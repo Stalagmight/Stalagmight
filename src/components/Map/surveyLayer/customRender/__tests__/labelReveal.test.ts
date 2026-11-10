@@ -8,6 +8,10 @@ import {
   EMIT_SLACK,
   REVEAL_CEILING,
   ADAPTIVE_EMIT_MAX,
+  labelVirtualRank,
+  VIRTUAL_RANK_REAL,
+  VIRTUAL_RANK_JUMP,
+  VIRTUAL_RANK_REFERENCE,
   type RevealInput,
   type ScreenBox,
 } from '../labelReveal';
@@ -385,5 +389,232 @@ describe('computeRevealZooms MONOTONICITY (randomized zoom sweep)', () => {
     }
     // The sweep actually admitted labels over time (not all-at-once / none).
     expect(prevVisible.size).toBeGreaterThan(0);
+  });
+});
+
+// ─── Real line first: jump / reference labels never take a real label's slot ─
+
+describe('labelVirtualRank', () => {
+  const rank = (flags: number, hide: { hideJump?: boolean; hideReference?: boolean } = {}) =>
+    labelVirtualRank(desc(LABEL_KIND.STATION_LABEL, { flags }), {
+      hideJump: hide.hideJump ?? false,
+      hideReference: hide.hideReference ?? false,
+    });
+
+  it('ranks real 0, jump 1, reference 2 from the shot kind bits', () => {
+    expect(rank(0)).toBe(VIRTUAL_RANK_REAL);
+    expect(rank(LABEL_FLAG.FIRST_IN_SECTION)).toBe(VIRTUAL_RANK_REAL);
+    expect(rank(LABEL_FLAG.JUMP)).toBe(VIRTUAL_RANK_JUMP);
+    expect(rank(LABEL_FLAG.REFERENCE)).toBe(VIRTUAL_RANK_REFERENCE);
+  });
+
+  it('ranks an all-virtual station by the best kind still drawn on it', () => {
+    expect(rank(LABEL_FLAG.ALL_JUMP)).toBe(VIRTUAL_RANK_JUMP);
+    expect(rank(LABEL_FLAG.ALL_REFERENCE)).toBe(VIRTUAL_RANK_REFERENCE);
+    const both = LABEL_FLAG.ALL_JUMP | LABEL_FLAG.ALL_REFERENCE;
+    expect(rank(both)).toBe(VIRTUAL_RANK_JUMP);
+    // Jumps hidden: only its reference legs are drawn, so it is a reference label.
+    expect(rank(both, { hideJump: true })).toBe(VIRTUAL_RANK_REFERENCE);
+    expect(rank(both, { hideReference: true })).toBe(VIRTUAL_RANK_JUMP);
+  });
+});
+
+describe('computeRevealZooms real line first (coincident labels)', () => {
+  it('a real shot label wins over a coincident jump or reference one from a coarser tier', () => {
+    // Before: the virtual label (ordinal 0, tier 0, admitted at z14) placed first
+    // and kept the slot, so the real one (ordinal 1, admitted at z18) never showed.
+    for (const virtual of [LABEL_FLAG.JUMP, LABEL_FLAG.REFERENCE]) {
+      const descs = [
+        desc(LABEL_KIND.SHOT_LABEL, { ordinal: 0, flags: virtual, shotGlobal: 0 }),
+        desc(LABEL_KIND.SHOT_LABEL, { ordinal: 1, shotGlobal: 1 }),
+      ];
+      const reveal = computeRevealZooms(descs, [UNIT_EXT, UNIT_EXT], input());
+      expect(reveal[1]).toBe(18);
+      expect(reveal[0]).toBe(REVEAL_NEVER);
+    }
+  });
+
+  it('a real station label wins over a coincident all-jump or all-reference station', () => {
+    for (const virtual of [LABEL_FLAG.ALL_JUMP, LABEL_FLAG.ALL_REFERENCE]) {
+      const descs = [
+        desc(LABEL_KIND.STATION_LABEL, { ordinal: 0, flags: virtual, stationGlobal: 0 }),
+        desc(LABEL_KIND.STATION_LABEL, { ordinal: 1, stationGlobal: 1 }),
+      ];
+      const reveal = computeRevealZooms(descs, [UNIT_EXT, UNIT_EXT], input());
+      expect(reveal[1]).toBe(18);
+      expect(reveal[0]).toBe(REVEAL_NEVER);
+    }
+  });
+
+  it('an all-reference section name yields to a coincident real station label', () => {
+    // Kind priority alone would put the section name (priority 0, z10) first.
+    const descs = [
+      desc(LABEL_KIND.SECTION_NAME, { flags: LABEL_FLAG.ALL_REFERENCE, sectionId: 5 }),
+      desc(LABEL_KIND.STATION_LABEL, { ordinal: 3, flags: LABEL_FLAG.FIRST_IN_SECTION, stationGlobal: 3 }),
+    ];
+    const reveal = computeRevealZooms(descs, [UNIT_EXT, UNIT_EXT], input());
+    expect(reveal[1]).toBe(14);
+    expect(reveal[0]).toBe(REVEAL_NEVER);
+  });
+
+  it('a real section name still beats a coincident real shot (kind priority inside a rank)', () => {
+    const descs = [desc(LABEL_KIND.SHOT_LABEL, { ordinal: 0 }), desc(LABEL_KIND.SECTION_NAME)];
+    const reveal = computeRevealZooms(descs, [UNIT_EXT, UNIT_EXT], input());
+    expect(reveal[1]).toBe(10);
+    expect(reveal[0]).toBe(REVEAL_NEVER);
+  });
+
+  it('a jump label wins over a coincident reference label', () => {
+    const descs = [
+      desc(LABEL_KIND.SHOT_LABEL, { ordinal: 0, flags: LABEL_FLAG.REFERENCE, shotGlobal: 0 }),
+      desc(LABEL_KIND.SHOT_LABEL, { ordinal: 1, flags: LABEL_FLAG.JUMP, shotGlobal: 1 }),
+    ];
+    const reveal = computeRevealZooms(descs, [UNIT_EXT, UNIT_EXT], input());
+    expect(reveal[1]).toBe(18);
+    expect(reveal[0]).toBe(REVEAL_NEVER);
+  });
+
+  it('a hidden kind frees the slot: the losing virtual label is emitted at its floor', () => {
+    // Jumps hidden: the jump label is no candidate (the shader hides it), and
+    // the real label is unaffected either way.
+    const descs = [
+      desc(LABEL_KIND.SHOT_LABEL, { ordinal: 0, flags: LABEL_FLAG.JUMP, shotGlobal: 0 }),
+      desc(LABEL_KIND.SHOT_LABEL, { ordinal: 1, shotGlobal: 1 }),
+    ];
+    const reveal = computeRevealZooms(descs, [UNIT_EXT, UNIT_EXT], input({ hideJump: true }));
+    expect(reveal[1]).toBe(18);
+    expect(reveal[0]).toBe(14);
+  });
+});
+
+describe('computeRevealZooms reserves the slots of real labels that reveal later', () => {
+  it('a jump label does not take, at z14, a slot a real label needs at z18', () => {
+    // Real shot R: tier 2, admitted at z18. Jump J: tier 0, admitted at z14,
+    // 10 px to R's right at z18 - an overlap (a shot box is 16 px wide there)
+    // that clears at z19 (20 px apart). J alone would show from z14; if it did,
+    // R would have to wait for z19, or both would overlap at z18.
+    const dx = 10 / 1e6; // 10 px at the build zoom 18 (worldPixelScale 1e6)
+    const real = desc(LABEL_KIND.SHOT_LABEL, { anchorX: 0, ordinal: 1, shotGlobal: 1 });
+    const jump = desc(LABEL_KIND.SHOT_LABEL, { anchorX: dx, ordinal: 0, flags: LABEL_FLAG.JUMP, shotGlobal: 0 });
+    const reveal = computeRevealZooms([real, jump], [UNIT_EXT, UNIT_EXT], input());
+    expect(reveal[0]).toBe(18);
+    expect(reveal[1]).toBe(19);
+    // Never drawn on top of each other once both show.
+    const both = Math.max(reveal[0]!, reveal[1]!);
+    expect(boxesOverlap(boxAt(real, UNIT_EXT, both, 18, 1e6), boxAt(jump, UNIT_EXT, both, 18, 1e6))).toBe(false);
+  });
+
+  it('a jump label that clears the real one by the time it reveals shows from its own floor', () => {
+    // 100 px apart at z18 (6 px at z14, where both boxes are 13 px wide): the
+    // real label only shows from z18 and they are clear there, so nothing stops
+    // the jump label from showing at z14.
+    const dx = 100 / 1e6;
+    const real = desc(LABEL_KIND.SHOT_LABEL, { anchorX: 0, ordinal: 1, shotGlobal: 1 });
+    const jump = desc(LABEL_KIND.SHOT_LABEL, { anchorX: dx, ordinal: 0, flags: LABEL_FLAG.JUMP, shotGlobal: 0 });
+    const reveal = computeRevealZooms([real, jump], [UNIT_EXT, UNIT_EXT], input());
+    expect(reveal[0]).toBe(18);
+    expect(reveal[1]).toBe(14);
+  });
+});
+
+/** A random tight cluster of every label kind, a share of them virtual. */
+function randomMixedLabels(seed: number, count: number): { descs: LabelDescriptor[]; exts: ExtentEm[] } {
+  const rnd = lcg(seed);
+  const kinds: LabelKind[] = [
+    LABEL_KIND.SECTION_NAME,
+    LABEL_KIND.STATION_LABEL,
+    LABEL_KIND.SHOT_LABEL,
+    LABEL_KIND.STATION_COMMENT,
+    LABEL_KIND.SHOT_COMMENT,
+  ];
+  const shotBits = [0, 0, LABEL_FLAG.JUMP, LABEL_FLAG.REFERENCE];
+  const stationBits = [0, 0, LABEL_FLAG.ALL_JUMP, LABEL_FLAG.ALL_REFERENCE, LABEL_FLAG.ALL_JUMP | LABEL_FLAG.ALL_REFERENCE];
+  const descs: LabelDescriptor[] = [];
+  const exts: ExtentEm[] = [];
+  for (let i = 0; i < count; i++) {
+    const kind = kinds[Math.floor(rnd() * kinds.length)]!;
+    const onShot = kind === LABEL_KIND.SHOT_LABEL || kind === LABEL_KIND.SHOT_COMMENT;
+    const bits = onShot ? shotBits : stationBits;
+    let flags = bits[Math.floor(rnd() * bits.length)]!;
+    if (kind === LABEL_KIND.STATION_LABEL && rnd() < 0.15) flags |= LABEL_FLAG.FIRST_IN_SECTION;
+    const over: Partial<LabelDescriptor> = {
+      anchorX: rnd() * 0.0008,
+      anchorY: rnd() * 0.0008,
+      ordinal: kind === LABEL_KIND.SHOT_LABEL || kind === LABEL_KIND.STATION_LABEL ? Math.floor(rnd() * 40) : 0,
+      flags,
+      sectionId: i,
+    };
+    if (onShot) over.shotGlobal = i;
+    else if (kind !== LABEL_KIND.SECTION_NAME) over.stationGlobal = i;
+    descs.push(desc(kind, over));
+    exts.push({ minX: 0, maxX: 1 + rnd() * 3, minY: 0, maxY: 1 });
+  }
+  return { descs, exts };
+}
+
+const HIDE_CASES: { hideJump: boolean; hideReference: boolean }[] = [
+  { hideJump: false, hideReference: false },
+  { hideJump: true, hideReference: false },
+  { hideJump: false, hideReference: true },
+  { hideJump: true, hideReference: true },
+];
+
+describe('computeRevealZooms real line first (randomized properties)', () => {
+  it('real labels reveal exactly as if no virtual label existed; jump labels as if no reference one did', () => {
+    for (const seed of [1, 2, 3, 0xbeef]) {
+      const { descs, exts } = randomMixedLabels(seed, 150);
+      for (const hide of HIDE_CASES) {
+        const opts = input({ buildZoom: 22, worldPixelScale: 4e6, slack: 2, ...hide });
+        const full = computeRevealZooms(descs, exts, opts);
+        for (const maxRank of [VIRTUAL_RANK_REAL, VIRTUAL_RANK_JUMP]) {
+          const keep = descs.map((_, i) => i).filter((i) => labelVirtualRank(descs[i]!, hide) <= maxRank);
+          const alone = computeRevealZooms(
+            keep.map((i) => descs[i]!),
+            keep.map((i) => exts[i]!),
+            opts,
+          );
+          expect(keep.map((i) => full[i])).toEqual(Array.from(alone));
+        }
+      }
+    }
+  });
+
+  it('with virtual labels mixed in, the visible set still only GROWS with zoom and never overlaps', () => {
+    const { descs, exts } = randomMixedLabels(0xc0ffee, 150);
+    const buildZoom = 22;
+    const wps = 4e6;
+    for (const hide of HIDE_CASES) {
+      const reveal = computeRevealZooms(descs, exts, input({ buildZoom, worldPixelScale: wps, slack: 2, ...hide }));
+      // Hidden kinds are emitted uncontested and the shader hides them, so only
+      // labels the shader draws take part in the overlap check.
+      const drawn = (d: LabelDescriptor): boolean => {
+        if (hide.hideJump && (d.flags & LABEL_FLAG.JUMP) !== 0) return false;
+        if (hide.hideReference && (d.flags & LABEL_FLAG.REFERENCE) !== 0) return false;
+        const allJump = (d.flags & LABEL_FLAG.ALL_JUMP) !== 0;
+        const allRef = (d.flags & LABEL_FLAG.ALL_REFERENCE) !== 0;
+        return !(allJump || allRef) || (allJump && !hide.hideJump) || (allRef && !hide.hideReference);
+      };
+      let prevVisible = new Set<number>();
+      let sawVirtual = false;
+      for (let z = 10; z <= 22 + 1e-9; z += 0.5) {
+        const visible: number[] = [];
+        for (let i = 0; i < descs.length; i++) {
+          if (drawn(descs[i]!) && reveal[i]! !== REVEAL_NEVER && reveal[i]! <= z + 1e-9) visible.push(i);
+        }
+        for (const i of prevVisible) expect(visible).toContain(i);
+        const boxes = visible.map((i) => boxAt(descs[i]!, exts[i]!, z, buildZoom, wps));
+        for (let a = 0; a < boxes.length; a++) {
+          for (let b = a + 1; b < boxes.length; b++) {
+            expect(boxesOverlap(boxes[a]!, boxes[b]!)).toBe(false);
+          }
+        }
+        if (visible.some((i) => labelVirtualRank(descs[i]!, hide) !== VIRTUAL_RANK_REAL)) sawVirtual = true;
+        prevVisible = new Set(visible);
+      }
+      expect(prevVisible.size).toBeGreaterThan(0);
+      // The fixture really exercises the virtual passes: some virtual label
+      // shows whenever a virtual kind is drawn at all.
+      expect(sawVirtual).toBe(!(hide.hideJump && hide.hideReference));
+    }
   });
 });
