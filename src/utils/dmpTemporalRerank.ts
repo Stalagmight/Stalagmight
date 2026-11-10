@@ -153,6 +153,13 @@ function addEdge(graph: Graph, a: string, b: string, weight: number) {
   graph.get(b)!.push({ to: a, weight });
 }
 
+/**
+ * The join this RANKING models for a suggestion: the matcher's own pick first.
+ * Not the station the wizard preselects - that is the end of the repeat
+ * (`defaultMergeOffset`, #685) - so a ranked candidate can be judged at a
+ * station up to `matchedShots` from where it is then joined. Left as is on
+ * purpose: changing what ranking measures is its own decision.
+ */
 function defaultMergePair(s: CrossSectionSuggestion, sections: DmpSection[]) {
   const section = sections[s.importSectionIndex];
   const importShotCount = section ? standardShots(section).length : 0;
