@@ -655,7 +655,10 @@ describe('formatActionName', () => {
 
   it('handles multiple underscores', () => {
     expect(formatActionName('toggle_depth_gradient')).toBe('Toggle Depth Gradient');
-    expect(formatActionName('toggle_station_labels')).toBe('Toggle Station Labels');
+    // A translated action uses its i18n name (the L key toggles the station IDs).
+    expect(formatActionName('toggle_station_labels')).toBe('Toggle Station IDs');
+    // An untranslated one falls back to title-casing its words.
+    expect(formatActionName('some_unknown_action')).toBe('Some Unknown Action');
   });
 });
 
