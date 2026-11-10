@@ -1616,8 +1616,8 @@ export default function DmpNewImportDialog({
             }
             return shot;
           }
-          // Past merge station: leave unchanged to keep geometry continuous in preview.
-          // Deletion happens at import time in handleConfirm.
+          // Past merge station: left unchanged, here and at import
+          // (`applyAllOverlapTreatments` treats only actionable shots).
           return shot;
         });
       }
@@ -1825,7 +1825,6 @@ export default function DmpNewImportDialog({
     }
   }, [isTargetDoublyAnchored, overlapMode, handleOverlapModeChange]);
 
-  // Pick the next suggestion from the cached pool, filtering out connected/skipped sections.
   // The end of the repeat, never the matcher's interior pick (#685): set before
   // the suggestion renders, so its first frame - and a confirm that lands in
   // it - already uses the station the reset effect above would choose.
@@ -1837,6 +1836,7 @@ export default function DmpNewImportDialog({
     return defaultMergeOffset(suggestion, importShotCount);
   }, [dmpFile.sections]);
 
+  // Pick the next suggestion from the cached pool, filtering out connected/skipped sections.
   const ensureTemporalDistances = useCallback(async (pool: CrossSectionSuggestion[]) => {
     const anchors = collectExistingAnchorsForTemporalRerank(pool, connectionsRef.current, dmpFile.sections);
     const missing = anchors.filter((ref) => {

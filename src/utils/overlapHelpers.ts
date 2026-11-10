@@ -242,15 +242,20 @@ export function computeMergeOptions(
 }
 
 /**
- * The "Merge at" offset a placement dialog preselects: the LAST option, the
- * end of the repeat. Joining there makes every repeated shot actionable
- * (`computeActionableIds` covers the stations before the merge point), so none
- * is imported a second time as a normal shot (#681, #685).
+ * The "Merge at" offset the mNemo import wizard preselects (#685): the LAST
+ * option, the end of the repeat. Joining there makes every repeated shot
+ * actionable (`computeActionableIds` covers the stations before the merge
+ * point), so none is imported a second time as a normal shot. The
+ * orphan-placement dialog makes the same choice for #681.
  *
- * Deliberately NOT the matcher's `preferredMergeOffset`. For a repeat of two or
- * more shots that is an interior station (the matcher boosts interior
- * stations), and it still drives suggestion ranking (`dmpTemporalRerank.ts`),
- * which is the only thing it is for. Returns 0 when there are no options.
+ * Deliberately NOT the matcher's `preferredMergeOffset`. That is the best
+ * offset by the matcher's own scoring: it favours an interior station (a 1.18x
+ * boost) and skips an offset whose join would cross too deep a passage, so for
+ * a repeat of two or more shots it is usually mid-repeat. The temporal rerank
+ * (`dmpTemporalRerank.ts`) still models suggestions at that offset. The visible
+ * wizard default was already the last option (a reset effect chose it once the
+ * suggestion rendered); this makes the up-front value agree with it. Returns 0
+ * when there are no options.
  */
 export function defaultMergeOffset(suggestion: SuggestionLike, importShotCount: number): number {
   const options = computeMergeOptions(suggestion, importShotCount);
