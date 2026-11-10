@@ -35,6 +35,7 @@ const getCleanTestState = () => ({
   showShots: true,
   showSectionNames: true,
   showStationLabels: false,
+  showStationNames: false,
   showShotData: false,
   showReferenceShots: true,
   showZeroDatum: true,
@@ -123,6 +124,7 @@ describe('Display Toggle State', () => {
         'showShots',
         'showSectionNames',
         'showStationLabels',
+        'showStationNames',
         'showShotData',
         'showReferenceShots',
         'showZeroDatum',
@@ -145,6 +147,7 @@ describe('Display Toggle State', () => {
         showShots: !DISPLAY_DEFAULTS.showShots,
         showSectionNames: !DISPLAY_DEFAULTS.showSectionNames,
         showStationLabels: !DISPLAY_DEFAULTS.showStationLabels,
+        showStationNames: !DISPLAY_DEFAULTS.showStationNames,
         showShotData: !DISPLAY_DEFAULTS.showShotData,
         showReferenceShots: !DISPLAY_DEFAULTS.showReferenceShots,
         showZeroDatum: !DISPLAY_DEFAULTS.showZeroDatum,
@@ -163,6 +166,7 @@ describe('Display Toggle State', () => {
       expect(state.showShots).toBe(DISPLAY_DEFAULTS.showShots);
       expect(state.showSectionNames).toBe(DISPLAY_DEFAULTS.showSectionNames);
       expect(state.showStationLabels).toBe(DISPLAY_DEFAULTS.showStationLabels);
+      expect(state.showStationNames).toBe(DISPLAY_DEFAULTS.showStationNames);
       expect(state.showShotData).toBe(DISPLAY_DEFAULTS.showShotData);
       expect(state.showReferenceShots).toBe(DISPLAY_DEFAULTS.showReferenceShots);
       expect(state.showZeroDatum).toBe(DISPLAY_DEFAULTS.showZeroDatum);
