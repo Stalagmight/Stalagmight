@@ -51,6 +51,9 @@ them on the shots.
 
 - The position (9-11) applies to the first section imported. Everything else
   follows the connections recorded in the file.
+- The total length (4) counts every shot, virtual ones included. Which of them
+  become references, and so drop out of the project's length, is settled on
+  import.
 - **Include excluded shots** appears when the file has shots marked excluded.
 - A section marked **(moved to origin)** connects to nothing else being
   imported, so it is placed at the origin. **(branch)** marks a section split
