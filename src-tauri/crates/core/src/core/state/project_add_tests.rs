@@ -1881,7 +1881,13 @@ fn merge_leaves_a_source_an_open_would_rewrite_untouched() {
     let unstamped = save_to(temp.path(), "unstamped.stalx", &source_charlie());
     rusqlite::Connection::open(&unstamped)
         .unwrap()
-        .execute_batch("PRAGMA user_version = 0;")
+        // What `an_unstamped_file_claiming_a_mid_range_version_is_stamped...`
+        // (persistence tests) builds: an open runs the v12 arms and stamps it.
+        .execute_batch(
+            "DELETE FROM project_settings WHERE key = 'pending_kind_classification';
+             UPDATE project SET schema_version = 12;
+             PRAGMA user_version = 0;",
+        )
         .unwrap();
     let before = std::fs::read(&unstamped).unwrap();
 
