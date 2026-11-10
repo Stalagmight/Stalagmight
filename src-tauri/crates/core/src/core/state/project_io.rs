@@ -693,18 +693,17 @@ impl AppState {
                                 // file saved before shot UUIDs were project-wide
                                 // unique) names its shot through the derived id, and
                                 // is re-keyed to it here: this save persists it.
-                                let (live_uuid, (sec, shot)) = match live_positions
-                                    .get(&(r.section_id, uuid))
+                                let (live_uuid, (sec, shot)) = if let Some(&position) =
+                                    live_positions.get(&(r.section_id, uuid))
                                 {
-                                    Some(&position) => (uuid.to_string(), position),
-                                    None => {
-                                        let renamed =
-                                            crate::models::reminted_shot_uuid(r.section_id, uuid);
-                                        let position = live_positions
-                                            .get(&(r.section_id, renamed.as_str()))
-                                            .copied()?;
-                                        (renamed, position)
-                                    }
+                                    (uuid.to_string(), position)
+                                } else {
+                                    let renamed =
+                                        crate::models::reminted_shot_uuid(r.section_id, uuid);
+                                    let position = live_positions
+                                        .get(&(r.section_id, renamed.as_str()))
+                                        .copied()?;
+                                    (renamed, position)
                                 };
                                 r.shot_uuid = Some(live_uuid);
                                 r.section_id = sec;

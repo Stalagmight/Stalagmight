@@ -293,7 +293,7 @@ fn a_legacy_history_walks_whole_after_the_load_renames_its_repeats() {
     assert!(state.execute(Command::CloseProject).success);
 
     // Reopen: section 0 keeps the file's ids, section 1 gets the derived ones.
-    assert!(state.open_project(path.clone()).success, "reopen");
+    assert!(state.open_project(path).success, "reopen");
     assert_eq!(section_ids(&state, 0)[..2], X[..2]);
     assert_eq!(
         section_ids(&state, 1)[0],
@@ -384,7 +384,7 @@ fn reopening_without_saving_derives_the_same_ids_and_a_save_persists_them() {
 
     // The production load path agrees, and nothing is renamed a second time.
     state.set_event_sink(Arc::new(NullSink));
-    state.do_load_project_full(path.clone()).unwrap();
+    state.do_load_project_full(path).unwrap();
     assert_eq!(opened(&state), first, "the saved file reads back unchanged");
     assert!(short_shot_resolved(&state, 1));
     assert_ids_unique(&state, "after the second open");

@@ -400,6 +400,10 @@ fn visit_key(
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::panic,
+    reason = "test module: panics on a failed assumption are the point"
+)]
 #[path = "uuid_remap_tests.rs"]
 mod tests;
