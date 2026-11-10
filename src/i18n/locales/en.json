@@ -2374,6 +2374,58 @@
       "fromStation": "from {{id}}",
       "computing": "Distance: computing…"
     },
+    "colorScale": {
+      "settingsButton": "Color scale settings",
+      "title": {
+        "depth": "Depth colors",
+        "distance": "Distance colors"
+      },
+      "palette": "Palette",
+      "themePalette": "Theme",
+      "reverse": "Reverse",
+      "reverseAria": "Reverse the palette",
+      "resetPalette": "Reset palette to the theme default",
+      "resetRange": "Reset range to the full data range",
+      "range": "Range",
+      "min": "Min",
+      "max": "Max",
+      "gamma": "Mid",
+      "gammaHelp": "Midpoint gamma, as in Levels: 1.00 is linear, higher pushes the middle color toward the start",
+      "minHandle": "Range start",
+      "midHandle": "Midpoint",
+      "maxHandle": "Range end",
+      "midValue": "Mid {{value}}",
+      "histogram": "Histogram of {{kind}} values",
+      "kind": {
+        "depth": "depth",
+        "distance": "distance"
+      },
+      "search": "Search palettes",
+      "noResults": "No palettes match",
+      "pin": "Pin {{name}} to the top",
+      "unpin": "Unpin {{name}}",
+      "groups": {
+        "pinned": "Pinned",
+        "theme": "Theme",
+        "mpl-perceptual": "Perceptually uniform",
+        "mpl-sequential": "Sequential",
+        "mpl-sequential-2": "Sequential (2)",
+        "mpl-diverging": "Diverging",
+        "mpl-cyclic": "Cyclic",
+        "mpl-qualitative": "Qualitative",
+        "mpl-misc": "Miscellaneous",
+        "grad-basics": "Basics",
+        "grad-spectrum": "Spectrum",
+        "grad-blues": "Blues",
+        "grad-greens": "Greens",
+        "grad-reds": "Reds and oranges",
+        "grad-purples": "Purples and pinks",
+        "grad-earth": "Browns and earth",
+        "grad-grays": "Grays",
+        "grad-metals": "Metals"
+      },
+      "saveFailed": "Could not save the color palette. It will be back to the previous one next time."
+    },
     "gasLegend": {
       "title": "Gas reach",
       "aria": "Gas-to-reach scale from {{min}} (near) to {{max}} (reachable limit)",
