@@ -3,6 +3,10 @@ use super::project_io::save_failure;
 use super::project_source::read_source_project;
 use super::AppState;
 use crate::core::command::{sanitize_display_text, MAX_FILE_NAME_LEN};
+
+/// How much of a source's path a merge refusal shows (a path, unlike a file
+/// name, has no natural bound).
+const MAX_MERGE_SOURCE_LABEL: usize = 4 * MAX_FILE_NAME_LEN;
 use crate::core::CommandResult;
 use crate::models::{Project, FEATURE_ID_STRIDE, MAX_SECTIONS_IN_ID_SPACE, MAX_SECTION_ID};
 use crate::persistence::Database;
@@ -67,10 +71,9 @@ impl AppState {
         // merged output does not carry the source's flag.
         let mut source_projects: Vec<Project> = Vec::with_capacity(source_paths.len());
         for path in &source_paths {
-            let label = path
-                .file_name()
-                .map(|n| sanitize_display_text(&n.to_string_lossy(), MAX_FILE_NAME_LEN))
-                .unwrap_or_default();
+            // The whole path, not just the file name: two sources can share a
+            // name in different folders, and the message must say which failed.
+            let label = sanitize_display_text(&path.to_string_lossy(), MAX_MERGE_SOURCE_LABEL);
             match read_source_project(path, &label, "merged") {
                 Ok(source) => source_projects.push(source.project),
                 Err(e) => return CommandResult::failure(e),

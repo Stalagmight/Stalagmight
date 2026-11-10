@@ -864,9 +864,10 @@ impl Project {
 
     /// Store a zero datum without triggering section repositioning.
     ///
-    /// This is an internal helper for use by `merge_projects` and import paths
-    /// that need to copy datums from source projects without recomputing offsets.
-    /// The source project's section_offsets are assumed to already be correct.
+    /// This is an internal helper for the copy shared by "Merge projects" and
+    /// "Add .stalx" and for import paths that store a datum where the survey
+    /// already is. Nothing moves here; a copy that has to land at the datum's
+    /// GPS position is placed afterwards (`place_by_datum` in the core crate).
     ///
     /// Returns Err if validation fails (same rules as `set_zero_datum`).
     pub fn store_zero_datum_without_repositioning(

@@ -1611,3 +1611,119 @@ fn a_datum_less_first_source_stays_put_and_the_next_datum_frames_the_merge() {
         "P2 is placed north of P1, not stacked on it: {second:?}"
     );
 }
+
+/// Merge now refuses what Add refuses, before writing anything, and the
+/// message says "merged" and names the whole path (two sources can share a
+/// file name).
+/// INJECTION (tried): reverting `copy_regular_file`'s messages to the fixed
+/// "added" wording fails the oversized case.
+#[test]
+fn merge_refuses_an_untrustworthy_source_and_writes_nothing() {
+    let temp = TempDir::new().unwrap();
+    let good = save_to(temp.path(), "good.stalx", &source_charlie());
+    let directory = temp.path().join("folder.stalx");
+    std::fs::create_dir(&directory).unwrap();
+    let oversized = temp.path().join("huge.stalx");
+    std::fs::File::create(&oversized)
+        .unwrap()
+        .set_len(crate::speleodb::client::NATIVE_LIMIT + 1)
+        .unwrap();
+    // A writer this app does not have: the corruption goes in through SQL.
+    let infinite = save_to(temp.path(), "infinite.stalx", &source_alpha());
+    let changed = rusqlite::Connection::open(&infinite)
+        .unwrap()
+        .execute("UPDATE station_offsets SET offset_x = 9e999", [])
+        .unwrap();
+    assert_eq!(changed, 1, "the corruption landed");
+
+    for (bad, expected) in [
+        (&directory, "is not a project file"),
+        (
+            &oversized,
+            "is larger than 512 MB, the largest project file that can be merged",
+        ),
+        (
+            &infinite,
+            "was not merged: a station offset is not a finite number",
+        ),
+    ] {
+        let output = temp.path().join("merged.stalx");
+        let result = AppState::new().unwrap().execute(Command::MergeProjects {
+            source_paths: vec![good.clone(), bad.clone()],
+            output_path: output.clone(),
+            output_name: "Merged".to_string(),
+            archive_originals: false,
+        });
+        let error = result.error.unwrap_or_default();
+        assert!(!result.success, "{expected}");
+        assert!(
+            error.starts_with(&format!("'{}' {expected}", bad.display())),
+            "{error}"
+        );
+        assert!(!output.exists(), "nothing written for {expected}");
+    }
+}
+
+/// A source left in WAL mode by a crash holds committed pages in its `-wal`.
+/// Opening it would apply them, so reading it as a source must too: the
+/// private copy takes the sidecar along. Both Add and Merge see the committed
+/// edit, and neither touches the source or its WAL.
+/// INJECTION (tried): dropping `copy_sqlite_sidecars` from the read makes both
+/// see the pre-crash length (12 m) and fail.
+#[test]
+fn a_sources_committed_wal_pages_are_read_by_add_and_merge() {
+    let temp = TempDir::new().unwrap();
+    let live = save_to(temp.path(), "live.stalx", &georeferenced("W", "w", 20.5));
+    let conn = rusqlite::Connection::open(&live).unwrap();
+    conn.pragma_update(None, "journal_mode", "WAL").unwrap();
+    conn.pragma_update(None, "wal_autocheckpoint", 0).unwrap();
+    conn.execute("UPDATE shots SET length = 77.0 WHERE uuid = 'w-0'", [])
+        .unwrap();
+    let crashed = temp.path().join("crashed.stalx");
+    let wal = |p: &Path| PathBuf::from(format!("{}-wal", p.display()));
+    std::fs::copy(&live, &crashed).unwrap();
+    std::fs::copy(wal(&live), wal(&crashed)).unwrap();
+    drop(conn);
+    let (db_bytes, wal_bytes) = (
+        std::fs::read(&crashed).unwrap(),
+        std::fs::read(wal(&crashed)).unwrap(),
+    );
+    let first_length = |project: &Project| {
+        project
+            .get_section(section_named(project, "W"))
+            .unwrap()
+            .shots[0]
+            .length
+    };
+
+    let merged = merge_files(
+        temp.path(),
+        vec![
+            crashed.clone(),
+            save_to(temp.path(), "c.stalx", &source_charlie()),
+        ],
+    );
+    assert_eq!(
+        first_length(&merged),
+        77.0,
+        "merge applies the WAL's commit"
+    );
+
+    let (state, _) = open_target(temp.path(), true);
+    assert!(add(&state, &crashed).success);
+    assert_eq!(
+        first_length(&state.get_project_state().unwrap()),
+        77.0,
+        "add applies it too"
+    );
+    assert_eq!(
+        std::fs::read(&crashed).unwrap(),
+        db_bytes,
+        "source untouched"
+    );
+    assert_eq!(
+        std::fs::read(wal(&crashed)).unwrap(),
+        wal_bytes,
+        "its WAL too"
+    );
+}
