@@ -173,13 +173,21 @@ The map (`history_remap`):
 
 1. reuses what the live heal did, verbatim;
 2. leaves an id that is live in its section alone;
-3. maps an id to its derived replacement when that is what the section holds
-   (history saved against an older heal);
-4. renames an id that ANOTHER live section holds, or that a lower section holds
-   elsewhere in the history, to a derived id stepped past every id in use - this
-   is what covers a copy only the history still holds (a deleted section an undo
-   would bring back);
+3. maps an id to its derived replacement when that is what the section holds,
+   live or elsewhere in the history (history saved against an older heal);
+4. renames an id its section must YIELD to a derived id stepped past every id in
+   use. A section yields when another section holds the same id in the SAME
+   recorded state - one project snapshot, or the sections one entry reinstalls
+   (an Add, a re-created section) together with the live project - and keeps
+   it: the one holding the id live, else the lowest. This is what covers a copy
+   only the history still holds (a deleted section an undo would bring back);
 5. leaves everything else alone.
+
+Rule 4 asks about one recorded state at a time on purpose. A split moves shots,
+ids and all, from one section to a new one, so the history holds each moved id
+in two sections - but never at the same time. Across the whole history that
+looks like a repeat; within any one state it is not, and renaming it would hand
+the shots new ids every time a project with a split in its history is opened.
 
 The visitor is an exhaustive `match` over `UndoData`: a new variant that carries
 a shot id has to say how it is translated, or the build fails. Where a variant
@@ -189,8 +197,10 @@ keeps one shot's id twice it rewrites both (`Shot::with_uuid` lets
 as `serde_json::Value`, never round-tripped through `Project`:
 `restore_snapshot_into` recognises a legacy blob by the keys it LACKS
 (`"validation":`, `"surface_elevation":`), and a typed round trip would add them.
-A light probe (section ids and shot ids only) decides which snapshots need the
-full rewrite. Byte totals are recounted afterwards.
+A light probe (section ids and shot ids only) reads each snapshot once; when
+nothing needs renaming - every history without repeats - the translation stops
+there and leaves the history byte for byte. Byte totals are recounted after a
+rewrite.
 
 Every id involved is derived from the file alone, so a reopen without saving, or
 two independent loads of one revision (SpeleoDB Unwind), translate identically,

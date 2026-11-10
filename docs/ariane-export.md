@@ -145,6 +145,13 @@ A shot UUID is unique across the whole project:
   (`harden_for_speleodb`), because a repeat would alias two shots onto one
   GeoJSON feature id.
 
+Keys stored OUTSIDE the project against an id the load renamed - an ignored
+warning, a dive-plan point - still find their shot through the derived id
+(`stored_shot_uuid_matches`), and the next save re-keys an ignore to it. They
+match the first derived candidate only: a replacement stepped past a colliding
+id, which takes a file that already holds the derived value, is not matched, and
+that ignore or plan point is shown again rather than applied to the wrong shot.
+
 So a consumer may key a shot on `<UUID>` alone, within one document and across
 re-exports of a saved project.
 

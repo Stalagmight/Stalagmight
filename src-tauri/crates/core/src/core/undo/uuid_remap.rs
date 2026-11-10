@@ -45,21 +45,17 @@ impl UndoStack {
 
     /// Rewrite every entry's shot ids with [`history_remap`]. Returns how many
     /// entries changed; the byte totals are recounted when any did.
+    ///
+    /// One pass reads what the history holds; the common case (nothing to rename)
+    /// returns there, so a history with no repeats costs one light probe of each
+    /// snapshot and is left byte for byte.
     pub fn translate_shot_uuids(&mut self, project: &Project, renamed: &ShotUuidRemap) -> usize {
         let started = Instant::now();
-        let mut holders: BTreeMap<String, BTreeSet<SectionId>> = BTreeMap::new();
+        let mut ids = HistoryIds::default();
         for entry in self.undo_stack.iter_mut().chain(self.redo_stack.iter_mut()) {
-            visit_entry(&mut entry.undo_data, &mut |section, uuid| {
-                if let Some(uuid) = uuid.as_deref().filter(|u| !u.is_empty()) {
-                    holders.entry(uuid.to_string()).or_default().insert(section);
-                }
-                false
-            });
-            visit_snapshots(&entry.undo_data, &mut |section, uuid| {
-                holders.entry(uuid.to_string()).or_default().insert(section);
-            });
+            ids.collect(&mut entry.undo_data);
         }
-        let map = history_remap(project, renamed, &holders);
+        let map = history_remap(project, renamed, &ids);
         if map.is_empty() {
             return 0;
         }
@@ -83,55 +79,172 @@ impl UndoStack {
     }
 }
 
-/// The renames the loaded history needs, given the healed live project and
-/// every `(id -> sections holding it)` the history mentions. For each
-/// (section S, id X) the history holds:
+/// What the loaded history holds, gathered in one pass.
+#[derive(Default)]
+pub(super) struct HistoryIds {
+    /// Every id the history mentions, with the sections it is mentioned in.
+    holders: BTreeMap<String, BTreeSet<SectionId>>,
+    /// Ids two sections hold in the SAME recorded state: one project snapshot,
+    /// or the sections one entry reinstalls. Only these are repeats; an id that
+    /// moved from one section to another (a split) is held by both only at
+    /// different times, and is no repeat.
+    repeats: Vec<(String, BTreeSet<SectionId>)>,
+    /// (section, id) of every shot an entry reinstalls whole - an Add's
+    /// sections, a re-created section - which will sit beside the live project
+    /// when that entry is replayed.
+    reinstalled: BTreeSet<(SectionId, String)>,
+}
+
+impl HistoryIds {
+    fn collect(&mut self, data: &mut UndoData) {
+        visit_entry(data, &mut |section, uuid| {
+            if let Some(uuid) = uuid.as_deref().filter(|u| !u.is_empty()) {
+                self.holders
+                    .entry(uuid.to_string())
+                    .or_default()
+                    .insert(section);
+            }
+            false
+        });
+        let mut state: BTreeMap<String, BTreeSet<SectionId>> = BTreeMap::new();
+        let note =
+            |state: &mut BTreeMap<String, BTreeSet<SectionId>>, section: SectionId, uuid: &str| {
+                state.entry(uuid.to_string()).or_default().insert(section);
+            };
+        match data {
+            UndoData::ProjectSnapshot(json) => {
+                probe_snapshot(json, &mut |section, uuid| note(&mut state, section, uuid));
+                self.close_state(&mut state, false);
+            }
+            UndoData::ProjectSnapshotPair { before, after } => {
+                probe_snapshot(before, &mut |section, uuid| note(&mut state, section, uuid));
+                self.close_state(&mut state, false);
+                probe_snapshot(after, &mut |section, uuid| note(&mut state, section, uuid));
+                self.close_state(&mut state, false);
+            }
+            UndoData::AddedProjectContent(content) => {
+                for section in &content.sections {
+                    for uuid in section.shots.iter().filter_map(|s| s.uuid.as_deref()) {
+                        note(&mut state, section.id, uuid);
+                    }
+                }
+                self.close_state(&mut state, true);
+            }
+            UndoData::SectionSnapshot {
+                section_id,
+                section_data,
+            } => {
+                for uuid in section_data.shots.iter().filter_map(|s| s.uuid.as_deref()) {
+                    note(&mut state, *section_id, uuid);
+                }
+                self.close_state(&mut state, true);
+            }
+            UndoData::CreatedSectionSnapshot {
+                section_id,
+                section_data,
+                identity,
+            } => {
+                let data_ids = section_data.shots.iter().filter_map(|s| s.uuid.as_deref());
+                for uuid in data_ids.chain(identity.shot_uuids.iter().flatten().map(String::as_str))
+                {
+                    note(&mut state, *section_id, uuid);
+                }
+                self.close_state(&mut state, true);
+            }
+            _ => {}
+        }
+    }
+
+    /// Fold one recorded state into the totals and clear it for the next.
+    fn close_state(&mut self, state: &mut BTreeMap<String, BTreeSet<SectionId>>, reinstalls: bool) {
+        for (uuid, sections) in std::mem::take(state) {
+            if reinstalls {
+                for &section in &sections {
+                    self.reinstalled.insert((section, uuid.clone()));
+                }
+            }
+            let holders = self.holders.entry(uuid.clone()).or_default();
+            holders.extend(sections.iter().copied());
+            if sections.len() > 1 {
+                self.repeats.push((uuid, sections));
+            }
+        }
+    }
+}
+
+/// The renames the loaded history needs, given the healed live project and what
+/// the history holds. For each (section S, id X) the history mentions:
 ///
 /// 1. the live heal renamed it -> that new id, verbatim;
 /// 2. X is live in S -> unchanged;
-/// 3. the derived replacement for X is live in S -> that (history saved
-///    against an older heal);
-/// 4. X is held live by another section, or by a lower section elsewhere in the
-///    history -> a derived replacement, stepped past every id in use;
-/// 5. otherwise unchanged.
-///
-/// The same id never ends up in two sections of one recorded state: rule 4
-/// renames every holder but the one that keeps it.
+/// 3. the derived replacement for X is what S holds, live or elsewhere in the
+///    history (history saved against an earlier heal) -> that;
+/// 4. S must yield X: another section holds X in the same recorded state and
+///    keeps it (the one holding X live, else the lowest), or S is a section an
+///    entry reinstalls while another live section holds X -> a derived
+///    replacement, stepped past every id in use;
+/// 5. otherwise unchanged - including an id that only MOVED between sections.
 pub(super) fn history_remap(
     project: &Project,
     renamed: &ShotUuidRemap,
-    holders: &BTreeMap<String, BTreeSet<SectionId>>,
+    ids: &HistoryIds,
 ) -> ShotUuidRemap {
     let live = project.shot_uuids_by_section();
     let live_holder: HashMap<&str, SectionId> = live
         .iter()
-        .flat_map(|(section, ids)| ids.iter().map(move |id| (id.as_str(), *section)))
+        .flat_map(|(section, held)| held.iter().map(move |id| (id.as_str(), *section)))
         .collect();
-    let mut in_use: HashSet<String> = live.values().flatten().cloned().collect();
-    in_use.extend(holders.keys().cloned());
 
+    let mut yields: BTreeSet<(SectionId, &str)> = BTreeSet::new();
+    for (uuid, sections) in &ids.repeats {
+        let keeper = live_holder
+            .get(uuid.as_str())
+            .copied()
+            .filter(|holder| sections.contains(holder))
+            .or_else(|| sections.iter().next().copied());
+        for &section in sections.iter().filter(|&&s| Some(s) != keeper) {
+            yields.insert((section, uuid.as_str()));
+        }
+    }
+    for (section, uuid) in &ids.reinstalled {
+        if live_holder
+            .get(uuid.as_str())
+            .is_some_and(|&holder| holder != *section)
+        {
+            yields.insert((*section, uuid.as_str()));
+        }
+    }
+
+    let mut in_use: Option<HashSet<String>> = None;
     let mut map = ShotUuidRemap::default();
-    for (uuid, sections) in holders {
-        let lowest = sections.iter().next().copied();
+    for (uuid, sections) in &ids.holders {
         for &section in sections {
             if let Some(new) = renamed.get(section, uuid) {
                 map.insert(section, uuid.clone(), new.to_string());
                 continue;
             }
             let live_here = live.get(&section);
-            if live_here.is_some_and(|ids| ids.contains(uuid)) {
+            if live_here.is_some_and(|held| held.contains(uuid)) {
                 continue;
             }
             let derived = reminted_shot_uuid(section, uuid);
-            if live_here.is_some_and(|ids| ids.contains(&derived)) {
+            let derived_is_here = live_here.is_some_and(|held| held.contains(&derived))
+                || ids
+                    .holders
+                    .get(&derived)
+                    .is_some_and(|holders| holders.contains(&section));
+            if derived_is_here {
                 map.insert(section, uuid.clone(), derived);
                 continue;
             }
-            let held_live_elsewhere = live_holder
-                .get(uuid.as_str())
-                .is_some_and(|&holder| holder != section);
-            let lower_holder_in_history = lowest.is_some_and(|first| first < section);
-            if held_live_elsewhere || lower_holder_in_history {
+            if yields.contains(&(section, uuid.as_str())) {
+                let in_use = in_use.get_or_insert_with(|| {
+                    live.values()
+                        .flatten()
+                        .cloned()
+                        .chain(ids.holders.keys().cloned())
+                        .collect()
+                });
                 let new = reminted_shot_uuid_avoiding(section, uuid, |c| in_use.contains(c));
                 in_use.insert(new.clone());
                 map.insert(section, uuid.clone(), new);
@@ -219,17 +332,6 @@ fn probe_snapshot(json: &str, found: &mut dyn FnMut(SectionId, &str)) {
                 found(section.id, uuid);
             }
         }
-    }
-}
-
-fn visit_snapshots(data: &UndoData, found: &mut dyn FnMut(SectionId, &str)) {
-    match data {
-        UndoData::ProjectSnapshot(json) => probe_snapshot(json, found),
-        UndoData::ProjectSnapshotPair { before, after } => {
-            probe_snapshot(before, found);
-            probe_snapshot(after, found);
-        }
-        _ => {}
     }
 }
 

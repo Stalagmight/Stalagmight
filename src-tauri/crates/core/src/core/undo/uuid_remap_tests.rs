@@ -521,10 +521,80 @@ fn reconciling_keeps_an_entry_the_drop_pass_would_otherwise_remove() {
 #[test]
 fn the_map_reuses_the_live_renames_verbatim() {
     let (project, renamed) = healed();
-    let holders = [(X[0].to_string(), [0, 1].into_iter().collect())]
-        .into_iter()
-        .collect();
-    let map = history_remap(&project, &renamed, &holders);
+    let mut stack = stack_of(vec![UndoData::PreviousValues {
+        section_id: 1,
+        shot_id: Some(100_000),
+        shot_uuid: Some(X[0].to_string()),
+        values_json: "{}".to_string(),
+        previous_offsets: HashMap::new(),
+    }]);
+    let mut ids = HistoryIds::default();
+    for entry in stack.undo_stack.iter_mut() {
+        ids.collect(&mut entry.undo_data);
+    }
+    let map = history_remap(&project, &renamed, &ids);
     assert_eq!(map.get(1, X[0]), renamed.get(1, X[0]));
     assert_eq!(map.get(0, X[0]), None);
+}
+
+/// A split moves shots - and their ids - from one section to a new one. The
+/// history then holds each moved id in BOTH sections, but never at the same
+/// time, so nothing is renamed: an undo of the split after a reload must give
+/// the shots back the ids they had.
+#[test]
+fn an_id_that_moved_between_sections_is_not_renamed() {
+    let mut before = Project::new("Split".to_string(), None);
+    before.add_section(copy_data());
+    let mut after = before.clone();
+    let mut tail = after.get_section(0).unwrap().clone();
+    tail.id = 1;
+    tail.shots.drain(..1);
+    after.get_section_mut(0).unwrap().shots.truncate(1);
+    after.sections.push(tail);
+    after.next_section_id = 2;
+    after.rebuild_section_index();
+    after.rebuild_shot_uuid_index();
+
+    let mut live = after.clone();
+    let renamed = live.make_shot_uuids_project_unique();
+    assert!(renamed.is_empty());
+
+    let mut stack = stack_of(vec![UndoData::ProjectSnapshotPair {
+        before: serde_json::to_string(&before).unwrap(),
+        after: serde_json::to_string(&after).unwrap(),
+    }]);
+    let untouched = serde_json::to_string(&stack.undo_entries().collect::<Vec<_>>()).unwrap();
+    assert_eq!(stack.translate_shot_uuids(&live, &renamed), 0);
+    assert_eq!(
+        serde_json::to_string(&stack.undo_entries().collect::<Vec<_>>()).unwrap(),
+        untouched
+    );
+}
+
+/// History saved after an earlier heal: section 1 is gone live, and the
+/// history holds its shot under BOTH the old id (an entry from before that
+/// heal) and the derived one (an entry from after). Both must name one shot.
+#[test]
+fn an_old_id_follows_the_derived_one_the_history_already_holds() {
+    let mut live = Project::new("Gone".to_string(), None);
+    live.add_section(copy_data());
+    let renamed = live.make_shot_uuids_project_unique();
+    let derived = new_id(X[0]);
+    let entry = |uuid: &str| UndoData::PreviousValues {
+        section_id: 1,
+        shot_id: Some(100_000),
+        shot_uuid: Some(uuid.to_string()),
+        values_json: "{}".to_string(),
+        previous_offsets: HashMap::new(),
+    };
+    let mut stack = stack_of(vec![entry(X[0]), entry(&derived)]);
+
+    stack.translate_shot_uuids(&live, &renamed);
+
+    for entry in stack.undo_entries() {
+        let UndoData::PreviousValues { shot_uuid, .. } = &entry.undo_data else {
+            panic!("previous values");
+        };
+        assert_eq!(shot_uuid.as_deref(), Some(derived.as_str()));
+    }
 }

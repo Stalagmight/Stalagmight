@@ -7,8 +7,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::models::{
-    gps_to_local, GpsCoordinates, LoopClosure, Project, SectionId, StationKey, StationMerge,
-    StationRef,
+    gps_to_local, GpsCoordinates, LoopClosure, Project, SectionId, ShotUuidRemap, StationKey,
+    StationMerge, StationRef,
 };
 
 /// What [`append_project`] did beyond the copy itself.
@@ -27,7 +27,7 @@ pub(super) struct AppendOutcome {
     /// target, for the copied shots whose id changed on the way in. Anything
     /// keyed by a source uuid (the Add's carried ignores) is translated through
     /// [`Self::target_uuid`].
-    pub(super) shot_uuid_map: HashMap<(SectionId, String), String>,
+    pub(super) shot_uuid_map: ShotUuidRemap,
 }
 
 impl AppendOutcome {
@@ -35,9 +35,9 @@ impl AppendOutcome {
     /// `target_section`.
     pub(super) fn target_uuid(&self, target_section: SectionId, source_uuid: &str) -> String {
         self.shot_uuid_map
-            .get(&(target_section, source_uuid.to_string()))
-            .cloned()
-            .unwrap_or_else(|| source_uuid.to_string())
+            .get(target_section, source_uuid)
+            .unwrap_or(source_uuid)
+            .to_string()
     }
 }
 
@@ -186,8 +186,8 @@ fn carry_shot_identity(
     target: &mut Project,
     source: &Project,
     section_id_map: &HashMap<SectionId, SectionId>,
-) -> HashMap<(SectionId, String), String> {
-    let mut renamed = HashMap::new();
+) -> ShotUuidRemap {
+    let mut renamed = ShotUuidRemap::default();
     for section in &source.sections {
         let Some(&new_section_id) = section_id_map.get(&section.id) else {
             continue;
@@ -201,10 +201,8 @@ fn carry_shot_identity(
                 continue;
             };
             by_source.entry(from).or_insert_with(|| to.to_string());
-            if from != to {
-                renamed
-                    .entry((new_section_id, from.to_string()))
-                    .or_insert_with(|| to.to_string());
+            if from != to && renamed.get(new_section_id, from).is_none() {
+                renamed.insert(new_section_id, from.to_string(), to.to_string());
             }
         }
         let carry = |anchor: &Option<String>| {

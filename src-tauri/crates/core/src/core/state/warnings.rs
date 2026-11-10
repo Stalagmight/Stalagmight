@@ -56,8 +56,19 @@ impl AppState {
             std::collections::HashMap::new();
         let mut resolved_by_position: HashSet<(u32, u32, &str)> = HashSet::new();
         // A row stored against an id the load renamed (`reminted_shot_uuid`)
-        // still suppresses its shot until the next save re-keys it: owned keys,
-        // since the derived id exists nowhere else to borrow from.
+        // still suppresses its shot until the next save re-keys it. Only a row
+        // whose id no live shot of its section holds can be one, so only those
+        // pay for the derivation; owned keys, since the derived id exists
+        // nowhere else to borrow from.
+        let live_ids: HashSet<(u32, &str)> = project
+            .sections
+            .iter()
+            .flat_map(|s| {
+                s.shots
+                    .iter()
+                    .filter_map(move |shot| shot.uuid.as_deref().map(|u| (s.id, u)))
+            })
+            .collect();
         let mut resolved_by_renamed: std::collections::HashMap<(u32, String), HashSet<&str>> =
             std::collections::HashMap::new();
         for r in &resolved {
@@ -67,13 +78,15 @@ impl AppState {
                         .entry((r.section_id, uuid.as_str()))
                         .or_default()
                         .insert(r.warning_code.as_str());
-                    resolved_by_renamed
-                        .entry((
-                            r.section_id,
-                            crate::models::reminted_shot_uuid(r.section_id, uuid),
-                        ))
-                        .or_default()
-                        .insert(r.warning_code.as_str());
+                    if !live_ids.contains(&(r.section_id, uuid.as_str())) {
+                        resolved_by_renamed
+                            .entry((
+                                r.section_id,
+                                crate::models::reminted_shot_uuid(r.section_id, uuid),
+                            ))
+                            .or_default()
+                            .insert(r.warning_code.as_str());
+                    }
                 }
                 None => {
                     resolved_by_position.insert((r.section_id, r.shot_id, r.warning_code.as_str()));
@@ -409,8 +422,11 @@ impl AppState {
         };
         // A row stored against the id this shot had before the load renamed it
         // (`stored_shot_uuid_matches`) suppresses it too, so un-ignoring clears
-        // that row as well.
-        if let Some(live) = shot_uuid {
+        // that row as well. Only a shot whose live id the file does not hold
+        // can have been renamed, so the scan is skipped for every other one.
+        let maybe_renamed =
+            shot_uuid.filter(|live| !db.shot_uuid_is_persisted(section_id, live).unwrap_or(false));
+        if let Some(live) = maybe_renamed {
             for row in db.load_resolved_warnings_verbatim().unwrap_or_default() {
                 let Some(stored) = row.shot_uuid.as_deref() else {
                     continue;

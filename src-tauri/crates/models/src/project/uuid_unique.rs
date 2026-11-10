@@ -167,7 +167,7 @@ impl Project {
     pub fn make_shot_uuids_project_unique(&mut self) -> ShotUuidRemap {
         let mut order: Vec<usize> = (0..self.sections.len()).collect();
         order.sort_by_key(|&i| self.sections[i].id);
-        self.rename_repeats_in_order(&order, &HashMap::new())
+        self.rename_repeats_in_order(&order, HashMap::new())
     }
 
     /// Rename the ids of `new_sections` that another section of the project
@@ -190,7 +190,7 @@ impl Project {
             .filter(|&i| newcomers.contains(&self.sections[i].id))
             .collect();
         order.sort_by_key(|&i| self.sections[i].id);
-        self.rename_repeats_in_order(&order, &claimed)
+        self.rename_repeats_in_order(&order, claimed)
     }
 
     /// Walk the sections at `order`, letting each claim its ids; an id already
@@ -199,14 +199,11 @@ impl Project {
     fn rename_repeats_in_order(
         &mut self,
         order: &[usize],
-        pre_claimed: &HashMap<String, SectionId>,
+        mut claimed: HashMap<String, SectionId>,
     ) -> ShotUuidRemap {
-        let mut claimed = pre_claimed.clone();
-        let mut in_use: HashSet<String> = self
-            .sections
-            .iter()
-            .flat_map(|s| s.shots.iter().filter_map(|shot| shot.uuid.clone()))
-            .collect();
+        // Every id in the project, for stepping past one already in use. Built
+        // only once a repeat is found: the common case has none.
+        let mut in_use: Option<HashSet<String>> = None;
         let mut remap = ShotUuidRemap::default();
         for &i in order {
             let section_id = self.sections[i].id;
@@ -223,6 +220,12 @@ impl Project {
                         if remap.get(section_id, old).is_some() {
                             continue;
                         }
+                        let in_use = in_use.get_or_insert_with(|| {
+                            self.sections
+                                .iter()
+                                .flat_map(|s| s.shots.iter().filter_map(|shot| shot.uuid.clone()))
+                                .collect()
+                        });
                         let new =
                             reminted_shot_uuid_avoiding(section_id, old, |c| in_use.contains(c));
                         in_use.insert(new.clone());

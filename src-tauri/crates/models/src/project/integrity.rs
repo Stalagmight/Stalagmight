@@ -77,49 +77,44 @@ impl Project {
             }
         }
 
-        // Two shots in one section sharing a UUID make AfterShot anchors
-        // mis-resolve: resolve_key takes the FIRST match via position(), so a
+        // One pass over every shot UUID, for both kinds of repeat.
+        //
+        // Within a section: two shots sharing a UUID make AfterShot anchors
+        // mis-resolve - resolve_key takes the FIRST match via position(), so a
         // merge/closure/datum pointing at the second station silently snaps to
-        // the first - geometrically wrong with no other signal. Critical, and
-        // section-scoped because resolve_key is section-local. Empty UUIDs are
-        // "no identity yet" (ensure_shot_uuids fills them) so they don't count.
+        // the first, geometrically wrong with no other signal.
+        //
+        // Across sections: shot UUIDs are unique across the whole project.
+        // Every door that brings foreign ids in renames the newcomers
+        // (`reassign_repeated_shot_uuids`) and the load heals a file saved
+        // before that (`make_shot_uuids_project_unique`), so a repeat means a
+        // door forgot its rename; the integrity guard then rolls it back instead
+        // of persisting two shots that undo history, ignored warnings and the
+        // exports cannot tell apart. Reported once per id.
+        //
+        // Both Critical. Empty UUIDs are "no identity yet" (ensure_shot_uuids
+        // fills them) so they don't count.
+        let mut holders: HashMap<&str, SectionId> = HashMap::new();
+        let mut reported_across: HashSet<&str> = HashSet::new();
         for section in &self.sections {
             let mut seen: HashSet<&str> = HashSet::new();
-            for shot in &section.shots {
-                if let Some(u) = shot.uuid.as_deref() {
-                    if !u.is_empty() && !seen.insert(u) {
-                        violations.push(IntegrityViolation {
-                            severity: ViolationSeverity::Critical,
-                            category: "duplicate_shot_uuid".to_string(),
-                            message: format!(
-                                "Section {} has two shots sharing UUID {u}",
-                                section.id
-                            ),
-                        });
-                    }
-                }
-            }
-        }
-
-        // One UUID held by two SECTIONS. Shot UUIDs are unique across the whole
-        // project: every door that brings foreign ids in renames the newcomers
-        // (`reassign_repeated_shot_uuids`) and the load heals a file saved before
-        // that (`make_shot_uuids_project_unique`). Critical so a door that forgot
-        // its rename is rolled back by the integrity guard instead of persisting
-        // two shots that undo history, ignored warnings and the exports cannot
-        // tell apart. Reported once per id, naming the first two holders.
-        let mut holders: HashMap<&str, SectionId> = HashMap::new();
-        let mut reported: HashSet<&str> = HashSet::new();
-        for section in &self.sections {
             for u in section.shots.iter().filter_map(|shot| shot.uuid.as_deref()) {
                 if u.is_empty() {
+                    continue;
+                }
+                if !seen.insert(u) {
+                    violations.push(IntegrityViolation {
+                        severity: ViolationSeverity::Critical,
+                        category: "duplicate_shot_uuid".to_string(),
+                        message: format!("Section {} has two shots sharing UUID {u}", section.id),
+                    });
                     continue;
                 }
                 match holders.get(u) {
                     None => {
                         holders.insert(u, section.id);
                     }
-                    Some(&other) if other != section.id && reported.insert(u) => {
+                    Some(&other) if reported_across.insert(u) => {
                         violations.push(IntegrityViolation {
                             severity: ViolationSeverity::Critical,
                             category: "duplicate_shot_uuid_across_sections".to_string(),

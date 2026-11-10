@@ -147,10 +147,15 @@ impl AppState {
         if new_sections.is_empty() {
             return;
         }
-        if let Ok(mut guard) = self.project.lock() {
-            if let Some(project) = guard.as_mut() {
-                project.reassign_repeated_shot_uuids(new_sections);
-            }
+        // Recover a poisoned lock, as the import loop around this does: skipping
+        // the rename would leave a repeat the integrity epilogue then reads as
+        // corruption, refusing the whole import.
+        let mut guard = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(project) = guard.as_mut() {
+            project.reassign_repeated_shot_uuids(new_sections);
         }
     }
 
