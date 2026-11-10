@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   formatShotLabel,
   formatStationLabel,
+  formatStationNameLabel,
+  STATION_NAME_LABEL_MAX_CHARS,
   formatSectionLabel,
   formatCommentLabel,
   resolveShotLabelColor,
@@ -49,6 +51,33 @@ describe('labelText helpers (units)', () => {
     // Defaults: azimuth 0 dp, length + depth 1 dp.
     expect(formatShotLabel(312, 4.2, 1.8)).toBe('312° 4.2m 1.8m');
     expect(formatShotLabel(312, 4.2, -0.5, { azimuth: 0, length: 1, depth: 1 } as never)).toBe('312° 4.2m -0.5m');
+  });
+
+  it('formats a station name label: sanitized, trimmed, null when nothing is left', () => {
+    expect(formatStationNameLabel('17')).toBe('17');
+    expect(formatStationNameLabel('  A12 ')).toBe('A12');
+    // Bidi overrides and control characters are stripped, as in the grid/detail panel.
+    expect(formatStationNameLabel('1\u202e7\n')).toBe('17');
+    // No name, an empty one, or one of only unsafe characters: no label at all.
+    expect(formatStationNameLabel(undefined)).toBeNull();
+    expect(formatStationNameLabel(null)).toBeNull();
+    expect(formatStationNameLabel('')).toBeNull();
+    expect(formatStationNameLabel('   ')).toBeNull();
+    expect(formatStationNameLabel('\u202e\u2066\u0007')).toBeNull();
+  });
+
+  it('caps a long station name by code point and ends it with an ellipsis', () => {
+    const exact = 'b'.repeat(STATION_NAME_LABEL_MAX_CHARS);
+    expect(formatStationNameLabel(exact)).toBe(exact);
+    const capped = formatStationNameLabel('a'.repeat(40))!;
+    expect(Array.from(capped)).toHaveLength(STATION_NAME_LABEL_MAX_CHARS);
+    expect(capped.endsWith('\u2026')).toBe(true);
+    // A cut right after a space does not keep the space before the ellipsis.
+    expect(formatStationNameLabel(`${'c'.repeat(22)} ${'d'.repeat(10)}`)).toBe(`${'c'.repeat(22)}\u2026`);
+    // Astral characters (surrogate pairs) count once and are never split.
+    const emoji = formatStationNameLabel('\u{1F30A}'.repeat(30))!;
+    expect(Array.from(emoji)).toHaveLength(STATION_NAME_LABEL_MAX_CHARS);
+    expect(emoji).toBe(`${'\u{1F30A}'.repeat(STATION_NAME_LABEL_MAX_CHARS - 1)}\u2026`);
   });
 
   it('formats a station label as its index; section as its name (empty for null)', () => {

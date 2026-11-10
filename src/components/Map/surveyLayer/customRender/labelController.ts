@@ -39,7 +39,9 @@
  * ENTIRELY rebuild-free - the emitted slack window only bounds vertices in the
  * crowded low-zoom case. A per-kind / reference toggle
  * stays off the render loop: it flips the uniform and reruns the reveal pass
- * (cheap reveal-only re-upload), never a buffer rebuild.
+ * (cheap reveal-only re-upload), never a buffer rebuild. The one exception is
+ * switching station labels between IDs and names (`setStationLabelMode`): the
+ * text is baked into the glyph quads, so that switch rebuilds, like any edit.
  *
  * FONT READINESS: the SDF atlas needs the bundled font loaded (async). If a sync
  * arrives before the font resolves, it is remembered and built once the font is
@@ -65,7 +67,7 @@ import {
 } from './labelTessellate';
 import { shapedExtent, ShapeCache, type ExtentEm, type ShapedLabel } from './labelLayout';
 import { computeRevealZooms, REVEAL_NEVER, EMIT_SLACK, ADAPTIVE_EMIT_MAX, emitSlackFor } from './labelReveal';
-import { labelColorContextFrom } from './labelText';
+import { labelColorContextFrom, type StationLabelText } from './labelText';
 import { LABEL_KIND, LABEL_FLAG, type LabelKind } from './labelShaders';
 import { LABEL_KIND_STYLE } from './labelStyle';
 import { packCssColor, type Rgba8 } from './colorPack';
@@ -307,6 +309,9 @@ export class SurveyLabelController {
    *  visibility while inactive. Defaults mirror the stock layers' initial
    *  `visibility`: section names visible, everything else hidden. */
   private kindVisible: boolean[] = [false, false, true, false, false];
+  /** What station labels say (IDs or names). Their visibility is
+   *  `kindVisible[STATION_LABEL]`; this is the text a build bakes in. */
+  private stationLabelText: StationLabelText = 'id';
   /** setShowReferenceShots state (false → collapse reference / all-reference). */
   private referenceShotsVisible = true;
   /** #27: jumps toggle separately. Label flags carry a single "virtual" bit, so
@@ -391,6 +396,27 @@ export class SurveyLabelController {
   }
   setStationLabelsVisible(visible: boolean): void {
     this.setKindVisible(LABEL_KIND.STATION_LABEL, visible);
+  }
+
+  /**
+   * Station labels off, as IDs, or as names (the Display menu's exclusive
+   * Station IDs / Station names pair). Showing or hiding the current text is
+   * the usual uniform flip; changing the text rebuilds, because the text is
+   * baked into the glyph quads (and names mode builds no label for an unnamed
+   * station, so the declutter candidate set changes too). Hiding keeps the
+   * current text, so turning the same labels back on needs no rebuild.
+   */
+  setStationLabelMode(mode: StationLabelText | 'off'): void {
+    if (mode === 'off' || mode === this.stationLabelText) {
+      this.setKindVisible(LABEL_KIND.STATION_LABEL, mode !== 'off');
+      return;
+    }
+    this.stationLabelText = mode;
+    this.kindVisible[LABEL_KIND.STATION_LABEL] = true;
+    if (this.active) {
+      this.rebuildViewport();
+      this.pushStyle();
+    }
   }
   setSectionNamesVisible(visible: boolean): void {
     this.setKindVisible(LABEL_KIND.SECTION_NAME, visible);
@@ -497,7 +523,7 @@ export class SurveyLabelController {
     const tDesc0 = performance.now();
     let descriptors = buildLabelDescriptors(
       surveyData, gpsOrigin, anchorX, anchorY,
-      { colorCtx, precision: params.precision, commentColor },
+      { colorCtx, precision: params.precision, commentColor, stationLabelText: this.stationLabelText },
       kinds, vpCtx?.viewport,
     );
     const tShape0 = performance.now();
