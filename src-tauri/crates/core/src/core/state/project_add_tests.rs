@@ -1419,3 +1419,195 @@ fn add_and_merge_keep_each_sections_gauge_parity_and_anchors() {
         .unwrap();
     assert_eq!(gauge_of(&merged, merged.sections[0].id), expected, "merge");
 }
+
+// ===========================================================================
+// Merge projects reads and places sources the way Add does (#680, #682)
+// ===========================================================================
+
+/// Merge `sources` into a new file and read it back raw (no load-time heals).
+fn merge_files(dir: &Path, sources: Vec<PathBuf>) -> Project {
+    let output = dir.join("merged.stalx");
+    let result = AppState::new().unwrap().execute(Command::MergeProjects {
+        source_paths: sources,
+        output_path: output.clone(),
+        output_name: "Merged".to_string(),
+        archive_originals: false,
+    });
+    assert!(result.success, "merge failed: {:?}", result.error);
+    Database::open_existing(&output)
+        .unwrap()
+        .load_project()
+        .unwrap()
+}
+
+/// A one-section project with a datum on its first station.
+fn georeferenced(name: &str, prefix: &str, latitude: f64) -> Project {
+    let mut p = Project::new(name.to_string(), None);
+    let id = p
+        .add_section(section(
+            name,
+            vec![
+                shot(&format!("{prefix}-0"), 30.0, 12.0, 3.0),
+                shot(&format!("{prefix}-1"), 80.0, 9.0, 4.0),
+            ],
+        ))
+        .id;
+    p.store_zero_datum_without_repositioning(
+        StationRef::new(id, 0),
+        GpsCoordinates::new(latitude, -87.3, 0.0).unwrap(),
+    )
+    .unwrap();
+    p
+}
+
+fn section_named(project: &Project, name: &str) -> SectionId {
+    project
+        .sections
+        .iter()
+        .find(|s| s.name.as_deref() == Some(name))
+        .unwrap()
+        .id
+}
+
+fn station_xy(project: &Project, id: SectionId, station: u32) -> (f64, f64) {
+    let at = project
+        .compute_station_raw_coords(StationRef::new(id, station))
+        .unwrap();
+    (at.x, at.y)
+}
+
+/// #680: a source saved before v13 carries a pending Jump->Reference
+/// classification that an open finishes. The merge reads its sources the same
+/// way, so the legacy reference shot arrives as Reference - the merged file
+/// does not carry the flag, so nothing could fix it later - and the source
+/// file is read through a private copy, still flagged and byte-for-byte as it
+/// was.
+/// INJECTION (tried): reading merge sources the old way (`Database::open_existing`
+/// + `load_project` on the user's file) fails the Reference assertion.
+#[test]
+fn merge_finishes_a_sources_pending_classification_and_leaves_the_file_alone() {
+    let temp = TempDir::new().unwrap();
+    let mut legacy = Project::new("Legacy".to_string(), None);
+    let mut data = section(
+        "L0",
+        vec![shot("l0-0", 10.0, 5.0, 2.0), shot("l0-1", 40.0, 3.0, 2.5)],
+    );
+    data.shots[1].kind = ShotKind::Jump;
+    legacy.add_section(data);
+    let unflagged = save_to(temp.path(), "unflagged.stalx", &legacy);
+    let flagged = save_to(temp.path(), "flagged.stalx", &legacy);
+    rusqlite::Connection::open(&flagged)
+        .unwrap()
+        .execute(
+            "INSERT INTO project_settings (key, value) VALUES ('pending_kind_classification', '1')",
+            [],
+        )
+        .unwrap();
+    let flagged_bytes = std::fs::read(&flagged).unwrap();
+
+    let merged = merge_files(temp.path(), vec![unflagged, flagged.clone()]);
+    assert_eq!(
+        merged.sections[0].shots[1].kind,
+        ShotKind::Jump,
+        "without the flag the stored kind is kept"
+    );
+    assert_eq!(
+        merged.sections[1].shots[1].kind,
+        ShotKind::Reference,
+        "with the flag the merge classifies the source like an open"
+    );
+    assert_eq!(
+        std::fs::read(&flagged).unwrap(),
+        flagged_bytes,
+        "the source file is untouched"
+    );
+    assert!(Database::open_existing(&flagged)
+        .unwrap()
+        .is_kind_classification_pending());
+}
+
+/// #682: two georeferenced projects whose datums are about 100 m apart merge
+/// about 100 m apart. The first source's datum station becomes the frame
+/// origin; the second's lands at its GPS position in that frame instead of on
+/// top of the first.
+/// INJECTION (tried): dropping the `place_by_datum` call from `append_project`
+/// leaves the second datum station at (0, 0) and fails.
+#[test]
+fn merging_two_georeferenced_projects_places_the_second_by_its_gps() {
+    let temp = TempDir::new().unwrap();
+    let p1 = save_to(temp.path(), "p1.stalx", &georeferenced("P1", "p1", 20.5));
+    let p2 = save_to(temp.path(), "p2.stalx", &georeferenced("P2", "p2", 20.5009));
+
+    let merged = merge_files(temp.path(), vec![p1, p2]);
+    let first = station_xy(&merged, section_named(&merged, "P1"), 0);
+    let second = station_xy(&merged, section_named(&merged, "P2"), 0);
+    assert!(
+        first.0.abs() < 1e-6 && first.1.abs() < 1e-6,
+        "the first datum station is the origin: {first:?}"
+    );
+    let expected = gps_to_local(
+        &GpsCoordinates::new(20.5009, -87.3, 0.0).unwrap(),
+        &GpsCoordinates::new(20.5, -87.3, 0.0).unwrap(),
+    );
+    assert!(
+        (99.0..100.5).contains(&expected.1) && expected.0.abs() < 1e-6,
+        "the fixture really is about 100 m north: {expected:?}"
+    );
+    assert!(
+        (second.0 - expected.0).abs() < 1e-6 && (second.1 - expected.1).abs() < 1e-6,
+        "the second datum station is at its GPS position: {second:?} vs {expected:?}"
+    );
+}
+
+/// Merge and Add are one routine now, so they place a georeferenced source the
+/// same way: the second project's datum station ends up at the same offset from
+/// the first's whether P2 is merged with P1 or added into an open P1.
+#[test]
+fn merge_and_add_place_a_georeferenced_source_identically() {
+    let temp = TempDir::new().unwrap();
+    let p1 = save_to(temp.path(), "p1.stalx", &georeferenced("P1", "p1", 20.5));
+    let p2 = save_to(temp.path(), "p2.stalx", &georeferenced("P2", "p2", 20.5013));
+
+    let merged = merge_files(temp.path(), vec![p1.clone(), p2.clone()]);
+    let relative = |project: &Project| {
+        let a = station_xy(project, section_named(project, "P1"), 0);
+        let b = station_xy(project, section_named(project, "P2"), 1);
+        (b.0 - a.0, b.1 - a.1)
+    };
+    let by_merge = relative(&merged);
+
+    let state = AppState::new().unwrap();
+    assert!(state.open_project(p1).success);
+    assert!(add(&state, &p2).success);
+    let by_add = relative(&state.get_project_state().unwrap());
+    assert!(
+        (by_merge.0 - by_add.0).abs() < 1e-6 && (by_merge.1 - by_add.1).abs() < 1e-6,
+        "merge {by_merge:?} vs add {by_add:?}"
+    );
+}
+
+/// A datum-less first source is not moved, and the first georeferenced source
+/// after it still becomes the frame (its datum station goes to the origin) -
+/// the same rule Add follows in a project without a datum.
+#[test]
+fn a_datum_less_first_source_stays_put_and_the_next_datum_frames_the_merge() {
+    let temp = TempDir::new().unwrap();
+    let charlie = save_to(temp.path(), "charlie.stalx", &source_charlie());
+    let p1 = save_to(temp.path(), "p1.stalx", &georeferenced("P1", "p1", 20.5));
+    let p2 = save_to(temp.path(), "p2.stalx", &georeferenced("P2", "p2", 20.5009));
+
+    let merged = merge_files(temp.path(), vec![charlie, p1, p2]);
+    let c0 = section_named(&merged, "C0");
+    assert_eq!(
+        merged.section_offsets.get(&c0),
+        Some(&(100.0, 50.0)),
+        "the datum-less source keeps its own layout"
+    );
+    let first = station_xy(&merged, section_named(&merged, "P1"), 0);
+    assert!(first.0.abs() < 1e-6 && first.1.abs() < 1e-6, "{first:?}");
+    let second = station_xy(&merged, section_named(&merged, "P2"), 0);
+    assert!(
+        (second.1 - first.1) > 99.0,
+        "P2 is placed north of P1, not stacked on it: {second:?}"
+    );
+}
