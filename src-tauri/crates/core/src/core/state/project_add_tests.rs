@@ -1473,7 +1473,7 @@ fn references_of(project: &Project, ids: &[SectionId]) -> Vec<String> {
         })
     };
     let mut refs = Vec::new();
-    for merge in project.station_merges.iter() {
+    for merge in &*project.station_merges {
         if let (Some(a), Some(b)) = (at(&merge.station_a), at(&merge.station_b)) {
             refs.push(format!("merge {a} {b}"));
         }
