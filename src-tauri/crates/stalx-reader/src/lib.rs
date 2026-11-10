@@ -398,7 +398,16 @@ fn read_copy(copy: &Path, options: &ReadOptions) -> Result<Survey, ReadError> {
     remaining(expires)?;
     project.assign_closure_ids();
     remaining(expires)?;
-    project.redrive_offsets_after_load();
+    // The re-drive also renames shot UUIDs held by more than one section (a
+    // file saved before they were unique across the project), with the same
+    // derived ids the app's own open gives them - so they are flagged derived.
+    let (_, renamed) = project.redrive_offsets_after_load_reporting();
+    let mut derived_uuids = derived_uuids;
+    derived_uuids.extend(
+        renamed
+            .iter()
+            .map(|(section, _, new)| (section, new.to_string())),
+    );
     remaining(expires)?;
     if db.is_kind_classification_pending() {
         project.classify_virtual_shots(&ClassifyScope::WholeProject);

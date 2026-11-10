@@ -24,11 +24,12 @@ use stalagmight_models::{NorthReference, Project, ShotKind as ModelShotKind, Sur
 /// - [`StationId::index`] is NOT stable: inserting or deleting a shot shifts the
 ///   indexes after it, and reversing a section renumbers station `i` to `N - i`.
 ///   Key anything persistent on `(section id, shot uuid)`, never on an index.
-/// - [`Shot::uuid`] is stable across edits and unique within its section only
-///   (the same UUID can appear in two sections), so key a shot on
-///   `(section id, uuid)`. A shot the file gives no usable UUID (files from before
-///   shot UUIDs, or a second shot repeating one in its section) gets one derived
-///   deterministically and is flagged [`Shot::uuid_derived`].
+/// - [`Shot::uuid`] is stable across edits and unique across the whole survey.
+///   A shot the file gives no usable UUID (files from before shot UUIDs, a second
+///   shot repeating one in its section, or a section repeating an id an earlier
+///   section holds - the same Ariane file imported twice, a merge of two copies)
+///   gets one derived deterministically, the same one the app's open gives it,
+///   and is flagged [`Shot::uuid_derived`].
 ///
 /// # Ordering
 ///
@@ -123,10 +124,11 @@ pub enum CorrectionSource {
 pub struct Shot {
     /// Stable identity across revisions. See [`Shot::uuid_derived`].
     pub uuid: String,
-    /// `true` when the file had no usable UUID for this shot (none, or the same
-    /// one as an earlier shot in the section) and `uuid` was derived by this
-    /// crate from the shot's place: deterministic for the same file, but not a
-    /// persisted identity, so it can change once the app re-saves the file.
+    /// `true` when the file had no usable UUID for this shot (none, the same one
+    /// as an earlier shot in the section, or one a lower section already holds)
+    /// and `uuid` was derived: deterministic for the same file, but not a
+    /// persisted identity until the app re-saves the file. A repeat across
+    /// sections derives the id the app gives it, so it survives that save.
     pub uuid_derived: bool,
     pub kind: ShotKind,
     pub length: f64,
