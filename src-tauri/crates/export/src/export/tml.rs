@@ -641,12 +641,15 @@ fn list_capped(names: &[&str]) -> String {
 /// project would render to different bytes on each export.
 ///
 /// What this value guarantees is STABILITY across re-exports, not uniqueness within
-/// the file. Shot-UUID uniqueness in this model is PER-SECTION only, deliberately:
+/// the file. The model's INVARIANT is per-section uniqueness:
 /// `Project::ensure_unique_shot_uuids` resets its dedup set inside the section loop,
 /// and the companion `duplicate_shot_uuid` integrity check is section-scoped for the
 /// same reason - `resolve_key` is section-local, so a cross-section repeat cannot
-/// mis-resolve an anchor and is not a violation. Document-level uniqueness is an
-/// EXPORT-boundary guarantee instead: `remint_duplicate_uuids` (user profile) and
+/// mis-resolve an anchor and is not a violation. Copying one project into another
+/// (merge, add) no longer brings in a repeat - the copy re-mints a colliding id -
+/// but other producers still can (the same Ariane file imported twice, a project
+/// saved before copies re-minted). Document-level uniqueness therefore stays an
+/// EXPORT-boundary guarantee: `remint_duplicate_uuids` (user profile) and
 /// `harden_for_speleodb` (sidecar) each settle repeats their own way after the
 /// full shot list is assembled.
 /// Never returns an empty string: an empty stored UUID is treated as "no identity

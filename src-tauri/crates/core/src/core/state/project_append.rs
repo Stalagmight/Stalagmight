@@ -88,10 +88,6 @@ pub(super) fn append_project(
         let mut data = section.to_section_data();
         let changed = claim_unique_uuids(&mut data, &mut taken);
         target.add_section(data);
-        if let Some(added) = target.get_section(new_section_id) {
-            // `Section::new` mints an id for a shot that came without one.
-            taken.extend(added.shots.iter().filter_map(|shot| shot.uuid.clone()));
-        }
 
         // #438: `SectionData` cannot carry the north reference, so the
         // copy would land on the target's default - reverting a
@@ -165,7 +161,8 @@ pub(super) fn append_project(
 /// translation must follow. A later in-section repeat is re-minted too (as
 /// `Section::new` would), but nothing can name it.
 ///
-/// Empty and missing uuids are left for `Section::new` to mint.
+/// A missing or empty uuid is minted here too (as `Section::new` would), so
+/// every id the section ends up with is in `taken` when this returns.
 fn claim_unique_uuids(
     data: &mut SectionData,
     taken: &mut HashSet<String>,
@@ -173,20 +170,20 @@ fn claim_unique_uuids(
     let mut changed: HashMap<String, String> = HashMap::new();
     let mut seen_here: HashSet<String> = HashSet::new();
     for shot in &mut data.shots {
-        let Some(old) = shot.uuid.clone().filter(|u| !u.is_empty()) else {
-            continue;
-        };
-        let first_here = seen_here.insert(old.clone());
-        if taken.insert(old.clone()) {
-            continue;
-        }
-        let fresh = loop {
-            let candidate = uuid::Uuid::new_v4().to_string();
-            if taken.insert(candidate.clone()) {
-                break candidate;
+        let old = shot.uuid.clone().filter(|u| !u.is_empty());
+        let first_here = match &old {
+            Some(id) => {
+                let first_here = seen_here.insert(id.clone());
+                if taken.insert(id.clone()) {
+                    continue; // nobody holds it yet: the shot keeps it
+                }
+                first_here
             }
+            None => false,
         };
-        if first_here {
+        let fresh = uuid::Uuid::new_v4().to_string();
+        taken.insert(fresh.clone());
+        if let (Some(old), true) = (old, first_here) {
             changed.insert(old, fresh.clone());
         }
         shot.uuid = Some(fresh);
