@@ -8074,6 +8074,39 @@ fn stats_multiple_sections() {
     assert!((max_depth - 3.0).abs() < 1e-6);
 }
 
+/// A Reference shot repeats passage already surveyed, so the project length sums
+/// each section's surveyed length and never counts a Reference again (#689). The
+/// shot count still includes it.
+#[test]
+fn stats_total_length_excludes_reference_shots() {
+    let reference = |length: f64| ShotData {
+        kind: ShotKind::Reference,
+        ..shot(0.0, 0.0, length, 0.0, 0.0)
+    };
+    let jump = ShotData {
+        kind: ShotKind::Jump,
+        ..shot(0.0, 0.0, 3.0, 0.0, 0.0)
+    };
+    let mut project = Project::new("With references".to_string(), None);
+    project.add_section(SectionData {
+        shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0), reference(4.0), jump],
+        ..Default::default()
+    });
+    project.add_section(SectionData {
+        shots: vec![reference(6.0), shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+        ..Default::default()
+    });
+    // A section made only of References adds nothing to the length.
+    project.add_section(SectionData {
+        shots: vec![reference(9.0)],
+        ..Default::default()
+    });
+
+    let stats = project.stats();
+    assert_eq!(stats.shot_count, 6);
+    assert!((stats.total_length - 18.0).abs() < 1e-6); // 10 + 3 + 5
+}
+
 #[test]
 fn stats_with_loop_closures() {
     let mut project = Project::new("Loops".to_string(), None);
