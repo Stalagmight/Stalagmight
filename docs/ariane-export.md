@@ -126,13 +126,21 @@ Uniqueness lives at two different levels, and they are deliberately different:
   `duplicate_shot_uuid` integrity check is section-scoped for the same reason -
   `resolve_key` is section-local, so a cross-section repeat cannot mis-resolve
   a station anchor and is not treated as a violation. Cross-section repeats are
-  reachable in normal use since #423 (importing the same Ariane file twice, or
-  merging two projects that each imported it) and are legal by design.
+  reachable in normal use since #423 (importing the same Ariane file twice) and
+  are legal by design.
+- **Copies: never a new repeat.** "Merge projects" and "Add .stalx" re-mint a
+  copied shot whose uuid the project already holds (or an earlier shot of the
+  copy took), so a copy brings in no repeat. The cost is deliberate: when two
+  projects that each imported the same Ariane file are merged, the first keeps
+  the file's ids and the second copy's shots get fresh v4s, so that copy no
+  longer round-trips its Ariane identity. Repeats a project already held
+  (imported twice, or merged before copies re-minted) are left as they are.
 - **Export boundary: per-document, enforced.** `build_export_shots` settles
   repeats after assembling the full shot list, each profile its own way: the
   user export re-mints later occurrences (`remint_duplicate_uuids` - the first
   copy keeps its Ariane identity, later copies draw a fresh v4 *per export*,
-  so byte-stability holds only for the first copy), and the SpeleoDB sidecar
+  so for a project that still holds a repeat, byte-stability holds only for
+  the first copy), and the SpeleoDB sidecar
   drops them (`harden_for_speleodb`), because a repeat would alias two shots
   onto one GeoJSON feature id.
 

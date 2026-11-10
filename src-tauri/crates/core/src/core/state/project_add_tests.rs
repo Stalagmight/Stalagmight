@@ -1602,6 +1602,10 @@ fn adding_the_same_project_twice_remints_only_the_second_copy() {
         !first_refs.iter().any(|r| r.contains('?')),
         "every reference resolves: {first_refs:?}"
     );
+    assert!(
+        first_refs.contains(&"gauge 0 true Some(\"1\") Some(\"0\")".to_string()),
+        "the gauge pair survived the read, so the comparison above covers it: {first_refs:?}"
+    );
     assert!(!project.has_critical_integrity_violations());
 }
 
@@ -1824,4 +1828,59 @@ fn an_add_leaves_repeats_the_open_project_already_held() {
     let added = &uuids_of(&project, &result.section_ids)[0];
     assert_ne!(added[0], "dup", "the incoming shot does not add a third");
     assert_eq!(added[1], "i0-1", "a non-colliding id is kept");
+}
+
+/// A source can repeat one id INSIDE a section (a crafted file, or a merge
+/// source, which is read without the open path's dedupe). When that id also
+/// collides with the target, both occurrences are re-minted, and whatever names
+/// the id - the gauge anchor here - follows the FIRST: the shot a reference to
+/// it resolves to in the source (`resolve_key` takes the first match).
+/// INJECTION (tried): recording every occurrence instead of only the first
+/// (`(old, first_here)` -> `(old, true)`) moves the gauge onto shot 2 and fails.
+#[test]
+fn an_in_section_repeat_is_followed_to_its_first_occurrence() {
+    let mut target = Project::new("Target".to_string(), None);
+    target.add_section(section("T0", vec![shot("U", 0.0, 10.0, 1.0)]));
+    let mut source = Project::new("Crafted".to_string(), None);
+    let s0 = source
+        .add_section(section(
+            "S0",
+            vec![
+                shot("U", 10.0, 5.0, 1.0),
+                shot("x", 20.0, 4.0, 1.5),
+                shot("y", 30.0, 3.0, 2.0),
+            ],
+        ))
+        .id;
+    if let Some(s) = source.get_section_mut(s0) {
+        // The repeat `Section::new` would have removed, put back by hand.
+        s.shots[2].uuid = Some("U".to_string());
+        s.gauge_shot_uuid = Some("U".to_string());
+        s.gauge_neighbour_uuid = Some("x".to_string());
+    }
+
+    let outcome = super::project_append::append_project(&mut target, &source).unwrap();
+    let id = outcome.new_section_ids[0];
+    let copied = target.get_section(id).unwrap();
+    let ids: Vec<String> = copied
+        .shots
+        .iter()
+        .map(|shot| shot.uuid.clone().unwrap())
+        .collect();
+    assert_ne!(ids[0], "U", "the first occurrence collides with the target");
+    assert_ne!(ids[2], "U", "the repeat collides too");
+    assert_ne!(ids[0], ids[2], "and they do not share the fresh id");
+    assert_eq!(ids[1], "x", "a non-colliding id is kept");
+    assert_eq!(
+        copied.gauge_shot_uuid.as_deref(),
+        Some(ids[0].as_str()),
+        "the gauge follows the first occurrence"
+    );
+    assert_eq!(copied.gauge_neighbour_uuid.as_deref(), Some("x"));
+    assert_eq!(
+        outcome.reminted_uuids.get(&(id, "U".to_string())),
+        Some(&ids[0]),
+        "the translation an ignore would use names the first occurrence"
+    );
+    assert_no_repeated_shot_uuid(&target, "an in-section repeat");
 }
