@@ -261,3 +261,23 @@ fn integrity_reports_an_id_in_two_sections_and_repair_heals_it() {
     assert!(project.check_structural_integrity().is_empty());
     assert_eq!(comment_at(&project, 1, 2).as_deref(), Some("second"));
 }
+
+#[test]
+fn a_plan_anchor_saved_against_a_renamed_id_still_finds_its_shot() {
+    let mut project = two_copies();
+    project.make_shot_uuids_project_unique();
+    let second = project.get_section(1).unwrap();
+    let found = crate::PlanAnchor::position_of(&project, second, &Some(IDS[2].to_string()));
+    assert_eq!(
+        found,
+        Some(2),
+        "the old id resolves through the derived one"
+    );
+    let first = project.get_section(0).unwrap();
+    let kept = crate::PlanAnchor::position_of(&project, first, &Some(IDS[2].to_string()));
+    assert_eq!(
+        kept,
+        Some(2),
+        "the section that kept the id still finds it directly"
+    );
+}

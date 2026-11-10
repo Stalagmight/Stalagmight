@@ -120,6 +120,16 @@ impl PlanAnchor {
             .shots
             .iter()
             .position(|s| s.uuid.as_deref() == Some(uuid))
+            .or_else(|| {
+                // A plan saved against an id the load renamed (a cross-section
+                // repeat in a file saved before shot UUIDs were project-wide
+                // unique) still finds its shot through the derived id.
+                let renamed = crate::reminted_shot_uuid(section.id, uuid);
+                section
+                    .shots
+                    .iter()
+                    .position(|s| s.uuid.as_deref() == Some(renamed.as_str()))
+            })
     }
 }
 

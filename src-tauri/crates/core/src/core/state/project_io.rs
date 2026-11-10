@@ -620,11 +620,10 @@ impl AppState {
                 // would let INSERT OR REPLACE (against UNIQUE(section_id, shot_id,
                 // warning_code)) silently delete the older shot's still-valid
                 // ignore.
-                // Key by (section_id, uuid), not uuid alone: ensure_unique_shot_uuids
-                // only de-dups within a section, so two sections can share a shot
-                // UUID and a uuid-only key would collapse both live shots into one
-                // entry - remapping section A's ignore to whichever section won the
-                // collect, losing A's ignore and mis-suppressing B (issue #57 / Codex).
+                // Key by (section_id, uuid), not uuid alone: shot UUIDs are unique
+                // across the live project, but a STORED row may name an id that
+                // two sections held before the load renamed one copy, and only
+                // its section says which shot it meant (issue #57 / Codex).
                 let live_positions: std::collections::HashMap<(SectionId, &str), (SectionId, u32)> =
                     project
                         .sections
@@ -689,10 +688,25 @@ impl AppState {
                     .filter_map(|mut r| {
                         match r.shot_uuid.as_deref() {
                             Some(uuid) => {
-                                // Look up by (section_id, uuid): a UUID-keyed row's
-                                // section_id is its shot's section, so this targets the
-                                // right shot even when another section shares the UUID.
-                                let &(sec, shot) = live_positions.get(&(r.section_id, uuid))?;
+                                // Look up by (section_id, uuid). A row stored against
+                                // an id the load renamed (a cross-section repeat in a
+                                // file saved before shot UUIDs were project-wide
+                                // unique) names its shot through the derived id, and
+                                // is re-keyed to it here: this save persists it.
+                                let (live_uuid, (sec, shot)) = match live_positions
+                                    .get(&(r.section_id, uuid))
+                                {
+                                    Some(&position) => (uuid.to_string(), position),
+                                    None => {
+                                        let renamed =
+                                            crate::models::reminted_shot_uuid(r.section_id, uuid);
+                                        let position = live_positions
+                                            .get(&(r.section_id, renamed.as_str()))
+                                            .copied()?;
+                                        (renamed, position)
+                                    }
+                                };
+                                r.shot_uuid = Some(live_uuid);
                                 r.section_id = sec;
                                 r.shot_id = shot;
                                 Some(r)
