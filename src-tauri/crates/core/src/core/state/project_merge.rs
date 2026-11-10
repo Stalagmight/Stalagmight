@@ -1,16 +1,32 @@
 use super::project_append::append_project;
 use super::project_io::save_failure;
-use super::project_source::read_source_project;
+use super::project_source::{read_source_project, with_suffix, SQLITE_SIDECARS};
 use super::AppState;
 use crate::core::command::{sanitize_display_text, MAX_FILE_NAME_LEN};
-
-/// How much of a source's path a merge refusal shows (a path, unlike a file
-/// name, has no natural bound).
-const MAX_MERGE_SOURCE_LABEL: usize = 4 * MAX_FILE_NAME_LEN;
 use crate::core::CommandResult;
 use crate::models::{Project, FEATURE_ID_STRIDE, MAX_SECTIONS_IN_ID_SPACE, MAX_SECTION_ID};
 use crate::persistence::Database;
 use std::path::PathBuf;
+
+/// How much of a source's path a merge refusal shows (a path, unlike a file
+/// name, has no natural bound).
+const MAX_MERGE_SOURCE_LABEL: usize = 4 * MAX_FILE_NAME_LEN;
+
+/// A source's path as a merge refusal names it: the whole path, since two
+/// sources can share a file name, cut from the FRONT when it is too long so
+/// the file name - the part that says which source failed - always survives.
+pub(super) fn merge_source_label(path: &std::path::Path) -> String {
+    let full = sanitize_display_text(&path.to_string_lossy(), usize::MAX);
+    let count = full.chars().count();
+    if count <= MAX_MERGE_SOURCE_LABEL {
+        return full;
+    }
+    let tail: String = full
+        .chars()
+        .skip(count - (MAX_MERGE_SOURCE_LABEL - 3))
+        .collect();
+    format!("...{tail}")
+}
 
 impl AppState {
     /// Merge multiple projects into a new project file
@@ -71,9 +87,7 @@ impl AppState {
         // merged output does not carry the source's flag.
         let mut source_projects: Vec<Project> = Vec::with_capacity(source_paths.len());
         for path in &source_paths {
-            // The whole path, not just the file name: two sources can share a
-            // name in different folders, and the message must say which failed.
-            let label = sanitize_display_text(&path.to_string_lossy(), MAX_MERGE_SOURCE_LABEL);
+            let label = merge_source_label(path);
             match read_source_project(path, &label, "merged") {
                 Ok(source) => source_projects.push(source.project),
                 Err(e) => return CommandResult::failure(e),
@@ -242,6 +256,16 @@ impl AppState {
         }
 
         std::fs::rename(path, &archive_path)?;
+        // A `-wal` or hot `-journal` belongs to the database by NAME: left
+        // behind, the archive loses the WAL's commits (which the merge itself
+        // read) and a stale journal waits for whatever file next takes this
+        // name. Each moves with the database.
+        for suffix in SQLITE_SIDECARS {
+            let sidecar = with_suffix(path, suffix);
+            if sidecar.is_file() {
+                std::fs::rename(&sidecar, with_suffix(&archive_path, suffix))?;
+            }
+        }
         tracing::info!(
             original = ?path,
             archived = ?archive_path,

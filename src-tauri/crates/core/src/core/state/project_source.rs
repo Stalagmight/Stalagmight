@@ -32,8 +32,8 @@ pub(super) fn read_source_project(
     let dir = tempfile::tempdir()
         .map_err(|e| format!("Failed to prepare a private copy of '{label}': {e}"))?;
     let copy = dir.path().join("source.stalx");
-    copy_regular_file(path, &copy, label, verb)?;
-    copy_sqlite_sidecars(path, &copy, label, verb)?;
+    let copied = copy_regular_file(path, &copy, label, verb, MAX_SOURCE_BYTES)?;
+    copy_sqlite_sidecars(path, &copy, label, verb, MAX_SOURCE_BYTES - copied)?;
     let db = Database::open_existing(&copy)
         .map_err(|e| format!("Failed to open project '{label}': {e}"))?;
     let mut project = db
@@ -120,7 +120,13 @@ const MAX_SOURCE_BYTES: u64 = crate::speleodb::client::NATIVE_LIMIT;
 /// The metadata check runs before the file is opened (opening a FIFO for
 /// reading blocks), and the copy itself is bounded too, so a file that grows
 /// or is swapped after the check still cannot exceed the ceiling.
-fn copy_regular_file(path: &Path, dest: &Path, label: &str, verb: &str) -> Result<(), String> {
+fn copy_regular_file(
+    path: &Path,
+    dest: &Path,
+    label: &str,
+    verb: &str,
+    cap: u64,
+) -> Result<u64, String> {
     let limit_mb = MAX_SOURCE_BYTES / (1024 * 1024);
     let metadata = match std::fs::metadata(path) {
         Ok(metadata) => metadata,
@@ -132,7 +138,7 @@ fn copy_regular_file(path: &Path, dest: &Path, label: &str, verb: &str) -> Resul
     if !metadata.is_file() {
         return Err(format!("'{label}' is not a project file"));
     }
-    if metadata.len() > MAX_SOURCE_BYTES {
+    if metadata.len() > cap {
         return Err(format!(
             "'{label}' is larger than {limit_mb} MB, the largest project file that can be {verb}"
         ));
@@ -141,16 +147,16 @@ fn copy_regular_file(path: &Path, dest: &Path, label: &str, verb: &str) -> Resul
     let mut target =
         std::fs::File::create(dest).map_err(|e| format!("Failed to read '{label}': {e}"))?;
     let copied = std::io::copy(
-        &mut std::io::Read::take(source, MAX_SOURCE_BYTES + 1),
+        &mut std::io::Read::take(source, cap.saturating_add(1)),
         &mut target,
     )
     .map_err(|e| format!("Failed to read '{label}': {e}"))?;
-    if copied > MAX_SOURCE_BYTES {
+    if copied > cap {
         return Err(format!(
             "'{label}' grew past {limit_mb} MB while it was being read, so it was not {verb}"
         ));
     }
-    Ok(())
+    Ok(copied)
 }
 
 /// Copy the SQLite sidecars of `path` that exist beside it - a `-wal` holding
@@ -163,17 +169,34 @@ fn copy_regular_file(path: &Path, dest: &Path, label: &str, verb: &str) -> Resul
 /// the original would not. With them beside the copy, SQLite replays or rolls
 /// back exactly as it would for the original. `-shm` is not copied: it is an
 /// index SQLite rebuilds from the WAL.
-fn copy_sqlite_sidecars(path: &Path, dest: &Path, label: &str, verb: &str) -> Result<(), String> {
-    for suffix in ["-wal", "-journal"] {
+///
+/// They share the source's size budget (`remaining`, what the main file left of
+/// [`MAX_SOURCE_BYTES`]), so one source never copies more than that in all; a
+/// refusal names the sidecar, not the database.
+fn copy_sqlite_sidecars(
+    path: &Path,
+    dest: &Path,
+    label: &str,
+    verb: &str,
+    mut remaining: u64,
+) -> Result<(), String> {
+    for suffix in SQLITE_SIDECARS {
         let from = with_suffix(path, suffix);
         if std::fs::metadata(&from).is_ok_and(|m| m.is_file()) {
-            copy_regular_file(&from, &with_suffix(dest, suffix), label, verb)?;
+            let sidecar = format!("{label}{suffix}");
+            let copied =
+                copy_regular_file(&from, &with_suffix(dest, suffix), &sidecar, verb, remaining)?;
+            remaining = remaining.saturating_sub(copied);
         }
     }
     Ok(())
 }
 
-fn with_suffix(path: &Path, suffix: &str) -> std::path::PathBuf {
+/// The SQLite files that carry a database's data beside it, named after it.
+pub(super) const SQLITE_SIDECARS: [&str; 2] = ["-wal", "-journal"];
+
+/// `path` with `suffix` appended to its file name (`x.stalx` -> `x.stalx-wal`).
+pub(super) fn with_suffix(path: &Path, suffix: &str) -> std::path::PathBuf {
     let mut name = path.as_os_str().to_os_string();
     name.push(suffix);
     std::path::PathBuf::from(name)

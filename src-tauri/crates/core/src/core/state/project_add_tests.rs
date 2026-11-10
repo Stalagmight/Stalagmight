@@ -1579,11 +1579,27 @@ fn merge_and_add_place_a_georeferenced_source_identically() {
     let state = AppState::new().unwrap();
     assert!(state.open_project(p1).success);
     assert!(add(&state, &p2).success);
-    let by_add = relative(&state.get_project_state().unwrap());
+    let added = state.get_project_state().unwrap();
+    let by_add = relative(&added);
     assert!(
         (by_merge.0 - by_add.0).abs() < 1e-6 && (by_merge.1 - by_add.1).abs() < 1e-6,
         "merge {by_merge:?} vs add {by_add:?}"
     );
+    // And both are RIGHT, not merely equal: the datum stations sit their GPS
+    // distance apart (a shared mistake in the one routine would pass the
+    // comparison above).
+    let expected = gps_to_local(
+        &GpsCoordinates::new(20.5013, -87.3, 0.0).unwrap(),
+        &GpsCoordinates::new(20.5, -87.3, 0.0).unwrap(),
+    );
+    for project in [&merged, &added] {
+        let a = station_xy(project, section_named(project, "P1"), 0);
+        let b = station_xy(project, section_named(project, "P2"), 0);
+        assert!(
+            (b.0 - a.0 - expected.0).abs() < 1e-6 && (b.1 - a.1 - expected.1).abs() < 1e-6,
+            "datum stations {a:?} -> {b:?}, expected {expected:?} apart"
+        );
+    }
 }
 
 /// A datum-less first source is not moved, and the first georeferenced source
@@ -1726,4 +1742,177 @@ fn a_sources_committed_wal_pages_are_read_by_add_and_merge() {
         wal_bytes,
         "its WAL too"
     );
+}
+
+/// A source a crash caught mid-write: half-applied pages in the database file,
+/// the originals in a hot `-journal` beside it. Opening it would roll the
+/// journal back, so reading it as a source must too - Add and Merge both see
+/// the survey as it was before the interrupted write, and neither touches the
+/// source or its journal. (A `.stalx` is in SQLite's default DELETE journal
+/// mode, so this, not a WAL, is what a real crash leaves.)
+/// INJECTION (tried): dropping "-journal" from `SQLITE_SIDECARS` makes both
+/// read the interrupted lengths (+1000 m) and fail.
+#[test]
+fn a_sources_hot_journal_is_rolled_back_by_add_and_merge() {
+    let temp = TempDir::new().unwrap();
+    let clean = save_to(temp.path(), "clean.stalx", &georeferenced("J", "j", 20.5));
+    let journal = |p: &Path| PathBuf::from(format!("{}-journal", p.display()));
+    let crashed = temp.path().join("crashed.stalx");
+    {
+        let conn = rusqlite::Connection::open(&clean).unwrap();
+        // One page of cache makes the transaction spill into the database
+        // file, which is the state a kill has to be recoverable from.
+        conn.execute_batch("PRAGMA cache_size = 1;").unwrap();
+        conn.execute_batch(
+            "BEGIN IMMEDIATE;
+             UPDATE shots SET length = length + 1000.0;
+             UPDATE sections SET name = 'interrupted-write';",
+        )
+        .unwrap();
+        std::fs::copy(&clean, &crashed).unwrap();
+        std::fs::copy(journal(&clean), journal(&crashed)).unwrap();
+        conn.execute_batch("ROLLBACK;").unwrap();
+    }
+    let (db_bytes, journal_bytes) = (
+        std::fs::read(&crashed).unwrap(),
+        std::fs::read(journal(&crashed)).unwrap(),
+    );
+    assert_ne!(
+        db_bytes,
+        std::fs::read(&clean).unwrap(),
+        "the interrupted write really reached the database file"
+    );
+    let first_length = |project: &Project| {
+        project
+            .get_section(section_named(project, "J"))
+            .unwrap()
+            .shots[0]
+            .length
+    };
+
+    let merged = merge_files(
+        temp.path(),
+        vec![
+            crashed.clone(),
+            save_to(temp.path(), "c.stalx", &source_charlie()),
+        ],
+    );
+    assert_eq!(first_length(&merged), 12.0, "merge rolls the journal back");
+    let (state, _) = open_target(temp.path(), true);
+    assert!(add(&state, &crashed).success);
+    assert_eq!(
+        first_length(&state.get_project_state().unwrap()),
+        12.0,
+        "add rolls it back too"
+    );
+    assert_eq!(
+        std::fs::read(&crashed).unwrap(),
+        db_bytes,
+        "source untouched"
+    );
+    assert_eq!(
+        std::fs::read(journal(&crashed)).unwrap(),
+        journal_bytes,
+        "its journal too"
+    );
+}
+
+/// "Archive original project files" moves a source's SQLite sidecars with it:
+/// a `-wal` left behind would take its commits away from the archive (the
+/// merge read them) and wait beside a name the next file may take.
+/// INJECTION (tried): dropping the sidecar loop from `archive_project_file`
+/// leaves `crashed.stalx-wal` behind and the archive at the pre-WAL length.
+#[test]
+fn archiving_a_source_moves_its_wal_with_it() {
+    let temp = TempDir::new().unwrap();
+    let live = save_to(temp.path(), "live.stalx", &georeferenced("W", "w", 20.5));
+    let wal = |p: &Path| PathBuf::from(format!("{}-wal", p.display()));
+    let crashed = temp.path().join("crashed.stalx");
+    {
+        let conn = rusqlite::Connection::open(&live).unwrap();
+        conn.pragma_update(None, "journal_mode", "WAL").unwrap();
+        conn.pragma_update(None, "wal_autocheckpoint", 0).unwrap();
+        conn.execute("UPDATE shots SET length = 77.0 WHERE uuid = 'w-0'", [])
+            .unwrap();
+        std::fs::copy(&live, &crashed).unwrap();
+        std::fs::copy(wal(&live), wal(&crashed)).unwrap();
+    }
+    let output = temp.path().join("merged.stalx");
+    let result = AppState::new().unwrap().execute(Command::MergeProjects {
+        source_paths: vec![
+            crashed.clone(),
+            save_to(temp.path(), "c.stalx", &source_charlie()),
+        ],
+        output_path: output,
+        output_name: "Merged".to_string(),
+        archive_originals: true,
+    });
+    assert!(result.success, "{:?}", result.error);
+
+    let archived = temp.path().join("crashed.stalx.archived");
+    assert!(
+        !crashed.exists() && !wal(&crashed).exists(),
+        "nothing left behind"
+    );
+    assert!(wal(&archived).is_file(), "the WAL moved with its database");
+    let restored = Database::open_existing(&archived)
+        .unwrap()
+        .load_project()
+        .unwrap();
+    assert_eq!(
+        restored
+            .get_section(section_named(&restored, "W"))
+            .unwrap()
+            .shots[0]
+            .length,
+        77.0,
+        "the archive still holds the WAL's commit"
+    );
+}
+
+/// The merge reads a source through a private copy, so a file an open WOULD
+/// rewrite (one whose version stamp an open fills in) is left byte-for-byte as
+/// it was. Before #680 the merge opened the user's file in place.
+/// INJECTION (tried): reading merge sources the old way (`Database::open_existing`
+/// on the user's file) stamps it and fails the byte assertion.
+#[test]
+fn merge_leaves_a_source_an_open_would_rewrite_untouched() {
+    let temp = TempDir::new().unwrap();
+    let unstamped = save_to(temp.path(), "unstamped.stalx", &source_charlie());
+    rusqlite::Connection::open(&unstamped)
+        .unwrap()
+        .execute_batch("PRAGMA user_version = 0;")
+        .unwrap();
+    let before = std::fs::read(&unstamped).unwrap();
+
+    merge_files(
+        temp.path(),
+        vec![
+            unstamped.clone(),
+            save_to(temp.path(), "b.stalx", &source_bravo()),
+        ],
+    );
+    assert_eq!(
+        std::fs::read(&unstamped).unwrap(),
+        before,
+        "source untouched"
+    );
+}
+
+/// A merge refusal names the source by its whole path, cut from the front when
+/// too long so the file name - which says which source failed - survives.
+#[test]
+fn a_long_merge_source_path_keeps_its_file_name() {
+    let short = Path::new("/caves/north/cave.stalx");
+    assert_eq!(
+        super::project_merge::merge_source_label(short),
+        "/caves/north/cave.stalx"
+    );
+    let long = PathBuf::from(format!("/{}/cave.stalx", "d".repeat(900)));
+    let label = super::project_merge::merge_source_label(&long);
+    assert!(
+        label.starts_with("...") && label.ends_with("/cave.stalx"),
+        "{label}"
+    );
+    assert!(label.chars().count() <= 480, "{}", label.chars().count());
 }

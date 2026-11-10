@@ -1474,8 +1474,9 @@ user to delete the connected shots instead.
    - Optional checkbox: "Archive original project files (rename to
      .stalx.archived)" - off by default
 5. Confirm → Systems merged into single file. Each source is read like an
-   open would read it (through a private copy, so the source files are never
-   changed, and an older file's pending shot classification is finished).
+   open would read it (through a private copy, so the source files are only
+   read - renamed only if you choose to archive them - and an older file's
+   pending shot classification is finished).
    A system with a GPS zero datum is placed at its real position: the first
    one's datum station becomes the origin, and every later one lands at its
    GPS position relative to it. A system without a datum keeps its own layout.

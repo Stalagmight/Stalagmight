@@ -1029,7 +1029,7 @@ fn test_undo_after_reload_restores_exactly_the_edited_field() {
 }
 
 #[test]
-fn test_merge_projects_preserves_offsets_zero_datums_and_closure_ids() {
+fn test_merge_projects_places_by_datum_and_keeps_station_offsets_datums_and_closure_ids() {
     let temp_dir = TempDir::new().unwrap();
 
     let mut project_a = Project::new("A".to_string(), None);
