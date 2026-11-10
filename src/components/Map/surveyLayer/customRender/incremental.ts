@@ -239,8 +239,11 @@ export function planColorOnlyUpdate(
   nextGpsOrigin: GpsOrigin | null,
   cachedAnchorX: number,
   cachedAnchorY: number,
+  /** Recolour even when the colour globals match: the buffers hold a live
+   *  colour-scale preview's approximate colours, not `prevCtx`'s. */
+  force = false,
 ): boolean {
-  if (sameColorGlobals(prevCtx, nextCtx)) return false;
+  if (!force && sameColorGlobals(prevCtx, nextCtx)) return false;
   if (!sameGpsOrigin(prevGpsOrigin, nextGpsOrigin)) return false;
   if (!sameSurveyLayout(prev, next)) return false;
   const [ax, ay] = computeMercatorAnchor(next, nextGpsOrigin);

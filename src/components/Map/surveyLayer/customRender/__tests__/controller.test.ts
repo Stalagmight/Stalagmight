@@ -523,6 +523,36 @@ describe('SurveyCustomController color-only fast path', () => {
     expect(layer.uploadCalls).toBeGreaterThan(0);
   });
 
+  it('a colour-scale preview re-uploads colours only, and the next sync replaces it exactly', () => {
+    const { map } = makeFakeMap();
+    const c = new SurveyCustomController(map);
+    const { surveyData, base, ctx } = scenario();
+    const committed = ctx({ showDepthGradient: true });
+    c.sync({ ...base, surveyData, colorCtx: committed });
+    const layer = h.layerState.last!;
+    // Preview: colours only - no rebuild, no geometry upload.
+    expect(c.previewColors(ctx({ showDepthGradient: true }))).toBe(true);
+    expect(layer.updateColorsCalls).toBe(1);
+    expect(layer.updateCalls).toBe(0);
+    expect(layer.uploadCalls).toBe(0);
+    // The user reverts (hover, then Escape): the committed context comes back
+    // unchanged, which would normally be a no-op - but the buffers hold the
+    // preview's approximate colours, so the controller recolours exactly.
+    c.sync({ ...base, surveyData, colorCtx: committed });
+    expect(layer.updateColorsCalls).toBe(2);
+    expect(layer.updateCalls).toBe(0);
+    // ...and only once: a further identical sync is a no-op again.
+    c.sync({ ...base, surveyData, colorCtx: committed });
+    expect(layer.updateColorsCalls).toBe(2);
+  });
+
+  it('a preview before the layer is live is refused (the caller syncs instead)', () => {
+    const { map } = makeFakeMap();
+    const c = new SurveyCustomController(map);
+    const { ctx } = scenario();
+    expect(c.previewColors(ctx({ showDepthGradient: true }))).toBe(false);
+  });
+
   it('a combined geometry + color change falls back to a full rebuild', () => {
     const { map } = makeFakeMap();
     const c = new SurveyCustomController(map);

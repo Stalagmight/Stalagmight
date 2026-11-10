@@ -339,6 +339,12 @@ export default class SurveyLayer {
   // theme ramp over the data extent: the pre-palette colours, byte for byte.
   private depthScale: ColorScaleInput | null = null;
   private distanceScale: ColorScaleInput | null = null;
+  // Live preview (palette hover / Levels drag): the latest preview scales,
+  // coalesced to one recolour per animation frame, and whether the buffers hold
+  // preview colours that the next setColorScales must replace exactly.
+  private pendingPreview: { depth: ColorScaleInput | null; distance: ColorScaleInput | null } | null = null;
+  private previewFrame: number | null = null;
+  private previewShown = false;
   // Gas reachable-frontier overlay (#38). Same feature-state mechanics as the
   // distance gradient (own `gasReach` key); mutually exclusive with it (both own
   // the shots/stations color paint), enforced upstream in uiStore.
@@ -1674,12 +1680,50 @@ export default class SurveyLayer {
    * the interact overlay's distance expression.
    */
   setColorScales(depth: ColorScaleInput | null, distance: ColorScaleInput | null): void {
-    if (sameColorScaleInput(this.depthScale, depth) && sameColorScaleInput(this.distanceScale, distance)) return;
+    this.cancelPreviewFrame();
+    const unchanged =
+      sameColorScaleInput(this.depthScale, depth) && sameColorScaleInput(this.distanceScale, distance);
+    // After a preview the buffers hold approximate colours even when the
+    // committed scale is unchanged (hover, then Escape): resync regardless.
+    if (unchanged && !this.previewShown) return;
+    this.previewShown = false;
     this.depthScale = depth;
     this.distanceScale = distance;
     if (!this.map || !hasLiveStyle(this.map)) return;
     this.applyOverlayPaint();
     this.resyncCustomRenderFromStore();
+  }
+
+  /**
+   * Live preview of a colour scale while the user hovers palettes or drags a
+   * Levels handle: a LUT recolour of the survey colour buffers only (no labels,
+   * no interact overlay), at most once per animation frame. The committed
+   * scales are untouched; {@link setColorScales} ends the preview exactly.
+   */
+  previewColorScales(depth: ColorScaleInput | null, distance: ColorScaleInput | null): void {
+    this.pendingPreview = { depth, distance };
+    if (this.previewFrame !== null) return;
+    this.previewFrame = requestAnimationFrame(() => {
+      this.previewFrame = null;
+      const pending = this.pendingPreview;
+      this.pendingPreview = null;
+      if (!pending || !this.customRender || !this.map || !hasLiveStyle(this.map)) return;
+      const ctx: DisplayColorContext = {
+        ...this.displayColorContext(),
+        depthScale: pending.depth,
+        overlay: overlayInputFrom(
+          this.distanceMode, this.distanceState, this.gasReachMode, this.gasReachState, pending.distance,
+        ),
+        commentTint: this.activeTool === 'move_comment',
+      };
+      if (this.customRender.previewColors(ctx)) this.previewShown = true;
+    });
+  }
+
+  private cancelPreviewFrame(): void {
+    if (this.previewFrame !== null) cancelAnimationFrame(this.previewFrame);
+    this.previewFrame = null;
+    this.pendingPreview = null;
   }
 
   /** The active analytical overlay's colour input (distance carries its scale). */
@@ -3623,6 +3667,7 @@ export default class SurveyLayer {
   }
 
   releaseVtRegistry(): void {
+    this.cancelPreviewFrame();
     this.customRender?.dispose();
     this.customLabels?.dispose();
     // The DPR watcher's matchMedia listener is a JS resource that survives
@@ -3640,6 +3685,7 @@ export default class SurveyLayer {
     // destroyed map (would throw in setData).
     this.updateScheduled = false;
     this.pendingUpdateArgs = null;
+    this.cancelPreviewFrame();
 
     // Restore any interact layers left hidden by an in-flight removal re-tile and
     // drop its listener/timer so nothing fires on the torn-down map.
