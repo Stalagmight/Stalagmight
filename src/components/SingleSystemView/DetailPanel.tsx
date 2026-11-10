@@ -23,7 +23,7 @@ import { formatFixed, formatPercent, formatNumber, formatDate } from '../../i18n
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { useActiveStations } from '../../hooks/useActiveStations';
 import { setSource, trackContextMenuAction } from '../../utils/telemetry';
-import { SHOT_KIND_LABEL_KEY, nextShotKind } from '../../utils/shotKind';
+import { SHOT_KIND_LABEL_KEY, nextShotKind, surveyedLength } from '../../utils/shotKind';
 import { countUnresolvedErrors } from '../../utils/validation';
 import { warningKey, warningMessageTestId, warningOpenShotTestId, warningResolveTestId, warningUndoResolveTestId } from '../../utils/testId';
 
@@ -1171,10 +1171,12 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
   const precision = useDecimalPrecision();
 
   // Calculate section statistics
-  const sectionLength = section.shots.reduce((sum, s) => sum + s.length, 0);
+  // Length leaves out Reference shots, matching the project total it is a
+  // share of (#689); the average is over the same shots.
+  const { length: sectionLength, shotCount: lengthShotCount } = surveyedLength(section.shots);
   const shotCount = section.shots.length;
   const referenceCount = section.shots.filter((s) => s.kind !== 'Normal').length;
-  const avgShotLength = shotCount > 0 ? sectionLength / shotCount : 0;
+  const avgShotLength = lengthShotCount > 0 ? sectionLength / lengthShotCount : 0;
   const contributionPercent = totalProjectLength > 0
     ? (sectionLength / totalProjectLength) * 100
     : 0;
