@@ -675,6 +675,30 @@ describe('computeRevealZooms reserved labels (section-only build below the label
     expect(Array.from(below)).toEqual([REVEAL_NEVER, REVEAL_NEVER]);
   });
 
+  it('a name held back only by a held-back name is held too, so a third name does not show only to vanish', () => {
+    // Three jump names on one anchor, boxes in a row: J overlaps K, K overlaps
+    // X, J and X clear. A reserved real station label R overlaps only J. Full
+    // build: R shows, J never does, so K shows and X never does. Below the
+    // band J is held (R is only a reservation); K, held back by J alone, must
+    // be held as well - were it simply hidden, X would show and then vanish.
+    const name = (id: number) => desc(LABEL_KIND.SECTION_NAME, { flags: LABEL_FLAG.ALL_JUMP, sectionId: id });
+    const [j, k, x] = [name(1), name(2), name(3)];
+    const ext = (minX: number, maxX: number): ExtentEm => ({ minX, maxX, minY: 1.2, maxY: 2.2 });
+    const exts = [ext(0, 2), ext(1.5, 3.5), ext(3, 5)];
+    const r = desc(LABEL_KIND.STATION_LABEL, { ordinal: 4, stationGlobal: 4 });
+    const rExt: ExtentEm = { minX: -1, maxX: 0.5, minY: 1.2, maxY: 2.2 };
+
+    const full = computeRevealZooms([j, k, x, r], [...exts, rExt], input({ buildZoom: 14, worldPixelScale: 1, slack: 8 }));
+    expect(Array.from(full)).toEqual([REVEAL_NEVER, 10, REVEAL_NEVER, 14]);
+
+    const below = computeRevealZooms([j, k, x], exts, input({
+      buildZoom: 12, worldPixelScale: 0.25, slack: 10,
+      reserved: { descriptors: [r], extents: [rExt] },
+    }));
+    // X must not show here: the full build never shows it.
+    expect(below[2]).toBe(REVEAL_NEVER);
+  });
+
   it('a name shown below the band is still shown by the full build (randomized)', () => {
     // Names spread across the screen, each with real and virtual station / shot
     // labels clustered around it - the shape a jump section tied in at a real

@@ -528,16 +528,18 @@ export function computeRevealZooms(
           if (reservedClear > placedClear) {
             // Only a reserved label holds it back - one a build that draws it
             // may never show, so this label's own fate there is open. Hide it
-            // here but keep its slot, so the labels it would block there are
+            // here but keep its slot, as a reservation itself (a label it holds
+            // back is just as open), so the labels it would block there are
             // not shown here only to vanish.
-            occupy(grids, { ...c, level: l });
+            occupy(reservedGrids, { ...c, level: l });
             earliest[j] = levelCount;
           } else {
             earliest[j] = placedClear;
           }
         }
         if (l < earliest[j]!) continue; // would overlap a better-rank label once both show
-        if (fits(grids[l]!, boxAt(c, lv), cellSize)) {
+        const box = boxAt(c, lv);
+        if (fits(grids[l]!, box, cellSize) && (!reserving || fits(reservedGrids[l]!, box, cellSize))) {
           place(c, l);
           occupy(grids, c);
         }
@@ -646,8 +648,10 @@ interface LadderLevel {
  * returned one is checked, so this does not lean on overlap shrinking with zoom
  * - which it need not (see {@link nearVirtual}). Below that level `c` would
  * overlap that label once both are drawn, even a better-rank one that only
- * reveals further up. A same-pass winner placed after this runs is drawn at or
- * below the level being tried; the per-level fit check covers it there.
+ * reveals further up. A same-pass winner placed after this runs is only checked
+ * against at the level being tried (the per-level fit check) - the same
+ * one-level test the real pass applies between two real labels, which offset
+ * boxes can outgrow further up.
  */
 function firstClearLevel(
   c: Candidate,

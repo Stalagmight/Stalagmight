@@ -1518,8 +1518,8 @@ describe('SurveyLabelController jump section names below the label band', () => 
     // Past the band, the full build agrees: the name never shows there.
     cam.state.zoom = 14;
     c.sync(tiedJumpParams());
-    const full = jumpNameReveals(h.layerState.last!);
-    expect(full.every((z) => z > REVEAL_CEILING)).toBe(true);
+    // (A full build reserves nothing, so the name is simply not emitted.)
+    expect(jumpNameReveals(h.layerState.last!)).toEqual([]);
   });
 });
 
