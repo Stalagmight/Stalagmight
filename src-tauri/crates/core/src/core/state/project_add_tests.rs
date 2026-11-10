@@ -1533,9 +1533,8 @@ fn references_of(project: &Project, ids: &[SectionId]) -> Vec<String> {
 /// station offset, datum and gauge anchor of the second copy sits where the
 /// first copy's does. The open project's own shots keep their ids.
 /// INJECTION (tried): skipping `claim_unique_uuids` fails the uniqueness
-/// assertion; re-minting AFTER `copy_zero_datums` instead blocks the second
-/// add on its dangling datum; copying the gauge anchors verbatim leaves the
-/// second copy's gauge at `?`.
+/// assertion; copying the gauge anchors verbatim leaves the second copy's
+/// gauge naming ids its section no longer has (`?`).
 #[test]
 fn adding_the_same_project_twice_remints_only_the_second_copy() {
     let temp = TempDir::new().unwrap();
@@ -1548,7 +1547,14 @@ fn adding_the_same_project_twice_remints_only_the_second_copy() {
         .map(|s| s.id)
         .collect();
     let host_before = uuids_of(&state.get_project_state().unwrap(), &host_ids);
-    let alpha = save_to(temp.path(), "alpha.stalx", &source_alpha_named());
+    // A gauge anchor pair on one section, so the re-mint has one to follow.
+    let mut gauged = source_alpha_named();
+    if let Some(s) = gauged.sections.first_mut() {
+        s.reverse_parity = true;
+        s.gauge_shot_uuid = Some("a0-1".to_string());
+        s.gauge_neighbour_uuid = Some("a0-0".to_string());
+    }
+    let alpha = save_to(temp.path(), "alpha.stalx", &gauged);
 
     let first = add(&state, &alpha);
     assert!(first.success, "{:?}", first.error);
@@ -1602,8 +1608,8 @@ fn adding_the_same_project_twice_remints_only_the_second_copy() {
 /// The re-minted ids are part of the add's recorded content: undo removes
 /// them, redo puts the SAME ids back (it never re-reads the file, and a fresh
 /// mint would differ), and both survive a save and a reload.
-/// INJECTION (tried): letting the redo re-run the add mints different ids and
-/// fails the first redo assertion.
+/// INJECTION (tried): skipping `claim_unique_uuids` fails the post-reload
+/// uniqueness assertion.
 #[test]
 fn reminted_ids_come_back_identical_on_redo_and_after_a_reload() {
     let temp = TempDir::new().unwrap();
