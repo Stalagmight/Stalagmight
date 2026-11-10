@@ -50,7 +50,10 @@
  * needs at z18, and since neither may vanish the two would then overlap. So a real
  * label's reveal is exactly what it would be with no virtual labels at all, and a
  * jump label's likewise with no reference labels. The tier / kind / ordinal order
- * still decides WITHIN a rank.
+ * still decides WITHIN a rank. Below the label build band only section names are
+ * built, so there the station / shot labels around a jump or reference section's
+ * name come in as RESERVED slots ({@link RevealInput.reserved}) - otherwise the
+ * name would show at z10..13.5 only to lose its slot, and vanish, once they are.
  *
  * DETERMINISM ACROSS REBUILDS. The priority order uses a STABLE per-label id
  * (global shot / station index, or section id) rather than the array position,
@@ -133,6 +136,13 @@ export interface ScreenBox {
   maxY: number;
 }
 
+/** Labels a build reserves without drawing ({@link RevealInput.reserved}),
+ *  with their shaped em extents (`null` = no ink, reserves nothing). */
+export interface RevealReservation {
+  descriptors: readonly LabelDescriptor[];
+  extents: readonly (ExtentEm | null)[];
+}
+
 /** Inputs the reveal pass needs beyond the descriptors + their em extents. */
 export interface RevealInput {
   /** Zoom at build time - the base for the world-pixel-scale ramp + the emit
@@ -158,6 +168,14 @@ export interface RevealInput {
    *  stay visible / selectable while editing (parity with the deleted stock
    *  `text-allow-overlap`). Non-comment kinds are unaffected. (C1) */
   commentOverlapExempt?: boolean;
+  /** Labels this build does NOT draw - their kinds are not built at this zoom -
+   *  but a build at a higher zoom would. A virtual candidate leaves their slots
+   *  free exactly as if they were drawn (from their decimation floor, the
+   *  earliest they could reveal), so it never shows here only to lose its slot
+   *  once they are built: the section-only build below the label band reserves
+   *  the station / shot labels around a jump or reference section's name. They
+   *  get no reveal of their own and block only labels of a worse rank. */
+  reserved?: RevealReservation | undefined;
   /** Emit horizon slack in zoom levels (default {@link EMIT_SLACK}). */
   slack?: number;
   /** Ladder step (default {@link REVEAL_LADDER_STEP}). */
@@ -187,10 +205,10 @@ export function labelPriority(kind: LabelKind, firstInSection: boolean): number 
  *  least one Normal shot touches. */
 export const VIRTUAL_RANK_REAL = 0;
 /** Labels of a Jump (swum, no line laid), or of a station / section touched only
- *  by virtual shots, at least one of them a drawn Jump. */
+ *  by virtual shots, at least one of them a Jump. */
 export const VIRTUAL_RANK_JUMP = 1;
 /** Labels of a Reference (tape tie, not swimmable), or of a station / section
- *  touched only by References among its drawn shots. */
+ *  touched only by References. */
 export const VIRTUAL_RANK_REFERENCE = 2;
 const VIRTUAL_RANK_COUNT = 3;
 
@@ -202,22 +220,16 @@ const VIRTUAL_RANK_COUNT = 3;
  * Shot labels and shot comments carry their own shot's kind (`JUMP` /
  * `REFERENCE`). Station labels, station comments and section names carry the
  * all-virtual bit pair (`ALL_JUMP` / `ALL_REFERENCE`), set only when no Normal
- * shot touches them; such a label takes the BEST kind among the ones still
- * drawn, so a station on both a jump and a reference ranks as a jump while jumps
- * are shown, and as a reference once jumps are hidden. A station with no legs at
- * all carries both bits and ranks the same way.
+ * shot touches them; such a label takes the better of the kinds that touch it,
+ * so a station on both a jump and a reference ranks as a jump (as does a station
+ * with no legs, which carries both bits). A pure function of the flags - never
+ * of the hide toggles - so a toggle can only add or remove candidates, never
+ * reorder the ones the last build emitted.
  */
-export function labelVirtualRank(
-  desc: LabelDescriptor,
-  hide: Pick<RevealInput, 'hideJump' | 'hideReference'> = { hideJump: false, hideReference: false },
-): number {
+export function labelVirtualRank(desc: LabelDescriptor): number {
   const f = desc.flags;
-  if ((f & LABEL_FLAG.JUMP) !== 0) return VIRTUAL_RANK_JUMP;
-  if ((f & LABEL_FLAG.REFERENCE) !== 0) return VIRTUAL_RANK_REFERENCE;
-  const allJump = (f & LABEL_FLAG.ALL_JUMP) !== 0;
-  const allRef = (f & LABEL_FLAG.ALL_REFERENCE) !== 0;
-  if (allJump && (!hide.hideJump || !allRef)) return VIRTUAL_RANK_JUMP;
-  if (allRef) return VIRTUAL_RANK_REFERENCE;
+  if ((f & (LABEL_FLAG.JUMP | LABEL_FLAG.ALL_JUMP)) !== 0) return VIRTUAL_RANK_JUMP;
+  if ((f & (LABEL_FLAG.REFERENCE | LABEL_FLAG.ALL_REFERENCE)) !== 0) return VIRTUAL_RANK_REFERENCE;
   return VIRTUAL_RANK_REAL;
 }
 
@@ -404,7 +416,7 @@ export function computeRevealZooms(
       extent,
       minzoom: style.minzoom,
       admitZoom,
-      rank: labelVirtualRank(desc, input),
+      rank: labelVirtualRank(desc),
       tier: decimationTier(desc.ordinal),
       priority: labelPriority(desc.kind, firstInSection),
       ordinal: desc.ordinal,
@@ -432,6 +444,7 @@ export function computeRevealZooms(
   // Ladder levels are integer steps from ONE start shared by every pass, so a
   // level means the same zoom in each (reservations are keyed by level).
   const levelCount = Math.floor((ladderMax - ladderStart) / step + 1e-9) + 1;
+  if (levelCount <= 0) return reveal; // horizon below every minzoom: nothing clears
   const levels: LadderLevel[] = [];
   for (let l = 0; l < levelCount; l++) {
     const z = ladderStart + l * step;
@@ -442,14 +455,22 @@ export function computeRevealZooms(
     }
     levels.push({ z, wps: input.worldPixelScale * Math.pow(2, z - input.buildZoom), sizeByKind });
   }
+  /** The first ladder level at or above `zoom`. */
+  const levelAt = (zoom: number): number => Math.max(0, Math.ceil((zoom - ladderStart) / step - 1e-9));
   const boxAt = (c: Candidate, lv: LadderLevel): ScreenBox =>
     revealScreenBox(c.desc, c.extent, lv.wps, lv.sizeByKind[c.desc.kind]!, LABEL_KIND_STYLE[c.desc.kind].haloWidth);
 
-  // Real-line pass: the plain ladder, as if no virtual label existed. A fresh
-  // grid per level, re-seeded with the winners so far at THAT zoom (keeps their
-  // slots).
-  const real = passes[VIRTUAL_RANK_REAL]!;
+  const place = (c: Candidate, l: number): void => {
+    reveal[c.index] = levels[l]!.z;
+    c.level = l;
+  };
+
+  // Real-line pass: the plain ladder, exactly as if no virtual label existed. A
+  // fresh grid per level, re-seeded with the winners so far at THAT zoom (keeps
+  // their slots) - cheaper than holding every level's grid at once, which only
+  // the virtual passes need.
   const realWinners: Candidate[] = [];
+  const real = passes[VIRTUAL_RANK_REAL]!;
   for (let l = 0; l < levelCount && real.length > 0; l++) {
     const lv = levels[l]!;
     const grid: BoxGrid = new Map();
@@ -460,28 +481,34 @@ export function computeRevealZooms(
       if (lv.z + 1e-9 < c.admitZoom) continue; // decimation not yet admitted
       const box = boxAt(c, lv);
       if (fits(grid, box, cellSize)) {
-        reveal[c.index] = lv.z;
-        c.level = l;
+        place(c, l);
         realWinners.push(c);
         insertBox(grid, box, cellSize);
       }
     }
   }
 
-  // Virtual passes (jump, then reference). They share one grid per level that
-  // holds every label drawn there, boxed at that level's zoom: each winner goes
-  // into its own level and every one above it. Seeded with the real winners
-  // that could ever touch a virtual label, so a virtual candidate can see the
-  // slot a real label takes further up the ladder, not just the ones drawn now.
-  const virtual = candidates.filter((c) => c.rank !== VIRTUAL_RANK_REAL);
+  // Virtual passes (jump, then reference) share one grid per level holding every
+  // label drawn there, boxed at that level's zoom: a winner goes into its own
+  // level and every one above it. A virtual candidate thus sees the slot a
+  // better-rank label takes further up the ladder, not just the ones drawn at
+  // the level it is trying.
+  const virtual = passes.slice(VIRTUAL_RANK_REAL + 1).flat();
   if (virtual.length === 0) return reveal;
-  const grids = seedVirtualGrids(realWinners, virtual, levels, boxAt, cellSize);
-  const place = (c: Candidate, l: number): void => {
-    reveal[c.index] = levels[l]!.z;
-    c.level = l;
-    for (let m = l; m < levelCount; m++) insertBox(grids[m]!, boxAt(c, levels[m]!), cellSize);
+  const phantoms = reservedPhantoms(input, levelAt, levelCount);
+  const pessimistic = phantoms.some((p) => p.length > 0);
+  const grids = levels.map((): BoxGrid => new Map());
+  const occupy = (c: Candidate): void => {
+    for (let m = c.level; m < levelCount; m++) insertBox(grids[m]!, boxAt(c, levels[m]!), cellSize);
   };
-  for (const pass of passes.slice(VIRTUAL_RANK_REAL + 1)) {
+  for (const w of nearVirtual([...realWinners, ...phantoms[VIRTUAL_RANK_REAL]!], virtual, levelAt, levels, boxAt, cellSize)) {
+    occupy(w);
+  }
+  for (let rank = VIRTUAL_RANK_REAL + 1; rank < VIRTUAL_RANK_COUNT; rank++) {
+    // Reserved better-rank labels this build does not draw (a jump-rank one
+    // outranks a reference label) join just before the pass they outrank.
+    if (rank > VIRTUAL_RANK_JUMP) for (const w of phantoms[rank - 1]!) occupy(w);
+    const pass = passes[rank]!;
     // The first level each candidate may reveal at (-1 until computed, at its
     // first admitted level).
     const earliest = new Int32Array(pass.length).fill(-1);
@@ -491,13 +518,89 @@ export function computeRevealZooms(
         const c = pass[j]!;
         if (c.level >= 0) continue; // already revealed
         if (lv.z + 1e-9 < c.admitZoom) continue; // decimation not yet admitted
-        if (earliest[j]! < 0) earliest[j] = firstClearLevel(c, l, grids, levels, boxAt, cellSize);
+        if (earliest[j]! < 0) {
+          earliest[j] = firstClearLevel(c, l, grids, levels, boxAt, cellSize);
+          if (pessimistic && earliest[j]! > l) {
+            // Held back by a reserved label that the full build may never show,
+            // in which case it shows there instead: keep its slot now, so the
+            // labels it would block there are not shown here only to vanish.
+            occupy({ ...c, level: l });
+            earliest[j] = levelCount;
+          }
+        }
         if (l < earliest[j]!) continue; // would overlap a better-rank label once both show
-        if (fits(grids[l]!, boxAt(c, lv), cellSize)) place(c, l);
+        if (fits(grids[l]!, boxAt(c, lv), cellSize)) {
+          place(c, l);
+          occupy(c);
+        }
       }
     }
   }
   return reveal;
+}
+
+/**
+ * The reserved labels ({@link RevealInput.reserved}) as already-placed
+ * candidates, bucketed by rank: each holds its slot from the level of its
+ * decimation floor - the earliest it could reveal in a build that draws it, so
+ * leaving its slot free from there is never too little. Ones the toggles hide,
+ * with no ink, or past the horizon reserve nothing.
+ */
+function reservedPhantoms(input: RevealInput, levelAt: (zoom: number) => number, levelCount: number): Candidate[][] {
+  const out: Candidate[][] = Array.from({ length: VIRTUAL_RANK_COUNT }, () => []);
+  const reserved = input.reserved;
+  if (!reserved) return out;
+  for (let i = 0; i < reserved.descriptors.length; i++) {
+    const extent = reserved.extents[i];
+    const desc = reserved.descriptors[i]!;
+    if (extent === null || extent === undefined || !isCandidate(desc, input)) continue;
+    const style = LABEL_KIND_STYLE[desc.kind];
+    const firstInSection = (desc.flags & LABEL_FLAG.FIRST_IN_SECTION) !== 0;
+    const admitZoom = decimationAdmitZoom(desc.kind, desc.ordinal, firstInSection, style.minzoom);
+    const level = levelAt(admitZoom);
+    if (level >= levelCount) continue;
+    const rank = labelVirtualRank(desc);
+    out[rank]!.push({
+      index: -1,
+      desc,
+      extent,
+      minzoom: style.minzoom,
+      admitZoom,
+      rank,
+      tier: 0,
+      priority: 0,
+      ordinal: desc.ordinal,
+      id: stableId(desc),
+      level,
+    });
+  }
+  return out;
+}
+
+/**
+ * The placed labels that could ever overlap a virtual candidate - a filter that
+ * keeps the shared grids small when, as usual, the virtual labels are few. All
+ * are tested at ONE level, the lowest a virtual candidate is admitted at: no two
+ * of them can both be drawn below it, and overlap only shrinks with zoom (module
+ * header), so a label clear of every virtual box there stays clear of them at
+ * every level either could be drawn. When the virtual labels outnumber the
+ * placed ones the test costs more than it saves, so every placed label is kept.
+ */
+function nearVirtual(
+  placed: readonly Candidate[],
+  virtual: readonly Candidate[],
+  levelAt: (zoom: number) => number,
+  levels: readonly LadderLevel[],
+  boxAt: (c: Candidate, lv: LadderLevel) => ScreenBox,
+  cellSize: number,
+): readonly Candidate[] {
+  if (virtual.length >= placed.length) return placed;
+  let lowest = levels.length - 1;
+  for (const c of virtual) lowest = Math.min(lowest, levelAt(c.admitZoom));
+  const at = levels[lowest]!;
+  const grid: BoxGrid = new Map();
+  for (const c of virtual) insertBox(grid, boxAt(c, at), cellSize);
+  return placed.filter((w) => !fits(grid, boxAt(w, at), cellSize));
 }
 
 /** One rung of the zoom ladder, with its world-pixel scale and per-kind sizes. */
@@ -505,33 +608,6 @@ interface LadderLevel {
   z: number;
   wps: number;
   sizeByKind: Float64Array;
-}
-
-/**
- * The virtual passes' per-level grids, seeded with the real winners: level `m`
- * holds the ones drawn at `m` (revealed at or below it), boxed at `m`.
- *
- * Only real winners that could ever overlap a virtual candidate go in. Overlap
- * only shrinks with zoom, so a winner clear of every virtual candidate at the
- * lowest level is clear of them at every level - one check there filters it
- * out, which keeps this cheap when, as usual, the virtual labels are few.
- */
-function seedVirtualGrids(
-  realWinners: readonly Candidate[],
-  virtual: readonly Candidate[],
-  levels: readonly LadderLevel[],
-  boxAt: (c: Candidate, lv: LadderLevel) => ScreenBox,
-  cellSize: number,
-): BoxGrid[] {
-  const grids = levels.map((): BoxGrid => new Map());
-  const lowest = levels[0]!;
-  const virtualAtLowest: BoxGrid = new Map();
-  for (const c of virtual) insertBox(virtualAtLowest, boxAt(c, lowest), cellSize);
-  for (const w of realWinners) {
-    if (fits(virtualAtLowest, boxAt(w, lowest), cellSize)) continue; // never touches one
-    for (let m = w.level; m < levels.length; m++) insertBox(grids[m]!, boxAt(w, levels[m]!), cellSize);
-  }
-  return grids;
 }
 
 /**

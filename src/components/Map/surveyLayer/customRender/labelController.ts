@@ -60,21 +60,25 @@ import {
   buildLabelBuffersFromShaped,
   buildLabelFlags,
   buildLabelRevealZooms,
+  type LabelBuildContext,
   type LabelDescriptor,
   type ViewportRel,
 } from './labelTessellate';
 import { shapedExtent, ShapeCache, type ExtentEm, type ShapedLabel } from './labelLayout';
 import {
   computeRevealZooms,
+  labelVirtualRank,
   REVEAL_NEVER,
   REVEAL_UNREACHABLE,
+  VIRTUAL_RANK_REAL,
   EMIT_SLACK,
   ADAPTIVE_EMIT_MAX,
   emitSlackFor,
+  type RevealReservation,
 } from './labelReveal';
 import { labelColorContextFrom } from './labelText';
 import { LABEL_KIND, LABEL_FLAG, type LabelKind } from './labelShaders';
-import { LABEL_KIND_STYLE } from './labelStyle';
+import { LABEL_KIND_STYLE, interpolateStops } from './labelStyle';
 import { packCssColor, type Rgba8 } from './colorPack';
 import type { CustomDimState } from './controller';
 import type { CustomRenderExclusion } from './tessellate';
@@ -137,6 +141,26 @@ const ZOOM_IN_SLACK_REBUILD = EMIT_SLACK / 2;
 const SECTION_ONLY_KINDS: ReadonlySet<LabelKind> = new Set([LABEL_KIND.SECTION_NAME]);
 /** Below section minzoom: nothing builds. */
 const NO_KINDS: ReadonlySet<LabelKind> = new Set();
+/** The kinds the section-only build leaves out (only built past the band). */
+const EXPENSIVE_KINDS: readonly LabelKind[] = [
+  LABEL_KIND.SHOT_LABEL,
+  LABEL_KIND.STATION_LABEL,
+  LABEL_KIND.STATION_COMMENT,
+  LABEL_KIND.SHOT_COMMENT,
+];
+/** How far (CSS px at the expensive kinds' minzoom, where a label's reach in
+ *  map units is largest) past a jump / reference section name's own box the
+ *  section-only build looks for labels whose slots the name must leave free.
+ *  Station labels are a few digits and shot labels about 20 characters; a
+ *  comment can be longer, and a comment wider than this anchored further out
+ *  is missed - the name could then still vanish at the band crossing. */
+const RESERVE_REACH_PX: Readonly<Record<LabelKind, number>> = {
+  [LABEL_KIND.SHOT_LABEL]: 160,
+  [LABEL_KIND.STATION_LABEL]: 60,
+  [LABEL_KIND.SECTION_NAME]: 0,
+  [LABEL_KIND.STATION_COMMENT]: 600,
+  [LABEL_KIND.SHOT_COMMENT]: 600,
+};
 
 // ─── Phase 5: dim + drag-hide interaction state ──────────────────────────────
 
@@ -304,6 +328,9 @@ export class SurveyLabelController {
   /** Whether the last build materialized the expensive kinds (hysteresis latch
    *  snapshot), so a settle can detect a band crossing that changes the set. */
   private lastBuiltWantFull = false;
+  /** The labels the last section-only build reserved ({@link reserveNearVirtualNames}),
+   *  replayed by the reveal-only rerun. */
+  private lastReserved: RevealReservation | undefined;
   /** Shape cache shared across builds: a camera-driven re-scope re-projects +
    *  re-collides, never re-shapes unchanged (kind, text) labels. */
   private readonly shapeCache = new ShapeCache();
@@ -420,8 +447,59 @@ export class SurveyLabelController {
     // fakes / below-gate), leaving the pure-uniform flip.
     if (this.active) {
       this.pushStyle();
-      this.rerunReveal();
+      // A section-only build reserves the expensive kinds that are shown, so
+      // toggling one changes what it reserves: rebuild (cheap at that zoom).
+      if (this.builtSectionOnly() && EXPENSIVE_KINDS.includes(kind)) {
+        this.rebuildViewport();
+      } else {
+        this.rerunReveal();
+      }
     }
+  }
+
+  /** Whether the last build was the section-only one below the label band. */
+  private builtSectionOnly(): boolean {
+    return !this.lastBuiltWantFull && this.lastBuildZoom !== undefined && this.lastBuildZoom >= SECTION_NAME_MIN_ZOOM;
+  }
+
+  /**
+   * The labels a section-only build reserves (`labelReveal`'s `reserved`): those
+   * of the shown expensive kinds whose anchor lies near a jump / reference
+   * section name, shaped. A full build would draw them, and a real-line label
+   * there outranks the name - so leaving their slots free now keeps the name
+   * from showing below the band only to vanish when they are built. Undefined
+   * when there is nothing to reserve (no such name, or no expensive kind shown -
+   * the defaults), so the common build pays nothing.
+   */
+  private reserveNearVirtualNames(
+    params: LabelSyncParams,
+    anchorX: number,
+    anchorY: number,
+    ctx: LabelBuildContext,
+    names: readonly LabelDescriptor[],
+    nameExtents: readonly (ExtentEm | null)[],
+    worldPixelScale: number,
+    zoom: number,
+  ): RevealReservation | undefined {
+    const shown = EXPENSIVE_KINDS.filter((k) => this.kindVisible[k]);
+    if (shown.length === 0) return undefined;
+    const reachPx = Math.max(...shown.map((k) => RESERVE_REACH_PX[k]));
+    const reserveZoom = Math.min(...shown.map((k) => LABEL_KIND_STYLE[k].minzoom));
+    const wps = worldPixelScale * 2 ** (reserveZoom - zoom);
+    const nameStyle = LABEL_KIND_STYLE[LABEL_KIND.SECTION_NAME];
+    const namePx = interpolateStops(reserveZoom, nameStyle.size);
+    const rects: ViewportRel[] = [];
+    for (let i = 0; i < names.length; i++) {
+      const d = names[i]!;
+      const e = nameExtents[i];
+      if (d.kind !== LABEL_KIND.SECTION_NAME || !e || labelVirtualRank(d) === VIRTUAL_RANK_REAL) continue;
+      const own = Math.max(Math.abs(e.minX), Math.abs(e.maxX), Math.abs(e.minY), Math.abs(e.maxY)) * namePx;
+      const half = (own + nameStyle.haloWidth + reachPx) / wps;
+      rects.push({ minX: d.anchorX - half, maxX: d.anchorX + half, minY: d.anchorY - half, maxY: d.anchorY + half });
+    }
+    if (rects.length === 0) return undefined;
+    const near = buildLabelDescriptors(params.surveyData, params.gpsOrigin, anchorX, anchorY, ctx, new Set(shown), rects);
+    return { descriptors: near, extents: shapeDescriptors(near, this.atlas!, this.shapeCache).map(shapedExtent) };
   }
 
   /** Per-kind label hiding (#27). A label is dropped with the geometry of ITS
@@ -511,6 +589,14 @@ export class SurveyLabelController {
     const tShape0 = performance.now();
     let shaped = shapeDescriptors(descriptors, this.atlas!, this.shapeCache);
     let extents = shaped.map(shapedExtent);
+    // Section-only build: the labels a full build would draw around a jump /
+    // reference section's name, so the name never shows here only to vanish at
+    // the band crossing (real-line labels outrank it there).
+    const reserved =
+      kinds === SECTION_ONLY_KINDS && vpCtx !== null && zoom !== undefined
+        ? this.reserveNearVirtualNames(params, anchorX, anchorY, { colorCtx, precision: params.precision, commentColor },
+          descriptors, extents, vpCtx.worldPixelScale, zoom)
+        : undefined;
 
     // Reveal pass: fold declutter + decimation into one per-label reveal zoom,
     // then keep only labels within the emit horizon (buildZoom + slack). Only
@@ -537,6 +623,7 @@ export class SurveyLabelController {
       hideJump: this.hideJumpLabels(),
         commentOverlapExempt: this.commentOverlapExempt,
         slack: emitSlack,
+        reserved,
       });
       // Emit only labels that clear within the horizon (finite reveal).
       const keptDesc: LabelDescriptor[] = [];
@@ -572,6 +659,7 @@ export class SurveyLabelController {
     this.lastAnchorX = anchorX;
     this.lastAnchorY = anchorY;
     this.lastBuiltWantFull = this.fullLabelsBuilt;
+    this.lastReserved = reserved;
 
     const buffers = buildLabelBuffersFromShaped(
       descriptors, shaped,
@@ -767,6 +855,7 @@ export class SurveyLabelController {
       hideJump: this.hideJumpLabels(),
       commentOverlapExempt: this.commentOverlapExempt,
       slack: this.lastEmitSlack,
+      reserved: this.lastReserved,
     });
     // The retained set is already the emitted subset; a rerun only lowers /
     // raises finite reveals within it (removing / re-adding competitors). A label

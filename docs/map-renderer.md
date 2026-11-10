@@ -151,8 +151,9 @@ finer-tier label cannot evict a coarser one.
 spot. `labelVirtualRank` puts every label in one of three ranks from the flags it
 already carries: real (a Normal shot's labels, or a station / section a Normal
 shot touches), jump, then reference (shot labels by their own kind, stations and
-section names by the `ALL_JUMP` / `ALL_REFERENCE` pair - the best kind still
-drawn). The ladder runs once per rank, best first. A later rank leaves free
+section names by the `ALL_JUMP` / `ALL_REFERENCE` pair - the better kind
+touching them; a pure function of the flags, so a hide toggle never reorders
+labels). The ladder runs once per rank, best first. A later rank leaves free
 every slot an earlier rank's winner holds, including one it only takes further
 up the ladder: a jump label may show at `z` only if it clears each real winner
 at `max(z, its reveal)`, the first zoom at which both are drawn. Real labels
@@ -160,7 +161,12 @@ therefore reveal exactly as they would with no virtual labels, and jump labels
 as they would with no reference labels; tier, kind and ordinal still order
 labels within a rank. A label that loses its spot on a reveal-only rerun
 (re-showing jumps, say) uploads an unreachable reveal and stays hidden, as a
-fresh build would leave it. `labelTessellate.ts` stamps the
+fresh build would leave it. Below the 13.5 label band only section names are
+built, yet a jump / reference section's name must not show there only to lose
+its spot, and vanish, once the station and shot labels around it are built: the
+section-only build gathers the shown expensive kinds near each such name and
+passes them to the reveal pass as `reserved` slots, held from their decimation
+floor. `labelTessellate.ts` stamps the
 quads; `labelController.ts` scopes the build to a padded viewport, emits a slack
 window above the build zoom so a modest zoom-in needs no rebuild at all, and
 defers the first build until the font promise resolves.

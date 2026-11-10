@@ -176,7 +176,7 @@ export function buildLabelDescriptors(
   anchorY: number,
   ctx: LabelBuildContext,
   kinds?: ReadonlySet<LabelKind>,
-  viewport?: ViewportRel,
+  viewport?: ViewportRel | readonly ViewportRel[],
 ): LabelDescriptor[] {
   const descriptors: LabelDescriptor[] = [];
   // Kind filter (Phase 2 builds station labels only; Phase 3 drops the arg to
@@ -186,9 +186,13 @@ export function buildLabelDescriptors(
   // whole-survey. Note the ORDINAL loops still run in full below (a shot's global
   // running index / a station's global ordinal must stay stable regardless of
   // what is on screen, so decimation parity holds) - only the `push` is gated.
+  // A list of rects keeps anchors inside ANY of them (the reservations around
+  // each jump / reference section name, see labelReveal's `reserved`).
+  const rects: readonly ViewportRel[] | undefined =
+    viewport === undefined ? undefined : 'minX' in viewport ? [viewport] : viewport;
   const inView = (x: number, y: number): boolean =>
-    viewport === undefined ||
-    (x >= viewport.minX && x <= viewport.maxX && y >= viewport.minY && y <= viewport.maxY);
+    rects === undefined ||
+    rects.some((r) => x >= r.minX && x <= r.maxX && y >= r.minY && y <= r.maxY);
   const lookup = buildStationLookup(data);
   // allRef[g] is the per-station kind mask (#27): 0 = a Normal shot touches it,
   // 1 = only Jumps, 2 = only References, 3 = both / no legs. Carried into the

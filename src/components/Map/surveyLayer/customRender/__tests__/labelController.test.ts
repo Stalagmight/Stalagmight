@@ -1454,6 +1454,67 @@ describe('SurveyLabelController rerun keeps a lost virtual label hidden', () => 
   });
 });
 
+describe('SurveyLabelController jump section names below the label band', () => {
+  beforeEach(() => {
+    h.layerState.disabledAfterAdd = false;
+    h.layerState.last = null;
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  /** Real section A (stations at x = -3000, 0, 10) and a jump section J tied in at
+   *  A's middle station: J's name sits on A's station label there. */
+  function tiedJumpParams(): LabelSyncParams {
+    const params = makeParams();
+    const d = params.surveyData;
+    d.sections = [
+      { id: 1, name: 'A', surveyor: null, date: null, color: '#ff0000', direction: 'in' as never, quality: 0, next_shot_id: 2, shotOffset: 0, shotCount: 2 },
+      { id: 2, name: 'Jump to the downstream sump', surveyor: null, date: null, color: '#00ff00', direction: 'in' as never, quality: 0, next_shot_id: 1, shotOffset: 2, shotCount: 1 },
+    ];
+    d.shotCount = 3;
+    d.shotIds = new Uint32Array([0, 1, 0]);
+    d.shotSectionIds = new Uint32Array([1, 1, 2]);
+    d.shotFlags = new Uint8Array([0, 0, shotKindToFlags('Jump')]);
+    d.stationCount = 5;
+    d.stationSectionIds = new Uint32Array([1, 1, 1, 2, 2]);
+    d.stationIndices = new Uint32Array([0, 1, 2, 0, 1]);
+    d.stationCoords = new Float64Array([-3000, 0, 0, 0, 0, -1, 10, 0, -2, 0, 0, -1, 0, 30, -1]);
+    d.stationFlags = new Uint8Array([STATION_FLAG_IS_ZERO_DATUM, 0, 0, 0, 0]);
+    return params;
+  }
+
+  /** Reveal zooms of J's section name (the all-jump one), [] when not emitted. */
+  function jumpNameReveals(layer: FakeLabelLayer): number[] {
+    const { kind, revealZoom, flags } = vfl(layer);
+    const out: number[] = [];
+    for (let v = 0; v < kind.length; v++) {
+      if (kind[v] === LABEL_KIND.SECTION_NAME && (flags[v]! & LABEL_FLAG.ALL_JUMP) !== 0) out.push(revealZoom[v]!);
+    }
+    return out;
+  }
+
+  it('shows at z12 while station labels are off, and is left out once they are on - as the full build leaves it', () => {
+    const cam = makeCameraMap(12);
+    const c = cameraController(cam.map);
+    c.sync(tiedJumpParams());
+    const layer = h.layerState.last!;
+    // Nothing to leave free: J's name shows below the band.
+    expect(jumpNameReveals(layer).length).toBeGreaterThan(0);
+    expect(Math.max(...jumpNameReveals(layer))).toBeLessThan(13.5);
+
+    // Station labels on: A's station label (drawn from the band up) outranks
+    // J's name, so the name is not shown below the band either.
+    c.setStationLabelsVisible(true);
+    expect(jumpNameReveals(layer)).toEqual([]);
+
+    // Past the band, the full build agrees: the name never shows there.
+    cam.state.zoom = 14;
+    c.sync(tiedJumpParams());
+    expect(jumpNameReveals(h.layerState.last!)).toEqual([]);
+  });
+});
+
 describe('SurveyLabelController labelRestore-guard contract (isActive gates the guard)', () => {
   beforeEach(() => {
     h.layerState.disabledAfterAdd = false;

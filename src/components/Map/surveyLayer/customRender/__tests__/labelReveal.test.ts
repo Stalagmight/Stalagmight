@@ -395,11 +395,7 @@ describe('computeRevealZooms MONOTONICITY (randomized zoom sweep)', () => {
 // ─── Real line first: jump / reference labels never take a real label's slot ─
 
 describe('labelVirtualRank', () => {
-  const rank = (flags: number, hide: { hideJump?: boolean; hideReference?: boolean } = {}) =>
-    labelVirtualRank(desc(LABEL_KIND.STATION_LABEL, { flags }), {
-      hideJump: hide.hideJump ?? false,
-      hideReference: hide.hideReference ?? false,
-    });
+  const rank = (flags: number) => labelVirtualRank(desc(LABEL_KIND.STATION_LABEL, { flags }));
 
   it('ranks real 0, jump 1, reference 2 from the shot kind bits', () => {
     expect(rank(0)).toBe(VIRTUAL_RANK_REAL);
@@ -408,14 +404,11 @@ describe('labelVirtualRank', () => {
     expect(rank(LABEL_FLAG.REFERENCE)).toBe(VIRTUAL_RANK_REFERENCE);
   });
 
-  it('ranks an all-virtual station by the best kind still drawn on it', () => {
+  it('ranks an all-virtual station by the better kind touching it', () => {
     expect(rank(LABEL_FLAG.ALL_JUMP)).toBe(VIRTUAL_RANK_JUMP);
     expect(rank(LABEL_FLAG.ALL_REFERENCE)).toBe(VIRTUAL_RANK_REFERENCE);
-    const both = LABEL_FLAG.ALL_JUMP | LABEL_FLAG.ALL_REFERENCE;
-    expect(rank(both)).toBe(VIRTUAL_RANK_JUMP);
-    // Jumps hidden: only its reference legs are drawn, so it is a reference label.
-    expect(rank(both, { hideJump: true })).toBe(VIRTUAL_RANK_REFERENCE);
-    expect(rank(both, { hideReference: true })).toBe(VIRTUAL_RANK_JUMP);
+    // On both a jump and a reference (or on no leg at all): a jump label.
+    expect(rank(LABEL_FLAG.ALL_JUMP | LABEL_FLAG.ALL_REFERENCE)).toBe(VIRTUAL_RANK_JUMP);
   });
 });
 
@@ -567,7 +560,7 @@ describe('computeRevealZooms real line first (randomized properties)', () => {
         const opts = input({ buildZoom: 22, worldPixelScale: 4e6, slack: 2, ...hide });
         const full = computeRevealZooms(descs, exts, opts);
         for (const maxRank of [VIRTUAL_RANK_REAL, VIRTUAL_RANK_JUMP]) {
-          const keep = descs.map((_, i) => i).filter((i) => labelVirtualRank(descs[i]!, hide) <= maxRank);
+          const keep = descs.map((_, i) => i).filter((i) => labelVirtualRank(descs[i]!) <= maxRank);
           const alone = computeRevealZooms(
             keep.map((i) => descs[i]!),
             keep.map((i) => exts[i]!),
@@ -608,7 +601,7 @@ describe('computeRevealZooms real line first (randomized properties)', () => {
             expect(boxesOverlap(boxes[a]!, boxes[b]!)).toBe(false);
           }
         }
-        if (visible.some((i) => labelVirtualRank(descs[i]!, hide) !== VIRTUAL_RANK_REAL)) sawVirtual = true;
+        if (visible.some((i) => labelVirtualRank(descs[i]!) !== VIRTUAL_RANK_REAL)) sawVirtual = true;
         prevVisible = new Set(visible);
       }
       expect(prevVisible.size).toBeGreaterThan(0);
@@ -616,5 +609,137 @@ describe('computeRevealZooms real line first (randomized properties)', () => {
       // shows whenever a virtual kind is drawn at all.
       expect(sawVirtual).toBe(!(hide.hideJump && hide.hideReference));
     }
+  });
+});
+
+describe('computeRevealZooms empty ladder', () => {
+  it('returns all-never, without throwing, when the horizon is below every minzoom', () => {
+    const descs = [
+      desc(LABEL_KIND.SHOT_LABEL, { ordinal: 0, shotGlobal: 0 }),
+      desc(LABEL_KIND.SHOT_LABEL, { ordinal: 1, flags: LABEL_FLAG.JUMP, shotGlobal: 1 }),
+    ];
+    const reveal = computeRevealZooms(descs, [UNIT_EXT, UNIT_EXT], input({ buildZoom: 11, slack: 2 }));
+    expect(Array.from(reveal)).toEqual([REVEAL_NEVER, REVEAL_NEVER]);
+  });
+});
+
+describe('computeRevealZooms reserved labels (section-only build below the label band)', () => {
+  const reservedStation = (flags = 0) =>
+    desc(LABEL_KIND.STATION_LABEL, { ordinal: 4, flags, stationGlobal: 4 });
+  const sectionOnly = (names: LabelDescriptor[], reserved: LabelDescriptor[]) =>
+    computeRevealZooms(
+      names,
+      names.map(() => UNIT_EXT),
+      input({ buildZoom: 12, reserved: { descriptors: reserved, extents: reserved.map(() => UNIT_EXT) } }),
+    );
+
+  it('a virtual section name leaves free the slot of a real station label built only from z13.5', () => {
+    const jumpName = desc(LABEL_KIND.SECTION_NAME, { flags: LABEL_FLAG.ALL_JUMP, sectionId: 2 });
+    // Not reserved: the name shows from z10 (and would vanish at the full build).
+    expect(sectionOnly([jumpName], [])[0]).toBe(10);
+    // Reserved: hidden here, as it is in the full build.
+    expect(sectionOnly([jumpName], [reservedStation()])[0]).toBe(REVEAL_NEVER);
+    expect(computeRevealZooms([jumpName, reservedStation()], [UNIT_EXT, UNIT_EXT], input({ buildZoom: 14 }))[0])
+      .toBe(REVEAL_NEVER);
+  });
+
+  it('a reservation blocks only worse-rank labels, and only while its kind is shown', () => {
+    const realName = desc(LABEL_KIND.SECTION_NAME, { sectionId: 1 });
+    const jumpName = desc(LABEL_KIND.SECTION_NAME, { flags: LABEL_FLAG.ALL_JUMP, sectionId: 2 });
+    const refName = desc(LABEL_KIND.SECTION_NAME, { flags: LABEL_FLAG.ALL_REFERENCE, sectionId: 3 });
+    // Real names never yield to a reserved station label (a full build places them first).
+    expect(sectionOnly([realName], [reservedStation()])[0]).toBe(10);
+    // A jump station label outranks a reference name, not a jump one.
+    expect(sectionOnly([refName], [reservedStation(LABEL_FLAG.ALL_JUMP)])[0]).toBe(REVEAL_NEVER);
+    expect(sectionOnly([jumpName], [reservedStation(LABEL_FLAG.ALL_JUMP)])[0]).toBe(10);
+    // Station labels toggled off: nothing to leave free.
+    const off = computeRevealZooms([jumpName], [UNIT_EXT], input({
+      buildZoom: 12,
+      kindVisible: [true, false, true, true, true],
+      reserved: { descriptors: [reservedStation()], extents: [UNIT_EXT] },
+    }));
+    expect(off[0]).toBe(10);
+  });
+
+  it('a name held back by a reservation keeps its slot, so no other name shows only to vanish', () => {
+    // Q (first-in-section) and R share an anchor; R's box is wider, so R never
+    // clears Q and a full build never shows it. V2 overlaps R but not Q; V1
+    // overlaps V2 but neither station. Full build: V2 shows (R never does) and
+    // V1 never clears V2. Below the band R is only a reservation, so V2 is held
+    // back - and without keeping its slot V1 would show there, then vanish.
+    const ext = (minX: number, maxX: number, minY: number, maxY: number): ExtentEm => ({ minX, maxX, minY, maxY });
+    const q = desc(LABEL_KIND.STATION_LABEL, { ordinal: 0, flags: LABEL_FLAG.FIRST_IN_SECTION, stationGlobal: 0 });
+    const r = desc(LABEL_KIND.STATION_LABEL, { ordinal: 4, stationGlobal: 4 });
+    const v2 = desc(LABEL_KIND.SECTION_NAME, { flags: LABEL_FLAG.ALL_JUMP, sectionId: 1 });
+    const v1 = desc(LABEL_KIND.SECTION_NAME, { flags: LABEL_FLAG.ALL_JUMP, sectionId: 2 });
+    const exts = { q: ext(0, 1, 0, 1), r: ext(0, 6, 0, 1), v2: ext(4, 5, 0.5, 1.7), v1: ext(4.5, 5.5, 1.2, 2.2) };
+
+    const full = computeRevealZooms([v2, v1, q, r], [exts.v2, exts.v1, exts.q, exts.r], input({ buildZoom: 14 }));
+    expect(Array.from(full)).toEqual([10, REVEAL_NEVER, 14, REVEAL_NEVER]);
+
+    const below = computeRevealZooms([v2, v1], [exts.v2, exts.v1], input({
+      buildZoom: 12,
+      reserved: { descriptors: [q, r], extents: [exts.q, exts.r] },
+    }));
+    // Both hidden below the band: V2 appears at the full build, V1 never shows.
+    expect(Array.from(below)).toEqual([REVEAL_NEVER, REVEAL_NEVER]);
+  });
+
+  it('a name shown below the band is still shown by the full build (randomized)', () => {
+    // Names spread across the screen, each with real and virtual station / shot
+    // labels clustered around it - the shape a jump section tied in at a real
+    // station has. Real pixel scale: 512 px per world unit at z0.
+    const wps12 = 512 * 2 ** 12;
+    let virtualShownBelow = 0;
+    let virtualHeldBack = 0;
+    for (const seed of [11, 12, 13, 14, 0xfeed]) {
+      const rnd = lcg(seed);
+      const names: LabelDescriptor[] = [];
+      const others: LabelDescriptor[] = [];
+      const nameBits = [0, LABEL_FLAG.ALL_JUMP, LABEL_FLAG.ALL_REFERENCE];
+      const shotBits = [0, 0, LABEL_FLAG.JUMP, LABEL_FLAG.REFERENCE];
+      const stationBits = [0, 0, LABEL_FLAG.ALL_JUMP, LABEL_FLAG.ALL_REFERENCE];
+      let id = 0;
+      for (let i = 0; i < 20; i++) {
+        // ~0..900 px apart at z12; cluster members within ~40 px at z14.
+        const ax = (rnd() * 900) / wps12;
+        const ay = (rnd() * 600) / wps12;
+        names.push(desc(LABEL_KIND.SECTION_NAME, { anchorX: ax, anchorY: ay, flags: nameBits[i % 3]!, sectionId: i }));
+        const members = 1 + Math.floor(rnd() * 4);
+        for (let k = 0; k < members; k++) {
+          const shot = rnd() < 0.5;
+          const bits = shot ? shotBits : stationBits;
+          const n = id++;
+          others.push(desc(shot ? LABEL_KIND.SHOT_LABEL : LABEL_KIND.STATION_LABEL, {
+            anchorX: ax + ((rnd() - 0.5) * 80) / (wps12 * 4),
+            anchorY: ay + ((rnd() - 0.5) * 80) / (wps12 * 4),
+            ordinal: n,
+            flags: bits[Math.floor(rnd() * bits.length)]!,
+            ...(shot ? { shotGlobal: n } : { stationGlobal: n }),
+          }));
+        }
+      }
+      const nameExt = names.map(() => ({ minX: -2, maxX: 2, minY: 0.5, maxY: 1.5 }));
+      const otherExt = others.map(() => ({ minX: 0.3, maxX: 3, minY: -0.5, maxY: 0.5 }));
+      const common = { worldPixelScale: wps12, slack: 22 - 12 };
+      const below = computeRevealZooms(names, nameExt, input({
+        buildZoom: 12, ...common, reserved: { descriptors: others, extents: otherExt },
+      }));
+      const full = computeRevealZooms([...names, ...others], [...nameExt, ...otherExt], input({
+        buildZoom: 12, ...common,
+      }));
+      for (let i = 0; i < names.length; i++) {
+        const isVirtual = labelVirtualRank(names[i]!) !== VIRTUAL_RANK_REAL;
+        if (below[i]! > 13.5) {
+          if (isVirtual && full[i]! > 13.5) virtualHeldBack++;
+          continue; // never drawn below the band
+        }
+        if (isVirtual) virtualShownBelow++;
+        expect(full[i]!).toBeLessThanOrEqual(below[i]!);
+      }
+    }
+    // The fixture exercises both outcomes for virtual names.
+    expect(virtualShownBelow).toBeGreaterThan(0);
+    expect(virtualHeldBack).toBeGreaterThan(0);
   });
 });
