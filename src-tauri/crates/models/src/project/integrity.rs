@@ -101,6 +101,39 @@ impl Project {
             }
         }
 
+        // One UUID held by two SECTIONS. Shot UUIDs are unique across the whole
+        // project: every door that brings foreign ids in renames the newcomers
+        // (`reassign_repeated_shot_uuids`) and the load heals a file saved before
+        // that (`make_shot_uuids_project_unique`). Critical so a door that forgot
+        // its rename is rolled back by the integrity guard instead of persisting
+        // two shots that undo history, ignored warnings and the exports cannot
+        // tell apart. Reported once per id, naming the first two holders.
+        let mut holders: HashMap<&str, SectionId> = HashMap::new();
+        let mut reported: HashSet<&str> = HashSet::new();
+        for section in &self.sections {
+            for u in section.shots.iter().filter_map(|shot| shot.uuid.as_deref()) {
+                if u.is_empty() {
+                    continue;
+                }
+                match holders.get(u) {
+                    None => {
+                        holders.insert(u, section.id);
+                    }
+                    Some(&other) if other != section.id && reported.insert(u) => {
+                        violations.push(IntegrityViolation {
+                            severity: ViolationSeverity::Critical,
+                            category: "duplicate_shot_uuid_across_sections".to_string(),
+                            message: format!(
+                                "Sections {other} and {} both hold shot UUID {u}",
+                                section.id
+                            ),
+                        });
+                    }
+                    Some(_) => {}
+                }
+            }
+        }
+
         // Validate every StationRef-bearing collection through the single
         // traversal, so a newly-added ref-bearing collection is checked by
         // construction. Dangling merge/closure/datum refs are Critical (they
@@ -207,6 +240,8 @@ impl Project {
         // the per-section UUID snapshot below reflects the de-duplicated set and
         // AfterShot anchors that pointed at the kept shot stay valid.
         self.ensure_unique_shot_uuids();
+        // Then across sections, rewriting the station keys of every renamed shot.
+        self.make_shot_uuids_project_unique();
 
         // Snapshot, per section, the station count and the set of shot UUIDs, so
         // the retain closures can validate a stored `StationKey` without

@@ -46,6 +46,7 @@ mod relationships;
 mod reverse;
 mod stats;
 mod union_find;
+mod uuid_unique;
 
 #[cfg(test)]
 mod anchor_fuzz;
@@ -59,6 +60,10 @@ pub use integrity::{IntegrityViolation, ViolationSeverity};
 pub use merge_topology::MergeTopology;
 pub use reverse::{reverse_shots, shot_run_displacement};
 pub use shots::MIN_SPLIT_CHILD_LENGTH_M;
+pub use uuid_unique::{
+    remap_project_json, reminted_shot_uuid, reminted_shot_uuid_avoiding, stored_shot_uuid_matches,
+    ShotUuidRemap, SHOT_UUID_REMINT_NAMESPACE,
+};
 
 /// Relationships that reference a given section (merges, closures, offsets, zero datums).
 /// Used by the frontend to show affected relationships before section deletion.
@@ -1603,3 +1608,7 @@ mod tests;
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod station_names_tests;
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+mod uuid_unique_tests;
