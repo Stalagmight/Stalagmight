@@ -633,6 +633,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // run keeps whatever gas config get_config would otherwise return.
       let mockGasConfig: Record<string, unknown> | null = null;
 
+      // The `[map_palette]` block persisted via update_map_palette (the depth /
+      // distance colour palettes and pins), overlaid onto get_config / reload_config
+      // exactly like mockGasConfig.
+      let mockMapPalette: Record<string, unknown> | null = null;
+
       // Station comments set via set_station_comment, keyed
       // "sectionId:stationIndex". get_project_state derives its station array
       // from the project's sections on every refresh, so comments must be
@@ -3932,6 +3937,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 ...mockImportShotsView,
                 },
                 ...(mockGasConfig ? { gas: mockGasConfig } : {}),
+                ...(mockMapPalette ? { map_palette: mockMapPalette } : {}),
               };
             }
             return {
@@ -4218,6 +4224,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               },
               // Spread LAST so a stored `[gas]` block wins over the literal's own.
               ...(mockGasConfig ? { gas: mockGasConfig } : {}),
+              ...(mockMapPalette ? { map_palette: mockMapPalette } : {}),
             };
 
           case 'update_config':
@@ -4236,6 +4243,19 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] update_gas_config called with:', args);
             const gas = args?.gas as Record<string, unknown> | undefined;
             if (gas) mockGasConfig = gas;
+            return null;
+          }
+
+          case 'update_map_palette': {
+            // Partial update of `[map_palette]` only, mirroring the Rust impl;
+            // overlaid in get_config like update_gas_config (see there).
+            console.log('[Mock IPC] update_map_palette called with:', args);
+            const palette = args?.palette as Record<string, unknown> | undefined;
+            if (palette) mockMapPalette = palette;
+            const win = window as unknown as Record<string, unknown>;
+            const calls = (win.__MOCK_MAP_PALETTE_CALLS__ as unknown[] | undefined) ?? [];
+            calls.push(palette ?? null);
+            win.__MOCK_MAP_PALETTE_CALLS__ = calls;
             return null;
           }
 
@@ -4366,6 +4386,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 ...mockImportShotsView,
                 },
                 ...(mockGasConfig ? { gas: mockGasConfig } : {}),
+                ...(mockMapPalette ? { map_palette: mockMapPalette } : {}),
               }, false];
             }
             // Return mock config with any test overrides applied
@@ -4622,6 +4643,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               // own, exactly as in get_config. (`panels` already picks up
               // mockDataTableView above.)
               ...(mockGasConfig ? { gas: mockGasConfig } : {}),
+              ...(mockMapPalette ? { map_palette: mockMapPalette } : {}),
             };
             return [baseConfig, false];
           }

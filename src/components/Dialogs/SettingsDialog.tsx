@@ -269,6 +269,9 @@ function mergeConfig(base: Config, updates: Partial<Config>): Config {
     },
     gas: { ...(base.gas ?? defaultConfig.gas) },
     speleodb: { ...(base.speleodb ?? defaultConfig.speleodb) },
+    // Not a Settings field (the map legend cog and the export panel own it via
+    // `update_map_palette`); carried through so a Settings save never drops it.
+    map_palette: base.map_palette ?? defaultConfig.map_palette,
   };
 
   // Apply updates with deep merge for each key

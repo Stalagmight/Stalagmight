@@ -22,11 +22,12 @@ use stalagmight_lib::config::{
     AngleUnit, AppearanceConfig, CacheConfig, ClosureAdjustmentConfig, ColorTheme, Config,
     DebugConfig, DecimalPrecision, DisplayConfig, DpvRig, DpvUnit, ExportConfig, GasConfig,
     GasUnits, GeneralConfig, GlobalViewConfig, GpsOrigin, ImportConfig, LengthUnit, LoggingConfig,
-    MapAnimationConfig, MapConfig, MapControlsConfig, MapDebugConfig, MapSnapConfig, OverlapMode,
-    PanelsConfig, PlacementSuggestionConfig, ProviderCacheConfig, ReservePreset, ReserveProfile,
-    SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig, SpeleoDbConfig,
-    StationConfig, SyntacticHighlightLevel, SyntacticHighlightPreset, SyntacticHighlightingConfig,
-    ThemeMode, UnitsConfig, UpdateTrack, ValidationConfig,
+    MapAnimationConfig, MapConfig, MapControlsConfig, MapDebugConfig, MapPaletteConfig,
+    MapSnapConfig, OverlapMode, PaletteChoiceConfig, PanelsConfig, PlacementSuggestionConfig,
+    ProviderCacheConfig, ReservePreset, ReserveProfile, SectionColorsConfig, ShortcutFeedback,
+    ShortcutsConfig, ShotConfig, SpeleoDbConfig, StationConfig, SyntacticHighlightLevel,
+    SyntacticHighlightPreset, SyntacticHighlightingConfig, ThemeMode, UnitsConfig, UpdateTrack,
+    ValidationConfig,
 };
 use stalagmight_lib::core::command::{
     CommandResult, CommentHolder, ImportReceipt, IntegrityCheckResult, IntegrityRepairResult,
@@ -349,6 +350,8 @@ fn main() {
     export::<GeneralConfig>(&out_dir);
     export::<UnitsConfig>(&out_dir);
     export::<GasConfig>(&out_dir);
+    export::<MapPaletteConfig>(&out_dir);
+    export::<PaletteChoiceConfig>(&out_dir);
     export::<GasUnits>(&out_dir);
     export::<ReservePreset>(&out_dir);
     export::<ReserveProfile>(&out_dir);
@@ -622,6 +625,8 @@ fn main() {
         "LengthUnit",
         "AngleUnit",
         "GasConfig",
+        "MapPaletteConfig",
+        "PaletteChoiceConfig",
         "GasUnits",
         "ReservePreset",
         "ReserveProfile",

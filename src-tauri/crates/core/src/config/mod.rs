@@ -2,6 +2,7 @@ mod atomic_write;
 mod column_widths;
 pub mod defaults;
 mod general;
+mod map_palette;
 mod panels;
 mod speleodb_file;
 mod types;
@@ -15,6 +16,7 @@ pub use crate::models::config::*;
 // `pub`, not `pub(crate)`: the root crate's config commands normalize widths
 // through this, and they live across the crate boundary now.
 pub use column_widths::normalize_column_widths;
+pub use map_palette::*;
 pub use panels::*;
 // SpeleoDB connection settings live with their runtime consumer
 // (`crate::speleodb::config`); re-exported here so `crate::config::X` keeps working.

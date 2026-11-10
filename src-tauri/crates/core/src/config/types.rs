@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use ts_rs::TS;
 
+use super::map_palette::MapPaletteConfig;
 use super::panels::PanelsConfig;
 use super::webkit::WebkitMemoryConfig;
 use crate::models::config::{
@@ -60,6 +61,9 @@ pub struct Config {
     pub gas: GasConfig,
     #[serde(default)]
     pub speleodb: SpeleoDbConfig,
+    /// Depth / distance colour palettes and pins (`config/map_palette.rs`).
+    #[serde(default)]
+    pub map_palette: MapPaletteConfig,
 
     // Legacy fields for backwards compatibility (deserialize only, never serialize)
     // Uses alias to match old TOML key name while keeping internal field name distinct
@@ -1600,6 +1604,7 @@ impl Config {
         self.placement_suggestion.normalize();
         self.syntactic_highlighting.normalize();
         self.gas.normalize();
+        self.map_palette.normalize();
         self.webkit_memory.normalize();
         self.units.decimal_precision.normalize();
         super::general::normalize_general(&mut self.general);

@@ -1,8 +1,8 @@
 use super::{
     AngleUnit, AppearanceConfig, CacheConfig, ClosureAdjustmentConfig, Config, DebugConfig,
-    DecimalPrecision, DisplayConfig, ExportConfig, GasConfig, GeneralConfig,
-    GlobalViewConfig, GpsOrigin, ImportConfig, LengthUnit, LoggingConfig, MapAnimationConfig,
-    MapConfig, MapControlsConfig, MapSnapConfig, PanelsConfig, PlacementSuggestionConfig,
+    DecimalPrecision, DisplayConfig, ExportConfig, GasConfig, GeneralConfig, GlobalViewConfig,
+    GpsOrigin, ImportConfig, LengthUnit, LoggingConfig, MapAnimationConfig, MapConfig,
+    MapControlsConfig, MapPaletteConfig, MapSnapConfig, PanelsConfig, PlacementSuggestionConfig,
     SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig, SpeleoDbConfig,
     StationConfig, SyntacticHighlightingConfig, UnitsConfig, UpdateTrack, ValidationConfig,
     WebkitMemoryConfig,
@@ -33,6 +33,7 @@ impl Default for Config {
             syntactic_highlighting: SyntacticHighlightingConfig::default(),
             gas: GasConfig::default(),
             speleodb: SpeleoDbConfig::default(),
+            map_palette: MapPaletteConfig::default(),
             legacy_snap: None,
         }
     }

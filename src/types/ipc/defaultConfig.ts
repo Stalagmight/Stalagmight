@@ -355,5 +355,16 @@ export const defaultConfig: Config = {
     "email": null,
     "insecure_http": false,
     "undo_mode": "full"
+  },
+  "map_palette": {
+    "depth": {
+      "id": "theme",
+      "reversed": false
+    },
+    "distance": {
+      "id": "theme",
+      "reversed": false
+    },
+    "pinned": []
   }
 };

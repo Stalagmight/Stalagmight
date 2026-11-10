@@ -1970,6 +1970,7 @@ pub fn run() {
             commands::config::update_edit_section_view,
             commands::config::update_import_shots_view,
             commands::config::update_gas_config,
+            commands::config::update_map_palette,
             // Display settings (per-project)
             commands::config::load_display_settings,
             commands::config::save_display_setting,
