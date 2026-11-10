@@ -929,6 +929,9 @@ export const exportRoundtripFuzz: Scenario = {
       const checkboxes: [string, boolean][] = [
         ['export-show-section-names', options.show_section_names],
         ['export-show-station-labels', options.show_station_labels],
+        // After the IDs: ticking names unticks the IDs, never the reverse order.
+        // `=== true`: a step recorded before the option existed replays as off.
+        ['export-show-station-names', options.show_station_names === true],
         ['export-show-station-comments', options.show_station_comments],
         ['export-show-shot-comments', options.show_shot_comments],
         ['export-show-shot-data', options.show_shot_data],
@@ -1679,6 +1682,7 @@ export const exportRoundtripFuzz: Scenario = {
         show_penetration_labels: false,
         color_mode: 'depth' as const,
         show_station_labels: true,
+        show_station_names: false,
         show_section_names: true,
         show_station_comments: true,
         show_shot_comments: true,
