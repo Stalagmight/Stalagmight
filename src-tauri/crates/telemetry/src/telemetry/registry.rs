@@ -510,6 +510,9 @@ pub const EVENT_NAMES: &[&str] = &[
     // Depth / distance colour palette + pins, written from the map legend cog
     // and the export panel (partial `[map_palette]` write).
     "command.update_map_palette",
+    // Export panel Levels slider: histogram of the depths / distances the
+    // image export colours.
+    "command.export_value_histogram",
     "command.get_raw_table_names",
     "command.get_raw_table",
     // Ruler tool: along-cave-line distance + path shots between two endpoints (#26).
@@ -1093,7 +1096,10 @@ mod tests {
         //   + 1 the depth / distance colour-palette picker's partial config
         //       write (map legend cog, export panel): how often anyone moves off
         //       the theme ramp: command.update_map_palette = 679.
-        assert_eq!(EVENT_NAMES.len(), 679);
+        //   + 1 the export panel's Levels histogram (depth / penetration
+        //       distance over the export's own range):
+        //       command.export_value_histogram = 680.
+        assert_eq!(EVENT_NAMES.len(), 680);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

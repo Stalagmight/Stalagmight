@@ -40,6 +40,9 @@ use stalagmight_lib::core::loading::{
 use stalagmight_lib::core::state::{
     SpeleoCacheOwnership, SpeleoCachedProject, SpeleoPurgeReport, VirtualShotMode,
 };
+use stalagmight_lib::export::color_scale::{
+    ExportColorScale, ExportLevels, ExportValueKind, ValueHistogram,
+};
 use stalagmight_lib::export::{ColorMode, ExportImageOptions, ImageFormat};
 use stalagmight_lib::logging::{LogsSince, RingLogEntry};
 use stalagmight_lib::models::placement_suggest::{
@@ -312,6 +315,10 @@ fn main() {
     export::<ExportImageOptions>(&out_dir);
     export::<ImageFormat>(&out_dir);
     export::<ColorMode>(&out_dir);
+    export::<ExportColorScale>(&out_dir);
+    export::<ExportLevels>(&out_dir);
+    export::<ExportValueKind>(&out_dir);
+    export::<ValueHistogram>(&out_dir);
 
     // Cache + tiles
     export::<ProviderStats>(&out_dir);
@@ -573,6 +580,10 @@ fn main() {
         "ExportImageOptions",
         "ImageFormat",
         "ColorMode",
+        "ExportColorScale",
+        "ExportLevels",
+        "ExportValueKind",
+        "ValueHistogram",
         "ProviderStats",
         "CacheStats",
         "TileFetchStatsResponse",

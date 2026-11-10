@@ -4861,6 +4861,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               '       0.0        0.0      0:00           0  in',
             ].join('\n');
 
+          case 'export_value_histogram': {
+            // A fixed, plausible histogram so the export panel's Levels slider
+            // renders: depth over 0..40 m, distance over 0..250 m.
+            const kind = args?.kind as string | undefined;
+            const bins = (args?.bins as number | undefined) ?? 64;
+            const counts = Array.from({ length: bins }, (_, k) => Math.round(20 * Math.exp(-((k - bins / 3) ** 2) / (bins * 2))));
+            return kind === 'distance' ? { min: 0, max: 250, counts } : { min: 0, max: 40, counts };
+          }
+
           case 'preview_svg_export': {
             // Stick-map preview lives in the same backend command pipeline; the
             // mock returns a tiny but valid SVG so the preview component can
@@ -4868,8 +4877,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const opts = args?.options as Record<string, unknown> | undefined;
             const threshold = (opts?.branching_threshold as number | undefined) ?? 0;
             // Encode the threshold in a data attribute so tests can verify
-            // the preview re-fetches when the slider changes.
-            return `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" data-threshold="${threshold}"><rect width="100" height="100" fill="#ffffff"/><line x1="10" y1="50" x2="90" y2="50" stroke="#000000" stroke-width="1"/></svg>`;
+            // the preview re-fetches when the slider changes; likewise the
+            // colour scales the export would draw (palette head + levels).
+            const scaleTag = (sc: unknown): string => {
+              const v = sc as { palette?: string[]; levels?: { min: number; max: number; gamma: number } } | undefined;
+              if (!v) return 'none';
+              return `${v.palette?.[0] ?? 'theme'}:${v.levels ? `${v.levels.min}-${v.levels.max}-${v.levels.gamma}` : 'auto'}`;
+            };
+            return `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" data-threshold="${threshold}" data-depth-scale="${scaleTag(opts?.depth_scale)}" data-distance-scale="${scaleTag(opts?.distance_scale)}"><rect width="100" height="100" fill="#ffffff"/><line x1="10" y1="50" x2="90" y2="50" stroke="#000000" stroke-width="1"/></svg>`;
           }
 
           case 'export_image': {

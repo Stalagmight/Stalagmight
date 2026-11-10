@@ -4223,6 +4223,28 @@ fn test_export_image_fails_no_project() {
 }
 
 #[test]
+fn test_export_value_histogram_needs_a_project_and_bins_its_stations() {
+    use crate::export::color_scale::ExportValueKind;
+    let app = app_with_state();
+    assert!(
+        export::export_value_histogram_impl(state(&app).inner(), ExportValueKind::Depth, 16)
+            .is_err()
+    );
+    create_project(&app);
+    create_section_with_shots(&app, vec![shot_data(1.0), shot_data(2.0)]);
+    let depth =
+        export::export_value_histogram_impl(state(&app).inner(), ExportValueKind::Depth, 16)
+            .expect("depth histogram");
+    assert_eq!(depth.counts.len(), 16);
+    assert_eq!(depth.counts.iter().sum::<u32>(), 3, "one count per station");
+    let distance =
+        export::export_value_histogram_impl(state(&app).inner(), ExportValueKind::Distance, 4)
+            .expect("distance histogram");
+    assert_eq!(distance.counts.len(), 4);
+    assert_eq!(distance.min, 0.0);
+}
+
+#[test]
 fn test_export_csv_fails_when_directory_missing() {
     let app = app_with_state();
     create_project(&app);

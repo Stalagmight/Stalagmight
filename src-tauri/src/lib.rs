@@ -1957,6 +1957,7 @@ pub fn run() {
             commands::export::export_tml,
             commands::export::export_image,
             commands::export::preview_svg_export,
+            commands::export::export_value_histogram,
             commands::export::export_dive_profile,
             commands::export::render_dive_profile_text,
             // Config
