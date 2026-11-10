@@ -572,7 +572,7 @@ export default function ExportControls({
                           { value: 'none', label: 'None (monochrome)' },
                           { value: 'section', label: 'By section' },
                           { value: 'depth', label: 'By depth' },
-                          { value: 'distance', label: 'By penetration distance' },
+                          { value: 'distance', label: 'By distance' },
                         ]}
                         data-testid="export-color-mode"
                       />

@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useAnchoredFixedMenu } from '../../../hooks/useAnchoredFixedMenu';
 import { useDismissableLayer } from '../../../hooks/useDismissableLayer';
 import { ChevronDownIcon, PinIcon } from '../../common/icons';
+import { nearestScrollableAncestor } from '../../common/Select';
 import { getMapThemeColors } from '../../../utils/themeColors';
 import {
   ALL_PALETTES,
@@ -67,6 +68,10 @@ export function PalettePicker({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  // The trigger's scroll container (the Export panel): bringing the trigger into
+  // view on open scrolls it, and that late scroll must not dismiss the panel
+  // that just opened - the same guard `Select` uses.
+  const scrollAncestorRef = useRef<HTMLElement | null>(null);
   const endpoints = getMapThemeColors();
 
   const nameOf = (p: Palette) => (p.id === THEME_PALETTE_ID ? t('map.colorScale.themePalette') : p.name);
@@ -98,6 +103,11 @@ export function PalettePicker({
 
   // Open with Pinned, Theme and the current palette's folder expanded.
   const openPanel = () => {
+    const trigger = triggerRef.current;
+    if (trigger) {
+      scrollAncestorRef.current = nearestScrollableAncestor(trigger);
+      trigger.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+    }
     setExpanded(new Set(['pinned', 'theme', getPalette(value.id).group]));
     setQuery('');
     setActive(-1);
@@ -125,7 +135,13 @@ export function PalettePicker({
     maxHeightCap: 420,
     remeasureKey: `${visible.length}`,
   });
-  useDismissableLayer({ open, onDismiss: close, contains: [panelRef, triggerRef], survivesUnrelatedScroll: true });
+  useDismissableLayer({
+    open,
+    onDismiss: close,
+    contains: [panelRef, triggerRef],
+    scrollSafe: [panelRef, scrollAncestorRef],
+    survivesUnrelatedScroll: true,
+  });
 
   // Keep the active row in view while arrowing.
   useEffect(() => {
