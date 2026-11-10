@@ -529,7 +529,7 @@ fn the_map_reuses_the_live_renames_verbatim() {
         previous_offsets: HashMap::new(),
     }]);
     let mut ids = HistoryIds::default();
-    for entry in stack.undo_stack.iter_mut() {
+    for entry in &mut stack.undo_stack {
         ids.collect(&mut entry.undo_data);
     }
     let map = history_remap(&project, &renamed, &ids);
