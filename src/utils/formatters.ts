@@ -34,12 +34,15 @@ export function formatStationId(sectionId: number, stationIndex: number): string
 
 /**
  * Whether a code point would reorder, hide or break the text around it: C0/C1
- * controls, and the bidi marks, embeddings, overrides and isolates.
+ * controls, the bidi marks, embeddings, overrides and isolates, and the two
+ * noncharacters U+FFFE/U+FFFF (illegal in XML, so the image export drops them).
  */
 function isUnsafeForDisplay(codePoint: number): boolean {
   return (
     codePoint <= 0x1f ||
     (codePoint >= 0x7f && codePoint <= 0x9f) ||
+    codePoint === 0xfffe ||
+    codePoint === 0xffff ||
     codePoint === 0x061c ||
     codePoint === 0x200e ||
     codePoint === 0x200f ||
@@ -65,7 +68,9 @@ export function displayStationName(name: string | null | undefined): string {
 /**
  * A station ID with its name, when it has one (e.g. the mNemo station number
  * a DMP import recorded). The name is not unique - mNemo restarts at 0 in
- * every section - so it is shown beside the positional ID, never instead of it.
+ * every section - so here it is shown beside the positional ID. Only the
+ * opt-in Station names map label (exclusive with the Station IDs label) shows
+ * a name instead of the ID.
  *
  * @example
  * formatStationIdWithName(5, 3, '17') // returns "5:3 · 17"

@@ -316,14 +316,18 @@ test.describe('Station IDs / Station names', () => {
     await toggleDisplayOption(page, 'showStationLabels');
     expect(await stationLabelPair(page)).toEqual({ ids: false, names: false });
 
+    // Every toggle writes the pair as it now stands, partner first, so a stored
+    // pair can never be left reading both-on.
     await expect
       .poll(() => saves, { timeout: 2000 })
       .toEqual([
+        'showStationNames=false',
         'showStationLabels=true',
         'showStationLabels=false',
         'showStationNames=true',
         'showStationNames=false',
         'showStationLabels=true',
+        'showStationNames=false',
         'showStationLabels=false',
       ]);
   });

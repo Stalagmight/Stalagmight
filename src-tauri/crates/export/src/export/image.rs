@@ -110,11 +110,17 @@ const STATION_NAME_LABEL_MAX_CHARS: usize = 24;
 ///
 /// Mirrors the live map's `formatStationNameLabel` (`labelText.ts`), so the
 /// preview and the file say the same thing: it also drops the Arabic letter
-/// mark (U+061C) that `sanitize_display_text` keeps, and trims a byte-order
-/// mark (U+FEFF) the way JavaScript's `trim` does.
+/// mark (U+061C) that `sanitize_display_text` keeps and the XML-illegal
+/// U+FFFE/U+FFFF (a name of only those would otherwise reserve space for an
+/// empty `<text>`), and trims a byte-order mark (U+FEFF) the way JavaScript's
+/// `trim` does - at both ends and again at the cut.
 fn station_name_label(name: Option<&str>) -> Option<String> {
-    let clean = crate::models::sanitize_display_text(name?, usize::MAX).replace('\u{061c}', "");
-    let clean = clean.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
+    let blank = |c: char| c.is_whitespace() || c == '\u{feff}';
+    let clean: String = crate::models::sanitize_display_text(name?, usize::MAX)
+        .chars()
+        .filter(|&c| c != '\u{061c}' && !is_xml_illegal_char(c))
+        .collect();
+    let clean = clean.trim_matches(blank);
     if clean.is_empty() {
         return None;
     }
@@ -125,7 +131,7 @@ fn station_name_label(name: Option<&str>) -> Option<String> {
         .chars()
         .take(STATION_NAME_LABEL_MAX_CHARS - 1)
         .collect();
-    out.truncate(out.trim_end().len());
+    out.truncate(out.trim_end_matches(blank).len());
     out.push('\u{2026}');
     Some(out)
 }
@@ -1445,22 +1451,31 @@ pub fn generate_svg_string_with_stations(
         // and a named station still shows the name, and a point with no
         // named station gets no label.
         if options.show_station_labels || show_station_names {
+            // Names mode cleans each name once (it decides who represents a
+            // point); index labels are formatted only for the chosen stations.
+            let names: Vec<Option<String>> = if show_station_names {
+                stations
+                    .iter()
+                    .map(|s| station_name_label(s.name.as_deref()))
+                    .collect()
+            } else {
+                Vec::new()
+            };
             let label_for = |i: usize| -> Option<String> {
                 if show_station_names {
-                    station_name_label(stations[i].name.as_deref())
+                    names[i].clone()
                 } else {
                     Some(stations[i].station_ref.station_index.to_string())
                 }
             };
             let mut rep: HashMap<usize, usize> = HashMap::new();
             for i in 0..n {
-                if show_station_names && label_for(i).is_none() {
+                if show_station_names && names[i].is_none() {
                     continue;
                 }
                 // Ascending `i`: the first entry per point is its smallest.
                 rep.entry(point_uf.find(i)).or_insert(i);
             }
-            // Only the chosen stations' text is built.
             let mut selected: Vec<(usize, String)> = degree
                 .iter()
                 .filter(|&(_, &deg)| deg >= 1)
@@ -4093,6 +4108,22 @@ mod tests {
             Some("17")
         );
         assert_eq!(station_name_label(Some("\u{feff}")), None);
+        // XML-illegal noncharacters would leave an empty <text> that still
+        // reserves space: dropped, and a name of only those is no name.
+        assert_eq!(station_name_label(Some("\u{fffe}\u{ffff}")), None);
+        assert_eq!(
+            station_name_label(Some("1\u{fffe}7")).as_deref(),
+            Some("17")
+        );
+        // A byte-order mark right before the cut is trimmed there too.
+        assert_eq!(
+            station_name_label(Some(&format!(
+                "{}\u{feff}{}",
+                "c".repeat(22),
+                "d".repeat(10)
+            ))),
+            Some(format!("{}\u{2026}", "c".repeat(22)))
+        );
 
         let exact = "b".repeat(STATION_NAME_LABEL_MAX_CHARS);
         assert_eq!(

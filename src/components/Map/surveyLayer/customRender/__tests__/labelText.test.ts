@@ -68,6 +68,9 @@ describe('labelText helpers (units)', () => {
     // letter mark goes, and a byte-order mark trims like whitespace.
     expect(formatStationNameLabel('\ufeff\u061c17\ufeff')).toBe('17');
     expect(formatStationNameLabel('\ufeff')).toBeNull();
+    expect(formatStationNameLabel('\ufffe\uffff')).toBeNull();
+    expect(formatStationNameLabel('1\ufffe7')).toBe('17');
+    expect(formatStationNameLabel(`${'c'.repeat(22)}\ufeff${'d'.repeat(10)}`)).toBe(`${'c'.repeat(22)}\u2026`);
   });
 
   it('caps a long station name by code point and ends it with an ellipsis', () => {

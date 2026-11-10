@@ -3,10 +3,11 @@
  *
  * The map's station label is the station ID or its name, never both. Turning
  * one Display-menu toggle on turns the other off; turning one off leaves the
- * other alone, so "no station labels" is reachable. The partner's `false` is
- * saved before the key, so a project can never be left stored as both-on by a
- * half-finished pair of writes - and if it is anyway (an edited file), the load
- * lets the IDs win, as the map and the image export do.
+ * other alone, so "no station labels" is reachable. Every toggle of either
+ * key saves the pair as it now stands (partner first), so a stored pair that
+ * reads both-on (a failed write, a file edited elsewhere) is repaired by the
+ * next toggle; until then the load lets the IDs win, as the map and the image
+ * export do.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
@@ -73,17 +74,38 @@ describe('toggleDisplay: Station IDs and Station names are exclusive', () => {
     ]);
   });
 
-  it('turning one off leaves the other alone (both off is allowed) and saves only the key', () => {
+  it('turning one off leaves the other alone (both off is allowed) and saves the pair', () => {
     useUIStore.setState({ showStationNames: true });
     useUIStore.getState().toggleDisplay('showStationNames');
     expect(pair()).toEqual({ ids: false, names: false });
-    expect(labelSaves()).toEqual([['showStationNames', 'false']]);
+    expect(labelSaves()).toEqual([
+      ['showStationLabels', 'false'],
+      ['showStationNames', 'false'],
+    ]);
   });
 
-  it('turning one on while the other is already off saves only the key', () => {
+  it('turning one on while the other is already off saves the pair as it stands', () => {
     useUIStore.getState().toggleDisplay('showStationNames');
     expect(pair()).toEqual({ ids: false, names: true });
-    expect(labelSaves()).toEqual([['showStationNames', 'true']]);
+    expect(labelSaves()).toEqual([
+      ['showStationLabels', 'false'],
+      ['showStationNames', 'true'],
+    ]);
+  });
+
+  it('a stored both-on pair is repaired by the next toggle, so it cannot reopen as names', () => {
+    // Loads as IDs only (the IDs win)...
+    useUIStore
+      .getState()
+      .applyDisplaySettings(settingsWith({ showStationLabels: true, showStationNames: true }));
+    vi.clearAllMocks();
+    // ...and turning the IDs off must not leave the stale names row behind.
+    useUIStore.getState().toggleDisplay('showStationLabels');
+    expect(pair()).toEqual({ ids: false, names: false });
+    expect(labelSaves()).toEqual([
+      ['showStationNames', 'false'],
+      ['showStationLabels', 'false'],
+    ]);
   });
 
   it('tracks only the toggle the user made, not the partner it turned off', () => {

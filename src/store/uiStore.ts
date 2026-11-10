@@ -1810,9 +1810,13 @@ export const useUIStore = create<UIStore>((set) => ({
     // the saved survey config. Re-read appMode: the showDepthGradient branch above
     // calls exitGasPlan() first, so a Shift+D from Plan lands (and persists) in Survey.
     if (useUIStore.getState().appMode === 'survey') {
-      // The partner's `false` goes first: if only the key's write landed, the
-      // stored pair would read both-on and the load would pick IDs over names.
-      if (clearPartner) state.saveDisplaySetting(partner, false);
+      // Station IDs / names: write the PAIR as it now stands, not just the key.
+      // In memory the pair is never both-on, so this also repairs a stored pair
+      // that is (a write that failed, a file edited elsewhere): the load lets
+      // the IDs win, and without this a later "IDs off" would leave the stale
+      // names row behind to reopen as names. The partner goes first.
+      const pairKey = EXCLUSIVE_DISPLAY_PARTNER[key];
+      if (pairKey !== undefined) state.saveDisplaySetting(pairKey, useUIStore.getState()[pairKey]);
       state.saveDisplaySetting(key, newValue);
     }
   },
@@ -1904,7 +1908,8 @@ export const useUIStore = create<UIStore>((set) => ({
     // silently won over the saved one).
     // Station IDs and names are exclusive in the menu; a stored pair that reads
     // both-on (a lost second write, or an edited file) lets the IDs win, as the
-    // map and the image export do. Not written back - the next toggle settles it.
+    // map and the image export do. Not written back here; the next Station IDs
+    // or Station names toggle rewrites the pair (see toggleDisplay).
     const current = useUIStore.getState();
     const showStationLabels = settings.showStationLabels ?? current.showStationLabels;
     const showStationNames = !showStationLabels && (settings.showStationNames ?? current.showStationNames);
