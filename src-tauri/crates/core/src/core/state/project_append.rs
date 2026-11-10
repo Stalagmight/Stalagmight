@@ -4,9 +4,15 @@
 //! and "Add .stalx to current project" (this once, into the OPEN project). One
 //! code path, so the two features cannot drift apart on what a copy carries.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use crate::models::{LoopClosure, Project, SectionId, StationKey, StationMerge, StationRef};
+use crate::models::{
+    LoopClosure, Project, SectionData, SectionId, StationKey, StationMerge, StationRef,
+};
+
+/// `(target section id, source shot uuid)` -> the uuid that shot was given in
+/// the target, for every copied shot whose identity was already taken there.
+pub(super) type RemintedUuids = HashMap<(SectionId, String), String>;
 
 /// What [`append_project`] did beyond the copy itself.
 pub(super) struct AppendOutcome {
@@ -16,6 +22,10 @@ pub(super) struct AppendOutcome {
     /// The target ids in the order they were assigned (the source's section
     /// order), so callers report and record them deterministically.
     pub(super) new_section_ids: Vec<SectionId>,
+    /// The copied shots that had to take a fresh uuid because the target
+    /// already held theirs. A caller that carries anything keyed by a SOURCE
+    /// shot uuid (the add's ignored warnings) translates it through this.
+    pub(super) reminted_uuids: RemintedUuids,
     /// `(incoming, kept)` when the source's entrance elevation disagreed with
     /// the one the target already held by more than the import tolerance. The
     /// target keeps its own; the caller decides how to tell the user.
@@ -33,6 +43,13 @@ pub(super) struct AppendOutcome {
 /// (`StationKey::positional`); the caller canonicalizes them (merge through
 /// `redrive_offsets_after_load`, add through `reanchor_station_refs`).
 ///
+/// Every copied shot keeps its uuid unless the target already holds it (or an
+/// earlier copied shot took it): then the copy gets a fresh one, so no shot
+/// uuid the copy brings in appears twice in the project. The copy is the side
+/// that loses its undo history, so nothing refers to its old ids; the
+/// target's own shots, which its undo history names, are never changed - nor
+/// are any repeats the target already held.
+///
 /// Only references between this source's own sections are copied - the source
 /// cannot name a target station. A reference to a section the source does not
 /// hold, or to a station that does not resolve, is skipped with a log line.
@@ -48,27 +65,33 @@ pub(super) fn append_project(
 ) -> Result<AppendOutcome, String> {
     let mut section_id_map: HashMap<SectionId, SectionId> = HashMap::new();
     let mut new_section_ids: Vec<SectionId> = Vec::with_capacity(source.sections.len());
+    let mut reminted_uuids = RemintedUuids::new();
+    let mut taken: HashSet<String> = target
+        .sections
+        .iter()
+        .flat_map(|s| s.shots.iter())
+        .filter_map(|shot| shot.uuid.clone())
+        .collect();
 
     for section in &source.sections {
         let old_section_id = section.id;
         let new_section_id = target.next_section_id;
 
-        // Shot identity rides along in `SectionData` (`ShotData::uuid`),
-        // so `add_section` reproduces each source shot's UUID by itself.
-        //
-        // Uniqueness is PER-SECTION here, matching the invariant the app
-        // actually enforces (`Project::ensure_unique_shot_uuids`, the
-        // section-scoped `duplicate_shot_uuid` integrity check, and
-        // `resolve_key`'s section-local lookup) - `Section::new` applies
-        // it as the sections are built. A project-wide dedupe would be
-        // stricter than the model AND than the format: two projects that
-        // imported the same Ariane file legitimately hold the same
-        // foreign ids (#423), and re-minting them here would throw away
-        // exactly the identity the import was preserving. The one
-        // consumer that needs document-wide uniqueness - the SpeleoDB
-        // sidecar - already drops repeats itself
-        // (`export::tml::harden_for_speleodb`).
-        target.add_section(section.to_section_data());
+        // Shot identity rides along in `SectionData` (`ShotData::uuid`), so
+        // `add_section` reproduces each source shot's uuid by itself - except
+        // where the target already holds it, which `claim_unique_uuids`
+        // re-mints first. Settled BEFORE anything is keyed on these shots:
+        // `copy_zero_datums` canonicalizes to `AfterShot(uuid)` at once, so a
+        // later re-mint would leave the datum naming a uuid the section no
+        // longer has. Positions are untouched (source shot i is target shot
+        // i), which is what the positional cross-references below rely on.
+        let mut data = section.to_section_data();
+        let changed = claim_unique_uuids(&mut data, &mut taken);
+        target.add_section(data);
+        if let Some(added) = target.get_section(new_section_id) {
+            // `Section::new` mints an id for a shot that came without one.
+            taken.extend(added.shots.iter().filter_map(|shot| shot.uuid.clone()));
+        }
 
         // #438: `SectionData` cannot carry the north reference, so the
         // copy would land on the target's default - reverting a
@@ -89,16 +112,33 @@ pub(super) fn append_project(
             // (#24): `Section::new` resets the reverse parity and both gauge
             // anchors, which would pin a datum-less component to a different
             // station than the source's and translate its adjusted geometry.
-            // The anchors are shot uuids, which the copy keeps per section.
+            // The anchors are shot uuids, so a re-minted shot's anchor follows
+            // it: a stale one would not resolve, and the gauge would fall back
+            // to the index rule for good.
+            let follow = |uuid: &Option<String>| -> Option<String> {
+                uuid.as_ref()
+                    .map(|u| changed.get(u).cloned().unwrap_or_else(|| u.clone()))
+            };
             copied.reverse_parity = section.reverse_parity;
-            copied.gauge_shot_uuid.clone_from(&section.gauge_shot_uuid);
-            copied
-                .gauge_neighbour_uuid
-                .clone_from(&section.gauge_neighbour_uuid);
+            copied.gauge_shot_uuid = follow(&section.gauge_shot_uuid);
+            copied.gauge_neighbour_uuid = follow(&section.gauge_neighbour_uuid);
         }
 
+        reminted_uuids.extend(
+            changed
+                .into_iter()
+                .map(|(old, new)| ((new_section_id, old), new)),
+        );
         section_id_map.insert(old_section_id, new_section_id);
         new_section_ids.push(new_section_id);
+    }
+    if !reminted_uuids.is_empty() {
+        tracing::info!(
+            project = %source.name,
+            reminted = reminted_uuids.len(),
+            purpose = "keep copied shot uuids unique across the project",
+            "Copied shots whose uuid the project already held were given fresh ones"
+        );
     }
 
     copy_offsets_and_comments(target, source, &section_id_map);
@@ -110,8 +150,48 @@ pub(super) fn append_project(
     Ok(AppendOutcome {
         section_id_map,
         new_section_ids,
+        reminted_uuids,
         elevation_conflict,
     })
+}
+
+/// Give each shot of `data` a uuid no shot in `taken` holds, claiming it.
+///
+/// A shot whose uuid is already taken - by the target, by a section copied
+/// earlier, or by an earlier shot of this same section - gets a fresh v4. The
+/// returned map (source uuid -> fresh uuid) holds only a uuid's FIRST
+/// occurrence in the section: that is the shot a source reference to that
+/// uuid names (`resolve_key` takes the first match), so it is the one a
+/// translation must follow. A later in-section repeat is re-minted too (as
+/// `Section::new` would), but nothing can name it.
+///
+/// Empty and missing uuids are left for `Section::new` to mint.
+fn claim_unique_uuids(
+    data: &mut SectionData,
+    taken: &mut HashSet<String>,
+) -> HashMap<String, String> {
+    let mut changed: HashMap<String, String> = HashMap::new();
+    let mut seen_here: HashSet<String> = HashSet::new();
+    for shot in &mut data.shots {
+        let Some(old) = shot.uuid.clone().filter(|u| !u.is_empty()) else {
+            continue;
+        };
+        let first_here = seen_here.insert(old.clone());
+        if taken.insert(old.clone()) {
+            continue;
+        }
+        let fresh = loop {
+            let candidate = uuid::Uuid::new_v4().to_string();
+            if taken.insert(candidate.clone()) {
+                break candidate;
+            }
+        };
+        if first_here {
+            changed.insert(old, fresh.clone());
+        }
+        shot.uuid = Some(fresh);
+    }
+    changed
 }
 
 /// Section offsets, station offsets and station comments, remapped.

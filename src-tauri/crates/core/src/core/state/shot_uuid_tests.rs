@@ -488,11 +488,14 @@ fn a_section_split_preserves_the_foreign_ids_and_the_cross_references_of_both_ha
 // ---------------------------------------------------------------------------
 
 /// Two projects that each imported the same Ariane file hold the same foreign
-/// ids in different sections. Uniqueness in this model is per-SECTION, so that
-/// is legal and the merge must leave both copies alone. Red on the old
-/// project-wide dedupe, which re-minted the second project's whole section.
+/// ids. Merged, the FIRST source keeps them - the identity its import
+/// preserved - and the second source's copies get fresh ids, so no shot id
+/// appears twice in the merged project. Only the colliding shots are
+/// re-minted, never a whole section's worth of ids that did not collide.
+/// INJECTION (tried): skipping `claim_unique_uuids` in `append_project` fails
+/// the second-source assertion with the foreign ids repeated.
 #[test]
-fn merging_two_projects_that_imported_one_file_keeps_both_copies_of_its_ids() {
+fn merging_two_projects_that_imported_one_file_reminted_only_the_second_copy() {
     const IDS: [&str; 3] = [
         "bbbbbbbb-0000-4000-8000-000000000001",
         "bbbbbbbb-0000-4000-8000-000000000002",
@@ -552,11 +555,17 @@ fn merging_two_projects_that_imported_one_file_keeps_both_copies_of_its_ids() {
         expected,
         "the first source's foreign ids must survive the merge"
     );
+    let second = section_uuids(&merged, 1);
     assert_eq!(
-        section_uuids(&merged, 1),
-        expected,
-        "the second source's foreign ids must survive too - a cross-section \
-         repeat is legal, and re-minting throws away the identity the import kept"
+        second.len(),
+        IDS.len(),
+        "every shot of the second copy is there"
+    );
+    let distinct: HashSet<&String> = expected.iter().chain(second.iter()).collect();
+    assert_eq!(
+        distinct.len(),
+        2 * IDS.len(),
+        "the second copy's ids are fresh and distinct: {second:?}"
     );
 }
 

@@ -249,6 +249,14 @@ fn remap_ignores(
         let Some(shot_uuid) = shot_uuid else {
             continue;
         };
+        // The copy may have given this shot a fresh uuid (the open project
+        // already held its own); the ignore follows the shot, not the old id,
+        // or `add_pending_ignores` would find no such shot and drop it.
+        let shot_uuid = outcome
+            .reminted_uuids
+            .get(&(section_id, shot_uuid.clone()))
+            .cloned()
+            .unwrap_or(shot_uuid);
         carried.push(CarriedIgnore {
             section_id,
             shot_uuid,
