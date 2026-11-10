@@ -663,8 +663,9 @@ fn shot_export_uuid(shot: &Shot) -> String {
 ///
 /// Per-section uniqueness (all the model enforces - see `shot_export_uuid`) still
 /// lets one document carry the same `<UUID>` twice: import the same `.tml` into a
-/// project twice, or merge two projects that came from one file, and every shot's
-/// foreign identity repeats across the two copies. How Ariane treats a repeated
+/// project twice, or open a project merged or added into before copies started
+/// re-minting their colliding ids, and every shot's foreign identity repeats
+/// across the two copies. How Ariane treats a repeated
 /// id is untestable from here, and a consumer keying features on `<UUID>` would
 /// alias the copies - so the export fails safe the same way the sidecar does: the
 /// FIRST occurrence keeps its identity (round-trip fidelity for the copy that
@@ -2786,8 +2787,9 @@ mod tests {
 
     #[test]
     fn a_twice_imported_identity_exports_once_and_reminted_after() {
-        // Import the same .tml twice (or merge two projects from one file) and
-        // both copies of every shot carry the same foreign identity. The
+        // Import the same .tml twice (or open a project merged from one file
+        // before merges re-minted colliding ids) and both copies of every shot
+        // carry the same foreign identity. The
         // user-facing document must not repeat a <UUID>: the first copy keeps
         // the Ariane id, later copies are re-minted (never dropped).
         const FOREIGN: &str = "beefbeef-0000-4000-8000-0000000000aa";

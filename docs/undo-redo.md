@@ -427,6 +427,14 @@ history, and that step records only what the add brought - never a
   (the two project fields the shared append can set), and `(before, after)` of
   any PRE-EXISTING section offset that moved across the command (normally none:
   the add places only what it copied).
+- **Shot identity**: a copied shot keeps its uuid unless the open project
+  already holds it (an earlier add of the same file, a copy of the open
+  project itself, or two projects that imported one Ariane file). Then the
+  copy gets a fresh uuid, before anything is keyed on it, so no uuid the add
+  brings in appears twice in the project. The open project's own shots are
+  never re-minted: its undo history names them. The fresh ids are part of the
+  recorded sections, so redo reinstalls the same ones. "Merge projects" runs
+  the same rule: the first source in the list keeps its ids.
 - **Two phases**, like `CreatedShotSnapshot`: `generate_undo_data` returns a stub
   holding only a baseline (`next_section_id`, offsets, hash sets, the two
   fields); `finalize_undo_data` measures the project the epilogue left against
