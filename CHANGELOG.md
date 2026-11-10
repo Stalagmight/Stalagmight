@@ -9,7 +9,7 @@ Update this file every time a new version is tagged.
 
 ### Fixed
 
-- **Every shot keeps its own identity across the whole project** - importing the same Ariane file twice, merging two copies of a project, or adding a `.stalx` whose survey is already in your project used to leave two shots sharing one ID. The copy already in the project now keeps its IDs and the new one gets its own. Projects saved by earlier versions are fixed when you open them, and their undo history, ignored warnings and dive-plan points stay with the right shots (ISSUE_LINK)
+- **Every shot keeps its own identity across the whole project** - importing the same Ariane file twice, merging two copies of a project, or adding a `.stalx` whose survey is already in your project used to leave two shots sharing one ID. The copy already in the project now keeps its IDs and the new one gets its own. Projects saved by earlier versions are fixed when you open them, and their undo history, ignored warnings and dive-plan points stay with the right shots ([#693](https://github.com/Stalagmight/Stalagmight/issues/693))
 
 ## [0.5.2] - 2026-11-10
 
