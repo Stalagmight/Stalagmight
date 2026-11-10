@@ -194,7 +194,7 @@ impl AppState {
                 "open_project: failed to backfill resolved-warning UUIDs; legacy rows remain position-keyed"
             );
         }
-        let healed_offsets = project.redrive_offsets_after_load();
+        let (healed_offsets, renamed_shots) = project.redrive_offsets_after_load_reporting();
         if healed_offsets > 0 {
             tracing::warn!(
                 healed_offsets,
@@ -428,11 +428,14 @@ impl AppState {
                 undo_stack.clear();
             } else {
                 undo_stack.load_from_persisted_with_timestamps(undo_entries, redo_entries);
-                // ...and against the project they will be replayed onto: a
-                // restored entry that cannot find its shot fails and is pushed
-                // straight back, sealing off everything under it (#413).
+                // ...and against the project they will be replayed onto: first
+                // translated through the shot UUIDs this load renamed (the
+                // entries were recorded against the old ids), then a restored
+                // entry that still cannot find its shot is dropped, since it
+                // would fail and be pushed straight back, sealing off
+                // everything under it (#413).
                 if let Some(project) = proj_guard.as_ref() {
-                    undo_stack.drop_entries_addressing_a_missing_shot(project);
+                    undo_stack.reconcile_with_loaded_project(project, &renamed_shots);
                 }
                 tracing::info!(
                     undo = undo_stack.len(),
@@ -711,7 +714,7 @@ impl AppState {
         // constraints so a file persisted with drifted offsets (e.g. from an
         // older redo bug) opens geometrically correct, before stations are
         // computed below. No-op for an already-consistent file.
-        let healed_offsets = project.redrive_offsets_after_load();
+        let (healed_offsets, renamed_shots) = project.redrive_offsets_after_load_reporting();
         if healed_offsets > 0 {
             tracing::warn!(
                 healed = healed_offsets,
@@ -1096,10 +1099,10 @@ impl AppState {
                 undo_stack.clear();
             } else {
                 undo_stack.load_from_persisted_with_timestamps(undo_entries, redo_entries);
-                // ...and against the project they will be replayed onto: a
-                // restored entry that cannot find its shot fails and is pushed
-                // straight back, sealing off everything under it (#413).
-                undo_stack.drop_entries_addressing_a_missing_shot(&project);
+                // ...and against the project they will be replayed onto: first
+                // translated through the shot UUIDs this load renamed, then an
+                // entry that still cannot find its shot is dropped (#413).
+                undo_stack.reconcile_with_loaded_project(&project, &renamed_shots);
                 tracing::info!(
                     undo = undo_stack.len(),
                     purpose = "restore edit history",
