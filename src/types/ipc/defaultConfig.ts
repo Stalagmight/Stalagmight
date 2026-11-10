@@ -40,13 +40,6 @@ export const defaultConfig: Config = {
     "grid_spacing": 10.0,
     "font_size": 12,
     "font_color": "#f5f5f5",
-    "depth_gradient": {
-      "enabled": false,
-      "shallow_color": "#00bfff",
-      "deep_color": "#ff4444",
-      "shallow_depth": 0.0,
-      "deep_depth": 50.0
-    },
     "measure_path_color": "#22d3ee"
   },
   "section_colors": {

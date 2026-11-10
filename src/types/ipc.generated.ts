@@ -138,7 +138,6 @@ export * from './ipc/Config';
 export * from './ipc/GeneralConfig';
 export * from './ipc/UnitsConfig';
 export * from './ipc/DisplayConfig';
-export * from './ipc/DepthGradientConfig';
 export * from './ipc/SectionColorsConfig';
 export * from './ipc/GpsOrigin';
 export * from './ipc/StationConfig';

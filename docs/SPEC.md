@@ -1739,7 +1739,7 @@ The sidebar displays 12 settings categories, with a visual separator before the 
 | Appearance | Theme mode (dark/light/auto), day and night color theme selection with preview cards, 10 color themes |
 | Units | Length/depth/angle units, decimal precision |
 | Gas planning | Swim speed, jump RMV multiplier, whether reference legs count toward gas |
-| Display | Background/grid/font colors, grid spacing, font size, depth gradient settings, section color palette |
+| Display | Grid/font colors, grid spacing, font size, measure-path color, section color palette |
 | Map | Satellite provider/toggle/GPS origin, zoom settings, pan/zoom controls, station/shot appearance, snap settings, animation settings |
 | Validation | Shot length min/max warnings, depth change warnings, azimuth deviation warnings, in/out difference thresholds |
 | Export | Default image format (PNG/SVG/PDF), default DPI, default layer includes (satellite, grid, labels) |

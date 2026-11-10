@@ -107,13 +107,6 @@ font_size = 12                      # Map label font size
 font_color = "#f5f5f5"              # Map label color
 measure_path_color = "#22d3ee"      # Along-line tint for the measure tool's path
 
-[display.depth_gradient]
-enabled = false                     # Color shots by depth
-shallow_color = "#00bfff"           # Gradient endpoint at shallow_depth
-deep_color = "#ff4444"              # Gradient endpoint at deep_depth
-shallow_depth = 0.0
-deep_depth = 50.0
-
 [section_colors]
 # Colors handed to new sections, in order; wraps around when all are used
 palette = ["#4ecdc4", "#ff6b6b", "#95e1d3", "#f38181",

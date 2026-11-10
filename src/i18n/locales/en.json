@@ -433,7 +433,6 @@
         "interface": "Interface",
         "grid": "Grid",
         "font": "Font",
-        "depthGradient": "Depth Gradient",
         "sectionColors": "Section Colors",
         "measure": "Measure tool"
       },
@@ -468,33 +467,6 @@
           "aria": "Font color"
         }
       },
-      "depthGradient": {
-        "enabled": {
-          "label": "Enable depth gradient",
-          "help": "Color shots based on their depth",
-          "aria": "Enable depth gradient coloring"
-        },
-        "shallowColor": {
-          "label": "Shallow color",
-          "help": "Color at the shallow depth threshold",
-          "aria": "Shallow depth color"
-        },
-        "deepColor": {
-          "label": "Deep color",
-          "help": "Color at the deep depth threshold",
-          "aria": "Deep depth color"
-        },
-        "shallowDepth": {
-          "label": "Shallow depth",
-          "help": "Depth value where gradient starts (in configured depth unit)",
-          "aria": "Shallow depth threshold"
-        },
-        "deepDepth": {
-          "label": "Deep depth",
-          "help": "Depth value where gradient ends (in configured depth unit)",
-          "aria": "Deep depth threshold"
-        }
-      },
       "sectionColors": {
         "label": "Color palette",
         "help": "Colors assigned to new sections (click to change)",
@@ -506,8 +478,7 @@
         "aria": "Measure path highlight color"
       },
       "validation": {
-        "fontSize": "Font size must be between 8 and 32",
-        "depthRange": "Shallow depth must be less than deep depth"
+        "fontSize": "Font size must be between 8 and 32"
       }
     },
     "validation": {

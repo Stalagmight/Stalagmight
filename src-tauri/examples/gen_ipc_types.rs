@@ -20,13 +20,13 @@ use stalagmight_lib::commands::survey_geometry::{
 };
 use stalagmight_lib::config::{
     AngleUnit, AppearanceConfig, CacheConfig, ClosureAdjustmentConfig, ColorTheme, Config,
-    DebugConfig, DecimalPrecision, DepthGradientConfig, DisplayConfig, DpvRig, DpvUnit,
-    ExportConfig, GasConfig, GasUnits, GeneralConfig, GlobalViewConfig, GpsOrigin, ImportConfig,
-    LengthUnit, LoggingConfig, MapAnimationConfig, MapConfig, MapControlsConfig, MapDebugConfig,
-    MapSnapConfig, OverlapMode, PanelsConfig, PlacementSuggestionConfig, ProviderCacheConfig,
-    ReservePreset, ReserveProfile, SectionColorsConfig, ShortcutFeedback, ShortcutsConfig,
-    ShotConfig, SpeleoDbConfig, StationConfig, SyntacticHighlightLevel, SyntacticHighlightPreset,
-    SyntacticHighlightingConfig, ThemeMode, UnitsConfig, UpdateTrack, ValidationConfig,
+    DebugConfig, DecimalPrecision, DisplayConfig, DpvRig, DpvUnit, ExportConfig, GasConfig,
+    GasUnits, GeneralConfig, GlobalViewConfig, GpsOrigin, ImportConfig, LengthUnit, LoggingConfig,
+    MapAnimationConfig, MapConfig, MapControlsConfig, MapDebugConfig, MapSnapConfig, OverlapMode,
+    PanelsConfig, PlacementSuggestionConfig, ProviderCacheConfig, ReservePreset, ReserveProfile,
+    SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig, SpeleoDbConfig,
+    StationConfig, SyntacticHighlightLevel, SyntacticHighlightPreset, SyntacticHighlightingConfig,
+    ThemeMode, UnitsConfig, UpdateTrack, ValidationConfig,
 };
 use stalagmight_lib::core::command::{
     CommandResult, CommentHolder, ImportReceipt, IntegrityCheckResult, IntegrityRepairResult,
@@ -153,6 +153,8 @@ fn main() {
         "SpeleoTeamGrant",
         "SpeleoTeamOption",
         "SpeleoUserSuggestion",
+        // Retired with the dead Settings > Display "Depth Gradient" section (#380).
+        "DepthGradientConfig",
     ] {
         for directory in [
             &out_dir,
@@ -353,7 +355,6 @@ fn main() {
     export::<DpvUnit>(&out_dir);
     export::<DpvRig>(&out_dir);
     export::<DisplayConfig>(&out_dir);
-    export::<DepthGradientConfig>(&out_dir);
     export::<SectionColorsConfig>(&out_dir);
     export::<GpsOrigin>(&out_dir);
     export::<StationConfig>(&out_dir);
@@ -591,7 +592,6 @@ fn main() {
         "GeneralConfig",
         "UnitsConfig",
         "DisplayConfig",
-        "DepthGradientConfig",
         "SectionColorsConfig",
         "GpsOrigin",
         "StationConfig",

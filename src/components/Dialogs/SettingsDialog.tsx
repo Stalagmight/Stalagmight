@@ -240,7 +240,7 @@ function mergeConfig(base: Config, updates: Partial<Config>): Config {
   const result: Config = {
     general: { ...base.general },
     units: { ...base.units },
-    display: { ...base.display, depth_gradient: { ...base.display.depth_gradient } },
+    display: { ...base.display },
     section_colors: { palette: [...base.section_colors.palette] },
     map: {
       ...base.map,
@@ -279,13 +279,7 @@ function mergeConfig(base: Config, updates: Partial<Config>): Config {
     result.units = { ...result.units, ...updates.units };
   }
   if (updates.display) {
-    result.display = {
-      ...result.display,
-      ...updates.display,
-      depth_gradient: updates.display.depth_gradient
-        ? { ...result.display.depth_gradient, ...updates.display.depth_gradient }
-        : result.display.depth_gradient,
-    };
+    result.display = { ...result.display, ...updates.display };
   }
   if (updates.section_colors) {
     result.section_colors = { ...result.section_colors, ...updates.section_colors };

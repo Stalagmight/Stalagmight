@@ -1,12 +1,11 @@
 import { useEffect, useRef, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Toggle } from '../../common/Toggle';
 import { Select } from '../../common/Select';
 import { SettingsSection } from './SettingsSection';
 import { SettingRow } from './SettingRow';
 import { getPanelId, getTabId } from '../SettingsSidebar';
 import type { SettingsCategoryProps } from './types';
-import { isFieldChanged, createNumericHandler, createToggleHandler, createSelectHandler, parseIntRadix10 } from './types';
+import { isFieldChanged, createNumericHandler, createSelectHandler, parseIntRadix10 } from './types';
 import { getThemedDisplayDefaults, getThemedSectionColorDefaults } from '../../../types/config';
 import { useUIStore } from '../../../store/uiStore';
 import {
@@ -22,8 +21,9 @@ import {
 
 /**
  * Display settings category content.
- * Maps to config.display + config.section_colors: background, grid settings,
- * font settings, depth_gradient, palette.
+ * Maps to config.display + config.section_colors: grid settings, font
+ * settings, measure-path colour, palette. The depth / distance colour palette
+ * is not here: it lives on the map legend's cog (`[map_palette]`).
  */
 export function DisplaySettings({
   config,
@@ -66,11 +66,6 @@ export function DisplaySettings({
       errors.push(t('settings.display.validation.fontSize'));
     }
 
-    // Validate depth gradient depths
-    if (config.display.depth_gradient.shallow_depth >= config.display.depth_gradient.deep_depth) {
-      errors.push(t('settings.display.validation.depthRange'));
-    }
-
     const hasError = errors.length > 0;
     if (hasError !== hasErrorRef.current) {
       hasErrorRef.current = hasError;
@@ -101,18 +96,6 @@ export function DisplaySettings({
     (n) => ({ display: { ...config.display, font_size: n } }), parseIntRadix10);
   const handleFontColorChange = createSelectHandler(onChange,
     (v) => ({ display: { ...config.display, font_color: v } }));
-
-  // --- Depth gradient ---
-  const handleDepthGradientEnabledChange = createToggleHandler(onChange,
-    (v) => ({ display: { ...config.display, depth_gradient: { ...config.display.depth_gradient, enabled: v } } }));
-  const handleShallowColorChange = createSelectHandler(onChange,
-    (v) => ({ display: { ...config.display, depth_gradient: { ...config.display.depth_gradient, shallow_color: v } } }));
-  const handleDeepColorChange = createSelectHandler(onChange,
-    (v) => ({ display: { ...config.display, depth_gradient: { ...config.display.depth_gradient, deep_color: v } } }));
-  const handleShallowDepthChange = createNumericHandler(onChange,
-    (n) => ({ display: { ...config.display, depth_gradient: { ...config.display.depth_gradient, shallow_depth: n } } }));
-  const handleDeepDepthChange = createNumericHandler(onChange,
-    (n) => ({ display: { ...config.display, depth_gradient: { ...config.display.depth_gradient, deep_depth: n } } }));
 
   // --- Measure tool (#26) ---
   const handleMeasurePathColorChange = createSelectHandler(onChange,
@@ -232,98 +215,6 @@ export function DisplaySettings({
             className="w-12 h-8 rounded border border-border cursor-pointer"
             aria-label={t('settings.display.font.color.aria')}
             data-testid="input-font-color"
-          />
-        </SettingRow>
-      </SettingsSection>
-
-      <SettingsSection title={t('settings.display.sections.depthGradient')} data-testid="section-depth-gradient">
-        <SettingRow
-          label={t('settings.display.depthGradient.enabled.label')}
-          helpText={t('settings.display.depthGradient.enabled.help')}
-          isChanged={isFieldChanged(changedFields, 'display.depth_gradient.enabled')}
-          data-testid="setting-depth-gradient-enabled"
-          onReset={() => onChange({ display: { ...config.display, depth_gradient: { ...config.display.depth_gradient, enabled: displayDefaults.depth_gradient.enabled } } })}
-          isDefault={config.display.depth_gradient.enabled === displayDefaults.depth_gradient.enabled}
-        >
-          <Toggle
-            checked={config.display.depth_gradient.enabled}
-            onChange={handleDepthGradientEnabledChange}
-            aria-label={t('settings.display.depthGradient.enabled.aria')}
-            data-testid="toggle-depth-gradient"
-          />
-        </SettingRow>
-
-        <SettingRow
-          label={t('settings.display.depthGradient.shallowColor.label')}
-          helpText={t('settings.display.depthGradient.shallowColor.help')}
-          isChanged={isFieldChanged(changedFields, 'display.depth_gradient.shallow_color')}
-          data-testid="setting-shallow-color"
-          onReset={() => onChange({ display: { ...config.display, depth_gradient: { ...config.display.depth_gradient, shallow_color: displayDefaults.depth_gradient.shallow_color } } })}
-          isDefault={config.display.depth_gradient.shallow_color === displayDefaults.depth_gradient.shallow_color}
-        >
-          <input
-            type="color"
-            value={config.display.depth_gradient.shallow_color}
-            onChange={(e) => handleShallowColorChange(e.target.value)}
-            className="w-12 h-8 rounded border border-border cursor-pointer"
-            aria-label={t('settings.display.depthGradient.shallowColor.aria')}
-            data-testid="input-shallow-color"
-          />
-        </SettingRow>
-
-        <SettingRow
-          label={t('settings.display.depthGradient.deepColor.label')}
-          helpText={t('settings.display.depthGradient.deepColor.help')}
-          isChanged={isFieldChanged(changedFields, 'display.depth_gradient.deep_color')}
-          data-testid="setting-deep-color"
-          onReset={() => onChange({ display: { ...config.display, depth_gradient: { ...config.display.depth_gradient, deep_color: displayDefaults.depth_gradient.deep_color } } })}
-          isDefault={config.display.depth_gradient.deep_color === displayDefaults.depth_gradient.deep_color}
-        >
-          <input
-            type="color"
-            value={config.display.depth_gradient.deep_color}
-            onChange={(e) => handleDeepColorChange(e.target.value)}
-            className="w-12 h-8 rounded border border-border cursor-pointer"
-            aria-label={t('settings.display.depthGradient.deepColor.aria')}
-            data-testid="input-deep-color"
-          />
-        </SettingRow>
-
-        <SettingRow
-          label={t('settings.display.depthGradient.shallowDepth.label')}
-          helpText={t('settings.display.depthGradient.shallowDepth.help')}
-          isChanged={isFieldChanged(changedFields, 'display.depth_gradient.shallow_depth')}
-          data-testid="setting-shallow-depth"
-          onReset={() => onChange({ display: { ...config.display, depth_gradient: { ...config.display.depth_gradient, shallow_depth: displayDefaults.depth_gradient.shallow_depth } } })}
-          isDefault={config.display.depth_gradient.shallow_depth === displayDefaults.depth_gradient.shallow_depth}
-        >
-          <input
-            type="number" inputMode="decimal"
-            step={0.1}
-            value={config.display.depth_gradient.shallow_depth}
-            onChange={(e) => handleShallowDepthChange(e.target.value)}
-            className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-            aria-label={t('settings.display.depthGradient.shallowDepth.aria')}
-            data-testid="input-shallow-depth"
-          />
-        </SettingRow>
-
-        <SettingRow
-          label={t('settings.display.depthGradient.deepDepth.label')}
-          helpText={t('settings.display.depthGradient.deepDepth.help')}
-          isChanged={isFieldChanged(changedFields, 'display.depth_gradient.deep_depth')}
-          data-testid="setting-deep-depth"
-          onReset={() => onChange({ display: { ...config.display, depth_gradient: { ...config.display.depth_gradient, deep_depth: displayDefaults.depth_gradient.deep_depth } } })}
-          isDefault={config.display.depth_gradient.deep_depth === displayDefaults.depth_gradient.deep_depth}
-        >
-          <input
-            type="number" inputMode="decimal"
-            step={0.1}
-            value={config.display.depth_gradient.deep_depth}
-            onChange={(e) => handleDeepDepthChange(e.target.value)}
-            className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-            aria-label={t('settings.display.depthGradient.deepDepth.aria')}
-            data-testid="input-deep-depth"
           />
         </SettingRow>
       </SettingsSection>

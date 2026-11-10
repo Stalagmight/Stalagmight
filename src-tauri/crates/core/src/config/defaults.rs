@@ -1,6 +1,6 @@
 use super::{
     AngleUnit, AppearanceConfig, CacheConfig, ClosureAdjustmentConfig, Config, DebugConfig,
-    DecimalPrecision, DepthGradientConfig, DisplayConfig, ExportConfig, GasConfig, GeneralConfig,
+    DecimalPrecision, DisplayConfig, ExportConfig, GasConfig, GeneralConfig,
     GlobalViewConfig, GpsOrigin, ImportConfig, LengthUnit, LoggingConfig, MapAnimationConfig,
     MapConfig, MapControlsConfig, MapSnapConfig, PanelsConfig, PlacementSuggestionConfig,
     SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig, SpeleoDbConfig,
@@ -94,20 +94,7 @@ impl Default for DisplayConfig {
             grid_spacing: 10.0,
             font_size: 12,
             font_color: "#f5f5f5".to_string(),
-            depth_gradient: DepthGradientConfig::default(),
             measure_path_color: "#22d3ee".to_string(),
-        }
-    }
-}
-
-impl Default for DepthGradientConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            shallow_color: "#00bfff".to_string(),
-            deep_color: "#ff4444".to_string(),
-            shallow_depth: 0.0,
-            deep_depth: 50.0,
         }
     }
 }

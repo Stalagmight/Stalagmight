@@ -18,7 +18,6 @@ export type {
   GeneralConfig,
   UnitsConfig,
   DisplayConfig,
-  DepthGradientConfig,
   SectionColorsConfig,
   GpsOrigin,
   StationConfig,
@@ -53,13 +52,6 @@ export const lightDisplayDefaults: DisplayConfig = {
   grid_spacing: 10,
   font_size: 12,
   font_color: themeTokens.light['--cc-text-primary'],
-  depth_gradient: {
-    enabled: false,
-    shallow_color: '#0077b6',
-    deep_color: '#c1121f',
-    shallow_depth: 0.0,
-    deep_depth: 50.0,
-  },
   // #357 item 17: the dark default is `#22d3ee`, a bright cyan that measures
   // 1.69:1 on light's `#faf7f2` - the ruler's measured path was all but invisible
   // even after resetting Display settings, because these defaults specified the
@@ -135,12 +127,9 @@ export function mapCanvasFor(resolvedTheme: string): string {
  */
 export function getThemedDisplayDefaults(resolvedTheme: string): DisplayConfig {
   if (LIGHT_CANVAS_THEMES.has(resolvedTheme)) {
-    return { ...lightDisplayDefaults, depth_gradient: { ...lightDisplayDefaults.depth_gradient } };
+    return { ...lightDisplayDefaults };
   }
-  return {
-    ...defaultConfig.display,
-    depth_gradient: { ...defaultConfig.display.depth_gradient },
-  };
+  return { ...defaultConfig.display };
 }
 
 /**
