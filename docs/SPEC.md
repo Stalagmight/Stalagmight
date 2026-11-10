@@ -946,7 +946,7 @@ The three move tools are documented in detail in [move-tools.md](move-tools.md).
 - Grid overlay (theme-aware; spacing chosen by the user from 1, 5, 10, 25, 50, 100 m - default 10 m)
 - Scale bar (always shown; not a toggle)
 - Satellite imagery
-- Depth color gradient (configurable palette)
+- Depth color gradient, and the distance gradient: palette and Levels range from the legend cog (docs/color-palettes.md)
 - LRUD passage walls (future)
 
 #### Map Interactions
