@@ -37,6 +37,7 @@ import { convertToEditableShots } from '../../hooks/useImportState';
 import { editableShotToShotData, editableShotsToDmpSection } from '../../utils/shotConversion';
 import {
   computeMergeOptions,
+  defaultMergeOffset,
   computeOverlapIds,
   computeActionableIds,
   computeTargetShotIndex,
@@ -1161,12 +1162,13 @@ export default function DmpNewImportDialog({
     return mergeOptions.find((o) => o.offset === selectedMergeOffset) ?? mergeOptions[mergeOptions.length - 1]!;
   }, [mergeOptions, selectedMergeOffset]);
 
-  // Reset merge offset to last option (deepest overlap) when suggestion changes
+  // Reset the merge offset to the end of the repeat when the suggestion changes.
+  // The same rule `computeDefaultMergeOffset` applies up front (#685).
   useEffect(() => {
-    if (mergeOptions.length > 0) {
-      setSelectedMergeOffset(mergeOptions[mergeOptions.length - 1]!.offset);
+    if (currentSuggestion && mergeOptions.length > 0) {
+      setSelectedMergeOffset(defaultMergeOffset(currentSuggestion, importShotCount));
     }
-  }, [currentSuggestion, mergeOptions]);
+  }, [currentSuggestion, mergeOptions, importShotCount]);
 
   // Check if the current suggestion targets an existing section that is doubly-anchored
   // (modified overlap shots sit between two positional constraints). When true, only
@@ -1824,17 +1826,15 @@ export default function DmpNewImportDialog({
   }, [isTargetDoublyAnchored, overlapMode, handleOverlapModeChange]);
 
   // Pick the next suggestion from the cached pool, filtering out connected/skipped sections.
+  // The end of the repeat, never the matcher's interior pick (#685): set before
+  // the suggestion renders, so its first frame - and a confirm that lands in
+  // it - already uses the station the reset effect above would choose.
   const computeDefaultMergeOffset = useCallback((suggestion: CrossSectionSuggestion): number => {
     const section = dmpFile.sections[suggestion.importSectionIndex];
     const importShotCount = section
       ? section.shots.filter((s) => s.shot_type === 'Standard').length
       : 0;
-    const options = computeMergeOptions(suggestion, importShotCount);
-    if (suggestion.preferredMergeOffset != null) {
-      const preferred = options.find((option) => option.offset === suggestion.preferredMergeOffset);
-      if (preferred) return preferred.offset;
-    }
-    return options[options.length - 1]?.offset ?? 0;
+    return defaultMergeOffset(suggestion, importShotCount);
   }, [dmpFile.sections]);
 
   const ensureTemporalDistances = useCallback(async (pool: CrossSectionSuggestion[]) => {

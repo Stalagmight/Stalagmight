@@ -241,6 +241,22 @@ export function computeMergeOptions(
   return options;
 }
 
+/**
+ * The "Merge at" offset a placement dialog preselects: the LAST option, the
+ * end of the repeat. Joining there makes every repeated shot actionable
+ * (`computeActionableIds` covers the stations before the merge point), so none
+ * is imported a second time as a normal shot (#681, #685).
+ *
+ * Deliberately NOT the matcher's `preferredMergeOffset`. For a repeat of two or
+ * more shots that is an interior station (the matcher boosts interior
+ * stations), and it still drives suggestion ranking (`dmpTemporalRerank.ts`),
+ * which is the only thing it is for. Returns 0 when there are no options.
+ */
+export function defaultMergeOffset(suggestion: SuggestionLike, importShotCount: number): number {
+  const options = computeMergeOptions(suggestion, importShotCount);
+  return options[options.length - 1]?.offset ?? 0;
+}
+
 // ─── Shot transformations ───────────────────────────────────────────────────
 
 /** Average two nullable numbers; returns null if both are null. */

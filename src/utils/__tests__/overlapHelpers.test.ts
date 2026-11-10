@@ -5,6 +5,7 @@ import {
   computeActionableIds,
   computeTargetShotIndex,
   computeMergeOptions,
+  defaultMergeOffset,
   reverseTargetShot,
   applyTargetData,
   interpolateShots,
@@ -1874,5 +1875,44 @@ describe('handleConfirm target-shot-update: real kb.dmp 018→003 scenario', () 
 
     const filtered = deletedImport.filter(s => !s.isDeleted);
     expect(filtered).toHaveLength(27);
+  });
+});
+
+// ─── defaultMergeOffset (#685) ──────────────────────────────────────────────
+
+describe('defaultMergeOffset', () => {
+  // A two-shot repeat, the case where the matcher's own pick is an interior
+  // station (offset 1). The default must be the end of the repeat anyway, so
+  // every repeated shot is actionable and none is imported twice.
+  // INJECTION (tried): returning `preferredMergeOffset` when it names an option
+  // (the pre-#685 rule) fails both "end of the repeat" cases.
+  const front = {
+    importStationIndex: 0,
+    existingStationIndex: 2,
+    matchedShots: 2,
+    preferredMergeOffset: 1,
+    direction: 'forward' as const,
+    isPartial: false,
+  };
+  const back = { ...front, importStationIndex: 4, existingStationIndex: 0 };
+
+  it('a repeat at the front defaults to the end of the repeat, not the matcher pick', () => {
+    const offset = defaultMergeOffset(front, 4);
+    expect(offset).toBe(2);
+    const merge = computeMergeOptions(front, 4).find((o) => o.offset === offset)!;
+    expect(merge).toEqual({ offset: 2, importStation: 2, existingStation: 4 });
+    expect(computeActionableIds(0, 2, merge.importStation)).toEqual(computeOverlapIds(0, 2));
+  });
+
+  it('a repeat at the back defaults to the end of the repeat as well', () => {
+    const offset = defaultMergeOffset(back, 4);
+    expect(offset).toBe(2);
+    const merge = computeMergeOptions(back, 4).find((o) => o.offset === offset)!;
+    expect(merge.importStation).toBe(2);
+    expect(computeActionableIds(4, 2, merge.importStation)).toEqual(computeOverlapIds(4, 2));
+  });
+
+  it('is 0 when no option fits', () => {
+    expect(defaultMergeOffset({ ...front, existingStationIndex: -5, direction: 'reverse' }, 4)).toBe(0);
   });
 });
