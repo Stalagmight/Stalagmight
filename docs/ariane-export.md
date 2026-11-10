@@ -119,26 +119,34 @@ render, so nothing is minted per-export (a project loaded but never saved is the
 one case where a UUID is minted on the fly, and it is persisted by the next
 save).
 
-Uniqueness lives at two different levels, and they are deliberately different:
+A shot UUID is unique across the whole project:
 
-- **Model level: per-section only.** `Project::ensure_unique_shot_uuids` resets
-  its dedup set inside the section loop, and the companion
-  `duplicate_shot_uuid` integrity check is section-scoped for the same reason -
-  `resolve_key` is section-local, so a cross-section repeat cannot mis-resolve
-  a station anchor and is not treated as a violation. Cross-section repeats are
-  reachable in normal use since #423 (importing the same Ariane file twice, or
-  merging two projects that each imported it) and are legal by design.
-- **Export boundary: per-document, enforced.** `build_export_shots` settles
-  repeats after assembling the full shot list, each profile its own way: the
-  user export re-mints later occurrences (`remint_duplicate_uuids` - the first
-  copy keeps its Ariane identity, later copies draw a fresh v4 *per export*,
-  so byte-stability holds only for the first copy), and the SpeleoDB sidecar
-  drops them (`harden_for_speleodb`), because a repeat would alias two shots
-  onto one GeoJSON feature id.
+- **Doors rename repeats.** An Ariane import, `create_section_and_merge`, project
+  merge and Add .stalx bring ids from outside. Each renames the ids its new
+  sections share with the project (`Project::reassign_repeated_shot_uuids`): the
+  project keeps its id, the newcomer gets a derived replacement
+  (`reminted_shot_uuid`, a v5 hash of the section and the old id re-stamped as a
+  v4, so the SpeleoDB sidecar keeps it). Importing the same file twice therefore
+  gives the second copy derived ids, and only the first copy round-trips to the
+  file's `<UUID>`s.
+- **The load heals older files.** A file saved before this can hold one id in
+  several sections. The load keeps it in the lowest section and gives the others
+  the derived replacement (`Project::make_shot_uuids_project_unique`), and
+  translates the persisted undo/redo history through the same renames (see
+  [Undo/Redo](undo-redo.md#a-loaded-history-follows-the-loads-shot-uuid-heal)).
+  Derived, so every open of an unsaved file agrees.
+- **The integrity check flags a repeat** (`duplicate_shot_uuid_across_sections`,
+  Critical), so a door that forgot its rename is rolled back by the guard.
+- **The export keeps a safety net.** `build_export_shots` still settles repeats
+  after assembling the full shot list, for the one state that can hold one in
+  memory: an undo of an integrity Repair restores the recorded state verbatim
+  until the next load heals it. The user export re-mints later occurrences
+  (`remint_duplicate_uuids`), and the SpeleoDB sidecar drops them
+  (`harden_for_speleodb`), because a repeat would alias two shots onto one
+  GeoJSON feature id.
 
-So a consumer of either output may key on `<UUID>` within one document, but the
-value guarantees **stability for settled identities, not project-wide model
-uniqueness** - do not describe `Shot::uuid` itself as unique beyond its section.
+So a consumer may key a shot on `<UUID>` alone, within one document and across
+re-exports of a saved project.
 
 The importer reads the element back (#423): a `<UUID>`/`<UU>` on a `<SurveyData>`
 row becomes that shot's identity verbatim, so an Ariane-authored file that leaves
@@ -151,7 +159,7 @@ SpeleoDB sidecar by `speleodb_uuid`, costing that shot its GeoJSON feature id in
 the server preview (Ariane writes v4s, so this bites only hand-edited or
 third-party files). A file that repeats a `<UUID>` inside one section is
 repaired, not rejected: `Section::new` keeps the FIRST occurrence and mints a
-fresh id for the rest, restoring the per-section uniqueness `resolve_key` needs.
+fresh id for the rest, restoring the in-section uniqueness `resolve_key` needs.
 
 Ariane 26.3.0's own Save fills any row missing `<UUID>` with a fresh v4
 (verified 2026-07-31), so the synthesized-shot gaps above do not survive a
@@ -330,7 +338,7 @@ to the byte. The **sidecar** profile additionally:
 | Rounds a repaired `Length` up to the next micrometre | The server re-derives `abs(Depth - parent.Depth) <= Length` from the DECIMAL STRINGS, and the six-decimal write can round a repaired tape back below the drop it was minted to cover |
 | Never emits exactly one `<SurveyData>` (pads with a VIRTUAL root) | A lone element parses as a dict in the server's decoder and crashes the conversion; zero is handled cleanly, two or more is the normal path |
 | Re-emits every `<Date>` as an ISO calendar date (`YYYY-MM-DD`), year clamped to `[1900, 2035]` | A missing, empty or non-ISO date fails the whole file; outside IGRF's range the declination silently becomes 0.0. Only `YYYY-MM-DD` is parsed - anything else, including a full ISO 8601 datetime, falls back to the placeholder and loses its real survey date |
-| Emits `<UUID>` only for a v4 not already used in the file | The field is typed `UUID4`; a repeat aliases two shots onto one GeoJSON feature (shot UUIDs are unique per SECTION only) |
+| Emits `<UUID>` only for a v4 not already used in the file | The field is typed `UUID4`; a repeat aliases two shots onto one GeoJSON feature (the model keeps shot UUIDs unique; this is the safety net) |
 | Nudges a zero latitude or longitude by a micro-degree, and clamps out-of-range ones | Both components must exceed `1e-7` or the map is skipped, so a survey on the equator or the prime meridian gets none. No datum still means no anchor |
 | Replaces U+220E in section and explorer names with a space | The server hashes the section-identity fields joined with that character |
 | Normalises `Azimut` for every shot type | Only REAL shots are normalised server-side |

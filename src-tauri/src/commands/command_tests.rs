@@ -5322,10 +5322,11 @@ fn test_resolve_warning_refuses_error_severity_codes() {
 
 #[test]
 fn test_cross_section_duplicate_uuid_ignore_does_not_cross_suppress() {
-    // ensure_unique_shot_uuids only de-dups WITHIN a section, so two sections can
-    // legally share a shot UUID. Ignoring a warning on one shot must NOT suppress
-    // the same code on the other section's shot (issue #57 / Codex) - suppression
-    // is keyed by (section_id, uuid, code), not the UUID alone.
+    // A file saved before shot UUIDs were project-wide unique can hold one id in
+    // two sections, and an undo of an integrity Repair can put such a state back
+    // in memory. Ignoring a warning on one shot must NOT suppress the same code
+    // on the other section's shot (issue #57 / Codex) - suppression is keyed by
+    // (section_id, uuid, code), not the UUID alone.
     let mut project = Project::new("Dup UUID".to_string(), None);
     let a = project
         .add_section(SectionData {

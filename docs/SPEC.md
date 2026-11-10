@@ -276,7 +276,7 @@ Project (Cave System)
 │   ├── azimuth_reference: Option<AzimuthReference>
 │   └── Shots[]
 │       ├── id: u32 (internal, immutable)
-│       ├── uuid: Option<String> (persistent identity, schema v6+)
+│       ├── uuid: Option<String> (persistent identity, schema v6+, unique across the project)
 │       ├── azimuth_in: f64 (degrees, 0-360)
 │       ├── azimuth_out: f64 (degrees, 0-360)
 │       ├── length: f64 (meters)
@@ -325,6 +325,14 @@ Examples:
 - 0:15 → 16th station of section 0
 - Merged station: [0:15, 1:0] → Station 15 of section 0 merged with station 0 of section 1
 ```
+
+A station's stored identity is not this index but the shot UUID before it
+(`StationAnchor::AfterShot`). Shot UUIDs are unique across the whole project:
+an import, merge or Add that brings an id the project already holds renames the
+newcomer's copy to a derived id, and a file saved before that rule is healed the
+same way on load, with its undo history translated alongside (see
+[ariane-export.md](ariane-export.md#shot-uuids) and
+[undo-redo.md](undo-redo.md#a-loaded-history-follows-the-loads-shot-uuid-heal)).
 
 The index is positional: inserting, deleting or reversing shots renumbers it.
 A station can also carry a **name**, free text stored apart from the shots and

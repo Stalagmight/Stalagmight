@@ -640,15 +640,13 @@ fn list_capped(names: &[&str]) -> String {
 /// fallback for an export of a project that was never saved - without it the same
 /// project would render to different bytes on each export.
 ///
-/// What this value guarantees is STABILITY across re-exports, not uniqueness within
-/// the file. Shot-UUID uniqueness in this model is PER-SECTION only, deliberately:
-/// `Project::ensure_unique_shot_uuids` resets its dedup set inside the section loop,
-/// and the companion `duplicate_shot_uuid` integrity check is section-scoped for the
-/// same reason - `resolve_key` is section-local, so a cross-section repeat cannot
-/// mis-resolve an anchor and is not a violation. Document-level uniqueness is an
-/// EXPORT-boundary guarantee instead: `remint_duplicate_uuids` (user profile) and
-/// `harden_for_speleodb` (sidecar) each settle repeats their own way after the
-/// full shot list is assembled.
+/// What this value guarantees is STABILITY across re-exports. Uniqueness is the
+/// model's: a shot UUID is held by one shot in the whole project (every door that
+/// brings ids in renames repeats, and the load heals a file saved before that).
+/// The export still settles repeats after the full shot list is assembled -
+/// `remint_duplicate_uuids` (user profile) and `harden_for_speleodb` (sidecar) -
+/// as a safety net for the one state that can still hold one in memory: an undo
+/// of an integrity Repair, which restores the recorded state verbatim.
 /// Never returns an empty string: an empty stored UUID is treated as "no identity
 /// yet" and gets the same fresh mint as `None`, because an empty `<UUID>` element
 /// is worse than an ephemeral one (it reads as a real, shared key).
@@ -661,10 +659,10 @@ fn shot_export_uuid(shot: &Shot) -> String {
 
 /// Document-level `<UUID>` uniqueness for the user-facing export.
 ///
-/// Per-section uniqueness (all the model enforces - see `shot_export_uuid`) still
-/// lets one document carry the same `<UUID>` twice: import the same `.tml` into a
-/// project twice, or merge two projects that came from one file, and every shot's
-/// foreign identity repeats across the two copies. How Ariane treats a repeated
+/// The model keeps shot UUIDs unique across the project (see `shot_export_uuid`),
+/// so this is a safety net: a project that holds a repeat anyway - an undo of an
+/// integrity Repair restores one verbatim, until the next load heals it - would
+/// otherwise carry the same `<UUID>` twice in one document. How Ariane treats a repeated
 /// id is untestable from here, and a consumer keying features on `<UUID>` would
 /// alias the copies - so the export fails safe the same way the sidecar does: the
 /// FIRST occurrence keeps its identity (round-trip fidelity for the copy that
@@ -2139,9 +2137,9 @@ fn harden_for_speleodb(shots: &mut Vec<ExportShot>) {
         shot.section = strip_section_separator(&shot.section);
         shot.explorer = shot.explorer.as_deref().map(strip_section_separator);
         shot.date = Some(speleodb_date(shot.date.as_deref()));
-        // A repeat aliases the two shots onto one GeoJSON feature id. Shot UUIDs
-        // are unique per SECTION by design (see `shot_export_uuid`), so a repeat
-        // across sections is legal in the model and has to be dropped here;
+        // A repeat aliases the two shots onto one GeoJSON feature id. The model
+        // keeps shot UUIDs unique across the project (see `shot_export_uuid`), so
+        // this is a safety net for the one state that can still hold a repeat;
         // omitting the optional element costs nothing downstream.
         //
         // The CANONICAL spelling is written back, not the one that came in.
@@ -5496,8 +5494,8 @@ mod tests {
     #[test]
     fn the_sidecar_emits_only_uuids_the_server_will_accept() {
         // `<UUID>` is typed UUID4 there, so a v1 or a non-UUID fails the whole
-        // file; a repeat aliases two shots onto one GeoJSON feature. Shot UUIDs
-        // are unique per SECTION by design, so the repeat is reachable.
+        // file; a repeat aliases two shots onto one GeoJSON feature. The model
+        // keeps shot UUIDs unique, but an undo of a Repair can restore a repeat.
         let v4 = "3f1e2d4c-5b6a-4789-8abc-def012345678";
         let other_v4 = "11111111-2222-4333-9444-555555555555";
         let v1 = "6f9619ff-8b86-1d01-b42d-00cf4fc964ff";

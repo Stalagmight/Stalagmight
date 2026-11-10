@@ -1,7 +1,7 @@
 # Third-party licenses
 
 Stalagmight's shipped binaries include the open-source packages listed below:
-646 Rust crates and 58 npm packages. Each distinct license
+647 Rust crates and 58 npm packages. Each distinct license
 text is reproduced verbatim, as those licenses require. Stalagmight itself is
 licensed AGPL-3.0-or-later; see [LICENSE](LICENSE).
 
@@ -14,7 +14,7 @@ Cargo.lock=c110777cb8fea8ab5f5277eb5e23b3eb4f3663541bb5325edbbea4f848761bf5
 pnpm-lock.yaml=0fdfd981c7d0b4501862c826a85107c7215a26e0e458742aea8fb1b914f08549
 gen-third-party-licenses.mjs=ebb68f24487c3cca49f60ec5c0867729efa22850dc3fc7d5780e163eb707c1f1
 about.toml=c7bd02edf652dab73230740c94195d391bfe6e103f17f226c8e0c2e517df1c46
-bundle-body=b307d17596a914a86c7025d9d8034e64ce323b0075004734354a42d9b7da7504
+bundle-body=4d98dea8844446809debf7c48bb1dcf81325ff8ef8efd18c3234b343c6d5791f
 -->
 
 ## npm packages
@@ -3711,7 +3711,7 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 
 ### BSD 3-Clause "New" or "Revised" License
 
-Applies to: `alloc-stdlib 0.2.2`, `aws-lc-sys 0.47.0`, `brotli 8.0.2`
+Applies to: `alloc-stdlib 0.2.2`, `aws-lc-sys 0.47.0`, `brotli 8.0.2`, `sha1_smol 1.0.1`
 
 ````text
 Copyright (c) <year> <owner>. 

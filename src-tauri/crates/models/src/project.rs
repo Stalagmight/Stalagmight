@@ -866,7 +866,7 @@ impl Project {
     /// Re-mint the UUID of any shot that shares a UUID with an earlier shot in
     /// the SAME section, keeping the first occurrence (AfterShot anchors resolve
     /// to the first match via `position()`, so they stay valid). Returns the
-    /// number re-minted. Restores the per-section uniqueness `resolve_key` relies
+    /// number re-minted. Restores the in-section uniqueness `resolve_key` relies
     /// on; the companion detection lives in [`check_structural_integrity`].
     /// Empty UUIDs are left for [`ensure_shot_uuids`].
     pub fn ensure_unique_shot_uuids(&mut self) -> usize {
