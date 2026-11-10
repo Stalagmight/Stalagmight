@@ -150,17 +150,11 @@ const EXPENSIVE_KINDS: readonly LabelKind[] = [
 ];
 /** How far (CSS px at the expensive kinds' minzoom, where a label's reach in
  *  map units is largest) past a jump / reference section name's own box the
- *  section-only build looks for labels whose slots the name must leave free.
- *  Station labels are a few digits and shot labels about 20 characters; a
- *  comment can be longer, and a comment wider than this anchored further out
- *  is missed - the name could then still vanish at the band crossing. */
-const RESERVE_REACH_PX: Readonly<Record<LabelKind, number>> = {
-  [LABEL_KIND.SHOT_LABEL]: 160,
-  [LABEL_KIND.STATION_LABEL]: 60,
-  [LABEL_KIND.SECTION_NAME]: 0,
-  [LABEL_KIND.STATION_COMMENT]: 600,
-  [LABEL_KIND.SHOT_COMMENT]: 600,
-};
+ *  section-only build looks for labels whose slots the name must leave free:
+ *  wide enough for a shot label (about 20 characters) or a station name or
+ *  comment of about a hundred. A longer one anchored further out is missed, and
+ *  the name could then still vanish at the band crossing. */
+const RESERVE_REACH_PX = 600;
 
 // ─── Phase 5: dim + drag-hide interaction state ──────────────────────────────
 
@@ -483,7 +477,6 @@ export class SurveyLabelController {
   ): RevealReservation | undefined {
     const shown = EXPENSIVE_KINDS.filter((k) => this.kindVisible[k]);
     if (shown.length === 0) return undefined;
-    const reachPx = Math.max(...shown.map((k) => RESERVE_REACH_PX[k]));
     const reserveZoom = Math.min(...shown.map((k) => LABEL_KIND_STYLE[k].minzoom));
     const wps = worldPixelScale * 2 ** (reserveZoom - zoom);
     const nameStyle = LABEL_KIND_STYLE[LABEL_KIND.SECTION_NAME];
@@ -494,7 +487,7 @@ export class SurveyLabelController {
       const e = nameExtents[i];
       if (d.kind !== LABEL_KIND.SECTION_NAME || !e || labelVirtualRank(d) === VIRTUAL_RANK_REAL) continue;
       const own = Math.max(Math.abs(e.minX), Math.abs(e.maxX), Math.abs(e.minY), Math.abs(e.maxY)) * namePx;
-      const half = (own + nameStyle.haloWidth + reachPx) / wps;
+      const half = (own + nameStyle.haloWidth + RESERVE_REACH_PX) / wps;
       rects.push({ minX: d.anchorX - half, maxX: d.anchorX + half, minY: d.anchorY - half, maxY: d.anchorY + half });
     }
     if (rects.length === 0) return undefined;
