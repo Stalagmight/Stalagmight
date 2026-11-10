@@ -563,6 +563,8 @@ interface UIStore {
   showShots: boolean;
   showSectionNames: boolean;
   showStationLabels: boolean;
+  /** Station names as the station labels; exclusive with showStationLabels. */
+  showStationNames: boolean;
   showShotData: boolean;
   showReferenceShots: boolean;
   /** #27: jumps hide independently of references. */
@@ -795,6 +797,7 @@ export type DisplayToggleKey =
   | 'showShots'
   | 'showSectionNames'
   | 'showStationLabels'
+  | 'showStationNames'
   | 'showShotData'
   | 'showReferenceShots'
   | 'showJumps'
@@ -823,6 +826,17 @@ const SESSION_ONLY_DISPLAY_TOGGLES: ReadonlySet<DisplayToggleKey> = new Set([
   'showMapStats',
   'showZoomStats',
 ]);
+
+/**
+ * Toggles that are one choice between two labels: the map's station label is
+ * either the station ID or the station name, never both. Turning one on turns
+ * its partner off; turning one off leaves the partner alone, so both off (no
+ * station labels) is reachable.
+ */
+const EXCLUSIVE_DISPLAY_PARTNER: Partial<Record<DisplayToggleKey, DisplayToggleKey>> = {
+  showStationLabels: 'showStationNames',
+  showStationNames: 'showStationLabels',
+};
 
 /**
  * Layout captured when entering section-focus mode (#50), restored on exit.
@@ -867,6 +881,7 @@ const PREPLAN_DISPLAY_KEYS = [
   'showZeroDatum',
   'showSectionNames',
   'showStationLabels',
+  'showStationNames',
   'showStationComments',
   'showShotComments',
   'showShotData',
@@ -1562,6 +1577,7 @@ export const useUIStore = create<UIStore>((set) => ({
   showShots: DISPLAY_DEFAULTS.showShots,
   showSectionNames: DISPLAY_DEFAULTS.showSectionNames,
   showStationLabels: DISPLAY_DEFAULTS.showStationLabels,
+  showStationNames: DISPLAY_DEFAULTS.showStationNames,
   showShotData: DISPLAY_DEFAULTS.showShotData,
   showReferenceShots: DISPLAY_DEFAULTS.showReferenceShots,
   showJumps: DISPLAY_DEFAULTS.showJumps,
@@ -1781,7 +1797,11 @@ export const useUIStore = create<UIStore>((set) => ({
     // same shots/stations paint. Critical for the Shift+D keyboard shortcut, which
     // calls toggleDisplay directly (bypassing setColorMode's gas-exit).
     if (key === 'showDepthGradient' && newValue) useUIStore.getState().exitGasPlan();
-    set({ [key]: newValue, ...exclusive });
+    // Station IDs and station names are one choice (see EXCLUSIVE_DISPLAY_PARTNER).
+    // Only the user's own key is tracked; the partner flips as a consequence.
+    const partner = newValue ? EXCLUSIVE_DISPLAY_PARTNER[key] : undefined;
+    const clearPartner = partner !== undefined && state[partner];
+    set({ [key]: newValue, ...exclusive, ...(clearPartner ? { [partner]: false } : {}) });
     // Session-only overlays (the Debug submenu) are never restored on load, so
     // persisting them would only write orphan rows - skip the IPC call entirely.
     if (SESSION_ONLY_DISPLAY_TOGGLES.has(key)) return;
@@ -1790,6 +1810,9 @@ export const useUIStore = create<UIStore>((set) => ({
     // the saved survey config. Re-read appMode: the showDepthGradient branch above
     // calls exitGasPlan() first, so a Shift+D from Plan lands (and persists) in Survey.
     if (useUIStore.getState().appMode === 'survey') {
+      // The partner's `false` goes first: if only the key's write landed, the
+      // stored pair would read both-on and the load would pick IDs over names.
+      if (clearPartner) state.saveDisplaySetting(partner, false);
       state.saveDisplaySetting(key, newValue);
     }
   },
@@ -1823,6 +1846,7 @@ export const useUIStore = create<UIStore>((set) => ({
       showShots: DISPLAY_DEFAULTS.showShots,
       showSectionNames: DISPLAY_DEFAULTS.showSectionNames,
       showStationLabels: DISPLAY_DEFAULTS.showStationLabels,
+      showStationNames: DISPLAY_DEFAULTS.showStationNames,
       showShotData: DISPLAY_DEFAULTS.showShotData,
       showReferenceShots: DISPLAY_DEFAULTS.showReferenceShots,
       showJumps: DISPLAY_DEFAULTS.showJumps,
@@ -1874,17 +1898,24 @@ export const useUIStore = create<UIStore>((set) => ({
     useExportStore.getState().reset();
     // Apply display settings from backend, merging with existing state.
     // Uses ?? to only apply fields that are defined, preserving current state for undefined fields.
-    // EXACT 13 persisted fields matching uiStore - NO colorBy (not persisted).
+    // Every persisted field matching uiStore - NO colorBy (not persisted).
     // showShots/showShotComments joined in #275 B2: they were always saved by
     // toggleDisplay but never restored (the previous project's in-memory value
     // silently won over the saved one).
+    // Station IDs and names are exclusive in the menu; a stored pair that reads
+    // both-on (a lost second write, or an edited file) lets the IDs win, as the
+    // map and the image export do. Not written back - the next toggle settles it.
+    const current = useUIStore.getState();
+    const showStationLabels = settings.showStationLabels ?? current.showStationLabels;
+    const showStationNames = !showStationLabels && (settings.showStationNames ?? current.showStationNames);
     set((state) => ({
       appMode: APP_MODE_DEFAULT,
       showStations: settings.showStations ?? state.showStations,
       showShots: settings.showShots ?? state.showShots,
       showShotComments: settings.showShotComments ?? state.showShotComments,
       showSectionNames: settings.showSectionNames ?? state.showSectionNames,
-      showStationLabels: settings.showStationLabels ?? state.showStationLabels,
+      showStationLabels,
+      showStationNames,
       showShotData: settings.showShotData ?? state.showShotData,
       showReferenceShots: settings.showReferenceShots ?? state.showReferenceShots,
       showJumps: settings.showJumps ?? state.showJumps,

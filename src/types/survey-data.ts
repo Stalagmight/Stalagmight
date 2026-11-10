@@ -293,6 +293,15 @@ export function getStation(data: SurveyData, globalIndex: number): Station {
 }
 
 /**
+ * Whether any station has a name (e.g. the mNemo station numbers a DMP import
+ * records). The Display menu and the image export offer the "Station names"
+ * labels only when this holds, because with no names they would label nothing.
+ */
+export function hasStationNames(data: Pick<SurveyData, 'stationNames'> | null | undefined): boolean {
+  return (data?.stationNames.size ?? 0) > 0;
+}
+
+/**
  * Find a station's global index by `(section_id, station_index)`.
  * Used by MapLibre click/hover handlers that get those two numbers
  * from feature properties.
