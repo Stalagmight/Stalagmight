@@ -324,17 +324,17 @@ fn resolve_stored(project: &Project, stored: &StoredAnchor) -> Option<StationRef
         StoredAnchor::Legacy(key) => project.resolve_key(key).or_else(|| {
             // A pre-#24 key anchored on an id the load renamed still places
             // through the derived id.
-            let crate::models::StationAnchor::AfterShot(old) = &key.anchor else {
+            use crate::models::{StationAnchor, StationKey};
+            let StationAnchor::AfterShot(old) = &key.anchor else {
                 return None;
             };
-            let renamed = crate::models::StationKey::new(
-                key.section_id,
-                crate::models::StationAnchor::AfterShot(crate::models::reminted_shot_uuid(
-                    key.section_id,
-                    old,
-                )),
-            );
-            project.resolve_key(&renamed)
+            let after = |id: &str| {
+                StationKey::new(key.section_id, StationAnchor::AfterShot(id.to_string()))
+            };
+            let live = crate::models::live_shot_uuid_for_stored(key.section_id, old, |id| {
+                project.resolve_key(&after(id)).is_some()
+            })?;
+            project.resolve_key(&after(&live))
         }),
     }
 }

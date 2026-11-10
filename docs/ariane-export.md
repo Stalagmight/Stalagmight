@@ -136,7 +136,10 @@ A shot UUID is unique across the whole project:
   [Undo/Redo](undo-redo.md#a-loaded-history-follows-the-loads-shot-uuid-heal)).
   Derived, so every open of an unsaved file agrees.
 - **The integrity check flags a repeat** (`duplicate_shot_uuid_across_sections`,
-  Critical), so a door that forgot its rename is rolled back by the guard.
+  Critical). The guard refuses only NEWLY introduced corruption, so on a project
+  that is otherwise sound a door that forgot its rename is rolled back; on one
+  that already holds a Critical violation (for example after undoing a Repair) it
+  is not, and the next load heals the repeat instead.
 - **The export keeps a safety net.** `build_export_shots` still settles repeats
   after assembling the full shot list, for the one state that can hold one in
   memory: an undo of an integrity Repair restores the recorded state verbatim
@@ -147,13 +150,15 @@ A shot UUID is unique across the whole project:
 
 Keys stored OUTSIDE the project against an id the load renamed - an ignored
 warning, a dive-plan point - still find their shot through the derived id
-(`stored_shot_uuid_matches`), and the next save re-keys an ignore to it. They
-match the first derived candidate only: a replacement stepped past a colliding
-id, which takes a file that already holds the derived value, is not matched, and
-that ignore or plan point is shown again rather than applied to the wrong shot.
+(`live_shot_uuid_for_stored`), and the next save re-keys an ignore to it. They
+try the first derived candidate only. A replacement is stepped past it only when
+the file itself already holds that derived value on another shot of the section,
+and then a key stored against the old id names that other shot - one the same
+file could have named directly.
 
 So a consumer may key a shot on `<UUID>` alone, within one document and across
-re-exports of a saved project.
+re-exports. The one exception is the in-memory state an undo of a Repair puts
+back, whose repeat the export re-mints per export until the next open heals it.
 
 The importer reads the element back (#423): a `<UUID>`/`<UU>` on a `<SurveyData>`
 row becomes that shot's identity verbatim, so an Ariane-authored file that leaves

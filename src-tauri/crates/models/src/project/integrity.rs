@@ -87,10 +87,12 @@ impl Project {
         // Across sections: shot UUIDs are unique across the whole project.
         // Every door that brings foreign ids in renames the newcomers
         // (`reassign_repeated_shot_uuids`) and the load heals a file saved
-        // before that (`make_shot_uuids_project_unique`), so a repeat means a
-        // door forgot its rename; the integrity guard then rolls it back instead
-        // of persisting two shots that undo history, ignored warnings and the
-        // exports cannot tell apart. Reported once per id.
+        // before that (`make_shot_uuids_project_unique`). A repeat therefore
+        // means a door forgot its rename, or an undo of a Repair put one back.
+        // On an otherwise sound project the integrity guard rolls the first case
+        // back rather than persist two shots that undo history, ignored warnings
+        // and the exports cannot tell apart (the guard refuses only NEWLY
+        // introduced corruption). Reported once per id.
         //
         // Both Critical. Empty UUIDs are "no identity yet" (ensure_shot_uuids
         // fills them) so they don't count.

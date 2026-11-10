@@ -116,20 +116,20 @@ impl PlanAnchor {
                 return Some(i as usize);
             }
         }
-        section
-            .shots
-            .iter()
-            .position(|s| s.uuid.as_deref() == Some(uuid))
-            .or_else(|| {
-                // A plan saved against an id the load renamed (a cross-section
-                // repeat in a file saved before shot UUIDs were project-wide
-                // unique) still finds its shot through the derived id.
-                let renamed = crate::reminted_shot_uuid(section.id, uuid);
-                section
-                    .shots
-                    .iter()
-                    .position(|s| s.uuid.as_deref() == Some(renamed.as_str()))
-            })
+        let position = |id: &str| {
+            section
+                .shots
+                .iter()
+                .position(|s| s.uuid.as_deref() == Some(id))
+        };
+        position(uuid).or_else(|| {
+            // A plan saved against an id the load renamed (a cross-section
+            // repeat in a file saved before shot UUIDs were project-wide unique)
+            // still finds its shot through the derived id.
+            let live =
+                crate::live_shot_uuid_for_stored(section.id, uuid, |id| position(id).is_some())?;
+            position(&live)
+        })
     }
 }
 

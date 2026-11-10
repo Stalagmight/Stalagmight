@@ -518,9 +518,21 @@ fn reconciling_keeps_an_entry_the_drop_pass_would_otherwise_remove() {
     assert_eq!(stack.len(), 1);
 }
 
+/// When the live heal had to step past an id already in use, only the live
+/// renames know where the shot went: the first derived candidate is a DIFFERENT
+/// shot. A history entry about the shot must follow the live rename.
 #[test]
 fn the_map_reuses_the_live_renames_verbatim() {
-    let (project, renamed) = healed();
+    let mut project = two_copies();
+    // Section 1 also holds, on its last shot, the id the heal would derive for
+    // its first one - so the heal steps past it.
+    let planted = new_id(X[0]);
+    project.get_section_mut(1).unwrap().shots[2].uuid = Some(planted.clone());
+    project.rebuild_shot_uuid_index();
+    let renamed = project.make_shot_uuids_project_unique();
+    let stepped = renamed.get(1, X[0]).unwrap().to_string();
+    assert_ne!(stepped, planted, "the heal stepped past the planted id");
+
     let mut stack = stack_of(vec![UndoData::PreviousValues {
         section_id: 1,
         shot_id: Some(100_000),
@@ -533,7 +545,7 @@ fn the_map_reuses_the_live_renames_verbatim() {
         ids.collect(&mut entry.undo_data);
     }
     let map = history_remap(&project, &renamed, &ids);
-    assert_eq!(map.get(1, X[0]), renamed.get(1, X[0]));
+    assert_eq!(map.get(1, X[0]), Some(stepped.as_str()));
     assert_eq!(map.get(0, X[0]), None);
 }
 

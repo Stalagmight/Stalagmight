@@ -61,8 +61,8 @@ pub use merge_topology::MergeTopology;
 pub use reverse::{reverse_shots, shot_run_displacement};
 pub use shots::MIN_SPLIT_CHILD_LENGTH_M;
 pub use uuid_unique::{
-    remap_project_json, reminted_shot_uuid, reminted_shot_uuid_avoiding, stored_shot_uuid_matches,
-    ShotUuidRemap, SHOT_UUID_REMINT_NAMESPACE,
+    live_shot_uuid_for_stored, remap_project_json, reminted_shot_uuid, reminted_shot_uuid_avoiding,
+    stored_shot_uuid_matches, ShotUuidRemap, SHOT_UUID_REMINT_NAMESPACE,
 };
 
 /// Relationships that reference a given section (merges, closures, offsets, zero datums).

@@ -218,7 +218,10 @@ before the reload.
 An undo of an integrity Repair that healed a cross-section repeat restores the
 repeat verbatim, like every Repair undo (`undo_of_duplicate_uuid_repair_restores_the_duplicates`
 and its cross-section twin). The save does not re-heal it (its uuid heal stays
-in-section); the next load does, with the same rule.
+in-section); the next load does, with the same rule. While that state is open,
+the project counts as already critical, so the integrity guard - which refuses
+only NEWLY introduced corruption - refuses no further edit until the repeat is
+gone: the same as after undoing any other Repair.
 
 ### A snapshot pair is a SELF-REFRESHING wall (#413, finding 11's re-creation residue)
 

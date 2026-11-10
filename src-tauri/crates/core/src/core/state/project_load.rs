@@ -418,6 +418,11 @@ impl AppState {
         // `undo_policy()`, which takes the `database` lock this path is mid-swap on.
         self.sync_undo_depth_limit_for(speleo_link.as_ref());
 
+        self.load_renamed_shots.store(
+            !renamed_shots.is_empty(),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+
         // Restore persisted undo/redo stacks
         if let Ok(mut undo_stack) = self.undo_stack.lock() {
             // [#303] Unconditionally, and before the entries: a project with no history
@@ -1084,6 +1089,11 @@ impl AppState {
         // restore's own `enforce_depth_limit` would trim a Full-mode project's history
         // down to the count window and no later re-arm could put it back.
         self.sync_undo_depth_limit_for(speleo_link.as_ref());
+
+        self.load_renamed_shots.store(
+            !renamed_shots.is_empty(),
+            std::sync::atomic::Ordering::Relaxed,
+        );
 
         // Commit 4: Undo/redo stack restore
         {

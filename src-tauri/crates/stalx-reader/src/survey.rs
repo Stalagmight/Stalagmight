@@ -28,8 +28,10 @@ use stalagmight_models::{NorthReference, Project, ShotKind as ModelShotKind, Sur
 ///   A shot the file gives no usable UUID (files from before shot UUIDs, a second
 ///   shot repeating one in its section, or a section repeating an id an earlier
 ///   section holds - the same Ariane file imported twice, a merge of two copies)
-///   gets one derived deterministically, the same one the app's open gives it,
-///   and is flagged [`Shot::uuid_derived`].
+///   gets one derived deterministically and is flagged [`Shot::uuid_derived`].
+///   For the last case the derived id is the one the app's own open gives it;
+///   for the first two the app mints its own, so those match the app only once
+///   it has saved the file.
 ///
 /// # Ordering
 ///

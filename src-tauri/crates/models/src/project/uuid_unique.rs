@@ -78,6 +78,27 @@ pub fn stored_shot_uuid_matches(section_id: SectionId, stored: &str, live: &str)
     stored == live || reminted_shot_uuid(section_id, stored) == live
 }
 
+/// The live id that a key stored against `stored` in `section_id` names, given
+/// `holds` (whether the section holds a shot with that id now): `stored` itself,
+/// else the derived replacement a uniqueness heal gave that shot, else `None`.
+///
+/// THE one rule every key stored outside the project follows (ignored warnings,
+/// dive-plan anchors, an Add's carried ignores). It tries the FIRST derived
+/// candidate only: a replacement stepped past an id already in use exists only
+/// when a file holds a derived value itself, and then the key names whichever
+/// shot holds that value - a shot the same file could have named directly.
+pub fn live_shot_uuid_for_stored(
+    section_id: SectionId,
+    stored: &str,
+    holds: impl Fn(&str) -> bool,
+) -> Option<String> {
+    if holds(stored) {
+        return Some(stored.to_string());
+    }
+    let renamed = reminted_shot_uuid(section_id, stored);
+    holds(&renamed).then_some(renamed)
+}
+
 /// Renames of shot ids, keyed by the section that held the old id. A key is the
 /// (section, old id) pair because the same old id can stay in one section and be
 /// renamed in another.

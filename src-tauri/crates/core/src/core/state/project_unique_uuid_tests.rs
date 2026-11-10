@@ -266,6 +266,32 @@ fn short_shot_resolved(state: &AppState, section: SectionId) -> bool {
 
 #[test]
 fn a_legacy_history_walks_whole_after_the_load_renames_its_repeats() {
+    legacy_history_walks_whole(Reopen::OpenProject);
+}
+
+/// The same, through the load path the app's UI uses.
+#[test]
+fn a_legacy_history_walks_whole_through_the_full_load_path() {
+    legacy_history_walks_whole(Reopen::LoadFull);
+}
+
+#[derive(Clone, Copy)]
+enum Reopen {
+    OpenProject,
+    LoadFull,
+}
+
+fn reopen(state: &AppState, path: &Path, how: Reopen) {
+    match how {
+        Reopen::OpenProject => assert!(state.open_project(path.to_path_buf()).success, "reopen"),
+        Reopen::LoadFull => {
+            state.set_event_sink(Arc::new(NullSink));
+            state.do_load_project_full(path.to_path_buf()).unwrap();
+        }
+    }
+}
+
+fn legacy_history_walks_whole(how: Reopen) {
     let dir = TempDir::new().unwrap();
     let (state, path) = legacy_session(dir.path());
     record_history(&state);
@@ -293,7 +319,7 @@ fn a_legacy_history_walks_whole_after_the_load_renames_its_repeats() {
     assert!(state.execute(Command::CloseProject).success);
 
     // Reopen: section 0 keeps the file's ids, section 1 gets the derived ones.
-    assert!(state.open_project(path).success, "reopen");
+    reopen(&state, &path, how);
     assert_eq!(section_ids(&state, 0)[..2], X[..2]);
     assert_eq!(
         section_ids(&state, 1)[0],
