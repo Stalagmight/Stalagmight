@@ -5163,6 +5163,97 @@ fn is_remote_false_on_metadata_open_of_pre_v9_file() {
     assert!(!meta.is_remote, "missing table → is_remote false, no error");
 }
 
+/// A project whose shots are 10 m Normal, 3 m Jump, 4 m Reference and 6 m
+/// Reference: 13 m surveyed, 23 m of tape.
+fn project_with_reference_shots() -> Project {
+    let shot = |length: f64, kind: ShotKind| ShotData {
+        length,
+        kind,
+        ..Default::default()
+    };
+    let mut project = Project::new("Refs".to_string(), None);
+    project.add_section(SectionData {
+        shots: vec![
+            shot(10.0, ShotKind::Normal),
+            shot(4.0, ShotKind::Reference),
+            shot(3.0, ShotKind::Jump),
+        ],
+        ..Default::default()
+    });
+    project.add_section(SectionData {
+        shots: vec![shot(6.0, ShotKind::Reference)],
+        ..Default::default()
+    });
+    project
+}
+
+/// The recent-projects listing (Global View, system table, merge dialog) reads
+/// the length through SQL, not `Project::stats`, so it must apply the same rule:
+/// Reference shots are left out (#689), and both routes report one figure.
+#[test]
+fn metadata_total_length_excludes_reference_shots() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("refs.stalx");
+    let project = project_with_reference_shots();
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&project).unwrap();
+    }
+    let db = Database::open_for_metadata(&path).unwrap();
+    let meta = db.load_metadata(path).unwrap();
+    assert!(
+        (meta.total_length - 13.0).abs() < 1e-9,
+        "got {}",
+        meta.total_length
+    );
+    assert!((meta.total_length - project.stats().total_length).abs() < 1e-9);
+}
+
+/// A stored `kind` this build does not recognise loads as Reference
+/// (`ShotKind::from_u8`), so the SQL length must leave it out too.
+#[test]
+fn metadata_total_length_excludes_unrecognised_kinds_like_the_loader() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("unknown_kind.stalx");
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&project_with_reference_shots()).unwrap();
+        db.conn
+            .execute("UPDATE shots SET kind = 7 WHERE length = 10.0", [])
+            .unwrap();
+    }
+    let db = Database::open_for_metadata(&path).unwrap();
+    let meta = db.load_metadata(path).unwrap();
+    assert!(
+        (meta.total_length - 3.0).abs() < 1e-9,
+        "got {}",
+        meta.total_length
+    );
+}
+
+/// `open_for_metadata` runs no migration, so a pre-v13 file has no `kind`
+/// column. Every virtual shot in such a file migrates to Jump, which counts, so
+/// the listing sums every shot rather than failing to 0.
+#[test]
+fn metadata_total_length_on_a_pre_v13_file_without_kind_column() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("pre_v13.stalx");
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&project_with_reference_shots()).unwrap();
+        db.conn
+            .execute("ALTER TABLE shots RENAME COLUMN kind TO is_reference", [])
+            .unwrap();
+    }
+    let db = Database::open_for_metadata(&path).unwrap();
+    let meta = db.load_metadata(path).unwrap();
+    assert!(
+        (meta.total_length - 23.0).abs() < 1e-9,
+        "got {}",
+        meta.total_length
+    );
+}
+
 #[test]
 fn metadata_open_reads_a_pre_v10_speleo_link_without_last_edit_or_verify_columns() {
     // The missing-TABLE case has coverage (`is_remote_false_on_metadata_open_of_pre_v9_file`);

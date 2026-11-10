@@ -57,12 +57,22 @@ impl Database {
             .query_row("SELECT COUNT(*) FROM shots", [], |row| row.get(0))
             .unwrap_or(0);
         let t_shot_count = start.elapsed();
+        // Surveyed length, the same rule as `Section::stats`: Reference shots
+        // (kind 2) repeat passage already surveyed and are left out (#689).
+        // `IN (0, 1)` rather than `!= 2` because the loader reads any other
+        // stored value as Reference too (`ShotKind::from_u8`). A pre-v13 file
+        // opened read-only has no `kind` column yet; every one of its virtual
+        // shots migrates to Jump, which counts, so it sums every shot.
         // COALESCE so an empty shots table returns 0.0 instead of NULL.
+        let has_kind = self.conn.prepare("SELECT kind FROM shots LIMIT 0").is_ok();
+        let length_sql = if has_kind {
+            "SELECT COALESCE(SUM(length), 0.0) FROM shots WHERE kind IN (0, 1)"
+        } else {
+            "SELECT COALESCE(SUM(length), 0.0) FROM shots"
+        };
         let total_length: f64 = self
             .conn
-            .query_row("SELECT COALESCE(SUM(length), 0.0) FROM shots", [], |row| {
-                row.get(0)
-            })
+            .query_row(length_sql, [], |row| row.get(0))
             .unwrap_or(0.0);
         let t_sum_length = start.elapsed();
 
