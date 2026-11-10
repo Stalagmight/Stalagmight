@@ -4,9 +4,12 @@
 //! and "Add .stalx to current project" (this once, into the OPEN project). One
 //! code path, so the two features cannot drift apart on what a copy carries.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use crate::models::{LoopClosure, Project, SectionId, StationKey, StationMerge, StationRef};
+use crate::models::{
+    gps_to_local, GpsCoordinates, LoopClosure, Project, SectionId, StationKey, StationMerge,
+    StationRef,
+};
 
 /// What [`append_project`] did beyond the copy itself.
 pub(super) struct AppendOutcome {
@@ -27,7 +30,8 @@ pub(super) struct AppendOutcome {
 /// station comments, zero datums, station merges, loop closures (id 0, for the
 /// caller's `assign_closure_ids`), each section's resolved north reference and
 /// least-squares gauge (reverse parity and gauge anchors), the entrance
-/// elevation (first one wins) and the location.
+/// elevation (first one wins) and the location - and place a georeferenced
+/// source at its GPS position in the target's frame (#682; [`place_by_datum`]).
 ///
 /// Cross-references are copied as TRANSITIONAL positional keys
 /// (`StationKey::positional`); the caller canonicalizes them (merge through
@@ -48,6 +52,9 @@ pub(super) fn append_project(
 ) -> Result<AppendOutcome, String> {
     let mut section_id_map: HashMap<SectionId, SectionId> = HashMap::new();
     let mut new_section_ids: Vec<SectionId> = Vec::with_capacity(source.sections.len());
+    // The target's georeference BEFORE this copy: a source datum is placed in
+    // it, or, when there is none yet, becomes it.
+    let frame_before = target.frame_datum().map(|d| d.gps);
 
     for section in &source.sections {
         let old_section_id = section.id;
@@ -104,6 +111,8 @@ pub(super) fn append_project(
     copy_offsets_and_comments(target, source, &section_id_map);
     copy_zero_datums(target, source, &section_id_map)?;
     copy_merges_and_closures(target, source, &section_id_map);
+    // Last, so the copy is complete when its datum station is measured.
+    place_by_datum(target, &new_section_ids, frame_before);
     let elevation_conflict = combine_surface_elevation(target, source);
     combine_location(target, source);
 
@@ -112,6 +121,52 @@ pub(super) fn append_project(
         new_section_ids,
         elevation_conflict,
     })
+}
+
+/// Translate the copied sections so a georeferenced source lands at its GPS
+/// position: its first resolvable datum's station goes to that datum's local
+/// position in the target's frame (`frame_before`, the target's frame datum
+/// before this copy), or to the origin when the target had no frame (the copied
+/// datum then BECOMES the frame).
+///
+/// The whole copy moves rigidly, unanchored components included, so the
+/// source's own layout is preserved. Nothing pre-existing moves. A source with
+/// no datum is left where it is - placing it is the orphan-placement dialog's
+/// job, not a guess made here.
+fn place_by_datum(
+    project: &mut Project,
+    new_ids: &[SectionId],
+    frame_before: Option<GpsCoordinates>,
+) {
+    let new: HashSet<SectionId> = new_ids.iter().copied().collect();
+    let Some((station, gps)) = project
+        .zero_datums
+        .iter()
+        .filter(|zd| new.contains(&zd.station_ref.section_id))
+        .find_map(|zd| project.resolve_key(&zd.station_ref).map(|sr| (sr, zd.gps)))
+    else {
+        return;
+    };
+    let Some(current) = project.compute_station_raw_coords(station) else {
+        return;
+    };
+    let (target_x, target_y) = frame_before.map_or((0.0, 0.0), |frame| gps_to_local(&gps, &frame));
+    let (dx, dy) = (target_x - current.x, target_y - current.y);
+    // Non-finite is refused at the read; this keeps a NaN (which passes the dust
+    // test below) from ever reaching an offset should another route produce one.
+    if !dx.is_finite() || !dy.is_finite() {
+        tracing::warn!(
+            purpose = "place a copied source by its datum",
+            "Datum placement is not finite; leaving the copy where it is"
+        );
+        return;
+    }
+    if dx.abs() <= Project::OFFSET_DUST_M && dy.abs() <= Project::OFFSET_DUST_M {
+        return;
+    }
+    for id in new_ids {
+        project.adjust_section_offset(*id, dx, dy);
+    }
 }
 
 /// Section offsets, station offsets and station comments, remapped.

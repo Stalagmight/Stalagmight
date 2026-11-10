@@ -1,6 +1,8 @@
 use super::project_append::append_project;
 use super::project_io::save_failure;
+use super::project_source::read_source_project;
 use super::AppState;
+use crate::core::command::{sanitize_display_text, MAX_FILE_NAME_LEN};
 use crate::core::CommandResult;
 use crate::models::{Project, FEATURE_ID_STRIDE, MAX_SECTIONS_IN_ID_SPACE, MAX_SECTION_ID};
 use crate::persistence::Database;
@@ -57,32 +59,21 @@ impl AppState {
             }
         }
 
-        // Load all source projects
-        let mut source_projects: Vec<Project> = Vec::new();
+        // Read every source the way "Add .stalx" does (#680): through a
+        // private copy, so opening an older file never migrates the user's own
+        // file in place, and normalized as an open would - shot uuids, closure
+        // ids, re-solved offsets, and the pending pre-v13 Jump/Reference
+        // classification, which is per file and would otherwise be lost: the
+        // merged output does not carry the source's flag.
+        let mut source_projects: Vec<Project> = Vec::with_capacity(source_paths.len());
         for path in &source_paths {
-            match Database::open_existing(path) {
-                Ok(db) => match db.load_project() {
-                    Ok(mut project) => {
-                        project.file_path = Some(path.clone());
-                        // Assign IDs to any legacy closures that have id=0
-                        project.assign_closure_ids();
-                        source_projects.push(project);
-                    }
-                    Err(e) => {
-                        return CommandResult::failure(format!(
-                            "Failed to load project '{}': {}",
-                            path.display(),
-                            e
-                        ));
-                    }
-                },
-                Err(e) => {
-                    return CommandResult::failure(format!(
-                        "Failed to open project '{}': {}",
-                        path.display(),
-                        e
-                    ));
-                }
+            let label = path
+                .file_name()
+                .map(|n| sanitize_display_text(&n.to_string_lossy(), MAX_FILE_NAME_LEN))
+                .unwrap_or_default();
+            match read_source_project(path, &label, "merged") {
+                Ok(source) => source_projects.push(source.project),
+                Err(e) => return CommandResult::failure(e),
             }
         }
 

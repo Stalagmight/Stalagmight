@@ -1021,9 +1021,9 @@ impl Project {
     /// The delta is `-(measured position of the promoted datum station)`, not
     /// `-gps_to_local(G_new, G_old)`. For a self-consistent project the two are
     /// the same number (that identity is exactly what `set_zero_datum` wrote).
-    /// For one that is already inconsistent - a merged project, whose datums are
-    /// copied by `store_zero_datum_without_repositioning` precisely to preserve
-    /// their offsets - only the measured form restores the app's own invariant,
+    /// For one that is already inconsistent - a project merged before #682, whose
+    /// later sources' datums were copied without being placed by their GPS -
+    /// only the measured form restores the app's own invariant,
     /// and only the measured form is IDEMPOTENT: a second application measures
     /// zero and does nothing. That is the same choice
     /// [`Self::datum_anchor_position`] already made for shot edits.

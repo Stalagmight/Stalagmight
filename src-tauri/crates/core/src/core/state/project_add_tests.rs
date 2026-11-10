@@ -264,8 +264,13 @@ fn canonical_merge_output(merged: &Project, result: &CommandResult) -> String {
 /// canonical form against the previous one, and only re-pin if the change is
 /// intended. Re-pinned once when #676 added `station_names` to the project
 /// (an empty list in this canonical form); master's pre-extraction merge was
-/// run against the new value and produced it.
-const MERGE_PARITY_DIGEST: u64 = 9_039_697_118_154_861_914;
+/// run against the new value and produced it. Re-pinned again for #682, which
+/// places bravo by its GPS datum in alpha's frame (alpha's datum station moves
+/// to the origin): with that placement call disabled, the merge still produces
+/// the previous value `9_039_697_118_154_861_914`, so placement is the only
+/// change - the #680 source read (private copy, normalized like an open) moves
+/// nothing for these sources.
+const MERGE_PARITY_DIGEST: u64 = 17_078_245_016_113_985_025;
 
 /// #674 parity: "Merge projects" must produce exactly what it produced before
 /// its per-source loop became the append that "Add .stalx" shares. Rich on

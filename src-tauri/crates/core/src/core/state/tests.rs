@@ -1125,13 +1125,25 @@ fn test_merge_projects_preserves_offsets_zero_datums_and_closure_ids() {
         .unwrap()
         .id;
 
-    assert_eq!(
-        merged.section_offsets.get(&merged_section_a),
-        Some(&(1.0, 2.0))
+    // #682: each georeferenced source is placed by its datum. The first
+    // source's datum station becomes the frame origin, and the second's lands at
+    // its GPS position in that frame - instead of both keeping their stored
+    // offsets and the second survey being drawn on top of the first.
+    let datum_station = |id| {
+        merged
+            .compute_station_raw_coords(StationRef::new(id, 0))
+            .unwrap()
+    };
+    let a0 = datum_station(merged_section_a);
+    assert!(
+        a0.x.abs() < 1e-6 && a0.y.abs() < 1e-6,
+        "the first datum station is the frame origin: {a0:?}"
     );
-    assert_eq!(
-        merged.section_offsets.get(&merged_section_b),
-        Some(&(3.0, 4.0))
+    let (expected_x, expected_y) = crate::models::gps_to_local(&gps_b, &gps_a);
+    let b0 = datum_station(merged_section_b);
+    assert!(
+        (b0.x - expected_x).abs() < 1e-3 && (b0.y - expected_y).abs() < 1e-3,
+        "the second datum station sits at its GPS position: {b0:?} vs ({expected_x}, {expected_y})"
     );
 
     assert_eq!(
@@ -1178,10 +1190,9 @@ fn test_merge_projects_preserves_offsets_zero_datums_and_closure_ids() {
 /// `project_merge.rs`), so both halves of the gate read the same unchanged open
 /// project and it returns without measuring anything.
 ///
-/// That distinction has teeth: a merged project's datums deliberately do NOT sit
-/// at the origin - `store_zero_datum_without_repositioning` copies them exactly
-/// so each source's own offsets survive - so a fire here would silently
-/// translate the file the user just built.
+/// That distinction has teeth: the merged project is laid out by its own
+/// sources' datums (#682), not by the open project's frame, so a fire here would
+/// silently translate one onto the other.
 ///
 /// Non-vacuous on both sides. The open project carries section offsets that
 /// nothing in the merge could produce and no datum at all, so a swap-in is
