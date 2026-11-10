@@ -2,6 +2,7 @@ import type { ExpressionSpecification } from 'maplibre-gl';
 import type { DistanceField } from '../types/project';
 import type { SurveyData } from '../types/survey-data';
 import { encodeFeatureId } from './ids';
+import { effectiveScale, scaleStops, type ColorScaleInput } from './palettes/scale';
 
 /**
  * Distance-gradient overlay helpers (#34).
@@ -143,17 +144,39 @@ export function distanceColorExpression(
   max: number,
   grey: string,
   distInput: ExpressionSpecification = ['feature-state', 'dist'] as ExpressionSpecification,
+  scale: ColorScaleInput | null = null,
 ): ExpressionSpecification {
   const safeMax = max > 0 ? max : 1;
+  const ramp: ExpressionSpecification = scale
+    ? scaledRamp(scale, safeMax)
+    : (['interpolate', ['linear'], ['var', 'd'], 0, near, safeMax, far] as ExpressionSpecification);
   return [
     'let',
     'd',
     ['coalesce', distInput, UNREACHABLE_DIST],
-    [
-      'case',
-      ['<', ['var', 'd'], 0],
-      grey,
-      ['interpolate', ['linear'], ['var', 'd'], 0, near, safeMax, far],
-    ],
+    ['case', ['<', ['var', 'd'], 0], grey, ramp],
   ] as ExpressionSpecification;
+}
+
+/**
+ * The user's palette + Levels range as a MapLibre ramp over `d`: a sampled
+ * 33-stop `interpolate` (the gamma bend between samples is linearised, which
+ * only the hover / selection overlay sees), or a `step` at the exact band
+ * edges for a discrete palette. A flat range is the palette's start colour.
+ */
+function scaledRamp(input: ColorScaleInput, safeMax: number): ExpressionSpecification {
+  const s = effectiveScale(input, { min: 0, max: safeMax });
+  if (!(s.max > s.min)) return (input.palette.flatHex() ?? '#808080') as unknown as ExpressionSpecification;
+  if (input.palette.bands !== null) {
+    const n = input.palette.bands;
+    const expr: unknown[] = ['step', ['var', 'd'], input.palette.hex(0) ?? '#808080'];
+    for (let k = 1; k < n; k++) {
+      // Band k starts where t' = k/n, i.e. t = (k/n)^gamma.
+      expr.push(s.min + (s.max - s.min) * Math.pow(k / n, s.gamma), input.palette.hex((k + 0.5) / n) ?? '#808080');
+    }
+    return expr as ExpressionSpecification;
+  }
+  const expr: unknown[] = ['interpolate', ['linear'], ['var', 'd']];
+  for (const [v, hex] of scaleStops(input, { min: 0, max: safeMax })) expr.push(v, hex);
+  return expr as ExpressionSpecification;
 }

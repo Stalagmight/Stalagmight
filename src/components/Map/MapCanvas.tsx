@@ -64,6 +64,7 @@ import { useNetworkStore } from '../../store/networkStore';
 import { FEATURE_ID_STRIDE } from '../../utils/ids';
 import { debugLog } from '../../utils/debugLog';
 import { TOAST_KEYS } from '../../utils/toastKeys';
+import { useMapColorScaleInputs } from './colorScale/useColorScaleInputs';
 
 // Stable empty warnings array fed to the survey-layer rebuild effect when
 // Issue-severity coloring is OFF. Module-level so its identity never changes
@@ -2154,6 +2155,14 @@ function MapCanvas() {
       });
     return () => { cancelled = true; };
   }, [showGasPlan, gasOriginChosen, gasComputeGate, gasWaypoints, gasSegments, gasDiver, gasCylinders, gasPlanConfig, project?.modified_at, setGasReachField]);
+
+  // The user's depth / distance palette + Levels range (legend cog). Null inputs
+  // = the theme ramp over the data extent, through the original code path.
+  const colorScales = useMapColorScaleInputs();
+  useEffect(() => {
+    if (!surveyLayerRef.current || !mapLoaded) return;
+    surveyLayerRef.current.setColorScales(colorScales.depth, colorScales.distance);
+  }, [colorScales, mapLoaded, surveyLayerRef]);
 
   // Apply the fetched field to the layer (feature-state + paint swap). Separate
   // from the rebuild path so re-rooting never triggers a feature rebuild.

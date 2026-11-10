@@ -11,6 +11,7 @@ import { THEME_PALETTE_ID, type ColorScaleKind, type Palette, type PaletteChoice
 export * from './types';
 export * from './levels';
 export * from './sample';
+export * from './scale';
 
 export const THEME_PALETTE: Palette = {
   id: THEME_PALETTE_ID,
