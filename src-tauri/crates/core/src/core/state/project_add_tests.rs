@@ -714,6 +714,18 @@ fn adding_the_same_stalx_twice_adds_again_with_a_warning() {
     assert!(receipt_warnings(&third)
         .iter()
         .any(|w| w.contains("is a copy of the open project")));
+
+    // Three copies of the same survey, yet every shot UUID is held once: each
+    // add renamed its newcomers' repeats, so undo, ignores and the exports can
+    // still tell the copies apart.
+    let project = state.get_project_state().unwrap();
+    let mut seen = std::collections::HashSet::new();
+    for section in &project.sections {
+        for uuid in section.shots.iter().filter_map(|s| s.uuid.as_deref()) {
+            assert!(seen.insert(uuid), "shot UUID {uuid} is held twice");
+        }
+    }
+    assert!(project.check_structural_integrity().is_empty());
 }
 
 #[test]

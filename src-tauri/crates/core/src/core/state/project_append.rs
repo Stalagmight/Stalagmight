@@ -23,6 +23,22 @@ pub(super) struct AppendOutcome {
     /// the one the target already held by more than the import tolerance. The
     /// target keeps its own; the caller decides how to tell the user.
     pub(super) elevation_conflict: Option<(f64, f64)>,
+    /// (target section, SOURCE shot uuid) -> the uuid that shot holds in the
+    /// target, for the copied shots whose id changed on the way in. Anything
+    /// keyed by a source uuid (the Add's carried ignores) is translated through
+    /// [`Self::target_uuid`].
+    pub(super) shot_uuid_map: HashMap<(SectionId, String), String>,
+}
+
+impl AppendOutcome {
+    /// The uuid the shot that held `source_uuid` in the source holds in
+    /// `target_section`.
+    pub(super) fn target_uuid(&self, target_section: SectionId, source_uuid: &str) -> String {
+        self.shot_uuid_map
+            .get(&(target_section, source_uuid.to_string()))
+            .cloned()
+            .unwrap_or_else(|| source_uuid.to_string())
+    }
 }
 
 /// Append every section of `source` to `target` with fresh ids, and carry
@@ -62,19 +78,10 @@ pub(super) fn append_project(
 
         // Shot identity rides along in `SectionData` (`ShotData::uuid`),
         // so `add_section` reproduces each source shot's UUID by itself.
-        //
-        // Uniqueness is PER-SECTION here, matching the invariant the app
-        // actually enforces (`Project::ensure_unique_shot_uuids`, the
-        // section-scoped `duplicate_shot_uuid` integrity check, and
-        // `resolve_key`'s section-local lookup) - `Section::new` applies
-        // it as the sections are built. A project-wide dedupe would be
-        // stricter than the model AND than the format: two projects that
-        // imported the same Ariane file legitimately hold the same
-        // foreign ids (#423), and re-minting them here would throw away
-        // exactly the identity the import was preserving. The one
-        // consumer that needs document-wide uniqueness - the SpeleoDB
-        // sidecar - already drops repeats itself
-        // (`export::tml::harden_for_speleodb`).
+        // Ids the target already holds - two projects that imported the same
+        // Ariane file, or two copies of one project - are renamed once the
+        // whole source is in (`reassign_repeated_shot_uuids` below): shot
+        // UUIDs are unique across the project, and the target keeps its own.
         target.add_section(section.to_section_data());
 
         // #438: `SectionData` cannot carry the north reference, so the
@@ -96,17 +103,17 @@ pub(super) fn append_project(
             // (#24): `Section::new` resets the reverse parity and both gauge
             // anchors, which would pin a datum-less component to a different
             // station than the source's and translate its adjusted geometry.
-            // The anchors are shot uuids, which the copy keeps per section.
+            // The anchors are shot uuids, carried over by POSITION below, once
+            // the copy's own ids are settled.
             copied.reverse_parity = section.reverse_parity;
-            copied.gauge_shot_uuid.clone_from(&section.gauge_shot_uuid);
-            copied
-                .gauge_neighbour_uuid
-                .clone_from(&section.gauge_neighbour_uuid);
         }
 
         section_id_map.insert(old_section_id, new_section_id);
         new_section_ids.push(new_section_id);
     }
+
+    target.reassign_repeated_shot_uuids(&new_section_ids);
+    let shot_uuid_map = carry_shot_identity(target, source, &section_id_map);
 
     copy_offsets_and_comments(target, source, &section_id_map);
     copy_zero_datums(target, source, &section_id_map)?;
@@ -120,6 +127,7 @@ pub(super) fn append_project(
         section_id_map,
         new_section_ids,
         elevation_conflict,
+        shot_uuid_map,
     })
 }
 
@@ -167,6 +175,50 @@ fn place_by_datum(
     for id in new_ids {
         project.adjust_section_offset(*id, dx, dy);
     }
+}
+
+/// Map every copied shot's SOURCE uuid to the uuid it holds in the target, by
+/// position (a copy keeps shot order), keeping only the ones that differ: ids
+/// renamed because the target already held them, and in-section repeats
+/// `Section::new` re-minted. Then carry each section's gauge pair over through
+/// that map, so it names the same two shots in the copy as in the source.
+fn carry_shot_identity(
+    target: &mut Project,
+    source: &Project,
+    section_id_map: &HashMap<SectionId, SectionId>,
+) -> HashMap<(SectionId, String), String> {
+    let mut renamed = HashMap::new();
+    for section in &source.sections {
+        let Some(&new_section_id) = section_id_map.get(&section.id) else {
+            continue;
+        };
+        let Some(copied) = target.get_section_mut(new_section_id) else {
+            continue;
+        };
+        let mut by_source: HashMap<&str, String> = HashMap::new();
+        for (from, to) in section.shots.iter().zip(&copied.shots) {
+            let (Some(from), Some(to)) = (from.uuid.as_deref(), to.uuid.as_deref()) else {
+                continue;
+            };
+            by_source.entry(from).or_insert_with(|| to.to_string());
+            if from != to {
+                renamed
+                    .entry((new_section_id, from.to_string()))
+                    .or_insert_with(|| to.to_string());
+            }
+        }
+        let carry = |anchor: &Option<String>| {
+            anchor.as_deref().map(|uuid| {
+                by_source
+                    .get(uuid)
+                    .cloned()
+                    .unwrap_or_else(|| uuid.to_string())
+            })
+        };
+        copied.gauge_shot_uuid = carry(&section.gauge_shot_uuid);
+        copied.gauge_neighbour_uuid = carry(&section.gauge_neighbour_uuid);
+    }
+    renamed
 }
 
 /// Section offsets, station offsets and station comments, remapped.

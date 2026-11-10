@@ -488,11 +488,11 @@ fn a_section_split_preserves_the_foreign_ids_and_the_cross_references_of_both_ha
 // ---------------------------------------------------------------------------
 
 /// Two projects that each imported the same Ariane file hold the same foreign
-/// ids in different sections. Uniqueness in this model is per-SECTION, so that
-/// is legal and the merge must leave both copies alone. Red on the old
-/// project-wide dedupe, which re-minted the second project's whole section.
+/// ids. Shot UUIDs are unique across the whole project, so the merge keeps the
+/// FIRST source's copy verbatim (its Ariane identity survives) and gives the
+/// second source's shots the derived replacement for their section.
 #[test]
-fn merging_two_projects_that_imported_one_file_keeps_both_copies_of_its_ids() {
+fn merging_two_projects_that_imported_one_file_keeps_the_first_copy_of_its_ids() {
     const IDS: [&str; 3] = [
         "bbbbbbbb-0000-4000-8000-000000000001",
         "bbbbbbbb-0000-4000-8000-000000000002",
@@ -552,11 +552,17 @@ fn merging_two_projects_that_imported_one_file_keeps_both_copies_of_its_ids() {
         expected,
         "the first source's foreign ids must survive the merge"
     );
+    let second = merged.sections[1].id;
     assert_eq!(
         section_uuids(&merged, 1),
-        expected,
-        "the second source's foreign ids must survive too - a cross-section \
-         repeat is legal, and re-minting throws away the identity the import kept"
+        IDS.iter()
+            .map(|id| crate::models::reminted_shot_uuid(second, id))
+            .collect::<Vec<_>>(),
+        "the second source's repeats must get the derived replacement"
+    );
+    assert!(
+        merged.check_structural_integrity().is_empty(),
+        "the merged project must hold every shot UUID once"
     );
 }
 
@@ -1342,11 +1348,12 @@ fn an_empty_or_whitespace_uuid_element_means_no_identity() {
         .all(|v| v.category != "duplicate_shot_uuid"));
 }
 
-/// A repeat across TWO sections of one file is legal by design - `resolve_key`
-/// is section-local, so it cannot mis-resolve - and must be left alone. Red if
-/// the per-section repair is ever widened back to project scope.
+/// A repeat across TWO sections of one file: shot UUIDs are unique across the
+/// project, so the first section keeps the file's id and the second gets the
+/// derived replacement for it. The import's integrity epilogue would roll the
+/// whole import back if the repeat survived.
 #[test]
-fn the_same_uuid_in_two_sections_of_one_file_is_left_alone() {
+fn the_same_uuid_in_two_sections_of_one_file_stays_in_the_first_section() {
     const SHARED: &str = "bebebebe-0000-4000-8000-000000000001";
 
     let dir = tempfile::tempdir().unwrap();
@@ -1371,17 +1378,18 @@ fn the_same_uuid_in_two_sections_of_one_file_is_left_alone() {
     let held: Vec<String> = (0..2)
         .map(|i| section_uuids(&project, i)[0].clone())
         .collect();
+    let second = project.sections[1].id;
     assert_eq!(
         held,
-        vec![SHARED.to_string(), SHARED.to_string()],
-        "a cross-section repeat is legal and must survive in BOTH sections"
+        vec![
+            SHARED.to_string(),
+            crate::models::reminted_shot_uuid(second, SHARED)
+        ],
+        "the first section keeps the id, the second gets the derived one"
     );
     assert!(
-        project
-            .check_structural_integrity()
-            .iter()
-            .all(|v| v.category != "duplicate_shot_uuid"),
-        "a cross-section repeat is not a violation"
+        project.check_structural_integrity().is_empty(),
+        "no shot UUID may be held by two sections"
     );
 }
 
