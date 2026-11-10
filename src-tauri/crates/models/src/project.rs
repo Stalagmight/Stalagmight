@@ -416,9 +416,12 @@ pub struct ProjectMetadata {
     #[ts(type = "string")]
     pub modified_at: DateTime<Utc>,
     pub section_count: usize,
-    /// Surveyed length, Reference shots excluded (#689). Same figure as
-    /// [`ProjectStats::total_length`]; the on-disk listing computes it in SQL
-    /// (`Database::load_metadata`), which must keep the same rule.
+    /// Surveyed length, Reference shots excluded (#689). The on-disk listing
+    /// computes it in SQL (`Database::load_metadata`) with the same rule as
+    /// [`ProjectStats::total_length`], so an opened project reports the same
+    /// figure. For a file not yet opened since the shot-kind backfill (#27) it
+    /// is an upper bound until its first open, which classifies the migrated
+    /// virtual shots and re-saves them.
     pub total_length: f64,
     /// Number of stations in the project (shots + 1 per section)
     pub station_count: usize,
