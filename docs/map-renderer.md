@@ -378,6 +378,7 @@ the Zustand write.
 | Click or hover misses a feature | `hitProbe.ts` padding, then `geometryIndex.sectionsIntersectingBox`, then the camera snapshot key |
 | Labels missing entirely | font readiness in `labelController` (the `label-font-unavailable` path) |
 | Labels vanish or flash while zooming | `labelReveal.ts` / `labelDecimation.ts` |
+| A jump / reference label shows where a real-line one should | `labelVirtualRank` and the per-rank passes in `labelReveal.ts`, then the flags `labelTessellate.ts` stamps |
 | Label text or placement wrong | `labelLayout.ts` (shaping, em offsets), `labelStyle.ts` (per-kind style) |
 | Sizes wrong after dragging the window to another monitor | the DPR watcher in `SurveyLayer` - device-pixel sizes are baked into the buffers |
 | Global View wrong but the survey map fine | `GlobalView/customRender/` - a separate implementation |
