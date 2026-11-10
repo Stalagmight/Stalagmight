@@ -59,14 +59,24 @@ impl Database {
         let t_shot_count = start.elapsed();
         // Surveyed length, the same rule as `Section::stats`: Reference shots
         // (kind 2) repeat passage already surveyed and are left out (#689).
-        // `IN (0, 1)` rather than `!= 2` because the loader reads any other
-        // stored value as Reference too (`ShotKind::from_u8`). A pre-v13 file
-        // opened read-only has no `kind` column yet; every one of its virtual
-        // shots migrates to Jump, which counts, so it sums every shot.
+        // Only an INTEGER-stored 0 or 1 counts, because the loader reads every
+        // other stored value as Reference (`ShotKind::from_u8`), including a
+        // non-INTEGER cell: the table is not STRICT, so a crafted file can
+        // store `'1'` or `1.0`, which `IN (0, 1)` alone would match through
+        // column affinity while the loader rejects it.
+        //
+        // A file not yet opened since the shot-kind backfill (#27) shows an
+        // upper bound, not the opened figure: a pre-v13 file has no `kind`
+        // column (`open_for_metadata` runs no migration), and a v13+ file can
+        // still carry `pending_kind_classification`. Either way the migration
+        // seeds every virtual shot as Jump, which counts, and the first open
+        // runs the classifier, which may demote some to Reference and re-saves
+        // the result. Until then summing every seeded shot is the best figure.
         // COALESCE so an empty shots table returns 0.0 instead of NULL.
         let has_kind = self.conn.prepare("SELECT kind FROM shots LIMIT 0").is_ok();
         let length_sql = if has_kind {
-            "SELECT COALESCE(SUM(length), 0.0) FROM shots WHERE kind IN (0, 1)"
+            "SELECT COALESCE(SUM(length), 0.0) FROM shots \
+             WHERE typeof(kind) = 'integer' AND kind IN (0, 1)"
         } else {
             "SELECT COALESCE(SUM(length), 0.0) FROM shots"
         };
