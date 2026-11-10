@@ -67,6 +67,11 @@ import { decimationAdmitZoom, decimationTier } from './labelDecimation';
  *  emitted). Finite reveal values are always `<= buildZoom + slack`. */
 export const REVEAL_NEVER = Infinity;
 
+/** The reveal UPLOADED for an emitted label that a reveal-only rerun leaves
+ *  uncleared: finite (an ordinary attribute float) but past any zoom the map
+ *  reaches, so the shader keeps it hidden until the next build drops it. */
+export const REVEAL_UNREACHABLE = 1e6;
+
 /** Zoom-ladder granularity (design suggests 0.5-zoom steps). */
 export const REVEAL_LADDER_STEP = 0.5;
 

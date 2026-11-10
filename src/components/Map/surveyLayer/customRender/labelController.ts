@@ -64,7 +64,14 @@ import {
   type ViewportRel,
 } from './labelTessellate';
 import { shapedExtent, ShapeCache, type ExtentEm, type ShapedLabel } from './labelLayout';
-import { computeRevealZooms, REVEAL_NEVER, EMIT_SLACK, ADAPTIVE_EMIT_MAX, emitSlackFor } from './labelReveal';
+import {
+  computeRevealZooms,
+  REVEAL_NEVER,
+  REVEAL_UNREACHABLE,
+  EMIT_SLACK,
+  ADAPTIVE_EMIT_MAX,
+  emitSlackFor,
+} from './labelReveal';
 import { labelColorContextFrom } from './labelText';
 import { LABEL_KIND, LABEL_FLAG, type LabelKind } from './labelShaders';
 import { LABEL_KIND_STYLE } from './labelStyle';
@@ -309,10 +316,11 @@ export class SurveyLabelController {
   private kindVisible: boolean[] = [false, false, true, false, false];
   /** setShowReferenceShots state (false → collapse reference / all-reference). */
   private referenceShotsVisible = true;
-  /** #27: jumps toggle separately. Label flags carry a single "virtual" bit, so
-   *  a virtual shot's label hides only when BOTH kinds are hidden - the same
-   *  conservative rule the circle shader uses for all-virtual stations. A label
-   *  therefore never disappears while its own shot is still drawn. */
+  /** #27: jumps toggle separately. A shot's label carries its own kind's bit and
+   *  hides with that kind; a station / section label hides once every kind
+   *  touching it is hidden (the `ALL_JUMP` / `ALL_REFERENCE` pair), the same rule
+   *  the circle shader uses. A label therefore never disappears while its own
+   *  shot is still drawn. */
   private jumpShotsVisible = true;
   /** Adaptive-emit candidate threshold (see the option). */
   private readonly adaptiveEmitMax: number;
@@ -761,13 +769,14 @@ export class SurveyLabelController {
       slack: this.lastEmitSlack,
     });
     // The retained set is already the emitted subset; a rerun only lowers /
-    // raises finite reveals within it (removing / re-adding competitors), so
-    // clamp any REVEAL_NEVER back to the emit horizon (the SAME slack the build
-    // emitted to) to keep the emitted label drawable at (or just past) the top of
-    // the window rather than vanishing.
-    const horizon = this.lastBuildZoom + this.lastEmitSlack;
+    // raises finite reveals within it (removing / re-adding competitors). A label
+    // that now never clears - it lost its slot to a label toggled back on - stays
+    // HIDDEN, as a fresh build would leave it: drawing it at the emit horizon put
+    // it on top of the label that beat it (at z22 on an adaptive build), e.g. a
+    // jump label over the real-line label it yields to once jumps are re-shown.
+    // Finite, so the attribute holds an ordinary float.
     for (let i = 0; i < reveal.length; i++) {
-      if (reveal[i]! === REVEAL_NEVER) reveal[i] = horizon;
+      if (reveal[i]! === REVEAL_NEVER) reveal[i] = REVEAL_UNREACHABLE;
     }
     this.layer.updateReveal(buildLabelRevealZooms(this.lastShaped, (i) => reveal[i]!));
     this.map.triggerRepaint?.();

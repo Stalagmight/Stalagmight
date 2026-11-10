@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Map as MaplibreMap } from 'maplibre-gl';
-import { emptySurveyData, STATION_FLAG_IS_ZERO_DATUM, type SurveyData } from '../../../../../types/survey-data';
+import { emptySurveyData, shotKindToFlags, STATION_FLAG_IS_ZERO_DATUM, type SurveyData } from '../../../../../types/survey-data';
 import type { MapThemeColors } from '../../../../../utils/themeColors';
 import { GlyphAtlas, SDF_BUFFER, type GlyphRasterizer, type RasterizedGlyph } from '../glyphAtlas';
 import { LABEL_KIND, LABEL_FLAG } from '../labelShaders';
@@ -8,6 +8,7 @@ import { FEATURE_ID_STRIDE } from '../../../../../utils/ids';
 import type { LabelRenderData } from '../surveyCustomLabelLayer';
 import { SurveyLabelController, type LabelSyncParams } from '../labelController';
 import { CUSTOM_LABELS_SYNC_HOOK } from '../labelsGate';
+import { REVEAL_CEILING } from '../labelReveal';
 import { computeMercatorAnchor } from '../mercator';
 import { projectStationsRel } from '../tessellate';
 
@@ -1392,6 +1393,64 @@ describe('SurveyLabelController reveal rerun on toggle', () => {
     c.setReferenceShotsVisible(false);
     expect(layer.revealCalls).toBeGreaterThan(revealBefore);
     expect(layer.updateCalls).toBe(updatesBefore);
+  });
+});
+
+describe('SurveyLabelController rerun keeps a lost virtual label hidden', () => {
+  beforeEach(() => {
+    h.layerState.disabledAfterAdd = false;
+    h.layerState.last = null;
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  /** Section B's one shot is a Jump laid exactly over section A's first (real)
+   *  shot, so their shot labels share an anchor and overlap at every zoom. */
+  function jumpOverRealParams(): LabelSyncParams {
+    const params = makeParams();
+    const d = params.surveyData;
+    d.stationCount = 5;
+    d.stationSectionIds = new Uint32Array([1, 1, 1, 2, 2]);
+    d.stationIndices = new Uint32Array([0, 1, 2, 0, 1]);
+    d.stationCoords = new Float64Array([0, 0, 0, 10, 0, -1, 10, 10, -2, 0, 0, 0, 10, 0, -1]);
+    d.stationFlags = new Uint8Array([STATION_FLAG_IS_ZERO_DATUM, 0, 0, 0, 0]);
+    d.shotFlags = new Uint8Array([0, 0, shotKindToFlags('Jump')]);
+    return params;
+  }
+
+  /** Reveal zooms of the shot-label vertices, split by whether they carry JUMP. */
+  function shotLabelReveals(layer: FakeLabelLayer): { real: number[]; jump: number[] } {
+    const { kind, revealZoom, flags } = vfl(layer);
+    const out = { real: [] as number[], jump: [] as number[] };
+    for (let v = 0; v < kind.length; v++) {
+      if (kind[v] !== LABEL_KIND.SHOT_LABEL) continue;
+      ((flags[v]! & LABEL_FLAG.JUMP) !== 0 ? out.jump : out.real).push(revealZoom[v]!);
+    }
+    return out;
+  }
+
+  it('re-showing jumps hides the jump label that loses to a real one, rather than drawing it on top at the horizon', () => {
+    const cam = makeCameraMap(18);
+    const c = cameraController(cam.map);
+    c.setShotLabelsVisible(true);
+    // Built with jumps hidden: the jump label is no candidate, so it is emitted
+    // uncontested (the shader hides it while jumps are off).
+    c.setJumpShotsVisible(false);
+    c.sync(jumpOverRealParams());
+    const layer = h.layerState.last!;
+    const built = shotLabelReveals(layer);
+    expect(built.jump.length).toBeGreaterThan(0);
+    const realBefore = built.real.slice();
+
+    c.setJumpShotsVisible(true);
+    const after = shotLabelReveals(layer);
+    // The jump label now loses its slot to the coincident real label: hidden at
+    // every zoom the map reaches, not parked at the emit horizon (z22 here).
+    for (const r of after.jump) expect(r).toBeGreaterThan(REVEAL_CEILING);
+    // The real labels keep their reveals.
+    expect(after.real).toEqual(realBefore);
+    expect(Math.max(...after.real)).toBeLessThanOrEqual(REVEAL_CEILING);
   });
 });
 
