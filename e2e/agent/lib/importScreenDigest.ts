@@ -299,10 +299,9 @@ export async function computeImportScreenDigest(
   // ---- screen -------------------------------------------------------------
   // Priority order. `orphan-placement-dialog` is checked BEFORE the wizard
   // phases on purpose: OrphanPlacementDialog renders `wizard-suggestion`,
-  // `merge-station-select`, `overlap-mode-select`, `toggle-alternatives` and
-  // `alternative-N` too, so a phase lookup that did not first establish WHICH
-  // dialog is up would classify it as the DMP wizard and drive the wrong
-  // generators at it.
+  // `merge-station-select`, `toggle-alternatives` and `alternative-N` too, so
+  // a phase lookup that did not first establish WHICH dialog is up would
+  // classify it as the DMP wizard and drive the wrong generators at it.
   const wizardUp = shown('dmp-new-import-dialog');
   let screen: string;
   // FIRST, and above everything: a modal rendered outside `activeDialog` that
