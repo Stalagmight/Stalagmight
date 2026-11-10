@@ -45,7 +45,7 @@ describe('LevelsSlider', () => {
     // Midpoint moved to 25% of the range -> 0.5^gamma = 0.25 -> gamma 2.
     fireEvent.keyDown(screen.getByTestId('lv-mid-handle'), { key: 'ArrowLeft', shiftKey: true });
     fireEvent.keyDown(screen.getByTestId('lv-mid-handle'), { key: 'ArrowLeft' });
-    const [scale] = onChange.mock.calls.at(-1)!;
+    const [scale] = onChange.mock.calls[onChange.mock.calls.length - 1]!;
     expect(scale.gamma).toBeGreaterThan(1);
   });
 
