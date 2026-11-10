@@ -109,14 +109,14 @@ const suggestion: CrossSectionSuggestion = {
   preferredMergeOffset: 1,
   direction: 'forward',
   isPartial: false,
-  confidence: 'High',
+  confidence: 'high',
   existingSectionName: 'AAA',
   importSectionIndex: 1,
   importSectionName: 'BBB',
   targetType: 'existing',
   existingSectionId: ANCHOR_ID,
   targetImportIndex: null,
-} as CrossSectionSuggestion;
+};
 
 let importCalls: Array<Record<string, unknown>> = [];
 
