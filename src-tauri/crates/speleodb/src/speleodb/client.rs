@@ -17,6 +17,8 @@ use super::models::{
 use super::native::NativeFile;
 use super::{SpeleoDbError, TransportCause};
 
+mod commit_dates;
+
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
 const TRANSFER_TIMEOUT: Duration = Duration::from_secs(120);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -488,6 +490,37 @@ fn api_error<E: std::fmt::Debug>(error: ApiOpError<E>) -> SpeleoDbError {
         }
     }
 }
+/// The reply of an SDK call that decodes a project or a revision list. A 2xx reply
+/// the SDK refused is decoded again with the commit dates a pre-ISO server writes
+/// set aside ([`commit_dates::decode_reply`]); any other refusal stays a contract
+/// mismatch.
+fn sdk_reply<T: serde::de::DeserializeOwned, E: std::fmt::Debug>(
+    result: Result<T, ApiOpError<E>>,
+) -> Result<commit_dates::Reply<T>, SpeleoDbError> {
+    match result {
+        Ok(value) => Ok(commit_dates::Reply::typed(value)),
+        Err(ApiOpError::Api(error)) if (200..300).contains(&error.status) => {
+            let reply = match commit_dates::decode_reply(&error.raw_body) {
+                Some(Ok(reply)) => reply,
+                Some(Err(detail)) => {
+                    return Err(SpeleoDbError::Parse(contract_mismatch(Some(
+                        detail.to_string(),
+                    ))))
+                }
+                None => return Err(SpeleoDbError::Parse(contract_mismatch(error.parse_error))),
+            };
+            static NOTED: OnceLock<()> = OnceLock::new();
+            NOTED.get_or_init(|| {
+                tracing::info!(
+                    "SpeleoDB sends commit dates in its pre-ISO format; \
+                     revision times are read as New York wall time"
+                );
+            });
+            Ok(reply)
+        }
+        Err(error) => Err(api_error(error)),
+    }
+}
 /// The message of a SpeleoDB error reply, [`bounded`]: the server chooses it, and
 /// it may be as long as the reply.
 fn parse_error_message(body: &[u8]) -> Option<String> {
@@ -742,12 +775,7 @@ fn get_project_inner(
 ) -> Result<Project, SpeleoDbError> {
     let c = client(base, Some(token), insecure, timeout)?;
     c.call(Endpoint::GetProject, retry, || async {
-        project(
-            c.http
-                .v2_project_retrieve(id, None)
-                .await
-                .map_err(api_error)?,
-        )
+        project(sdk_reply(c.http.v2_project_retrieve(id, None).await)?.value)
     })
 }
 pub fn get_revisions(
@@ -758,20 +786,21 @@ pub fn get_revisions(
 ) -> Result<RevisionHistory, SpeleoDbError> {
     let c = client(base, Some(token), insecure, READ_TIMEOUT)?;
     c.call(Endpoint::GetRevisions, true, || async {
-        let value = c
-            .http
-            .v2_projects_revisions_retrieve(id, None)
-            .await
-            .map_err(api_error)?;
+        let reply = sdk_reply(c.http.v2_projects_revisions_retrieve(id, None).await)?;
         Ok(RevisionHistory {
-            commits: value
+            commits: reply
+                .value
                 .commits
                 .into_iter()
-                .map(|v| RevisionCommit {
+                .enumerate()
+                .map(|(i, v)| RevisionCommit {
+                    authored_date: match reply.dates.get(i) {
+                        Some(date) => date.clone(),
+                        None => Some(commit_dates::instant(v.authored_date)),
+                    },
                     id: v.id,
                     parent_ids: v.parent_ids,
                     author_email: v.author_email,
-                    authored_date: Some(v.authored_date),
                     message: Some(v.message),
                 })
                 .collect(),
@@ -787,10 +816,12 @@ pub fn acquire_lock(
     let c = client(base, Some(token), insecure, READ_TIMEOUT)?;
     c.call(Endpoint::Acquire, false, || async {
         project(
-            c.http
-                .v2_projects_acquire_create(id, None, None::<&str>)
-                .await
-                .map_err(api_error)?,
+            sdk_reply(
+                c.http
+                    .v2_projects_acquire_create(id, None, None::<&str>)
+                    .await,
+            )?
+            .value,
         )
     })
 }
@@ -803,10 +834,12 @@ pub fn release_lock(
     let c = client(base, Some(token), insecure, READ_TIMEOUT)?;
     c.call(Endpoint::Release, false, || async {
         project(
-            c.http
-                .v2_projects_release_create_with_json(id, None, None::<&str>, None)
-                .await
-                .map_err(api_error)?,
+            sdk_reply(
+                c.http
+                    .v2_projects_release_create_with_json(id, None, None::<&str>, None)
+                    .await,
+            )?
+            .value,
         )
     })
 }
@@ -821,10 +854,12 @@ pub fn create_project_with(
     let c = client(base, Some(token), insecure, READ_TIMEOUT)?;
     c.call(Endpoint::CreateProject, false, || async {
         project(
-            c.http
-                .v2_projects_create_with_json(None, None::<&str>, request.clone())
-                .await
-                .map_err(api_error)?,
+            sdk_reply(
+                c.http
+                    .v2_projects_create_with_json(None, None::<&str>, request.clone())
+                    .await,
+            )?
+            .value,
         )
     })
 }
@@ -840,10 +875,17 @@ pub fn patch_project(
     let c = client(base, Some(token), insecure, READ_TIMEOUT)?;
     c.call(Endpoint::PatchProject, false, || async {
         project(
-            c.http
-                .v2_projects_partial_update_with_json(id, None, None::<&str>, Some(request.clone()))
-                .await
-                .map_err(api_error)?,
+            sdk_reply(
+                c.http
+                    .v2_projects_partial_update_with_json(
+                        id,
+                        None,
+                        None::<&str>,
+                        Some(request.clone()),
+                    )
+                    .await,
+            )?
+            .value,
         )
     })
 }
@@ -879,11 +921,12 @@ pub fn upload_stalx(
                 content_type: Some("application/vnd.sqlite3".into()),
             }],
         };
-        let response = c
-            .http
-            .v2_projects_upload("stalagmight", id, None, None::<&str>, request)
-            .await
-            .map_err(api_error)?;
+        let response = sdk_reply(
+            c.http
+                .v2_projects_upload("stalagmight", id, None, None::<&str>, request)
+                .await,
+        )?
+        .value;
         let mut value = project(response.project)?;
         value.latest_commit = if response.hexsha.is_empty() {
             None

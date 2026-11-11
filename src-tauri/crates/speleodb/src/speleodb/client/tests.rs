@@ -1256,3 +1256,158 @@ fn a_profile_contract_mismatch_also_keeps_the_decoder_detail() {
     assert!(err.to_string().contains("unknown variant `...`"), "{err}");
     assert!(!err.to_string().contains("ZZ"), "{err}");
 }
+
+/// A revision as a SpeleoDB from before the ISO revision dates (server a679010c6)
+/// sends it: New York wall time with no zone.
+fn pre_iso_commit(id: &str, date: &str) -> Value {
+    json!({"id":id,"parent_ids":[],"author_email":"test@example.com","author_name":"Test",
+        "authored_date":date,"dt_since":"now","message":"Synthetic","formats":[],"tree":[],"url":null})
+}
+/// A project as a pre-ISO server sends it: `latest_commit` embeds the whole newest
+/// commit, wall-time date included.
+fn pre_iso_project() -> Value {
+    let mut p = project_json();
+    p["commit_count"] = json!(1);
+    p["latest_commit"] = pre_iso_commit(SHA, "2026/11/10 03:18");
+    p
+}
+
+#[test]
+fn iso_revision_dates_reach_the_history_as_utc_milliseconds() {
+    let mut project = project_json();
+    project["latest_commit"] = pre_iso_commit(SHA, "2026-11-10T08:18:23Z");
+    let s = Server::json(json!({"project":project,"commits":[
+        pre_iso_commit(SHA, "2026-11-10T09:18:23.123456+01:00"),
+        pre_iso_commit(SHA, "2026-11-10T08:18:23Z"),
+    ]}));
+    let dates: Vec<_> = get_revisions(&s.base, "t", false, ID)
+        .unwrap()
+        .commits
+        .into_iter()
+        .map(|c| c.authored_date)
+        .collect();
+    s.finish();
+    assert_eq!(
+        dates,
+        [
+            Some("2026-11-10T08:18:23.123Z".to_owned()),
+            Some("2026-11-10T08:18:23.000Z".to_owned())
+        ]
+    );
+}
+
+#[test]
+fn pre_iso_revision_dates_reach_the_history_as_sent() {
+    let parent = "1111111111111111111111111111111111111111";
+    let mut child = pre_iso_commit(SHA, "2026/11/10 03:18");
+    child["parent_ids"] = json!([parent]);
+    let s = Server::json(json!({"project":pre_iso_project(),"commits":[
+        child,
+        pre_iso_commit(parent, "2026-11-09T08:00:00.5Z"),
+        pre_iso_commit(parent, "not a date"),
+    ]}));
+    let history = get_revisions(&s.base, "t", false, ID).unwrap();
+    s.finish();
+    // The wall time goes to the frontend unchanged (it knows New York's rules), an
+    // instant is normalised, and a date neither format reads shows no time.
+    let dates: Vec<_> = history
+        .commits
+        .iter()
+        .map(|c| c.authored_date.clone())
+        .collect();
+    assert_eq!(
+        dates,
+        [
+            Some("2026/11/10 03:18".to_owned()),
+            Some("2026-11-09T08:00:00.500Z".to_owned()),
+            None
+        ]
+    );
+    assert_eq!(history.commits[0].id, SHA);
+    assert_eq!(history.commits[0].parent_ids, [parent]);
+    assert_eq!(history.commits[0].author_email, "test@example.com");
+    assert_eq!(history.commits[0].message.as_deref(), Some("Synthetic"));
+}
+
+#[test]
+fn pre_iso_dates_do_not_excuse_any_other_contract_mismatch() {
+    let mut missing_id = pre_iso_commit(SHA, "2026/11/10 03:18");
+    missing_id.as_object_mut().unwrap().remove("id");
+    let mut unknown_field = pre_iso_commit(SHA, "2026/11/10 03:18");
+    unknown_field["surprise"] = json!(true);
+    let mut drifted_project = pre_iso_project();
+    drifted_project["visibility"] = json!("FUTURE_VISIBILITY");
+    for reply in [
+        json!({"project":pre_iso_project(),"commits":[missing_id]}),
+        json!({"project":pre_iso_project(),"commits":[unknown_field]}),
+        json!({"project":drifted_project,"commits":[pre_iso_commit(SHA, "2026/11/10 03:18")]}),
+    ] {
+        let s = Server::json(reply);
+        let err = get_revisions(&s.base, "t", false, ID).unwrap_err();
+        s.finish();
+        assert!(matches!(&err, SpeleoDbError::Parse(_)), "got {err:?}");
+    }
+    let mut drifted_project = pre_iso_project();
+    drifted_project["visibility"] = json!("FUTURE_VISIBILITY");
+    let s = Server::json(drifted_project);
+    let err = get_project(&s.base, "t", false, ID).unwrap_err();
+    s.finish();
+    assert!(err.to_string().contains("unknown variant `...`"), "{err}");
+}
+
+#[test]
+fn every_project_reply_from_a_pre_iso_server_decodes() {
+    let check = |result: Result<Project, SpeleoDbError>| {
+        assert_eq!(result.unwrap().latest_commit.unwrap().id, SHA);
+    };
+    for probe in [false, true] {
+        let s = Server::json(pre_iso_project());
+        check(if probe {
+            get_project_probe(&s.base, "t", false, ID)
+        } else {
+            get_project(&s.base, "t", false, ID)
+        });
+        s.finish();
+    }
+    for acquire in [true, false] {
+        let s = Server::json(pre_iso_project());
+        check(if acquire {
+            acquire_lock(&s.base, "t", false, ID)
+        } else {
+            release_lock(&s.base, "t", false, ID)
+        });
+        s.finish();
+    }
+    let s = Server::replies(vec![(201, pre_iso_project().to_string().into_bytes())]);
+    check(create_project_with(
+        &s.base,
+        "t",
+        false,
+        &json!({"name":"Synthetic","description":"Test","country":"US","type":"STALAGMIGHT"})
+            .to_string(),
+    ));
+    s.finish();
+    let s = Server::json(pre_iso_project());
+    check(patch_project(
+        &s.base,
+        "t",
+        false,
+        ID,
+        r#"{"name":"Renamed"}"#,
+    ));
+    s.finish();
+    let f = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(f.path(), b"SQLite format 3\0").unwrap();
+    let s = Server::json(
+        json!({"project":pre_iso_project(),"hexsha":SHA,"files":["project.stalx"],"message":"Saved","browser_url":null}),
+    );
+    check(upload_stalx(
+        &s.base,
+        "t",
+        false,
+        ID,
+        f.path(),
+        "Synthetic upload",
+    ));
+    s.finish();
+}
