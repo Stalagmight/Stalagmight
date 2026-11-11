@@ -107,7 +107,7 @@ fn conversion_saves_unsaved_survey_uploads_once_and_requires_verified_editing_af
                 } else if route.contains("/revisions/") {
                     let commits = if uploaded {
                         vec![
-                            json!({"id":SHA,"parent_ids":[],"author_email":"test@example.com","author_name":"Test","authored_date":"2026/01/01 00:00","dt_since":"now","message":"Project Creation","formats":[],"tree":[],"url":null}),
+                            json!({"id":SHA,"parent_ids":[],"author_email":"test@example.com","author_name":"Test","authored_date":"2026-01-01T00:00:00Z","dt_since":"now","message":"Project Creation","formats":[],"tree":[],"url":null}),
                         ]
                     } else {
                         Vec::new()

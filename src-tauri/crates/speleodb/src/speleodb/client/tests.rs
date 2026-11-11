@@ -220,7 +220,7 @@ fn project_operations_preserve_permissions_locks_and_patch_nulls() {
 
 #[test]
 fn revisions_and_native_file_routes_are_exact() {
-    let commit = json!({"id":SHA,"parent_ids":[],"author_email":"test@example.com","author_name":"Test","authored_date":"2026/01/01 00:00","dt_since":"now","message":"Test","formats":[],"tree":[],"url":null});
+    let commit = json!({"id":SHA,"parent_ids":[],"author_email":"test@example.com","author_name":"Test","authored_date":"2026-01-01T00:00:00Z","dt_since":"now","message":"Test","formats":[],"tree":[],"url":null});
     let s = Server::json(json!({"project":project_json(),"commits":[commit]}));
     assert_eq!(
         get_revisions(&s.base, "t", false, ID).unwrap().commits[0].id,
