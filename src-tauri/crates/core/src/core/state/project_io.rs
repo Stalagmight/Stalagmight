@@ -1332,6 +1332,9 @@ impl AppState {
         self.bump_speleodb_session();
         // An add's pending ignores (#674) die with the project they belong to.
         self.clear_pending_ignores();
+        // So does the record of renamed shot ids: it describes this project only.
+        self.load_renamed_shots
+            .store(false, std::sync::atomic::Ordering::Relaxed);
         // [#473] The discarded-history banner describes the OPEN project; with none
         // open there is nothing for it to describe. Cleared here as well as on every
         // load commit, so closing a project takes its banner with it rather than

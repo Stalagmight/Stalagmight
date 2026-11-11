@@ -9,6 +9,7 @@
 //! is synthetic.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -499,9 +500,16 @@ fn undoing_a_repair_of_a_cross_section_repeat_restores_it_exactly() {
     let before = section_ids(&state, 1);
     assert_eq!(before, X);
 
+    // `legacy_session` swapped the unhealed project in after a load that set
+    // the flag; clear it so only the Repair below can set it again.
+    state.load_renamed_shots.store(false, Ordering::Relaxed);
     let repaired = state.repair_open_project_integrity();
     assert!(repaired.changed && repaired.remaining == 0, "{repaired:?}");
     assert_ids_unique(&state, "after repair");
+    assert!(
+        state.load_renamed_shots.load(Ordering::Relaxed),
+        "a Repair that renamed ids turns on the stored-ignore alias lookup"
+    );
 
     // Undo puts the recorded state back verbatim, repeats included; the next
     // load heals them with the same rule.
@@ -509,4 +517,36 @@ fn undoing_a_repair_of_a_cross_section_repeat_restores_it_exactly() {
     assert_eq!(section_ids(&state, 1), before);
     assert!(state.redo().success);
     assert_ids_unique(&state, "after redoing the repair");
+}
+
+/// INJECTION (tried): dropping the reset from `close_open_project_locked` fails
+/// the close assertion; dropping it from `create_project` fails the last one.
+#[test]
+fn the_renamed_ids_flag_belongs_to_the_open_project() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("legacy.stalx");
+    Database::open(&path)
+        .unwrap()
+        .save_project(&three_copies())
+        .unwrap();
+    let state = AppState::new().unwrap();
+    assert!(state.open_project(path.clone()).success, "open the file");
+    assert!(
+        state.load_renamed_shots.load(Ordering::Relaxed),
+        "the load renamed the repeats"
+    );
+
+    assert!(state.close_project().success);
+    assert!(
+        !state.load_renamed_shots.load(Ordering::Relaxed),
+        "closing forgets it"
+    );
+
+    assert!(state.open_project(path).success, "reopen");
+    assert!(state.load_renamed_shots.load(Ordering::Relaxed));
+    assert!(state.create_project("Fresh".to_string(), None).success);
+    assert!(
+        !state.load_renamed_shots.load(Ordering::Relaxed),
+        "a new project has renamed nothing"
+    );
 }

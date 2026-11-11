@@ -79,11 +79,12 @@ pub struct AppState {
     /// (ambiguous for reserved-path collisions), so the first import can durably
     /// persist it exactly once (#92 / PR #104).
     pub(super) initial_save_deferred: AtomicBool,
-    /// Whether the open project's load renamed shot UUIDs a file held in more
-    /// than one section (`Project::make_shot_uuids_project_unique`). Until a save
-    /// re-keys them, ignored warnings can be stored against the old ids, and only
-    /// then is it worth deriving the replacement to match them. Set by both load
-    /// paths once the project is committed.
+    /// Whether the open project's shot UUIDs a file held in more than one
+    /// section were renamed (`Project::make_shot_uuids_project_unique`), by its
+    /// load or by a Repair. Until a save re-keys them, ignored warnings can be
+    /// stored against the old ids, and only then is it worth deriving the
+    /// replacement to match them. Set by both load paths once the project is
+    /// committed and by Repair; cleared on close and on project create.
     pub(super) load_renamed_shots: AtomicBool,
     /// Undo/redo stack
     pub(super) undo_stack: Mutex<UndoStack>,
