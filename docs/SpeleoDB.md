@@ -373,12 +373,24 @@ message's final `, expected`, and anything after a span that never closes is
 dropped) and the length capped, is logged with the endpoint
 kind, and is counted as its own `parse-error` traffic outcome (docs/telemetry.md).
 
-Revision times arrive as New York wall time with no zone (`YYYY/MM/DD HH:MM`).
-The backend passes them through; the revision history converts them to an
-instant with the webview's time-zone data (DST-aware) and shows the viewer's
-local time with its GMT offset, e.g. `Nov 9, 2026, 10:15 AM GMT+1`, with the
-relative time as the tooltip. An ISO-8601 time with an explicit offset is taken
-as sent.
+Revision times arrive as ISO-8601 UTC instants
+(`2026-11-10T08:18:23.123456Z`; SpeleoDB a679010c6, SDK 0.6.2, which decodes
+them as UTC). The backend hands each on as UTC with milliseconds, and the
+revision history shows the viewer's local time with its GMT offset, e.g.
+`Nov 9, 2026, 10:15 AM GMT+1`, with the relative time as the tooltip.
+
+An older server sends New York wall time with no zone (`YYYY/MM/DD HH:MM`) and
+embeds a commit with such a date as every project's `latest_commit`. SDK 0.6.2
+refuses that date, so the client (`client/commit_dates.rs`) decodes a refused
+2xx reply again with those dates out of the SDK's way:
+
+- an embedded `latest_commit` becomes its bare id, the only part the app reads;
+- a revision keeps its place, and its wall time passes through to the frontend,
+  which converts it to an instant with the webview's time-zone data (DST-aware).
+
+Everything else in the reply is still held to the SDK contract, and a reply
+with no such date stays a contract mismatch. A revision time in neither form is
+not shown.
 
 ## Project workspace
 

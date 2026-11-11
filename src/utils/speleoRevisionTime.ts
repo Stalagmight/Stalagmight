@@ -1,19 +1,19 @@
 /**
  * sdk#7: SpeleoDB revision timestamps.
  *
- * The server sends a commit's `authored_date` as wall-clock time in ITS zone,
- * `YYYY/MM/DD HH:MM`, with no offset: the instance runs with
- * `TIME_ZONE = "America/New_York"` and the revision serializer formats the date
- * without one. `new Date()` reads such a string as the VIEWER's local time, which
- * put every revision up to a day off (a just-made commit read "in 4 hours" for a
- * viewer west of New York).
+ * SpeleoDB sends a commit's `authored_date` as an ISO-8601 UTC instant (since its
+ * a679010c6, 2026-11-10), which the backend hands on as UTC with milliseconds,
+ * `2026-11-10T08:18:23.123Z`.
  *
- * Converted here, in the frontend, rather than in Rust: the webview ships the full
- * IANA time-zone database through `Intl`, so the New York DST rules (past and
- * future) come for free, while the backend has no tz data and would need a new
- * crate to get it. The backend passes the server string through unchanged, so the
- * same parser also takes the ISO-8601 form with an explicit offset should the
- * server start sending one.
+ * An older server sends wall-clock time in ITS zone, `YYYY/MM/DD HH:MM`, with no
+ * offset: the instance runs with `TIME_ZONE = "America/New_York"` and its revision
+ * serializer formatted the date without one. `new Date()` reads such a string as
+ * the VIEWER's local time, which put every revision up to a day off (a just-made
+ * commit read "in 4 hours" for a viewer west of New York). The backend passes that
+ * string through unchanged, and it is converted here, in the frontend, rather than
+ * in Rust: the webview ships the full IANA time-zone database through `Intl`, so
+ * the New York DST rules (past and future) come for free, while the backend has no
+ * tz data and would need a new crate to get it.
  */
 import { formatDate } from '../i18n/format';
 
