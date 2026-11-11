@@ -10,11 +10,11 @@ from the dependency lockfiles - do not edit by hand. CI fails if this file is
 stale or hand-edited; regenerate after any dependency change.
 
 <!-- lockfile-hashes
-Cargo.lock=b8e1260573baff074f11ff6b83670b5237cc1e43efd7d37eeafcf838eced30ba
+Cargo.lock=45463c2c43c4a9f8f2ff48afc55e3f9bdb16d6c182f164cd130808b2de0cf639
 pnpm-lock.yaml=0fdfd981c7d0b4501862c826a85107c7215a26e0e458742aea8fb1b914f08549
 gen-third-party-licenses.mjs=ebb68f24487c3cca49f60ec5c0867729efa22850dc3fc7d5780e163eb707c1f1
 about.toml=c7bd02edf652dab73230740c94195d391bfe6e103f17f226c8e0c2e517df1c46
-bundle-body=efef47bcf05012c50fb3b724f8f1ec07378a1494db69af7016dffc5c2bd4e774
+bundle-body=dcc33f7f9b64b24f478e8dde66451be2e3a56c35fe7d34d35041dd475ea015ef
 -->
 
 ## npm packages
@@ -1818,7 +1818,7 @@ The dependency graph of the release binary (telemetry features included, dev-dep
 
 ### GNU Affero General Public License v3.0 only
 
-Applies to: `speleodb-api 0.6.1`
+Applies to: `speleodb-api 0.6.2`
 
 ````text
 GNU AFFERO GENERAL PUBLIC LICENSE
@@ -7079,7 +7079,6 @@ Copyright 2013-2014 RAD Game Tools and Valve Software
 Copyright 2010-2014 Rich Geldreich and Tenacious Software LLC
 Copyright (c) 2017 Frommi
 Copyright (c) 2017-2024 oyvindln
-
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

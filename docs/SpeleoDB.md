@@ -251,11 +251,16 @@ snapshot remains independent of subsequent local edits. The authoritative upload
 result is its top-level `hexsha`; an HTTP 304 remains the existing no-change outcome.
 An uncertain upload does not clear dirty state or automatically release the lock.
 
-The server accepts at most 24,657,920 bytes per upload and refuses a larger file
-only after receiving all of it. That figure is an upstream bug (the check
-multiplies the maximum file COUNT by `1024 * 1204`, a typo for `1024`); it lives in
-one constant, `client::SERVER_UPLOAD_LIMIT_BYTES`, to raise once the server is
-fixed. The sanitized snapshot is measured before anything is sent:
+The server accepts at most 5 MiB (5,242,880 bytes, inclusive) per uploaded file
+and 7 MiB per commit (SpeleoDB e094fd501), and refuses a larger file only after
+receiving all of it. An upload is one `.stalx`, so the per-file limit binds; it
+lives in one constant, `client::SERVER_UPLOAD_LIMIT_BYTES`. An older server
+accepted up to 24,657,920 bytes (`client::LARGEST_STORED_BYTES`: its check
+multiplied the maximum file COUNT by `1024 * 1204`, a typo for `1024`). Uploads
+are held to the newer limit there too, so a project between the two limits that
+such a server would have taken now leaves out its undo history, or is refused
+when it is still over 5 MiB without it. The sanitized snapshot is measured
+before anything is sent:
 
 - within the limit, it uploads unchanged;
 - over it with the undo history included (Full mode), the copy is re-sanitized on
@@ -346,8 +351,9 @@ Downloads have a 30-second connection limit, a 120-second read inactivity limit
 and a size-aware total deadline: 120 seconds plus the bytes received at 4 KiB/s
 (the SDK's stream does not expose the reply's length, so a download of N bytes ends
 within 120 s + N / 4 KiB/s), capped by an absolute ceiling: the deadline of the
-largest file SpeleoDB accepts (24,657,920 bytes, see Native file transfer) at 4 KiB/s, 6,140 s or about
-1 h 42 min (`DOWNLOAD_CEILING`). Every project the server can store still fits at
+largest file a SpeleoDB server may hold (24,657,920 bytes, what an older server
+accepted, see Native file transfer) at 4 KiB/s, 6,140 s or about
+1 h 42 min (`DOWNLOAD_CEILING`). Every project a server can have stored still fits at
 the minimum rate; without the cap, a server paying out just above 4 KiB/s could
 hold a download for some 36 hours within the 512 MiB native limit. A server
 trickling bytes inside the read limit is stopped as a timeout instead of holding
@@ -373,12 +379,26 @@ message's final `, expected`, and anything after a span that never closes is
 dropped) and the length capped, is logged with the endpoint
 kind, and is counted as its own `parse-error` traffic outcome (docs/telemetry.md).
 
-Revision times arrive as New York wall time with no zone (`YYYY/MM/DD HH:MM`).
-The backend passes them through; the revision history converts them to an
-instant with the webview's time-zone data (DST-aware) and shows the viewer's
-local time with its GMT offset, e.g. `Nov 9, 2026, 10:15 AM GMT+1`, with the
-relative time as the tooltip. An ISO-8601 time with an explicit offset is taken
-as sent.
+Revision times arrive as ISO-8601 UTC instants
+(`2026-11-10T08:18:23.123456Z`; SpeleoDB a679010c6, SDK 0.6.2, which decodes
+them as UTC). The backend hands each on as UTC with milliseconds, and the
+revision history shows the viewer's local time with its GMT offset, e.g.
+`Nov 9, 2026, 10:15 AM GMT+1`, with the relative time as the tooltip.
+
+An older server sends New York wall time with no zone (`YYYY/MM/DD HH:MM`) and
+embeds a commit with such a date as every project's `latest_commit`. SDK 0.6.2
+refuses that date, so the client (`client/commit_dates.rs`) decodes a 2xx reply
+the SDK could not deserialize again with each unreadable date string set aside:
+
+- an embedded `latest_commit` keeps everything but its date, which the app
+  never reads (it reads only the commit's id);
+- a revision keeps its place, and its wall time passes through to the frontend,
+  which converts it to an instant with the webview's time-zone data (DST-aware).
+
+Everything else in the reply, the rest of each commit included, is still held to
+the SDK contract. A reply with no such date, a date that is not a string, and an
+unexpected success status all stay a contract mismatch. A revision time in
+neither form (or a wall time that is not a real date and time) is not shown.
 
 ## Project workspace
 

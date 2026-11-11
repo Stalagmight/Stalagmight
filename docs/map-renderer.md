@@ -150,6 +150,16 @@ quads; `labelController.ts` scopes the build to a padded viewport, emits a slack
 window above the build zoom so a modest zoom-in needs no rebuild at all, and
 defers the first build until the font promise resolves.
 
+Station names (the Display menu's **Station names**, exclusive with **Station
+IDs**) are not a sixth label kind: they are the station-label kind with
+different text. `setStationLabelMode('off' | 'id' | 'name')` sets the text the
+build bakes in; in names mode `buildLabelDescriptors` gives a named station its
+sanitized, length-capped name (`formatStationNameLabel`) and an unnamed station
+no label at all. Every other field of the descriptor is the ID label's, so names
+declutter, decimate, dim and hide with their geometry exactly like the IDs.
+Showing or hiding the current text is the usual uniform flip; switching between
+IDs and names is a rebuild, because the text lives in the glyph quads.
+
 ## Hit-testing
 
 MapLibre returns nothing from a custom layer, so `queryRenderedFeatures` is not

@@ -25,6 +25,7 @@ import {
   getEffectiveShowShotData,
   getEffectiveShowStationComments,
   getEffectiveShowShotComments,
+  getEffectiveStationLabelMode,
   isShotKindVisible,
 } from '../../store/displaySelectors';
 import { getErrorMessage, invokeIpc } from '../../utils/ipc';
@@ -243,6 +244,7 @@ const MAP_CANVAS_UI_KEYS = [
   'showShotData',
   'showSectionNames',
   'showStationLabels',
+  'showStationNames',
   'showStationComments',
   'showShotComments',
   'showStations',
@@ -507,6 +509,7 @@ function MapCanvas() {
     showShotData,
     showSectionNames,
     showStationLabels,
+    showStationNames,
     showStationComments,
     showShotComments,
     showStations,
@@ -2485,11 +2488,11 @@ function MapCanvas() {
     surveyLayerRef.current.setShowSectionNames(showSectionNames);
   }, [showSectionNames, mapLoaded]);
 
-  // Sync station index labels visibility with SurveyLayer
+  // Sync the station labels (off / IDs / names) with SurveyLayer
   useEffect(() => {
     if (!surveyLayerRef.current) return;
-    surveyLayerRef.current.setShowStationLabels(showStationLabels);
-  }, [showStationLabels, mapLoaded]);
+    surveyLayerRef.current.setStationLabelMode(getEffectiveStationLabelMode(showStationLabels, showStationNames));
+  }, [showStationLabels, showStationNames, mapLoaded]);
 
   // Sync station comments visibility with SurveyLayer (gated by showStations)
   useEffect(() => {

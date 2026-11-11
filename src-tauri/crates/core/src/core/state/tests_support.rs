@@ -216,7 +216,7 @@ pub(super) fn sdk_fixture(body: &str) -> String {
                 for (key, value) in [
                     ("author_email", json!("test@example.com")),
                     ("author_name", json!("Test")),
-                    ("authored_date", json!("2026/01/01 00:00")),
+                    ("authored_date", json!("2026-01-01T00:00:00Z")),
                     ("dt_since", json!("now")),
                     ("formats", json!([])),
                     ("message", json!("Test")),

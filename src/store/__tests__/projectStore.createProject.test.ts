@@ -46,6 +46,7 @@ describe('projectStore.createProject', () => {
             showShots: true,
             showSectionNames: true,
             showStationLabels: false,
+            showStationNames: false,
             showShotData: false,
             showReferenceShots: true,
         showJumps: true,
