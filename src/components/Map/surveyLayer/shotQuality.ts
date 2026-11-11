@@ -16,7 +16,10 @@
  *   lengthDelta    recorded length - the length the depth change and the
  *                  recorded inclination imply (|dz| / |sin incl|), signed.
  *                  Label-only: it restates the inclination-vs-depth mismatch
- *                  as a distance, so it is not scored on its own.
+ *                  as a distance, so it is not scored on its own. Only on
+ *                  shots at least LENGTH_DELTA_MIN_INCLINATION_DEG steep: on a
+ *                  shallower shot a 1° clinometer error moves the implied
+ *                  length by metres, so the number would mislead.
  *
  * NaN means "not computable" (a leg is missing or out of range, the length is
  * not positive, the shot is too flat for a length, ...). Computed from the
@@ -27,6 +30,11 @@
 import type { SurveyData } from '../../../types/survey-data';
 import { lengthFixableFromInclination, lengthFromInclination } from '../../../utils/resolutionPreview';
 import { azimuthDelta, impliedPitchDeg, pitchLegInRange, recordedPitch } from '../../../utils/shotGeometry';
+
+/** Below this recorded inclination (degrees) the length delta is withheld.
+ *  At 15° a 1° inclination error moves the implied length of a 10 m shot by
+ *  about 0.65 m; at 5° by about 7 m. */
+export const LENGTH_DELTA_MIN_INCLINATION_DEG = 15;
 
 /** Score at a check's warning threshold (yellow). */
 export const SCORE_WARNING = 1;
@@ -108,7 +116,9 @@ export function computeShotQualityMetrics(data: SurveyData): ShotQualityMetrics 
     }
     inclDepthDelta[i] = rec - impliedPitchDeg(length, depthIn, depthOut);
     const dz = depthOut - depthIn;
-    const impliedLength = lengthFixableFromInclination(dz, rec) ? lengthFromInclination(dz, rec) : null;
+    const steepEnough = Math.abs(rec) >= LENGTH_DELTA_MIN_INCLINATION_DEG;
+    const impliedLength =
+      steepEnough && lengthFixableFromInclination(dz, rec) ? lengthFromInclination(dz, rec) : null;
     lengthDelta[i] = impliedLength === null ? NaN : length - impliedLength;
   }
 

@@ -127,8 +127,12 @@ describe('computeShotQualityMetrics', () => {
     expect(metricsOf({ length: 10, depthIn: 0, depthOut: 5, pitchIn: 20, pitchOut: 20 }).len).toBeCloseTo(-4.619, 3);
   });
 
-  it('withholds the length delta on a flat, reversed or level shot', () => {
+  it('withholds the length delta on a flat, shallow, reversed or level shot', () => {
     expect(metricsOf({ length: 10, depthIn: 0, depthOut: 0.2, pitchIn: 2, pitchOut: 2 }).len).toBeNaN();
+    // 14.9° is below the 15° floor (a 1° error would swing the length by ~0.7 m);
+    // 15° is not.
+    expect(metricsOf({ length: 10, depthIn: 0, depthOut: 2.5, pitchIn: 14.9, pitchOut: 14.9 }).len).toBeNaN();
+    expect(metricsOf({ length: 10, depthIn: 0, depthOut: 2.5, pitchIn: 15, pitchOut: 15 }).len).toBeCloseTo(0.341, 3);
     expect(metricsOf({ length: 10, depthIn: 0, depthOut: 5, pitchIn: -30, pitchOut: -30 }).len).toBeNaN();
     expect(metricsOf({ length: 10, depthIn: 3, depthOut: 3, pitchIn: 30, pitchOut: 30 }).len).toBeNaN();
   });
