@@ -138,6 +138,21 @@ describe('computeIssueScores: levels, switched-off errors, average', () => {
     expect(scores(data(), [], allOff).shot).toEqual([0, 0, 0]);
   });
 
+  it("an error's own open warning sets no floor: switching it off or raising its levels can clear the shot", () => {
+    // Shot 101: az 30 of 20 (the validator warns AZIMUTH_DEVIATION), pitch agrees.
+    const d = fixture({ shots: { 0: { azimuthIn: 0, azimuthOut: 30, length: 10 } } });
+    const azWarn = warn(1, 101, 'warning', { code: 'AZIMUTH_DEVIATION' });
+    expect(scores(d, [azWarn]).shot[0]).toBe(1.5); // graded by the metric
+    const off = issueScaleFrom(T, {}, ['azimuth'], 'worst');
+    expect(scores(d, [azWarn], off).shot[0]).toBe(0);
+    const lenient = issueScaleFrom(T, { azimuth: { min: 40, warn: 50, max: 60 } }, [], 'worst');
+    expect(scores(d, [azWarn], lenient).shot[0]).toBe(0);
+    // The same holds for the inclination checks.
+    for (const code of ['PITCH_DEVIATION', 'INCLINATION_DEPTH_MISMATCH']) {
+      expect(scores(fixture(), [warn(1, 101, 'warning', { code })]).shot[0]).toBe(0);
+    }
+  });
+
   it('switched-off errors do not lift hard errors or the warning floor', () => {
     const allOff = issueScaleFrom(T, {}, ['azimuth', 'inclination', 'inclinationDepth', 'length'], 'worst');
     const s = scores(data(), [warn(1, 101, 'error'), warn(1, 102, 'warning', { code: 'SHORT_SHOT' })], allOff);

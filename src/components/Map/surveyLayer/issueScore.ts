@@ -10,7 +10,8 @@
  *     depth change, ...) forces 3 (the palette's end);
  *   - any other unresolved warning (short / long shot, large depth change, or a
  *     code this module does not know) floors the colour at 1 (the warn colour),
- *     as the old three-colour mode did;
+ *     as the old three-colour mode did. A warning about a graded metric does
+ *     not: that metric already scores the shot on the user's levels;
  *   - an IGNORED (resolved) AZIMUTH_DEVIATION / PITCH_DEVIATION /
  *     INCLINATION_DEPTH_MISMATCH drops that metric from the shot.
  *
@@ -67,6 +68,10 @@ export function computeIssueScores(
   // (1) Unresolved warnings and ignored metrics per shot, keyed by
   //     (sectionId, shotId) and resolved to a global index through a
   //     per-section map built lazily, so untouched sections cost nothing.
+  //     A warning about a graded metric (azimuth / inclination in vs out,
+  //     inclination vs depth) sets no floor: its metric already scores it on
+  //     the user's levels, and switching that metric off or raising its levels
+  //     must be able to take the shot below the warn colour.
   const lookupShotGlobal = shotGlobalLookup(data);
   for (const w of warnings) {
     const g = lookupShotGlobal(w.sectionId, w.shotId);
@@ -75,7 +80,7 @@ export function computeIssueScores(
       ignored[g] = ignored[g]! | (WARNING_CODE_METRICS[w.code] ?? 0);
     } else if (w.severity === 'error') {
       hardError[g] = 1;
-    } else {
+    } else if (!Object.prototype.hasOwnProperty.call(WARNING_CODE_METRICS, w.code)) {
       warned[g] = 1;
     }
   }

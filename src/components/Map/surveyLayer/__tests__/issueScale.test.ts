@@ -9,6 +9,7 @@ import {
   hiddenMaskOf,
   issueScaleFrom,
   levelScore,
+  MAX_LEVEL,
   METRIC_AZ,
   METRIC_CLOSURE,
   METRIC_LENGTH,
@@ -125,8 +126,13 @@ describe('validLevels / hiddenMaskOf', () => {
     expect(validLevels({ min: 0, warn: 2, max: 2 })).toBe(false);
     expect(validLevels({ min: 0, warn: 1, max: Infinity })).toBe(false);
   });
-  it('maps ids to bits', () => {
+  it('maps ids to bits, ignoring ids that are not errors (prototype names included)', () => {
     expect(hiddenMaskOf(['azimuth', 'azimuth'])).toBe(METRIC_AZ);
     expect(hiddenMaskOf([])).toBe(0);
+    expect(hiddenMaskOf(['constructor', '__proto__', 'toString', 'hasOwnProperty'])).toBe(0);
+  });
+  it('caps a level at MAX_LEVEL', () => {
+    expect(validLevels({ min: 0, warn: 1, max: MAX_LEVEL })).toBe(true);
+    expect(validLevels({ min: 0, warn: 1, max: 1e308 })).toBe(false);
   });
 });

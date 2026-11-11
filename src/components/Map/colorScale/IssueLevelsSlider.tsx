@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { formatFixed } from '../../../i18n/format';
-import type { IssueLevels } from '../surveyLayer/issueScale';
+import { MAX_LEVEL, validLevels, type IssueLevels } from '../surveyLayer/issueScale';
 
 type Handle = 'min' | 'warn' | 'max';
 const HANDLES: readonly Handle[] = ['min', 'warn', 'max'];
@@ -106,12 +106,23 @@ export function IssueLevelsSlider({
     return Math.min(1, Math.max(0, (clientX - rect.left) / rect.width)) * viewMax;
   };
 
+  // A handle stops at its neighbours. Levels that are not in order to begin
+  // with (a zero project threshold gives 0 / 0 / 0) let Warn and Max push the
+  // handles above them instead, so a drag can still set them apart. The editor
+  // drops anything that is still not 0 <= Min < Warn < Max.
   const moved = (handle: Handle, value: number): IssueLevels => {
-    if (handle === 'min') return { ...levels, min: Math.max(0, Math.min(value, levels.warn - gap)) };
+    const v = Math.min(Math.max(value, 0), MAX_LEVEL);
+    if (handle === 'min') return { ...levels, min: Math.max(0, Math.min(v, levels.warn - gap)) };
     if (handle === 'warn') {
-      return { ...levels, warn: Math.min(Math.max(value, levels.min + gap), levels.max - gap) };
+      const warn = Math.max(v, levels.min + gap);
+      return validLevels(levels)
+        ? { ...levels, warn: Math.min(warn, levels.max - gap) }
+        : { ...levels, warn, max: Math.max(levels.max, warn + gap) };
     }
-    return { ...levels, max: Math.max(value, levels.warn + gap) };
+    const max = Math.max(v, levels.min + 2 * gap);
+    return validLevels(levels)
+      ? { ...levels, max: Math.max(max, levels.warn + gap) }
+      : { ...levels, warn: Math.max(levels.min + gap, Math.min(levels.warn, max - gap)), max };
   };
 
   const onPointerDown = (handle: Handle) => (e: PointerEvent<HTMLDivElement>) => {
@@ -287,8 +298,7 @@ function IssueLevelsFields({
     // A field the user did not edit keeps its exact value (its text is rounded).
     const read = (h: Handle) => (draft[h] === shown[h] ? levels[h] : Number(draft[h]));
     const next = { min: read('min'), warn: read('warn'), max: read('max') };
-    const ok =
-      HANDLES.every((h) => Number.isFinite(next[h])) && next.min >= 0 && next.min < next.warn && next.warn < next.max;
+    const ok = validLevels(next);
     if (ok && (next.min !== levels.min || next.warn !== levels.warn || next.max !== levels.max)) onChange(next);
     else setDraft(shown);
   };

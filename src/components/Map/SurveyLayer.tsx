@@ -3610,7 +3610,8 @@ export default class SurveyLayer {
       if (next === this.issueInput || !this.cachedSurveyData || !hasLiveStyle(this.map)) return;
       this.issueInput = next;
       this.cachedIssueRender = resolveIssueRender(this.cachedSurveyData, next, this.cachedLoopClosures);
-      this.resyncCustomRenderFromStore();
+      // Paint the data the scores index (a pending update() repaints the store's).
+      if (this.customRender) this.syncCustomRender(this.cachedSurveyData);
       this.publishLoopClosures();
     });
   }

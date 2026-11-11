@@ -424,6 +424,12 @@ test.describe('Survey Issues gradient', () => {
   test('the colour cog regrades by its levels, drops a switched-off error, and never touches the warnings', async ({ page }) => {
     const sectionId = (await getSectionIds(page))[0]!;
     const shotIds = await getShotIds(page, sectionId);
+    // The validator's own azimuth warnings for the 40 and 60 degree shots (over
+    // the 20 degree threshold); the mock does not validate, so inject them.
+    const azWarnings: MockWarning[] = [3, 4].map((i) => ({
+      sectionId, shotId: shotIds[i]!, shotIndex: i, code: 'AZIMUTH_DEVIATION', message: 'az', severity: 'warning', isResolved: false,
+    }));
+    await injectWarnings(page, azWarnings);
     await openDisplayMenu(page);
     await toggleDisplayOption(page, 'showIssueSeverity');
     await page.keyboard.press('Escape');
@@ -457,15 +463,23 @@ test.describe('Survey Issues gradient', () => {
       return (s?.project?.validation ?? s?.config?.validation)?.azimuth_diff_threshold;
     })).toBe(20);
 
-    // Azimuth off: no other error disagrees, so every shot paints clear.
+    // Azimuth off: no other error disagrees, so every shot paints clear - the
+    // azimuth warnings themselves are still open, and set no yellow floor.
     await page.getByTestId('issue-scale-enable-azimuth').click();
     await expect.poll(async () => {
       const shots = await shotColorsById(page);
       return shotIds.every((id) => isColor(shots[id], SEV_CLEAR));
     }, { timeout: 4000 }).toBe(true);
-    // The switch is a config write; nothing goes to the project file or the validator.
+    // The switch is a config write; nothing goes to the project file or the
+    // validator, and the warnings are the same two.
     expect(ipc).toContain('update_map_palette');
     expect(ipc.filter((c) => c !== 'update_map_palette')).toEqual([]);
+    expect(await page.evaluate(() => {
+      const stores = (window as unknown as {
+        __E2E_TEST__?: { projectStore: { getState: () => { warnings: Array<{ code: string; isResolved: boolean }> } } };
+      }).__E2E_TEST__;
+      return stores?.projectStore.getState().warnings.filter((w) => w.code === 'AZIMUTH_DEVIATION' && !w.isResolved).length;
+    })).toBe(2);
   });
 
   test('a palette picked in the colour cog paints the same scale', async ({ page }) => {

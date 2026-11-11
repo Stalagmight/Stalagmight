@@ -255,6 +255,17 @@ mod tests {
     }
 
     #[test]
+    fn issues_hidden_is_capped() {
+        let mut cfg = MapPaletteConfig {
+            issues_hidden: (0..40).map(|i| format!("error{i}")).collect(),
+            ..MapPaletteConfig::default()
+        };
+        cfg.normalize();
+        assert_eq!(cfg.issues_hidden.len(), MAX_HIDDEN_ISSUES);
+        assert_eq!(cfg.issues_hidden[0], "error0");
+    }
+
+    #[test]
     fn issue_options_parse_leniently() {
         let cfg: MapPaletteConfig =
             toml::from_str("issues_combine = \"average\"\nissues_hidden = [\"closure\"]\n")

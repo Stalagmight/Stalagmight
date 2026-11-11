@@ -23,7 +23,7 @@ import {
   defaultIssueLevels,
   ISSUE_METRICS,
   levelScore,
-  sameLevels,
+  validLevels,
   type IssueLevels,
   type IssueMetricId,
 } from '../surveyLayer/issueScale';
@@ -155,6 +155,12 @@ function scaleLevels(l: IssueLevels, f: (v: number) => number): IssueLevels {
   return { min: f(l.min), warn: f(l.warn), max: f(l.max) };
 }
 
+/** Same levels up to unit-conversion rounding (feet back to metres). */
+function nearlySameLevels(a: IssueLevels, b: IssueLevels): boolean {
+  const near = (x: number, y: number) => Math.abs(x - y) <= 1e-9 * Math.max(1, Math.abs(x), Math.abs(y));
+  return near(a.min, b.min) && near(a.warn, b.warn) && near(a.max, b.max);
+}
+
 function IssueMetricRow({
   id,
   enabled,
@@ -204,7 +210,9 @@ function IssueMetricRow({
 
   const onChange = (next: IssueLevels, live: boolean) => {
     const stored = scaleLevels(next, units.fromDisplay);
-    setIssueLevels(id, !live && sameLevels(stored, defaults) ? null : stored, live);
+    // Never store levels the map would ignore (out of order, beyond MAX_LEVEL).
+    if (!validLevels(stored)) return;
+    setIssueLevels(id, !live && nearlySameLevels(stored, defaults) ? null : stored, live);
   };
 
   const name = t(`map.issueScale.metric.${id}`, { degrees: LENGTH_DELTA_MIN_INCLINATION_DEG });

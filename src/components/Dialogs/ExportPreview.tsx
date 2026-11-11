@@ -41,7 +41,8 @@ export default function ExportPreview({ options, fill = false }: ExportPreviewPr
   // the debounced preview, which is what makes the export panel's controls live.
   const mapPalette = useProjectStore((state) => state.config?.map_palette);
   const exportScale = useColorScaleStore((s) => s.exportScale);
-  const palettePreview = useColorScaleStore((s) => s.palettePreview);
+  // A Survey Issues palette preview never reaches the export: ignore it here.
+  const palettePreview = useColorScaleStore((s) => (s.palettePreview?.kind === 'issues' ? null : s.palettePreview));
 
   const [svg, setSvg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);

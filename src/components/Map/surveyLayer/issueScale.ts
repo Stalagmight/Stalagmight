@@ -6,7 +6,9 @@
  * levels: at or below Min it scores 0 (the palette's start), at Warn 1 (the
  * palette's middle, the "warn colour"), at or above Max 3 (the palette's end).
  * The defaults put Warn on the project's warning threshold and Max at three
- * times it, which is exactly the original scoring.
+ * times it, which is exactly the original scoring for the three angle checks.
+ * The length check is new to the colour (it has no project threshold): 1 m
+ * warn, 3 m max. Loop closures default to their line's own colour bands.
  *
  * These levels only change what the map draws (colours, label colours, which
  * label wins a collision). The warnings themselves come from the backend
@@ -156,11 +158,15 @@ export function sameIssueScale(a: IssueScale | null | undefined, b: IssueScale |
   );
 }
 
-/** A valid levels triple: finite, min >= 0, min < warn < max. */
+/** Largest level accepted, in the error's own unit (far past any real
+ *  degrees, metres or percent; keeps the slider's span finite). */
+export const MAX_LEVEL = 1e6;
+
+/** A valid levels triple: 0 <= min < warn < max <= {@link MAX_LEVEL}. */
 export function validLevels(l: IssueLevels): boolean {
   return (
     Number.isFinite(l.min) && Number.isFinite(l.warn) && Number.isFinite(l.max) &&
-    l.min >= 0 && l.min < l.warn && l.warn < l.max
+    l.min >= 0 && l.min < l.warn && l.warn < l.max && l.max <= MAX_LEVEL
   );
 }
 
@@ -170,7 +176,9 @@ export type IssueLevelOverrides = Readonly<Partial<Record<IssueMetricId, IssueLe
 /** The hidden-error mask of a list of error ids (unknown ids are ignored). */
 export function hiddenMaskOf(ids: readonly string[]): number {
   let mask = 0;
-  for (const id of ids) mask |= (METRIC_BIT as Readonly<Record<string, number>>)[id] ?? 0;
+  for (const id of ids) {
+    if (Object.prototype.hasOwnProperty.call(METRIC_BIT, id)) mask |= METRIC_BIT[id as IssueMetricId];
+  }
   return mask;
 }
 

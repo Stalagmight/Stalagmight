@@ -101,6 +101,26 @@ describe('IssueLevelsSlider', () => {
     expect(onChange).toHaveBeenLastCalledWith({ min: 0, warn: 5, max: 90 }, false);
   });
 
+  it('levels that are not in order (a zero threshold) can still be dragged apart', () => {
+    const { onChange } = setup({ min: 0, warn: 0, max: 0 });
+    const warn = screen.getByTestId('il-warn-handle');
+    fireEvent.pointerDown(warn, { pointerId: 1, clientX: 0 });
+    fireEvent.pointerMove(warn, { pointerId: 1, clientX: 50 }); // 5 deg
+    const [moved] = onChange.mock.calls[onChange.mock.calls.length - 1]!;
+    expect(moved.min).toBe(0);
+    expect(moved.warn).toBe(5);
+    expect(moved.max).toBeGreaterThan(5);
+  });
+
+  it('rejects a level too large to draw', () => {
+    const { onChange } = setup();
+    const max = screen.getByTestId('il-max-input');
+    fireEvent.change(max, { target: { value: '1e308' } });
+    fireEvent.keyDown(max, { key: 'Enter' });
+    expect(onChange).not.toHaveBeenCalled();
+    expect(max).toHaveValue('15.0');
+  });
+
   it('arrow keys nudge a handle', () => {
     const { onChange } = setup();
     fireEvent.keyDown(screen.getByTestId('il-max-handle'), { key: 'ArrowRight', shiftKey: true });

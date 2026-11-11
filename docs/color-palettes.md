@@ -124,12 +124,22 @@ The cog beside the Survey Issues legend (`IssueLegend.tsx` ->
   off switch and a levels slider. **Min**, **Warn** and **Max** map to scores
   0, 1 and 3, i.e. palette positions 0, 0.5 and 1, linearly in between
   (`issueScale.ts::levelScore`). The defaults put Warn on the project threshold
-  and Max at three times it (length: 1 m / 3 m; closure: 1% / 5%, the closure
-  line's own color bands), which is exactly the original scoring. The histogram
+  and Max at three times it, which is exactly the original scoring of the three
+  angle checks. Length has no project threshold and was not in the original
+  color: it defaults to 1 m / 3 m. Closures default to 1% / 5%, the closure
+  line's own color bands. The histogram
   is drawn on a log scale so the few large errors show beside the many small
   ones. A switched-off error leaves the colors, the Errors labels and the
-  legend key; unresolved errors still force the end color and other open
-  warnings still floor at the warn color.
+  legend key. Unresolved errors (zero length, length shorter than the depth
+  change, ...) still force the end color, and open warnings from checks that
+  are not graded here (short / long shot, depth change) still floor at the warn
+  color. A graded check's own warning (azimuth, inclination in vs out,
+  inclination vs depth) sets no floor, so switching it off or raising its
+  levels can take the shot back to the start color.
+- In **Average**, inclination vs depth change and length vs depth change both
+  come from the same disagreement (the length one restates it in metres), so a
+  shot with that one fault counts it twice; switch one of them off for an
+  average that counts it once.
 
 The levels never touch the validator: which shots get a warning, and the
 thresholds in Project Settings, are unchanged (the popover says so). While
