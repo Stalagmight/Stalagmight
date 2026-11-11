@@ -1176,7 +1176,10 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
   const { length: sectionLength, shotCount: lengthShotCount } = surveyedLength(section.shots);
   const shotCount = section.shots.length;
   const referenceCount = section.shots.filter((s) => s.kind !== 'Normal').length;
-  const avgShotLength = lengthShotCount > 0 ? sectionLength / lengthShotCount : 0;
+  const avgShotLength = lengthShotCount > 0 ? sectionLength / lengthShotCount : null;
+  // Reference length is left out of the section length; say so, or a section of
+  // Reference shots reads "0.0 m" with no reason next to a table of real lengths.
+  const referenceLength = section.shots.reduce((sum, s) => (s.kind === 'Reference' ? sum + s.length : sum), 0);
   const contributionPercent = totalProjectLength > 0
     ? (sectionLength / totalProjectLength) * 100
     : 0;
@@ -1272,11 +1275,18 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
             <div className="grid grid-cols-2 gap-x-4 gap-y-1">
               <StatCard label={t('detailPanel.section.totalLength')} value={`${formatFixed(sectionLength, undefined, precision.length)} ${t('common.units.meters')}`} />
               <StatCard label={t('detailPanel.section.shotCount')} value={formatNumber(shotCount)} />
-              <StatCard label={t('detailPanel.section.avgShot')} value={`${formatFixed(avgShotLength, undefined, precision.length)} ${t('common.units.meters')}`} />
+              <StatCard label={t('detailPanel.section.avgShot')} value={avgShotLength === null ? '-' : `${formatFixed(avgShotLength, undefined, precision.length)} ${t('common.units.meters')}`} />
               {referenceCount > 0 && (
                 <StatCard label={t('detailPanel.section.referenceShots')} value={formatNumber(referenceCount)} />
               )}
             </div>
+            {referenceLength > 0 && (
+              <p className="text-xs text-text-secondary" data-testid="section-reference-length-note">
+                {t('detailPanel.section.referenceLengthNote', {
+                  length: `${formatFixed(referenceLength, undefined, precision.length)} ${t('common.units.meters')}`,
+                })}
+              </p>
+            )}
           </div>
 
           {/* Depth range */}
