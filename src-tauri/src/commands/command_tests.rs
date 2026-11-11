@@ -753,6 +753,49 @@ fn test_update_gas_config_normalizes_and_leaves_other_sections_alone() {
     });
 }
 
+/// `update_map_palette` is the partial door for `[map_palette]`: it normalizes
+/// (an invalid id falls back to the theme palette, pins are deduped) and leaves
+/// every other section alone, like `update_gas_config` above.
+#[test]
+fn test_update_map_palette_normalizes_and_leaves_other_sections_alone() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        config::update_panel_sizes_impl(state(&app).inner(), None, None, Some(321), None)
+            .expect("update panel sizes");
+
+        let palette = crate::config::MapPaletteConfig {
+            depth: crate::config::PaletteChoiceConfig {
+                id: "mpl.viridis".into(),
+                reversed: true,
+            },
+            distance: crate::config::PaletteChoiceConfig {
+                id: "NOT a palette".into(),
+                reversed: false,
+            },
+            pinned: vec![
+                "mpl.viridis".into(),
+                "mpl.viridis".into(),
+                "grad.cenote".into(),
+            ],
+        };
+        config::update_map_palette_impl(state(&app).inner(), palette).expect("update palette");
+
+        let cfg = config::get_config(state(&app));
+        assert_eq!(cfg.map_palette.depth.id, "mpl.viridis");
+        assert!(cfg.map_palette.depth.reversed);
+        assert_eq!(
+            cfg.map_palette.distance.id,
+            crate::config::THEME_PALETTE_ID,
+            "an invalid palette id must fall back to the theme palette"
+        );
+        assert_eq!(cfg.map_palette.pinned, vec!["mpl.viridis", "grad.cenote"]);
+        assert_eq!(
+            cfg.panels.data_table_height, 321,
+            "a partial palette write must not revert an unrelated [panels] value"
+        );
+    });
+}
+
 #[test]
 fn test_get_config_defaults_validation() {
     // Same isolation as above: defaults must not depend on the real config.
@@ -4177,6 +4220,28 @@ fn test_export_image_fails_no_project() {
     let result =
         export::export_image_impl(state(&app).inner(), PathBuf::from("/tmp/out.png"), options);
     assert!(result.is_err());
+}
+
+#[test]
+fn test_export_value_histogram_needs_a_project_and_bins_its_stations() {
+    use crate::export::color_scale::ExportValueKind;
+    let app = app_with_state();
+    assert!(
+        export::export_value_histogram_impl(state(&app).inner(), ExportValueKind::Depth, 16)
+            .is_err()
+    );
+    create_project(&app);
+    create_section_with_shots(&app, vec![shot_data(1.0), shot_data(2.0)]);
+    let depth =
+        export::export_value_histogram_impl(state(&app).inner(), ExportValueKind::Depth, 16)
+            .expect("depth histogram");
+    assert_eq!(depth.counts.len(), 16);
+    assert_eq!(depth.counts.iter().sum::<u32>(), 3, "one count per station");
+    let distance =
+        export::export_value_histogram_impl(state(&app).inner(), ExportValueKind::Distance, 4)
+            .expect("distance histogram");
+    assert_eq!(distance.counts.len(), 4);
+    assert_eq!(distance.min, 0.0);
 }
 
 #[test]

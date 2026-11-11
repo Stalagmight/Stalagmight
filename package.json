@@ -40,6 +40,7 @@
     "coverage:ui": "E2E_COVERAGE=1 VITE_COVERAGE=1 pnpm test:ui",
     "coverage:merge": "node scripts/merge-coverage.mjs",
     "gen:ipc-types": "cargo run --manifest-path src-tauri/Cargo.toml --features ipc-typegen --example gen_ipc_types",
+    "gen:palettes": "uv run --no-project --python 3.12 --with matplotlib==3.10.7 python -I scripts/gen-palettes.py",
     "gen:third-party": "node scripts/gen-third-party-licenses.mjs",
     "gen:updater-manifest": "node scripts/gen-updater-manifest.mjs",
     "gen:updater-manifest:test": "node scripts/gen-updater-manifest.test.mjs",

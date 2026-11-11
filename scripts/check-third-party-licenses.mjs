@@ -58,6 +58,29 @@ const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
 // gen-third-party-licenses.mjs's hashNormalised.
 const hashNormalised = (text) => sha256(text.replace(/\r\n/g, '\n'));
 
+// Every file under third_party/ hashed as one unit. Must stay in lockstep with
+// vendoredFiles / vendoredHash in gen-third-party-licenses.mjs.
+function vendoredHash(root) {
+  const dir = path.join(root, 'third_party');
+  const files = [];
+  const walk = (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      // Dotfiles (.DS_Store, editor swap files) are never committed, so a
+      // local regen must not hash them into a value CI cannot reproduce.
+      if (e.name.startsWith('.')) continue;
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (e.isFile()) files.push(path.relative(root, p).split(path.sep).join('/'));
+    }
+  };
+  if (fs.existsSync(dir)) walk(dir);
+  const h = createHash('sha256');
+  for (const rel of files.sort()) {
+    h.update(rel + '\0' + fs.readFileSync(path.join(root, rel), 'utf8').replace(/\r\n/g, '\n') + '\0');
+  }
+  return h.digest('hex');
+}
+
 // Returns a list of problem strings; empty means the bundle is current.
 export function checkBundle(root) {
   const bundlePath = path.join(root, BUNDLE);
@@ -93,6 +116,12 @@ export function checkBundle(root) {
     const got = hashNormalised(fs.readFileSync(path.join(root, rel), 'utf8'));
     if (got !== want) problems.push(`${rel} changed since ${BUNDLE} was generated`);
   }
+  const wantVendored = recorded.get('vendored-data');
+  if (!wantVendored) {
+    problems.push(`${BUNDLE} records no vendored-data hash - regenerate it`);
+  } else if (vendoredHash(root) !== wantVendored) {
+    problems.push(`third_party/ changed since ${BUNDLE} was generated`);
+  }
   // Everything after the comment's closing marker is the generated body; a
   // mismatch means the bundle was edited by hand (or truncated).
   const wantBody = recorded.get('bundle-body');
@@ -110,7 +139,7 @@ export function checkBundle(root) {
 function main() {
   const problems = checkBundle(REPO_ROOT);
   if (problems.length === 0) {
-    console.log(`✓ ${BUNDLE} matches its generator inputs (lockfiles, generator, about.toml) and its own body`);
+    console.log(`✓ ${BUNDLE} matches its generator inputs (lockfiles, generator, about.toml, third_party/) and its own body`);
     return;
   }
   for (const p of problems) console.error(`✗ ${p}`);

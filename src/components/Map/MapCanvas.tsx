@@ -46,8 +46,6 @@ import { SATELLITE_BOTTOM_CANDIDATES } from './mapUtils';
 import { renderFatalMessage } from './surveyLayer/mapErrors';
 import PlacementOverlay from './PlacementOverlay';
 import GridOverlay from './GridOverlay';
-import { DepthLegend } from './DepthLegend';
-import { DistanceLegend } from './DistanceLegend';
 import { GasLegend } from './GasLegend';
 import { MapDevStatsPanels } from './MapDevStatsPanels';
 import CommentOverlay from './CommentOverlay';
@@ -64,6 +62,8 @@ import { useNetworkStore } from '../../store/networkStore';
 import { FEATURE_ID_STRIDE } from '../../utils/ids';
 import { debugLog } from '../../utils/debugLog';
 import { TOAST_KEYS } from '../../utils/toastKeys';
+import { useSurveyLayerColorScales } from './colorScale/useColorScaleInputs';
+import { MapColorLegends } from './MapColorLegends';
 
 // Stable empty warnings array fed to the survey-layer rebuild effect when
 // Issue-severity coloring is OFF. Module-level so its identity never changes
@@ -2155,6 +2155,11 @@ function MapCanvas() {
     return () => { cancelled = true; };
   }, [showGasPlan, gasOriginChosen, gasComputeGate, gasWaypoints, gasSegments, gasDiver, gasCylinders, gasPlanConfig, project?.modified_at, setGasReachField]);
 
+  // The user's depth / distance palette + Levels range (legend cog), live while
+  // a palette is previewed or a Levels handle dragged. Store-subscribed, so a drag
+  // never re-renders MapCanvas.
+  useSurveyLayerColorScales(surveyLayerRef, mapLoaded);
+
   // Apply the fetched field to the layer (feature-state + paint swap). Separate
   // from the rebuild path so re-rooting never triggers a feature rebuild.
   useEffect(() => {
@@ -4065,42 +4070,15 @@ function MapCanvas() {
       {/* Grid overlay using MapLibre layer */}
       {mapLoaded && map.current && <GridOverlay map={map.current} gpsOrigin={gpsOrigin} />}
 
-      {/* Depth legend when depth gradient is enabled (suppressed while the
-          distance overlay is active - distance wins visually, one legend). */}
-      {effectiveDepthGradient && !showDistanceGradient && (
-        <DepthLegend
-          minDepth={depthRange.min}
-          maxDepth={depthRange.max}
-          visible={effectiveDepthGradient}
-        />
-      )}
-
-      {/* Distance legend (#34): color key + "which overlay" cue. Hidden while
-          issue-severity owns the paint (e.g. the Warnings tab) so the legend
-          matches the visible overlay (#57 / Codex). */}
-      {showDistanceGradient && !effectiveIssueSeverity && distanceField && (
-        <DistanceLegend max={distanceField.max_reachable} visible={showDistanceGradient} />
-      )}
-      {/* While the field is being (re)computed - first toggle / re-root - show a
-          lightweight cue so a slow closure solve doesn't look frozen. */}
-      {showDistanceGradient && !effectiveIssueSeverity && !distanceField && (
-        <div
-          data-testid="distance-legend-loading"
-          style={{
-            position: 'absolute',
-            bottom: 50,
-            left: 10,
-            background: 'var(--cc-text-halo-alt)',
-            color: 'var(--cc-depth-text)',
-            borderRadius: 4,
-            padding: 8,
-            zIndex: 1,
-            fontSize: 11,
-          }}
-        >
-          {t('map.distanceLegend.computing')}
-        </div>
-      )}
+      {/* Depth / distance colour key + its colour-scale cog (distance wins the
+          slot; both hidden while issue-severity owns the paint, #57). */}
+      <MapColorLegends
+        showDepth={effectiveDepthGradient && !showDistanceGradient}
+        depthRange={depthRange}
+        surveyData={activeSurveyData}
+        showDistance={showDistanceGradient && !effectiveIssueSeverity}
+        distanceField={distanceField}
+      />
 
       {/* Gas reachable-frontier legend (#38) - gold→purple, 0 → turn budget. */}
       {showGasPlan && gasReachField && (

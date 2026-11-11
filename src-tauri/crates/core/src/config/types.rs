@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use ts_rs::TS;
 
+use super::map_palette::MapPaletteConfig;
 use super::panels::PanelsConfig;
 use super::webkit::WebkitMemoryConfig;
 use crate::models::config::{
@@ -60,6 +61,9 @@ pub struct Config {
     pub gas: GasConfig,
     #[serde(default)]
     pub speleodb: SpeleoDbConfig,
+    /// Depth / distance colour palettes and pins (`config/map_palette.rs`).
+    #[serde(default)]
+    pub map_palette: MapPaletteConfig,
 
     // Legacy fields for backwards compatibility (deserialize only, never serialize)
     // Uses alias to match old TOML key name while keeping internal field name distinct
@@ -855,6 +859,13 @@ pub enum AngleUnit {
 /// `deny_unknown_fields`, so a `default_background = "..."` line left in an
 /// existing `config.toml` is ignored. Seven `[display]` fixtures in `tests.rs`
 /// still carry that line and still parse, which is the regression coverage.
+///
+/// `depth_gradient` (enabled, shallow/deep colour, shallow/deep depth) went the
+/// same way (#380 item 1): Settings > Display edited it but no renderer, legend
+/// or export ever read it - the depth ramp comes from the theme's
+/// `--cc-depth-shallow/deep` tokens over the survey's own range. The user-chosen
+/// palette that replaced it lives in `[map_palette]`. The same seven fixtures
+/// still carry a `[display.depth_gradient]` table and still parse.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct DisplayConfig {
     pub grid_color: String,
@@ -863,7 +874,6 @@ pub struct DisplayConfig {
     pub grid_spacing: f64,
     pub font_size: u32,
     pub font_color: String,
-    pub depth_gradient: DepthGradientConfig,
     /// Highlight color for the ruler's chosen along-cave-line path (#26), applied
     /// to both the path's shots and its stations. `#rrggbb`.
     #[serde(default = "default_measure_path_color")]
@@ -876,15 +886,6 @@ fn default_grid_spacing() -> f64 {
 
 fn default_measure_path_color() -> String {
     "#22d3ee".to_string()
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-pub struct DepthGradientConfig {
-    pub enabled: bool,
-    pub shallow_color: String,
-    pub deep_color: String,
-    pub shallow_depth: f64,
-    pub deep_depth: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -1603,6 +1604,7 @@ impl Config {
         self.placement_suggestion.normalize();
         self.syntactic_highlighting.normalize();
         self.gas.normalize();
+        self.map_palette.normalize();
         self.webkit_memory.normalize();
         self.units.decimal_precision.normalize();
         super::general::normalize_general(&mut self.general);

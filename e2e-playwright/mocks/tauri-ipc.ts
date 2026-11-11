@@ -633,6 +633,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // run keeps whatever gas config get_config would otherwise return.
       let mockGasConfig: Record<string, unknown> | null = null;
 
+      // The `[map_palette]` block persisted via update_map_palette (the depth /
+      // distance colour palettes and pins), overlaid onto get_config / reload_config
+      // exactly like mockGasConfig.
+      let mockMapPalette: Record<string, unknown> | null = null;
+
       // Station comments set via set_station_comment, keyed
       // "sectionId:stationIndex". get_project_state derives its station array
       // from the project's sections on every refresh, so comments must be
@@ -3932,6 +3937,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 ...mockImportShotsView,
                 },
                 ...(mockGasConfig ? { gas: mockGasConfig } : {}),
+                ...(mockMapPalette ? { map_palette: mockMapPalette } : {}),
               };
             }
             return {
@@ -3983,13 +3989,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 grid_spacing: 10,
                 font_size: 12,
                 font_color: '#f5f5f5',
-                depth_gradient: {
-                  enabled: false,
-                  shallow_color: '#00bfff',
-                  deep_color: '#ff4444',
-                  shallow_depth: 0.0,
-                  deep_depth: 50.0,
-                },
               },
               section_colors: {
                 palette: ['#4ecdc4', '#ff6b6b', '#95e1d3', '#f38181', '#aa96da', '#fcbad3', '#a8d8ea', '#ffcb77'],
@@ -4225,6 +4224,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               },
               // Spread LAST so a stored `[gas]` block wins over the literal's own.
               ...(mockGasConfig ? { gas: mockGasConfig } : {}),
+              ...(mockMapPalette ? { map_palette: mockMapPalette } : {}),
             };
 
           case 'update_config':
@@ -4243,6 +4243,19 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] update_gas_config called with:', args);
             const gas = args?.gas as Record<string, unknown> | undefined;
             if (gas) mockGasConfig = gas;
+            return null;
+          }
+
+          case 'update_map_palette': {
+            // Partial update of `[map_palette]` only, mirroring the Rust impl;
+            // overlaid in get_config like update_gas_config (see there).
+            console.log('[Mock IPC] update_map_palette called with:', args);
+            const palette = args?.palette as Record<string, unknown> | undefined;
+            if (palette) mockMapPalette = palette;
+            const win = window as unknown as Record<string, unknown>;
+            const calls = (win.__MOCK_MAP_PALETTE_CALLS__ as unknown[] | undefined) ?? [];
+            calls.push(palette ?? null);
+            win.__MOCK_MAP_PALETTE_CALLS__ = calls;
             return null;
           }
 
@@ -4373,6 +4386,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 ...mockImportShotsView,
                 },
                 ...(mockGasConfig ? { gas: mockGasConfig } : {}),
+                ...(mockMapPalette ? { map_palette: mockMapPalette } : {}),
               }, false];
             }
             // Return mock config with any test overrides applied
@@ -4426,13 +4440,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 grid_spacing: 10,
                 font_size: 12,
                 font_color: '#f5f5f5',
-                depth_gradient: {
-                  enabled: false,
-                  shallow_color: '#00bfff',
-                  deep_color: '#ff4444',
-                  shallow_depth: 0.0,
-                  deep_depth: 50.0,
-                },
               },
               section_colors: {
                 palette: ['#4ecdc4', '#ff6b6b', '#95e1d3', '#f38181', '#aa96da', '#fcbad3', '#a8d8ea', '#ffcb77'],
@@ -4636,6 +4643,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               // own, exactly as in get_config. (`panels` already picks up
               // mockDataTableView above.)
               ...(mockGasConfig ? { gas: mockGasConfig } : {}),
+              ...(mockMapPalette ? { map_palette: mockMapPalette } : {}),
             };
             return [baseConfig, false];
           }
@@ -4853,6 +4861,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               '       0.0        0.0      0:00           0  in',
             ].join('\n');
 
+          case 'export_value_histogram': {
+            // A fixed, plausible histogram so the export panel's Levels slider
+            // renders: depth over 0..40 m, distance over 0..250 m.
+            const kind = args?.kind as string | undefined;
+            const bins = (args?.bins as number | undefined) ?? 64;
+            const counts = Array.from({ length: bins }, (_, k) => Math.round(20 * Math.exp(-((k - bins / 3) ** 2) / (bins * 2))));
+            return kind === 'distance' ? { min: 0, max: 250, counts } : { min: 0, max: 40, counts };
+          }
+
           case 'preview_svg_export': {
             // Stick-map preview lives in the same backend command pipeline; the
             // mock returns a tiny but valid SVG so the preview component can
@@ -4860,8 +4877,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const opts = args?.options as Record<string, unknown> | undefined;
             const threshold = (opts?.branching_threshold as number | undefined) ?? 0;
             // Encode the threshold in a data attribute so tests can verify
-            // the preview re-fetches when the slider changes.
-            return `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" data-threshold="${threshold}"><rect width="100" height="100" fill="#ffffff"/><line x1="10" y1="50" x2="90" y2="50" stroke="#000000" stroke-width="1"/></svg>`;
+            // the preview re-fetches when the slider changes; likewise the
+            // colour scales the export would draw (palette head + levels).
+            const scaleTag = (sc: unknown): string => {
+              const v = sc as { palette?: string[]; levels?: { min: number; max: number; gamma: number } } | undefined;
+              if (!v) return 'none';
+              return `${v.palette?.[0] ?? 'theme'}:${v.levels ? `${v.levels.min}-${v.levels.max}-${v.levels.gamma}` : 'auto'}`;
+            };
+            return `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" data-threshold="${threshold}" data-depth-scale="${scaleTag(opts?.depth_scale)}" data-distance-scale="${scaleTag(opts?.distance_scale)}"><rect width="100" height="100" fill="#ffffff"/><line x1="10" y1="50" x2="90" y2="50" stroke="#000000" stroke-width="1"/></svg>`;
           }
 
           case 'export_image': {

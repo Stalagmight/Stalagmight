@@ -21,6 +21,7 @@ import type { DisplaySettings } from '../types/loading';
 import { DISPLAY_DEFAULTS } from './displaySelectors';
 import { useGasPlanStore } from './gasPlanStore';
 import { useExportStore } from './exportStore';
+import { useColorScaleStore } from './colorScaleStore';
 
 // Import tool utilities for internal use and re-export for convenience
 import { NON_INTERACTIVE_TOOLS, isNonInteractiveTool } from '../utils/toolUtils';
@@ -1900,6 +1901,9 @@ export const useUIStore = create<UIStore>((set) => ({
     // different cave at settings nobody chose for it. The modal Export dialog is
     // unaffected by design: it owns local state and always opens on data/CSV.
     useExportStore.getState().reset();
+    // The depth / distance Levels ranges are per-project too (session-only; the
+    // palette CHOICE persists in config and is untouched).
+    useColorScaleStore.getState().resetSession();
     // Apply display settings from backend, merging with existing state.
     // Uses ?? to only apply fields that are defined, preserving current state for undefined fields.
     // Every persisted field matching uiStore - NO colorBy (not persisted).

@@ -533,6 +533,45 @@ pub async fn preview_svg_export(
     .map_err(|e| format!("Preview task panicked: {e}"))?
 }
 
+/// Bin the values an image export would colour for `kind` (depth, or
+/// penetration distance from the entrance) over the export's own auto range,
+/// for the Export panel's Levels slider. Uses exactly the export's data: the
+/// adjusted solve when there is one (depth), the measured network (distance).
+#[tauri::command]
+pub async fn export_value_histogram(
+    app_handle: AppHandle,
+    kind: crate::export::color_scale::ExportValueKind,
+    bins: u32,
+) -> Result<crate::export::color_scale::ValueHistogram, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle.state::<AppState>();
+        export_value_histogram_impl(state.inner(), kind, bins)
+    })
+    .await
+    .map_err(|e| format!("Histogram task panicked: {e}"))?
+}
+
+pub(crate) fn export_value_histogram_impl(
+    state: &AppState,
+    kind: crate::export::color_scale::ExportValueKind,
+    bins: u32,
+) -> Result<crate::export::color_scale::ValueHistogram, String> {
+    let include_reference_legs = state.get_config().gas.include_reference_legs;
+    let project = state
+        .get_project_state()
+        .ok_or_else(|| "No project open".to_string())?;
+    let stations = state
+        .get_adjusted_stations()
+        .unwrap_or_else(|| project.compute_station_coordinates());
+    Ok(crate::export::color_scale::export_value_histogram(
+        &project,
+        &stations,
+        kind,
+        bins as usize,
+        include_reference_legs,
+    ))
+}
+
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod tests {

@@ -50,6 +50,7 @@ import {
   type CircleStationInputs,
 } from './tessellate';
 import { makeColorResolvers } from './colorResolvers';
+import { makePreviewResolvers, segmentShotOrder, writePreviewColors } from './previewResolvers';
 import { planIncrementalUpdate, planColorOnlyUpdate, coalesceVertexRuns } from './incremental';
 import { SurveyCustomLayer, type CustomRenderData } from './surveyCustomLayer';
 import {
@@ -271,6 +272,11 @@ export class SurveyCustomController {
   private lastData: CustomRenderData | null = null;
   private lastLookup: Map<number, Map<number, number>> | null = null;
   private lastSurveyData: SurveyData | null = null;
+  /** The colour buffers hold a live colour-scale preview (approximate), so the
+   *  next sync must recolour exactly even if its colour globals look unchanged. */
+  private previewed = false;
+  /** Segment -> shot order for the preview's flat loop, keyed by the built data. */
+  private previewOrder: { data: CustomRenderData; order: Uint32Array } | null = null;
   private lastStationRel: StationRel | null = null;
   private lastAllReference: Float32Array | null = null;
 
@@ -304,9 +310,17 @@ export class SurveyCustomController {
     // a pure global recolor (overlay / theme / depth-mode toggle) with unchanged
     // geometry re-uploads just the two color buffers. Either beats a full rebuild.
     if (this.active && this.layer && prevParams) {
-      if (this.tryIncremental(prevParams, params)) return;
-      if (this.tryColorOnly(prevParams, params)) return;
+      if (this.previewed) {
+        // A preview left approximate colours behind: recolour exactly (or, if the
+        // geometry moved under the preview, fall through to a full build).
+        this.previewed = false;
+        if (this.tryColorOnly(prevParams, params, true)) return;
+      } else {
+        if (this.tryIncremental(prevParams, params)) return;
+        if (this.tryColorOnly(prevParams, params)) return;
+      }
     }
+    this.previewed = false;
     const data = this.build(params);
     if (!this.active) this.enable(data);
     else this.layer?.update(data);
@@ -892,7 +906,7 @@ export class SurveyCustomController {
    * color-only (see {@link planColorOnlyUpdate}) or a build-time exclusion is
    * active (compaction breaks the g↦[4g] map, as for {@link tryIncremental}).
    */
-  private tryColorOnly(prevParams: CustomSyncParams, params: CustomSyncParams): boolean {
+  private tryColorOnly(prevParams: CustomSyncParams, params: CustomSyncParams, force = false): boolean {
     const prev = this.lastSurveyData;
     const layer = this.layer;
     const line = this.lastData?.line;
@@ -904,7 +918,7 @@ export class SurveyCustomController {
     if (
       !planColorOnlyUpdate(
         prev, next, prevParams.colorCtx, params.colorCtx,
-        prevParams.gpsOrigin, params.gpsOrigin, this.lastData.anchorX, this.lastData.anchorY,
+        prevParams.gpsOrigin, params.gpsOrigin, this.lastData.anchorX, this.lastData.anchorY, force,
       )
     ) {
       return false;
@@ -922,6 +936,33 @@ export class SurveyCustomController {
     // size uniforms (a size-only change rides here with no extra upload).
     Object.assign(this.lastData, this.sizeFields(params));
     this.lastSurveyData = next;
+    this.map.triggerRepaint();
+    return true;
+  }
+
+  /**
+   * Live colour-scale preview (palette hover, Levels drag): recolour the CURRENT
+   * geometry with `colorCtx` through LUT-backed resolvers and re-upload only the
+   * four colour buffers. No labels, no geometry, no snapshot change - the next
+   * {@link sync} replaces these approximate colours with exact ones. Returns
+   * false when there is nothing live to recolour (the caller then syncs).
+   */
+  previewColors(colorCtx: DisplayColorContext): boolean {
+    if (this.disposed || this.fatal || !this.active) return false;
+    const params = this.lastParams;
+    const data = this.lastSurveyData;
+    const layer = this.layer;
+    const line = this.lastData?.line;
+    const circle = this.lastData?.circle;
+    const lookup = this.lastLookup;
+    if (!params || params.exclude || !data || !layer || !line || !circle || !lookup) return false;
+    const built = this.lastData!;
+    if (this.previewOrder?.data !== built) {
+      this.previewOrder = { data: built, order: segmentShotOrder(data, lookup) };
+    }
+    writePreviewColors(data, this.previewOrder.order, makePreviewResolvers(data, colorCtx), line, circle.fill);
+    layer.updateColors(line.colorFrom, line.colorTo, circle.fill, circle.stroke);
+    this.previewed = true;
     this.map.triggerRepaint();
     return true;
   }

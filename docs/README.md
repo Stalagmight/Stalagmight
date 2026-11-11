@@ -52,6 +52,7 @@ in determines how you write it, and picking wrong is the most common rework.
 | Doc | Contents |
 |-----|----------|
 | [map-renderer.md](map-renderer.md) | The custom WebGL survey renderer (a MapLibre `CustomLayerInterface`): tessellation, shaders, labels, incremental updates. |
+| [color-palettes.md](color-palettes.md) | Depth / distance color palettes and the Levels range: where each setting is stored, the gamma mapping, the byte-exact default, palette sources and licences, the live-preview path, export. |
 | [gas-planning.md](gas-planning.md) | Plan mode's gas engine: gas-weighted reachability over the survey graph, turnaround and stage-drop points. |
 | [move-tools.md](move-tools.md) | Move Station / Shot / Segment: scope of each, the shared drag-preview engine, Ctrl+drag panning, immovable stations. |
 | [SpeleoDB.md](SpeleoDB.md) | Complete SpeleoDB exchange contract: API calls and callers, artifacts, authentication, permissions, mutexes, revision fences, recovery, and workflow diagrams. |

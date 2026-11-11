@@ -19,6 +19,7 @@ import { trackDialogComplete } from '../../utils/telemetry';
 import { ChevronRightIcon } from '../common/icons';
 import { setStationLabelOption } from '../../utils/exportOptions';
 import { hasStationNames } from '../../types/survey-data';
+import { ExportColorScaleControls } from './ExportColorScaleControls';
 
 /** Phase label mapping for export phases (matches backend LoadingPhase) */
 const EXPORT_PHASE_LABELS: Record<string, string> = {
@@ -579,8 +580,11 @@ export default function ExportControls({
                     <p className="text-xs text-text-secondary">
                       {svgSelected
                         ? 'SVG export is always monochrome. Choose PNG or PDF to color the map.'
-                        : 'Depth / distance gradients match the survey map. Color applies to PNG / PDF.'}
+                        : 'Depth / distance gradients use the palette chosen on the map. Color applies to PNG / PDF.'}
                     </p>
+                    {!svgSelected && (imageOptions.color_mode === 'depth' || imageOptions.color_mode === 'distance') && (
+                      <ExportColorScaleControls kind={imageOptions.color_mode} />
+                    )}
                   </div>
                 )}
               </div>

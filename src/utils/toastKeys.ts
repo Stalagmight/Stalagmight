@@ -42,6 +42,7 @@ export const TOAST_KEYS = {
   DATA_TABLE_PASTE: 'data-table-paste',
   DATA_TABLE_DELETE: 'data-table-delete',
   DATA_TABLE_VIEW_SAVE: 'data-table-view-save',
+  MAP_PALETTE_SAVE: 'map-palette-save',
   NEW_SECTION_VIEW_SAVE: 'new-section-view-save',
   EDIT_SECTION_VIEW_SAVE: 'edit-section-view-save',
   IMPORT_SHOTS_VIEW_SAVE: 'import-shots-view-save',

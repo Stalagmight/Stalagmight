@@ -9,6 +9,7 @@
  */
 
 import { COMMENT_PALETTE, getDepthColor } from '../../../utils/colors';
+import { scaleHex, type ColorScaleInput } from '../../../utils/palettes';
 import type { MapThemeColors } from '../../../utils/themeColors';
 import { type SurveyData, STATION_FLAG_IS_ZERO_DATUM } from '../../../types/survey-data';
 
@@ -60,6 +61,11 @@ export interface GhostSectionData {
 export interface DisplayColorContext {
   showDepthGradient: boolean;
   depthRange: DepthRange;
+  /** The user's depth palette + Levels range (map legend cog). Null / absent =
+   *  the theme ramp over `depthRange`, linear: the pre-palette colours, through
+   *  the original `getDepthColor` call. `depthRange` stays the data extent the
+   *  auto range falls back to. */
+  depthScale?: ColorScaleInput | null;
   themeColors: MapThemeColors;
   /** Only honored when `issueSeverity` is present (mirrors the builder). */
   showIssueSeverity: boolean;
@@ -109,6 +115,9 @@ export interface OverlayColorInput {
   stations: ReadonlyMap<number, number>;
   /** Interpolate scale far end (distance: max reachable; gas: turn budget). */
   max: number;
+  /** Distance only: the user's palette + Levels range. Null / absent = the
+   *  fixed near/far ramp over `0 -> max`. Gas reach ignores it. */
+  scale?: ColorScaleInput | null;
 }
 
 export function normalizeDepthRange(depthRange: DepthRange): DepthRange {
@@ -118,6 +127,19 @@ export function normalizeDepthRange(depthRange: DepthRange): DepthRange {
     min: Math.min(minD, maxD),
     max: Math.max(minD, maxD),
   };
+}
+
+/** A depth value's ramp colour, or null (the caller falls back to section
+ *  colour). The user's palette when one is set, else the original theme ramp. */
+export function depthColorFor(value: number, ctx: DisplayColorContext): string | null {
+  if (ctx.depthScale) return scaleHex(value, ctx.depthScale, ctx.depthRange);
+  return getDepthColor(
+    value,
+    ctx.themeColors.depthShallow,
+    ctx.themeColors.depthDeep,
+    ctx.depthRange.min,
+    ctx.depthRange.max,
+  );
 }
 
 /** Severity → color (2=error, 1=warning, else clear). */
@@ -141,15 +163,7 @@ export function resolveShotDisplayColor(
   }
   if (ctx.showDepthGradient) {
     const avgDepth = (data.shotDepthIn[shotGlobalIdx]! + data.shotDepthOut[shotGlobalIdx]!) / 2;
-    return (
-      getDepthColor(
-        avgDepth,
-        ctx.themeColors.depthShallow,
-        ctx.themeColors.depthDeep,
-        ctx.depthRange.min,
-        ctx.depthRange.max,
-      ) ?? sectionColor
-    );
+    return depthColorFor(avgDepth, ctx) ?? sectionColor;
   }
   return sectionColor;
 }
@@ -177,22 +191,8 @@ export function resolveShotEndpointColors(
   // layer in severity mode); the gradient sub-layer is depth-only.
   if (ctx.showIssueSeverity && ctx.issueSeverity) return [base, base];
   if (ctx.showDepthGradient) {
-    const from =
-      getDepthColor(
-        data.shotDepthIn[shotGlobalIdx]!,
-        ctx.themeColors.depthShallow,
-        ctx.themeColors.depthDeep,
-        ctx.depthRange.min,
-        ctx.depthRange.max,
-      ) ?? base;
-    const to =
-      getDepthColor(
-        data.shotDepthOut[shotGlobalIdx]!,
-        ctx.themeColors.depthShallow,
-        ctx.themeColors.depthDeep,
-        ctx.depthRange.min,
-        ctx.depthRange.max,
-      ) ?? base;
+    const from = depthColorFor(data.shotDepthIn[shotGlobalIdx]!, ctx) ?? base;
+    const to = depthColorFor(data.shotDepthOut[shotGlobalIdx]!, ctx) ?? base;
     return [from, to];
   }
   return [base, base];
@@ -211,15 +211,7 @@ export function resolveStationDisplayColor(
   const isZeroDatum = (data.stationFlags[stationGlobalIdx]! & STATION_FLAG_IS_ZERO_DATUM) !== 0;
   if (ctx.showDepthGradient) {
     const z = data.stationCoords[stationGlobalIdx * 3 + 2]!;
-    return (
-      getDepthColor(
-        z,
-        ctx.themeColors.depthShallow,
-        ctx.themeColors.depthDeep,
-        ctx.depthRange.min,
-        ctx.depthRange.max,
-      ) ?? sectionColor
-    );
+    return depthColorFor(z, ctx) ?? sectionColor;
   }
   return isZeroDatum ? ctx.themeColors.zeroDatum : sectionColor;
 }

@@ -3,7 +3,9 @@ use tauri::{AppHandle, Manager, State};
 
 use std::collections::BTreeMap;
 
-use crate::config::{normalize_column_widths, Config, GasConfig, DATA_TABLE_ANGLE_MODES};
+use crate::config::{
+    normalize_column_widths, Config, GasConfig, MapPaletteConfig, DATA_TABLE_ANGLE_MODES,
+};
 use crate::core::AppState;
 
 /// Get the current configuration
@@ -425,6 +427,34 @@ pub(crate) fn update_gas_config_impl(state: &AppState, gas: GasConfig) -> Result
     state
         .modify_config(|config| {
             config.gas = gas;
+            Ok(())
+        })
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// Update the `[map_palette]` block: the depth / distance colour palettes and
+/// the pinned palettes (efficient partial update).
+///
+/// The palette picker on the map legend and in the export panel writes here.
+/// Partial for the same reason as [`update_gas_config`]: a whole-`Config`
+/// write built from a store snapshot could silently revert another partial
+/// save. Global config only - the palette never reaches the `.stalx`
+/// (`save_display_setting`) or SpeleoDB.
+#[tauri::command]
+pub fn update_map_palette(state: State<AppState>, palette: MapPaletteConfig) -> Result<(), String> {
+    update_map_palette_impl(state.inner(), palette)
+}
+
+pub(crate) fn update_map_palette_impl(
+    state: &AppState,
+    palette: MapPaletteConfig,
+) -> Result<(), String> {
+    // `modify_config` ends in `normalize_except_shortcuts`, which runs
+    // `MapPaletteConfig::normalize` (bad ids -> theme, pins deduped and capped).
+    state
+        .modify_config(|config| {
+            config.map_palette = palette;
             Ok(())
         })
         .map(|_| ())

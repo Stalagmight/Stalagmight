@@ -47,6 +47,7 @@ use ts_rs::TS;
 use usvg::{Options, Tree};
 
 use super::atomic_write::write_atomic;
+use super::color_scale::{depth_color, distance_color, ExportColorScale, ResolvedScale};
 use crate::models::{Project, StationRef};
 
 /// Output image format.
@@ -183,9 +184,9 @@ const DEPTH_DEEP: &str = "#ff6b6b";
 /// The depth-gradient endpoints for one export: whatever the frontend resolved
 /// from the live theme, else the dark-theme constants.
 #[derive(Clone, Copy)]
-struct DepthRamp<'a> {
-    shallow: &'a str,
-    deep: &'a str,
+pub(super) struct DepthRamp<'a> {
+    pub(super) shallow: &'a str,
+    pub(super) deep: &'a str,
 }
 
 /// A `#rrggbb` literal, or `None`. Deliberately strict: `hex_to_rgb` answers
@@ -212,12 +213,17 @@ impl ExportImageOptions {
 /// map paints unreachable features. From `src/utils/distanceGradient.ts`.
 const DIST_NEAR: (u8, u8, u8) = (0xf4, 0xd0, 0x3f);
 const DIST_FAR: (u8, u8, u8) = (0x7d, 0x3c, 0x98);
-const DIST_UNREACHABLE: &str = "#666666";
+pub(super) const DIST_UNREACHABLE: &str = "#666666";
 
 /// Depth-gradient color for `depth` normalized over `[min_d, max_d]`, matching
 /// the survey map: a 2-stop HSL shortest-hue-path lerp shallow→deep. Non-finite
 /// input falls back to black; a flat range collapses to the shallow color.
-fn depth_gradient_color(depth: f64, min_d: f64, max_d: f64, ramp: DepthRamp<'_>) -> String {
+pub(super) fn depth_gradient_color(
+    depth: f64,
+    min_d: f64,
+    max_d: f64,
+    ramp: DepthRamp<'_>,
+) -> String {
     if !depth.is_finite() || !min_d.is_finite() || !max_d.is_finite() {
         return "#000000".to_string();
     }
@@ -232,7 +238,7 @@ fn depth_gradient_color(depth: f64, min_d: f64, max_d: f64, ramp: DepthRamp<'_>)
 /// station's z AND every shot's `depth_in`/`depth_out` (reference shots included,
 /// to match `MapCanvas` even though only non-reference shots are drawn). Falls
 /// back to `(0, 50)` when non-finite.
-fn depth_range(project: &Project, stations: &[crate::models::Station]) -> (f64, f64) {
+pub(super) fn depth_range(project: &Project, stations: &[crate::models::Station]) -> (f64, f64) {
     let mut min = f64::INFINITY;
     let mut max = f64::NEG_INFINITY;
     for s in stations {
@@ -259,12 +265,16 @@ fn depth_range(project: &Project, stations: &[crate::models::Station]) -> (f64, 
 /// (NOT linear light) - so a naive per-channel lerp is what actually matches the
 /// on-screen distance ramp. (The GPU renders float colors, so the export's 8-bit
 /// rounding lands within ±1 level of the map.)
-fn distance_gradient_color(value: Option<f64>, max: f64) -> String {
+pub(super) fn distance_gradient_color(value: Option<f64>, max: f64) -> String {
     let Some(v) = value.filter(|v| v.is_finite() && *v >= 0.0) else {
         return DIST_UNREACHABLE.to_string();
     };
     let safe_max = if max > 0.0 { max } else { 1.0 };
-    let t = (v / safe_max).clamp(0.0, 1.0);
+    distance_ramp_at((v / safe_max).clamp(0.0, 1.0))
+}
+
+/// The fixed near→far distance ramp at position `t` (0..1).
+pub(super) fn distance_ramp_at(t: f64) -> String {
     let lerp =
         |a: u8, b: u8| -> u8 { (f64::from(a) + t * (f64::from(b) - f64::from(a))).round() as u8 };
     format!(
@@ -387,6 +397,16 @@ pub struct ExportImageOptions {
     #[serde(default)]
     #[ts(optional)]
     pub depth_deep: Option<String>,
+    /// The user's depth palette + Levels range (export panel). Absent = the
+    /// theme ramp above over the data's full extent - the pre-palette export.
+    #[serde(default)]
+    #[ts(optional)]
+    pub depth_scale: Option<ExportColorScale>,
+    /// The user's distance palette + Levels range. Absent = the fixed
+    /// near→far ramp over `0..max reachable`.
+    #[serde(default)]
+    #[ts(optional)]
+    pub distance_scale: Option<ExportColorScale>,
 }
 
 impl Default for ExportImageOptions {
@@ -406,6 +426,8 @@ impl Default for ExportImageOptions {
             include_reference_legs: false,
             depth_shallow: None,
             depth_deep: None,
+            depth_scale: None,
+            distance_scale: None,
         }
     }
 }
@@ -1020,6 +1042,8 @@ pub fn generate_svg_string_with_stations(
     };
     let depth_rng = (mode == ColorMode::Depth).then(|| depth_range(project, &stations));
     let depth_ramp = options.depth_ramp();
+    let depth_scale = options.depth_scale.as_ref().map(ResolvedScale::new);
+    let distance_scale = options.distance_scale.as_ref().map(ResolvedScale::new);
     let dist_field = (mode == ColorMode::Distance).then(|| {
         // The map colors the distance ramp from MEASURED distances (it draws
         // adjusted geometry but deliberately computes the distance field from
@@ -1075,7 +1099,7 @@ pub fn generate_svg_string_with_stations(
                                 (Some(a), Some(b)) => Some((a + b) / 2.0),
                                 _ => None,
                             };
-                            distance_gradient_color(avg, *max)
+                            distance_color(avg, *max, distance_scale.as_ref())
                         }
                         None => DIST_UNREACHABLE.to_string(),
                     };
@@ -1094,7 +1118,8 @@ pub fn generate_svg_string_with_stations(
                         let t1 = (s + 1) as f64 / segs as f64;
                         let mid = shot.depth_in
                             + (shot.depth_out - shot.depth_in) * ((s as f64 + 0.5) / segs as f64);
-                        let color = depth_gradient_color(mid, min_d, max_d, depth_ramp);
+                        let color =
+                            depth_color(mid, (min_d, max_d), depth_ramp, depth_scale.as_ref());
                         let (ax, ay) = (x0 + (x1 - x0) * t0, y0 + (y1 - y0) * t0);
                         let (bx, by) = (x0 + (x1 - x0) * t1, y0 + (y1 - y0) * t1);
                         let _ = writeln!(

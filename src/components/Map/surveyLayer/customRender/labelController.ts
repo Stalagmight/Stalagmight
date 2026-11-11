@@ -68,6 +68,7 @@ import {
 import { shapedExtent, ShapeCache, type ExtentEm, type ShapedLabel } from './labelLayout';
 import { computeRevealZooms, REVEAL_NEVER, EMIT_SLACK, ADAPTIVE_EMIT_MAX, emitSlackFor } from './labelReveal';
 import { labelColorContextFrom, type StationLabelText } from './labelText';
+import type { ColorScaleInput } from '../../../../utils/palettes';
 import { LABEL_KIND, LABEL_FLAG, type LabelKind } from './labelShaders';
 import { LABEL_KIND_STYLE } from './labelStyle';
 import { packCssColor, type Rgba8 } from './colorPack';
@@ -179,6 +180,8 @@ export interface LabelSyncParams {
   themeColors: MapThemeColors;
   showDepthGradient: boolean;
   depthRange: { min: number; max: number };
+  /** The user's depth palette + Levels range; null / absent = the theme ramp. */
+  depthScale?: ColorScaleInput | null | undefined;
   precision?: DecimalPrecision | undefined;
   /** move_comment tool active → comment labels use the FNV-1a palette tint
    *  (`commentColorForKey`), mirroring the stock `commentTextColor()` (#52). */
@@ -503,7 +506,12 @@ export class SurveyLabelController {
     const { surveyData, gpsOrigin } = params;
     this.lastThemeColors = params.themeColors;
     const [anchorX, anchorY] = computeMercatorAnchor(surveyData, gpsOrigin);
-    const colorCtx = labelColorContextFrom(params.showDepthGradient, params.depthRange, params.themeColors);
+    const colorCtx = labelColorContextFrom(
+      params.showDepthGradient,
+      params.depthRange,
+      params.themeColors,
+      params.depthScale ?? null,
+    );
     // Comment palette tint (#52): only while move_comment is active; else comments
     // use the flat labelColor (the tessellator's fallback). Same key + palette as
     // colorResolvers.ts / features.ts, so the label tint matches the geometry tint.

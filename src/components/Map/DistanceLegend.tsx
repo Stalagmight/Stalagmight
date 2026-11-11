@@ -6,11 +6,17 @@ import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { getThemeColor } from '../../utils/themeColors';
 import { useUIStore } from '../../store/uiStore';
 import { DISTANCE_NEAR, DISTANCE_FAR } from '../../utils/distanceGradient';
+import { effectiveScale, legendGradientStops, type ColorScaleInput } from '../../utils/palettes/scale';
 
 interface DistanceLegendProps {
   /** Largest reachable distance (meters) - the far end of the scale. */
   max: number;
   visible: boolean;
+  /** The user's palette + Levels range. Null / absent = the fixed near/far ramp
+   *  over 0..max. The bar then spans the scale's range. */
+  colorScale?: ColorScaleInput | null;
+  /** Laid out by a wrapper (MapColorLegends) instead of positioning itself. */
+  embedded?: boolean;
 }
 
 /**
@@ -19,7 +25,7 @@ interface DistanceLegendProps {
  * as the cue for which overlay you're in (vs depth). Shows the current origin
  * (the entrance default, or the picked station).
  */
-export function DistanceLegend({ max, visible }: DistanceLegendProps) {
+export function DistanceLegend({ max, visible, colorScale = null, embedded = false }: DistanceLegendProps) {
   const gradientId = useId();
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
@@ -31,8 +37,18 @@ export function DistanceLegend({ max, visible }: DistanceLegendProps) {
 
   if (!visible) return null;
 
-  const minLabel = `0${t('common.units.meters')}`;
-  const maxLabel = `${formatFixed(max, undefined, precision.coordinates)}${t('common.units.meters')}`;
+  const auto = { min: 0, max: max > 0 ? max : 1 };
+  const scaled = colorScale ? effectiveScale(colorScale, auto) : null;
+  const stops = colorScale
+    ? legendGradientStops(colorScale, auto)
+    : [
+        { offset: 0, color: DISTANCE_NEAR },
+        { offset: 100, color: DISTANCE_FAR },
+      ];
+  const minLabel = scaled
+    ? `${formatFixed(scaled.min, undefined, precision.coordinates)}${t('common.units.meters')}`
+    : `0${t('common.units.meters')}`;
+  const maxLabel = `${formatFixed(scaled ? scaled.max : max, undefined, precision.coordinates)}${t('common.units.meters')}`;
   const originLabel = origin
     ? t('map.distanceLegend.fromStation', {
         id: formatStationId(origin.section_id, origin.station_index),
@@ -44,13 +60,10 @@ export function DistanceLegend({ max, visible }: DistanceLegendProps) {
       data-testid="distance-legend"
       className="distance-legend"
       style={{
-        position: 'absolute',
-        bottom: 50,
-        left: 10,
+        ...(embedded ? {} : { position: 'absolute' as const, bottom: 50, left: 10, zIndex: 1 }),
         background: textHaloAlt,
         borderRadius: 4,
         padding: 8,
-        zIndex: 1,
         display: 'flex',
         flexDirection: 'column',
         gap: 4,
@@ -74,8 +87,9 @@ export function DistanceLegend({ max, visible }: DistanceLegendProps) {
         >
           <defs>
             <linearGradient id={gradientId} x1="0%" y1="0%" x2="0%" y2="100%">
-              <stop offset="0%" stopColor={DISTANCE_NEAR} />
-              <stop offset="100%" stopColor={DISTANCE_FAR} />
+              {stops.map((stop, i) => (
+                <stop key={i} offset={`${stop.offset}%`} stopColor={stop.color} />
+              ))}
             </linearGradient>
           </defs>
           <rect width="16" height="80" fill={`url(#${gradientId})`} rx="2" />

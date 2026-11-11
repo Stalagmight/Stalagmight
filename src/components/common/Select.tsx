@@ -156,7 +156,7 @@ interface DropdownPosition {
  * just-opened list. We mark this element scroll-safe so its scroll doesn't dismiss, while
  * a genuine external/page scroll (target outside it) still does.
  */
-function nearestScrollableAncestor(el: HTMLElement): HTMLElement | null {
+export function nearestScrollableAncestor(el: HTMLElement): HTMLElement | null {
   for (let node = el.parentElement; node; node = node.parentElement) {
     const { overflowX, overflowY } = getComputedStyle(node);
     if (/(auto|scroll|overlay)/.test(overflowY) || /(auto|scroll|overlay)/.test(overflowX)) {

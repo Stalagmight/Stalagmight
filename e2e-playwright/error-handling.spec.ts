@@ -324,13 +324,6 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
               grid_spacing: 10,
               font_size: 12,
               font_color: '#f5f5f5',
-              depth_gradient: {
-                enabled: false,
-                shallow_color: '#00bfff',
-                deep_color: '#ff4444',
-                shallow_depth: 0.0,
-                deep_depth: 50.0,
-              },
             },
             section_colors: {
               palette: ['#4ecdc4', '#ff6b6b', '#95e1d3', '#f38181', '#aa96da', '#fcbad3', '#a8d8ea', '#ffcb77'],
