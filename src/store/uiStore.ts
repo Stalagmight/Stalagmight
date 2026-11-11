@@ -567,6 +567,9 @@ interface UIStore {
   /** Station names as the station labels; exclusive with showStationLabels. */
   showStationNames: boolean;
   showShotData: boolean;
+  /** The "Errors" labels: each shot's reading deltas and each loop closure's
+   *  error. Persisted per project like showShotData. */
+  showShotErrors: boolean;
   showReferenceShots: boolean;
   /** #27: jumps hide independently of references. */
   showJumps: boolean;
@@ -800,6 +803,7 @@ export type DisplayToggleKey =
   | 'showStationLabels'
   | 'showStationNames'
   | 'showShotData'
+  | 'showShotErrors'
   | 'showReferenceShots'
   | 'showJumps'
   | 'showZeroDatum'
@@ -886,6 +890,7 @@ const PREPLAN_DISPLAY_KEYS = [
   'showStationComments',
   'showShotComments',
   'showShotData',
+  'showShotErrors',
   'showGrid',
   'showSatellite',
   'gridSpacing',
@@ -1580,6 +1585,7 @@ export const useUIStore = create<UIStore>((set) => ({
   showStationLabels: DISPLAY_DEFAULTS.showStationLabels,
   showStationNames: DISPLAY_DEFAULTS.showStationNames,
   showShotData: DISPLAY_DEFAULTS.showShotData,
+  showShotErrors: DISPLAY_DEFAULTS.showShotErrors,
   showReferenceShots: DISPLAY_DEFAULTS.showReferenceShots,
   showJumps: DISPLAY_DEFAULTS.showJumps,
   showZeroDatum: DISPLAY_DEFAULTS.showZeroDatum,
@@ -1853,6 +1859,7 @@ export const useUIStore = create<UIStore>((set) => ({
       showStationLabels: DISPLAY_DEFAULTS.showStationLabels,
       showStationNames: DISPLAY_DEFAULTS.showStationNames,
       showShotData: DISPLAY_DEFAULTS.showShotData,
+      showShotErrors: DISPLAY_DEFAULTS.showShotErrors,
       showReferenceShots: DISPLAY_DEFAULTS.showReferenceShots,
       showJumps: DISPLAY_DEFAULTS.showJumps,
       showZeroDatum: DISPLAY_DEFAULTS.showZeroDatum,
@@ -1926,6 +1933,7 @@ export const useUIStore = create<UIStore>((set) => ({
       showStationLabels,
       showStationNames,
       showShotData: settings.showShotData ?? state.showShotData,
+      showShotErrors: settings.showShotErrors ?? state.showShotErrors,
       showReferenceShots: settings.showReferenceShots ?? state.showReferenceShots,
       showJumps: settings.showJumps ?? state.showJumps,
       showZeroDatum: settings.showZeroDatum ?? state.showZeroDatum,

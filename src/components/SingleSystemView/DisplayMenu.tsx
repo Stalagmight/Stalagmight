@@ -55,6 +55,7 @@ interface ToggleItem {
     | 'showStationComments'
     | 'showShotComments'
     | 'showShotData'
+    | 'showShotErrors'
     | 'showGrid'
     | 'showSatellite'
   >;
@@ -95,6 +96,8 @@ const COMMENTS_LABELS: ToggleItem[] = [
   { key: 'showStationComments', labelKey: 'displayMenu.items.stationComments', descriptionKey: 'displayMenu.descriptions.stationComments', entity: 'station', symbol: 'comment' },
   { key: 'showShotComments', labelKey: 'displayMenu.items.shotComments', descriptionKey: 'displayMenu.descriptions.shotComments', disabledWhen: 'showShots', entity: 'shot', symbol: 'comment' },
   { key: 'showShotData', labelKey: 'displayMenu.items.shotData', descriptionKey: 'displayMenu.descriptions.shotData', disabledWhen: 'showShots', entity: 'shot', symbol: 'data' },
+  // Not gated on Shots: the loop-closure error labels follow Stations instead.
+  { key: 'showShotErrors', labelKey: 'displayMenu.items.shotErrors', descriptionKey: 'displayMenu.descriptions.shotErrors', entity: 'shot', symbol: 'label' },
 ];
 
 /**
@@ -227,6 +230,7 @@ export default function DisplayMenu({
         showStationComments: s.showStationComments,
         showShotComments: s.showShotComments,
         showShotData: s.showShotData,
+        showShotErrors: s.showShotErrors,
         showGrid: s.showGrid,
         showSatellite: s.showSatellite,
       }),

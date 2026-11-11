@@ -21,6 +21,7 @@ export const DISPLAY_DEFAULTS = {
   showStationLabels: false,
   showStationNames: false,
   showShotData: false,
+  showShotErrors: false,
   showReferenceShots: true,
   showJumps: true,
   showZeroDatum: true,

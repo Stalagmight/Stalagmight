@@ -224,6 +224,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "action.toggle.showSectionNames",
     "action.toggle.showShotComments",
     "action.toggle.showShotData",
+    "action.toggle.showShotErrors",
     "action.toggle.showShots",
     "action.toggle.showStationComments",
     "action.toggle.showStationLabels",
@@ -1099,7 +1100,8 @@ mod tests {
         //   + 1 the export panel's Levels histogram (depth / penetration
         //       distance over the export's own range):
         //       command.export_value_histogram = 680.
-        assert_eq!(EVENT_NAMES.len(), 680);
+        //   + 1 the "Errors" display toggle: action.toggle.showShotErrors = 681.
+        assert_eq!(EVENT_NAMES.len(), 681);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

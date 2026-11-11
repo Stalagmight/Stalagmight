@@ -2092,6 +2092,7 @@
       "referenceShots": "References",
       "stationComments": "Station comments",
       "shotData": "Shot data",
+      "shotErrors": "Errors",
       "shotComments": "Shot comments",
       "zeroDatum": "Zero datum",
       "grid": "Grid",
@@ -2112,13 +2113,14 @@
       "referenceShots": "Show reference shots (survey ties)",
       "stationComments": "Show station comments on map",
       "shotData": "Show shot data labels",
+      "shotErrors": "Label each shot with how far its readings disagree, and each loop closure with its error",
       "shotComments": "Show shot comments on map",
       "zeroDatum": "Show zero datum stations",
       "grid": "Show grid overlay",
       "satellite": "Show satellite imagery",
       "depthGradient": "Color by depth",
       "distanceGradient": "Color by along-cave distance from the entrance (click a station to re-root)",
-      "issueSeverity": "Color shots and stations by validation issues (red = error, yellow = warning, green = clear)",
+      "issueSeverity": "Color shots and stations by how far their readings disagree: green agrees, yellow is at a warning threshold, red is an error or 3x the threshold",
       "devStats": "Show developer stats overlay"
     }
   },
