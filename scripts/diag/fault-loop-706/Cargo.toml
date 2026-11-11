@@ -1,0 +1,16 @@
+# Diagnostic for #706. Standalone (own [workspace]) so it never joins the app
+# workspace; built and run only by .github/workflows/diag-706-macos.yml.
+[package]
+name = "fault-loop-706"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+libc = "0.2"
+
+[profile.release]
+opt-level = 1
+debug = 1
+
+[workspace]

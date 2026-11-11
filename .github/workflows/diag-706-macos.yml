@@ -1,0 +1,35 @@
+# Diagnostic for #706 (macOS hang inside Rust's SIGSEGV/SIGBUS handler).
+# Lives only on diag/706-* branches; not meant for master.
+name: diag-706-macos
+
+on:
+  push:
+    branches: ['diag/706-*']
+    paths: ['scripts/diag/fault-loop-706/**', '.github/workflows/diag-706-macos.yml']
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  fault-loop:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Toolchain
+        run: rustc -Vv && cargo -V
+      - name: Build
+        run: |
+          cargo build --release --manifest-path scripts/diag/fault-loop-706/Cargo.toml --target-dir "$RUNNER_TEMP/t"
+          cargo build --manifest-path scripts/diag/fault-loop-706/Cargo.toml --target-dir "$RUNNER_TEMP/t"
+          ls -la "$RUNNER_TEMP/t/release/fault-loop-706" "$RUNNER_TEMP/t/debug/fault-loop-706"
+      - name: Run scenarios
+        env:
+          OUT: ${{ runner.temp }}/fl706-out
+        run: bash scripts/diag/fault-loop-706/run-macos.sh "$RUNNER_TEMP/t/release/fault-loop-706" "$RUNNER_TEMP/t/debug/fault-loop-706"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: fl706-out
+          path: ${{ runner.temp }}/fl706-out
