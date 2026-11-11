@@ -21,7 +21,7 @@ upload, draw).
 | Layer id | Controller | GL layer | Draws |
 |---|---|---|---|
 | `survey-custom-render` | `customRender/controller.ts` | `surveyCustomLayer.ts` | shots as screen-width lines, stations as fragment circles |
-| `survey-custom-labels` | `customRender/labelController.ts` | `surveyCustomLabelLayer.ts` | all five label kinds (`labelShaders.LABEL_KIND`) |
+| `survey-custom-labels` | `customRender/labelController.ts` | `surveyCustomLabelLayer.ts` | all seven label kinds (`labelShaders.LABEL_KIND`): the five stock ones plus the shot and loop-closure Errors labels |
 | `survey-measure-path-custom` | `customRender/measurePathController.ts` | `surveyMeasurePathLayer.ts` | the ruler's along-cave-line tint |
 | `survey-drag-ghost` | `surveyLayer/dragGhostController.ts` | `customRender/surveyGhostLayer.ts` | the moving-geometry preview during a move drag |
 | (global map) | `GlobalView/customRender/globalController.ts` | `globalCustomLayer.ts` | the multi-system Global View |
@@ -110,10 +110,28 @@ would have made in a paint expression happen at build time in
 `colorResolvers.ts::makeColorResolvers`. Precedence: an active **analytical
 overlay** (distance gradient, gas reach) owns the shot color and station fill
 outright; otherwise the **move-comment tint** if that tool is active; otherwise
-`surveyLayer/displayColor.ts` - severity, then depth ramp, then section color.
+`surveyLayer/displayColor.ts` - Survey Issues score, then depth ramp, then section color.
 The depth ramp and the distance overlay take the user's palette + Levels range
 when one is set (`ColorScaleInput`; see [color-palettes.md](color-palettes.md),
 which also covers the LUT-backed live preview).
+
+**Survey Issues** is graded, not three flat colors. `surveyLayer/shotQuality.ts`
+measures per shot how far its readings disagree (azimuth in vs out, inclination
+in vs out, inclination vs the depth change) and scores each against the
+project's threshold: 0 = agree, 1 = at the threshold, capped at 3.
+`issueScore.ts` takes the worst metric, forces 3 for an unresolved error, floors
+other unresolved warnings at 1, drops a metric whose warning was ignored, and
+gives each station the worst score of its shots (shared across merge groups).
+`issueColor.ts` ramps green -> yellow (score 1) -> red (score 3), quantized to
+hundredths so there are at most 301 colors. The metrics are computed from the
+recorded shot columns, so the Raw Data and Closures Computed views share them;
+`resolveIssueRender` memoizes per `SurveyData`, and an unchanged scores object
+keeps `incremental.ts`' cheap path.
+
+Which color mode is painted is decided in one place,
+`displaySelectors.selectEffectiveColorMode`: the saved flags, or, while the
+Warnings tab is on screen, Survey Issues unless the user picked another mode
+during that visit (`store/warningsVisit.ts`).
 
 Two details are worth respecting. `overlayColor.ts` reproduces MapLibre's
 data-driven ramp *byte for byte* - it floors where `colorPack.packCssColor`
@@ -169,7 +187,21 @@ built, yet a jump / reference section's name must not show there only to lose
 its spot, and vanish, once the station and shot labels around it are built: the
 section-only build gathers the shown expensive kinds near each such name and
 passes them to the reveal pass as `reserved` slots, held from their decimation
-floor. `labelTessellate.ts` stamps the
+floor.
+
+The **Errors labels** (`SHOT_ERROR`, `CLOSURE_ERROR`) carry a severity score
+(`descriptor.score`). They rank right after section names and, among
+themselves, worst first; they are not ordinal-decimated. An Errors label that
+is admitted but does not fit reserves its box for the rest of that ladder step,
+so neither a weaker error nor a station / shot label takes the place of a
+stronger error at that zoom; the randomized property test in
+`labelReveal.test.ts` pins that a weaker overlapping error is not visible while
+a stronger one is hidden. This all happens within a virtual rank: a jump
+shot's error label never takes a real-line label's spot. Section names keep their place (placed from
+z10). The text comes from `errorLabelText.ts` (one label per shot, all parts or
+none, ASCII signs); the shot label sits above the shot midpoint so Shot data
+(below) can show with it, and the closure label at the midpoint of the closure's
+stations. `labelTessellate.ts` stamps the
 quads; `labelController.ts` scopes the build to a padded viewport, emits a slack
 window above the build zoom so a modest zoom-in needs no rebuild at all, and
 defers the first build until the font promise resolves.
@@ -438,6 +470,8 @@ the Zustand write.
 | A jump / reference marker or line drawn over, or clicked instead of, the real one at the same spot | `writeCircleDrawOrder` / `writeLineDrawOrder` in `tessellate.ts` (and their calls in `controller.tryIncremental`), then `geometryIndex.nearestStation` / `nearestShot` |
 | A selected section still drawn under the real line, or stays on top after deselecting | `SurveyLayer.updateVisualState` -> `raisedSectionOf` -> `controller.setRaisedSection`, then `ResolveOptions.raisedSectionId` for the click |
 | Label text or placement wrong | `labelLayout.ts` (shaping, em offsets), `labelStyle.ts` (per-kind style) |
+| Survey Issues color or an Errors label value looks wrong | `shotQuality.ts` (the metrics, parity-tested against the Rust validator), `issueScore.ts` (floors, ignores), `errorLabelText.ts` |
+| Survey Issues on / off when it should not be | `displaySelectors.selectEffectiveColorMode` and `store/warningsVisit.ts` (the Warnings-tab visit) |
 | Sizes wrong after dragging the window to another monitor | the DPR watcher in `SurveyLayer` - device-pixel sizes are baked into the buffers |
 | Global View wrong but the survey map fine | `GlobalView/customRender/` - a separate implementation |
 | Imagery drawn with no source names, or the wrong ones | `MapAttribution.tsx` visibility prop at the mount site, then `tile_attribution.rs` (a failed fetch backs off for 5 min and serves the fallback) |

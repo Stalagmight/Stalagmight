@@ -32,4 +32,15 @@ projects:
 - Errors: zero or negative length, azimuth or inclination out of range,
   negative LRUD, a value that is not a number, length shorter than the depth
   change, more than one zero datum on connected sections.
+- Warnings: length shorter or longer than the limits, a large depth change,
+  azimuth in and out too far apart, inclination in and out too far apart,
+  inclination that disagrees with the depth change.
 - Errors can only be fixed. Warnings can also be ignored.
+
+## How far over
+
+**Survey Issues** coloring and the **Errors** labels in the
+[Display menu](../screens/display-menu.md) show how far over a threshold a shot
+is, not just whether it is. A shot is green when its readings agree, yellow at
+the threshold, and red at three times the threshold. An error is always red.
+Ignoring a warning takes that difference out of the shot's color and label.
