@@ -395,7 +395,7 @@ impl std::error::Error for LoadError {}
 
 /// Display settings for API payloads (used in load_project_full response).
 ///
-/// This struct contains the 13 display settings that are persisted per-project.
+/// This struct contains the display settings that are persisted per-project.
 /// It is used ONLY for the consolidated load API response, not for storage.
 ///
 /// NOTE: show_shots and show_shot_comments were historically excluded here on
@@ -410,6 +410,10 @@ pub struct DisplaySettings {
     pub show_shots: bool,
     pub show_section_names: bool,
     pub show_station_labels: bool,
+    /// Station names as the station labels. The Display menu keeps it exclusive
+    /// with `show_station_labels`; this reports what was stored, and the store's
+    /// `applyDisplaySettings` lets the ID labels win if both read `true`.
+    pub show_station_names: bool,
     pub show_shot_data: bool,
     pub show_reference_shots: bool,
     /// #27: jump shots hide independently of reference shots. Defaults to the
@@ -437,6 +441,7 @@ impl Default for DisplaySettings {
             show_shots: true,
             show_section_names: true,
             show_station_labels: false,
+            show_station_names: false,
             show_shot_data: false,
             show_reference_shots: true,
             show_jumps: true,
@@ -462,6 +467,7 @@ impl DisplaySettings {
             show_shots: map.get("showShots").is_none_or(|s| s == "true"),
             show_section_names: map.get("showSectionNames").is_none_or(|s| s == "true"),
             show_station_labels: map.get("showStationLabels").is_some_and(|s| s == "true"),
+            show_station_names: map.get("showStationNames").is_some_and(|s| s == "true"),
             show_shot_data: map.get("showShotData").is_some_and(|s| s == "true"),
             show_reference_shots: map
                 .get("showReferenceShots")
@@ -1036,6 +1042,7 @@ mod tests {
         assert!(!defaults.show_shot_comments); // false
         assert!(defaults.show_section_names); // true
         assert!(!defaults.show_station_labels); // false
+        assert!(!defaults.show_station_names); // false
         assert!(!defaults.show_shot_data); // false
         assert!(defaults.show_reference_shots); // true
         assert!(defaults.show_zero_datum); // true
@@ -1056,6 +1063,7 @@ mod tests {
         assert!(!settings.show_shot_comments); // false
         assert!(settings.show_section_names); // true
         assert!(!settings.show_station_labels); // false
+        assert!(!settings.show_station_names); // false
         assert!(!settings.show_shot_data); // false
         assert!(settings.show_reference_shots); // true
         assert!(settings.show_zero_datum); // true
@@ -1088,6 +1096,7 @@ mod tests {
         stored.insert("showShotComments".to_string(), "true".to_string());
         stored.insert("showSectionNames".to_string(), "false".to_string());
         stored.insert("showStationLabels".to_string(), "true".to_string());
+        stored.insert("showStationNames".to_string(), "true".to_string());
         stored.insert("showShotData".to_string(), "true".to_string());
         stored.insert("showReferenceShots".to_string(), "false".to_string());
         stored.insert("showZeroDatum".to_string(), "false".to_string());
@@ -1112,6 +1121,11 @@ mod tests {
         assert!(
             settings.show_station_labels,
             "showStationLabels should be true"
+        );
+        // Both label keys read back as stored; picking one is the store's job.
+        assert!(
+            settings.show_station_names,
+            "showStationNames should be true"
         );
         assert!(settings.show_shot_data, "showShotData should be true");
         assert!(

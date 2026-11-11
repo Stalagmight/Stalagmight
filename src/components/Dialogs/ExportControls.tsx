@@ -17,6 +17,8 @@ import type { ExportType, DataFormat } from '../../store/exportStore';
 import { ensureExtension, exportSaveFilters } from '../../utils/fileDialogs';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { ChevronRightIcon } from '../common/icons';
+import { setStationLabelOption } from '../../utils/exportOptions';
+import { hasStationNames } from '../../types/survey-data';
 
 /** Phase label mapping for export phases (matches backend LoadingPhase) */
 const EXPORT_PHASE_LABELS: Record<string, string> = {
@@ -69,6 +71,8 @@ export default function ExportControls({
     useProjectStore();
   const showToast = useUIStore((s) => s.showToast);
   const { t } = useTranslation();
+  const hasNames = useProjectStore((s) => hasStationNames(s.surveyData));
+  const stationNamesUnavailable = !hasNames && !imageOptions.show_station_names;
 
   const [isExporting, setIsExporting] = useState(false);
   const [labelsOptionsExpanded, setLabelsOptionsExpanded] = useState(false);
@@ -465,14 +469,34 @@ export default function ExportControls({
                         type="checkbox"
                         checked={imageOptions.show_station_labels}
                         onChange={(e) =>
-                          onImageOptionsChange({
-                            ...imageOptions,
-                            show_station_labels: e.target.checked,
-                          })
+                          onImageOptionsChange(
+                            setStationLabelOption(imageOptions, 'show_station_labels', e.target.checked),
+                          )
                         }
                         data-testid="export-show-station-labels"
                       />
-                      <span>Station labels</span>
+                      <span>Station IDs</span>
+                    </label>
+                    {/* Names replace the IDs, so the two are one choice. Without any
+                        names the box would label nothing (and untick the IDs), so it
+                        is offered only when the project has names - or is already
+                        ticked, so it can always be unticked. */}
+                    <label
+                      className={`flex items-center gap-2 text-sm${stationNamesUnavailable ? ' opacity-50' : ''}`}
+                      title={stationNamesUnavailable ? t('displayMenu.descriptions.stationNamesUnavailable') : undefined}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={imageOptions.show_station_names}
+                        disabled={stationNamesUnavailable}
+                        onChange={(e) =>
+                          onImageOptionsChange(
+                            setStationLabelOption(imageOptions, 'show_station_names', e.target.checked),
+                          )
+                        }
+                        data-testid="export-show-station-names"
+                      />
+                      <span>Station names</span>
                     </label>
                     <label className="flex items-center gap-2 text-sm">
                       <input

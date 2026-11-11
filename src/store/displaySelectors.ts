@@ -19,6 +19,7 @@ export const DISPLAY_DEFAULTS = {
   showShots: true,
   showSectionNames: true,
   showStationLabels: false,
+  showStationNames: false,
   showShotData: false,
   showReferenceShots: true,
   showJumps: true,
@@ -34,6 +35,27 @@ export const DISPLAY_DEFAULTS = {
   showZoomStats: false,
   gridSpacing: 10,
 } as const;
+
+/**
+ * What the map's station labels show: nothing, each station's ID, or each
+ * station's name (unnamed stations then get no label).
+ */
+export type StationLabelMode = 'off' | 'id' | 'name';
+
+/**
+ * The station-label mode from the two Display-menu toggles. They are mutually
+ * exclusive (`toggleDisplay` clears the partner), so both being on only happens
+ * through a stored pair that bypassed the menu; the IDs win then, because every
+ * station has an ID and none of them goes unlabelled. The image export applies
+ * the same precedence to its own two options.
+ */
+export function getEffectiveStationLabelMode(
+  showStationLabels: boolean,
+  showStationNames: boolean
+): StationLabelMode {
+  if (showStationLabels) return 'id';
+  return showStationNames ? 'name' : 'off';
+}
 
 /**
  * Compute effective visibility of reference shots.

@@ -52,12 +52,14 @@ export interface ViewportRel {
 import {
   formatShotLabel,
   formatStationLabel,
+  formatStationNameLabel,
   formatSectionLabel,
   formatCommentLabel,
   resolveShotLabelColor,
   resolveStationLabelColor,
   resolveSectionLabelColor,
   type LabelColorContext,
+  type StationLabelText,
 } from './labelText';
 
 /**
@@ -113,6 +115,13 @@ export interface LabelBuildContext {
    * (`commentColorForKey`) - no import cycle.
    */
   commentColor?: ((ownerKey: string) => Rgba8) | undefined;
+  /**
+   * What station labels say. ABSENT = `'id'` (the station index). `'name'`
+   * labels each station with its name and skips unnamed stations - every other
+   * field of the descriptor (ordinal, flags, owner) is the same as for the ID,
+   * so names declutter, decimate, dim and hide exactly like the IDs do.
+   */
+  stationLabelText?: StationLabelText | undefined;
 }
 
 /**
@@ -279,6 +288,7 @@ export function buildLabelDescriptors(
   // ─── Station labels (+ station comments) ───────────────────────
   const wantStationLabel = wants(LABEL_KIND.STATION_LABEL);
   const wantStationComment = wants(LABEL_KIND.STATION_COMMENT);
+  const namesMode = ctx.stationLabelText === 'name';
   if (wantStationLabel || wantStationComment) {
     // Per-section min station index == the "first in section" predicate.
     const sectionMinIndex = new Map<number, number>();
@@ -298,9 +308,14 @@ export function buildLabelDescriptors(
       const ax = stationRel[g * 2]!;
       const ay = stationRel[g * 2 + 1]!;
       const stationInView = inView(ax, ay);
-      if (wantStationLabel && stationInView) descriptors.push({
+      const stationText = !(wantStationLabel && stationInView)
+        ? null
+        : namesMode
+          ? formatStationNameLabel(data.stationNames.get(g))
+          : formatStationLabel(stationIndex);
+      if (stationText !== null) descriptors.push({
         kind: LABEL_KIND.STATION_LABEL,
-        text: formatStationLabel(stationIndex),
+        text: stationText,
         anchorX: ax,
         anchorY: ay,
         color: packCssColor(resolveStationLabelColor(z, colorCtx)),

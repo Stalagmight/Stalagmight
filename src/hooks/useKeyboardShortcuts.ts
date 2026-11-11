@@ -123,7 +123,7 @@ const ACTION_LABELS: Record<ShortcutAction, string> = {
   toggle_depth_gradient: 'Depth gradient',
   toggle_grid: 'Grid',
   toggle_satellite: 'Satellite',
-  toggle_station_labels: 'Station labels',
+  toggle_station_labels: 'Station IDs',
   toggle_shot_labels: 'Shot labels',
   toggle_section_labels: 'Section labels',
   fit_to_bounds: 'Fit to bounds',
