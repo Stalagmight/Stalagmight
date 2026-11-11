@@ -149,6 +149,24 @@ test.describe('Colour scale', () => {
     await expect(page.locator('[data-testid="color-scale-palette-current"]')).toHaveText('Theme');
   });
 
+  test('the palette list grows back to full height when a search is cleared', async ({ page }) => {
+    await openCog(page, 'depth');
+    await page.locator('[data-testid="color-scale-palette-trigger"]').click();
+    const panel = page.locator('[data-testid="color-scale-palette-panel"]');
+    const height = async () => (await panel.boundingBox())!.height;
+    // Open a folder so the search below changes how many rows are visible:
+    // that is what makes the list re-measure (and, before the fix, keep the
+    // few-results height once the search was cleared).
+    await page.locator('[data-testid="color-scale-palette-group-mpl-sequential"]').click();
+    await expect.poll(height).toBeGreaterThan(200);
+    const full = await height();
+    const search = page.locator('[data-testid="color-scale-palette-search"]');
+    await search.fill('viridis');
+    await expect.poll(height).toBeLessThan(full);
+    await search.fill('');
+    await expect.poll(height).toBeGreaterThanOrEqual(full - 1);
+  });
+
   test('the Levels range recolours the map and resets to the data range', async ({ page }) => {
     const themed = await shotMids(page);
     await openCog(page, 'depth');

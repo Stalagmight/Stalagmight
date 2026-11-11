@@ -29,6 +29,12 @@ interface AnchoredMenuOptions {
    *  triggers a remeasure). Placement always recomputes on open; pass a value
    *  here ONLY when the menu's content can resize after that. */
   remeasureKey?: string | number;
+  /** The element that scrolls, when it is not the menu itself (a fixed header
+   *  above an `overflow-auto` list). The menu's own `scrollHeight` cannot see
+   *  what that inner list hides under the previous cap, so a remeasure after
+   *  the content grows (a search cleared, a folder opened) would keep the old,
+   *  smaller height. Omit when the menu element is the scroller. */
+  scrollRef?: RefObject<HTMLElement | null>;
 }
 
 interface Placement {
@@ -63,7 +69,7 @@ export function useAnchoredFixedMenu(
   open: boolean,
   triggerRef: RefObject<HTMLElement | null>,
   menuRef: RefObject<HTMLElement | null>,
-  { align, gap, width, maxHeightCap, remeasureKey }: AnchoredMenuOptions
+  { align, gap, width, maxHeightCap, remeasureKey, scrollRef }: AnchoredMenuOptions
 ): CSSProperties {
   const [placement, setPlacement] = useState<Placement | null>(null);
 
@@ -81,7 +87,11 @@ export function useAnchoredFixedMenu(
     // currently max-height-clipped (+ overflow-auto) from the PRIOR placement, so a
     // remeasure after a loading -> N-row content swap still sees the true natural
     // height instead of reading back the stale cap via getBoundingClientRect alone.
-    const naturalHeight = Math.max(menu.getBoundingClientRect().height, menu.scrollHeight);
+    // An inner scroller (`scrollRef`) is clipped by the menu's cap without the menu
+    // itself overflowing, so add back what it hides.
+    const inner = scrollRef?.current;
+    const innerHidden = inner ? Math.max(inner.scrollHeight - inner.clientHeight, 0) : 0;
+    const naturalHeight = Math.max(menu.getBoundingClientRect().height + innerHidden, menu.scrollHeight);
 
     // Keep the menu clear of the app chrome that would otherwise clip/cover it:
     // the opaque top toolbar when flipping up, the bottom status bar when flipping
@@ -114,7 +124,7 @@ export function useAnchoredFixedMenu(
     const left = Math.max(gap, Math.min(rawLeft, window.innerWidth - width - gap));
 
     setPlacement({ top, left, maxHeight });
-  }, [open, triggerRef, menuRef, align, gap, width, maxHeightCap, remeasureKey]);
+  }, [open, triggerRef, menuRef, align, gap, width, maxHeightCap, remeasureKey, scrollRef]);
 
   if (!placement) {
     // Hidden first pass: render at natural size, out of the way, so the layout

@@ -156,6 +156,9 @@ export function PalettePicker({
     width: PANEL_WIDTH,
     maxHeightCap: 420,
     remeasureKey: `${visible.length}`,
+    // The list scrolls under the search box, not the panel: without this a
+    // cleared search keeps the shrunk height of its few results.
+    scrollRef: listRef,
   });
   useDismissableLayer({
     open,
