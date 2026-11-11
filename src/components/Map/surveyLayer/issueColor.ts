@@ -75,18 +75,34 @@ export function issueScoreColor(theme: MapThemeColors, score: number, palette: R
 
 /** How much a severity colour is darkened for label TEXT on a light map. */
 const LIGHT_MAP_TEXT_DARKEN = 0.45;
+/** Label text brightness bounds (0..1, the simple weighted RGB mean): on a
+ *  dark map text is lifted to at least the low bound, on a light map pushed to
+ *  at most the high one. The default green / yellow / red already sit inside
+ *  them, so only darker or lighter user palettes move. */
+const DARK_MAP_TEXT_MIN = 0.4;
+const LIGHT_MAP_TEXT_MAX = 0.45;
+
+function brightness(hex: string): number {
+  const [r, g, b] = hexToRgb(hex);
+  return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+}
 
 /**
- * A severity colour readable as label text on this map. The ramp's yellow and
- * green are light colours: on a light map (whose label halo is light too) they
- * all but vanish, so there the text is darkened toward black. On a dark map the
- * colour is returned unchanged. A background that is not a hex colour counts
- * as dark (no change).
+ * A severity colour readable as label text on this map. The default ramp's
+ * yellow and green are light colours: on a light map (whose label halo is
+ * light too) they all but vanish, so there the text is darkened toward black.
+ * A user palette can also have very dark colours (viridis starts near black),
+ * which vanish on a dark map, so there they are lifted toward white. A
+ * background that is not a hex colour counts as dark.
  */
 export function severityTextColor(color: string, theme: MapThemeColors): string {
-  const [r, g, b] = hexToRgb(theme.background);
-  const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
-  return luminance > 0.5 ? interpolateColor(color, '#000000', LIGHT_MAP_TEXT_DARKEN) : color;
+  if (brightness(theme.background) > 0.5) {
+    const dark = interpolateColor(color, '#000000', LIGHT_MAP_TEXT_DARKEN);
+    const l = brightness(dark);
+    return l > LIGHT_MAP_TEXT_MAX ? interpolateColor(dark, '#000000', 1 - LIGHT_MAP_TEXT_MAX / l) : dark;
+  }
+  const l = brightness(color);
+  return l < DARK_MAP_TEXT_MIN ? interpolateColor(color, '#ffffff', (DARK_MAP_TEXT_MIN - l) / (1 - l)) : color;
 }
 
 /**

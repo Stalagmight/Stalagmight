@@ -96,7 +96,9 @@ export function IssueLevelsSlider({
     return `linear-gradient(to right, ${parts.join(', ')})`;
   }, [colorAt, viewMax]);
 
-  const peak = histogram ? Math.max(1, ...histogram) : 1;
+  // Bar heights on a log scale: most shots agree, so a linear scale would show
+  // one spike at zero and hide the tail the levels are about.
+  const logPeak = Math.log1p(histogram ? Math.max(1, ...histogram) : 1);
 
   const valueAt = (clientX: number): number => {
     const rect = trackRef.current?.getBoundingClientRect();
@@ -188,7 +190,7 @@ export function IssueLevelsSlider({
               const from = binW * k;
               const x = pct(from);
               const w = Math.max(0.15, pct(from + binW) - x);
-              const h = Math.max(1, (count / peak) * 42);
+              const h = Math.max(1, (Math.log1p(count) / logPeak) * 42);
               // Values at or below Min count as agreeing: drawn faint.
               return (
                 <rect key={k} x={x} y={44 - h} width={w} height={h} fill="currentColor" opacity={from + binW > levels.min ? 0.85 : 0.3} />

@@ -58,7 +58,23 @@ export function LegendCogPopover({ id, title, width, onClose, children }: Legend
     onCloseRef.current();
   };
 
-  const style = useAnchoredFixedMenu(open, cogRef, popRef, { align: 'center', gap: 6, width });
+  // Re-place the popover when its content grows or shrinks (a row expanded).
+  const [contentKey, setContentKey] = useState(0);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!open || !el || typeof ResizeObserver === 'undefined') return undefined;
+    let last = el.offsetHeight;
+    const ro = new ResizeObserver(() => {
+      if (el.offsetHeight !== last) {
+        last = el.offsetHeight;
+        setContentKey((k) => k + 1);
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [open]);
+  const style = useAnchoredFixedMenu(open, cogRef, popRef, { align: 'center', gap: 6, width, remeasureKey: contentKey });
   useDismissableLayer({ open, onDismiss: close, contains: [wrapRef, popRef], survivesUnrelatedScroll: true });
 
   // Escape closes the popover (an inner field or the palette list claims it
@@ -110,7 +126,7 @@ export function LegendCogPopover({ id, title, width, onClose, children }: Legend
           ref={popRef}
           role="dialog"
           aria-label={title}
-          className="z-50 flex flex-col gap-2 rounded border border-border bg-panel p-2 shadow-lg text-text-primary"
+          className="z-50 flex flex-col gap-2 overflow-y-auto rounded border border-border bg-panel p-2 shadow-lg text-text-primary"
           style={{ ...chromeVars, ...style }}
           data-dropdown-open
           onMouseDown={(e) => e.stopPropagation()}
@@ -118,8 +134,10 @@ export function LegendCogPopover({ id, title, width, onClose, children }: Legend
           onWheel={(e) => e.stopPropagation()}
           data-testid={`color-scale-popover-${id}`}
         >
-          <span className="text-xs font-medium">{title}</span>
-          {children(popRef)}
+          <div ref={bodyRef} className="flex flex-col gap-2">
+            <span className="text-xs font-medium">{title}</span>
+            {children(popRef)}
+          </div>
         </div>,
         document.body,
       )}

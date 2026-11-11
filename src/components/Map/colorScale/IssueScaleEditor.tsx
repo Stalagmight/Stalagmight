@@ -183,9 +183,10 @@ function IssueMetricRow({
   const levels = preview ?? committed ?? defaults;
   const shown = scaleLevels(levels, units.toDisplay);
 
-  // The slider's span: twice the default Max, widened to the committed Max (not
-  // the dragged one, so the track does not rescale under the pointer).
-  const domainMax = units.toDisplay(niceCeil(Math.max(2 * defaults.max, 1.25 * (committed ?? defaults).max)));
+  // The slider's span: a little past Max (the committed one, not the dragged
+  // one, so the track does not rescale under the pointer). Typing a larger Max
+  // in its field widens it.
+  const domainMax = units.toDisplay(niceCeil(1.25 * (committed ?? defaults).max));
   const values = useMemo(
     () => (expanded ? metricValues(id, surveyData, closures) : null),
     [expanded, id, surveyData, closures],
@@ -208,7 +209,7 @@ function IssueMetricRow({
 
   const name = t(`map.issueScale.metric.${id}`, { degrees: LENGTH_DELTA_MIN_INCLINATION_DEG });
   const fmt = (v: number) => `${formatFixed(v, undefined, units.precision)}${units.unit}`;
-  const summary = enabled ? `${fmt(shown.warn)} / ${fmt(shown.max)}` : t('map.issueScale.off');
+  const summary = enabled ? t('map.issueScale.summary', { warn: fmt(shown.warn), max: fmt(shown.max) }) : t('map.issueScale.off');
 
   return (
     <div className="flex flex-col" data-testid={`issue-scale-row-${id}`}>
@@ -234,7 +235,6 @@ function IssueMetricRow({
           <span className={`truncate ${enabled ? '' : 'text-text-secondary line-through'}`}>{name}</span>
           <span
             className="ml-auto shrink-0 text-[10px] text-text-secondary"
-            title={t('map.issueScale.summaryTitle')}
             data-testid={`issue-scale-summary-${id}`}
           >
             {summary}

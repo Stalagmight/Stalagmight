@@ -28,7 +28,7 @@ interface IssueLegendProps {
 
 const BAR_HEIGHT = 90;
 const RAMP_STOPS = 16;
-const POPOVER_WIDTH = 320;
+const POPOVER_WIDTH = 340;
 const NO_CLOSURES: readonly LoopClosure[] = [];
 
 /** Vertical position (px from the top of the bar) of a score: the palette's
