@@ -61,6 +61,7 @@ export function LegendCogPopover({ id, title, width, onClose, children }: Legend
   // Re-place the popover when its content grows or shrinks (a row expanded).
   const [contentKey, setContentKey] = useState(0);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = bodyRef.current;
     if (!open || !el || typeof ResizeObserver === 'undefined') return undefined;
@@ -74,7 +75,13 @@ export function LegendCogPopover({ id, title, width, onClose, children }: Legend
     ro.observe(el);
     return () => ro.disconnect();
   }, [open]);
-  const style = useAnchoredFixedMenu(open, cogRef, popRef, { align: 'center', gap: 6, width, remeasureKey: contentKey });
+  const style = useAnchoredFixedMenu(open, cogRef, popRef, {
+    align: 'center',
+    gap: 6,
+    width,
+    remeasureKey: contentKey,
+    scrollRef,
+  });
   useDismissableLayer({ open, onDismiss: close, contains: [wrapRef, popRef], survivesUnrelatedScroll: true });
 
   // Escape closes the popover (an inner field or the palette list claims it
@@ -126,7 +133,7 @@ export function LegendCogPopover({ id, title, width, onClose, children }: Legend
           ref={popRef}
           role="dialog"
           aria-label={title}
-          className="z-50 flex flex-col gap-2 overflow-y-auto rounded border border-border bg-panel p-2 shadow-lg text-text-primary"
+          className="z-50 flex flex-col rounded border border-border bg-panel shadow-lg text-text-primary"
           style={{ ...chromeVars, ...style }}
           data-dropdown-open
           onMouseDown={(e) => e.stopPropagation()}
@@ -134,9 +141,14 @@ export function LegendCogPopover({ id, title, width, onClose, children }: Legend
           onWheel={(e) => e.stopPropagation()}
           data-testid={`color-scale-popover-${id}`}
         >
-          <div ref={bodyRef} className="flex flex-col gap-2">
-            <span className="text-xs font-medium">{title}</span>
-            {children(popRef)}
+          {/* An inner scroller, not the popover itself: menus portalled into
+              the popover (the palette list) are position: fixed, and WebKit
+              clips those to a scrolling ancestor. */}
+          <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto p-2">
+            <div ref={bodyRef} className="flex flex-col gap-2">
+              <span className="text-xs font-medium">{title}</span>
+              {children(popRef)}
+            </div>
           </div>
         </div>,
         document.body,
