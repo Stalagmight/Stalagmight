@@ -690,6 +690,16 @@ fn live_used_api_calls_with_email_and_token() {
                     let history = get_revisions(&base, &token, false, id)?;
                     assert!(history.commits.iter().any(|c| c.id == first));
                     assert!(history.commits.iter().any(|c| c.id == second));
+                    // A current server's instant or a pre-ISO server's wall time;
+                    // either way every revision has a time to show.
+                    for commit in &history.commits {
+                        let date = commit.authored_date.as_deref().expect("revision time");
+                        assert_eq!(
+                            commit_dates::display_date(date).as_deref(),
+                            Some(date),
+                            "{label}: revision time {date:?} is not in a form the history shows"
+                        );
+                    }
                     assert_eq!(
                         std::fs::read(
                             download_stalx_at_hash(&base, &token, false, id, &first)?.path()
