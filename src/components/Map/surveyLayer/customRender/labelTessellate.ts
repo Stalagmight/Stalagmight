@@ -431,7 +431,7 @@ export function buildLabelDescriptors(
       closure, errors.format.abbrev.loop, errors.format.lengthUnit, errors.format.precision?.length,
     );
     if (text === null) continue;
-    const style = closureErrorLabelStyle(closure);
+    const style = closureErrorLabelStyle(closure, ctx.themeColors!);
     descriptors.push({
       kind: LABEL_KIND.CLOSURE_ERROR,
       text,

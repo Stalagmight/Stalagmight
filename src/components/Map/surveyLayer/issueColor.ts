@@ -8,7 +8,7 @@
  * then see the same few strings, and an overlay highlight matches its bulk
  * fill byte for byte.
  */
-import { interpolateColor } from '../../../utils/colors';
+import { hexToRgb, interpolateColor } from '../../../utils/colors';
 import type { MapThemeColors } from '../../../utils/themeColors';
 import { SCORE_MAX, SCORE_WARNING } from './issueScale';
 
@@ -41,6 +41,22 @@ export function issueScoreColor(theme: MapThemeColors, score: number): string {
   const ramp = rampFor(theme.severityClear, theme.severityWarning, theme.severityError);
   const s = Number.isFinite(score) ? Math.min(Math.max(score, 0), SCORE_MAX) : 0;
   return ramp[Math.round(s * STEPS_PER_UNIT)]!;
+}
+
+/** How much a severity colour is darkened for label TEXT on a light map. */
+const LIGHT_MAP_TEXT_DARKEN = 0.45;
+
+/**
+ * A severity colour readable as label text on this map. The ramp's yellow and
+ * green are light colours: on a light map (whose label halo is light too) they
+ * all but vanish, so there the text is darkened toward black. On a dark map the
+ * colour is returned unchanged. A background that is not a hex colour counts
+ * as dark (no change).
+ */
+export function severityTextColor(color: string, theme: MapThemeColors): string {
+  const [r, g, b] = hexToRgb(theme.background);
+  const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  return luminance > 0.5 ? interpolateColor(color, '#000000', LIGHT_MAP_TEXT_DARKEN) : color;
 }
 
 /**

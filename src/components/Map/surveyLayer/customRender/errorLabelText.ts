@@ -26,7 +26,7 @@ import { getErrorColor } from '../../../../utils/colors';
 import type { LengthUnit } from '../../../../types/config';
 import type { LoopClosure } from '../../../../types/project';
 import type { MapThemeColors } from '../../../../utils/themeColors';
-import { issueScoreColor, closureErrorScore } from '../issueColor';
+import { issueScoreColor, closureErrorScore, severityTextColor } from '../issueColor';
 import type { ErrorLabelInput } from '../issueScore';
 import { METRIC_AZ, METRIC_INCL_DEPTH, METRIC_LENGTH, METRIC_PITCH } from '../shotQuality';
 
@@ -77,9 +77,9 @@ export function formatShotErrorLabel(input: ErrorLabelInput, i: number): string 
 }
 
 /** The colour of shot `i`'s Errors label: the Survey Issues ramp at its label
- *  score, so the worst labels read red at a glance. */
+ *  score, so the worst labels read red at a glance (darkened on a light map). */
 export function shotErrorLabelColor(input: ErrorLabelInput, i: number, theme: MapThemeColors): string {
-  return issueScoreColor(theme, input.scores.labelScore[i] ?? 0);
+  return severityTextColor(issueScoreColor(theme, input.scores.labelScore[i] ?? 0), theme);
 }
 
 /** The Errors label text of a loop closure, or null when its stored metrics
@@ -97,7 +97,11 @@ export function formatClosureErrorLabel(
   return `${prefix} ${formatFixed(pct, undefined, 1)}% ${distance}`;
 }
 
-/** A closure label's score and colour: the closure line's own colour bands. */
-export function closureErrorLabelStyle(closure: LoopClosure): { score: number; color: string } {
-  return { score: closureErrorScore(closure.error_percentage), color: getErrorColor(closure.error_percentage) };
+/** A closure label's score and colour: the closure line's own colour bands
+ *  (darkened on a light map). */
+export function closureErrorLabelStyle(closure: LoopClosure, theme: MapThemeColors): { score: number; color: string } {
+  return {
+    score: closureErrorScore(closure.error_percentage),
+    color: severityTextColor(getErrorColor(closure.error_percentage), theme),
+  };
 }

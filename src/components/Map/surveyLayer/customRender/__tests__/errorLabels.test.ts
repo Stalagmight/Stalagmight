@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { formatClosureErrorLabel, formatShotErrorLabel, closureErrorLabelStyle } from '../errorLabelText';
+import { severityTextColor } from '../../issueColor';
 import { buildLabelDescriptors, type LabelBuildContext } from '../labelTessellate';
 import { LABEL_KIND, LABEL_FLAG } from '../labelShaders';
 import { LABEL_KIND_LAYOUT, shapeLabel, shapedExtent } from '../labelLayout';
@@ -105,8 +106,16 @@ describe('formatClosureErrorLabel', () => {
     expect(formatClosureErrorLabel(closure(NaN, 0.84), 'Loop', 'meters')).toBeNull();
   });
   it('is coloured and scored like its closure line', () => {
-    expect(closureErrorLabelStyle(closure(2, 1))).toEqual({ score: 1.5, color: '#eab308' });
-    expect(closureErrorLabelStyle(closure(7, 1))).toEqual({ score: 3, color: '#ef4444' });
+    const dark = { ...theme, background: '#101418' };
+    expect(closureErrorLabelStyle(closure(2, 1), dark)).toEqual({ score: 1.5, color: '#eab308' });
+    expect(closureErrorLabelStyle(closure(7, 1), dark)).toEqual({ score: 3, color: '#ef4444' });
+  });
+  it('darkens the text colour on a light map so yellow and green stay readable', () => {
+    const light = { ...theme, background: '#f4efe6' };
+    expect(closureErrorLabelStyle(closure(2, 1), light).color).toBe('#816204');
+    expect(severityTextColor('#22c55e', light)).toBe('#136c34');
+    expect(severityTextColor('#22c55e', { ...theme, background: '#101418' })).toBe('#22c55e');
+    expect(severityTextColor('#22c55e', { ...theme, background: 'rgb(255, 255, 255)' })).toBe('#22c55e');
   });
 });
 
