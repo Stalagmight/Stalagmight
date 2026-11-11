@@ -193,8 +193,13 @@ stations by `stationKindRank` - reference-only first, then jump, then real
 the incremental path redoes the order when a kind edit moves a station between
 ranks) - so the real-line marker is drawn last, on top. `nearestStation` agrees:
 equal distances go to the better rank, and a cursor on the drawn disc of a
-better-ranked marker (`ResolveOptions.stationDiscPx`, radius + stroke) picks it
-over a nearer, worse-ranked centre it covers. The visible edge of a worse-ranked
+better-ranked marker picks it over a nearer, worse-ranked centre it covers. The
+disc is sized as the shader draws it: `ResolveOptions.stationDiscPx` (radius +
+stroke) times `stationSizeMul` (`controller.stationSizeMul`: the hover or
+selection size of a highlighted section, else 2x for a zero datum). The edit
+path writes the new order through `COPY_WRITE_BUFFER`
+(`surveyCustomLayer.uploadCircleIndices`): it runs outside `render()`, and the
+element-array binding is VAO state. The visible edge of a worse-ranked
 marker still picks that marker, and stations of one rank keep the plain nearest
 pick. The ranks are the label declutter's (`labelVirtualRank`).
 

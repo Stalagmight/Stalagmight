@@ -1358,6 +1358,9 @@ export default class SurveyLayer {
     return this.geoIndex.nearestStation(this.projector(), x, y, sections, maxDistance, {
       visibleKinds: this.visibleKinds(),
       stationDiscPx: this.getStationRadius() + SurveyLayer.STATION_STROKE_PX,
+      ...(this.customRender
+        ? { stationSizeMul: this.customRender.stationSizeMul.bind(this.customRender) }
+        : {}),
     });
   }
 

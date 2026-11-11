@@ -449,12 +449,18 @@ export class SurveyCustomLayer implements CustomLayerInterface {
    * Re-upload the circle index buffer (same length) after the incremental edit
    * path rewrote its draw order in `this.data.circle.indices` - a kind edit moved
    * a station between ranks (`writeCircleDrawOrder`). Vertex buffers untouched.
+   *
+   * Written through `COPY_WRITE_BUFFER`, not `ELEMENT_ARRAY_BUFFER`: this runs on
+   * the edit path, outside `render()`, and the element-array binding is VAO
+   * state - binding it here would swap the index buffer of whatever VAO MapLibre
+   * left bound after its last draw.
    */
   uploadCircleIndices(): void {
     const gl = this.gl;
     if (!gl || this.disabled || !this.circleGpu || !this.data) return;
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.circleGpu.index);
-    gl.bufferSubData(gl.ELEMENT_ARRAY_BUFFER, 0, this.data.circle.indices);
+    gl.bindBuffer(gl.COPY_WRITE_BUFFER, this.circleGpu.index);
+    gl.bufferSubData(gl.COPY_WRITE_BUFFER, 0, this.data.circle.indices);
+    gl.bindBuffer(gl.COPY_WRITE_BUFFER, null);
   }
 
   render(gl: WebGLRenderingContext | WebGL2RenderingContext, options: CustomRenderMethodInput): void {

@@ -83,11 +83,15 @@ export interface ResolveOptions {
    *  stations touched only by hidden kinds) are skipped, since they are
    *  filtered out of the hitbox layers and must stay non-interactive. */
   visibleKinds: VisibleKinds;
-  /** Drawn radius of a station marker (disc + stroke), px; a zero-datum
-   *  station draws at twice that. When set, {@link SurveyGeometryIndex.nearestStation}
-   *  gives a marker whose disc is under the cursor to the best-ranked station,
-   *  the one drawn on top. Omitted: plain nearest. */
+  /** Drawn radius of a station marker at size 1 (disc + stroke), px. When set,
+   *  {@link SurveyGeometryIndex.nearestStation} gives a marker whose disc is under
+   *  the cursor to the best-ranked station, the one drawn on top. Omitted: plain
+   *  nearest. */
   stationDiscPx?: number;
+  /** The size multiplier a station's marker is drawn at (the circle shader's:
+   *  hover / selection size, else 2 for a zero datum, else 1), scaling
+   *  `stationDiscPx`. Omitted: 2 for a zero datum, else 1. */
+  stationSizeMul?: (sectionId: number, zeroDatum: boolean) => number;
 }
 
 /**
@@ -336,6 +340,7 @@ export class SurveyGeometryIndex {
   ): NearestStationHit | null {
     this.ensureBuilt();
     const disc = opts.stationDiscPx ?? 0;
+    const sizeMulOf = opts.stationSizeMul ?? ((_sid: number, zeroDatum: boolean) => (zeroDatum ? 2 : 1));
     let best: NearestStationHit | null = null;
     let bestRank = 0;
     // The best-ranked (then nearest) station whose drawn disc is under the cursor.
@@ -356,10 +361,9 @@ export class SurveyGeometryIndex {
         if (dist > maxDistance) continue;
         const rank = stationKindRank(mask);
         const nearer = !best || dist < best.distance || (dist === best.distance && rank < bestRank);
-        const sizeMul = (this.data.stationFlags[g]! & STATION_FLAG_IS_ZERO_DATUM) !== 0 ? 2 : 1;
         const covers =
           disc > 0 &&
-          dist <= disc * sizeMul &&
+          dist <= disc * sizeMulOf(sid, (this.data.stationFlags[g]! & STATION_FLAG_IS_ZERO_DATUM) !== 0) &&
           (!covering || rank < coveringRank || (rank === coveringRank && dist < covering.distance));
         if (!nearer && !covers) continue;
         const hit: NearestStationHit = { ref: { section_id: sid, station_index: stationIndex }, distance: dist, lngLat };

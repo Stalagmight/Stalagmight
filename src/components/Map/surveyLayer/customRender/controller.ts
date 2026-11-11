@@ -658,6 +658,21 @@ export class SurveyCustomController {
     return HIGHLIGHT_NONE;
   }
 
+  /**
+   * The size multiplier the circle shader draws a station marker at (radius and
+   * stroke both scale by it): a hovered / selected section's markers take the
+   * configured highlight size, which wins over the zero-datum 2x, else 1 - the
+   * `sizeMul` choice in the circle vertex shader (`shaders.ts`). The station
+   * pick sizes the drawn disc with it (`SurveyGeometryIndex.nearestStation`).
+   */
+  stationSizeMul(sectionId: number, zeroDatum: boolean): number {
+    const level = this.highlightLevel(sectionId);
+    const d = this.lastData;
+    if (level === HIGHLIGHT_HOVER && d) return d.circleHoverSizeMul;
+    if (level === HIGHLIGHT_SELECT && d) return d.circleSelectSizeMul;
+    return zeroDatum ? 2 : 1;
+  }
+
   /** Per-station / per-shot highlight predicates resolving the merged emphasis
    *  level for a feature's section (0 none, 1 selection, 2 hover). */
   private highlightPredicates(surveyData: SurveyData): {
@@ -858,12 +873,22 @@ export class SurveyCustomController {
     for (const si of plan.dirtySectionIdxs) {
       const section = next.sections[si]!;
       const inner = lookup.get(section.id);
-      const rankBefore = inner ? Array.from(inner.values(), (g) => stationKindRank(allRef[g]!)) : [];
+      // A station's kind mask reads only its section's shot kinds (the layout is
+      // fixed by the plan's gate), so only a kind edit can move a rank: snapshot
+      // the ranks just then, not on every position edit.
+      let kindsEdited = false;
+      for (let i = section.shotOffset; i < section.shotOffset + section.shotCount; i++) {
+        if (prev.shotFlags[i] !== next.shotFlags[i]) {
+          kindsEdited = true;
+          break;
+        }
+      }
+      const rankBefore = kindsEdited && inner ? Array.from(inner.values(), (g) => stationKindRank(allRef[g]!)) : null;
       recomputeSectionAllReference(next, lookup, section, allRef);
       if (inner) {
         let k = 0;
         for (const g of inner.values()) {
-          if (stationKindRank(allRef[g]!) !== rankBefore[k++]) rankMoved = true;
+          if (rankBefore && stationKindRank(allRef[g]!) !== rankBefore[k++]) rankMoved = true;
           recomputeStation(circle, g, next, rel, circleInputs, allRef[g]!);
           circleSlots.push(g);
         }

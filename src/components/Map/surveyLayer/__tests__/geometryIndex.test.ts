@@ -676,6 +676,35 @@ describe('SurveyGeometryIndex.nearestStation rank priority', () => {
     expect(pick(offset, 3, 7.5, [1, 3])).toBe(1);
   });
 
+  it('sizes the drawn disc like the shader: zero datum 2x, highlight size', () => {
+    // Real zero-datum station at 0, reference 6 px right: the real disc is
+    // 10 px there (2 x 5), so 7 px out is still on it.
+    const sections = [sec(1, 'Reference'), sec(3, 'Normal')];
+    const stations = [
+      st(1, 0, 6, 0), st(1, 1, 6, -30),
+      { ...st(3, 0, 0, 0), is_zero_datum: true }, st(3, 1, -30, 0),
+    ];
+    const zd = new SurveyGeometryIndex(surveyDataFromLegacy(sections, stations), null);
+    expect(pick(zd, 7, 0, [1, 3])).toBe(3);
+    // A hovered real section draws at the hover size (1.5x = 7.5 px), which
+    // wins over the zero-datum 2x: 7 px is on its disc, 8 px is off.
+    const hover = (sid: number, zero: boolean) => (sid === 3 ? 1.5 : zero ? 2 : 1);
+    const pickSized = (x: number) =>
+      zd.nearestStation(project, x, 0, [1, 3], 10, {
+        visibleKinds: ALL_KINDS, stationDiscPx: DISC, stationSizeMul: hover,
+      })?.ref.section_id;
+    expect(pickSized(7)).toBe(3);
+    expect(pickSized(8)).toBe(1);
+    // Plain offset fixture, real section selected (1.25x = 6.25 px disc): 6 px
+    // out is now on the real disc, though nearer the reference centre.
+    const sel = (sid: number) => (sid === 3 ? 1.25 : 1);
+    expect(
+      offset.nearestStation(project, 6, 0, [1, 3], 10, {
+        visibleKinds: ALL_KINDS, stationDiscPx: DISC, stationSizeMul: sel,
+      })?.ref.section_id,
+    ).toBe(3);
+  });
+
   it('stations of one rank keep the nearest pick', () => {
     const same = build([
       { id: 1, kind: 'Normal', at: [3, 0], dir: [0, -1] },

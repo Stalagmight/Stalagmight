@@ -581,6 +581,24 @@ describe('SurveyCustomController highlight width/radius resolution (C2)', () => 
     expect(d.circleHoverSizeMul).toBeCloseTo(2.5);
     expect(d.circleSelectSizeMul).toBeCloseTo(1.5);
   });
+
+  // The station pick sizes a marker's drawn disc with this, so it must follow
+  // the circle shader: highlight size wins over the zero-datum 2x.
+  it('stationSizeMul follows the shader: hover, then selection, then zero-datum 2x', () => {
+    const { map } = makeFakeMap();
+    const c = new SurveyCustomController(map);
+    c.sync({ ...makeParams(), stationRadiusPx: 4, stationHoverRadiusPx: 10, stationSelectionRadiusPx: 6 });
+    expect(c.stationSizeMul(1, false)).toBe(1);
+    expect(c.stationSizeMul(1, true)).toBe(2);
+    c.setSectionSelect([1]);
+    expect(c.stationSizeMul(1, false)).toBeCloseTo(1.5);
+    expect(c.stationSizeMul(1, true)).toBeCloseTo(1.5); // not 2, not 3
+    expect(c.stationSizeMul(2, true)).toBe(2); // another section: unaffected
+    c.setSectionHover([1]);
+    expect(c.stationSizeMul(1, false)).toBeCloseTo(2.5); // hover wins over selection
+    c.clearHighlights();
+    expect(c.stationSizeMul(1, true)).toBe(2);
+  });
 });
 
 /**

@@ -421,6 +421,51 @@ describe('SurveyCustomController incremental apply', () => {
     expect(incrementalRuns).toBe(37);
   });
 
+  // Kind edits are what move a station between draw ranks (real-line markers on
+  // top), so the circle index order must follow them too. Random kind flips on
+  // the interior sections, mixed with a position edit, against a fresh rebuild.
+  it('shot-kind edits stay byte-identical to a full rebuild, draw order included (property test)', () => {
+    const rand = rng(0x5EED);
+    let incrementalRuns = 0;
+    let reorders = 0;
+    for (let iter = 0; iter < 40; iter++) {
+      let cur = pinnedSurvey();
+      const c = new SurveyCustomController(makeFakeMap());
+      c.sync(params(cur));
+      // A few edits in sequence, so a later edit starts from reordered indices.
+      for (let step = 0; step < 3; step++) {
+        const next = cloneSurvey(cur);
+        // Interior shots are globals 1..6 (section 0's pin shot is global 0).
+        const flips = 1 + Math.floor(rand() * 2);
+        for (let f = 0; f < flips; f++) {
+          const gi = 1 + Math.floor(rand() * 6);
+          next.shotFlags[gi] = Math.floor(rand() * 3); // Normal / Jump / Reference
+        }
+        if (rand() < 0.5) {
+          const g = 2 + Math.floor(rand() * (next.stationCount - 2));
+          next.stationCoords[g * 3] = next.stationCoords[g * 3]! + (rand() - 0.5) * 20;
+        }
+        const fu = h.state.fullUpdates;
+        const iu = h.state.circleIndexUploads;
+        c.sync(params(next));
+        if (h.state.fullUpdates === fu) incrementalRuns++;
+        if (h.state.circleIndexUploads > iu) reorders++;
+        const ref = new SurveyCustomController(makeFakeMap());
+        ref.sync(params(next));
+        expectDataEqual(dataOf(c), dataOf(ref));
+        ref.destroy();
+        cur = next;
+      }
+      c.destroy();
+    }
+    // Pinned for this seed, like the position property test: 117 of the 120
+    // edits take the incremental path (3 dirty most sections and rebuild), and
+    // 82 of them rewrite the draw order. A regression that fell back to rebuilds,
+    // or never reordered, would still pass the byte-identity check alone.
+    expect(incrementalRuns).toBe(117);
+    expect(reorders).toBe(82);
+  });
+
   it('depth-mode recolor via a z-move stays byte-identical', () => {
     const prev = pinnedSurvey();
     const dctx = ctx({ showDepthGradient: true, depthRange: { min: 0, max: 4 } });
