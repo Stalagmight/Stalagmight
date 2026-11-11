@@ -78,6 +78,7 @@ import { clearFeatureCountsForPrefix } from '../../utils/memoryProbe';
 import { shouldSuppressMapError, type MapErrorEventLike } from './surveyLayer/mapErrors';
 import { diffRemovedSectionIds } from './surveyLayer/sectionDiff';
 import { InteractOverlayHideController, overlayPaintDigest, overlayTouchesRemovedSections } from './surveyLayer/interactOverlayHide';
+import { raisedSectionOf } from './surveyLayer/raisedSection';
 import type { SemanticMapTarget } from './surveyLayer/semanticTarget';
 import { SemanticTargetPreference } from './surveyLayer/semanticTargetPreference';
 
@@ -1345,7 +1346,8 @@ export default class SurveyLayer {
   }
 
   /** Nearest visible station among candidate sections, within maxDistance px;
-   *  on overlapping markers, the real-line one drawn on top (see
+   *  on overlapping markers, the one drawn on top - the raised section's, else
+   *  the real-line one (see
    *  `SurveyGeometryIndex.nearestStation`). Hover, click, context menu and the
    *  measure snap all resolve here, so they agree. */
   private resolveStationAt(
@@ -1358,6 +1360,7 @@ export default class SurveyLayer {
     return this.geoIndex.nearestStation(this.projector(), x, y, sections, maxDistance, {
       visibleKinds: this.visibleKinds(),
       stationDiscPx: this.getStationRadius() + SurveyLayer.STATION_STROKE_PX,
+      raisedSectionId: this.raisedSectionId(),
       ...(this.customRender
         ? { stationSizeMul: this.customRender.stationSizeMul.bind(this.customRender) }
         : {}),
@@ -1365,8 +1368,8 @@ export default class SurveyLayer {
   }
 
   /** Nearest visible shot among candidate sections, within maxDistance px; on
-   *  overlapping lines, the real-line one drawn on top (see
-   *  `SurveyGeometryIndex.nearestShot`). */
+   *  overlapping lines, the one drawn on top - the raised section's, else the
+   *  real-line one (see `SurveyGeometryIndex.nearestShot`). */
   private resolveShotAt(
     x: number,
     y: number,
@@ -1377,6 +1380,7 @@ export default class SurveyLayer {
     return this.geoIndex.nearestShot(this.projector(), x, y, sections, maxDistance, {
       visibleKinds: this.visibleKinds(),
       shotHalfWidthPx: this.getShotWidth() / 2,
+      raisedSectionId: this.raisedSectionId(),
       ...(this.customRender ? { shotWidthMul: this.customRender.shotWidthMul.bind(this.customRender) } : {}),
     });
   }
@@ -1513,8 +1517,15 @@ export default class SurveyLayer {
   // custom renderer (setSectionHover / setSectionSelect / setHighlight, wired from
   // the setHoveredSection / setSelectedSection / setHoveredSegment setters);
   // individual hover/selection/snap render via the interact overlay (#mem).
+  // The selection's whole section draws above every rank (no-op when unchanged).
   private updateVisualState() {
+    this.customRender?.setRaisedSection(this.raisedSectionId());
     this.refreshInteractOverlay();
+  }
+
+  /** The section drawn on top and given the click (see `raisedSectionOf`). */
+  private raisedSectionId(): number | null {
+    return raisedSectionOf(this.selectedSectionId, this.selectedStationId, this.selectedShotId);
   }
 
   /**

@@ -705,6 +705,25 @@ describe('SurveyGeometryIndex.nearestStation rank priority', () => {
     ).toBe(3);
   });
 
+  // The selection's section is drawn above every rank (#700 review), so it
+  // takes the pick where its marker is drawn, and only there.
+  it('the raised section outranks every rank, where its marker is drawn', () => {
+    const raisedPick = (index: SurveyGeometryIndex, xPx: number, yPx: number, ids: number[], raised: number | null) =>
+      index.nearestStation(project, xPx, -yPx, ids, 10, {
+        visibleKinds: ALL_KINDS, stationDiscPx: DISC, raisedSectionId: raised,
+      })?.ref.section_id ?? null;
+    // Coincident tie-in: the raised jump or reference station beats the real one.
+    expect(raisedPick(tieIn, 0, 0, [1, 2, 3], 2)).toBe(2);
+    expect(raisedPick(tieIn, 0, 0, [3, 2, 1], 1)).toBe(1);
+    expect(raisedPick(tieIn, 0, 0, [1, 2, 3], 3)).toBe(3);
+    expect(raisedPick(tieIn, 0, 0, [1, 2, 3], null)).toBe(3);
+    // On the raised reference's disc it beats a nearer real centre...
+    expect(raisedPick(offset, 0.5, 0, [1, 3], 1)).toBe(1);
+    expect(raisedPick(offset, 0.5, 0, [1, 3], null)).toBe(3);
+    // ...but the real marker's edge showing past it still picks the real one.
+    expect(raisedPick(offset, -4, 0, [1, 3], 1)).toBe(3);
+  });
+
   it('stations of one rank keep the nearest pick', () => {
     const same = build([
       { id: 1, kind: 'Normal', at: [3, 0], dir: [0, -1] },
@@ -785,6 +804,20 @@ describe('SurveyGeometryIndex.nearestShot rank priority', () => {
     expect(pick(near, 20, -1.4, [1, 3])).toBe(1);
     // A selected real section draws wider (1.5x): 1.4 px is on it now.
     expect(pick(near, 20, -1.4, [1, 3], { mul: (sid) => (sid === 3 ? 1.5 : 1) })).toBe(3);
+  });
+
+  it('the raised section outranks every kind, where its line is drawn', () => {
+    const raisedPick = (index: SurveyGeometryIndex, xPx: number, yPx: number, ids: number[], raised: number | null) =>
+      index.nearestShot(project, xPx, -yPx, ids, 4, {
+        visibleKinds: ALL_KINDS, shotHalfWidthPx: HALF, raisedSectionId: raised,
+      })?.sectionId ?? null;
+    expect(raisedPick(over, 20, 0, [1, 2, 3], 1)).toBe(1);
+    expect(raisedPick(over, 20, 0, [3, 2, 1], 2)).toBe(2);
+    expect(raisedPick(over, 20, 0, [1, 2, 3], null)).toBe(3);
+    // 1 px below the real line: on both drawn lines, the raised reference wins.
+    expect(raisedPick(near, 20, -1, [1, 3], 1)).toBe(1);
+    // 0.2 px below it: off the reference's width, so the real line, as drawn.
+    expect(raisedPick(near, 20, -0.2, [1, 3], 1)).toBe(3);
   });
 
   it('shots of one kind keep the nearest pick', () => {

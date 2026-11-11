@@ -303,6 +303,31 @@ describe('line tessellation', () => {
     expect(writeLineDrawOrder(b)).toBe(false);
   });
 
+  // The selection's section draws above every kind (#700 review): a raised
+  // segment goes after the Normal ones, kind ignored, slot order kept.
+  it('draws raised segments last, above every kind', () => {
+    const d = makeFixture();
+    d.shotFlags = new Uint8Array([0, shotKindToFlags('Reference'), 0]);
+    const lookup = buildStationLookup(d);
+    const rel = projectStationsRel(d, null, 0, 0);
+    const b = buildLineBuffers(d, rel, lookup, stubColor);
+    const drawn = () => Array.from({ length: b.segmentCount }, (_, k) => b.indices[k * 6]! / 4);
+    expect(drawn()).toEqual([1, 0]); // the reference under the real one
+    const raised = new Float32Array(b.vertexCount);
+    raised.fill(1, 4, 8); // raise the reference segment
+    expect(writeLineDrawOrder(b, raised)).toBe(true);
+    expect(drawn()).toEqual([0, 1]);
+    expect(Array.from(b.indices.slice(6, 12))).toEqual([4, 5, 6, 6, 5, 7]); // winding kept
+    expect(writeLineDrawOrder(b, raised)).toBe(false);
+    // Both raised: slot order, the kinds no longer matter.
+    raised.fill(1);
+    expect(writeLineDrawOrder(b, raised)).toBe(false);
+    expect(drawn()).toEqual([0, 1]);
+    // Raise dropped: the rank order again.
+    expect(writeLineDrawOrder(b)).toBe(true);
+    expect(drawn()).toEqual([1, 0]);
+  });
+
   it('posA/posB are the anchor-relative segment endpoints', () => {
     const d = makeFixture();
     const lookup = buildStationLookup(d);
@@ -398,6 +423,25 @@ describe('circle tessellation', () => {
     b.allReference.fill(2, 0, 4);
     expect(writeCircleDrawOrder(b)).toBe(true);
     expect(Array.from({ length: 4 }, (_, k) => b.indices[k * 6]! / 4)).toEqual([0, 3, 1, 2]);
+  });
+
+  it('draws raised stations last, above every rank, slot order within', () => {
+    const d = makeFixture();
+    const rel = projectStationsRel(d, null, 0, 0);
+    const b = buildCircleBuffers(d, rel, fill, stroke, undefined, Float32Array.from([0, 2, 1, 3]));
+    const drawn = () => Array.from({ length: b.stationCount }, (_, k) => b.indices[k * 6]! / 4);
+    expect(drawn()).toEqual([1, 2, 3, 0]);
+    // Raise the reference-only station 1 and the both-virtual station 3: they
+    // go above the real station 0, the jump (2) stays under it.
+    const raised = new Float32Array(b.vertexCount);
+    raised.fill(1, 4, 8);
+    raised.fill(1, 12, 16);
+    expect(writeCircleDrawOrder(b, raised)).toBe(true);
+    expect(drawn()).toEqual([2, 0, 1, 3]);
+    expect(Array.from(b.indices.slice(18, 24))).toEqual([12, 13, 14, 12, 14, 15]);
+    expect(writeCircleDrawOrder(b, raised)).toBe(false);
+    expect(writeCircleDrawOrder(b)).toBe(true);
+    expect(drawn()).toEqual([1, 2, 3, 0]);
   });
 
   it('centers are the anchor-relative station positions; colors propagate', () => {

@@ -492,6 +492,34 @@ describe('SurveyCustomController incremental apply', () => {
   // A kind edit can move a station between ranks: the incremental path must
   // redo the draw order (and re-upload it) to stay byte-identical to a rebuild,
   // and leave it alone when no rank moved.
+  // The raised section (the selection's) stays on top through a kind edit
+  // elsewhere: the incremental reorder must honour it as the rebuild does.
+  it('a kind edit keeps the raised section on top, as a rebuild does', () => {
+    const prev = pinnedSurvey();
+    const c = new SurveyCustomController(makeFakeMap());
+    c.setRaisedSection(3); // section 3's lone shot is a Reference
+    c.sync(params(prev));
+    const fu = h.state.fullUpdates;
+    const iu = h.state.circleIndexUploads;
+    const lu = h.state.lineIndexUploads;
+    const jump = cloneSurvey(prev);
+    jump.shotFlags[3] = shotKindToFlags('Jump'); // section 2's first shot
+    c.sync(params(jump));
+    expect(h.state.fullUpdates).toBe(fu); // incremental, not a rebuild
+    expect(h.state.circleIndexUploads).toBe(iu + 1);
+    expect(h.state.lineIndexUploads).toBe(lu + 1);
+    const ref = new SurveyCustomController(makeFakeMap());
+    ref.setRaisedSection(3);
+    ref.sync(params(jump));
+    expectDataEqual(dataOf(c), dataOf(ref));
+    // The raise is what keeps section 3 last: unraised, its reference draws first.
+    const plain = new SurveyCustomController(makeFakeMap());
+    plain.sync(params(jump));
+    expect(Array.from(dataOf(c).line.indices)).not.toEqual(Array.from(dataOf(plain).line.indices));
+    expect(Array.from(dataOf(c).circle.indices)).not.toEqual(Array.from(dataOf(plain).circle.indices));
+    for (const x of [c, ref, plain]) x.destroy();
+  });
+
   it('a kind edit redoes the line draw order and, when a station rank moved, the circle one', () => {
     const prev = pinnedSurvey();
     const c = new SurveyCustomController(makeFakeMap());

@@ -100,7 +100,15 @@ export interface ResolveOptions {
   /** The width multiplier a section's lines are drawn at (the line shader's:
    *  hover / selection width, else 1), scaling `shotHalfWidthPx`. Omitted: 1. */
   shotWidthMul?: (sectionId: number) => number;
+  /** The section drawn above every rank (the selection's,
+   *  `SurveyCustomController.setRaisedSection`): its stations and shots outrank
+   *  all others in {@link SurveyGeometryIndex.nearestStation} /
+   *  {@link SurveyGeometryIndex.nearestShot}, the way they are drawn. */
+  raisedSectionId?: number | null;
 }
+
+/** Pick rank of a raised section's features: better than real line (0). */
+const RAISED_RANK = -1;
 
 /** Draw rank of a shot kind: 0 Normal, 1 Jump, 2 Reference (the line draw order
  *  and the shot pick; `stationKindRank` is the station counterpart). */
@@ -343,7 +351,8 @@ export class SurveyGeometryIndex {
    *    that outranks the nearest one: that station, since its marker covers
    *    the nearer one's there. The visible edge of a worse-ranked marker poking
    *    out from under it still picks the worse-ranked station.
-   * Among stations of one rank the nearest wins, as before.
+   * Among stations of one rank the nearest wins, as before. The raised
+   * section (`opts.raisedSectionId`) outranks every rank: it is drawn on top.
    */
   nearestStation(
     project: ProjectFn,
@@ -374,7 +383,7 @@ export class SurveyGeometryIndex {
         const p = project(lngLat);
         const dist = Math.hypot(p.x - px, p.y - py);
         if (dist > maxDistance) continue;
-        const rank = stationKindRank(mask);
+        const rank = sid === opts.raisedSectionId ? RAISED_RANK : stationKindRank(mask);
         const nearer = !best || dist < best.distance || (dist === best.distance && rank < bestRank);
         const covers =
           disc > 0 &&
@@ -403,7 +412,8 @@ export class SurveyGeometryIndex {
    * top of Reference, `writeLineDrawOrder`), as {@link nearestStation} does for
    * markers: equal distances go to the better rank, and with `shotHalfWidthPx`
    * a cursor on the drawn width of a better-ranked line picks it over a nearer,
-   * worse-ranked one it covers. Among shots of one kind the nearest wins.
+   * worse-ranked one it covers. Among shots of one kind the nearest wins. The
+   * raised section's shots outrank every kind, as they are drawn on top.
    */
   nearestShot(
     project: ProjectFn,
@@ -438,7 +448,7 @@ export class SurveyGeometryIndex {
         const p2 = project(to);
         const dist = distanceToLineSegment(px, py, p1.x, p1.y, p2.x, p2.y);
         if (dist > maxDistance) continue;
-        const rank = shotKindRank(flags);
+        const rank = sid === opts.raisedSectionId ? RAISED_RANK : shotKindRank(flags);
         const nearer = !best || dist < best.distance || (dist === best.distance && rank < bestRank);
         const covers =
           reach > 0 &&

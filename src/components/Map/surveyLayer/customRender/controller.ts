@@ -265,6 +265,9 @@ export class SurveyCustomController {
   private segmentHoverState: ReadonlySet<number> = EMPTY_FEATURE_SET;
   private sectionHoverState: ReadonlySet<number> = EMPTY_FEATURE_SET;
   private sectionSelectState: ReadonlySet<number> = EMPTY_FEATURE_SET;
+  /** The section drawn above every rank (the selection's; see
+   *  {@link setRaisedSection}), or null. Re-applied on every build. */
+  private raisedSectionId: number | null = null;
   /** Cached build products backing the cheap dim-only refresh (setDimming),
    *  the drag hide refresh (setDragHide), and the incremental edit path: the
    *  last CustomRenderData (its per-vertex arrays are rewritten in place) plus
@@ -538,6 +541,12 @@ export class SurveyCustomController {
       dims?.dimForStation, hides?.hideForStation, highlights?.highlightForStation,
     );
 
+    const raised = this.raisedFlags(surveyData, lookup, params.exclude);
+    if (raised) {
+      writeLineDrawOrder(line, raised.line);
+      writeCircleDrawOrder(circle, raised.circle);
+    }
+
     const data: CustomRenderData = { anchorX, anchorY, line, circle, ...this.sizeFields(params) };
 
     const totalBytes = line.byteLength + circle.byteLength;
@@ -799,6 +808,43 @@ export class SurveyCustomController {
   }
 
   /**
+   * Draw one section's lines and markers above every other section, whatever
+   * their kinds (null: none). SurveyLayer raises the selection's section - the
+   * selected section, or the section of the selected station or shot - so the
+   * whole of it shows where it runs over the real line; the hit test gives it
+   * the click there too (`ResolveOptions.raisedSectionId`). Only the two index
+   * buffers change: they are rewritten and re-uploaded when an order moved.
+   * State is stored regardless, so the next build reproduces it.
+   */
+  setRaisedSection(sectionId: number | null): void {
+    if (this.raisedSectionId === sectionId) return;
+    this.raisedSectionId = sectionId;
+    const { layer, lastData, lastLookup, lastSurveyData } = this;
+    if (!this.active || !layer || !lastData || !lastLookup || !lastSurveyData) return;
+    const raised = this.raisedFlags(lastSurveyData, lastLookup, this.lastParams?.exclude);
+    const lineMoved = writeLineDrawOrder(lastData.line, raised?.line);
+    const circleMoved = writeCircleDrawOrder(lastData.circle, raised?.circle);
+    if (lineMoved) layer.uploadLineIndices();
+    if (circleMoved) layer.uploadCircleIndices();
+    if (lineMoved || circleMoved) this.map.triggerRepaint();
+  }
+
+  /** Per-vertex raised flags for the draw-order writers (the raised section's
+   *  shots and stations), in the buffers' layout; null when none is raised. */
+  private raisedFlags(
+    survey: SurveyData,
+    lookup: Map<number, Map<number, number>>,
+    exclude?: CustomRenderExclusion,
+  ): { line: Float32Array; circle: Float32Array } | null {
+    const sid = this.raisedSectionId;
+    if (sid === null) return null;
+    return {
+      line: computeLineDim(survey, lookup, (_g, sectionId) => sectionId === sid, exclude),
+      circle: computeCircleDim(survey, (g) => survey.stationSectionIds[g] === sid, exclude),
+    };
+  }
+
+  /**
    * Recompute + re-upload the two per-vertex highlight-level arrays from the
    * merged emphasis sources. Sibling of {@link setDimming}: the cheap
    * per-interaction path recomputes ONLY the highlight arrays from the cached SoA
@@ -913,8 +959,9 @@ export class SurveyCustomController {
       }
       recomputeLineSection(line, si, next, rel, lookup, lineInputs);
     }
-    if (anyKindEdited && writeLineDrawOrder(line)) layer.uploadLineIndices();
-    if (rankMoved && writeCircleDrawOrder(circle)) layer.uploadCircleIndices();
+    const raised = anyKindEdited || rankMoved ? this.raisedFlags(next, lookup) : null;
+    if (anyKindEdited && writeLineDrawOrder(line, raised?.line)) layer.uploadLineIndices();
+    if (rankMoved && writeCircleDrawOrder(circle, raised?.circle)) layer.uploadCircleIndices();
 
     // Sub-upload: one contiguous line range per section; coalesced station runs.
     for (const si of plan.dirtySectionIdxs) {

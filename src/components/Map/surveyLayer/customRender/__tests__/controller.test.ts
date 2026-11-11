@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Map as MaplibreMap } from 'maplibre-gl';
 import {
   emptySurveyData,
+  shotKindToFlags,
   STATION_FLAG_IS_ZERO_DATUM,
   type SurveyData,
 } from '../../../../../types/survey-data';
@@ -101,11 +102,15 @@ const h = vi.hoisted(() => {
     uploadCircleVertexRange(): void {
       this.uploadCalls++;
     }
+    circleIndexUploads = 0;
     uploadCircleIndices(): void {
       this.uploadCalls++;
+      this.circleIndexUploads++;
     }
+    lineIndexUploads = 0;
     uploadLineIndices(): void {
       this.uploadCalls++;
+      this.lineIndexUploads++;
     }
   }
 
@@ -615,6 +620,86 @@ describe('SurveyCustomController highlight width/radius resolution (C2)', () => 
     expect(c.shotWidthMul(1)).toBeCloseTo(2.5);
     c.clearHighlights();
     expect(c.shotWidthMul(1)).toBe(1);
+  });
+});
+
+/**
+ * The selection's section draws above every rank (#700 review):
+ * `setRaisedSection` reorders only the two index buffers, and every build keeps
+ * the raise. Fixture: section 1's shots are Normal then Reference, so its
+ * stations 0-1 are real and 2 reference-only; section 2's lone station has no
+ * drawn leg (ranks as a jump), and section 2 draws no line.
+ */
+describe('SurveyCustomController raised section', () => {
+  beforeEach(() => {
+    h.layerState.disabledAfterAdd = false;
+    h.layerState.last = null;
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  const params = (): CustomSyncParams => {
+    const p = makeParams();
+    p.surveyData.shotFlags = new Uint8Array([0, shotKindToFlags('Reference'), 0]);
+    return p;
+  };
+  const layer = () => h.layerState.last!;
+  const data = (): CustomRenderData => layer().data as CustomRenderData;
+  const drawnLines = () => Array.from({ length: data().line.segmentCount }, (_, k) => data().line.indices[k * 6]! / 4);
+  const drawnCircles = () =>
+    Array.from({ length: data().circle.stationCount }, (_, k) => data().circle.indices[k * 6]! / 4);
+
+  it('draws the raised section on top, re-uploading only the index buffers that moved', () => {
+    const { map } = makeFakeMap();
+    const c = new SurveyCustomController(map);
+    c.sync(params());
+    expect(drawnLines()).toEqual([1, 0]); // the reference under the real one
+    expect(drawnCircles()).toEqual([2, 3, 0, 1]); // reference, jump, then real
+    const updates = layer().updateCalls;
+
+    c.setRaisedSection(1);
+    expect(drawnLines()).toEqual([0, 1]);
+    expect(drawnCircles()).toEqual([3, 0, 1, 2]);
+    expect(layer().lineIndexUploads).toBe(1);
+    expect(layer().circleIndexUploads).toBe(1);
+    expect(layer().updateCalls).toBe(updates); // no rebuild
+
+    c.setRaisedSection(1); // unchanged: nothing to do
+    expect(layer().lineIndexUploads).toBe(1);
+    expect(layer().circleIndexUploads).toBe(1);
+
+    // Section 2 has no drawn line: the line order falls back to rank.
+    c.setRaisedSection(2);
+    expect(drawnLines()).toEqual([1, 0]);
+    expect(drawnCircles()).toEqual([2, 0, 1, 3]);
+    expect(layer().lineIndexUploads).toBe(2);
+    expect(layer().circleIndexUploads).toBe(2);
+
+    c.setRaisedSection(null);
+    expect(drawnCircles()).toEqual([2, 3, 0, 1]);
+    expect(layer().lineIndexUploads).toBe(2); // the line order did not move
+    expect(layer().circleIndexUploads).toBe(3);
+    expect(layer().updateCalls).toBe(updates);
+  });
+
+  it('a build keeps the raise, including one set before the first build', () => {
+    const { map } = makeFakeMap();
+    const c = new SurveyCustomController(map);
+    c.setRaisedSection(1);
+    c.sync(params());
+    expect(drawnLines()).toEqual([0, 1]);
+    expect(drawnCircles()).toEqual([3, 0, 1, 2]);
+    // A full rebuild (new geometry) re-applies it.
+    const first = layer();
+    const updates = first.updateCalls;
+    const p = params();
+    p.surveyData.stationCoords[0] = 5;
+    c.sync({ ...p, shotWidthPx: 3 });
+    expect(layer()).toBe(first);
+    expect(first.updateCalls).toBe(updates + 1);
+    expect(drawnLines()).toEqual([0, 1]);
+    expect(drawnCircles()).toEqual([3, 0, 1, 2]);
   });
 });
 

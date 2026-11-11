@@ -24,7 +24,8 @@
  * incremental path addresses), but both index buffers draw by rank - reference
  * first, then jump, then real (`writeLineDrawOrder` / `writeCircleDrawOrder`) -
  * so where a jump or reference line or marker crosses or coincides with the real
- * line, the real line is on top.
+ * line, the real line is on top. A raised section (the selection's, see
+ * `SurveyCustomController.setRaisedSection`) draws after all three.
  *
  * Valid-shot selection mirrors `vtSurveyBuild.buildShotsPerFeature`: a shot
  * contributes only when both endpoint stations (`stationIndex` i and i+1) exist.
@@ -424,32 +425,56 @@ function emitLineSection(
   return seg;
 }
 
+/** Index pattern of one line segment quad (two triangles over its 4 vertices). */
+const LINE_TRIS = [0, 1, 2, 2, 1, 3] as const;
+/** Index pattern of one station quad. */
+const CIRCLE_TRIS = [0, 1, 2, 0, 2, 3] as const;
+
 /**
  * Write the line index buffer in draw order: every Reference segment first, then
- * Jump, then Normal (the per-vertex kind in `b.reference` is the rank), segment
- * order within a kind. One draw call, no depth test: where a jump or reference
- * line crosses or runs over the real line, the real line ends on top. Line
- * counterpart of {@link writeCircleDrawOrder}; returns whether any index changed,
- * so the incremental path re-uploads only when a kind edit moved a segment.
+ * Jump, then Normal (the per-vertex kind in `b.reference` is the rank), then the
+ * raised segments, segment order within each. One draw call, no depth test:
+ * where a jump or reference line crosses or runs over the real line, the real
+ * line ends on top, and a raised section ends above them all. `raised` is a
+ * per-vertex flag array in the buffers' layout (`computeLineDim` builds one);
+ * omitted, nothing is raised. Line counterpart of {@link writeCircleDrawOrder};
+ * returns whether any index changed, so a caller re-uploads only when a segment
+ * moved.
  */
-export function writeLineDrawOrder(b: LineBuffers): boolean {
-  const { indices, reference, segmentCount } = b;
-  const start = [0, 0, 0];
-  for (let s = 0; s < segmentCount; s++) start[2 - lineKindRank(reference[s * 4]!)]!++;
-  start[2] = start[0]! + start[1]!;
-  start[1] = start[0]!;
-  start[0] = 0;
+export function writeLineDrawOrder(b: LineBuffers, raised?: Float32Array | null): boolean {
+  const { reference } = b;
+  return writeQuadDrawOrder(b.indices, b.segmentCount, (s) => lineKindRank(reference[s * 4]!), raised, LINE_TRIS);
+}
+
+/**
+ * Shared body of {@link writeLineDrawOrder} / {@link writeCircleDrawOrder}: a
+ * stable counting sort of the `count` quads into four buckets, drawn in order -
+ * rank 2 (reference), rank 1 (jump), rank 0 (real), then raised (`raised[4s]`
+ * set). Returns whether any quad changed position.
+ */
+function writeQuadDrawOrder(
+  indices: Uint32Array,
+  count: number,
+  rankOf: (slot: number) => 0 | 1 | 2,
+  raised: Float32Array | null | undefined,
+  tris: readonly number[],
+): boolean {
+  const bucketOf = (s: number): number => (raised && raised[s * 4]! > 0.5 ? 3 : 2 - rankOf(s));
+  const start = [0, 0, 0, 0];
+  for (let s = 0; s < count; s++) start[bucketOf(s)]!++;
+  // Counts -> start offsets.
+  let acc = 0;
+  for (let k = 0; k < 4; k++) {
+    const n = start[k]!;
+    start[k] = acc;
+    acc += n;
+  }
   let changed = false;
-  for (let s = 0; s < segmentCount; s++) {
-    const io = start[2 - lineKindRank(reference[s * 4]!)]!++ * 6;
+  for (let s = 0; s < count; s++) {
+    const io = start[bucketOf(s)]!++ * 6;
     const base = s * 4;
     if (indices[io] !== base) changed = true;
-    indices[io] = base;
-    indices[io + 1] = base + 1;
-    indices[io + 2] = base + 2;
-    indices[io + 3] = base + 2;
-    indices[io + 4] = base + 1;
-    indices[io + 5] = base + 3;
+    for (let k = 0; k < 6; k++) indices[io + k] = base + tris[k]!;
   }
   return changed;
 }
@@ -727,40 +752,25 @@ function emitStation(
 
 /**
  * Write the circle index buffer in draw order: every reference-rank station
- * first, then jump, then real (`stationKindRank` of each slot's kind mask), slot
- * order within a rank. The circles draw in one call with no depth test, so a
- * later quad paints over an earlier one: where markers of several sections
- * coincide (a jump or reference section tied in at a real station), the
- * real-line marker ends on top. The hit test picks the same one
+ * first, then jump, then real (`stationKindRank` of each slot's kind mask), then
+ * the raised stations, slot order within each. The circles draw in one call with
+ * no depth test, so a later quad paints over an earlier one: where markers of
+ * several sections coincide (a jump or reference section tied in at a real
+ * station), the real-line marker ends on top, unless the other section is raised
+ * (the selection's). The hit test picks the same one
  * (`SurveyGeometryIndex.nearestStation`).
  *
  * Reads the per-vertex kind mask already in `b.allReference`, so it works for
  * the compacted (excluded) build and after an incremental re-emit alike.
- * Returns whether any index changed, so the incremental path re-uploads the
- * index buffer only when a station's rank moved.
+ * `raised` is a per-vertex flag array in the same layout (`computeCircleDim`
+ * builds one); omitted, nothing is raised. Returns whether any index changed, so
+ * a caller re-uploads the index buffer only when a station moved.
  */
-export function writeCircleDrawOrder(b: CircleBuffers): boolean {
-  const { indices, allReference, stationCount } = b;
-  const start = [0, 0, 0];
-  for (let s = 0; s < stationCount; s++) start[2 - stationKindRank(allReference[s * 4]!)]!++;
-  // Counts -> start offsets, drawing reference (bucket 0) first, real last.
-  start[2] = start[0]! + start[1]!;
-  start[1] = start[0]!;
-  start[0] = 0;
-  let changed = false;
-  for (let s = 0; s < stationCount; s++) {
-    const bucket = 2 - stationKindRank(allReference[s * 4]!);
-    const io = start[bucket]!++ * 6;
-    const base = s * 4;
-    if (indices[io] !== base) changed = true;
-    indices[io] = base;
-    indices[io + 1] = base + 1;
-    indices[io + 2] = base + 2;
-    indices[io + 3] = base;
-    indices[io + 4] = base + 2;
-    indices[io + 5] = base + 3;
-  }
-  return changed;
+export function writeCircleDrawOrder(b: CircleBuffers, raised?: Float32Array | null): boolean {
+  const { allReference } = b;
+  return writeQuadDrawOrder(
+    b.indices, b.stationCount, (s) => stationKindRank(allReference[s * 4]!), raised, CIRCLE_TRIS,
+  );
 }
 
 /**
