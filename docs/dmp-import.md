@@ -358,7 +358,10 @@ a deleted or added row, any edit after import - shifts the positional
   station through later inserts, deletes, splits and reverses; a merge keeps
   both stations' own numbers. The stations grid has a read-only Name column
   (hidden by default; the eye menu shows it) and the detail panel shows
-  `S:I · name` on station links.
+  `S:I · name` on station links. On the map, the Display menu's **Station
+  names** labels each named station with its number in place of its ID (it
+  and **Station IDs** are one choice), and the image export has the same
+  **Station names** option.
 
 ## Key Types
 

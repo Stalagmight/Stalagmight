@@ -336,6 +336,9 @@ export const TESTID_INVENTORY: readonly string[] = [
   'orphan-skip',
   'orphan-accept-all',
   'orphan-close',
+  // the repeated-shots table (#681): a set-all button per choice, a choice per row
+  'overlap-set-all-*',
+  'overlap-choice-*',
   // --- dirty-discard overlay ------------------------------------------------
   'dirty-dialog-keep-editing',
   'dirty-dialog-discard',
@@ -358,6 +361,74 @@ export const SELECT_TESTIDS: readonly string[] = [
 
 /** `overlap-mode-select`'s option values are static (see DmpNewImportDialog). */
 export const OVERLAP_MODES: readonly string[] = ['interpolate', 'import_data', 'existing_data', 'keep_both'];
+
+/**
+ * The orphan dialog's per-shot choices (#681): the option values of every
+ * `overlap-choice-N` (see `OVERLAP_CHOICES` in src/utils/overlapChoices.ts).
+ */
+export const ORPHAN_OVERLAP_CHOICES: readonly string[] = ['keep_existing', 'use_new', 'average'];
+
+/** The orphan dialog's set-all buttons, one per choice (#681). */
+const ORPHAN_OVERLAP_SET_ALL: readonly string[] = [
+  'overlap-set-all-keep-existing',
+  'overlap-set-all-use-new',
+  'overlap-set-all-average',
+];
+
+const ORPHAN_OVERLAP_CHOICE_PREFIX = 'overlap-choice-';
+
+/** Whether `testid` is one of the orphan dialog's repeated-shot controls. */
+export function isOrphanRepeatControl(testid: string): boolean {
+  return testid.startsWith(ORPHAN_OVERLAP_CHOICE_PREFIX) || ORPHAN_OVERLAP_SET_ALL.includes(testid);
+}
+
+/** One move on the orphan dialog's repeated-shot table, as the oracle judges it. */
+export interface OrphanRepeatStep {
+  testid: string;
+  /** The option picked on a per-row choice; null for a set-all click. */
+  value: string | null;
+  performed: boolean;
+  skip: string | null;
+  /** The control's digest state after the move (2 = actionable). */
+  liveAfter: number | undefined;
+  /** Undo depth before and after; negative when it could not be read. */
+  undoBefore: number;
+  undoAfter: number;
+}
+
+/**
+ * What a repeated-shot move owes (#681), as a failure, or null when it held.
+ *
+ * - Keep existing is offered on every row whatever the guards: the doubly-anchored
+ *   guard disables Use new and Average only, so a row that refuses Keep existing
+ *   while actionable leaves the user a repeated shot with no legal choice.
+ * - A choice is dialog state, applied only on Accept, so making one must not move
+ *   the undo stack.
+ *
+ * The orphan-dialog twin of the DMP wizard's `overlap-mode-select` checks.
+ */
+export function orphanRepeatBreach(step: OrphanRepeatStep): { headline: string; detail: string } | null {
+  if (
+    !step.performed &&
+    step.skip === 'option-absent' &&
+    step.value === 'keep_existing' &&
+    step.liveAfter === 2
+  ) {
+    return {
+      headline: 'OVERLAP CHOICES: Keep existing was not offered on a repeated shot',
+      detail: `  ${step.testid} is actionable but refused "keep_existing", which no guard disables`,
+    };
+  }
+  if (step.performed && step.undoBefore >= 0 && step.undoAfter >= 0 && step.undoAfter !== step.undoBefore) {
+    return {
+      headline: 'OVERLAP CHOICES: choosing a reading moved the undo stack',
+      detail:
+        `  ${step.testid}${step.value === null ? '' : ` = ${step.value}`}: undo depth ` +
+        `${step.undoBefore} -> ${step.undoAfter}; a choice is applied only on Accept`,
+    };
+  }
+  return null;
+}
 
 /** `tml-virtual-shot-mode`'s option values are static (see TmlImportDialog). */
 export const VIRTUAL_SHOT_MODES: readonly string[] = ['Auto', 'AllJumps', 'AllReferences'];

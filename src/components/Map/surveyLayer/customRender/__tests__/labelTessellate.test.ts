@@ -96,6 +96,39 @@ describe('buildLabelDescriptors', () => {
     expect(byKind(LABEL_KIND.SECTION_NAME)).toHaveLength(1);
   });
 
+  it('station names mode: named stations only, labelled by name, everything else as for the ID', () => {
+    const d = fixture();
+    d.stationNames = new Map([[0, '7'], [2, ' \u202e9 ']]);
+    const ids = buildLabelDescriptors(d, null, 0, 0, CTX).filter((x) => x.kind === LABEL_KIND.STATION_LABEL);
+    const names = buildLabelDescriptors(d, null, 0, 0, { ...CTX, stationLabelText: 'name' }).filter(
+      (x) => x.kind === LABEL_KIND.STATION_LABEL,
+    );
+    // g1 has no name, so it gets no label (no fallback to its index); g2's name is sanitized.
+    expect(names.map((x) => [x.stationGlobal, x.text])).toEqual([
+      [0, '7'],
+      [2, '9'],
+    ]);
+    // Ordinal, flags, anchor, color and owner match the ID label for the same
+    // station, so names declutter, decimate, dim and hide exactly like the IDs.
+    for (const n of names) {
+      const id = ids.find((x) => x.stationGlobal === n.stationGlobal)!;
+      expect({ ...n, text: id.text }).toEqual(id);
+    }
+  });
+
+  it('station names mode skips names that sanitize to nothing and leaves the other kinds alone', () => {
+    const d = fixture();
+    d.stationNames = new Map([[1, '\u2066\u2069'], [2, '   ']]);
+    const ids = buildLabelDescriptors(d, null, 0, 0, CTX);
+    const names = buildLabelDescriptors(d, null, 0, 0, { ...CTX, stationLabelText: 'name' });
+    expect(names.filter((x) => x.kind === LABEL_KIND.STATION_LABEL)).toEqual([]);
+    expect(names.filter((x) => x.kind !== LABEL_KIND.STATION_LABEL)).toEqual(
+      ids.filter((x) => x.kind !== LABEL_KIND.STATION_LABEL),
+    );
+    // The explicit 'id' mode is the default.
+    expect(buildLabelDescriptors(d, null, 0, 0, { ...CTX, stationLabelText: 'id' })).toEqual(ids);
+  });
+
   it('assigns decimation ordinals (shot running index, station global index)', () => {
     const d = fixture();
     const descs = buildLabelDescriptors(d, null, 0, 0, CTX);

@@ -912,7 +912,8 @@ For batch commands, `derive_command_details()` extracts a compact detail string 
 | `src-tauri/crates/core/src/core/state/undo_capture.rs` | `generate_undo_data()`, `finalize_undo_data()`, `is_undoable()` |
 | `src-tauri/crates/core/src/core/undo/added_content.rs` | `AddedContent`: what an `AddProjectFile` brought, its removal and reinstall |
 | `src-tauri/crates/core/src/core/state/project_add.rs` | The add's forward step, the pending-ignore set |
-| `src-tauri/crates/core/src/core/state/project_append.rs` | `append_project`, shared by merge and add |
+| `src-tauri/crates/core/src/core/state/project_append.rs` | `append_project`, shared by merge and add (copy, datum placement) |
+| `src-tauri/crates/core/src/core/state/project_source.rs` | `read_source_project`, the source read shared by merge and add |
 | `src-tauri/crates/core/src/core/command.rs` | `Command` enum and `description()` method |
 | `src-tauri/src/commands/history.rs` | Tauri commands for stacks |
 | `src-tauri/crates/core/src/core/undo/history_view.rs` | `UndoHistoryItem` DTO, `derive_preview_data()`, `entry_to_history_item()` |

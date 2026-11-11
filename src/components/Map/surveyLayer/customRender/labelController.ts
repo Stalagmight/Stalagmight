@@ -39,7 +39,9 @@
  * ENTIRELY rebuild-free - the emitted slack window only bounds vertices in the
  * crowded low-zoom case. A per-kind / reference toggle
  * stays off the render loop: it flips the uniform and reruns the reveal pass
- * (cheap reveal-only re-upload), never a buffer rebuild.
+ * (cheap reveal-only re-upload), never a buffer rebuild. The one exception is
+ * switching station labels between IDs and names (`setStationLabelMode`): the
+ * text is baked into the glyph quads, so that switch rebuilds, like any edit.
  *
  * FONT READINESS: the SDF atlas needs the bundled font loaded (async). If a sync
  * arrives before the font resolves, it is remembered and built once the font is
@@ -76,7 +78,7 @@ import {
   emitSlackFor,
   type RevealReservation,
 } from './labelReveal';
-import { labelColorContextFrom } from './labelText';
+import { labelColorContextFrom, type StationLabelText } from './labelText';
 import { LABEL_KIND, LABEL_KIND_COUNT, LABEL_FLAG, type LabelKind } from './labelShaders';
 import { LABEL_KIND_STYLE, interpolateStops } from './labelStyle';
 import { packCssColor, type Rgba8 } from './colorPack';
@@ -333,6 +335,9 @@ export class SurveyLabelController {
    *  visibility while inactive. Defaults mirror the stock layers' initial
    *  `visibility`: section names visible, everything else hidden. */
   private kindVisible: boolean[] = [false, false, true, false, false];
+  /** What station labels say (IDs or names). Their visibility is
+   *  `kindVisible[STATION_LABEL]`; this is the text a build bakes in. */
+  private stationLabelText: StationLabelText = 'id';
   /** setShowReferenceShots state (false → collapse reference / all-reference). */
   private referenceShotsVisible = true;
   /** #27: jumps toggle separately. A shot's label carries its own kind's bit and
@@ -410,14 +415,31 @@ export class SurveyLabelController {
     }
   }
 
-  /** Mirror the five setShow* toggles: drive the kind's uniform when active
-   *  (stock stays suppressed); store the desired state either way so a later
-   *  enable / stock restore reproduces it. */
+  /** Mirror the setShow* toggles (station labels: setStationLabelMode below):
+   *  drive the kind's uniform when active (stock stays suppressed); store the
+   *  desired state either way so a later enable / stock restore reproduces it. */
   setShotLabelsVisible(visible: boolean): void {
     this.setKindVisible(LABEL_KIND.SHOT_LABEL, visible);
   }
-  setStationLabelsVisible(visible: boolean): void {
-    this.setKindVisible(LABEL_KIND.STATION_LABEL, visible);
+  /**
+   * Station labels off, as IDs, or as names (the Display menu's exclusive
+   * Station IDs / Station names pair). Showing or hiding the current text is
+   * the usual uniform flip; changing the text rebuilds, because the text is
+   * baked into the glyph quads (and names mode builds no label for an unnamed
+   * station, so the declutter candidate set changes too). Hiding keeps the
+   * current text, so turning the same labels back on needs no rebuild.
+   */
+  setStationLabelMode(mode: StationLabelText | 'off'): void {
+    if (mode === 'off' || mode === this.stationLabelText) {
+      this.setKindVisible(LABEL_KIND.STATION_LABEL, mode !== 'off');
+      return;
+    }
+    this.stationLabelText = mode;
+    this.kindVisible[LABEL_KIND.STATION_LABEL] = true;
+    if (this.active) {
+      this.rebuildViewport();
+      this.pushStyle();
+    }
   }
   setSectionNamesVisible(visible: boolean): void {
     this.setKindVisible(LABEL_KIND.SECTION_NAME, visible);
@@ -572,11 +594,12 @@ export class SurveyLabelController {
     const vpCtx = zoom === undefined ? null : this.computeViewportContext(anchorX, anchorY);
 
     const tDesc0 = performance.now();
-    let descriptors = buildLabelDescriptors(
-      surveyData, gpsOrigin, anchorX, anchorY,
-      { colorCtx, precision: params.precision, commentColor },
-      kinds, vpCtx?.viewport,
-    );
+    // One context for the build and its reservations, so both say the same
+    // station text (IDs or names) and size their boxes alike.
+    const buildCtx: LabelBuildContext = {
+      colorCtx, precision: params.precision, commentColor, stationLabelText: this.stationLabelText,
+    };
+    let descriptors = buildLabelDescriptors(surveyData, gpsOrigin, anchorX, anchorY, buildCtx, kinds, vpCtx?.viewport);
     const tShape0 = performance.now();
     let shaped = shapeDescriptors(descriptors, this.atlas!, this.shapeCache);
     let extents = shaped.map(shapedExtent);
@@ -585,8 +608,7 @@ export class SurveyLabelController {
     // the band crossing (real-line labels outrank it there).
     const reserved =
       kinds === SECTION_ONLY_KINDS && vpCtx !== null && zoom !== undefined
-        ? this.reserveNearVirtualNames(params, anchorX, anchorY, { colorCtx, precision: params.precision, commentColor },
-          descriptors, extents, vpCtx.worldPixelScale, zoom)
+        ? this.reserveNearVirtualNames(params, anchorX, anchorY, buildCtx, descriptors, extents, vpCtx.worldPixelScale, zoom)
         : undefined;
 
     // Reveal pass: fold declutter + decimation into one per-label reveal zoom,

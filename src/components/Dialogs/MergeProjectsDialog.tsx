@@ -233,8 +233,9 @@ export default function MergeProjectsDialog() {
         {/* Info about merge behavior */}
         <div className="p-3 bg-accent-10 border border-accent-20 rounded text-sm">
           <p className="text-text-secondary">
-            Merging will combine all sections from the selected projects into a new project file.
-            Section IDs will be renumbered to avoid conflicts. Zero datums will be preserved.
+            Merging combines all sections from the selected projects into a new project file.
+            Projects with a GPS zero point are placed at their real positions; a project without
+            one keeps its own layout and may need connecting afterwards.
           </p>
         </div>
 

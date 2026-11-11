@@ -315,8 +315,26 @@ describe('SpeleoRevisionHistory revision times (sdk#7)', () => {
     expect(when.getAttribute('datetime')).toBe('2026-11-09T09:15:00.000Z');
     expect(when.textContent).toMatch(/ GMT[+-]\d+(:\d{2})?$/);
     expect(when.getAttribute('title')).toBeTruthy();
-    // An unplaceable value is shown as the server sent it.
-    expect(screen.getByTestId('speleodb-revision-date-bbbbbbbb2222').textContent).toBe('not a date');
+    // A time that cannot be placed is not shown at all, separator included.
+    expect(screen.queryByTestId('speleodb-revision-date-bbbbbbbb2222')).toBeNull();
+    expect(screen.getByTestId('speleodb-revision-bbbbbbbb2222').textContent).not.toContain('·');
+    expect(screen.getByTestId('speleodb-revision-bbbbbbbb2222').textContent).not.toContain('not a date');
+  });
+
+  it('shows an ISO UTC instant as the same local time with its GMT offset', async () => {
+    seed('read-only');
+    invokeIpcMock.mockResolvedValue([
+      { id: 'aaaaaaaa1111', parent_ids: ['bbbbbbbb2222'], author_email: 'me@x', authored_date: '2026-11-09T09:15:42.123Z', message: 'second' },
+      { id: 'bbbbbbbb2222', parent_ids: [], author_email: 'you@x', authored_date: '2026/11/09 04:15', message: 'root' },
+    ] satisfies SpeleoRevision[]);
+    render(<SpeleoRevisionHistory />);
+    await waitFor(() => expect(screen.getByTestId('speleodb-revisions-list')).toBeInTheDocument());
+
+    const iso = screen.getByTestId('speleodb-revision-date-aaaaaaaa1111');
+    expect(iso.getAttribute('datetime')).toBe('2026-11-09T09:15:42.123Z');
+    expect(iso.textContent).toMatch(/ GMT[+-]\d+(:\d{2})?$/);
+    // The same minute from a pre-ISO server reads the same.
+    expect(screen.getByTestId('speleodb-revision-date-bbbbbbbb2222').textContent).toBe(iso.textContent);
   });
 
   // `text-text-tertiary` is not a configured colour (no token, no Tailwind entry),

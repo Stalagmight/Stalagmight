@@ -7,7 +7,7 @@ export type DataFormat = 'csv' | 'json' | 'tml';
 /**
  * Default image-export options. Mirrors the backend `ExportImageOptions::default`
  * (PNG / 300 DPI / threshold 2 / labels on) with colors off - coloring is
- * opt-in and raster-only (SVG stays monochrome). Station labels are opt-in too.
+ * opt-in and raster-only (SVG stays monochrome). Station ID and name labels are opt-in too.
  */
 export const DEFAULT_IMAGE_OPTIONS: ExportImageOptions = {
   format: 'png',
@@ -20,6 +20,8 @@ export const DEFAULT_IMAGE_OPTIONS: ExportImageOptions = {
   // reads the live theme tokens. A default here would be a second source of
   // truth for the ramp and would be the stale one.
   show_station_labels: false,
+  // Station names instead of IDs; exclusive with the IDs (setStationLabelOption).
+  show_station_names: false,
   show_section_names: false,
   show_station_comments: false,
   show_shot_comments: false,

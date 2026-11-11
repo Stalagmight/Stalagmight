@@ -243,6 +243,106 @@ test.describe('Label Toggle Click Coverage', () => {
   }
 });
 
+/** Give the first seeded section's stations names, as a DMP import would, and
+ *  rebuild the survey data from them (the mock threads names into
+ *  get_project_state only). */
+async function seedStationNames(page: Page, names: Array<[number, string]>): Promise<void> {
+  await page.evaluate(async (names) => {
+    const w = window as unknown as {
+      __MOCK_SET_STATION_NAME__: (sectionId: number, stationIndex: number, name: string | null) => void;
+      __E2E_TEST__: { projectStore: { getState: () => { project: { sections: Array<{ id: number }> }; refreshProjectState: () => Promise<void> } } };
+    };
+    const store = w.__E2E_TEST__.projectStore.getState();
+    const sectionId = store.project.sections[0]!.id;
+    for (const [index, name] of names) w.__MOCK_SET_STATION_NAME__(sectionId, index, name);
+    await store.refreshProjectState();
+  }, names);
+}
+
+async function stationLabelPair(page: Page): Promise<{ ids: boolean; names: boolean }> {
+  return page.evaluate(() => {
+    const s = (window as unknown as { __E2E_TEST__: { uiStore: { getState: () => { showStationLabels: boolean; showStationNames: boolean } } } })
+      .__E2E_TEST__.uiStore.getState();
+    return { ids: s.showStationLabels, names: s.showStationNames };
+  });
+}
+
+test.describe('Station IDs / Station names', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupTauriMocks(page);
+    await page.goto('/');
+    await createProject(page, 'Station Names Test');
+    await seedProjectWithSections(page, sectionSeeds);
+    await waitForMapReady(page);
+    await waitForDrawnStations(page, 1);
+  });
+
+  test('Station names is offered only once the project has names', async ({ page }) => {
+    await openDisplayMenu(page);
+    const names = page.getByTestId('display-toggle-showStationNames');
+    await expect(page.getByTestId('display-toggle-showStationLabels')).toHaveText(/Station IDs/);
+    await expect(names).toHaveText(/Station names/);
+    await expect(names).toBeDisabled();
+    await expect(names).toHaveAttribute('title', /no station names/);
+
+    await seedStationNames(page, [[0, '7'], [2, '9']]);
+    await expect(names).toBeEnabled();
+    await expect(names).toHaveAttribute('title', /instead of IDs/);
+  });
+
+  test('the two pills are one choice, and both are saved', async ({ page }) => {
+    const saves: string[] = [];
+    page.on('console', (msg) => {
+      const m = /save_display_setting: (showStation(?:Labels|Names))=(true|false)/.exec(msg.text());
+      if (m) saves.push(`${m[1]}=${m[2]}`);
+    });
+    await seedStationNames(page, [[0, '7'], [2, '9']]);
+    await openDisplayMenu(page);
+
+    await toggleDisplayOption(page, 'showStationLabels');
+    expect(await stationLabelPair(page)).toEqual({ ids: true, names: false });
+
+    // Names on turns IDs off.
+    await toggleDisplayOption(page, 'showStationNames');
+    expect(await isToggleOn(page, 'showStationLabels')).toBe(false);
+    expect(await stationLabelPair(page)).toEqual({ ids: false, names: true });
+
+    // IDs on turns names off.
+    await toggleDisplayOption(page, 'showStationLabels');
+    expect(await isToggleOn(page, 'showStationNames')).toBe(false);
+    expect(await stationLabelPair(page)).toEqual({ ids: true, names: false });
+
+    // Turning one off leaves both off.
+    await toggleDisplayOption(page, 'showStationLabels');
+    expect(await stationLabelPair(page)).toEqual({ ids: false, names: false });
+
+    // Every toggle writes the pair as it now stands, partner first, so a stored
+    // pair can never be left reading both-on.
+    await expect
+      .poll(() => saves, { timeout: 2000 })
+      .toEqual([
+        'showStationNames=false',
+        'showStationLabels=true',
+        'showStationLabels=false',
+        'showStationNames=true',
+        'showStationNames=false',
+        'showStationLabels=true',
+        'showStationNames=false',
+        'showStationLabels=false',
+      ]);
+  });
+
+  test('the L key turns Station IDs on and Station names off', async ({ page }) => {
+    await seedStationNames(page, [[0, '7']]);
+    await openDisplayMenu(page);
+    await toggleDisplayOption(page, 'showStationNames');
+    await page.keyboard.press('Escape');
+    await page.locator('canvas').first().click({ position: { x: 5, y: 5 } });
+    await page.keyboard.press('l');
+    await expect.poll(() => stationLabelPair(page), { timeout: 2000 }).toEqual({ ids: true, names: false });
+  });
+});
+
 test.describe('Selection Blocking When Hidden', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
@@ -769,6 +869,7 @@ test.describe('Display Menu State Persistence', () => {
     expect(await isToggleOn(page, 'showShots')).toBe(true);
     expect(await isToggleOn(page, 'showSectionNames')).toBe(true);
     expect(await isToggleOn(page, 'showStationLabels')).toBe(false);
+    expect(await isToggleOn(page, 'showStationNames')).toBe(false);
     expect(await isToggleOn(page, 'showShotData')).toBe(false);
     expect(await isToggleOn(page, 'showReferenceShots')).toBe(true);
     expect(await isToggleOn(page, 'showZeroDatum')).toBe(true);

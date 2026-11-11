@@ -17,6 +17,8 @@ use super::models::{
 use super::native::NativeFile;
 use super::{SpeleoDbError, TransportCause};
 
+mod commit_dates;
+
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
 const TRANSFER_TIMEOUT: Duration = Duration::from_secs(120);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -33,16 +35,15 @@ fn upload_timeout(bytes: usize) -> Duration {
 const DOWNLOAD_MIN_RATE: u64 = 4 * 1024;
 
 /// The longest any download may run, whatever it has received: the deadline of
-/// the largest file SpeleoDB accepts ([`SERVER_UPLOAD_LIMIT_BYTES`]) at
+/// the largest file a SpeleoDB server may hold ([`LARGEST_STORED_BYTES`]) at
 /// [`DOWNLOAD_MIN_RATE`], 120 + 6,020 s (about 1 h 42 min). Without it the
 /// per-byte deadline alone let a server trickling just above the minimum rate
 /// hold a download - and the app's exit waiting for it - for some 36 hours
-/// within the native size limit. Derived rather than picked: every project the
-/// server can store still downloads at the minimum rate, so only a server
+/// within the native size limit. Derived rather than picked: every project a
+/// server can have stored still downloads at the minimum rate, so only a server
 /// sending more than it could have stored, or slower than the minimum, is cut.
-/// It grows with the upload limit when the server's limit is fixed.
 const DOWNLOAD_CEILING: Duration = Duration::from_secs(
-    TRANSFER_TIMEOUT.as_secs() + SERVER_UPLOAD_LIMIT_BYTES.div_ceil(DOWNLOAD_MIN_RATE),
+    TRANSFER_TIMEOUT.as_secs() + LARGEST_STORED_BYTES.div_ceil(DOWNLOAD_MIN_RATE),
 );
 
 /// How long a download may have run once it has received `bytes`: `grace` plus
@@ -60,17 +61,28 @@ const JSON_LIMIT: usize = 10 * 1024 * 1024;
 /// hold a file to the same ceiling the app already holds a pulled one to.
 pub const NATIVE_LIMIT: u64 = 512 * 1024 * 1024;
 
-/// The largest project file SpeleoDB accepts in one upload, in bytes. A larger
-/// file is refused with a 400 only AFTER its whole body has been sent, so the
-/// push path checks against this first (sdk#3).
+/// The largest project file SpeleoDB accepts in one upload, in bytes: 5 MiB. A
+/// larger file is refused with a 400 only AFTER its whole body has been sent, so
+/// the push path checks against this first (sdk#3).
 ///
-/// The value is an upstream bug, not a design limit. The server compares the
-/// upload against `DJANGO_UPLOAD_TOTAL_FILES_LIMIT * 1024 * 1204`: that setting is
-/// the maximum file COUNT (20), not the intended
-/// `DJANGO_UPLOAD_TOTAL_FILESIZE_MB_LIMIT` (150 MB), and `1204` is a typo for
-/// `1024`. 20 * 1024 * 1204 = 24,657,920 bytes (about 23.5 MiB). Raise this to the
-/// real limit once the server is fixed.
-pub const SERVER_UPLOAD_LIMIT_BYTES: u64 = 24_657_920;
+/// SpeleoDB e094fd501 (2026-11-10, shipped with the ISO revision dates and SDK
+/// 0.6.2) limits each uploaded file to `DJANGO_GIT_UPLOAD_INDIVIDUAL_FILESIZE_MB_LIMIT`
+/// = 5 MiB, inclusive, and a commit to 7 MiB; an upload is one `.stalx`, so the
+/// per-file limit is the one that binds. An older server accepted up to
+/// [`LARGEST_STORED_BYTES`] (about 23.5 MiB), and uploads to it are held to the
+/// newer limit too: a project between the two now leaves out its undo history,
+/// and one still over 5 MiB without it is refused, where that server would have
+/// taken it. The app cannot tell the server's limit from its replies, and the
+/// servers that matter are moving to the newer one.
+pub const SERVER_UPLOAD_LIMIT_BYTES: u64 = 5 * 1024 * 1024;
+
+/// The largest project file a SpeleoDB server may hold, in bytes: what a server
+/// from before e094fd501 accepted in one upload. Its check compared the upload
+/// against `DJANGO_UPLOAD_TOTAL_FILES_LIMIT * 1024 * 1204`: the maximum file COUNT
+/// (20) rather than a size, and `1204` a typo for `1024`, so 20 * 1024 * 1204 =
+/// 24,657,920 bytes (about 23.5 MiB). Projects that large may still be stored, so
+/// downloads are budgeted for them ([`DOWNLOAD_CEILING`]).
+pub const LARGEST_STORED_BYTES: u64 = 24_657_920;
 
 #[derive(Clone, Copy)]
 struct Settings {
@@ -488,6 +500,44 @@ fn api_error<E: std::fmt::Debug>(error: ApiOpError<E>) -> SpeleoDbError {
         }
     }
 }
+/// The reply of an SDK call that decodes a project or a revision list. A 2xx reply
+/// the SDK could not deserialize is decoded again with the commit dates a pre-ISO
+/// server writes set aside ([`commit_dates::decode_reply`]); any other refusal,
+/// an unexpected success status included, stays a contract mismatch.
+fn sdk_reply<T: serde::de::DeserializeOwned, E: std::fmt::Debug>(
+    result: Result<T, ApiOpError<E>>,
+) -> Result<commit_dates::Reply<T>, SpeleoDbError> {
+    match result {
+        Ok(value) => Ok(commit_dates::Reply::typed(value)),
+        Err(ApiOpError::Api(error))
+            if (200..300).contains(&error.status)
+                && error
+                    .parse_error
+                    .as_deref()
+                    .is_some_and(|e| e.starts_with("failed to deserialize 2xx response body")) =>
+        {
+            let reply = match commit_dates::decode_reply(&error.raw_body) {
+                Some(Ok(reply)) => reply,
+                Some(Err(detail)) => {
+                    return Err(SpeleoDbError::Parse(contract_mismatch(Some(
+                        detail.to_string(),
+                    ))))
+                }
+                None => return Err(SpeleoDbError::Parse(contract_mismatch(error.parse_error))),
+            };
+            static NOTED: OnceLock<()> = OnceLock::new();
+            NOTED.get_or_init(|| {
+                tracing::info!(
+                    "SpeleoDB sent commit dates the SDK cannot read (a server from before \
+                     its ISO revision dates); revision times are read in the old format \
+                     or not shown"
+                );
+            });
+            Ok(reply)
+        }
+        Err(error) => Err(api_error(error)),
+    }
+}
 /// The message of a SpeleoDB error reply, [`bounded`]: the server chooses it, and
 /// it may be as long as the reply.
 fn parse_error_message(body: &[u8]) -> Option<String> {
@@ -742,12 +792,7 @@ fn get_project_inner(
 ) -> Result<Project, SpeleoDbError> {
     let c = client(base, Some(token), insecure, timeout)?;
     c.call(Endpoint::GetProject, retry, || async {
-        project(
-            c.http
-                .v2_project_retrieve(id, None)
-                .await
-                .map_err(api_error)?,
-        )
+        project(sdk_reply(c.http.v2_project_retrieve(id, None).await)?.value)
     })
 }
 pub fn get_revisions(
@@ -758,20 +803,21 @@ pub fn get_revisions(
 ) -> Result<RevisionHistory, SpeleoDbError> {
     let c = client(base, Some(token), insecure, READ_TIMEOUT)?;
     c.call(Endpoint::GetRevisions, true, || async {
-        let value = c
-            .http
-            .v2_projects_revisions_retrieve(id, None)
-            .await
-            .map_err(api_error)?;
+        let reply = sdk_reply(c.http.v2_projects_revisions_retrieve(id, None).await)?;
         Ok(RevisionHistory {
-            commits: value
+            commits: reply
+                .value
                 .commits
                 .into_iter()
-                .map(|v| RevisionCommit {
+                .enumerate()
+                .map(|(i, v)| RevisionCommit {
+                    authored_date: match reply.dates.get(i) {
+                        Some(date) => date.clone(),
+                        None => Some(commit_dates::instant(v.authored_date)),
+                    },
                     id: v.id,
                     parent_ids: v.parent_ids,
                     author_email: v.author_email,
-                    authored_date: Some(v.authored_date),
                     message: Some(v.message),
                 })
                 .collect(),
@@ -787,10 +833,12 @@ pub fn acquire_lock(
     let c = client(base, Some(token), insecure, READ_TIMEOUT)?;
     c.call(Endpoint::Acquire, false, || async {
         project(
-            c.http
-                .v2_projects_acquire_create(id, None, None::<&str>)
-                .await
-                .map_err(api_error)?,
+            sdk_reply(
+                c.http
+                    .v2_projects_acquire_create(id, None, None::<&str>)
+                    .await,
+            )?
+            .value,
         )
     })
 }
@@ -803,10 +851,12 @@ pub fn release_lock(
     let c = client(base, Some(token), insecure, READ_TIMEOUT)?;
     c.call(Endpoint::Release, false, || async {
         project(
-            c.http
-                .v2_projects_release_create_with_json(id, None, None::<&str>, None)
-                .await
-                .map_err(api_error)?,
+            sdk_reply(
+                c.http
+                    .v2_projects_release_create_with_json(id, None, None::<&str>, None)
+                    .await,
+            )?
+            .value,
         )
     })
 }
@@ -821,10 +871,12 @@ pub fn create_project_with(
     let c = client(base, Some(token), insecure, READ_TIMEOUT)?;
     c.call(Endpoint::CreateProject, false, || async {
         project(
-            c.http
-                .v2_projects_create_with_json(None, None::<&str>, request.clone())
-                .await
-                .map_err(api_error)?,
+            sdk_reply(
+                c.http
+                    .v2_projects_create_with_json(None, None::<&str>, request.clone())
+                    .await,
+            )?
+            .value,
         )
     })
 }
@@ -840,10 +892,17 @@ pub fn patch_project(
     let c = client(base, Some(token), insecure, READ_TIMEOUT)?;
     c.call(Endpoint::PatchProject, false, || async {
         project(
-            c.http
-                .v2_projects_partial_update_with_json(id, None, None::<&str>, Some(request.clone()))
-                .await
-                .map_err(api_error)?,
+            sdk_reply(
+                c.http
+                    .v2_projects_partial_update_with_json(
+                        id,
+                        None,
+                        None::<&str>,
+                        Some(request.clone()),
+                    )
+                    .await,
+            )?
+            .value,
         )
     })
 }
@@ -879,11 +938,12 @@ pub fn upload_stalx(
                 content_type: Some("application/vnd.sqlite3".into()),
             }],
         };
-        let response = c
-            .http
-            .v2_projects_upload("stalagmight", id, None, None::<&str>, request)
-            .await
-            .map_err(api_error)?;
+        let response = sdk_reply(
+            c.http
+                .v2_projects_upload("stalagmight", id, None, None::<&str>, request)
+                .await,
+        )?
+        .value;
         let mut value = project(response.project)?;
         value.latest_commit = if response.hexsha.is_empty() {
             None

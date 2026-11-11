@@ -220,7 +220,7 @@ fn project_operations_preserve_permissions_locks_and_patch_nulls() {
 
 #[test]
 fn revisions_and_native_file_routes_are_exact() {
-    let commit = json!({"id":SHA,"parent_ids":[],"author_email":"test@example.com","author_name":"Test","authored_date":"2026/01/01 00:00","dt_since":"now","message":"Test","formats":[],"tree":[],"url":null});
+    let commit = json!({"id":SHA,"parent_ids":[],"author_email":"test@example.com","author_name":"Test","authored_date":"2026-01-01T00:00:00Z","dt_since":"now","message":"Test","formats":[],"tree":[],"url":null});
     let s = Server::json(json!({"project":project_json(),"commits":[commit]}));
     assert_eq!(
         get_revisions(&s.base, "t", false, ID).unwrap().commits[0].id,
@@ -690,6 +690,16 @@ fn live_used_api_calls_with_email_and_token() {
                     let history = get_revisions(&base, &token, false, id)?;
                     assert!(history.commits.iter().any(|c| c.id == first));
                     assert!(history.commits.iter().any(|c| c.id == second));
+                    // A current server's instant or a pre-ISO server's wall time;
+                    // either way every revision has a time to show, and it is when
+                    // this test made the revision, not hours off.
+                    for commit in &history.commits {
+                        let date = commit.authored_date.as_deref().expect("revision time");
+                        assert!(
+                            live_revision_time_is_plausible(date, chrono::Utc::now()),
+                            "{label}: revision time {date:?} is not this run's time"
+                        );
+                    }
                     assert_eq!(
                         std::fs::read(
                             download_stalx_at_hash(&base, &token, false, id, &first)?.path()
@@ -724,6 +734,47 @@ fn live_used_api_calls_with_email_and_token() {
         deleted.expect("delete test-owned project");
     }
     eprintln!("live SpeleoDB API tests executed successfully; both test-created projects deleted");
+}
+
+/// Whether `date`, a revision time as the history gets it, is a commit made within
+/// the last hour: an instant in UTC, or the pre-ISO server's New York wall time
+/// (UTC-4 or UTC-5).
+fn live_revision_time_is_plausible(date: &str, now: chrono::DateTime<chrono::Utc>) -> bool {
+    let window = |instant: chrono::DateTime<chrono::Utc>| (now - instant).num_minutes().abs() <= 60;
+    if commit_dates::is_wall_time(date) {
+        let wall = chrono::NaiveDateTime::parse_from_str(date, "%Y/%m/%d %H:%M")
+            .expect("wall time")
+            .and_utc();
+        return [4, 5]
+            .into_iter()
+            .any(|hours| window(wall + chrono::Duration::hours(hours)));
+    }
+    commit_dates::display_date(date).as_deref() == Some(date)
+        && date
+            .parse::<chrono::DateTime<chrono::Utc>>()
+            .is_ok_and(window)
+}
+
+#[test]
+fn live_revision_times_are_checked_against_the_run_time() {
+    let now = "2026-11-11T07:08:30Z"
+        .parse::<chrono::DateTime<chrono::Utc>>()
+        .unwrap();
+    assert!(live_revision_time_is_plausible(
+        "2026-11-11T07:08:16.000Z",
+        now
+    ));
+    assert!(live_revision_time_is_plausible("2026/11/11 02:08", now));
+    // The same wall time read as UTC, or a time five hours off, is wrong.
+    assert!(!live_revision_time_is_plausible("2026/11/11 07:08", now));
+    assert!(!live_revision_time_is_plausible(
+        "2026-11-11T02:08:16.000Z",
+        now
+    ));
+    assert!(!live_revision_time_is_plausible(
+        "2026-11-11T07:08:16Z",
+        now
+    ));
 }
 
 #[test]
@@ -851,12 +902,14 @@ fn download_deadline_scales_with_the_size_and_is_bounded_by_the_native_limit() {
     );
     // Generous: a quarter of the upload budget's rate, so never shorter than it.
     assert!(deadline(20 * 1024 * 1024) >= upload_timeout(20 * 1024 * 1024));
-    // Every file SpeleoDB can store still fits at the minimum rate...
+    // Every file a SpeleoDB server may hold (an older one took up to about
+    // 23.5 MiB) still fits at the minimum rate...
     assert_eq!(
-        deadline(SERVER_UPLOAD_LIMIT_BYTES),
-        grace + Duration::from_secs(SERVER_UPLOAD_LIMIT_BYTES / DOWNLOAD_MIN_RATE)
+        deadline(LARGEST_STORED_BYTES),
+        grace + Duration::from_secs(LARGEST_STORED_BYTES / DOWNLOAD_MIN_RATE)
     );
-    assert!(deadline(SERVER_UPLOAD_LIMIT_BYTES) <= DOWNLOAD_CEILING);
+    assert!(deadline(LARGEST_STORED_BYTES) <= DOWNLOAD_CEILING);
+    const { assert!(SERVER_UPLOAD_LIMIT_BYTES < LARGEST_STORED_BYTES) };
     // ...while the most a download may receive (the native limit, about 36 h at
     // the minimum rate) is cut at the ceiling, Content-Length or not.
     assert_eq!(deadline(NATIVE_LIMIT), DOWNLOAD_CEILING);
@@ -1212,8 +1265,8 @@ fn a_tls_handshake_failure_is_classified_as_tls() {
 fn an_upload_over_the_server_limit_is_refused_before_any_request() {
     // sdk#3: the server reads the whole body before refusing an oversized file,
     // so the client refuses it first - no connection, no body. The limit is
-    // lowered for the test; the production value is the server's 24,657,920.
-    assert_eq!(SERVER_UPLOAD_LIMIT_BYTES, 24_657_920);
+    // lowered for the test; the production value is the server's 5 MiB.
+    assert_eq!(SERVER_UPLOAD_LIMIT_BYTES, 5_242_880);
     let _settings = TestSettings::install(Settings {
         upload_limit: 16,
         ..Settings::default()
@@ -1255,4 +1308,279 @@ fn a_profile_contract_mismatch_also_keeps_the_decoder_detail() {
     assert!(matches!(&err, SpeleoDbError::Parse(_)), "got {err:?}");
     assert!(err.to_string().contains("unknown variant `...`"), "{err}");
     assert!(!err.to_string().contains("ZZ"), "{err}");
+}
+
+/// A revision as a SpeleoDB from before the ISO revision dates (server a679010c6)
+/// sends it: New York wall time with no zone.
+fn pre_iso_commit(id: &str, date: &str) -> Value {
+    json!({"id":id,"parent_ids":[],"author_email":"test@example.com","author_name":"Test",
+        "authored_date":date,"dt_since":"now","message":"Synthetic","formats":[],"tree":[],"url":null})
+}
+/// A project as a pre-ISO server sends it: `latest_commit` embeds the whole newest
+/// commit, wall-time date included.
+fn pre_iso_project() -> Value {
+    let mut p = project_json();
+    p["commit_count"] = json!(1);
+    p["latest_commit"] = pre_iso_commit(SHA, "2026/11/10 03:18");
+    p
+}
+
+#[test]
+fn iso_revision_dates_reach_the_history_as_utc_milliseconds() {
+    let mut project = project_json();
+    project["latest_commit"] = pre_iso_commit(SHA, "2026-11-10T08:18:23Z");
+    let s = Server::json(json!({"project":project,"commits":[
+        pre_iso_commit(SHA, "2026-11-10T09:18:23.123456+01:00"),
+        pre_iso_commit(SHA, "2026-11-10T08:18:23Z"),
+    ]}));
+    let dates: Vec<_> = get_revisions(&s.base, "t", false, ID)
+        .unwrap()
+        .commits
+        .into_iter()
+        .map(|c| c.authored_date)
+        .collect();
+    s.finish();
+    assert_eq!(
+        dates,
+        [
+            Some("2026-11-10T08:18:23.123Z".to_owned()),
+            Some("2026-11-10T08:18:23.000Z".to_owned())
+        ]
+    );
+}
+
+#[test]
+fn pre_iso_revision_dates_reach_the_history_as_sent() {
+    let parent = "1111111111111111111111111111111111111111";
+    let mut child = pre_iso_commit(SHA, "2026/11/10 03:18");
+    child["parent_ids"] = json!([parent]);
+    let s = Server::json(json!({"project":pre_iso_project(),"commits":[
+        child,
+        pre_iso_commit(parent, "2026-11-09T08:00:00.5Z"),
+        pre_iso_commit(parent, "not a date"),
+    ]}));
+    let history = get_revisions(&s.base, "t", false, ID).unwrap();
+    s.finish();
+    // The wall time goes to the frontend unchanged (it knows New York's rules), an
+    // instant is normalised, and a date neither format reads shows no time.
+    let dates: Vec<_> = history
+        .commits
+        .iter()
+        .map(|c| c.authored_date.clone())
+        .collect();
+    assert_eq!(
+        dates,
+        [
+            Some("2026/11/10 03:18".to_owned()),
+            Some("2026-11-09T08:00:00.500Z".to_owned()),
+            None
+        ]
+    );
+    assert_eq!(history.commits[0].id, SHA);
+    assert_eq!(history.commits[0].parent_ids, [parent]);
+    assert_eq!(history.commits[0].author_email, "test@example.com");
+    assert_eq!(history.commits[0].message.as_deref(), Some("Synthetic"));
+}
+
+#[test]
+fn pre_iso_dates_do_not_excuse_any_other_contract_mismatch() {
+    let mut missing_id = pre_iso_commit(SHA, "2026/11/10 03:18");
+    missing_id.as_object_mut().unwrap().remove("id");
+    let mut unknown_field = pre_iso_commit(SHA, "2026/11/10 03:18");
+    unknown_field["surprise"] = json!(true);
+    let mut drifted_project = pre_iso_project();
+    drifted_project["visibility"] = json!("FUTURE_VISIBILITY");
+    for reply in [
+        json!({"project":pre_iso_project(),"commits":[missing_id]}),
+        json!({"project":pre_iso_project(),"commits":[unknown_field]}),
+        json!({"project":drifted_project,"commits":[pre_iso_commit(SHA, "2026/11/10 03:18")]}),
+    ] {
+        let s = Server::json(reply);
+        let err = get_revisions(&s.base, "t", false, ID).unwrap_err();
+        s.finish();
+        assert!(matches!(&err, SpeleoDbError::Parse(_)), "got {err:?}");
+    }
+    let mut drifted_project = pre_iso_project();
+    drifted_project["visibility"] = json!("FUTURE_VISIBILITY");
+    let s = Server::json(drifted_project);
+    let err = get_project(&s.base, "t", false, ID).unwrap_err();
+    s.finish();
+    assert!(err.to_string().contains("unknown variant `...`"), "{err}");
+}
+
+#[test]
+fn every_project_reply_from_a_pre_iso_server_decodes() {
+    let check = |result: Result<Project, SpeleoDbError>| {
+        assert_eq!(result.unwrap().latest_commit.unwrap().id, SHA);
+    };
+    for probe in [false, true] {
+        let s = Server::json(pre_iso_project());
+        check(if probe {
+            get_project_probe(&s.base, "t", false, ID)
+        } else {
+            get_project(&s.base, "t", false, ID)
+        });
+        s.finish();
+    }
+    for acquire in [true, false] {
+        let s = Server::json(pre_iso_project());
+        check(if acquire {
+            acquire_lock(&s.base, "t", false, ID)
+        } else {
+            release_lock(&s.base, "t", false, ID)
+        });
+        s.finish();
+    }
+    let s = Server::replies(vec![(201, pre_iso_project().to_string().into_bytes())]);
+    check(create_project_with(
+        &s.base,
+        "t",
+        false,
+        &json!({"name":"Synthetic","description":"Test","country":"US","type":"STALAGMIGHT"})
+            .to_string(),
+    ));
+    s.finish();
+    let s = Server::json(pre_iso_project());
+    check(patch_project(
+        &s.base,
+        "t",
+        false,
+        ID,
+        r#"{"name":"Renamed"}"#,
+    ));
+    s.finish();
+    let f = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(f.path(), b"SQLite format 3\0").unwrap();
+    let s = Server::json(
+        json!({"project":pre_iso_project(),"hexsha":SHA,"files":["project.stalx"],"message":"Saved","browser_url":null}),
+    );
+    check(upload_stalx(
+        &s.base,
+        "t",
+        false,
+        ID,
+        f.path(),
+        "Synthetic upload",
+    ));
+    s.finish();
+}
+
+#[test]
+fn pre_iso_dates_never_excuse_an_unexpected_success_status() {
+    // Create answers 201 and lock answers 200; another 2xx is the SDK's own
+    // refusal, whatever the dates in the body.
+    let s = Server::json(pre_iso_project());
+    let err = create_project_with(
+        &s.base,
+        "t",
+        false,
+        &json!({"name":"Synthetic","description":"Test","country":"US","type":"STALAGMIGHT"})
+            .to_string(),
+    )
+    .unwrap_err();
+    s.finish();
+    assert!(matches!(&err, SpeleoDbError::Parse(_)), "got {err:?}");
+    let s = Server::replies(vec![(202, pre_iso_project().to_string().into_bytes())]);
+    let err = acquire_lock(&s.base, "t", false, ID).unwrap_err();
+    s.finish();
+    assert!(matches!(&err, SpeleoDbError::Parse(_)), "got {err:?}");
+}
+
+#[test]
+fn an_embedded_commit_is_still_held_to_the_contract_apart_from_its_date() {
+    let mut no_author = pre_iso_project();
+    no_author["latest_commit"]
+        .as_object_mut()
+        .unwrap()
+        .remove("author_name");
+    let mut unknown_field = pre_iso_project();
+    unknown_field["latest_commit"]["surprise"] = json!(true);
+    let mut bad_parents = pre_iso_project();
+    bad_parents["latest_commit"]["parent_ids"] = json!("not a list");
+    let mut null_date = pre_iso_project();
+    null_date["latest_commit"]["authored_date"] = Value::Null;
+    for reply in [no_author, unknown_field, bad_parents, null_date] {
+        let s = Server::json(reply);
+        let err = get_project(&s.base, "t", false, ID).unwrap_err();
+        s.finish();
+        assert!(matches!(&err, SpeleoDbError::Parse(_)), "got {err:?}");
+    }
+}
+
+#[test]
+fn a_revision_date_that_is_not_a_string_stays_a_contract_mismatch() {
+    for date in [Value::Null, json!(42)] {
+        let mut commit = pre_iso_commit(SHA, "2026/11/10 03:18");
+        commit["authored_date"] = date;
+        let s = Server::json(
+            json!({"project":pre_iso_project(),"commits":[commit, pre_iso_commit(SHA, "2026/11/10 03:18")]}),
+        );
+        let err = get_revisions(&s.base, "t", false, ID).unwrap_err();
+        s.finish();
+        assert!(matches!(&err, SpeleoDbError::Parse(_)), "got {err:?}");
+    }
+}
+
+#[test]
+fn only_a_real_wall_time_passes_to_the_frontend() {
+    use super::commit_dates::display_date;
+    assert_eq!(
+        display_date(" 2026/11/10 03:18 ").as_deref(),
+        Some("2026/11/10 03:18")
+    );
+    // The shape, but not a date or time: shown as nothing rather than rolled over.
+    for raw in [
+        "2026/13/45 25:99",
+        "2026/02/30 10:00",
+        "2026/11/10 24:00",
+        "2026/1/10 03:18",
+    ] {
+        assert_eq!(display_date(raw), None, "{raw}");
+    }
+    assert_eq!(
+        display_date("2026-11-10T03:18:23-05:00").as_deref(),
+        Some("2026-11-10T08:18:23.000Z")
+    );
+    assert_eq!(
+        display_date("2026-11-10T08:18:23.123456789Z").as_deref(),
+        Some("2026-11-10T08:18:23.123Z")
+    );
+    assert_eq!(display_date("yesterday"), None);
+}
+
+#[test]
+fn the_upload_limit_is_the_servers_inclusive_five_mib() {
+    // SpeleoDB refuses a file only ABOVE 5 MiB, so exactly 5 MiB is sent and one
+    // byte more is refused here, before any request.
+    let f = tempfile::NamedTempFile::new().unwrap();
+    let mut bytes = b"SQLite format 3\0".to_vec();
+    bytes.resize(5 * 1024 * 1024 + 1, 0);
+    std::fs::write(f.path(), &bytes).unwrap();
+    let s = Server::replies(Vec::new());
+    let err = upload_stalx(&s.base, "t", false, ID, f.path(), "One byte over").unwrap_err();
+    assert!(
+        matches!(err, SpeleoDbError::UploadTooLarge { size, limit } if size == 5_242_881 && limit == 5_242_880),
+        "got {err:?}"
+    );
+    assert!(s.finish().is_empty(), "nothing may reach the server");
+    bytes.truncate(5 * 1024 * 1024);
+    std::fs::write(f.path(), &bytes).unwrap();
+    let s = Server::json(
+        json!({"project":project_json(),"hexsha":SHA,"files":["project.stalx"],"message":"Saved","browser_url":null}),
+    );
+    upload_stalx(&s.base, "t", false, ID, f.path(), "Exactly the limit").unwrap();
+    assert_eq!(s.finish().len(), 1);
+}
+
+#[test]
+fn a_refused_reply_without_a_commit_date_is_not_decoded_again() {
+    use super::commit_dates::decode_reply;
+    // Nothing to set aside: the SDK's own refusal stands, and no tree is built.
+    let mut drifted = project_json();
+    drifted["visibility"] = json!("FUTURE_VISIBILITY");
+    let body = drifted.to_string().into_bytes();
+    assert!(decode_reply::<types::Project>(&body).is_none());
+    // With an old-format date, it is.
+    let body = pre_iso_project().to_string().into_bytes();
+    assert!(matches!(decode_reply::<types::Project>(&body), Some(Ok(_))));
 }

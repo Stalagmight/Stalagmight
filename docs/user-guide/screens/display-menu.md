@@ -21,8 +21,8 @@ What the map shows. Opened by **Display** in the top right of the
 2. **Overlays**: **Grid** and **Satellite** imagery.
 3. **Map elements**: **Stations**, **Shots**, **Jumps**, **References** and
    **Zero datum** stations.
-4. **Comments & labels**: **Section names**, **Station labels** (station IDs),
-   **Station comments**, **Shot comments** and **Shot data** labels.
+4. **Comments & labels**: **Section names**, **Station IDs**, **Station
+   names**, **Station comments**, **Shot comments** and **Shot data** labels.
 5. **Geometry**:
    - **Raw Data View**: the survey as measured.
    - **Closures Computed View**: corrected by the
@@ -31,6 +31,11 @@ What the map shows. Opened by **Display** in the top right of the
 ## Details
 
 - **Grid** adds a **Grid spacing** setting.
+- **Station IDs** and **Station names** label the stations in two ways, and
+  only one can be on: turning one on turns the other off. **Station names**
+  shows each station's name, such as the mNemo station number from a `.dmp`
+  import, and stations without a name get no label. It is unavailable when
+  the project has no station names.
 - **Closures Computed View** is unavailable when there are no loop closures to
   adjust. Edit in the **Raw Data View**.
 - The choices are remembered between sessions, except **Distance** and

@@ -175,7 +175,7 @@ pub enum SpeleoDbError {
 }
 
 /// A byte count as decimal megabytes with one decimal, for user-facing text
-/// (`24_657_920` -> `24.7`).
+/// (`5_242_880` -> `5.2`).
 fn megabytes(bytes: &u64) -> String {
     format!("{:.1}", *bytes as f64 / 1_000_000.0)
 }

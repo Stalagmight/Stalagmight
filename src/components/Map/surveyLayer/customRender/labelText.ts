@@ -13,12 +13,14 @@
  * import cycle.
  *
  * PURE: no DOM, no GL. Depends only on the i18n number formatter (locale-aware,
- * exactly as the stock builder formats) and the depth ramp.
+ * exactly as the stock builder formats), the depth ramp, and the station-name
+ * display sanitizer.
  */
 import type { DecimalPrecision } from '../../../../types/config';
 import type { MapThemeColors } from '../../../../utils/themeColors';
 import { formatFixed } from '../../../../i18n/format';
 import { getDepthColor } from '../../../../utils/colors';
+import { displayStationName } from '../../../../utils/formatters';
 
 /**
  * Shot-label text: azimuth (°), length (m), depth (m), each at its configured
@@ -39,6 +41,28 @@ export function formatShotLabel(
 /** Station-label text: the station's index, as the stock builder emits it. */
 export function formatStationLabel(stationIndex: number): string {
   return String(stationIndex);
+}
+
+/** What a station label says: its ID (the index) or its name. */
+export type StationLabelText = 'id' | 'name';
+
+/** The longest station name drawn whole. Longer names are cut to one less and
+ *  end in an ellipsis. The image export (`image.rs`) uses the same cap. */
+export const STATION_NAME_LABEL_MAX_CHARS = 24;
+
+/**
+ * Station-label text in names mode. Names come from the file, so they pass the
+ * same sanitizer as every other place a name is shown (no control characters or
+ * bidi overrides), then are trimmed and capped by code point - never splitting
+ * a surrogate pair. `null` when nothing is left: an unnamed station gets no
+ * label rather than falling back to its index.
+ */
+export function formatStationNameLabel(name: string | null | undefined): string | null {
+  const clean = displayStationName(name).trim();
+  if (clean === '') return null;
+  const chars = Array.from(clean);
+  if (chars.length <= STATION_NAME_LABEL_MAX_CHARS) return clean;
+  return `${chars.slice(0, STATION_NAME_LABEL_MAX_CHARS - 1).join('').trimEnd()}\u2026`;
 }
 
 /** Section-name text. `name` is nullable (a section may be unnamed); the stock

@@ -178,6 +178,7 @@ export interface ImageOptionDraw {
   show_penetration_labels: boolean;
   color_mode: 'none' | 'section' | 'depth' | 'distance';
   show_station_labels: boolean;
+  show_station_names: boolean;
   show_section_names: boolean;
   show_station_comments: boolean;
   show_shot_comments: boolean;
@@ -210,15 +211,27 @@ const COLOR_MODES: readonly ImageOptionDraw['color_mode'][] = ['none', 'section'
 export function drawImageOptions(ctx: ScenarioContext, format: 'png' | 'svg' | 'pdf'): ImageOptionDraw {
   const cap = maxDpi();
   const allowed = DPI_VALUES.filter((dpi) => dpi <= cap);
+  // Draw order is fixed: a recorded seed replays the same rng sequence.
+  const dpi = ctx.pick(allowed.length > 0 ? allowed : [72]); // never empty: 0 <= every positive cap
+  const branching_threshold = ctx.pick(THRESHOLD_VALUES);
+  const show_penetration_labels = ctx.rng() < 0.5;
+  const color_mode = ctx.pick(COLOR_MODES);
+  const show_station_labels = ctx.rng() < 0.5;
+  const show_section_names = ctx.rng() < 0.5;
   return {
     format,
-    // `allowed` can never be empty: 0 is <= every positive cap.
-    dpi: ctx.pick(allowed.length > 0 ? allowed : [72]),
-    branching_threshold: ctx.pick(THRESHOLD_VALUES),
-    show_penetration_labels: ctx.rng() < 0.5,
-    color_mode: ctx.pick(COLOR_MODES),
-    show_station_labels: ctx.rng() < 0.5,
-    show_section_names: ctx.rng() < 0.5,
+    dpi,
+    branching_threshold,
+    show_penetration_labels,
+    color_mode,
+    show_station_labels,
+    // Station names are derived, not drawn, so existing seeds keep their rng
+    // sequence; and never together with the IDs, which the UI route cannot
+    // reach (the two checkboxes are one choice). The XOR keeps them independent
+    // of each of those two draws, so names are fuzzed with and without section
+    // names and penetration labels.
+    show_station_names: !show_station_labels && show_penetration_labels !== show_section_names,
+    show_section_names,
     show_station_comments: ctx.rng() < 0.5,
     show_shot_comments: ctx.rng() < 0.5,
     show_shot_data: ctx.rng() < 0.5,
@@ -293,6 +306,7 @@ export const EXPORT_TESTIDS: ReadonlySet<string> = new Set([
   'export-labels-options-toggle',
   'export-show-section-names',
   'export-show-station-labels',
+  'export-show-station-names',
   'export-show-station-comments',
   'export-show-shot-comments',
   'export-show-shot-data',

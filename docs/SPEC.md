@@ -331,8 +331,13 @@ A station can also carry a **name**, free text stored apart from the shots and
 keyed to the physical station, so it stays put through those edits. A DMP
 import records each station's mNemo station number there (see
 [dmp-import.md](dmp-import.md#station-names)); names are not unique (mNemo
-restarts at 0 in every section), so the UI shows a name beside the positional
-ID (`3:5 · 17`), never instead of it. A shot delete drops the name of the
+restarts at 0 in every section), so the grid, the detail panel and the station
+links show a name beside the positional ID (`3:5 · 17`), never instead of it.
+The one place a name stands alone is the opt-in **Station names** map label
+(and the matching image-export option), which labels each named station with
+its name instead of its index and leaves unnamed stations unlabelled; it is
+exclusive with the Station IDs label, so the two numbers are never drawn
+side by side. A shot delete drops the name of the
 station it removes, an inserted shot adds an unnamed station, and a reverse
 keeps every name on its physical station.
 
@@ -922,6 +927,11 @@ The three move tools are documented in detail in [move-tools.md](move-tools.md).
 #### Display Toggles (Right-click or menu)
 - Stations (dots)
 - Section names (labels)
+- Station IDs or Station names (labels; one or the other, never both). Station
+  IDs label every station with its index. Station names label each named
+  station with its name (e.g. its mNemo station number) and leave unnamed
+  stations unlabelled; the pill is disabled while the project has no names.
+- Station comments, shot comments
 - Shot data (azimuth, length, depth)
 - Reference shots (faded, semi-transparent lines)
 - Zero datum (enlarged golden station dot)
@@ -1295,8 +1305,9 @@ Shown when creating a loop closure between two **connected** stations.
 │  Options:                                                        │
 │    [ ] Include station comments                                 │
 │    [ ] Include shot comments                                    │
-│    [✓] Include station labels                                   │
-│    [✓] Include section names                                    │
+│    [ ] Include station IDs                                      │
+│    [ ] Include station names                                    │
+│    [ ] Include section names                                    │
 │    [ ] Include shot data (azimuth, length, depth)               │
 │                                                                  │
 │  Resolution: [High (300 DPI) ▼]                                 │
@@ -1473,7 +1484,13 @@ user to delete the connected shots instead.
    - Enter new merged system name
    - Optional checkbox: "Archive original project files (rename to
      .stalx.archived)" - off by default
-5. Confirm → Systems merged into single file
+5. Confirm → Systems merged into single file. Each source is read like an
+   open would read it (through a private copy, so the source files are only
+   read - renamed only if you choose to archive them - and an older file's
+   pending shot classification is finished).
+   A system with a GPS zero datum is placed at its real position: the first
+   one's datum station becomes the origin, and every later one lands at its
+   GPS position relative to it. A system without a datum keeps its own layout.
 6. Auto-switch to Single System View
 7. User connects the systems using Merge Tool
 
@@ -2405,6 +2422,11 @@ checked against a device) and records it as the station's name; see
 - Render current map view with selected options
 - SVG preserves vector quality
 - PDF includes metadata
+- Station labels are the station IDs or the station names (one choice, like
+  the Display menu; unnamed stations get no name label, and a merged point is
+  named by its first named station). If a caller sends both options, the IDs
+  are drawn. Names are stripped of control and bidi characters and capped at
+  24 characters.
 
 #### DPI Scaling
 
@@ -2579,7 +2601,7 @@ not live co-editing), and floating/dockable panels.
 | Toggle Depth Gradient | Shift+D |
 | Toggle Grid | Shift+G |
 | Toggle Satellite | B |
-| Toggle Station Labels | L |
+| Toggle Station IDs | L |
 | Toggle Shot Labels | Shift+L |
 | Toggle Section Labels | Ctrl+L |
 | Toggle Sections Panel | Ctrl+1 |

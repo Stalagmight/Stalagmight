@@ -5,6 +5,7 @@ import type { Config, GpsOrigin, DecimalPrecision } from '../../types/config';
 import type { RouteLeg } from '../../types/ipc.generated';
 import { isNonInteractiveTool } from '../../utils/toolUtils';
 import type { ToolType } from '../../store/uiStore';
+import type { StationLabelMode } from '../../store/displaySelectors';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { selectActiveSurveyData } from '../../store/geometrySelectors';
@@ -2239,9 +2240,9 @@ export default class SurveyLayer {
     this.customLabels?.setSectionNamesVisible(show);
   }
 
-  // Control station index labels visibility (custom label layer uniform).
-  setShowStationLabels(show: boolean) {
-    this.customLabels?.setStationLabelsVisible(show);
+  // Station labels: off, IDs, or names (a text switch rebuilds the labels).
+  setStationLabelMode(mode: StationLabelMode) {
+    this.customLabels?.setStationLabelMode(mode);
   }
 
   // Control station comments visibility. Effective visibility folds in the
