@@ -264,8 +264,13 @@ fn canonical_merge_output(merged: &Project, result: &CommandResult) -> String {
 /// canonical form against the previous one, and only re-pin if the change is
 /// intended. Re-pinned once when #676 added `station_names` to the project
 /// (an empty list in this canonical form); master's pre-extraction merge was
-/// run against the new value and produced it.
-const MERGE_PARITY_DIGEST: u64 = 9_039_697_118_154_861_914;
+/// run against the new value and produced it. Re-pinned again for #682, which
+/// places bravo by its GPS datum in alpha's frame (alpha's datum station moves
+/// to the origin): with that placement call disabled, the merge still produces
+/// the previous value `9_039_697_118_154_861_914`, so placement is the only
+/// change - the #680 source read (private copy, normalized like an open) moves
+/// nothing for these sources.
+const MERGE_PARITY_DIGEST: u64 = 17_078_245_016_113_985_025;
 
 /// #674 parity: "Merge projects" must produce exactly what it produced before
 /// its per-source loop became the append that "Add .stalx" shares. Rich on
@@ -1413,4 +1418,507 @@ fn add_and_merge_keep_each_sections_gauge_parity_and_anchors() {
         .load_project()
         .unwrap();
     assert_eq!(gauge_of(&merged, merged.sections[0].id), expected, "merge");
+}
+
+// ===========================================================================
+// Merge projects reads and places sources the way Add does (#680, #682)
+// ===========================================================================
+
+/// Merge `sources` into a new file and read it back raw (no load-time heals).
+fn merge_files(dir: &Path, sources: Vec<PathBuf>) -> Project {
+    let output = dir.join("merged.stalx");
+    let result = AppState::new().unwrap().execute(Command::MergeProjects {
+        source_paths: sources,
+        output_path: output.clone(),
+        output_name: "Merged".to_string(),
+        archive_originals: false,
+    });
+    assert!(result.success, "merge failed: {:?}", result.error);
+    Database::open_existing(&output)
+        .unwrap()
+        .load_project()
+        .unwrap()
+}
+
+/// A one-section project with a datum on its first station.
+fn georeferenced(name: &str, prefix: &str, latitude: f64) -> Project {
+    let mut p = Project::new(name.to_string(), None);
+    let id = p
+        .add_section(section(
+            name,
+            vec![
+                shot(&format!("{prefix}-0"), 30.0, 12.0, 3.0),
+                shot(&format!("{prefix}-1"), 80.0, 9.0, 4.0),
+            ],
+        ))
+        .id;
+    p.store_zero_datum_without_repositioning(
+        StationRef::new(id, 0),
+        GpsCoordinates::new(latitude, -87.3, 0.0).unwrap(),
+    )
+    .unwrap();
+    p
+}
+
+fn section_named(project: &Project, name: &str) -> SectionId {
+    project
+        .sections
+        .iter()
+        .find(|s| s.name.as_deref() == Some(name))
+        .unwrap()
+        .id
+}
+
+fn station_xy(project: &Project, id: SectionId, station: u32) -> (f64, f64) {
+    let at = project
+        .compute_station_raw_coords(StationRef::new(id, station))
+        .unwrap();
+    (at.x, at.y)
+}
+
+/// #680: a source saved before v13 carries a pending Jump->Reference
+/// classification that an open finishes. The merge reads its sources the same
+/// way, so the legacy reference shot arrives as Reference - the merged file
+/// does not carry the flag, so nothing could fix it later - and the source
+/// file is read through a private copy, still flagged and byte-for-byte as it
+/// was.
+/// INJECTION (tried): reading merge sources the old way (`Database::open_existing`
+/// + `load_project` on the user's file) fails the Reference assertion.
+#[test]
+fn merge_finishes_a_sources_pending_classification_and_leaves_the_file_alone() {
+    let temp = TempDir::new().unwrap();
+    let mut legacy = Project::new("Legacy".to_string(), None);
+    let mut data = section(
+        "L0",
+        vec![shot("l0-0", 10.0, 5.0, 2.0), shot("l0-1", 40.0, 3.0, 2.5)],
+    );
+    data.shots[1].kind = ShotKind::Jump;
+    legacy.add_section(data);
+    let unflagged = save_to(temp.path(), "unflagged.stalx", &legacy);
+    let flagged = save_to(temp.path(), "flagged.stalx", &legacy);
+    rusqlite::Connection::open(&flagged)
+        .unwrap()
+        .execute(
+            "INSERT INTO project_settings (key, value) VALUES ('pending_kind_classification', '1')",
+            [],
+        )
+        .unwrap();
+    let flagged_bytes = std::fs::read(&flagged).unwrap();
+
+    let merged = merge_files(temp.path(), vec![unflagged, flagged.clone()]);
+    assert_eq!(
+        merged.sections[0].shots[1].kind,
+        ShotKind::Jump,
+        "without the flag the stored kind is kept"
+    );
+    assert_eq!(
+        merged.sections[1].shots[1].kind,
+        ShotKind::Reference,
+        "with the flag the merge classifies the source like an open"
+    );
+    assert_eq!(
+        std::fs::read(&flagged).unwrap(),
+        flagged_bytes,
+        "the source file is untouched"
+    );
+    assert!(Database::open_existing(&flagged)
+        .unwrap()
+        .is_kind_classification_pending());
+}
+
+/// #682: two georeferenced projects whose datums are about 100 m apart merge
+/// about 100 m apart. The first source's datum station becomes the frame
+/// origin; the second's lands at its GPS position in that frame instead of on
+/// top of the first.
+/// INJECTION (tried): dropping the `place_by_datum` call from `append_project`
+/// leaves the second datum station at (0, 0) and fails.
+#[test]
+fn merging_two_georeferenced_projects_places_the_second_by_its_gps() {
+    let temp = TempDir::new().unwrap();
+    let p1 = save_to(temp.path(), "p1.stalx", &georeferenced("P1", "p1", 20.5));
+    let p2 = save_to(temp.path(), "p2.stalx", &georeferenced("P2", "p2", 20.5009));
+
+    let merged = merge_files(temp.path(), vec![p1, p2]);
+    let first = station_xy(&merged, section_named(&merged, "P1"), 0);
+    let second = station_xy(&merged, section_named(&merged, "P2"), 0);
+    assert!(
+        first.0.abs() < 1e-6 && first.1.abs() < 1e-6,
+        "the first datum station is the origin: {first:?}"
+    );
+    let expected = gps_to_local(
+        &GpsCoordinates::new(20.5009, -87.3, 0.0).unwrap(),
+        &GpsCoordinates::new(20.5, -87.3, 0.0).unwrap(),
+    );
+    assert!(
+        (99.0..100.5).contains(&expected.1) && expected.0.abs() < 1e-6,
+        "the fixture really is about 100 m north: {expected:?}"
+    );
+    assert!(
+        (second.0 - expected.0).abs() < 1e-6 && (second.1 - expected.1).abs() < 1e-6,
+        "the second datum station is at its GPS position: {second:?} vs {expected:?}"
+    );
+}
+
+/// Merge and Add are one routine now, so they place a georeferenced source the
+/// same way: the second project's datum station ends up at the same offset from
+/// the first's whether P2 is merged with P1 or added into an open P1.
+#[test]
+fn merge_and_add_place_a_georeferenced_source_identically() {
+    let temp = TempDir::new().unwrap();
+    let p1 = save_to(temp.path(), "p1.stalx", &georeferenced("P1", "p1", 20.5));
+    let p2 = save_to(temp.path(), "p2.stalx", &georeferenced("P2", "p2", 20.5013));
+
+    let merged = merge_files(temp.path(), vec![p1.clone(), p2.clone()]);
+    let relative = |project: &Project| {
+        let a = station_xy(project, section_named(project, "P1"), 0);
+        let b = station_xy(project, section_named(project, "P2"), 1);
+        (b.0 - a.0, b.1 - a.1)
+    };
+    let by_merge = relative(&merged);
+
+    let state = AppState::new().unwrap();
+    assert!(state.open_project(p1).success);
+    assert!(add(&state, &p2).success);
+    let added = state.get_project_state().unwrap();
+    let by_add = relative(&added);
+    assert!(
+        (by_merge.0 - by_add.0).abs() < 1e-6 && (by_merge.1 - by_add.1).abs() < 1e-6,
+        "merge {by_merge:?} vs add {by_add:?}"
+    );
+    // And both are RIGHT, not merely equal: the datum stations sit their GPS
+    // distance apart (a shared mistake in the one routine would pass the
+    // comparison above).
+    let expected = gps_to_local(
+        &GpsCoordinates::new(20.5013, -87.3, 0.0).unwrap(),
+        &GpsCoordinates::new(20.5, -87.3, 0.0).unwrap(),
+    );
+    for project in [&merged, &added] {
+        let a = station_xy(project, section_named(project, "P1"), 0);
+        let b = station_xy(project, section_named(project, "P2"), 0);
+        assert!(
+            (b.0 - a.0 - expected.0).abs() < 1e-6 && (b.1 - a.1 - expected.1).abs() < 1e-6,
+            "datum stations {a:?} -> {b:?}, expected {expected:?} apart"
+        );
+    }
+}
+
+/// A datum-less first source is not moved, and the first georeferenced source
+/// after it still becomes the frame (its datum station goes to the origin) -
+/// the same rule Add follows in a project without a datum.
+#[test]
+fn a_datum_less_first_source_stays_put_and_the_next_datum_frames_the_merge() {
+    let temp = TempDir::new().unwrap();
+    let charlie = save_to(temp.path(), "charlie.stalx", &source_charlie());
+    let p1 = save_to(temp.path(), "p1.stalx", &georeferenced("P1", "p1", 20.5));
+    let p2 = save_to(temp.path(), "p2.stalx", &georeferenced("P2", "p2", 20.5009));
+
+    let merged = merge_files(temp.path(), vec![charlie, p1, p2]);
+    let c0 = section_named(&merged, "C0");
+    assert_eq!(
+        merged.section_offsets.get(&c0),
+        Some(&(100.0, 50.0)),
+        "the datum-less source keeps its own layout"
+    );
+    let first = station_xy(&merged, section_named(&merged, "P1"), 0);
+    assert!(first.0.abs() < 1e-6 && first.1.abs() < 1e-6, "{first:?}");
+    let second = station_xy(&merged, section_named(&merged, "P2"), 0);
+    assert!(
+        (second.1 - first.1) > 99.0,
+        "P2 is placed north of P1, not stacked on it: {second:?}"
+    );
+}
+
+/// Merge now refuses what Add refuses, before writing anything, and the
+/// message says "merged" and names the whole path (two sources can share a
+/// file name).
+/// INJECTION (tried): reverting `copy_regular_file`'s messages to the fixed
+/// "added" wording fails the oversized case.
+#[test]
+fn merge_refuses_an_untrustworthy_source_and_writes_nothing() {
+    let temp = TempDir::new().unwrap();
+    let good = save_to(temp.path(), "good.stalx", &source_charlie());
+    let directory = temp.path().join("folder.stalx");
+    std::fs::create_dir(&directory).unwrap();
+    let oversized = temp.path().join("huge.stalx");
+    std::fs::File::create(&oversized)
+        .unwrap()
+        .set_len(crate::speleodb::client::NATIVE_LIMIT + 1)
+        .unwrap();
+    // A writer this app does not have: the corruption goes in through SQL.
+    let infinite = save_to(temp.path(), "infinite.stalx", &source_alpha());
+    let changed = rusqlite::Connection::open(&infinite)
+        .unwrap()
+        .execute("UPDATE station_offsets SET offset_x = 9e999", [])
+        .unwrap();
+    assert_eq!(changed, 1, "the corruption landed");
+
+    for (bad, expected) in [
+        (&directory, "is not a project file"),
+        (
+            &oversized,
+            "is larger than 512 MB, the largest project file that can be merged",
+        ),
+        (
+            &infinite,
+            "was not merged: a station offset is not a finite number",
+        ),
+    ] {
+        let output = temp.path().join("merged.stalx");
+        let result = AppState::new().unwrap().execute(Command::MergeProjects {
+            source_paths: vec![good.clone(), bad.clone()],
+            output_path: output.clone(),
+            output_name: "Merged".to_string(),
+            archive_originals: false,
+        });
+        let error = result.error.unwrap_or_default();
+        assert!(!result.success, "{expected}");
+        assert!(
+            error.starts_with(&format!("'{}' {expected}", bad.display())),
+            "{error}"
+        );
+        assert!(!output.exists(), "nothing written for {expected}");
+    }
+}
+
+/// A source left in WAL mode by a crash holds committed pages in its `-wal`.
+/// Opening it would apply them, so reading it as a source must too: the
+/// private copy takes the sidecar along. Both Add and Merge see the committed
+/// edit, and neither touches the source or its WAL.
+/// INJECTION (tried): dropping `copy_sqlite_sidecars` from the read makes both
+/// see the pre-crash length (12 m) and fail.
+#[test]
+fn a_sources_committed_wal_pages_are_read_by_add_and_merge() {
+    let temp = TempDir::new().unwrap();
+    let live = save_to(temp.path(), "live.stalx", &georeferenced("W", "w", 20.5));
+    let conn = rusqlite::Connection::open(&live).unwrap();
+    conn.pragma_update(None, "journal_mode", "WAL").unwrap();
+    conn.pragma_update(None, "wal_autocheckpoint", 0).unwrap();
+    conn.execute("UPDATE shots SET length = 77.0 WHERE uuid = 'w-0'", [])
+        .unwrap();
+    let crashed = temp.path().join("crashed.stalx");
+    let wal = |p: &Path| PathBuf::from(format!("{}-wal", p.display()));
+    std::fs::copy(&live, &crashed).unwrap();
+    std::fs::copy(wal(&live), wal(&crashed)).unwrap();
+    drop(conn);
+    let (db_bytes, wal_bytes) = (
+        std::fs::read(&crashed).unwrap(),
+        std::fs::read(wal(&crashed)).unwrap(),
+    );
+    let first_length = |project: &Project| {
+        project
+            .get_section(section_named(project, "W"))
+            .unwrap()
+            .shots[0]
+            .length
+    };
+
+    let merged = merge_files(
+        temp.path(),
+        vec![
+            crashed.clone(),
+            save_to(temp.path(), "c.stalx", &source_charlie()),
+        ],
+    );
+    assert_eq!(
+        first_length(&merged),
+        77.0,
+        "merge applies the WAL's commit"
+    );
+
+    let (state, _) = open_target(temp.path(), true);
+    assert!(add(&state, &crashed).success);
+    assert_eq!(
+        first_length(&state.get_project_state().unwrap()),
+        77.0,
+        "add applies it too"
+    );
+    assert_eq!(
+        std::fs::read(&crashed).unwrap(),
+        db_bytes,
+        "source untouched"
+    );
+    assert_eq!(
+        std::fs::read(wal(&crashed)).unwrap(),
+        wal_bytes,
+        "its WAL too"
+    );
+}
+
+/// A source a crash caught mid-write: half-applied pages in the database file,
+/// the originals in a hot `-journal` beside it. Opening it would roll the
+/// journal back, so reading it as a source must too - Add and Merge both see
+/// the survey as it was before the interrupted write, and neither touches the
+/// source or its journal. (A `.stalx` is in SQLite's default DELETE journal
+/// mode, so this, not a WAL, is what a real crash leaves.)
+/// INJECTION (tried): dropping "-journal" from `SQLITE_SIDECARS` makes both
+/// read the interrupted lengths (+1000 m) and fail.
+#[test]
+fn a_sources_hot_journal_is_rolled_back_by_add_and_merge() {
+    let temp = TempDir::new().unwrap();
+    let clean = save_to(temp.path(), "clean.stalx", &georeferenced("J", "j", 20.5));
+    let journal = |p: &Path| PathBuf::from(format!("{}-journal", p.display()));
+    let crashed = temp.path().join("crashed.stalx");
+    {
+        let conn = rusqlite::Connection::open(&clean).unwrap();
+        // One page of cache makes the transaction spill into the database
+        // file, which is the state a kill has to be recoverable from.
+        conn.execute_batch("PRAGMA cache_size = 1;").unwrap();
+        conn.execute_batch(
+            "BEGIN IMMEDIATE;
+             UPDATE shots SET length = length + 1000.0;
+             UPDATE sections SET name = 'interrupted-write';",
+        )
+        .unwrap();
+        std::fs::copy(&clean, &crashed).unwrap();
+        std::fs::copy(journal(&clean), journal(&crashed)).unwrap();
+        conn.execute_batch("ROLLBACK;").unwrap();
+    }
+    let (db_bytes, journal_bytes) = (
+        std::fs::read(&crashed).unwrap(),
+        std::fs::read(journal(&crashed)).unwrap(),
+    );
+    assert_ne!(
+        db_bytes,
+        std::fs::read(&clean).unwrap(),
+        "the interrupted write really reached the database file"
+    );
+    let first_length = |project: &Project| {
+        project
+            .get_section(section_named(project, "J"))
+            .unwrap()
+            .shots[0]
+            .length
+    };
+
+    let merged = merge_files(
+        temp.path(),
+        vec![
+            crashed.clone(),
+            save_to(temp.path(), "c.stalx", &source_charlie()),
+        ],
+    );
+    assert_eq!(first_length(&merged), 12.0, "merge rolls the journal back");
+    let (state, _) = open_target(temp.path(), true);
+    assert!(add(&state, &crashed).success);
+    assert_eq!(
+        first_length(&state.get_project_state().unwrap()),
+        12.0,
+        "add rolls it back too"
+    );
+    assert_eq!(
+        std::fs::read(&crashed).unwrap(),
+        db_bytes,
+        "source untouched"
+    );
+    assert_eq!(
+        std::fs::read(journal(&crashed)).unwrap(),
+        journal_bytes,
+        "its journal too"
+    );
+}
+
+/// "Archive original project files" moves a source's SQLite sidecars with it:
+/// a `-wal` left behind would take its commits away from the archive (the
+/// merge read them) and wait beside a name the next file may take.
+/// INJECTION (tried): dropping the sidecar loop from `archive_project_file`
+/// leaves `crashed.stalx-wal` behind and the archive at the pre-WAL length.
+#[test]
+fn archiving_a_source_moves_its_wal_with_it() {
+    let temp = TempDir::new().unwrap();
+    let live = save_to(temp.path(), "live.stalx", &georeferenced("W", "w", 20.5));
+    let wal = |p: &Path| PathBuf::from(format!("{}-wal", p.display()));
+    let crashed = temp.path().join("crashed.stalx");
+    {
+        let conn = rusqlite::Connection::open(&live).unwrap();
+        conn.pragma_update(None, "journal_mode", "WAL").unwrap();
+        conn.pragma_update(None, "wal_autocheckpoint", 0).unwrap();
+        conn.execute("UPDATE shots SET length = 77.0 WHERE uuid = 'w-0'", [])
+            .unwrap();
+        std::fs::copy(&live, &crashed).unwrap();
+        std::fs::copy(wal(&live), wal(&crashed)).unwrap();
+    }
+    let output = temp.path().join("merged.stalx");
+    let result = AppState::new().unwrap().execute(Command::MergeProjects {
+        source_paths: vec![
+            crashed.clone(),
+            save_to(temp.path(), "c.stalx", &source_charlie()),
+        ],
+        output_path: output,
+        output_name: "Merged".to_string(),
+        archive_originals: true,
+    });
+    assert!(result.success, "{:?}", result.error);
+
+    let archived = temp.path().join("crashed.stalx.archived");
+    assert!(
+        !crashed.exists() && !wal(&crashed).exists(),
+        "nothing left behind"
+    );
+    assert!(wal(&archived).is_file(), "the WAL moved with its database");
+    let restored = Database::open_existing(&archived)
+        .unwrap()
+        .load_project()
+        .unwrap();
+    assert_eq!(
+        restored
+            .get_section(section_named(&restored, "W"))
+            .unwrap()
+            .shots[0]
+            .length,
+        77.0,
+        "the archive still holds the WAL's commit"
+    );
+}
+
+/// The merge reads a source through a private copy, so a file an open WOULD
+/// rewrite (one whose version stamp an open fills in) is left byte-for-byte as
+/// it was. Before #680 the merge opened the user's file in place.
+/// INJECTION (tried): reading merge sources the old way (`Database::open_existing`
+/// on the user's file) stamps it and fails the byte assertion.
+#[test]
+fn merge_leaves_a_source_an_open_would_rewrite_untouched() {
+    let temp = TempDir::new().unwrap();
+    let unstamped = save_to(temp.path(), "unstamped.stalx", &source_charlie());
+    rusqlite::Connection::open(&unstamped)
+        .unwrap()
+        // What `an_unstamped_file_claiming_a_mid_range_version_is_stamped...`
+        // (persistence tests) builds: an open runs the v12 arms and stamps it.
+        .execute_batch(
+            "DELETE FROM project_settings WHERE key = 'pending_kind_classification';
+             UPDATE project SET schema_version = 12;
+             PRAGMA user_version = 0;",
+        )
+        .unwrap();
+    let before = std::fs::read(&unstamped).unwrap();
+
+    merge_files(
+        temp.path(),
+        vec![
+            unstamped.clone(),
+            save_to(temp.path(), "b.stalx", &source_bravo()),
+        ],
+    );
+    assert_eq!(
+        std::fs::read(&unstamped).unwrap(),
+        before,
+        "source untouched"
+    );
+}
+
+/// A merge refusal names the source by its whole path, cut from the front when
+/// too long so the file name - which says which source failed - survives.
+#[test]
+fn a_long_merge_source_path_keeps_its_file_name() {
+    let short = Path::new("/caves/north/cave.stalx");
+    assert_eq!(
+        super::project_merge::merge_source_label(short),
+        "/caves/north/cave.stalx"
+    );
+    let long = PathBuf::from(format!("/{}/cave.stalx", "d".repeat(900)));
+    let label = super::project_merge::merge_source_label(&long);
+    assert!(
+        label.starts_with("...") && label.ends_with("/cave.stalx"),
+        "{label}"
+    );
+    assert!(label.chars().count() <= 480, "{}", label.chars().count());
 }

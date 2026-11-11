@@ -351,11 +351,10 @@ impl AppState {
     /// writes it to a NEW file and returns; it never touches `self.project` (there
     /// is no reference to it anywhere in `project_merge.rs`). Both reads therefore
     /// see the same unchanged open project, `before == after`, and the gate
-    /// returns without measuring anything. That matters because a merged project's
-    /// datums legitimately do NOT sit at the origin
-    /// (`store_zero_datum_without_repositioning` copies them precisely to preserve
-    /// the source offsets), so a fire here would translate a file the user just
-    /// built. Pinned by `merge_projects_does_not_renormalise_the_open_project`.
+    /// returns without measuring anything. That matters because a merged project
+    /// is laid out by its own sources' datums (#682), not by the open project's
+    /// frame, so a fire here would translate one onto the other. Pinned by
+    /// `merge_projects_does_not_renormalise_the_open_project`.
     pub(super) fn renormalize_frame_if_changed(&self, before: Option<StationKey>) {
         let mut guard = match self.project.lock() {
             Ok(g) => g,
