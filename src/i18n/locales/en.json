@@ -2392,8 +2392,8 @@
       "key": {
         "azimuth": "azimuth in vs out",
         "inclination": "inclination in vs out",
-        "inclinationDepth": "inclination vs the depth change",
-        "length": "length vs depth change and inclination (shots steeper than {{degrees}}°)",
+        "inclinationDepth": "inclination vs depth change",
+        "length": "length vs depth change and inclination, on shots over {{degrees}}°",
         "closure": "loop closure error and misclosure"
       }
     },
@@ -2402,7 +2402,8 @@
         "azimuth": "Δaz",
         "inclination": "Δinc",
         "inclinationDepth": "Δi/d",
-        "length": "ΔL"
+        "length": "ΔL",
+        "closure": "Loop"
       }
     },
     "colorScale": {

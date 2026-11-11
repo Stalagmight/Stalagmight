@@ -37,6 +37,7 @@ describe('IssueLegend', () => {
       expect(key).toHaveTextContent(`map.errorLabels.abbrev.${k}`);
       expect(key).toHaveTextContent(`map.issueLegend.key.${k}`);
     }
-    expect(key).toHaveTextContent('% m');
+    expect(key).toHaveTextContent('map.errorLabels.abbrev.closure');
+    expect(key).toHaveTextContent('map.issueLegend.key.closure');
   });
 });

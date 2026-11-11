@@ -165,8 +165,8 @@ function shotGlobalLookup(data: SurveyData): (sectionId: number, shotId: number)
 export interface ErrorLabelFormat {
   precision: DecimalPrecision | undefined;
   lengthUnit: LengthUnit;
-  /** The localized part prefixes, e.g. "Δaz". */
-  abbrev: { az: string; inc: string; dep: string; len: string };
+  /** The localized part prefixes, e.g. "Δaz", and the closure label's "Loop". */
+  abbrev: { az: string; inc: string; dep: string; len: string; loop: string };
 }
 
 /** What the map asks the survey layer to draw for Survey Issues. */

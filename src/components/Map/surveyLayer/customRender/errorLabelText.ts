@@ -13,8 +13,8 @@
  *
  * A part is left out when its value is not computable, rounds to zero at the
  * user's precision, or its warning was ignored. A shot with no parts gets no
- * label. A loop closure gets "2.1% 0.84m": its stored error percentage and
- * misclosure distance.
+ * label. A loop closure gets "Loop 2.1% 0.84m": its stored error percentage
+ * and misclosure distance.
  *
  * The prefixes are localized by the caller (`ErrorLabelFormat.abbrev`). Signs
  * are written as ASCII "+" / "-" by hand rather than by `Intl`, which emits
@@ -86,6 +86,7 @@ export function shotErrorLabelColor(input: ErrorLabelInput, i: number, theme: Ma
  *  are not finite. */
 export function formatClosureErrorLabel(
   closure: LoopClosure,
+  prefix: string,
   unit: LengthUnit,
   precision: number = DEFAULT_LENGTH_PRECISION,
 ): string | null {
@@ -93,7 +94,7 @@ export function formatClosureErrorLabel(
   const dist = closure.misclosure_distance;
   if (!Number.isFinite(pct) || !Number.isFinite(dist)) return null;
   const distance = `${formatFixed(convertLength(dist, unit), undefined, precision)}${unitSuffix(unit)}`;
-  return `${formatFixed(pct, undefined, 1)}% ${distance}`;
+  return `${prefix} ${formatFixed(pct, undefined, 1)}% ${distance}`;
 }
 
 /** A closure label's score and colour: the closure line's own colour bands. */

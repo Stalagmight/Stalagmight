@@ -198,7 +198,7 @@ describe('resolveIssueRender', () => {
     const warnings: ProjectWarning[] = [];
     const colourOnly = resolveIssueRender(data, input({ warnings }), none)!;
     expect(colourOnly.labels).toBeNull();
-    const format = { precision: undefined, lengthUnit: 'meters' as const, abbrev: { az: 'a', inc: 'i', dep: 'd', len: 'l' } };
+    const format = { precision: undefined, lengthUnit: 'meters' as const, abbrev: { az: 'a', inc: 'i', dep: 'd', len: 'l', loop: 'o' } };
     const withLabels = resolveIssueRender(data, input({ warnings, labels: format }), none)!;
     expect(withLabels.labels?.format).toBe(format);
     expect(withLabels.scores).toBe(colourOnly.scores);

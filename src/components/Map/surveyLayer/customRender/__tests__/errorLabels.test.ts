@@ -18,7 +18,7 @@ const T = { azimuthDiff: 20, pitchDiff: 10, inclinationDepthDiff: 15 };
 const FORMAT: ErrorLabelFormat = {
   precision: { length: 1, coordinates: 2, depth: 1, azimuth: 1, inclination: 1, gps: 6 },
   lengthUnit: 'meters',
-  abbrev: { az: 'Δaz', inc: 'Δinc', dep: 'Δi/d', len: 'ΔL' },
+  abbrev: { az: 'Δaz', inc: 'Δinc', dep: 'Δi/d', len: 'ΔL', loop: 'Loop' },
 };
 const NO_CLOSURES: LoopClosure[] = [];
 
@@ -98,11 +98,11 @@ describe('formatClosureErrorLabel', () => {
   const closure = (pct: number, dist: number) =>
     ({ error_percentage: pct, misclosure_distance: dist }) as unknown as LoopClosure;
   it('shows the stored error percentage and misclosure distance', () => {
-    expect(formatClosureErrorLabel(closure(2.14, 0.84), 'meters', 2)).toBe('2.1% 0.84m');
-    expect(formatClosureErrorLabel(closure(2.14, 0.84), 'feet', 1)).toBe('2.1% 2.8ft');
+    expect(formatClosureErrorLabel(closure(2.14, 0.84), 'Loop', 'meters', 2)).toBe('Loop 2.1% 0.84m');
+    expect(formatClosureErrorLabel(closure(2.14, 0.84), 'Loop', 'feet', 1)).toBe('Loop 2.1% 2.8ft');
   });
   it('has no label for non-finite metrics', () => {
-    expect(formatClosureErrorLabel(closure(NaN, 0.84), 'meters')).toBeNull();
+    expect(formatClosureErrorLabel(closure(NaN, 0.84), 'Loop', 'meters')).toBeNull();
   });
   it('is coloured and scored like its closure line', () => {
     expect(closureErrorLabelStyle(closure(2, 1))).toEqual({ score: 1.5, color: '#eab308' });
@@ -188,7 +188,7 @@ describe('buildLabelDescriptors: Errors labels', () => {
     const descs = buildLabelDescriptors(data, null, 0, 0, ctx(labelInput(data, { closures: [closure] })));
     const stations = descs.filter((d) => d.kind === LABEL_KIND.STATION_LABEL);
     const [c] = descs.filter((d) => d.kind === LABEL_KIND.CLOSURE_ERROR);
-    expect(c!.text).toBe('4.0% 0.5m');
+    expect(c!.text).toBe('Loop 4.0% 0.5m');
     expect(c!.score).toBe(2.5);
     expect(c!.anchorX).toBeCloseTo((stations[0]!.anchorX + stations[2]!.anchorX) / 2, 12);
     expect(c!.anchorY).toBeCloseTo((stations[0]!.anchorY + stations[2]!.anchorY) / 2, 12);

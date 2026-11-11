@@ -427,7 +427,9 @@ export function buildLabelDescriptors(
     const ax = (stationRel[gA * 2]! + stationRel[gB * 2]!) / 2;
     const ay = (stationRel[gA * 2 + 1]! + stationRel[gB * 2 + 1]!) / 2;
     if (!inView(ax, ay)) continue;
-    const text = formatClosureErrorLabel(closure, errors.format.lengthUnit, errors.format.precision?.length);
+    const text = formatClosureErrorLabel(
+      closure, errors.format.abbrev.loop, errors.format.lengthUnit, errors.format.precision?.length,
+    );
     if (text === null) continue;
     const style = closureErrorLabelStyle(closure);
     descriptors.push({

@@ -44,7 +44,7 @@ export function IssueLegend({ showRamp, showKey, besideSelector = null }: IssueL
     [abbrev('inclination'), t('map.issueLegend.key.inclination')],
     [abbrev('inclinationDepth'), t('map.issueLegend.key.inclinationDepth')],
     [abbrev('length'), t('map.issueLegend.key.length', { degrees: LENGTH_DELTA_MIN_INCLINATION_DEG })],
-    ['% m', t('map.issueLegend.key.closure')],
+    [abbrev('closure'), t('map.issueLegend.key.closure')],
   ];
 
   return (
@@ -61,7 +61,7 @@ export function IssueLegend({ showRamp, showKey, besideSelector = null }: IssueL
         display: 'flex',
         flexDirection: 'column',
         gap: 8,
-        maxWidth: 260,
+        maxWidth: 200,
         color: textColor,
       }}
     >
@@ -81,7 +81,7 @@ export function IssueLegend({ showRamp, showKey, besideSelector = null }: IssueL
               </defs>
               <rect width="16" height={BAR_HEIGHT} fill={`url(#${gradientId})`} rx="2" />
             </svg>
-            <div style={{ position: 'relative', height: BAR_HEIGHT, minWidth: 120, fontSize: 10 }}>
+            <div style={{ position: 'relative', height: BAR_HEIGHT, minWidth: 112, fontSize: 10 }}>
               {[
                 [SCORE_MAX, t('map.issueLegend.error'), 'issue-legend-error'],
                 [SCORE_WARNING, t('map.issueLegend.warning'), 'issue-legend-warning'],

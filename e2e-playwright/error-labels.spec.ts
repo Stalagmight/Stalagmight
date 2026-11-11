@@ -155,6 +155,6 @@ test.describe('Errors labels', () => {
     await setZoom(page, 18);
     await expect
       .poll(async () => (await errorLabels(page, LABEL_KIND_CLOSURE_ERROR)).map((l) => l.text))
-      .toEqual(['2.2% 0.4m']);
+      .toEqual(['Loop 2.2% 0.4m']);
   });
 });

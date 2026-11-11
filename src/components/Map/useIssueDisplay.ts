@@ -43,6 +43,7 @@ export function useIssueRenderInput(colorOn: boolean, labelsOn: boolean): IssueR
               inc: t('map.errorLabels.abbrev.inclination'),
               dep: t('map.errorLabels.abbrev.inclinationDepth'),
               len: t('map.errorLabels.abbrev.length'),
+              loop: t('map.errorLabels.abbrev.closure'),
             },
           }
         : null,
