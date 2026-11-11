@@ -35,16 +35,15 @@ fn upload_timeout(bytes: usize) -> Duration {
 const DOWNLOAD_MIN_RATE: u64 = 4 * 1024;
 
 /// The longest any download may run, whatever it has received: the deadline of
-/// the largest file SpeleoDB accepts ([`SERVER_UPLOAD_LIMIT_BYTES`]) at
+/// the largest file a SpeleoDB server may hold ([`LARGEST_STORED_BYTES`]) at
 /// [`DOWNLOAD_MIN_RATE`], 120 + 6,020 s (about 1 h 42 min). Without it the
 /// per-byte deadline alone let a server trickling just above the minimum rate
 /// hold a download - and the app's exit waiting for it - for some 36 hours
-/// within the native size limit. Derived rather than picked: every project the
-/// server can store still downloads at the minimum rate, so only a server
+/// within the native size limit. Derived rather than picked: every project a
+/// server can have stored still downloads at the minimum rate, so only a server
 /// sending more than it could have stored, or slower than the minimum, is cut.
-/// It grows with the upload limit when the server's limit is fixed.
 const DOWNLOAD_CEILING: Duration = Duration::from_secs(
-    TRANSFER_TIMEOUT.as_secs() + SERVER_UPLOAD_LIMIT_BYTES.div_ceil(DOWNLOAD_MIN_RATE),
+    TRANSFER_TIMEOUT.as_secs() + LARGEST_STORED_BYTES.div_ceil(DOWNLOAD_MIN_RATE),
 );
 
 /// How long a download may have run once it has received `bytes`: `grace` plus
@@ -62,17 +61,25 @@ const JSON_LIMIT: usize = 10 * 1024 * 1024;
 /// hold a file to the same ceiling the app already holds a pulled one to.
 pub const NATIVE_LIMIT: u64 = 512 * 1024 * 1024;
 
-/// The largest project file SpeleoDB accepts in one upload, in bytes. A larger
-/// file is refused with a 400 only AFTER its whole body has been sent, so the
-/// push path checks against this first (sdk#3).
+/// The largest project file SpeleoDB accepts in one upload, in bytes: 5 MiB. A
+/// larger file is refused with a 400 only AFTER its whole body has been sent, so
+/// the push path checks against this first (sdk#3).
 ///
-/// The value is an upstream bug, not a design limit. The server compares the
-/// upload against `DJANGO_UPLOAD_TOTAL_FILES_LIMIT * 1024 * 1204`: that setting is
-/// the maximum file COUNT (20), not the intended
-/// `DJANGO_UPLOAD_TOTAL_FILESIZE_MB_LIMIT` (150 MB), and `1204` is a typo for
-/// `1024`. 20 * 1024 * 1204 = 24,657,920 bytes (about 23.5 MiB). Raise this to the
-/// real limit once the server is fixed.
-pub const SERVER_UPLOAD_LIMIT_BYTES: u64 = 24_657_920;
+/// SpeleoDB e094fd501 (2026-11-10, shipped with the ISO revision dates and SDK
+/// 0.6.2) limits each uploaded file to `DJANGO_GIT_UPLOAD_INDIVIDUAL_FILESIZE_MB_LIMIT`
+/// = 5 MiB, inclusive, and a commit to 7 MiB; an upload is one `.stalx`, so the
+/// per-file limit is the one that binds. An older server accepted up to
+/// [`LARGEST_STORED_BYTES`]; holding uploads to the newer, smaller limit there
+/// too only leaves out the undo history (or refuses) a little sooner.
+pub const SERVER_UPLOAD_LIMIT_BYTES: u64 = 5 * 1024 * 1024;
+
+/// The largest project file a SpeleoDB server may hold, in bytes: what a server
+/// from before e094fd501 accepted in one upload. Its check compared the upload
+/// against `DJANGO_UPLOAD_TOTAL_FILES_LIMIT * 1024 * 1204`: the maximum file COUNT
+/// (20) rather than a size, and `1204` a typo for `1024`, so 20 * 1024 * 1204 =
+/// 24,657,920 bytes (about 23.5 MiB). Projects that large may still be stored, so
+/// downloads are budgeted for them ([`DOWNLOAD_CEILING`]).
+pub const LARGEST_STORED_BYTES: u64 = 24_657_920;
 
 #[derive(Clone, Copy)]
 struct Settings {

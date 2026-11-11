@@ -40,7 +40,7 @@ async function editingRemoteProject(page: Page, push: 'without_history' | 'too_l
       get: () => push === 'without_history'
         ? Promise.resolve({ kind: 'pushed', undo_history_omitted: true })
         : Promise.reject({
-          message: 'this project is too large to upload to SpeleoDB: it is 31.2 MB and the server accepts at most 24.7 MB, even without the undo history. Nothing was uploaded; your changes are still on this computer',
+          message: 'this project is too large to upload to SpeleoDB: it is 31.2 MB and the server accepts at most 5.2 MB, even without the undo history. Nothing was uploaded; your changes are still on this computer',
           action: 'Fatal', status: null, transport: null, unpushed_local: null, newer_schema: null,
         }),
     });

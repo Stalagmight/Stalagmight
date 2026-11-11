@@ -902,12 +902,14 @@ fn download_deadline_scales_with_the_size_and_is_bounded_by_the_native_limit() {
     );
     // Generous: a quarter of the upload budget's rate, so never shorter than it.
     assert!(deadline(20 * 1024 * 1024) >= upload_timeout(20 * 1024 * 1024));
-    // Every file SpeleoDB can store still fits at the minimum rate...
+    // Every file a SpeleoDB server may hold (an older one took up to about
+    // 23.5 MiB) still fits at the minimum rate...
     assert_eq!(
-        deadline(SERVER_UPLOAD_LIMIT_BYTES),
-        grace + Duration::from_secs(SERVER_UPLOAD_LIMIT_BYTES / DOWNLOAD_MIN_RATE)
+        deadline(LARGEST_STORED_BYTES),
+        grace + Duration::from_secs(LARGEST_STORED_BYTES / DOWNLOAD_MIN_RATE)
     );
-    assert!(deadline(SERVER_UPLOAD_LIMIT_BYTES) <= DOWNLOAD_CEILING);
+    assert!(deadline(LARGEST_STORED_BYTES) <= DOWNLOAD_CEILING);
+    assert!(SERVER_UPLOAD_LIMIT_BYTES < LARGEST_STORED_BYTES);
     // ...while the most a download may receive (the native limit, about 36 h at
     // the minimum rate) is cut at the ceiling, Content-Length or not.
     assert_eq!(deadline(NATIVE_LIMIT), DOWNLOAD_CEILING);
@@ -1263,8 +1265,8 @@ fn a_tls_handshake_failure_is_classified_as_tls() {
 fn an_upload_over_the_server_limit_is_refused_before_any_request() {
     // sdk#3: the server reads the whole body before refusing an oversized file,
     // so the client refuses it first - no connection, no body. The limit is
-    // lowered for the test; the production value is the server's 24,657,920.
-    assert_eq!(SERVER_UPLOAD_LIMIT_BYTES, 24_657_920);
+    // lowered for the test; the production value is the server's 5 MiB.
+    assert_eq!(SERVER_UPLOAD_LIMIT_BYTES, 5_242_880);
     let _settings = TestSettings::install(Settings {
         upload_limit: 16,
         ..Settings::default()
@@ -1544,4 +1546,28 @@ fn only_a_real_wall_time_passes_to_the_frontend() {
         Some("2026-11-10T08:18:23.123Z")
     );
     assert_eq!(display_date("yesterday"), None);
+}
+
+#[test]
+fn the_upload_limit_is_the_servers_inclusive_five_mib() {
+    // SpeleoDB refuses a file only ABOVE 5 MiB, so exactly 5 MiB is sent and one
+    // byte more is refused here, before any request.
+    let f = tempfile::NamedTempFile::new().unwrap();
+    let mut bytes = b"SQLite format 3\0".to_vec();
+    bytes.resize(5 * 1024 * 1024 + 1, 0);
+    std::fs::write(f.path(), &bytes).unwrap();
+    let s = Server::replies(Vec::new());
+    let err = upload_stalx(&s.base, "t", false, ID, f.path(), "One byte over").unwrap_err();
+    assert!(
+        matches!(err, SpeleoDbError::UploadTooLarge { size, limit } if size == 5_242_881 && limit == 5_242_880),
+        "got {err:?}"
+    );
+    assert!(s.finish().is_empty(), "nothing may reach the server");
+    bytes.truncate(5 * 1024 * 1024);
+    std::fs::write(f.path(), &bytes).unwrap();
+    let s = Server::json(
+        json!({"project":project_json(),"hexsha":SHA,"files":["project.stalx"],"message":"Saved","browser_url":null}),
+    );
+    upload_stalx(&s.base, "t", false, ID, f.path(), "Exactly the limit").unwrap();
+    assert_eq!(s.finish().len(), 1);
 }

@@ -251,11 +251,14 @@ snapshot remains independent of subsequent local edits. The authoritative upload
 result is its top-level `hexsha`; an HTTP 304 remains the existing no-change outcome.
 An uncertain upload does not clear dirty state or automatically release the lock.
 
-The server accepts at most 24,657,920 bytes per upload and refuses a larger file
-only after receiving all of it. That figure is an upstream bug (the check
-multiplies the maximum file COUNT by `1024 * 1204`, a typo for `1024`); it lives in
-one constant, `client::SERVER_UPLOAD_LIMIT_BYTES`, to raise once the server is
-fixed. The sanitized snapshot is measured before anything is sent:
+The server accepts at most 5 MiB (5,242,880 bytes, inclusive) per uploaded file
+and 7 MiB per commit (SpeleoDB e094fd501), and refuses a larger file only after
+receiving all of it. An upload is one `.stalx`, so the per-file limit binds; it
+lives in one constant, `client::SERVER_UPLOAD_LIMIT_BYTES`. An older server
+accepted up to 24,657,920 bytes (`client::LARGEST_STORED_BYTES`: its check
+multiplied the maximum file COUNT by `1024 * 1204`, a typo for `1024`); uploads
+are held to the newer limit there too. The sanitized snapshot is measured before
+anything is sent:
 
 - within the limit, it uploads unchanged;
 - over it with the undo history included (Full mode), the copy is re-sanitized on
@@ -346,8 +349,9 @@ Downloads have a 30-second connection limit, a 120-second read inactivity limit
 and a size-aware total deadline: 120 seconds plus the bytes received at 4 KiB/s
 (the SDK's stream does not expose the reply's length, so a download of N bytes ends
 within 120 s + N / 4 KiB/s), capped by an absolute ceiling: the deadline of the
-largest file SpeleoDB accepts (24,657,920 bytes, see Native file transfer) at 4 KiB/s, 6,140 s or about
-1 h 42 min (`DOWNLOAD_CEILING`). Every project the server can store still fits at
+largest file a SpeleoDB server may hold (24,657,920 bytes, what an older server
+accepted, see Native file transfer) at 4 KiB/s, 6,140 s or about
+1 h 42 min (`DOWNLOAD_CEILING`). Every project a server can have stored still fits at
 the minimum rate; without the cap, a server paying out just above 4 KiB/s could
 hold a download for some 36 hours within the 512 MiB native limit. A server
 trickling bytes inside the read limit is stopped as a timeout instead of holding

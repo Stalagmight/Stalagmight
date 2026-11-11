@@ -7,6 +7,10 @@ Update this file every time a new version is tagged.
 
 ## [Unreleased]
 
+### Fixed
+
+- **SpeleoDB revision times work with the updated server** - SpeleoDB now sends revision times as UTC instants, and the revision history shows them in your own time zone with its GMT offset. Servers that have not been updated yet still work: their New York times are converted as before, and opening, locking and uploading are unaffected. A revision time that cannot be read is left out rather than shown wrongly. Uploads are now held to the server's 5 MiB limit before anything is sent, leaving out the undo history first when that is enough ([#701](https://github.com/Stalagmight/Stalagmight/pull/701))
+
 ## [0.5.2] - 2026-11-10
 
 ### Added
