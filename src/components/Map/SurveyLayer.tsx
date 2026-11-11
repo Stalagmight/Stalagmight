@@ -41,7 +41,7 @@ import { DragGhostController } from './surveyLayer/dragGhostController';
 import type { GhostRenderData } from './surveyLayer/customRender/surveyGhostLayer';
 import { buildGhostRenderData } from './surveyLayer/dragGhostData';
 import { padProbeBox, type ProbeGeometry } from './surveyLayer/hitProbe';
-import { computeIssueSeverity, type IssueSeverity } from './surveyLayer/severity';
+import { resolveIssueRender, type IssueRender, type IssueRenderInput } from './surveyLayer/issueScore';
 import { SurveyCustomController, buildCustomDimState, type CustomRenderExclusion } from './surveyLayer/customRender/controller';
 import { SurveyLabelController } from './surveyLayer/customRender/labelController';
 import { overlayInputFrom } from './surveyLayer/customRender/overlayColor';
@@ -56,7 +56,6 @@ import {
 } from './surveyLayer/customRender/measurePathTessellate';
 import { packCssColor } from './surveyLayer/customRender/colorPack';
 import type { SurveyData } from '../../types/survey-data';
-import type { ProjectWarning } from '../../types/commands';
 import { getMapThemeColors, type MapThemeColors } from '../../utils/themeColors';
 import {
   distanceColorExpression,
@@ -256,8 +255,7 @@ export default class SurveyLayer {
     showDepthGradient: boolean;
     depthRange: DepthRange;
     precision: DecimalPrecision | undefined;
-    showIssueSeverity: boolean;
-    warnings: ProjectWarning[];
+    issueInput: IssueRenderInput | null;
   } | null = null;
   private updateScheduled = false;
   /** Coalesced-call counter, surfaced to memory probe for instrumentation. */
@@ -329,10 +327,9 @@ export default class SurveyLayer {
   private showDepthGradient: boolean = false;
   private depthRange: DepthRange = { min: 0, max: 50 };
 
-  // Issue-severity coloring mode (#22). Like showDepthGradient, cached so the
-  // lazy-labels zoom rebuild and theme rebuild re-fire with the same mode.
-  private showIssueSeverity: boolean = false;
-  private cachedWarnings: ProjectWarning[] = [];
+  // Survey Issues colouring + Errors labels (#22). Like showDepthGradient, cached
+  // so the theme rebuild re-fires with the same mode.
+  private issueInput: IssueRenderInput | null = null;
 
   // Distance-gradient overlay (#34). feature-state based so re-root needs no
   // feature rebuild; re-applied after source rebuilds because endApplyFeatures
@@ -400,11 +397,11 @@ export default class SurveyLayer {
 
   // SoA survey data + geometry resolver for the last applied build (#mem).
   // The resolver serves per-item hit-testing over merged features and the
-  // interact overlay's geometry/color lookups. `cachedIssueSeverity` mirrors
-  // the severity arrays the build used so overlay colors match exactly.
+  // interact overlay's geometry/color lookups. `cachedIssueRender` holds the
+  // issue scores the build used so overlay colors match exactly.
   private cachedSurveyData: SurveyData | null = null;
   private geoIndex: SurveyGeometryIndex | null = null;
-  private cachedIssueSeverity: IssueSeverity | undefined;
+  private cachedIssueRender: IssueRender | null = null;
 
   // Flag-gated custom WebGL render prototype (#customRender). No-op unless the
   // `stalagmight_custom_render` gate is on; see surveyLayer/customRender/.
@@ -1640,8 +1637,8 @@ export default class SurveyLayer {
       depthRange: this.depthRange,
       depthScale: this.depthScale,
       themeColors: this.themeColors,
-      showIssueSeverity: this.showIssueSeverity && !!this.cachedIssueSeverity,
-      issueSeverity: this.cachedIssueSeverity,
+      showIssueSeverity: !!this.issueInput?.color && !!this.cachedIssueRender,
+      issueScores: this.cachedIssueRender?.scores,
       planIdleTint: this.isPlanIdleActive(),
     };
   }
@@ -3295,8 +3292,7 @@ export default class SurveyLayer {
     showDepthGradient: boolean = false,
     depthRange: DepthRange = { min: 0, max: 50 },
     precision?: DecimalPrecision,
-    showIssueSeverity: boolean = false,
-    warnings: ProjectWarning[] = []
+    issueInput: IssueRenderInput | null = null,
   ) {
     // Overwrite the pending args - last-call-wins is correct because the
     // builder is deterministic in its inputs; coalescing equivalent calls
@@ -3309,8 +3305,7 @@ export default class SurveyLayer {
       showDepthGradient,
       depthRange,
       precision,
-      showIssueSeverity,
-      warnings,
+      issueInput,
     };
     this.coalescedUpdateCallsSinceLastFlush += 1;
 
@@ -3334,8 +3329,7 @@ export default class SurveyLayer {
         args.showDepthGradient,
         args.depthRange,
         args.precision,
-        args.showIssueSeverity,
-        args.warnings,
+        args.issueInput,
       );
       return;
     }
@@ -3357,8 +3351,7 @@ export default class SurveyLayer {
         args.showDepthGradient,
         args.depthRange,
         args.precision,
-        args.showIssueSeverity,
-        args.warnings,
+        args.issueInput,
       );
     });
   }
@@ -3376,8 +3369,8 @@ export default class SurveyLayer {
       depthRange: this.depthRange,
       depthScale: this.depthScale,
       themeColors: this.themeColors,
-      showIssueSeverity: this.showIssueSeverity,
-      issueSeverity: this.cachedIssueSeverity,
+      showIssueSeverity: !!this.issueInput?.color,
+      issueScores: this.cachedIssueRender?.scores,
       // Analytical overlay ramp colors (distance #34 / gas-reach #38): the custom
       // layer has no feature-state, so it resolves them per feature at build time.
       overlay: this.overlayInput(),
@@ -3446,8 +3439,7 @@ export default class SurveyLayer {
     showDepthGradient: boolean = false,
     depthRange: DepthRange = { min: 0, max: 50 },
     precision?: DecimalPrecision,
-    showIssueSeverity: boolean = false,
-    warnings: ProjectWarning[] = [],
+    issueInput: IssueRenderInput | null = null,
   ): void {
     // Cancel any pending coalesced flush so we don't re-run with stale args.
     this.updateScheduled = false;
@@ -3460,8 +3452,7 @@ export default class SurveyLayer {
       showDepthGradient,
       depthRange,
       precision,
-      showIssueSeverity,
-      warnings,
+      issueInput,
     );
   }
 
@@ -3473,14 +3464,13 @@ export default class SurveyLayer {
     showDepthGradient: boolean,
     depthRange: DepthRange,
     precision: DecimalPrecision | undefined,
-    showIssueSeverity: boolean = false,
-    warnings: ProjectWarning[] = [],
+    issueInput: IssueRenderInput | null = null,
   ): void {
     if (isStyleRestoring(this.map)) {
       this.deferredUpdate = () =>
         this.flushUpdate(
           sections, stations, loopClosures, gpsOrigin, showDepthGradient, depthRange,
-          precision, showIssueSeverity, warnings,
+          precision, issueInput,
         );
       return;
     }
@@ -3492,8 +3482,7 @@ export default class SurveyLayer {
     this.gpsOrigin = gpsOrigin;
     this.showDepthGradient = showDepthGradient;
     this.depthRange = normalizeDepthRange(depthRange);
-    this.showIssueSeverity = showIssueSeverity;
-    this.cachedWarnings = warnings;
+    this.issueInput = issueInput;
 
     // Sections this flush removes (delete / undo-of-add), read BEFORE the cache
     // overwrite: their custom geometry vanishes synchronously in syncCustomRender
@@ -3514,11 +3503,8 @@ export default class SurveyLayer {
       useUIStore.getState().geometryMode
     ) ?? surveyDataFromLegacy(sections, stations);
 
-    const issueSeverity = showIssueSeverity
-      ? computeIssueSeverity(surveyData, warnings)
-      : undefined;
     this.cachedSurveyData = surveyData;
-    this.cachedIssueSeverity = issueSeverity;
+    this.cachedIssueRender = resolveIssueRender(surveyData, issueInput, loopClosures);
     // INVARIANT: geoIndex is re-created (never mutated in place) on every flush -
     // its per-instance lazy caches rest on a fresh instance per geometry change.
     this.geoIndex = new SurveyGeometryIndex(surveyData, this.gpsOrigin);
@@ -3644,8 +3630,7 @@ export default class SurveyLayer {
     if (this.cachedSections.length > 0 || this.cachedStations.length > 0) {
       this.update(
         this.cachedSections, this.cachedStations, this.cachedLoopClosures, this.gpsOrigin,
-        this.showDepthGradient, this.depthRange, this.cachedPrecision, this.showIssueSeverity,
-        this.cachedWarnings,
+        this.showDepthGradient, this.depthRange, this.cachedPrecision, this.issueInput,
       );
     }
   }

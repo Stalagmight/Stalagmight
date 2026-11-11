@@ -16,6 +16,7 @@ import {
   resolveStationStrokeColor,
   type DisplayColorContext,
 } from '../displayColor';
+import { closureErrorScore, issueScoreColor } from '../issueColor';
 import { surveyDataFromLegacy } from '../../../../types/survey-data';
 import { getMapThemeColors } from '../../../../utils/themeColors';
 import { getDepthColor } from '../../../../utils/colors';
@@ -198,5 +199,61 @@ describe('resolveStationDisplayColor / resolveStationStrokeColor', () => {
     expect(resolveStationStrokeColor(true, ctxFor(false))).toBe(theme.strokeColor);
     expect(resolveStationStrokeColor(true, ctxFor(true))).toBe(theme.zeroDatum);
     expect(resolveStationStrokeColor(false, ctxFor(true))).toBe(theme.strokeColor);
+  });
+});
+
+describe('Survey Issues gradient (issue scores)', () => {
+  it('ramps green -> yellow at the threshold -> red at 3x', () => {
+    expect(issueScoreColor(theme, 0)).toBe('#22c55e');
+    expect(issueScoreColor(theme, 0.5)).toBe('#86bc33');
+    expect(issueScoreColor(theme, 1)).toBe('#eab308');
+    expect(issueScoreColor(theme, 2)).toBe('#ed7c26');
+    expect(issueScoreColor(theme, 3)).toBe('#ef4444');
+  });
+
+  it('clamps out-of-range and NaN scores', () => {
+    expect(issueScoreColor(theme, 7)).toBe('#ef4444');
+    expect(issueScoreColor(theme, -1)).toBe('#22c55e');
+    expect(issueScoreColor(theme, NaN)).toBe('#22c55e');
+  });
+
+  it('quantises to hundredths, so at most 301 distinct colours exist', () => {
+    const seen = new Set<string>();
+    for (let s = 0; s <= 3; s += 0.0007) seen.add(issueScoreColor(theme, s));
+    expect(seen.size).toBeLessThanOrEqual(301);
+    expect(issueScoreColor(theme, 1.234)).toBe(issueScoreColor(theme, 1.23));
+  });
+
+  it('colours a shot and a station by their scores, flat along the shot', () => {
+    const { sections, stations } = fixture();
+    const data = surveyDataFromLegacy(sections, stations);
+    const gShot = findShotGlobal(data, 1, 102);
+    const shotScore = new Float32Array(data.shotCount);
+    const stationScore = new Float32Array(data.stationCount);
+    shotScore[gShot] = 2;
+    stationScore[0] = 1;
+    const ctx: DisplayColorContext = {
+      showDepthGradient: true, // Survey Issues takes precedence over depth
+      depthRange,
+      themeColors: theme,
+      showIssueSeverity: true,
+      issueScores: { shotScore, stationScore },
+    };
+    expect(resolveShotDisplayColor(data, '#ff0000', gShot, ctx)).toBe('#ed7c26');
+    expect(resolveShotEndpointColors(data, '#ff0000', gShot, ctx)).toEqual(['#ed7c26', '#ed7c26']);
+    expect(resolveStationDisplayColor(data, '#ff0000', 0, ctx)).toBe('#eab308');
+    expect(resolveStationDisplayColor(data, '#ff0000', 1, ctx)).toBe('#22c55e');
+  });
+});
+
+describe('closureErrorScore', () => {
+  it('maps the closure colour band edges onto the shot score scale', () => {
+    expect(closureErrorScore(0)).toBe(0);
+    expect(closureErrorScore(0.5)).toBe(0.5);
+    expect(closureErrorScore(1)).toBe(1);
+    expect(closureErrorScore(3)).toBe(2);
+    expect(closureErrorScore(5)).toBe(3);
+    expect(closureErrorScore(40)).toBe(3);
+    expect(closureErrorScore(NaN)).toBe(0);
   });
 });

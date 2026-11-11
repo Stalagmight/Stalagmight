@@ -1,94 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { computeIssueSeverity, SEV_CLEAR, SEV_WARNING, SEV_ERROR } from '../severity';
-import { emptySurveyData, type SurveyData } from '../../../../types/survey-data';
+import { computeIssueScores, resolveIssueRender, type IssueRenderInput } from '../issueScore';
+import { computeShotQualityMetrics, METRIC_AZ, METRIC_INCL_DEPTH, METRIC_LENGTH, METRIC_PITCH } from '../shotQuality';
 import type { ProjectWarning } from '../../../../types/commands';
-import type { WarningSeverity } from '../../../../types/ipc/WarningSeverity';
+import type { SurveyData } from '../../../../types/survey-data';
+import { buildSurveyData, warn, type ShotReadings } from './surveyQualityFixture';
 
-/**
- * Build a minimal SurveyData from a compact spec, populating only the fields
- * computeIssueSeverity reads. Stations are listed in global order.
- */
-function buildSurveyData(spec: {
-  sections: { id: number; shotIds: number[] }[];
-  stations: { sectionId: number; stationIndex: number }[];
-  /** Groups of GLOBAL station indices that are merged (fully transitive). */
-  merged?: number[][];
-}): SurveyData {
-  const data = emptySurveyData();
-
-  let offset = 0;
-  for (const s of spec.sections) {
-    data.sections.push({
-      id: s.id,
-      name: null,
-      surveyor: null,
-      date: null,
-      color: '#ffffff',
-      direction: 'in',
-      quality: 1,
-      next_shot_id: 1,
-      shotOffset: offset,
-      shotCount: s.shotIds.length,
-    });
-    offset += s.shotIds.length;
-  }
-
-  const totalShots = offset;
-  data.shotCount = totalShots;
-  data.shotIds = new Uint32Array(totalShots);
-  data.shotSectionIds = new Uint32Array(totalShots);
-  let c = 0;
-  for (const s of spec.sections) {
-    for (const id of s.shotIds) {
-      data.shotIds[c] = id;
-      data.shotSectionIds[c] = s.id;
-      c++;
-    }
-  }
-
-  data.stationCount = spec.stations.length;
-  data.stationSectionIds = new Uint32Array(spec.stations.length);
-  data.stationIndices = new Uint32Array(spec.stations.length);
-  spec.stations.forEach((st, i) => {
-    data.stationSectionIds[i] = st.sectionId;
-    data.stationIndices[i] = st.stationIndex;
-  });
-
-  if (spec.merged) {
-    for (const group of spec.merged) {
-      for (const g of group) {
-        // Mirror the backend: every member lists every OTHER member.
-        const others = group
-          .filter((x) => x !== g)
-          .map((x) => ({
-            section_id: spec.stations[x]!.sectionId,
-            station_index: spec.stations[x]!.stationIndex,
-          }));
-        data.stationMergedWith.set(g, others);
-      }
-    }
-  }
-
-  return data;
-}
-
-function warn(
-  sectionId: number,
-  shotId: number,
-  severity: WarningSeverity,
-  isResolved = false,
-): ProjectWarning {
-  return { sectionId, shotId, shotIndex: 0, code: 'TEST', message: 'm', severity, isResolved };
-}
+const T = { azimuthDiff: 20, pitchDiff: 10, inclinationDepthDiff: 15 };
 
 /**
  * Standard fixture:
- *   section 1: shots [101, 102] → stations idx 0,1,2 (global 0,1,2)
- *   section 2: shot  [201]      → stations idx 0,1   (global 3,4)
+ *   section 1: shots [101, 102] -> stations idx 0,1,2 (global 0,1,2)
+ *   section 2: shot  [201]      -> stations idx 0,1   (global 3,4)
  * shot 101 (g0) connects global 0-1; shot 102 (g1) connects global 1-2;
- * shot 201 (g2) connects global 3-4.
+ * shot 201 (g2) connects global 3-4. Every shot is pristine unless `shots`
+ * says otherwise.
  */
-function fixture(merged?: number[][]): SurveyData {
+function fixture(opts: { merged?: number[][]; shots?: Record<number, ShotReadings> } = {}): SurveyData {
   return buildSurveyData({
     sections: [
       { id: 1, shotIds: [101, 102] },
@@ -101,123 +28,179 @@ function fixture(merged?: number[][]): SurveyData {
       { sectionId: 2, stationIndex: 0 },
       { sectionId: 2, stationIndex: 1 },
     ],
-    ...(merged ? { merged } : {}),
+    ...(opts.merged ? { merged: opts.merged } : {}),
+    ...(opts.shots ? { shots: opts.shots } : {}),
   });
 }
 
-describe('computeIssueSeverity', () => {
-  it('no warnings ⇒ everything clear (green)', () => {
-    const { shotSeverity, stationSeverity } = computeIssueSeverity(fixture(), []);
-    expect([...shotSeverity]).toEqual([SEV_CLEAR, SEV_CLEAR, SEV_CLEAR]);
-    expect([...stationSeverity]).toEqual([SEV_CLEAR, SEV_CLEAR, SEV_CLEAR, SEV_CLEAR, SEV_CLEAR]);
+function scores(data: SurveyData, warnings: ProjectWarning[] = []) {
+  const s = computeIssueScores(data, computeShotQualityMetrics(data), warnings, T);
+  return {
+    shot: [...s.shotScore].map((v) => +v.toFixed(3)),
+    station: [...s.stationScore].map((v) => +v.toFixed(3)),
+    label: [...s.labelScore].map((v) => +v.toFixed(3)),
+    ignored: [...s.ignored],
+  };
+}
+
+describe('computeIssueScores: shots', () => {
+  it('pristine readings and no warnings score 0 everywhere', () => {
+    const s = scores(fixture());
+    expect(s.shot).toEqual([0, 0, 0]);
+    expect(s.station).toEqual([0, 0, 0, 0, 0]);
   });
 
-  it('an error shot colors the shot and both its endpoint stations red', () => {
-    const { shotSeverity, stationSeverity } = computeIssueSeverity(fixture(), [
-      warn(1, 101, 'error'),
+  it('grades a shot by how far its readings disagree, relative to the threshold', () => {
+    // az delta 10 of 20 -> 0.5; az delta 40 -> 2; pitch delta 40 of 10 -> capped 3.
+    const s = scores(
+      fixture({
+        shots: {
+          0: { azimuthIn: 90, azimuthOut: 100 },
+          1: { azimuthIn: 90, azimuthOut: 130 },
+          2: { pitchIn: -20, pitchOut: 20 },
+        },
+      }),
+    );
+    expect(s.shot).toEqual([0.5, 2, 3]);
+    expect(s.label).toEqual([0.5, 2, 3]);
+  });
+
+  it('an unresolved error forces 3 on colour and label', () => {
+    const s = scores(fixture({ shots: { 0: { azimuthIn: 90, azimuthOut: 95 } } }), [warn(1, 101, 'error')]);
+    expect(s.shot[0]).toBe(3);
+    expect(s.label[0]).toBe(3);
+  });
+
+  it('another unresolved warning floors the colour at 1 but not the label', () => {
+    const s = scores(fixture({ shots: { 1: { azimuthIn: 90, azimuthOut: 130 } } }), [
+      warn(1, 101, 'warning', { code: 'SHORT_SHOT' }),
+      warn(1, 102, 'warning', { code: 'LONG_SHOT' }),
     ]);
-    expect([...shotSeverity]).toEqual([SEV_ERROR, SEV_CLEAR, SEV_CLEAR]);
-    // global 0 & 1 are endpoints of shot 101; global 2 untouched.
-    expect([...stationSeverity]).toEqual([SEV_ERROR, SEV_ERROR, SEV_CLEAR, SEV_CLEAR, SEV_CLEAR]);
+    expect(s.shot[0]).toBe(1); // pristine readings, floored
+    expect(s.label[0]).toBe(0);
+    expect(s.shot[1]).toBe(2); // already worse than the floor
   });
 
-  it('error beats warning on the same shot', () => {
-    const { shotSeverity } = computeIssueSeverity(fixture(), [
-      warn(1, 101, 'warning'),
-      warn(1, 101, 'error'),
+  it('a resolved limit warning no longer floors the colour', () => {
+    const s = scores(fixture(), [warn(1, 101, 'warning', { code: 'SHORT_SHOT', isResolved: true })]);
+    expect(s.shot[0]).toBe(0);
+  });
+
+  it('an ignored deviation drops only its own metric', () => {
+    const data = fixture({
+      shots: { 0: { azimuthIn: 0, azimuthOut: 30, pitchIn: 0, pitchOut: 20, length: 10 } },
+    });
+    // az 30/20 = 1.5, pitch 20/10 = 2.
+    expect(scores(data).shot[0]).toBe(2);
+    const ignoredPitch = scores(data, [warn(1, 101, 'warning', { code: 'PITCH_DEVIATION', isResolved: true })]);
+    expect(ignoredPitch.shot[0]).toBe(1.5);
+    expect(ignoredPitch.ignored[0]).toBe(METRIC_PITCH);
+    const ignoredBoth = scores(data, [
+      warn(1, 101, 'warning', { code: 'PITCH_DEVIATION', isResolved: true }),
+      warn(1, 101, 'warning', { code: 'AZIMUTH_DEVIATION', isResolved: true }),
     ]);
-    expect(shotSeverity[0]).toBe(SEV_ERROR);
+    expect(ignoredBoth.ignored[0]).toBe(METRIC_PITCH | METRIC_AZ);
+    // The remaining metric (incl. vs depth: mean 10 vs implied 0) is 10/15.
+    expect(ignoredBoth.shot[0]).toBeCloseTo(0.667, 3);
   });
 
-  it('resolved warnings are ignored', () => {
-    const { shotSeverity, stationSeverity } = computeIssueSeverity(fixture(), [
-      warn(1, 101, 'error', true), // resolved → does not count
-      warn(1, 102, 'warning'), // unresolved → counts
-    ]);
-    expect([...shotSeverity]).toEqual([SEV_CLEAR, SEV_WARNING, SEV_CLEAR]);
-    // shot 102 connects global 1-2 ⇒ those are yellow; global 0 clear.
-    expect([...stationSeverity]).toEqual([SEV_CLEAR, SEV_WARNING, SEV_WARNING, SEV_CLEAR, SEV_CLEAR]);
+  it('ignoring the inclination-vs-depth mismatch also drops the length delta', () => {
+    const s = scores(fixture(), [warn(1, 101, 'warning', { code: 'INCLINATION_DEPTH_MISMATCH', isResolved: true })]);
+    expect(s.ignored[0]).toBe(METRIC_INCL_DEPTH | METRIC_LENGTH);
   });
 
-  it('a station shared by two shots takes the highest severity', () => {
-    const { stationSeverity } = computeIssueSeverity(fixture(), [
-      warn(1, 101, 'warning'), // global 0,1 ← warning
-      warn(1, 102, 'error'), // global 1,2 ← error
-    ]);
-    // global 1 is shared by both shots ⇒ error wins.
-    expect([...stationSeverity]).toEqual([SEV_WARNING, SEV_ERROR, SEV_ERROR, SEV_CLEAR, SEV_CLEAR]);
+  it('an unknown unresolved code floors at 1; a stale warning is skipped', () => {
+    const s = scores(fixture(), [warn(1, 101, 'warning', { code: 'SOMETHING_NEW' }), warn(9, 999, 'error'), warn(1, 999, 'error')]);
+    expect(s.shot).toEqual([1, 0, 0]);
+  });
+});
+
+describe('computeIssueScores: stations', () => {
+  it('a station takes the highest score of the shots touching it', () => {
+    const s = scores(fixture({ shots: { 0: { azimuthIn: 90, azimuthOut: 100 }, 1: { azimuthIn: 90, azimuthOut: 130 } } }));
+    // g0: shot 101 (0.5); g1: shots 101 + 102 (2); g2: shot 102 (2).
+    expect(s.station).toEqual([0.5, 2, 2, 0, 0]);
   });
 
-  it('severity propagates to merged stations', () => {
-    // Merge global 2 (section1 idx2) with global 3 (section2 idx0).
-    const { stationSeverity } = computeIssueSeverity(fixture([[2, 3]]), [
-      warn(2, 201, 'warning'), // shot 201 connects global 3-4 ⇒ both yellow
-    ]);
-    // global 3 is merged with global 2 ⇒ global 2 inherits yellow.
-    expect(stationSeverity[2]).toBe(SEV_WARNING);
-    expect(stationSeverity[3]).toBe(SEV_WARNING);
-    expect(stationSeverity[4]).toBe(SEV_WARNING);
-    expect(stationSeverity[0]).toBe(SEV_CLEAR);
-    expect(stationSeverity[1]).toBe(SEV_CLEAR);
+  it('an error shot colours both its endpoint stations red', () => {
+    expect(scores(fixture(), [warn(1, 101, 'error')]).station).toEqual([3, 3, 0, 0, 0]);
   });
 
-  it('propagates across a full (transitive) merge group, taking the max', () => {
-    // Group {global 2, 3, 4}; error on shot 102 flags global 2 (its endpoint).
-    const { stationSeverity } = computeIssueSeverity(fixture([[2, 3, 4]]), [
-      warn(1, 102, 'error'), // shot 102 connects global 1-2 ⇒ global 2 red
-    ]);
-    expect(stationSeverity[2]).toBe(SEV_ERROR);
-    expect(stationSeverity[3]).toBe(SEV_ERROR); // via the group, not a direct shot
-    expect(stationSeverity[4]).toBe(SEV_ERROR);
-    expect(stationSeverity[1]).toBe(SEV_ERROR); // direct endpoint of shot 102
-    expect(stationSeverity[0]).toBe(SEV_CLEAR);
+  it('shares the score across a transitive merge group', () => {
+    const s = scores(fixture({ merged: [[2, 3, 4]] }), [warn(1, 102, 'error')]);
+    expect(s.station).toEqual([0, 3, 3, 3, 3]);
   });
 
-  it('a station with no shots and no flagged merge-partner stays clear', () => {
+  it('a station with no shots and no flagged merge partner stays 0', () => {
     const data = buildSurveyData({
       sections: [
         { id: 1, shotIds: [101] },
-        { id: 3, shotIds: [] }, // section with a lone, shot-less station
+        { id: 3, shotIds: [] },
       ],
       stations: [
         { sectionId: 1, stationIndex: 0 },
         { sectionId: 1, stationIndex: 1 },
-        { sectionId: 3, stationIndex: 0 }, // global 2 - isolated
+        { sectionId: 3, stationIndex: 0 },
       ],
     });
-    const { stationSeverity } = computeIssueSeverity(data, [warn(1, 101, 'error')]);
-    expect(stationSeverity[2]).toBe(SEV_CLEAR);
+    expect(scores(data, [warn(1, 101, 'error')]).station[2]).toBe(0);
   });
 
-  it('over-anchoring colors every datum station, not just the representative shot', () => {
-    // The warning is attached to one representative shot (101 → g0/g1) but its
-    // datumRefs include section 2 station 0 (g3), which is not on that shot and
-    // (here) not merged with it. Both datum stations must still be colored (#57).
+  it('over-anchoring colours every datum station, not just the representative shot', () => {
     const w: ProjectWarning = {
-      sectionId: 1,
-      shotId: 101,
-      shotIndex: 0,
-      code: 'multiple_datums_per_merge_component',
-      message: 'm',
-      severity: 'error',
-      isResolved: false,
+      ...warn(1, 101, 'error', { code: 'multiple_datums_per_merge_component' }),
       datumRefs: [
         { section_id: 1, station_index: 0 },
         { section_id: 2, station_index: 0 },
       ],
     };
-    const { stationSeverity } = computeIssueSeverity(fixture(), [w]);
-    expect(stationSeverity[0]).toBe(SEV_ERROR); // representative datum
-    expect(stationSeverity[3]).toBe(SEV_ERROR); // the other datum, off the representative shot
+    const s = scores(fixture(), [w]);
+    expect(s.station[0]).toBe(3);
+    expect(s.station[3]).toBe(3);
+  });
+});
+
+describe('resolveIssueRender', () => {
+  const none = [] as const;
+  const input = (over: Partial<IssueRenderInput> = {}): IssueRenderInput => ({
+    color: true,
+    labels: null,
+    warnings: [],
+    thresholds: T,
+    ...over,
   });
 
-  it('ignores warnings for shots not present in the SoA without throwing', () => {
-    expect(() => computeIssueSeverity(fixture(), [warn(999, 999, 'error')])).not.toThrow();
-    const { shotSeverity, stationSeverity } = computeIssueSeverity(fixture(), [
-      warn(999, 999, 'error'),
-      warn(1, 999, 'error'), // valid section, unknown shotId
-    ]);
-    expect([...shotSeverity]).toEqual([SEV_CLEAR, SEV_CLEAR, SEV_CLEAR]);
-    expect([...stationSeverity]).toEqual([SEV_CLEAR, SEV_CLEAR, SEV_CLEAR, SEV_CLEAR, SEV_CLEAR]);
+  it('is null while neither the colouring nor the labels are on', () => {
+    expect(resolveIssueRender(fixture(), null, none)).toBeNull();
+    expect(resolveIssueRender(fixture(), input({ color: false }), none)).toBeNull();
+  });
+
+  it('returns the same objects while nothing they depend on changes', () => {
+    const data = fixture();
+    const i = input();
+    const a = resolveIssueRender(data, i, none);
+    expect(resolveIssueRender(data, { ...i }, none)).toBe(a);
+    // New warnings -> new scores.
+    expect(resolveIssueRender(data, input({ warnings: [] }), none)!.scores).not.toBe(a!.scores);
+  });
+
+  it('a threshold change recomputes; the same values do not', () => {
+    const data = fixture({ shots: { 0: { azimuthIn: 90, azimuthOut: 100 } } });
+    const warnings: ProjectWarning[] = [];
+    const a = resolveIssueRender(data, input({ warnings }), none)!;
+    expect(resolveIssueRender(data, input({ warnings, thresholds: { ...T } }), none)).toBe(a);
+    const b = resolveIssueRender(data, input({ warnings, thresholds: { ...T, azimuthDiff: 5 } }), none)!;
+    expect(b.scores.shotScore[0]).toBe(2);
+  });
+
+  it('carries the label input only while the labels are on, reusing the scores', () => {
+    const data = fixture();
+    const warnings: ProjectWarning[] = [];
+    const colourOnly = resolveIssueRender(data, input({ warnings }), none)!;
+    expect(colourOnly.labels).toBeNull();
+    const format = { precision: undefined, lengthUnit: 'meters' as const, abbrev: { az: 'a', inc: 'i', dep: 'd', len: 'l' } };
+    const withLabels = resolveIssueRender(data, input({ warnings, labels: format }), none)!;
+    expect(withLabels.labels?.format).toBe(format);
+    expect(withLabels.scores).toBe(colourOnly.scores);
   });
 });

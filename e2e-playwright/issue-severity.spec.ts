@@ -27,7 +27,9 @@ import {
  * old geometry-matching against merged vector-tile groups is gone.
  *
  * Severity palette (fixed, themeColors): error #ef4444, warning #eab308,
- * clear #22c55e.
+ * clear #22c55e. The mode is graded: a shot whose readings disagree ramps from
+ * clear (agree) to warning (at the threshold) to error (3x the threshold), so the
+ * baseline seed records equal azimuths in and out.
  */
 
 const SEV_ERROR = '#ef4444';
@@ -40,9 +42,9 @@ const sectionSeeds: SectionSeed[] = [
     name: 'Severity A',
     direction: 'in',
     shots: [
-      { azimuth_in: 45, azimuth_out: 225, length: 12, depth_in: 0, depth_out: -6 },
-      { azimuth_in: 90, azimuth_out: 270, length: 8, depth_in: -6, depth_out: -12 },
-      { azimuth_in: 135, azimuth_out: 315, length: 6, depth_in: -12, depth_out: -15 },
+      { azimuth_in: 45, azimuth_out: 45, length: 12, depth_in: 0, depth_out: -6 },
+      { azimuth_in: 90, azimuth_out: 90, length: 8, depth_in: -6, depth_out: -12 },
+      { azimuth_in: 135, azimuth_out: 135, length: 6, depth_in: -12, depth_out: -15 },
     ],
   },
 ];
@@ -337,5 +339,61 @@ test.describe('Issue Severity coloring (#22)', () => {
       const shots = await shotColorsById(page);
       return Object.values(shots).some((c) => !isColor(c, SEV_CLEAR));
     }, { timeout: 3000 }).toBe(true);
+  });
+});
+
+/**
+ * The graded ramp: five shots whose azimuths in and out disagree by 0, 10, 20,
+ * 40 and 60 degrees against the default 20 degree threshold score 0, 0.5, 1, 2
+ * and 3. Their colours are the ramp stops (displayColor.test.ts pins the bytes).
+ */
+const RAMP = ['#22c55e', '#86bc33', '#eab308', '#ed7c26', '#ef4444'];
+const gradientSeeds: SectionSeed[] = [
+  {
+    name: 'Gradient',
+    direction: 'in',
+    shots: [0, 10, 20, 40, 60].map((delta, i) => ({
+      azimuth_in: 90 + (i % 2 === 0 ? 0 : 60),
+      azimuth_out: 90 + (i % 2 === 0 ? 0 : 60) + delta,
+      length: 10,
+      depth_in: -i,
+      depth_out: -i,
+    })),
+  },
+];
+
+test.describe('Survey Issues gradient', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupMockedPage(page);
+    await createProject(page, 'Gradient Test');
+    await seedProjectWithSections(page, gradientSeeds);
+    await waitForMapIdle(page);
+    await waitForDrawnShots(page, 5);
+    await zoomIn(page);
+  });
+
+  test('a shot is painted by how far its readings disagree', async ({ page }) => {
+    const sectionId = (await getSectionIds(page))[0]!;
+    const shotIds = await getShotIds(page, sectionId);
+    await openDisplayMenu(page);
+    await toggleDisplayOption(page, 'showIssueSeverity');
+    await expect.poll(async () => {
+      const shots = await shotColorsById(page);
+      return shotIds.map((id, i) => isColor(shots[id], RAMP[i]!)).join(',');
+    }, { timeout: 4000 }).toBe('true,true,true,true,true');
+  });
+
+  test('ignoring the azimuth warning drops that delta from the colour', async ({ page }) => {
+    const sectionId = (await getSectionIds(page))[0]!;
+    const shotIds = await getShotIds(page, sectionId);
+    await injectWarnings(page, [
+      { sectionId, shotId: shotIds[3]!, shotIndex: 3, code: 'AZIMUTH_DEVIATION', message: 'az', severity: 'warning', isResolved: true },
+    ]);
+    await openDisplayMenu(page);
+    await toggleDisplayOption(page, 'showIssueSeverity');
+    await expect.poll(async () => {
+      const shots = await shotColorsById(page);
+      return [isColor(shots[shotIds[3]!], SEV_CLEAR), isColor(shots[shotIds[4]!], SEV_ERROR)].join(',');
+    }, { timeout: 4000 }).toBe('true,true');
   });
 });

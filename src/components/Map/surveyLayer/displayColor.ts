@@ -12,6 +12,7 @@ import { COMMENT_PALETTE, getDepthColor } from '../../../utils/colors';
 import { scaleHex, type ColorScaleInput } from '../../../utils/palettes';
 import type { MapThemeColors } from '../../../utils/themeColors';
 import { type SurveyData, STATION_FLAG_IS_ZERO_DATUM } from '../../../types/survey-data';
+import { issueScoreColor } from './issueColor';
 
 export type DepthRange = { min: number; max: number };
 
@@ -67,9 +68,10 @@ export interface DisplayColorContext {
    *  auto range falls back to. */
   depthScale?: ColorScaleInput | null;
   themeColors: MapThemeColors;
-  /** Only honored when `issueSeverity` is present (mirrors the builder). */
+  /** Only honored when `issueScores` is present (mirrors the builder). */
   showIssueSeverity: boolean;
-  issueSeverity?: { shotSeverity: Uint8Array; stationSeverity: Uint8Array } | undefined;
+  /** Graded Survey Issues scores, 0 to 3 per shot / station (`issueScore.ts`). */
+  issueScores?: { shotScore: Float32Array; stationScore: Float32Array } | undefined;
   /** An analytical overlay (distance gradient / gas reach) active in the CUSTOM
    *  renderer. Null / absent = off. See {@link OverlayColorInput}. The stock
    *  feature builder ignores this - it colors by section/depth/severity and lets
@@ -142,24 +144,15 @@ export function depthColorFor(value: number, ctx: DisplayColorContext): string |
   );
 }
 
-/** Severity → color (2=error, 1=warning, else clear). */
-export function severityColor(themeColors: MapThemeColors, s: number | undefined): string {
-  return s === 2
-    ? themeColors.severityError
-    : s === 1
-      ? themeColors.severityWarning
-      : themeColors.severityClear;
-}
-
-/** The shot's base display color: severity > depth ramp > section color. */
+/** The shot's base display color: issue score > depth ramp > section color. */
 export function resolveShotDisplayColor(
   data: SurveyData,
   sectionColor: string,
   shotGlobalIdx: number,
   ctx: DisplayColorContext,
 ): string {
-  if (ctx.showIssueSeverity && ctx.issueSeverity) {
-    return severityColor(ctx.themeColors, ctx.issueSeverity.shotSeverity[shotGlobalIdx]);
+  if (ctx.showIssueSeverity && ctx.issueScores) {
+    return issueScoreColor(ctx.themeColors, ctx.issueScores.shotScore[shotGlobalIdx] ?? 0);
   }
   if (ctx.showDepthGradient) {
     const avgDepth = (data.shotDepthIn[shotGlobalIdx]! + data.shotDepthOut[shotGlobalIdx]!) / 2;
@@ -187,9 +180,8 @@ export function resolveShotEndpointColors(
   ctx: DisplayColorContext,
 ): [string, string] {
   const base = resolveShotDisplayColor(data, sectionColor, shotGlobalIdx, ctx);
-  // Severity fill is a single flat color per shot (mirrors the stock shots
-  // layer in severity mode); the gradient sub-layer is depth-only.
-  if (ctx.showIssueSeverity && ctx.issueSeverity) return [base, base];
+  // An issue score is one flat color per shot; the gradient is depth-only.
+  if (ctx.showIssueSeverity && ctx.issueScores) return [base, base];
   if (ctx.showDepthGradient) {
     const from = depthColorFor(data.shotDepthIn[shotGlobalIdx]!, ctx) ?? base;
     const to = depthColorFor(data.shotDepthOut[shotGlobalIdx]!, ctx) ?? base;
@@ -198,15 +190,15 @@ export function resolveShotEndpointColors(
   return [base, base];
 }
 
-/** The station's fill color: severity > depth ramp > zero-datum > section color. */
+/** The station's fill color: issue score > depth ramp > zero-datum > section color. */
 export function resolveStationDisplayColor(
   data: SurveyData,
   sectionColor: string,
   stationGlobalIdx: number,
   ctx: DisplayColorContext,
 ): string {
-  if (ctx.showIssueSeverity && ctx.issueSeverity) {
-    return severityColor(ctx.themeColors, ctx.issueSeverity.stationSeverity[stationGlobalIdx]);
+  if (ctx.showIssueSeverity && ctx.issueScores) {
+    return issueScoreColor(ctx.themeColors, ctx.issueScores.stationScore[stationGlobalIdx] ?? 0);
   }
   const isZeroDatum = (data.stationFlags[stationGlobalIdx]! & STATION_FLAG_IS_ZERO_DATUM) !== 0;
   if (ctx.showDepthGradient) {

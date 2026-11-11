@@ -1220,7 +1220,7 @@ describe('planColorOnlyUpdate gate', () => {
       showDepthGradient: false,
       showIssueSeverity: false,
       depthRange: { min: 0, max: 1 },
-      issueSeverity: undefined,
+      issueScores: undefined,
       overlay: null,
       commentTint: false,
       ...over,

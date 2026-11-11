@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import * as maplibregl from 'maplibre-gl';
 import type { SectionId, ShotId, StationRef, DistanceField } from '../../types/project';
 import type { GasReachField } from '../../types/ipc.generated';
-import type { BatchCommand, ProjectWarning } from '../../types/commands';
+import type { BatchCommand } from '../../types/commands';
 import { useProjectStore } from '../../store/projectStore';
 import {
   useUIStore,
@@ -57,6 +57,7 @@ import { getMapThemeColors } from '../../utils/themeColors';
 import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { MapTopLeftOverlay } from './MapTopLeftOverlay';
+import { useIssueRenderInput } from './useIssueDisplay';
 import { useSpeleoStore, selectSpeleoReadOnly } from '../../store/speleoStore';
 import { useNetworkStore } from '../../store/networkStore';
 import { FEATURE_ID_STRIDE } from '../../utils/ids';
@@ -64,11 +65,6 @@ import { debugLog } from '../../utils/debugLog';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 import { useSurveyLayerColorScales } from './colorScale/useColorScaleInputs';
 import { MapColorLegends } from './MapColorLegends';
-
-// Stable empty warnings array fed to the survey-layer rebuild effect when
-// Issue-severity coloring is OFF. Module-level so its identity never changes
-// across renders - a per-render [] would defeat the rebuild-gating memo below.
-const EMPTY_WARNINGS: ProjectWarning[] = [];
 
 /**
  * How far a WATCHED Ctrl+left press has to travel before the custom pan takes
@@ -395,7 +391,7 @@ function MapCanvas() {
   const pressClientRef = useRef<{ x: number; y: number } | null>(null);
   const { t } = useTranslation();
 
-  const { project, stations, surveyData, stationsAdjusted, surveyDataAdjusted, adjustedLoading, loadAdjustedGeometry, config, warnings, moveStation, moveSegment, getConnectedSectionIds, getAnchoredSectionIds, executeBatch } = useProjectStore();
+  const { project, stations, surveyData, stationsAdjusted, surveyDataAdjusted, adjustedLoading, loadAdjustedGeometry, config, moveStation, moveSegment, getConnectedSectionIds, getAnchoredSectionIds, executeBatch } = useProjectStore();
   const logMapInteractions = config?.debug?.map?.log_hit_detection ?? false;
 
   // Geometry display mode (measured vs read-only closure-adjusted).
@@ -624,14 +620,8 @@ function MapCanvas() {
     (detailPanelOpen && detailPanelTab === 'warnings' && highlightWarningsOnTabSwitch && !showGasPlan);
   // Severity takes visual precedence over the depth gradient when both apply.
   const effectiveDepthGradient = showDepthGradient && !effectiveIssueSeverity;
-  // Gate the survey-layer rebuild on issue-severity coloring. `warnings` changes
-  // identity on every refreshWarnings (each edit/resolve/ignore), but warnings
-  // only affect colors when severity coloring is effectively ON - feed the rebuild
-  // a stable shared [] when OFF so warning-only refreshes don't rebuild the GeoJSON.
-  const severityWarnings = useMemo(
-    () => (effectiveIssueSeverity ? warnings : EMPTY_WARNINGS),
-    [effectiveIssueSeverity, warnings]
-  );
+  // Null while Survey Issues is off, so warning-only refreshes don't rebuild.
+  const issueInput = useIssueRenderInput(effectiveIssueSeverity, false);
 
   const alignedClosureIds = useMemo(() => {
     if (!project?.loop_closures) return new Set<bigint>();
@@ -1999,11 +1989,10 @@ function MapCanvas() {
         effectiveDepthGradient,
         depthRange,
         precision,
-        effectiveIssueSeverity,
-        severityWarnings
+        issueInput
       );
     }
-  }, [project, activeStations, mapLoaded, gpsOrigin, effectiveDepthGradient, depthRange, precision, geometryMode, surveyDataAdjusted, effectiveIssueSeverity, severityWarnings]);
+  }, [project, activeStations, mapLoaded, gpsOrigin, effectiveDepthGradient, depthRange, precision, geometryMode, surveyDataAdjusted, issueInput]);
 
   // (The Warnings-tab auto-highlight is now derived via `effectiveIssueSeverity`
   // above - no snapshot/restore effect needed, so nothing to lose on leave/unmount.)
