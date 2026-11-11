@@ -54,6 +54,7 @@ const COMMENT_HALO_WIDTH = 1.5;
  *   - station label:  size 14→9 / 18→11,  opacity 14→0.7 / 18→1, halo 2,   minzoom 14, alt
  *   - section name:   size 12→11 / 18→14, opacity 1 (const),     halo 1.5, minzoom 10, main
  *   - comments:       size 14→8 / 18→10,  opacity 0.85 (const),  halo 1.5, minzoom 14, alt
+ *   - errors (shot + closure): size 14→9 / 18→12, opacity 1, halo 2, minzoom 14, alt
  */
 export const LABEL_KIND_STYLE: Record<LabelKind, KindStyle> = {
   [LABEL_KIND.SHOT_LABEL]: {
@@ -88,6 +89,22 @@ export const LABEL_KIND_STYLE: Record<LabelKind, KindStyle> = {
     size: [[14, 8], [18, 10]],
     opacity: [[0, 0.85]],
     haloWidth: COMMENT_HALO_WIDTH,
+    minzoom: 14,
+    halo: 'textHaloAlt',
+  },
+  // Errors labels: the shot-label size, fully opaque (they are coloured by
+  // severity, and a faded red reads as a lesser error), the same halo.
+  [LABEL_KIND.SHOT_ERROR]: {
+    size: [[14, 9], [18, 12]],
+    opacity: [[0, 1]],
+    haloWidth: 2,
+    minzoom: 14,
+    halo: 'textHaloAlt',
+  },
+  [LABEL_KIND.CLOSURE_ERROR]: {
+    size: [[14, 9], [18, 12]],
+    opacity: [[0, 1]],
+    haloWidth: 2,
     minzoom: 14,
     halo: 'textHaloAlt',
   },

@@ -2378,6 +2378,14 @@
       "fromStation": "from {{id}}",
       "computing": "Distance: computing…"
     },
+    "errorLabels": {
+      "abbrev": {
+        "azimuth": "Δaz",
+        "inclination": "Δinc",
+        "inclinationDepth": "Δi/d",
+        "length": "ΔL"
+      }
+    },
     "colorScale": {
       "settingsButton": "Color scale settings",
       "title": {

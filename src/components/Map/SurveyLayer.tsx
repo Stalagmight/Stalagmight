@@ -2305,6 +2305,11 @@ export default class SurveyLayer {
     this.customLabels?.setShotLabelsVisible(show);
   }
 
+  // Errors labels: shot labels follow Shots, closure labels follow Stations.
+  setShowErrorLabels(shots: boolean, closures: boolean) {
+    this.customLabels?.setErrorLabelsVisible(shots, closures);
+  }
+
   // Control section name labels visibility (custom label layer uniform).
   setShowSectionNames(show: boolean) {
     this.customLabels?.setSectionNamesVisible(show);
@@ -3395,9 +3400,9 @@ export default class SurveyLayer {
       stationHoverRadiusPx: this.getStationHoverRadius(),
       stationSelectionRadiusPx: this.getStationSelectionRadius(),
     });
-    // Custom LABEL layer (#customRender labels). Shares surveyData + theme; its
-    // own composed gate no-ops when off. Builds all five kinds, viewport-scoped
-    // with collision; a synchronous rebuild here keeps the edit path immediate.
+    // Custom LABEL layer (#customRender labels). Shares surveyData + theme; builds
+    // every kind viewport-scoped with collision; a synchronous rebuild here keeps
+    // the edit path immediate.
     this.customLabels?.sync({
       surveyData,
       gpsOrigin: this.gpsOrigin,
@@ -3407,6 +3412,7 @@ export default class SurveyLayer {
       depthScale: this.depthScale,
       precision: this.cachedPrecision,
       commentTint: this.activeTool === 'move_comment',
+      errors: this.cachedIssueRender?.labels,
     });
   }
 
@@ -3649,6 +3655,11 @@ export default class SurveyLayer {
    * project these instead of querying deleted stock layers (see MapCanvas's
    * `__stalagmight_geometry__` hook). Returns null before geometry is indexed.
    */
+  /** E2E: the emitted labels (kind, text, reveal zoom); see the label controller. */
+  labelSnapshot(): ReturnType<SurveyLabelController['snapshot']> {
+    return this.customLabels?.snapshot() ?? [];
+  }
+
   enumerateGeometry(): ReturnType<SurveyGeometryIndex['enumerateGeometry']> | null {
     if (!this.geoIndex) return null;
     return this.geoIndex.enumerateGeometry(this.visibleKinds());

@@ -24,6 +24,7 @@ describe('map E2E controls', () => {
         measuredPathDrawnCounts: () => ({ shots: 0, stations: 0 }),
         dragGhostOffset: () => null,
         setSemanticTargetPreference,
+        labelSnapshot: () => [],
       }),
       toMeters: () => ({ x: 0, y: 0 }),
     });

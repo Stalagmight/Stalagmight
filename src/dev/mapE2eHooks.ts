@@ -24,6 +24,7 @@ export interface MapE2eSurveyLayer {
   measuredPathDrawnCounts(): { shots: number; stations: number };
   dragGhostOffset(): unknown;
   setSemanticTargetPreference(target: SemanticMapTarget): void;
+  labelSnapshot(): unknown;
 }
 
 /** What `installMapE2eHooks` needs: live accessors, read at call time so the
@@ -46,6 +47,7 @@ interface HookWindow {
   __stalagmight_map_interaction__?: () => number;
   __stalagmight_set_map_target__?: (target: SemanticMapTarget) => boolean;
   __stalagmight_clear_map_target__?: () => void;
+  __stalagmight_labels__?: () => unknown;
 }
 
 /**
@@ -58,6 +60,9 @@ interface HookWindow {
  *   `{shots, stations}`; the tint is a custom GL layer with no feature-state.
  * - `__stalagmight_drag_ghost__()` - the live drag-preview offset `{mode, dx, dy}`,
  *   so a drag test never reaches into the ghost layer's private fields.
+ * - `__stalagmight_labels__()` - the emitted map labels `{kind, text, revealZoom,
+ *   kindVisible, score?}`: a label draws while its kind is visible and the live
+ *   zoom is at least its revealZoom.
  * - `__stalagmight_to_meters__(lng, lat)` - the ACTIVE meters transform, so a test
  *   can predict a committed move offset with the same gpsOrigin the app uses (the
  *   no-GPS linear fallback and the ENU transform are not equivalent).
@@ -71,6 +76,7 @@ export function installMapE2eHooks(sources: MapE2eHookSources): () => void {
     sources.surveyLayer()?.measuredPathDrawnCounts() ?? { shots: 0, stations: 0 };
   w.__stalagmight_drag_ghost__ = () => sources.surveyLayer()?.dragGhostOffset() ?? null;
   w.__stalagmight_to_meters__ = (lng, lat) => sources.toMeters(lng, lat);
+  w.__stalagmight_labels__ = () => sources.surveyLayer()?.labelSnapshot() ?? [];
   if (sources.controls) {
     w.__stalagmight_map_interaction__ = () => sources.controls!.interactionSequence();
     w.__stalagmight_set_map_target__ = (target) => sources.controls!.setSemanticTarget(target);
@@ -82,6 +88,7 @@ export function installMapE2eHooks(sources: MapE2eHookSources): () => void {
     delete w.__stalagmight_measured__;
     delete w.__stalagmight_drag_ghost__;
     delete w.__stalagmight_to_meters__;
+    delete w.__stalagmight_labels__;
     delete w.__stalagmight_map_interaction__;
     delete w.__stalagmight_set_map_target__;
     delete w.__stalagmight_clear_map_target__;

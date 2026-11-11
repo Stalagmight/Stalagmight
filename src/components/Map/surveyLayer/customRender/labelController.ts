@@ -85,6 +85,7 @@ import { LABEL_KIND_STYLE, interpolateStops } from './labelStyle';
 import { packCssColor, type Rgba8 } from './colorPack';
 import type { CustomDimState } from './controller';
 import type { CustomRenderExclusion } from './tessellate';
+import type { ErrorLabelInput } from '../issueScore';
 import {
   GlyphAtlas,
   ensureLabelFont,
@@ -209,6 +210,8 @@ export interface LabelSyncParams {
   /** move_comment tool active → comment labels use the FNV-1a palette tint
    *  (`commentColorForKey`), mirroring the stock `commentTextColor()` (#52). */
   commentTint?: boolean | undefined;
+  /** The Errors labels' input; null / absent while the Errors labels are off. */
+  errors?: ErrorLabelInput | null | undefined;
 }
 
 export interface SurveyLabelControllerOptions {
@@ -303,6 +306,9 @@ export class SurveyLabelController {
    *  the reveal-pass inputs (build zoom + world-pixel scale), and the last reveal
    *  zooms. Rewritten on every {@link build}. */
   private lastDescriptors: LabelDescriptor[] | null = null;
+  /** The reveal zooms of {@link lastDescriptors} (build or rerun), for the e2e
+   *  label snapshot. */
+  private lastReveal: Float32Array | null = null;
   private lastShaped: ShapedLabel[] | null = null;
   private lastExtents: (ExtentEm | null)[] | null = null;
   private lastBuildZoom: number | undefined = undefined;
@@ -337,7 +343,7 @@ export class SurveyLabelController {
    *  it; drives `u_kind_visible` while active and each stock layer's restored
    *  visibility while inactive. Defaults mirror the stock layers' initial
    *  `visibility`: section names visible, everything else hidden. */
-  private kindVisible: boolean[] = [false, false, true, false, false];
+  private kindVisible: boolean[] = [false, false, true, false, false, false, false];
   /** What station labels say (IDs or names). Their visibility is
    *  `kindVisible[STATION_LABEL]`; this is the text a build bakes in. */
   private stationLabelText: StationLabelText = 'id';
@@ -452,6 +458,12 @@ export class SurveyLabelController {
   }
   setShotCommentsVisible(visible: boolean): void {
     this.setKindVisible(LABEL_KIND.SHOT_COMMENT, visible);
+  }
+  /** The Errors labels: shot labels follow the Shots toggle, closure labels the
+   *  Stations toggle (the closure lines hide with the stations). */
+  setErrorLabelsVisible(shots: boolean, closures: boolean): void {
+    this.kindVisible[LABEL_KIND.SHOT_ERROR] = shots;
+    this.setKindVisible(LABEL_KIND.CLOSURE_ERROR, closures);
   }
 
   private setKindVisible(kind: LabelKind, visible: boolean): void {
@@ -606,6 +618,7 @@ export class SurveyLabelController {
     // station text (IDs or names) and size their boxes alike.
     const buildCtx: LabelBuildContext = {
       colorCtx, precision: params.precision, commentColor, stationLabelText: this.stationLabelText,
+      errors: params.errors, themeColors: params.themeColors,
     };
     let descriptors = buildLabelDescriptors(surveyData, gpsOrigin, anchorX, anchorY, buildCtx, kinds, vpCtx?.viewport);
     const tShape0 = performance.now();
@@ -675,6 +688,7 @@ export class SurveyLabelController {
     // Retain build products for the cheap flag paths + reveal rerun, and the
     // viewport coverage the settle-rebuild test compares against.
     this.lastDescriptors = descriptors;
+    this.lastReveal = reveal;
     this.lastShaped = shaped;
     this.lastExtents = extents;
     this.lastBuildZoom = zoom;
@@ -770,7 +784,11 @@ export class SurveyLabelController {
     if (sid === undefined) return false;
     const anchored = anchoredSectionIds.has(sid);
     switch (desc.kind) {
+      case LABEL_KIND.CLOSURE_ERROR:
+        // Like the closure line: dim only once both ends' sections are anchored.
+        return anchored && desc.pairSectionId !== undefined && anchoredSectionIds.has(desc.pairSectionId);
       case LABEL_KIND.SHOT_LABEL:
+      case LABEL_KIND.SHOT_ERROR:
         return (
           anchored ||
           (desc.shotId !== undefined &&
@@ -824,7 +842,17 @@ export class SurveyLabelController {
         return desc.stationGlobal !== undefined && stationGlobalIndices?.has(desc.stationGlobal) === true;
       case LABEL_KIND.SHOT_LABEL:
       case LABEL_KIND.SHOT_COMMENT:
+      case LABEL_KIND.SHOT_ERROR:
         return desc.shotGlobal !== undefined && shotGlobalIndices?.has(desc.shotGlobal) === true;
+      case LABEL_KIND.CLOSURE_ERROR:
+        // Either end moving moves the closure: hide it until the commit rebuild.
+        return (
+          (desc.pairSectionId !== undefined &&
+            (sectionIds?.has(desc.pairSectionId) === true || affectedSectionIds?.has(desc.pairSectionId) === true)) ||
+          affectedSectionIds?.has(sid) === true ||
+          (desc.stationGlobal !== undefined && stationGlobalIndices?.has(desc.stationGlobal) === true) ||
+          (desc.pairStationGlobal !== undefined && stationGlobalIndices?.has(desc.pairStationGlobal) === true)
+        );
       case LABEL_KIND.SECTION_NAME:
         // Partial station / shot drag: hide the name of every affected section.
         return affectedSectionIds?.has(sid) === true;
@@ -893,8 +921,23 @@ export class SurveyLabelController {
     for (let i = 0; i < reveal.length; i++) {
       if (reveal[i]! === REVEAL_NEVER) reveal[i] = REVEAL_UNREACHABLE;
     }
+    this.lastReveal = reveal;
     this.layer.updateReveal(buildLabelRevealZooms(this.lastShaped, (i) => reveal[i]!));
     this.map.triggerRepaint?.();
+  }
+
+  /** E2E / harness read-out of the emitted labels: kind, text, the zoom from
+   *  which each draws, and whether its kind is toggled on. Labels have no
+   *  MapLibre features, so this is the only way to assert what is drawn. */
+  snapshot(): { kind: LabelKind; text: string; revealZoom: number; kindVisible: boolean; score?: number }[] {
+    const descriptors = this.lastDescriptors ?? [];
+    return descriptors.map((d, i) => ({
+      kind: d.kind,
+      text: d.text,
+      revealZoom: this.lastReveal?.[i] ?? 0,
+      kindVisible: this.kindVisible[d.kind] ?? false,
+      ...(d.score !== undefined ? { score: d.score } : {}),
+    }));
   }
 
   /**

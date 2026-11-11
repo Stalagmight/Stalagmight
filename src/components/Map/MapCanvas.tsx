@@ -238,6 +238,7 @@ const MAP_CANVAS_UI_KEYS = [
   'activeTool',
   'showSatellite',
   'showShotData',
+  'showShotErrors',
   'showSectionNames',
   'showStationLabels',
   'showStationNames',
@@ -503,6 +504,7 @@ function MapCanvas() {
     activeTool,
     showSatellite,
     showShotData,
+    showShotErrors,
     showSectionNames,
     showStationLabels,
     showStationNames,
@@ -621,7 +623,7 @@ function MapCanvas() {
   // Severity takes visual precedence over the depth gradient when both apply.
   const effectiveDepthGradient = showDepthGradient && !effectiveIssueSeverity;
   // Null while Survey Issues is off, so warning-only refreshes don't rebuild.
-  const issueInput = useIssueRenderInput(effectiveIssueSeverity, false);
+  const issueInput = useIssueRenderInput(effectiveIssueSeverity, showShotErrors);
 
   const alignedClosureIds = useMemo(() => {
     if (!project?.loop_closures) return new Set<bigint>();
@@ -2480,6 +2482,11 @@ function MapCanvas() {
     if (!surveyLayerRef.current) return;
     surveyLayerRef.current.setShowShotLabels(getEffectiveShowShotData(showShots, showShotData));
   }, [showShotData, showShots, mapLoaded]);
+
+  // Errors labels: shot labels follow Shots, closure labels follow Stations.
+  useEffect(() => {
+    surveyLayerRef.current?.setShowErrorLabels(showShotErrors && showShots, showShotErrors && showStations);
+  }, [showShotErrors, showShots, showStations, mapLoaded]);
 
   // Sync section name labels visibility with SurveyLayer
   useEffect(() => {
