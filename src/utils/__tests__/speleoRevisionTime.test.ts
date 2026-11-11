@@ -1,7 +1,8 @@
 /**
- * sdk#7: SpeleoDB sends revision `authored_date` as New York wall time with no
- * zone (`YYYY/MM/DD HH:MM`). It must become the right instant (DST-aware), be
- * shown in the viewer's zone with its GMT offset, and give correct relative times.
+ * sdk#7: SpeleoDB sends revision `authored_date` as an ISO-8601 UTC instant, and
+ * before its ISO revision dates as New York wall time with no zone
+ * (`YYYY/MM/DD HH:MM`). Either must become the right instant (DST-aware), be shown
+ * in the viewer's zone with its GMT offset, and give correct relative times.
  */
 import { describe, it, expect } from 'vitest';
 import { formatRelativeTime } from '../../i18n/format';
@@ -34,6 +35,20 @@ describe('parseRevisionDate', () => {
     expect(iso('2026/07/03 06:00:30')).toBe('2026-07-03T10:00:30.000Z');
     expect(parseRevisionDate('yesterday')).toBeNull();
     expect(parseRevisionDate('')).toBeNull();
+  });
+
+  it('places no wall time that is not a real date and time, rather than rolling it over', () => {
+    for (const raw of ['2026/02/30 10:00', '2026/13/45 25:99', '2026/11/10 24:00', '2026/11/10 10:60']) {
+      expect(parseRevisionDate(raw)).toBeNull();
+    }
+    expect(iso('2028/02/29 10:00')).toBe('2028-02-29T15:00:00.000Z'); // leap day, EST
+  });
+
+  it('reads the UTC instant the backend hands on, milliseconds included', () => {
+    expect(iso('2026-11-10T08:18:23.123Z')).toBe('2026-11-10T08:18:23.123Z');
+    expect(iso('2026-11-10T08:18:23.000Z')).toBe('2026-11-10T08:18:23.000Z');
+    // The same minute from a pre-ISO server (03:18 EST) is the same instant, to the minute.
+    expect(iso('2026/11/10 03:18')).toBe('2026-11-10T08:18:00.000Z');
   });
 });
 
@@ -70,6 +85,25 @@ describe('formatRevisionTime', () => {
     const spring = formatRevisionTime(parseRevisionDate('2026/03/20 12:00') as Date, 'Europe/Paris');
     expect(spring).toContain('05:00');
     expect(spring.endsWith(' GMT+1')).toBe(true);
+  });
+
+  it('shows a UTC instant in the zone and offset in force at that instant', () => {
+    // Paris: CET (GMT+1) in winter, CEST (GMT+2) in summer, switching 2026-03-29 01:00 UTC.
+    const winter = formatRevisionTime(parseRevisionDate('2026-03-29T00:59:00.000Z') as Date, 'Europe/Paris');
+    expect(winter).toContain('Mar 29, 2026');
+    expect(winter).toContain('01:59');
+    expect(winter.endsWith(' GMT+1')).toBe(true);
+    const summer = formatRevisionTime(parseRevisionDate('2026-03-29T01:00:00.000Z') as Date, 'Europe/Paris');
+    expect(summer).toContain('03:00');
+    expect(summer.endsWith(' GMT+2')).toBe(true);
+    // A half-hour zone, and a viewer west of New York.
+    const kolkata = formatRevisionTime(parseRevisionDate('2026-11-10T08:18:23.123Z') as Date, 'Asia/Kolkata');
+    expect(kolkata).toContain('01:48');
+    expect(kolkata.endsWith(' GMT+5:30')).toBe(true);
+    const la = formatRevisionTime(parseRevisionDate('2026-11-10T08:18:23.123Z') as Date, 'America/Los_Angeles');
+    expect(la).toContain('Nov 10, 2026');
+    expect(la).toContain('12:18');
+    expect(la.endsWith(' GMT-8')).toBe(true);
   });
 
   it('gives a correct relative time for a just-made commit', () => {

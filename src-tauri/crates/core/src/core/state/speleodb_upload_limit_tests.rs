@@ -1,8 +1,8 @@
 //! sdk#3: the push snapshot is fitted under SpeleoDB's upload limit BEFORE a byte
 //! is sent.
 //!
-//! The server refuses a file over 24,657,920 bytes (an upstream setting bug; see
-//! `client::SERVER_UPLOAD_LIMIT_BYTES`) only after the whole body has arrived. The
+//! The server refuses a file over 5 MiB (`client::SERVER_UPLOAD_LIMIT_BYTES`)
+//! only after the whole body has arrived. The
 //! push path now measures the sanitized snapshot first: within the limit it is
 //! unchanged; over it, the undo history is left out of the COPY when that is
 //! enough; otherwise the push is refused with a clear error and no request.
@@ -169,7 +169,7 @@ fn the_too_large_refusal_reads_clearly_and_fails_closed() {
         dto.message
     );
     assert!(dto.message.contains("31.2 MB"), "{}", dto.message);
-    assert!(dto.message.contains("24.7 MB"), "{}", dto.message);
+    assert!(dto.message.contains("5.2 MB"), "{}", dto.message);
     assert!(
         dto.message.contains("Nothing was uploaded"),
         "{}",

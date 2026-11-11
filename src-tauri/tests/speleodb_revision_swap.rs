@@ -167,7 +167,7 @@ fn serve(project_id: &str, revision: Vec<u8>, gate: Option<Gate>) -> Stub {
             } else if route.contains("/revisions/") {
                 let commit = |id: &str, parents: Vec<&str>| {
                     json!({"id":id,"parent_ids":parents,"author_email":"test@example.com",
-                        "author_name":"Test","authored_date":"2026/01/01 00:00","dt_since":"now",
+                        "author_name":"Test","authored_date":"2026-01-01T00:00:00Z","dt_since":"now",
                         "message":"Synthetic","formats":[],"tree":[],"url":null})
                 };
                 (

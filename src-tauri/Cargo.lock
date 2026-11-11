@@ -4540,9 +4540,9 @@ dependencies = [
 
 [[package]]
 name = "speleodb-api"
-version = "0.6.1"
+version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7c6f7636c5c5ee9e0410be170db92d2d8d5e424ca6797453a67af8eaf40ad37"
+checksum = "868c71233774273092801837402fa563aaf7f2db4f68e0ffc0f623a78cbf9504"
 dependencies = [
  "bytes",
  "chrono",
