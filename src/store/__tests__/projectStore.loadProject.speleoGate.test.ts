@@ -34,6 +34,7 @@ const displaySettings: DisplaySettings = {
   showShots: true,
   showSectionNames: true,
   showStationLabels: false,
+  showStationNames: false,
   showShotData: false,
   showReferenceShots: true,
   showJumps: true,

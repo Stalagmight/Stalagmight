@@ -37,6 +37,7 @@ import { getThemeColor } from '../../utils/themeColors';
 import { getContrastColor } from '../../utils/colors';
 import { setSource } from '../../utils/telemetry';
 import { hasEligibleClosures } from '../../utils/closures';
+import { hasStationNames } from '../../types/survey-data';
 import { useOnboardingStep } from '../../hooks/useOnboardingStep';
 
 /** A multi-toggle display key shown as a pill, optionally gated on another toggle. */
@@ -50,6 +51,7 @@ interface ToggleItem {
     | 'showZeroDatum'
     | 'showSectionNames'
     | 'showStationLabels'
+    | 'showStationNames'
     | 'showStationComments'
     | 'showShotComments'
     | 'showShotData'
@@ -59,6 +61,8 @@ interface ToggleItem {
   labelKey: string;
   descriptionKey?: string;
   disabledWhen?: 'showShots';
+  /** Offered only when the project has station names (see renderTogglePill). */
+  needsStationNames?: true;
   /** Element this pill refers to: drives the entity icon + the pill's tint
    *  (--sh-<entity>, the same color the data-table/legend chips use). */
   entity?: BlobEntity;
@@ -86,6 +90,8 @@ const OVERLAYS: ToggleItem[] = [
 const COMMENTS_LABELS: ToggleItem[] = [
   { key: 'showSectionNames', labelKey: 'displayMenu.items.sectionNames', descriptionKey: 'displayMenu.descriptions.sectionNames', entity: 'section', symbol: 'label' },
   { key: 'showStationLabels', labelKey: 'displayMenu.items.stationLabels', descriptionKey: 'displayMenu.descriptions.stationLabels', entity: 'station', symbol: 'label' },
+  // Exclusive with Station IDs (toggleDisplay turns the other one off).
+  { key: 'showStationNames', labelKey: 'displayMenu.items.stationNames', descriptionKey: 'displayMenu.descriptions.stationNames', entity: 'station', symbol: 'label', needsStationNames: true },
   { key: 'showStationComments', labelKey: 'displayMenu.items.stationComments', descriptionKey: 'displayMenu.descriptions.stationComments', entity: 'station', symbol: 'comment' },
   { key: 'showShotComments', labelKey: 'displayMenu.items.shotComments', descriptionKey: 'displayMenu.descriptions.shotComments', disabledWhen: 'showShots', entity: 'shot', symbol: 'comment' },
   { key: 'showShotData', labelKey: 'displayMenu.items.shotData', descriptionKey: 'displayMenu.descriptions.shotData', disabledWhen: 'showShots', entity: 'shot', symbol: 'data' },
@@ -217,6 +223,7 @@ export default function DisplayMenu({
         showZeroDatum: s.showZeroDatum,
         showSectionNames: s.showSectionNames,
         showStationLabels: s.showStationLabels,
+        showStationNames: s.showStationNames,
         showStationComments: s.showStationComments,
         showShotComments: s.showShotComments,
         showShotData: s.showShotData,
@@ -230,6 +237,7 @@ export default function DisplayMenu({
   // least one closure eligible for the solve (Batch / LeastSquaresWeighted);
   // otherwise the option is disabled (it would render identical geometry).
   const hasClosures = useProjectStore((s) => hasEligibleClosures(s.project?.loop_closures ?? []));
+  const hasNames = useProjectStore((s) => hasStationNames(s.surveyData));
 
   const selectColorMode = (mode: ColorMode) => {
     if (mode === colorMode) return;
@@ -258,8 +266,12 @@ export default function DisplayMenu({
   };
 
   const renderTogglePill = (item: ToggleItem) => {
-    const disabled = item.disabledWhen ? !toggleValues[item.disabledWhen] : false;
     const active = toggleValues[item.key];
+    // Station names replace the IDs, so with no names in the project the pill
+    // would only switch the IDs off and label nothing. Offer it only when there
+    // are names - or when it is already on, so it can always be turned off.
+    const noNames = !!item.needsStationNames && !hasNames && !active;
+    const disabled = noNames || (item.disabledWhen ? !toggleValues[item.disabledWhen] : false);
     const entityColored = !!item.entity && colorsOn;
     // Contrast color for the filled (on) state, derived from the resolved
     // (possibly user-overridden) element color so the label + glyph stay legible.
@@ -274,7 +286,7 @@ export default function DisplayMenu({
       <Pill
         key={item.key}
         label={t(item.labelKey)}
-        title={item.descriptionKey ? t(item.descriptionKey) : ''}
+        title={noNames ? t('displayMenu.descriptions.stationNamesUnavailable') : item.descriptionKey ? t(item.descriptionKey) : ''}
         active={active}
         disabled={disabled}
         onClick={() => { setSource('display-menu'); toggleDisplay(item.key); }}

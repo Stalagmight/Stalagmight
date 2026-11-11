@@ -227,6 +227,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "action.toggle.showShots",
     "action.toggle.showStationComments",
     "action.toggle.showStationLabels",
+    "action.toggle.showStationNames",
     "action.toggle.showStations",
     "action.toggle.showZeroDatum",
     // ── Action: selection (132-136) ──
@@ -1084,7 +1085,9 @@ mod tests {
         //       undo-after.add_project_file, and the full per-dialog set for the
         //       open-or-add prompt: action.dialog + dialog-cancel + dwell.dialog +
         //       active-dwell.dialog for add-or-open-project = 677.
-        assert_eq!(EVENT_NAMES.len(), 677);
+        //   + 1 the Display menu's Station names toggle (station names as the
+        //       map's station labels): action.toggle.showStationNames = 678.
+        assert_eq!(EVENT_NAMES.len(), 678);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

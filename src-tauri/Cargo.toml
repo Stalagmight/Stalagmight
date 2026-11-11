@@ -74,7 +74,7 @@ time = "0.3"
 tempfile = "3.24.0"
 
 # SpeleoDB's published async SDK and its native-file transport.
-speleodb-api = "=0.6.1"
+speleodb-api = "=0.6.2"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream"] }
 # The TLS stack reqwest already uses (same version, no extra features). Named
 # directly only so a handshake / certificate failure can be told apart by its

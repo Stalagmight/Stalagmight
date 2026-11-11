@@ -73,10 +73,13 @@ pub struct RevisionCommit {
     /// landed" from "someone else pushed".
     #[serde(default)]
     pub author_email: String,
-    /// [#218] Commit timestamp, for the history view, exactly as the server sent
-    /// it: `YYYY/MM/DD HH:MM` wall time in the instance's zone (America/New_York)
-    /// with NO offset (sdk#7). The frontend converts it to an instant
-    /// (`src/utils/speleoRevisionTime.ts`). `None` if the server omits it.
+    /// [#218] Commit timestamp, for the history view: a UTC instant with
+    /// milliseconds (`2026-11-10T08:18:23.123Z`), or, from a SpeleoDB older than
+    /// its ISO revision dates, that server's `YYYY/MM/DD HH:MM` wall time in its
+    /// zone (America/New_York) with NO offset (sdk#7), which the frontend converts
+    /// to an instant (`src/utils/speleoRevisionTime.ts`). See
+    /// `client::commit_dates::display_date`. `None` if the server omits it or sends
+    /// neither form.
     #[serde(default)]
     pub authored_date: Option<String>,
     /// [#218] Commit message, for the history view. `None` if the server omits it.
@@ -149,8 +152,9 @@ pub struct SpeleoRevision {
     pub parent_ids: Vec<String>,
     /// Commit author's email (may be empty if the server omitted it).
     pub author_email: String,
-    /// Commit timestamp as the server sent it - New York wall time with no zone
-    /// (see [`RevisionCommit::authored_date`]) - or `None` if the server omitted it.
+    /// Commit timestamp: a UTC instant, or an older server's New York wall time
+    /// with no zone (see [`RevisionCommit::authored_date`]); `None` when there is
+    /// no time to show.
     pub authored_date: Option<String>,
     /// Commit message, or `None` if the server omitted it.
     pub message: Option<String>,

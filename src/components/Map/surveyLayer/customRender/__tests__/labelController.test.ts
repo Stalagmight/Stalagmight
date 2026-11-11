@@ -248,7 +248,7 @@ describe('SurveyLabelController error state (no stock fallback)', () => {
     const fatals: string[] = [];
     const { map, removed } = makeFakeMap();
     const c = makeController(map, { onFatal: (r: string) => fatals.push(r) });
-    c.setStationLabelsVisible(true);
+    c.setStationLabelMode('id');
     c.sync(makeParams());
     expect(c.isActive()).toBe(false);
     expect(removed).toContain(CUSTOM_ID);
@@ -270,7 +270,7 @@ describe('SurveyLabelController error state (no stock fallback)', () => {
         holder.scheduled += 1;
       },
     });
-    c.setStationLabelsVisible(true);
+    c.setStationLabelMode('id');
     c.sync(makeParams());
 
     const layer = h.layerState.last;
@@ -320,7 +320,7 @@ describe('SurveyLabelController error state (no stock fallback)', () => {
   it('stays inert after destroy: a stray late sync does not resurrect the layer', () => {
     const { map, removed } = makeFakeMap();
     const c = makeController(map);
-    c.setStationLabelsVisible(true); // desired visible so destroy restores stock to visible
+    c.setStationLabelMode('id'); // desired visible so destroy restores stock to visible
     c.sync(makeParams());
     expect(c.isActive()).toBe(true);
     c.destroy();
@@ -369,9 +369,9 @@ describe('SurveyLabelController style wiring', () => {
     const layer = h.layerState.last!;
     const updatesBefore = layer.updateCalls;
 
-    c.setStationLabelsVisible(true);
+    c.setStationLabelMode('id');
     expect(layer.lastStyle?.kindEnabled[LABEL_KIND.STATION_LABEL]).toBe(true);
-    c.setStationLabelsVisible(false);
+    c.setStationLabelMode('off');
     expect(layer.lastStyle?.kindEnabled[LABEL_KIND.STATION_LABEL]).toBe(false);
     // A toggle is a uniform flip, not a buffer rebuild.
     expect(layer.updateCalls).toBe(updatesBefore);
@@ -530,7 +530,7 @@ describe('SurveyLabelController teardown', () => {
   it('destroy() removes the layer and restores the stock label visibility', () => {
     const { map, removed } = makeFakeMap();
     const c = makeController(map);
-    c.setStationLabelsVisible(true);
+    c.setStationLabelMode('id');
     c.sync(makeParams());
     c.destroy();
     expect(removed).toContain(CUSTOM_ID);
@@ -1414,5 +1414,107 @@ describe('SurveyLabelController labelRestore-guard contract (isActive gates the 
     expect(c.isActive()).toBe(true); // active → guard SKIPS stock restore
     c.destroy();
     expect(c.isActive()).toBe(false); // torn down → guard runs stock restore again
+  });
+});
+
+describe('SurveyLabelController station label mode (Station IDs / Station names)', () => {
+  beforeEach(() => {
+    h.layerState.disabledAfterAdd = false;
+    h.layerState.last = null;
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  /** The fixture with names on g1 ('AB') and g3 ('C'); g0 and g2 are unnamed. */
+  function namedParams(): LabelSyncParams {
+    const p = makeParams();
+    p.surveyData.stationNames = new Map([[1, 'AB'], [3, 'C']]);
+    return p;
+  }
+
+  /** Station-label glyphs in the last-built buffer (one quad = 4 vertices each). */
+  function stationGlyphs(layer: FakeLabelLayer): number {
+    return vfl(layer).kind.filter((k) => k === LABEL_KIND.STATION_LABEL).length / 4;
+  }
+
+  it('switching IDs -> names rebuilds once and labels only the named stations', () => {
+    const c = cameraController(zoomOnlyMap(18).map);
+    c.setStationLabelMode('id');
+    const p = namedParams();
+    c.sync(p);
+    const layer = h.layerState.last!;
+    expect(stationGlyphs(layer)).toBe(4); // "0", "1", "2", "0"
+    const updates = layer.updateCalls;
+
+    c.setStationLabelMode('name');
+    // The text is baked into the glyph quads, so a text switch is a rebuild.
+    expect(layer.updateCalls).toBe(updates + 1);
+    expect(stationGlyphs(layer)).toBe(3); // "AB", "C"; g0 and g2 get no label
+    expect(stationLabelFlag(layer, p, 0)).toBe(0);
+    expect(layer.lastStyle?.kindEnabled[LABEL_KIND.STATION_LABEL]).toBe(true);
+
+    c.setStationLabelMode('id');
+    expect(layer.updateCalls).toBe(updates + 2);
+    expect(stationGlyphs(layer)).toBe(4);
+  });
+
+  it('turning the current labels off and on is a uniform flip, not a rebuild', () => {
+    const c = cameraController(zoomOnlyMap(18).map);
+    c.sync(namedParams());
+    const layer = h.layerState.last!;
+    const updates = layer.updateCalls;
+
+    c.setStationLabelMode('id'); // the default text: just show it
+    expect(layer.lastStyle?.kindEnabled[LABEL_KIND.STATION_LABEL]).toBe(true);
+    c.setStationLabelMode('off');
+    expect(layer.lastStyle?.kindEnabled[LABEL_KIND.STATION_LABEL]).toBe(false);
+    expect(layer.updateCalls).toBe(updates);
+
+    c.setStationLabelMode('name'); // off -> names changes the text: one rebuild
+    expect(layer.updateCalls).toBe(updates + 1);
+    c.setStationLabelMode('off'); // hiding keeps the names built...
+    c.setStationLabelMode('name'); // ...so showing them again needs no rebuild
+    expect(layer.updateCalls).toBe(updates + 1);
+    expect(layer.lastStyle?.kindEnabled[LABEL_KIND.STATION_LABEL]).toBe(true);
+    expect(stationGlyphs(layer)).toBe(3);
+  });
+
+  it('a mode set before the first build applies to that build', () => {
+    const c = cameraController(zoomOnlyMap(18).map);
+    c.setStationLabelMode('name');
+    c.sync(namedParams());
+    const layer = h.layerState.last!;
+    expect(stationGlyphs(layer)).toBe(3);
+    expect(layer.lastStyle?.kindEnabled[LABEL_KIND.STATION_LABEL]).toBe(true);
+  });
+
+  it('names mode follows the data: a later sync builds the new names', () => {
+    const c = cameraController(zoomOnlyMap(18).map);
+    c.setStationLabelMode('name');
+    c.sync(namedParams());
+    const layer = h.layerState.last!;
+    const renamed = namedParams();
+    renamed.surveyData.stationNames = new Map([[0, 'WXYZ']]);
+    c.sync(renamed);
+    expect(stationGlyphs(layer)).toBe(4);
+    expect(stationLabelFlag(layer, renamed, 0)).not.toBe(0); // g0 is labelled now...
+    expect(stationLabelFlag(layer, renamed, 1)).toBe(0); // ...and g1 no longer is
+  });
+
+  it('name labels carry the dim and drag-hide bits like the ID labels', () => {
+    const c = cameraController(zoomOnlyMap(18).map);
+    const p = namedParams();
+    c.sync(p);
+    const layer = h.layerState.last!;
+    // Dim station g1 (section 1, index 1) while IDs show, then switch to names:
+    // the rebuild recomputes the full flag byte, so the name label is dimmed too.
+    c.setDimming({ ...EMPTY_DIM, immovableStationFeatureIds: new Set([1 * FEATURE_ID_STRIDE + 1]) });
+    c.setStationLabelMode('name');
+    expect(stationLabelFlag(layer, p, 1) & LABEL_FLAG.DIM).toBe(LABEL_FLAG.DIM);
+    expect(stationLabelFlag(layer, p, 3) & LABEL_FLAG.DIM).toBe(0);
+    c.setDragHide({ stationGlobalIndices: new Set([3]) });
+    expect(stationLabelFlag(layer, p, 3) & LABEL_FLAG.DRAG_HIDE).toBe(LABEL_FLAG.DRAG_HIDE);
+    expect(stationLabelFlag(layer, p, 1) & LABEL_FLAG.DRAG_HIDE).toBe(0);
   });
 });
