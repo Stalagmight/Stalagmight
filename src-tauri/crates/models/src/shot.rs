@@ -282,7 +282,11 @@ pub struct ShotData {
     /// mint a fresh one. Set by the Ariane importer from the file's `<UUID>`
     /// (#423) and by [`Shot::to_shot_data`], so identity survives every
     /// transform that rebuilds shots from their data - a section split, a
-    /// reverse, a project merge, an undo/redo round trip.
+    /// reverse, an undo/redo round trip. Copying a project into another
+    /// ("Merge projects", "Add .stalx") keeps it too, except where the
+    /// destination already holds the id: shot uuids are unique across the
+    /// project (#693), so the copied shot is renamed
+    /// (`Project::reassign_repeated_shot_uuids`).
     ///
     /// **Any future clone/duplicate-shot path MUST clear this field.** The
     /// uniqueness repair ([`crate::Project::ensure_unique_shot_uuids`],
