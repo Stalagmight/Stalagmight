@@ -319,12 +319,13 @@ describe('line tessellation', () => {
     expect(drawn()).toEqual([0, 1]);
     expect(Array.from(b.indices.slice(6, 12))).toEqual([4, 5, 6, 6, 5, 7]); // winding kept
     expect(writeLineDrawOrder(b, raised)).toBe(false);
-    // Both raised: slot order, the kinds no longer matter.
-    raised.fill(1);
-    expect(writeLineDrawOrder(b, raised)).toBe(false);
-    expect(drawn()).toEqual([0, 1]);
     // Raise dropped: the rank order again.
     expect(writeLineDrawOrder(b)).toBe(true);
+    expect(drawn()).toEqual([1, 0]);
+    // Both raised: the kind order holds among them, the reference still under
+    // the real line of its own raised section.
+    raised.fill(1);
+    expect(writeLineDrawOrder(b, raised)).toBe(false);
     expect(drawn()).toEqual([1, 0]);
   });
 
@@ -440,6 +441,11 @@ describe('circle tessellation', () => {
     expect(drawn()).toEqual([2, 0, 1, 3]);
     expect(Array.from(b.indices.slice(18, 24))).toEqual([12, 13, 14, 12, 14, 15]);
     expect(writeCircleDrawOrder(b, raised)).toBe(false);
+    // Raised real (0) and reference-only (1): rank order among the raised too.
+    raised.fill(0);
+    raised.fill(1, 0, 8);
+    expect(writeCircleDrawOrder(b, raised)).toBe(true);
+    expect(drawn()).toEqual([2, 3, 1, 0]);
     expect(writeCircleDrawOrder(b)).toBe(true);
     expect(drawn()).toEqual([1, 2, 3, 0]);
   });

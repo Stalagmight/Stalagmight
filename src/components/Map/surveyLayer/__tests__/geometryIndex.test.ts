@@ -820,6 +820,23 @@ describe('SurveyGeometryIndex.nearestShot rank priority', () => {
     expect(raisedPick(near, 20, -0.2, [1, 3], 1)).toBe(3);
   });
 
+  // Inside the raised section its own kinds keep their order, as drawn: here a
+  // Reference shot out and a Normal shot straight back over it, so station 0
+  // (reference-only) and station 2 (real) coincide, both listed reference first.
+  it('inside the raised section, its real line still beats its own virtual one', () => {
+    const section: Section = {
+      id: 5, name: 'S5', surveyor: null, date: null, color: '#ffffff', direction: 'in', quality: 1,
+      next_shot_id: 2, reverse_parity: false, gauge_shot_uuid: null, gauge_neighbour_uuid: null,
+      shots: [kindShot(50, 'Reference'), kindShot(51, 'Normal')],
+    };
+    const loop = new SurveyGeometryIndex(
+      surveyDataFromLegacy([section], [st(5, 0, 0, 0), st(5, 1, 40, 0), st(5, 2, 0, 0)]), null,
+    );
+    const opts = { visibleKinds: ALL_KINDS, raisedSectionId: 5, shotHalfWidthPx: HALF, stationDiscPx: 5 };
+    expect(loop.nearestShot(project, 20, 0, [5], 4, opts)?.shotId).toBe(51); // the Normal shot
+    expect(loop.nearestStation(project, 0, 0, [5], 10, opts)?.ref.station_index).toBe(2);
+  });
+
   it('shots of one kind keep the nearest pick', () => {
     const same = build([
       { id: 1, kind: 'Normal', y: -1.5 },

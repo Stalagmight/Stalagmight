@@ -2420,6 +2420,11 @@ function MapCanvas() {
   // section ids are per-project sequential (they collide across projects), a
   // regular useEffect would let the colliding section flash highlighted for one
   // frame before this cleared it.
+  //
+  // Each branch sets the new target BEFORE clearing the other two: every setter
+  // re-raises the selection's section (`raisedSectionOf`, section > station >
+  // shot), and this order moves the draw order at most once per change instead
+  // of rewriting it for an intermediate empty selection.
   useLayoutEffect(() => {
     if (!surveyLayerRef.current) return;
 
@@ -2428,14 +2433,14 @@ function MapCanvas() {
       surveyLayerRef.current.setSelectedShot(null, null);
       surveyLayerRef.current.setSelectedSection(null);
     } else if (selection?.type === 'shot' && selection.sectionId !== undefined && selection.shotId !== undefined) {
-      surveyLayerRef.current.setSelectedStation(null);
       surveyLayerRef.current.setSelectedShot(selection.sectionId, selection.shotId);
+      surveyLayerRef.current.setSelectedStation(null);
       surveyLayerRef.current.setSelectedSection(null);
     } else if (selection?.type === 'section' && selection.sectionId !== undefined) {
       // Section selection
+      surveyLayerRef.current.setSelectedSection(selection.sectionId);
       surveyLayerRef.current.setSelectedStation(null);
       surveyLayerRef.current.setSelectedShot(null, null);
-      surveyLayerRef.current.setSelectedSection(selection.sectionId);
     } else {
       surveyLayerRef.current.setSelectedStation(null);
       surveyLayerRef.current.setSelectedShot(null, null);

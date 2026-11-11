@@ -107,8 +107,10 @@ export interface ResolveOptions {
   raisedSectionId?: number | null;
 }
 
-/** Pick rank of a raised section's features: better than real line (0). */
-const RAISED_RANK = -1;
+/** Rank shift of a raised section's features: its real (0), jump (1) and
+ *  reference (2) rank as -3, -2 and -1, above every other section's, its own
+ *  kinds kept in order, as `writeLineDrawOrder` / `writeCircleDrawOrder` draw them. */
+const RAISED_RANK_SHIFT = 3;
 
 /** Draw rank of a shot kind: 0 Normal, 1 Jump, 2 Reference (the line draw order
  *  and the shot pick; `stationKindRank` is the station counterpart). */
@@ -383,7 +385,7 @@ export class SurveyGeometryIndex {
         const p = project(lngLat);
         const dist = Math.hypot(p.x - px, p.y - py);
         if (dist > maxDistance) continue;
-        const rank = sid === opts.raisedSectionId ? RAISED_RANK : stationKindRank(mask);
+        const rank = stationKindRank(mask) - (sid === opts.raisedSectionId ? RAISED_RANK_SHIFT : 0);
         const nearer = !best || dist < best.distance || (dist === best.distance && rank < bestRank);
         const covers =
           disc > 0 &&
@@ -448,7 +450,7 @@ export class SurveyGeometryIndex {
         const p2 = project(to);
         const dist = distanceToLineSegment(px, py, p1.x, p1.y, p2.x, p2.y);
         if (dist > maxDistance) continue;
-        const rank = sid === opts.raisedSectionId ? RAISED_RANK : shotKindRank(flags);
+        const rank = shotKindRank(flags) - (sid === opts.raisedSectionId ? RAISED_RANK_SHIFT : 0);
         const nearer = !best || dist < best.distance || (dist === best.distance && rank < bestRank);
         const covers =
           reach > 0 &&

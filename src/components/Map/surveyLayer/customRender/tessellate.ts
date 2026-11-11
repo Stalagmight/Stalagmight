@@ -433,9 +433,10 @@ const CIRCLE_TRIS = [0, 1, 2, 0, 2, 3] as const;
 /**
  * Write the line index buffer in draw order: every Reference segment first, then
  * Jump, then Normal (the per-vertex kind in `b.reference` is the rank), then the
- * raised segments, segment order within each. One draw call, no depth test:
- * where a jump or reference line crosses or runs over the real line, the real
- * line ends on top, and a raised section ends above them all. `raised` is a
+ * raised segments in the same kind order, segment order within each. One draw
+ * call, no depth test: where a jump or reference line crosses or runs over the
+ * real line, the real line ends on top, and a raised section ends above them all
+ * (its own real line still above its own virtual ones). `raised` is a
  * per-vertex flag array in the buffers' layout (`computeLineDim` builds one);
  * omitted, nothing is raised. Line counterpart of {@link writeCircleDrawOrder};
  * returns whether any index changed, so a caller re-uploads only when a segment
@@ -448,9 +449,9 @@ export function writeLineDrawOrder(b: LineBuffers, raised?: Float32Array | null)
 
 /**
  * Shared body of {@link writeLineDrawOrder} / {@link writeCircleDrawOrder}: a
- * stable counting sort of the `count` quads into four buckets, drawn in order -
- * rank 2 (reference), rank 1 (jump), rank 0 (real), then raised (`raised[4s]`
- * set). Returns whether any quad changed position.
+ * stable counting sort of the `count` quads into six buckets, drawn in order -
+ * rank 2 (reference), rank 1 (jump), rank 0 (real), then the same three for the
+ * raised quads (`raised[4s]` set). Returns whether any quad changed position.
  */
 function writeQuadDrawOrder(
   indices: Uint32Array,
@@ -459,12 +460,12 @@ function writeQuadDrawOrder(
   raised: Float32Array | null | undefined,
   tris: readonly number[],
 ): boolean {
-  const bucketOf = (s: number): number => (raised && raised[s * 4]! > 0.5 ? 3 : 2 - rankOf(s));
-  const start = [0, 0, 0, 0];
+  const bucketOf = (s: number): number => (raised && raised[s * 4]! > 0.5 ? 3 : 0) + 2 - rankOf(s);
+  const start = [0, 0, 0, 0, 0, 0];
   for (let s = 0; s < count; s++) start[bucketOf(s)]!++;
   // Counts -> start offsets.
   let acc = 0;
-  for (let k = 0; k < 4; k++) {
+  for (let k = 0; k < 6; k++) {
     const n = start[k]!;
     start[k] = acc;
     acc += n;
@@ -753,11 +754,11 @@ function emitStation(
 /**
  * Write the circle index buffer in draw order: every reference-rank station
  * first, then jump, then real (`stationKindRank` of each slot's kind mask), then
- * the raised stations, slot order within each. The circles draw in one call with
- * no depth test, so a later quad paints over an earlier one: where markers of
- * several sections coincide (a jump or reference section tied in at a real
- * station), the real-line marker ends on top, unless the other section is raised
- * (the selection's). The hit test picks the same one
+ * the raised stations in the same rank order, slot order within each. The
+ * circles draw in one call with no depth test, so a later quad paints over an
+ * earlier one: where markers of several sections coincide (a jump or reference
+ * section tied in at a real station), the real-line marker ends on top, unless
+ * the other section is raised (the selection's). The hit test picks the same one
  * (`SurveyGeometryIndex.nearestStation`).
  *
  * Reads the per-vertex kind mask already in `b.allReference`, so it works for

@@ -209,14 +209,18 @@ the label declutter's (`labelVirtualRank`).
 **The selection on top.** The selected section, or the section of the selected
 station or shot (`raisedSection.raisedSectionOf`), draws above every rank: the
 writers take a per-vertex raised flag (built with `computeLineDim` /
-`computeCircleDim`) and put those quads in a fourth bucket, drawn last.
+`computeCircleDim`) and draw those quads after all others, in the same kind
+order among themselves.
 `SurveyLayer.updateVisualState` pushes it to `controller.setRaisedSection`, which
 rewrites and re-uploads only the index buffers whose order moved; every build
 and the incremental reorder keep it. The picks rank the raised section above
-real line (`ResolveOptions.raisedSectionId`), so where it overlaps the main line
-the click goes to it, as drawn; to reach a real-line station it covers, clear
-the selection first (Escape, or a click on empty map). Hover changes no order,
-and labels ignore the selection. The single selected station or shot is drawn
+real line (`ResolveOptions.raisedSectionId`: its kinds' ranks shifted by 3), so
+where it overlaps the main line the click goes to it, as drawn, in every tool
+that picks through `resolveStationAt` / `resolveShotAt` (merge and measure snaps
+too); to reach a real-line station it covers, clear the selection first (Escape,
+or in the Select tool a click on empty map). MapCanvas sets the new selection
+before clearing the old one, so a change moves the order at most once. Hover
+changes no order, and labels ignore the selection. The single selected station or shot is drawn
 again above everything by the interact overlay, as before.
 
 Every pick is a single nearest-within-tolerance resolve; the box in step 2 is

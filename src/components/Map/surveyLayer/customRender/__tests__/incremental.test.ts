@@ -488,10 +488,6 @@ describe('SurveyCustomController incremental apply', () => {
     expectDataEqual(dataOf(c), dataOf(ref));
   });
 
-  // The circle index buffer draws stations by rank (real-line markers on top).
-  // A kind edit can move a station between ranks: the incremental path must
-  // redo the draw order (and re-upload it) to stay byte-identical to a rebuild,
-  // and leave it alone when no rank moved.
   // The raised section (the selection's) stays on top through a kind edit
   // elsewhere: the incremental reorder must honour it as the rebuild does.
   it('a kind edit keeps the raised section on top, as a rebuild does', () => {
@@ -520,6 +516,10 @@ describe('SurveyCustomController incremental apply', () => {
     for (const x of [c, ref, plain]) x.destroy();
   });
 
+  // The circle index buffer draws stations by rank (real-line markers on top).
+  // A kind edit can move a station between ranks: the incremental path must
+  // redo the draw order (and re-upload it) to stay byte-identical to a rebuild,
+  // and leave it alone when no rank moved.
   it('a kind edit redoes the line draw order and, when a station rank moved, the circle one', () => {
     const prev = pinnedSurvey();
     const c = new SurveyCustomController(makeFakeMap());
