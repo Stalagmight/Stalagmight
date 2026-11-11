@@ -2014,7 +2014,10 @@ the collision declutter together with a nested decimation band
 (`labelReveal.ts` / `labelDecimation.ts`), and the shader draws a label only at or
 above that zoom - see [map-renderer.md](map-renderer.md). Where labels compete for
 the same space, a real-line label wins over a label that belongs only to jump or
-reference shots, and a jump label wins over a reference one. Shot
+reference shots, and a jump label wins over a reference one. Station markers
+follow the same order: where markers of several sections coincide (a jump or
+reference section tied in at a real station), the real-line marker is drawn on
+top and takes the hover and the click. Shot
 geometry itself is not simplified: no path simplification, no station merging,
 no zoom-based hiding.
 

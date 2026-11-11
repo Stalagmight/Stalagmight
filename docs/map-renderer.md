@@ -186,6 +186,18 @@ it:
    (reached through `SurveyLayer.resolveStationAt` / `resolveShotAt`), using true
    endpoints rather than tile-clipped geometry.
 
+**Real-line markers on top.** Sections that start at a real station (a jump or
+reference tie-in) put several markers on one spot. The circle index buffer draws
+stations by `stationKindRank` - reference-only first, then jump, then real
+(`tessellate.writeCircleDrawOrder`; the vertices stay in global-index order, and
+the incremental path redoes the order when a kind edit moves a station between
+ranks) - so the real-line marker is drawn last, on top. `nearestStation` agrees:
+equal distances go to the better rank, and a cursor on the drawn disc of a
+better-ranked marker (`ResolveOptions.stationDiscPx`, radius + stroke) picks it
+over a nearer, worse-ranked centre it covers. The visible edge of a worse-ranked
+marker still picks that marker, and stations of one rank keep the plain nearest
+pick. The ranks are the label declutter's (`labelVirtualRank`).
+
 Every pick is a single nearest-within-tolerance resolve; the box in step 2 is
 only the candidate prefilter. The index's multi-hit box resolver went away with
 box select (#409), so there is no "everything inside this rectangle" query left.
@@ -385,6 +397,7 @@ the Zustand write.
 | Labels missing entirely | font readiness in `labelController` (the `label-font-unavailable` path) |
 | Labels vanish or flash while zooming | `labelReveal.ts` / `labelDecimation.ts` |
 | A jump / reference label shows where a real-line one should | `labelVirtualRank` and the per-rank passes in `labelReveal.ts`, then the flags `labelTessellate.ts` stamps |
+| A jump / reference marker drawn over, or clicked instead of, a real station at the same spot | `writeCircleDrawOrder` in `tessellate.ts` (and its call in `controller.tryIncremental`), then `geometryIndex.nearestStation` |
 | Label text or placement wrong | `labelLayout.ts` (shaping, em offsets), `labelStyle.ts` (per-kind style) |
 | Sizes wrong after dragging the window to another monitor | the DPR watcher in `SurveyLayer` - device-pixel sizes are baked into the buffers |
 | Global View wrong but the survey map fine | `GlobalView/customRender/` - a separate implementation |
