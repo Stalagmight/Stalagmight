@@ -35,6 +35,28 @@ describe('legend colour-scale cog', () => {
     expect(legend.querySelectorAll('svg')).toHaveLength(1);
   });
 
+  it('renders the popover above the map chrome (in body), with the palette list inside it', () => {
+    const { container } = render(<MapColorLegends {...depthProps} />);
+    fireEvent.click(screen.getByTestId('depth-legend-settings-button'));
+    const popover = screen.getByTestId('color-scale-popover-depth');
+    expect(container.contains(popover)).toBe(false);
+    expect(popover.parentElement).toBe(document.body);
+    fireEvent.click(screen.getByTestId('color-scale-palette-trigger'));
+    const list = screen.getByTestId('color-scale-palette-panel');
+    expect(popover.contains(list)).toBe(true);
+    // A click in the list is inside the popover: it stays open.
+    act(() => {
+      screen.getByTestId('color-scale-palette-search').dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    });
+    expect(screen.getByTestId('color-scale-popover-depth')).toBeInTheDocument();
+    // Escape with the list open closes only the list.
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    });
+    expect(screen.queryByTestId('color-scale-palette-panel')).toBeNull();
+    expect(screen.getByTestId('color-scale-popover-depth')).toBeInTheDocument();
+  });
+
   it('opens the popover, edits the map range, and closes on Escape', () => {
     render(<MapColorLegends {...depthProps} />);
     fireEvent.click(screen.getByTestId('depth-legend-settings-button'));

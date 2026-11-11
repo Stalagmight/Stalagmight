@@ -6,7 +6,7 @@ import { resolveChoice, type LevelsScale } from '../../../../utils/palettes';
 import { getMapThemeColors } from '../../../../utils/themeColors';
 
 function setup(scale: LevelsScale | null = null) {
-  const onChange = vi.fn<(s: LevelsScale, live: boolean) => void>();
+  const onChange = vi.fn<(s: LevelsScale | null, live: boolean) => void>();
   const props: LevelsSliderProps = {
     domain: { min: 0, max: 100 },
     scale,
@@ -46,7 +46,7 @@ describe('LevelsSlider', () => {
     fireEvent.keyDown(screen.getByTestId('lv-mid-handle'), { key: 'ArrowLeft', shiftKey: true });
     fireEvent.keyDown(screen.getByTestId('lv-mid-handle'), { key: 'ArrowLeft' });
     const [scale] = onChange.mock.calls[onChange.mock.calls.length - 1]!;
-    expect(scale.gamma).toBeGreaterThan(1);
+    expect(scale!.gamma).toBeGreaterThan(1);
   });
 
   it('commits typed values and reverts an impossible range', () => {
@@ -64,6 +64,52 @@ describe('LevelsSlider', () => {
     fireEvent.change(gamma, { target: { value: '40' } });
     fireEvent.blur(gamma);
     expect(onChange).toHaveBeenLastCalledWith({ min: 10, max: 60, gamma: 9.99 }, false);
+  });
+
+  it('tabbing through a field without typing changes nothing', () => {
+    const onChange = setup();
+    const max = screen.getByTestId('lv-max-input');
+    fireEvent.focus(max);
+    fireEvent.blur(max);
+    fireEvent.keyDown(screen.getByTestId('lv-min-input'), { key: 'Enter' });
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('keeps an untouched field exact when another one is edited', () => {
+    const onChange = setup({ min: 0.123456, max: 81.4000015, gamma: 1 });
+    const min = screen.getByTestId('lv-min-input');
+    fireEvent.change(min, { target: { value: '5' } });
+    fireEvent.blur(min);
+    expect(onChange).toHaveBeenLastCalledWith({ min: 5, max: 81.4000015, gamma: 1 }, false);
+  });
+
+  it('a press on a handle without a move changes nothing', () => {
+    const onChange = setup();
+    const handle = screen.getByTestId('lv-max-handle');
+    handle.setPointerCapture = () => {};
+    handle.releasePointerCapture = () => {};
+    fireEvent.pointerDown(handle, { pointerId: 1, clientX: 200 });
+    fireEvent.pointerUp(handle, { pointerId: 1, clientX: 200 });
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('Escape mid-drag restores the range the drag started from', () => {
+    const onChange = setup();
+    const handle = screen.getByTestId('lv-max-handle');
+    const track = handle.parentElement!.parentElement!;
+    track.getBoundingClientRect = () => ({ left: 0, width: 200, top: 0, height: 10, right: 200, bottom: 10, x: 0, y: 0, toJSON: () => ({}) });
+    handle.setPointerCapture = () => {};
+    handle.releasePointerCapture = () => {};
+    fireEvent.pointerDown(handle, { pointerId: 1, clientX: 200 });
+    fireEvent.pointerMove(handle, { pointerId: 1, clientX: 100 });
+    const esc = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    window.dispatchEvent(esc);
+    expect(esc.defaultPrevented).toBe(true);
+    // Started on the auto range, so it goes back to auto.
+    expect(onChange).toHaveBeenLastCalledWith(null, false);
+    onChange.mockClear();
+    fireEvent.pointerUp(handle, { pointerId: 1, clientX: 100 });
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   it('reports a drag as live until the pointer is released', () => {

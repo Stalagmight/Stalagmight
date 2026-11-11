@@ -30,7 +30,9 @@ const SPECS: readonly CuratedSpec[] = [
   { id: 'grad.yellow-violet-orange-blue', name: 'Yellow, Violet, Orange, Blue', group: 'grad-basics', stops: ['#fdd835', '#7b1fa2', '#f57c00', '#1976d2'] },
 
   // Spectrum: full-hue and vivid multi-hue ramps.
-  { id: 'grad.spectrum', name: 'Spectrum', group: 'grad-spectrum', stops: ['#ff0000', '#ffff00', '#00ff00', '#00ffff', '#0000ff', '#ff00ff', '#ff0000'] },
+  // Stops at magenta rather than wrapping back to red, so the two ends of a
+  // data range never look alike.
+  { id: 'grad.spectrum', name: 'Spectrum', group: 'grad-spectrum', stops: ['#ff0000', '#ffff00', '#00ff00', '#00ffff', '#0000ff', '#ff00ff'] },
   { id: 'grad.soft-rainbow', name: 'Soft Rainbow', group: 'grad-spectrum', stops: ['#e57373', '#ffb74d', '#fff176', '#81c784', '#64b5f6', '#9575cd'] },
   { id: 'grad.neon', name: 'Neon', group: 'grad-spectrum', stops: ['#ff00a0', '#ffe600', '#00ffd5', '#3d5afe'] },
   { id: 'grad.aurora', name: 'Aurora', group: 'grad-spectrum', stops: ['#0b3d2e', '#1de9b6', '#00b0ff', '#7c4dff', '#f50057'] },

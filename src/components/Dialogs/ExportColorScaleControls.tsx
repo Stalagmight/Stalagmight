@@ -52,6 +52,16 @@ export function ExportColorScaleControls({ kind }: { kind: ColorScaleKind }) {
     );
   }
 
+  // Nothing to colour (distance with no station reachable from an entrance):
+  // say why instead of offering a range over nothing.
+  if (histogram.counts.every((c) => c === 0)) {
+    return (
+      <p className="text-xs text-text-secondary" data-testid={`export-color-scale-empty-${kind}`}>
+        {t(`map.colorScale.noValues.${kind}`)}
+      </p>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-1 rounded border border-border p-2" data-testid={`export-color-scale-${kind}`}>
       <span className="text-xs font-medium text-text-primary">{t(`map.colorScale.title.${kind}`)}</span>

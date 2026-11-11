@@ -181,6 +181,38 @@ test.describe('Colour scale', () => {
     expect(gamma).toBeGreaterThan(1);
   });
 
+  test('the popover and its palette list are on top of the panels at 1280x720', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await openCog(page, 'depth');
+    // Hit-test the middle of each control: the element there must belong to the
+    // popover, not to a side panel, the data table or a map control above it.
+    const onTop = (testId: string) =>
+      page.evaluate((id) => {
+        const el = document.querySelector(`[data-testid="${id}"]`);
+        if (!el) return 'missing';
+        const r = el.getBoundingClientRect();
+        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return hit && el.contains(hit) ? 'ok' : `covered by ${hit?.closest('[data-testid]')?.getAttribute('data-testid') ?? hit?.tagName}`;
+      }, testId);
+    for (const id of [
+      'color-scale-palette-trigger',
+      'color-scale-levels-min-handle',
+      'color-scale-levels-max-input',
+      'color-scale-range-reset',
+    ]) {
+      expect(await onTop(id), id).toBe('ok');
+    }
+    await page.locator('[data-testid="color-scale-palette-trigger"]').click();
+    // Opening focuses the search: typing searches instead of switching map tools.
+    await page.keyboard.type('mag');
+    await expect(page.locator('[data-testid="color-scale-palette-search"]')).toHaveValue('mag');
+    expect(await onTop('color-scale-palette-option-mpl.magma')).toBe('ok');
+    // Escape closes the list only.
+    await page.keyboard.press('Escape');
+    await expect(page.locator('[data-testid="color-scale-palette-panel"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="color-scale-popover-depth"]')).toBeVisible();
+  });
+
   test('Escape closes the popover', async ({ page }) => {
     await openCog(page, 'depth');
     await page.keyboard.press('Escape');

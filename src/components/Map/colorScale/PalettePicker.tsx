@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
+import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { useAnchoredFixedMenu } from '../../../hooks/useAnchoredFixedMenu';
 import { useDismissableLayer } from '../../../hooks/useDismissableLayer';
@@ -31,6 +32,10 @@ export interface PalettePickerProps {
   onSelect: (choice: PaletteChoice) => void;
   onTogglePin: (id: string) => void;
   testIdPrefix: string;
+  /** Render the open list inside this element (the map popover, so a click in
+   *  the list counts as inside it and the list shares its stacking layer).
+   *  Absent = `document.body`, above everything. */
+  portalInto?: RefObject<HTMLElement | null> | undefined;
 }
 
 interface Row {
@@ -59,6 +64,7 @@ export function PalettePicker({
   onSelect,
   onTogglePin,
   testIdPrefix,
+  portalInto,
 }: PalettePickerProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -68,6 +74,7 @@ export function PalettePicker({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
   // The trigger's scroll container (the Export panel): bringing the trigger into
   // view on open scrolls it, and that late scroll must not dismiss the panel
   // that just opened - the same guard `Select` uses.
@@ -121,6 +128,7 @@ export function PalettePicker({
     setOpen(false);
     onPreview(null);
     onSelect({ id: palette.id, reversed });
+    triggerRef.current?.focus();
   };
   const previewRow = (i: number) => {
     setActive(i);
@@ -143,6 +151,31 @@ export function PalettePicker({
     survivesUnrelatedScroll: true,
   });
 
+  // Focus the search once the list is placed and visible: `autoFocus` fires on
+  // the hidden measuring pass, which WebKit refuses to focus, and the next
+  // keystroke would then reach the map's tool shortcuts (`Select` does the same).
+  const placed = menuStyle.visibility === 'visible';
+  useEffect(() => {
+    if (open && placed) searchRef.current?.focus({ preventScroll: true });
+  }, [open, placed]);
+
+  // Escape closes the LIST (not a popover around it) wherever focus is. Window
+  // capture runs before the popover's and the app's own Escape handlers, and
+  // `preventDefault` tells both to stand down.
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      e.stopPropagation();
+      close();
+      triggerRef.current?.focus();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+    // close() only touches local state and the stable onPreview callback.
+  }, [open]);
+
   // Keep the active row in view while arrowing.
   useEffect(() => {
     if (active < 0) return;
@@ -159,11 +192,6 @@ export function PalettePicker({
       e.preventDefault();
       const row = visible[active >= 0 ? active : 0];
       if (row) pick(row.palette);
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      e.stopPropagation();
-      close();
-      triggerRef.current?.focus();
     }
   };
 
@@ -178,6 +206,7 @@ export function PalettePicker({
         onClick={() => (open ? close() : openPanel())}
         aria-haspopup="listbox"
         aria-expanded={open}
+        aria-controls={open ? `${testIdPrefix}-listbox` : undefined}
         className="w-full flex items-center gap-2 px-1.5 py-1 rounded border border-border bg-background text-xs text-text-primary hover:bg-accent-10 focus:outline-none focus:ring-1 focus:ring-accent"
         data-testid={`${testIdPrefix}-trigger`}
       >
@@ -191,7 +220,7 @@ export function PalettePicker({
         </span>
         <ChevronDownIcon size={12} />
       </button>
-      {open && (
+      {open && createPortal(
         <div
           ref={panelRef}
           className="z-50 flex flex-col rounded border border-border bg-panel shadow-lg text-xs"
@@ -202,7 +231,7 @@ export function PalettePicker({
         >
           <div className="p-1.5 border-b border-border">
             <input
-              autoFocus
+              ref={searchRef}
               type="text"
               value={query}
               onChange={(e) => {
@@ -304,7 +333,8 @@ export function PalettePicker({
               </div>
             ))}
           </div>
-        </div>
+        </div>,
+        portalInto?.current ?? document.body,
       )}
     </div>
   );

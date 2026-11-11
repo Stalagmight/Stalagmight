@@ -1,3 +1,4 @@
+import type { RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ResetButton } from '../../common/ResetButton';
 import { useColorScaleStore } from '../../../store/colorScaleStore';
@@ -24,6 +25,8 @@ export interface ColorScaleEditorProps {
   onScaleChange: (scale: LevelsScale | null, live: boolean) => void;
   precision: number;
   testIdPrefix: string;
+  /** Where the palette list renders (see PalettePicker `portalInto`). */
+  pickerPortalInto?: RefObject<HTMLElement | null> | undefined;
 }
 
 /**
@@ -40,6 +43,7 @@ export function ColorScaleEditor({
   onScaleChange,
   precision,
   testIdPrefix,
+  pickerPortalInto,
 }: ColorScaleEditorProps) {
   const { t } = useTranslation();
   const persisted = usePersistedPalette(kind);
@@ -61,6 +65,7 @@ export function ColorScaleEditor({
             onSelect={(choice) => void setPalette(kind, choice)}
             onTogglePin={(id) => void togglePinnedPalette(id)}
             testIdPrefix={`${testIdPrefix}-palette`}
+            portalInto={pickerPortalInto}
           />
           <button
             type="button"

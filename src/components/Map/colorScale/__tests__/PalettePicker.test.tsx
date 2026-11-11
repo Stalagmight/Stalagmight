@@ -82,6 +82,30 @@ describe('PalettePicker', () => {
     expect(screen.getByTestId('p-pinned-pin-grad.cenote')).toHaveAttribute('aria-pressed', 'true');
   });
 
+  it('focuses the search once open, so typing searches instead of hitting map shortcuts', () => {
+    setup();
+    expect(document.activeElement).toBe(screen.getByTestId('p-search'));
+  });
+
+  it('Escape closes the list from anywhere and claims the key, then focus returns to the trigger', () => {
+    const props = setup();
+    screen.getByTestId('p-trigger').focus();
+    const esc = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    act(() => {
+      window.dispatchEvent(esc);
+    });
+    expect(esc.defaultPrevented).toBe(true);
+    expect(screen.queryByTestId('p-panel')).toBeNull();
+    expect(props.onPreview).toHaveBeenLastCalledWith(null);
+    expect(document.activeElement).toBe(screen.getByTestId('p-trigger'));
+  });
+
+  it('returns focus to the trigger after a pick', () => {
+    setup();
+    fireEvent.click(screen.getByTestId('p-option-theme'));
+    expect(document.activeElement).toBe(screen.getByTestId('p-trigger'));
+  });
+
   it('closes on an outside click, reverting the preview', () => {
     const props = setup();
     act(() => {

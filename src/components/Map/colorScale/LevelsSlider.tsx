@@ -26,8 +26,9 @@ export interface LevelsSliderProps {
   unit: string;
   precision: number;
   /** A new range. `live` is true while a handle is being dragged; the final
-   *  call of a drag (pointer up) passes false. */
-  onChange: (scale: LevelsScale, live: boolean) => void;
+   *  call of a drag (pointer up) passes false. `null` restores auto (a drag
+   *  cancelled with Escape that began on the auto range). */
+  onChange: (scale: LevelsScale | null, live: boolean) => void;
   /** Accessible name for the histogram, e.g. "Histogram of depth values". */
   histogramLabel: string;
   testIdPrefix: string;
@@ -56,6 +57,38 @@ export function LevelsSlider({
   const trackRef = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<Handle | null>(null);
   const eff = scale ?? autoScale(domain);
+  // The drag in progress: the range it started from (restored on Escape or if
+  // the slider goes away mid-drag), whether the pointer has moved yet (a press
+  // without a move changes nothing), and the captured element.
+  const dragRef = useRef<{ start: LevelsScale | null; moved: boolean; el: HTMLElement; pointerId: number } | null>(null);
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+
+  useEffect(() => {
+    if (drag === null) return undefined;
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      const d = dragRef.current;
+      if (!d) return;
+      e.preventDefault();
+      e.stopPropagation();
+      dragRef.current = null;
+      d.el.releasePointerCapture?.(d.pointerId);
+      setDrag(null);
+      if (d.moved) onChangeRef.current(d.start, false);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [drag]);
+
+  // Unmounted mid-drag (the popover closed): put the range back.
+  useEffect(
+    () => () => {
+      const d = dragRef.current;
+      if (d?.moved) onChangeRef.current(d.start, false);
+    },
+    [],
+  );
 
   // The slider shows the data extent, widened to an explicit range beyond it.
   let viewMin = Math.min(domain.min, eff.min);
@@ -98,18 +131,22 @@ export function LevelsSlider({
     e.stopPropagation();
     e.currentTarget.setPointerCapture?.(e.pointerId);
     e.currentTarget.focus();
+    dragRef.current = { start: scale, moved: false, el: e.currentTarget, pointerId: e.pointerId };
     setDrag(handle);
-    onChange(eff, true);
   };
   const onPointerMove = (handle: Handle) => (e: PointerEvent<HTMLDivElement>) => {
-    if (drag !== handle) return;
+    const d = dragRef.current;
+    if (drag !== handle || !d) return;
+    d.moved = true;
     onChange(moved(handle, valueAt(e.clientX)), true);
   };
   const onPointerUp = (handle: Handle) => (e: PointerEvent<HTMLDivElement>) => {
-    if (drag !== handle) return;
+    const d = dragRef.current;
+    if (drag !== handle || !d) return;
+    dragRef.current = null;
     e.currentTarget.releasePointerCapture?.(e.pointerId);
     setDrag(null);
-    onChange(moved(handle, valueAt(e.clientX)), false);
+    if (d.moved) onChange(moved(handle, valueAt(e.clientX)), false);
   };
 
   const onKeyDown = (handle: Handle) => (e: KeyboardEvent<HTMLDivElement>) => {
@@ -254,9 +291,15 @@ function LevelsFields({ scale, unit, precision, onChange, testIdPrefix }: Levels
   }, [min, max, gamma, precision]);
 
   const commit = () => {
-    const min = Number(draft.min);
-    const max = Number(draft.max);
-    const gamma = Number(draft.gamma);
+    // A field the user did not edit keeps its exact value: its text is rounded,
+    // and re-reading it would pin an auto range to a rounded fixed one just for
+    // tabbing through.
+    const shown = draftOf(scale, precision);
+    if (draft.min === shown.min && draft.max === shown.max && draft.gamma === shown.gamma) return;
+    const read = (key: 'min' | 'max' | 'gamma') => (draft[key] === shown[key] ? scale[key] : Number(draft[key]));
+    const min = read('min');
+    const max = read('max');
+    const gamma = read('gamma');
     if (!Number.isFinite(min) || !Number.isFinite(max) || !Number.isFinite(gamma) || !(max > min)) {
       setDraft(draftOf(scale, precision));
       return;
