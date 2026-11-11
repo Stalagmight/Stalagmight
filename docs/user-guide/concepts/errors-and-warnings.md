@@ -44,3 +44,6 @@ projects:
 is, not just whether it is. A shot is green when its readings agree, yellow at
 the threshold, and red at three times the threshold. An error is always red.
 Ignoring a warning takes that difference out of the shot's color and label.
+The cog beside the Survey Issues legend can move those levels, change the
+palette or leave an error out of the colors; that only changes the map, never
+which shots get a warning.

@@ -956,7 +956,9 @@ The three move tools are documented in detail in [move-tools.md](move-tools.md).
 - Depth color gradient, and the distance gradient: palette and Levels range from the legend cog (docs/color-palettes.md)
 - Survey Issues coloring: each shot graded by its worst disagreement, green
   (agree) -> yellow (at the warning threshold) -> red (3x the threshold, or an
-  error); unresolved errors are red, other unresolved warnings at least yellow
+  error); unresolved errors are red, other unresolved warnings at least yellow.
+  The legend cog sets the palette, worst or average, the errors that count and
+  per-error Min / Warn / Max levels (map only; never the validation thresholds)
 - While the Warnings tab is open (setting "Highlight warnings on tab switch"),
   Survey Issues and Errors are on. Changes made then last until the tab is left
   and are never saved; leaving restores the saved display settings

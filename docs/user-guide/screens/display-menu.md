@@ -18,7 +18,8 @@ What the map shows. Opened by **Display** in the top right of the
      station to measure from there instead.
    - **Survey Issues**: each shot by how far its readings disagree: green
      where they agree, yellow at a warning threshold, red at three times it or
-     for an error. A legend shows the scale. See
+     for an error. A legend shows the scale, and the cog beside it changes the
+     palette, the levels of each error and which errors count. See
      [Errors and warnings](../concepts/errors-and-warnings.md).
 2. **Overlays**: **Grid** and **Satellite** imagery.
 3. **Map elements**: **Stations**, **Shots**, **Jumps**, **References** and
@@ -49,6 +50,15 @@ What the map shows. Opened by **Display** in the top right of the
   flatter shot a small inclination error would change it by metres. Where labels
   overlap, the worst error is shown. Shot labels hide with **Shots**, loop
   closure labels with **Stations**.
+- The **Survey Issues** cog: pick a palette (**Default** is green, yellow,
+  red), whether a shot takes the color of its **Worst error** or the
+  **Average** of its errors, and switch errors on or off. Each error has a
+  **Min**, **Warn** and **Max** level over a histogram of the survey's values:
+  at Min or below a shot reads as agreeing, Warn is the middle of the palette,
+  Max its end. A switched-off error also leaves the Errors labels and the
+  legend. These only change the map; which shots get a warning is still set by
+  the thresholds in Project Settings. The levels reset when you open another
+  project; the rest is remembered.
 - While the [Warnings tab](warnings-panel.md) is open, **Survey Issues** and
   **Errors** are on and marked as automatic. Changes you make then last until
   you leave the tab, and are not saved. Leaving the tab brings your own choices

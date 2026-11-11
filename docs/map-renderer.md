@@ -117,13 +117,17 @@ which also covers the LUT-backed live preview).
 
 **Survey Issues** is graded, not three flat colors. `surveyLayer/shotQuality.ts`
 measures per shot how far its readings disagree (azimuth in vs out, inclination
-in vs out, inclination vs the depth change) and scores each against the
-project's threshold: 0 = agree, 1 = at the threshold, capped at 3.
-`issueScore.ts` takes the worst metric, forces 3 for an unresolved error, floors
-other unresolved warnings at 1, drops a metric whose warning was ignored, and
-gives each station the worst score of its shots (shared across merge groups).
-`issueColor.ts` ramps green -> yellow (score 1) -> red (score 3), quantized to
-hundredths so there are at most 301 colors. The metrics are computed from the
+in vs out, inclination vs the depth change, length vs the depth change) and
+`issueScale.ts` scores each against its Min / Warn / Max levels: 0 at Min, 1 at
+Warn, 3 at Max. The default levels sit on the project's thresholds (Warn) and
+three times them (Max). `issueScore.ts` combines a shot's metrics (worst or
+average, leaving out switched-off ones), forces 3 for an unresolved error,
+floors other unresolved warnings at 1, drops a metric whose warning was
+ignored, and combines the shots of each station the same way (shared across
+merge groups). `issueColor.ts` ramps through the chosen palette (default green
+-> yellow at score 1 -> red at score 3), quantized to hundredths so there are
+at most 301 colors per palette. See [color-palettes.md](color-palettes.md#survey-issues-colors)
+for the cog. The metrics are computed from the
 recorded shot columns, so the Raw Data and Closures Computed views share them;
 `resolveIssueRender` memoizes per `SurveyData`, and an unchanged scores object
 keeps `incremental.ts`' cheap path.
@@ -470,7 +474,7 @@ the Zustand write.
 | A jump / reference marker or line drawn over, or clicked instead of, the real one at the same spot | `writeCircleDrawOrder` / `writeLineDrawOrder` in `tessellate.ts` (and their calls in `controller.tryIncremental`), then `geometryIndex.nearestStation` / `nearestShot` |
 | A selected section still drawn under the real line, or stays on top after deselecting | `SurveyLayer.updateVisualState` -> `raisedSectionOf` -> `controller.setRaisedSection`, then `ResolveOptions.raisedSectionId` for the click |
 | Label text or placement wrong | `labelLayout.ts` (shaping, em offsets), `labelStyle.ts` (per-kind style) |
-| Survey Issues color or an Errors label value looks wrong | `shotQuality.ts` (the metrics, parity-tested against the Rust validator), `issueScore.ts` (floors, ignores), `errorLabelText.ts` |
+| Survey Issues color or an Errors label value looks wrong | `shotQuality.ts` (the metrics, parity-tested against the Rust validator), `issueScale.ts` (levels, combine), `issueScore.ts` (floors, ignores), `errorLabelText.ts` |
 | Survey Issues on / off when it should not be | `displaySelectors.selectEffectiveColorMode` and `store/warningsVisit.ts` (the Warnings-tab visit) |
 | Sizes wrong after dragging the window to another monitor | the DPR watcher in `SurveyLayer` - device-pixel sizes are baked into the buffers |
 | Global View wrong but the survey map fine | `GlobalView/customRender/` - a separate implementation |

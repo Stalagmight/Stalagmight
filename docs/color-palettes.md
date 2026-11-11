@@ -4,7 +4,9 @@ When the map colors by **depth** or by **distance**, a cog beside the
 bottom-left legend opens the color-scale popover. The same controls appear in
 the Export panel under **By depth** and **By distance** (PNG / PDF; distance there
 is always the penetration distance from the entrance).
-Gas reach in Plan mode keeps its own fixed ramp.
+Gas reach in Plan mode keeps its own fixed ramp. **Survey Issues** has its own
+cog with a palette and per-error levels; see
+[Survey Issues colors](#survey-issues-colors) below.
 
 The popover has two parts, each with a reset-to-default button:
 
@@ -29,6 +31,8 @@ The popover has two parts, each with a reset-to-default button:
 | Pinned palettes (one list, up to 64) | `config.toml` `[map_palette].pinned` | Follows you across projects |
 | Map range (Min / Mid / Max) per kind | memory (`colorScaleStore`) | Until another project is opened |
 | Export range per kind | memory (`colorScaleStore`) | Until another project is opened |
+| Survey Issues palette, combine mode (`issues_combine`), switched-off errors (`issues_hidden`) | `config.toml` `[map_palette]` | Follows you across projects |
+| Survey Issues levels (Min / Warn / Max) per error | memory (`colorScaleStore.issueLevels`) | Until another project is opened |
 
 None of this is written to the `.stalx` (no `save_display_setting` call; a
 store test pins that), so none of it reaches SpeleoDB. The palette is written
@@ -100,6 +104,43 @@ fails CI.
   previewResolvers`.
 - `MapCanvas` drives the layer by store subscription
   (`useSurveyLayerColorScales`), so a drag never re-renders it.
+
+## Survey Issues colors
+
+The cog beside the Survey Issues legend (`IssueLegend.tsx` ->
+`colorScale/IssueScaleEditor.tsx`) has:
+
+- **Palette** - the same picker (`PaletteRow`, kind `issues`). Its theme entry is
+  called **Default** and is the original green -> yellow -> red; with it
+  unreversed the map gets `palette: null` and runs the original ramp code
+  (`issueColor.ts`), byte for byte.
+- **Color a shot by** - **Worst error** (the maximum score) or **Average** (the
+  mean *palette position* of the shot's errors, so one error at Max and one at
+  Min give the warn color). Stations combine the shots touching them, and their
+  merge group, the same way. A datum of an over-anchored group is raised to the
+  end color after that, so it is never averaged away.
+- **Errors** - one row per error (azimuth in vs out, inclination in vs out,
+  inclination vs depth change, length vs depth change, loop closure): an on /
+  off switch and a levels slider. **Min**, **Warn** and **Max** map to scores
+  0, 1 and 3, i.e. palette positions 0, 0.5 and 1, linearly in between
+  (`issueScale.ts::levelScore`). The defaults put Warn on the project threshold
+  and Max at three times it (length: 1 m / 3 m; closure: 1% / 5%, the closure
+  line's own color bands), which is exactly the original scoring. The histogram
+  is drawn on a log scale so the few large errors show beside the many small
+  ones. A switched-off error leaves the colors, the Errors labels and the
+  legend key; unresolved errors still force the end color and other open
+  warnings still floor at the warn color.
+
+The levels never touch the validator: which shots get a warning, and the
+thresholds in Project Settings, are unchanged (the popover says so). While
+Survey Issues paints the map, loop-closure lines and their labels use the same
+palette and the closure levels; otherwise they keep their color bands.
+
+A handle drag or a palette hover previews through
+`SurveyLayer.previewIssueScale` (driven by `useSurveyLayerIssuePreview`), which
+stands in for the committed scale and recolors through the normal color-only
+path - shots, stations, Errors labels and closure lines, exact, at most once per
+animation frame. The commit arrives through `MapCanvas` as usual.
 
 ## Export
 
