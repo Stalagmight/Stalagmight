@@ -1957,6 +1957,7 @@ pub fn run() {
             commands::export::export_tml,
             commands::export::export_image,
             commands::export::preview_svg_export,
+            commands::export::export_value_histogram,
             commands::export::export_dive_profile,
             commands::export::render_dive_profile_text,
             // Config
@@ -1970,6 +1971,7 @@ pub fn run() {
             commands::config::update_edit_section_view,
             commands::config::update_import_shots_view,
             commands::config::update_gas_config,
+            commands::config::update_map_palette,
             // Display settings (per-project)
             commands::config::load_display_settings,
             commands::config::save_display_setting,

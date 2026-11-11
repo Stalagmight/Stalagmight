@@ -759,6 +759,56 @@ fn missing_and_repeated_uuids_are_derived_the_same_way_every_read() {
 }
 
 #[test]
+fn an_id_two_sections_hold_is_derived_for_the_later_one_the_way_the_app_does() {
+    const IDS: [&str; 2] = [
+        "d1d1d1d1-0000-4000-8000-000000000001",
+        "d1d1d1d1-0000-4000-8000-000000000002",
+    ];
+    let copy = || SectionData {
+        shots: IDS
+            .iter()
+            .map(|id| ShotData {
+                uuid: Some((*id).to_string()),
+                azimuth_in: 90.0,
+                azimuth_out: 90.0,
+                length: 5.0,
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    };
+    let mut project = Project::new("Copies".to_string(), None);
+    project.add_section(copy());
+    project.add_section(copy());
+    let dir = TempDir::new().unwrap();
+    let path = save(&dir, &project);
+
+    let first = read_file(&path).unwrap();
+    let second = read_file(&path).unwrap();
+    assert_eq!(first, second, "derived ids must not change between reads");
+
+    let ids = |i: usize| -> Vec<(String, bool)> {
+        first.sections[i]
+            .shots
+            .iter()
+            .map(|s| (s.uuid.clone(), s.uuid_derived))
+            .collect()
+    };
+    let kept: Vec<(String, bool)> = IDS.iter().map(|id| ((*id).to_string(), false)).collect();
+    assert_eq!(ids(0), kept, "the lower section keeps the file's ids");
+    let later = first.sections[1].id;
+    let renamed: Vec<(String, bool)> = IDS
+        .iter()
+        .map(|id| (stalagmight_models::reminted_shot_uuid(later, id), true))
+        .collect();
+    assert_eq!(
+        ids(1),
+        renamed,
+        "the later one gets the app's derived ids, flagged"
+    );
+}
+
+#[test]
 fn anchored_positions_carry_lat_lon_and_datums_carry_their_residual() {
     let mut project = full_project();
     // Fore- and back-sight both 90: Main really runs due east.

@@ -111,6 +111,9 @@ would have made in a paint expression happen at build time in
 overlay** (distance gradient, gas reach) owns the shot color and station fill
 outright; otherwise the **move-comment tint** if that tool is active; otherwise
 `surveyLayer/displayColor.ts` - severity, then depth ramp, then section color.
+The depth ramp and the distance overlay take the user's palette + Levels range
+when one is set (`ColorScaleInput`; see [color-palettes.md](color-palettes.md),
+which also covers the LUT-backed live preview).
 
 Two details are worth respecting. `overlayColor.ts` reproduces MapLibre's
 data-driven ramp *byte for byte* - it floors where `colorPack.packCssColor`

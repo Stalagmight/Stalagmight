@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { invokeIpc } from '../../utils/ipc';
-import { withThemeDepthRamp } from '../../utils/exportOptions';
+import { exportScaleInputsFrom, withColorScales } from '../../utils/exportOptions';
+import { useColorScaleStore } from '../../store/colorScaleStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import type { ExportImageOptions } from '../../types/commands';
@@ -35,6 +36,12 @@ export default function ExportPreview({ options, fill = false }: ExportPreviewPr
   // the same options follows the new one - the drift this was meant to close,
   // moved rather than removed.
   const resolvedTheme = useUIStore((state) => state.resolvedTheme);
+  // The user's colour scales are inputs too: the palette (persisted, or the
+  // picker's live preview) and the export's own Levels range. A change re-runs
+  // the debounced preview, which is what makes the export panel's controls live.
+  const mapPalette = useProjectStore((state) => state.config?.map_palette);
+  const exportScale = useColorScaleStore((s) => s.exportScale);
+  const palettePreview = useColorScaleStore((s) => s.palettePreview);
 
   const [svg, setSvg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -74,7 +81,7 @@ export default function ExportPreview({ options, fill = false }: ExportPreviewPr
       // preview matches what the chosen format will actually write - including
       // the live theme's depth endpoints, which the backend cannot resolve and
       // which the export path stamps on the same way (#360).
-      invokeIpc<string>('preview_svg_export', { options: withThemeDepthRamp(options) }, {
+      invokeIpc<string>('preview_svg_export', { options: withColorScales(options, exportScaleInputsFrom(mapPalette, { exportScale, palettePreview })) }, {
         purpose: 'render export preview',
       })
         .then((markup) => {
@@ -99,7 +106,7 @@ export default function ExportPreview({ options, fill = false }: ExportPreviewPr
     };
     // `resolvedTheme` is a dependency for the depth endpoints `withThemeDepthRamp`
     // reads off the document, not for anything in `options` - see above.
-  }, [project, options, resolvedTheme]);
+  }, [project, options, resolvedTheme, mapPalette, exportScale, palettePreview]);
 
   return (
     <div

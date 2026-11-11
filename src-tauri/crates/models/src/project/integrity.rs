@@ -77,26 +77,56 @@ impl Project {
             }
         }
 
-        // Two shots in one section sharing a UUID make AfterShot anchors
-        // mis-resolve: resolve_key takes the FIRST match via position(), so a
+        // One pass over every shot UUID, for both kinds of repeat.
+        //
+        // Within a section: two shots sharing a UUID make AfterShot anchors
+        // mis-resolve - resolve_key takes the FIRST match via position(), so a
         // merge/closure/datum pointing at the second station silently snaps to
-        // the first - geometrically wrong with no other signal. Critical, and
-        // section-scoped because resolve_key is section-local. Empty UUIDs are
-        // "no identity yet" (ensure_shot_uuids fills them) so they don't count.
+        // the first, geometrically wrong with no other signal.
+        //
+        // Across sections: shot UUIDs are unique across the whole project.
+        // Every door that brings foreign ids in renames the newcomers
+        // (`reassign_repeated_shot_uuids`) and the load heals a file saved
+        // before that (`make_shot_uuids_project_unique`). A repeat therefore
+        // means a door forgot its rename, or an undo of a Repair put one back.
+        // On an otherwise sound project the integrity guard rolls the first case
+        // back rather than persist two shots that undo history, ignored warnings
+        // and the exports cannot tell apart (the guard refuses only NEWLY
+        // introduced corruption). Reported once per id.
+        //
+        // Both Critical. Empty UUIDs are "no identity yet" (ensure_shot_uuids
+        // fills them) so they don't count.
+        let mut holders: HashMap<&str, SectionId> = HashMap::new();
+        let mut reported_across: HashSet<&str> = HashSet::new();
         for section in &self.sections {
             let mut seen: HashSet<&str> = HashSet::new();
-            for shot in &section.shots {
-                if let Some(u) = shot.uuid.as_deref() {
-                    if !u.is_empty() && !seen.insert(u) {
+            for u in section.shots.iter().filter_map(|shot| shot.uuid.as_deref()) {
+                if u.is_empty() {
+                    continue;
+                }
+                if !seen.insert(u) {
+                    violations.push(IntegrityViolation {
+                        severity: ViolationSeverity::Critical,
+                        category: "duplicate_shot_uuid".to_string(),
+                        message: format!("Section {} has two shots sharing UUID {u}", section.id),
+                    });
+                    continue;
+                }
+                match holders.get(u) {
+                    None => {
+                        holders.insert(u, section.id);
+                    }
+                    Some(&other) if reported_across.insert(u) => {
                         violations.push(IntegrityViolation {
                             severity: ViolationSeverity::Critical,
-                            category: "duplicate_shot_uuid".to_string(),
+                            category: "duplicate_shot_uuid_across_sections".to_string(),
                             message: format!(
-                                "Section {} has two shots sharing UUID {u}",
+                                "Sections {other} and {} both hold shot UUID {u}",
                                 section.id
                             ),
                         });
                     }
+                    Some(_) => {}
                 }
             }
         }
@@ -207,6 +237,8 @@ impl Project {
         // the per-section UUID snapshot below reflects the de-duplicated set and
         // AfterShot anchors that pointed at the kept shot stay valid.
         self.ensure_unique_shot_uuids();
+        // Then across sections, rewriting the station keys of every renamed shot.
+        self.make_shot_uuids_project_unique();
 
         // Snapshot, per section, the station count and the set of shot UUIDs, so
         // the retain closures can validate a stored `StationKey` without

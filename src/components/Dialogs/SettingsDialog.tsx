@@ -240,7 +240,7 @@ function mergeConfig(base: Config, updates: Partial<Config>): Config {
   const result: Config = {
     general: { ...base.general },
     units: { ...base.units },
-    display: { ...base.display, depth_gradient: { ...base.display.depth_gradient } },
+    display: { ...base.display },
     section_colors: { palette: [...base.section_colors.palette] },
     map: {
       ...base.map,
@@ -269,6 +269,9 @@ function mergeConfig(base: Config, updates: Partial<Config>): Config {
     },
     gas: { ...(base.gas ?? defaultConfig.gas) },
     speleodb: { ...(base.speleodb ?? defaultConfig.speleodb) },
+    // Not a Settings field (the map legend cog and the export panel own it via
+    // `update_map_palette`); carried through so a Settings save never drops it.
+    map_palette: base.map_palette ?? defaultConfig.map_palette,
   };
 
   // Apply updates with deep merge for each key
@@ -279,13 +282,7 @@ function mergeConfig(base: Config, updates: Partial<Config>): Config {
     result.units = { ...result.units, ...updates.units };
   }
   if (updates.display) {
-    result.display = {
-      ...result.display,
-      ...updates.display,
-      depth_gradient: updates.display.depth_gradient
-        ? { ...result.display.depth_gradient, ...updates.display.depth_gradient }
-        : result.display.depth_gradient,
-    };
+    result.display = { ...result.display, ...updates.display };
   }
   if (updates.section_colors) {
     result.section_colors = { ...result.section_colors, ...updates.section_colors };
@@ -604,7 +601,11 @@ export default function SettingsDialog() {
       if (isDirty) {
         const saved = useProjectStore.getState().config;
         const previous = backendConfigRef.current;
-        const next = saved && previous ? rebaseSpeleoOwnedFields(draft, saved, previous) : draft;
+        const rebased = saved && previous ? rebaseSpeleoOwnedFields(draft, saved, previous) : draft;
+        // Settings never edits the palette (the legend cog and the export panel
+        // own it), so send the live one: a pick made while this dialog was open
+        // must not be reverted by the snapshot it opened with.
+        const next = saved?.map_palette ? { ...rebased, map_palette: saved.map_palette } : rebased;
         const result = await updateConfig(next);
         if (!result.success) {
           if (ownsDialog()) setSaveError(result.error ?? t('settings.saveErrorTitle'));

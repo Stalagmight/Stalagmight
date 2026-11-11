@@ -620,6 +620,56 @@ fn ignored_warnings_survive_the_add_a_save_and_a_reload() {
     assert_eq!(long_shot_verdicts(&state, &ids), vec![true, true]);
 }
 
+/// The second add of one file renames every shot id the first add already
+/// brought in, so its carried ignores have to follow the rename onto the copy.
+///
+/// INJECTION (tried): carrying the source's id instead of
+/// `outcome.target_uuid(..)` in `add_project_file` fails the first assertion.
+#[test]
+fn a_carried_ignore_follows_its_shot_when_the_add_renames_it() {
+    let temp = TempDir::new().unwrap();
+    let (state, path) = open_target(temp.path(), true);
+    let source = source_with_ignores(temp.path());
+
+    let first = add(&state, &source);
+    assert!(first.success, "{:?}", first.error);
+    let second = add(&state, &source);
+    assert!(second.success, "{:?}", second.error);
+    let project = state.get_project_state().unwrap();
+    let copy = project
+        .sections
+        .iter()
+        .find(|s| second.section_ids.contains(&s.id))
+        .unwrap();
+    assert!(
+        copy.shots.iter().all(|s| s.uuid.as_deref() != Some("i0-1")),
+        "precondition: the second add renamed the shot its ignore names"
+    );
+
+    assert_eq!(
+        long_shot_verdicts(&state, &second.section_ids),
+        vec![true, true],
+        "the renamed copy's ignores are honored before any save"
+    );
+    assert_eq!(
+        long_shot_verdicts(&state, &first.section_ids),
+        vec![true, true],
+        "the first copy keeps its own"
+    );
+
+    save(&state);
+    reopen(&state, &path);
+    assert_eq!(
+        long_shot_verdicts(&state, &second.section_ids),
+        vec![true, true],
+        "and after a save and a reload"
+    );
+    assert_eq!(
+        long_shot_verdicts(&state, &first.section_ids),
+        vec![true, true]
+    );
+}
+
 fn linked(project_name: &str) -> SpeleoLink {
     SpeleoLink {
         endpoint: "http://speleodb.invalid/".to_string(),
@@ -714,6 +764,18 @@ fn adding_the_same_stalx_twice_adds_again_with_a_warning() {
     assert!(receipt_warnings(&third)
         .iter()
         .any(|w| w.contains("is a copy of the open project")));
+
+    // Three copies of the same survey, yet every shot UUID is held once: each
+    // add renamed its newcomers' repeats, so undo, ignores and the exports can
+    // still tell the copies apart.
+    let project = state.get_project_state().unwrap();
+    let mut seen = std::collections::HashSet::new();
+    for section in &project.sections {
+        for uuid in section.shots.iter().filter_map(|s| s.uuid.as_deref()) {
+            assert!(seen.insert(uuid), "shot UUID {uuid} is held twice");
+        }
+    }
+    assert!(project.check_structural_integrity().is_empty());
 }
 
 #[test]

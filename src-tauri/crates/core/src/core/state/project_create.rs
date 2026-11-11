@@ -150,6 +150,9 @@ impl AppState {
             self.bump_speleodb_session();
             // An add's pending ignores (#674) belong to the project that just left.
             self.clear_pending_ignores();
+            // So does the record of renamed shot ids.
+            self.load_renamed_shots
+                .store(false, std::sync::atomic::Ordering::Relaxed);
         }
 
         if let Ok(mut undo_stack) = self.undo_stack.lock() {
@@ -535,6 +538,9 @@ impl AppState {
         // has no file on disk yet, so its first import must durably persist it.
         self.initial_save_deferred
             .store(defer_initial_save, std::sync::atomic::Ordering::Relaxed);
+        // A new project has renamed nothing.
+        self.load_renamed_shots
+            .store(false, std::sync::atomic::Ordering::Relaxed);
 
         // Commit 4: Display settings cache
         if defer_initial_save {

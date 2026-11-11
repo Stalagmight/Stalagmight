@@ -320,9 +320,10 @@ Parsed but dropped:
   (`parsers/tml/mod.rs:541`) validates the SHAPE of a `UUID`/`UU` element (non-empty, at most 128
   characters, no XML-unexportable character) and never coerces the value; `Shot::with_uuid`
   (`models/shot.rs:628`) lets the file's value win over the caller's fresh mint. So re-importing
-  a file this app exported round-trips by ID, and importing the SAME file twice hands two shots
-  the same foreign uuid - which is why the export path re-mints document-level duplicates
-  (`export/tml.rs::remint_duplicate_uuids`). A uuid whose shape is rejected costs THAT SHOT its
+  a file this app exported round-trips by ID. Importing the SAME file twice would hand two shots
+  the same foreign uuid, so the import renames the repeats in its new sections: the copy already
+  in the project keeps the file's ids, the new one gets derived ids (`reminted_shot_uuid`; see
+  [Shot UUIDs](ariane-export.md#shot-uuids)). A uuid whose shape is rejected costs THAT SHOT its
   foreign identity and nothing else.
 - **A `0.0` LRUD field is read as UNMEASURED, per field.** `lrud_opt`
   (`parsers/tml/mod.rs:1902-1908`) maps any of `Left`/`Right`/`Up`/`Down` whose

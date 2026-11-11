@@ -33,7 +33,7 @@ const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
 const GEN_V1 = 'generator-script-v1';
 const ABOUT_V1 = 'about-toml-v1';
 
-function makeTree({ cargo = 'cargo-lock-v1', pnpm = 'pnpm-lock-v1', gen = GEN_V1, about = ABOUT_V1, bundle } = {}) {
+function makeTree({ cargo = 'cargo-lock-v1', pnpm = 'pnpm-lock-v1', gen = GEN_V1, about = ABOUT_V1, vendored = {}, bundle } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tpl-gate-'));
   fs.mkdirSync(path.join(root, 'src-tauri'));
   fs.mkdirSync(path.join(root, 'scripts'));
@@ -41,14 +41,27 @@ function makeTree({ cargo = 'cargo-lock-v1', pnpm = 'pnpm-lock-v1', gen = GEN_V1
   fs.writeFileSync(path.join(root, 'pnpm-lock.yaml'), pnpm);
   fs.writeFileSync(path.join(root, 'scripts', 'gen-third-party-licenses.mjs'), gen);
   fs.writeFileSync(path.join(root, 'src-tauri', 'about.toml'), about);
+  for (const [rel, text] of Object.entries(vendored)) {
+    fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+    fs.writeFileSync(path.join(root, rel), text);
+  }
   if (bundle !== undefined) fs.writeFileSync(path.join(root, 'THIRD-PARTY-LICENSES.md'), bundle);
   return root;
 }
 
-// Mirrors the generator's layout: hashes comment (all four inputs + body),
-// then the body it hashes (every byte after the comment's closing `-->\n`).
-const currentBundle = (cargo, pnpm, body = '\n## npm packages\n\nfixture body\n') =>
-  `# Third-party licenses\n\n<!-- lockfile-hashes\nCargo.lock=${sha256(cargo)}\npnpm-lock.yaml=${sha256(pnpm)}\ngen-third-party-licenses.mjs=${sha256(GEN_V1)}\nabout.toml=${sha256(ABOUT_V1)}\nbundle-body=${sha256(body)}\n-->\n${body}`;
+// The vendored-data hash the generator records: every third_party/ file as
+// `relpath \0 content \0`, in sorted path order. An empty tree hashes nothing.
+const vendoredHash = (files = {}) => {
+  const h = createHash('sha256');
+  for (const rel of Object.keys(files).sort()) h.update(rel + '\0' + files[rel] + '\0');
+  return h.digest('hex');
+};
+
+// Mirrors the generator's layout: hashes comment (all four inputs, the
+// vendored tree, and the body), then the body it hashes (every byte after
+// the comment's closing `-->\n`).
+const currentBundle = (cargo, pnpm, body = '\n## npm packages\n\nfixture body\n', vendored = {}) =>
+  `# Third-party licenses\n\n<!-- lockfile-hashes\nCargo.lock=${sha256(cargo)}\npnpm-lock.yaml=${sha256(pnpm)}\ngen-third-party-licenses.mjs=${sha256(GEN_V1)}\nabout.toml=${sha256(ABOUT_V1)}\nvendored-data=${vendoredHash(vendored)}\nbundle-body=${sha256(body)}\n-->\n${body}`;
 
 test('current bundle passes', () => {
   const root = makeTree({ bundle: currentBundle('cargo-lock-v1', 'pnpm-lock-v1') });
@@ -133,6 +146,29 @@ test('an edited generator script or about.toml fails', () => {
   assert.match(checkBundle(genRoot)[0], /gen-third-party-licenses\.mjs changed/);
   const aboutRoot = makeTree({ bundle, about: 'about-toml-v2' });
   assert.match(checkBundle(aboutRoot)[0], /about\.toml changed/);
+});
+
+test('a vendored notice edited without regenerating fails', () => {
+  const vendored = { 'third_party/palettes/LICENSE-x': 'notice v1\n' };
+  const bundle = currentBundle('cargo-lock-v1', 'pnpm-lock-v1', undefined, vendored);
+  assert.deepEqual(checkBundle(makeTree({ bundle, vendored })), []);
+  const edited = makeTree({ bundle, vendored: { 'third_party/palettes/LICENSE-x': 'notice v2\n' } });
+  assert.match(checkBundle(edited)[0], /third_party\/ changed/);
+  const added = makeTree({ bundle, vendored: { ...vendored, 'third_party/palettes/NOTICE-y': 'new\n' } });
+  assert.match(checkBundle(added)[0], /third_party\/ changed/);
+});
+
+test('a dotfile under third_party/ does not change the vendored-data hash', () => {
+  const vendored = { 'third_party/palettes/LICENSE-x': 'notice v1\n' };
+  const bundle = currentBundle('cargo-lock-v1', 'pnpm-lock-v1', undefined, vendored);
+  const withJunk = makeTree({ bundle, vendored: { ...vendored, 'third_party/palettes/.DS_Store': 'junk' } });
+  assert.deepEqual(checkBundle(withJunk), []);
+});
+
+test('a bundle without a vendored-data hash fails', () => {
+  const good = currentBundle('cargo-lock-v1', 'pnpm-lock-v1');
+  const root = makeTree({ bundle: good.replace(/^vendored-data=[0-9a-f]{64}\n/m, '') });
+  assert.match(checkBundle(root)[0], /no vendored-data hash/);
 });
 
 // The gate must pass against the real repo right now - a committed stale

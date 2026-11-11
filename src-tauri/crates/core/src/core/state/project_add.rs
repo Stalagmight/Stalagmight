@@ -20,8 +20,8 @@ use crate::core::{
     extend_unique_hashes, AddedContent, CarriedIgnore, Command, CommandResult, UndoData,
 };
 use crate::models::{
-    warning_is_ignorable, Project, SectionId, FEATURE_ID_STRIDE, MAX_SECTIONS_IN_ID_SPACE,
-    MAX_SECTION_ID,
+    live_shot_uuid_for_stored, warning_is_ignorable, Project, SectionId, FEATURE_ID_STRIDE,
+    MAX_SECTIONS_IN_ID_SPACE, MAX_SECTION_ID,
 };
 use crate::persistence::ResolvedWarning;
 
@@ -60,7 +60,7 @@ fn remap_ignores(
             continue;
         };
         let shot_uuid = match row.shot_uuid.as_deref() {
-            Some(uuid) => shots.id_of(row.section_id, uuid).map(|_| uuid.to_string()),
+            Some(uuid) => shots.live_uuid(row.section_id, uuid),
             None => shots
                 .uuid_of(row.section_id, row.shot_id)
                 .map(str::to_string),
@@ -70,7 +70,7 @@ fn remap_ignores(
         };
         carried.push(CarriedIgnore {
             section_id,
-            shot_uuid,
+            shot_uuid: outcome.target_uuid(section_id, &shot_uuid),
             warning_code: row.warning_code.clone(),
             resolved_at: row.resolved_at,
             resolved_comment: row.resolved_comment.clone(),
@@ -115,6 +115,13 @@ impl<'a> ShotIndex<'a> {
     /// The id of the shot carrying `uuid` in `section_id`.
     fn id_of(&self, section_id: SectionId, uuid: &str) -> Option<u32> {
         self.id_by_uuid.get(&(section_id, uuid)).copied()
+    }
+
+    /// The uuid a stored row's `uuid` names in `section_id` now: itself, or the
+    /// id the source's load gave that shot when it renamed a cross-section
+    /// repeat (`live_shot_uuid_for_stored`). `None` when neither is there.
+    fn live_uuid(&self, section_id: SectionId, uuid: &str) -> Option<String> {
+        live_shot_uuid_for_stored(section_id, uuid, |id| self.id_of(section_id, id).is_some())
     }
 
     /// The uuid of the shot with `shot_id` in `section_id`, if it has one.

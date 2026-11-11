@@ -326,17 +326,27 @@ impl Database {
         Ok(())
     }
 
+    /// Every shot UUID the on-disk `shots` table holds for `section_id`. Lets the
+    /// resolve path recognise a shot the load renamed (its live id is DERIVED from
+    /// one of these, the same on every open) as being as durable as a stored one.
+    pub fn section_shot_uuids(&self, section_id: u32) -> Result<Vec<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT uuid FROM shots WHERE section_id = ?1 AND uuid IS NOT NULL")?;
+        let rows = stmt.query_map(params![section_id], |row| row.get::<_, String>(0))?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
     /// Whether `uuid` is already stored in the on-disk `shots` table FOR `section_id`. A pre-v6
     /// shot's UUID is minted only in memory until the project is saved, so keying a new ignore
     /// by such an unpersisted UUID would orphan the row on the next open (different UUIDs are
     /// minted) - the resolve path keeps those ignores position-keyed instead (issue #57 / Codex).
     ///
     /// Scoped by section for the same reason `delete_matching_resolved` scopes its UUID branch:
-    /// `ensure_unique_shot_uuids` only de-dups WITHIN a section, so two sections can hold the
-    /// same shot UUID. An unscoped `EXISTS` would answer "persisted" because the OTHER section's
-    /// copy is on disk, and the caller would then key an ignore by a UUID that is still
-    /// in-memory-only for the section it actually belongs to - orphaning it on the next open,
-    /// which is precisely what this guard exists to prevent.
+    /// a file saved before shot UUIDs were project-wide unique can hold the same id in two
+    /// sections, and the load renames one copy. An unscoped `EXISTS` would answer "persisted"
+    /// because the OTHER section's copy is on disk, and the caller would then key an ignore by
+    /// a UUID that is in-memory-only for the section it actually belongs to.
     pub fn shot_uuid_is_persisted(&self, section_id: u32, uuid: &str) -> Result<bool> {
         let exists: bool = self.conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM shots WHERE uuid = ?1 AND section_id = ?2)",
@@ -351,10 +361,10 @@ impl Database {
     /// NULL-uuid row at the same `(section_id, shot_id)` - but NEVER a *different*
     /// shot's valid by-UUID row that happens to occupy that position after a
     /// renumber (the `shot_uuid IS NULL` guard on the position branch ensures
-    /// that). The UUID branch is constrained by `section_id` because
-    /// `ensure_unique_shot_uuids` only de-dups within a section, so two sections
-    /// can share a shot UUID - without the section guard, ignoring/un-ignoring on
-    /// one section would clear the other's suppression too (issue #57 / Codex).
+    /// that). The UUID branch is constrained by `section_id` because a stored
+    /// row can name an id two sections held before the load renamed one copy -
+    /// without the section guard, ignoring/un-ignoring on one section would
+    /// clear the other's suppression too (issue #57 / Codex).
     /// This lets un-ignoring a live shot still clear a legacy position-keyed
     /// suppression of that same shot even on a load path that did not run the
     /// backfill. When no UUID is supplied (a legacy row), match purely by

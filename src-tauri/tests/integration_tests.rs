@@ -1080,7 +1080,16 @@ threshold_pixels = 20
         stalagmight_lib::config::LengthUnit::Feet
     );
     assert_eq!(config.display.font_size, 14);
-    assert!(config.display.depth_gradient.enabled);
+    // `[display.depth_gradient]` was removed (#380 item 1): its table above is
+    // ignored, and re-serialising the config drops it.
+    let resaved = toml::to_string(&config).expect("config re-serialises");
+    assert!(!resaved.contains("[display.depth_gradient]"));
+    assert!(!resaved.contains("shallow_color"));
+    // A config from before `[map_palette]` existed loads with the theme palettes.
+    assert_eq!(
+        config.map_palette,
+        stalagmight_lib::config::MapPaletteConfig::default()
+    );
     assert_eq!(config.map.satellite_provider, "esri");
     assert!(config.map.satellite_enabled);
     assert!(config.map.controls.invert_scroll);

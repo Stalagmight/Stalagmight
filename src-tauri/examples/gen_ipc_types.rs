@@ -20,13 +20,14 @@ use stalagmight_lib::commands::survey_geometry::{
 };
 use stalagmight_lib::config::{
     AngleUnit, AppearanceConfig, CacheConfig, ClosureAdjustmentConfig, ColorTheme, Config,
-    DebugConfig, DecimalPrecision, DepthGradientConfig, DisplayConfig, DpvRig, DpvUnit,
-    ExportConfig, GasConfig, GasUnits, GeneralConfig, GlobalViewConfig, GpsOrigin, ImportConfig,
-    LengthUnit, LoggingConfig, MapAnimationConfig, MapConfig, MapControlsConfig, MapDebugConfig,
-    MapSnapConfig, OverlapMode, PanelsConfig, PlacementSuggestionConfig, ProviderCacheConfig,
-    ReservePreset, ReserveProfile, SectionColorsConfig, ShortcutFeedback, ShortcutsConfig,
-    ShotConfig, SpeleoDbConfig, StationConfig, SyntacticHighlightLevel, SyntacticHighlightPreset,
-    SyntacticHighlightingConfig, ThemeMode, UnitsConfig, UpdateTrack, ValidationConfig,
+    DebugConfig, DecimalPrecision, DisplayConfig, DpvRig, DpvUnit, ExportConfig, GasConfig,
+    GasUnits, GeneralConfig, GlobalViewConfig, GpsOrigin, ImportConfig, LengthUnit, LoggingConfig,
+    MapAnimationConfig, MapConfig, MapControlsConfig, MapDebugConfig, MapPaletteConfig,
+    MapSnapConfig, OverlapMode, PaletteChoiceConfig, PanelsConfig, PlacementSuggestionConfig,
+    ProviderCacheConfig, ReservePreset, ReserveProfile, SectionColorsConfig, ShortcutFeedback,
+    ShortcutsConfig, ShotConfig, SpeleoDbConfig, StationConfig, SyntacticHighlightLevel,
+    SyntacticHighlightPreset, SyntacticHighlightingConfig, ThemeMode, UnitsConfig, UpdateTrack,
+    ValidationConfig,
 };
 use stalagmight_lib::core::command::{
     CommandResult, CommentHolder, ImportReceipt, IntegrityCheckResult, IntegrityRepairResult,
@@ -38,6 +39,9 @@ use stalagmight_lib::core::loading::{
 };
 use stalagmight_lib::core::state::{
     SpeleoCacheOwnership, SpeleoCachedProject, SpeleoPurgeReport, VirtualShotMode,
+};
+use stalagmight_lib::export::color_scale::{
+    ExportColorScale, ExportLevels, ExportValueKind, ValueHistogram,
 };
 use stalagmight_lib::export::{ColorMode, ExportImageOptions, ImageFormat};
 use stalagmight_lib::logging::{LogsSince, RingLogEntry};
@@ -153,6 +157,8 @@ fn main() {
         "SpeleoTeamGrant",
         "SpeleoTeamOption",
         "SpeleoUserSuggestion",
+        // Retired with the dead Settings > Display "Depth Gradient" section (#380).
+        "DepthGradientConfig",
     ] {
         for directory in [
             &out_dir,
@@ -309,6 +315,10 @@ fn main() {
     export::<ExportImageOptions>(&out_dir);
     export::<ImageFormat>(&out_dir);
     export::<ColorMode>(&out_dir);
+    export::<ExportColorScale>(&out_dir);
+    export::<ExportLevels>(&out_dir);
+    export::<ExportValueKind>(&out_dir);
+    export::<ValueHistogram>(&out_dir);
 
     // Cache + tiles
     export::<ProviderStats>(&out_dir);
@@ -347,13 +357,14 @@ fn main() {
     export::<GeneralConfig>(&out_dir);
     export::<UnitsConfig>(&out_dir);
     export::<GasConfig>(&out_dir);
+    export::<MapPaletteConfig>(&out_dir);
+    export::<PaletteChoiceConfig>(&out_dir);
     export::<GasUnits>(&out_dir);
     export::<ReservePreset>(&out_dir);
     export::<ReserveProfile>(&out_dir);
     export::<DpvUnit>(&out_dir);
     export::<DpvRig>(&out_dir);
     export::<DisplayConfig>(&out_dir);
-    export::<DepthGradientConfig>(&out_dir);
     export::<SectionColorsConfig>(&out_dir);
     export::<GpsOrigin>(&out_dir);
     export::<StationConfig>(&out_dir);
@@ -569,6 +580,10 @@ fn main() {
         "ExportImageOptions",
         "ImageFormat",
         "ColorMode",
+        "ExportColorScale",
+        "ExportLevels",
+        "ExportValueKind",
+        "ValueHistogram",
         "ProviderStats",
         "CacheStats",
         "TileFetchStatsResponse",
@@ -591,7 +606,6 @@ fn main() {
         "GeneralConfig",
         "UnitsConfig",
         "DisplayConfig",
-        "DepthGradientConfig",
         "SectionColorsConfig",
         "GpsOrigin",
         "StationConfig",
@@ -622,6 +636,8 @@ fn main() {
         "LengthUnit",
         "AngleUnit",
         "GasConfig",
+        "MapPaletteConfig",
+        "PaletteChoiceConfig",
         "GasUnits",
         "ReservePreset",
         "ReserveProfile",

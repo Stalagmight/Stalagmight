@@ -321,7 +321,21 @@ fn resolve_anchor(project: &Project, anchor: &PlanAnchor) -> Option<StationRef> 
 fn resolve_stored(project: &Project, stored: &StoredAnchor) -> Option<StationRef> {
     match stored {
         StoredAnchor::Pair(anchor) => resolve_anchor(project, anchor),
-        StoredAnchor::Legacy(key) => project.resolve_key(key),
+        StoredAnchor::Legacy(key) => project.resolve_key(key).or_else(|| {
+            // A pre-#24 key anchored on an id the load renamed still places
+            // through the derived id.
+            use crate::models::{StationAnchor, StationKey};
+            let StationAnchor::AfterShot(old) = &key.anchor else {
+                return None;
+            };
+            let after = |id: &str| {
+                StationKey::new(key.section_id, StationAnchor::AfterShot(id.to_string()))
+            };
+            let live = crate::models::live_shot_uuid_for_stored(key.section_id, old, |id| {
+                project.resolve_key(&after(id)).is_some()
+            })?;
+            project.resolve_key(&after(&live))
+        }),
     }
 }
 

@@ -276,7 +276,7 @@ Project (Cave System)
 │   ├── azimuth_reference: Option<AzimuthReference>
 │   └── Shots[]
 │       ├── id: u32 (internal, immutable)
-│       ├── uuid: Option<String> (persistent identity, schema v6+)
+│       ├── uuid: Option<String> (persistent identity, schema v6+, unique across the project)
 │       ├── azimuth_in: f64 (degrees, 0-360)
 │       ├── azimuth_out: f64 (degrees, 0-360)
 │       ├── length: f64 (meters)
@@ -325,6 +325,14 @@ Examples:
 - 0:15 → 16th station of section 0
 - Merged station: [0:15, 1:0] → Station 15 of section 0 merged with station 0 of section 1
 ```
+
+A station's stored identity is not this index but the shot UUID before it
+(`StationAnchor::AfterShot`). Shot UUIDs are unique across the whole project:
+an import, merge or Add that brings an id the project already holds renames the
+newcomer's copy to a derived id, and a file saved before that rule is healed the
+same way on load, with its undo history translated alongside (see
+[ariane-export.md](ariane-export.md#shot-uuids) and
+[undo-redo.md](undo-redo.md#a-loaded-history-follows-the-loads-shot-uuid-heal)).
 
 The index is positional: inserting, deleting or reversing shots renumbers it.
 A station can also carry a **name**, free text stored apart from the shots and
@@ -938,7 +946,7 @@ The three move tools are documented in detail in [move-tools.md](move-tools.md).
 - Grid overlay (theme-aware; spacing chosen by the user from 1, 5, 10, 25, 50, 100 m - default 10 m)
 - Scale bar (always shown; not a toggle)
 - Satellite imagery
-- Depth color gradient (configurable palette)
+- Depth color gradient, and the distance gradient: palette and Levels range from the legend cog (docs/color-palettes.md)
 - LRUD passage walls (future)
 
 #### Map Interactions
@@ -1731,7 +1739,7 @@ The sidebar displays 12 settings categories, with a visual separator before the 
 | Appearance | Theme mode (dark/light/auto), day and night color theme selection with preview cards, 10 color themes |
 | Units | Length/depth/angle units, decimal precision |
 | Gas planning | Swim speed, jump RMV multiplier, whether reference legs count toward gas |
-| Display | Background/grid/font colors, grid spacing, font size, depth gradient settings, section color palette |
+| Display | Grid/font colors, grid spacing, font size, measure-path color, section color palette |
 | Map | Satellite provider/toggle/GPS origin, zoom settings, pan/zoom controls, station/shot appearance, snap settings, animation settings |
 | Validation | Shot length min/max warnings, depth change warnings, azimuth deviation warnings, in/out difference thresholds |
 | Export | Default image format (PNG/SVG/PDF), default DPI, default layer includes (satellite, grid, labels) |

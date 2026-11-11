@@ -18,6 +18,7 @@ import type { DistanceFeatureState } from '../../../../utils/distanceGradient';
 import type { GasReachFeatureState } from '../../../../utils/gasReach';
 import type { OverlayColorInput } from '../displayColor';
 import { packCssColor, type Rgba8 } from './colorPack';
+import { effectiveScale, levelsT, type ColorScaleInput } from '../../../../utils/palettes';
 
 /** `Math.floor` + clamp to 0..255, mirroring MapLibre's `packUint8ToFloat`
  *  (which floors, unlike `colorPack.packCssColor`, which rounds). */
@@ -81,6 +82,9 @@ export function makeOverlayColor(
   overlay: OverlayColorInput,
   grayLine: string,
 ): (value: number) => Rgba8 {
+  if (overlay.mode === 'distance' && overlay.scale) {
+    return makeScaledOverlayColor(overlay.scale, overlay.max, packCssColor(grayLine));
+  }
   const [near, far] =
     overlay.mode === 'distance'
       ? [packCssColor(DISTANCE_NEAR), packCssColor(DISTANCE_FAR)]
@@ -88,6 +92,27 @@ export function makeOverlayColor(
   const grey = packCssColor(grayLine);
   const safeMax = overlay.max > 0 ? overlay.max : 1;
   return (value: number): Rgba8 => packRampColor(value, safeMax, near, far, grey);
+}
+
+/** Opaque magenta: the colour-pack fallback, for an unusable palette entry. */
+const UNUSABLE: Rgba8 = [255, 0, 255, 255];
+
+/**
+ * The distance overlay through the user's palette + Levels range. Unreachable
+ * (`< 0`) stays grey and a NaN stays the transparent black `packRampColor`
+ * produces, so only the reachable colours change. With the Theme palette and an
+ * auto range this is byte-identical to `packRampColor` (pinned in
+ * src/utils/palettes/__tests__).
+ */
+function makeScaledOverlayColor(input: ColorScaleInput, max: number, grey: Rgba8): (value: number) => Rgba8 {
+  const scale = effectiveScale(input, { min: 0, max: max > 0 ? max : 1 });
+  const flat = scale.max === scale.min;
+  return (value: number): Rgba8 => {
+    if (Number.isNaN(value)) return [0, 0, 0, 0];
+    if (value < 0) return grey;
+    const c = flat ? input.palette.rgb(0) : input.palette.rgb(levelsT(value, scale));
+    return c ? [c[0], c[1], c[2], 255] : UNUSABLE;
+  };
 }
 
 /**
@@ -102,10 +127,13 @@ export function overlayInputFrom(
   distanceState: DistanceFeatureState | null,
   gasReachMode: boolean,
   gasReachState: GasReachFeatureState | null,
+  distanceScale: ColorScaleInput | null = null,
 ): OverlayColorInput | null {
   if (distanceMode && distanceState) {
     const { shots, stations, max } = distanceState;
-    return { mode: 'distance', shots, stations, max };
+    return distanceScale
+      ? { mode: 'distance', shots, stations, max, scale: distanceScale }
+      : { mode: 'distance', shots, stations, max };
   }
   if (gasReachMode && gasReachState) {
     const { shots, stations, max } = gasReachState;

@@ -10,11 +10,17 @@ Update this file every time a new version is tagged.
 ### Added
 
 - **Station names on the map and in image exports** - the Display menu's Comments & Labels group has a new Station names option. It labels each station with its name, such as the mNemo station number from a DMP import, instead of its ID, so you can find the stations your notes refer to. Stations without a name get no label. The Station labels option is now called Station IDs, and only one of the two can be on. The option is unavailable in projects without station names. SVG, PNG and PDF image exports have the same Station names option ([#695](https://github.com/Stalagmight/Stalagmight/issues/695))
+- **Choose the colors for depth and distance** - when the map colors by depth or by distance, the cog beside the legend opens a palette picker with every matplotlib colormap and a set of gradient folders, searchable, with previews and pins for the ones you use most. Below it, a Levels-style range with a histogram sets where the colors start, end and bend. Both preview on the map as you go and have a reset. The palette is remembered across projects; the range is for the open project only. Export by depth or by distance (from the entrance) has the same controls, so a PNG or PDF can match the screen. None of it is saved in the project file or sent to SpeleoDB
+
+### Removed
+
+- **The Depth Gradient section in Settings > Display** - its color and depth fields never changed the map. The legend's color controls replace it, and an old setting in your config file is ignored. Installing an earlier version again after this one resets your settings, because earlier versions expect that section in the config file ([#380](https://github.com/Stalagmight/Stalagmight/issues/380))
 
 ### Fixed
 
 - **SpeleoDB revision times work with the updated server** - SpeleoDB now sends revision times as UTC instants, and the revision history shows them in your own time zone with its GMT offset. Servers that have not been updated yet still work: their New York times are converted as before, and opening, locking and uploading are unaffected. A revision time that cannot be read is left out rather than shown wrongly ([#701](https://github.com/Stalagmight/Stalagmight/pull/701))
 - **SpeleoDB uploads follow the server's new 5 MiB limit** - the updated server accepts project files up to 5 MiB (it used to take about 23.5 MiB). A larger project is now uploaded without its undo history when that makes it fit, and is refused before anything is sent when it is still too large; your changes stay on your computer either way. This applies to servers that have not been updated yet too ([#701](https://github.com/Stalagmight/Stalagmight/pull/701))
+- **Every shot keeps its own identity across the whole project** - importing the same Ariane file twice, merging two copies of a project, or adding a `.stalx` whose survey is already in your project used to leave two shots sharing one ID. The copy already in the project now keeps its IDs and the new one gets its own. Projects saved by earlier versions are fixed when you open them, and their undo history, ignored warnings and dive-plan points stay with the right shots ([#693](https://github.com/Stalagmight/Stalagmight/issues/693))
 
 ## [0.5.2] - 2026-11-10
 
