@@ -1,6 +1,11 @@
 import { useState, useRef, useEffect, type ReactNode, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useUIStore, colorModeOf, type DisplayToggleKey, type ColorMode } from '../../store/uiStore';
+import { useUIStore, type DisplayToggleKey, type ColorMode } from '../../store/uiStore';
+import {
+  isWarningsVisitActive,
+  selectEffectiveColorMode,
+  selectEffectiveShowShotErrors,
+} from '../../store/displaySelectors';
 import { useProjectStore } from '../../store/projectStore';
 import { useDismissableLayer } from '../../hooks/useDismissableLayer';
 import { useShallow } from 'zustand/react/shallow';
@@ -119,6 +124,7 @@ function Pill({
   entityColored,
   onColor,
   icon,
+  auto,
 }: {
   label: string;
   active: boolean;
@@ -132,6 +138,8 @@ function Pill({
   /** Contrast color for the filled (on) state's label + glyph. */
   onColor?: string | undefined;
   icon?: ReactNode;
+  /** On only because the Warnings tab is open (the visit default). */
+  auto?: boolean;
 }) {
   const base = 'px-3 py-1 text-xs rounded-full inline-flex items-center gap-1.5 transition-colors';
   const className = entity && entityColored
@@ -154,6 +162,7 @@ function Pill({
       aria-pressed={active}
       title={title}
       data-testid={testId}
+      data-auto={auto ? 'true' : undefined}
       className={className}
       style={style}
     >
@@ -188,9 +197,9 @@ export default function DisplayMenu({
   const { t } = useTranslation();
 
   // Single-select coloring mode, derived from the three mutually-exclusive overlay
-  // flags. Reading + setting both go through the store (colorModeOf / setColorMode)
-  // so the select-one logic isn't duplicated here. colorMode is folded into this
-  // shallow selector (via colorModeOf) rather than carried by its own subscription.
+  // flags (or a Warnings-tab visit). Reading + setting both go through the store
+  // (selectEffectiveColorMode / setColorMode) so the select-one logic isn't
+  // duplicated here. Folded into this shallow selector as plain values.
   const {
     gridSpacing,
     geometryMode,
@@ -201,6 +210,9 @@ export default function DisplayMenu({
     setGridSpacing,
     setGeometryMode,
     colorMode,
+    visitActive,
+    autoColor,
+    autoErrors,
   } = useUIStore(useShallow((s) => ({
     gridSpacing: s.gridSpacing,
     geometryMode: s.geometryMode,
@@ -210,7 +222,12 @@ export default function DisplayMenu({
     setColorMode: s.setColorMode,
     setGridSpacing: s.setGridSpacing,
     setGeometryMode: s.setGeometryMode,
-    colorMode: colorModeOf(s),
+    // The PAINTED mode: during a Warnings-tab visit that is the visit's, not the
+    // saved flags' (displaySelectors).
+    colorMode: selectEffectiveColorMode(s),
+    visitActive: isWarningsVisitActive(s),
+    autoColor: s.warningsVisitOverride?.colorMode === undefined,
+    autoErrors: s.warningsVisitOverride?.showShotErrors === undefined,
   })));
 
   // The element-toggle booleans, read as a keyed map so a pill can look itself
@@ -230,7 +247,7 @@ export default function DisplayMenu({
         showStationComments: s.showStationComments,
         showShotComments: s.showShotComments,
         showShotData: s.showShotData,
-        showShotErrors: s.showShotErrors,
+        showShotErrors: selectEffectiveShowShotErrors(s),
         showGrid: s.showGrid,
         showSatellite: s.showSatellite,
       }),
@@ -286,11 +303,14 @@ export default function DisplayMenu({
     const onColor = entityColored && active && item.entity
       ? getContrastColor(getThemeColor(syntacticVarName(item.entity)))
       : undefined;
+    const auto = item.key === 'showShotErrors' && visitActive && autoErrors;
+    const description = item.descriptionKey ? t(item.descriptionKey) : '';
     return (
       <Pill
         key={item.key}
         label={t(item.labelKey)}
-        title={noNames ? t('displayMenu.descriptions.stationNamesUnavailable') : item.descriptionKey ? t(item.descriptionKey) : ''}
+        title={noNames ? t('displayMenu.descriptions.stationNamesUnavailable') : auto ? `${description}. ${t('displayMenu.warningsVisit.pillHint')}` : description}
+        auto={auto}
         active={active}
         disabled={disabled}
         onClick={() => { setSource('display-menu'); toggleDisplay(item.key); }}
@@ -399,7 +419,12 @@ export default function DisplayMenu({
                 <Pill label={t('displayMenu.items.section')} active={colorMode === 'section'} onClick={() => selectColorMode('section')} testId="display-color-section" />
                 <Pill label={t('displayMenu.items.depthGradient')} title={t('displayMenu.descriptions.depthGradient')} active={colorMode === 'depth'} onClick={() => selectColorMode('depth')} testId="display-toggle-showDepthGradient" />
                 <Pill label={t('displayMenu.items.distanceGradient')} title={t('displayMenu.descriptions.distanceGradient')} active={colorMode === 'distance'} onClick={() => selectColorMode('distance')} testId="display-toggle-showDistanceGradient" />
-                <Pill label={t('displayMenu.items.issueSeverity')} title={t('displayMenu.descriptions.issueSeverity')} active={colorMode === 'issues'} onClick={() => selectColorMode('issues')} testId="display-toggle-showIssueSeverity" />
+                <Pill label={t('displayMenu.items.issueSeverity')} title={visitActive && autoColor ? `${t('displayMenu.descriptions.issueSeverity')}. ${t('displayMenu.warningsVisit.pillHint')}` : t('displayMenu.descriptions.issueSeverity')} auto={visitActive && autoColor && colorMode === 'issues'} active={colorMode === 'issues'} onClick={() => selectColorMode('issues')} testId="display-toggle-showIssueSeverity" />
+                {visitActive && (
+                  <p className="basis-full pt-1 text-xs text-text-secondary" data-testid="display-warnings-visit-note">
+                    {t('displayMenu.warningsVisit.note')}
+                  </p>
+                )}
               </Category>
             )}
 

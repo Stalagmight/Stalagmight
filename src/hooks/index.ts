@@ -7,6 +7,7 @@ export { useFpsMonitor, type FpsMonitorConfig, type FpsMonitorResult } from './u
 export { useFocusTrap } from './useFocusTrap';
 export { useTheme } from './useTheme';
 export { useSyntacticHighlighting } from './useSyntacticHighlighting';
+export { useWarningsAutoDisplay } from './useWarningsAutoDisplay';
 export { useAutoSave } from './useAutoSave';
 export type { AutoSaveStatus, AutoSaveState } from './useAutoSave';
 export { useLongPress } from './useLongPress';

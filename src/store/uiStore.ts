@@ -18,7 +18,12 @@ export interface CommentTarget {
 }
 import type { AppearanceConfig, PanelsConfig, SyntacticHighlightingConfig, SyntacticHighlightLevel } from '../types/config';
 import type { DisplaySettings } from '../types/loading';
-import { DISPLAY_DEFAULTS } from './displaySelectors';
+import {
+  DISPLAY_DEFAULTS,
+  isWarningsVisitActive,
+  selectEffectiveColorMode,
+  type WarningsVisitOverride,
+} from './displaySelectors';
 import { useGasPlanStore } from './gasPlanStore';
 import { useExportStore } from './exportStore';
 import { useColorScaleStore } from './colorScaleStore';
@@ -88,62 +93,11 @@ export type DmpImportWizardPhase = 'init' | 'suggesting' | 'manual_placing' | 'p
 
 export type DetailPanelTab = 'details' | 'warnings';
 
-/**
- * Shot/station coloring mode. The three overlay flags (showDepthGradient /
- * showDistanceGradient / showIssueSeverity) are mutually exclusive - all paint the
- * shots/stations layer - so this enum is the single-select view of them. `section`
- * = none of the overlays (the default per-section coloring). Read via
- * {@link colorModeOf}; set via the store's `setColorMode` (the one place that owns
- * the select-one mapping).
- */
-export type ColorMode = 'section' | 'depth' | 'distance' | 'issues';
-
-/** Derive the single-select coloring mode from the three mutually-exclusive
- *  overlay flags. Use as a zustand selector: `useUIStore(colorModeOf)`. */
-export function colorModeOf(
-  s: Pick<UIStore, 'showIssueSeverity' | 'showDistanceGradient' | 'showDepthGradient'>,
-): ColorMode {
-  return s.showIssueSeverity
-    ? 'issues'
-    : s.showDistanceGradient
-      ? 'distance'
-      : s.showDepthGradient
-        ? 'depth'
-        : 'section';
-}
-
-/**
- * The overlay flags (plus the distance overlay's cache) that represent a
- * {@link ColorMode} - the inverse of {@link colorModeOf}, and the ONE place that
- * maps a single-select mode back onto the three booleans.
- *
- * Every writer that can turn an overlay on goes through this, so "two overlays on
- * at once" is not representable after any entry point runs. That mattered:
- * `showDepthGradient` is persisted (a DisplayToggleKey) while
- * `showDistanceGradient` is runtime-only, so re-applying the saved display
- * settings while distance was on (project load / revision restore) wrote depth
- * back to true underneath it. `colorModeOf` reads that pair as 'distance', and
- * the old `if (!flag) toggle()` writers no-op'd on it - picking Depth did nothing
- * and the overlay was stuck in distance mode for good (#34, #22).
- *
- * `distanceGradientOrigin`/`distanceField` are the distance overlay's cache: left
- * alone when distance IS the mode, cleared with it otherwise, so re-enabling
- * starts fresh at the entrance (zero-datum) default.
- */
-export type ColorOverlayFlags = Pick<
-  UIStore,
-  'showDepthGradient' | 'showDistanceGradient' | 'showIssueSeverity'
-> &
-  Partial<Pick<UIStore, 'distanceGradientOrigin' | 'distanceField'>>;
-
-export function colorModeFlags(mode: ColorMode): ColorOverlayFlags {
-  return {
-    showDepthGradient: mode === 'depth',
-    showDistanceGradient: mode === 'distance',
-    showIssueSeverity: mode === 'issues',
-    ...(mode === 'distance' ? {} : { distanceGradientOrigin: null, distanceField: null }),
-  };
-}
+// The single-select colour mode lives in ./colorMode (shared with the display
+// selectors without an import cycle); re-exported so existing imports keep working.
+export { colorModeOf, colorModeFlags, type ColorMode, type ColorOverlayFlags } from './colorMode';
+import { colorModeFlags, type ColorMode } from './colorMode';
+import { visitColorPatch, visitEndPatch, visitErrorsPatch } from './warningsVisit';
 
 /** Reveal behavior for a side/data panel.
  *  - `pin`: click to open; stays open (reflows the map) until closed.
@@ -388,7 +342,7 @@ export const TOAST_DEDUP_WINDOW_MS = 1000;
 /** Source of `ToastItem.id`. Module-scoped so ids never repeat within a session. */
 let nextToastId = 1;
 
-interface UIStore {
+export interface UIStore {
   // View state
   view: ViewType;
   setView: (view: ViewType) => void;
@@ -570,6 +524,14 @@ interface UIStore {
   /** The "Errors" labels: each shot's reading deltas and each loop closure's
    *  error. Persisted per project like showShotData. */
   showShotErrors: boolean;
+  /** Mirror of `config.map.highlight_warnings_on_tab_switch`: whether the
+   *  Warnings tab turns on Survey Issues + Errors while it is on screen. */
+  warningsAutoDisplay: boolean;
+  setWarningsAutoDisplay: (on: boolean) => void;
+  /** Changes made during the current Warnings-tab visit (see
+   *  `displaySelectors.isWarningsVisitActive`); null outside a visit and until
+   *  the user changes something. Never persisted. */
+  warningsVisitOverride: WarningsVisitOverride | null;
   showReferenceShots: boolean;
   /** #27: jumps hide independently of references. */
   showJumps: boolean;
@@ -1586,6 +1548,9 @@ export const useUIStore = create<UIStore>((set) => ({
   showStationNames: DISPLAY_DEFAULTS.showStationNames,
   showShotData: DISPLAY_DEFAULTS.showShotData,
   showShotErrors: DISPLAY_DEFAULTS.showShotErrors,
+  warningsAutoDisplay: true,
+  setWarningsAutoDisplay: (warningsAutoDisplay) => set({ warningsAutoDisplay }),
+  warningsVisitOverride: null,
   showReferenceShots: DISPLAY_DEFAULTS.showReferenceShots,
   showJumps: DISPLAY_DEFAULTS.showJumps,
   showZeroDatum: DISPLAY_DEFAULTS.showZeroDatum,
@@ -1649,6 +1614,12 @@ export const useUIStore = create<UIStore>((set) => ({
     // when gas is off.
     useUIStore.getState().exitGasPlan();
     const s = useUIStore.getState();
+    // During a Warnings-tab visit the pick lasts for the visit only: it lands in
+    // the visit override, the saved flags (and the project) stay as they were.
+    if (isWarningsVisitActive(s)) {
+      set(visitColorPatch(s, mode));
+      return;
+    }
     // This action is AUTHORITATIVE: it drives the three overlay flags straight
     // from the requested mode via colorModeFlags, whatever combination they were
     // in. It used to delegate to the per-overlay actions behind `if (!flag)`
@@ -1788,6 +1759,18 @@ export const useUIStore = create<UIStore>((set) => ({
   toggleDisplay: (key) => {
     trackAction(`toggle.${key}`);
     const state = useUIStore.getState();
+    // During a Warnings-tab visit the Errors toggle and Shift+D change only the
+    // visit (see setColorMode); nothing is saved.
+    if (isWarningsVisitActive(state)) {
+      if (key === 'showShotErrors') {
+        set(visitErrorsPatch(state));
+        return;
+      }
+      if (key === 'showDepthGradient') {
+        set(visitColorPatch(state, selectEffectiveColorMode(state) === 'depth' ? 'section' : 'depth'));
+        return;
+      }
+    }
     const newValue = !state[key];
     // Enabling the depth gradient turns off the (runtime-only) distance gradient
     // and issue-severity overlays - all three paint the shots layer (#34, #22).
@@ -1934,6 +1917,8 @@ export const useUIStore = create<UIStore>((set) => ({
       showStationNames,
       showShotData: settings.showShotData ?? state.showShotData,
       showShotErrors: settings.showShotErrors ?? state.showShotErrors,
+      // A load starts outside any Warnings-tab visit's changes.
+      warningsVisitOverride: null,
       showReferenceShots: settings.showReferenceShots ?? state.showReferenceShots,
       showJumps: settings.showJumps ?? state.showJumps,
       showZeroDatum: settings.showZeroDatum ?? state.showZeroDatum,
@@ -2253,3 +2238,12 @@ export const useUIStore = create<UIStore>((set) => ({
   selectionAnnouncement: '',
   announceSelection: (message) => set({ selectionAnnouncement: message }),
 }));
+
+// Drop the Warnings-tab visit's changes as soon as the visit ends - whatever
+// ended it (another tab, closing the panel, section focus, Plan / Export, the
+// Global view, a full-screen table, the setting turned off). A subscription
+// sees every one of those paths, including direct setState calls.
+useUIStore.subscribe((s) => {
+  const patch = visitEndPatch(s);
+  if (patch) useUIStore.setState(patch);
+});

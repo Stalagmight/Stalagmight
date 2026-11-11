@@ -2102,6 +2102,10 @@
       "issueSeverity": "Survey Issues",
       "devStats": "Dev stats"
     },
+    "warningsVisit": {
+      "note": "Survey Issues and Errors are on while the Warnings tab is open. Changes here last until you leave the tab.",
+      "pillHint": "On while the Warnings tab is open"
+    },
     "descriptions": {
       "stations": "Show station markers",
       "sectionNames": "Show section labels",

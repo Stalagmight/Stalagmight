@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from 'react-i18next';
+import { selectDistanceOverlayActive } from '../../store/displaySelectors';
 import { useUIStore, type Selection } from '../../store/uiStore';
 import { useEditingBlocked } from '../../hooks/useEditingBlocked';
 import { useShallow } from 'zustand/react/shallow';
@@ -624,7 +625,7 @@ function StationDetail({ station }: { station: Station }) {
   // all read-only: disable mutation controls (edits happen in the measured survey view).
   const editingBlocked = useEditingBlocked();
   const distanceGradientOrigin = useUIStore((s) => s.distanceGradientOrigin);
-  const showDistanceGradient = useUIStore((s) => s.showDistanceGradient);
+  const showDistanceGradient = useUIStore(selectDistanceOverlayActive);
   // Show the active geometry's coordinates so inspection matches the map; falls
   // back to the passed (measured) station before the adjusted set is fetched.
   const activeStations = useActiveStations();
