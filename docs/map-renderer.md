@@ -148,7 +148,28 @@ also folds in the decimation band, and the shader just compares
 (a label that appeared can never vanish on zooming further in): the decimation
 moduli are the nested chain `4 -> 2 -> 1`, each admitted set a subset of the
 next, and the reveal ladder re-seeds already-revealed winners at every step so a
-finer-tier label cannot evict a coarser one. `labelTessellate.ts` stamps the
+finer-tier label cannot evict a coarser one.
+
+**Real line first.** Labels of virtual geometry never take a real-line label's
+spot. `labelVirtualRank` puts every label in one of three ranks from the flags it
+already carries: real (a Normal shot's labels, or a station / section a Normal
+shot touches), jump, then reference (shot labels by their own kind, stations and
+section names by the `ALL_JUMP` / `ALL_REFERENCE` pair - the better kind
+touching them; a pure function of the flags, so a hide toggle never reorders
+labels). The ladder runs once per rank, best first. A later rank leaves free
+every slot an earlier rank's winner holds, including one it only takes further
+up the ladder: a jump label may show at `z` only if it clears each real winner
+at `max(z, its reveal)`, the first zoom at which both are drawn. Real labels
+therefore reveal exactly as they would with no virtual labels, and jump labels
+as they would with no reference labels; tier, kind and ordinal still order
+labels within a rank. A label that loses its spot on a reveal-only rerun
+(re-showing jumps, say) uploads an unreachable reveal and stays hidden, as a
+fresh build would leave it. Below the 13.5 label band only section names are
+built, yet a jump / reference section's name must not show there only to lose
+its spot, and vanish, once the station and shot labels around it are built: the
+section-only build gathers the shown expensive kinds near each such name and
+passes them to the reveal pass as `reserved` slots, held from their decimation
+floor. `labelTessellate.ts` stamps the
 quads; `labelController.ts` scopes the build to a padded viewport, emits a slack
 window above the build zoom so a modest zoom-in needs no rebuild at all, and
 defers the first build until the font promise resolves.
@@ -177,6 +198,43 @@ it:
 3. trim to the exact pick with the index's `nearestStation` / `nearestShot`
    (reached through `SurveyLayer.resolveStationAt` / `resolveShotAt`), using true
    endpoints rather than tile-clipped geometry.
+
+**The real line on top.** A jump or reference section tied in at a real station
+puts several markers on one spot, and a reference tie surveyed along the real
+line runs over it. Each kind draws in one call with no depth test, so the index
+buffers draw by rank - reference first, then jump, then real
+(`tessellate.writeLineDrawOrder` by shot kind, `writeCircleDrawOrder` by
+`stationKindRank`) - and the real line ends on top. The vertices stay in SoA
+order, which the incremental path addresses; when a kind edit moves shots or a
+station between ranks it redoes the order and writes it through
+`COPY_WRITE_BUFFER` (`surveyCustomLayer.uploadLineIndices` /
+`uploadCircleIndices`): it runs outside `render()`, and the element-array binding
+is VAO state. The picks agree (`nearestStation` / `nearestShot`): equal distances
+go to the better rank, and a cursor on the drawn disc or line of a better-ranked
+feature picks it over a nearer, worse-ranked one it covers. The drawn size is the
+shader's: `ResolveOptions.stationDiscPx` (radius + stroke) times `stationSizeMul`
+(`controller.stationSizeMul`: the hover or selection size of a highlighted
+section, else 2x for a zero datum), and `shotHalfWidthPx` times `shotWidthMul`
+(`controller.shotWidthMul`). The visible edge of a worse-ranked feature still
+picks it, and features of one rank keep the plain nearest pick. The ranks are
+the label declutter's (`labelVirtualRank`).
+
+**The selection on top.** The selected section, or the section of the selected
+station or shot (`raisedSection.raisedSectionOf`), draws above every rank: the
+writers take a per-vertex raised flag (built with `computeLineDim` /
+`computeCircleDim`) and draw those quads after all others, in the same kind
+order among themselves.
+`SurveyLayer.updateVisualState` pushes it to `controller.setRaisedSection`, which
+rewrites and re-uploads only the index buffers whose order moved; every build
+and the incremental reorder keep it. The picks rank the raised section above
+real line (`ResolveOptions.raisedSectionId`: its kinds' ranks shifted by 3), so
+where it overlaps the main line the click goes to it, as drawn, in every tool
+that picks through `resolveStationAt` / `resolveShotAt` (merge and measure snaps
+too); to reach a real-line station it covers, clear the selection first (Escape,
+or in the Select tool a click on empty map). MapCanvas sets the new selection
+before clearing the old one, so a change moves the order at most once. Hover
+changes no order, and labels ignore the selection. The single selected station or shot is drawn
+again above everything by the interact overlay, as before.
 
 Every pick is a single nearest-within-tolerance resolve; the box in step 2 is
 only the candidate prefilter. The index's multi-hit box resolver went away with
@@ -376,6 +434,9 @@ the Zustand write.
 | Click or hover misses a feature | `hitProbe.ts` padding, then `geometryIndex.sectionsIntersectingBox`, then the camera snapshot key |
 | Labels missing entirely | font readiness in `labelController` (the `label-font-unavailable` path) |
 | Labels vanish or flash while zooming | `labelReveal.ts` / `labelDecimation.ts` |
+| A jump / reference label shows where a real-line one should | `labelVirtualRank` and the per-rank passes in `labelReveal.ts`, then the flags `labelTessellate.ts` stamps |
+| A jump / reference marker or line drawn over, or clicked instead of, the real one at the same spot | `writeCircleDrawOrder` / `writeLineDrawOrder` in `tessellate.ts` (and their calls in `controller.tryIncremental`), then `geometryIndex.nearestStation` / `nearestShot` |
+| A selected section still drawn under the real line, or stays on top after deselecting | `SurveyLayer.updateVisualState` -> `raisedSectionOf` -> `controller.setRaisedSection`, then `ResolveOptions.raisedSectionId` for the click |
 | Label text or placement wrong | `labelLayout.ts` (shaping, em offsets), `labelStyle.ts` (per-kind style) |
 | Sizes wrong after dragging the window to another monitor | the DPR watcher in `SurveyLayer` - device-pixel sizes are baked into the buffers |
 | Global View wrong but the survey map fine | `GlobalView/customRender/` - a separate implementation |

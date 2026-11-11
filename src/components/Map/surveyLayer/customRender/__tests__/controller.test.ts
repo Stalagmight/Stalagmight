@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Map as MaplibreMap } from 'maplibre-gl';
 import {
   emptySurveyData,
+  shotKindToFlags,
   STATION_FLAG_IS_ZERO_DATUM,
   type SurveyData,
 } from '../../../../../types/survey-data';
@@ -100,6 +101,16 @@ const h = vi.hoisted(() => {
     }
     uploadCircleVertexRange(): void {
       this.uploadCalls++;
+    }
+    circleIndexUploads = 0;
+    uploadCircleIndices(): void {
+      this.uploadCalls++;
+      this.circleIndexUploads++;
+    }
+    lineIndexUploads = 0;
+    uploadLineIndices(): void {
+      this.uploadCalls++;
+      this.lineIndexUploads++;
     }
   }
 
@@ -607,6 +618,135 @@ describe('SurveyCustomController highlight width/radius resolution (C2)', () => 
     expect(d.lineSelectWidthMul).toBeCloseTo(1.5);
     expect(d.circleHoverSizeMul).toBeCloseTo(2.5);
     expect(d.circleSelectSizeMul).toBeCloseTo(1.5);
+  });
+
+  // The station pick sizes a marker's drawn disc with this, so it must follow
+  // the circle shader: highlight size wins over the zero-datum 2x.
+  it('stationSizeMul follows the shader: hover, then selection, then zero-datum 2x', () => {
+    const { map } = makeFakeMap();
+    const c = new SurveyCustomController(map);
+    c.sync({ ...makeParams(), stationRadiusPx: 4, stationHoverRadiusPx: 10, stationSelectionRadiusPx: 6 });
+    expect(c.stationSizeMul(1, false)).toBe(1);
+    expect(c.stationSizeMul(1, true)).toBe(2);
+    c.setSectionSelect([1]);
+    expect(c.stationSizeMul(1, false)).toBeCloseTo(1.5);
+    expect(c.stationSizeMul(1, true)).toBeCloseTo(1.5); // not 2, not 3
+    expect(c.stationSizeMul(2, true)).toBe(2); // another section: unaffected
+    c.setSectionHover([1]);
+    expect(c.stationSizeMul(1, false)).toBeCloseTo(2.5); // hover wins over selection
+    c.clearHighlights();
+    expect(c.stationSizeMul(1, true)).toBe(2);
+  });
+
+  it('shotWidthMul follows the line shader: hover, then selection, else 1', () => {
+    const { map } = makeFakeMap();
+    const c = new SurveyCustomController(map);
+    c.sync({ ...makeParams(), shotWidthPx: 2, shotHoverWidthPx: 5, shotSelectionWidthPx: 3 });
+    expect(c.shotWidthMul(1)).toBe(1);
+    c.setSectionSelect([1]);
+    expect(c.shotWidthMul(1)).toBeCloseTo(1.5);
+    expect(c.shotWidthMul(2)).toBe(1);
+    c.setSectionHover([1]);
+    expect(c.shotWidthMul(1)).toBeCloseTo(2.5);
+    c.clearHighlights();
+    expect(c.shotWidthMul(1)).toBe(1);
+  });
+});
+
+/**
+ * The selection's section draws above every rank (#700 review):
+ * `setRaisedSection` reorders only the two index buffers, and every build keeps
+ * the raise. Fixture: section 1 is a Normal then a Reference shot (stations 0-1
+ * real, 2 reference-only), section 2 one Jump shot (stations 3-4), section 3 a
+ * lone station with no leg (5, ranks as a jump). Segments: 0 and 1 in section
+ * 1, 2 in section 2.
+ */
+describe('SurveyCustomController raised section', () => {
+  beforeEach(() => {
+    h.layerState.disabledAfterAdd = false;
+    h.layerState.last = null;
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  const params = (): CustomSyncParams => {
+    const d = emptySurveyData();
+    const sec = (id: number, shotOffset: number, shotCount: number) => ({
+      id, name: `S${id}`, surveyor: null, date: null, color: '#ff0000', direction: 'in' as never, quality: 0,
+      next_shot_id: shotCount, shotOffset, shotCount,
+    });
+    d.sections = [sec(1, 0, 2), sec(2, 2, 1), sec(3, 3, 0)];
+    d.shotCount = 3;
+    d.shotIds = new Uint32Array([0, 1, 0]);
+    d.shotSectionIds = new Uint32Array([1, 1, 2]);
+    d.shotFlags = new Uint8Array([0, shotKindToFlags('Reference'), shotKindToFlags('Jump')]);
+    d.stationCount = 6;
+    d.stationSectionIds = new Uint32Array([1, 1, 1, 2, 2, 3]);
+    d.stationIndices = new Uint32Array([0, 1, 2, 0, 1, 0]);
+    d.stationCoords = new Float64Array([0, 0, 0, 10, 0, -1, 10, 10, -2, 0, 5, 0, 10, 5, 0, 20, 20, 0]);
+    d.stationFlags = new Uint8Array(6);
+    return { ...makeParams(), surveyData: d };
+  };
+  const layer = () => h.layerState.last!;
+  const data = (): CustomRenderData => layer().data as CustomRenderData;
+  const drawnLines = () => Array.from({ length: data().line.segmentCount }, (_, k) => data().line.indices[k * 6]! / 4);
+  const drawnCircles = () =>
+    Array.from({ length: data().circle.stationCount }, (_, k) => data().circle.indices[k * 6]! / 4);
+  const REF_JUMP_REAL = { lines: [1, 2, 0], circles: [2, 3, 4, 5, 0, 1] };
+  // Section 1 raised: above the rest, its own reference still under its real line.
+  const RAISED_1 = { lines: [2, 1, 0], circles: [3, 4, 5, 2, 0, 1] };
+
+  it('draws the raised section on top, re-uploading only the index buffers that moved', () => {
+    const { map } = makeFakeMap();
+    let repaints = 0;
+    (map as unknown as { triggerRepaint: () => void }).triggerRepaint = () => {
+      repaints++;
+    };
+    const c = new SurveyCustomController(map);
+    c.sync(params());
+    expect({ lines: drawnLines(), circles: drawnCircles() }).toEqual(REF_JUMP_REAL);
+    const updates = layer().updateCalls;
+    const r0 = repaints;
+
+    c.setRaisedSection(1);
+    expect({ lines: drawnLines(), circles: drawnCircles() }).toEqual(RAISED_1);
+    expect([layer().lineIndexUploads, layer().circleIndexUploads]).toEqual([1, 1]);
+    expect(repaints).toBe(r0 + 1);
+
+    c.setRaisedSection(1); // unchanged: nothing to do
+    expect([layer().lineIndexUploads, layer().circleIndexUploads]).toEqual([1, 1]);
+    expect(repaints).toBe(r0 + 1);
+
+    // Section 3 has no line: the lines fall back to rank, its station goes last.
+    c.setRaisedSection(3);
+    expect({ lines: drawnLines(), circles: drawnCircles() }).toEqual({
+      lines: REF_JUMP_REAL.lines, circles: [2, 3, 4, 0, 1, 5],
+    });
+    expect([layer().lineIndexUploads, layer().circleIndexUploads]).toEqual([2, 2]);
+
+    c.setRaisedSection(null); // only the circle order moves back
+    expect({ lines: drawnLines(), circles: drawnCircles() }).toEqual(REF_JUMP_REAL);
+    expect([layer().lineIndexUploads, layer().circleIndexUploads]).toEqual([2, 3]);
+    expect(repaints).toBe(r0 + 3);
+    expect(layer().updateCalls).toBe(updates); // never a rebuild
+  });
+
+  it('a build keeps the raise, including one set before the first build', () => {
+    const { map } = makeFakeMap();
+    const c = new SurveyCustomController(map);
+    c.setRaisedSection(1);
+    c.sync(params());
+    expect({ lines: drawnLines(), circles: drawnCircles() }).toEqual(RAISED_1);
+    // A full rebuild (new geometry) re-applies it.
+    const first = layer();
+    const updates = first.updateCalls;
+    const p = params();
+    p.surveyData.stationCoords[0] = 5;
+    c.sync({ ...p, shotWidthPx: 3 });
+    expect(layer()).toBe(first);
+    expect(first.updateCalls).toBe(updates + 1);
+    expect({ lines: drawnLines(), circles: drawnCircles() }).toEqual(RAISED_1);
   });
 });
 

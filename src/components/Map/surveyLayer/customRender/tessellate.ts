@@ -19,6 +19,14 @@
  * CIRCLES (stations): one quad per station, the disc + stroke ring drawn in the
  * fragment shader with a feathered edge (`shaders.ts`).
  *
+ * DRAW ORDER: each kind draws in one call with no depth test, so a later quad
+ * paints over an earlier one. The vertices sit in SoA order (what the
+ * incremental path addresses), but both index buffers draw by rank - reference
+ * first, then jump, then real (`writeLineDrawOrder` / `writeCircleDrawOrder`) -
+ * so where a jump or reference line or marker crosses or coincides with the real
+ * line, the real line is on top. A raised section (the selection's, see
+ * `SurveyCustomController.setRaisedSection`) draws after all three.
+ *
  * Valid-shot selection mirrors `vtSurveyBuild.buildShotsPerFeature`: a shot
  * contributes only when both endpoint stations (`stationIndex` i and i+1) exist.
  * That keeps the custom layer's shot set identical to the stock shots layer.
@@ -30,6 +38,7 @@ import {
   shotKindFromFlags,
   shotKindToFlags,
   STATION_FLAG_IS_ZERO_DATUM,
+  stationKindRank,
 } from '../../../../types/survey-data';
 import { metersToMapCoords } from '../../../../utils/coordinates';
 import { lngLatToMercator } from '../mercatorCoords';
@@ -99,7 +108,8 @@ export interface LineBuffers {
    *  is highlighted and not dimmed; anchored sections are dimmed and excluded from
    *  the highlight). Rewritten in place on a hover/selection-set change. */
   highlight: Float32Array;
-  /** Two triangles per segment, `segmentCount*6`, `UNSIGNED_INT`. */
+  /** Two triangles per segment, `segmentCount*6`, `UNSIGNED_INT`, in draw
+   *  order: by shot kind, reference first, real last ({@link writeLineDrawOrder}). */
   indices: Uint32Array;
   /** Per-section `[segStart, segCount]` pairs (`sections.length * 2`), in
    *  section declaration order. `segStart` is the first drawn segment index for
@@ -142,12 +152,13 @@ export interface CircleBuffers {
    *  stations by the matching stock feature-state radius bump (hover 1.5x,
    *  selection 1.25x). Rewritten in place on a hover/selection-set change. */
   highlight: Float32Array;
-  /** Per-vertex all-reference flag (1 = every shot touching this station is a
-   *  reference shot, else 0). Mirrors the stock stations layer's
-   *  `allShotsReference` property: the shader collapses these stations when
-   *  reference shots are hidden (`setShowReferenceShots(false)`). */
+  /** Per-vertex station kind mask (see `computeStationAllReference`: 0 = a
+   *  Normal shot touches it, 1 = only Jumps, 2 = only References, 3 = both
+   *  virtual kinds or no legs). The shader collapses a station when every kind
+   *  that touches it is hidden; {@link writeCircleDrawOrder} ranks by it. */
   allReference: Float32Array;
-  /** Two triangles per station, `stationCount*6`, `UNSIGNED_INT`. */
+  /** Two triangles per station, `stationCount*6`, `UNSIGNED_INT`, in draw
+   *  order: by station rank, worst first ({@link writeCircleDrawOrder}). */
   indices: Uint32Array;
   byteLength: number;
 }
@@ -359,7 +370,7 @@ function emitLineSection(
 ): number {
   const inner = lookup.get(section.id);
   if (!inner) return startSeg;
-  const { posA, posB, endpoint, side, colorFrom, colorTo, reference, dim, hide, highlight, indices } = b;
+  const { posA, posB, endpoint, side, colorFrom, colorTo, reference, dim, hide, highlight } = b;
   const { colorForShot, colorForShotEndpoints, dimForShot, hideForShot, highlightForShot } = inputs;
   let seg = startSeg;
   for (let i = 0; i < section.shotCount; i++) {
@@ -409,16 +420,70 @@ function emitLineSection(
       hide[v] = isHide;
       highlight[v] = isHighlight;
     }
-    const io = seg * 6;
-    indices[io] = base;
-    indices[io + 1] = base + 1;
-    indices[io + 2] = base + 2;
-    indices[io + 3] = base + 2;
-    indices[io + 4] = base + 1;
-    indices[io + 5] = base + 3;
     seg++;
   }
   return seg;
+}
+
+/** Index pattern of one line segment quad (two triangles over its 4 vertices). */
+const LINE_TRIS = [0, 1, 2, 2, 1, 3] as const;
+/** Index pattern of one station quad. */
+const CIRCLE_TRIS = [0, 1, 2, 0, 2, 3] as const;
+
+/**
+ * Write the line index buffer in draw order: every Reference segment first, then
+ * Jump, then Normal (the per-vertex kind in `b.reference` is the rank), then the
+ * raised segments in the same kind order, segment order within each. One draw
+ * call, no depth test: where a jump or reference line crosses or runs over the
+ * real line, the real line ends on top, and a raised section ends above them all
+ * (its own real line still above its own virtual ones). `raised` is a
+ * per-vertex flag array in the buffers' layout (`computeLineDim` builds one);
+ * omitted, nothing is raised. Line counterpart of {@link writeCircleDrawOrder};
+ * returns whether any index changed, so a caller re-uploads only when a segment
+ * moved.
+ */
+export function writeLineDrawOrder(b: LineBuffers, raised?: Float32Array | null): boolean {
+  const { reference } = b;
+  return writeQuadDrawOrder(b.indices, b.segmentCount, (s) => lineKindRank(reference[s * 4]!), raised, LINE_TRIS);
+}
+
+/**
+ * Shared body of {@link writeLineDrawOrder} / {@link writeCircleDrawOrder}: a
+ * stable counting sort of the `count` quads into six buckets, drawn in order -
+ * rank 2 (reference), rank 1 (jump), rank 0 (real), then the same three for the
+ * raised quads (`raised[4s]` set). Returns whether any quad changed position.
+ */
+function writeQuadDrawOrder(
+  indices: Uint32Array,
+  count: number,
+  rankOf: (slot: number) => 0 | 1 | 2,
+  raised: Float32Array | null | undefined,
+  tris: readonly number[],
+): boolean {
+  const bucketOf = (s: number): number => (raised && raised[s * 4]! > 0.5 ? 3 : 0) + 2 - rankOf(s);
+  const start = [0, 0, 0, 0, 0, 0];
+  for (let s = 0; s < count; s++) start[bucketOf(s)]!++;
+  // Counts -> start offsets.
+  let acc = 0;
+  for (let k = 0; k < 6; k++) {
+    const n = start[k]!;
+    start[k] = acc;
+    acc += n;
+  }
+  let changed = false;
+  for (let s = 0; s < count; s++) {
+    const io = start[bucketOf(s)]!++ * 6;
+    const base = s * 4;
+    if (indices[io] !== base) changed = true;
+    for (let k = 0; k < 6; k++) indices[io + k] = base + tris[k]!;
+  }
+  return changed;
+}
+
+/** Draw rank of a segment from its per-vertex kind attribute (0 Normal, 1 Jump,
+ *  2 Reference - already the rank; clamped for safety). */
+function lineKindRank(kind: number): 0 | 1 | 2 {
+  return kind >= 1.5 ? 2 : kind >= 0.5 ? 1 : 0;
 }
 
 export function buildLineBuffers(
@@ -471,6 +536,7 @@ export function buildLineBuffers(
     sectionRanges[si * 2] = segStart;
     sectionRanges[si * 2 + 1] = seg - segStart;
   }
+  writeLineDrawOrder(b);
   return b;
 }
 
@@ -479,7 +545,8 @@ export function buildLineBuffers(
  * section's drawn-segment range is stable (unchanged SoA layout is the caller's
  * precondition), so this rewrites exactly the slots {@link buildLineBuffers}
  * wrote for that section - positions, colors, reference/dim/hide flags - leaving
- * every other section's bytes untouched. Never called with a build-time
+ * every other section's bytes untouched. Leaves the index buffer alone: a caller
+ * that changed a shot's kind calls {@link writeLineDrawOrder}. Never called with a build-time
  * exclusion (the live path hides via the per-vertex flag), so `exShots` is
  * omitted and the re-emit stays in lock-step with the stored range.
  */
@@ -633,12 +700,13 @@ export interface CircleStationInputs {
 }
 
 /**
- * Emit one station's quad (4 verts + 6 indices) into `b` at output slot `out`,
- * reading its center/color/size/flags for global station index `g`. The single
- * writer shared by the full build and the incremental station recompute. In the
- * live (unexcluded) path `out === g`, so a station's vertices are always at
+ * Emit one station's quad (4 verts) into `b` at output slot `out`, reading its
+ * center/color/size/flags for global station index `g`. The single writer shared
+ * by the full build and the incremental station recompute. In the live
+ * (unexcluded) path `out === g`, so a station's vertices are always at
  * `[4g, 4g+4)` - the property the incremental path relies on to address a
- * changed station without a compaction map.
+ * changed station without a compaction map. The index buffer is written apart,
+ * by {@link writeCircleDrawOrder}, since the draw order is by rank, not slot.
  */
 function emitStation(
   b: CircleBuffers,
@@ -649,7 +717,7 @@ function emitStation(
   inputs: CircleStationInputs,
   allRef: number,
 ): void {
-  const { center, corner, fill, stroke, sizeMul, dim, hide, highlight, allReference, indices } = b;
+  const { center, corner, fill, stroke, sizeMul, dim, hide, highlight, allReference } = b;
   const { fillForStation, strokeForStation, dimForStation, hideForStation, highlightForStation } = inputs;
   const cx = stationRel[g * 2]!;
   const cy = stationRel[g * 2 + 1]!;
@@ -681,18 +749,35 @@ function emitStation(
     highlight[v] = hl;
     allReference[v] = allRef;
   }
-  const io = out * 6;
-  indices[io] = base;
-  indices[io + 1] = base + 1;
-  indices[io + 2] = base + 2;
-  indices[io + 3] = base;
-  indices[io + 4] = base + 2;
-  indices[io + 5] = base + 3;
+}
+
+/**
+ * Write the circle index buffer in draw order: every reference-rank station
+ * first, then jump, then real (`stationKindRank` of each slot's kind mask), then
+ * the raised stations in the same rank order, slot order within each. The
+ * circles draw in one call with no depth test, so a later quad paints over an
+ * earlier one: where markers of several sections coincide (a jump or reference
+ * section tied in at a real station), the real-line marker ends on top, unless
+ * the other section is raised (the selection's). The hit test picks the same one
+ * (`SurveyGeometryIndex.nearestStation`).
+ *
+ * Reads the per-vertex kind mask already in `b.allReference`, so it works for
+ * the compacted (excluded) build and after an incremental re-emit alike.
+ * `raised` is a per-vertex flag array in the same layout (`computeCircleDim`
+ * builds one); omitted, nothing is raised. Returns whether any index changed, so
+ * a caller re-uploads the index buffer only when a station moved.
+ */
+export function writeCircleDrawOrder(b: CircleBuffers, raised?: Float32Array | null): boolean {
+  const { allReference } = b;
+  return writeQuadDrawOrder(
+    b.indices, b.stationCount, (s) => stationKindRank(allReference[s * 4]!), raised, CIRCLE_TRIS,
+  );
 }
 
 /**
  * Build the per-station quad buffers for station discs. Each station becomes 4
- * corner vertices and 6 indices. `fillForStation` / `strokeForStation` resolve
+ * corner vertices and 6 indices, the indices in rank draw order
+ * ({@link writeCircleDrawOrder}). `fillForStation` / `strokeForStation` resolve
  * packed RGBA per station (global index).
  */
 export function buildCircleBuffers(
@@ -745,14 +830,17 @@ export function buildCircleBuffers(
     emitStation(b, out, g, data, stationRel, inputs, allReferenceFlags ? allReferenceFlags[g]! : 0);
     out++;
   }
+  writeCircleDrawOrder(b);
   return b;
 }
 
 /**
  * Re-emit ONE station's circle vertices in place (incremental edit path). Valid
  * only for the unexcluded (live) build where output slot equals global index, so
- * the station occupies `[4g, 4g+4)`. `allRef` is the station's current
- * all-reference flag (the caller recomputes it per changed section).
+ * the station occupies `[4g, 4g+4)`. `allRef` is the station's current kind
+ * mask (the caller recomputes it per changed section). Leaves the index buffer
+ * alone: a caller that changed a station's rank calls
+ * {@link writeCircleDrawOrder}.
  */
 export function recomputeStation(
   b: CircleBuffers,

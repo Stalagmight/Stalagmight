@@ -2037,8 +2037,18 @@ export function formatDate(date: Date, locale: string): string {
 Only labels are thinned by zoom: each label carries a baked reveal zoom that folds
 the collision declutter together with a nested decimation band
 (`labelReveal.ts` / `labelDecimation.ts`), and the shader draws a label only at or
-above that zoom - see [map-renderer.md](map-renderer.md). Shot geometry itself is
-not simplified: no path simplification, no station merging, no zoom-based hiding.
+above that zoom - see [map-renderer.md](map-renderer.md). Where labels compete for
+the same space, a real-line label wins over a label that belongs only to jump or
+reference shots, and a jump label wins over a reference one. Station markers
+and shot lines follow the same order: where they coincide or overlap (a jump or
+reference section tied in at a real station, or surveyed along the real line),
+the real-line marker or line is drawn on top and takes the hover and the click,
+then jump, then reference. The selection's section (the selected section, or
+the section of the selected station or shot) is drawn above all of them and
+takes the hover and the click where it overlaps them; labels keep the rank
+order. Shot
+geometry itself is not simplified: no path simplification, no station merging,
+no zoom-based hiding.
 
 ### 13.3 Data Table Virtualization
 
