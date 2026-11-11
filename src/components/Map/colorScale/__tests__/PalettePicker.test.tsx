@@ -106,6 +106,44 @@ describe('PalettePicker', () => {
     expect(document.activeElement).toBe(screen.getByTestId('p-trigger'));
   });
 
+  it('ends a hover preview when it unmounts with the list open', () => {
+    const onPreview = vi.fn();
+    const { unmount } = render(
+      <PalettePicker
+        kind="depth"
+        value={{ id: 'theme', reversed: false }}
+        pinned={[]}
+        onPreview={onPreview}
+        onSelect={vi.fn()}
+        onTogglePin={vi.fn()}
+        testIdPrefix="u"
+      />,
+    );
+    fireEvent.click(screen.getByTestId('u-trigger'));
+    fireEvent.change(screen.getByTestId('u-search'), { target: { value: 'viri' } });
+    fireEvent.mouseEnter(screen.getByTestId('u-option-mpl.viridis'));
+    expect(onPreview).toHaveBeenLastCalledWith({ id: 'mpl.viridis', reversed: false });
+    unmount();
+    expect(onPreview).toHaveBeenLastCalledWith(null);
+  });
+
+  it('does not touch the preview when it unmounts closed', () => {
+    const onPreview = vi.fn();
+    const { unmount } = render(
+      <PalettePicker
+        kind="depth"
+        value={{ id: 'theme', reversed: false }}
+        pinned={[]}
+        onPreview={onPreview}
+        onSelect={vi.fn()}
+        onTogglePin={vi.fn()}
+        testIdPrefix="c"
+      />,
+    );
+    unmount();
+    expect(onPreview).not.toHaveBeenCalled();
+  });
+
   it('closes on an outside click, reverting the preview', () => {
     const props = setup();
     act(() => {

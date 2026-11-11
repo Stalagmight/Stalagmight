@@ -11,7 +11,7 @@ const invoke = vi.fn();
 vi.mock('@tauri-apps/api/core', () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
 
 import { useColorScaleStore, isColorScaleLive } from '../colorScaleStore';
-import { currentMapPalette, setPalette, togglePinnedPalette } from '../colorScalePalette';
+import { currentMapPalette, MAX_PINNED_PALETTES, setPalette, togglePinnedPalette } from '../colorScalePalette';
 import { useProjectStore } from '../projectStore';
 import { useUIStore } from '../uiStore';
 import { DISPLAY_DEFAULTS } from '../displaySelectors';
@@ -70,6 +70,21 @@ describe('colour scale persistence', () => {
     expect(currentMapPalette().pinned).toEqual(['mpl.viridis', 'grad.cenote']);
     await togglePinnedPalette('mpl.viridis');
     expect(currentMapPalette().pinned).toEqual(['grad.cenote']);
+  });
+
+  it('stops at the backend pin cap instead of showing a pin that will not survive', async () => {
+    const full = Array.from({ length: MAX_PINNED_PALETTES }, (_, i) => `mpl.p${i}`);
+    const config = freshConfig();
+    useProjectStore.setState({ config: { ...config, map_palette: { ...config.map_palette, pinned: full } } });
+    const showToast = vi.fn();
+    useUIStore.setState({ showToast });
+    await togglePinnedPalette('grad.cenote');
+    expect(currentMapPalette().pinned).toEqual(full);
+    expect(invoke).not.toHaveBeenCalled();
+    expect(showToast).toHaveBeenCalledWith(expect.any(String), 'map-palette-save', 'info');
+    // Unpinning still works at the cap.
+    await togglePinnedPalette('mpl.p0');
+    expect(currentMapPalette().pinned).toHaveLength(MAX_PINNED_PALETTES - 1);
   });
 
   it('rolls back a failed write and tells the user', async () => {

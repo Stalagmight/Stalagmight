@@ -601,7 +601,11 @@ export default function SettingsDialog() {
       if (isDirty) {
         const saved = useProjectStore.getState().config;
         const previous = backendConfigRef.current;
-        const next = saved && previous ? rebaseSpeleoOwnedFields(draft, saved, previous) : draft;
+        const rebased = saved && previous ? rebaseSpeleoOwnedFields(draft, saved, previous) : draft;
+        // Settings never edits the palette (the legend cog and the export panel
+        // own it), so send the live one: a pick made while this dialog was open
+        // must not be reverted by the snapshot it opened with.
+        const next = saved?.map_palette ? { ...rebased, map_palette: saved.map_palette } : rebased;
         const result = await updateConfig(next);
         if (!result.success) {
           if (ownsDialog()) setSaveError(result.error ?? t('settings.saveErrorTitle'));

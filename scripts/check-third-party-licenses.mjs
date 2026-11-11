@@ -65,6 +65,9 @@ function vendoredHash(root) {
   const files = [];
   const walk = (d) => {
     for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      // Dotfiles (.DS_Store, editor swap files) are never committed, so a
+      // local regen must not hash them into a value CI cannot reproduce.
+      if (e.name.startsWith('.')) continue;
       const p = path.join(d, e.name);
       if (e.isDirectory()) walk(p);
       else if (e.isFile()) files.push(path.relative(root, p).split(path.sep).join('/'));

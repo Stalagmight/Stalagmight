@@ -158,6 +158,13 @@ test('a vendored notice edited without regenerating fails', () => {
   assert.match(checkBundle(added)[0], /third_party\/ changed/);
 });
 
+test('a dotfile under third_party/ does not change the vendored-data hash', () => {
+  const vendored = { 'third_party/palettes/LICENSE-x': 'notice v1\n' };
+  const bundle = currentBundle('cargo-lock-v1', 'pnpm-lock-v1', undefined, vendored);
+  const withJunk = makeTree({ bundle, vendored: { ...vendored, 'third_party/palettes/.DS_Store': 'junk' } });
+  assert.deepEqual(checkBundle(withJunk), []);
+});
+
 test('a bundle without a vendored-data hash fails', () => {
   const good = currentBundle('cargo-lock-v1', 'pnpm-lock-v1');
   const root = makeTree({ bundle: good.replace(/^vendored-data=[0-9a-f]{64}\n/m, '') });

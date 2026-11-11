@@ -60,7 +60,8 @@ fn parse_hex(s: &str) -> Option<(u8, u8, u8)> {
 impl ResolvedScale {
     /// Parse a scale. A palette with any unusable entry, fewer than two
     /// entries or more than [`MAX_PALETTE_ENTRIES`] is dropped (default ramp)
-    /// rather than drawn with holes; non-finite or inverted levels likewise.
+    /// rather than drawn with holes; non-finite or inverted levels likewise,
+    /// and a span too wide to subtract (`max - min` overflowing to infinity).
     pub(crate) fn new(scale: &ExportColorScale) -> Self {
         let lut = scale.palette.as_ref().and_then(|entries| {
             if entries.len() < 2 || entries.len() > MAX_PALETTE_ENTRIES {
@@ -77,6 +78,7 @@ impl ResolvedScale {
                 && l.gamma.is_finite()
                 && l.gamma > 0.0
                 && l.max >= l.min
+                && (l.max - l.min).is_finite()
         });
         Self { lut, levels }
     }
@@ -136,8 +138,10 @@ pub enum ExportValueKind {
 }
 
 /// Equal-width bin counts over `[min, max]`, for the export panel's Levels
-/// slider. Built from exactly the data the export colours, so its extent is
-/// the export's auto range.
+/// slider. The extent is the export's auto range; the counts are the values
+/// that range is drawn over (station depths for depth, which approximate the
+/// shot depth readings the export also spans; per-station distance from the
+/// entrance for distance).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 pub struct ValueHistogram {
     pub min: f64,
@@ -213,9 +217,10 @@ pub(super) fn distance_color(
     scale.color_at(t).unwrap_or_else(|| distance_ramp_at(t))
 }
 
-/// Bin counts of the values an export would colour for `kind`, over the
-/// export's own auto range: depth over the same stations and shots the export
-/// normalises across, distance from the entrance over the measured network.
+/// Bin counts for the export's Levels slider for `kind`, over the export's own
+/// auto range: station depths over the extent the export normalises across
+/// (stations and shot depth readings), distance from the entrance over the
+/// measured network.
 pub fn export_value_histogram(
     project: &Project,
     stations: &[crate::models::Station],
@@ -281,7 +286,11 @@ mod tests {
         assert_eq!(s.color_at(0.0).unwrap(), "#000000");
         assert_eq!(s.color_at(1.0).unwrap(), "#ffffff");
         assert_eq!(s.color_at(0.5).unwrap(), "#808080");
-        assert_eq!(s.color_at(f64::NAN).unwrap(), "#000000");
+        // A non-finite position takes the palette's start. A light start tells
+        // that apart from NaN arithmetic, which would saturate to black.
+        let light_start = scale(Some(vec!["#ffffff", "#000000"]), None);
+        assert_eq!(light_start.color_at(f64::NAN).unwrap(), "#ffffff");
+        assert_eq!(light_start.color_at(f64::INFINITY).unwrap(), "#ffffff");
     }
 
     #[test]
@@ -308,6 +317,17 @@ mod tests {
             }),
         );
         assert_eq!(zero_gamma.range((0.0, 9.0)), (0.0, 9.0, 1.0));
+        // Finite ends whose difference overflows would turn every value into
+        // NaN through levels_t; such a range is dropped like an inverted one.
+        let overflowing = scale(
+            None,
+            Some(ExportLevels {
+                min: -f64::MAX,
+                max: f64::MAX,
+                gamma: 1.0,
+            }),
+        );
+        assert_eq!(overflowing.range((0.0, 9.0)), (0.0, 9.0, 1.0));
     }
 
     fn shot(length: f64, depth_in: f64, depth_out: f64) -> crate::models::ShotData {

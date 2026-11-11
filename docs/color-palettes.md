@@ -2,7 +2,8 @@
 
 When the map colors by **depth** or by **distance**, a cog beside the
 bottom-left legend opens the color-scale popover. The same controls appear in
-the Export panel under **By depth** and **By penetration distance** (PNG / PDF).
+the Export panel under **By depth** and **By distance** (PNG / PDF; distance there
+is always the penetration distance from the entrance).
 Gas reach in Plan mode keeps its own fixed ramp.
 
 The popover has two parts, each with a reset-to-default button:
@@ -25,7 +26,7 @@ The popover has two parts, each with a reset-to-default button:
 | Setting | Stored | Lifetime |
 |---------|--------|----------|
 | Palette per kind (depth, distance), reversed flag | `config.toml` `[map_palette]` | Follows you across projects |
-| Pinned palettes (one list) | `config.toml` `[map_palette].pinned` | Follows you across projects |
+| Pinned palettes (one list, up to 64) | `config.toml` `[map_palette].pinned` | Follows you across projects |
 | Map range (Min / Mid / Max) per kind | memory (`colorScaleStore`) | Until another project is opened |
 | Export range per kind | memory (`colorScaleStore`) | Until another project is opened |
 
@@ -106,6 +107,8 @@ fails CI.
 `distance_scale` on the image options for both `export_image` and
 `preview_svg_export`: the palette baked into 256 `#rrggbb` entries and the
 export's Levels range. Absent fields keep the original export. The Export
-panel's histogram comes from `export_value_histogram`, which bins exactly the
-data the export colors (the adjusted solve for depth, the entrance distance
-field for distance).
+panel's histogram comes from `export_value_histogram`, over the export's own
+auto range: station depths from the adjusted solve (the range also spans the
+shot depth readings) for depth, the entrance distance field for distance. It is
+refetched when the kind, the project, the reference-leg setting or the
+closure-adjustment settings change.

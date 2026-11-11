@@ -74,10 +74,21 @@ export function setPalette(kind: ColorScaleKind, choice: PaletteChoice): Promise
   return writeMapPalette({ ...current, [kind]: { id: choice.id, reversed: choice.reversed } });
 }
 
+/** The most pins config.toml keeps (`MAX_PINNED_PALETTES` in
+ *  `config/map_palette.rs`, which drops the rest on write). */
+export const MAX_PINNED_PALETTES = 64;
+
 export function togglePinnedPalette(id: string): Promise<void> {
   const current = currentMapPalette();
-  const pinned = current.pinned.includes(id)
-    ? current.pinned.filter((p) => p !== id)
-    : [...current.pinned, id];
-  return writeMapPalette({ ...current, pinned });
+  if (current.pinned.includes(id)) {
+    return writeMapPalette({ ...current, pinned: current.pinned.filter((p) => p !== id) });
+  }
+  // Refuse rather than show a pin the backend would drop on the next launch.
+  if (current.pinned.length >= MAX_PINNED_PALETTES) {
+    useUIStore
+      .getState()
+      .showToast(i18n.t('map.colorScale.pinLimit', { count: MAX_PINNED_PALETTES }), TOAST_KEYS.MAP_PALETTE_SAVE, 'info');
+    return Promise.resolve();
+  }
+  return writeMapPalette({ ...current, pinned: [...current.pinned, id] });
 }

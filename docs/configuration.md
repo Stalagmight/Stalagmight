@@ -327,7 +327,7 @@ recalc_hold_stage1_bar = 70.0       # recalc (carried now; that path is not impl
 # and not stored anywhere.
 depth = { id = "theme", reversed = false }
 distance = { id = "theme", reversed = false }
-pinned = []                         # Palette ids pinned to the top of the picker
+pinned = []                         # Palette ids pinned to the top of the picker (at most 64)
 
 [debug.map]
 show_hitboxes = false               # Show red overlay for interaction hitbox areas

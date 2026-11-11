@@ -89,6 +89,9 @@ function vendoredFiles(root) {
   const out = [];
   const walk = (d) => {
     for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      // Dotfiles (.DS_Store, editor swap files) are never committed, so a
+      // local regen must not hash them into a value CI cannot reproduce.
+      if (e.name.startsWith('.')) continue;
       const p = path.join(d, e.name);
       if (e.isDirectory()) walk(p);
       else if (e.isFile()) out.push(path.relative(root, p).split(path.sep).join('/'));
@@ -133,6 +136,11 @@ const VENDORED_NOTICES = [
     licenseName: 'Apache-2.0 notice (Turbo colormap)',
     file: 'third_party/palettes/NOTICE-turbo',
     appliesTo: 'the turbo map in `src/utils/palettes/catalog.generated.ts`',
+  },
+  {
+    licenseName: 'MIT (Scientific colour maps, Fabio Crameri)',
+    file: 'third_party/palettes/LICENSE-crameri',
+    appliesTo: 'the berlin, managua and vanimo maps in `src/utils/palettes/catalog.generated.ts`',
   },
 ];
 

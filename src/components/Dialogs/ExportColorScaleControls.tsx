@@ -10,20 +10,26 @@ import type { ColorScaleKind } from '../../utils/palettes';
 import type { ValueHistogram } from '../../types/ipc.generated';
 
 /**
- * The export's palette + Levels controls for "By depth" / "By penetration
- * distance". The palette is the same persisted choice the map uses; the range
+ * The export's palette + Levels controls for "By depth" / "By distance"
+ * (penetration distance from the entrance). The palette is the same persisted choice the map uses; the range
  * is the export's own (session-only), over the export's own data: the
- * histogram comes from the backend so it covers exactly what the file colours
- * (the adjusted solve for depth, distance from the entrance).
+ * histogram comes from the backend, over the export's own auto range (station
+ * depths from the adjusted solve for depth, distance from the entrance).
  */
 export function ExportColorScaleControls({ kind }: { kind: ColorScaleKind }) {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
   const project = useProjectStore((s) => s.project);
   const includeRefLegs = useProjectStore((s) => s.config?.gas.include_reference_legs);
+  // The depth histogram is binned over the adjusted solve, which these settings
+  // change without touching the project.
+  const closureAdjustment = useProjectStore((s) => s.config?.closure_adjustment);
   const scale = useColorScaleStore((s) => s.exportScale[kind]);
   const setExportScale = useColorScaleStore((s) => s.setExportScale);
-  const [histogram, setHistogram] = useState<ValueHistogram | null>(null);
+  // Tagged with the kind it was fetched for: after a depth / distance switch the
+  // old kind's bins and extent must not stand in for the new kind's.
+  const [fetched, setFetched] = useState<{ kind: ColorScaleKind; histogram: ValueHistogram } | null>(null);
+  const histogram = fetched?.kind === kind ? fetched.histogram : null;
 
   useEffect(() => {
     if (!project) return undefined;
@@ -34,15 +40,15 @@ export function ExportColorScaleControls({ kind }: { kind: ColorScaleKind }) {
       { purpose: 'histogram the values the image export colours' },
     )
       .then((h) => {
-        if (!cancelled) setHistogram(h);
+        if (!cancelled) setFetched({ kind, histogram: h });
       })
       .catch(() => {
-        if (!cancelled) setHistogram(null);
+        if (!cancelled) setFetched(null);
       });
     return () => {
       cancelled = true;
     };
-  }, [kind, project, includeRefLegs]);
+  }, [kind, project, includeRefLegs, closureAdjustment]);
 
   if (!histogram) {
     return (

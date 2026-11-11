@@ -81,6 +81,20 @@ export function PalettePicker({
   const scrollAncestorRef = useRef<HTMLElement | null>(null);
   const endpoints = getMapThemeColors();
 
+  // Unmounted with the list open (the legend's gating flipped under the
+  // pointer): no mouseleave or close will come, so end the preview here or the
+  // map and the export keep drawing a palette nobody picked.
+  const openRef = useRef(open);
+  openRef.current = open;
+  const onPreviewRef = useRef(onPreview);
+  onPreviewRef.current = onPreview;
+  useEffect(
+    () => () => {
+      if (openRef.current) onPreviewRef.current(null);
+    },
+    [],
+  );
+
   const nameOf = (p: Palette) => (p.id === THEME_PALETTE_ID ? t('map.colorScale.themePalette') : p.name);
   const groupLabel = (g: string) => t(`map.colorScale.groups.${g}`);
   const swatch = (id: string, reversed: boolean) => cssGradient(resolveChoice({ id, reversed }, kind, endpoints));

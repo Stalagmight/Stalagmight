@@ -16,7 +16,7 @@ Where the data comes from, and the licence each part carries:
 | gist_earth, gist_gray, gist_heat, gist_ncar, gist_rainbow, gist_stern, gist_yarg | The Yorick scientific visualisation package | BSD-like | `LICENSE-yorick` |
 | Wistia | Wistia heatmap-palette | MIT | `LICENSE-wistia` |
 | turbo | Google LLC | Apache-2.0 | `NOTICE-turbo` |
-| berlin, managua, vanimo | Fabio Crameri, Scientific colour maps, as distributed with matplotlib | as distributed with matplotlib | `LICENSE-matplotlib` |
+| berlin, managua, vanimo | Fabio Crameri, Scientific colour maps 8.0.1 (doi:10.5281/zenodo.1243862), as distributed with matplotlib | MIT | `LICENSE-crameri` |
 
 `scripts/gen-third-party-licenses.mjs` reproduces every file in this directory
 in the "Vendored data" section of `THIRD-PARTY-LICENSES.md`, which ships with

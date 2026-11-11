@@ -2425,6 +2425,7 @@
         "grad-metals": "Metals"
       },
       "saveFailed": "Could not save the color palette. It will be back to the previous one next time.",
+      "pinLimit": "You can pin up to {{count}} palettes. Unpin one to pin another.",
       "noValues": {
         "depth": "This survey has no depths to color.",
         "distance": "No station is reachable from an entrance, so nothing is colored by distance. Set a zero datum to use this."

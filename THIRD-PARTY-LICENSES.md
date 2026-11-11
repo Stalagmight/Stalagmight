@@ -13,10 +13,10 @@ stale or hand-edited; regenerate after any dependency change.
 <!-- lockfile-hashes
 Cargo.lock=45463c2c43c4a9f8f2ff48afc55e3f9bdb16d6c182f164cd130808b2de0cf639
 pnpm-lock.yaml=0fdfd981c7d0b4501862c826a85107c7215a26e0e458742aea8fb1b914f08549
-gen-third-party-licenses.mjs=a7ab784604aa9245cec6e411fd07af19e090e0ccc96e483b951707eb1d735825
+gen-third-party-licenses.mjs=5450d2ab535a7ad141d28dd699d64e10b5b513487cfa5906454d4d8af24bd0ba
 about.toml=c7bd02edf652dab73230740c94195d391bfe6e103f17f226c8e0c2e517df1c46
-vendored-data=d776fe2252559c3dc495882a9ceab3e371a699dd56cd95da355aa5639f21d393
-bundle-body=783d86dd1abbae9108bb288ee4d58a3ee48686ccdcdc46fdba260fb94baaa104
+vendored-data=28e20e512c62abb53e4b4d75db3e11f7d47115249317907fd3b09daf2eeacf5c
+bundle-body=312db9ab8a2c735726438d45e25b20fe6ffb56a7cf923aae7b93a00d8aede163
 -->
 
 ## npm packages
@@ -11515,4 +11515,36 @@ Author: Anton Mikhailov
 
 Licensed under the Apache License, Version 2.0. The full Apache-2.0 text is
 reproduced elsewhere in THIRD-PARTY-LICENSES.md.
+````
+
+### MIT (Scientific colour maps, Fabio Crameri)
+
+Applies to: the berlin, managua and vanimo maps in `src/utils/palettes/catalog.generated.ts`
+
+````text
+Scientific colour maps (berlin, managua, vanimo, version 8.0.1)
+Source: Fabio Crameri, Scientific colour maps, doi:10.5281/zenodo.1243862,
+as distributed with matplotlib 3.10.7.
+
+MIT License
+
+Copyright (c) Fabio Crameri
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 ````
