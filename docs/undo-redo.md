@@ -156,6 +156,73 @@ are deliberately not re-applied: an undo has to be an exact inverse, and undoing
 a Repair has to restore the very state that Repair healed. The per-heal argument
 is on the function.
 
+### A loaded history follows the load's shot UUID heal
+
+Shot UUIDs are unique across the whole project, but a file saved before that
+can hold one id in several sections (the same Ariane file imported twice, a
+merge of two copies). The load keeps the id in the lowest section and renames
+the others to a derived id (`Project::make_shot_uuids_project_unique`,
+`reminted_shot_uuid`). The persisted history was recorded against the OLD ids:
+left alone, an entry addressing `(section, old id)` would no longer find its
+shot and be dropped, and a snapshot restored from it would put the repeat back.
+
+So both load paths call `UndoStack::reconcile_with_loaded_project` right after
+`load_from_persisted_with_timestamps`: it translates every entry
+(`core/undo/uuid_remap.rs`), THEN runs `drop_entries_addressing_a_missing_shot`.
+The map (`history_remap`):
+
+1. reuses what the live heal did, verbatim;
+2. leaves an id that is live in its section alone;
+3. maps an id to its derived replacement when that is what the section holds,
+   live or elsewhere in the history (history saved against an older heal);
+4. renames an id its section must YIELD to a derived id stepped past every id in
+   use. A section yields when another section holds the same id in the SAME
+   recorded state - one project snapshot, or the sections one entry reinstalls
+   (an Add, a re-created section) together with the live project - and keeps
+   it: the one holding the id live, else the lowest. This is what covers a copy
+   only the history still holds (a deleted section an undo would bring back);
+5. leaves everything else alone.
+
+Rule 4 asks about one recorded state at a time on purpose. A split moves shots,
+ids and all, from one section to a new one, so the history holds each moved id
+in two sections - but never at the same time. Across the whole history that
+looks like a repeat; within any one state it is not, and renaming it would hand
+the shots new ids every time a project with a split in its history is opened.
+
+The visitor is an exhaustive `match` over `UndoData`: a new variant that carries
+a shot id has to say how it is translated, or the build fails. Where a variant
+keeps one shot's id twice it rewrites both (`Shot::with_uuid` lets
+`shot_data.uuid` win over the recorded `uuid`; `restore_with_identity` lets
+`identity.shot_uuids` win over `section_data`). Project snapshots are rewritten
+as `serde_json::Value`, never round-tripped through `Project`:
+`restore_snapshot_into` recognises a legacy blob by the keys it LACKS
+(`"validation":`, `"surface_elevation":`), and a typed round trip would add them.
+A light probe (section ids and shot ids only) reads each snapshot once; when
+nothing needs renaming - every history without repeats - the translation stops
+there and leaves the history byte for byte. Byte totals are recounted after a
+rewrite.
+
+Every id involved is derived from the file alone, so a reopen without saving, or
+two independent loads of one revision (SpeleoDB Unwind), translate identically,
+and nothing on this path marks the project dirty. The next save persists the
+translated history.
+
+One case translates differently across a reload than it would have within the
+session: delete a section holding id X, then import a file carrying X (the door
+sees no live holder, so the new section keeps X), then reload. The deleted
+section exists only in the history now, so it is the one renamed, and undoing
+back to it restores it with the derived id instead of X. Its references are
+translated with it, so nothing dangles; only the id differs from what it had
+before the reload.
+
+An undo of an integrity Repair that healed a cross-section repeat restores the
+repeat verbatim, like every Repair undo (`undo_of_duplicate_uuid_repair_restores_the_duplicates`
+and its cross-section twin). The save does not re-heal it (its uuid heal stays
+in-section); the next load does, with the same rule. While that state is open,
+the project counts as already critical, so the integrity guard - which refuses
+only NEWLY introduced corruption - refuses no further edit until the repeat is
+gone: the same as after undoing any other Repair.
+
 ### A snapshot pair is a SELF-REFRESHING wall (#413, finding 11's re-creation residue)
 
 The carry-forward above repairs the half being **restored**, and it can only do so

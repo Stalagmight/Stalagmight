@@ -13,6 +13,7 @@ mod added_content;
 mod budget;
 pub mod history_view;
 mod persistence;
+mod uuid_remap;
 
 pub use added_content::{extend_unique_hashes, AddedContent, CarriedIgnore};
 

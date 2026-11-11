@@ -1,7 +1,7 @@
 # Third-party licenses
 
 Stalagmight's shipped binaries include the open-source packages listed below:
-646 Rust crates and 58 npm packages. Each distinct license
+647 Rust crates and 58 npm packages. Each distinct license
 text is reproduced verbatim, as those licenses require. Stalagmight itself is
 licensed AGPL-3.0-or-later; see [LICENSE](LICENSE).
 
@@ -14,7 +14,7 @@ Cargo.lock=45463c2c43c4a9f8f2ff48afc55e3f9bdb16d6c182f164cd130808b2de0cf639
 pnpm-lock.yaml=0fdfd981c7d0b4501862c826a85107c7215a26e0e458742aea8fb1b914f08549
 gen-third-party-licenses.mjs=ebb68f24487c3cca49f60ec5c0867729efa22850dc3fc7d5780e163eb707c1f1
 about.toml=c7bd02edf652dab73230740c94195d391bfe6e103f17f226c8e0c2e517df1c46
-bundle-body=dcc33f7f9b64b24f478e8dde66451be2e3a56c35fe7d34d35041dd475ea015ef
+bundle-body=7acf23307458a8aa8c4c14d970219d1726c3043f2d3d2085ab8d5e21b6f69046
 -->
 
 ## npm packages
@@ -3711,7 +3711,7 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 
 ### BSD 3-Clause "New" or "Revised" License
 
-Applies to: `alloc-stdlib 0.2.2`, `aws-lc-sys 0.47.0`, `brotli 8.0.2`
+Applies to: `alloc-stdlib 0.2.2`, `aws-lc-sys 0.47.0`, `brotli 8.0.2`, `sha1_smol 1.0.1`
 
 ````text
 Copyright (c) <year> <owner>. 
@@ -7079,6 +7079,7 @@ Copyright 2013-2014 RAD Game Tools and Valve Software
 Copyright 2010-2014 Rich Geldreich and Tenacious Software LLC
 Copyright (c) 2017 Frommi
 Copyright (c) 2017-2024 oyvindln
+
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

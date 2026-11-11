@@ -46,6 +46,7 @@ mod relationships;
 mod reverse;
 mod stats;
 mod union_find;
+mod uuid_unique;
 
 #[cfg(test)]
 mod anchor_fuzz;
@@ -59,6 +60,10 @@ pub use integrity::{IntegrityViolation, ViolationSeverity};
 pub use merge_topology::MergeTopology;
 pub use reverse::{reverse_shots, shot_run_displacement};
 pub use shots::MIN_SPLIT_CHILD_LENGTH_M;
+pub use uuid_unique::{
+    live_shot_uuid_for_stored, remap_project_json, reminted_shot_uuid, reminted_shot_uuid_avoiding,
+    stored_shot_uuid_matches, ShotUuidRemap, SHOT_UUID_REMINT_NAMESPACE,
+};
 
 /// Relationships that reference a given section (merges, closures, offsets, zero datums).
 /// Used by the frontend to show affected relationships before section deletion.
@@ -861,7 +866,7 @@ impl Project {
     /// Re-mint the UUID of any shot that shares a UUID with an earlier shot in
     /// the SAME section, keeping the first occurrence (AfterShot anchors resolve
     /// to the first match via `position()`, so they stay valid). Returns the
-    /// number re-minted. Restores the per-section uniqueness `resolve_key` relies
+    /// number re-minted. Restores the in-section uniqueness `resolve_key` relies
     /// on; the companion detection lives in [`check_structural_integrity`].
     /// Empty UUIDs are left for [`ensure_shot_uuids`].
     pub fn ensure_unique_shot_uuids(&mut self) -> usize {
@@ -1603,3 +1608,7 @@ mod tests;
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod station_names_tests;
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+mod uuid_unique_tests;

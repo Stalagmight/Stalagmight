@@ -46,15 +46,36 @@ impl AppState {
         // Key the lookup sets by borrowed slices into `resolved` so the
         // per-warning probe below allocates nothing. `resolved` outlives this
         // closure, so the &str borrows stay valid.
-        // Key UUID-suppression by (section_id, uuid): `ensure_unique_shot_uuids`
-        // only de-dups WITHIN a section, so two sections can legitimately carry the
-        // same shot UUID. Keying by UUID alone would let an ignore on one cross-
-        // suppress the same code on the other section's shot (issue #57 / Codex).
-        // section_id is stable per shot (it doesn't change when shot_id renumbers),
-        // so this keeps the position-independence the UUID keying was added for.
+        // Key UUID-suppression by (section_id, uuid). Shot UUIDs are unique across
+        // the live project, but a STORED row can name an id that two sections held
+        // before the load renamed one copy: only its section says which shot it
+        // meant (issue #57 / Codex). section_id is stable per shot (it doesn't
+        // change when shot_id renumbers), so this keeps the position-independence
+        // the UUID keying was added for.
         let mut resolved_by_uuid: std::collections::HashMap<(u32, &str), HashSet<&str>> =
             std::collections::HashMap::new();
         let mut resolved_by_position: HashSet<(u32, u32, &str)> = HashSet::new();
+        // A row stored against an id the load renamed (`reminted_shot_uuid`)
+        // still suppresses its shot until the next save re-keys it. Only when
+        // this load renamed anything, and only for a row whose id no live shot
+        // of its section holds, is the derivation paid for; owned keys, since
+        // the derived id exists nowhere else to borrow from.
+        let derive_aliases = self.load_renamed_shots();
+        let live_ids: HashSet<(u32, &str)> = if derive_aliases {
+            project
+                .sections
+                .iter()
+                .flat_map(|s| {
+                    s.shots
+                        .iter()
+                        .filter_map(move |shot| shot.uuid.as_deref().map(|u| (s.id, u)))
+                })
+                .collect()
+        } else {
+            HashSet::new()
+        };
+        let mut resolved_by_renamed: std::collections::HashMap<(u32, String), HashSet<&str>> =
+            std::collections::HashMap::new();
         for r in &resolved {
             match &r.shot_uuid {
                 Some(uuid) => {
@@ -62,6 +83,15 @@ impl AppState {
                         .entry((r.section_id, uuid.as_str()))
                         .or_default()
                         .insert(r.warning_code.as_str());
+                    if derive_aliases && !live_ids.contains(&(r.section_id, uuid.as_str())) {
+                        resolved_by_renamed
+                            .entry((
+                                r.section_id,
+                                crate::models::reminted_shot_uuid(r.section_id, uuid),
+                            ))
+                            .or_default()
+                            .insert(r.warning_code.as_str());
+                    }
                 }
                 None => {
                     resolved_by_position.insert((r.section_id, r.shot_id, r.warning_code.as_str()));
@@ -88,6 +118,13 @@ impl AppState {
                     if resolved_by_uuid
                         .get(&(section_id, uuid.as_str()))
                         .is_some_and(|codes| codes.contains(code))
+                    {
+                        return true;
+                    }
+                    if !resolved_by_renamed.is_empty()
+                        && resolved_by_renamed
+                            .get(&(section_id, uuid.clone()))
+                            .is_some_and(|codes| codes.contains(code))
                     {
                         return true;
                     }
@@ -341,6 +378,13 @@ impl AppState {
         db.save_resolved_warning(warning)
     }
 
+    /// Whether the open project's load renamed shot UUIDs (see
+    /// `AppState::load_renamed_shots`).
+    fn load_renamed_shots(&self) -> bool {
+        self.load_renamed_shots
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     /// Whether a shot UUID is already persisted on disk (see
     /// `Database::shot_uuid_is_persisted`). Returns false when no database is open
     /// or the lookup fails - the safe default, which keeps a new ignore
@@ -352,7 +396,21 @@ impl AppState {
         let Some(db) = db_guard.as_ref() else {
             return false;
         };
-        db.shot_uuid_is_persisted(section_id, uuid).unwrap_or(false)
+        if db.shot_uuid_is_persisted(section_id, uuid).unwrap_or(false) {
+            return true;
+        }
+        // A shot the load renamed (a cross-section repeat in a file saved before
+        // shot UUIDs were project-wide unique) holds an id the file does not, but
+        // every open derives the SAME id from the one on disk, so an ignore keyed
+        // by it survives a close without saving just as well. Only a load that
+        // renamed anything can have produced one.
+        if !self.load_renamed_shots() {
+            return false;
+        }
+        db.section_shot_uuids(section_id)
+            .unwrap_or_default()
+            .iter()
+            .any(|stored| crate::models::reminted_shot_uuid(section_id, stored) == uuid)
     }
 
     /// Delete a resolved warning from database (un-ignore). `shot_uuid` keys the
@@ -379,6 +437,33 @@ impl AppState {
             }
             return Err(anyhow::anyhow!("No database open"));
         };
+        // A row stored against the id this shot had before the load renamed it
+        // (`stored_shot_uuid_matches`) suppresses it too, so un-ignoring clears
+        // that row as well. Only a shot whose live id the file does not hold
+        // can have been renamed, so the scan is skipped for every other one.
+        let maybe_renamed = shot_uuid.filter(|live| {
+            self.load_renamed_shots()
+                && !db.shot_uuid_is_persisted(section_id, live).unwrap_or(false)
+        });
+        if let Some(live) = maybe_renamed {
+            for row in db.load_resolved_warnings_verbatim().unwrap_or_default() {
+                let Some(stored) = row.shot_uuid.as_deref() else {
+                    continue;
+                };
+                if row.section_id == section_id
+                    && row.warning_code == warning_code
+                    && stored != live
+                    && crate::models::stored_shot_uuid_matches(section_id, stored, live)
+                {
+                    db.delete_resolved_warning(
+                        section_id,
+                        row.shot_id,
+                        warning_code,
+                        Some(stored),
+                    )?;
+                }
+            }
+        }
         db.delete_resolved_warning(section_id, shot_id, warning_code, shot_uuid)
     }
 
