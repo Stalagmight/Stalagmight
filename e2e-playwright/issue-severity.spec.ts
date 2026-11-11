@@ -421,6 +421,72 @@ test.describe('Survey Issues gradient', () => {
     }, { timeout: 4000 }).toBe('true,true,true,true,true');
   });
 
+  test('the colour cog regrades by its levels, drops a switched-off error, and never touches the warnings', async ({ page }) => {
+    const sectionId = (await getSectionIds(page))[0]!;
+    const shotIds = await getShotIds(page, sectionId);
+    await openDisplayMenu(page);
+    await toggleDisplayOption(page, 'showIssueSeverity');
+    await page.keyboard.press('Escape');
+    const ipc: string[] = [];
+    page.on('console', (msg) => {
+      const m = /\[Mock IPC\] (update_map_palette|save_display_setting|update_project_settings)/.exec(msg.text());
+      if (m) ipc.push(m[1]!);
+    });
+    await page.getByTestId('issues-legend-settings-button').click();
+    await expect(page.getByTestId('color-scale-popover-issues')).toBeVisible();
+
+    // Warn 10 / Max 20 instead of the threshold's 20 / 60: deltas 0, 10, 20, 40, 60
+    // now score 0, 1, 3, 3, 3.
+    const field = (h: string) => page.getByTestId(`issue-scale-azimuth-${h}-input`);
+    await field('warn').fill('10');
+    await field('warn').press('Enter');
+    await field('max').fill('20');
+    await field('max').press('Enter');
+    const strict = [SEV_CLEAR, SEV_WARNING, SEV_ERROR, SEV_ERROR, SEV_ERROR];
+    await expect.poll(async () => {
+      const shots = await shotColorsById(page);
+      return shotIds.map((id, i) => isColor(shots[id], strict[i]!)).join(',');
+    }, { timeout: 4000 }).toBe('true,true,true,true,true');
+    // The validation threshold (the project's, else the config's) is untouched.
+    expect(await page.evaluate(() => {
+      type V = { validation?: { azimuth_diff_threshold: number } } | null;
+      const stores = (window as unknown as {
+        __E2E_TEST__?: { projectStore: { getState: () => { project: V; config: V } } };
+      }).__E2E_TEST__;
+      const s = stores?.projectStore.getState();
+      return (s?.project?.validation ?? s?.config?.validation)?.azimuth_diff_threshold;
+    })).toBe(20);
+
+    // Azimuth off: no other error disagrees, so every shot paints clear.
+    await page.getByTestId('issue-scale-enable-azimuth').click();
+    await expect.poll(async () => {
+      const shots = await shotColorsById(page);
+      return shotIds.every((id) => isColor(shots[id], SEV_CLEAR));
+    }, { timeout: 4000 }).toBe(true);
+    // The switch is a config write; nothing goes to the project file or the validator.
+    expect(ipc).toContain('update_map_palette');
+    expect(ipc.filter((c) => c !== 'update_map_palette')).toEqual([]);
+  });
+
+  test('a palette picked in the colour cog paints the same scale', async ({ page }) => {
+    const sectionId = (await getSectionIds(page))[0]!;
+    const shotIds = await getShotIds(page, sectionId);
+    await openDisplayMenu(page);
+    await toggleDisplayOption(page, 'showIssueSeverity');
+    await page.keyboard.press('Escape');
+    await page.getByTestId('issues-legend-settings-button').click();
+    await page.getByTestId('issue-scale-palette-trigger').click();
+    await page.getByTestId('issue-scale-palette-search').fill('viridis');
+    await page.locator('[data-testid="issue-scale-palette-option-mpl.viridis"]').click();
+    await expect(page.getByTestId('issue-scale-palette-current')).toHaveText('viridis');
+    // Scores 0, 1 and 3 sit at the start, middle and end of the palette.
+    const expected: Array<[number, string]> = [[0, '#440154'], [2, '#21918c'], [4, '#fde725']];
+    await expect.poll(async () => {
+      const shots = await shotColorsById(page);
+      return expected.map(([i, hex]) => isColor(shots[shotIds[i]!], hex, 12)).join(',');
+    }, { timeout: 4000 }).toBe('true,true,true');
+  });
+
   test('ignoring the azimuth warning drops that delta from the colour', async ({ page }) => {
     const sectionId = (await getSectionIds(page))[0]!;
     const shotIds = await getShotIds(page, sectionId);
