@@ -232,17 +232,49 @@ fn evict_page(addr: usize) {
     }
 }
 
+/// The candidate mitigation: keep std's handler but re-install it with
+/// SA_NODEFER | SA_RESETHAND. The kernel then resets the disposition to
+/// SIG_DFL on entry and leaves the signal unblocked, so a second fault inside
+/// the handler takes the default action (a crash) instead of being parked as
+/// pending on a blocked signal.
+fn apply_resethand() {
+    for sig in [libc::SIGSEGV, libc::SIGBUS] {
+        // SAFETY: zeroed sigaction is a valid out-parameter; we re-install the
+        // handler std put there, with two extra flags.
+        unsafe {
+            let mut cur: libc::sigaction = std::mem::zeroed();
+            libc::sigaction(sig, std::ptr::null(), &mut cur);
+            cur.sa_flags |= libc::SA_NODEFER | libc::SA_RESETHAND;
+            let rc = libc::sigaction(sig, &cur, std::ptr::null_mut());
+            say(&format!("resethand sig={sig} rc={rc} flags={:#x}", cur.sa_flags));
+        }
+    }
+}
+
+#[inline(never)]
+fn recurse(depth: u64) -> u64 {
+    let buf = std::hint::black_box([depth; 64]);
+    if depth == u64::MAX {
+        return 0;
+    }
+    recurse(depth + 1).wrapping_add(buf[(depth % 64) as usize])
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let mode = args.get(1).map_or("control", String::as_str).to_owned();
     let trigger = args.get(2).cloned().unwrap_or_else(|| "/tmp/fl706.trigger".into());
+    let resethand = std::env::var_os("FL706_RESETHAND").is_some_and(|v| v == "1");
+    if resethand {
+        apply_resethand();
+    }
     let handler = installed_handler(libc::SIGSEGV);
     let bus_handler = installed_handler(libc::SIGBUS);
     let ((text_start, text_len), stubs) = text_layout();
     let cold = cold_entry as *const () as usize;
     let here = main as *const () as usize;
     say(&format!(
-        "pid={} mode={mode} page_size={:#x} handler={handler:#x} bus_handler={bus_handler:#x} \
+        "pid={} mode={mode} resethand={resethand} page_size={:#x} handler={handler:#x} bus_handler={bus_handler:#x} \
          handler_page={:#x} cold_page={:#x} main_page={:#x} null_write_page={:#x} text={text_start:#x}+{text_len:#x} stubs={:#x}+{:#x}",
         std::process::id(),
         page_size(),
@@ -257,6 +289,11 @@ fn main() {
         "control" => {
             say("fault=null_write");
             null_write();
+        }
+        "overflow" => {
+            say("fault=recursion");
+            let v = recurse(0);
+            say(&format!("survived recursion {v}"));
         }
         "noexec" => {
             if page_of(handler) == page_of(here) || page_of(handler) == page_of(null_write as *const () as usize) {
