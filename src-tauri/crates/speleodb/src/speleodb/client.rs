@@ -69,8 +69,11 @@ pub const NATIVE_LIMIT: u64 = 512 * 1024 * 1024;
 /// 0.6.2) limits each uploaded file to `DJANGO_GIT_UPLOAD_INDIVIDUAL_FILESIZE_MB_LIMIT`
 /// = 5 MiB, inclusive, and a commit to 7 MiB; an upload is one `.stalx`, so the
 /// per-file limit is the one that binds. An older server accepted up to
-/// [`LARGEST_STORED_BYTES`]; holding uploads to the newer, smaller limit there
-/// too only leaves out the undo history (or refuses) a little sooner.
+/// [`LARGEST_STORED_BYTES`] (about 23.5 MiB), and uploads to it are held to the
+/// newer limit too: a project between the two now leaves out its undo history,
+/// and one still over 5 MiB without it is refused, where that server would have
+/// taken it. The app cannot tell the server's limit from its replies, and the
+/// servers that matter are moving to the newer one.
 pub const SERVER_UPLOAD_LIMIT_BYTES: u64 = 5 * 1024 * 1024;
 
 /// The largest project file a SpeleoDB server may hold, in bytes: what a server

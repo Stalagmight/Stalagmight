@@ -37,6 +37,13 @@ describe('parseRevisionDate', () => {
     expect(parseRevisionDate('')).toBeNull();
   });
 
+  it('places no wall time that is not a real date and time, rather than rolling it over', () => {
+    for (const raw of ['2026/02/30 10:00', '2026/13/45 25:99', '2026/11/10 24:00', '2026/11/10 10:60']) {
+      expect(parseRevisionDate(raw)).toBeNull();
+    }
+    expect(iso('2028/02/29 10:00')).toBe('2028-02-29T15:00:00.000Z'); // leap day, EST
+  });
+
   it('reads the UTC instant the backend hands on, milliseconds included', () => {
     expect(iso('2026-11-10T08:18:23.123Z')).toBe('2026-11-10T08:18:23.123Z');
     expect(iso('2026-11-10T08:18:23.000Z')).toBe('2026-11-10T08:18:23.000Z');

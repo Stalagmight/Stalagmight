@@ -76,6 +76,15 @@ export function parseRevisionDate(raw: string, serverTimeZone = SPELEODB_SERVER_
   if (wall) {
     const [, y, mo, d, h, mi, s] = wall;
     const wallAsUtc = Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(s ?? 0));
+    // Not a real date and time (`2026/02/30`, `25:99`): `Date.UTC` would roll it over
+    // into another day, so place nothing rather than the wrong instant.
+    const check = new Date(wallAsUtc);
+    if (
+      check.getUTCFullYear() !== Number(y) || check.getUTCMonth() !== Number(mo) - 1 || check.getUTCDate() !== Number(d) ||
+      check.getUTCHours() !== Number(h) || check.getUTCMinutes() !== Number(mi) || check.getUTCSeconds() !== Number(s ?? 0)
+    ) {
+      return null;
+    }
     const instant = new Date(wallTimeToInstant(wallAsUtc, serverTimeZone));
     return Number.isNaN(instant.getTime()) ? null : instant;
   }

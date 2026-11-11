@@ -909,7 +909,7 @@ fn download_deadline_scales_with_the_size_and_is_bounded_by_the_native_limit() {
         grace + Duration::from_secs(LARGEST_STORED_BYTES / DOWNLOAD_MIN_RATE)
     );
     assert!(deadline(LARGEST_STORED_BYTES) <= DOWNLOAD_CEILING);
-    assert!(SERVER_UPLOAD_LIMIT_BYTES < LARGEST_STORED_BYTES);
+    const { assert!(SERVER_UPLOAD_LIMIT_BYTES < LARGEST_STORED_BYTES) };
     // ...while the most a download may receive (the native limit, about 36 h at
     // the minimum rate) is cut at the ceiling, Content-Length or not.
     assert_eq!(deadline(NATIVE_LIMIT), DOWNLOAD_CEILING);
@@ -1570,4 +1570,17 @@ fn the_upload_limit_is_the_servers_inclusive_five_mib() {
     );
     upload_stalx(&s.base, "t", false, ID, f.path(), "Exactly the limit").unwrap();
     assert_eq!(s.finish().len(), 1);
+}
+
+#[test]
+fn a_refused_reply_without_a_commit_date_is_not_decoded_again() {
+    use super::commit_dates::decode_reply;
+    // Nothing to set aside: the SDK's own refusal stands, and no tree is built.
+    let mut drifted = project_json();
+    drifted["visibility"] = json!("FUTURE_VISIBILITY");
+    let body = drifted.to_string().into_bytes();
+    assert!(decode_reply::<types::Project>(&body).is_none());
+    // With an old-format date, it is.
+    let body = pre_iso_project().to_string().into_bytes();
+    assert!(matches!(decode_reply::<types::Project>(&body), Some(Ok(_))));
 }

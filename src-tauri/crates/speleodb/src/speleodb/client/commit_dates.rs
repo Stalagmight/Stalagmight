@@ -112,6 +112,12 @@ impl<T> Reply<T> {
 pub(super) fn decode_reply<T: DeserializeOwned>(
     body: &[u8],
 ) -> Option<Result<Reply<T>, serde_json::Error>> {
+    // Most refusals carry no commit date at all; skip building a tree of a reply
+    // (up to the JSON limit) that cannot be one this decodes.
+    const DATE_KEY: &[u8] = b"\"authored_date\"";
+    if !body.windows(DATE_KEY.len()).any(|w| w == DATE_KEY) {
+        return None;
+    }
     let mut value: Value = serde_json::from_slice(body).ok()?;
     let mut changed = set_aside_latest_commit_dates(&mut value);
     let mut dates = Vec::new();
