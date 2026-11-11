@@ -206,6 +206,19 @@ section, else 2x for a zero datum), and `shotHalfWidthPx` times `shotWidthMul`
 picks it, and features of one rank keep the plain nearest pick. The ranks are
 the label declutter's (`labelVirtualRank`).
 
+**The selection on top.** The selected section, or the section of the selected
+station or shot (`raisedSection.raisedSectionOf`), draws above every rank: the
+writers take a per-vertex raised flag (built with `computeLineDim` /
+`computeCircleDim`) and put those quads in a fourth bucket, drawn last.
+`SurveyLayer.updateVisualState` pushes it to `controller.setRaisedSection`, which
+rewrites and re-uploads only the index buffers whose order moved; every build
+and the incremental reorder keep it. The picks rank the raised section above
+real line (`ResolveOptions.raisedSectionId`), so where it overlaps the main line
+the click goes to it, as drawn; to reach a real-line station it covers, clear
+the selection first (Escape, or a click on empty map). Hover changes no order,
+and labels ignore the selection. The single selected station or shot is drawn
+again above everything by the interact overlay, as before.
+
 Every pick is a single nearest-within-tolerance resolve; the box in step 2 is
 only the candidate prefilter. The index's multi-hit box resolver went away with
 box select (#409), so there is no "everything inside this rectangle" query left.
@@ -406,6 +419,7 @@ the Zustand write.
 | Labels vanish or flash while zooming | `labelReveal.ts` / `labelDecimation.ts` |
 | A jump / reference label shows where a real-line one should | `labelVirtualRank` and the per-rank passes in `labelReveal.ts`, then the flags `labelTessellate.ts` stamps |
 | A jump / reference marker or line drawn over, or clicked instead of, the real one at the same spot | `writeCircleDrawOrder` / `writeLineDrawOrder` in `tessellate.ts` (and their calls in `controller.tryIncremental`), then `geometryIndex.nearestStation` / `nearestShot` |
+| A selected section still drawn under the real line, or stays on top after deselecting | `SurveyLayer.updateVisualState` -> `raisedSectionOf` -> `controller.setRaisedSection`, then `ResolveOptions.raisedSectionId` for the click |
 | Label text or placement wrong | `labelLayout.ts` (shaping, em offsets), `labelStyle.ts` (per-kind style) |
 | Sizes wrong after dragging the window to another monitor | the DPR watcher in `SurveyLayer` - device-pixel sizes are baked into the buffers |
 | Global View wrong but the survey map fine | `GlobalView/customRender/` - a separate implementation |

@@ -2018,7 +2018,10 @@ reference shots, and a jump label wins over a reference one. Station markers
 and shot lines follow the same order: where they coincide or overlap (a jump or
 reference section tied in at a real station, or surveyed along the real line),
 the real-line marker or line is drawn on top and takes the hover and the click,
-then jump, then reference. Shot
+then jump, then reference. The selection's section (the selected section, or
+the section of the selected station or shot) is drawn above all of them and
+takes the hover and the click where it overlaps them; labels keep the rank
+order. Shot
 geometry itself is not simplified: no path simplification, no station merging,
 no zoom-based hiding.
 
