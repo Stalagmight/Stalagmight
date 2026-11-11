@@ -67,6 +67,7 @@ import { FEATURE_ID_STRIDE } from '../../utils/ids';
 import { debugLog } from '../../utils/debugLog';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 import { useSurveyLayerColorScales } from './colorScale/useColorScaleInputs';
+import { useSurveyLayerIssuePreview } from './colorScale/useIssueScale';
 import { MapColorLegends } from './MapColorLegends';
 
 /**
@@ -2135,6 +2136,7 @@ function MapCanvas() {
   // a palette is previewed or a Levels handle dragged. Store-subscribed, so a drag
   // never re-renders MapCanvas.
   useSurveyLayerColorScales(surveyLayerRef, mapLoaded);
+  useSurveyLayerIssuePreview(surveyLayerRef, mapLoaded);
 
   // Apply the fetched field to the layer (feature-state + paint swap). Separate
   // from the rebuild path so re-rooting never triggers a feature rebuild.
@@ -4071,6 +4073,8 @@ function MapCanvas() {
         showRamp={effectiveIssueSeverity}
         showKey={effectiveShowShotErrors && (showShots || showStations)}
         besideSelector={otherLegendSelector({ depth: effectiveDepthGradient, distance: effectiveDistance, distanceReady: !!distanceField, gas: showGasPlan && gasOriginChosen, gasReady: !!gasReachField })}
+        surveyData={activeSurveyData}
+        closures={project?.loop_closures}
       />
 
       {/* Gas reachable-frontier legend (#38) - gold→purple, 0 → turn budget. */}

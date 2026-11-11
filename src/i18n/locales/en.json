@@ -2385,10 +2385,10 @@
     },
     "issueLegend": {
       "title": "Survey Issues",
-      "aria": "Survey Issues colour scale: green where the readings agree, yellow at a warning threshold, red at three times it or for an error",
-      "error": "Error, or 3x threshold",
-      "warning": "Warning threshold",
-      "clear": "Readings agree",
+      "aria": "Survey Issues color scale: the start of the palette where the readings agree, its middle at an error's warn level, its end at the max level or for an error",
+      "error": "Max level, or an error",
+      "warning": "Warn level",
+      "clear": "Min level: readings agree",
       "keyTitle": "Errors labels",
       "key": {
         "azimuth": "azimuth in vs out",
@@ -2396,7 +2396,8 @@
         "inclinationDepth": "inclination vs depth change",
         "length": "length vs depth change and inclination, on shots over {{degrees}}°",
         "closure": "loop closure error and misclosure"
-      }
+      },
+      "allOff": "All errors are switched off in the color settings."
     },
     "errorLabels": {
       "abbrev": {
@@ -2411,7 +2412,8 @@
       "settingsButton": "Color scale settings",
       "title": {
         "depth": "Depth colors",
-        "distance": "Distance colors"
+        "distance": "Distance colors",
+        "issues": "Survey Issues colors"
       },
       "palette": "Palette",
       "themePalette": "Theme",
@@ -2462,7 +2464,9 @@
       "noValues": {
         "depth": "This survey has no depths to color.",
         "distance": "No station is reachable from an entrance, so nothing is colored by distance. Set a zero datum to use this."
-      }
+      },
+      "issuesDefaultPalette": "Default",
+      "resetIssuesPalette": "Reset palette to the default green, yellow, red"
     },
     "gasLegend": {
       "title": "Gas reach",
@@ -2567,6 +2571,40 @@
       "zoom": "Zoom",
       "zoomLevels": "{{countFormatted}} levels",
       "zooming": "Zooming"
+    },
+    "issueScale": {
+      "title": "Survey Issues colors",
+      "combine": "Color a shot by",
+      "combineMode": {
+        "worst": "Worst error",
+        "average": "Average"
+      },
+      "combineHelp": {
+        "worst": "A shot takes the color of its worst error.",
+        "average": "A shot takes the average color of its errors: one error at Max and one at Min give the warn color."
+      },
+      "errors": "Errors",
+      "metric": {
+        "azimuth": "Azimuth in vs out",
+        "inclination": "Inclination in vs out",
+        "inclinationDepth": "Inclination vs depth change",
+        "length": "Length vs depth change",
+        "closure": "Loop closure"
+      },
+      "enableAria": "Use {{name}} in the colors and labels",
+      "summaryTitle": "Warn level / Max level",
+      "off": "Off",
+      "offHint": "Off: left out of the colors and the Errors labels",
+      "noValues": "No values to show in this survey",
+      "resetLevels": "Reset levels to the default",
+      "histogram": "Histogram of {{name}} values",
+      "min": "Min",
+      "warn": "Warn",
+      "max": "Max",
+      "minHandle": "Min level: at or below it the readings agree",
+      "warnHandle": "Warn level: the palette's middle",
+      "maxHandle": "Max level: the palette's end, as for an error",
+      "note": "These levels change only the map's colors and the Errors labels. Which shots get a warning is set by the thresholds in Project Settings."
     }
   },
   "editSection": {
