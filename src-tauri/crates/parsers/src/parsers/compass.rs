@@ -1723,6 +1723,7 @@ pub fn convert_compass_to_import_configs(
             shots: chain.shots.clone(),
             placement: p,
             station_comments: chain.station_comments.clone(),
+            station_names: Vec::new(),
             azimuth_reference: Some(chain.azimuth_reference),
         });
     }

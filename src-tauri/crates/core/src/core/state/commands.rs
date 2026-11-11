@@ -71,6 +71,9 @@ impl AppState {
             | MoveComment { .. }
             | Batch { .. }
             | UntrackImport { .. }
+            // Adding a file INTO the open project is an edit of it (#674),
+            // unlike MergeProjects, which writes a new file.
+            | AddProjectFile { .. }
             | RepairIntegrity
             | UpdateProjectSettings
             | SetSurfaceElevation => false,
@@ -231,6 +234,14 @@ impl AppState {
             | MoveSection { .. }
             | MoveSegment { .. }
             | MoveStation { .. } => SAFE_REFS,
+
+            // A pure addition (#674): it copies a source's own references
+            // between the sections it creates and links nothing existing, so
+            // it can neither dangle a ref nor strand a closure. No rollback
+            // snapshot either - `add_project_file` blocks introduced corruption
+            // itself by removing what it appended, which costs the size of the
+            // file being added rather than of the open project.
+            AddProjectFile { .. } => SAFE_REFS,
         }
     }
 
@@ -308,11 +319,16 @@ impl AppState {
     ///   `DeleteShot`, the delete/split entry points, `RepairIntegrity`, any
     ///   `Batch`) each record a `ProjectSnapshotPair`, so their undo hands the old
     ///   map back verbatim.
-    /// * `SetZeroDatum` - the only command that ESTABLISHES a frame today -
+    /// * `SetZeroDatum` - the command that ordinarily ESTABLISHES a frame -
     ///   records `UndoData::ZeroDatumInfo` with a whole-project
     ///   `previous_offsets` (`Project::capture_all_section_offsets`, taken before
     ///   the mutation), which is exactly the blast radius of the translation it
     ///   performs.
+    /// * `AddProjectFile` (#674) can establish one too, when the copied file
+    ///   carries a datum and the open project has none. It lands that datum on
+    ///   the origin itself, moving only what it copied, so this gate measures
+    ///   zero; a pre-existing offset that moves anyway is recorded in its
+    ///   `AddedContent::moved_offsets` and handed back by the undo.
     ///
     /// KNOWN LIMITATION, pre-existing and NOT introduced here: a datum stored
     /// against a legacy POSITIONAL anchor (`StationAnchor::Index`, written by
@@ -335,11 +351,10 @@ impl AppState {
     /// writes it to a NEW file and returns; it never touches `self.project` (there
     /// is no reference to it anywhere in `project_merge.rs`). Both reads therefore
     /// see the same unchanged open project, `before == after`, and the gate
-    /// returns without measuring anything. That matters because a merged project's
-    /// datums legitimately do NOT sit at the origin
-    /// (`store_zero_datum_without_repositioning` copies them precisely to preserve
-    /// the source offsets), so a fire here would translate a file the user just
-    /// built. Pinned by `merge_projects_does_not_renormalise_the_open_project`.
+    /// returns without measuring anything. That matters because a merged project
+    /// is laid out by its own sources' datums (#682), not by the open project's
+    /// frame, so a fire here would translate one onto the other. Pinned by
+    /// `merge_projects_does_not_renormalise_the_open_project`.
     pub(super) fn renormalize_frame_if_changed(&self, before: Option<StationKey>) {
         let mut guard = match self.project.lock() {
             Ok(g) => g,
@@ -524,7 +539,17 @@ impl AppState {
             // claim the derive-don't-hook rule exists to avoid having to make.
             let frame_before = project.frame_datum_key();
             // Drop dangling refs/orphans and re-mint duplicate shot UUIDs.
-            project.repair_structural_integrity();
+            let repaired = project.repair_structural_integrity();
+            // A cross-section repeat is healed by renaming, exactly as a load
+            // does, so ignores stored against the old ids need the same alias
+            // lookup until the next save re-keys them.
+            if repaired
+                .iter()
+                .any(|v| v.category == "duplicate_shot_uuid_across_sections")
+            {
+                self.load_renamed_shots
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+            }
             // Demote any merge that bridges two independently datum-anchored
             // groups back to a loop closure. It must run BEFORE the conversion
             // and the re-solve: it is the one repair `resolve_offsets` cannot do
@@ -602,18 +627,25 @@ impl AppState {
         // see the chokepoint enumeration test
         // (`gate_rejects_every_mutation_entrypoint`).
         if !Self::is_lifecycle_passthrough(&cmd) {
+            // A background lock re-verify (#202) that found the write lock gone
+            // shuts the gate and refuses this edit with the re-verify code, which
+            // routes to the divergence prompt. Ahead of `guard_mutation`, which
+            // would otherwise report the gate it shuts as a plain read-only refusal.
+            if let Err(f) = self.speleodb_collect_reverify() {
+                return f;
+            }
             if let Err(f) = self.guard_mutation(&cmd.description()) {
                 return f;
             }
             // Lazy 20-min lock re-verify (#202): on a lock-held remote edit through
-            // this chokepoint, confirm (at most ~3x/hr) we still hold the write lock
-            // before mutating. No-op for local / read-only projects and when recently
+            // this chokepoint, check (at most ~3x/hr) that we still hold the write
+            // lock. The GET runs in the background - this is reached from sync
+            // commands on the main thread - and its verdict is collected above by a
+            // later edit. No-op for local / read-only projects and when recently
             // verified. Deliberately scoped to the `execute()` path (the direct
             // mutation entrypoints - undo/redo etc. - do not re-verify; the
             // release-time fence + a 403 on push are the correctness backstops).
-            if let Err(f) = self.speleodb_verify_lock_if_expired() {
-                return f;
-            }
+            self.speleodb_verify_lock_if_expired();
         }
         // A reverse of a section that has no shots provably changes nothing (#24):
         // `Project::reverse_section` returns `true` on `shot_count == 0` without touching a
@@ -795,6 +827,9 @@ impl AppState {
                 file_hashes,
                 section_hashes,
             } => self.untrack_import(file_hashes, section_hashes),
+            Command::AddProjectFile { path, .. } => {
+                self.add_project_file(path, Self::add_slot_generation(&undo_data))
+            }
             Command::RepairIntegrity => CommandResult::failure(
                 "RepairIntegrity is applied via repair_project_integrity, not execute()"
                     .to_string(),
@@ -854,10 +889,20 @@ impl AppState {
             self.reconcile_geometry();
         }
 
-        // Push to undo stack if successful and undoable.
-        // Batch commands handle their own undo push inside execute_batch()
-        // (with before+after snapshots), so skip them here.
-        if result.success && Self::is_undoable(&cmd) && !matches!(cmd, Command::Batch { .. }) {
+        // An add finalizes and pushes under ONE `project` guard, bound to the
+        // slot generation its stub was captured against (#674): a project
+        // committed into the slot since must neither be recorded as the add's
+        // content nor receive its undo entry.
+        if result.success && matches!(cmd, Command::AddProjectFile { .. }) {
+            if let Some(failure) = self.push_add_undo(&cmd, undo_data) {
+                return failure;
+            }
+            self.mark_remote_forward_edit();
+        } else if result.success && Self::is_undoable(&cmd) && !matches!(cmd, Command::Batch { .. })
+        {
+            // Push to undo stack if successful and undoable.
+            // Batch commands handle their own undo push inside execute_batch()
+            // (with before+after snapshots), so skip them here.
             // For create commands, finalize undo data with snapshot-based ID preservation
             let final_undo_data = self.finalize_undo_data(&cmd, undo_data);
 

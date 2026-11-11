@@ -80,6 +80,7 @@ fn import_config(index: u32) -> ImportSectionConfig {
         quality: 1.0,
         shots: vec![shot(3.0)],
         station_comments: Vec::new(),
+        station_names: Vec::new(),
         placement: ImportPlacement::Origin,
         azimuth_reference: None,
     }

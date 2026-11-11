@@ -4,4 +4,4 @@ import type { Coordinates } from "./Coordinates";
 import type { GpsCoordinates } from "./GpsCoordinates";
 import type { StationRef } from "./StationRef";
 
-export interface Station { station_ref: StationRef, coordinates: Coordinates, is_zero_datum: boolean, gps_coordinates: GpsCoordinates | null, merged_with: Array<StationRef>, closures_with?: Array<ClosureRef>, comment?: string, }
+export interface Station { station_ref: StationRef, coordinates: Coordinates, is_zero_datum: boolean, gps_coordinates: GpsCoordinates | null, merged_with: Array<StationRef>, closures_with?: Array<ClosureRef>, comment?: string, name?: string, }

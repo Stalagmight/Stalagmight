@@ -39,12 +39,7 @@ pub(super) fn load_legacy(
         table.retain(|key, _| {
             matches!(
                 key,
-                "endpoint"
-                    | "email"
-                    | "insecure_http"
-                    | "allow_force_edit"
-                    | "poll_interval_seconds"
-                    | "undo_mode"
+                "endpoint" | "email" | "insecure_http" | "poll_interval_seconds" | "undo_mode"
             )
         });
     }
@@ -171,8 +166,6 @@ mod tests {
         config.speleodb.endpoint = Some("https://sdb.example.com".to_owned());
         config.speleodb.email = Some("diver@example.com".to_owned());
         config.speleodb.token.0 = Some("synthetic-test-token".to_owned());
-        config.speleodb.allow_force_edit = true;
-        config.speleodb.poll_interval_seconds = 45;
         config
     }
 
@@ -194,8 +187,10 @@ mod tests {
             Some("https://legacy.example.com")
         );
         assert_eq!(loaded.speleodb.email.as_deref(), Some("legacy@example.com"));
-        assert!(loaded.speleodb.insecure_http && loaded.speleodb.allow_force_edit);
-        assert_eq!(loaded.speleodb.poll_interval_seconds, 30);
+        assert!(loaded.speleodb.insecure_http);
+        assert!(!toml::to_string(&loaded.speleodb)
+            .unwrap()
+            .contains("allow_force_edit"));
         assert_eq!(loaded.speleodb.undo_mode, crate::models::UndoMode::Disabled);
         assert!(loaded.speleodb.token.0.is_none());
         loaded.save_to_path(&path).unwrap();
@@ -243,8 +238,24 @@ mod tests {
         let loaded = Config::load_from_path(&path).unwrap();
         assert_eq!(loaded.speleodb.token.0, config.speleodb.token.0);
         assert_eq!(loaded.speleodb.email, config.speleodb.email);
-        assert!(loaded.speleodb.allow_force_edit);
-        assert_eq!(loaded.speleodb.poll_interval_seconds, 45);
+        assert!(!toml::to_string(&loaded.speleodb)
+            .unwrap()
+            .contains("allow_force_edit"));
+    }
+
+    #[test]
+    fn obsolete_preference_in_private_file_is_ignored_and_not_resaved() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        let private = file_path(&path);
+        std::fs::create_dir_all(private.parent().unwrap()).unwrap();
+        std::fs::write(&private, "allow_force_edit = true\n").unwrap();
+        let mut settings = SpeleoDbConfig::default();
+        load(&mut settings, &path).unwrap();
+        save(&settings, &path).unwrap();
+        assert!(!std::fs::read_to_string(private)
+            .unwrap()
+            .contains("allow_force_edit"));
     }
 
     #[test]

@@ -4,18 +4,48 @@
 
 Stalagmight uses an atomic save strategy with a SQLite `.stalx` database file. Saves are triggered manually (Ctrl+S), automatically via a frontend debounced timer, or by the first import into a new project whose initial save was deferred (`finalize_deferred_import` in `src-tauri/src/commands/import.rs`). A failed deferred-import save degrades to a successful import carrying a warning, never a hard failure, so the imported data stays in memory under the close-guard. The save pipeline is optimized to return quickly by deferring non-critical work to background threads and avoiding unnecessary recomputation.
 
-For a linked SpeleoDB project being edited under its write lock, manual Save
-(Ctrl+S or the menu action) asks for a nonblank commit message, saves locally,
-and uploads the native SQLite `project.stalx` through the dedicated endpoint.
-Autosave writes locally, including while the message dialog is open or cancelled.
-Confirmation saves locally and immediately uploads; only a confirmed upload reports
-combined success. Failed or uncertain uploads retain the message and saved file for
-retry without making the local disk dirty. The lock remains held.
-Closing, switching projects or quitting offers Keep lock as the default local exit.
-Release without uploading requires explicit confirmation: edits remain local and
-another collaborator may advance the remote project. A requested local-save failure
-blocks exit; failed upload/release blocks the corresponding exit action. See
-[SpeleoDB integration](SpeleoDB.md) for the transfer and lock contract.
+Menu Save, Cmd/Ctrl+S and the SpeleoDB workspace's Save Changes action share
+`dispatchProjectSave`. Local projects use the existing local save flow. Linked
+projects collect a required change description, save locally, then upload only with
+fresh permission and editing-lock verification. Missing locks show an explanation
+and recovery controls; recovery never uploads automatically. A clean linked project
+reports No changes to upload. Offline and uncertain uploads never report success.
+Ordinary successful upload retains the editing lock. Save Changes, menu Save and
+Cmd/Ctrl+S share a centered, app-blocking progress indicator during the upload,
+after the required description and successful local save. The indicator expires
+after 120 seconds and explains that the request may still finish. The dialog can
+then be closed; the description is retained and duplicate submission stays disabled
+while that request is pending. Failure removes the indicator and keeps retry details.
+
+Autosave and failed-autosave retry are always local-only, including while an upload
+dialog is open or cancelled. Save and Close releases and closes only after confirmed
+success with no newer edits. Cancel, conflict, uncertainty and release failure leave
+the project open. Plain Close, project switching and Quit retain automatic lock
+release without upload and Discard changes / Cancel protection for unsaved work,
+including unsent SpeleoDB form drafts (asked first, in-app). Saved unuploaded work
+remains local. See
+[SpeleoDB integration](SpeleoDB.md) for navigation, ownership and offline behavior.
+
+Switch to Read Only Mode requires a clean local file and no unuploaded work. It
+refuses pending changes with Save Changes guidance and performs no implicit upload
+or discard. Reload Project offers Discard changes / Cancel for unsaved or unuploaded
+work and explains that saving first preserves it. Reload checks fresh revision
+history and returns historical checkouts to the server version without acquiring a
+lock or changing editing mode. Failure preserves current work. Consent and release
+are guarded against project/account changes and newer edits.
+
+Sign-in and connection management open application Settings on SpeleoDB. The Save
+description and Save-and-Close intent survive recovery for the originating project
+and account. Returning from Settings reopens confirmation; it never saves or uploads
+automatically. Local settings has no SpeleoDB metadata or account controls.
+
+Converting a local project through its SpeleoDB tab opens the creation form. Once
+confirmed, publishing saves the latest survey into its managed cache and uploads
+it. Only a clean confirmed upload is downloaded again from SpeleoDB and reopened;
+newer edits and unconfirmed uploads remain protected for Save Changes. A failed
+fresh download retains the already-created managed project for Reload Project,
+so recovery does not repeat the server creation. The original local file remains
+a separate local copy. Account recovery returns to the form without publishing.
 
 Every import-into-new-project flow now creates its project deferred, so the
 `.stalx` appears on the first import rather than at the moment the name is typed
@@ -237,3 +267,44 @@ The `save_project` backend command returns the save path as a string in `Command
 | `src-tauri/crates/persistence/src/persistence/sqlite.rs` | SQLite database operations |
 | `docs/undo-redo.md` | Undo/redo stack persistence details |
 | `docs/configuration.md` | Auto-save config options |
+
+## Immediate SpeleoDB connection settings
+
+Connect saves changed preferences and authenticates immediately. Success closes
+Settings and refreshes the project listing. Disconnect takes effect immediately,
+clears the remote listing and stays on the SpeleoDB Settings tab. Neither action
+requires a subsequent Save. While connected, the server endpoint and both reset
+controls are disabled; backend requests to change instances are also refused.
+Disconnect first, including when the current server is temporarily unavailable.
+
+The SpeleoDB tab has a Close button instead of Save/Cancel. Closing validates and
+saves preference changes, including changes in other categories, without connecting.
+Connection and persistence errors keep Settings open. The ordinary Settings
+unsaved-changes prompt offers only Cancel (red) and Discard Changes (blue).
+
+HTTPS is required except for HTTP to the exact host `localhost`, the exact IPv4
+address `127.0.0.1`, or valid IPv4 addresses in `192.168.0.0/16`. Valid ports are
+allowed. For HTTP, other private ranges, IPv6, localhost aliases/subdomains, public hosts,
+missing schemes and malformed addresses are rejected, without any DNS lookup. An
+endpoint the policy refuses produces an error dialog when connecting, or when saving
+a new server. `insecure_http` lifts only the HTTP rule (never certificate
+verification); it stays in the file so existing configurations load, Settings has
+no control for it, and its development-build-only handling is being finalised by a
+follow-up commit. Certificate verification and redirect restrictions remain.
+
+### Confirmed project close
+
+Hamburger Menu -> Close Project and the SpeleoDB workspace Close action share the
+same close command. A clean close releases the lock only when SpeleoDB names this
+account as its holder; over un-uploaded work the exit prompt decides (Upload / Keep
+the lock / Discard / Cancel) and the backend never releases without the confirmed
+discard. A close the backend reports as failed keeps the project open with a visible
+error and pauses editing until the link status is refreshed. A release that fails
+or is uncertain closes nothing: the claim stays unbound (editing paused) and the
+in-app "Couldn't hand back the lock" dialog asks - Retry (the holder-checked
+release again), Close and keep the lock (the lock waits for the next sign-in's
+held-lock prompt) or Cancel (stay, read-only). Project switches and quits ask the
+same question (see [SpeleoDB](SpeleoDB.md#save-switching-and-exit)). Local files
+and saved unpublished changes remain intact. The API has no atomic
+compare-and-release, so a server-side ownership change between the holder check and
+the POST remains a protocol limitation.

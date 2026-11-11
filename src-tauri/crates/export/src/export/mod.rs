@@ -1,4 +1,5 @@
 mod atomic_write;
+pub mod color_scale;
 pub mod csv;
 mod depth_colors;
 pub mod dive_profile;

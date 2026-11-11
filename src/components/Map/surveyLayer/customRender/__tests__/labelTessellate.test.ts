@@ -17,6 +17,7 @@ import {
   type SurveyData,
 } from '../../../../../types/survey-data';
 import { commentColorForKey } from '../../displayColor';
+import { labelVirtualRank, VIRTUAL_RANK_JUMP, VIRTUAL_RANK_REAL, VIRTUAL_RANK_REFERENCE } from '../labelReveal';
 
 /**
  * Label descriptor extraction + per-glyph buffer emission (#customRender labels,
@@ -95,6 +96,39 @@ describe('buildLabelDescriptors', () => {
     expect(byKind(LABEL_KIND.SECTION_NAME)).toHaveLength(1);
   });
 
+  it('station names mode: named stations only, labelled by name, everything else as for the ID', () => {
+    const d = fixture();
+    d.stationNames = new Map([[0, '7'], [2, ' \u202e9 ']]);
+    const ids = buildLabelDescriptors(d, null, 0, 0, CTX).filter((x) => x.kind === LABEL_KIND.STATION_LABEL);
+    const names = buildLabelDescriptors(d, null, 0, 0, { ...CTX, stationLabelText: 'name' }).filter(
+      (x) => x.kind === LABEL_KIND.STATION_LABEL,
+    );
+    // g1 has no name, so it gets no label (no fallback to its index); g2's name is sanitized.
+    expect(names.map((x) => [x.stationGlobal, x.text])).toEqual([
+      [0, '7'],
+      [2, '9'],
+    ]);
+    // Ordinal, flags, anchor, color and owner match the ID label for the same
+    // station, so names declutter, decimate, dim and hide exactly like the IDs.
+    for (const n of names) {
+      const id = ids.find((x) => x.stationGlobal === n.stationGlobal)!;
+      expect({ ...n, text: id.text }).toEqual(id);
+    }
+  });
+
+  it('station names mode skips names that sanitize to nothing and leaves the other kinds alone', () => {
+    const d = fixture();
+    d.stationNames = new Map([[1, '\u2066\u2069'], [2, '   ']]);
+    const ids = buildLabelDescriptors(d, null, 0, 0, CTX);
+    const names = buildLabelDescriptors(d, null, 0, 0, { ...CTX, stationLabelText: 'name' });
+    expect(names.filter((x) => x.kind === LABEL_KIND.STATION_LABEL)).toEqual([]);
+    expect(names.filter((x) => x.kind !== LABEL_KIND.STATION_LABEL)).toEqual(
+      ids.filter((x) => x.kind !== LABEL_KIND.STATION_LABEL),
+    );
+    // The explicit 'id' mode is the default.
+    expect(buildLabelDescriptors(d, null, 0, 0, { ...CTX, stationLabelText: 'id' })).toEqual(ids);
+  });
+
   it('assigns decimation ordinals (shot running index, station global index)', () => {
     const d = fixture();
     const descs = buildLabelDescriptors(d, null, 0, 0, CTX);
@@ -148,6 +182,48 @@ describe('buildLabelDescriptors', () => {
     // does not.
     expect(byStation.get(2)!.flags & LABEL_FLAG.ALL_REFERENCE).toBe(LABEL_FLAG.ALL_REFERENCE);
     expect(byStation.get(0)!.flags & LABEL_FLAG.ALL_REFERENCE).toBe(0);
+  });
+
+  it('flags let the declutter rank every label: real, jump or reference (real line first)', () => {
+    // Shot 1 is a Jump: station g1 still touches the real shot 0 (a real-line
+    // label), g2 only the jump. A second section of one Reference shot is all
+    // virtual, so its name and stations rank as reference labels.
+    const d = fixture();
+    d.sections = [
+      d.sections[0]!,
+      { id: 2, name: 'Tie', surveyor: null, date: null, color: '#8e44ad', direction: 'in' as never, quality: 0, next_shot_id: 1, shotOffset: 2, shotCount: 1 },
+    ];
+    d.shotCount = 3;
+    d.shotIds = new Uint32Array([0, 1, 0]);
+    d.shotSectionIds = new Uint32Array([1, 1, 2]);
+    d.shotFlags = new Uint8Array([0, shotKindToFlags('Jump'), shotKindToFlags('Reference')]);
+    d.shotAzimuthIn = new Float32Array([312, 45, 90]);
+    d.shotLength = new Float32Array([4, 3, 5]);
+    d.shotDepthIn = new Float32Array([1, 2, 1]);
+    d.shotDepthOut = new Float32Array([2, 4, 1]);
+    d.stationCount = 5;
+    d.stationSectionIds = new Uint32Array([1, 1, 1, 2, 2]);
+    d.stationIndices = new Uint32Array([0, 1, 2, 0, 1]);
+    d.stationCoords = new Float64Array([0, 0, 0, 10, 0, -1, 20, 0, -2, 0, 5, 0, 5, 5, 0]);
+    d.stationFlags = new Uint8Array([0, 0, 0, 0, 0]);
+    d.shotComments = new Map();
+    d.stationComments = new Map();
+    const descs = buildLabelDescriptors(d, null, 0, 0, CTX);
+    const rank = (x: LabelDescriptor | undefined): number => labelVirtualRank(x!);
+
+    const shot = (g: number) => descs.find((x) => x.kind === LABEL_KIND.SHOT_LABEL && x.shotGlobal === g);
+    expect([0, 1, 2].map((g) => rank(shot(g)))).toEqual([VIRTUAL_RANK_REAL, VIRTUAL_RANK_JUMP, VIRTUAL_RANK_REFERENCE]);
+    const station = (g: number) => descs.find((x) => x.kind === LABEL_KIND.STATION_LABEL && x.stationGlobal === g);
+    expect([0, 1, 2, 3, 4].map((g) => rank(station(g)))).toEqual([
+      VIRTUAL_RANK_REAL,
+      VIRTUAL_RANK_REAL,
+      VIRTUAL_RANK_JUMP,
+      VIRTUAL_RANK_REFERENCE,
+      VIRTUAL_RANK_REFERENCE,
+    ]);
+    const section = (id: number) => descs.find((x) => x.kind === LABEL_KIND.SECTION_NAME && x.sectionId === id);
+    expect(rank(section(1))).toBe(VIRTUAL_RANK_REAL);
+    expect(rank(section(2))).toBe(VIRTUAL_RANK_REFERENCE);
   });
 
   it('colors comments with labelColor and section names with the section color', () => {

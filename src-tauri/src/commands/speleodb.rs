@@ -23,13 +23,11 @@ use crate::core::AppState;
 // the typed SpeleoDbAction) instead of a flattened String, so the FE branches on
 // `err.action`. The orchestration `AppState::speleodb_*` methods build the DTO at
 // the call site where the endpoint is known.
-use crate::models::UndoMode;
 use crate::speleodb::{
     DoneResult, PushResult, SpeleoDbAction, SpeleoErrorDto, SpeleoLinkStatus,
     SpeleoLocalProjectState, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata,
-    SpeleoProjectMetadataPatch, SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult,
-    SpeleoRevision, SpeleoRewindTarget, SpeleoSessionStatus, SpeleoUnwindTarget,
-    StartEditingResult, UpdateResult,
+    SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult, SpeleoRevision,
+    SpeleoRewindTarget, SpeleoSessionStatus, SpeleoUnwindTarget, StartEditingResult, UpdateResult,
 };
 
 /// Run a blocking SpeleoDB orchestration call off the main thread. The
@@ -48,24 +46,62 @@ async fn run_blocking<T: Send + 'static>(
             transport: None,
             unpushed_local: None,
             newer_schema: None,
+            endpoint_refusal: None,
         })?
+}
+
+/// [`run_blocking`] for a user-visible transfer - a lock, upload, download,
+/// release or account change, i.e. every command the frontend's quit gate counts
+/// as `exclusive` (`speleoNetworkCommands.ts`). The app's exit waits for it
+/// instead of cutting it (lock#6, `exit_wait`); a read never holds the exit.
+async fn run_transfer<T: Send + 'static>(
+    app: AppHandle,
+    f: impl FnOnce(&AppState) -> Result<T, SpeleoErrorDto> + Send + 'static,
+) -> Result<T, SpeleoErrorDto> {
+    let _transfer = super::exit_wait::user_transfer(&app);
+    run_blocking(app, f).await
+}
+
+/// sdk#2: the reason an upload description cannot be sent, or `None` when it
+/// can. Checked at the IPC boundary, BEFORE any work starts: a description the
+/// server would commit and then fail to store breaks every later upload of the
+/// project, and a publish would already have created the server project by the
+/// time `client::upload_stalx` (which refuses it too) saw it. A blank
+/// description is not refused here: the upload verbs substitute a default.
+fn unstorable_commit_message(text: Option<&str>) -> Option<SpeleoErrorDto> {
+    use crate::speleodb::commit_message::{check_commit_message, CommitMessageError};
+    match check_commit_message(text?) {
+        Err(e @ CommitMessageError::TooLong { .. }) => Some(SpeleoErrorDto {
+            message: e.to_string(),
+            action: SpeleoDbAction::Fatal,
+            status: None,
+            transport: None,
+            unpushed_local: None,
+            newer_schema: None,
+            endpoint_refusal: None,
+        }),
+        Ok(()) | Err(CommitMessageError::Empty) => None,
+    }
 }
 
 /// Log in to SpeleoDB. Either email+`password` (exchanged for a token) or a
 /// pasted `token` must be supplied; with a pasted token the `email` is ignored
 /// and derived from the API instead. `endpoint` overrides the configured/env
-/// endpoint for this session. Returns the (authoritative) user email + whether
-/// the authenticated instance - never the token itself.
+/// endpoint for this session, and `insecure_http` the saved plaintext-http
+/// choice (Settings passes the values on screen); both are saved with the
+/// session on success. Returns the (authoritative) user email + the
+/// authenticated instance - never the token itself.
 #[tauri::command]
 pub async fn speleodb_login(
     app: AppHandle,
     endpoint: Option<String>,
+    insecure_http: Option<bool>,
     email: Option<String>,
     password: Option<String>,
     token: Option<String>,
 ) -> Result<SpeleoLoginResult, SpeleoErrorDto> {
-    run_blocking(app, move |s| {
-        s.speleodb_login(endpoint, email, password, token)
+    run_transfer(app, move |s| {
+        s.speleodb_login(endpoint, insecure_http, email, password, token)
     })
     .await
 }
@@ -91,7 +127,7 @@ pub async fn speleodb_open_project(
     project_name: String,
     latest_commit_sha: Option<String>,
 ) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
-    run_blocking(app, move |s| {
+    run_transfer(app, move |s| {
         s.speleodb_open_project(project_id, project_name, latest_commit_sha)
     })
     .await
@@ -117,7 +153,7 @@ pub async fn speleodb_open_project_discarding_local(
     project_name: String,
     latest_commit_sha: Option<String>,
 ) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
-    run_blocking(app, move |s| {
+    run_transfer(app, move |s| {
         s.speleodb_open_project_discarding_local(project_id, project_name, latest_commit_sha)
     })
     .await
@@ -130,25 +166,15 @@ pub async fn speleodb_open_project_discarding_local(
 /// offer a retry) while treating the user as logged out.
 #[tauri::command]
 pub async fn speleodb_logout(app: AppHandle) -> Result<(), SpeleoErrorDto> {
-    run_blocking(app, AppState::speleodb_logout).await
-}
-
-/// [#213] Enable optimistic force-edit: edit the open remote project WITHOUT the
-/// server write lock (offline / contended), behind the FE's big-red warning. Opt-in
-/// (gated on the `allow_force_edit` config). No acquire, no network, BASE unchanged;
-/// the user later reconnects via `speleodb_start_editing`.
-#[tauri::command]
-pub async fn speleodb_force_edit(app: AppHandle) -> Result<(), SpeleoErrorDto> {
-    run_blocking(app, AppState::speleodb_force_edit).await
+    run_transfer(app, AppState::speleodb_logout).await
 }
 
 /// Acquire the write lock on the open remote project and reconcile it against the
 /// server (#194). Enables editing on a clean reconcile; reports divergence,
-/// contention (locked-by), or an error otherwise. [#213] Also serves as the
-/// force-edit "reconnect".
+/// contention (locked-by), or an error otherwise.
 #[tauri::command]
 pub async fn speleodb_start_editing(app: AppHandle) -> Result<StartEditingResult, SpeleoErrorDto> {
-    run_blocking(app, AppState::speleodb_start_editing).await
+    run_transfer(app, AppState::speleodb_start_editing).await
 }
 
 /// Push the open project's edits (if any) and release the lock, returning to
@@ -160,7 +186,10 @@ pub async fn speleodb_done(
     message: Option<String>,
     accept_older_version: Option<bool>,
 ) -> Result<DoneResult, SpeleoErrorDto> {
-    run_blocking(app, move |s| {
+    if let Some(refused) = unstorable_commit_message(message.as_deref()) {
+        return Err(refused);
+    }
+    run_transfer(app, move |s| {
         s.speleodb_done_acknowledged(message, accept_older_version.unwrap_or(false))
     })
     .await
@@ -169,8 +198,19 @@ pub async fn speleodb_done(
 /// Read-only refresh of the open project against the server (#197): no lock is
 /// taken (UpToDate / FastForward / DivergenceNeeded).
 #[tauri::command]
-pub async fn speleodb_update(app: AppHandle) -> Result<UpdateResult, SpeleoErrorDto> {
-    run_blocking(app, AppState::speleodb_update).await
+#[expect(
+    clippy::result_large_err,
+    reason = "IPC returns the shared structured SpeleoDB error"
+)]
+pub async fn speleodb_update(
+    app: AppHandle,
+    discard_changes: Option<bool>,
+    expected: Option<stalagmight_core::speleodb::SpeleoReleaseContext>,
+) -> Result<UpdateResult, SpeleoErrorDto> {
+    run_transfer(app, move |s| {
+        s.speleodb_reload(discard_changes.unwrap_or(false), expected)
+    })
+    .await
 }
 
 /// Push the open project's edits to SpeleoDB WITHOUT releasing the lock (T2d):
@@ -182,7 +222,10 @@ pub async fn speleodb_push(
     message: Option<String>,
     accept_older_version: Option<bool>,
 ) -> Result<PushResult, SpeleoErrorDto> {
-    run_blocking(app, move |s| {
+    if let Some(refused) = unstorable_commit_message(message.as_deref()) {
+        return Err(refused);
+    }
+    run_transfer(app, move |s| {
         s.speleodb_push_only_acknowledged(message, accept_older_version.unwrap_or(false))
     })
     .await
@@ -195,7 +238,7 @@ pub async fn speleodb_push(
 /// choice in the divergence prompt, so there is no single-click path to it.
 #[tauri::command]
 pub async fn speleodb_take_remote(app: AppHandle) -> Result<String, SpeleoErrorDto> {
-    run_blocking(app, AppState::speleodb_take_remote).await
+    run_transfer(app, AppState::speleodb_take_remote).await
 }
 
 /// Hand back a write lock only if THIS process took it, and only the one it took.
@@ -206,7 +249,33 @@ pub async fn speleodb_take_remote(app: AppHandle) -> Result<String, SpeleoErrorD
 /// [`AppState::speleodb_release_lock_acquired_here`].
 #[tauri::command]
 pub async fn speleodb_release_lock_acquired_here(app: AppHandle) -> Result<(), SpeleoErrorDto> {
-    run_blocking(app, AppState::speleodb_release_lock_acquired_here).await
+    run_transfer(app, AppState::speleodb_release_lock_acquired_here).await
+}
+
+/// Settle the OPEN project's write lock before a project switch or a quit leaves
+/// it, without closing anything: hand it back, holder-checked (`release_lock`
+/// unset or `true`), or keep it (`false`, the "Couldn't hand back the lock"
+/// dialog's Close and keep the lock). The reply carries what the release came to
+/// (`CommandResult::lock_release`); a failed or uncertain one fails the call, and
+/// the switch or quit waits for the user's answer. A user-visible transfer: the
+/// app's exit waits for it (lock#6).
+#[tauri::command]
+pub async fn speleodb_settle_open_lock(
+    app: AppHandle,
+    release_lock: Option<bool>,
+) -> crate::core::CommandResult {
+    let _transfer = super::exit_wait::user_transfer(&app);
+    let release = release_lock != Some(false);
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<AppState>()
+            .inner()
+            .speleodb_settle_open_lock(release)
+    })
+    .await
+    .unwrap_or_else(|e| {
+        crate::core::CommandResult::failure(format!("Handing back the lock failed: {e}"))
+            .with_lock_release(Some(crate::core::LockReleaseOutcome::Failed))
+    })
 }
 
 /// Release the write lock on ONE project by id (#201 per-project "Release" in the
@@ -217,7 +286,7 @@ pub async fn speleodb_release_lock(
     app: AppHandle,
     project_id: String,
 ) -> Result<(), SpeleoErrorDto> {
-    run_blocking(app, move |s| s.speleodb_release_lock(project_id)).await
+    run_transfer(app, move |s| s.speleodb_release_lock(project_id)).await
 }
 
 /// Per-project LOCAL state for a set of SpeleoDB projects: whether this machine
@@ -294,7 +363,7 @@ pub async fn speleodb_restore_revision(
     let keep_undo_history = keep_undo_history.unwrap_or(false);
     let discard_unpushed = discard_unpushed.unwrap_or(false);
     let chain_forward = chain_forward.unwrap_or(false);
-    run_blocking(app, move |s| {
+    run_transfer(app, move |s| {
         s.speleodb_restore_revision(
             project_id,
             project_name,
@@ -315,7 +384,7 @@ pub async fn speleodb_restore_revision(
 ///
 /// Read-only and permission-free, like the revision list it reads. Costs one
 /// `GET /revisions/`, so the frontend asks when the undo dropdown opens rather than on
-/// every status poll.
+/// every status refresh.
 #[tauri::command]
 pub async fn speleodb_unwind_target(
     app: AppHandle,
@@ -352,7 +421,7 @@ pub async fn speleodb_discard_changes(
     keep_lock: bool,
     acknowledged: bool,
 ) -> Result<Option<StartEditingResult>, SpeleoErrorDto> {
-    run_blocking(app, move |s| {
+    run_transfer(app, move |s| {
         s.speleodb_discard_changes(keep_lock, acknowledged)
     })
     .await
@@ -367,34 +436,12 @@ pub async fn speleodb_discard_changes(
 /// offering a step that would discard the edit.
 ///
 /// Same cost and same timing as its backward twin: one `GET /revisions/`, asked when the
-/// redo dropdown opens rather than on every status poll.
+/// redo dropdown opens rather than on every status refresh.
 #[tauri::command]
 pub async fn speleodb_rewind_target(
     app: AppHandle,
 ) -> Result<Option<SpeleoRewindTarget>, SpeleoErrorDto> {
     run_blocking(app, AppState::speleodb_rewind_target).await
-}
-
-/// [#303] Set the open project's per-project undo-history policy
-/// (`speleo_link.undo_mode`).
-///
-/// EDIT-SESSION-REQUIRED: this writes the `.stalx`, which is project state that rides to
-/// the server in the next push, so every collaborator inherits it. Force editing uses
-/// the same gate deliberately - see `AppState::speleodb_set_undo_mode`.
-#[tauri::command]
-pub async fn speleodb_set_undo_mode(app: AppHandle, mode: UndoMode) -> Result<(), SpeleoErrorDto> {
-    run_blocking(app, move |s| s.speleodb_set_undo_mode(mode)).await
-}
-
-/// Set the open project's server-side `exclude_geojson` flag (#200
-/// Enable-rendering): `PATCH /projects/{id}/`, permission-gated, no lock. Passing
-/// `false` re-enables web-viewer GeoJSON, effective on the next push.
-#[tauri::command]
-pub async fn speleodb_set_exclude_geojson(
-    app: AppHandle,
-    exclude: bool,
-) -> Result<(), SpeleoErrorDto> {
-    run_blocking(app, move |s| s.speleodb_set_exclude_geojson(exclude)).await
 }
 
 /// Report whether the backend already holds a usable token (and for whom). The
@@ -423,7 +470,7 @@ pub async fn speleodb_link_status(app: AppHandle) -> Result<SpeleoLinkStatus, Sp
 /// the project to a new path first so the user's edits land somewhere permanent.
 #[tauri::command]
 pub async fn speleodb_unlink(app: AppHandle) -> Result<(), SpeleoErrorDto> {
-    run_blocking(app, AppState::speleodb_unlink).await
+    run_transfer(app, AppState::speleodb_unlink).await
 }
 
 /// Remove the `speleo_link` row from a CLOSED foreign `.stalx` so it can be
@@ -455,18 +502,6 @@ pub async fn speleodb_get_project_metadata(
     run_blocking(app, AppState::speleodb_get_project_metadata).await
 }
 
-/// PATCH the open remote project's metadata with only the changed fields (#206):
-/// `PATCH /projects/{id}/`, permission-gated (READ_AND_WRITE), no lock. On a name
-/// change the SDB-authoritative name is folded into the local `.stalx` without
-/// dirtying. Returns the post-edit server truth.
-#[tauri::command]
-pub async fn speleodb_patch_project(
-    app: AppHandle,
-    patch: SpeleoProjectMetadataPatch,
-) -> Result<SpeleoProjectMetadata, SpeleoErrorDto> {
-    run_blocking(app, move |s| s.speleodb_patch_project(patch)).await
-}
-
 /// Create the open local project on SpeleoDB and push its first revision (#207):
 /// `POST /projects/` → relocate into the cache → acquire → upload → release. Returns
 /// the new project id, endpoint, and cache `local_path` the frontend reloads.
@@ -475,28 +510,25 @@ pub async fn speleodb_publish(
     app: AppHandle,
     params: SpeleoPublishParams,
 ) -> Result<SpeleoPublishResult, SpeleoErrorDto> {
-    run_blocking(app, move |s| s.speleodb_publish(params)).await
+    if let Some(refused) = unstorable_commit_message(params.message.as_deref()) {
+        return Err(refused);
+    }
+    run_transfer(app, move |s| s.speleodb_publish(params)).await
 }
 
 // Release the open project's lock.
 
-/// Release the lock on the linked project (own lock, or an ADMIN force-release of
-/// another user's lock). Does not push; a recovery action for a stuck lock.
+/// Switch a clean linked project to read-only, releasing only our own lock.
 #[tauri::command]
+#[expect(
+    clippy::result_large_err,
+    reason = "IPC returns the shared structured SpeleoDB error"
+)]
 pub async fn speleodb_release_current_lock(
     app: AppHandle,
-    own_only: Option<bool>,
-    allow_unpushed: Option<bool>,
     expected: Option<stalagmight_core::speleodb::SpeleoReleaseContext>,
 ) -> Result<(), SpeleoErrorDto> {
-    run_blocking(app, move |s| {
-        s.speleodb_release_current_lock(
-            own_only.unwrap_or(false),
-            allow_unpushed.unwrap_or(false),
-            expected,
-        )
-    })
-    .await
+    run_transfer(app, move |s| s.speleodb_release_current_lock(expected)).await
 }
 
 /// Read access restrictions before opening a linked SQLite project from disk.
@@ -510,4 +542,24 @@ pub async fn speleodb_project_access_at(
         s.speleodb_project_access_at(path, local_only.unwrap_or(false))
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_upload_description_the_server_cannot_store_is_refused_up_front() {
+        // sdk#2: 1001 characters once each line break becomes ". ".
+        let long = format!("{}\n{}", "a".repeat(500), "b".repeat(499));
+        let refused = unstorable_commit_message(Some(&long));
+        assert!(
+            matches!(&refused, Some(dto) if dto.action == SpeleoDbAction::Fatal && dto.message.contains("1001")),
+            "{refused:?}"
+        );
+        assert!(unstorable_commit_message(Some(&"a".repeat(1000))).is_none());
+        // Blank and absent fall through to the default description.
+        assert!(unstorable_commit_message(Some("  ")).is_none());
+        assert!(unstorable_commit_message(None).is_none());
+    }
 }

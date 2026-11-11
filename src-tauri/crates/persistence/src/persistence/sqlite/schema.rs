@@ -5,6 +5,7 @@ use rusqlite::{params, Connection, MAIN_DB};
 
 use crate::models::FEATURE_ID_STRIDE;
 
+use super::station_texts::CREATE_STATION_NAMES;
 use super::{Database, SCHEMA_VERSION, UNDO_FORMAT_SAFE_VERSION};
 
 /// Columns of `speleo_link` that MUST survive every future SCHEMA_VERSION bump
@@ -334,6 +335,12 @@ impl Database {
             )",
             [],
         )?;
+
+        // Ensure station_names table exists (station names, no schema bump - see
+        // `station_texts`). Runs only on the migration path: a v18 file opened
+        // through the fast path never gets here, so the read path tolerates the
+        // table's absence instead of relying on this.
+        self.conn.execute(CREATE_STATION_NAMES, [])?;
 
         // Ensure speleo_link table exists (schema v9: SpeleoDB hand-off identity
         // + dirty bit, #189). This CREATE IF NOT EXISTS is what makes the table
@@ -1639,6 +1646,10 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_undo_sequence ON undo_stack(sequence);
             ",
         )?;
+
+        // Station names - see `station_texts` for why this table carries no
+        // schema bump.
+        self.conn.execute(CREATE_STATION_NAMES, [])?;
 
         Ok(())
     }

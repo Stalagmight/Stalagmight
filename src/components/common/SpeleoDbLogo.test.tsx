@@ -14,7 +14,7 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
 
-import { SpeleoDbLogo } from './SpeleoDbLogo';
+import { SpeleoDbLogo, speleoLogoMask } from './SpeleoDbLogo';
 
 describe('SpeleoDbLogo untinted mark (#357 item 11)', () => {
   it('renders via the mask path and inherits currentColor, not a bare <img>', () => {
@@ -45,5 +45,51 @@ describe('SpeleoDbLogo untinted mark (#357 item 11)', () => {
     render(<SpeleoDbLogo tint="#ff0" testId="recent-project-logo" />);
     expect(screen.getByTestId('recent-project-logo')).toHaveAttribute('data-tint', '#ff0');
     expect(screen.queryByTestId('speleodb-logo-tinted')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * The 128px line art shrunk 8x by the browser's mask sampling rendered as noise at
+ * tab and button sizes. The mark now draws from the smallest pre-downscaled mask
+ * that still covers the device pixels it occupies (size x devicePixelRatio, which
+ * the UI zoom and the display both move).
+ */
+describe('SpeleoDbLogo mask size', () => {
+  const maskOf = () => (document.querySelector('[style*="mask-image"]') as HTMLElement).style.maskImage;
+
+  it.each([
+    [16, 1, 'speleodb-logo-16'],
+    [18, 1, 'speleodb-logo-24'],
+    [16, 1.27, 'speleodb-logo-24'],
+    [16, 0.8, 'speleodb-logo-16'],
+    [16, 2, 'speleodb-logo-32'],
+    [56, 1, 'speleodb-logo-64'],
+    [56, 2, 'speleodb-logo.png'],
+    [56, 3, 'speleodb-logo.png'],
+  ])('size %i at %s device px per CSS px draws from %s', (size, dpr, asset) => {
+    expect(speleoLogoMask(size * dpr)).toContain(asset);
+  });
+
+  it('follows the current device pixel ratio when it renders', () => {
+    const original = window.devicePixelRatio;
+    Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 2 });
+    try {
+      render(<SpeleoDbLogo size={16} />);
+      expect(maskOf()).toContain('speleodb-logo-32');
+    } finally {
+      Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: original });
+    }
+  });
+
+  it('every small mask is the original art, box-filtered: same aspect and a sane size', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    for (const px of [16, 24, 32, 48, 64]) {
+      const file = path.resolve(__dirname, `../../assets/speleodb-logo-${px}.png`);
+      const png = fs.readFileSync(file);
+      // PNG IHDR: width and height, big-endian, at bytes 16..24.
+      expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([px, px]);
+      expect(png.length).toBeLessThan(8 * 1024);
+    }
   });
 });

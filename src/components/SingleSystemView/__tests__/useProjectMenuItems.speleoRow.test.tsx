@@ -1,3 +1,4 @@
+import { useProjectStore } from '../../../store/projectStore';
 /**
  * The seam left behind after the SpeleoDB submenu moved to `useSpeleoMenuItems`:
  * the hamburger keeps only the wrapper row, and it must still carry the extracted
@@ -23,8 +24,7 @@ const LINK: SpeleoLinkState = {
   lockedByOther: false,
   hasUnpushedEdits: false,
   unwound: false,
-  forceEditing: false,
-  forceEditAllowed: false,
+
   undoMode: 'full',
   remoteState: 'up_to_date',
   noAccess: false,
@@ -39,6 +39,7 @@ const speleoRow = () => {
 };
 
 beforeEach(() => {
+  useProjectStore.setState({ project: { file_path: '/synthetic.stalx' } as never });
   useSpeleoStore.setState({
     link: null,
     remoteProjectId: 'p1',
@@ -47,23 +48,37 @@ beforeEach(() => {
 });
 
 describe('useProjectMenuItems SpeleoDB row', () => {
-  it('carries a populated submenu for a remote project', () => {
+  it('removes the obsolete submenu for a remote project', () => {
     useSpeleoStore.setState({ link: LINK });
     const row = speleoRow();
-    expect(row).toBeDefined();
-    expect(row?.submenu?.length).toBeGreaterThan(0);
+    expect(row).toBeUndefined();
   });
 
   it('is absent for a local project', () => {
     expect(speleoRow()).toBeUndefined();
   });
-});
 
+  // The "SpeleoDB" row that only switched to the left panel's SpeleoDB tab is
+  // gone too: the tab itself is the entry point.
+  it.each([
+    ['a local project in Survey', null, 'survey'],
+    ['a remote read-only project in Survey', LINK, 'survey'],
+    ['a remote project in Plan', LINK, 'plan'],
+    ['a remote project in Export', LINK, 'export'],
+  ] as const)('has no row that opens the SpeleoDB tab: %s', (_label, link, appMode) => {
+    useSpeleoStore.setState({ link });
+    useUIStore.setState({ appMode });
+    const { result } = renderHook(() => useProjectMenuItems({ onSave: async () => ({ success: true }) }));
+    const flat = result.current.flatMap((item) => [item, ...(item.submenu ?? [])]);
+    expect(flat.find((item) => item.id === 'project-menu-speleodb')).toBeUndefined();
+    expect(flat.filter((item) => item.label === 'SpeleoDB')).toEqual([]);
+  });
+});
 
 describe('SpeleoDB manual save intent', () => {
   it.each([
     [false, 'speleodb-done'],
-    [true, 'speleodb-close'],
+    [true, 'speleodb-done'],
   ] as const)('preserves closeAfterSave=%s while collecting the commit message', async (closeAfterSave, dialog) => {
     useSpeleoStore.setState({ link: { ...LINK, editState: 'editing', hasUnpushedEdits: true } });
     const openDialog = vi.spyOn(useUIStore.getState(), 'openDialog').mockImplementation(() => {});
@@ -74,7 +89,7 @@ describe('SpeleoDB manual save intent', () => {
       });
       await waitFor(() => expect(openDialog).toHaveBeenCalledWith(
         dialog,
-        ...(closeAfterSave ? [] : [{ mode: 'push' }]),
+        { mode: 'push', closeAfterSave },
       ));
     } finally {
       openDialog.mockRestore();

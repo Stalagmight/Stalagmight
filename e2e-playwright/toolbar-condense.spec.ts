@@ -25,7 +25,7 @@ interface CondenseState {
   historyHidden: boolean;
 }
 
-/** Horizontal overlap of the carousel with each side cluster, or null if a rect is missing. */
+/** Painted overlap with each side cluster, including the narrow two-row layout. */
 interface OverlapState {
   left: boolean;
   right: boolean;
@@ -38,7 +38,8 @@ async function readOverlap(page: Page): Promise<OverlapState | null> {
     const left = box('[data-testid="toolbar-file-controls"]');
     const right = box('[data-testid="toolbar-tools-group"]');
     if (!carousel || !left || !right) return null;
-    const hits = (a: DOMRect, b: DOMRect) => a.left < b.right && b.left < a.right;
+    const hits = (a: DOMRect, b: DOMRect) =>
+      a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
     return { left: hits(carousel, left), right: hits(carousel, right) };
   });
 }

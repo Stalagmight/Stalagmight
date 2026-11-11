@@ -30,8 +30,7 @@ const READ_ONLY_LINK: SpeleoLinkState = {
   lockedByOther: true,
   hasUnpushedEdits: false,
   unwound: false,
-  forceEditing: false,
-  forceEditAllowed: false,
+
   undoMode: 'full',
   remoteState: 'up_to_date',
   noAccess: false,
@@ -118,6 +117,55 @@ describe('routeOpenedFile', () => {
     expect(parseGpx).not.toHaveBeenCalled();
     // Handed off to the dialog - the source must survive until it resolves.
     expect(peekProjectActionSource()).toBe('keyboard');
+  });
+
+  describe('a .stalx through an in-project Import door (#674)', () => {
+    it('asks open-or-add instead of opening, handing off the source', async () => {
+      useProjectStore.setState({ project: { name: 'X' } as never, isDirty: true });
+      await routeOpenedFile('/cave/other.stalx', 'Import Failed', { importDoor: true });
+      expect(useUIStore.getState().activeDialog).toBe('add-or-open-project');
+      expect(useUIStore.getState().dialogData).toMatchObject({
+        path: '/cave/other.stalx',
+        fileName: 'other.stalx',
+      });
+      expect(loadProject).not.toHaveBeenCalled();
+      expect(peekProjectActionSource()).toBe('keyboard');
+    });
+
+    it('picking the open project\'s own file shows an already-open toast, not the dialog', async () => {
+      useProjectStore.setState({
+        project: { name: 'X', file_path: '/cave/self.stalx' } as never,
+        isDirty: false,
+      });
+      await routeOpenedFile('/cave/self.stalx', 'Import Failed', { importDoor: true });
+      expect(useUIStore.getState().activeDialog).toBeNull();
+      expect(loadProject).not.toHaveBeenCalled();
+      expect(useUIStore.getState().toasts.map((x) => x.key)).toContain('import-already-open');
+    });
+
+    it('is unchanged for the Open doors: a dirty project still defers to unsaved-changes', async () => {
+      useProjectStore.setState({ project: { name: 'X' } as never, isDirty: true });
+      await routeOpenedFile('/cave/other.stalx', 'Open Failed');
+      expect(useUIStore.getState().activeDialog).toBe('unsaved-changes');
+    });
+
+    it('is unchanged for the Open doors: a clean project still raises the swap confirm', async () => {
+      useProjectStore.setState({ project: { name: 'X' } as never, isDirty: false });
+      await routeOpenedFile('/cave/other.stalx', 'Open Failed', { importDoor: false });
+      expect(useUIStore.getState().activeDialog).toBe('launch-open-confirm');
+    });
+
+    it('with no project open the Import door opens the file directly (nothing to add to)', async () => {
+      await routeOpenedFile('/cave/other.stalx', 'Import Failed', { importDoor: true });
+      expect(loadProject).toHaveBeenCalledWith('/cave/other.stalx');
+    });
+
+    it('pickAndRoute forwards importDoor to the router', async () => {
+      useProjectStore.setState({ project: { name: 'X' } as never, isDirty: false });
+      openMock.mockResolvedValue('/cave/other.stalx');
+      await pickAndRoute([{ name: 'Project', extensions: ['stalx'] }], 'Import Failed', { importDoor: true });
+      expect(useUIStore.getState().activeDialog).toBe('add-or-open-project');
+    });
   });
 
   it('shows an unsupported-file error for an unknown extension and clears the source', async () => {

@@ -13,7 +13,7 @@ beforeEach(() => {
   useSpeleoStore.setState({
     session: { loggedIn: true, userEmail: 'old@example.com', endpoint: 'https://old.example.com' },
     sessionGeneration: 5,
-    link: { editState: 'editing', forceEditing: false, hasUnpushedEdits: true } as never,
+    link: { editState: 'editing', hasUnpushedEdits: true } as never,
   });
 });
 

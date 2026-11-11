@@ -1,3 +1,5 @@
+import { confirmWorkspaceDrafts } from '../utils/workspaceDrafts';
+import { autoAcquireSpeleoLock, useSpeleoReadOnlyNotice } from '../utils/autoAcquireSpeleoLock';
 import { createSaveProjectAction } from './projectSaveActions';
 import { runDeduplicatedProjectLoad } from '../utils/projectLoadRequests';
 import { create } from 'zustand';
@@ -7,7 +9,8 @@ import { trackCommand, setSource, peekProjectActionSource, clearProjectActionSou
 import { debugLog } from '../utils/debugLog';
 import { extractFilename } from '../utils/path';
 import type { SaveErrorKind } from '../utils/saveErrors';
-import { withThemeDepthRamp } from '../utils/exportOptions';
+import { exportScaleInputsFrom, withColorScales } from '../utils/exportOptions';
+import { useColorScaleStore } from './colorScaleStore';
 import {
   isEditDisabledError,
   isReverifyDivergedError,
@@ -62,6 +65,7 @@ import { emptySurveyData, surveyDataFromLegacy, surveyDataWithAdjustedStations }
 import { createProjectConfigActions, type ProjectConfigActions } from './projectConfigActions';
 import { createProjectHistoryBannerActions, HISTORY_BANNER_CLEARED, type ProjectHistoryBannerActions, type ProjectHistoryBannerState } from './projectHistoryBannerActions';
 import { runProjectSwitch, runConfirmedProjectSwitch, reserveProjectRequest, isProjectRequestCurrent, beginProjectMutation, isProjectMutationCurrent } from '../utils/projectTransition';
+import { releaseFailed, resolveReleaseFailure, settleOpenLockBeforeLeaving } from '../utils/speleoReleaseFailure';
 import { TOAST_KEYS } from '../utils/toastKeys';
 
 type ShotUpdatesPatch = Partial<ShotUpdates>;
@@ -129,7 +133,6 @@ function nextProjectTreeGeneration(): number {
 // must not clobber the newer result (e.g. a manual save's check racing a Repair's
 // check on the same project, where the project-identity guard can't tell them apart).
 let integrityCheckSeq = 0;
-
 
 /**
  * Parsed error from Tauri backend.
@@ -294,7 +297,7 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   cancelLoading: () => Promise<void>;
 
   /** Load a project using the consolidated load_project_full command */
-  loadProject: (path: string, opts?: { accessConfirmed?: boolean; request?: number }) => Promise<LoadProjectOutcome>;
+  loadProject: (path: string, opts?: { accessConfirmed?: boolean; request?: number; acquireLock?: boolean }) => Promise<LoadProjectOutcome>;
   /** Create a new project (legacy, still supported) */
   createProject: (name: string, projectLocation?: string, options?: CreateProjectOptions) => Promise<CommandResult>;
   /**
@@ -333,11 +336,17 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   saveAfterImport: () => Promise<boolean>;
   /**
    * Close the open project. By default (`releaseLock` unset/true) the backend
-   * best-effort releases a held SpeleoDB write lock first so the close can't strand
-   * the server mutex (fix 1). The release opt-out is reserved for internal tree
-   * replacements that retain the same project's edit session.
+   * hands a held SpeleoDB write lock back first (holder-checked) so the close can't
+   * strand the server mutex (fix 1) - but never over un-uploaded edits, which keep it.
+   * A release that fails or is uncertain closes nothing and raises "Couldn't hand
+   * back the lock" (Retry / Close and keep the lock / Cancel, which resolves
+   * 'Cancelled'). `releaseLock: false` is the exit prompt's "Keep the lock";
+   * `discardLocal: true` its confirmed "Discard changes" (local copy removed, then
+   * the lock released). A close the backend reports as failed leaves the project
+   * open: editing is shown paused until the link status is refreshed, and the
+   * caller shows the error.
    */
-  closeProject: (opts?: { releaseLock?: boolean; request?: number }) => Promise<CommandResult>;
+  closeProject:(opts?: { releaseLock?: boolean; discardLocal?: boolean; request?: number; isCurrent?: () => boolean }) => Promise<CommandResult>;
   refreshProjectState: () => Promise<void>;
   /**
    * Mark the project dirty (unsaved changes) without running a command. The DMP
@@ -482,6 +491,8 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
     provenance?: ImportReceiptProvenance,
     existingShotUpdates?: ExistingShotUpdate[] | null,
   ) => Promise<CommandResult>;
+  /** [#674] Append the `.stalx` at `path` into the open project as one undo step. */
+  addProjectFile: (path: string) => Promise<CommandResult>;
   suggestImportPlacement: (
     shots: ShotData[],
     azimuthReference?: AzimuthReference | null,
@@ -531,6 +542,7 @@ const IMPORT_COMMANDS = new Set([
   'execute_compass_import',
   'execute_walls_import',
   'execute_gpx_import',
+  'add_project_file',
 ]);
 
 /**
@@ -968,15 +980,20 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   //
   // Current same-path requests share decoding and geometry work. Ownership is
   // reserved before preflight; operation IDs protect dispatched loads afterward.
-  loadProject: (path: string, opts?: { accessConfirmed?: boolean; request?: number }) =>
+  loadProject: (path: string, opts?: { accessConfirmed?: boolean; request?: number; acquireLock?: boolean }) =>
     runDeduplicatedProjectLoad(path, opts?.request, (request) => {
     const actionSource = peekProjectActionSource();
+    let openedRemote = false;
+    let acquisitionBusyToken: number | undefined;
     let dispatched = false;
     const current = () => dispatched ? isProjectMutationCurrent(request) :
       isProjectRequestCurrent(request) || (opts?.accessConfirmed === true && isProjectMutationCurrent(request));
     const superseded: LoadProjectOutcome = { success: false, superseded: true };
 
     const promise: Promise<LoadProjectOutcome> = runConfirmedProjectSwitch(path, () => get().project?.file_path, opts?.accessConfirmed, async () => {
+      if (get().project?.file_path !== path && !await confirmWorkspaceDrafts(current)) return { success: false, superseded: !current() };
+      // Hand the open project's lock back before leaving it; a failed release asks (utils/speleoReleaseFailure).
+      if (get().project?.file_path !== path && !await settleOpenLockBeforeLeaving('switch', get().project !== null, current)) return { success: false, superseded: !current() };
       // [perf-debug] Trace each post-IPC step distinctly so we know whether
       // the visible "stuck progress bar" freeze is JSON.parse on the IPC
       // resolution, the Zustand set, the view switch / MapCanvas mount, or
@@ -1038,6 +1055,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           get().setLoadingProgress({ projectName: result.project.name });
         }
 
+        useUIStore.getState().resetLeftWorkspace();
         // Apply ALL state from single response
         const tSetStart = performance.now();
         set({
@@ -1084,6 +1102,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // `path` identifies WHICH project this link is for, so a link left over
         // from the previously-open remote project is replaced rather than reused.
         useSpeleoStore.getState().syncProjectLink(result.isRemote, path);
+        openedRemote = result.isRemote;
+        if (openedRemote && opts?.acquireLock !== false) acquisitionBusyToken = useSpeleoStore.getState().beginBusy();
+        useSpeleoReadOnlyNotice.setState({ notice: null });
 
         // Apply display settings to UI store (merge, don't overwrite)
         useUIStore.getState().applyDisplaySettings(result.displaySettings);
@@ -1164,8 +1185,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           // view paints. `refreshLinkStatus` below refines it, but it is unawaited
           // and swallows its errors, so with `unknown` left standing a failed
           // status call renders the project permanently read-only under the
-          // fail-closed gate AND leaves no status button to act from (it arms its
-          // recovery poll on `link !== null`). Seeding remote is the pessimistic
+          // fail-closed gate AND leaves no status button to act from (it requires
+          // `link !== null`). Seeding remote is the pessimistic
           // direction - read-only, with a way out on screen - and the status reply
           // resolves it either way (a non-remote status seeds `local`).
           if (useSpeleoStore.getState().projectLinkKind === 'unknown') {
@@ -1182,14 +1203,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           // success the callers act on: the refused-open prompt's "Keep the local
           // copy" used to seed a pessimistic read-only link over a project we hold
           // the lock on, and this branch preserved it verbatim - a read-only survey
-          // UI and a disarmed quit guard that healed only on the next status poll
-          // (Survey mode only, 30 s to 24 h).
+          // UI and a disarmed quit guard until another status refresh.
           //
           // Unawaited and best-effort on purpose: `speleodb_link_status` does
           // blocking HTTP for a remote project, and no caller of `loadProject` may
           // be stalled behind the network. So it is a REFINEMENT, never the fix -
-          // the seeding side (`keepLocalCopy`, and now every route through
-          // `finishOpen`) is correct on its own, offline included, and the
+          // the seeding side (`finishOpen`) is correct on its own, offline included, and the
           // fail-closed fallback above covers the case nothing else resolved.
           void useSpeleoStore.getState().refreshLinkStatus();
           return { success: true };
@@ -1261,7 +1280,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       }
     }, request);
 
-    return promise;
+    return promise.then(async outcome => {
+      if (outcome.success && openedRemote && opts?.acquireLock !== false && current()) {
+        await autoAcquireSpeleoLock(path, current);
+      }
+      return outcome;
+    }).finally(() => {
+      if (acquisitionBusyToken !== undefined) useSpeleoStore.getState().endBusy(acquisitionBusyToken);
+    });
   }),
 
   // Project operations - uses consolidated create_project_full command
@@ -1270,6 +1296,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     let dispatched = false;
     const current = () => dispatched ? isProjectMutationCurrent(request) : isProjectRequestCurrent(request);
     if (!current()) return emptyCommandResult(false, 'Superseded');
+    if (!await confirmWorkspaceDrafts(current)) return emptyCommandResult(false, current() ? 'Cancelled' : 'Superseded');
+    if (!await settleOpenLockBeforeLeaving('switch', get().project !== null, current)) return emptyCommandResult(false, current() ? 'Cancelled' : 'Superseded');
     // ALWAYS cancel first - NO isLoading guard
     await get().cancelLoading();
     if (!current()) return emptyCommandResult(false, 'Superseded');
@@ -1419,19 +1447,42 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     const request = opts?.request ?? reserveProjectRequest();
     set({ isClosing: true });
     return runProjectSwitch(async () => {
+      const closeContext = useSpeleoStore.getState();
+      let dispatched = false;
+      const reconcileFailedClose = () => {
+        const current = useSpeleoStore.getState();
+        if (!dispatched || !isProjectMutationCurrent(request)
+          || current.sessionGeneration !== closeContext.sessionGeneration
+          || current.remoteProjectId !== closeContext.remoteProjectId || !current.link) return;
+        // A release may have succeeded even when its response was lost. Stop
+        // presenting editing immediately; refresh the backend gate without
+        // delaying the actionable close error behind another network request.
+        useSpeleoStore.setState({ link: { ...current.link, editState: 'read-only' } });
+        void useSpeleoStore.getState().refreshLinkStatus();
+      };
       try {
-        if (!isProjectRequestCurrent(request)) return emptyCommandResult(false, 'Superseded');
-        const result = await invokeIpc<CommandResult>(
-          'close_project',
-          // Default: release a held SpeleoDB lock so the close doesn't strand it
-          // (fix 1). The keep-lock close path passes { releaseLock: false }.
-          { releaseLock: opts?.releaseLock ?? true },
-          { purpose: 'close project and release resources' },
-        );
+        const current = () => isProjectRequestCurrent(request) && (opts?.isCurrent?.() ?? true);
+        if (!current()) return emptyCommandResult(false, 'Superseded');
+        if (!await confirmWorkspaceDrafts(current)) return emptyCommandResult(false, current() ? 'Cancelled' : 'Superseded');
+        if (!current()) return emptyCommandResult(false, 'Superseded');
+        dispatched = true;
+        // Default: release a held SpeleoDB lock (never over un-uploaded edits -
+        // the backend keeps it). The exit prompt's "Keep the lock" passes
+        // `releaseLock: false`; its confirmed "Discard changes" `discardLocal: true`.
+        const close = (releaseLock: boolean, discardLocal = false) => invokeIpc<CommandResult>('close_project',
+          { releaseLock, discardLocal }, { purpose: 'close project and release resources' });
+        let result = await close(opts?.releaseLock ?? true, opts?.discardLocal === true);
+        // A release that failed or is uncertain closed nothing: ask (Retry / Close and keep the lock / Cancel).
+        if (releaseFailed(result)) { reconcileFailedClose(); result = await resolveReleaseFailure('close', result, close); }
         if (result.success && isProjectMutationCurrent(request)) {
           clearOpenProjectState(set);
+        } else if (!result.success) {
+          reconcileFailedClose();
         }
         return result;
+      } catch (error) {
+        reconcileFailedClose();
+        return emptyCommandResult(false, String(error));
       } finally {
         set({ isClosing: false });
       }
@@ -1663,7 +1714,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   // issue set actually changes. Keeping the issues populated also lets the
   // Review & Repair dialog still open them.
   dismissIntegrityIssues: () => set({ integrityDismissed: true }),
-
 
   openIntegrityDialog: () => set({ integrityDialogOpen: true }),
   closeIntegrityDialog: () => set({ integrityDialogOpen: false }),
@@ -2334,6 +2384,16 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     }
   },
 
+  addProjectFile: async (path: string) => {
+    const s = peekProjectActionSource();
+    if (s) setSource(s);
+    try {
+      return await executeCommand('add_project_file', { path }, { purpose: 'add a .stalx to the open project' });
+    } finally {
+      clearProjectActionSource();
+    }
+  },
+
   suggestImportPlacement: async (
     shots: ShotData[],
     // What `shots` are measured against (#438). Pass the same value the
@@ -2399,7 +2459,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     // non-depth modes. See `utils/exportOptions.ts`.
     await invokeIpc('export_image', {
       path,
-      options: withThemeDepthRamp(options),
+      options: withColorScales(options, exportScaleInputsFrom(get().config?.map_palette, useColorScaleStore.getState())),
     }, {
       purpose: 'export map image',
       fields: { path, format: options.format },

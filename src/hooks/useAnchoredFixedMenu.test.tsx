@@ -98,6 +98,42 @@ describe('useAnchoredFixedMenu', () => {
     expect(result.current.maxHeight).toBe(300);
   });
 
+  it('grows back past a stale clip when the scrolling list is INSIDE the menu (scrollRef)', () => {
+    // A fixed header (40px) above an overflow-auto list: under the prior cap the
+    // menu itself does not overflow (its scrollHeight equals its clipped box), the
+    // inner list does. Without scrollRef the remeasure reads 97px and stays there.
+    const { triggerRef, menuRef, menu } = setup();
+    const list = document.createElement('div');
+    menu.appendChild(list);
+    const scrollRef = { current: list };
+
+    const { result, rerender } = renderHook(
+      ({ remeasureKey, listContent }: { remeasureKey: string; listContent: number }) => {
+        const clip = 97;
+        const header = 40;
+        const listBox = Math.min(listContent, clip - header);
+        menu.getBoundingClientRect = () => rect({ height: header + listBox });
+        Object.defineProperty(menu, 'scrollHeight', { value: header + listBox, configurable: true });
+        Object.defineProperty(list, 'clientHeight', { value: listBox, configurable: true });
+        Object.defineProperty(list, 'scrollHeight', { value: listContent, configurable: true });
+        return useAnchoredFixedMenu(true, triggerRef, menuRef, {
+          align: 'center',
+          gap: 4,
+          width: 208,
+          maxHeightCap: 420,
+          remeasureKey,
+          scrollRef,
+        });
+      },
+      { initialProps: { remeasureKey: 'few', listContent: 57 } }
+    );
+    expect(result.current.maxHeight).toBe(97);
+
+    // The search is cleared: the list holds 600px of rows again.
+    rerender({ remeasureKey: 'all', listContent: 600 });
+    expect(result.current.maxHeight).toBe(420);
+  });
+
   it('leaves placement stable across re-renders when remeasureKey is omitted', () => {
     const { triggerRef, menuRef, menu } = setup();
 

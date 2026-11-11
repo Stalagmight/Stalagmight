@@ -26,8 +26,7 @@ const LINK: SpeleoLinkState = {
   lockedByOther: false,
   hasUnpushedEdits: false,
   unwound: false,
-  forceEditing: false,
-  forceEditAllowed: false,
+
   undoMode: 'full',
   remoteState: 'up_to_date',
   noAccess: false,
@@ -205,7 +204,7 @@ describe('SpeleoRevisionHistory (#218)', () => {
     expect(screen.queryByTestId('speleodb-revision-revert-bbbbbbbb2222')).not.toBeInTheDocument();
   });
 
-  it('offers Revert for an UNKNOWN (null) permission', async () => {
+  it('does not offer revision writes without a known write permission', async () => {
     // Offline, so the grant is not known - treat it as potentially editable and let
     // the backend gate decide, the same way the status button does.
     useSpeleoStore.setState({
@@ -214,7 +213,7 @@ describe('SpeleoRevisionHistory (#218)', () => {
     });
     render(<SpeleoRevisionHistory />);
     await waitFor(() => expect(screen.getByTestId('speleodb-revisions-list')).toBeInTheDocument());
-    expect(screen.getByTestId('speleodb-revision-revert-bbbbbbbb2222')).toBeEnabled();
+    expect(screen.queryByTestId('speleodb-revision-revert-bbbbbbbb2222')).toBeNull();
   });
 
   it('offers Revert - and NOT View - when un-pushed edits block the read-only peek', async () => {
@@ -231,19 +230,122 @@ describe('SpeleoRevisionHistory (#218)', () => {
     expect(screen.getByTestId('speleodb-revision-revert-bbbbbbbb2222')).toBeEnabled();
   });
 
-  it('offers NEITHER View nor Restore nor Revert while force-editing (no lock), with a hint', async () => {
-    // A force-editor holds unsaved, lock-less edits; swapping the tree would clobber
-    // them, so the backend refuses both and the UI offers no action.
-    useSpeleoStore.setState({
-      remoteProjectId: 'p1',
-      link: { ...LINK, editState: 'editing', forceEditing: true },
+  /**
+   * View lives in the persistent workspace with no blocking overlay, so the user can
+   * open another project while the revision downloads. The backend then refuses the
+   * swap rather than closing that project; the late refusal must not toast an error
+   * over the project the user is now working in.
+   */
+  it('a View refused after the user opened another project stays silent', async () => {
+    seed('read-only');
+    const sessionMoved = {
+      message:
+        'the project changed while this request was in flight; nothing was changed - try again',
+      action: 'Retry',
+      status: null,
+      transport: null,
+      unpushed_local: null,
+      newer_schema: null,
+    };
+    let reply: (() => void) | undefined;
+    invokeIpcMock.mockImplementation(async (cmd: string) => {
+      if (cmd !== 'speleodb_restore_revision') return REVISIONS;
+      await new Promise<void>((resolve) => {
+        reply = resolve;
+      });
+      throw sessionMoved;
     });
     render(<SpeleoRevisionHistory />);
     await waitFor(() => expect(screen.getByTestId('speleodb-revisions-list')).toBeInTheDocument());
-    expect(screen.queryByTestId('speleodb-revision-restore-bbbbbbbb2222')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('speleodb-revision-view-bbbbbbbb2222')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('speleodb-revision-revert-bbbbbbbb2222')).not.toBeInTheDocument();
-    expect(screen.getByTestId('speleodb-revisions-forceedit-hint')).toBeInTheDocument();
-    expect(screen.queryByTestId('speleodb-revisions-lock-hint')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId('speleodb-revision-view-bbbbbbbb2222'));
+    await waitFor(() => expect(reply).toBeDefined());
+    // The user opens a local project; the workspace's SpeleoDB section goes away.
+    useSpeleoStore.setState({ remoteProjectId: null, link: null });
+    reply?.();
+
+    await waitFor(() =>
+      expect(screen.queryByTestId('speleodb-revisions')).not.toBeInTheDocument(),
+    );
+    // Let the rejected request settle before asserting nothing was shown.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(showToastMock).not.toHaveBeenCalled();
+    expect(useProjectStore.getState().refreshProjectState).not.toHaveBeenCalled();
+  });
+
+  it('a View refused while its project is still open is reported', async () => {
+    // The text is the backend's own "nothing was changed - try again" (asserted in
+    // the Rust integration test); `getErrorMessage` is stubbed in this file.
+    seed('read-only');
+    const sessionMoved = {
+      message:
+        'the project changed while this request was in flight; nothing was changed - try again',
+      action: 'Retry',
+      status: null,
+      transport: null,
+      unpushed_local: null,
+      newer_schema: null,
+    };
+    invokeIpcMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'speleodb_restore_revision') throw sessionMoved;
+      return REVISIONS;
+    });
+    render(<SpeleoRevisionHistory />);
+    await waitFor(() => expect(screen.getByTestId('speleodb-revisions-list')).toBeInTheDocument());
+
+    await userEvent.click(screen.getByTestId('speleodb-revision-view-bbbbbbbb2222'));
+    await waitFor(() => expect(showToastMock).toHaveBeenCalledTimes(1));
+    expect(showToastMock.mock.calls[0]?.[2]).toBe('error');
+    expect(useProjectStore.getState().refreshProjectState).not.toHaveBeenCalled();
+  });
+});
+
+describe('SpeleoRevisionHistory revision times (sdk#7)', () => {
+  it('shows the server New York wall time as a local time with its GMT offset', async () => {
+    seed('read-only');
+    invokeIpcMock.mockResolvedValue([
+      { id: 'aaaaaaaa1111', parent_ids: ['bbbbbbbb2222'], author_email: 'me@x', authored_date: '2026/11/09 04:15', message: 'second' },
+      { id: 'bbbbbbbb2222', parent_ids: [], author_email: 'you@x', authored_date: 'not a date', message: 'root' },
+    ] satisfies SpeleoRevision[]);
+    render(<SpeleoRevisionHistory />);
+    await waitFor(() => expect(screen.getByTestId('speleodb-revisions-list')).toBeInTheDocument());
+
+    const when = screen.getByTestId('speleodb-revision-date-aaaaaaaa1111');
+    // 04:15 in New York (EST) is 09:15 UTC - not 04:15 in the viewer's zone.
+    expect(when.getAttribute('datetime')).toBe('2026-11-09T09:15:00.000Z');
+    expect(when.textContent).toMatch(/ GMT[+-]\d+(:\d{2})?$/);
+    expect(when.getAttribute('title')).toBeTruthy();
+    // A time that cannot be placed is not shown at all, separator included.
+    expect(screen.queryByTestId('speleodb-revision-date-bbbbbbbb2222')).toBeNull();
+    expect(screen.getByTestId('speleodb-revision-bbbbbbbb2222').textContent).not.toContain('·');
+    expect(screen.getByTestId('speleodb-revision-bbbbbbbb2222').textContent).not.toContain('not a date');
+  });
+
+  it('shows an ISO UTC instant as the same local time with its GMT offset', async () => {
+    seed('read-only');
+    invokeIpcMock.mockResolvedValue([
+      { id: 'aaaaaaaa1111', parent_ids: ['bbbbbbbb2222'], author_email: 'me@x', authored_date: '2026-11-09T09:15:42.123Z', message: 'second' },
+      { id: 'bbbbbbbb2222', parent_ids: [], author_email: 'you@x', authored_date: '2026/11/09 04:15', message: 'root' },
+    ] satisfies SpeleoRevision[]);
+    render(<SpeleoRevisionHistory />);
+    await waitFor(() => expect(screen.getByTestId('speleodb-revisions-list')).toBeInTheDocument());
+
+    const iso = screen.getByTestId('speleodb-revision-date-aaaaaaaa1111');
+    expect(iso.getAttribute('datetime')).toBe('2026-11-09T09:15:42.123Z');
+    expect(iso.textContent).toMatch(/ GMT[+-]\d+(:\d{2})?$/);
+    // The same minute from a pre-ISO server reads the same.
+    expect(screen.getByTestId('speleodb-revision-date-bbbbbbbb2222').textContent).toBe(iso.textContent);
+  });
+
+  // `text-text-tertiary` is not a configured colour (no token, no Tailwind entry),
+  // so it applied nothing and the time took whatever colour it inherited. It reads
+  // in the secondary text token, which holds WCAG AA on the panel (tokens.test.ts).
+  it('shows the time in the secondary text colour', async () => {
+    seed('read-only');
+    invokeIpcMock.mockResolvedValue(REVISIONS);
+    render(<SpeleoRevisionHistory />);
+    const when = await screen.findByTestId('speleodb-revision-date-aaaaaaaa1111');
+    expect(when.parentElement).toHaveClass('text-text-secondary');
+    expect(when.parentElement?.className).not.toMatch(/tertiary/);
   });
 });

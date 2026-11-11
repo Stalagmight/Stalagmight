@@ -37,6 +37,61 @@ rather than restating it, because a copy here rots silently.
 
 ---
 
+## SpeleoDB project workspace
+
+All project editors expose a full logo + SpeleoDB toolbar button in every mode.
+Survey opens on Sections and offers Sections | SpeleoDB tabs in one left dock.
+Plan and Export reveal SpeleoDB only on request unless it was already selected;
+returning to Survey restores its tab. Tab navigation preserves map, selection,
+section expansion, scroll and unfinished drafts, without changing lock ownership.
+A local project's SpeleoDB tab contains a centered explanation of version history
+and team collaboration and one Convert to a SpeleoDB project action. It opens the
+creation form; confirmation saves and uploads, then downloads and opens the fresh
+server version. The project becomes managed. Failed upload/download recovery keeps
+that managed identity and pending work without creating duplicate server projects.
+Signed-out users authenticate in Settings and return to their creation draft.
+Publishing blocks the app with a centered progress indicator for up to 120 seconds.
+After that limit the indicator expires, a timeout explanation appears, and the
+dialog can be closed while the original request finishes; duplicate submission
+remains disabled.
+
+The dock retains resize/pin/hover behavior, uses a 320px SpeleoDB minimum within the
+400px maximum, and floats at constrained widths. Programmatic opening focuses the
+selected tab and exits fullscreen table mode while preserving table state.
+
+The persistent project header and everyday Save Changes, Switch to Read Only Mode/Resume editing, Reload Project
+and web controls sit above an expandable Revision History section. Close Project sits below Reload Project and returns
+to the project listing after unsaved-work confirmation and lock release. Account and
+connection forms live exclusively in application Settings. Local settings retains
+validation and elevation editing; linked project names remain server-managed. Home retains its entry points. The
+project-editor SpeleoDB menus, remote settings dialog and undo-menu revision
+controls are replaced by workspace navigation. Critical access, lock-loss,
+upload-failure and unuploaded-work indicators remain visible outside the tab.
+
+Remote opening automatically attempts lock acquisition and reconciliation. No
+explicit editing-without-a-lock feature exists. Offline opening stays read-only;
+transient disconnection after acquisition permits local editing. Confirmed lock
+loss, permission loss or sign-out closes the editing gate. Backend direct mutation
+and upload calls enforce the same ownership requirements.
+
+Explicit Save, its shortcut and Save Changes share a dispatcher: local Save for
+local projects, upload confirmation for linked ones, and a blocked explanation
+without the lock. Upload needs a description, local save and fresh server ownership
+verification; ordinary upload keeps the lock. Clean projects do not upload empty
+revisions. Autosave and autosave retry remain local-only. Save and Close continues
+only after confirmed upload and release, with no newer unuploaded changes. Other
+exits automatically release without upload, protecting unsaved survey and form
+drafts with Discard changes / Cancel. A release that fails or is uncertain never
+leaves silently: Close, project switches and Quit stay put and ask "Couldn't hand
+back the lock" (Retry / Close and keep the lock / Cancel). Dirtiness is independent of validity.
+Switch to read-only refuses unsaved or unuploaded changes, with Save Changes guidance.
+Reload requires explicit Discard changes / Cancel for pending work, preserves mode,
+and never acquires a lock. Historical checkouts return to the live server version.
+Start Editing is the only acquisition/reconciliation flow; fresh revision topology
+is checked after acquisition. Status refresh cannot enable editing. Failed downloads,
+validation, stale sessions and newer edits preserve the current project.
+See [SpeleoDB](SpeleoDB.md) and [Saving](saving.md) for failure and recovery rules.
+
 ## 1. Overview
 
 ### 1.1 Purpose
@@ -69,7 +124,7 @@ Stalagmight is a desktop application for processing underwater cave survey data.
 - Multi-project workspace (Global View)
 - Export: PNG, SVG, PDF (map images), CSV, JSON, Ariane `.tml` (data)
 - Dive and gas planning as the Plan workspace mode, persisted to a `.plnx` sidecar
-- SpeleoDB integration - remote project hand-off; see [the native-file and lock contract](SpeleoDB.md) for Save + Push, local autosave, keep-lock exits and access verification
+- SpeleoDB integration - remote project hand-off; see [the native-file and lock contract](SpeleoDB.md) for Save + Push, local autosave, automatic-release exits and access verification
 - SQLite project storage, undo/redo with persistence
 - An Android tablet build, sideload-only and not in CI, with partial touch
   support ([touch-support.md](touch-support.md))
@@ -158,7 +213,7 @@ See [TESTING.md](TESTING.md) for the tiers and which one a test belongs in, and
 
 ### 2.9 Settings
 - Global settings in the Settings dialog, plus a per-project subset (project name,
-  validation thresholds, SpeleoDB) stored in the `.stalx`
+  validation thresholds) stored in the `.stalx`
 - Changes are staged and applied on Save, not live (section 10.4)
 - Reset to defaults per category
 
@@ -221,7 +276,7 @@ Project (Cave System)
 │   ├── azimuth_reference: Option<AzimuthReference>
 │   └── Shots[]
 │       ├── id: u32 (internal, immutable)
-│       ├── uuid: Option<String> (persistent identity, schema v6+)
+│       ├── uuid: Option<String> (persistent identity, schema v6+, unique across the project)
 │       ├── azimuth_in: f64 (degrees, 0-360)
 │       ├── azimuth_out: f64 (degrees, 0-360)
 │       ├── length: f64 (meters)
@@ -270,6 +325,29 @@ Examples:
 - 0:15 → 16th station of section 0
 - Merged station: [0:15, 1:0] → Station 15 of section 0 merged with station 0 of section 1
 ```
+
+A station's stored identity is not this index but the shot UUID before it
+(`StationAnchor::AfterShot`). Shot UUIDs are unique across the whole project:
+an import, merge or Add that brings an id the project already holds renames the
+newcomer's copy to a derived id, and a file saved before that rule is healed the
+same way on load, with its undo history translated alongside (see
+[ariane-export.md](ariane-export.md#shot-uuids) and
+[undo-redo.md](undo-redo.md#a-loaded-history-follows-the-loads-shot-uuid-heal)).
+
+The index is positional: inserting, deleting or reversing shots renumbers it.
+A station can also carry a **name**, free text stored apart from the shots and
+keyed to the physical station, so it stays put through those edits. A DMP
+import records each station's mNemo station number there (see
+[dmp-import.md](dmp-import.md#station-names)); names are not unique (mNemo
+restarts at 0 in every section), so the grid, the detail panel and the station
+links show a name beside the positional ID (`3:5 · 17`), never instead of it.
+The one place a name stands alone is the opt-in **Station names** map label
+(and the matching image-export option), which labels each named station with
+its name instead of its index and leaves unnamed stations unlabelled; it is
+exclusive with the Station IDs label, so the two numbers are never drawn
+side by side. A shot delete drops the name of the
+station it removes, an inserted shot adds an unnamed station, and a reverse
+keeps every name on its physical station.
 
 ### 4.3 Coordinate System
 
@@ -467,8 +545,9 @@ the `ModeCarousel` in the middle of the toolbar (`uiStore.appMode`): **Survey**,
 **Plan**, **Export**. Survey is the editable workspace. Plan and Export force the
 read-only Closures Computed View (on a project with no eligible closures the
 geometry falls back to the Raw Data View; the modes are read-only regardless - gating keys
-off `appMode`, not the geometry), so the left Sections dock and every
-geometry-mutating tool are Survey-only; selection, inspection and measurement stay
+off `appMode`, not the geometry), so the Sections tab and every
+geometry-mutating tool are Survey-only. Linked projects retain the SpeleoDB left
+workspace on request in every mode; selection, inspection and measurement stay
 available in all three.
 
 Plan is dive and gas planning: the gas reach field over the survey, route and
@@ -579,7 +658,7 @@ Primary view for survey work.
 
 | Panel | Default State | Behavior |
 |-------|---------------|----------|
-| Sections Panel | Open, 250px | Resizable, collapsible |
+| Left workspace | Sections open, 250px | Resizable, collapsible; linked projects also offer SpeleoDB (320px minimum, 400px maximum, overlay when constrained) |
 | Detail Panel | Open, 300px | Resizable, collapsible |
 | Data Table | Collapsed | Resizable (height), collapsible |
 
@@ -727,7 +806,7 @@ The Undo and Redo toolbar buttons feature dropdown menus showing recent actions 
 - **Hover**: Dropdown opens after 300ms delay when hovering over Undo/Redo buttons
 - **Chevron Indicator**: A small `▾` chevron appears next to the button text when history is available
 - **Click**: Single click on button performs standard undo/redo (one step)
-- **Empty State**: The button stays disabled and hover opens nothing, with one exception - on a SpeleoDB-linked project whose write lock is held and where a revision-chain step resolves, hover (or ArrowDown) opens the panel to show the pinned Unwind/Rewind entry. Placement mode suppresses the panel entirely
+- **Empty State**: The button stays disabled and hover opens nothing. SpeleoDB revision inspection and restore actions live in the left workspace Revision History section.
 
 #### Dropdown Layout
 
@@ -797,7 +876,7 @@ The dropdown stays open when performing actions (button click, item click, keybo
   - Mouse leaving the button/dropdown area (100ms buffer)
   - Pressing Escape key
   - Clicking outside the dropdown
-  - Stack becoming empty after an action (auto-close), unless a SpeleoDB write lock is held
+  - Stack becoming empty after an action (auto-close)
 
 #### Action Behavior
 
@@ -807,7 +886,7 @@ When an action is performed while the dropdown is open:
 - Keyboard navigation and scroll position reset to the top (first item)
 - Detail preview popup is dismissed immediately on any action
 - Rapid clicks are queued and executed sequentially with a refresh after each
-- If the stack becomes empty after an action, remaining queued actions are discarded and the dropdown closes - unless a SpeleoDB write lock is held, in which case it stays open so the Unwind/Rewind chain entry stays reachable
+- If the stack becomes empty after an action, remaining queued actions are discarded and the dropdown closes
 - On error, the dropdown stays open, the stack is refreshed to reflect backend state, and an error dialog is shown with title, message, and stack trace (if available from a caught exception)
 - Ctrl+Z/Y/Shift+Z keyboard shortcuts are intercepted by the dropdown (capture phase) to prevent the global handler from causing a double-undo/redo
 - Keyboard shortcuts are NOT intercepted when focus is in a text input, textarea, select, or contentEditable element (native text editing undo/redo is preserved)
@@ -856,13 +935,18 @@ The three move tools are documented in detail in [move-tools.md](move-tools.md).
 #### Display Toggles (Right-click or menu)
 - Stations (dots)
 - Section names (labels)
+- Station IDs or Station names (labels; one or the other, never both). Station
+  IDs label every station with its index. Station names label each named
+  station with its name (e.g. its mNemo station number) and leave unnamed
+  stations unlabelled; the pill is disabled while the project has no names.
+- Station comments, shot comments
 - Shot data (azimuth, length, depth)
 - Reference shots (faded, semi-transparent lines)
 - Zero datum (enlarged golden station dot)
 - Grid overlay (theme-aware; spacing chosen by the user from 1, 5, 10, 25, 50, 100 m - default 10 m)
 - Scale bar (always shown; not a toggle)
 - Satellite imagery
-- Depth color gradient (configurable palette)
+- Depth color gradient, and the distance gradient: palette and Levels range from the legend cog (docs/color-palettes.md)
 - LRUD passage walls (future)
 
 #### Map Interactions
@@ -1229,8 +1313,9 @@ Shown when creating a loop closure between two **connected** stations.
 │  Options:                                                        │
 │    [ ] Include station comments                                 │
 │    [ ] Include shot comments                                    │
-│    [✓] Include station labels                                   │
-│    [✓] Include section names                                    │
+│    [ ] Include station IDs                                      │
+│    [ ] Include station names                                    │
+│    [ ] Include section names                                    │
 │    [ ] Include shot data (azimuth, length, depth)               │
 │                                                                  │
 │  Resolution: [High (300 DPI) ▼]                                 │
@@ -1407,7 +1492,13 @@ user to delete the connected shots instead.
    - Enter new merged system name
    - Optional checkbox: "Archive original project files (rename to
      .stalx.archived)" - off by default
-5. Confirm → Systems merged into single file
+5. Confirm → Systems merged into single file. Each source is read like an
+   open would read it (through a private copy, so the source files are only
+   read - renamed only if you choose to archive them - and an older file's
+   pending shot classification is finished).
+   A system with a GPS zero datum is placed at its real position: the first
+   one's datum station becomes the origin, and every later one lands at its
+   GPS position relative to it. A system without a datum keeps its own layout.
 6. Auto-switch to Single System View
 7. User connects the systems using Merge Tool
 
@@ -1648,13 +1739,13 @@ The sidebar displays 12 settings categories, with a visual separator before the 
 | Appearance | Theme mode (dark/light/auto), day and night color theme selection with preview cards, 10 color themes |
 | Units | Length/depth/angle units, decimal precision |
 | Gas planning | Swim speed, jump RMV multiplier, whether reference legs count toward gas |
-| Display | Background/grid/font colors, grid spacing, font size, depth gradient settings, section color palette |
+| Display | Grid/font colors, grid spacing, font size, measure-path color, section color palette |
 | Map | Satellite provider/toggle/GPS origin, zoom settings, pan/zoom controls, station/shot appearance, snap settings, animation settings |
 | Validation | Shot length min/max warnings, depth change warnings, azimuth deviation warnings, in/out difference thresholds |
 | Export | Default image format (PNG/SVG/PDF), default DPI, default layer includes (satellite, grid, labels) |
 | Shortcuts | Searchable shortcut editor with categories (Tools, Edit, View, Panels), primary/secondary binding slots, conflict detection, reserved shortcuts display |
 | Cache | Tile cache statistics, clear cache button, cache enable toggle, max size, TTL days |
-| SpeleoDB | Account sign-in, API endpoint, token fallback, insecure-HTTP and force-edit toggles, lock poll interval |
+| SpeleoDB | Account Connect / Disconnect, API endpoint, token authentication, automatic transport policy, startup and manual refresh, "Purge all cached files" (keeps copies with un-uploaded changes unless their deletion is confirmed twice) |
 | Advanced | Debug settings (hitboxes, hit detection logging), logging level/max size, placement suggestion heuristic constants, panel dimensions, reload config from disk |
 
 ### 10.3 Navigation
@@ -1946,8 +2037,18 @@ export function formatDate(date: Date, locale: string): string {
 Only labels are thinned by zoom: each label carries a baked reveal zoom that folds
 the collision declutter together with a nested decimation band
 (`labelReveal.ts` / `labelDecimation.ts`), and the shader draws a label only at or
-above that zoom - see [map-renderer.md](map-renderer.md). Shot geometry itself is
-not simplified: no path simplification, no station merging, no zoom-based hiding.
+above that zoom - see [map-renderer.md](map-renderer.md). Where labels compete for
+the same space, a real-line label wins over a label that belongs only to jump or
+reference shots, and a jump label wins over a reference one. Station markers
+and shot lines follow the same order: where they coincide or overlap (a jump or
+reference section tied in at a real station, or surveyed along the real line),
+the real-line marker or line is drawn on top and takes the hover and the click,
+then jump, then reference. The selection's section (the selected section, or
+the section of the selected station or shot) is drawn above all of them and
+takes the hover and the click where it overlaps them; labels keep the rank
+order. Shot
+geometry itself is not simplified: no path simplification, no station merging,
+no zoom-based hiding.
 
 ### 13.3 Data Table Virtualization
 
@@ -2217,8 +2318,8 @@ The schema is versioned (`SCHEMA_VERSION` in
 opened. Alongside the survey tables (project, sections, shots, station merges,
 zero datums, loop closures, section and station offsets) it holds per-project and
 display settings, the persisted undo and redo stacks, resolved warnings, import
-hashes, station comments, the SpeleoDB link row, and the Unwind chain position in
-`speleo_undo_chain`. Five markers are worth knowing before touching migration
+hashes, station comments and names, the SpeleoDB link row, and the Unwind chain
+position in `speleo_undo_chain`. Five markers are worth knowing before touching migration
 code:
 
 - `UNDO_FORMAT_SAFE_VERSION` - files written before it get their persisted
@@ -2255,6 +2356,20 @@ code:
   `UNDO_FORMAT_SAFE_VERSION` stays at 7: it is the floor for the pre-v7 purge
   alone, and bumping it would make the v13 and v15 arms' own tests pass with
   those arms removed.
+
+`station_names` holds per-station names in the same positional shape as
+`station_comments`. It was added at v18 WITHOUT a schema version bump, on
+purpose: SpeleoDB turns an uploaded `.stalx` into a map with OpenSpeleo's
+Python package `stalagmight_lib` (pytool_stalagmight_lib, through
+`openspeleo_lib`; not the app's Rust lib crate of the same name). It refuses any
+file not at exactly v18 and reads only the tables it knows, so a new table is
+invisible to it while a bump would lock it out (verified version and details in
+`persistence/sqlite/station_texts.rs`). The cost is that a build without the table drops
+the names on its next save. A v18 file from before the table takes the version
+fast path, so the read side treats a missing table as empty and `save_project`
+creates it inside its transaction; `station_names_tests.rs` in
+`persistence/sqlite/` pins both, and that no table the outside reader reads
+changes when a project gains names.
 
 The dive plan lives beside the project in its own `.plnx` SQLite sidecar
 (`src-tauri/crates/persistence/src/persistence/plnx.rs`), not in the `.stalx`.
@@ -2303,12 +2418,23 @@ pub struct DmpShot {
 }
 ```
 
+The file carries no station numbers: mNemo numbers a section's start 0 and the
+end of its N-th shot N, so the importer derives each station's number from the
+shot's position (counting only the shots it imports - an assumption not yet
+checked against a device) and records it as the station's name; see
+[dmp-import.md](dmp-import.md#station-names).
+
 ### 17.3 Export Formats
 
 **Map Image (PNG/SVG/PDF):**
 - Render current map view with selected options
 - SVG preserves vector quality
 - PDF includes metadata
+- Station labels are the station IDs or the station names (one choice, like
+  the Display menu; unnamed stations get no name label, and a merged point is
+  named by its first named station). If a caller sends both options, the IDs
+  are drawn. Names are stripped of control and bidi characters and capped at
+  24 characters.
 
 #### DPI Scaling
 
@@ -2483,7 +2609,7 @@ not live co-editing), and floating/dockable panels.
 | Toggle Depth Gradient | Shift+D |
 | Toggle Grid | Shift+G |
 | Toggle Satellite | B |
-| Toggle Station Labels | L |
+| Toggle Station IDs | L |
 | Toggle Shot Labels | Shift+L |
 | Toggle Section Labels | Ctrl+L |
 | Toggle Sections Panel | Ctrl+1 |
@@ -2588,3 +2714,27 @@ Reference Shot: 28% opacity of the section color (#27)
 Selection Highlight: #4ecdc4
 Loop Closure Line: dashed, colored by error severity (#22c55e <1%, #eab308 1-3%, #f97316 3-5%, #ef4444 >5%)
 ```
+
+## Immediate SpeleoDB connection settings
+
+Connect saves changed preferences and authenticates immediately. Success closes
+Settings and refreshes the project listing. Disconnect takes effect immediately,
+clears the remote listing and stays on the SpeleoDB Settings tab. Neither action
+requires a subsequent Save. While connected, the server endpoint and both reset
+controls are disabled; backend requests to change instances are also refused.
+Disconnect first, including when the current server is temporarily unavailable.
+
+The SpeleoDB tab has a Close button instead of Save/Cancel. Closing validates and
+saves preference changes, including changes in other categories, without connecting.
+Connection and persistence errors keep Settings open. The ordinary Settings
+unsaved-changes prompt offers only Cancel (red) and Discard Changes (blue).
+
+HTTPS is required except for HTTP to the exact host `localhost`, the exact IPv4
+address `127.0.0.1`, or valid IPv4 addresses in `192.168.0.0/16`. Valid ports are
+allowed. For HTTP, other private ranges, IPv6, localhost aliases/subdomains, public hosts,
+missing schemes and malformed addresses are rejected, without any DNS lookup. An
+endpoint the policy refuses produces an error dialog when connecting, or when saving
+a new server. `insecure_http` lifts only the HTTP rule (never certificate
+verification); it stays in the file so existing configurations load, Settings has
+no control for it, and its development-build-only handling is being finalised by a
+follow-up commit. Certificate verification and redirect restrictions remain.

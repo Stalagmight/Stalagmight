@@ -118,7 +118,7 @@ export default function SystemCard({
       // A bar down the leading edge: yellow for work that is only on this computer
       // (#270), bright neutral when you hold the SpeleoDB write lock, blue when
       // someone else does. Accent only - no badge here (the recents list is a
-      // chooser; the actionable "!" lives on the status button).
+      // chooser, and un-uploaded work is not an error).
       //
       // Via recentCardStyle, not recentAccentStyle: `ring-1` above compiles to a
       // box-shadow, which an inline one would replace outright, dropping the

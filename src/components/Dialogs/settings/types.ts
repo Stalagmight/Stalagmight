@@ -7,6 +7,8 @@ import type { SettingsCategory } from '../SettingsSidebar';
 export interface SettingsCategoryProps {
   /** Current config values (local state) */
   config: Config;
+  saveBeforeConnect?: () => Promise<boolean>;
+  onConnectionBusyChange?: (busy: boolean) => void;
   /** Callback to update config values */
   onChange: (updates: Partial<Config>) => void;
   /** Set of changed field paths (e.g., 'general.auto_save') for highlighting */

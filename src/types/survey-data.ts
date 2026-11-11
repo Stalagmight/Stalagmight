@@ -34,6 +34,7 @@ import type { ClosureRef } from './ipc/ClosureRef';
 import type { GpsCoordinates } from './ipc/GpsCoordinates';
 import type { AzimuthReference } from './ipc/AzimuthReference';
 import type { SurveyDirection } from './ipc/SurveyDirection';
+import { displayStationName } from '../utils/formatters';
 
 /** Section metadata kept as small structured objects. ~14k items for
  *  92.stalx; total memory is tiny compared to the shot payload. The
@@ -125,6 +126,8 @@ export interface SurveyData {
   stationMergedWith: Map<number, StationRef[]>;
   stationClosuresWith: Map<number, ClosureRef[]>;
   stationComments: Map<number, string>;
+  /** Station names (e.g. the mNemo station number of a DMP import). */
+  stationNames: Map<number, string>;
 }
 
 /**
@@ -182,6 +185,21 @@ export function shotKindToFlags(kind: ShotKind): number {
 /** True for the two virtual kinds. Mirrors Rust's `ShotKind::is_virtual`. */
 export function isVirtualKind(kind: ShotKind): boolean {
   return kind !== 'Normal';
+}
+
+/**
+ * Rank of a station from the kinds of shot that touch it, as the station kind
+ * mask encodes them (0 = a Normal shot touches it, bit 1 = a Jump, bit 2 = a
+ * Reference; 3 is also the no-legs default): 0 real, 1 jump, 2 reference. A
+ * station on both a Jump and a Reference ranks as a jump.
+ *
+ * Where the markers of several sections coincide (a jump or reference section
+ * tied in at a real station), the better rank is drawn on top and takes the
+ * click. The same ranks order the map's label declutter (`labelVirtualRank`).
+ */
+export function stationKindRank(mask: number): 0 | 1 | 2 {
+  if (mask === 0) return 0;
+  return (mask & 1) !== 0 ? 1 : 2;
 }
 /** Bit position of the `is_zero_datum` flag in `stationFlags`. */
 export const STATION_FLAG_IS_ZERO_DATUM = 0b01;
@@ -285,7 +303,37 @@ export function getStation(data: SurveyData, globalIndex: number): Station {
   if (closures !== undefined) station.closures_with = closures;
   const cmt = data.stationComments.get(globalIndex);
   if (cmt !== undefined) station.comment = cmt;
+  const name = data.stationNames.get(globalIndex);
+  if (name !== undefined) station.name = name;
   return station;
+}
+
+/** {@link hasStationNames} per names map: a SurveyData's map is replaced, never
+ *  mutated, when the project changes, so the answer is computed once per map. */
+const showableNamesCache = new WeakMap<Map<number, string>, boolean>();
+
+/**
+ * Whether any station has a name that would be drawn as a label (e.g. the mNemo
+ * station numbers a DMP import records): non-empty once control and bidi
+ * characters are stripped and it is trimmed - the rule the map label and the
+ * image export apply. The Display menu and the export offer the "Station names"
+ * labels only when this holds, because otherwise they would label nothing.
+ */
+export function hasStationNames(data: Pick<SurveyData, 'stationNames'> | null | undefined): boolean {
+  const names = data?.stationNames;
+  if (!names || names.size === 0) return false;
+  let cached = showableNamesCache.get(names);
+  if (cached === undefined) {
+    cached = false;
+    for (const name of names.values()) {
+      if (displayStationName(name).trim() !== '') {
+        cached = true;
+        break;
+      }
+    }
+    showableNamesCache.set(names, cached);
+  }
+  return cached;
 }
 
 /**
@@ -434,6 +482,7 @@ export function surveyDataFromLegacy(
     stationMergedWith: new Map(),
     stationClosuresWith: new Map(),
     stationComments: new Map(),
+    stationNames: new Map(),
   };
 
   const nullToNaN = (v: number | null | undefined): number => (v == null ? NaN : v);
@@ -499,6 +548,7 @@ export function surveyDataFromLegacy(
       data.stationClosuresWith.set(i, closuresWith);
     }
     if (s.comment) data.stationComments.set(i, s.comment);
+    if (s.name) data.stationNames.set(i, s.name);
   });
 
   return data;
@@ -531,6 +581,7 @@ export function surveyDataWithAdjustedStations(
   const stationMergedWith = new Map<number, StationRef[]>();
   const stationClosuresWith = new Map<number, ClosureRef[]>();
   const stationComments = new Map<number, string>();
+  const stationNames = new Map<number, string>();
 
   adjustedStations.forEach((s, i) => {
     stationSectionIds[i] = s.station_ref.section_id;
@@ -545,6 +596,7 @@ export function surveyDataWithAdjustedStations(
     const closuresWith = s.closures_with;
     if (closuresWith && closuresWith.length > 0) stationClosuresWith.set(i, closuresWith);
     if (s.comment) stationComments.set(i, s.comment);
+    if (s.name) stationNames.set(i, s.name);
   });
 
   return {
@@ -558,6 +610,7 @@ export function surveyDataWithAdjustedStations(
     stationMergedWith,
     stationClosuresWith,
     stationComments,
+    stationNames,
   };
 }
 
@@ -595,5 +648,6 @@ export function emptySurveyData(): SurveyData {
     stationMergedWith: new Map(),
     stationClosuresWith: new Map(),
     stationComments: new Map(),
+    stationNames: new Map(),
   };
 }

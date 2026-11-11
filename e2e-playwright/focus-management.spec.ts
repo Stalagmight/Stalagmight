@@ -275,7 +275,7 @@ test.describe('Focus Management', () => {
 
       // Wait for the initial focus heuristic (runs via requestAnimationFrame).
       // Use deterministic wait: poll until the primary action button is focused.
-      await expect(page.locator('[data-primary-action]')).toBeFocused({ timeout: 3000 });
+      await expect(page.getByTestId('confirm-dialog').locator('[data-primary-action]')).toBeFocused({ timeout: 3000 });
 
       // The ConfirmDialog has a Delete button with data-primary-action attribute.
       // According to DialogWrapper's initial focus heuristic (priority 3), this

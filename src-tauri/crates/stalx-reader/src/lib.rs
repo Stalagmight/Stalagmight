@@ -57,7 +57,7 @@ use stalagmight_persistence::persistence::{refused_schema_object, Database, SCHE
 
 pub use survey::{
     CorrectionSource, Direction, LoopClosure, North, Section, Shot, ShotKind, StationComment,
-    StationId, StationMerge, StationPosition, Survey, ZeroDatum,
+    StationId, StationMerge, StationName, StationPosition, Survey, ZeroDatum,
 };
 
 /// Default cap on the input size, in bytes.
@@ -115,6 +115,10 @@ pub struct CountLimits {
     pub shots: usize,
     pub station_merges: usize,
     pub loop_closures: usize,
+    /// Station names. Dense on a DMP-imported survey (one per station), and a
+    /// row may name no station at all, so the table is capped on its own rather
+    /// than through the shots it would resolve against.
+    pub station_names: usize,
 }
 
 impl Default for CountLimits {
@@ -124,6 +128,8 @@ impl Default for CountLimits {
             shots: 2_000_000,
             station_merges: 200_000,
             loop_closures: 50_000,
+            // One per station: at most every shot's end plus every section start.
+            station_names: 2_100_000,
         }
     }
 }
@@ -152,6 +158,12 @@ impl CountLimits {
         self.loop_closures = max;
         self
     }
+
+    #[must_use]
+    pub fn station_names(mut self, max: usize) -> Self {
+        self.station_names = max;
+        self
+    }
 }
 
 /// Which [`CountLimits`] cap a file exceeded.
@@ -166,6 +178,8 @@ pub enum Limit {
     StationMerges,
     /// [`CountLimits::loop_closures`].
     LoopClosures,
+    /// [`CountLimits::station_names`].
+    StationNames,
 }
 
 impl std::fmt::Display for Limit {
@@ -175,6 +189,7 @@ impl std::fmt::Display for Limit {
             Self::Shots => "shots",
             Self::StationMerges => "station merges",
             Self::LoopClosures => "loop closures",
+            Self::StationNames => "station names",
         })
     }
 }
@@ -383,7 +398,16 @@ fn read_copy(copy: &Path, options: &ReadOptions) -> Result<Survey, ReadError> {
     remaining(expires)?;
     project.assign_closure_ids();
     remaining(expires)?;
-    project.redrive_offsets_after_load();
+    // The re-drive also renames shot UUIDs held by more than one section (a
+    // file saved before they were unique across the project), with the same
+    // derived ids the app's own open gives them - so they are flagged derived.
+    let (_, renamed) = project.redrive_offsets_after_load_reporting();
+    let mut derived_uuids = derived_uuids;
+    derived_uuids.extend(
+        renamed
+            .iter()
+            .map(|(section, _, new)| (section, new.to_string())),
+    );
     remaining(expires)?;
     if db.is_kind_classification_pending() {
         project.classify_virtual_shots(&ClassifyScope::WholeProject);
@@ -419,6 +443,7 @@ fn check_row_counts(conn: &rusqlite::Connection, limits: CountLimits) -> Result<
             limits.station_merges,
         ),
         ("loop_closures", Limit::LoopClosures, limits.loop_closures),
+        ("station_names", Limit::StationNames, limits.station_names),
     ] {
         let exists: i64 = conn
             .query_row(

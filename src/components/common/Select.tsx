@@ -40,6 +40,10 @@ interface SelectProps {
   onChange: (value: string) => void;
   /** Options to display - can be flat list or grouped */
   options: SelectOption[] | SelectOptionGroup[];
+  /** Enables a search input in the dropdown, with this accessible label. */
+  searchLabel?: string;
+  /** Text shown when search matches no options. */
+  noResultsLabel?: string;
   /** Placeholder text when no value selected */
   placeholder?: string;
   /** Whether the select is disabled */
@@ -152,7 +156,7 @@ interface DropdownPosition {
  * just-opened list. We mark this element scroll-safe so its scroll doesn't dismiss, while
  * a genuine external/page scroll (target outside it) still does.
  */
-function nearestScrollableAncestor(el: HTMLElement): HTMLElement | null {
+export function nearestScrollableAncestor(el: HTMLElement): HTMLElement | null {
   for (let node = el.parentElement; node; node = node.parentElement) {
     const { overflowX, overflowY } = getComputedStyle(node);
     if (/(auto|scroll|overlay)/.test(overflowY) || /(auto|scroll|overlay)/.test(overflowX)) {
@@ -166,6 +170,8 @@ export function Select({
   value,
   onChange,
   options,
+  searchLabel,
+  noResultsLabel,
   placeholder = 'Select...',
   disabled = false,
   className = '',
@@ -178,6 +184,8 @@ export function Select({
   onOptionHover,
 }: SelectProps) {
   const [isOpen, setIsOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const searchRef = useRef<HTMLInputElement>(null);
   const [highlightedIndex, setHighlightedIndex] = useState<number>(-1);
   const [dropdownPosition, setDropdownPosition] = useState<DropdownPosition | null>(null);
   // Trigger rect captured on open so the hidden dropdown can use correct width/left
@@ -212,7 +220,25 @@ export function Select({
 
   // Flatten options for keyboard navigation (memoized so effects that depend
   // on flatOptions don't re-fire when the options reference is stable).
-  const flatOptions = useMemo(() => flattenOptions(options), [options]);
+  const displayedOptions = useMemo(() => {
+    if (!searchLabel || !query.trim()) return options;
+    const term = query.trim().toLocaleLowerCase();
+    const matches = (option: SelectOption) => !option.disabled &&
+      `${option.label} ${option.value}`.toLocaleLowerCase().includes(term);
+    return isGroupedOptions(options)
+      ? options.map(group => ({ ...group, options: group.options.filter(matches) }))
+          .filter(group => group.options.length > 0)
+      : options.filter(matches);
+  }, [options, query, searchLabel]);
+  const flatOptions = useMemo(() => flattenOptions(displayedOptions), [displayedOptions]);
+
+  useEffect(() => {
+    if (isOpen && dropdownPosition && searchLabel) searchRef.current?.focus({ preventScroll: true });
+  }, [isOpen, dropdownPosition, searchLabel]);
+
+  useEffect(() => {
+    if (searchLabel) setHighlightedIndex(-1);
+  }, [query, searchLabel]);
 
   // Find index of currently selected value
   const findSelectedIndex = useCallback(() => {
@@ -349,6 +375,7 @@ export function Select({
       const rect = trigger.getBoundingClientRect();
       setTriggerRect({ left: rect.left, width: rect.width, top: rect.top, bottom: rect.bottom });
     }
+    setQuery('');
     setIsOpen(true);
   }, []);
 
@@ -530,8 +557,8 @@ export function Select({
   const renderOptions = () => {
     flatIndex = -1;
 
-    if (isGroupedOptions(options)) {
-      return options.map((group) => (
+    if (isGroupedOptions(displayedOptions)) {
+      return displayedOptions.map((group) => (
         <div key={group.label} role="group" aria-label={group.label}>
           {group.options.map((option, idx) => {
             flatIndex++;
@@ -540,7 +567,7 @@ export function Select({
         </div>
       ));
     } else {
-      return options.map((option) => {
+      return displayedOptions.map((option) => {
         flatIndex++;
         return renderOption(option, flatIndex);
       });
@@ -618,9 +645,9 @@ export function Select({
       {isOpen && createPortal(
         <div
           ref={dropdownRef}
-          role="listbox"
-          id={listboxId}
-          data-testid={testId ? `${testId}-listbox` : undefined}
+          role={searchLabel ? undefined : "listbox"}
+          id={searchLabel ? undefined : listboxId}
+          data-testid={!searchLabel && testId ? `${testId}-listbox` : undefined}
           aria-label={ariaLabel}
           aria-labelledby={ariaLabelledBy}
           className="bg-panel border border-border rounded shadow-lg max-h-60 overflow-auto"
@@ -632,7 +659,43 @@ export function Select({
             onOptionHover?.(null);
           }}
         >
-          {renderOptions()}
+          {searchLabel ? (
+            <>
+              <div className="sticky top-0 bg-panel p-2 z-10">
+                <input
+                  ref={searchRef}
+                  type="text"
+                  role="combobox"
+                  aria-label={searchLabel}
+                  aria-autocomplete="list"
+                  aria-expanded={true}
+                  aria-controls={listboxId}
+                  aria-activedescendant={highlightedIndex >= 0 ? getOptionId(highlightedIndex) : undefined}
+                  data-testid={testId ? `${testId}-search` : undefined}
+                  placeholder={searchLabel}
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  onKeyDown={(event) => {
+                    // Keep text editing keys (including spaces and Home/End) in the input.
+                    if (['ArrowDown', 'ArrowUp', 'Enter', 'Escape'].includes(event.key)) {
+                      handleKeyDown(event);
+                    } else if (event.key === 'Tab') {
+                      event.preventDefault();
+                      setIsOpen(false);
+                      triggerRef.current?.focus();
+                    }
+                    event.stopPropagation();
+                  }}
+                  className="w-full px-2 py-1 bg-background border border-border rounded text-sm"
+                />
+              </div>
+              <div role="listbox" id={listboxId} aria-label={ariaLabel}
+                data-testid={testId ? `${testId}-listbox` : undefined}>
+                {renderOptions()}
+              </div>
+              {flatOptions.length === 0 && <p role="status" className="px-3 py-2 text-sm text-text-secondary">{noResultsLabel}</p>}
+            </>
+          ) : renderOptions()}
         </div>,
         document.body,
       )}

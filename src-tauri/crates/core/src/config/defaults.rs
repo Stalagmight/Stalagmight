@@ -1,8 +1,8 @@
 use super::{
     AngleUnit, AppearanceConfig, CacheConfig, ClosureAdjustmentConfig, Config, DebugConfig,
-    DecimalPrecision, DepthGradientConfig, DisplayConfig, ExportConfig, GasConfig, GeneralConfig,
-    GlobalViewConfig, GpsOrigin, ImportConfig, LengthUnit, LoggingConfig, MapAnimationConfig,
-    MapConfig, MapControlsConfig, MapSnapConfig, PanelsConfig, PlacementSuggestionConfig,
+    DecimalPrecision, DisplayConfig, ExportConfig, GasConfig, GeneralConfig, GlobalViewConfig,
+    GpsOrigin, ImportConfig, LengthUnit, LoggingConfig, MapAnimationConfig, MapConfig,
+    MapControlsConfig, MapPaletteConfig, MapSnapConfig, PanelsConfig, PlacementSuggestionConfig,
     SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig, SpeleoDbConfig,
     StationConfig, SyntacticHighlightingConfig, UnitsConfig, UpdateTrack, ValidationConfig,
     WebkitMemoryConfig,
@@ -33,6 +33,7 @@ impl Default for Config {
             syntactic_highlighting: SyntacticHighlightingConfig::default(),
             gas: GasConfig::default(),
             speleodb: SpeleoDbConfig::default(),
+            map_palette: MapPaletteConfig::default(),
             legacy_snap: None,
         }
     }
@@ -94,20 +95,7 @@ impl Default for DisplayConfig {
             grid_spacing: 10.0,
             font_size: 12,
             font_color: "#f5f5f5".to_string(),
-            depth_gradient: DepthGradientConfig::default(),
             measure_path_color: "#22d3ee".to_string(),
-        }
-    }
-}
-
-impl Default for DepthGradientConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            shallow_color: "#00bfff".to_string(),
-            deep_color: "#ff4444".to_string(),
-            shallow_depth: 0.0,
-            deep_depth: 50.0,
         }
     }
 }
@@ -247,12 +235,8 @@ impl Default for PanelsConfig {
             data_table_azimuth_mode: "avg".to_string(),
             data_table_inclination_mode: "off".to_string(),
             data_table_station_column_order: Vec::new(),
-            data_table_station_hidden_columns: vec![
-                "_x".to_string(),
-                "_y".to_string(),
-                "_lat".to_string(),
-                "_long".to_string(),
-            ],
+            data_table_station_hidden_columns: super::panels::default_station_hidden_columns(),
+            data_table_station_columns_seen: super::panels::default_station_columns_seen(),
             data_table_station_column_widths: std::collections::BTreeMap::new(),
             new_section_column_order: Vec::new(),
             new_section_hidden_columns: vec![

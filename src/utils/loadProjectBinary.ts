@@ -78,7 +78,7 @@ export interface LoadProjectFullResultWithSoa extends LoadProjectFullResult {
  * find the key absent rather than misalign - the bump is a deliberate fence, not
  * a decode requirement, and it keeps this constant honest about the shape.
  */
-const EXPECTED_VERSION = 5;
+const EXPECTED_VERSION = 6;
 /** f32 fields per shot. Mirror of SHOT_FLOAT_FIELDS in Rust. */
 const SHOT_FLOAT_FIELDS = 12;
 /** u32 fields per shot. Mirror of SHOT_UINT_FIELDS in Rust. */
@@ -110,6 +110,7 @@ export interface BinaryEnvelope {
   station_merged_with: Array<[number, StationRef[]]>;
   station_closures_with: Array<[number, ClosureRef[]]>;
   station_comments: Array<[number, string]>;
+  station_names: Array<[number, string]>;
   stats: ProjectStats;
   warnings: ProjectWarning[];
   display_settings: DisplaySettings;
@@ -403,6 +404,8 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
   for (const [i, c] of env.station_closures_with) closuresByIdx.set(i, c);
   const commentByIdx = new Map<number, string>();
   for (const [i, c] of env.station_comments) commentByIdx.set(i, c);
+  const nameByIdx = new Map<number, string>();
+  for (const [i, n] of env.station_names) nameByIdx.set(i, n);
 
   // Build the new SoA layout. This reuses the same typed-array views we
   // already created above; per-shot/station numeric fields aren't copied,
@@ -416,7 +419,7 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
   //     it's not in the wire format)
   //   - 1 Uint8Array `shotFlags` mapping the wire's u32 marker_or_max
   //     into the Int32Array `shotMarkerIndex` and bit-packed flags
-  const surveyData = buildSurveyData(env, shotsF32, shotsU32, shotsFlags, stationsF64, stationsU32, stationsFlags, shotCommentByIdx, gpsByIdx, mergedByIdx, closuresByIdx, commentByIdx);
+  const surveyData = buildSurveyData(env, shotsF32, shotsU32, shotsFlags, stationsF64, stationsU32, stationsFlags, shotCommentByIdx, gpsByIdx, mergedByIdx, closuresByIdx, commentByIdx, nameByIdx);
 
   // Stations: a *lazy* `Station[]` view over `surveyData`, not an eager
   // ~89k-object array. The old eager loop (removed here) materialized one
@@ -445,7 +448,7 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
     frozen_shots: env.frozen_shots as FrozenShotRef[],
     displaySettings: env.display_settings,
     // #270: the SpeleoDB read-only gate is resolved from this, synchronously,
-    // before the project view renders - never from the async link-status poll.
+    // before the project view renders - never from the async link-status refresh.
     isRemote: env.is_remote,
     surveyData,
   };
@@ -478,6 +481,7 @@ function buildSurveyData(
   stationMerged: Map<number, StationRef[]>,
   stationClosures: Map<number, ClosureRef[]>,
   stationComments: Map<number, string>,
+  stationNames: Map<number, string>,
 ): SurveyData {
   const N = env.shot_count;
   const shotIds = new Uint32Array(N);
@@ -596,6 +600,7 @@ function buildSurveyData(
     stationMergedWith: stationMerged,
     stationClosuresWith: stationClosures,
     stationComments,
+    stationNames,
   };
 }
 

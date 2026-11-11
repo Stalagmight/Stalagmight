@@ -1,123 +1,123 @@
-//! TLS / private-network transport policy for the SpeleoDB client (#187).
+//! Transport policy for the SpeleoDB client (#187).
 //!
-//! The `http://` scheme is a plaintext-credential hazard, so it is **blocked
-//! unless every resolved address is loopback / private / link-local** - the
-//! dev-box case (`http://10.10.0.220:8000`) is allowed, a public `http://` host
-//! is refused before any byte is dialed. `https://` short-circuits before any
-//! resolution (TLS protects the credentials regardless of the peer address). A
-//! missing or unknown scheme is rejected outright (D-B19: require explicit
-//! http/https, never silently rewrite).
+//! `https://` is always allowed: TLS protects the credentials whatever the peer.
+//! Plain `http://` sends the sign-in and the survey data unencrypted, so it is
+//! allowed only to the automatic exceptions, compared as written (no DNS):
 //!
-//! `insecure_http` (the persisted override, D-B10, owned by Track C config but
-//! consumed here) relaxes **only** the public-http scheme block - it never
-//! disables TLS certificate verification, so self-signed / internal-CA `https://`
-//! endpoints stay rejected by ureq's TLS stack.
+//! - the exact host `localhost` (any letter case),
+//! - the exact IPv4 literal `127.0.0.1`,
+//! - an IPv4 literal in `192.168.0.0/16` (four decimal octets, no leading zeros),
 //!
-//! [`enforce`] is called once per request at the top of `client::with_retry`
-//! (#185 step 5), so a new client method physically cannot forget the check.
+//! on any valid port. Every other `http://` address (a hostname, a public
+//! address, the other private ranges, IPv6 literals, `localhost` aliases or
+//! subdomains) is refused before any byte is dialed. A missing or unknown
+//! scheme, a missing host, user info (`user@host`) or an invalid port is refused
+//! as an unusable address (D-B19: require an explicit http/https, never
+//! silently rewrite).
 //!
-//! NOTE (#187/D-187, risk 2): this is a guard against accidental
-//! plaintext-to-public misconfiguration, NOT an adversarial SSRF / DNS-rebinding
-//! defense. The address set is resolved + classified at check-time; a hostname
-//! that resolves private at check-time and public at connect-time (TOCTOU /
-//! DNS rebinding) is explicitly accepted as out of scope.
+//! The exception set is defined once, in [`is_automatic_http_exception`], and
+//! described once, in [`PLAIN_HTTP_RULE`] (the frontend's translated line has
+//! its own single description, `speleodb.httpExceptions`).
+//!
+//! `insecure_http` (the persisted `SpeleoDbConfig::insecure_http` override, or
+//! the value a sign-in passes) lifts ONLY the http scheme rule - it never
+//! disables TLS certificate verification, so self-signed / internal-CA
+//! `https://` endpoints stay rejected by the TLS stack, and it never accepts an
+//! unusable address. It is a DEVELOPMENT-BUILD option: a release build
+//! (betas and release candidates included) treats it as `false` whatever the
+//! config file or the caller says ([`INSECURE_HTTP_HONOURED`]). The policy is
+//! the one place the value takes effect, so that is where it is ignored: no
+//! caller has to remember to.
+//!
+//! [`enforce`] runs in `client::SdkClient::new`, before the SDK client exists,
+//! so a new client method physically cannot forget the check. Sign-in calls
+//! [`validate_endpoint`] (the same policy, without DNS) before it uses an
+//! address, and a Settings save calls it whenever the save changes the server
+//! or the `insecure_http` choice (`AppState::update_config`), so a refused
+//! address is reported before it is saved. An address already saved is not
+//! re-checked by a save that changes neither; [`enforce`] still refuses it on
+//! every call.
+//!
+//! A hostname the override allowed over `http://` is resolved before the client
+//! dials it: a host that does not resolve is UNREACHABLE, not insecure, so
+//! [`enforce`] reports it as a `Transport { cause: Dns }` failure, and that typed
+//! cause gets the offline handling (the cached open, sdk#6). An `https://`
+//! request is not resolved here: its DNS failure surfaces from the SDK's send,
+//! which `client::api_error` currently classifies, like a refused or reset
+//! connection, as `TransportCause::Unknown` - and an unknown cause does not fall
+//! back to the cached copy. So today an offline `https://` endpoint falls back
+//! only on a timeout; the DNS and refused cases are the known gap F1, tracked in
+//! #669.
+//!
+//! NOTE (#187): this is a guard against accidental plaintext misconfiguration,
+//! NOT an adversarial SSRF / DNS-rebinding defense.
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
+use std::net::{IpAddr, Ipv4Addr, ToSocketAddrs};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use http::Uri;
 
-use super::SpeleoDbError;
+use super::{EndpointRefusal, SpeleoDbError, TransportCause};
 
-/// Classification of a single resolved IP address for the http policy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AddrClass {
-    Loopback,
-    Private,
-    LinkLocal,
-    Public,
+/// Characters that copy-paste carries around an address without the user seeing
+/// them: zero-width space/joiners, word joiner, BOM, soft hyphen and the bidi
+/// marks/embeddings/isolates. None of them is Unicode `White_Space`, so
+/// `str::trim` keeps them.
+fn is_invisible_format(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00AD}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{FEFF}'
+    )
 }
 
-/// `true` for the three classes that are safe to reach over plaintext `http://`
-/// (a private network the user already trusts); `false` for `Public`.
-fn is_private(class: AddrClass) -> bool {
-    !matches!(class, AddrClass::Public)
+/// Clean an endpoint as the user entered it (typed or pasted, #675): strip
+/// leading and trailing whitespace and invisible format characters. `None` when
+/// nothing is left. Interior characters are kept, so a genuinely malformed
+/// address still fails [`validate_endpoint`] - this only removes what the user
+/// cannot see and did not mean. Every place a configured endpoint enters the app
+/// (startup load, settings save, settings reload, login override,
+/// `DEV_SPELEODB_URL`) runs it before validating, and the cleaned value is what
+/// gets stored. An endpoint read from a project file's SpeleoDB link is only
+/// ever compared, through [`super::auth::normalize_endpoint`], which applies the
+/// same cleaning. [`validate_endpoint`] itself stays strict: it is the transport
+/// boundary and does not clean its input.
+pub fn clean_endpoint_input(input: &str) -> Option<String> {
+    let cleaned = input.trim_matches(|c: char| c.is_whitespace() || is_invisible_format(c));
+    (!cleaned.is_empty()).then(|| cleaned.to_owned())
 }
 
-/// Classify an IP address into the #187 policy buckets. Pure (no DNS or socket
-/// I/O), so it is the unit-test seam (D-T-unit). Delegates the actual range
-/// checks to the standard library's audited predicates rather than hand-rolled
-/// bit math, so this security-sensitive boundary can't drift from the RFC set.
-///
-/// IPv4: `is_loopback` (127/8) -> Loopback; `is_private` (10/8, 172.16/12,
-/// 192.168/16) -> Private; `is_link_local` (169.254/16) -> LinkLocal; else Public.
-/// IPv6: `is_loopback` (::1) -> Loopback; `is_unique_local` (fc00::/7) -> Private;
-/// `is_unicast_link_local` (fe80::/10) -> LinkLocal; else Public.
-/// An IPv4-mapped IPv6 address is unwrapped to its v4 form first, closing the
-/// `::ffff:8.8.8.8` bypass.
-fn classify_addr(ip: IpAddr) -> AddrClass {
-    match ip {
-        IpAddr::V4(v4) => classify_v4(v4),
-        // IPv4-mapped (`::ffff:a.b.c.d`) must be classified by its v4 range,
-        // not treated as an opaque public v6 address.
-        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
-            Some(mapped) => classify_v4(mapped),
-            None => classify_v6(v6),
-        },
-    }
+/// `true` for the automatic plain-HTTP exceptions (see the module docs). Pure:
+/// the host is compared as written, never resolved. The ONE definition of the
+/// set: [`PLAIN_HTTP_RULE`] describes it, and changes with it.
+fn is_automatic_http_exception(host: &str) -> bool {
+    host.eq_ignore_ascii_case("localhost")
+        || host == "127.0.0.1"
+        || Ipv4Addr::from_str(host).is_ok_and(|ip| ip.octets()[..2] == [192, 168])
 }
 
-fn classify_v4(v4: Ipv4Addr) -> AddrClass {
-    if v4.is_loopback() {
-        AddrClass::Loopback
-    } else if v4.is_private() {
-        AddrClass::Private
-    } else if v4.is_link_local() {
-        AddrClass::LinkLocal
-    } else {
-        AddrClass::Public
-    }
-}
+/// The plain-HTTP rule in English, naming [`is_automatic_http_exception`]'s set:
+/// the Display text of a `PlainHttp` refusal (logs, and callers that show the
+/// backend message as is).
+pub(crate) const PLAIN_HTTP_RULE: &str =
+    "HTTPS is required. HTTP is allowed only on localhost, 127.0.0.1 or 192.168.x.x.";
 
-fn classify_v6(v6: Ipv6Addr) -> AddrClass {
-    if v6.is_loopback() {
-        AddrClass::Loopback
-    } else if v6.is_unique_local() {
-        AddrClass::Private
-    } else if v6.is_unicast_link_local() {
-        AddrClass::LinkLocal
-    } else {
-        AddrClass::Public
-    }
-}
+/// Whether this build honours an `insecure_http` choice at all. Only a
+/// development build does (`debug_assertions`, like the other dev-only gates in
+/// docs/debug-gates.md). A release build - betas and release candidates
+/// included - offers no control for it and ignores a stored or requested value.
+pub(crate) const INSECURE_HTTP_HONOURED: bool = cfg!(debug_assertions);
 
-/// Resolve the URI's authority to the address set the agent will dial.
-///
-/// Uses [`DefaultResolver::host_and_port`] to assemble the exact `host:port`
-/// ureq dials, then `ToSocketAddrs` to resolve it (the D-187-permitted fallback
-/// - wiring the full `&Config`/`NextTimeout` resolver path is awkward and buys
-/// nothing for a check that only needs the IP set). Returns an `InsecureEndpoint`
-/// error on a missing authority or a resolution failure (fail closed).
-fn resolve_addrs(uri: &Uri) -> Result<Vec<IpAddr>, SpeleoDbError> {
-    let endpoint = uri.to_string();
-    let host = uri.host().ok_or_else(|| SpeleoDbError::InsecureEndpoint {
-        endpoint: endpoint.clone(),
-    })?;
-    let host = host.trim_start_matches('[').trim_end_matches(']');
-    let host_and_port = (host, uri.port_u16().unwrap_or(80));
-    let addrs = host_and_port
-        .to_socket_addrs()
-        .map_err(|_| SpeleoDbError::InsecureEndpoint { endpoint })?;
-    Ok(addrs.map(|sa| sa.ip()).collect())
-}
-
-/// `true` for `localhost` and any `*.localhost` label (case-insensitive). These
-/// resolve to loopback by convention; special-casing them keeps the box-less
-/// localhost dev path working without depending on a hosts-file entry.
-fn is_localhost(host: &str) -> bool {
-    let host = host.trim_end_matches('.').to_ascii_lowercase();
-    host == "localhost" || host.ends_with(".localhost")
+/// The `insecure_http` choice a build applies: `requested` in a development
+/// build (`dev_build`), always `false` in a release one. Pure, so a test in a
+/// debug build pins what a release build does.
+const fn honoured_insecure_http(requested: bool, dev_build: bool) -> bool {
+    requested && dev_build
 }
 
 /// Process-wide one-shot latch behind the unencrypted-connection notice: `true`
@@ -143,142 +143,472 @@ fn notice_unencrypted_once(endpoint: &str) {
             endpoint,
             "Using an unencrypted http connection to SpeleoDB: credentials and \
              survey data are sent in plaintext. This is allowed only for a \
-             trusted local/private network; prefer https otherwise."
+             trusted local network; prefer https otherwise."
         );
     }
 }
 
-/// Enforce the http/https transport policy for `endpoint`. See the module docs.
+/// Enforce the transport policy for `endpoint` before credentials or requests
+/// leave the application. See the module docs.
 ///
-/// - `https://` → `Ok(())` immediately (no resolution, no notice - it is encrypted).
-/// - `http://` → allowed only if every resolved address is private/loopback/
-///   link-local (or `insecure_http` is set, which lifts the scheme block only);
-///   the first allowed http connection of the session emits a one-time notice.
-/// - missing / unknown scheme → `Err(InsecureEndpoint)`.
-pub(crate) fn enforce(endpoint: &str, insecure_http: bool) -> Result<(), SpeleoDbError> {
-    let uri = Uri::from_str(endpoint).map_err(|_| SpeleoDbError::InsecureEndpoint {
-        endpoint: endpoint.to_owned(),
-    })?;
+/// - `https://` -> `Ok(())`.
+/// - `http://` -> allowed for the automatic exceptions, or anywhere when
+///   `insecure_http` is set in a development build; the first allowed http
+///   connection of the session emits a one-time notice. Otherwise
+///   `Err(InsecureEndpoint { PlainHttp })`.
+/// - missing / unknown scheme, no host, user info or an invalid port ->
+///   `Err(InsecureEndpoint { InvalidAddress })`.
+pub fn validate_endpoint(endpoint: &str, insecure_http: bool) -> Result<(), SpeleoDbError> {
+    validate_endpoint_in(endpoint, insecure_http, INSECURE_HTTP_HONOURED)
+}
 
+/// [`validate_endpoint`] as a development (`dev_build`) or a release build
+/// applies it.
+fn validate_endpoint_in(
+    endpoint: &str,
+    insecure_http: bool,
+    dev_build: bool,
+) -> Result<(), SpeleoDbError> {
+    let insecure_http = honoured_insecure_http(insecure_http, dev_build);
+    let refuse = |refusal| SpeleoDbError::InsecureEndpoint {
+        endpoint: endpoint.to_owned(),
+        refusal,
+    };
+    let invalid = || refuse(EndpointRefusal::InvalidAddress);
+    // The client dials a `reqwest::Url`: an address it cannot parse (a port out
+    // of range or not a number, ...) is unusable whatever the scheme.
+    reqwest::Url::parse(endpoint).map_err(|_| invalid())?;
+    let uri = Uri::from_str(endpoint).map_err(|_| invalid())?;
+    let authority = uri.authority().ok_or_else(invalid)?;
+    // `user@host` hides the real host from whoever reads the address.
+    if authority.as_str().contains('@') {
+        return Err(invalid());
+    }
+    let host = uri.host().ok_or_else(invalid)?;
     match uri.scheme_str() {
-        // TLS protects the credentials regardless of peer address; never resolve.
         Some("https") => Ok(()),
-        Some("http") => {
-            let allowed = if insecure_http {
-                // The persisted override lifts ONLY the public-http scheme block
-                // (D-B10) - TLS cert verification on https is untouched.
-                true
-            } else if uri.host().is_some_and(is_localhost) {
-                // localhost / *.localhost are loopback by convention (no DNS).
-                true
-            } else {
-                // Empty resolution or any public address fails closed (D-187);
-                // `resolve_addrs` returns Err (fail closed) on a resolution
-                // failure, propagated here before the private-only check.
-                let addrs = resolve_addrs(&uri)?;
-                !addrs.is_empty()
-                    && addrs
-                        .iter()
-                        .copied()
-                        .all(|ip| is_private(classify_addr(ip)))
-            };
-            if allowed {
-                // Any allowed http is plaintext - notice once per session (E3).
-                notice_unencrypted_once(endpoint);
-                Ok(())
-            } else {
-                Err(SpeleoDbError::InsecureEndpoint {
-                    endpoint: endpoint.to_owned(),
-                })
-            }
+        Some("http") if insecure_http || is_automatic_http_exception(host) => {
+            // Any allowed http is plaintext - notice once per session (E3).
+            notice_unencrypted_once(endpoint);
+            Ok(())
         }
+        Some("http") => Err(refuse(EndpointRefusal::PlainHttp)),
         // D-B19: require an explicit, known scheme - never silently rewrite.
-        _ => Err(SpeleoDbError::InsecureEndpoint {
-            endpoint: endpoint.to_owned(),
-        }),
+        _ => Err(invalid()),
     }
 }
 
+/// [`validate_endpoint`], plus the resolution an allowed `http://` hostname
+/// gets before the client dials it (see the module docs). The client's check.
+pub(crate) fn enforce(endpoint: &str, insecure_http: bool) -> Result<(), SpeleoDbError> {
+    enforce_with(
+        endpoint,
+        insecure_http,
+        INSECURE_HTTP_HONOURED,
+        resolve_addrs,
+    )
+}
+
+/// Resolve `host:port` to the address set the client will dial, with the
+/// system resolver (the one the transport uses).
+fn resolve_addrs(host: &str, port: u16) -> std::io::Result<Vec<IpAddr>> {
+    Ok((host, port).to_socket_addrs()?.map(|sa| sa.ip()).collect())
+}
+
+/// The DNS failure an unresolvable `http://` host reports: the same typed
+/// transport error the request itself would have produced, never the policy
+/// refusal. `detail` names the cause for the log; no URL rides in it.
+fn unresolved(detail: impl std::fmt::Display) -> SpeleoDbError {
+    SpeleoDbError::Transport {
+        cause: TransportCause::Dns,
+        detail: format!("could not resolve the SpeleoDB host: {detail}"),
+    }
+}
+
+/// [`enforce`] with the build (`dev_build`, see [`validate_endpoint_in`]) and the
+/// resolver injected, so the offline path is testable without DNS.
+fn enforce_with(
+    endpoint: &str,
+    insecure_http: bool,
+    dev_build: bool,
+    resolve: impl FnOnce(&str, u16) -> std::io::Result<Vec<IpAddr>>,
+) -> Result<(), SpeleoDbError> {
+    validate_endpoint_in(endpoint, insecure_http, dev_build)?;
+    // Validated above, so these only skip what needs no resolving: `https://`,
+    // the automatic exceptions and IP literals.
+    let Ok(uri) = Uri::from_str(endpoint) else {
+        return Ok(());
+    };
+    let Some(host) = uri.host() else {
+        return Ok(());
+    };
+    let literal = host.starts_with('[') || IpAddr::from_str(host).is_ok();
+    if uri.scheme_str() != Some("http") || literal || is_automatic_http_exception(host) {
+        return Ok(());
+    }
+    let addrs = resolve(host, uri.port_u16().unwrap_or(80)).map_err(unresolved)?;
+    if addrs.is_empty() {
+        return Err(unresolved("no addresses"));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
-#[expect(clippy::expect_used, reason = "unit test fixtures")]
+#[expect(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "unit test fixtures fail loudly on an unexpected answer"
+)]
 mod tests {
-    use std::net::IpAddr;
-    use std::str::FromStr;
     use std::sync::atomic::AtomicBool;
 
-    use super::{classify_addr, enforce, latch_once, AddrClass};
-    use crate::speleodb::SpeleoDbError;
+    use super::{
+        clean_endpoint_input, enforce_with, honoured_insecure_http, latch_once, validate_endpoint,
+        validate_endpoint_in, INSECURE_HTTP_HONOURED,
+    };
+    use crate::speleodb::{EndpointRefusal, SpeleoDbError, TransportCause};
 
-    fn ip(s: &str) -> IpAddr {
-        IpAddr::from_str(s).expect("test IP literal")
+    fn refusal(endpoint: &str, insecure_http: bool) -> EndpointRefusal {
+        match validate_endpoint(endpoint, insecure_http) {
+            Err(SpeleoDbError::InsecureEndpoint { refusal, .. }) => refusal,
+            other => panic!("{endpoint}: expected a refusal, got {other:?}"),
+        }
     }
 
     #[test]
-    fn classify_addr_private_v4_ranges() {
-        assert_eq!(classify_addr(ip("10.10.0.220")), AddrClass::Private);
-        assert_eq!(classify_addr(ip("127.0.0.1")), AddrClass::Loopback);
-        assert_eq!(classify_addr(ip("10.0.0.1")), AddrClass::Private);
-        assert_eq!(classify_addr(ip("172.16.5.4")), AddrClass::Private);
-        assert_eq!(classify_addr(ip("172.31.255.255")), AddrClass::Private);
-        assert_eq!(classify_addr(ip("192.168.1.1")), AddrClass::Private);
-        assert_eq!(classify_addr(ip("169.254.10.10")), AddrClass::LinkLocal);
+    fn automatic_exceptions_and_https_are_allowed() {
+        for endpoint in [
+            "http://localhost",
+            "http://LOCALHOST:8000/",
+            "http://127.0.0.1:80",
+            "http://127.0.0.1:8000",
+            "http://192.168.0.0",
+            "http://192.168.1.50",
+            "http://192.168.255.255:8000/",
+            "https://example.com",
+            "https://8.8.8.8",
+        ] {
+            assert!(validate_endpoint(endpoint, false).is_ok(), "{endpoint}");
+        }
     }
 
     #[test]
-    fn classify_addr_public_v4_blocks() {
-        assert_eq!(classify_addr(ip("8.8.8.8")), AddrClass::Public);
-        // 172.32.0.1 is just past the 172.16/12 private block.
-        assert_eq!(classify_addr(ip("172.32.0.1")), AddrClass::Public);
-        assert_eq!(classify_addr(ip("172.15.0.1")), AddrClass::Public);
-        assert_eq!(classify_addr(ip("1.1.1.1")), AddrClass::Public);
-        // 192.169 is NOT 192.168.
-        assert_eq!(classify_addr(ip("192.169.0.1")), AddrClass::Public);
+    fn other_http_addresses_are_refused_as_plain_http() {
+        for endpoint in [
+            "http://10.0.0.1",
+            "http://10.10.0.220:8000",
+            "http://172.16.0.1",
+            "http://127.0.0.2",
+            "http://[::1]",
+            "http://[::1]:8000",
+            "http://169.254.1.1",
+            "http://8.8.8.8",
+            "http://localhost.evil.com",
+            "http://sub.localhost",
+            "http://localhost.",
+            "http://192.168.example.com",
+            "http://192.169.0.1",
+            "http://192.167.255.255",
+            "http://example.com",
+            "http://this-host-does-not-exist.invalid:8000",
+        ] {
+            assert_eq!(
+                refusal(endpoint, false),
+                EndpointRefusal::PlainHttp,
+                "{endpoint}"
+            );
+        }
     }
 
     #[test]
-    fn classify_addr_v6() {
-        assert_eq!(classify_addr(ip("::1")), AddrClass::Loopback);
-        assert_eq!(classify_addr(ip("fc00::1")), AddrClass::Private);
-        assert_eq!(classify_addr(ip("fd12:3456::1")), AddrClass::Private);
-        assert_eq!(classify_addr(ip("fe80::1")), AddrClass::LinkLocal);
-        assert_eq!(classify_addr(ip("2001:db8::1")), AddrClass::Public);
+    fn look_alikes_of_the_exceptions_are_refused() {
+        // Short, decimal, octal-looking or out-of-range spellings of an exception
+        // are not the exception, whichever parser rejects them first.
+        for endpoint in [
+            "http://127.1",
+            "http://2130706433",
+            "http://192.168.001.1",
+            "http://192.168.1.256",
+        ] {
+            assert!(
+                matches!(
+                    validate_endpoint(endpoint, false),
+                    Err(SpeleoDbError::InsecureEndpoint { .. })
+                ),
+                "{endpoint}"
+            );
+        }
     }
 
     #[test]
-    fn classify_addr_v4_mapped_stripped() {
-        // ::ffff:8.8.8.8 must classify as the public v4 8.8.8.8, not as an
-        // opaque public v6 (the result is the same here, but the mapped path is
-        // what closes the ::ffff:10.0.0.1 → "looks public" bypass).
-        assert_eq!(classify_addr(ip("::ffff:8.8.8.8")), AddrClass::Public);
-        assert_eq!(classify_addr(ip("::ffff:10.0.0.1")), AddrClass::Private);
-        assert_eq!(classify_addr(ip("::ffff:127.0.0.1")), AddrClass::Loopback);
+    fn unusable_addresses_are_refused_as_invalid() {
+        // D-B19: no or an unknown scheme is refused rather than guessed, as are
+        // user info and a port the client could not dial.
+        for endpoint in [
+            "localhost:8000",
+            "10.10.0.220:8000",
+            "ftp://localhost",
+            "http://localhost@evil.com",
+            "https://user@example.com",
+            "http://localhost:65536",
+            "http://localhost:bad",
+        ] {
+            assert_eq!(
+                refusal(endpoint, false),
+                EndpointRefusal::InvalidAddress,
+                "{endpoint}"
+            );
+        }
     }
 
     #[test]
-    fn enforce_https_short_circuits() {
-        // A public https host is fine - TLS protects the credentials; enforce
-        // must not resolve or block it.
-        assert!(enforce("https://example.com", false).is_ok());
-        assert!(enforce("https://8.8.8.8", false).is_ok());
+    fn insecure_http_lifts_only_the_http_rule() {
+        // In a development build, with the override set, any http host is
+        // allowed - but an unusable address is STILL refused (the override
+        // relaxes the scheme rule only).
+        for endpoint in ["http://8.8.8.8", "http://example.com", "http://[::1]:8000"] {
+            assert!(
+                validate_endpoint_in(endpoint, true, true).is_ok(),
+                "{endpoint}"
+            );
+        }
+        for endpoint in [
+            "10.10.0.220:8000",
+            "ftp://example.com",
+            "http://u@example.com",
+        ] {
+            assert!(
+                matches!(
+                    validate_endpoint_in(endpoint, true, true),
+                    Err(SpeleoDbError::InsecureEndpoint {
+                        refusal: EndpointRefusal::InvalidAddress,
+                        ..
+                    })
+                ),
+                "{endpoint}"
+            );
+        }
     }
 
     #[test]
-    fn enforce_http_public_blocked() {
-        let err = enforce("http://8.8.8.8", false).expect_err("public http must be blocked");
-        assert!(matches!(err, SpeleoDbError::InsecureEndpoint { .. }));
+    fn a_release_build_ignores_insecure_http() {
+        // Owner decision: the option exists only in development builds. A
+        // release build (betas and release candidates included) applies the
+        // automatic rules even when the config file or the caller asks for the
+        // override, so an old config with `insecure_http = true` cannot reopen
+        // plaintext to a public host.
+        assert!(!honoured_insecure_http(true, false));
+        assert!(!honoured_insecure_http(false, false));
+        assert!(honoured_insecure_http(true, true));
+        assert!(!honoured_insecure_http(false, true));
+        for endpoint in [
+            "http://8.8.8.8",
+            "http://example.com",
+            "http://10.0.0.5:8000",
+        ] {
+            assert!(
+                matches!(
+                    validate_endpoint_in(endpoint, true, false),
+                    Err(SpeleoDbError::InsecureEndpoint {
+                        refusal: EndpointRefusal::PlainHttp,
+                        ..
+                    })
+                ),
+                "{endpoint}"
+            );
+        }
+        // The transport check refuses it too, before any resolution.
+        let must_not_resolve = |_: &str, _: u16| Err(std::io::Error::other("must not resolve"));
+        assert!(matches!(
+            enforce_with("http://speleodb.lan", true, false, must_not_resolve),
+            Err(SpeleoDbError::InsecureEndpoint {
+                refusal: EndpointRefusal::PlainHttp,
+                ..
+            })
+        ));
+        // The automatic exceptions and https are unaffected.
+        for endpoint in [
+            "http://localhost:8000",
+            "http://127.0.0.1",
+            "http://192.168.1.50",
+            "https://example.com",
+        ] {
+            assert!(
+                validate_endpoint_in(endpoint, true, false).is_ok(),
+                "{endpoint}"
+            );
+        }
     }
 
     #[test]
-    fn enforce_http_private_allowed() {
-        // A literal private IP resolves to itself - no DNS needed. Acceptance
-        // (#187): `10.10.0.220` AND `[::1]` are both accepted under the policy.
-        assert!(enforce("http://10.10.0.220:8000", false).is_ok());
-        assert!(enforce("http://127.0.0.1:8000", false).is_ok());
-        assert!(enforce("http://192.168.1.50", false).is_ok());
-        // IPv6 loopback literal, with and without a port - the bracketed
-        // authority must resolve to `::1` and classify as Loopback.
-        assert!(enforce("http://[::1]:8000", false).is_ok());
-        assert!(enforce("http://[::1]", false).is_ok());
+    fn only_a_development_build_honours_insecure_http() {
+        assert_eq!(INSECURE_HTTP_HONOURED, cfg!(debug_assertions));
+        // `validate_endpoint` is the policy of THIS build.
+        assert_eq!(
+            validate_endpoint("http://8.8.8.8", true).is_ok(),
+            cfg!(debug_assertions)
+        );
+    }
+
+    #[test]
+    fn an_unresolvable_http_host_the_override_allows_is_an_offline_dns_failure() {
+        // sdk#6: a host that cannot resolve is never dialed, and it is reported as
+        // the DNS transport failure, not as a fatal InsecureEndpoint - so an
+        // offline `http://` endpoint gets the cached open an offline `https://`
+        // one gets. `.invalid` never resolves (RFC 6761).
+        let err = enforce_with(
+            "http://this-host-does-not-exist.invalid:8000",
+            true,
+            true,
+            super::resolve_addrs,
+        )
+        .expect_err("unresolvable http host must not be allowed");
+        assert!(
+            matches!(
+                err,
+                SpeleoDbError::Transport {
+                    cause: TransportCause::Dns,
+                    ..
+                }
+            ),
+            "got {err:?}"
+        );
+        // Same through the injected resolver, including an empty answer.
+        let not_found = || std::io::Error::new(std::io::ErrorKind::NotFound, "offline");
+        for resolved in [Err(not_found()), Ok(Vec::new())] {
+            let err = enforce_with("http://speleodb.lan:8000", true, true, |host, port| {
+                assert_eq!((host, port), ("speleodb.lan", 8000));
+                resolved
+            })
+            .expect_err("nothing to dial");
+            assert!(matches!(
+                err,
+                SpeleoDbError::Transport {
+                    cause: TransportCause::Dns,
+                    ..
+                }
+            ));
+        }
+    }
+
+    #[test]
+    fn only_an_allowed_http_hostname_is_resolved() {
+        let must_not_resolve = |_: &str, _: u16| Err(std::io::Error::other("must not resolve"));
+        // Refused without the override: the policy, not DNS, answers.
+        assert!(matches!(
+            enforce_with("http://speleodb.lan", false, true, must_not_resolve),
+            Err(SpeleoDbError::InsecureEndpoint {
+                refusal: EndpointRefusal::PlainHttp,
+                ..
+            })
+        ));
+        // Nothing to resolve: https, the exceptions and IP literals.
+        for (endpoint, insecure_http) in [
+            ("https://speleodb.example", false),
+            ("http://localhost:8000", false),
+            ("http://192.168.1.50", false),
+            ("http://10.0.0.5:8000", true),
+            ("http://[::1]:8000", true),
+        ] {
+            assert!(
+                enforce_with(endpoint, insecure_http, true, must_not_resolve).is_ok(),
+                "{endpoint}"
+            );
+        }
+        // A hostname that resolves goes ahead.
+        let resolved = enforce_with("http://speleodb.lan", true, true, |_, port| {
+            assert_eq!(port, 80);
+            Ok(vec!["10.10.0.220".parse().expect("test IP literal")])
+        });
+        assert!(resolved.is_ok());
+    }
+
+    #[test]
+    fn the_refusal_names_the_rule_and_the_endpoint() {
+        let err = validate_endpoint("http://10.0.0.1:8000", false).expect_err("refused");
+        let message = err.to_string();
+        assert!(message.contains("HTTPS is required"), "{message}");
+        assert!(message.contains("http://10.0.0.1:8000"), "{message}");
+    }
+
+    #[test]
+    fn clean_strips_only_what_the_user_cannot_see_at_the_ends() {
+        for (input, expected) in [
+            ("https://www.speleodb.org", Some("https://www.speleodb.org")),
+            (
+                "  https://www.speleodb.org \r\n",
+                Some("https://www.speleodb.org"),
+            ),
+            (
+                "\u{00A0}https://www.speleodb.org\u{3000}",
+                Some("https://www.speleodb.org"),
+            ),
+            (
+                "\u{200B}\u{FEFF}https://www.speleodb.org\u{2060}",
+                Some("https://www.speleodb.org"),
+            ),
+            (
+                "\u{200E}https://www.speleodb.org\u{202C}\u{00AD}",
+                Some("https://www.speleodb.org"),
+            ),
+            (
+                "\u{0085}https://www.speleodb.org\u{0085}",
+                Some("https://www.speleodb.org"),
+            ),
+            // Interior characters are the user's; validation decides about them.
+            (
+                "https://www.speleo db.org",
+                Some("https://www.speleo db.org"),
+            ),
+            (
+                "https://www.speleo\u{200B}db.org",
+                Some("https://www.speleo\u{200B}db.org"),
+            ),
+            ("", None),
+            (" \t\n\u{200B}\u{FEFF} ", None),
+        ] {
+            assert_eq!(
+                clean_endpoint_input(input).as_deref(),
+                expected,
+                "{input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_cleaned_paste_is_valid_and_an_interior_space_is_still_refused() {
+        let pasted = "\u{FEFF} https://www.speleodb.org\u{200B}\n";
+        assert_eq!(refusal(pasted, false), EndpointRefusal::InvalidAddress);
+        let cleaned = clean_endpoint_input(pasted).expect("non-empty");
+        assert!(validate_endpoint(&cleaned, false).is_ok(), "{cleaned:?}");
+        assert_eq!(
+            refusal("https://www.speleo db.org", false),
+            EndpointRefusal::InvalidAddress
+        );
+    }
+
+    #[test]
+    fn the_refusal_shows_an_invisible_character_escaped() {
+        let message = validate_endpoint("https://www.speleodb.org\u{200B}", false)
+            .expect_err("refused")
+            .to_string();
+        assert!(
+            message.ends_with("Rejected endpoint: \"https://www.speleodb.org\\u{200b}\""),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn normalize_endpoint_treats_a_pasted_spelling_as_the_same_server() {
+        // Project-file links and a config loaded before any save reach
+        // `normalize_endpoint` uncleaned; it must still see one server.
+        use crate::speleodb::auth::{account_key, normalize_endpoint};
+        let pasted = "\u{200B} https://SDB.example.com:443/ \u{FEFF}";
+        assert_eq!(normalize_endpoint(pasted), "https://sdb.example.com");
+        assert_eq!(
+            account_key(pasted, "diver@example.com"),
+            account_key("https://sdb.example.com", "diver@example.com")
+        );
     }
 
     #[test]
@@ -290,49 +620,5 @@ mod tests {
         assert!(latch_once(&flag), "first call must fire");
         assert!(!latch_once(&flag), "second call must be silent");
         assert!(!latch_once(&flag), "and every call after");
-    }
-
-    #[test]
-    fn enforce_localhost_resolution_branch() {
-        // localhost / *.localhost are loopback by convention (no DNS).
-        assert!(enforce("http://localhost:8000", false).is_ok());
-        assert!(enforce("http://LOCALHOST:8000", false).is_ok());
-        assert!(enforce("http://foo.localhost", false).is_ok());
-        // And the classifier agrees the loopback literal is Loopback distinctly.
-        assert_eq!(classify_addr(ip("127.0.0.1")), AddrClass::Loopback);
-    }
-
-    #[test]
-    fn enforce_missing_scheme_rejected() {
-        // No scheme: refuse rather than guess http/https (D-B19).
-        let err = enforce("10.10.0.220:8000", false).expect_err("missing scheme must be rejected");
-        assert!(matches!(err, SpeleoDbError::InsecureEndpoint { .. }));
-        // An unknown scheme is likewise rejected.
-        assert!(matches!(
-            enforce("ftp://10.10.0.220", false),
-            Err(SpeleoDbError::InsecureEndpoint { .. })
-        ));
-    }
-
-    #[test]
-    fn enforce_empty_resolution_fails_closed() {
-        // A host that cannot resolve to any address fails closed with
-        // InsecureEndpoint (never silently allowed).
-        let err = enforce("http://this-host-does-not-exist.invalid", false)
-            .expect_err("unresolvable http host must fail closed");
-        assert!(matches!(err, SpeleoDbError::InsecureEndpoint { .. }));
-    }
-
-    #[test]
-    fn enforce_insecure_http_bypasses_public_block() {
-        // With the override set, a public http host is allowed (scheme block
-        // lifted) - but a missing scheme is STILL rejected (the override only
-        // relaxes the http policy, not the require-explicit-scheme rule).
-        assert!(enforce("http://8.8.8.8", true).is_ok());
-        assert!(enforce("http://example.com", true).is_ok());
-        assert!(matches!(
-            enforce("10.10.0.220:8000", true),
-            Err(SpeleoDbError::InsecureEndpoint { .. })
-        ));
     }
 }

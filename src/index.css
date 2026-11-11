@@ -23,6 +23,7 @@
   --cc-accent: #4ecdc4;
   --cc-accent-on: #1a1a2e;
   --cc-warning: #ffcb77;
+  --cc-warning-text: #ffcb77;
   --cc-error: #ff6b6b;
   --cc-success: #95e1d3;
   --cc-lock-other: #5aa9ff;
@@ -128,6 +129,7 @@
   --cc-accent: #3a8a82;
   --cc-accent-on: #ffffff;
   --cc-warning: #b8860b;
+  --cc-warning-text: #7c5a07;
   --cc-error: #c0392b;
   --cc-success: #27764e;
   --cc-lock-other: #1f6feb;
@@ -242,6 +244,7 @@
   --cc-accent: #a89060;
   --cc-accent-on: #0e0d0c;
   --cc-warning: #b89848;
+  --cc-warning-text: #b89848;
   --cc-error: #b85048;
   --cc-success: #48986a;
   --cc-lock-other: #6f9ccf;
@@ -345,6 +348,7 @@
   --cc-accent: #bd93f9;
   --cc-accent-on: #282a36;
   --cc-warning: #ffb86c;
+  --cc-warning-text: #ffb86c;
   --cc-error: #ff5555;
   --cc-success: #50fa7b;
   --cc-lock-other: #6d9eeb;
@@ -447,6 +451,7 @@
   --cc-accent: #61afef;
   --cc-accent-on: #282c34;
   --cc-warning: #e5c07b;
+  --cc-warning-text: #e5c07b;
   --cc-error: #e06c75;
   --cc-success: #98c379;
   --cc-lock-other: #5c7cfa;
@@ -552,6 +557,7 @@
   --cc-accent: #268bd2;
   --cc-accent-on: #fdf6e3;
   --cc-warning: #b58900;
+  --cc-warning-text: #735700;
   --cc-error: #dc322f;
   --cc-success: #859900;
   --cc-lock-other: #1a6496;
@@ -629,6 +635,7 @@
   --cc-accent: #1e66f5;
   --cc-accent-on: #eff1f5;
   --cc-warning: #df8e1d;
+  --cc-warning-text: #835311;
   --cc-error: #d20f39;
   --cc-success: #40a02b;
   --cc-lock-other: #7287fd;
@@ -706,6 +713,7 @@
   --cc-accent: #88c0d0;
   --cc-accent-on: #2e3440;
   --cc-warning: #ebcb8b;
+  --cc-warning-text: #efd6a2;
   --cc-error: #bf616a;
   --cc-success: #a3be8c;
   --cc-lock-other: #6c92d8;
@@ -809,6 +817,7 @@
   --cc-accent: #89b4fa;
   --cc-accent-on: #1e1e2e;
   --cc-warning: #f9e2af;
+  --cc-warning-text: #f9e2af;
   --cc-error: #f38ba8;
   --cc-success: #a6e3a1;
   --cc-lock-other: #74c7ec;
@@ -912,6 +921,7 @@
   --cc-accent: #0050a0;
   --cc-accent-on: #ffffff;
   --cc-warning: #cc7700;
+  --cc-warning-text: #965700;
   --cc-error: #cc0000;
   --cc-success: #007a2f;
   --cc-lock-other: #0066cc;

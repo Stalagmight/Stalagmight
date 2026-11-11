@@ -184,8 +184,7 @@ pub(crate) fn classify_ancestry(
         return AncestryOutcome::Diverged;
     }
     // Any commit not authored by us means someone else pushed. Compare case-
-    // INSENSITIVELY: the server may normalise email case (mirrors
-    // `concurrent_session_notice`; the live revision test asserts the same).
+    // INSENSITIVELY: the server may normalise email case.
     if new_commits
         .iter()
         .any(|c| !c.author_email.eq_ignore_ascii_case(my_email))
@@ -400,7 +399,7 @@ pub fn plan_push(
 }
 
 /// The passive status-button verdict: how the open project stands against the
-/// server tip, for the poll that drives the toolbar mark. Pure over an
+/// server tip, used by on-demand status refreshes. Pure over an
 /// already-fetched tip + history so every branch is unit-tested offline.
 ///
 /// This is deliberately the SAME reasoning the write path uses, not a cheaper
@@ -409,7 +408,7 @@ pub fn plan_push(
 /// just-landed push**, which [`plan_push`] recovers from via `AdoptThenUpload`.
 /// Two ways into that state:
 ///
-/// - a status poll that read the link row BEFORE a push and resolved the tip
+/// - a status refresh that read the link row BEFORE a push and resolved the tip
 ///   AFTER it (nothing holds a command-level lock, so a push lands inside that
 ///   window), and
 /// - the #193 ambiguous-push case, where a lost confirmation leaves BASE behind.
@@ -423,8 +422,7 @@ pub fn plan_push(
 /// optional. `author_email == my_email` is a proxy for "this session pushed it",
 /// and a second session signed in as the SAME account breaks the proxy exactly:
 /// its commit reads as ours, so the gap classifies as `Landed` and the mark keeps
-/// its resting state over a genuine conflict - the case
-/// [`concurrent_session_notice`] exists to warn about (#193 b8), ending in Done
+/// its resting state over a genuine conflict, ending in Done
 /// superseding the other session's revision with no prompt at any point. Our own
 /// landed-but-unrecorded push can only have been made while we held the
 /// single-writer lock, so requiring it costs the recovery nothing and denies the
@@ -433,7 +431,7 @@ pub fn plan_push(
 /// It also keeps this verdict AGREEING with [`reconcile_verdict`], which has no
 /// authorship recovery. That function drives Start editing - reachable only while
 /// the lock is NOT ours - so the two now answer the same thing in every state a
-/// user can click through. Without the gate the poll could paint the resting,
+/// user can click through. Without the gate the refresh could paint the resting,
 /// unbadged mark while the click behind it raised the divergence prompt: the same
 /// passive/active disagreement this function exists to remove, moved from the
 /// badge to the click.
@@ -442,7 +440,7 @@ pub fn plan_push(
 /// BASE with no server tip is a transient empty response, and nothing local is at
 /// risk, so it degrades to `Unknown` rather than shouting `Conflict`.
 #[must_use]
-pub fn poll_verdict(
+pub fn status_verdict(
     base: Option<&str>,
     tip: Option<&str>,
     dirty: bool,
@@ -697,19 +695,6 @@ pub fn display_history(commits: Vec<RevisionCommit>) -> Vec<RevisionCommit> {
     out
 }
 
-/// Whether opening a remote project should warn about a concurrent SAME-ACCOUNT
-/// session (#193 b8). [`classify_ancestry`] treats `author_email == my_email` as
-/// "this session's push"; a second session under the same account editing the same
-/// project breaks that proxy (its commit reads as "mine" and could wrongly clear
-/// the dirty bit). The single-writer lock makes this rare, but if the server
-/// already reports a lock held by our OWN account when we open, a second session is
-/// live - surface a notice. Case-insensitive (the server may normalise email case);
-/// a lock held by a DIFFERENT account is an ordinary contended-lock case, not this.
-#[must_use]
-pub fn concurrent_session_notice(active_mutex_user: Option<&str>, my_email: &str) -> bool {
-    active_mutex_user.is_some_and(|holder| holder.eq_ignore_ascii_case(my_email))
-}
-
 #[cfg(test)]
 // [#303] `expect` arrived with the `unwind_target` tests, which assert on an
 // `Option<(String, bool)>`: unwrapping it names the expectation at the assertion rather
@@ -717,10 +702,9 @@ pub fn concurrent_session_notice(active_mutex_user: Option<&str>, my_email: &str
 #[expect(clippy::expect_used, reason = "unit test fixtures fail loudly")]
 mod tests {
     use super::{
-        base_is_ancestor_of_tip, classify_ancestry, concurrent_session_notice, display_history,
-        edits_captured_by_push, fence, plan_push, poll_verdict, reconcile_verdict, rewind_target,
-        tip_of, unwind_target, AncestryOutcome, FenceOutcome, PushPlan, ReconcileVerdict,
-        RemoteState, RevisionCommit,
+        base_is_ancestor_of_tip, classify_ancestry, display_history, edits_captured_by_push, fence,
+        plan_push, reconcile_verdict, rewind_target, status_verdict, tip_of, unwind_target,
+        AncestryOutcome, FenceOutcome, PushPlan, ReconcileVerdict, RemoteState, RevisionCommit,
     };
 
     /// Build a revision-history commit with the given parents and author.
@@ -988,7 +972,7 @@ mod tests {
     fn ancestry_landed_matches_author_case_insensitively() {
         // #197 review: the server may normalise email case. Our own landed commit
         // authored as "Me@Example.COM" must still classify as ours (Landed), not a
-        // stranger, mirroring concurrent_session_notice's case-insensitive match.
+        // stranger.
         let commits = [commit("c", &["b"], "Me@Example.COM")];
         assert_eq!(
             classify_ancestry(Some("b"), Some("c"), &commits, ME, Some(T1), Some(T2)),
@@ -1203,25 +1187,25 @@ mod tests {
         );
     }
 
-    // ---- poll_verdict: the passive status-button verdict ----
+    // ---- status_verdict: the passive status-button verdict ----
 
     #[test]
-    fn poll_verdict_reports_our_own_landed_push_as_up_to_date_not_a_conflict() {
-        // The self-conflict. A status poll read the link row before a push and
+    fn status_verdict_reports_our_own_landed_push_as_up_to_date_not_a_conflict() {
+        // The self-conflict. A status refresh read the link row before a push and
         // resolved the tip after it, so it fences a BASE one commit behind - and
         // that commit is OUR OWN. A bare fence calls this Diverged; reporting it as
         // a conflict paints the button red against the user's own work and sends
         // their next click to the divergence dialog.
         let commits = vec![commit("c1", &["c0"], ME), commit("c0", &[], ME)];
         assert_eq!(
-            poll_verdict(Some("c0"), Some("c1"), true, &commits, ME, true),
+            status_verdict(Some("c0"), Some("c1"), true, &commits, ME, true),
             RemoteState::UpToDate
         );
     }
 
     #[test]
-    fn poll_verdict_reports_a_same_account_second_session_as_a_conflict() {
-        // #193 b8, the case `concurrent_session_notice` warns about. The gap commit
+    fn status_verdict_reports_a_same_account_second_session_as_a_conflict() {
+        // A second session under the same account can author the gap commit. It
         // carries OUR email but was pushed by our other session, so the authorship
         // proxy - "same email means this session pushed it" - is exactly wrong here.
         // We are not the lock holder, which is what says so: our own unrecorded push
@@ -1233,21 +1217,21 @@ mod tests {
         // revision with no prompt at any point.
         let commits = vec![commit("c1", &["c0"], ME), commit("c0", &[], ME)];
         assert_eq!(
-            poll_verdict(Some("c0"), Some("c1"), true, &commits, ME, false),
+            status_verdict(Some("c0"), Some("c1"), true, &commits, ME, false),
             RemoteState::Conflict
         );
     }
 
     #[test]
-    fn poll_verdict_agrees_with_reconcile_verdict_wherever_the_mark_is_clickable() {
-        // The passive mark and the verb behind it must not disagree. `poll_verdict`
+    fn status_verdict_agrees_with_reconcile_verdict_wherever_the_mark_is_clickable() {
+        // The passive mark and the verb behind it must not disagree. `status_verdict`
         // has authorship recovery and `reconcile_verdict` (which drives Start
         // editing) has none, so the recovery is gated on holding the lock -
         // reachable only when Start editing is NOT the click action. Pin the
         // agreement: with the lock not ours, both say the same thing.
         let commits = vec![commit("c1", &["c0"], ME), commit("c0", &[], ME)];
         assert_eq!(
-            poll_verdict(Some("c0"), Some("c1"), true, &commits, ME, false),
+            status_verdict(Some("c0"), Some("c1"), true, &commits, ME, false),
             RemoteState::Conflict
         );
         assert_eq!(
@@ -1259,51 +1243,51 @@ mod tests {
     }
 
     #[test]
-    fn poll_verdict_still_reports_a_strangers_commit_as_a_conflict() {
+    fn status_verdict_still_reports_a_strangers_commit_as_a_conflict() {
         // The recovery above must not swallow a real divergence: someone else's
         // commit sits between BASE and the tip.
         let commits = vec![commit("c1", &["c0"], OTHER), commit("c0", &[], ME)];
         assert_eq!(
-            poll_verdict(Some("c0"), Some("c1"), true, &commits, ME, true),
+            status_verdict(Some("c0"), Some("c1"), true, &commits, ME, true),
             RemoteState::Conflict
         );
     }
 
     #[test]
-    fn poll_verdict_reports_a_conflict_when_we_cannot_identify_our_own_commits() {
+    fn status_verdict_reports_a_conflict_when_we_cannot_identify_our_own_commits() {
         // No session email -> `classify_ancestry` can match nothing as ours, so it
         // fails closed. The passive button says the same thing Done would.
         let commits = vec![commit("c1", &["c0"], ME), commit("c0", &[], ME)];
         assert_eq!(
-            poll_verdict(Some("c0"), Some("c1"), true, &commits, "", true),
+            status_verdict(Some("c0"), Some("c1"), true, &commits, "", true),
             RemoteState::Conflict
         );
     }
 
     #[test]
-    fn poll_verdict_maps_the_clean_and_anomalous_arms_unchanged() {
+    fn status_verdict_maps_the_clean_and_anomalous_arms_unchanged() {
         let commits = vec![commit("c1", &["c0"], ME), commit("c0", &[], ME)];
         // base == tip: nothing to reconcile.
         assert_eq!(
-            poll_verdict(Some("c1"), Some("c1"), true, &commits, ME, true),
+            status_verdict(Some("c1"), Some("c1"), true, &commits, ME, true),
             RemoteState::UpToDate
         );
         // Clean copy, tip genuinely descends from BASE: a real pull is available.
         assert_eq!(
-            poll_verdict(Some("c0"), Some("c1"), false, &commits, ME, false),
+            status_verdict(Some("c0"), Some("c1"), false, &commits, ME, false),
             RemoteState::RemoteAhead
         );
         // Clean copy but BASE is NOT an ancestor (a server-side history rewrite):
         // never advertise a pull the Update verb would immediately fail closed on.
         let forked = vec![commit("x1", &["x0"], ME), commit("x0", &[], ME)];
         assert_eq!(
-            poll_verdict(Some("c0"), Some("x1"), false, &forked, ME, false),
+            status_verdict(Some("c0"), Some("x1"), false, &forked, ME, false),
             RemoteState::Conflict
         );
         // A recorded BASE with no server tip is a transient empty response, not a
         // conflict - nothing local is at risk of being clobbered.
         assert_eq!(
-            poll_verdict(Some("c0"), None, true, &[], ME, true),
+            status_verdict(Some("c0"), None, true, &[], ME, true),
             RemoteState::Unknown
         );
     }
@@ -1395,23 +1379,6 @@ mod tests {
         let shown = display_history(vec![creation_commit("root")]);
         assert!(shown.is_empty());
         assert!(display_history(vec![]).is_empty());
-    }
-
-    // ---- concurrent_session_notice (#193 b8) ----
-
-    #[test]
-    fn concurrent_session_flagged_only_for_a_same_account_lock_hold() {
-        // Our own account already holds the lock -> a second session is live.
-        assert!(concurrent_session_notice(Some(ME), ME));
-        // Case-insensitive (the server may normalise email case).
-        assert!(concurrent_session_notice(
-            Some("ME@Example.com"),
-            "me@example.com"
-        ));
-        // A different account's lock is an ordinary contended lock, not this notice.
-        assert!(!concurrent_session_notice(Some(OTHER), ME));
-        // No lock held -> nothing to warn about.
-        assert!(!concurrent_session_notice(None, ME));
     }
 
     // ---- edits_captured_by_push (direct, #197 dirty-clear timing) ----

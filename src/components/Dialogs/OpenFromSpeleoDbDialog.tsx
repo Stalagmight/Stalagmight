@@ -1,8 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { LoadingSpinner } from '../common/LoadingSpinner';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useSpeleoStore } from '../../store/speleoStore';
-import { useOpenRemoteProject } from '../../hooks/useOpenRemoteProject';
+import { useOpenRemoteProject, type OpenRemoteOutcome } from '../../hooks/useOpenRemoteProject';
+import { TOAST_KEYS } from '../../utils/toastKeys';
+import { useSpeleoOperationBusy } from '../../hooks/useSpeleoOperationBusy';
 import { invokeIpc } from '../../utils/ipc';
 import { speleoErrorAction, humanizeSpeleoError } from '../../utils/speleoError';
 import { Button } from '../common/Button';
@@ -31,6 +34,7 @@ export default function OpenFromSpeleoDbDialog() {
   // `cancelReturnsTo`: the refused-open prompt the hook may raise REPLACES this
   // browser in the single `activeDialog` slot, so its Cancel must hand the user back
   // here - otherwise cancelling leaves nothing open and nothing opened (#270).
+  const sessionGeneration = useSpeleoStore((s) => s.sessionGeneration);
   const { openRemote } = useOpenRemoteProject({
     onBeforeLoad: closeDialog,
     cancelReturnsTo: 'open-from-speleodb',
@@ -42,14 +46,28 @@ export default function OpenFromSpeleoDbDialog() {
   const [projects, setProjects] = useState<SpeleoProjectSummary[]>([]);
   const [filter, setFilter] = useState('');
   const [busy, setBusy] = useState(false);
+  // The open in flight, if any. While it runs the browser cannot be dismissed
+  // (Escape, the X, a backdrop click or Close): its outcome, including a 401 that
+  // ends the session, belongs on this surface. Cleared by the open that set it,
+  // so a session change resetting `busy` does not unblock it early.
+  const [openingRequest, setOpeningRequest] = useState<number | null>(null);
+  const opening = openingRequest !== null;
+  // A lock, upload or account call already running (an upload, an auto-acquire):
+  // opening another project now would start a download and a lock under it.
+  const operationBusy = useSpeleoOperationBusy();
   const [error, setError] = useState<string | null>(null);
   // #270: the last project-list fetch failed, so an empty list means "we could not
   // load them", NOT "this account has no projects". Keeps the empty state honest.
   const [listFailed, setListFailed] = useState(false);
+  const request = useRef(0);
+  // An error raised together with `clearSession()`. The session change re-runs the
+  // mount effect, which resets the surface; this carries the message across it so
+  // the reason for the sign-out stays on screen.
+  const carriedError = useRef<string | null>(null);
 
   const refreshProjects = async (isCancelled: () => boolean = () => false) => {
     const list = await invokeIpc<SpeleoProjectSummary[]>('speleodb_list_projects');
-    if (!isCancelled()) {
+    if (!isCancelled() && useSpeleoStore.getState().sessionGeneration === sessionGeneration) {
       setProjects(list);
       setListFailed(false);
     }
@@ -57,19 +75,31 @@ export default function OpenFromSpeleoDbDialog() {
 
   useEffect(() => {
     let cancelled = false;
+    request.current += 1;
+    setBusy(false);
+    setError(carriedError.current);
+    carriedError.current = null;
+    setProjects([]);
+    setListFailed(false);
+    setPhase('checking');
+    const stale = () => cancelled || useSpeleoStore.getState().sessionGeneration !== sessionGeneration;
     void (async () => {
       // Step 1 - the AUTH check. Only THIS deciding we're not signed in may send the
       // user to the login prompt.
       let status: SpeleoSessionStatus;
       try {
         status = await invokeIpc<SpeleoSessionStatus>('speleodb_session');
-        if (cancelled) return;
+        if (stale()) return;
         setSession(status);
       } catch (e) {
-        if (cancelled) return;
+        if (stale()) return;
         // A dead token surfaces here - drop the session and prompt a re-login.
-        if (speleoErrorAction(e) === 'ReLogin') clearSession();
-        setError(humanizeSpeleoError(e, t('speleodb.errors.listFailed')));
+        const message = humanizeSpeleoError(e, t('speleodb.errors.listFailed'));
+        setError(message);
+        if (speleoErrorAction(e) === 'ReLogin') {
+          carriedError.current = message;
+          clearSession();
+        }
         setPhase('logged-out');
         return;
       }
@@ -83,13 +113,15 @@ export default function OpenFromSpeleoDbDialog() {
       // leaves them in the authenticated list phase with the inline error + Refresh.
       // Only a genuinely dead token (`ReLogin`) surfacing here escalates to logged-out.
       try {
-        await refreshProjects(() => cancelled);
-        if (!cancelled) setPhase('list');
+        await refreshProjects(stale);
+        if (!stale()) setPhase('list');
       } catch (e) {
-        if (cancelled) return;
+        if (stale()) return;
         setListFailed(true);
-        setError(humanizeSpeleoError(e, t('speleodb.errors.listFailed')));
+        const message = humanizeSpeleoError(e, t('speleodb.errors.listFailed'));
+        setError(message);
         if (speleoErrorAction(e) === 'ReLogin') {
+          carriedError.current = message;
           clearSession();
           setPhase('logged-out');
         } else {
@@ -99,8 +131,9 @@ export default function OpenFromSpeleoDbDialog() {
     })();
     return () => {
       cancelled = true;
+      request.current += 1;
     };
-  }, [setSession, clearSession, t]);
+  }, [setSession, clearSession, t, sessionGeneration]);
 
   const filtered = useMemo(() => {
     const q = filter.trim().toLowerCase();
@@ -109,19 +142,24 @@ export default function OpenFromSpeleoDbDialog() {
   }, [projects, filter]);
 
   const handleRefresh = async () => {
+    const issued = ++request.current;
+    const current = () => issued === request.current && useSpeleoStore.getState().sessionGeneration === sessionGeneration;
     setBusy(true);
     setError(null);
     try {
-      await refreshProjects();
+      await refreshProjects(() => !current());
     } catch (e) {
+      if (!current()) return;
       setListFailed(true);
+      const message = humanizeSpeleoError(e, t('speleodb.errors.listFailed'));
+      setError(message);
       if (speleoErrorAction(e) === 'ReLogin') {
+        carriedError.current = message;
         clearSession();
         setPhase('logged-out');
       }
-      setError(humanizeSpeleoError(e, t('speleodb.errors.listFailed')));
     } finally {
-      setBusy(false);
+      if (current()) setBusy(false);
     }
   };
 
@@ -132,38 +170,45 @@ export default function OpenFromSpeleoDbDialog() {
   const surfaceOpenError = (message: string, reLogin: boolean) => {
     setError(message);
     if (reLogin) {
+      carriedError.current = message;
       clearSession();
       setPhase('logged-out');
     }
     setBusy(false);
   };
 
-  const handleOpen = async (project: SpeleoProjectSummary) => {
-    setBusy(true);
-    setError(null);
-    const outcome = await openRemote(project);
-    if (outcome.status === 'cancelled') {
-      setBusy(false);
-    } else if (outcome.status === 'unpushed_local') {
-      // #270: the hook raised the keep-local / take-remote prompt, which has already
-      // replaced this browser as the active dialog - so this component is unmounting
-      // and there is deliberately nothing to do. (Backing out of that prompt re-opens
-      // this dialog fresh via `cancelReturnsTo`, with its own state.)
-    } else if (outcome.status === 'error') {
-      surfaceOpenError(outcome.message, outcome.reLogin);
+  // The browser can still lose its slot mid-open (a dialog raised by the exit
+  // prompt replaces it). The error must not vanish with it: report it the way
+  // Home's remote rows do, and drop a dead session that is still the current one.
+  const reportDetachedOpenError = (outcome: Extract<OpenRemoteOutcome, { status: 'error' }>) => {
+    if (outcome.reLogin && useSpeleoStore.getState().sessionGeneration === sessionGeneration) {
+      useSpeleoStore.getState().clearSession();
     }
+    useUIStore.getState().showToast(outcome.message, TOAST_KEYS.SPELEODB_OPEN_REMOTE_ERROR, 'error');
+  };
+
+  const handleOpen = async (project: SpeleoProjectSummary) => {
+    const issued = ++request.current;
+    const current = () => issued === request.current && useSpeleoStore.getState().sessionGeneration === sessionGeneration;
+    setBusy(true);
+    setOpeningRequest(issued);
+    setError(null);
+    let outcome: OpenRemoteOutcome;
+    try {
+      outcome = await openRemote(project);
+    } finally {
+      setOpeningRequest((open) => (open === issued ? null : open));
+      // A refused-open prompt returns to this browser on cancellation.
+      if (current()) setBusy(false);
+    }
+    if (outcome.status !== 'error') return;
+    if (current()) surfaceOpenError(outcome.message, outcome.reLogin);
+    else reportDetachedOpenError(outcome);
   };
 
   const goToLogin = () => openDialog('settings', { initialCategory: 'speleodb' });
 
-  return (
-    <>
-    <DialogWrapper
-      title={t('speleodb.browser.title')}
-      onClose={closeDialog}
-      size="lg"
-      data-testid="open-from-speleodb-dialog"
-    >
+  const content = (
       <div className="space-y-4">
         {error && (
           <div
@@ -239,7 +284,7 @@ export default function OpenFromSpeleoDbDialog() {
                     <Button
                       variant="primary"
                       onClick={() => void handleOpen(p)}
-                      disabled={busy}
+                      disabled={busy || operationBusy}
                       data-testid={`open-from-speleodb-open-${p.id}`}
                     >
                       {t('speleodb.browser.open')}
@@ -256,10 +301,10 @@ export default function OpenFromSpeleoDbDialog() {
                   : ''}
               </span>
               <div className="flex gap-2">
-                <Button onClick={() => void handleRefresh()} disabled={busy} data-testid="open-from-speleodb-refresh">
+                <Button onClick={() => void handleRefresh()} disabled={busy} aria-busy={busy} icon={busy ? <LoadingSpinner testId="open-from-speleodb-refresh-spinner" /> : undefined} data-testid="open-from-speleodb-refresh">
                   {t('speleodb.browser.refresh')}
                 </Button>
-                <Button onClick={closeDialog} disabled={busy} data-testid="open-from-speleodb-close">
+                <Button onClick={closeDialog} disabled={busy || opening} data-testid="open-from-speleodb-close">
                   {t('common.actions.close')}
                 </Button>
               </div>
@@ -267,8 +312,10 @@ export default function OpenFromSpeleoDbDialog() {
           </>
         )}
       </div>
+  );
+  return (
+    <DialogWrapper title={t('speleodb.browser.title')} onClose={opening ? () => {} : closeDialog} size="lg" data-testid="open-from-speleodb-dialog">
+      {content}
     </DialogWrapper>
-
-    </>
   );
 }

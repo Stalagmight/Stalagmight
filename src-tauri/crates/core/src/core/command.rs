@@ -213,6 +213,21 @@ pub enum Command {
         /// Whether to archive (rename) the original files
         archive_originals: bool,
     },
+    /// Append the survey of another `.stalx` into the OPEN project (#674), as
+    /// one undo step recording only what it brought
+    /// (`UndoData::AddedProjectContent`). Build with
+    /// [`Command::add_project_file`].
+    AddProjectFile {
+        /// Read by the forward command only, and NEVER serialized: undo history
+        /// rides to SpeleoDB in Full mode, so a local path must not enter it
+        /// (the privacy fence on `AppState::is_undoable`). A reloaded entry
+        /// carries an empty path that nothing reads - redo reinstalls the
+        /// recorded content, it never re-reads the file.
+        #[serde(skip)]
+        path: PathBuf,
+        /// The file's own name, no directory, sanitized: the history label.
+        file_name: String,
+    },
     /// Repair the open project's structural integrity (drop dangling refs, re-mint
     /// duplicate UUIDs, re-cascade offsets). Applied directly via the
     /// `repair_project_integrity` IPC command, which records its own snapshot-pair
@@ -472,6 +487,36 @@ pub struct CommandResult {
     /// non-import command.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub import_receipt: Option<ImportReceipt>,
+    /// What handing back the open project's SpeleoDB write lock came to, for the
+    /// commands that leave a project (`close_project`, and the lock settlement a
+    /// project switch or a quit runs first). Absent when no release was attempted:
+    /// a local project, no lock claim, or a lock deliberately kept (the
+    /// un-uploaded-work veto, an earlier Keep the lock).
+    ///
+    /// Reported on the reply of the call that released, so the frontend decides
+    /// on the outcome (go on, or ask "Couldn't hand back the lock") without a
+    /// second round trip to find out what happened. Same wire contract as the
+    /// optional fields above (`skip_serializing_if` + `default`).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub lock_release: Option<LockReleaseOutcome>,
+}
+
+/// What one holder-checked release of the open project's lock came to (see
+/// [`CommandResult::lock_release`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum LockReleaseOutcome {
+    /// SpeleoDB named this account as the holder, and confirmed the release.
+    Released,
+    /// SpeleoDB named another account, or nobody: there was nothing of ours to
+    /// hand back, so nothing was sent.
+    NotHeld,
+    /// The release failed or its outcome is unknown: the holder could not be
+    /// read, the release POST failed or its reply was lost, SpeleoDB still names
+    /// this account after the release, or the release could not be attempted
+    /// (no usable credential, an unreadable session). The lock may still be ours:
+    /// the claim is kept, unbound, so editing is paused and nothing was closed.
+    Failed,
 }
 
 /// Result of an explicit "repair project integrity" action. `fixed` and
@@ -532,6 +577,7 @@ impl CommandResult {
             unlinked_copy_path: None,
             reversed_sections: None,
             import_receipt: None,
+            lock_release: None,
         }
     }
 
@@ -548,6 +594,7 @@ impl CommandResult {
             unlinked_copy_path: None,
             reversed_sections: None,
             import_receipt: None,
+            lock_release: None,
         }
     }
 
@@ -615,6 +662,14 @@ impl CommandResult {
         self
     }
 
+    /// Attach what handing back the open project's lock came to (see
+    /// [`CommandResult::lock_release`]); `None` leaves the key off the wire.
+    #[must_use]
+    pub fn with_lock_release(mut self, outcome: Option<LockReleaseOutcome>) -> Self {
+        self.lock_release = outcome;
+        self
+    }
+
     /// Attach a single warning message to this result.
     pub fn with_warning(mut self, message: &str) -> Self {
         self.warnings.push(ValidationWarning {
@@ -667,8 +722,19 @@ impl Command {
             | Command::MoveSection { .. }
             | Command::MoveSegment { .. }
             | Command::MoveStation { .. }
-            | Command::MergeProjects { .. } => true,
+            | Command::MergeProjects { .. }
+            | Command::AddProjectFile { .. } => true,
         }
+    }
+
+    /// The `AddProjectFile` command for `path`, its label taken from the file
+    /// name alone (sanitized and clamped like a receipt's `file_name`).
+    pub fn add_project_file(path: PathBuf) -> Self {
+        let file_name = path
+            .file_name()
+            .map(|n| sanitize_display_text(&n.to_string_lossy(), MAX_FILE_NAME_LEN))
+            .unwrap_or_default();
+        Command::AddProjectFile { path, file_name }
     }
 
     /// Reduce a reverse log to its NET effect: keep an id only when it occurs an
@@ -856,6 +922,9 @@ impl Command {
                     output_name
                 )
             }
+            Command::AddProjectFile { file_name, .. } => {
+                format!("Add '{file_name}' to project")
+            }
             Command::UntrackImport { section_hashes, .. } => {
                 format!("Forget {} imported sections", section_hashes.len())
             }
@@ -925,7 +994,7 @@ mod tests {
 
         assert_eq!(
             variants.len(),
-            30,
+            31,
             "Command's variant set changed. A removal leaves persisted undo \
              history unloadable at that entry and holed either side of it - keep \
              the tag deserializable, or bump SCHEMA_VERSION and call \

@@ -6,7 +6,6 @@ import { getErrorMessage } from '../../utils/ipc';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
-import { ensureExtension, projectSaveFilters, saveDialog, PROJECT_EXTENSION } from '../../utils/fileDialogs';
 
 export default function NewProjectDialog() {
   const { closeDialog } = useUIStore();
@@ -18,7 +17,6 @@ export default function NewProjectDialog() {
 
   const [name, setName] = useState('');
   const [projectLocation, setProjectLocation] = useState('');
-  const [saveImmediately, setSaveImmediately] = useState(false);
   const [alsoPublish, setAlsoPublish] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
@@ -33,22 +31,9 @@ export default function NewProjectDialog() {
     setError(null);
 
     try {
-      let explicitSavePath: string | undefined;
-      if (saveImmediately) {
-        const path = await saveDialog({
-          title: 'Save Project',
-          filters: projectSaveFilters(),
-          defaultPath: `${name.replace(/[^a-zA-Z0-9]/g, '_')}.stalx`,
-        });
-        if (path) {
-          explicitSavePath = ensureExtension(path, PROJECT_EXTENSION);
-        }
-      }
-
       const result = await createProject(
         name.trim(),
-        projectLocation.trim() || undefined,
-        explicitSavePath ? { savePath: explicitSavePath } : undefined
+        projectLocation.trim() || undefined
       );
 
       if (result.success) {
@@ -73,7 +58,7 @@ export default function NewProjectDialog() {
   };
 
   // Track if form has been modified
-  const isDirty = name.trim() !== '' || projectLocation.trim() !== '' || saveImmediately || alsoPublish;
+  const isDirty = name.trim() !== '' || projectLocation.trim() !== '' || alsoPublish;
 
   return (
     <DialogWrapper title="New Project" onClose={closeDialog} size="md" isDirty={isDirty} data-testid="new-project-dialog">
@@ -112,20 +97,6 @@ export default function NewProjectDialog() {
           />
         </div>
 
-        <div className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            id="saveImmediately"
-            checked={saveImmediately}
-            onChange={(e) => setSaveImmediately(e.target.checked)}
-            className="rounded"
-            data-testid="new-project-save-immediately"
-          />
-          <label htmlFor="saveImmediately" className="text-sm">
-            Save project file immediately
-          </label>
-        </div>
-
         {loggedIn && (
           <div className="flex items-center gap-2">
             <input
@@ -137,7 +108,7 @@ export default function NewProjectDialog() {
               data-testid="new-project-also-publish"
             />
             <label htmlFor="alsoPublish" className="text-sm">
-              Also create on SpeleoDB after creating
+              Create as SpeleoDB project
             </label>
           </div>
         )}

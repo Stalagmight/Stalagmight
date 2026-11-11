@@ -1,4 +1,4 @@
-import type { SpeleoProjectSummary } from '../../types/ipc.generated';
+import type { SpeleoCachedProject, SpeleoProjectSummary } from '../../types/ipc.generated';
 import { useTranslation } from 'react-i18next';
 import { SpeleoDbLogo } from '../common/SpeleoDbLogo';
 import { SpeleoBadgedIcon, HourglassGlyph, PenGlyph } from '../common/SpeleoBadgedIcon';
@@ -61,6 +61,19 @@ export function resolveSpeleoLock(
 }
 
 /**
+ * A SpeleoDB card or row with a cached copy: the copy's own un-uploaded flag marks
+ * it too. The local-state scan only covers projects in recents or the server
+ * listing, and a signed-out cached copy may be in neither. Card and table row both
+ * go through here, so they always agree.
+ */
+export function withCachedCopyEdits(
+  lock: SpeleoLockInfo,
+  cached: Pick<SpeleoCachedProject, 'has_unpushed_edits'> | undefined,
+): SpeleoLockInfo {
+  return cached?.has_unpushed_edits && !lock.hasLocalEdits ? { ...lock, hasLocalEdits: true } : lock;
+}
+
+/**
  * "You hold the SpeleoDB write lock": each theme's primary text colour, which is the
  * highest-contrast neutral it defines. That reads as white on most dark themes and
  * near-black on most light ones, but not uniformly - `one_dark` is grey `#abb2bf` and
@@ -111,7 +124,8 @@ export type RecentAccent = 'unpushed' | 'lock-mine' | 'lock-other' | 'none';
  * than stacked, and un-pushed edits outrank lock state: the lock is recoverable
  * (ask, or wait) while work that exists only on this computer is the thing that can
  * actually be lost. Lock state stays legible on a row that loses the bar - the badge
- * and "Write-locked by you / by {email}" in `SpeleoRecentInfo` say it in words.
+ * and "You are editing" / "Currently being edited by {email}" in `SpeleoRecentInfo`
+ * say it in words.
  *
  * Lock accents are gated on `isRemote` so a local project can never pick one up from
  * a stale holder field.
@@ -135,9 +149,9 @@ const ACCENT_COLOR: Record<Exclude<RecentAccent, 'none'>, string> = {
  * The list accent bar down the leading edge of a card / row: yellow for "changes
  * only on this computer" (#270), bright neutral for "you hold the write lock", blue
  * for "someone else does". Deliberately an ACCENT and nothing more - the recents
- * list is a chooser, not a place to shout, so the "!" badge stays on the status
- * button where an action is available. Returns `undefined` (no styling at all) when
- * the entry earns no accent.
+ * list is a chooser, not a place to shout, and un-uploaded work is not an error, so
+ * nothing here (nor on the SpeleoDB tab) carries a "!". Returns `undefined` (no
+ * styling at all) when the entry earns no accent.
  *
  * On an element that also carries Tailwind's `ring-*`, use `recentCardStyle` instead
  * - see the trap documented there.
@@ -261,7 +275,7 @@ export function SpeleoLockBadge({
  * irrelevant for a linked project, so in its place we show the SpeleoDB mark plus
  * "SpeleoDB: {name}" - the server-side project name (falling back to the local
  * `name` when the scan hasn't resolved it) - then, when the lock is held, a middot
- * and "Write-locked by you" / "Write-locked by {email}". Returns `null` for a local project
+ * and "You are editing" / "Currently being edited by {email}". Returns `null` for a local project
  * (the caller shows the path instead). The last-edited time is not repeated here -
  * it has its own column / card footer.
  */

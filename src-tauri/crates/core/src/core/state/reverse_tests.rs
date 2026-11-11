@@ -346,6 +346,7 @@ fn import_reverse_applies_before_placement_and_comments_resolve() {
             placement: ImportPlacement::Origin,
             // Station 0 of the FILE - the backend mirrors it to station 3.
             station_comments: vec![(0, "file station 0".to_string())],
+            station_names: Vec::new(),
             reverse: true,
             azimuth_reference: None,
         }],
@@ -418,6 +419,7 @@ fn import_reverse_lands_the_section_in_the_same_place() {
                 shots: shots.clone(),
                 placement,
                 station_comments: Vec::new(),
+                station_names: Vec::new(),
                 reverse,
                 azimuth_reference: None,
             }],
@@ -512,6 +514,7 @@ fn import_one(reverse: bool, placement: fn(SectionId) -> ImportPlacement) -> Vec
             shots: import_shots(),
             placement: placement(anchor),
             station_comments: Vec::new(),
+            station_names: Vec::new(),
             reverse,
             azimuth_reference: None,
         }],
@@ -643,6 +646,7 @@ fn import_two(
             shots,
             placement,
             station_comments: Vec::new(),
+            station_names: Vec::new(),
             reverse,
             azimuth_reference: None,
         };
@@ -904,6 +908,7 @@ fn import_reverse_drops_an_out_of_range_station_comment() {
             placement: ImportPlacement::Origin,
             // Two shots means stations 0..2; station 7 does not exist.
             station_comments: vec![(7, "nowhere".to_string()), (1, "the bend".to_string())],
+            station_names: Vec::new(),
             reverse: true,
             azimuth_reference: None,
         }],
@@ -1726,6 +1731,7 @@ fn importing_with_the_reverse_toggle_records_the_orientation() {
             shots: vec![shot(0.0, 10.0, 0.0, 2.0), shot(90.0, 5.0, 2.0, 2.0)],
             placement: ImportPlacement::Origin,
             station_comments: Vec::new(),
+            station_names: Vec::new(),
             reverse: true,
             azimuth_reference: None,
         }],

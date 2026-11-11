@@ -16,13 +16,15 @@ import { EntityBlob } from '../common/EntityBlob';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import type { Station, Shot, Section, Project, ProjectStats as ProjectStatsType, ClosureRef, LoopClosure } from '../../types/project';
 import type { ProjectWarning } from '../../types/commands';
-import { formatShotId, formatStationId } from '../../utils/formatters';
+import { displayStationName, formatShotId, formatStationId, formatStationIdWithName } from '../../utils/formatters';
+import { findStation } from '../../utils/findStation';
 import { getDeleteShotDialog } from '../../utils/contextMenuHelpers';
 import { formatFixed, formatPercent, formatNumber, formatDate } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { useActiveStations } from '../../hooks/useActiveStations';
 import { setSource, trackContextMenuAction } from '../../utils/telemetry';
 import { SHOT_KIND_LABEL_KEY, nextShotKind } from '../../utils/shotKind';
+import { countUnresolvedErrors } from '../../utils/validation';
 import { warningKey, warningMessageTestId, warningOpenShotTestId, warningResolveTestId, warningUndoResolveTestId } from '../../utils/testId';
 
 /** Center/locate glyph (small ring + edge spokes), filled so it stays crisp
@@ -51,7 +53,7 @@ export default function DetailPanel() {
   const { project, stations, warnings } = useProjectStore();
 
   const unresolvedWarnings = warnings.filter((w) => !w.isResolved);
-  const errorCount = unresolvedWarnings.filter((w) => w.severity === 'error').length;
+  const errorCount = countUnresolvedErrors(warnings);
   const unresolvedCount = unresolvedWarnings.length;
 
   return (
@@ -159,11 +161,7 @@ function DetailsContent({ selection, project, stations }: DetailsContentProps) {
   }
 
   if (selection.type === 'station' && selection.stationRef) {
-    const station = stations.find(
-      (s) =>
-        s.station_ref.section_id === selection.stationRef?.section_id &&
-        s.station_ref.station_index === selection.stationRef?.station_index
-    );
+    const station = findStation(stations, selection.stationRef.section_id, selection.stationRef.station_index);
 
     if (station) {
       return <StationDetail station={station} />;
@@ -631,11 +629,7 @@ function StationDetail({ station }: { station: Station }) {
   // back to the passed (measured) station before the adjusted set is fetched.
   const activeStations = useActiveStations();
   const displayStation =
-    activeStations.find(
-      (s) =>
-        s.station_ref.section_id === station.station_ref.section_id &&
-        s.station_ref.station_index === station.station_ref.station_index
-    ) ?? station;
+    findStation(activeStations, station.station_ref.section_id, station.station_ref.station_index) ?? station;
   const [unmergeTargetKey, setUnmergeTargetKey] = useState<string | null>(null);
   const section = project?.sections.find(
     (s) => s.id === station.station_ref.section_id
@@ -741,11 +735,11 @@ function StationDetail({ station }: { station: Station }) {
   };
 
   // Validate merged station targets exist
-  const mergedStationExists = (ref: { section_id: number; station_index: number }): boolean => {
-    return stations.some(
-      (s) => s.station_ref.section_id === ref.section_id && s.station_ref.station_index === ref.station_index
-    );
-  };
+  const mergedStationExists = (ref: { section_id: number; station_index: number }): boolean =>
+    findStation(stations, ref.section_id, ref.station_index) !== undefined;
+  // A merge is where two sections' numbering meets, so name both ends.
+  const stationName = (ref: { section_id: number; station_index: number }): string | undefined =>
+    findStation(stations, ref.section_id, ref.station_index)?.name;
 
   const sectionName = section?.name ?? t('detailPanel.section.unnamed');
   const sectionDisplayText = t('detailPanel.section.display', {
@@ -775,6 +769,9 @@ function StationDetail({ station }: { station: Station }) {
             label={t('detailPanel.labels.id')}
             value={formatStationId(sectionId, stationPosition)}
           />
+          {station.name && (
+            <DetailRow label={t('detailPanel.labels.name')} value={displayStationName(station.name)} testId="station-detail-name" />
+          )}
           <DetailRow label={t('detailPanel.labels.section')} value={section?.name ?? t('sections.defaultName', { id: sectionId })} />
           <DetailRow label={t('detailPanel.labels.x')} value={`${formatFixed(displayStation.coordinates.x, undefined, precision.coordinates)} ${t('common.units.meters')}`} />
           <DetailRow label={t('detailPanel.labels.y')} value={`${formatFixed(displayStation.coordinates.y, undefined, precision.coordinates)} ${t('common.units.meters')}`} />
@@ -823,7 +820,7 @@ function StationDetail({ station }: { station: Station }) {
                       <DetailLink
                         type="station"
                         target={{ sectionId: ref.section_id, position: ref.station_index }}
-                        displayText={formatStationId(ref.section_id, ref.station_index)}
+                        displayText={formatStationIdWithName(ref.section_id, ref.station_index, stationName(ref))}
                         onSelect={() => handleSelectMergedStation(ref)}
                         isMissing={!mergedStationExists(ref)}
                         onAnnounce={announceSelection}
@@ -965,13 +962,11 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
   const startStationPosition = startStationIndex;
   const endStationPosition = endStationIndex;
 
-  // Validate station targets exist
-  const startStationExists = stations.some(
-    (s) => s.station_ref.section_id === section.id && s.station_ref.station_index === startStationIndex
-  );
-  const endStationExists = stations.some(
-    (s) => s.station_ref.section_id === section.id && s.station_ref.station_index === endStationIndex
-  );
+  // Validate station targets exist (and read their names)
+  const startStation = findStation(stations, section.id, startStationIndex);
+  const endStation = findStation(stations, section.id, endStationIndex);
+  const startStationExists = startStation !== undefined;
+  const endStationExists = endStation !== undefined;
 
   const kindBadge = t('detailPanel.shot.kindBadge', { kind: t(SHOT_KIND_LABEL_KEY[shot.kind]) });
 
@@ -1095,7 +1090,7 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
                 <DetailLink
                   type="station"
                   target={{ sectionId: section.id, position: startStationPosition }}
-                  displayText={formatStationId(section.id, startStationPosition)}
+                  displayText={formatStationIdWithName(section.id, startStationPosition, startStation?.name)}
                   onSelect={handleSelectStartStation}
                   isMissing={!startStationExists}
                   onAnnounce={announceSelection}
@@ -1108,7 +1103,7 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
                 <DetailLink
                   type="station"
                   target={{ sectionId: section.id, position: endStationPosition }}
-                  displayText={formatStationId(section.id, endStationPosition)}
+                  displayText={formatStationIdWithName(section.id, endStationPosition, endStation?.name)}
                   onSelect={handleSelectEndStation}
                   isMissing={!endStationExists}
                   onAnnounce={announceSelection}
@@ -1204,12 +1199,8 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
   const hasSingleStation = section.shots.length === 0;
 
   // Validate station targets exist
-  const firstStationExists = stations.some(
-    (s) => s.station_ref.section_id === section.id && s.station_ref.station_index === firstStationIndex
-  );
-  const lastStationExists = stations.some(
-    (s) => s.station_ref.section_id === section.id && s.station_ref.station_index === lastStationIndex
-  );
+  const firstStationExists = findStation(stations, section.id, firstStationIndex) !== undefined;
+  const lastStationExists = findStation(stations, section.id, lastStationIndex) !== undefined;
 
   const handleSelectFirstStation = () => {
     setSource('detail-panel');
@@ -1736,9 +1727,9 @@ function StatCard({ label, value }: { label: string; value: string }) {
   );
 }
 
-function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
+function DetailRow({ label, value, testId }: { label: string; value: React.ReactNode; testId?: string }) {
   return (
-    <div className="flex justify-between text-sm">
+    <div className="flex justify-between text-sm" data-testid={testId}>
       <span className="text-text-secondary">{label}:</span>
       <span>{value}</span>
     </div>

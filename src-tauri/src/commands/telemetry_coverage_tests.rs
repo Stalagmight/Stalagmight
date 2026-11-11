@@ -28,6 +28,10 @@ const REMOVED_DIALOGS: &[&str] = &[
     "adjust-closures",
     "held-lock-resume",
     "speleodb-dump-picker",
+    // Folded into the SpeleoDB exit prompt, an independent overlay that layers
+    // over whatever dialog raised it instead of evicting it from the slot.
+    "speleodb-close",
+    "speleodb-quit",
 ];
 
 /// `action.toggle.*` events that are intentionally NOT derived from

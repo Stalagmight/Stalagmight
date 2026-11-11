@@ -62,13 +62,6 @@ fn poison_mutex<T>(mutex: &Mutex<T>) {
 
 // === Project Operations Tests ===
 
-/// [#473] Creating a project clears the PREVIOUS project's discarded-history flag.
-///
-/// The flag is per-project and drives a banner reading "edit history could not be read
-/// and was discarded". Create is a project-slot commit like a load, and every commit has
-/// to write it - the first version of this fix reset `edit_enabled` and `force_editing`
-/// here and forgot this one, so opening a project with an unreadable history and then
-/// choosing File > New Project put a data-loss banner over a brand-new empty project.
 #[test]
 fn creating_a_project_clears_a_previous_projects_discarded_history_flag() {
     let state = AppState::new().unwrap();
@@ -1036,7 +1029,7 @@ fn test_undo_after_reload_restores_exactly_the_edited_field() {
 }
 
 #[test]
-fn test_merge_projects_preserves_offsets_zero_datums_and_closure_ids() {
+fn test_merge_projects_places_by_datum_and_keeps_station_offsets_datums_and_closure_ids() {
     let temp_dir = TempDir::new().unwrap();
 
     let mut project_a = Project::new("A".to_string(), None);
@@ -1132,13 +1125,25 @@ fn test_merge_projects_preserves_offsets_zero_datums_and_closure_ids() {
         .unwrap()
         .id;
 
-    assert_eq!(
-        merged.section_offsets.get(&merged_section_a),
-        Some(&(1.0, 2.0))
+    // #682: each georeferenced source is placed by its datum. The first
+    // source's datum station becomes the frame origin, and the second's lands at
+    // its GPS position in that frame - instead of both keeping their stored
+    // offsets and the second survey being drawn on top of the first.
+    let datum_station = |id| {
+        merged
+            .compute_station_raw_coords(StationRef::new(id, 0))
+            .unwrap()
+    };
+    let a0 = datum_station(merged_section_a);
+    assert!(
+        a0.x.abs() < 1e-6 && a0.y.abs() < 1e-6,
+        "the first datum station is the frame origin: {a0:?}"
     );
-    assert_eq!(
-        merged.section_offsets.get(&merged_section_b),
-        Some(&(3.0, 4.0))
+    let (expected_x, expected_y) = crate::models::gps_to_local(&gps_b, &gps_a);
+    let b0 = datum_station(merged_section_b);
+    assert!(
+        (b0.x - expected_x).abs() < 1e-3 && (b0.y - expected_y).abs() < 1e-3,
+        "the second datum station sits at its GPS position: {b0:?} vs ({expected_x}, {expected_y})"
     );
 
     assert_eq!(
@@ -1185,10 +1190,9 @@ fn test_merge_projects_preserves_offsets_zero_datums_and_closure_ids() {
 /// `project_merge.rs`), so both halves of the gate read the same unchanged open
 /// project and it returns without measuring anything.
 ///
-/// That distinction has teeth: a merged project's datums deliberately do NOT sit
-/// at the origin - `store_zero_datum_without_repositioning` copies them exactly
-/// so each source's own offsets survive - so a fire here would silently
-/// translate the file the user just built.
+/// That distinction has teeth: the merged project is laid out by its own
+/// sources' datums (#682), not by the open project's frame, so a fire here would
+/// silently translate one onto the other.
 ///
 /// Non-vacuous on both sides. The open project carries section offsets that
 /// nothing in the merge could produce and no datum at all, so a swap-in is
@@ -6910,20 +6914,72 @@ fn test_remove_recent_projects_fails_when_lock_poisoned() {
 
 #[test]
 fn test_remove_recent_project_removes_present_entry() {
-    // Isolated because `remove_from_recent_projects` persists the trimmed list and
-    // reports a save failure as `success: false`, so this assert is only about the
-    // removal if the save has a writable config file of its own to land in.
     crate::test_helpers::with_isolated_config(|| {
+        let temp = tempfile::tempdir().unwrap();
+        let local = temp.path().join("local.stalx");
+        let managed = temp.path().join("managed.stalx");
+        let original = b"synthetic original survey file";
+        std::fs::write(&local, original).unwrap();
+        std::fs::write(&managed, b"synthetic managed survey file").unwrap();
         let state = AppState::new().unwrap();
-        {
-            let mut recent = state.recent_projects.lock().unwrap();
-            *recent = vec![PathBuf::from("/a.stalx"), PathBuf::from("/b.stalx")];
-        }
-
-        let result = state.remove_from_recent_projects(PathBuf::from("/a.stalx"));
+        *state.recent_projects.lock().unwrap() = vec![local.clone(), managed.clone()];
+        let result = state.remove_from_recent_projects(local.clone());
         assert!(result.success);
-        let recent = state.recent_projects.lock().unwrap();
-        assert_eq!(*recent, vec![PathBuf::from("/b.stalx")]);
+        assert_eq!(
+            *state.recent_projects.lock().unwrap(),
+            vec![managed.clone()]
+        );
+        assert_eq!(
+            crate::config::Config::load()
+                .unwrap()
+                .general
+                .recent_projects,
+            vec![managed.clone()]
+        );
+        assert_eq!(std::fs::read(&local).unwrap(), original);
+        assert_eq!(
+            std::fs::read(&managed).unwrap(),
+            b"synthetic managed survey file"
+        );
+    });
+}
+
+#[test]
+fn test_remove_recent_project_failed_save_preserves_retry_and_original_file() {
+    crate::test_helpers::with_isolated_config(|| {
+        let temp = tempfile::tempdir().unwrap();
+        let local = temp.path().join("synthetic-local.stalx");
+        std::fs::write(&local, b"synthetic original survey file").unwrap();
+        let state = AppState::new().unwrap();
+        *state.recent_projects.lock().unwrap() = vec![local.clone()];
+        {
+            let mut config = state.config.lock().unwrap();
+            config.general.recent_projects = vec![local.clone()];
+            config.save().unwrap();
+        }
+        let config_path = crate::config::Config::config_path().unwrap();
+        let before = std::fs::read(&config_path).unwrap();
+        // A directory at the destination makes atomic replacement fail on every OS.
+        std::fs::remove_file(&config_path).unwrap();
+        std::fs::create_dir(&config_path).unwrap();
+        assert!(!state.remove_from_recent_projects(local.clone()).success);
+        assert_eq!(*state.recent_projects.lock().unwrap(), vec![local.clone()]);
+        assert_eq!(
+            state.get_config().general.recent_projects,
+            vec![local.clone()]
+        );
+        std::fs::remove_dir(&config_path).unwrap();
+        std::fs::write(&config_path, before).unwrap();
+        assert!(state.remove_from_recent_projects(local.clone()).success);
+        assert!(crate::config::Config::load()
+            .unwrap()
+            .general
+            .recent_projects
+            .is_empty());
+        assert_eq!(
+            std::fs::read(&local).unwrap(),
+            b"synthetic original survey file"
+        );
     });
 }
 
@@ -7932,6 +7988,7 @@ fn test_import_shot_updates_reject_atomically_when_one_is_poisoned() {
         quality: 1.0,
         shots: vec![test_shot_data(5.0), test_shot_data(6.0)],
         station_comments: Vec::new(),
+        station_names: Vec::new(),
         placement: ImportPlacement::Origin,
         azimuth_reference: None,
     };
@@ -7962,6 +8019,7 @@ fn test_import_shot_updates_reject_atomically_when_one_is_poisoned() {
         quality: 1.0,
         shots: vec![test_shot_data(3.0)],
         station_comments: Vec::new(),
+        station_names: Vec::new(),
         placement: ImportPlacement::Origin,
         azimuth_reference: None,
     };
@@ -8073,6 +8131,7 @@ fn doubly_anchored_guard_reports_receipt_warning_and_skips_the_shot() {
         quality: 1.0,
         shots: vec![test_shot_data(1.0)],
         station_comments: Vec::new(),
+        station_names: Vec::new(),
         placement: ImportPlacement::Origin,
         azimuth_reference: None,
     };
@@ -8137,6 +8196,7 @@ fn zero_datum_import_placement_sets_receipt_zero_datum_created() {
         quality: 1.0,
         shots: vec![test_shot_data(5.0)],
         station_comments: Vec::new(),
+        station_names: Vec::new(),
         placement: ImportPlacement::ZeroDatum {
             coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
             station_index: 0,
@@ -8183,6 +8243,7 @@ fn multiple_zero_datum_placements_name_the_first_and_count_the_rest() {
         quality: 1.0,
         shots: vec![test_shot_data(5.0)],
         station_comments: Vec::new(),
+        station_names: Vec::new(),
         placement: ImportPlacement::ZeroDatum {
             coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
             station_index,
@@ -8229,6 +8290,7 @@ fn import_with_no_zero_datum_placement_leaves_receipt_field_none() {
         quality: 1.0,
         shots: vec![test_shot_data(5.0)],
         station_comments: Vec::new(),
+        station_names: Vec::new(),
         placement: ImportPlacement::Origin,
         azimuth_reference: None,
     };
@@ -17103,12 +17165,10 @@ fn setting_the_undo_mode_on_a_linked_project_needs_the_edit_gate() {
         .speleodb_set_undo_mode(crate::models::UndoMode::Disabled)
         .expect("with an edit session the override is settable");
 
-    // Force editing is intentionally the same gate. It carries conflict risk, but the
-    // user explicitly accepted that mode and its commands may edit this same project file.
-    state.set_force_editing(true);
+    state.set_edit_enabled(false);
     state
         .speleodb_set_undo_mode(crate::models::UndoMode::Full)
-        .expect("force editing may change the project policy too");
+        .expect_err("a released session cannot change the project policy");
 }
 
 #[test]
@@ -17900,6 +17960,7 @@ fn test_execute_import_sections_origin_placement() {
             quality: 1.0,
             shots: vec![test_shot_data(5.0)],
             station_comments: Vec::new(),
+            station_names: Vec::new(),
             placement: ImportPlacement::Origin,
             azimuth_reference: None,
         },
@@ -17914,6 +17975,7 @@ fn test_execute_import_sections_origin_placement() {
             quality: 1.0,
             shots: vec![test_shot_data(3.0)],
             station_comments: Vec::new(),
+            station_names: Vec::new(),
             placement: ImportPlacement::Origin,
             azimuth_reference: None,
         },
@@ -17970,6 +18032,7 @@ fn test_execute_import_sections_unresolvable_closure_is_skipped_on_receipt() {
         quality: 1.0,
         shots: vec![test_shot_data(5.0)],
         station_comments: Vec::new(),
+        station_names: Vec::new(),
         placement: ImportPlacement::Origin,
         azimuth_reference: None,
     }];
@@ -18037,6 +18100,7 @@ fn imported_shot_kinds_survive_an_undo_redo_round_trip() {
         quality: 1.0,
         shots: vec![test_shot_data(5.0), virtual_shot, test_shot_data(6.0)],
         station_comments: Vec::new(),
+        station_names: Vec::new(),
         placement: ImportPlacement::Origin,
         reverse: false,
         azimuth_reference: None,
@@ -18092,6 +18156,7 @@ fn importing_a_second_file_leaves_existing_shot_kinds_alone() {
         quality: 1.0,
         shots,
         station_comments: Vec::new(),
+        station_names: Vec::new(),
         placement: ImportPlacement::Origin,
         reverse: false,
         azimuth_reference: None,
@@ -18186,6 +18251,7 @@ fn test_execute_import_sections_rejects_non_finite_shot_update() {
         quality: 1.0,
         shots: vec![test_shot_data(5.0)],
         station_comments: Vec::new(),
+        station_names: Vec::new(),
         placement: ImportPlacement::Origin,
         azimuth_reference: None,
     };
@@ -18214,6 +18280,7 @@ fn test_execute_import_sections_rejects_non_finite_shot_update() {
         quality: 1.0,
         shots: vec![test_shot_data(3.0)],
         station_comments: Vec::new(),
+        station_names: Vec::new(),
         placement: ImportPlacement::Origin,
         azimuth_reference: None,
     };
@@ -18276,6 +18343,7 @@ fn test_execute_import_sections_from_importing_placement() {
             quality: 1.0,
             shots: vec![test_shot_data(5.0), test_shot_data(3.0)],
             station_comments: Vec::new(),
+            station_names: Vec::new(),
             placement: ImportPlacement::Origin,
             azimuth_reference: None,
         },
@@ -18290,6 +18358,7 @@ fn test_execute_import_sections_from_importing_placement() {
             quality: 1.0,
             shots: vec![test_shot_data(4.0)],
             station_comments: Vec::new(),
+            station_names: Vec::new(),
             placement: ImportPlacement::FromImporting {
                 import_station: 0,
                 target_section_index: 0,
@@ -18346,6 +18415,7 @@ fn test_execute_import_sections_from_existing_placement() {
         quality: 1.0,
         shots: vec![test_shot_data(4.0)],
         station_comments: Vec::new(),
+        station_names: Vec::new(),
         placement: ImportPlacement::FromExisting {
             import_station: 0,
             existing_station: StationRef::new(existing_id, 2),
@@ -18389,6 +18459,7 @@ fn test_execute_import_sections_manual_with_offset() {
         quality: 1.0,
         shots: vec![test_shot_data(5.0)],
         station_comments: Vec::new(),
+        station_names: Vec::new(),
         placement: ImportPlacement::Manual {
             align_station_index: 0,
             offset: Some(Coordinates {
@@ -18445,6 +18516,7 @@ fn test_execute_import_sections_zero_datum_placement() {
         quality: 1.0,
         shots: vec![test_shot_data(5.0)],
         station_comments: Vec::new(),
+        station_names: Vec::new(),
         placement: ImportPlacement::ZeroDatum {
             coordinates: gps,
             station_index: 0,
@@ -18502,6 +18574,7 @@ fn test_execute_import_sections_zero_datum_placement_at_non_origin_station() {
         quality: 1.0,
         shots: vec![imported_shot.clone()],
         station_comments: Vec::new(),
+        station_names: Vec::new(),
         placement: ImportPlacement::ZeroDatum {
             coordinates: gps,
             station_index: 1,
@@ -18571,6 +18644,7 @@ fn test_execute_import_sections_rollback_on_failure() {
             quality: 1.0,
             shots: vec![test_shot_data(5.0)],
             station_comments: Vec::new(),
+            station_names: Vec::new(),
             placement: ImportPlacement::Origin,
             azimuth_reference: None,
         },
@@ -18585,6 +18659,7 @@ fn test_execute_import_sections_rollback_on_failure() {
             quality: 1.0,
             shots: vec![test_shot_data(3.0)],
             station_comments: Vec::new(),
+            station_names: Vec::new(),
             placement: ImportPlacement::FromExisting {
                 import_station: 0,
                 existing_station: StationRef::new(9999, 0), // nonexistent
@@ -18651,6 +18726,7 @@ fn test_execute_import_sections_no_project() {
         quality: 1.0,
         shots: vec![test_shot_data(5.0)],
         station_comments: Vec::new(),
+        station_names: Vec::new(),
         placement: ImportPlacement::Origin,
         azimuth_reference: None,
     }];
@@ -18698,6 +18774,7 @@ fn test_execute_import_sections_manual_snap_placement() {
         quality: 1.0,
         shots: vec![test_shot_data(4.0)],
         station_comments: Vec::new(),
+        station_names: Vec::new(),
         placement: ImportPlacement::ManualSnap {
             align_station_index: 0,
             snapped_to_station: StationRef::new(existing_id, 1),
@@ -19876,6 +19953,7 @@ fn kb5_import_overlap_interpolation_integration() {
             quality: 1.0,
             shots: shots_002.clone(),
             station_comments: Vec::new(),
+            station_names: Vec::new(),
             placement: ImportPlacement::Origin,
             azimuth_reference: None,
         }],
@@ -19990,6 +20068,7 @@ fn kb5_import_overlap_interpolation_integration() {
             quality: 1.0,
             shots: shots_001_treated,
             station_comments: Vec::new(),
+            station_names: Vec::new(),
             placement: ImportPlacement::FromExisting {
                 import_station: 105,
                 existing_station: StationRef::new(section_002_id, 182),
@@ -23380,8 +23459,6 @@ fn remote_fixture() -> (AppState, SectionId, ShotId, TempDir) {
     (state, section_id, shot_id, temp)
 }
 
-/// Build the same fixture but force editing ENABLED (simulating a later
-/// lock-acquire) so the dirty-bit plumbing can be exercised.
 fn remote_fixture_editable() -> (AppState, SectionId, ShotId, TempDir) {
     let (state, sid, shid, temp) = remote_fixture();
     state.set_edit_enabled(true);
@@ -23570,6 +23647,9 @@ const MUTATION_ENTRYPOINTS: &[&str] = &[
     "execute:ReverseSection",
     "execute:Batch:ReverseSection",
     "execute:MoveComment",
+    // Add .stalx (#674) sits next to MergeProjects, which IS a lifecycle
+    // pass-through; this probe catches it being filed there by analogy.
+    "execute:AddProjectFile",
     // history entrypoints
     "undo",
     "redo",
@@ -23600,7 +23680,7 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
     // guard_mutation AND add its name to MUTATION_ENTRYPOINTS + a call below.
     assert_eq!(
         MUTATION_ENTRYPOINTS.len(),
-        25,
+        26,
         "update both the routing and this list when adding a mutation entry"
     );
 
@@ -23689,6 +23769,14 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
                 swap: false,
             }),
         );
+        // The gate runs before the file is even read, so a path that does not
+        // exist still has to come back EDIT_DISABLED, not "file not found".
+        assert_disabled(
+            "execute:AddProjectFile",
+            &state.execute(Command::add_project_file(PathBuf::from(
+                "/nonexistent/added.stalx",
+            ))),
+        );
     }
 
     // --- history entrypoints ---
@@ -23769,6 +23857,7 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
                     quality: 1.0,
                     shots: vec![test_shot_data(3.0)],
                     station_comments: Vec::new(),
+                    station_names: Vec::new(),
                     placement: ImportPlacement::Origin,
                     azimuth_reference: None,
                 }],

@@ -6,6 +6,7 @@
 //!
 //! Layout:
 //! - [`client`]   - the published SpeleoDB SDK adapter (Bearer auth, retries, timeouts).
+//! - [`commit_message`] - the upload-description limit, measured as the server stores it.
 //! - [`auth`]     - backend-only token cache.
 //! - [`config`]   - persisted connection settings (re-exported via `crate::config`).
 //! - [`contract`] - the pure status→action table (#186) + `SpeleoErrorDto`.
@@ -20,6 +21,8 @@
 
 pub mod auth;
 pub mod client;
+// sdk#2: the longest upload description the server can store.
+pub mod commit_message;
 // Persisted connection settings ([`SpeleoDbConfig`]), re-exported via `crate::config`.
 pub mod config;
 // [Track A] #186 status→action contract (pure map_status + ts-rs SpeleoDbAction).
@@ -30,16 +33,17 @@ pub mod metrics;
 pub mod models;
 // [P1] #192/#193 pure sync-engine logic: base-SHA fence + ancestry recovery.
 pub mod sync;
-// [Track A] #187 http/https private-network TLS policy (pure classify_addr + enforce).
+// [Track A] #187 http/https transport policy (automatic http exceptions).
 pub(crate) mod tls;
+pub use tls::{clean_endpoint_input, validate_endpoint};
 
 // [Track A] #186/D-B2: SpeleoDbAction + the structured SpeleoErrorDto cross IPC.
-pub use contract::{SpeleoDbAction, TransportCause};
+pub use contract::{EndpointRefusal, SpeleoDbAction, TransportCause};
 pub use models::{
     DoneResult, Permission, PushResult, RemoteState, SpeleoAccessVerification, SpeleoErrorDto,
     SpeleoFileAccess, SpeleoLinkStatus, SpeleoLocalProjectState, SpeleoLoginResult,
-    SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectMetadataPatch, SpeleoProjectSummary,
-    SpeleoPublishParams, SpeleoPublishResult, SpeleoReleaseContext, SpeleoRevision,
+    SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectSummary, SpeleoPublishParams,
+    SpeleoPublishResult, SpeleoReadOnlyOpen, SpeleoReleaseContext, SpeleoRevision,
     SpeleoRewindTarget, SpeleoSessionStatus, SpeleoUnwindTarget, StartEditingResult,
     UnpushedLocalEdits, UpdateResult, Visibility,
 };
@@ -50,8 +54,8 @@ pub use models::{
 /// [`SpeleoDbError::Status`] without re-parsing message strings.
 #[derive(Debug, thiserror::Error)]
 pub enum SpeleoDbError {
-    /// No token is available - the user is not logged in (or the token was dropped).
-    #[error("not logged in to SpeleoDB")]
+    /// No token is available - the user is not connected (or the token was dropped).
+    #[error("not connected to SpeleoDB")]
     NotAuthenticated,
     /// No endpoint is configured (no `DEV_SPELEODB_URL`, no saved config).
     #[error("SpeleoDB endpoint is not configured")]
@@ -59,8 +63,15 @@ pub enum SpeleoDbError {
     /// Password login was attempted without both an email and a password (and
     /// without a pasted token). Rejected at the boundary rather than POSTing
     /// blank credentials and relying on the server to 400.
-    #[error("email and password are required to log in")]
+    #[error("an email and a password are required to connect")]
     MissingCredentials,
+    /// A sign-in (or a settings write) would move a connected session to another
+    /// SpeleoDB server. Changing servers is a Disconnect - with its sign-out flow,
+    /// which protects un-uploaded work and hands locks back - and a fresh
+    /// Connect, never a sign-in that replaces the session underneath open work.
+    /// Refused before anything is sent or saved.
+    #[error("Disconnect from SpeleoDB before changing servers")]
+    ServerChangeWhileConnected,
     /// A transport-level failure (DNS, timeout, connection reset, body read).
     ///
     /// `cause` classifies the SDK transport error for translated UI messages.
@@ -94,23 +105,54 @@ pub enum SpeleoDbError {
     /// [`SpeleoDbError::InvalidProjectId`].
     #[error("invalid SpeleoDB revision id")]
     InvalidRevision,
-    // [Track A] #187: the endpoint scheme/host failed the http private-network
-    // policy (public `http://`, a missing/unknown scheme, or an unresolvable
-    // host). Non-retryable by construction - `tls::enforce` errors before any
-    // request attempt, so `with_retry` never loops on it.
-    #[error("refusing to use an insecure SpeleoDB endpoint: {endpoint}")]
-    InsecureEndpoint { endpoint: String },
+    // [Track A] #187: the endpoint failed the transport policy
+    // (`tls::validate_endpoint`): plain `http://` outside the automatic
+    // exceptions, or an unusable address (no/unknown scheme, no host, user info,
+    // bad port). Decided without DNS. Non-retryable by construction - the policy
+    // errors before the SDK client exists, so `SdkClient::call` never loops on
+    // it. `refusal` says which rule refused it, for the frontend's translated line.
+    // The endpoint is printed with `{:?}` so it arrives quoted and escaped (#675):
+    // a character the user cannot see shows up in the message instead of making
+    // a correct-looking address look rejected.
+    #[error("{} Rejected endpoint: {endpoint:?}", .refusal.reason())]
+    InsecureEndpoint {
+        endpoint: String,
+        refusal: EndpointRefusal,
+    },
+    /// sdk#3: the project file is larger than SpeleoDB accepts in one upload
+    /// ([`client::SERVER_UPLOAD_LIMIT_BYTES`]), even with its undo history left
+    /// out. Refused BEFORE any byte is sent: nothing was uploaded, and the local
+    /// copy and its dirty bit are untouched. Fails closed (Fatal).
+    #[error(
+        "this project is too large to upload to SpeleoDB: it is {} MB and the server \
+         accepts at most {} MB, even without the undo history. Nothing was uploaded; \
+         your changes are still on this computer",
+        megabytes(.size),
+        megabytes(.limit)
+    )]
+    UploadTooLarge { size: u64, limit: u64 },
     /// [P1] No open remote SpeleoDB project to act on (start editing / done /
     /// update require one). Fails closed (Fatal).
     #[error("no open SpeleoDB project")]
     NoRemoteProject,
-    /// The open project changed - or went away - between the moment Start Editing
-    /// read it and the moment it was ready to open the edit gate (a delete, close,
-    /// project switch or logout landed inside the network window). Nothing was
-    /// committed: the gate stayed shut and no acquisition was recorded. Retrying in
+    /// Start Editing on a cached copy whose owner record names another account and
+    /// that holds un-uploaded edits: taking the lock would make that account's work
+    /// this account's. Refused (Fatal); the copy stays open read-only.
+    #[error(
+        "this copy holds changes {owner} made that were never uploaded to SpeleoDB. Only \
+         {owner} can edit and upload them, so it stays read-only for this account; you \
+         can still save a copy of it"
+    )]
+    OtherAccountsCopy { owner: String },
+    /// The open project changed - or went away - between the moment a SpeleoDB
+    /// operation read it and the moment it was ready to commit (a delete, close,
+    /// project switch or logout landed inside the network window): Start Editing
+    /// opening the edit gate, or a revision View / Restore replacing the working
+    /// copy. Nothing was committed: no gate opened, no acquisition was recorded,
+    /// no file was replaced and the project open now was left alone. Retrying in
     /// the new world does the right thing, whatever that is.
     #[error(
-        "the project changed while Start Editing was in flight; nothing was changed - try again"
+        "the project changed while this request was in flight; nothing was changed - try again"
     )]
     SessionMoved,
     /// A re-pull would have overwritten a local copy that still holds edits the
@@ -130,4 +172,10 @@ pub enum SpeleoDbError {
         local_path: String,
         last_edit_at: Option<String>,
     },
+}
+
+/// A byte count as decimal megabytes with one decimal, for user-facing text
+/// (`5_242_880` -> `5.2`).
+fn megabytes(bytes: &u64) -> String {
+    format!("{:.1}", *bytes as f64 / 1_000_000.0)
 }

@@ -15,7 +15,50 @@ impl AppState {
     /// strand the shell on a project the backend no longer has open. If this is
     /// ever exposed over IPC, the guard question returns; a tripwire test pins
     /// the non-exposure (`the_legacy_open_project_is_not_exposed_over_ipc`).
-    pub(super) fn open_project(&self, path: PathBuf) -> CommandResult {
+    pub(super) fn open_project_prepared<F>(
+        &self,
+        path: PathBuf,
+        expected: Option<(u64, Vec<u8>)>,
+        before_commit: F,
+    ) -> std::result::Result<CommandResult, crate::speleodb::SpeleoErrorDto>
+    where
+        F: FnOnce() -> std::result::Result<(), crate::speleodb::SpeleoErrorDto>,
+    {
+        self.open_project_prepared_inner(path, expected, before_commit, None)
+    }
+
+    /// Fully prepare a downloaded project before installing its bytes and state.
+    #[expect(
+        clippy::result_large_err,
+        reason = "preserve the shared structured IPC recovery payload"
+    )]
+    pub(super) fn open_project_download(
+        &self,
+        source: PathBuf,
+        dest: PathBuf,
+        expected: (u64, Vec<u8>),
+        editing: bool,
+    ) -> std::result::Result<CommandResult, crate::speleodb::SpeleoErrorDto> {
+        self.open_project_prepared_inner(dest, Some(expected), || Ok(()), Some((source, editing)))
+    }
+
+    #[expect(
+        clippy::result_large_err,
+        reason = "preserve the shared structured IPC recovery payload"
+    )]
+    fn open_project_prepared_inner<F>(
+        &self,
+        path: PathBuf,
+        expected: Option<(u64, Vec<u8>)>,
+        before_commit: F,
+        download: Option<(PathBuf, bool)>,
+    ) -> std::result::Result<CommandResult, crate::speleodb::SpeleoErrorDto>
+    where
+        F: FnOnce() -> std::result::Result<(), crate::speleodb::SpeleoErrorDto>,
+    {
+        let source = download
+            .as_ref()
+            .map_or(path.as_path(), |(source, _)| source.as_path());
         tracing::info!(
             path = ?path,
             purpose = "resume editing",
@@ -32,7 +75,7 @@ impl AppState {
         // forward-compatible hardening, not live folder-access guidance; the
         // production UI opens via `loadProject` → `load_project_full`, whose
         // structured `LoadError::permission` is handled there.
-        match path.try_exists() {
+        match source.try_exists() {
             Ok(true) => {}
             Ok(false) => {
                 tracing::warn!(
@@ -41,7 +84,10 @@ impl AppState {
                     reason = "file not found",
                     "Project open failed"
                 );
-                return CommandResult::failure(format!("File not found: {}", path.display()));
+                return Ok(CommandResult::failure(format!(
+                    "File not found: {}",
+                    path.display()
+                )));
             }
             Err(e) => {
                 let e = anyhow::Error::from(e);
@@ -52,11 +98,11 @@ impl AppState {
                         reason = "permission denied",
                         "Project open failed"
                     );
-                    return CommandResult::failure(format!(
+                    return Ok(CommandResult::failure(format!(
                         "{}: Cannot access {}: {e}",
                         crate::core::loading::PERMISSION_DENIED_CODE,
                         path.display()
-                    ));
+                    )));
                 }
                 tracing::warn!(
                     path = ?path,
@@ -64,12 +110,15 @@ impl AppState {
                     reason = %e,
                     "Project open failed (metadata access error)"
                 );
-                return CommandResult::failure(format!("File not found: {}", path.display()));
+                return Ok(CommandResult::failure(format!(
+                    "File not found: {}",
+                    path.display()
+                )));
             }
         }
 
         // Use open_existing which validates the file is a valid Stalagmight project
-        let db = match Database::open_existing(&path) {
+        let db = match Database::open_existing(source) {
             Ok(db) => db,
             Err(e) => {
                 tracing::error!(
@@ -78,7 +127,7 @@ impl AppState {
                     reason = %e,
                     "Failed to open project database"
                 );
-                return CommandResult::failure(format!("{e}"));
+                return Ok(CommandResult::failure(format!("{e}")));
             }
         };
 
@@ -91,7 +140,9 @@ impl AppState {
                     reason = %e,
                     "Failed to load project data"
                 );
-                return CommandResult::failure(format!("Failed to load project data: {e}"));
+                return Ok(CommandResult::failure(format!(
+                    "Failed to load project data: {e}"
+                )));
             }
         };
 
@@ -143,7 +194,7 @@ impl AppState {
                 "open_project: failed to backfill resolved-warning UUIDs; legacy rows remain position-keyed"
             );
         }
-        let healed_offsets = project.redrive_offsets_after_load();
+        let (healed_offsets, renamed_shots) = project.redrive_offsets_after_load_reporting();
         if healed_offsets > 0 {
             tracing::warn!(
                 healed_offsets,
@@ -165,7 +216,15 @@ impl AppState {
         //
         // [#469] Read BEFORE the entries rather than after, because the depth it resolves
         // is also the bound the LOAD runs under; see `history_load_row_cap`.
-        let mut speleo_link = db.load_speleo_link().ok().flatten();
+        let mut speleo_link = match db.load_speleo_link() {
+            Ok(link) => link,
+            Err(error) if expected.is_some() => {
+                return Err(super::speleodb::local_dto(
+                    crate::speleodb::SpeleoDbError::Io(error.to_string()),
+                ))
+            }
+            Err(_) => None,
+        };
         if let Some(link) = &mut speleo_link {
             self.materialize_undo_mode(&db, link);
         }
@@ -188,6 +247,11 @@ impl AppState {
                     .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
                     .collect::<Vec<_>>(),
                 Err(e) => {
+                    if expected.is_some() {
+                        return Err(super::speleodb::local_dto(
+                            crate::speleodb::SpeleoDbError::Io(e.to_string()),
+                        ));
+                    }
                     tracing::warn!(
                         error = %e,
                         purpose = "restore edit history",
@@ -204,6 +268,11 @@ impl AppState {
                     .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
                     .collect::<Vec<_>>(),
                 Err(e) => {
+                    if expected.is_some() {
+                        return Err(super::speleodb::local_dto(
+                            crate::speleodb::SpeleoDbError::Io(e.to_string()),
+                        ));
+                    }
                     tracing::warn!(
                         error = %e,
                         purpose = "restore edit history",
@@ -228,6 +297,33 @@ impl AppState {
                     .map(|dt| dt.with_timezone(&chrono::Utc))
             });
 
+        let saved_link_matches = || {
+            speleo_link.as_ref().is_some_and(|saved| {
+                self.speleodb_open_link().is_ok_and(|live| {
+                    saved.project_id == live.project_id
+                        && crate::speleodb::auth::normalize_endpoint(&saved.endpoint)
+                            == crate::speleodb::auth::normalize_endpoint(&live.endpoint)
+                })
+            })
+        };
+        // A discard is consent for the exact in-memory project captured before
+        // reading its saved copy. Check before HTTP and again under the commit lock.
+        if let Some((generation, bytes)) = &expected {
+            let current = self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if self.speleodb_session_generation() != *generation
+                || !saved_link_matches()
+                || serde_json::to_vec(&*current).ok().as_deref() != Some(bytes.as_slice())
+            {
+                return Err(super::speleodb::local_dto(
+                    crate::speleodb::SpeleoDbError::SessionMoved,
+                ));
+            }
+        }
+        before_commit()?;
+
         // ALL commits under ONE `project` acquisition, exactly as
         // `do_load_project_full`'s finalization and for the same reason (round
         // 5): the delete's check-and-teardown serializes on this mutex, and a
@@ -238,23 +334,64 @@ impl AppState {
             .project
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((generation, bytes)) = &expected {
+            if self.speleodb_session_generation() != *generation
+                || !saved_link_matches()
+                || serde_json::to_vec(&*proj_guard).ok().as_deref() != Some(bytes.as_slice())
+            {
+                return Err(super::speleodb::local_dto(
+                    crate::speleodb::SpeleoDbError::SessionMoved,
+                ));
+            }
+        }
+        let db = if let Some((source, _)) = &download {
+            if self
+                .active_loading
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some()
+            {
+                return Err(super::speleodb::local_dto(
+                    crate::speleodb::SpeleoDbError::SessionMoved,
+                ));
+            }
+            self.install_prepared_database(source, &path, db, proj_guard.as_ref())
+                .map_err(super::speleodb::local_dto)?
+        } else {
+            db
+        };
         *proj_guard = Some(project);
-        // A session boundary (a project committed into the slot), bumped under
-        // the guard per the `speleodb_session` rule.
-        self.bump_speleodb_session();
+        // [Track B] (#191) The edit gate, re-derived for what is now open (see
+        // `speleodb_edit_gate`): a local project is editable, a linked one only
+        // through a bound lock claim. A downloaded reload that keeps its edit
+        // session (`editing`) carries the claim bound to the generation it was
+        // prepared against - and only that: a reload never starts a session, so a
+        // lock released before it (Take remote) leaves the project read-only.
+        let carry_from = download
+            .as_ref()
+            .filter(|(_, editing)| *editing)
+            .and(expected.as_ref())
+            .map(|(generation, _)| *generation);
+        {
+            // A session boundary (a project committed into the slot), bumped under
+            // the guard per the `speleodb_session` rule - and under the SpeleoDB
+            // session lock, in ONE step with the gate it re-derives, so a reader
+            // never sees the new generation with the old binding.
+            let mut session = self
+                .speleodb
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.bump_speleodb_session();
+            // Off the link read above, which came from the same handle before `db`
+            // moves.
+            self.speleodb_commit_open_gate(&mut session, speleo_link.as_ref(), carry_from);
+        }
+        // An add's pending ignores (#674) belong to the project that just left.
+        self.clear_pending_ignores();
         // [#473] Under the SAME acquisition that commits the project, so the flag can
         // only ever describe the project in the slot. Unconditional, so a clean load
         // clears the previous project's verdict.
         self.set_history_discarded(history_discarded);
-
-        // [Track B] (#191) Read-only edit gate: remote ⇒ edit disabled,
-        // local-only ⇒ enabled (see do_load_project_full). Off the link read above,
-        // which came from the same handle before `db` moves.
-        let is_remote = speleo_link.is_some();
-        self.set_edit_enabled(!is_remote);
-        // #213: force-edit is per-session; a fresh open never starts force-editing.
-        self.set_force_editing(false);
-
         *self
             .database
             .lock()
@@ -281,6 +418,11 @@ impl AppState {
         // `undo_policy()`, which takes the `database` lock this path is mid-swap on.
         self.sync_undo_depth_limit_for(speleo_link.as_ref());
 
+        self.load_renamed_shots.store(
+            !renamed_shots.is_empty(),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+
         // Restore persisted undo/redo stacks
         if let Ok(mut undo_stack) = self.undo_stack.lock() {
             // [#303] Unconditionally, and before the entries: a project with no history
@@ -291,11 +433,14 @@ impl AppState {
                 undo_stack.clear();
             } else {
                 undo_stack.load_from_persisted_with_timestamps(undo_entries, redo_entries);
-                // ...and against the project they will be replayed onto: a
-                // restored entry that cannot find its shot fails and is pushed
-                // straight back, sealing off everything under it (#413).
+                // ...and against the project they will be replayed onto: first
+                // translated through the shot UUIDs this load renamed (the
+                // entries were recorded against the old ids), then a restored
+                // entry that still cannot find its shot is dropped, since it
+                // would fail and be pushed straight back, sealing off
+                // everything under it (#413).
                 if let Some(project) = proj_guard.as_ref() {
-                    undo_stack.drop_entries_addressing_a_missing_shot(project);
+                    undo_stack.reconcile_with_loaded_project(project, &renamed_shots);
                 }
                 tracing::info!(
                     undo = undo_stack.len(),
@@ -336,7 +481,14 @@ impl AppState {
             purpose = "resume editing",
             "Project opened"
         );
-        CommandResult::success()
+        Ok(CommandResult::success())
+    }
+
+    pub(super) fn open_project(&self, path: PathBuf) -> CommandResult {
+        match self.open_project_prepared(path, None, || Ok(())) {
+            Ok(result) => result,
+            Err(error) => CommandResult::failure(error.message),
+        }
     }
 
     /// Load a project with full progress reporting.
@@ -567,7 +719,7 @@ impl AppState {
         // constraints so a file persisted with drifted offsets (e.g. from an
         // older redo bug) opens geometrically correct, before stations are
         // computed below. No-op for an already-consistent file.
-        let healed_offsets = project.redrive_offsets_after_load();
+        let (healed_offsets, renamed_shots) = project.redrive_offsets_after_load_reporting();
         if healed_offsets > 0 {
             tracing::warn!(
                 healed = healed_offsets,
@@ -894,24 +1046,30 @@ impl AppState {
 
         // Commit 1: Project state mutation
         *proj_guard = Some(project.clone());
-        // A session boundary (a project committed into the slot), bumped under
-        // the guard per the `speleodb_session` rule.
-        self.bump_speleodb_session();
+        // [Track B] (#191) The edit gate, re-derived for what is now open (see
+        // `speleodb_edit_gate`): a project carrying a speleo_link row is a
+        // SpeleoDB project, editable only once Start Editing binds a lock claim to
+        // this session; a local-only project is always editable. Off the link read
+        // above, taken from the same handle before `db` is moved into the handle
+        // slot. A fresh open carries no edit session: whatever claim this account
+        // still holds on the project stays a pointer, never an open gate.
+        let is_remote = speleo_link.is_some();
+        {
+            // A session boundary (a project committed into the slot), bumped under
+            // the guard per the `speleodb_session` rule, in one step with the gate.
+            let mut session = self
+                .speleodb
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.bump_speleodb_session();
+            self.speleodb_commit_open_gate(&mut session, speleo_link.as_ref(), None);
+        }
+        // An add's pending ignores (#674) belong to the project that just left.
+        self.clear_pending_ignores();
         // [#473] Under the SAME acquisition that commits the project - a cancelled load
         // never reaches this finalize section, so it cannot leave its verdict on the
         // project the user actually opened.
         self.set_history_discarded(history_discarded);
-
-        // [Track B] (#191) Read-only edit gate: a remote SpeleoDB project (one
-        // carrying a speleo_link row) opened WITHOUT a write lock is read-only.
-        // There is no lock-acquire path yet (#191), so the rule is simply: remote
-        // ⇒ edit disabled; local-only ⇒ edit enabled (default-true; the gate is a
-        // no-op off-SpeleoDB). Off the link read above, taken from the same handle
-        // before `db` is moved into the handle slot.
-        let is_remote = speleo_link.is_some();
-        self.set_edit_enabled(!is_remote);
-        // #213: force-edit is per-session; a fresh open never starts force-editing.
-        self.set_force_editing(false);
 
         // Commit 2: Database handle mutation
         *self
@@ -932,6 +1090,11 @@ impl AppState {
         // down to the count window and no later re-arm could put it back.
         self.sync_undo_depth_limit_for(speleo_link.as_ref());
 
+        self.load_renamed_shots.store(
+            !renamed_shots.is_empty(),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+
         // Commit 4: Undo/redo stack restore
         {
             let mut undo_stack = self
@@ -946,10 +1109,10 @@ impl AppState {
                 undo_stack.clear();
             } else {
                 undo_stack.load_from_persisted_with_timestamps(undo_entries, redo_entries);
-                // ...and against the project they will be replayed onto: a
-                // restored entry that cannot find its shot fails and is pushed
-                // straight back, sealing off everything under it (#413).
-                undo_stack.drop_entries_addressing_a_missing_shot(&project);
+                // ...and against the project they will be replayed onto: first
+                // translated through the shot UUIDs this load renamed, then an
+                // entry that still cannot find its shot is dropped (#413).
+                undo_stack.reconcile_with_loaded_project(&project, &renamed_shots);
                 tracing::info!(
                     undo = undo_stack.len(),
                     purpose = "restore edit history",

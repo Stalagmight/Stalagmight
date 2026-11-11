@@ -9,6 +9,7 @@
 
 use crate::core::undo::MAX_PERSISTED_HISTORY_ROWS;
 use crate::models::{SpeleoLink, UndoMode, UndoPolicy};
+#[cfg(test)]
 use crate::speleodb::{SpeleoDbError, SpeleoErrorDto};
 
 use super::AppState;
@@ -65,6 +66,7 @@ impl AppState {
     ///
     /// Re-arms the depth bound immediately, so switching to Disabled starts trimming to
     /// the count window without waiting for a reload.
+    #[cfg(test)]
     pub fn speleodb_set_undo_mode(&self, mode: UndoMode) -> Result<(), SpeleoErrorDto> {
         // Save rewrites the whole database while holding `project`, then renames the
         // fresh file over the live one. Hold the same lock through this database edit so
@@ -382,31 +384,6 @@ mod tests {
         });
     }
 
-    /// The lock gate is the FIRST thing after the link lookup, so no write can slip in
-    /// ahead of it. Structural, for the reason above.
-    #[test]
-    fn the_undo_mode_write_is_gated_before_it_mutates() {
-        let src = include_str!("undo_policy.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .expect("production region precedes the test module");
-        let verb = src
-            .split_once("pub fn speleodb_set_undo_mode")
-            .map(|(_, rest)| rest)
-            .expect("the verb is in this file");
-        let gate = verb
-            .find("if !self.edit_enabled()")
-            .expect("the verb must check the edit gate");
-        let write = verb
-            .find("set_speleo_undo_mode_and_mark_forward_edit")
-            .expect("the verb writes the link");
-        assert!(
-            gate < write,
-            "the edit gate must precede the write - checking afterwards would leave the \
-             policy on disk for the next push to ship"
-        );
-    }
-
     /// With no linked project open, status reports the application default.
     #[test]
     fn undo_mode_status_reports_the_global_value_without_a_project() {
@@ -610,7 +587,10 @@ mod tests {
             "both load paths must record whether their history survived"
         );
 
-        for func in ["fn open_project", "pub fn do_load_project_full"] {
+        for func in [
+            "fn open_project_prepared_inner",
+            "pub fn do_load_project_full",
+        ] {
             // Slice at the NEXT item in the `impl AppState` block rather than at the end
             // of the file. Both are 4-space-indented methods, so the next `///`, `pub` or
             // `fn` at that indent ends this one. Without the cut, `open_project`'s slice

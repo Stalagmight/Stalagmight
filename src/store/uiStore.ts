@@ -21,6 +21,7 @@ import type { DisplaySettings } from '../types/loading';
 import { DISPLAY_DEFAULTS } from './displaySelectors';
 import { useGasPlanStore } from './gasPlanStore';
 import { useExportStore } from './exportStore';
+import { useColorScaleStore } from './colorScaleStore';
 
 // Import tool utilities for internal use and re-export for convenience
 import { NON_INTERACTIVE_TOOLS, isNonInteractiveTool } from '../utils/toolUtils';
@@ -69,28 +70,6 @@ export function isMapReadOnly(state: Pick<UIStore, 'geometryMode' | 'appMode'>):
   return state.geometryMode === 'closureAdjusted' || state.appMode !== 'survey';
 }
 
-/**
- * Whether the map shows the "closure-adjusted, so read-only" notice - a narrower
- * question than [`isMapReadOnly`], which is why it is its own predicate: the map can
- * be read-only without this badge earning its space.
- *
- * Survey ONLY (#299): Plan and Export are read-only workspaces outright, so the
- * badge announces nothing new there and is noise over the fit-to-view button.
- * `showClosureComputing` is deliberately NOT gated this way - the solve still runs
- * in Plan/Export, where it is the only progress signal - so hiding the notice here
- * does not hide progress there.
- *
- * And only when nothing else already explains the read-only state, which inside
- * Survey means the project is otherwise editable: the exact complement of the
- * SpeleoDB badge, which occupies the same corner, so the two are mutually exclusive
- * by construction rather than by luck. `speleoReadOnly` is the right predicate for
- * that half rather than `holdsWriteLock`, because a force-editor genuinely CAN edit
- * - the SpeleoDB badge is already hidden for them, which makes the closure view the
- * only thing blocking their edits, and exactly when the notice earns its space.
- *
- * Both rules have been got wrong in opposite directions, so both are pinned by a
- * truth table in `uiStore.isMapReadOnly.test.ts`.
- */
 export function showsClosureAdjustedNotice(args: {
   geometryMode: GeometryMode;
   appMode: AppMode;
@@ -459,6 +438,17 @@ interface UIStore {
   /** Reset every piece of measure state (endpoints, results, tint, snap). */
   clearMeasure: () => void;
 
+  // Left workspace navigation is session-only and never changes lock ownership.
+  leftWorkspace: 'sections' | 'speleodb';
+  surveyLeftWorkspace: 'sections' | 'speleodb';
+  speleoWorkspaceSection: 'history' | null;
+  speleoRevealNonce: number;
+  speleoOutsideSurvey: boolean;
+  leftWorkspaceVisible: boolean;
+  selectLeftWorkspace: (tab: 'sections' | 'speleodb') => void;
+  openSpeleoWorkspace: (section?: 'history') => void;
+  resetLeftWorkspace: () => void;
+
   // Panel state
   sectionsPanelOpen: boolean;
   sectionsPanelMode: PanelMode;
@@ -558,6 +548,10 @@ interface UIStore {
   requestResolveWarning: { sectionId: SectionId; shotId: ShotId } | null;
   triggerResolveWarning: (sectionId: SectionId, shotId: ShotId) => void;
   clearResolveWarningRequest: () => void;
+  /** Show the project view's Details panel on the Warnings tab, listing every
+   *  issue, without starting to resolve one (the SpeleoDB upload dialog's
+   *  "Resolve now"). Leaves Plan/Export for Survey, where that panel lives. */
+  openWarningsTab: () => void;
 
   /** Progressive zoom-in centered on a shot: each request recenters and zooms
    *  one step closer (used by the resolve view's zoom button, #57). */
@@ -570,6 +564,8 @@ interface UIStore {
   showShots: boolean;
   showSectionNames: boolean;
   showStationLabels: boolean;
+  /** Station names as the station labels; exclusive with showStationLabels. */
+  showStationNames: boolean;
   showShotData: boolean;
   showReferenceShots: boolean;
   /** #27: jumps hide independently of references. */
@@ -802,6 +798,7 @@ export type DisplayToggleKey =
   | 'showShots'
   | 'showSectionNames'
   | 'showStationLabels'
+  | 'showStationNames'
   | 'showShotData'
   | 'showReferenceShots'
   | 'showJumps'
@@ -830,6 +827,17 @@ const SESSION_ONLY_DISPLAY_TOGGLES: ReadonlySet<DisplayToggleKey> = new Set([
   'showMapStats',
   'showZoomStats',
 ]);
+
+/**
+ * Toggles that are one choice between two labels: the map's station label is
+ * either the station ID or the station name, never both. Turning one on turns
+ * its partner off; turning one off leaves the partner alone, so both off (no
+ * station labels) is reachable.
+ */
+const EXCLUSIVE_DISPLAY_PARTNER: Partial<Record<DisplayToggleKey, DisplayToggleKey>> = {
+  showStationLabels: 'showStationNames',
+  showStationNames: 'showStationLabels',
+};
 
 /**
  * Layout captured when entering section-focus mode (#50), restored on exit.
@@ -874,6 +882,7 @@ const PREPLAN_DISPLAY_KEYS = [
   'showZeroDatum',
   'showSectionNames',
   'showStationLabels',
+  'showStationNames',
   'showStationComments',
   'showShotComments',
   'showShotData',
@@ -924,6 +933,43 @@ let prePlanDocks:
 let fullScreenTableSnapshot:
   | { dataTableOpen: boolean; dataTableMode: PanelMode }
   | null = null;
+
+/**
+ * Show the Details panel on its Warnings tab, making sure it will actually mount
+ * and be visible: section-focus and data-table fullscreen hide or cover the
+ * panel, and the panel may simply be collapsed. WarningsContent only consumes a
+ * resolve request while mounted (detailPanelOpen && tab === 'warnings'), so
+ * without this a request would be a no-op that sat stale and fired on a later
+ * tab switch.
+ *
+ * It reveals the panel without changing the user's saved panel mode. Pinned: just
+ * ensure it is open. Hover: bump the reveal nonce so SingleSystemView floats it
+ * open like a hover (with a timed auto-close, since no pointer-leave fires for a
+ * programmatic reveal), so revealing never silently leaves a hover-mode user
+ * pinned. Opening a pinned-but-closed panel is a real (persistent) open, just
+ * like toggleDetailPanel, so it is persisted: otherwise the in-memory open flag
+ * would diverge from the saved layout (re-closing the panel next session, or
+ * being overwritten by any later savePanelLayout).
+ */
+function revealWarningsTab(
+  set: (partial: Partial<UIStore>) => void,
+  extra: Partial<UIStore>,
+): void {
+  let s = useUIStore.getState();
+  if (s.focusedSectionId !== null) s.exitSectionFocus();
+  if (s.dataTableFullScreen) s.exitDataTableFullScreen();
+  // Re-read: the exits above can change the panel's mode/open.
+  s = useUIStore.getState();
+  const pinOpening = s.detailPanelMode === 'pin' && !s.detailPanelOpen;
+  set({
+    ...extra,
+    detailPanelTab: 'warnings',
+    ...(s.detailPanelMode === 'pin'
+      ? { detailPanelOpen: true }
+      : { detailRevealNonce: s.detailRevealNonce + 1 }),
+  });
+  if (pinOpening) void useUIStore.getState().savePanelLayout();
+}
 
 /**
  * Apply a panel mutation that also exits section-focus (#50). Restores the
@@ -1193,8 +1239,25 @@ export const useUIStore = create<UIStore>((set) => ({
   setMeasureSnapShot: (measureSnapShot) => set({ measureSnapShot }),
   clearMeasure: () => set({ ...MEASURE_CLEARED }),
 
-
   // Panel state
+  leftWorkspace: 'sections',
+  surveyLeftWorkspace: 'sections',
+  speleoWorkspaceSection: null,
+  speleoRevealNonce: 0,
+  speleoOutsideSurvey: false,
+  leftWorkspaceVisible: false,
+  resetLeftWorkspace: () => set({ leftWorkspace: 'sections', surveyLeftWorkspace: 'sections', speleoWorkspaceSection: null, speleoOutsideSurvey: false }),
+  selectLeftWorkspace: (tab) => set({ leftWorkspace: tab, ...(useUIStore.getState().appMode === 'survey' ? { surveyLeftWorkspace: tab } : {}) }),
+  openSpeleoWorkspace: (section) => {
+    const state = useUIStore.getState();
+    state.exitDataTableFullScreen();
+    set({
+      leftWorkspace: 'speleodb',
+      ...(state.appMode === 'survey' ? { surveyLeftWorkspace: 'speleodb' } : { speleoOutsideSurvey: true }),
+      ...(section ? { speleoWorkspaceSection: section } : {}),
+      speleoRevealNonce: state.speleoRevealNonce + 1,
+    });
+  },
   sectionsPanelOpen: true,
   sectionsPanelMode: 'pin',
   sectionsPanelWidth: 250,
@@ -1491,36 +1554,13 @@ export const useUIStore = create<UIStore>((set) => ({
   setGeometryPreview: (geometryPreview) => set({ geometryPreview }),
   requestResolveWarning: null,
   triggerResolveWarning: (sectionId: SectionId, shotId: ShotId) => {
-    // Make sure the resolve view will actually mount and be visible before
-    // requesting it: section-focus and data-table fullscreen hide/cover the
-    // detail panel, and the panel may simply be collapsed. WarningsContent only
-    // consumes the request while mounted (detailPanelOpen && tab === 'warnings'),
-    // so open the panel on the Warnings tab here. (Otherwise the click would be
-    // a no-op and the request would sit stale and fire on a later tab switch.)
-    let s = useUIStore.getState();
-    if (s.focusedSectionId !== null) s.exitSectionFocus();
-    if (s.dataTableFullScreen) s.exitDataTableFullScreen();
-    // Re-read: the exits above can change the panel's mode/open.
-    s = useUIStore.getState();
-    // Reveal the Details panel on the Warnings tab so WarningsContent mounts and
-    // consumes the request - without mutating the user's persisted panel mode.
-    // Pinned: just ensure it's open. Hover: bump the reveal nonce so SingleSystemView
-    // floats it open like a hover (with a timed auto-close, since no pointer-leave
-    // fires for a programmatic reveal), so resolving a warning never silently leaves
-    // a hover-mode user pinned.
-    // For a pinned-but-closed panel, opening it is a real (persistent) open just
-    // like toggleDetailPanel - persist it so the in-memory open flag doesn't
-    // diverge from the saved layout (which would re-close the panel next session
-    // and could be clobbered by any later savePanelLayout).
-    const pinOpening = s.detailPanelMode === 'pin' && !s.detailPanelOpen;
-    set({
-      requestResolveWarning: { sectionId, shotId },
-      detailPanelTab: 'warnings',
-      ...(s.detailPanelMode === 'pin'
-        ? { detailPanelOpen: true }
-        : { detailRevealNonce: s.detailRevealNonce + 1 }),
-    });
-    if (pinOpening) void useUIStore.getState().savePanelLayout();
+    revealWarningsTab(set, { requestResolveWarning: { sectionId, shotId } });
+  },
+  openWarningsTab: () => {
+    // The Warnings tab lives in the Details panel, which Plan and Export replace
+    // with panels of their own: return to Survey first (a no-op when there).
+    useUIStore.getState().exitGasPlan();
+    revealWarningsTab(set, {});
   },
   clearResolveWarningRequest: () => set({ requestResolveWarning: null }),
   requestZoomToShot: null,
@@ -1538,6 +1578,7 @@ export const useUIStore = create<UIStore>((set) => ({
   showShots: DISPLAY_DEFAULTS.showShots,
   showSectionNames: DISPLAY_DEFAULTS.showSectionNames,
   showStationLabels: DISPLAY_DEFAULTS.showStationLabels,
+  showStationNames: DISPLAY_DEFAULTS.showStationNames,
   showShotData: DISPLAY_DEFAULTS.showShotData,
   showReferenceShots: DISPLAY_DEFAULTS.showReferenceShots,
   showJumps: DISPLAY_DEFAULTS.showJumps,
@@ -1648,6 +1689,9 @@ export const useUIStore = create<UIStore>((set) => ({
   setAppMode: (mode) => {
     const s = useUIStore.getState();
     if (s.appMode === mode) return;
+    if (s.appMode === 'survey' && mode !== 'survey') {
+      set({ speleoOutsideSurvey: s.leftWorkspace === 'speleodb' && s.leftWorkspaceVisible, leftWorkspace: 'speleodb' });
+    }
     if (mode === 'survey') {
       // Returning to Survey: restore the geometry mode we had before entering
       // Plan/Export. The gas overlay + markers are appMode-gated (they clear when
@@ -1666,6 +1710,8 @@ export const useUIStore = create<UIStore>((set) => ({
       prePlanDocks = null;
       set({
         appMode: 'survey',
+        leftWorkspace: s.surveyLeftWorkspace,
+        speleoOutsideSurvey: false,
         geometryMode: restore,
         ...displayRestore,
         ...dockRestore,
@@ -1752,7 +1798,11 @@ export const useUIStore = create<UIStore>((set) => ({
     // same shots/stations paint. Critical for the Shift+D keyboard shortcut, which
     // calls toggleDisplay directly (bypassing setColorMode's gas-exit).
     if (key === 'showDepthGradient' && newValue) useUIStore.getState().exitGasPlan();
-    set({ [key]: newValue, ...exclusive });
+    // Station IDs and station names are one choice (see EXCLUSIVE_DISPLAY_PARTNER).
+    // Only the user's own key is tracked; the partner flips as a consequence.
+    const partner = newValue ? EXCLUSIVE_DISPLAY_PARTNER[key] : undefined;
+    const clearPartner = partner !== undefined && state[partner];
+    set({ [key]: newValue, ...exclusive, ...(clearPartner ? { [partner]: false } : {}) });
     // Session-only overlays (the Debug submenu) are never restored on load, so
     // persisting them would only write orphan rows - skip the IPC call entirely.
     if (SESSION_ONLY_DISPLAY_TOGGLES.has(key)) return;
@@ -1761,6 +1811,13 @@ export const useUIStore = create<UIStore>((set) => ({
     // the saved survey config. Re-read appMode: the showDepthGradient branch above
     // calls exitGasPlan() first, so a Shift+D from Plan lands (and persists) in Survey.
     if (useUIStore.getState().appMode === 'survey') {
+      // Station IDs / names: write the PAIR as it now stands, not just the key.
+      // In memory the pair is never both-on, so this also repairs a stored pair
+      // that is (a write that failed, a file edited elsewhere): the load lets
+      // the IDs win, and without this a later "IDs off" would leave the stale
+      // names row behind to reopen as names. The partner goes first.
+      const pairKey = EXCLUSIVE_DISPLAY_PARTNER[key];
+      if (pairKey !== undefined) state.saveDisplaySetting(pairKey, useUIStore.getState()[pairKey]);
       state.saveDisplaySetting(key, newValue);
     }
   },
@@ -1794,6 +1851,7 @@ export const useUIStore = create<UIStore>((set) => ({
       showShots: DISPLAY_DEFAULTS.showShots,
       showSectionNames: DISPLAY_DEFAULTS.showSectionNames,
       showStationLabels: DISPLAY_DEFAULTS.showStationLabels,
+      showStationNames: DISPLAY_DEFAULTS.showStationNames,
       showShotData: DISPLAY_DEFAULTS.showShotData,
       showReferenceShots: DISPLAY_DEFAULTS.showReferenceShots,
       showJumps: DISPLAY_DEFAULTS.showJumps,
@@ -1843,19 +1901,30 @@ export const useUIStore = create<UIStore>((set) => ({
     // different cave at settings nobody chose for it. The modal Export dialog is
     // unaffected by design: it owns local state and always opens on data/CSV.
     useExportStore.getState().reset();
+    // The depth / distance Levels ranges are per-project too (session-only; the
+    // palette CHOICE persists in config and is untouched).
+    useColorScaleStore.getState().resetSession();
     // Apply display settings from backend, merging with existing state.
     // Uses ?? to only apply fields that are defined, preserving current state for undefined fields.
-    // EXACT 13 persisted fields matching uiStore - NO colorBy (not persisted).
+    // Every persisted field matching uiStore - NO colorBy (not persisted).
     // showShots/showShotComments joined in #275 B2: they were always saved by
     // toggleDisplay but never restored (the previous project's in-memory value
     // silently won over the saved one).
+    // Station IDs and names are exclusive in the menu; a stored pair that reads
+    // both-on (a lost second write, or an edited file) lets the IDs win, as the
+    // map and the image export do. Not written back here; the next Station IDs
+    // or Station names toggle rewrites the pair (see toggleDisplay).
+    const current = useUIStore.getState();
+    const showStationLabels = settings.showStationLabels ?? current.showStationLabels;
+    const showStationNames = !showStationLabels && (settings.showStationNames ?? current.showStationNames);
     set((state) => ({
       appMode: APP_MODE_DEFAULT,
       showStations: settings.showStations ?? state.showStations,
       showShots: settings.showShots ?? state.showShots,
       showShotComments: settings.showShotComments ?? state.showShotComments,
       showSectionNames: settings.showSectionNames ?? state.showSectionNames,
-      showStationLabels: settings.showStationLabels ?? state.showStationLabels,
+      showStationLabels,
+      showStationNames,
       showShotData: settings.showShotData ?? state.showShotData,
       showReferenceShots: settings.showReferenceShots ?? state.showReferenceShots,
       showJumps: settings.showJumps ?? state.showJumps,
@@ -2012,6 +2081,11 @@ export const useUIStore = create<UIStore>((set) => ({
   dialogData: {},
   dmpImportWizardPhase: null,
   openDialog: (activeDialog, dialogData = {}) => {
+    if (activeDialog === 'speleodb-project') {
+      useUIStore.getState().closeDialog();
+      useUIStore.getState().openSpeleoWorkspace('history');
+      return;
+    }
     const prev = useUIStore.getState().activeDialog;
     // Re-opening the dialog already on screen is a data refresh, not a chain and
     // not a new open, so gate the BOOKKEEPING - never the state. `dialogData` is

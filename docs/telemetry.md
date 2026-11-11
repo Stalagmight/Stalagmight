@@ -187,8 +187,8 @@ prevents timer resets from redundant calls.
 
 Every SpeleoDB HTTP call is instrumented at the Rust client's single choke
 point (`SdkClient::call`) so we can size the
-server load Stalagmight causes and spot a runaway poll/retry loop *before* it
-reaches the server. Recorded **per HTTP attempt** (a retried idempotent 5xx
+server load Stalagmight causes and spot excessive requests or retries.
+Recorded **per HTTP attempt** (a retried idempotent 5xx
 really re-hits the server, so a retry storm shows up as inflated counts +
 latency). Emitted from the backend via `TelemetryCollector::track`, so they land
 in the global `project_seq 0` bucket.
@@ -205,11 +205,17 @@ file bytes. That is all sizing load / flagging abuse needs.
 speleodb-api.<kind>.ok                  - completed exchange (2xx/3xx, incl. 304)
 speleodb-api.<kind>.client-error        - 4xx
 speleodb-api.<kind>.server-error        - 5xx
-speleodb-api.<kind>.network-error       - transport failure (DNS/timeout/reset)
+speleodb-api.<kind>.parse-error         - reply does not match the SDK contract
+speleodb-api.<kind>.network-error       - transport failure (DNS/timeout/reset/TLS)
 speleodb-api.<kind>.latency.<bucket>    - one hit per attempt, in its duration bucket
 ```
 
-**Count** is implicit: the four outcome counters sum to the call count for that
+`parse-error` is an answered request the app could not use: a 2xx body the SDK
+cannot decode (for example a new server enum value), or a body over the size
+limit. It used to be counted as `ok`, which hid contract drift; the client also
+logs the endpoint kind and the decoder detail for it.
+
+**Count** is implicit: the five outcome counters sum to the call count for that
 endpoint. **Latency** follows the `dwell.<state>` precedent (a plain counter),
 extended to a **histogram** because the flat `{name: count}` wire format cannot
 carry a computed percentile: each attempt increments exactly one
@@ -219,7 +225,7 @@ per session from the bucket distribution. Buckets (ms): `le-100`, `le-500`,
 
 Adding an `Endpoint` variant is CI-gated: `every_speleodb_endpoint_has_traffic_events`
 regenerates the exact `speleodb-api.*` set from `Endpoint::ALL x Outcome::ALL x
-LATENCY_BUCKETS` and fails until the new kind's ten names are in `EVENT_NAMES`
+LATENCY_BUCKETS` and fails until the new kind's eleven names are in `EVENT_NAMES`
 (and it flags any orphan `speleodb-api.*` name that no longer maps to a kind).
 
 ### Map-tile consumption - `tile.<source>.<provider>` (#31)

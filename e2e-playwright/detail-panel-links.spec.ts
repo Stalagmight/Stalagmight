@@ -1119,6 +1119,48 @@ test.describe('Detail Panel Links', () => {
     });
   });
 
+  test.describe('Station names', () => {
+    test('shot ends, merged stations and the station view show station names', async ({ page }) => {
+      await createProjectWithSections(page);
+      const [mainSectionId, sideSectionId] = (await getSectionIds(page)) as [number, number];
+      await createDirectMerge(
+        page,
+        { section_id: mainSectionId, station_index: 1 },
+        { section_id: sideSectionId, station_index: 0 },
+      );
+      await page.evaluate(
+        async ({ main, side }) => {
+          const setName = (window as unknown as {
+            __MOCK_SET_STATION_NAME__: (s: number, i: number, n: string | null) => void;
+          }).__MOCK_SET_STATION_NAME__;
+          setName(main, 0, '7');
+          setName(main, 1, '8');
+          setName(side, 0, '0');
+          const e2e = (window as unknown as {
+            __E2E_TEST__: { projectStore: { getState: () => { refreshProjectState: () => Promise<void> } } };
+          }).__E2E_TEST__;
+          await e2e.projectStore.getState().refreshProjectState();
+        },
+        { main: mainSectionId, side: sideSectionId },
+      );
+
+      const shotIds = await getShotIdsForSection(page, mainSectionId);
+      await selectShot(page, mainSectionId, shotIds[0]!);
+      await expect(page.getByTestId(`station-${mainSectionId}-0-link`)).toContainText(`${mainSectionId}:0 · 7`);
+      await expect(page.getByTestId(`station-${mainSectionId}-1-link`)).toContainText(`${mainSectionId}:1 · 8`);
+
+      await selectStation(page, mainSectionId, 1);
+      await expect(page.getByTestId('station-detail-name')).toHaveText('Name:8');
+      // The merge partner is named too: this is where two sections' numbers meet.
+      await expect(page.getByTestId(`station-${sideSectionId}-0-link`)).toContainText(`${sideSectionId}:0 · 0`);
+
+      // A station without a name has no Name row.
+      await selectStation(page, mainSectionId, 2);
+      await expect(page.getByTestId('station-detail')).toBeVisible();
+      await expect(page.getByTestId('station-detail-name')).toHaveCount(0);
+    });
+  });
+
   test.describe('Accessibility', () => {
     test('all links have aria-labels', async ({ page }) => {
       await createProjectWithSections(page);

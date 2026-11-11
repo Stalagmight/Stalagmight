@@ -1,4 +1,3 @@
-import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   useSpeleoStore,
@@ -6,53 +5,22 @@ import {
   type SpeleoBanner as SpeleoBannerState,
 } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
-import { useSpeleoActions } from '../../hooks/useSpeleoActions';
-import { humanizeSpeleoError } from '../../utils/speleoError';
-import { TOAST_KEYS } from '../../utils/toastKeys';
+import { useProjectStore } from '../../store/projectStore';
+import { dispatchProjectSave } from '../../utils/dispatchProjectSave';
+import { getSetAsideUploadMessage, getUploadContinuation, setUploadContinuation } from '../../utils/uploadContinuation';
+import { useSpeleoExitPrompt } from '../../utils/speleoExit';
+import { useSpeleoSignOut } from '../../utils/speleoSignOut';
 
-/**
- * Thin banner slot below the toolbar for SpeleoDB status (#200/#204). It surfaces
- * one non-blocking notice at a time:
- * - `push_unconfirmed` / `concurrent_session` - transient action feedback (#204);
- * - `rendering_disabled` - the server's `exclude_geojson` is set, so the web map
- *   won't refresh; offers Enable-rendering (a PATCH that takes effect on the NEXT
- *   push, gated behind an inline confirmation stating exactly that). This one is
- *   server-derived state, so it has NO Dismiss button - dismissing would just be
- *   re-derived by the next status poll; the resolution is Enable-rendering (or the
- *   flag being cleared server-side). It also preempts `no_anchor` in the store so it
- *   is always reachable.
- * - `no_anchor` - a push/unlock of a survey with no georeferenced zero datum, so the
- *   server generated no new map geometry (the map may be stale).
- * - `push_failed` (#260) - the last push/unlock threw. The action toast auto-clears
- *   after 3 s, which left a failed upload with no durable surface at all; this banner
- *   keeps the humanized error on screen and offers Retry, which replays the SAME verb
- *   (push keeps the lock, done releases it) with the same commit message. It clears on
- *   the next attempt, on a landed push/release, and when the project closes. It is
- *   HIDDEN while the dialog that issued the verb is open (`PUSH_FAILURE_DIALOGS`):
- *   that dialog stays open on failure and renders the same error inline, and a
- *   banner behind its modal scrim is dimmed, unreadable and unclickable.
- * None of these block editing or pushing.
- *
- * Above all of them sits the #213 force-edit banner (big-red, derived from
- * `link.forceEditing`, NOT the transient slot): while editing without the write lock
- * it persistently warns the `.stalx` is unmergeable and offers Reconnect. It preempts
- * the yellow notices so the data-safety warning is never masked.
- */
 export function SpeleoBanner() {
   const { t } = useTranslation();
   const banner = useSpeleoStore((s) => s.banner);
   const dismissBanner = useSpeleoStore((s) => s.dismissBanner);
-  const enableRendering = useSpeleoStore((s) => s.enableRendering);
-  const forceEditing = useSpeleoStore((s) => s.link?.forceEditing ?? false);
-  const lockedByOther = useSpeleoStore((s) => s.link?.lockedByOther ?? false);
-  const lockHolder = useSpeleoStore((s) => s.link?.lockHolder ?? null);
   // #270: Retry re-issues push/done, and BOTH need an open edit gate. Without one
   // the backend uploads nothing and answers `not_editing` - so offering "Retry
   // upload" there is an invitation to a no-op that reads like a fix. A 401 is
   // exactly how a project lands here: `clearSession()` drops to read-only while
   // KEEPING the unpushed edits, which is also what raised the failure banner.
   const editing = useSpeleoStore((s) => s.link?.editState === 'editing');
-  const showToast = useUIStore((s) => s.showToast);
   // #260: while the dialog that issued the push/unlock is open it OWNS the failure
   // and renders it inline; this banner would only render behind that dialog's modal
   // scrim - dimmed, unreadable, its Retry/Dismiss unclickable. Dismissing the dialog
@@ -60,103 +28,47 @@ export function SpeleoBanner() {
   const dialogOwnsFailure = useUIStore((s) =>
     s.activeDialog !== null && PUSH_FAILURE_DIALOGS.includes(s.activeDialog),
   );
-  // #213: Reconnect is the existing acquire+reconcile verb (startEditing).
-  // #260: Retry re-issues the push/unlock verb that failed.
-  const { startEditing, push, done, busy } = useSpeleoActions();
-  // Inline second step for the Enable-rendering action (no single-click side effect
-  // on server metadata; the confirm states rendering refreshes on the next push).
-  const [confirmingEnable, setConfirmingEnable] = useState(false);
-  const [enabling, setEnabling] = useState(false);
-
-  // If the banner kind changes out from under the confirm sub-step (e.g. a push
-  // lands and swaps in `push_unconfirmed` while the user is confirming), reset it -
-  // otherwise the confirm prompt text would linger with no actionable buttons (the
-  // confirm/back buttons are gated on `rendering_disabled`).
-  useEffect(() => {
-    if (banner?.kind !== 'rendering_disabled') setConfirmingEnable(false);
-  }, [banner?.kind]);
-
-  // #213: a force-edit session (editing WITHOUT the write lock) shows a PERSISTENT
-  // big-red data-safety warning that outranks the yellow transient notices - the
-  // "this .stalx cannot be merged" message must never be masked by a lesser banner.
-  // Its only action is Reconnect (acquire the lock + reconcile, via startEditing);
-  // it is not dismissable (backend state, re-derived every poll). When someone else
-  // holds the lock we name them, since their work is what a reconnect reconciles against.
-  if (forceEditing) {
-    return (
-      <div
-        className="flex items-center justify-between gap-3 px-4 py-2 bg-error-20 text-error text-sm font-medium border-b border-border"
-        role="alert"
-        data-testid="speleo-banner"
-        data-kind="force_edit_active"
-      >
-        <span>
-          {lockedByOther
-            ? t('speleodb.forceEdit.banner.lockedBy', {
-                email: lockHolder ?? t('speleodb.editBar.someone'),
-              })
-            : t('speleodb.forceEdit.banner.text')}
-        </span>
-        <button
-          type="button"
-          onClick={() => void startEditing()}
-          disabled={busy}
-          className="text-xs underline flex-shrink-0 disabled:opacity-50"
-          data-testid="speleo-banner-reconnect"
-        >
-          {t('speleodb.forceEdit.reconnect')}
-        </button>
-      </div>
-    );
-  }
-
+  // The exit prompt and the sign-out prompt are overlays of their own, not an
+  // `activeDialog`, and both render the failure inline too (their upload step).
+  const exitPromptOpen = useSpeleoExitPrompt((s) => s.request !== null);
+  const signOutPromptOpen = useSpeleoSignOut((s) => s.request !== null);
+  const busy = useSpeleoStore((s) => s.busy);
+  // No banner, no bar. Read-only on its own is NOT a banner state: the map's
+  // read-only pill and the SpeleoDB tab's lock badge already say it, and the pill
+  // carries the Resume editing action.
   if (!banner) return null;
   // #260: the failure is on screen inside the dialog that caused it - never both.
-  if (banner.kind === 'push_failed' && dialogOwnsFailure) return null;
+  if (banner.kind === 'push_failed' && (dialogOwnsFailure || exitPromptOpen || signOutPromptOpen)) return null;
 
   // #260: keep the failed attempt's own context so Retry replays the same verb with
   // the same commit message (narrowed once here - the JSX callbacks close over it).
   const pushFailed = banner.kind === 'push_failed' ? banner : null;
 
-  // A total lookup rather than a ternary chain: the chain's final `else` was
-  // `concurrent_session`, so a new banner kind would have silently rendered THAT
-  // kind's message. Keyed on the union, so a new kind is a compile error here.
+  // Keyed on the banner union so every new kind requires its own message.
   const TEXT: Record<SpeleoBannerState['kind'], () => string> = {
     push_unconfirmed: () => t('speleodb.banner.pushUnconfirmed'),
-    rendering_disabled: () => t('speleodb.banner.renderingDisabled'),
     no_anchor: () => t('speleodb.banner.noAnchor'),
-    concurrent_session: () => t('speleodb.banner.concurrentSession'),
     push_failed: () =>
       t('speleodb.banner.pushFailed', { message: pushFailed?.message ?? '' }),
   };
   const text = TEXT[banner.kind]();
 
-  // The verbs share the speleoStore `busy` lock, so a Retry while one is in flight
-  // can't double-issue; the guard just stops the click from queueing another.
+  // Retry returns to the shared Save confirmation, retaining the description
+  // and any still-current Save-and-Close request through authentication recovery.
   const retry = () => {
-    // `editing` is also what gates the button below - checked again here so the
-    // no-op re-issue is impossible even if the two ever drift.
-    if (!pushFailed || busy || !editing) return;
-    void (pushFailed.origin === 'done'
-      ? done(pushFailed.pushMessage)
-      : push(pushFailed.pushMessage));
-  };
-
-  const confirmEnable = async () => {
-    setEnabling(true);
-    try {
-      await enableRendering();
-      // enableRendering clears the banner on success.
-    } catch (e) {
-      showToast(
-        humanizeSpeleoError(e, t('speleodb.banner.enableRenderingFailed')),
-        TOAST_KEYS.SPELEODB_ENABLE_RENDERING_ERROR,
-        'error',
-      );
-    } finally {
-      setEnabling(false);
-      setConfirmingEnable(false);
-    }
+    if (!pushFailed || useSpeleoStore.getState().busy || !editing) return;
+    const path = useProjectStore.getState().project?.file_path;
+    if (!path) return;
+    const pending = getUploadContinuation(path);
+    setUploadContinuation({
+      path, message: pending?.message ?? getSetAsideUploadMessage(path) ?? pushFailed.pushMessage ?? '',
+      closeAfterSave: pending?.closeAfterSave ?? false,
+    });
+    useUIStore.getState().openSpeleoWorkspace();
+    if (pushFailed.origin === 'done' && !pending?.closeAfterSave) {
+      // A failed explicit lock release retries that operation after confirmation.
+      useUIStore.getState().openDialog('speleodb-done', { mode: 'release' });
+    } else void dispatchProjectSave();
   };
 
   return (
@@ -166,7 +78,7 @@ export function SpeleoBanner() {
       data-testid="speleo-banner"
       data-kind={banner.kind}
     >
-      <span>{confirmingEnable ? t('speleodb.banner.enableRenderingConfirm') : text}</span>
+      <span>{text}</span>
       <div className="flex items-center gap-3 flex-shrink-0">
         {/* #270: the retry verb needs the edit gate open. Read-only (a token loss,
             a re-verify divergence) makes an upload impossible, so offer the step
@@ -185,7 +97,7 @@ export function SpeleoBanner() {
           ) : (
             <button
               type="button"
-              onClick={() => void startEditing()}
+              onClick={() => useSpeleoStore.getState().session?.loggedIn ? useUIStore.getState().openSpeleoWorkspace() : useUIStore.getState().openDialog('settings', { initialCategory: 'speleodb' })}
               disabled={busy}
               className="text-xs underline disabled:opacity-50"
               data-testid="speleo-banner-start-editing-to-retry"
@@ -193,53 +105,14 @@ export function SpeleoBanner() {
               {t('speleodb.banner.startEditingToRetry')}
             </button>
           ))}
-        {banner.kind === 'rendering_disabled' &&
-          (confirmingEnable ? (
-            <>
-              <button
-                type="button"
-                onClick={() => void confirmEnable()}
-                disabled={enabling}
-                className="text-xs underline disabled:opacity-50"
-                data-testid="speleo-banner-enable-rendering-confirm"
-              >
-                {enabling
-                  ? t('speleodb.banner.enableRenderingBusy')
-                  : t('speleodb.banner.enableRenderingConfirmAction')}
-              </button>
-              <button
-                type="button"
-                onClick={() => setConfirmingEnable(false)}
-                disabled={enabling}
-                className="text-xs underline disabled:opacity-50"
-                data-testid="speleo-banner-enable-rendering-back"
-              >
-                {t('common.actions.cancel')}
-              </button>
-            </>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setConfirmingEnable(true)}
-              className="text-xs underline"
-              data-testid="speleo-banner-enable-rendering"
-            >
-              {t('speleodb.banner.enableRendering')}
-            </button>
-          ))}
-        {/* `rendering_disabled` is server-derived, so it has no Dismiss (a poll would
-            just re-raise it): its resolution is Enable-rendering / the flag clearing.
-            Every other kind is dismissable transient/action feedback. */}
-        {banner.kind !== 'rendering_disabled' && (
-          <button
-            type="button"
-            onClick={dismissBanner}
-            className="text-xs underline"
-            data-testid="speleo-banner-dismiss"
-          >
-            {t('common.actions.dismiss')}
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={dismissBanner}
+          className="text-xs underline"
+          data-testid="speleo-banner-dismiss"
+        >
+          {t('common.actions.dismiss')}
+        </button>
       </div>
     </div>
   );

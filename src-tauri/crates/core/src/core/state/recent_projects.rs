@@ -54,35 +54,23 @@ impl AppState {
             return CommandResult::failure("Failed to lock recent projects".to_string());
         };
 
-        // Remove the path from the list
-        let initial_len = recent.len();
-        recent.retain(|p| p != &path);
-
-        // Idempotent forget: "remove from recent" means "ensure this path is not in
-        // the list", so an already-absent entry is SUCCESS, not a failure. The
-        // backend's `config.general.recent_projects` and this in-memory list are kept
-        // in lockstep, but the FRONTEND holds its own config snapshot that can lag them
-        // (e.g. after the backend trimmed an entry past `recent_projects_max`). That
-        // stale snapshot still renders the trimmed path as an unavailable "missing"
-        // card. The frontend only refreshes recents on a success result, so returning a
-        // failure here left that row un-removable forever. Nothing changed on the
-        // backend, so skip the re-save and return success; the caller then re-reads the
-        // (already-correct) backend config and the stale row drops out. (The normal
-        // case - a missing file whose path is still in the list - takes the resave
-        // branch below.)
-        if recent.len() == initial_len {
-            tracing::debug!(path = ?path, "remove_from_recent: path already absent; treating as success");
+        let mut updated = recent.clone();
+        updated.retain(|p| p != &path);
+        if updated.len() == recent.len() {
             return CommandResult::success();
         }
 
-        // Update config and save
-        if let Ok(mut config) = self.config.lock() {
-            config.general.recent_projects.clone_from(&recent);
-            if let Err(e) = config.save() {
-                tracing::warn!("Failed to save config after removing from recent: {}", e);
-                return CommandResult::failure(format!("Failed to save config: {e}"));
-            }
+        // Publish neither in-memory list until persistence succeeds. Otherwise a
+        // failed conversion cleanup makes its manual retry a false successful no-op.
+        let Ok(mut config) = self.config.lock() else {
+            return CommandResult::failure("Failed to lock config".into());
+        };
+        let previous = std::mem::replace(&mut config.general.recent_projects, updated.clone());
+        if let Err(error) = config.save() {
+            config.general.recent_projects = previous;
+            return CommandResult::failure(format!("Failed to save config: {error}"));
         }
+        *recent = updated;
 
         tracing::info!(path = ?path, "Removed project from recent list");
         CommandResult::success()
@@ -136,6 +124,48 @@ impl AppState {
     /// drops the recents entry. Returning a failure after the file is already
     /// trashed would strand a "File not found" zombie row in the UI.
     pub fn delete_project(&self, path: PathBuf) -> CommandResult {
+        self.delete_project_as(path, None)
+    }
+
+    /// [`Self::delete_project`], handing a regular file to the trash under
+    /// `trash_name` (a bare file name) instead of its own - see [`trash_under_name`].
+    /// Everything else is identical: the identity decisions, the teardown and the
+    /// recents prune all use `path`, made while the file is still there under it.
+    pub(super) fn delete_project_as(
+        &self,
+        path: PathBuf,
+        trash_name: Option<&str>,
+    ) -> CommandResult {
+        self.delete_project_impl(path, trash_name, IfOpen::CloseIt)
+            .unwrap_or_else(|| {
+                // Unreachable: only `IfOpen::Refuse` declines to delete.
+                CommandResult::failure("The project is open. Nothing was deleted.".to_owned())
+            })
+    }
+
+    /// [`Self::delete_project_as`] for a file that must NOT be the open project: a
+    /// removal of a cached SpeleoDB copy that is not open (Home's removal, the
+    /// purge, sign-out's Discard). `None`, with nothing done at all, when `path` is
+    /// the open project after all. The question is asked under the same `project`
+    /// lock acquisition as the teardown would be, so a copy opened after the
+    /// caller's own check is refused here instead of being closed and trashed.
+    pub(super) fn delete_project_unless_open(
+        &self,
+        path: PathBuf,
+        trash_name: Option<&str>,
+    ) -> Option<CommandResult> {
+        self.delete_project_impl(path, trash_name, IfOpen::Refuse)
+    }
+
+    /// The body of [`Self::delete_project_as`] and
+    /// [`Self::delete_project_unless_open`]: `None` only when `if_open` is
+    /// [`IfOpen::Refuse`] and `path` is the open project.
+    fn delete_project_impl(
+        &self,
+        path: PathBuf,
+        trash_name: Option<&str>,
+        if_open: IfOpen,
+    ) -> Option<CommandResult> {
         // Does the FINAL component of `path` name a symlink? That one question decides
         // which notion of identity everything below uses, so it is answered once, up
         // front, while the file is still there to be stat'd.
@@ -193,7 +223,10 @@ impl AppState {
                     purpose = "delete a project",
                     "Refusing to delete: cannot determine whether the file is there"
                 );
-                return CommandResult::failure(format!("Failed to delete {}: {e}", path.display()));
+                return Some(CommandResult::failure(format!(
+                    "Failed to delete {}: {e}",
+                    path.display()
+                )));
             }
         }
 
@@ -236,8 +269,8 @@ impl AppState {
         // and left the entire undo/redo stack in place so an undo could replay
         // against the deleted project. The teardown additionally drops the database
         // handle, clears the undo stack, drops the display-settings and
-        // adjusted-geometry caches, and resets the read-only edit gate plus the
-        // force-edit flag so neither leaks into the next open.
+        // adjusted-geometry caches, and resets the read-only edit gate so it cannot
+        // leak into the next open.
         //
         // ONE acquisition of the `project` lock covers BOTH the identity check and
         // the teardown, and that is load-bearing rather than tidiness. Reading the
@@ -298,6 +331,18 @@ impl AppState {
                 .as_ref()
                 .and_then(|p| p.file_path.as_deref())
                 .is_some_and(names_the_deleted_file);
+            if deleting_open_project && if_open == IfOpen::Refuse {
+                // The caller removes only a project that is NOT open, and it is
+                // now: refuse with nothing torn down, deleted or released. Asked
+                // here, under the same acquisition the teardown would use, so a
+                // project opened after the caller's own check cannot slip past it.
+                tracing::info!(
+                    path = ?path,
+                    purpose = "never close and delete a project opened since the check",
+                    "Refusing to delete: the file is the open project"
+                );
+                return None;
+            }
             let mut held_lock = None;
             if deleting_open_project {
                 // Snapshot what releasing a held SpeleoDB write lock needs, HERE,
@@ -341,7 +386,7 @@ impl AppState {
                 // Kept, not dropped: nothing has been destroyed yet, and the
                 // trash below can still fail. A claim cleared over a file that
                 // survived is a mutex left held with no local pointer to it -
-                // the session is closed, so the poll's catch-alls never see it,
+                // the session is closed, so the refresh's catch-alls never see it,
                 // and the no-project janitor has nothing to retry. See the
                 // trash-failure return, which puts it back.
                 cleared_claim = held_lock
@@ -408,17 +453,21 @@ impl AppState {
         // for what that cost). `symlink_metadata` answered both questions honestly
         // there, an unreadable path has already been refused, so what is left here is
         // exactly "there is an entry" versus "there is provably nothing".
-        if entry.is_ok() {
-            if let Err(e) = send_to_trash(&path) {
+        if let Ok(meta) = &entry {
+            // Only a regular file is renamed: a symlink's own name is what it is.
+            let rename_to = trash_name.filter(|_| meta.file_type().is_file());
+            if let Err(e) = trash_under_name(&path, rename_to, send_to_trash) {
                 // Nothing was destroyed, so the lock is still ours and still
                 // guarding a project that is still there. Put the claim back -
                 // without it the mutex has no local pointer at all: this call
-                // closed the session, so the poll's catch-alls will never run
+                // closed the session, so the refresh's catch-alls will never run
                 // over it, and the deferred release below is not reached from
                 // here either.
                 self.speleodb_restore_lock_claim(cleared_claim);
-                return CommandResult::failure(format!("Failed to delete {}: {e}", path.display()))
-                    .with_session_closed(session_closed);
+                return Some(
+                    CommandResult::failure(format!("Failed to delete {}: {e}", path.display()))
+                        .with_session_closed(session_closed),
+                );
             }
         }
 
@@ -488,8 +537,8 @@ impl AppState {
                     code: "delete_project_lock_release_failed".to_string(),
                     message: format!(
                         "Project deleted, but its SpeleoDB write lock could not be released: {e}. \
-                         Other divers stay locked out until it expires; you can release it from \
-                         the held-lock prompt."
+                         Other divers stay locked out until it is released; you can release it \
+                         from the held-lock prompt or on the SpeleoDB website."
                     ),
                     severity: WarningSeverity::Warning,
                 });
@@ -497,9 +546,11 @@ impl AppState {
         }
 
         tracing::info!(path = ?path, "Deleted project");
-        CommandResult::success()
-            .with_warnings(warnings)
-            .with_session_closed(session_closed)
+        Some(
+            CommandResult::success()
+                .with_warnings(warnings)
+                .with_session_closed(session_closed),
+        )
     }
 
     /// Rename a project's display name on disk by path, without requiring it to
@@ -519,7 +570,7 @@ impl AppState {
 
         // Read-only edit gate (#191, D-B6): this renames a `.stalx` BY PATH -
         // usually NOT the open AppState project
-        // - so the transient `edit_enabled` flag (which describes the *open*
+        // - so the derived `edit_enabled()` gate (which describes the *open*
         // project) can only speak for it when the path IS the currently open
         // project. Compute the open-project identity FIRST, BEFORE the disk write,
         // and gate only on a match so `guard_mutation` aborts a rename of the
@@ -615,7 +666,62 @@ fn send_to_trash(path: &Path) -> Result<(), String> {
 
 #[cfg(any(test, all(feature = "test-support", debug_assertions)))]
 fn send_to_trash(path: &Path) -> Result<(), String> {
+    #[cfg(test)]
+    TRASHED.with(|trashed| trashed.borrow_mut().push(path.to_path_buf()));
     std::fs::remove_file(path).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Every path this thread handed to the test build's [`send_to_trash`]: the
+    /// name a file went to the trash under, which the removal leaves no trace of.
+    static TRASHED: std::cell::RefCell<Vec<PathBuf>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Test-only: take the paths this thread has handed to the trash so far.
+#[cfg(test)]
+pub(super) fn take_trashed_for_tests() -> Vec<PathBuf> {
+    TRASHED.with(std::cell::RefCell::take)
+}
+
+/// What a delete does when the file is the open project.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum IfOpen {
+    /// Tear the session down first (the delete the user asked for by path).
+    CloseIt,
+    /// Refuse with nothing done (a removal of a copy that must not be open).
+    Refuse,
+}
+
+/// Hand `path` to `trash` under the bare file name `name`, when given: the file is
+/// renamed in place first (same directory, so the rename cannot cross a volume).
+/// In the OS trash every cached SpeleoDB copy is otherwise a `project.stalx`
+/// (`project.stalx.2`, ...), and the user restoring one cannot tell which is which.
+///
+/// The name is a courtesy, never a reason to fail or to touch another file: when it
+/// is the file's own name, is already taken, or the rename is refused, the file is
+/// trashed under its own name. When the trash itself fails, the file is renamed
+/// back, so a failed delete leaves it where it was.
+fn trash_under_name(
+    path: &Path,
+    name: Option<&str>,
+    trash: impl FnOnce(&Path) -> Result<(), String>,
+) -> Result<(), String> {
+    let named = name.and_then(|name| path.parent().map(|dir| dir.join(name)));
+    let Some(named) = named.filter(|named| {
+        named.as_path() != path
+            && std::fs::symlink_metadata(named).is_err()
+            && std::fs::rename(path, named).is_ok()
+    }) else {
+        return trash(path);
+    };
+    trash(&named).map_err(|e| match std::fs::rename(&named, path) {
+        Ok(()) => e,
+        Err(back) => format!(
+            "{e}; it is now at {} and could not be renamed back ({back})",
+            named.display()
+        ),
+    })
 }
 
 /// Turns the result of a platform trash attempt into this module's `Result`,
@@ -643,7 +749,76 @@ fn after_trash_attempt(result: Result<(), trash::Error>, path: &Path) -> Result<
     reason = "unit test fixtures fail loudly on setup errors"
 )]
 mod tests {
-    use super::{after_trash_attempt, AppState};
+    use super::{after_trash_attempt, trash_under_name, AppState};
+    use std::path::{Path, PathBuf};
+
+    /// A cached copy goes to the trash under the project's name, and only the
+    /// renamed file is handed over: the trash sees `<name>.stalx`, with the
+    /// copy's bytes, and nothing is left under the old name.
+    #[test]
+    fn trash_under_name_hands_over_the_renamed_file() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let path = temp.path().join("project.stalx");
+        std::fs::write(&path, b"synthetic copy").expect("seed the file");
+
+        let mut seen: Option<PathBuf> = None;
+        trash_under_name(&path, Some("Synthetic Cave.stalx"), |trashed: &Path| {
+            assert_eq!(
+                std::fs::read(trashed).expect("the renamed file"),
+                b"synthetic copy"
+            );
+            seen = Some(trashed.to_path_buf());
+            std::fs::remove_file(trashed).map_err(|e| e.to_string())
+        })
+        .expect("trashed");
+
+        assert_eq!(seen, Some(temp.path().join("Synthetic Cave.stalx")));
+        assert!(!path.exists() && !temp.path().join("Synthetic Cave.stalx").exists());
+    }
+
+    /// A failed trash puts the file back under its own name: the delete reports
+    /// a failure and the copy is exactly where it was.
+    #[test]
+    fn trash_under_name_renames_back_when_the_trash_fails() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let path = temp.path().join("project.stalx");
+        std::fs::write(&path, b"synthetic copy").expect("seed the file");
+
+        let err = trash_under_name(&path, Some("Synthetic Cave.stalx"), |_| {
+            Err("synthetic trash failure".to_owned())
+        })
+        .expect_err("the trash failed");
+
+        assert_eq!(err, "synthetic trash failure");
+        assert_eq!(
+            std::fs::read(&path).expect("back in place"),
+            b"synthetic copy"
+        );
+        assert!(!temp.path().join("Synthetic Cave.stalx").exists());
+    }
+
+    /// The name never displaces another file: a taken name (or none) trashes the
+    /// file under its own name and leaves the other file alone.
+    #[test]
+    fn trash_under_name_never_overwrites_and_falls_back_to_the_own_name() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let path = temp.path().join("project.stalx");
+        let taken = temp.path().join("owner.json");
+        std::fs::write(&path, b"synthetic copy").expect("seed the file");
+        std::fs::write(&taken, b"{}").expect("seed the other file");
+
+        for name in [Some("owner.json"), Some("project.stalx"), None] {
+            std::fs::write(&path, b"synthetic copy").expect("reseed");
+            let mut seen: Option<PathBuf> = None;
+            trash_under_name(&path, name, |trashed: &Path| {
+                seen = Some(trashed.to_path_buf());
+                std::fs::remove_file(trashed).map_err(|e| e.to_string())
+            })
+            .expect("trashed");
+            assert_eq!(seen.as_deref(), Some(path.as_path()), "{name:?}");
+            assert_eq!(std::fs::read(&taken).expect("untouched"), b"{}");
+        }
+    }
 
     /// The stub arm covers the happy path everywhere; this re-covers
     /// `after_trash_attempt`'s pass-through of a successful trash call, since

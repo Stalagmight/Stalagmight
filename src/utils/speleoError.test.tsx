@@ -84,7 +84,7 @@ describe('humanizeSpeleoError - transport failures (#270)', () => {
     for (const line of [refused, timeout, dns, tls, unknown]) {
       expect(line).toContain(ENDPOINT);
     }
-    expect(refused).toMatch(/refused/i);
+    expect(refused).toMatch(/could not connect/i);
     expect(timeout).toMatch(/did not respond in time/i);
     expect(dns).toMatch(/could not find/i);
     expect(tls).toMatch(/secure connection/i);
@@ -92,6 +92,17 @@ describe('humanizeSpeleoError - transport failures (#270)', () => {
     expect(unknown).toMatch(/check your network connection/i);
     // Four of the five say something the others do not.
     expect(new Set([refused, timeout, dns, tls, unknown]).size).toBe(5);
+  });
+
+  it('names the server the call was made to when the caller knows it', () => {
+    // Settings' Connect tries the address on screen, not the session's.
+    const line = humanizeSpeleoError(dto({ transport: 'Refused' }), 'Could not connect to SpeleoDB', {
+      endpoint: 'https://unsaved.example/',
+    });
+    expect(line).toContain('https://unsaved.example/');
+    expect(line).not.toContain(ENDPOINT);
+    // A blank one falls back to the session's.
+    expect(humanizeSpeleoError(dto({ transport: 'Refused' }), undefined, { endpoint: '  ' })).toContain(ENDPOINT);
   });
 
   it('falls back to a neutral phrase when no session endpoint is known', () => {
@@ -106,9 +117,9 @@ describe('humanizeSpeleoError - transport failures (#270)', () => {
     // sound discriminant: a retryable 5xx is `Retry` too, but carries a status.
     const line = humanizeSpeleoError(
       dto({ message: 'Bad login.', action: 'Fatal', status: 400, transport: null }),
-      'Login to SpeleoDB failed',
+      'Could not connect to SpeleoDB',
     );
-    expect(line).toBe('Login to SpeleoDB failed: Bad login');
+    expect(line).toBe('Could not connect to SpeleoDB: Bad login');
   });
 
   it('does not treat a retryable 5xx as a transport failure', () => {
@@ -117,6 +128,35 @@ describe('humanizeSpeleoError - transport failures (#270)', () => {
       'Could not push changes',
     );
     expect(line).toBe('Could not push changes: Server error');
+  });
+});
+
+describe('humanizeSpeleoError - an endpoint the policy refused', () => {
+  const refused = (endpoint_refusal: 'PlainHttp' | 'InvalidAddress') => dto({
+    message: 'HTTPS is required. HTTP is allowed only on localhost, 127.0.0.1 or 192.168.x.x. Rejected endpoint: http://192.0.2.1/',
+    action: 'Fatal', transport: null, endpoint_refusal,
+  });
+
+  it('names the automatic HTTP exceptions for a plain http:// server, never the backend text', () => {
+    const line = humanizeSpeleoError(refused('PlainHttp'), 'Could not connect to SpeleoDB', { endpoint: 'http://192.0.2.1/' });
+    expect(line).toContain('http://192.0.2.1/');
+    // The one description of the exception set (`speleodb.httpExceptions`), nested in.
+    expect(line).toContain('allowed only for localhost, 127.0.0.1 and 192.168.x.x addresses');
+    expect(line).not.toContain('$t(');
+    expect(line).toContain('https://');
+    expect(line).not.toContain('Rejected endpoint');
+    expect(line).not.toContain('Could not connect to SpeleoDB:');
+  });
+
+  it('asks for a full address when the address is unusable', () => {
+    const line = humanizeSpeleoError(refused('InvalidAddress'), undefined, { endpoint: 'speleodb.lan' });
+    expect(line).toMatch(/^speleodb\.lan is not a server address/);
+    expect(line).not.toContain('Allow insecure HTTP');
+  });
+
+  it('ignores a refusal field that is not one it knows', () => {
+    const line = humanizeSpeleoError({ ...refused('PlainHttp'), endpoint_refusal: 'Other' }, 'Prefix');
+    expect(line).toBe('Prefix: HTTPS is required. HTTP is allowed only on localhost, 127.0.0.1 or 192.168.x.x. Rejected endpoint: http://192.0.2.1/');
   });
 });
 

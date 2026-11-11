@@ -36,17 +36,12 @@ it.each(['success', 'rejection', 'cancel'] as const)('supersedes a slow probe: %
   expect(clear).not.toHaveBeenCalled();
 });
 
-it('rechecks ownership after native confirmation even when the newer request is cancelled', async () => {
-  const answer = deferred<boolean>();
+it('opens a restricted project without a pre-open access confirmation', async () => {
   probe.mockResolvedValue(restricted);
-  warning.mockReturnValueOnce(answer.promise).mockResolvedValueOnce(false);
   const work = vi.fn(async () => ({ success: true }));
-  const a = runConfirmedProjectSwitch('A', () => null, false, work);
-  await vi.waitFor(() => expect(warning).toHaveBeenCalledOnce());
-  expect(await runConfirmedProjectSwitch('B', () => null, false, work)).toEqual({ success: false });
-  answer.resolve(true);
-  expect(await a).toEqual({ success: false, superseded: true });
-  expect(work).not.toHaveBeenCalled();
+  expect(await runConfirmedProjectSwitch('A', () => null, false, work)).toEqual({ success: true });
+  expect(work).toHaveBeenCalledOnce();
+  expect(warning).not.toHaveBeenCalled();
 });
 
 it.each([true, false])('checks queued pre-confirmed/already-open work (%s)', async (confirmed) => {

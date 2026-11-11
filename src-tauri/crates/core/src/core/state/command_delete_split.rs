@@ -898,9 +898,12 @@ impl AppState {
                 .station_offsets
                 .retain(|key, _| key.section_id != section_id);
 
-            // Remove station comments referencing this section
+            // Remove station comments and names referencing this section
             project
                 .station_comments
+                .retain(|key, _| key.section_id != section_id);
+            project
+                .station_names
                 .retain(|key, _| key.section_id != section_id);
 
             // Remove zero datums referencing this section

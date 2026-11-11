@@ -735,12 +735,14 @@ impl Project {
             .station_offsets
             .keys()
             .chain(self.station_comments.keys())
+            .chain(self.station_names.keys())
             .filter(|&k| is_removed(self, k))
             .cloned()
             .collect();
         for k in removed_keys {
             self.station_offsets.remove(&k);
             self.station_comments.remove(&k);
+            self.station_names.remove(&k);
         }
     }
 
@@ -766,6 +768,10 @@ impl Project {
 
         // Remove station comments referencing this section
         self.station_comments
+            .retain(|sr, _| sr.section_id != section_id);
+
+        // Remove station names referencing this section
+        self.station_names
             .retain(|sr, _| sr.section_id != section_id);
 
         // Remove zero datums referencing this section

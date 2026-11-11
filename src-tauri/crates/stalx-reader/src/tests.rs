@@ -77,7 +77,7 @@ fn set_user_version(path: &Path, version: i32) {
         .unwrap();
 }
 
-/// Two sections, one merge, one datum, one closure, one comment.
+/// Two sections, one merge, one datum, one closure, one comment, two names.
 fn full_project() -> Project {
     let mut project = Project::new("Synthetic".to_string(), Some("Nowhere".to_string()));
     project.add_section(descending("Main", 1.0, 4));
@@ -112,7 +112,12 @@ fn full_project() -> Project {
         strategy: ClosureStrategy::default(),
         is_aligned: false,
     });
-    project.station_comments.insert(a, "lead".to_string());
+    project
+        .station_comments
+        .insert(a.clone(), "lead".to_string());
+    project.station_names.insert(a, "17".to_string());
+    let start = project.key_for_ref(StationRef::new(main, 0)).unwrap();
+    project.station_names.insert(start, "0".to_string());
     project
 }
 
@@ -157,6 +162,12 @@ fn reads_every_part_of_a_current_file() {
     assert_eq!(survey.station_comments.len(), 1);
     assert_eq!(survey.station_comments[0].station, id(main.id, 4));
     assert_eq!(survey.station_comments[0].text, "lead");
+    let names: Vec<_> = survey
+        .station_names
+        .iter()
+        .map(|n| (n.station, n.name.as_str()))
+        .collect();
+    assert_eq!(names, [(id(main.id, 0), "0"), (id(main.id, 4), "17")]);
     assert_eq!(survey.unresolved_references, 0);
     assert!(survey.stations.is_none(), "positions are opt-in");
 }
@@ -382,6 +393,30 @@ fn an_expired_deadline_interrupts_a_long_statement() {
     assert_eq!(invalid_kind(&err), Some(InvalidKind::Deadline), "{err}");
 }
 
+/// A v18 file written before station names has no `station_names` table; it
+/// still reads, with no names.
+#[test]
+fn a_file_without_station_names_reads_with_none() {
+    let path = with_schema_sql("DROP TABLE station_names;");
+
+    let survey = read_file(&path).unwrap();
+
+    assert!(survey.station_names.is_empty());
+    assert_eq!(survey.station_comments.len(), 1);
+    assert_eq!(survey.schema_version, SUPPORTED_SCHEMA_VERSION);
+}
+
+#[test]
+fn a_dangling_station_name_is_dropped_and_counted() {
+    let path =
+        with_schema_sql("UPDATE station_names SET station_index = 999 WHERE station_index = 4;");
+
+    let survey = read_file(&path).unwrap();
+
+    assert_eq!(survey.station_names.len(), 1);
+    assert_eq!(survey.unresolved_references, 1);
+}
+
 #[test]
 fn a_dangling_cross_reference_is_dropped_and_counted() {
     let path = with_schema_sql("UPDATE station_comments SET station_index = 999;");
@@ -575,6 +610,34 @@ fn count_limits_refuse_a_file_before_the_post_load_steps() {
     );
 }
 
+/// A hostile upload can fill `station_names` with rows that name no station;
+/// they are counted before the load builds them, like every other capped table.
+#[test]
+fn station_names_are_counted_against_their_own_cap() {
+    let dir = TempDir::new().unwrap();
+    let path = save(&dir, &full_project());
+    let options = ReadOptions::default().count_limits(CountLimits::default().station_names(1));
+
+    let err = read_file_with(&path, &options).unwrap_err();
+
+    assert!(
+        matches!(
+            err,
+            ReadError::TooComplex {
+                what: Limit::StationNames,
+                count: 2,
+                max: 1
+            }
+        ),
+        "{err}"
+    );
+    assert!(read_file_with(
+        &path,
+        &ReadOptions::default().count_limits(CountLimits::default().station_names(2))
+    )
+    .is_ok());
+}
+
 #[test]
 fn the_frame_datum_anchors_its_component_even_when_it_is_not_the_lowest() {
     // The app refuses a second datum in one component, but a crafted or older
@@ -693,6 +756,56 @@ fn missing_and_repeated_uuids_are_derived_the_same_way_every_read() {
     assert_eq!(flags, [true, false, true, false]);
     let unique: std::collections::HashSet<&str> = shots.iter().map(|s| s.uuid.as_str()).collect();
     assert_eq!(unique.len(), shots.len());
+}
+
+#[test]
+fn an_id_two_sections_hold_is_derived_for_the_later_one_the_way_the_app_does() {
+    const IDS: [&str; 2] = [
+        "d1d1d1d1-0000-4000-8000-000000000001",
+        "d1d1d1d1-0000-4000-8000-000000000002",
+    ];
+    let copy = || SectionData {
+        shots: IDS
+            .iter()
+            .map(|id| ShotData {
+                uuid: Some((*id).to_string()),
+                azimuth_in: 90.0,
+                azimuth_out: 90.0,
+                length: 5.0,
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    };
+    let mut project = Project::new("Copies".to_string(), None);
+    project.add_section(copy());
+    project.add_section(copy());
+    let dir = TempDir::new().unwrap();
+    let path = save(&dir, &project);
+
+    let first = read_file(&path).unwrap();
+    let second = read_file(&path).unwrap();
+    assert_eq!(first, second, "derived ids must not change between reads");
+
+    let ids = |i: usize| -> Vec<(String, bool)> {
+        first.sections[i]
+            .shots
+            .iter()
+            .map(|s| (s.uuid.clone(), s.uuid_derived))
+            .collect()
+    };
+    let kept: Vec<(String, bool)> = IDS.iter().map(|id| ((*id).to_string(), false)).collect();
+    assert_eq!(ids(0), kept, "the lower section keeps the file's ids");
+    let later = first.sections[1].id;
+    let renamed: Vec<(String, bool)> = IDS
+        .iter()
+        .map(|id| (stalagmight_models::reminted_shot_uuid(later, id), true))
+        .collect();
+    assert_eq!(
+        ids(1),
+        renamed,
+        "the later one gets the app's derived ids, flagged"
+    );
 }
 
 #[test]

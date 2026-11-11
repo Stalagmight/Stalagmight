@@ -1,5 +1,5 @@
+import { dispatchProjectSave } from '../utils/dispatchProjectSave';
 import { requestTopDialogClose } from '../utils/dialogStack';
-import { useSpeleoStore } from '../store/speleoStore';
 import { useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../store/uiStore';
@@ -9,7 +9,6 @@ import { useShallow } from 'zustand/react/shallow';
 import { isEditingBlockedNow } from './useEditingBlocked';
 import { isNonInteractiveTool, navigationToolsEnabled } from '../utils/toolUtils';
 import { normalizeShortcut, parseKeyEvent } from '../utils/shortcuts';
-import { surfaceSaveFailure } from '../utils/saveFeedback';
 import { runFileShortcutAction } from '../utils/fileShortcutActions';
 import { saveProjectAs } from '../utils/projectActions';
 import type { ToolType, Selection, DisplayToggleKey } from '../store/uiStore';
@@ -124,7 +123,7 @@ const ACTION_LABELS: Record<ShortcutAction, string> = {
   toggle_depth_gradient: 'Depth gradient',
   toggle_grid: 'Grid',
   toggle_satellite: 'Satellite',
-  toggle_station_labels: 'Station labels',
+  toggle_station_labels: 'Station IDs',
   toggle_shot_labels: 'Shot labels',
   toggle_section_labels: 'Section labels',
   fit_to_bounds: 'Fit to bounds',
@@ -333,7 +332,7 @@ export function useKeyboardShortcuts() {
     showStations: s.showStations,
     showToast: s.showToast,
   })));
-  const { undo, redo, saveProject, project, stations, config } = useProjectStore();
+  const { undo, redo, project, stations, config } = useProjectStore();
 
   // Ref for shortcut map - uses ref to avoid stale closures in event handlers
   // Initialize with defaults to handle first render before useEffect runs
@@ -355,7 +354,10 @@ export function useKeyboardShortcuts() {
       // to Stations). Mirrors the existing defaultPrevented guard in the Escape
       // branch, generalized to every reserved key.
       if (event.defaultPrevented) return;
-      const { activeDialog } = useUIStore.getState();
+      const { activeDialog, screenOccupants } = useUIStore.getState();
+      // An independent overlay (the exit prompts, the held-lock prompt) is as
+      // modal as a dialog in the slot: no shortcut may edit or quit behind it.
+      if (screenOccupants > 0 && !activeDialog) return;
       if (activeDialog && event.key !== 'Escape') {
         // Allow ? to toggle the keyboard shortcuts overlay closed
         if (!(event.key === '?' && activeDialog === 'keyboard-shortcuts')) {
@@ -711,20 +713,7 @@ export function useKeyboardShortcuts() {
 
         case 'save':
           event.preventDefault();
-          if (useSpeleoStore.getState().link?.editState === 'editing' && !useSpeleoStore.getState().link?.forceEditing) {
-            openDialog('speleodb-done', { mode: 'push' });
-            break;
-          }
-          if (project) {
-            void saveProject().then((result) => {
-              if (result && !result.success) {
-                // A save blocked by integrity issues is not a "real" error -
-                // route to Review & Repair instead of an error window.
-                surfaceSaveFailure(result.error, openDialog);
-              }
-            });
-            maybeShowToast(action);
-          }
+          void dispatchProjectSave();
           break;
 
         case 'save_as':
@@ -771,7 +760,6 @@ export function useKeyboardShortcuts() {
       setActiveTool,
       undo,
       redo,
-      saveProject,
       toggleDisplay,
       triggerFitToBounds,
       toggleSectionsPanel,

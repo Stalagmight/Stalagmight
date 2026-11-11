@@ -41,7 +41,9 @@ import { getErrorMessage } from './ipc';
 import { extractFilename } from './path';
 import { openDialog, openOrImportFilters, DMP_EXTENSION } from './fileDialogs';
 import { clearProjectActionSource } from './telemetry';
-import { needsSpeleoHandBackPrompt } from './quit';
+import { askSpeleoExit, openProjectNeedsSpeleoExitPrompt } from './speleoExit';
+import { confirmWorkspaceDrafts } from './workspaceDrafts';
+import { confirmSpeleoFileOpen } from './confirmSpeleoOpen';
 import { TOAST_KEYS } from './toastKeys';
 import i18n from '../i18n';
 
@@ -189,6 +191,9 @@ function importFlowOwnsScreen(ui: ReturnType<typeof useUIStore.getState>): boole
  *   import parsers, which the OS-launch route (`launch.rs` `LAUNCHABLE_EXTENSIONS`)
  *   also restricts to `.stalx`/`.tml`/`.tmlu`. Unset (the default) keeps the
  *   general router's full dispatch for the picker, drag-drop, and Ctrl+O/Ctrl+I.
+ * @param opts.importDoor  Set by the in-project Import doors (#674). A `.stalx`
+ *   arriving that way with a project open asks "Open as project" or "Add to
+ *   <project>" instead of opening outright. Open doors leave it unset.
  */
 export async function routeOpenedFile(
   path: string,
@@ -197,6 +202,7 @@ export async function routeOpenedFile(
     residualReadOnlyToast?: boolean;
     swapConfirmed?: boolean;
     allow?: 'project-only';
+    importDoor?: boolean;
   },
 ): Promise<void> {
   const lowerPath = path.toLowerCase();
@@ -329,15 +335,33 @@ export async function routeOpenedFile(
       // gate on the DISK-dirty bit alone - so a remote project saved to disk with a
       // held lock or with edits SpeleoDB has never seen was swapped out with no
       // notice, while closing the same project prompted. Ordered SpeleoDB-first for
-      // the same reason `guardQuit` is: the SpeleoDB prompt carries its own "save
-      // changes locally" checkbox and so subsumes the disk one, while the reverse
-      // order would let "Discard Changes" walk straight past the lock and the
-      // unpushed edits. The prompt carries the chosen path and performs the open
-      // itself once the SpeleoDB side is resolved, so the user's Ctrl+O is not
-      // silently swallowed by the prompt it raised.
-      if (store.project && needsSpeleoHandBackPrompt(useSpeleoStore.getState().link)) {
-        ui.openDialog('speleodb-close', { pendingOpenPath: path });
+      // the same reason `guardQuit` is: the SpeleoDB exit prompt covers unsaved
+      // work too (its upload and keep both save it), while the reverse order would
+      // let "Discard Changes" walk straight past the lock and the unpushed edits.
+      // The prompt closes the project per the user's answer; the open then runs
+      // here, so the user's Ctrl+O is not swallowed by the prompt it raised.
+      // #674: an Import door asks open-or-add first; "Open as project" re-enters
+      // without `importDoor`, so it still meets every guard below.
+      if (store.project && opts?.importDoor && store.project.file_path === path) {
+        // Picking the open project's own file: adding it to itself is refused and
+        // re-opening it would only discard nothing, so say so instead of offering both.
+        ui.showToast(
+          i18n.t('importGate.alreadyOpen', { fileName: extractFilename(path) }),
+          'import-already-open',
+          'info',
+        );
+      } else if (store.project && opts?.importDoor) {
+        ui.openDialog('add-or-open-project', { path, fileName: extractFilename(path) });
         handedOff = true;
+      } else if (store.project && openProjectNeedsSpeleoExitPrompt()) {
+        // The destination's disk preflight runs BEFORE anything is given up: a file
+        // that cannot be opened must fail here (the catch below reports it), not
+        // after the user has answered the prompt and the project is closed.
+        await confirmSpeleoFileOpen(path);
+        // Unsent SpeleoDB input next, still before the prompt that uploads or releases.
+        if (await confirmWorkspaceDrafts() && await askSpeleoExit('switch')) {
+          await useProjectStore.getState().loadProject(path, { accessConfirmed: true });
+        }
       } else if (store.project && store.isDirty) {
         ui.openDialog('unsaved-changes', { pendingOpenPath: path });
         handedOff = true;
@@ -500,6 +524,7 @@ export async function routeOpenedFile(
 export async function pickAndRoute(
   filters: Array<{ name: string; extensions: string[] }>,
   errorTitle = 'Open Failed',
+  opts?: { importDoor?: boolean },
 ): Promise<void> {
   let selected: string | string[] | null;
   try {
@@ -525,7 +550,7 @@ export async function pickAndRoute(
   }
 
   if (path) {
-    await routeOpenedFile(path, errorTitle);
+    await routeOpenedFile(path, errorTitle, opts);
   } else {
     clearProjectActionSource();
   }

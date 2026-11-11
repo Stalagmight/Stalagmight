@@ -1,18 +1,18 @@
 //! Per-endpoint traffic instrumentation for the SpeleoDB client (#210, F1).
 //!
-//! Every SpeleoDB HTTP call funnels through [`client::with_retry`](super::client),
-//! the single choke point a new method cannot forget. This module turns each
+//! Every SpeleoDB HTTP call funnels through `client::SdkClient::call`, the
+//! single choke point a new method cannot forget. This module turns each
 //! attempt through that choke point into three no-PII telemetry dimensions -
 //! **count**, **latency**, and **outcome** - so the backend can size the server
-//! load Stalagmight causes and spot a runaway poll/retry loop *before* it reaches
-//! the server (§4.11 F1). The payload never carries a host, project id, email,
+//! load Stalagmight causes and spot excessive requests or retries (§4.11 F1).
+//! The payload never carries a host, project id, email,
 //! token, or file bytes: only the endpoint *kind*, the outcome class, and a
 //! latency bucket.
 //!
 //! Wire shape (following the flat `{name: count}` payload and the `dwell.<state>`
 //! precedent - the wire cannot carry a computed percentile, so latency is a
 //! histogram of bucket counters the backend reconstructs p50/p95 from):
-//! - `speleodb-api.<kind>.<outcome>` - one increment per attempt; the four
+//! - `speleodb-api.<kind>.<outcome>` - one increment per attempt; the five
 //!   outcome counters sum to the call count for that endpoint.
 //! - `speleodb-api.<kind>.latency.<bucket>` - one increment per attempt, in the
 //!   bucket the attempt's wall-clock duration falls into.
@@ -32,7 +32,7 @@ use crate::telemetry::TelemetryCollector;
 /// operation records its outcome through `SdkClient::call`.
 ///
 /// [`Endpoint::ALL`] backs the `every_speleodb_endpoint_has_traffic_events`
-/// registry coverage test: add a variant here and CI fails until its ten event
+/// registry coverage test: add a variant here and CI fails until its eleven event
 /// names are registered - the "a new method cannot forget" guarantee (F1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Endpoint {
@@ -91,16 +91,23 @@ impl Endpoint {
     }
 }
 
-/// The outcome class of a single attempt. The four labels partition every
+/// The outcome class of a single attempt. The five labels partition every
 /// attempt: a completed HTTP exchange is `ok` (2xx/3xx, incl. the benign 304
 /// unchanged), a client/validation status is `client-error` (4xx), a server
-/// status is `server-error` (5xx), and a transport failure (DNS, timeout,
-/// connection reset, mid-body read) is `network-error`.
+/// status is `server-error` (5xx), a reply that does not match the SDK
+/// contract (an undecodable 2xx body, an unknown enum value, an oversized
+/// body) is `parse-error`, and a transport failure (DNS, timeout, connection
+/// reset, TLS, mid-body read) is `network-error`.
+///
+/// `parse-error` is separate from `ok` on purpose (sdk#8): the server answered,
+/// but the app could not use the answer, and counting that as `ok` hid every
+/// contract drift from the traffic metrics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Outcome {
     Ok,
     ClientError,
     ServerError,
+    ParseError,
     NetworkError,
 }
 
@@ -113,8 +120,13 @@ impl Outcome {
             reason = "enumerated only by the registry/metrics coverage tests"
         )
     )]
-    pub(crate) const ALL: &'static [&'static str] =
-        &["ok", "client-error", "server-error", "network-error"];
+    pub(crate) const ALL: &'static [&'static str] = &[
+        "ok",
+        "client-error",
+        "server-error",
+        "parse-error",
+        "network-error",
+    ];
 
     /// Classify a completed HTTP response by status class. A transport failure
     /// never reaches here - it is [`Outcome::NetworkError`] at the call site.
@@ -135,6 +147,7 @@ impl Outcome {
             Outcome::Ok => "ok",
             Outcome::ClientError => "client-error",
             Outcome::ServerError => "server-error",
+            Outcome::ParseError => "parse-error",
             Outcome::NetworkError => "network-error",
         }
     }
@@ -236,11 +249,12 @@ mod tests {
 
     #[test]
     fn outcome_labels_match_the_registry_list() {
-        // The four labels the registry coverage test enumerates, in order.
+        // The five labels the registry coverage test enumerates, in order.
         let labels: Vec<&str> = [
             Outcome::Ok,
             Outcome::ClientError,
             Outcome::ServerError,
+            Outcome::ParseError,
             Outcome::NetworkError,
         ]
         .iter()
@@ -295,9 +309,9 @@ mod telemetry_coverage_tests {
     use crate::telemetry::registry::EVENT_NAMES;
 
     /// Every SpeleoDB endpoint kind (#210, F1) must have its full traffic-event
-    /// set registered: four outcome counters + one counter per latency bucket.
+    /// set registered: five outcome counters + one counter per latency bucket.
     /// Mirrors `every_tile_provider_has_consumption_events` - add an `Endpoint`
-    /// variant and this fails until its ten names land in `EVENT_NAMES`. Also
+    /// variant and this fails until its eleven names land in `EVENT_NAMES`. Also
     /// asserts the reverse: no orphan `speleodb-api.*` name the generator cannot
     /// produce (a typo, or a renamed/removed kind), so the vocabulary can't drift
     /// away from `speleodb::metrics::Endpoint`.

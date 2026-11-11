@@ -25,3 +25,18 @@ export function permissionAtLeast(
   if (!permission) return false;
   return PERMISSION_ORDER[permission] >= PERMISSION_ORDER[min];
 }
+
+/**
+ * Whether "Resume editing" (take the write lock again) can apply to the open
+ * project: signed in, with project access, and at least read-and-write
+ * permission. Whether the lock is actually free is the server's answer - the
+ * start-editing flow reports a contended lock on its own. Shared by the SpeleoDB
+ * workspace and the read-only map pill so the two never disagree.
+ */
+export function canResumeSpeleoEditing(
+  link: { noAccess: boolean; permission: Permission | null } | null | undefined,
+  session: { loggedIn: boolean } | null | undefined,
+): boolean {
+  return !!link && session?.loggedIn === true && !link.noAccess &&
+    permissionAtLeast(link.permission, 'READ_AND_WRITE');
+}

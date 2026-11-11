@@ -46,6 +46,7 @@ mod relationships;
 mod reverse;
 mod stats;
 mod union_find;
+mod uuid_unique;
 
 #[cfg(test)]
 mod anchor_fuzz;
@@ -59,6 +60,10 @@ pub use integrity::{IntegrityViolation, ViolationSeverity};
 pub use merge_topology::MergeTopology;
 pub use reverse::{reverse_shots, shot_run_displacement};
 pub use shots::MIN_SPLIT_CHILD_LENGTH_M;
+pub use uuid_unique::{
+    live_shot_uuid_for_stored, remap_project_json, reminted_shot_uuid, reminted_shot_uuid_avoiding,
+    stored_shot_uuid_matches, ShotUuidRemap, SHOT_UUID_REMINT_NAMESPACE,
+};
 
 /// Relationships that reference a given section (merges, closures, offsets, zero datums).
 /// Used by the frontend to show affected relationships before section deletion.
@@ -276,11 +281,25 @@ pub struct Project {
     /// Station comments keyed by StationRef
     #[serde(
         default,
-        serialize_with = "serialize_station_comments",
-        deserialize_with = "deserialize_station_comments"
+        serialize_with = "serialize_station_texts",
+        deserialize_with = "deserialize_station_texts"
     )]
     #[ts(skip)]
     pub station_comments: HashMap<StationKey, String>,
+    /// Station names: a short free-text identifier per station, such as the
+    /// station number an mNemo dump gave it (a DMP import records it here).
+    /// Not unique - mNemo numbers restart at 0 in every section - so it is
+    /// always shown next to the positional `S:I` id, never instead of it.
+    /// Stored in its own `station_names` table so readers that know only the
+    /// v18 tables (OpenSpeleo's Python `stalagmight_lib`, which SpeleoDB maps
+    /// with - see `station_texts` in the persistence crate) are unaffected.
+    #[serde(
+        default,
+        serialize_with = "serialize_station_texts",
+        deserialize_with = "deserialize_station_texts"
+    )]
+    #[ts(skip)]
+    pub station_names: HashMap<StationKey, String>,
     /// SHA256 hashes of imported DMP files (for duplicate detection)
     #[serde(default)]
     pub imported_file_hashes: Vec<String>,
@@ -493,9 +512,10 @@ pub struct ProjectStats {
     pub penetration_distance: f64,
 }
 
-/// # THE DETERMINISTIC-SERIALIZATION RULE FOR THE THREE HASHMAPS
+/// # THE DETERMINISTIC-SERIALIZATION RULE FOR THE HASHMAPS
 ///
-/// `section_offsets`, `station_offsets` and `station_comments` are `HashMap`s,
+/// `section_offsets`, `station_offsets`, `station_comments` and `station_names`
+/// are `HashMap`s,
 /// and a `HashMap`'s iteration order is a function of its RandomState seed and
 /// its insertion history - NOT of its contents. Emitting them in iteration order
 /// makes the serialized `Project` a function of how the map was built rather
@@ -507,8 +527,8 @@ pub struct ProjectStats {
 /// * the `.stalx` save, so a re-save of an untouched project rewrote permuted
 ///   bytes and re-rolled the save/load fixpoint.
 ///
-/// So every one of the three sorts its keys before it emits them. Ascending by
-/// section id for `section_offsets`; by [`station_key_order`] for the two
+/// So every one of them sorts its keys before it emits them. Ascending by
+/// section id for `section_offsets`; by [`station_key_order`] for the
 /// `StationKey`-keyed maps, whose entries are emitted as a `Vec` of pairs anyway
 /// (serde_json cannot use a struct as an object key). The DESERIALIZE side is
 /// untouched: order was never load-bearing on the way in, and both shapes
@@ -521,7 +541,7 @@ fn serialize_section_offsets<S: serde::Serializer>(
     ordered.serialize(serializer)
 }
 
-/// Total order over [`StationKey`], for the two maps keyed by one. Section
+/// Total order over [`StationKey`], for the maps keyed by one. Section
 /// first, then the anchor variant, then the variant's payload. Distinct keys
 /// never tie - a key IS its section plus its anchor - so this is a total order
 /// on any map's key set, which is what makes the sorted output a function of the
@@ -556,9 +576,10 @@ fn deserialize_station_offsets<'de, D: serde::Deserializer<'de>>(
     Ok(entries.into_iter().collect())
 }
 
-/// Serialize station_comments as a Vec of (StationRef, String) tuples.
-/// Key-ordered - see [`serialize_section_offsets`].
-fn serialize_station_comments<S: serde::Serializer>(
+/// Serialize a station-keyed text map (`station_comments`, `station_names`) as
+/// a Vec of (StationKey, String) tuples. Key-ordered - see
+/// [`serialize_section_offsets`].
+fn serialize_station_texts<S: serde::Serializer>(
     map: &HashMap<StationKey, String>,
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
@@ -567,8 +588,8 @@ fn serialize_station_comments<S: serde::Serializer>(
     entries.serialize(serializer)
 }
 
-/// Deserialize station_comments from a Vec of (StationRef, String) tuples.
-fn deserialize_station_comments<'de, D: serde::Deserializer<'de>>(
+/// Deserialize a station-keyed text map from a Vec of (StationKey, String) tuples.
+fn deserialize_station_texts<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<HashMap<StationKey, String>, D::Error> {
     let entries: Vec<(StationKey, String)> = Vec::deserialize(deserializer)?;
@@ -582,7 +603,7 @@ fn deserialize_station_comments<'de, D: serde::Deserializer<'de>>(
 /// This wrapper forwards every ts-exported field and re-encodes those three to
 /// wire, dropping dangling refs (the same resolution the binary load path's
 /// `ProjectHeaderBinary` does). `#[ts(skip)]` fields on `Project` - the
-/// `StationKey`-keyed `station_offsets`/`station_comments` and the transient
+/// `StationKey`-keyed `station_offsets`/`station_comments`/`station_names` and the transient
 /// caches - are intentionally omitted to match the generated `Project` TS type.
 struct ProjectIpc<'a>(&'a Project);
 
@@ -665,6 +686,7 @@ impl Project {
             section_offsets: HashMap::new(),
             station_offsets: HashMap::new(),
             station_comments: HashMap::new(),
+            station_names: HashMap::new(),
             imported_file_hashes: Vec::new(),
             imported_section_hashes: Vec::new(),
             next_closure_id: 1,
@@ -844,7 +866,7 @@ impl Project {
     /// Re-mint the UUID of any shot that shares a UUID with an earlier shot in
     /// the SAME section, keeping the first occurrence (AfterShot anchors resolve
     /// to the first match via `position()`, so they stay valid). Returns the
-    /// number re-minted. Restores the per-section uniqueness `resolve_key` relies
+    /// number re-minted. Restores the in-section uniqueness `resolve_key` relies
     /// on; the companion detection lives in [`check_structural_integrity`].
     /// Empty UUIDs are left for [`ensure_shot_uuids`].
     pub fn ensure_unique_shot_uuids(&mut self) -> usize {
@@ -1025,7 +1047,7 @@ impl Project {
     /// removing shots, which changes station indices for all subsequent stations.
     ///
     /// Affects: station_merges, loop_closures, zero_datums, station_offsets,
-    /// station_comments - all routed through [`Self::map_station_refs`].
+    /// station_comments, station_names - all routed through [`Self::map_station_refs`].
     /// THE single enumeration of every [`StationKey`]-bearing collection on the
     /// project, for READ access. `check_structural_integrity` and
     /// `reanchor_station_refs` consume this so a newly-added ref-bearing collection
@@ -1047,6 +1069,9 @@ impl Project {
         }
         for k in self.station_comments.keys() {
             f("station comment", k.clone());
+        }
+        for k in self.station_names.keys() {
+            f("station name", k.clone());
         }
     }
 
@@ -1074,6 +1099,8 @@ impl Project {
         self.station_offsets = offsets.into_iter().map(|(k, v)| (f(k), v)).collect();
         let comments = std::mem::take(&mut self.station_comments);
         self.station_comments = comments.into_iter().map(|(k, v)| (f(k), v)).collect();
+        let names = std::mem::take(&mut self.station_names);
+        self.station_names = names.into_iter().map(|(k, v)| (f(k), v)).collect();
     }
 
     fn station_ref_key(station_ref: &StationRef) -> (SectionId, u32) {
@@ -1555,6 +1582,16 @@ impl Project {
             .find(|(k, _)| self.resolve_key(k) == Some(sr))
             .map(|(_, v)| v)
     }
+
+    /// Station name for a positional ref; the `station_names` twin of
+    /// [`Self::station_comment_for_ref`].
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn station_name_for_ref(&self, sr: StationRef) -> Option<&String> {
+        self.station_names
+            .iter()
+            .find(|(k, _)| self.resolve_key(k) == Some(sr))
+            .map(|(_, v)| v)
+    }
 }
 
 #[cfg(test)]
@@ -1567,3 +1604,11 @@ impl Project {
     clippy::print_stdout
 )]
 mod tests;
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+mod station_names_tests;
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+mod uuid_unique_tests;

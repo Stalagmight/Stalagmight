@@ -88,7 +88,12 @@ pub const STATION_UINT_STRIDE: usize = STATION_UINT_FIELDS * 4;
 /// per-section struct that the decoder walks positionally, and a frontend that
 /// does not know it exists would render every corrected section uncorrected
 /// while believing it had the whole project.
-pub const BINARY_FORMAT_VERSION: u32 = 5;
+///
+/// Bumped 5 → 6 for station names: the envelope gained the sparse
+/// `station_names` list. A map field a stale frontend would ignore, but it
+/// would then show every imported mNemo station number as missing - the same
+/// "believes it has the whole project" case as 4 → 5.
+pub const BINARY_FORMAT_VERSION: u32 = 6;
 
 #[derive(Serialize)]
 pub struct LoadProjectFullBinaryResult {
@@ -131,6 +136,10 @@ pub struct LoadProjectFullBinaryResult {
     pub station_closures_with: Vec<(u32, Vec<ClosureRef>)>,
     /// Sparse: stations with non-empty `comment`.
     pub station_comments: Vec<(u32, String)>,
+    /// Sparse: stations with a non-empty `name` (e.g. an mNemo station number).
+    /// Dense on a DMP-imported project, but still keyed by station so the
+    /// common unnamed station costs nothing.
+    pub station_names: Vec<(u32, String)>,
 
     pub stats: ProjectStats,
     pub warnings: Vec<ProjectWarning>,
@@ -307,6 +316,7 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
     let mut station_merged_with: Vec<(u32, Vec<StationRef>)> = Vec::new();
     let mut station_closures_with: Vec<(u32, Vec<ClosureRef>)> = Vec::new();
     let mut station_comments: Vec<(u32, String)> = Vec::new();
+    let mut station_names: Vec<(u32, String)> = Vec::new();
 
     for (idx, station) in stations.into_iter().enumerate() {
         let idx_u32 = idx as u32;
@@ -333,6 +343,11 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         if let Some(comment) = station.comment {
             if !comment.is_empty() {
                 station_comments.push((idx_u32, comment));
+            }
+        }
+        if let Some(name) = station.name {
+            if !name.is_empty() {
+                station_names.push((idx_u32, name));
             }
         }
     }
@@ -411,6 +426,7 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         station_merged_with,
         station_closures_with,
         station_comments,
+        station_names,
         stats,
         warnings,
         display_settings,

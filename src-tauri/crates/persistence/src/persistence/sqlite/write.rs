@@ -4,6 +4,7 @@ use rusqlite::params;
 
 use crate::models::Project;
 
+use super::station_texts::{StationTextTable, CREATE_STATION_NAMES};
 use super::{Database, SCHEMA_VERSION};
 
 impl Database {
@@ -23,6 +24,13 @@ impl Database {
             }
         };
 
+        // `station_names` carries no schema bump (see `station_texts`), so a v18
+        // file opened through `ensure_schema_version`'s fast path - the live
+        // connection a save can reach, e.g. the SpeleoDB rename path - may not
+        // have it yet. Create it here, inside the transaction, the way the
+        // `closure_id` column is ensured below, so the DELETE cannot fail.
+        tx.execute(CREATE_STATION_NAMES, [])?;
+
         // Clear existing data (delete children before parents for foreign key compliance)
         // NOTE: speleo_link is intentionally NOT cleared here (see save_speleo_link
         // / D-B13c). save_project wipes-and-rewrites every table it owns; if
@@ -38,6 +46,7 @@ impl Database {
             DELETE FROM section_offsets;
             DELETE FROM station_offsets;
             DELETE FROM station_comments;
+            DELETE FROM station_names;
             DELETE FROM loop_closures;
             DELETE FROM imported_file_hashes;
             DELETE FROM imported_section_hashes;
@@ -216,19 +225,23 @@ impl Database {
             )?;
         }
 
-        // Save station comments
-        for (key, comment) in &project.station_comments {
-            let Some(sr) = project.resolve_key(key) else {
-                tracing::warn!(
-                    purpose = "skip orphan station comment on save",
-                    "Dropping a station comment whose station no longer resolves"
-                );
-                continue;
-            };
-            tx.execute(
-                "INSERT INTO station_comments (section_id, station_index, comment) VALUES (?1, ?2, ?3)",
-                params![sr.section_id, sr.station_index, comment],
-            )?;
+        // Save station comments and names
+        for (table, texts) in [
+            (StationTextTable::Comments, &project.station_comments),
+            (StationTextTable::Names, &project.station_names),
+        ] {
+            let mut insert = tx.prepare_cached(table.insert_sql())?;
+            for (key, text) in texts {
+                let Some(sr) = project.resolve_key(key) else {
+                    tracing::warn!(
+                        purpose = "skip orphan station text on save",
+                        table = table.name(),
+                        "Dropping a station comment or name whose station no longer resolves"
+                    );
+                    continue;
+                };
+                insert.execute(params![sr.section_id, sr.station_index, text])?;
+            }
         }
 
         // Save loop closures (with closure_id column)

@@ -13,7 +13,7 @@
  * picks "Keep the local copy", and the old code then overwrote the live link with a
  * pessimistic read-only seed which this branch preserved verbatim - a read-only
  * survey UI for a project we hold the lock on, plus a disarmed quit guard, healing
- * only on the next status poll (Survey mode only, 30 s to a configurable 24 h).
+ * only on a subsequent status refresh.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -36,8 +36,7 @@ const EDITING_LINK: SpeleoLinkState = {
   lockedByOther: false,
   hasUnpushedEdits: true,
   unwound: false,
-  forceEditing: false,
-  forceEditAllowed: false,
+
   undoMode: 'full',
   remoteState: 'up_to_date',
   noAccess: false,
@@ -114,7 +113,7 @@ describe('loadProject ALREADY_OPEN re-resolves the SpeleoDB gate (#270)', () => 
    * ONLY through the unawaited, error-swallowing `refreshLinkStatus`, unlike every
    * other rendered-project path. Left at `unknown` - read-only under the
    * fail-closed gate - a failed status call renders the project permanently
-   * read-only with no status button to act from (it arms its recovery poll on
+   * read-only with no status button to act from (it requires
    * `link !== null`). Seeding pessimistically gives the user a way out on screen;
    * the status reply then resolves it either way.
    */
@@ -126,7 +125,7 @@ describe('loadProject ALREADY_OPEN re-resolves the SpeleoDB gate (#270)', () => 
 
     expect(useSpeleoStore.getState().projectLinkKind).toBe('remote');
     expect(useSpeleoStore.getState().link?.editState).toBe('read-only');
-    // `SpeleoStatusButton` arms its recovery poll on `link !== null`.
+    // The SpeleoDB workspace requires `link !== null` to offer manual recovery.
     expect(useSpeleoStore.getState().link).not.toBeNull();
   });
 

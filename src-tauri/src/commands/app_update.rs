@@ -230,6 +230,33 @@ pub struct AppUpdateProgress {
     pub total: Option<u64>,
 }
 
+/// Why [`install_app_update_and_restart`] did not restart.
+///
+/// Typed rather than a bare string because the two need different answers from
+/// the frontend: a transfer in flight keeps the download (Restart works again once
+/// the transfer has finished), while any other failure drops the banner back to
+/// Download, since the bytes may be what failed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AppUpdateInstallError {
+    /// A SpeleoDB transfer the user started is still running and the user did
+    /// not choose "Quit now" over it. Nothing was installed; the download is kept.
+    TransferInFlight { message: String },
+    /// Not armed, nothing downloaded, or the install itself failed.
+    Failed { message: String },
+}
+
+impl From<String> for AppUpdateInstallError {
+    fn from(message: String) -> Self {
+        Self::Failed { message }
+    }
+}
+
+/// The message of [`AppUpdateInstallError::TransferInFlight`] (logs, and a
+/// caller that shows the backend text as is; the app shows its own translation).
+const RESTART_WAITS_FOR_TRANSFER: &str = "Stalagmight did not restart to update: a SpeleoDB \
+     transfer is still running. Restart again once it has finished.";
+
 /// Where in the check -> download -> install cycle we are.
 ///
 /// The [`Update`] cannot be rebuilt from anything the frontend holds (it
@@ -1006,20 +1033,96 @@ pub fn discard_app_update_download(update_state: State<AppUpdateState>) -> Resul
 ///
 /// On failure the bytes are put back, so the restart can be retried - through
 /// the guarded path, which re-arms - without downloading again.
+///
+/// Releases a held SpeleoDB write lock FIRST, bounded by the same deadline the
+/// ordinary quit uses. The Windows installer's own exit never raises
+/// `RunEvent::ExitRequested`, which is where a quit releases (nor does an
+/// `app.restart()` on the main thread; the one here runs off it and does, but
+/// only after the install), so without this the lock was simply never handed
+/// back before the install. The release keeps the
+/// lock over un-pushed edits (the invariant in `speleodb_lock_release`), which is
+/// the restart's documented "keep the lock and the local changes" answer; the
+/// frontend has already saved and closed such a project with the lock kept.
+///
+/// Never cuts a SpeleoDB transfer the user started (lock#6): Tauri cannot prevent
+/// a restart's exit, so this refuses with
+/// [`AppUpdateInstallError::TransferInFlight`] while one is in flight, unless the
+/// user chose "Quit now" over it (`exit_wait::arm_forced_exit`). See
+/// [`install_unless_a_transfer_runs`] for where the check runs. The frontend's
+/// quit gate normally waited for the transfer already; this does not rely on it.
+///
+/// Async, the work on a blocking thread: the bounded release can take up to
+/// [`crate::EXIT_LOCK_RELEASE_TIMEOUT`], and a sync command runs on the main
+/// thread, which would freeze the UI for it.
 #[tauri::command]
-pub fn install_app_update_and_restart(
-    app: AppHandle,
-    update_state: State<'_, AppUpdateState>,
-) -> Result<(), String> {
-    let (generation, update, bytes) = installable_update(&update_state)?;
+pub async fn install_app_update_and_restart(app: AppHandle) -> Result<(), AppUpdateInstallError> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), AppUpdateInstallError> {
+        let update_state = app.state::<AppUpdateState>();
+        let taken = installable_update(&update_state)?;
+        let exit_wait = app.try_state::<super::exit_wait::ExitWait>();
+        install_unless_a_transfer_runs(
+            &update_state,
+            taken,
+            || {
+                exit_wait
+                    .as_ref()
+                    .is_some_and(|wait| wait.restart_blocked())
+            },
+            || {
+                if let Some(state) = app.try_state::<AppState>() {
+                    state.speleodb_release_held_lock_bounded(crate::EXIT_LOCK_RELEASE_TIMEOUT);
+                }
+            },
+            |update: &Update, bytes: &[u8]| update.install(bytes).map_err(|e| e.to_string()),
+        )?;
+        // Off the main thread, this raises `ExitRequested` with the restart code,
+        // which the exit hook lets through (`exit_wait`).
+        app.restart();
+    })
+    .await
+    .map_err(|e| AppUpdateInstallError::from(format!("Update install failed: {e}")))?
+}
 
-    if let Err(e) = update.install(&bytes) {
-        // Filed under the generation they were DOWNLOADED for, not whatever is
-        // current now - see `restore_bytes_if_current`.
-        restore_bytes_if_current(&update_state, generation, bytes)?;
-        return Err(format!("Update install failed: {e}"));
+/// [`install_app_update_and_restart`] up to the restart, generic over the
+/// installer so the order is testable without a live updater plugin.
+///
+/// `transfer_blocks` is asked twice: before the release, so a transfer in flight
+/// is refused at once instead of the release queuing behind it, and again right
+/// before the install, so one that started while the release ran is not cut
+/// either. A refusal (or a failed install) puts the bytes back
+/// ([`restore_bytes_if_current`]), so the restart can be retried without
+/// downloading again.
+fn install_unless_a_transfer_runs<U>(
+    update_state: &AppUpdateState,
+    (generation, update, bytes): (u64, U, Vec<u8>),
+    transfer_blocks: impl Fn() -> bool,
+    release: impl FnOnce(),
+    install: impl FnOnce(&U, &[u8]) -> Result<(), String>,
+) -> Result<(), AppUpdateInstallError> {
+    // Filed under the generation they were DOWNLOADED for, not whatever is
+    // current now - see `restore_bytes_if_current`.
+    let refuse = |bytes: Vec<u8>| -> Result<(), AppUpdateInstallError> {
+        tracing::info!(
+            purpose = "never cut a SpeleoDB transfer the user started",
+            "update restart refused: a SpeleoDB transfer is in flight"
+        );
+        restore_bytes_if_current(update_state, generation, bytes)?;
+        Err(AppUpdateInstallError::TransferInFlight {
+            message: RESTART_WAITS_FOR_TRANSFER.to_owned(),
+        })
+    };
+    if transfer_blocks() {
+        return refuse(bytes);
     }
-    app.restart();
+    release();
+    if transfer_blocks() {
+        return refuse(bytes);
+    }
+    if let Err(e) = install(&update, &bytes) {
+        restore_bytes_if_current(update_state, generation, bytes)?;
+        return Err(format!("Update install failed: {e}").into());
+    }
+    Ok(())
 }
 
 /// Take a verified download for the exit-time install, if one is waiting for
@@ -1088,6 +1191,136 @@ pub fn install_downloaded_update_on_exit(app: &AppHandle) {
 #[expect(clippy::expect_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_update_restart_releases_the_speleodb_lock_before_installing() {
+        // `app.restart()` and the Windows installer's own exit both skip
+        // `RunEvent::ExitRequested`, the only other place a quit releases. A release
+        // placed after `update.install` never runs on Windows (the installer has
+        // already exited the process), so ORDER is the contract, not presence.
+        let src = include_str!("app_update.rs");
+        let start = src
+            .find("pub async fn install_app_update_and_restart(")
+            .expect("the install command is present");
+        let body = &src[start..];
+        let body = &body[..body.find("\n}\n").expect("fn body terminates")];
+        let release = body
+            .find("speleodb_release_held_lock_bounded(")
+            .expect("the install path releases a held lock");
+        let install = body
+            .find("update.install(bytes)")
+            .expect("the install path installs");
+        assert!(release < install, "the release must run BEFORE the install");
+        assert!(
+            body.contains("EXIT_LOCK_RELEASE_TIMEOUT"),
+            "bounded by the same deadline the quit path uses"
+        );
+        // The command hands the two steps to `install_unless_a_transfer_runs` as
+        // its `release` and `install`; that it calls them in this order is pinned
+        // behaviourally below.
+        assert!(
+            body.contains("install_unless_a_transfer_runs("),
+            "the install path runs through the transfer gate"
+        );
+    }
+
+    /// What `install_unless_a_transfer_runs` did, in order.
+    fn attempt(
+        state: &AppUpdateState,
+        blocked: &[bool],
+        install: Result<(), String>,
+    ) -> (Result<(), AppUpdateInstallError>, Vec<&'static str>) {
+        let steps = std::cell::RefCell::new(Vec::new());
+        let asks = std::cell::Cell::new(0);
+        let result = install_unless_a_transfer_runs(
+            state,
+            (1, "synthetic update", vec![9u8; 4]),
+            || {
+                let i = asks.get();
+                asks.set(i + 1);
+                steps.borrow_mut().push("check");
+                blocked.get(i).copied().unwrap_or(false)
+            },
+            || steps.borrow_mut().push("release"),
+            |update: &&str, bytes: &[u8]| {
+                assert_eq!((*update, bytes), ("synthetic update", &[9u8; 4][..]));
+                steps.borrow_mut().push("install");
+                install
+            },
+        );
+        (result, steps.into_inner())
+    }
+
+    fn kept_bytes(state: &AppUpdateState) -> Option<(u64, Vec<u8>)> {
+        state
+            .with(|pending| pending.bytes.clone())
+            .expect("lockable")
+    }
+
+    /// lock#6: Tauri ignores `prevent_exit` for a restart, so the install command
+    /// itself refuses while a SpeleoDB transfer the user started is in flight: no
+    /// release queued behind it, no install, and the download is kept for a
+    /// Restart once the transfer has finished.
+    #[test]
+    fn a_transfer_in_flight_refuses_the_restart_and_keeps_the_download() {
+        let state = AppUpdateState::default();
+        state
+            .with(|pending| pending.generation = 1)
+            .expect("lockable");
+        let (result, steps) = attempt(&state, &[true], Ok(()));
+        assert!(
+            matches!(result, Err(AppUpdateInstallError::TransferInFlight { .. })),
+            "{result:?}"
+        );
+        assert_eq!(steps, ["check"], "nothing released, nothing installed");
+        assert_eq!(kept_bytes(&state), Some((1, vec![9u8; 4])));
+    }
+
+    /// A transfer that starts while the release runs is not cut either: the gate
+    /// is asked again right before the install.
+    #[test]
+    fn a_transfer_started_during_the_release_still_refuses_the_install() {
+        let state = AppUpdateState::default();
+        state
+            .with(|pending| pending.generation = 1)
+            .expect("lockable");
+        let (result, steps) = attempt(&state, &[false, true], Ok(()));
+        assert!(
+            matches!(result, Err(AppUpdateInstallError::TransferInFlight { .. })),
+            "{result:?}"
+        );
+        assert_eq!(steps, ["check", "release", "check"]);
+        assert_eq!(kept_bytes(&state), Some((1, vec![9u8; 4])));
+    }
+
+    /// With nothing in flight (or Quit now armed, which `restart_blocked` answers
+    /// false for), the lock is released and only then the update installed.
+    #[test]
+    fn with_nothing_in_flight_the_release_runs_before_the_install() {
+        let state = AppUpdateState::default();
+        let (result, steps) = attempt(&state, &[], Ok(()));
+        assert_eq!(result, Ok(()));
+        assert_eq!(steps, ["check", "release", "check", "install"]);
+    }
+
+    /// A failed install is a plain failure (the banner re-offers Download), with
+    /// the bytes put back while the offer stands.
+    #[test]
+    fn a_failed_install_is_not_reported_as_a_transfer_refusal() {
+        let state = AppUpdateState::default();
+        state
+            .with(|pending| pending.generation = 1)
+            .expect("lockable");
+        let (result, _) = attempt(&state, &[], Err("synthetic disk full".to_owned()));
+        assert!(
+            matches!(
+                &result,
+                Err(AppUpdateInstallError::Failed { message }) if message.contains("synthetic disk full")
+            ),
+            "expected a plain failure, got {result:?}"
+        );
+        assert_eq!(kept_bytes(&state), Some((1, vec![9u8; 4])));
+    }
 
     /// The endpoint override is process-global, so the tests that touch it take
     /// this first. Without it they race each other and read one another's value.

@@ -10,6 +10,7 @@
  */
 import type { AzimuthReference } from '../types/ipc/AzimuthReference';
 import type { ImportPlacement, ImportSectionConfig } from '../types/commands';
+import type { EditableShot } from '../components/common/editableShot';
 import { isEmittedShot } from '../components/common/emittedShots';
 import type { ShotData } from '../types/project';
 import type { ZeroDatumConfigResult } from '../components/Dialogs/ZeroDatumConfigDialog';
@@ -40,6 +41,36 @@ export const DMP_AZIMUTH_REFERENCE: AzimuthReference = {
   correction: 0,
   source: 'unknown',
 };
+
+/**
+ * The station names (mNemo station numbers) of a section, from the rows that
+ * will actually be sent, in that order.
+ *
+ * Station `k + 1` is the end of emitted row `k`, so it takes that row's
+ * `mnemoStation`. The START of a row is the end of the row before it, so it
+ * already has that row's number or, after a row the user added, none: the
+ * same as an in-app edit, where deleting an interior shot removes only its END
+ * station and an inserted shot adds an unnamed one. The one station no earlier
+ * DMP row can name is the start of the FIRST one (the section start, or the
+ * station after rows the user prepended); it is `mnemoStation - 1`. So a
+ * section whose first m shots an overlap trim removed starts at mNemo `m`, not
+ * 0, and the trimmed numbers are gone with their stations.
+ *
+ * Indices are in the emitted (pre-reverse) order: the backend mirrors them for
+ * a reversed import, exactly like `station_comments`.
+ */
+export function stationNamesForEmittedShots(
+  emitted: readonly EditableShot[],
+): Array<[number, string]> {
+  const names: Array<[number, string]> = [];
+  emitted.forEach((shot, k) => {
+    const end = shot.mnemoStation;
+    if (end === undefined) return;
+    if (names.length === 0 && end > 0) names.push([k, String(end - 1)]);
+    names.push([k + 1, String(end)]);
+  });
+  return names;
+}
 
 /**
  * Rewrite a placement's indices for reverse, on both sides of a connection.
@@ -100,9 +131,8 @@ export function buildZeroDatumSectionConfig(config: ZeroDatumConfigResult): Impo
   // completeness gates let a wholly blank row through on purpose - it is an
   // invitation, not an obligation - which is only safe if it is dropped HERE.
   // Otherwise it serializes as NaN length, depths and azimuths.
-  const backendShots: ShotData[] = shots
-    .filter(isEmittedShot)
-    .map(editableShotToShotData);
+  const emitted = shots.filter(isEmittedShot);
+  const backendShots: ShotData[] = emitted.map(editableShotToShotData);
   const reverse = metadata.reverse ?? false;
 
   const placement: ImportPlacement = {
@@ -122,6 +152,7 @@ export function buildZeroDatumSectionConfig(config: ZeroDatumConfigResult): Impo
     shots: backendShots,
     placement: mirrorPlacementForReverse(placement, reverse, backendShots.length, null),
     station_comments: [],
+    station_names: stationNamesForEmittedShots(emitted),
     reverse,
     azimuth_reference: DMP_AZIMUTH_REFERENCE,
   };

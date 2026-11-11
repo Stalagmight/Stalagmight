@@ -5,6 +5,7 @@ use std::path::Path;
 use super::speleodb_cache::{
     drop_inherited_undo, preserved_display_settings, InheritedUndo, LocalEditsPolicy,
 };
+use super::speleodb_sidecars::SetAsideSidecars;
 use super::AppState;
 use crate::persistence::Database;
 use crate::speleodb::SpeleoDbError;
@@ -142,7 +143,7 @@ impl AppState {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .take();
         }
-        if let Err(error) = std::fs::rename(&staged, dest) {
+        let reopen_original = || -> Result<(), SpeleoDbError> {
             if replaces_open {
                 let original_database = Database::open_existing(dest).map_err(|e| SpeleoDbError::Io(format!("cache replacement failed and its original database could not be reopened: {e}")))?;
                 *self
@@ -150,8 +151,24 @@ impl AppState {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(original_database);
             }
+            Ok(())
+        };
+        // No connection of ours is left on `dest` (closed above, or it was never
+        // the open project), so whatever sidecar sits beside it is the outgoing
+        // file's and must not be replayed into the incoming one.
+        let sidecars = match SetAsideSidecars::take(dest) {
+            Ok(sidecars) => sidecars,
+            Err(error) => {
+                reopen_original()?;
+                return Err(error);
+            }
+        };
+        if let Err(error) = std::fs::rename(&staged, dest) {
+            sidecars.restore();
+            reopen_original()?;
             return Err(SpeleoDbError::Io(error.to_string()));
         }
+        sidecars.discard();
         if replaces_open {
             self.close_open_project_locked(&mut project);
         } else {

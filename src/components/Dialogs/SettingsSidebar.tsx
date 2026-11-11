@@ -211,9 +211,8 @@ export function SettingsSidebar({
                 data-testid={`settings-tab-${category.id}`}
                 className={`
                   relative px-4 py-2 text-sm cursor-pointer select-none
-                  transition-colors outline-none
+                  transition-colors outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent
                   ${isActive ? 'bg-accent-20 text-accent font-medium' : 'text-text-primary hover:bg-accent-10'}
-                  ${isFocused ? 'ring-2 ring-inset ring-accent' : ''}
                 `}
                 onClick={() => handleClick(category.id, index)}
                 onKeyDown={(e) => handleKeyDown(e, index)}

@@ -56,6 +56,9 @@ family (`command_shot.rs`, `command_station.rs`, `command_move.rs`, ...) under
   - `station_comments` - free text keyed by `StationKey`. A station is implicit (the
     boundary between consecutive shots), so it has no record of its own to hang a
     comment on.
+  - `station_names` - a station's name (a DMP import's mNemo station number), keyed
+    and handled exactly like `station_comments`, so it stays on its physical station
+    when shots are inserted, deleted or reversed.
   - `validation` - per-project thresholds, stored in the `.stalx` so they travel with the
     file between collaborators instead of following whoever opens it.
   - `imported_file_hashes` / `imported_section_hashes` - re-import de-duplication.
@@ -87,8 +90,9 @@ blocked through `useEditingBlocked()` / `isEditingBlockedNow()`
 (`src/hooks/useEditingBlocked.ts`) and nothing else - `pnpm lint:readonly-gates` bans the
 raw composition, because writing it inline as `useA() || useB()` short-circuits the second
 store hook and violates the Rules of Hooks. Note the asymmetry: the map-read-only term has
-no backend backstop - a local project keeps `edit_enabled` true in Rust whatever mode the
-UI is in - so a missed gate is a real bug, not a cosmetic one.
+no backend backstop - a local project is always editable in Rust whatever mode the UI is
+in (the backend gate, `edit_enabled()`, is derived from the SpeleoDB lock claim and only
+ever closes a SpeleoDB project) - so a missed gate is a real bug, not a cosmetic one.
 -> [app-modes.md](app-modes.md)
 
 **Gas and dive planning.** `Project::compute_gas_reach_field`

@@ -45,6 +45,7 @@ export class FakeGl {
   readonly LINK_STATUS = 0x8b82;
   readonly ARRAY_BUFFER = 0x8892;
   readonly ELEMENT_ARRAY_BUFFER = 0x8893;
+  readonly COPY_WRITE_BUFFER = 0x8f37;
   readonly STATIC_DRAW = 0x88e4;
   readonly FLOAT = 0x1406;
   readonly UNSIGNED_BYTE = 0x1401;
@@ -206,6 +207,13 @@ export class FakeGl {
 
   bufferData(_target: number, _data: unknown, _usage: number): void {
     this.bump('bufferData');
+  }
+
+  /** Every `bufferSubData` call: the target it wrote through and the bytes. */
+  readonly subDataCalls: { target: number; offset: number; data: unknown }[] = [];
+  bufferSubData(target: number, offset: number, data: unknown): void {
+    this.bump('bufferSubData');
+    this.subDataCalls.push({ target, offset, data });
   }
 
   deleteBuffer(_buf: unknown): void {

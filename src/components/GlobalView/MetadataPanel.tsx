@@ -421,6 +421,7 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
             {/* Actions */}
             <div className="p-3 border-t border-border space-y-2">
               <Button
+                variant="primary"
                 onClick={handleOpenProject}
                 className="w-full"
                 data-testid="metadata-open-button"

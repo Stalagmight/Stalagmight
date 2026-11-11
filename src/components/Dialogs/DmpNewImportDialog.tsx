@@ -28,6 +28,7 @@ import {
   buildZeroDatumSectionConfig,
   DMP_AZIMUTH_REFERENCE,
   finalizePlacementForReverse,
+  stationNamesForEmittedShots,
 } from '../../utils/importSectionConfig';
 import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
 import { useProjectStore, projectSwitched } from '../../store/projectStore';
@@ -490,18 +491,21 @@ export function buildBatchImport(
 
       const edits = sectionEdits?.get(idx);
 
-      // Use edited shots if available, otherwise fall back to DMP data
+      // Use edited shots if available, otherwise fall back to DMP data. The
+      // emitted rows are kept as well as converted: their mNemo station numbers
+      // become the section's station names.
+      let emittedShots: EditableShot[];
       let backendShots: ShotData[];
       if (edits) {
         const deletedCount = edits.shots.filter(s => s.isDeleted).length;
-        backendShots = edits.shots
+        emittedShots = edits.shots
           // `!isBlankNewShot` as well: the completeness gate deliberately lets a
           // row added and left wholly blank through (it is an invitation, not an
           // obligation), which is only safe if every payload path drops it. The
           // zero-datum and segment paths do; this one did not, so a row typed in
           // and then cleared arrived as NaN length, depths and azimuths.
-          .filter(isEmittedShot)
-          .map(editableShotToShotData);
+          .filter(isEmittedShot);
+        backendShots = emittedShots.map(editableShotToShotData);
         if (deletedCount > 0) {
           debugLog(
             `[buildBatchImport] Section ${idx} "${section.name}": ${edits.shots.length} total shots, ${deletedCount} deleted, ${backendShots.length} emitted`,
@@ -535,8 +539,8 @@ export function buildBatchImport(
           }
         }
       } else {
-        const editableShots = convertToEditableShots(section.shots);
-        backendShots = editableShots.map(editableShotToShotData);
+        emittedShots = convertToEditableShots(section.shots);
+        backendShots = emittedShots.map(editableShotToShotData);
         debugLog(`[buildBatchImport] Section ${idx} "${section.name}": no edits, using ${backendShots.length} DMP shots`);
       }
       if (backendShots.length === 0) {
@@ -719,6 +723,7 @@ export function buildBatchImport(
         shots: backendShots,
         placement: finalPlacement,
         station_comments: [],
+        station_names: stationNamesForEmittedShots(emittedShots),
         reverse: reverseValue,
         // The mNemo measures magnetic; nothing in the file declares a
         // declination (#438).

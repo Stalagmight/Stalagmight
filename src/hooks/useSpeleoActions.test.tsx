@@ -1,3 +1,4 @@
+import { useSpeleoReadOnlyNotice } from '../utils/autoAcquireSpeleoLock';
 /**
  * Unit test - the SpeleoDB push/unlock verbs flush the survey to disk so the
  * projectStore's `isDirty` flag clears immediately.
@@ -33,14 +34,13 @@ beforeEach(() => {
   saveProjectMock = vi.fn(async () => ({ success: true }));
   // A georeferenced zero datum keeps noteNoAnchorIfNeeded quiet on the push paths.
   useProjectStore.setState({
-    project: { zero_datums: [{}] } as never,
+    project: { file_path: '/remote.stalx', zero_datums: [{}] } as never,
     saveProject: saveProjectMock,
   });
   useSpeleoStore.setState({
     busy: false,
     applyDone: vi.fn(),
     applyPush: vi.fn(),
-    bumpPoll: vi.fn(),
     clearSession: vi.fn(),
     raiseNoAnchorBanner: vi.fn(),
   });
@@ -220,8 +220,7 @@ describe('useSpeleoActions - the release toast reflects whether anything was upl
         lockedByOther: false,
         hasUnpushedEdits,
         unwound: false,
-        forceEditing: false,
-        forceEditAllowed: false,
+
         undoMode: 'full',
         remoteState: 'up_to_date',
         noAccess: false,
@@ -348,16 +347,16 @@ describe('useSpeleoActions - fast-forward resets the on-screen tree (#218)', () 
     const loadProject = vi.fn(async () => ({ success: true }));
     const refreshProjectState = vi.fn(async () => {});
     const refreshLinkStatus = vi.fn(async () => {});
-    useProjectStore.setState({ loadProject, refreshProjectState, checkProjectIntegrity: vi.fn(async () => []) });
-    useSpeleoStore.setState({ applyUpdate: vi.fn(), refreshLinkStatus });
-    invokeIpcMock.mockResolvedValue({ kind: 'fast_forwarded', local_path: '/x.stalx' });
+    useProjectStore.setState({ isDirty: false, loadProject, refreshProjectState, checkProjectIntegrity: vi.fn(async () => []) });
+    useSpeleoStore.setState({ link: { hasUnpushedEdits: false } as never, applyUpdate: vi.fn(), refreshLinkStatus });
+    invokeIpcMock.mockImplementation(async (cmd) => cmd === 'speleodb_project_access_at' ? { release_context: {} } : { kind: 'fast_forwarded', local_path: '/x.stalx' });
     const { result } = renderHook(() => useSpeleoActions());
 
     await act(async () => {
       await result.current.update();
     });
 
-    expect(loadProject).toHaveBeenCalledWith('/x.stalx');
+    expect(loadProject).toHaveBeenCalledWith('/x.stalx', { acquireLock: false });
     expect(refreshProjectState).toHaveBeenCalled();
     expect(refreshLinkStatus).toHaveBeenCalled();
   });
@@ -377,7 +376,7 @@ describe('useSpeleoActions - fast-forward resets the on-screen tree (#218)', () 
       await result.current.startEditing();
     });
 
-    expect(loadProject).toHaveBeenCalledWith('/y.stalx');
+    expect(loadProject).toHaveBeenCalledWith('/y.stalx', { acquireLock: false });
     expect(refreshProjectState).toHaveBeenCalled();
     expect(refreshLinkStatus).toHaveBeenCalled();
   });
@@ -417,9 +416,9 @@ describe('useSpeleoActions - fast-forward resets the on-screen tree (#218)', () 
     const loadProject = vi.fn(async () => ({ success: false, superseded: true }));
     const refreshProjectState = vi.fn(async () => {});
     const refreshLinkStatus = vi.fn(async () => {});
-    useProjectStore.setState({ loadProject, refreshProjectState, checkProjectIntegrity: vi.fn(async () => []) });
-    useSpeleoStore.setState({ applyUpdate: vi.fn(), refreshLinkStatus });
-    invokeIpcMock.mockResolvedValue({ kind: 'fast_forwarded', local_path: '/x.stalx' });
+    useProjectStore.setState({ isDirty: false, loadProject, refreshProjectState, checkProjectIntegrity: vi.fn(async () => []) });
+    useSpeleoStore.setState({ link: { hasUnpushedEdits: false } as never, applyUpdate: vi.fn(), refreshLinkStatus });
+    invokeIpcMock.mockImplementation(async (cmd) => cmd === 'speleodb_project_access_at' ? { release_context: {} } : { kind: 'fast_forwarded', local_path: '/x.stalx' });
     const { result } = renderHook(() => useSpeleoActions());
 
     await act(async () => {
@@ -528,11 +527,7 @@ describe('useSpeleoActions - discard routes every StartEditingResult (#303)', ()
 
     expect(outcome).toBe('discarded_without_lock');
     expect(applyStartEditing).toHaveBeenCalledWith(locked);
-    expect(useUIStore.getState().showToast).toHaveBeenCalledWith(
-      expect.any(String),
-      'speleodb-locked-by',
-      'warning',
-    );
+    expect(useSpeleoReadOnlyNotice.getState().notice?.message).toContain('other@example.com');
   });
 
   it('applies divergence and reloads a fast-forwarded result', async () => {
@@ -548,7 +543,7 @@ describe('useSpeleoActions - discard routes every StartEditingResult (#303)', ()
 
     expect(outcome).toBe('editing');
     expect(applyStartEditing).toHaveBeenCalledWith(fastForwarded);
-    expect(loadProject).toHaveBeenCalledWith('/tip.stalx');
+    expect(loadProject).toHaveBeenCalledWith('/tip.stalx', { acquireLock: false });
 
     const divergence = { kind: 'divergence_needed' } as const;
     invokeIpcMock.mockResolvedValueOnce(divergence);
@@ -775,8 +770,7 @@ describe('useSpeleoActions - pushing an unwound copy is confirmed first (#303)',
         lockedByOther: false,
         hasUnpushedEdits: true,
         unwound: unwoundNotEdited,
-        forceEditing: false,
-        forceEditAllowed: false,
+
         undoMode: 'full',
         remoteState: 'up_to_date',
         noAccess: false,
@@ -937,4 +931,39 @@ it('ignores a successful upload response after the project changes', async () =>
   await act(async () => { finish({ kind: 'pushed' }); outcome = await operation; });
   expect(outcome).toBeNull();
   expect(saveProjectMock).not.toHaveBeenCalled();
+});
+it('manual refresh waits for fresh lock and permission status even when the revision is current', async () => {
+  let finishStatus!: () => void;
+  const refreshLinkStatus = vi.fn(() => new Promise<void>((resolve) => { finishStatus = resolve; }));
+  useProjectStore.setState({ isDirty: false });
+  useSpeleoStore.setState({ link: { hasUnpushedEdits: false } as never, applyUpdate: vi.fn(), refreshLinkStatus });
+  invokeIpcMock.mockImplementation(async (command) => command === 'speleodb_project_access_at' ? { release_context: {} } : { kind: 'up_to_date' });
+  const { result } = renderHook(() => useSpeleoActions());
+  let request!: Promise<void>;
+  await act(async () => { request = result.current.update(); });
+  expect(refreshLinkStatus).toHaveBeenCalledOnce();
+  expect(useSpeleoStore.getState().busy).toBe(true);
+  await act(async () => {
+    finishStatus();
+    await request;
+  });
+  expect(useSpeleoStore.getState().busy).toBe(false);
+});
+
+describe('useSpeleoActions - Take remote ends the edit session (data#3)', () => {
+  it('reopens the server version without taking the lock back', async () => {
+    const loadProject = vi.fn(async () => ({ success: true }));
+    useProjectStore.setState({ isDirty: false, loadProject, refreshProjectState: vi.fn(async () => {}), checkProjectIntegrity: vi.fn(async () => []) });
+    useSpeleoStore.setState({ link: { hasUnpushedEdits: true } as never, refreshLinkStatus: vi.fn(async () => {}) });
+    invokeIpcMock.mockImplementation(async (cmd) => (cmd === 'speleodb_take_remote' ? '/remote.stalx' : null));
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current.takeRemote();
+    });
+
+    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_take_remote');
+    expect(loadProject).toHaveBeenCalledWith('/remote.stalx', { acquireLock: false });
+    expect(invokeIpcMock).not.toHaveBeenCalledWith('speleodb_start_editing');
+  });
 });

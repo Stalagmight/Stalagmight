@@ -13,12 +13,15 @@
  * import cycle.
  *
  * PURE: no DOM, no GL. Depends only on the i18n number formatter (locale-aware,
- * exactly as the stock builder formats) and the depth ramp.
+ * exactly as the stock builder formats), the depth ramp, and the station-name
+ * display sanitizer.
  */
 import type { DecimalPrecision } from '../../../../types/config';
 import type { MapThemeColors } from '../../../../utils/themeColors';
 import { formatFixed } from '../../../../i18n/format';
 import { getDepthColor } from '../../../../utils/colors';
+import { displayStationName } from '../../../../utils/formatters';
+import { scaleHex, type ColorScaleInput } from '../../../../utils/palettes';
 
 /**
  * Shot-label text: azimuth (°), length (m), depth (m), each at its configured
@@ -39,6 +42,28 @@ export function formatShotLabel(
 /** Station-label text: the station's index, as the stock builder emits it. */
 export function formatStationLabel(stationIndex: number): string {
   return String(stationIndex);
+}
+
+/** What a station label says: its ID (the index) or its name. */
+export type StationLabelText = 'id' | 'name';
+
+/** The longest station name drawn whole. Longer names are cut to one less and
+ *  end in an ellipsis. The image export (`image.rs`) uses the same cap. */
+export const STATION_NAME_LABEL_MAX_CHARS = 24;
+
+/**
+ * Station-label text in names mode. Names come from the file, so they pass the
+ * same sanitizer as every other place a name is shown (no control characters or
+ * bidi overrides), then are trimmed and capped by code point - never splitting
+ * a surrogate pair. `null` when nothing is left: an unnamed station gets no
+ * label rather than falling back to its index.
+ */
+export function formatStationNameLabel(name: string | null | undefined): string | null {
+  const clean = displayStationName(name).trim();
+  if (clean === '') return null;
+  const chars = Array.from(clean);
+  if (chars.length <= STATION_NAME_LABEL_MAX_CHARS) return clean;
+  return `${chars.slice(0, STATION_NAME_LABEL_MAX_CHARS - 1).join('').trimEnd()}\u2026`;
 }
 
 /** Section-name text. `name` is nullable (a section may be unnamed); the stock
@@ -68,6 +93,15 @@ export interface LabelColorContext {
   /** Flat label color (theme `--cc-depth-text`) used when depth mode is off or
    *  the ramp declines the value. */
   labelColor: string;
+  /** The user's depth palette + Levels range; null / absent = the theme ramp
+   *  over `depthMin..depthMax` through the original getDepthColor call. */
+  depthScale?: ColorScaleInput | null;
+}
+
+function labelDepthColor(value: number, ctx: LabelColorContext): string | null {
+  if (!ctx.showDepthGradient) return null;
+  if (ctx.depthScale) return scaleHex(value, ctx.depthScale, { min: ctx.depthMin, max: ctx.depthMax });
+  return getDepthColor(value, ctx.depthShallow, ctx.depthDeep, ctx.depthMin, ctx.depthMax);
 }
 
 /**
@@ -77,10 +111,7 @@ export interface LabelColorContext {
  * midpoint depth the caller already computed for the fill.
  */
 export function resolveShotLabelColor(avgDepth: number, ctx: LabelColorContext): string {
-  const depthColor = ctx.showDepthGradient
-    ? getDepthColor(avgDepth, ctx.depthShallow, ctx.depthDeep, ctx.depthMin, ctx.depthMax)
-    : null;
-  return depthColor ?? ctx.labelColor;
+  return labelDepthColor(avgDepth, ctx) ?? ctx.labelColor;
 }
 
 /**
@@ -88,10 +119,7 @@ export function resolveShotLabelColor(avgDepth: number, ctx: LabelColorContext):
  * flat `labelColor`. Mirrors `features.ts` (`getDepthColor(z, ...) ?? labelColor`).
  */
 export function resolveStationLabelColor(z: number, ctx: LabelColorContext): string {
-  const depthColor = ctx.showDepthGradient
-    ? getDepthColor(z, ctx.depthShallow, ctx.depthDeep, ctx.depthMin, ctx.depthMax)
-    : null;
-  return depthColor ?? ctx.labelColor;
+  return labelDepthColor(z, ctx) ?? ctx.labelColor;
 }
 
 /** Section-name color: the section's own color (never depth-ramped), matching
@@ -113,8 +141,10 @@ export function labelColorContextFrom(
   showDepthGradient: boolean,
   depthRange: { min: number; max: number },
   themeColors: Pick<MapThemeColors, 'depthShallow' | 'depthDeep' | 'labelColor'>,
+  depthScale: ColorScaleInput | null = null,
 ): LabelColorContext {
   return {
+    depthScale,
     showDepthGradient,
     depthShallow: themeColors.depthShallow,
     depthDeep: themeColors.depthDeep,

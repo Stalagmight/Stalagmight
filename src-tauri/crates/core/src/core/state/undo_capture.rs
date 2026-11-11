@@ -1,5 +1,5 @@
-use crate::core::{Command, UndoData};
-use crate::models::{ClosureStrategy, SectionId, SectionUpdates, ShotId, ShotUpdates};
+use crate::core::{AddedContent, Command, UndoData};
+use crate::models::{ClosureStrategy, Project, SectionId, SectionUpdates, ShotId, ShotUpdates};
 
 use super::AppState;
 
@@ -509,6 +509,15 @@ impl AppState {
             // which captures before+after snapshots and pushes directly.
             Command::Batch { .. } => UndoData::None,
 
+            // A STUB holding only what the add will be measured against
+            // (#674); `finalize_undo_data` turns it into the record of what the
+            // add brought, and drops the baseline. The slot generation is read
+            // under this same guard (a slot commit bumps it under the guard), so
+            // the stub names the project it measured.
+            Command::AddProjectFile { .. } => UndoData::AddedProjectContent(Box::new(
+                AddedContent::stub(project, Some(self.speleodb_session_generation())),
+            )),
+
             // Non-undoable commands
             _ => UndoData::None,
         }
@@ -693,7 +702,39 @@ impl AppState {
             // failure can trigger rollback.
             Command::Batch { .. } => undo_data,
 
+            // Everything the add brought, measured against the stub's baseline
+            // AFTER the epilogue, so a pre-existing offset the epilogue moved is
+            // in the record too. Ignores come from the pending set the forward
+            // step filled (`project_add.rs`).
+            Command::AddProjectFile { .. } => self.finalize_add_undo(project, undo_data),
+
             _ => undo_data,
+        }
+    }
+
+    /// The add's arm of [`Self::finalize_undo_data`], on a project the caller
+    /// already holds: `push_add_undo` finalizes and pushes under ONE `project`
+    /// guard, so the record and the push describe the same project.
+    pub(super) fn finalize_add_undo(&self, project: &Project, undo_data: UndoData) -> UndoData {
+        match undo_data {
+            UndoData::AddedProjectContent(stub) => {
+                let stub = *stub;
+                let first_new = stub.baseline.as_ref().map(|b| b.next_section_id);
+                let ignores = first_new.map_or_else(Vec::new, |first| {
+                    let new: std::collections::HashSet<SectionId> = project
+                        .sections
+                        .iter()
+                        .map(|s| s.id)
+                        .filter(|id| *id >= first)
+                        .collect();
+                    self.ignores_on_sections(&new)
+                });
+                stub.finalize(project, ignores)
+                    .map_or(UndoData::None, |content| {
+                        UndoData::AddedProjectContent(Box::new(content))
+                    })
+            }
+            other => other,
         }
     }
 

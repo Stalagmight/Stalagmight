@@ -18,7 +18,6 @@ export type {
   GeneralConfig,
   UnitsConfig,
   DisplayConfig,
-  DepthGradientConfig,
   SectionColorsConfig,
   GpsOrigin,
   StationConfig,
@@ -44,17 +43,6 @@ export type {
 } from './ipc.generated';
 
 /**
- * Bounds for `speleodb.poll_interval_seconds` (the action-shell remote-state
- * poll). The floor mirrors `MIN_POLL_INTERVAL_SECONDS` in `config/types.rs` (the
- * Settings UI blocks Save below it; the backend re-clamps a hand-edited file on
- * load). The ceiling keeps a huge value from effectively disabling the poll (and
- * clear of setInterval's 32-bit delay overflow). Shared so the Settings panel and
- * the status button agree.
- */
-export const MIN_POLL_INTERVAL_SECONDS = 30;
-export const MAX_POLL_INTERVAL_SECONDS = 24 * 60 * 60;
-
-/**
  * Light-theme display defaults. Used when "Reset to defaults" is triggered
  * while a light-CANVAS theme is active. Colors are chosen for visibility on
  * the light map canvas (`--cc-map-background`), which is what they are drawn on.
@@ -64,13 +52,6 @@ export const lightDisplayDefaults: DisplayConfig = {
   grid_spacing: 10,
   font_size: 12,
   font_color: themeTokens.light['--cc-text-primary'],
-  depth_gradient: {
-    enabled: false,
-    shallow_color: '#0077b6',
-    deep_color: '#c1121f',
-    shallow_depth: 0.0,
-    deep_depth: 50.0,
-  },
   // #357 item 17: the dark default is `#22d3ee`, a bright cyan that measures
   // 1.69:1 on light's `#faf7f2` - the ruler's measured path was all but invisible
   // even after resetting Display settings, because these defaults specified the
@@ -146,12 +127,9 @@ export function mapCanvasFor(resolvedTheme: string): string {
  */
 export function getThemedDisplayDefaults(resolvedTheme: string): DisplayConfig {
   if (LIGHT_CANVAS_THEMES.has(resolvedTheme)) {
-    return { ...lightDisplayDefaults, depth_gradient: { ...lightDisplayDefaults.depth_gradient } };
+    return { ...lightDisplayDefaults };
   }
-  return {
-    ...defaultConfig.display,
-    depth_gradient: { ...defaultConfig.display.depth_gradient },
-  };
+  return { ...defaultConfig.display };
 }
 
 /**

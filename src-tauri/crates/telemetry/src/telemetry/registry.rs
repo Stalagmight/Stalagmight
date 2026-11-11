@@ -40,6 +40,7 @@ pub const EVENT_NAMES: &[&str] = &[
     // coverage tests skip it via REMOVED_COMMANDS.
     "command.adjust_loop_closures",
     "command.arm_app_update_restart",
+    "command.arm_forced_exit",
     "command.attempt_repair",
     "command.calculate_file_hash",
     "command.can_redo",
@@ -66,6 +67,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.delete_section",
     "command.delete_shot",
     "command.delete_shot_and_split",
+    "command.disarm_forced_exit",
     "command.discard_app_update_download",
     "command.download_app_update",
     "command.execute_batch",
@@ -98,6 +100,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.history_discarded",
     "command.import_dmp",
     "command.import_sections",
+    "command.add_project_file",
     "command.install_app_update_and_restart",
     "command.list_backups",
     "command.list_dive_plans",
@@ -139,7 +142,6 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.set_station_comment",
     "command.set_zero_datum",
     "command.speleodb_done",
-    "command.speleodb_force_edit",
     "command.speleodb_get_project_metadata",
     "command.speleodb_get_revisions",
     "command.speleodb_link_status",
@@ -149,17 +151,15 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.speleodb_logout",
     "command.speleodb_open_project",
     "command.speleodb_open_project_discarding_local",
-    "command.speleodb_patch_project",
     "command.speleodb_project_access_at",
     "command.speleodb_publish",
     "command.speleodb_push",
     "command.speleodb_release_current_lock",
     "command.speleodb_release_lock",
     "command.speleodb_release_lock_acquired_here",
+    "command.speleodb_settle_open_lock",
     "command.speleodb_restore_revision",
     "command.speleodb_session",
-    "command.speleodb_set_exclude_geojson",
-    "command.speleodb_set_undo_mode",
     "command.speleodb_start_editing",
     "command.speleodb_take_remote",
     "command.speleodb_unlink",
@@ -167,6 +167,10 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.speleodb_unwind_target",
     "command.speleodb_rewind_target",
     "command.speleodb_discard_changes",
+    "command.speleodb_discard_cached_copy",
+    "command.speleodb_cached_projects",
+    "command.speleodb_remove_cached_copy",
+    "command.speleodb_purge_cached_copies",
     "command.speleodb_update",
     "command.split_shot_at_distance",
     "command.suggest_all_import_placements",
@@ -223,6 +227,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "action.toggle.showShots",
     "action.toggle.showStationComments",
     "action.toggle.showStationLabels",
+    "action.toggle.showStationNames",
     "action.toggle.showStations",
     "action.toggle.showZeroDatum",
     // ── Action: selection (132-136) ──
@@ -267,7 +272,6 @@ pub const EVENT_NAMES: &[&str] = &[
     "action.dialog.open-from-speleodb",
     "action.dialog.speleodb-done",
     "action.dialog.speleodb-divergence",
-    "action.dialog.speleodb-force-edit",
     "action.dialog.speleodb-close",
     "action.dialog.speleodb-quit",
     "action.dialog.speleodb-no-permission",
@@ -278,7 +282,6 @@ pub const EVENT_NAMES: &[&str] = &[
     "action.dialog.speleodb-unwound-push",
     "action.dialog.speleodb-discard-changes",
     "action.dialog.speleodb-revert",
-    "action.dialog.speleodb-project",
     "action.dialog.publish-to-speleodb",
     "action.dialog.split-section",
     "action.dialog.swap-comments",
@@ -342,7 +345,6 @@ pub const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.open-from-speleodb",
     "dialog-cancel.speleodb-done",
     "dialog-cancel.speleodb-divergence",
-    "dialog-cancel.speleodb-force-edit",
     "dialog-cancel.speleodb-close",
     "dialog-cancel.speleodb-quit",
     "dialog-cancel.speleodb-no-permission",
@@ -353,7 +355,6 @@ pub const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.speleodb-unwound-push",
     "dialog-cancel.speleodb-discard-changes",
     "dialog-cancel.speleodb-revert",
-    "dialog-cancel.speleodb-project",
     "dialog-cancel.publish-to-speleodb",
     "dialog-cancel.split-section",
     "dialog-cancel.swap-comments",
@@ -379,6 +380,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "undo-after.execute_tml_import",
     "undo-after.execute_walls_import",
     "undo-after.import_sections",
+    "undo-after.add_project_file",
     "undo-after.merge_stations",
     "undo-after.move_comment",
     "undo-after.move_section",
@@ -444,7 +446,6 @@ pub const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.open-from-speleodb",
     "dwell.dialog.speleodb-done",
     "dwell.dialog.speleodb-divergence",
-    "dwell.dialog.speleodb-force-edit",
     "dwell.dialog.speleodb-close",
     "dwell.dialog.speleodb-quit",
     "dwell.dialog.speleodb-no-permission",
@@ -455,7 +456,6 @@ pub const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.speleodb-unwound-push",
     "dwell.dialog.speleodb-discard-changes",
     "dwell.dialog.speleodb-revert",
-    "dwell.dialog.speleodb-project",
     "dwell.dialog.publish-to-speleodb",
     "dwell.dialog.split-section",
     "dwell.dialog.swap-comments",
@@ -507,6 +507,12 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.update_edit_section_view",
     "command.update_import_shots_view",
     "command.update_gas_config",
+    // Depth / distance colour palette + pins, written from the map legend cog
+    // and the export panel (partial `[map_palette]` write).
+    "command.update_map_palette",
+    // Export panel Levels slider: histogram of the depths / distances the
+    // image export colours.
+    "command.export_value_histogram",
     "command.get_raw_table_names",
     "command.get_raw_table",
     // Ruler tool: along-cave-line distance + path shots between two endpoints (#26).
@@ -599,7 +605,6 @@ pub const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.open-from-speleodb",
     "active-dwell.dialog.speleodb-done",
     "active-dwell.dialog.speleodb-divergence",
-    "active-dwell.dialog.speleodb-force-edit",
     "active-dwell.dialog.speleodb-close",
     "active-dwell.dialog.speleodb-quit",
     "active-dwell.dialog.speleodb-no-permission",
@@ -610,7 +615,6 @@ pub const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.speleodb-unwound-push",
     "active-dwell.dialog.speleodb-discard-changes",
     "active-dwell.dialog.speleodb-revert",
-    "active-dwell.dialog.speleodb-project",
     "active-dwell.dialog.publish-to-speleodb",
     "active-dwell.dialog.split-section",
     "active-dwell.dialog.swap-comments",
@@ -638,20 +642,21 @@ pub const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.walls-import",
     "active-dwell.dialog.walls-import",
     // SpeleoDB per-endpoint traffic metrics (#210, F1). For each endpoint kind
-    // (`speleodb::metrics::Endpoint`) the client emits four outcome counters
-    // (`ok`/`client-error`/`server-error`/`network-error`, which sum to the call
-    // count) plus a latency histogram (`latency.<bucket>`) the backend
+    // (`speleodb::metrics::Endpoint`) the client emits five outcome counters
+    // (`ok`/`client-error`/`server-error`/`parse-error`/`network-error`, which
+    // sum to the call count) plus a latency histogram (`latency.<bucket>`) the backend
     // reconstructs p50/p95 from. NO PII: only the endpoint kind, the outcome
     // class, and a latency bucket ever leave the app - never a host, project id,
     // email, token, or file bytes. Recorded per HTTP attempt at the
-    // `client::with_retry` / `client::send_json_request` chokepoints (a retried
-    // 5xx re-hits the server, so counting per attempt is what makes a retry storm
-    // legible). `every_speleodb_endpoint_has_traffic_events` regenerates this
-    // exact set from `Endpoint::ALL` x `Outcome::ALL` x `LATENCY_BUCKETS`: add an
-    // endpoint kind and CI fails until its ten names are listed here.
+    // `client::SdkClient::call` chokepoint (a retried 5xx re-hits the server, so
+    // counting per attempt is what makes a retry storm legible).
+    // `every_speleodb_endpoint_has_traffic_events` regenerates this exact set from
+    // `Endpoint::ALL` x `Outcome::ALL` x `LATENCY_BUCKETS`: add an endpoint kind
+    // and CI fails until its eleven names are listed here.
     "speleodb-api.login.ok",
     "speleodb-api.login.client-error",
     "speleodb-api.login.server-error",
+    "speleodb-api.login.parse-error",
     "speleodb-api.login.network-error",
     "speleodb-api.login.latency.le-100",
     "speleodb-api.login.latency.le-500",
@@ -662,6 +667,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "speleodb-api.list-projects.ok",
     "speleodb-api.list-projects.client-error",
     "speleodb-api.list-projects.server-error",
+    "speleodb-api.list-projects.parse-error",
     "speleodb-api.list-projects.network-error",
     "speleodb-api.list-projects.latency.le-100",
     "speleodb-api.list-projects.latency.le-500",
@@ -672,6 +678,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "speleodb-api.get-project.ok",
     "speleodb-api.get-project.client-error",
     "speleodb-api.get-project.server-error",
+    "speleodb-api.get-project.parse-error",
     "speleodb-api.get-project.network-error",
     "speleodb-api.get-project.latency.le-100",
     "speleodb-api.get-project.latency.le-500",
@@ -682,6 +689,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "speleodb-api.get-revisions.ok",
     "speleodb-api.get-revisions.client-error",
     "speleodb-api.get-revisions.server-error",
+    "speleodb-api.get-revisions.parse-error",
     "speleodb-api.get-revisions.network-error",
     "speleodb-api.get-revisions.latency.le-100",
     "speleodb-api.get-revisions.latency.le-500",
@@ -692,6 +700,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "speleodb-api.fetch-user.ok",
     "speleodb-api.fetch-user.client-error",
     "speleodb-api.fetch-user.server-error",
+    "speleodb-api.fetch-user.parse-error",
     "speleodb-api.fetch-user.network-error",
     "speleodb-api.fetch-user.latency.le-100",
     "speleodb-api.fetch-user.latency.le-500",
@@ -702,6 +711,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "speleodb-api.download-stalx.ok",
     "speleodb-api.download-stalx.client-error",
     "speleodb-api.download-stalx.server-error",
+    "speleodb-api.download-stalx.parse-error",
     "speleodb-api.download-stalx.network-error",
     "speleodb-api.download-stalx.latency.le-100",
     "speleodb-api.download-stalx.latency.le-500",
@@ -712,6 +722,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "speleodb-api.upload.ok",
     "speleodb-api.upload.client-error",
     "speleodb-api.upload.server-error",
+    "speleodb-api.upload.parse-error",
     "speleodb-api.upload.network-error",
     "speleodb-api.upload.latency.le-100",
     "speleodb-api.upload.latency.le-500",
@@ -722,6 +733,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "speleodb-api.acquire.ok",
     "speleodb-api.acquire.client-error",
     "speleodb-api.acquire.server-error",
+    "speleodb-api.acquire.parse-error",
     "speleodb-api.acquire.network-error",
     "speleodb-api.acquire.latency.le-100",
     "speleodb-api.acquire.latency.le-500",
@@ -732,6 +744,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "speleodb-api.release.ok",
     "speleodb-api.release.client-error",
     "speleodb-api.release.server-error",
+    "speleodb-api.release.parse-error",
     "speleodb-api.release.network-error",
     "speleodb-api.release.latency.le-100",
     "speleodb-api.release.latency.le-500",
@@ -742,6 +755,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "speleodb-api.patch-project.ok",
     "speleodb-api.patch-project.client-error",
     "speleodb-api.patch-project.server-error",
+    "speleodb-api.patch-project.parse-error",
     "speleodb-api.patch-project.network-error",
     "speleodb-api.patch-project.latency.le-100",
     "speleodb-api.patch-project.latency.le-500",
@@ -752,6 +766,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "speleodb-api.create-project.ok",
     "speleodb-api.create-project.client-error",
     "speleodb-api.create-project.server-error",
+    "speleodb-api.create-project.parse-error",
     "speleodb-api.create-project.network-error",
     "speleodb-api.create-project.latency.le-100",
     "speleodb-api.create-project.latency.le-500",
@@ -772,6 +787,12 @@ pub const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.import-as-new-project",
     "dwell.dialog.import-as-new-project",
     "active-dwell.dialog.import-as-new-project",
+    // Open-or-add prompt (#674): a `.stalx` picked through an Import door while a
+    // project is open asks whether to open it or add it to the open project.
+    "action.dialog.add-or-open-project",
+    "dialog-cancel.add-or-open-project",
+    "dwell.dialog.add-or-open-project",
+    "active-dwell.dialog.add-or-open-project",
 ];
 
 #[cfg(test)]
@@ -1041,7 +1062,44 @@ mod tests {
         //       pair is the backend's one-shot consent for the install, so a
         //       webview `invoke` cannot skip the exit guards.
         // Native SDK migration removes retired commands and picker events.
-        assert_eq!(EVENT_NAMES.len(), 665);
+        // Removed force-edit command/dialog (5) and project settings dialog (4).
+        // Retired workspace metadata mutation commands (3).
+        //   + 1 sign-out's discard of a cached copy that is not open (the exit
+        //       prompt work): how often a sign-out has to throw un-uploaded work
+        //       away says whether people are leaving work stranded between
+        //       sessions: command.speleodb_discard_cached_copy = 654.
+        //   The speleodb-close / speleodb-quit dialogs became one independent
+        //   overlay (like held-lock-resume); their slots are retained.
+        //   + 11 SpeleoDB traffic outcome `parse-error`, one per endpoint kind
+        //       (sdk#8): a reply that does not match the SDK contract was
+        //       counted as `ok`, hiding every contract drift = 665.
+        //   + 1 the user's explicit "Quit now" while a SpeleoDB transfer is still
+        //       running (lock#6): how often people refuse to wait says whether the
+        //       quit-after-work wait is too long to bear:
+        //       command.arm_forced_exit = 666.
+        //   + 3 cached SpeleoDB copies on the home screen: the owner-aware
+        //       listing, removing one copy, and Settings' purge:
+        //       command.speleodb_cached_projects, command.speleodb_remove_cached_copy,
+        //       command.speleodb_purge_cached_copies = 669.
+        //   + 1 a project switch or a quit hands the open project's lock back
+        //       before leaving it, and asks when that fails (never strand a lock
+        //       silently): command.speleodb_settle_open_lock = 670.
+        //   + 1 a "Quit now" whose window close failed takes its forced-exit arm
+        //       back, so the app that stays open does not cut a later transfer:
+        //       command.disarm_forced_exit = 671.
+        //   + 6 "Add .stalx to current project" (#674): command.add_project_file,
+        //       undo-after.add_project_file, and the full per-dialog set for the
+        //       open-or-add prompt: action.dialog + dialog-cancel + dwell.dialog +
+        //       active-dwell.dialog for add-or-open-project = 677.
+        //   + 1 the Display menu's Station names toggle (station names as the
+        //       map's station labels): action.toggle.showStationNames = 678.
+        //   + 1 the depth / distance colour-palette picker's partial config
+        //       write (map legend cog, export panel): how often anyone moves off
+        //       the theme ramp: command.update_map_palette = 679.
+        //   + 1 the export panel's Levels histogram (depth / penetration
+        //       distance over the export's own range):
+        //       command.export_value_histogram = 680.
+        assert_eq!(EVENT_NAMES.len(), 680);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

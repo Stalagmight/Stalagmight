@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { SettingsSection } from './SettingsSection';
 import { Button } from '../../common/Button';
+import { DownloadIcon, ExternalLinkIcon, EyeIcon, UndoIcon } from '../../common/icons';
+import { MENU_ICON_COLORS } from '../../common/menuColors';
 import { useUIStore } from '../../../store/uiStore';
 import {
   useSpeleoStore,
@@ -9,59 +10,38 @@ import {
 import { useProjectStore } from '../../../store/projectStore';
 import { useRestoreRevision } from '../../../hooks/useRestoreRevision';
 import { useSpeleoWebLink } from '../../../hooks/useSpeleoWebLink';
+import { useSpeleoOperationBusy } from '../../../hooks/useSpeleoOperationBusy';
 import { invokeIpc } from '../../../utils/ipc';
 import { humanizeSpeleoError, unpushedLocalEdits, } from '../../../utils/speleoError';
 import { holdsWriteLock } from '../../../utils/quit';
 import { permissionAtLeast } from '../../../utils/speleoPermission';
-import { formatDate } from '../../../i18n/format';
+import { formatRelativeTime } from '../../../i18n/format';
 import type { SpeleoRevision } from '../../../types/ipc.generated';
 import { TOAST_KEYS } from '../../../utils/toastKeys';
-
-/** RFC-3339 -> localized date/time; falls back to the raw string if unparseable. */
-function formatWhen(iso: string | null): string {
-  if (!iso) return '';
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
-  return formatDate(date, undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
+import { formatRevisionTime, parseRevisionDate } from '../../../utils/speleoRevisionTime';
 
 /**
- * [#218] Read-only revision history for the open remote project - the History tab
- * of the SpeleoDB project dialog. Fetches
- * `speleodb_get_revisions` on mount and lists the server-ordered (newest-first)
- * commit chain: short SHA, author, date, message, a merge marker for >1 parent.
- *
- * Each PAST revision offers actions keyed on the edit state:
- * - **Restore** (genuine lock held): a git-forward restore that pulls the revision
- *   into the working copy as an unsaved, pushable edit (via a confirm dialog carrying
- *   the disclaimer + unsaved-changes safeguard).
- * - **View** (read-only): a non-destructive peek - it checks the revision out
- *   read-only, and the SpeleoDB Update action fast-forwards back to the latest.
- * - **Revert** (read-only, upload rights): the whole round trip - take the lock,
- *   check the revision out, upload it, release the lock - so a user who never held
- *   the lock can undo a bad revision and end read-only exactly as they started.
- * - **Neither** (force-editing, i.e. editing WITHOUT the lock): a revision swap would
- *   clobber the unsaved lock-less edits, so the backend refuses both and a hint asks
- *   the user to finish or discard the force-edit session first.
- *
- * The newest commit is the current server state and is marked, not actionable.
+ * sdk#7: a revision's time as the viewer's local time with its GMT offset, and the
+ * relative time as the tooltip. `date` is the server time as an instant (see
+ * `speleoRevisionTime`); a revision whose time cannot be placed shows none.
  */
+function RevisionWhen({ date, id }: { date: Date; id: string }) {
+  return (
+    <time
+      dateTime={date.toISOString()}
+      title={formatRelativeTime(date)}
+      data-testid={`speleodb-revision-date-${id}`}
+    >
+      {formatRevisionTime(date)}
+    </time>
+  );
+}
+
 export function SpeleoRevisionHistory() {
   const { t } = useTranslation();
   const openDialog = useUIStore((s) => s.openDialog);
   const showToast = useUIStore((s) => s.showToast);
   const projectId = useSpeleoStore((s) => s.remoteProjectId);
-  const isForceEditing = useSpeleoStore((s) => s.link?.forceEditing ?? false);
-  // A genuine lock-held session (NOT force-editing, which holds no lock) may Restore;
-  // a plain read-only session may View. A force-editor gets neither: swapping the tree
-  // would clobber their unsaved, lock-less edits, so the backend refuses both and the
-  // UI offers no action. Shared predicate - see `holdsWriteLock`.
   const iHoldLock = useSpeleoStore((s) => holdsWriteLock(s.link));
   // A View is read-only in INTENT, but not in effect: the backend swaps the working
   // copy to the chosen revision, so it runs the same un-pushed-edits guard a Restore
@@ -72,13 +52,15 @@ export function SpeleoRevisionHistory() {
   // the user asked to be a peek, with nothing said about how to get out of it.
   // Named up front instead, with the way through (see the hint below).
   const hasUnpushedEdits = useSpeleoStore((s) => s.link?.hasUnpushedEdits ?? false);
-  const viewBlocked = !iHoldLock && !isForceEditing && hasUnpushedEdits;
+  const viewBlocked = !iHoldLock && hasUnpushedEdits;
   // Revert takes the lock, uploads the chosen revision and releases again, so it needs
   // upload rights. A `null` permission is "not known" (offline), not "none" - treat it
   // as potentially editable and let the backend gate decide, the same way the status
   // button does, rather than hiding the only route a read-only user has.
   const permission = useSpeleoStore((s) => s.link?.permission ?? null);
-  const canRevert = permission === null || permissionAtLeast(permission, 'READ_AND_WRITE');
+  const survey = useUIStore((s) => s.appMode === 'survey');
+  const generation = useSpeleoStore((s) => s.sessionGeneration);
+  const canRevert = survey && permissionAtLeast(permission, 'READ_AND_WRITE');
   const projectName = useProjectStore((s) => s.project?.name ?? '');
   const restoreRevision = useRestoreRevision();
   const web = useSpeleoWebLink('revisions');
@@ -87,6 +69,9 @@ export function SpeleoRevisionHistory() {
   const [error, setError] = useState<string | null>(null);
   // The revision whose read-only View is currently loading (disables that button).
   const [pendingId, setPendingId] = useState<string | null>(null);
+  // View, Restore and Revert each download a revision (Restore and Revert also
+  // lock), so none may start while another lock, upload or download is running.
+  const operationBusy = useSpeleoOperationBusy();
 
   useEffect(() => {
     if (!projectId) return undefined;
@@ -104,7 +89,7 @@ export function SpeleoRevisionHistory() {
     return () => {
       cancelled = true;
     };
-  }, [projectId, t]);
+  }, [projectId, generation, t]);
 
   // Read-only View of a past revision (no lock): check it out for inspection; the
   // SpeleoDB Update then fast-forwards back to the latest. Errors toast (there is no
@@ -124,7 +109,7 @@ export function SpeleoRevisionHistory() {
       if (!applied) return;
     } catch (e) {
       // The un-pushed-edits refusal is normally pre-empted by `viewBlocked`, but the
-      // dirty bit can flip between render and click (an auto-save, a poll), so the
+      // dirty bit can flip between render and click (an auto-save, a refresh), so the
       // race still has to say the same thing the hint does rather than fall through
       // to the backend's raw line.
       showToast(
@@ -143,38 +128,31 @@ export function SpeleoRevisionHistory() {
   if (!projectId) return null;
 
   return (
-    <SettingsSection title={t('speleodb.revisions.title')} data-testid="speleodb-revisions">
-      {/* Sits under the section heading rather than in it: SettingsSection takes a
-          plain string title. */}
-      <div className="flex justify-end">
-        <button
-          type="button"
-          disabled={web.url === null}
-          title={web.url === null ? t('speleodb.web.unavailable') : undefined}
-          onClick={web.open}
-          className="text-xs text-accent hover:underline disabled:opacity-50 disabled:no-underline"
-          data-testid="speleodb-web-revisions"
-        >
-          {t('speleodb.web.openRevisions')}
-        </button>
-      </div>
-      <div className="mb-2 space-y-1" data-testid="speleodb-revisions-hint">
+    <div data-testid="speleodb-revisions">
+      <Button
+        icon={<ExternalLinkIcon size={16} />}
+        iconColor={MENU_ICON_COLORS.projectDetails}
+        disabled={web.url === null}
+        title={web.url === null ? t('speleodb.web.unavailable') : undefined}
+        onClick={web.open}
+        className="w-full"
+        data-testid="speleodb-web-revisions"
+      >
+        {t('speleodb.web.openRevisions')}
+      </Button>
+      <div className="mt-2 mb-2 space-y-1" data-testid="speleodb-revisions-hint">
         <p className="text-xs text-text-secondary">{t('speleodb.revisions.restoreHint')}</p>
-        {isForceEditing ? (
-          <p className="text-xs text-warning" data-testid="speleodb-revisions-forceedit-hint">
-            {t('speleodb.revisions.forceEditActive')}
-          </p>
-        ) : viewBlocked ? (
+        {viewBlocked ? (
           // Says WHY View is gone and WHAT clears it, because the block is not
           // permanent: locking the project for editing and uploading the changes
           // resolves it, and Revert stays on offer here precisely because it carries
           // its own explicit discard route for the same changes.
-          <p className="text-xs text-warning" data-testid="speleodb-revisions-unpushed-hint">
+          <p className="text-xs text-warning-text" data-testid="speleodb-revisions-unpushed-hint">
             {t('speleodb.revisions.viewBlockedByUnpushed')}
           </p>
         ) : (
           !iHoldLock && (
-            <p className="text-xs text-warning" data-testid="speleodb-revisions-lock-hint">
+            <p className="text-xs text-warning-text" data-testid="speleodb-revisions-lock-hint">
               {t('speleodb.revisions.lockToRestore')}
             </p>
           )
@@ -201,6 +179,7 @@ export function SpeleoRevisionHistory() {
             // Server order is newest-first, so index 0 is the current server HEAD:
             // restoring to it would be a no-op, so it is marked, not restorable.
             const isCurrent = idx === 0;
+            const when = rev.authored_date ? parseRevisionDate(rev.authored_date) : null;
             return (
               <li
                 key={rev.id}
@@ -222,7 +201,7 @@ export function SpeleoRevisionHistory() {
                     )}
                     {rev.parent_ids.length > 1 && (
                       <span
-                        className="px-1.5 py-0.5 rounded text-xs bg-warning-20 text-warning"
+                        className="px-1.5 py-0.5 rounded text-xs bg-warning-20 text-warning-text"
                         data-testid={`speleodb-revision-merge-${rev.id}`}
                       >
                         {t('speleodb.revisions.merge')}
@@ -231,9 +210,9 @@ export function SpeleoRevisionHistory() {
                     <span className="text-xs text-text-secondary truncate">
                       {rev.author_email || t('speleodb.revisions.unknownAuthor')}
                     </span>
-                    {rev.authored_date && (
-                      <span className="text-xs text-text-tertiary">
-                        · {formatWhen(rev.authored_date)}
+                    {when && (
+                      <span className="text-xs text-text-secondary">
+                        · <RevisionWhen date={when} id={rev.id} />
                       </span>
                     )}
                   </div>
@@ -243,10 +222,11 @@ export function SpeleoRevisionHistory() {
                     </p>
                   )}
                 </div>
-                {!isCurrent && iHoldLock && (
+                {!isCurrent && iHoldLock && survey && (
                   <Button
                     variant="secondary"
                     size="sm"
+                    disabled={operationBusy}
                     onClick={() =>
                       openDialog(TOAST_KEYS.SPELEODB_RESTORE, {
                         projectId,
@@ -256,17 +236,19 @@ export function SpeleoRevisionHistory() {
                         message: rev.message ?? '',
                       })
                     }
+                    icon={<DownloadIcon size={14} />}
                     data-testid={`speleodb-revision-restore-${rev.id}`}
                   >
                     {t('speleodb.revisions.restore')}
                   </Button>
                 )}
-                {!isCurrent && !iHoldLock && !isForceEditing && !viewBlocked && (
+                {!isCurrent && !iHoldLock && !viewBlocked && (
                   <Button
                     variant="secondary"
                     size="sm"
-                    disabled={pendingId !== null}
+                    disabled={pendingId !== null || operationBusy}
                     onClick={() => void handleView(rev)}
+                    icon={<EyeIcon size={14} />}
                     data-testid={`speleodb-revision-view-${rev.id}`}
                   >
                     {pendingId === rev.id
@@ -279,10 +261,11 @@ export function SpeleoRevisionHistory() {
                     to show no buttons at all, and Revert is the one route out of it -
                     it takes the lock for the user, with the armed discard as the
                     explicit consent for replacing their un-pushed work. */}
-                {!isCurrent && !iHoldLock && !isForceEditing && canRevert && (
+                {!isCurrent && !iHoldLock && canRevert && (
                   <Button
                     variant="secondary"
                     size="sm"
+                    disabled={operationBusy}
                     onClick={() =>
                       openDialog('speleodb-revert', {
                         projectId,
@@ -299,6 +282,7 @@ export function SpeleoRevisionHistory() {
                         returnData: { tab: 'history' },
                       })
                     }
+                    icon={<UndoIcon size={14} />}
                     data-testid={`speleodb-revision-revert-${rev.id}`}
                   >
                     {t('speleodb.revert.action')}
@@ -309,6 +293,6 @@ export function SpeleoRevisionHistory() {
           })}
         </ul>
       )}
-    </SettingsSection>
+    </div>
   );
 }

@@ -863,11 +863,20 @@ impl Project {
     }
 
     /// Find orphaned connected components and suggest placements for their leaf
-    /// ends against newly imported sections.
+    /// ends against datum-anchored sections.
     ///
     /// An orphaned component is a set of sections connected via merges that has
     /// no zero datum. Leaf ends are terminal stations with at least 3 free shots
     /// (shots not adjacent to a merge or aligned closure).
+    ///
+    /// Which anchored sections an orphan may be placed onto depends on whether
+    /// THIS import touched it:
+    /// - an orphan containing a newly imported section may go onto ANY anchored
+    ///   section, pre-existing ones included - adding a datum-less `.stalx`
+    ///   into an anchored project must be offered a spot on the host (#674);
+    /// - a pre-existing orphan may only go onto a newly imported anchored
+    ///   section, so an unrelated later import never re-raises a pairing the
+    ///   user already had their chance to act on (#446).
     pub fn suggest_orphan_placements(
         &self,
         newly_imported_section_ids: &[SectionId],
@@ -898,46 +907,68 @@ impl Project {
         // 1. Build all connected components (via merges only), over the WHOLE
         // post-import project - not just pre-existing sections - so a first
         // import into an empty project can suggest an unanchored component
-        // against an anchored one from the SAME import (#446). Suggestion
-        // targets stay newly-imported-only (built below), so a pre-existing
-        // orphan is never re-suggested against a pre-existing anchor: only
-        // "orphan vs. newly imported" pairs are ever produced.
+        // against an anchored one from the SAME import (#446).
         let components = self.connected_components();
 
-        // 2. Filter to orphan components: no datum (an empty component -
-        // impossible here - is treated as non-orphan).
-        let orphan_components: Vec<&HashSet<SectionId>> = components
-            .iter()
-            .filter(|comp| {
-                let Some(&any_member) = comp.iter().next() else {
-                    return false;
-                };
-                !self.rigid_group_has_datum(any_member)
-            })
-            .collect();
+        // 2. Split them into orphans (no datum) and anchored components, one
+        // datum check per component. An empty component - impossible here -
+        // is neither. The two sets are disjoint by construction, which is
+        // what keeps a component from being suggested onto itself: every
+        // target below comes from an anchored component, never an orphan one.
+        let mut orphan_components: Vec<&HashSet<SectionId>> = Vec::new();
+        let mut anchored_section_ids: HashSet<SectionId> = HashSet::new();
+        for comp in &components {
+            let Some(&any_member) = comp.iter().next() else {
+                continue;
+            };
+            if self.rigid_group_has_datum(any_member) {
+                anchored_section_ids.extend(comp.iter().copied());
+            } else {
+                orphan_components.push(comp);
+            }
+        }
 
-        if orphan_components.is_empty() {
+        if orphan_components.is_empty() || anchored_section_ids.is_empty() {
             return Vec::new();
         }
 
-        // 3. Build target sections (newly imported only)
-        let target_sections: Vec<ExistingSection> = newly_imported_section_ids
+        // 3. Build the two target pools. Targets must be datum-anchored:
+        // without that, two distinct floating components can be suggested onto
+        // each other - a "placement" that is circular and anchors nothing
+        // (#446).
+        let new_ids: HashSet<SectionId> = newly_imported_section_ids.iter().copied().collect();
+        let to_target = |s: &Section| ExistingSection {
+            id: s.id,
+            name: s
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("Section {}", s.id)),
+            shots: s.shots.clone(),
+            azimuth_reference: self.azimuth_reference_for(s),
+        };
+        // Anchored sections from THIS import - the only targets a
+        // pre-existing orphan may use (#446).
+        let new_anchored_targets: Vec<ExistingSection> = newly_imported_section_ids
             .iter()
+            .filter(|id| anchored_section_ids.contains(id))
             .filter_map(|&id| self.get_section(id))
-            .map(|s| ExistingSection {
-                id: s.id,
-                name: s
-                    .name
-                    .clone()
-                    .unwrap_or_else(|| format!("Section {}", s.id)),
-                shots: s.shots.clone(),
-                azimuth_reference: self.azimuth_reference_for(s),
-            })
+            .map(to_target)
             .collect();
-
-        if target_sections.is_empty() {
-            return Vec::new();
-        }
+        // Every anchored section in the project - the targets for an orphan
+        // this import touched (#674). Only built when such an orphan exists,
+        // so an import that leaves nothing floating never copies the host.
+        let import_left_an_orphan = orphan_components
+            .iter()
+            .any(|comp| comp.iter().any(|id| new_ids.contains(id)));
+        let all_anchored_targets: Vec<ExistingSection> = if import_left_an_orphan {
+            self.sections
+                .iter()
+                .filter(|s| anchored_section_ids.contains(&s.id))
+                .map(to_target)
+                .collect()
+        } else {
+            Vec::new()
+        };
 
         // Helper: check if a station has any merge
         let station_has_merge = |sr: StationRef| -> bool {
@@ -960,20 +991,15 @@ impl Project {
 
         let mut suggestions: Vec<OrphanPlacementSuggestion> = Vec::new();
 
-        // 4. For each orphan component, find leaf candidates. Targets that are
-        // themselves members of this orphan component are excluded - they are
-        // already connected to the leaf via the merges that make up this very
-        // component, so matching against them would be a self-suggestion.
+        // 4. For each orphan component, pick its target pool and find leaf
+        // candidates.
         for component in &orphan_components {
-            // Targets must themselves be datum-anchored: without this, two
-            // distinct floating (unanchored) components can be suggested onto
-            // each other - a "placement" that is circular and anchors
-            // nothing (#446).
-            let component_targets: Vec<ExistingSection> = target_sections
-                .iter()
-                .filter(|t| !component.contains(&t.id) && self.rigid_group_has_datum(t.id))
-                .cloned()
-                .collect();
+            let touched_by_import = component.iter().any(|id| new_ids.contains(id));
+            let component_targets: &[ExistingSection] = if touched_by_import {
+                &all_anchored_targets
+            } else {
+                &new_anchored_targets
+            };
             if component_targets.is_empty() {
                 continue;
             }
@@ -1070,7 +1096,7 @@ impl Project {
                     let placement_suggestions = suggest_placements(
                         &leaf_shots,
                         self.azimuth_reference_for(section),
-                        &component_targets,
+                        component_targets,
                         ps_config,
                     );
 

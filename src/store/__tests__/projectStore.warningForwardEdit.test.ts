@@ -24,9 +24,9 @@ describe('projectStore warning edits', () => {
         lockedByOther: false,
         hasUnpushedEdits: true,
         unwound: true,
-        forceEditing: false,
+
         undoMode: 'full',
-        forceEditAllowed: false,
+
         remoteState: 'up_to_date',
         noAccess: false,
         serverError: null,

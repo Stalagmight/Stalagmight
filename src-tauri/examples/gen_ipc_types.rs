@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 
 use ts_rs::TS;
 
-use stalagmight_lib::commands::app_update::{AppUpdateCheck, AppUpdateProgress, AppUpdateStatus};
+use stalagmight_lib::commands::app_update::{
+    AppUpdateCheck, AppUpdateInstallError, AppUpdateProgress, AppUpdateStatus,
+};
 use stalagmight_lib::commands::cache::{CacheStats, ProviderStats, TileFetchStatsResponse};
 use stalagmight_lib::commands::export::DiveProfileRequest;
 use stalagmight_lib::commands::history::{FieldChange, PreviewData, UndoHistoryItem};
@@ -18,23 +20,29 @@ use stalagmight_lib::commands::survey_geometry::{
 };
 use stalagmight_lib::config::{
     AngleUnit, AppearanceConfig, CacheConfig, ClosureAdjustmentConfig, ColorTheme, Config,
-    DebugConfig, DecimalPrecision, DepthGradientConfig, DisplayConfig, DpvRig, DpvUnit,
-    ExportConfig, GasConfig, GasUnits, GeneralConfig, GlobalViewConfig, GpsOrigin, ImportConfig,
-    LengthUnit, LoggingConfig, MapAnimationConfig, MapConfig, MapControlsConfig, MapDebugConfig,
-    MapSnapConfig, OverlapMode, PanelsConfig, PlacementSuggestionConfig, ProviderCacheConfig,
-    ReservePreset, ReserveProfile, SectionColorsConfig, ShortcutFeedback, ShortcutsConfig,
-    ShotConfig, SpeleoDbConfig, StationConfig, SyntacticHighlightLevel, SyntacticHighlightPreset,
-    SyntacticHighlightingConfig, ThemeMode, UnitsConfig, UpdateTrack, ValidationConfig,
+    DebugConfig, DecimalPrecision, DisplayConfig, DpvRig, DpvUnit, ExportConfig, GasConfig,
+    GasUnits, GeneralConfig, GlobalViewConfig, GpsOrigin, ImportConfig, LengthUnit, LoggingConfig,
+    MapAnimationConfig, MapConfig, MapControlsConfig, MapDebugConfig, MapPaletteConfig,
+    MapSnapConfig, OverlapMode, PaletteChoiceConfig, PanelsConfig, PlacementSuggestionConfig,
+    ProviderCacheConfig, ReservePreset, ReserveProfile, SectionColorsConfig, ShortcutFeedback,
+    ShortcutsConfig, ShotConfig, SpeleoDbConfig, StationConfig, SyntacticHighlightLevel,
+    SyntacticHighlightPreset, SyntacticHighlightingConfig, ThemeMode, UnitsConfig, UpdateTrack,
+    ValidationConfig,
 };
 use stalagmight_lib::core::command::{
     CommandResult, CommentHolder, ImportReceipt, IntegrityCheckResult, IntegrityRepairResult,
-    ReversedSection, ValidationWarning, WarningSeverity,
+    LockReleaseOutcome, ReversedSection, ValidationWarning, WarningSeverity,
 };
 use stalagmight_lib::core::loading::{
     CreateProjectFullResult, DisplaySettings, LoadProjectFullResult, LoadingPhase, LoadingProgress,
     SpeleoManagedFile,
 };
-use stalagmight_lib::core::state::VirtualShotMode;
+use stalagmight_lib::core::state::{
+    SpeleoCacheOwnership, SpeleoCachedProject, SpeleoPurgeReport, VirtualShotMode,
+};
+use stalagmight_lib::export::color_scale::{
+    ExportColorScale, ExportLevels, ExportValueKind, ValueHistogram,
+};
 use stalagmight_lib::export::{ColorMode, ExportImageOptions, ImageFormat};
 use stalagmight_lib::logging::{LogsSince, RingLogEntry};
 use stalagmight_lib::models::placement_suggest::{
@@ -66,12 +74,12 @@ use stalagmight_lib::parsers::tml::{
 use stalagmight_lib::parsers::walls::{WallsFile, WallsSurveySummary};
 use stalagmight_lib::persistence::{BackupInfo, RawTableData, RepairResult, SalvagedData};
 use stalagmight_lib::speleodb::{
-    DoneResult, Permission, PushResult, RemoteState, SpeleoAccessVerification, SpeleoDbAction,
-    SpeleoErrorDto, SpeleoFileAccess, SpeleoLinkStatus, SpeleoLocalProjectState, SpeleoLoginResult,
-    SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectMetadataPatch, SpeleoProjectSummary,
-    SpeleoPublishParams, SpeleoPublishResult, SpeleoReleaseContext, SpeleoRevision,
-    SpeleoRewindTarget, SpeleoSessionStatus, SpeleoUnwindTarget, StartEditingResult,
-    TransportCause, UnpushedLocalEdits, UpdateResult, Visibility,
+    DoneResult, EndpointRefusal, Permission, PushResult, RemoteState, SpeleoAccessVerification,
+    SpeleoDbAction, SpeleoErrorDto, SpeleoFileAccess, SpeleoLinkStatus, SpeleoLocalProjectState,
+    SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectSummary,
+    SpeleoPublishParams, SpeleoPublishResult, SpeleoReadOnlyOpen, SpeleoReleaseContext,
+    SpeleoRevision, SpeleoRewindTarget, SpeleoSessionStatus, SpeleoUnwindTarget,
+    StartEditingResult, TransportCause, UnpushedLocalEdits, UpdateResult, Visibility,
 };
 use stalagmight_lib::tile_attribution::TileAttribution;
 use stalagmight_lib::tile_providers::TileProviderInfo;
@@ -135,6 +143,7 @@ fn main() {
     fs::create_dir_all(&out_dir).expect("Failed to create ipc types directory");
     // Remove generated files whose source types were retired with native transfer.
     for name in [
+        "SpeleoProjectMetadataPatch",
         "KeychainReport",
         "TokenFallback",
         "TokenStorage",
@@ -148,6 +157,8 @@ fn main() {
         "SpeleoTeamGrant",
         "SpeleoTeamOption",
         "SpeleoUserSuggestion",
+        // Retired with the dead Settings > Display "Depth Gradient" section (#380).
+        "DepthGradientConfig",
     ] {
         for directory in [
             &out_dir,
@@ -162,6 +173,7 @@ fn main() {
 
     // Core command/result types
     export::<CommandResult>(&out_dir);
+    export::<LockReleaseOutcome>(&out_dir);
     export::<ReversedSection>(&out_dir);
     export::<ImportReceipt>(&out_dir);
     export::<CommentHolder>(&out_dir);
@@ -303,6 +315,10 @@ fn main() {
     export::<ExportImageOptions>(&out_dir);
     export::<ImageFormat>(&out_dir);
     export::<ColorMode>(&out_dir);
+    export::<ExportColorScale>(&out_dir);
+    export::<ExportLevels>(&out_dir);
+    export::<ExportValueKind>(&out_dir);
+    export::<ValueHistogram>(&out_dir);
 
     // Cache + tiles
     export::<ProviderStats>(&out_dir);
@@ -341,13 +357,14 @@ fn main() {
     export::<GeneralConfig>(&out_dir);
     export::<UnitsConfig>(&out_dir);
     export::<GasConfig>(&out_dir);
+    export::<MapPaletteConfig>(&out_dir);
+    export::<PaletteChoiceConfig>(&out_dir);
     export::<GasUnits>(&out_dir);
     export::<ReservePreset>(&out_dir);
     export::<ReserveProfile>(&out_dir);
     export::<DpvUnit>(&out_dir);
     export::<DpvRig>(&out_dir);
     export::<DisplayConfig>(&out_dir);
-    export::<DepthGradientConfig>(&out_dir);
     export::<SectionColorsConfig>(&out_dir);
     export::<GpsOrigin>(&out_dir);
     export::<StationConfig>(&out_dir);
@@ -387,14 +404,22 @@ fn main() {
     export::<AppUpdateCheck>(&out_dir);
     export::<AppUpdateStatus>(&out_dir);
     export::<AppUpdateProgress>(&out_dir);
+    export::<AppUpdateInstallError>(&out_dir);
     // SpeleoDB IPC DTOs (#183; #186/D-B2 added SpeleoDbAction + SpeleoErrorDto)
     export::<Permission>(&out_dir);
     export::<SpeleoProjectSummary>(&out_dir);
     export::<SpeleoFileAccess>(&out_dir);
     export::<SpeleoAccessVerification>(&out_dir);
     export::<SpeleoReleaseContext>(&out_dir);
+    export::<SpeleoReleaseContext>(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("bindings"));
     export::<SpeleoLoginResult>(&out_dir);
     export::<SpeleoOpenResult>(&out_dir);
+    // Why an open returned the cached copy read-only without a session.
+    export::<SpeleoReadOnlyOpen>(&out_dir);
+    // Cached SpeleoDB copies on the home screen (owner-aware) and the cache purge.
+    export::<SpeleoCacheOwnership>(&out_dir);
+    export::<SpeleoCachedProject>(&out_dir);
+    export::<SpeleoPurgeReport>(&out_dir);
     // #214 adopt-Ariane result (import + link + type-flip outcome), and what the
     // adoption's own hand-over to the server managed to do
     // #218 revision-history view: one projected commit
@@ -411,6 +436,9 @@ fn main() {
     // #270: why a transport call never reached the server, so the FE can render a
     // translated line instead of a raw OS errno.
     export::<TransportCause>(&out_dir);
+    // Why the endpoint policy refused a server address, so the FE can point at the
+    // setting to change instead of showing the backend's refusal text.
+    export::<EndpointRefusal>(&out_dir);
     // The un-pushed local work a refused re-pull would have destroyed, carried on
     // SpeleoErrorDto so the FE can offer keep-local vs take-remote-and-discard.
     // [#258] Which ambiguity the candidates describe, so the picker offers the right
@@ -430,13 +458,13 @@ fn main() {
     // SpeleoDB Project Settings metadata (#206) + create-on-SDB publish (#207)
     export::<Visibility>(&out_dir);
     export::<SpeleoProjectMetadata>(&out_dir);
-    export::<SpeleoProjectMetadataPatch>(&out_dir);
     export::<SpeleoPublishParams>(&out_dir);
     export::<SpeleoPublishResult>(&out_dir);
     // #215 full Project Settings: collaborator roster (users + teams) + team picker
 
     let export_list = [
         "CommandResult",
+        "LockReleaseOutcome",
         "ReversedSection",
         "ImportReceipt",
         "CommentHolder",
@@ -552,6 +580,10 @@ fn main() {
         "ExportImageOptions",
         "ImageFormat",
         "ColorMode",
+        "ExportColorScale",
+        "ExportLevels",
+        "ExportValueKind",
+        "ValueHistogram",
         "ProviderStats",
         "CacheStats",
         "TileFetchStatsResponse",
@@ -574,7 +606,6 @@ fn main() {
         "GeneralConfig",
         "UnitsConfig",
         "DisplayConfig",
-        "DepthGradientConfig",
         "SectionColorsConfig",
         "GpsOrigin",
         "StationConfig",
@@ -605,6 +636,8 @@ fn main() {
         "LengthUnit",
         "AngleUnit",
         "GasConfig",
+        "MapPaletteConfig",
+        "PaletteChoiceConfig",
         "GasUnits",
         "ReservePreset",
         "ReserveProfile",
@@ -618,6 +651,7 @@ fn main() {
         "AppUpdateCheck",
         "AppUpdateStatus",
         "AppUpdateProgress",
+        "AppUpdateInstallError",
         "Permission",
         "SpeleoProjectSummary",
         "SpeleoFileAccess",
@@ -625,6 +659,10 @@ fn main() {
         "SpeleoReleaseContext",
         "SpeleoLoginResult",
         "SpeleoOpenResult",
+        "SpeleoReadOnlyOpen",
+        "SpeleoCacheOwnership",
+        "SpeleoCachedProject",
+        "SpeleoPurgeReport",
         "SpeleoRevision",
         "SpeleoUnwindTarget",
         "SpeleoRewindTarget",
@@ -633,6 +671,7 @@ fn main() {
         "SpeleoDbAction",
         "SpeleoErrorDto",
         "TransportCause",
+        "EndpointRefusal",
         "UnpushedLocalEdits",
         "SpeleoLinkStatus",
         "RemoteState",
@@ -643,7 +682,6 @@ fn main() {
         "PushResult",
         "Visibility",
         "SpeleoProjectMetadata",
-        "SpeleoProjectMetadataPatch",
         "SpeleoPublishParams",
         "SpeleoPublishResult",
     ];

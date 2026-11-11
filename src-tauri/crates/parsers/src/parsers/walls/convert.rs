@@ -673,6 +673,7 @@ pub fn convert_walls_to_import_configs(
                 .clone()
                 .unwrap_or(ImportPlacement::Origin),
             station_comments: chain.station_comments.clone(),
+            station_names: Vec::new(),
             azimuth_reference: Some(chain.azimuth_reference),
         });
     }

@@ -27,15 +27,14 @@ const LINK: SpeleoLinkState = {
   lockedByOther: false,
   hasUnpushedEdits: false,
   unwound: false,
-  forceEditing: false,
-  forceEditAllowed: false,
+
   undoMode: 'full',
   remoteState: 'up_to_date',
   noAccess: false,
   serverError: null,
 };
 
-const RESTORED = { local_path: '/cache/p1.stalx', concurrent_session: false };
+const RESTORED = { local_path: '/cache/p1.stalx' };
 
 function ipc(routes: Record<string, () => unknown>): void {
   invokeIpcMock.mockImplementation(async (command: string) => routes[command]?.() ?? null);

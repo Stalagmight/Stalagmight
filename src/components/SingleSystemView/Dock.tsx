@@ -69,6 +69,7 @@ interface DockProps {
   closedBottomInset?: number;
   /** Data table only: render content as a fixed fullscreen overlay (no reparent). */
   fullscreen?: boolean;
+  keepMounted?: boolean;
   /** Bottom edge only: portal the absolute overlay into this element instead of
    *  rendering it inline, so it positions relative to that ancestor (lets the
    *  Data panel span the full Main width past the center column's side insets).
@@ -116,6 +117,7 @@ function DockComponent({
   onTabBoundsChange,
   closedBottomInset = 0,
   fullscreen = false,
+  keepMounted = false,
   overlayContainer,
   overlayLeft = 0,
   overlayRight = 0,
@@ -265,7 +267,7 @@ function DockComponent({
     const t = window.setTimeout(() => setIsClosing(false), PANEL_SLIDE_MS + 50);
     return () => window.clearTimeout(t);
   }, [isClosing]);
-  const mounted = open || isClosing;
+  const mounted = keepMounted || open || isClosing;
 
   const sizeNow = open ? size : BAR;
   const spacerSize = reveal.isPinnedOpen ? size : BAR;
@@ -369,7 +371,7 @@ function DockComponent({
       // onRegionEnter. Guarded by isFloatingOpen so merely tab-focusing a CLOSED
       // panel's opener tab never auto-reveals it (only an explicit click does).
       onFocus={() => {
-        if (reveal.isFloatingOpen) reveal.onRegionEnter();
+        if (reveal.isOpen) reveal.onRegionFocus?.();
       }}
       // Keyboard close: a hover panel opened via the keyboard (the opener tab is a
       // real button, so Enter/Space reveals it) gets no mouseleave to trigger the
@@ -378,6 +380,7 @@ function DockComponent({
       onBlur={(e) => {
         const next = e.relatedTarget;
         const stayingInRegion = next instanceof Node && outerRef.current?.contains(next);
+        if (!stayingInRegion) reveal.onRegionBlur?.();
         if (reveal.isFloatingOpen && !openerHover && !stayingInRegion) {
           reveal.onRegionLeave();
         }
@@ -405,7 +408,7 @@ function DockComponent({
               {children}
             </div>
           ) : (
-            <div style={innerStyle}>{children}</div>
+            <div style={innerStyle} hidden={!open && !isClosing} aria-hidden={!open && !isClosing}>{children}</div>
           ))}
       </div>
 
@@ -416,6 +419,7 @@ function DockComponent({
       {reveal.isOpen && !fullscreen && (
         <div
           ref={handleRef}
+          data-testid={`${testId}-resize-handle`}
           className={`absolute bg-transparent ${handleClass}`}
           style={{ touchAction: 'none', zIndex: 1 }}
           onMouseEnter={() => setResizeHover(true)}
@@ -435,7 +439,7 @@ function DockComponent({
             testId={testId}
             labels={tabLabels}
             resizing={resizeActive}
-            visuallyOpen={mounted}
+            visuallyOpen={open || isClosing}
             hovered={openerHover}
           />
         </div>

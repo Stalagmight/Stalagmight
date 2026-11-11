@@ -397,10 +397,23 @@ impl AppState {
     }
 
     pub(super) fn save_project(&self, path: Option<PathBuf>) -> CommandResult {
+        self.save_project_at_generation(path, None)
+    }
+
+    pub(super) fn save_project_at_generation(
+        &self,
+        path: Option<PathBuf>,
+        expected_generation: Option<u64>,
+    ) -> CommandResult {
         let Ok(mut proj_guard) = self.project.lock() else {
             return CommandResult::failure("Failed to lock project".to_string());
         };
 
+        if expected_generation
+            .is_some_and(|generation| self.speleodb_session_generation() != generation)
+        {
+            return CommandResult::failure("The project session changed before saving".to_string());
+        }
         let Some(project) = proj_guard.as_mut() else {
             return CommandResult::failure("No project open".to_string());
         };
@@ -578,7 +591,14 @@ impl AppState {
                 Some(db) => db.load_resolved_warnings_verbatim(),
                 None => Ok(Vec::new()),
             }
-        };
+        }
+        // ...plus the ignores an "Add .stalx" carried in for sections this file
+        // has never held (#674): THIS save is the first that can write them.
+        // They ride the same remap and section filter as every other row.
+        .map(|mut rows| {
+            rows.extend(self.pending_ignores());
+            rows
+        });
         let resolved_warnings: Vec<_> = match carried_ignores {
             Ok(rows) => {
                 // Drop rows whose section no longer exists. resolved_warnings has
@@ -600,11 +620,10 @@ impl AppState {
                 // would let INSERT OR REPLACE (against UNIQUE(section_id, shot_id,
                 // warning_code)) silently delete the older shot's still-valid
                 // ignore.
-                // Key by (section_id, uuid), not uuid alone: ensure_unique_shot_uuids
-                // only de-dups within a section, so two sections can share a shot
-                // UUID and a uuid-only key would collapse both live shots into one
-                // entry - remapping section A's ignore to whichever section won the
-                // collect, losing A's ignore and mis-suppressing B (issue #57 / Codex).
+                // Key by (section_id, uuid), not uuid alone: shot UUIDs are unique
+                // across the live project, but a STORED row may name an id that
+                // two sections held before the load renamed one copy, and only
+                // its section says which shot it meant (issue #57 / Codex).
                 let live_positions: std::collections::HashMap<(SectionId, &str), (SectionId, u32)> =
                     project
                         .sections
@@ -669,10 +688,19 @@ impl AppState {
                     .filter_map(|mut r| {
                         match r.shot_uuid.as_deref() {
                             Some(uuid) => {
-                                // Look up by (section_id, uuid): a UUID-keyed row's
-                                // section_id is its shot's section, so this targets the
-                                // right shot even when another section shares the UUID.
-                                let &(sec, shot) = live_positions.get(&(r.section_id, uuid))?;
+                                // Look up by (section_id, uuid). A row stored against
+                                // an id the load renamed (a cross-section repeat in a
+                                // file saved before shot UUIDs were project-wide
+                                // unique) names its shot through the derived id, and
+                                // is re-keyed to it here: this save persists it.
+                                let live_uuid = crate::models::live_shot_uuid_for_stored(
+                                    r.section_id,
+                                    uuid,
+                                    |id| live_positions.contains_key(&(r.section_id, id)),
+                                )?;
+                                let &(sec, shot) =
+                                    live_positions.get(&(r.section_id, live_uuid.as_str()))?;
+                                r.shot_uuid = Some(live_uuid);
                                 r.section_id = sec;
                                 r.shot_id = shot;
                                 Some(r)
@@ -1051,6 +1079,11 @@ impl AppState {
         // the project is persisted regardless of whether the handle reopens.
         self.initial_save_deferred
             .store(false, std::sync::atomic::Ordering::Relaxed);
+        // The file now holds every pending ignore (#674) - still under the
+        // project guard the carry-over read them under, so none can slip in
+        // between. The detached-copy branch above returns before this: the
+        // session's own file did not receive them.
+        self.clear_pending_ignores();
 
         // The installed file deliberately has no history because its chain metadata
         // could not be classified safely. Drop the live mirror at the same commit point:
@@ -1078,10 +1111,10 @@ impl AppState {
                 // (undo persistence, display settings) will fail. Clear the stale
                 // database handle so callers don't use it.
                 project.file_path = Some(save_path.clone());
-                drop(proj_guard);
                 if let Ok(mut database) = self.database.lock() {
                     *database = None;
                 }
+                drop(proj_guard);
                 // Distinct code (not the generic "SYSTEM") so the frontend can keep
                 // databaseOpen=false and leave DB-backed actions (e.g. Ignore)
                 // disabled until the project is reopened (issue #57 / Codex).
@@ -1099,11 +1132,11 @@ impl AppState {
         // Update file path after successful save
         project.file_path = Some(save_path.clone());
 
-        // Update database handle
-        drop(proj_guard);
+        // Publish the reopened handle before a replacement project can take the slot.
         if let Ok(mut database) = self.database.lock() {
             *database = Some(db);
         }
+        drop(proj_guard);
 
         // Clear in-memory cache since settings are now persisted to DB
         self.clear_display_settings_cache();
@@ -1297,6 +1330,11 @@ impl AppState {
         // in), which is the bump rule (`speleodb_session`). Covers close, delete
         // and the project switch, which all route through here.
         self.bump_speleodb_session();
+        // An add's pending ignores (#674) die with the project they belong to.
+        self.clear_pending_ignores();
+        // So does the record of renamed shot ids: it describes this project only.
+        self.load_renamed_shots
+            .store(false, std::sync::atomic::Ordering::Relaxed);
         // [#473] The discarded-history banner describes the OPEN project; with none
         // open there is nothing for it to describe. Cleared here as well as on every
         // load commit, so closing a project takes its banner with it rather than
@@ -1326,11 +1364,9 @@ impl AppState {
         // Clear display settings cache
         self.clear_display_settings_cache();
         self.invalidate_adjusted_cache();
-        // [Track B] (#191) Reset the transient read-only edit gate so a previously
-        // read-only remote project can't leave the flag stuck for the next open.
-        self.set_edit_enabled(true);
-        // #213: clear force-edit so it never leaks across a close into the next open.
-        self.set_force_editing(false);
+        // [Track B] (#191) Nothing is open: back to unmanaged (see
+        // `speleodb_edit_gate`); the closed session's claim stays a pointer only.
+        self.speleodb_set_open_gate(None);
 
         tracing::info!(purpose = "release project resources", "Project closed");
         tracing::debug!("close_project: returning success");

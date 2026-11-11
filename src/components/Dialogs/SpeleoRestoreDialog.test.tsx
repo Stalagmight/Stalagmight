@@ -110,7 +110,7 @@ describe('SpeleoRestoreDialog - a second restore (#270)', () => {
 
   it('takes two further presses - the refusal alone can never discard', async () => {
     invokeIpcMock.mockRejectedValueOnce(REFUSAL);
-    invokeIpcMock.mockResolvedValue({ local_path: '/cache/p1.stalx', concurrent_session: false });
+    invokeIpcMock.mockResolvedValue({ local_path: '/cache/p1.stalx' });
     render(<SpeleoRestoreDialog />);
 
     await userEvent.click(screen.getByTestId('speleodb-restore-confirm-btn'));
@@ -137,7 +137,7 @@ describe('SpeleoRestoreDialog - a second restore (#270)', () => {
   // button, permanently destroyed un-pushed survey work the user never chose to lose.
   it('a second Enter on the focused control after the refusal does NOT discard', async () => {
     invokeIpcMock.mockRejectedValueOnce(REFUSAL);
-    invokeIpcMock.mockResolvedValue({ local_path: '/cache/p1.stalx', concurrent_session: false });
+    invokeIpcMock.mockResolvedValue({ local_path: '/cache/p1.stalx' });
     render(<SpeleoRestoreDialog />);
 
     await userEvent.click(screen.getByTestId('speleodb-restore-confirm-btn'));

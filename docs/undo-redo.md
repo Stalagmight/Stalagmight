@@ -46,6 +46,7 @@ Commands go through a two-phase capture during execution:
 | `ZeroDatumInfo` | SetZeroDatum (and legacy persisted RemoveZeroDatum entries) | Restore GPS + offsets directly, at the datum's recorded index | Execute the original command |
 | `SegmentMoveInfo` | MoveSegment | Restore section offsets directly | Reapply offset to affected sections |
 | `ProjectSnapshotPair` | Batch, DeleteSection, DeleteShot, ReverseSection, MergeStations, UnmergeStations, UnmergeStationPair, MoveStation, MoveComment, RemoveZeroDatum, CreateLoopClosure (distributing strategies only), and the label-only RepairIntegrity / UpdateProjectSettings / SetSurfaceElevation (see below) | Re-record "after" from the live project, then restore "before" JSON (see below) | Re-record "before" from the live project, then restore "after" JSON |
+| `AddedProjectContent` | AddProjectFile (#674) | Re-record what the add brought from the live project, then remove exactly that and put back the two project fields it changed (see below) | Reinstall the recorded content verbatim - same section, shot and closure ids |
 | `None` | Non-undoable commands | N/A | N/A |
 
 ### Undo data addresses a shot by uuid, never by its in-session id (#413)
@@ -154,6 +155,73 @@ anchors the live project already holds). The heals that DROP or REWRITE state
 are deliberately not re-applied: an undo has to be an exact inverse, and undoing
 a Repair has to restore the very state that Repair healed. The per-heal argument
 is on the function.
+
+### A loaded history follows the load's shot UUID heal
+
+Shot UUIDs are unique across the whole project, but a file saved before that
+can hold one id in several sections (the same Ariane file imported twice, a
+merge of two copies). The load keeps the id in the lowest section and renames
+the others to a derived id (`Project::make_shot_uuids_project_unique`,
+`reminted_shot_uuid`). The persisted history was recorded against the OLD ids:
+left alone, an entry addressing `(section, old id)` would no longer find its
+shot and be dropped, and a snapshot restored from it would put the repeat back.
+
+So both load paths call `UndoStack::reconcile_with_loaded_project` right after
+`load_from_persisted_with_timestamps`: it translates every entry
+(`core/undo/uuid_remap.rs`), THEN runs `drop_entries_addressing_a_missing_shot`.
+The map (`history_remap`):
+
+1. reuses what the live heal did, verbatim;
+2. leaves an id that is live in its section alone;
+3. maps an id to its derived replacement when that is what the section holds,
+   live or elsewhere in the history (history saved against an older heal);
+4. renames an id its section must YIELD to a derived id stepped past every id in
+   use. A section yields when another section holds the same id in the SAME
+   recorded state - one project snapshot, or the sections one entry reinstalls
+   (an Add, a re-created section) together with the live project - and keeps
+   it: the one holding the id live, else the lowest. This is what covers a copy
+   only the history still holds (a deleted section an undo would bring back);
+5. leaves everything else alone.
+
+Rule 4 asks about one recorded state at a time on purpose. A split moves shots,
+ids and all, from one section to a new one, so the history holds each moved id
+in two sections - but never at the same time. Across the whole history that
+looks like a repeat; within any one state it is not, and renaming it would hand
+the shots new ids every time a project with a split in its history is opened.
+
+The visitor is an exhaustive `match` over `UndoData`: a new variant that carries
+a shot id has to say how it is translated, or the build fails. Where a variant
+keeps one shot's id twice it rewrites both (`Shot::with_uuid` lets
+`shot_data.uuid` win over the recorded `uuid`; `restore_with_identity` lets
+`identity.shot_uuids` win over `section_data`). Project snapshots are rewritten
+as `serde_json::Value`, never round-tripped through `Project`:
+`restore_snapshot_into` recognises a legacy blob by the keys it LACKS
+(`"validation":`, `"surface_elevation":`), and a typed round trip would add them.
+A light probe (section ids and shot ids only) reads each snapshot once; when
+nothing needs renaming - every history without repeats - the translation stops
+there and leaves the history byte for byte. Byte totals are recounted after a
+rewrite.
+
+Every id involved is derived from the file alone, so a reopen without saving, or
+two independent loads of one revision (SpeleoDB Unwind), translate identically,
+and nothing on this path marks the project dirty. The next save persists the
+translated history.
+
+One case translates differently across a reload than it would have within the
+session: delete a section holding id X, then import a file carrying X (the door
+sees no live holder, so the new section keeps X), then reload. The deleted
+section exists only in the history now, so it is the one renamed, and undoing
+back to it restores it with the derived id instead of X. Its references are
+translated with it, so nothing dangles; only the id differs from what it had
+before the reload.
+
+An undo of an integrity Repair that healed a cross-section repeat restores the
+repeat verbatim, like every Repair undo (`undo_of_duplicate_uuid_repair_restores_the_duplicates`
+and its cross-section twin). The save does not re-heal it (its uuid heal stays
+in-section); the next load does, with the same rule. While that state is open,
+the project counts as already critical, so the integrity guard - which refuses
+only NEWLY introduced corruption - refuses no further edit until the repeat is
+gone: the same as after undoing any other Repair.
 
 ### A snapshot pair is a SELF-REFRESHING wall (#413, finding 11's re-creation residue)
 
@@ -408,6 +476,62 @@ Batch operations (`Command::Batch { commands }`) are **atomic**:
 - The single `UndoEntry` uses `ProjectSnapshotPair` - undo restores "before", redo restores "after"
 - The UI shows batch as one history item; the hover preview lists each sub-command
 
+## Adding a `.stalx` to the open project (#674)
+
+`AddProjectFile` appends another project file's survey into the OPEN project
+through the same routine "Merge projects" uses (`core/state/project_append.rs`),
+and goes through `execute()` like any edit, so the read-only gate and the
+geometry epilogue apply. It is ONE undo step on top of the project's existing
+history, and that step records only what the add brought - never a
+`ProjectSnapshotPair`, whose size would grow with the cave being added INTO:
+
+- **What is recorded** (`AddedContent`, `core/undo/added_content.rs`): the
+  added `Section`s whole (ids, shot uuids, parity, gauge pair), every merge,
+  closure, datum, comment, station name and section/station offset that names
+  them, the
+  dedup hashes the add put in (not ones the project already held), the ignored
+  warnings it carried, `(before, after)` of `surface_elevation` and `location`
+  (the two project fields the shared append can set), and `(before, after)` of
+  any PRE-EXISTING section offset that moved across the command (normally none:
+  the add places only what it copied).
+- **Two phases**, like `CreatedShotSnapshot`: `generate_undo_data` returns a stub
+  holding only a baseline (`next_section_id`, offsets, hash sets, the two
+  fields); `finalize_undo_data` measures the project the epilogue left against
+  it. The baseline is `#[serde(skip)]` and never persisted.
+- **Undo** removes exactly the recorded sections and everything referencing
+  them, the recorded hashes, and puts the two fields and any moved offset back.
+  The id allocators are left alone, so within a session nothing later reuses
+  an id the redo needs. That holds only within a session: a reload derives
+  `next_section_id` from the highest section id on disk (max + 1), so after
+  undo, save and reopen a later command can take an id the redo needs - and
+  the redo then refuses it rather than create two sections with one id. It is
+  SELF-REFRESHING, like `CreatedSectionSnapshot`: the
+  content is re-read from the live project right before the removal, so a save
+  heal applied since the push comes back on redo instead of being reverted.
+- **Redo** reinstalls the recorded content verbatim - it never re-reads the
+  file, which may have changed or gone. It refuses (nothing changed) if a
+  recorded section id is already taken, or if the record names a section twice
+  or past `MAX_SECTION_ID` (the entry is persisted, so it is read back like any
+  other input).
+- **Placement is not part of the step**: a source with a datum lands at its
+  GPS position. One without a datum stays floating, and the orphan-placement
+  dialog offers it spots on any anchored section, the open project's own
+  included (`Project::suggest_orphan_placements`). Accepting one runs
+  ordinary edits (`MergeStations`, `SetShotKind`, and with the "interpolate"
+  or "import data" overlap modes `UpdateShot` on the target's shots). Each is
+  its own undo step on top of the add, and each goes through the same gate.
+- **Privacy**: undo history rides to SpeleoDB in Full mode, so the command's
+  `path` is `#[serde(skip)]`; only the sanitized file name (the history label)
+  is serialized. A reloaded entry has an empty path, which nothing reads.
+- **Ignored warnings** live in the open file's `resolved_warnings` table, which
+  has a foreign key on `sections(id)` - and an added section is not in that
+  table until the next save. So the carried ignores wait in
+  `AppState::pending_ignores`, are honored by `compute_project_warnings`
+  meanwhile, are written by the next save's carry-over, and are cleared with
+  every project-slot commit. Undo drops the pending ones; rows a save already
+  wrote stay on disk, inert (their sections are gone) and dropped by the next
+  save, so a close without saving leaves the file consistent.
+
 ## Non-Undoable Commands
 
 These are never pushed to the undo stack: `OpenProject`, `SaveProject`, `CloseProject`, `CreateProject`, `MergeProjects`.
@@ -584,7 +708,8 @@ are megabytes each.
 A SpeleoDB-linked project is a binary `.stalx` committed to a git repo, so what its undo
 stack holds at push time is what every commit stores forever. Two policies, resolved by
 `AppState::undo_policy` from `speleo_link.undo_mode` (per project, rides to the server) then
-`SpeleoDbConfig.undo_mode` (the application default):
+`SpeleoDbConfig.undo_mode` (the application default). Existing per-project values
+continue to load and apply; the workspace no longer offers a policy editor:
 
 | | `Full` (default) | `Disabled` | Local project |
 |---|---|---|---|
@@ -626,9 +751,8 @@ side's value.
 | Event | Effect | Why |
 |---|---|---|
 | Confirmed push | entries with `timestamp <= push_start` dropped; redo cleared | they are in the commit now, so keeping them would duplicate them in the next one. Bounded by push-start because an edit recorded after the snapshot keeps its dirty bit, so its history has to survive with it |
-| Any server `.stalx` becoming the local cache file | undo/redo tables emptied in the downloaded FILE | `InheritedUndo::Drop` at the `replace_cache_stalx*` chokepoint - pull, fast-forward and revision swap all funnel there |
+| Any server `.stalx` becoming the local cache file | undo/redo tables emptied in the downloaded FILE | `InheritedUndo::Drop` applied by `stage_download` - pull, fast-forward and revision swap all stage their download through it |
 | Lock acquired over a copy that equals git (`UpToDate` + clean) | in-memory stacks cleared | the history describes already-committed operations. The clean check is what lets lock, edit, unlock-without-pushing, re-lock keep the user's own history |
-| Force-edit | in-memory stacks cleared | no lock and no reconcile, so the equals-git fence cannot be evaluated; that session already carries the unmergeable warning |
 
 Clearing on adopt happens in the FILE, not in memory: the load path reads those tables into
 the live stack, so a memory-only clear would leave the history on disk for the next open.
@@ -764,14 +888,38 @@ One lock sits OUTSIDE even that: `speleodb_lock_ops`
 operation** against every other and is deliberately held across network calls.
 Start Editing takes it before its first read (generation, link, token, holder)
 and holds it through the commit; so do the reclaim-checked releases, the status
-poll's inherited-lock gate reopen, and logout - each of which can invalidate a
-fact another one of them is mid-way through acting on. Nothing holding `project` / `database` / `undo_stack` may
+refresh's short lock-holder probe, logout, and a settings save or reload that
+moves to another SpeleoDB instance (taken before `config_write_lock`) - each of
+which can invalidate a fact another one of them is mid-way through acting on.
+Nothing holding `project` / `database` / `undo_stack` / `config_write_lock` may
 block on it - its users decide under `project`, drop that guard, and only then
-take it. The SpeleoDB session generation (`speleodb_session_generation`) is
+take it. No synchronous Tauri command may block on it either: those run on the
+main thread, and the span lasts as long as an upload or download. The partial
+config writes never take it, and Switch to Read Only Mode drops `command_lock`
+and `project` before its release request. The SpeleoDB session generation (`speleodb_session_generation`) is
 likewise only ever bumped while holding `project`; see the module doc in
 `speleodb_session.rs` for the rules.
 
+The read-only edit gate that every mutation entry (`guard_mutation`) checks is
+not a stored flag but a function of the lock claim bound to the editing session
+(`core/state/speleodb_edit_gate.rs`): a local project is always editable, a
+SpeleoDB project only while the signed-in account holds a claim on it bound to the
+current session generation. Reading it takes the open-project gate record (the
+innermost lock of all) and then, separately, the SpeleoDB session mutex, under
+which nothing but that record is ever taken - so `edit_enabled()` must never be
+called while holding the session mutex. An in-place reload bumps the generation and carries the binding in one
+acquisition of the session mutex, so a reader never sees the gate of a session
+that kept editing flicker shut. Undo and redo on a SpeleoDB project are therefore
+refused exactly when there is no edit session, including right after Take remote,
+whose reload carries no claim. A Restore that loads a revision's undo history keeps
+its edit session by carrying the claim through the swap; a View carries none.
+
 ## History UI
+
+SpeleoDB revision inspection, restore/revert, and Unwind/Rewind live in the left
+workspace History section. They are separate from the local undo/redo dropdown,
+which closes when its stack becomes empty. Revision editing requires Survey mode
+and the editing lock.
 
 ### Dropdown (`UndoHistoryDropdown.tsx`)
 
@@ -821,14 +969,18 @@ For batch commands, `derive_command_details()` extracts a compact detail string 
 |------|----------|
 | `src-tauri/crates/core/src/core/undo.rs` | `UndoStack`, `UndoEntry`, `UndoData` types, `DepthLimit` + the byte budget, the persist plan |
 | `src-tauri/crates/core/src/core/state/undo.rs` | `undo()`, `redo()`, `undo_to()`, `redo_to()` implementation |
-| `src-tauri/crates/core/src/core/state/undo_policy.rs` | `undo_policy()` (the Full/Disabled resolver), `speleodb_set_undo_mode` |
+| `src-tauri/crates/core/src/core/state/undo_policy.rs` | `undo_policy()` (the Full/Disabled resolver) |
 | `src-tauri/crates/models/src/undo_mode.rs` | `UndoMode`, `UndoPolicy` |
 | `src-tauri/crates/speleodb/src/speleodb/sync.rs` | `unwind_target` - the BASE-then-first-parents chain |
 | `src-tauri/crates/core/src/core/state/speleodb_cache.rs` | `InheritedUndo` and the drop-on-adopt chokepoint |
 | `src/components/Dialogs/SpeleoUnwindDialog.tsx` | The Unwind confirmation |
-| `src/components/Dialogs/settings/SpeleoUndoModeControl.tsx` | The per-project Full/Disabled control |
+| `src-tauri/crates/core/src/core/state/undo_policy.rs` | Persisted policy loading and effective undo limits |
 | `src-tauri/crates/core/src/core/state/commands.rs` | `execute()`, `execute_batch()` |
 | `src-tauri/crates/core/src/core/state/undo_capture.rs` | `generate_undo_data()`, `finalize_undo_data()`, `is_undoable()` |
+| `src-tauri/crates/core/src/core/undo/added_content.rs` | `AddedContent`: what an `AddProjectFile` brought, its removal and reinstall |
+| `src-tauri/crates/core/src/core/state/project_add.rs` | The add's forward step, the pending-ignore set |
+| `src-tauri/crates/core/src/core/state/project_append.rs` | `append_project`, shared by merge and add (copy, datum placement) |
+| `src-tauri/crates/core/src/core/state/project_source.rs` | `read_source_project`, the source read shared by merge and add |
 | `src-tauri/crates/core/src/core/command.rs` | `Command` enum and `description()` method |
 | `src-tauri/src/commands/history.rs` | Tauri commands for stacks |
 | `src-tauri/crates/core/src/core/undo/history_view.rs` | `UndoHistoryItem` DTO, `derive_preview_data()`, `entry_to_history_item()` |

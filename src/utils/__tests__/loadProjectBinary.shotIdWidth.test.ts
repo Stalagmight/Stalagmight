@@ -61,7 +61,7 @@ function makeEnvelope(sectionId: number, seqs: number[]): BinaryEnvelope {
   return {
     // Keep in sync with BINARY_FORMAT_VERSION / EXPECTED_VERSION. This fixture
     // feeds buildResult() directly, bypassing the envelope-version gate.
-    version: 5,
+    version: 6,
     loading_id: 1,
     is_remote: false,
     project_header: {
@@ -110,6 +110,7 @@ function makeEnvelope(sectionId: number, seqs: number[]): BinaryEnvelope {
     station_merged_with: [],
     station_closures_with: [],
     station_comments: [],
+    station_names: [],
     stats: {} as BinaryEnvelope['stats'],
     warnings: [],
     display_settings: {} as BinaryEnvelope['display_settings'],

@@ -66,6 +66,19 @@ describe('an import resolves the deferred first save (#394)', () => {
   });
 
   /**
+   * #674: adding a `.stalx` into a never-saved project goes through the same
+   * `finalize_deferred_import` (`add_project_file`), so it writes the file too.
+   *
+   * Injection: drop `add_project_file` from `IMPORT_COMMANDS` and the flag stays
+   * false after an add that really did write the file.
+   */
+  it('does the same for adding a .stalx to the open project', async () => {
+    await useProjectStore.getState().addProjectFile('/caves/other.stalx');
+
+    expect(useProjectStore.getState().databaseOpen).toBe(true);
+  });
+
+  /**
    * The deferred save reports its own failure as a `SYSTEM` warning ("Imported,
    * but could not save the new project to disk"), and then there IS no file -
    * opening the flag would enable surfaces that write to nothing.

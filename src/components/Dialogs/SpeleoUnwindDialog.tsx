@@ -9,35 +9,6 @@ import { useRestoreRevision } from '../../hooks/useRestoreRevision';
 import { humanizeSpeleoError } from '../../utils/speleoError';
 import { trackDialogComplete } from '../../utils/telemetry';
 
-/**
- * [#303] Confirmation for "Unwind to previous SpeleoDB version" - the one action that
- * fetches a commit's undo history back so the user can keep undoing past a commit
- * boundary.
- *
- * It exists because the action is not a plain undo step: it downloads a revision and
- * REPLACES the working copy. Two shapes, worded differently because they promise
- * different things (`isCurrent`, from `speleodb_unwind_target`):
- *
- * - **the commit the copy already equals** (the first press after a push): nothing
- *   moves. What comes back is the history that produced this state, so the user can
- *   step back through the operations they just pushed.
- * - **an ancestor**: the working copy DOES move back, and a later push lands that older
- *   content as a new forward commit (SpeleoDB exposes no server-side revert).
- *
- * The backend re-checks every precondition (lock held, no force-edit session, an empty
- * undo stack, and any dirt being a previous Unwind's own doing), so this dialog is the
- * user-facing half of the gate, never the whole of it.
- *
- * `discardsUnpushed` is the third thing it has to say. The affordance is offered when the
- * UNDO stack is empty, which is also what undoing everything produces - and that leaves the
- * copy dirty with the undone steps sitting on the REDO stack. The backend used to refuse
- * that outright, so the entry existed only to fail once pressed. Now the same predicate
- * that drives the refusal rides on the unwind target, this dialog states the consequence in
- * red BEFORE the user commits, and confirming reports back that it did (`discardUnpushed`).
- * The warning names the survey changes as well as the history: this copy can also be dirty
- * for reasons no undo explains (a byte-budget trim, a legacy file), and there the swap
- * really does replace content.
- */
 export default function SpeleoUnwindDialog() {
   const { t } = useTranslation();
   const closeDialog = useUIStore((s) => s.closeDialog);

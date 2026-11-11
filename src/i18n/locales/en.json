@@ -73,6 +73,7 @@
     "loading": "Loading configuration...",
     "categoryHeader": "{{category}} Settings",
     "resetToDefaults": "Reset to Defaults",
+    "saveErrorTitle": "Cannot save Settings",
     "sidebar": {
       "ariaLabel": "Settings categories",
       "general": "General",
@@ -432,7 +433,6 @@
         "interface": "Interface",
         "grid": "Grid",
         "font": "Font",
-        "depthGradient": "Depth Gradient",
         "sectionColors": "Section Colors",
         "measure": "Measure tool"
       },
@@ -467,33 +467,6 @@
           "aria": "Font color"
         }
       },
-      "depthGradient": {
-        "enabled": {
-          "label": "Enable depth gradient",
-          "help": "Color shots based on their depth",
-          "aria": "Enable depth gradient coloring"
-        },
-        "shallowColor": {
-          "label": "Shallow color",
-          "help": "Color at the shallow depth threshold",
-          "aria": "Shallow depth color"
-        },
-        "deepColor": {
-          "label": "Deep color",
-          "help": "Color at the deep depth threshold",
-          "aria": "Deep depth color"
-        },
-        "shallowDepth": {
-          "label": "Shallow depth",
-          "help": "Depth value where gradient starts (in configured depth unit)",
-          "aria": "Shallow depth threshold"
-        },
-        "deepDepth": {
-          "label": "Deep depth",
-          "help": "Depth value where gradient ends (in configured depth unit)",
-          "aria": "Deep depth threshold"
-        }
-      },
       "sectionColors": {
         "label": "Color palette",
         "help": "Colors assigned to new sections (click to change)",
@@ -505,8 +478,7 @@
         "aria": "Measure path highlight color"
       },
       "validation": {
-        "fontSize": "Font size must be between 8 and 32",
-        "depthRange": "Shallow depth must be less than deep depth"
+        "fontSize": "Font size must be between 8 and 32"
       }
     },
     "validation": {
@@ -657,46 +629,28 @@
       },
       "endpoint": {
         "label": "Server endpoint",
-        "help": "The SpeleoDB server to connect to (e.g. https://www.speleodb.org/). Saving a different server signs you out. Log in now connects to the server entered here immediately.",
+        "help": "HTTPS is required except for $t(speleodb.httpExceptions).",
+        "disconnectFirst": "Disconnect before changing servers.",
         "aria": "SpeleoDB server endpoint"
       },
       "insecureHttp": {
         "label": "Allow insecure HTTP",
-        "help": "By default only HTTPS (or HTTP to a private/loopback address) is allowed.",
+        "help": "Development builds only. Without it, HTTPS is required except for $t(speleodb.httpExceptions).",
         "aria": "Allow insecure HTTP endpoints",
-        "warning": "Allowing plain HTTP to a public address sends your token unencrypted. Only enable this for a trusted local server."
+        "warning": "Allowing plain HTTP to another address sends your token unencrypted. Only enable this for a trusted local server."
       },
-
       "account": {
-        "appliesOnSave": "Sign in and sign out apply when you press Save.",
-        "signedInAs": "Signed in as {{email}}",
-        "signedInAsAt": "Signed in as {{email}} at {{endpoint}}",
-        "logout": "Log out",
-        "willSignOut": "You'll be signed out when you press Save.",
-        "willSignIn": "Log in now to check your details, or they'll be applied when you press Save.",
-        "replacesSession": "This will replace your current session ({{email}}).",
-        "undo": "Undo",
+        "signedInAs": "Connected as {{email}}",
+        "signedInAsAt": "Connected to {{endpoint}} as {{email}}",
+        "logout": "Disconnect",
+        "replacesSession": "This replaces your current connection ({{email}}).",
         "email": "Email",
         "password": "Password",
         "token": "Token",
         "useToken": "Paste an existing token instead of a password",
-        "tryLogin": "Log in now",
-        "tryingLogin": "Logging in…"
-      },
-      "allowForceEdit": {
-        "label": "Allow editing without the write lock",
-        "help": "Adds an \"Edit without the write lock\" option for remote projects, so you can survey offline or while someone else holds it.",
-        "aria": "Allow editing SpeleoDB projects without the write lock",
-        "warning": "Changes made without the write lock cannot be merged to SpeleoDB until you reconnect and acquire it. If someone else edits meanwhile you may have to reconcile or keep your work as a separate local file."
-      },
-      "credentials": {
-        "fileStorage": "SpeleoDB settings and your API token are saved in speleodb/speleodb.conf in the app configuration folder. The token is stored as plaintext."
-      },
-      "pollInterval": {
-        "label": "Remote refresh interval",
-        "help": "How often (seconds) to re-check a linked project's remote state. Minimum {{min}}.",
-        "aria": "Remote refresh interval in seconds",
-        "tooLow": "Must be at least {{min}} seconds."
+        "tryLogin": "Connect",
+        "tryingLogin": "Connecting…",
+        "connectionErrorTitle": "SpeleoDB connection error"
       }
     },
     "advanced": {
@@ -768,22 +722,22 @@
       "placementSuggestion": {
         "azimuthWeight": {
           "label": "Azimuth weight",
-          "help": "Weight for azimuth score component (0\u20131)",
+          "help": "Weight for azimuth score component (0-1)",
           "aria": "Azimuth weight"
         },
         "lengthWeight": {
           "label": "Length weight",
-          "help": "Weight for length score component (0\u20131)",
+          "help": "Weight for length score component (0-1)",
           "aria": "Length weight"
         },
         "depthInWeight": {
           "label": "Depth in weight",
-          "help": "Weight for depth-in score component (0\u20131)",
+          "help": "Weight for depth-in score component (0-1)",
           "aria": "Depth in weight"
         },
         "depthOutWeight": {
           "label": "Depth out weight",
-          "help": "Weight for depth-out score component (0\u20131)",
+          "help": "Weight for depth-out score component (0-1)",
           "aria": "Depth out weight"
         },
         "azimuthSigma": {
@@ -803,17 +757,17 @@
         },
         "minShotScore": {
           "label": "Min shot score",
-          "help": "Minimum per-shot score to continue matching (0\u20131)",
+          "help": "Minimum per-shot score to continue matching (0-1)",
           "aria": "Minimum shot score"
         },
         "minAggregateScore": {
           "label": "Min aggregate score",
-          "help": "Minimum aggregate score to include a suggestion (0\u20131)",
+          "help": "Minimum aggregate score to include a suggestion (0-1)",
           "aria": "Minimum aggregate score"
         },
         "singleShotPenalty": {
           "label": "Single shot penalty",
-          "help": "Penalty multiplier for single-shot matches (0\u20131)",
+          "help": "Penalty multiplier for single-shot matches (0-1)",
           "aria": "Single shot penalty"
         },
         "maxAzimuthErrorFull": {
@@ -833,7 +787,7 @@
         },
         "maxLengthErrorFraction": {
           "label": "Max length error fraction",
-          "help": "Length error fraction for dynamic cutoff (0\u20131)",
+          "help": "Length error fraction for dynamic cutoff (0-1)",
           "aria": "Max length error fraction"
         },
         "maxLengthErrorFloor": {
@@ -843,17 +797,17 @@
         },
         "maxReferenceShots": {
           "label": "Max reference shots",
-          "help": "Maximum number of reference shots to try from each leaf (1\u201350)",
+          "help": "Maximum number of reference shots to try from each leaf (1-50)",
           "aria": "Max reference shots"
         },
         "maxSuggestions": {
           "label": "Max suggestions",
-          "help": "Maximum number of suggestions to return (1\u2013100)",
+          "help": "Maximum number of suggestions to return (1-100)",
           "aria": "Max suggestions"
         },
         "minPartialRatio": {
           "label": "Min partial ratio",
-          "help": "Minimum partial shot length ratio (0\u20131)",
+          "help": "Minimum partial shot length ratio (0-1)",
           "aria": "Min partial ratio"
         },
         "shortShotThreshold": {
@@ -964,7 +918,7 @@
         "toggleDepthGradient": "Toggle Depth Gradient",
         "toggleGrid": "Toggle Grid",
         "toggleSatellite": "Toggle Satellite",
-        "toggleStationLabels": "Toggle Station Labels",
+        "toggleStationLabels": "Toggle Station IDs",
         "toggleShotLabels": "Toggle Shot Labels",
         "toggleSectionLabels": "Toggle Section Labels",
         "fitToBounds": "Fit to Bounds",
@@ -1183,7 +1137,7 @@
       "title": "Settings"
     },
     "projectSettings": {
-      "title": "Project Settings",
+      "title": "Local settings",
       "noProject": "No project is open.",
       "saveFailed": "Failed to save project settings.",
       "tabs": {
@@ -1269,6 +1223,14 @@
       "bodyDirect": "Open {{fileName}}?",
       "closeNotice": "Opening it will close {{projectName}}.",
       "confirm": "Open"
+    },
+    "addOrOpenProject": {
+      "title": "Open or add this project?",
+      "body": "{{fileName}} can be opened as its own project, or its survey data can be added to the project that is open now. Adding is one undo step and never modifies the original file.",
+      "blockedNotice": "Adding is unavailable while editing is blocked (Plan or Export mode, the Closures Computed View, or no SpeleoDB write lock).",
+      "openAsProject": "Open as project",
+      "addTo": "Add to {{projectName}}",
+      "adding": "Adding..."
     },
     "importAsNewProject": {
       "title": "Import as new project?",
@@ -1616,22 +1578,45 @@
         "medium": "Medium",
         "low": "Low"
       },
-      "overlapModes": {
-        "interpolate": "Interpolate (average)",
-        "import_data": "Use orphan data",
-        "existing_data": "Use target data",
-        "keep_both": "Keep both (mark as reference)"
-      },
       "sectionNotFound": "Section not found",
       "suggestedConnection": "Suggested Connection",
       "station": "stn {{index}}",
       "matchedShots_one": "{{count}} shot matched {{direction}}",
       "matchedShots_other": "{{count}} shots matched {{direction}}",
+      "matchedShotsResolved_one": "{{count}} shot matched {{direction}}, {{resolved}} resolved at this merge station",
+      "matchedShotsResolved_other": "{{count}} shots matched {{direction}}, {{resolved}} resolved at this merge station",
       "score": "{{percent}}% score",
       "mergeAt": "Merge at",
       "mergeOption": "stn {{importStation}} → {{targetName}} stn {{existingStation}}",
-      "overlap": "Overlap",
+      "repeat": {
+        "heading_one": "{{count}} repeated shot",
+        "heading_other": "{{count}} repeated shots",
+        "setAll": "Set all:",
+        "hint": "Only the shots between this section's open end and the merge station are treated as the repeat; survey on the other side of the merge station is kept as normal survey, so choose the end of the repeat to resolve all of it. The new copy of each repeated shot is kept as a Reference shot. Choose which reading the existing shot keeps.",
+        "anchored": "The existing survey is tied down at both ends, so its readings stay as they are. The new copies are kept as Reference shots.",
+        "choices": {
+          "keep_existing": "Keep existing",
+          "use_new": "Use new",
+          "average": "Average"
+        },
+        "columns": {
+          "shot": "Shot",
+          "length": "Length ({{unit}})",
+          "azimuth": "Azimuth (°)",
+          "inclination": "Incl. (°)",
+          "depth": "Depth ({{unit}})"
+        },
+        "existing": "Existing {{shot}}",
+        "new": "New {{shot}}",
+        "diff": "Difference",
+        "unresolved_one": "Merging at this station keeps the repeated shot as normal survey, so it is counted twice. Merge at the end of the repeat to resolve it.",
+        "unresolved_other": "Merging at this station keeps the {{count}} repeated shots as normal survey, so they are counted twice. Merge at the end of the repeat to resolve them.",
+        "choiceLabel": "Reading to keep:",
+        "choiceAria": "Reading to keep for shot {{shot}}"
+      },
       "prompt": "Does this connection look right?",
+      "mergeFailed": "Could not connect {{name}}, so nothing was changed for it. {{error}}",
+      "readOnly": "Editing is disabled in this mode, so nothing was connected.",
       "accept": "Accept",
       "skip": "Skip",
       "hideAlternatives": "Hide alternatives",
@@ -1840,6 +1825,7 @@
     "stationCount": "{{countFormatted}} stations",
     "stationColumns": {
       "index": "Stn",
+      "name": "Name",
       "x": "X",
       "y": "Y",
       "depth": "Depth",
@@ -1850,6 +1836,7 @@
       "comment": "Comment"
     },
     "stationColumnsMenu": {
+      "name": "Name",
       "coordsMeters": "Coordinates (m)",
       "coordsGps": "Coordinates (GPS)",
       "depth": "Depth",
@@ -1967,6 +1954,7 @@
     },
     "labels": {
       "id": "ID",
+      "name": "Name",
       "section": "Section",
       "x": "X",
       "y": "Y",
@@ -2058,7 +2046,7 @@
       "zeroDatums": "Zero datums"
     },
     "projectSettings": {
-      "open": "Project Settings"
+      "open": "Local settings"
     },
     "closures": {
       "title": "Loop closures",
@@ -2095,7 +2083,8 @@
       "section": "Section",
       "stations": "Stations",
       "sectionNames": "Section names",
-      "stationLabels": "Station labels",
+      "stationLabels": "Station IDs",
+      "stationNames": "Station names",
       "shots": "Shots",
       "jumps": "Jumps",
       "referenceShots": "References",
@@ -2114,6 +2103,8 @@
       "stations": "Show station markers",
       "sectionNames": "Show section labels",
       "stationLabels": "Show station IDs",
+      "stationNames": "Show station names (e.g. mNemo station numbers) instead of IDs. Stations without a name get no label",
+      "stationNamesUnavailable": "This project has no station names. Stations get names from an mNemo (.dmp) import",
       "shots": "Show shot lines",
       "jumps": "Show jump shots (swum shortcuts)",
       "referenceShots": "Show reference shots (survey ties)",
@@ -2148,8 +2139,10 @@
       "aria": "Switch between map and list view"
     },
     "speleoRefresh": {
-      "title": "Refresh SpeleoDB write-lock state",
-      "aria": "Refresh SpeleoDB write-lock state"
+      "label": "Refresh SpeleoDB",
+      "loading": "Refreshing projects...",
+      "title": "Refresh SpeleoDB projects",
+      "aria": "Refresh SpeleoDB projects"
     },
     "tabs": {
       "map": "Map",
@@ -2164,6 +2157,7 @@
     "recent": {
       "title": "Recent projects",
       "hintPrefix": "Click to select, double-click to open, right-click for options.",
+      "hintPrefixWithSpeleo": "Click to select, double-click to open, right-click for options. A SpeleoDB project opens with a single click.",
       "hintFindPrefix": "Don't see your project?",
       "hintFindLink": "Click here",
       "hintFindSuffix": " to open it from file.",
@@ -2350,6 +2344,11 @@
       "expandAria": "Show map imagery sources",
       "collapsed": "by {{source}}"
     },
+    "readOnlyPill": {
+      "resume": "Resume editing",
+      "resumeSpeleoTitle": "Take the SpeleoDB write lock again so you can edit",
+      "resumeRawTitle": "Switch back to the Raw Data View, which you can edit"
+    },
     "geometry": {
       "adjustedBadge": "Closures Computed View · read-only",
       "computing": "Computing closures…",
@@ -2374,6 +2373,63 @@
       "fromEntrance": "from entrance",
       "fromStation": "from {{id}}",
       "computing": "Distance: computing…"
+    },
+    "colorScale": {
+      "settingsButton": "Color scale settings",
+      "title": {
+        "depth": "Depth colors",
+        "distance": "Distance colors"
+      },
+      "palette": "Palette",
+      "themePalette": "Theme",
+      "reverse": "Reverse",
+      "reverseAria": "Reverse the palette",
+      "resetPalette": "Reset palette to the theme default",
+      "resetRange": "Reset range to the full data range",
+      "range": "Range",
+      "min": "Min",
+      "max": "Max",
+      "gamma": "Mid",
+      "gammaHelp": "Midpoint gamma, as in Levels: 1.00 is linear, higher pushes the middle color toward the start",
+      "minHandle": "Range start",
+      "midHandle": "Midpoint",
+      "maxHandle": "Range end",
+      "midValue": "Mid {{value}}",
+      "histogram": "Histogram of {{kind}} values",
+      "kind": {
+        "depth": "depth",
+        "distance": "distance"
+      },
+      "search": "Search palettes",
+      "noResults": "No palettes match",
+      "pin": "Pin {{name}} to the top",
+      "unpin": "Unpin {{name}}",
+      "groups": {
+        "pinned": "Pinned",
+        "theme": "Theme",
+        "mpl-perceptual": "Perceptually uniform",
+        "mpl-sequential": "Sequential",
+        "mpl-sequential-2": "Sequential (2)",
+        "mpl-diverging": "Diverging",
+        "mpl-cyclic": "Cyclic",
+        "mpl-qualitative": "Qualitative",
+        "mpl-misc": "Miscellaneous",
+        "grad-basics": "Basics",
+        "grad-spectrum": "Spectrum",
+        "grad-blues": "Blues",
+        "grad-greens": "Greens",
+        "grad-reds": "Reds and oranges",
+        "grad-purples": "Purples and pinks",
+        "grad-earth": "Browns and earth",
+        "grad-grays": "Grays",
+        "grad-metals": "Metals"
+      },
+      "saveFailed": "Could not save the color palette. It will be back to the previous one next time.",
+      "pinLimit": "You can pin up to {{count}} palettes. Unpin one to pin another.",
+      "noValues": {
+        "depth": "This survey has no depths to color.",
+        "distance": "No station is reachable from an entrance, so nothing is colored by distance. Set a zero datum to use this."
+      }
     },
     "gasLegend": {
       "title": "Gas reach",
@@ -2537,7 +2593,8 @@
     "restartNow": "Restart now",
     "toasts": {
       "downloadFailed": "Could not download the update. Try again from the update banner.",
-      "installFailed": "Could not install the update. Download it again from the update banner."
+      "installFailed": "Could not install the update. Download it again from the update banner.",
+      "restartWaitsForTransfer": "Stalagmight did not restart: a SpeleoDB transfer is still running. Restart to update once it has finished."
     }
   },
   "integrityRepair": {
@@ -2563,7 +2620,8 @@
     "commandFailed": "The change could not be applied."
   },
   "importGate": {
-    "inProgress": "Finish or cancel the current import first."
+    "inProgress": "Finish or cancel the current import first.",
+    "alreadyOpen": "{{fileName}} is already the open project."
   },
   "newerSchema": {
     "message": "\"{{file}}\" was saved by a newer version of Stalagmight (file format {{found}}; this version reads up to {{supported}}). Update Stalagmight to open it.",
@@ -2679,7 +2737,7 @@
       "saveACopy": "Save a Copy",
       "saveAndClose": "Save and Close",
       "closeProject": "Close Project",
-      "projectSettings": "Project Settings",
+      "projectSettings": "Local settings",
       "projectDetails": "Project Details",
       "debug": "Debug",
       "devStats": "Dev Stats",
@@ -3196,19 +3254,17 @@
       "readOnlyBadge": "SpeleoDB · read-only"
     },
     "button": {
-      "unlocked": "Read-only - click to start editing (take the write lock)",
-      "editingUnwound": "This copy is at an older version of the survey - click to choose what to do with it",
-      "editingDirty": "You're editing - click to push your changes and release the write lock",
-      "editingClean": "You hold the write lock - click to release it",
-      "forceEditing": "Editing WITHOUT the write lock - your changes can't be merged until you reconnect. Click to reconnect.",
-      "forceEditingLockedBy": "Editing WITHOUT the write lock ({{email}} holds it) - click to reconnect and reconcile",
-      "lockedByOther": "Being edited by {{email}} - click to pull the latest",
-      "remoteAhead": "SpeleoDB has newer changes - click to pull",
-      "conflict": "Local and remote have diverged - click to resolve",
-      "viewOnly": "Read-only access - click to refresh from SpeleoDB",
-      "noPermission": "You don't have permission to this SpeleoDB project - click for options",
-      "unknownError": "SpeleoDB reported an unexpected error - click for details",
-      "loggedOut": "Log in to SpeleoDB to edit this project"
+      "unlocked": "Read-only - open SpeleoDB menu",
+      "editingUnwound": "Viewing an older survey version - open SpeleoDB menu",
+      "editingDirty": "Editing - changes have not been uploaded. Open SpeleoDB menu.",
+      "editingClean": "Editing - open SpeleoDB menu",
+      "lockedByOther": "Read-only - {{email}} is editing this project. Open SpeleoDB menu.",
+      "remoteAhead": "SpeleoDB has newer changes - open SpeleoDB menu",
+      "conflict": "Local and remote changes need review - open SpeleoDB menu",
+      "viewOnly": "Read-only access - open SpeleoDB menu",
+      "noPermission": "You do not have access to this SpeleoDB project - open SpeleoDB menu",
+      "unknownError": "SpeleoDB reported an unexpected error - open SpeleoDB menu",
+      "loggedOut": "Connect to SpeleoDB to edit this project"
     },
     "serverError": {
       "title": "SpeleoDB error",
@@ -3216,12 +3272,11 @@
     },
     "menu": {
       "title": "SpeleoDB",
-      "lock": "Start editing (take the write lock)",
-      "unlock": "Finish editing (push & release)",
-      "push": "Push (keep the write lock)",
+      "lock": "Resume editing",
+      "unlock": "Release editing lock",
+      "push": "Upload changes",
       "refresh": "Refresh from SpeleoDB",
-      "discardChanges": "Discard changes…",
-      "editWithoutLock": "Edit without the write lock…"
+      "discardChanges": "Discard changes…"
     },
     "close": {
       "title": "Close SpeleoDB project",
@@ -3283,32 +3338,13 @@
       }
     },
     "errors": {
-      "loginFailed": "Login to SpeleoDB failed",
+      "loginFailed": "Could not connect to SpeleoDB",
       "openFailed": "Unable to open the project",
       "listFailed": "Could not load projects",
       "openBlockedUnpushed": "Hand the open project back to SpeleoDB first - it still has work that has not been uploaded, and opening {{name}} would close it and leave that work only on this computer.",
       "openBlockedUnsaved": "Save or discard the changes in the open project first - opening {{name}} would close it and lose them.",
       "saveFailedTitle": "Save Failed",
       "saveFailedMessage": "Failed to save project"
-    },
-    "forceEdit": {
-      "reconnect": "Reconnect to sync",
-      "confirm": {
-        "title": "Edit without the write lock?",
-        "warning": "You are about to edit WITHOUT the SpeleoDB write lock. Your changes stay only on this computer and cannot be merged back to SpeleoDB until you reconnect and acquire it.",
-        "hint": "If someone else edits meanwhile, reconnecting may report a conflict - you would then reconcile, or save your work as an unmanaged local copy. Use this to survey offline or while another person holds the write lock.",
-        "lockedBy": "{{email}} currently holds the write lock, so their work is what a later reconnect will reconcile against.",
-        "action": "Edit without the write lock",
-        "entering": "Enabling…"
-      },
-      "banner": {
-        "text": "Editing WITHOUT the write lock - these changes cannot be merged to SpeleoDB until you reconnect and acquire it.",
-        "lockedBy": "Editing WITHOUT the write lock ({{email}} holds it) - reconnect to acquire it and reconcile before your work can be merged."
-      },
-      "toasts": {
-        "active": "Editing without the write lock. Reconnect to sync when you're ready.",
-        "failed": "Could not start editing without the write lock"
-      }
     },
     "revisions": {
       "title": "Revision history",
@@ -3322,7 +3358,6 @@
       "viewing": "Viewing…",
       "restoreHint": "Restoring replaces the working copy with the selected revision as an unsaved edit; push to make it the project's latest. Your project history is not rewritten.",
       "lockToRestore": "The project is read-only. View opens a revision for inspection (the SpeleoDB Update returns you to the latest). Revert takes the write lock, uploads the chosen revision as a new revision, and releases it again.",
-      "forceEditActive": "You are force-editing without the write lock. Finish or discard those edits (reconnect or save a local copy) before you can view or restore a revision.",
       "unknownAuthor": "unknown author",
       "viewBlockedByUnpushed": "This copy has changes that are not on SpeleoDB. Viewing a revision replaces the working copy, so it would discard them - take the write lock and upload your changes first, or use Revert (that route asks before replacing them)."
     },
@@ -3424,7 +3459,7 @@
         "lockStillHeld": "The write lock was kept, because releasing it would leave your unpushed changes unprotected.",
         "pushFailed": "Revision {{sha}} is in your working copy and you still hold the write lock, but it could not be uploaded. That upload is all that is left, so retry it below.",
         "pushUnconfirmed": "The upload could not be confirmed, so the revert may or may not have reached SpeleoDB. Your working copy and the write lock are both kept, so retry it below - a revert that did land is recognised as yours rather than uploaded a second time.",
-        "notEditing": "Revision {{sha}} is in your working copy, but your SpeleoDB session ended before it could be uploaded, so nothing was published and no write lock is held. Close this dialog, sign in again, then start editing to upload it."
+        "notEditing": "Revision {{sha}} is in your working copy, but your SpeleoDB session ended before it could be uploaded, so nothing was published and no write lock is held. Close this dialog, connect to SpeleoDB again, then start editing to upload it."
       }
     },
     "editBar": {
@@ -3436,19 +3471,24 @@
         "released": "Changes uploaded and the write lock released.",
         "releasedNothingToUpload": "Write lock released. Nothing to upload.",
         "pushed": "Changes pushed to SpeleoDB.",
+        "pushedWithoutHistory": "Changes pushed without undo history: the project is over the SpeleoDB size limit.",
+        "releasedWithoutHistory": "Changes uploaded without undo history (the project is over the SpeleoDB size limit) and the write lock released.",
         "startFailed": "Could not start editing",
         "updateFailed": "Could not update",
         "doneFailed": "Could not finish editing",
         "pushFailed": "Could not push changes",
         "tookRemote": "Reset to the SpeleoDB version.",
         "takeRemoteFailed": "Could not take the SpeleoDB version",
-        "notEditing": "Nothing was uploaded - you are not editing this project right now. Start editing again (signing in first if needed) to upload your changes."
-      }
+        "notEditing": "Nothing was uploaded - you are not editing this project right now. Start editing again (connecting to SpeleoDB first if needed) to upload your changes.",
+        "lateUploadFailed": "The upload you left running did not reach SpeleoDB. Your changes are still on this computer."
+      },
+      "push": "Save Changes",
+      "unlock": "Switch to Read Only Mode"
     },
     "done": {
       "title": "Finish editing",
       "description": "Upload your changes to SpeleoDB and release the write lock.",
-      "pushTitle": "Push changes",
+      "pushTitle": "Save Changes",
       "pushDescription": "Upload your changes to SpeleoDB and keep the write lock so you can carry on editing.",
       "messageLabel": "Commit message",
       "messagePlaceholder": "Describe your changes…",
@@ -3456,7 +3496,28 @@
       "pushConfirm": "Upload & keep editing",
       "pushing": "Uploading…",
       "failedHeading": "Your changes were NOT uploaded",
-      "retryHint": "They are still only on this computer. Fix the problem, then press the button again to retry."
+      "retryHint": "They are still only on this computer. Fix the problem, then press the button again to retry.",
+      "errors": {
+        "heading_one": "This survey has {{count}} error.",
+        "heading_other": "This survey has {{count}} errors.",
+        "body": "Uploading sends the survey to SpeleoDB as it is, errors included. Fix them first, or confirm that they should be uploaded.",
+        "accept": "Upload anyway, with the errors",
+        "resolve": "Resolve now",
+        "confirmBlocked": "The survey has errors. Fix them, or tick \"Upload anyway\" to upload them as they are."
+      }
+    },
+    "saveLocal": {
+      "signedOut": "Saved on this computer. Connect to SpeleoDB to upload it.",
+      "lockedBy": "Saved on this computer. {{email}} is editing this project, so it was not uploaded.",
+      "noAccess": "Saved on this computer. You cannot upload this project to SpeleoDB.",
+      "saved": "Saved on this computer. Not uploaded to SpeleoDB yet.",
+      "button": "Save on this computer",
+      "acquiring": "Taking the editing lock so you can upload…",
+      "blocked": "Upload needs a SpeleoDB connection, write permission and the editing lock. You can save your work on this computer and upload it later."
+    },
+    "commitMessage": {
+      "count": "{{length}} / {{max}} characters",
+      "tooLong": "This description is too long for SpeleoDB ({{length}} characters). Shorten it to {{max}} characters or fewer. Each line break counts as two characters."
     },
     "noPermission": {
       "title": "No SpeleoDB access",
@@ -3469,42 +3530,43 @@
       "message": "\"{{fileName}}\" is a copy of the SpeleoDB project \"{{name}}\". A managed project has one working copy on this computer, so this file cannot be opened directly.",
       "hint": "Open the project from SpeleoDB to work on the managed copy, or remove this file's SpeleoDB link to open it as an independent local project. Removing the link changes only this file - the SpeleoDB project is untouched.",
       "openRemote": "Open from SpeleoDB",
-      "openRemoteDisabledLoggedOut": "Sign in to SpeleoDB to open the managed copy. Removing the link works offline.",
+      "openRemoteDisabledLoggedOut": "Connect to SpeleoDB to open the managed copy. Removing the link works offline.",
       "openRemoteDisabledBadId": "This file's SpeleoDB project id is not readable, so it cannot be opened from the server.",
       "removeLink": "Remove link & open as local",
       "removeFailed": "Could not remove the SpeleoDB link",
       "notOnAccount": "\"{{name}}\" is not available on your SpeleoDB account.",
-      "endpointMismatch": "This file is linked to {{endpoint}}, which is not the server you are signed in to.",
+      "endpointMismatch": "This file is linked to {{endpoint}}, which is not the server you are connected to.",
       "copySaved": "Saved an unlinked copy to {{path}}. You are still working on the SpeleoDB-managed project."
     },
     "unpushedLocal": {
+      "choices": "\"Open my local copy\" opens the copy on this computer as it is, without downloading anything. You can then upload your changes, and Stalagmight will tell you if SpeleoDB has a newer version. \"Discard my changes\" deletes them and opens the version on SpeleoDB instead. Cancel leaves them as they are.",
       "title": "Changes on this computer are not on SpeleoDB",
-      "message": "\"{{name}}\" has already been opened on this computer, and that local copy has changes SpeleoDB has never seen. Downloading the server copy would delete them, so nothing has been downloaded yet.",
+      "message": "\"{{name}}\" has already been opened on this computer, and that local copy has changes SpeleoDB has never seen. Replacing the local copy would delete them, so your local changes have been left intact.",
       "lastEdited": "Local copy last edited: {{when}}",
       "lastEditedUnknown": "We could not tell when the local copy was last edited.",
-      "keepHint": "Keeping the local copy downloads nothing and overwrites nothing: it opens exactly as you left it, with your changes intact, and you can upload them to SpeleoDB later.",
-      "keepLocal": "Keep the local copy & open it",
-      "takeRemote": "Take the server copy & discard my changes",
-      "discardWarning": "Taking the server copy permanently deletes the changes made to \"{{name}}\" on this computer. They are not on SpeleoDB, so there is no other copy and this cannot be undone.",
-      "takeRemoteConfirm": "Yes, discard my changes"
+      "takeRemote": "Discard my changes",
+      "discardWarning": "Discarding permanently deletes the changes made to \"{{name}}\" on this computer. They are not on SpeleoDB, so there is no other copy and this cannot be undone.",
+      "takeRemoteConfirm": "Yes, discard my changes",
+      "messageOtherAccount": "\"{{name}}\" has already been opened on this computer by {{owner}}, and that local copy holds changes {{owner}} made that SpeleoDB has never seen. They are {{owner}}'s work, not yours, so they have been left intact.",
+      "choicesOtherAccount": "\"Open it read-only\" opens the copy on this computer as it is, without downloading anything and without taking the editing lock. You can look at {{owner}}'s changes and save a copy of the project, but only {{owner}} can edit and upload them. \"Discard their changes\" deletes them and opens the version on SpeleoDB instead. Cancel leaves them as they are.",
+      "takeRemoteOtherAccount": "Discard their changes",
+      "takeRemoteConfirmOtherAccount": "Yes, discard their changes"
     },
     "transport": {
-      "refused": "Could not reach SpeleoDB at {{endpoint}} - the server refused the connection. Check that it is running and that the address is right.",
+      "refused": "Could not connect to SpeleoDB at {{endpoint}}. Check your network connection, the server address, and whether the server is running.",
       "timeout": "SpeleoDB at {{endpoint}} did not respond in time. Check your network connection and that the server is running.",
       "dns": "Could not find the SpeleoDB server at {{endpoint}}. Check the address in Settings and your network connection.",
       "tls": "Could not set up a secure connection to SpeleoDB at {{endpoint}}. Check the server's certificate and the address in Settings.",
       "unreachable": "Could not reach SpeleoDB at {{endpoint}}. Check your network connection and that the server is running.",
       "thisServer": "the configured server"
     },
+    "httpExceptions": "localhost, 127.0.0.1 and 192.168.x.x addresses",
+    "endpointRefused": {
+      "plainHttp": "Did not connect to {{endpoint}}: HTTPS is required. Plain HTTP is allowed only for $t(speleodb.httpExceptions), because it would send your credentials unencrypted. Use an https:// address.",
+      "invalidAddress": "{{endpoint}} is not a server address Stalagmight can use. Enter the full address, starting with https:// (or http:// for a server on your own network)."
+    },
     "banner": {
       "pushUnconfirmed": "The upload could not be confirmed. Your changes are kept - click Done again to retry.",
-      "concurrentSession": "Your account holds the write lock on this project in another session. Editing from two sessions at once can lose edits.",
-      "renderingDisabled": "Web-map rendering is turned off for this project on SpeleoDB, so the online map won't refresh (it may show older geometry).",
-      "enableRendering": "Enable rendering",
-      "enableRenderingConfirm": "Rendering refreshes on your NEXT push, not right now (this does not re-render the current version). Enable it?",
-      "enableRenderingConfirmAction": "Enable rendering",
-      "enableRenderingBusy": "Enabling…",
-      "enableRenderingFailed": "Could not enable rendering",
       "pushFailed": "Your changes were NOT uploaded and are still only on this computer. {{message}}",
       "retryPush": "Retry upload",
       "startEditingToRetry": "Start editing to upload",
@@ -3514,7 +3576,7 @@
       "title": "You hold SpeleoDB write locks",
       "description_one": "You still hold the write lock on this SpeleoDB project (perhaps from a session that did not exit cleanly). Others cannot edit it until it is released.",
       "description_other": "You still hold the write lock on {{count}} SpeleoDB projects (perhaps from a session that did not exit cleanly). Others cannot edit them until they are released.",
-      "keep": "Keep working",
+      "keep": "Not now",
       "release": "Release",
       "releaseOneAria": "Release the write lock on {{name}}",
       "releasing": "Releasing…",
@@ -3535,34 +3597,136 @@
         "unpushedWork": "Hand the open project back to SpeleoDB first - it still has work that has not been uploaded, and opening {{name}} would close it and leave that work only on this computer."
       }
     },
+    "workspace": {
+      "disabled": {
+        "busy": "Wait for the current SpeleoDB operation to finish.",
+        "noAccess": "Your SpeleoDB account has no access to this project.",
+        "permissionUnknown": "SpeleoDB has not said yet whether your account can edit this project.",
+        "reloadSignedOut": "Connect to SpeleoDB to reload this project from the server."
+      }
+    },
+    "workspaceTab": {
+      "tablist": "Project workspace",
+      "sections": "Sections",
+      "speleodb": "SpeleoDB",
+      "unuploaded": "Changes on this computer have not been uploaded to SpeleoDB yet.",
+      "readOnly": "Read-only - you are not editing this project",
+      "busy": "Talking to SpeleoDB..."
+    },
+    "reloadConfirm": {
+      "title": "Reload Project",
+      "body": "Discard changes removes unsaved and unuploaded modifications. Save first using Save Changes to preserve your work. Cancel keeps everything.",
+      "discard": "Discard changes",
+      "cancel": "Cancel"
+    },
+    "lockState": {
+      "youAreEditing": "You are editing",
+      "beingEditedBy": "Currently being edited by {{email}}",
+      "readyForEditing": "Ready for editing",
+      "readOnly": "Read-only"
+    },
     "recentBadge": {
       "remote": "Linked to SpeleoDB",
-      "lockedByYou": "Linked to SpeleoDB - write lock held by you",
-      "lockedByOther": "Linked to SpeleoDB - write lock held by {{email}}"
+      "lockedByYou": "Linked to SpeleoDB - you are editing",
+      "lockedByOther": "Linked to SpeleoDB - currently being edited by {{email}}"
+    },
+    "projectListing": {
+      "permission": "Permission: {{permission}}",
+      "permissions": {
+        "WEB_VIEWER": "Web viewer",
+        "READ_ONLY": "Read-only",
+        "READ_AND_WRITE": "Read and write",
+        "ADMIN": "Admin",
+        "unknown": "Unknown"
+      },
+      "lockedBy": "Currently being edited by {{email}}",
+      "lockedByYou": "You are editing",
+      "unlocked": "Ready for editing",
+      "lockUnknown": "Editing status unknown",
+      "offlineCopy": "SpeleoDB is unreachable. Opened the last downloaded copy; it may be out of date."
     },
     "recentInfo": {
       "prefix": "SpeleoDB: {{name}}",
-      "lockedByYou": "Write-locked by you",
-      "lockedByOther": "Write-locked by {{email}}"
+      "lockedByYou": "You are editing",
+      "lockedByOther": "Currently being edited by {{email}}"
+    },
+    "cachedCopies": {
+      "readOnlySignedOut": "Read-only copy - connect to SpeleoDB to edit",
+      "viewOnly": "Read-only - your SpeleoDB access does not allow editing",
+      "logIn": "Connect",
+      "logInTitle": "Open the SpeleoDB settings to connect",
+      "openedSignedOut": "Opened a read-only copy. Connect to SpeleoDB to edit it.",
+      "openedSessionExpired": "Your SpeleoDB session has expired. Opened a read-only copy; connect again to edit it.",
+      "openedOtherAccount": "Opened a read-only copy. It holds changes {{owner}} made that were never uploaded: only {{owner}} can edit and upload them. You can still save a copy.",
+      "menu": {
+        "aria": "SpeleoDB project actions",
+        "open": "Open project",
+        "zoom": "Zoom to system",
+        "removeCopy": "Remove local copy…"
+      },
+      "remove": {
+        "title": "Remove local copy?",
+        "body": "This removes the copy of {{name}} downloaded to this computer. The project stays on SpeleoDB and can be downloaded again.",
+        "unpushed": "This copy has changes that were never uploaded to SpeleoDB. Removing it deletes them for good.",
+        "unknown": "Stalagmight could not read this copy, so it may hold changes that were never uploaded to SpeleoDB. Removing it may delete them for good.",
+        "lockHandedBack": "If you hold this project's editing lock on SpeleoDB, it is handed back once the copy is removed.",
+        "lockStaysSignedOut": "You are not connected to SpeleoDB, so no editing lock is handed back. If one is held on SpeleoDB, it stays until you next connect (which offers to release it), or until it is released on the SpeleoDB website.",
+        "lockStaysOtherAccount": "This copy belongs to another SpeleoDB account. If that account holds the project's editing lock, it stays until that account next connects (which offers to release it), or until it is released on the SpeleoDB website.",
+        "confirm": "Remove copy",
+        "confirmLosingChanges": "Remove copy and lose my changes",
+        "removing": "Removing…",
+        "cancel": "Cancel",
+        "done": "Removed the local copy of {{name}}.",
+        "failed": "The copy could not be removed."
+      },
+      "purge": {
+        "title": "Downloaded projects",
+        "help": "Copies of SpeleoDB projects downloaded to this computer: your account's while you are connected, every account's while you are not. Projects stay on SpeleoDB and download again when you open them.",
+        "button": "Purge all cached files",
+        "working": "Purging…",
+        "empty": "There are no downloaded copies to remove.",
+        "confirmTitle": "Purge all cached files?",
+        "confirmBody_one": "Remove {{countFormatted}} downloaded copy from this computer? It stays on SpeleoDB and can be downloaded again.",
+        "confirmBody_other": "Remove {{countFormatted}} downloaded copies from this computer? They stay on SpeleoDB and can be downloaded again.",
+        "openKept": "The copy of the project that is open now is kept.",
+        "locksSignedIn": "Your editing locks on these projects are handed back. Locks held by other accounts, or that cannot be checked because SpeleoDB is unreachable, stay until that account next connects (which offers to release them), or until they are released on the SpeleoDB website.",
+        "locksSignedOut": "You are not connected to SpeleoDB, so no editing lock is handed back. Locks held on SpeleoDB stay until the next connection offers to release them, or until they are released on the SpeleoDB website.",
+        "locksReleased": "Handed back the editing lock of: {{names}}",
+        "locksUnchecked": "Could not hand back the editing lock of: {{names}}. If you hold it, it stays until you next connect (which offers to release it), or until you release it on the SpeleoDB website.",
+        "atRisk_one": "{{countFormatted}} copy has changes that were never uploaded to SpeleoDB, or could not be read:",
+        "atRisk_other": "{{countFormatted}} copies have changes that were never uploaded to SpeleoDB, or could not be read:",
+        "keepAtRisk": "Keep those, remove the rest",
+        "deleteAll": "Delete everything",
+        "purge": "Purge",
+        "cancel": "Cancel",
+        "lostTitle": "Delete changes that were never uploaded?",
+        "lostBody": "The changes in these copies exist only on this computer. They will be lost for good. This cannot be undone.",
+        "lostConfirm": "Delete them",
+        "back": "Back",
+        "result_one": "Removed {{countFormatted}} downloaded copy.",
+        "result_other": "Removed {{countFormatted}} downloaded copies.",
+        "keptUnpushed": "Kept, with changes that were never uploaded: {{names}}",
+        "keptOpen": "Kept because it is open: {{names}}",
+        "failed": "Could not remove: {{details}}"
+      }
     },
     "browser": {
       "title": "Open from SpeleoDB",
       "checking": "Checking session…",
-      "loginPrompt": "You're not signed in to SpeleoDB. Sign in from Settings to browse your projects.",
+      "loginPrompt": "You're not connected to SpeleoDB. Connect from Settings to browse your projects.",
       "goToSettings": "Open Settings",
       "filterPlaceholder": "Filter projects…",
       "noProjects": "No projects visible to this account.",
       "listUnavailable": "Your projects could not be loaded. Check your connection and use Refresh to try again.",
       "noMatches": "No projects match your filter.",
       "noAccess": "NO ACCESS",
-      "lockedBy": "Locked by {{email}}",
+      "lockedBy": "Currently being edited by {{email}}",
       "readOnly": "Read-only",
       "readOnlyWarning": "This project will open read-only. Uploading changes requires write access and the project lock.",
-      "lockedWarning": "This project is locked by {{email}}. It will open read-only. Editing requires the write lock.",
+      "lockedWarning": "This project is currently being edited by {{email}}. It will open read-only.",
       "open": "Open",
       "refresh": "Refresh",
-      "signedInAs": "Signed in as {{email}}",
-      "concurrentSession": "Your account already holds the write lock on this project in another session. Editing it from two sessions at once is unsupported and can lose edits.",
+      "signedInAs": "Connected as {{email}}",
       "listFailed": "Could not load projects",
       "openFailed": "Could not open project"
     },
@@ -3584,55 +3748,32 @@
     },
     "web": {
       "openProject": "Open project on the web",
-      "openRevisions": "Open revision history on the web",
-      "unavailable": "Sign in to SpeleoDB to open this project on the web.",
+      "openRevisions": "Revision History on SpeleoDB",
+      "unavailable": "Connect to SpeleoDB to open this project on the web.",
       "failed": "Could not open your browser"
-    },
-    "projectSettings": {
-      "title": "Project details",
-      "loading": "Loading project details from SpeleoDB…",
-      "loadFailed": "Could not load project details",
-      "retry": "Retry",
-      "readOnlyBadge": "Read-only access",
-      "saveButton": "Save to SpeleoDB",
-      "saving": "Saving…",
-      "saveFailed": "Could not save to SpeleoDB",
-      "saved": "Saved to SpeleoDB.",
-      "coordinatesHint": "Latitude and longitude go together - fill in both or leave both blank.",
-      "fields": {
-        "name": "Name",
-        "description": "Description",
-        "country": "Country",
-        "visibility": "Visibility",
-        "latitude": "Latitude",
-        "longitude": "Longitude"
-      },
-      "visibilityOptions": {
-        "private": "Private",
-        "public": "Public"
-      },
-      "rendering": {
-        "label": "Web-map rendering",
-        "enabledNote": "Rendering is enabled - the online map refreshes on each push.",
-        "enableButton": "Enable rendering",
-        "enabled": "Rendering enabled."
-      }
     },
     "publish": {
       "title": "Publish to SpeleoDB",
       "menuItem": "Publish to SpeleoDB…",
       "description": "Create this project on SpeleoDB and upload its first revision.",
       "country": "Country",
-      "visibility": "Visibility",
       "latitude": "Latitude",
       "longitude": "Longitude",
       "countryPlaceholder": "Select a country…",
+      "searchCountry": "Search countries…",
+      "noCountries": "No countries match your search.",
       "submit": "Publish",
       "submitting": "Publishing…",
       "success": "Project published to SpeleoDB.",
       "failed": "Could not publish to SpeleoDB",
-      "reloadFailed": "Published to SpeleoDB, but the project could not be reopened. Reopen it from SpeleoDB.",
-      "descriptionRequired": "A description is required to publish."
+      "recentCleanupFailed": "Converted to SpeleoDB, but the local shortcut could not be removed from Recent Projects. You can remove it manually; the original file is unchanged.",
+      "reloadFailed": "The project was created on SpeleoDB, but a fresh server copy could not be reopened. Use Reload Project to retry.",
+      "descriptionRequired": "A description is required to publish.",
+      "name": "Name",
+      "descriptionLabel": "Description",
+      "coordinatesHint": "Enter both latitude and longitude, within their valid ranges.",
+      "uploadPending": "The project was created on SpeleoDB. Changes remain on this computer; use Save Changes to finish uploading.",
+      "withoutHistory": "The project's first revision was uploaded without undo history: it is over the SpeleoDB size limit."
     },
     "lock": {
       "title": "Write lock",
@@ -3644,11 +3785,154 @@
       "releasing": "Releasing…",
       "released": "Write lock released.",
       "releaseFailed": "Could not release the write lock"
+    },
+    "readOnlyNotice": {
+      "title": "Project opened read-only",
+      "lockedBy": "{{email}} is currently editing this project. You can view it, but you cannot make changes.",
+      "unavailable": "The editing lock could not be acquired. You can view this project, but you cannot make changes.",
+      "failed": "The editing lock could not be acquired. This project is open read-only.",
+      "continue": "Continue read-only"
+    },
+    "release": {
+      "title": "Release editing lock",
+      "unsavedMessage": "This project has unsaved changes. Discard them and release the editing lock? Changes already saved on this computer will be kept and will not be uploaded.",
+      "discard": "Discard changes",
+      "released": "Editing lock released. This project is now read-only.",
+      "failed": "Could not release editing lock"
+    },
+    "exit": {
+      "unsavedTitle": "Discard unsaved changes?",
+      "unsavedMessage": "Your unsaved changes will be discarded. Changes already saved on this computer will be kept. Nothing will be uploaded to SpeleoDB.",
+      "discardChanges": "Discard changes"
     }
   },
   "shotKind": {
     "normal": "Permanent",
     "jump": "Jump",
     "reference": "Reference"
+  },
+  "quitWait": {
+    "toast": "An upload or save is in progress. Stalagmight will close when it finishes.",
+    "title": "Waiting to quit",
+    "body": "A SpeleoDB transfer is still running. Stalagmight will close as soon as it finishes, so nothing is lost on a slow connection.",
+    "cancel": "Keep Stalagmight open",
+    "force": "Quit now",
+    "forceTitle": "Quit without waiting?",
+    "forceBody": "The transfer will be cut off, and SpeleoDB may or may not receive it.",
+    "forceDetail": "Your changes stay saved on this computer. If an upload or an editing-lock request is cut off, the project can stay locked to you until you open it again in Stalagmight.",
+    "back": "Back",
+    "forceConfirm": "Quit without waiting",
+    "forcing": "Quitting…",
+    "saveFailed": "Your changes could not be saved on this computer, so Stalagmight did not quit."
+  },
+  "speleoExitPrompt": {
+    "title": "Your changes are not on SpeleoDB yet",
+    "body": "You are editing \"{{name}}\", and some of your changes have not been uploaded to SpeleoDB. What should happen to them before {{action}}?",
+    "action": {
+      "close": "you close the project",
+      "switch": "you open another project",
+      "quit": "Stalagmight closes"
+    },
+    "choices": "Upload sends them to SpeleoDB and hands the project back, so others can edit it. Keep the lock leaves them on this computer and keeps the project reserved for you, so nobody else can edit it until you come back and upload. Discard throws them away and hands the project back.",
+    "upload": "Upload",
+    "keep": "Keep the lock",
+    "discard": "Discard",
+    "back": "Back",
+    "saveLocally": "Save on this computer",
+    "uploadBody": "Describe what you changed. Other cavers will see this note in the project history.",
+    "messageLabel": "What did you change?",
+    "messagePlaceholder": "For example: surveyed the north passage",
+    "uploadConfirm": "Upload and continue",
+    "uploading": "Uploading…",
+    "uploadProgressTitle": "Uploading your changes to SpeleoDB",
+    "uploadProgressBody": "This can take a moment for a large survey.",
+    "uploadSlow": "The upload is taking more than 2 minutes. It may still finish. You can wait, or close this window and try again later.",
+    "olderVersion": "This copy is an older version of the survey that you went back to. Uploading it records that older version over the newer one, for everyone who works on this project.",
+    "discardTitle": "Are you sure?",
+    "discardBody": "Your changes will be lost forever.",
+    "discardDetail": "The changes on this computer that are not on SpeleoDB will be deleted, and the project will be handed back. Next time you open it, you will get the version that is on SpeleoDB.",
+    "discardConfirm": "Yes, discard my changes",
+    "working": "Working…",
+    "errors": {
+      "saveFailed": "Your changes could not be saved on this computer, so nothing was closed.",
+      "closeFailed": "The project could not be closed. It is still open.",
+      "newerChanges": "You made more changes while uploading. They are still on this computer, so the project stays open."
+    },
+    "restart": {
+      "failedTitle": "Could not restart to update"
+    },
+    "closeApp": {
+      "title": "Close Stalagmight?",
+      "confirm": "Discard and close"
+    },
+    "account": {
+      "title": "Discard unsaved changes?",
+      "message": "Changing the account or server discards changes you have not saved yet, including unsaved form changes.",
+      "confirm": "Discard changes"
+    },
+    "drafts": {
+      "title": "Discard what you typed?",
+      "message": "You have not sent {{items}} to SpeleoDB yet. If you continue, it is lost.",
+      "confirm": "Discard and continue",
+      "alsoLost": "You have also not sent {{items}} to SpeleoDB yet. If you continue, it is lost, whichever you choose.",
+      "upload": "the description of your upload",
+      "publish": "the SpeleoDB project form"
+    },
+    "unpushedLocal": {
+      "openLocal": "Open my local copy",
+      "openReadOnly": "Open it read-only"
+    },
+    "readOnly": {
+      "lockedByKeepsChanges": "{{email}} is editing this project right now, so it is open read-only. Your changes are kept on this computer, and you can upload them once {{email}} has finished.",
+      "unavailableKeepsChanges": "The editing lock could not be taken, so this project is open read-only. Your changes are kept on this computer, and you can upload them later."
+    },
+    "signOut": {
+      "title": "Before you disconnect",
+      "switchTitle": "Before you switch accounts",
+      "intro": "Disconnecting hands back every project you are editing on SpeleoDB, so others can edit them.",
+      "checking": "Checking your SpeleoDB projects…",
+      "checkFailedTitle": "Could not check your projects",
+      "checkFailedBody": "SpeleoDB could not be reached, so Stalagmight cannot tell which projects you are editing. If you disconnect anyway, any project you are editing stays reserved for you until you connect again and hand it back. Changes on this computer are kept.",
+      "openProjectBody": "\"{{name}}\", the project you have open, has changes that are not on SpeleoDB yet. Upload them before you disconnect, keep them on this computer to upload after you connect again, or discard them.",
+      "otherChangesBody": "These projects have changes that are not on SpeleoDB yet. The changes stay on this computer, and you can open and upload them after you connect again:",
+      "discard": "Discard",
+      "keepOpen": "Keep on this computer",
+      "uploadAndSignOut": "Upload and disconnect",
+      "uploadAndSwitch": "Upload and switch",
+      "discardAndSignOut": "Discard and disconnect",
+      "discardAndSwitch": "Discard and switch",
+      "keepFailed": "Your changes could not be saved on this computer, so they were not kept.",
+      "discardBody": "Your changes to \"{{name}}\" will be lost forever:",
+      "lostUnsaved": "the changes you have not saved yet",
+      "lostUnuploaded": "the changes saved on this computer that are not on SpeleoDB",
+      "discardDetail": "They are deleted from this computer, and the project is handed back. Next time you open it, you will get the version that is on SpeleoDB.",
+      "discardOthersKept": "Only this project is affected: the other projects keep their changes on this computer.",
+      "discardFailed": "The changes to \"{{name}}\" could not be discarded.",
+      "willRelease": "These projects will be handed back so others can edit them:",
+      "signOut": "Disconnect",
+      "switch": "Switch account",
+      "releasing": "Handing projects back to SpeleoDB…",
+      "releasingShort": "Handing back…",
+      "releaseFailedTitle": "Some projects could not be handed back",
+      "releaseFailedBody": "SpeleoDB could not be reached, so these projects are still reserved for you: {{names}}.",
+      "signOutAnywayHint": "If you disconnect anyway, these projects stay reserved for you, and nobody else can edit them until you connect again and hand them back.",
+      "retry": "Try again",
+      "signOutAnyway": "Disconnect anyway",
+      "unnamed": "Unnamed project"
+    }
+  },
+  "speleoReleaseFailed": {
+    "title": "Couldn't hand back the lock",
+    "body": "Stalagmight could not hand back the SpeleoDB lock on \"{{name}}\" before {{action}}. Until it is handed back, nobody else can edit the project.",
+    "reason": "What went wrong: {{reason}}",
+    "choices": "Retry asks SpeleoDB again and hands the lock back if it is still yours. Close and keep the lock leaves the project reserved for you: the next time you connect to SpeleoDB, Stalagmight offers to release it, and you can also release it on the SpeleoDB website. Cancel keeps the project open, read-only until you resume editing.",
+    "retry": "Retry",
+    "retrying": "Retrying...",
+    "keep": "Close and keep the lock",
+    "stillOpen": "The SpeleoDB lock was not handed back, so the project is still open."
+  },
+  "projectClose": {
+    "failedTitle": "Close Project failed",
+    "failedMessage": "The project is still open. Try again."
   }
 }

@@ -1,6 +1,7 @@
 //! Release the open linked project's write lock through its authenticated session.
 
 use super::speleodb::validate_project_id;
+use super::speleodb_session::LockClaim;
 use super::AppState;
 use crate::speleodb::client;
 use crate::speleodb::contract::{dto_for_error, Endpoint};
@@ -52,6 +53,7 @@ impl AppState {
         validate_project_id(&link.project_id).map_err(admin_dto)?;
         // Unknown access (offline, signed out, another deployment) opens read-only.
         let fallback = SpeleoProjectSummary {
+            modified_date: None,
             id: link.project_id.clone(),
             name: path
                 .file_stem()
@@ -81,6 +83,13 @@ impl AppState {
                         endpoint,
                         user_email,
                         session_generation: generation.to_string(),
+                        project_modified_at: self
+                            .project
+                            .lock()
+                            .ok()?
+                            .as_ref()?
+                            .modified_at
+                            .to_rfc3339(),
                     })
                 });
         let unavailable = || SpeleoFileAccess {
@@ -118,67 +127,162 @@ impl AppState {
         ))
     }
 
-    /// Explicit recovery may release another holder's lock for an administrator.
-    /// Automatic close/quit sets `own_only`, which checks current ownership first.
+    /// Switch the current project to read-only. No discard or upload is implicit.
+    ///
+    /// No guard but the lock-ops span is held across either network call. The holder
+    /// probe runs with nothing else held. The clean check and the gate closing then
+    /// happen together under `command_lock` + `project`, so no mutation or session
+    /// boundary lands between them, and both guards drop before the release POST.
+    /// That was the freeze: holding them across the POST made every edit, undo, save
+    /// and `get_project_state` - synchronous commands, so on the main thread - wait
+    /// up to the release timeout. With the gate already shut, an edit attempted
+    /// during the POST is refused as read-only instead of waiting. If the POST
+    /// fails, a gate this call closed is reopened for the same session, so a failed
+    /// switch still leaves the project editable under the lock it still holds.
     pub fn speleodb_release_current_lock(
         &self,
-        own_only: bool,
-        allow_unpushed: bool,
         expected: Option<crate::speleodb::SpeleoReleaseContext>,
     ) -> Result<(), SpeleoErrorDto> {
         let _lock_ops = self.speleodb_lock_ops_guard();
+        self.speleodb_check_expected_context(expected.as_ref())
+            .map_err(admin_dto)?;
         let generation = self.speleodb_session_generation();
         let (link, endpoint, token, insecure_http) = self.speleodb_admin_context()?;
-        if let Some(expected) = &expected {
-            let (_, _, email) = self.speleodb_active_account().map_err(admin_dto)?;
-            if expected.session_generation != generation.to_string()
-                || expected.project_id != link.project_id
-                || crate::speleodb::auth::normalize_endpoint(&expected.endpoint)
-                    != crate::speleodb::auth::normalize_endpoint(&endpoint)
-                || !super::speleodb::lock_held_by_me(Some(&expected.user_email), Some(&email))
+        if link.has_unpushed_edits {
+            return Err(admin_dto(SpeleoDbError::Io(
+                "Save your changes using Save Changes before switching to read-only mode.".into(),
+            )));
+        }
+        {
+            let _commands = self
+                .command_lock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let project = self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.speleodb_require_clean_project(project.as_ref())
+                .map_err(admin_dto)?;
+        }
+        let (_, _, email) = self.speleodb_active_account().map_err(admin_dto)?;
+        let holder = self
+            .speleodb_lock_holder_checked(&endpoint, &token, insecure_http, &link.project_id)
+            .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
+        // Clean check and gate transition under ONE `command_lock` + `project`
+        // acquisition: mutations and session boundaries cannot slip between them.
+        // Taking the claim out IS shutting the gate (`speleodb_edit_gate`), and a
+        // failed POST can put back exactly what was there.
+        let (gate_was_open, claim) = {
+            let _commands = self
+                .command_lock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let project = self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if generation != self.speleodb_session_generation()
+                || expected.as_ref().is_none_or(|expected| {
+                    expected.session_generation != generation.to_string()
+                        || project.as_ref().is_none_or(|project| {
+                            project.modified_at.to_rfc3339() != expected.project_modified_at
+                        })
+                })
             {
                 return Err(admin_dto(SpeleoDbError::SessionMoved));
             }
-        }
-        if link.has_unpushed_edits && (!allow_unpushed || expected.is_none()) {
-            return Err(admin_dto(SpeleoDbError::Parse(
-                "Unpushed edits require explicit release confirmation for this project and account"
-                    .into(),
-            )));
-        }
-        if crate::speleodb::auth::normalize_endpoint(&endpoint)
-            != crate::speleodb::auth::normalize_endpoint(&link.endpoint)
-        {
-            return Err(admin_dto(SpeleoDbError::SessionMoved));
-        }
-        let should_release = if own_only {
-            let (_, _, email) = self.speleodb_active_account().map_err(admin_dto)?;
-            let holder = self
-                .speleodb_lock_holder_checked(&endpoint, &token, insecure_http, &link.project_id)
-                .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
-            super::speleodb::lock_held_by_me(holder.as_deref(), Some(&email))
-        } else {
-            true
+            self.speleodb_require_clean_project(project.as_ref())
+                .map_err(admin_dto)?;
+            let open = self.edit_enabled();
+            let claim = self.speleodb_forget_lock_acquired_for(&link.project_id);
+            (open, claim)
         };
-        if generation != self.speleodb_session_generation() {
-            return Err(admin_dto(SpeleoDbError::SessionMoved));
+        if super::speleodb::lock_held_by_me(holder.as_deref(), Some(&email)) {
+            if let Err(e) = client::release_lock(&endpoint, &token, insecure_http, &link.project_id)
+            {
+                // Still ours: give the same session its gate back, exactly as it was
+                // before this call. A boundary that landed during the POST owns the
+                // gate now, so leave it alone - but the claim goes back either way:
+                // it is the only local pointer to a mutex the server still holds,
+                // and with the session gone it is what the janitor retries from.
+                let _project = self
+                    .project
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let authored = claim.as_ref().is_some_and(LockClaim::is_authored);
+                self.speleodb_restore_lock_claim(claim);
+                if gate_was_open && generation == self.speleodb_session_generation() {
+                    // Re-bound through the one way in, as the same kind of claim
+                    // it was; never recorded as a flow's fresh acquisition.
+                    let _ = self.speleodb_bind_edit_claim(
+                        &link.project_id,
+                        &link.endpoint,
+                        authored,
+                        false,
+                    );
+                }
+                return Err(dto_for_error(Endpoint::Release, &e));
+            }
         }
-        if should_release {
-            self.speleodb_handle_auth(
-                Endpoint::Release,
-                client::release_lock(&endpoint, &token, insecure_http, &link.project_id),
-            )
-            .map_err(|e| dto_for_error(Endpoint::Release, &e))?;
-        }
-        if self.edit_enabled()
-            && !self.force_editing()
-            && self.speleodb_open_link().is_ok_and(|open| {
-                open.project_id == link.project_id && open.endpoint == link.endpoint
-            })
+        Ok(())
+    }
+
+    /// Caller holds project and excludes command mutations.
+    pub(super) fn speleodb_require_clean_project(
+        &self,
+        project: Option<&crate::models::Project>,
+    ) -> Result<(), SpeleoDbError> {
+        let database = self
+            .database
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let db = database.as_ref().ok_or(SpeleoDbError::NoRemoteProject)?;
+        let saved = db
+            .load_project()
+            .map_err(|e| SpeleoDbError::Io(e.to_string()))?;
+        let link = db
+            .load_speleo_link()
+            .map_err(|e| SpeleoDbError::Io(e.to_string()))?;
+        if project.is_none_or(|p| p.modified_at != saved.modified_at)
+            || link.is_none_or(|link| link.has_unpushed_edits)
         {
-            self.set_edit_enabled(false);
+            return Err(SpeleoDbError::Io(
+                "Save your changes using Save Changes before switching to read-only mode.".into(),
+            ));
         }
-        self.speleodb_forget_lock_acquired_for(&link.project_id);
+        Ok(())
+    }
+
+    /// Bind UI consent to the open project and authenticated backend session.
+    pub(super) fn speleodb_check_expected_context(
+        &self,
+        expected: Option<&crate::speleodb::SpeleoReleaseContext>,
+    ) -> Result<(), SpeleoDbError> {
+        let Some(expected) = expected else {
+            return Err(SpeleoDbError::SessionMoved);
+        };
+        let (generation, link) = self
+            .speleodb_session_snapshot()
+            .map_err(|_| SpeleoDbError::SessionMoved)?;
+        let (endpoint, _, email) = self.speleodb_active_account()?;
+        let project = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if project
+            .as_ref()
+            .is_none_or(|p| p.modified_at.to_rfc3339() != expected.project_modified_at)
+            || expected.session_generation != generation.to_string()
+            || expected.project_id != link.project_id
+            || crate::speleodb::auth::normalize_endpoint(&expected.endpoint)
+                != crate::speleodb::auth::normalize_endpoint(&endpoint)
+            || crate::speleodb::auth::normalize_endpoint(&link.endpoint)
+                != crate::speleodb::auth::normalize_endpoint(&endpoint)
+            || !super::speleodb::lock_held_by_me(Some(&expected.user_email), Some(&email))
+        {
+            return Err(SpeleoDbError::SessionMoved);
+        }
         Ok(())
     }
 }

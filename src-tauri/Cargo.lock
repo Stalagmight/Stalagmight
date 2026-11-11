@@ -4540,9 +4540,9 @@ dependencies = [
 
 [[package]]
 name = "speleodb-api"
-version = "0.6.0"
+version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e600e205836314e6c6f04e38571c0c6d486e16efbd09d36bbe069c12c842fc5c"
+checksum = "868c71233774273092801837402fa563aaf7f2db4f68e0ffc0f623a78cbf9504"
 dependencies = [
  "bytes",
  "chrono",
@@ -4576,7 +4576,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "stalagmight"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4722,6 +4722,7 @@ dependencies = [
  "futures-util",
  "http",
  "reqwest 0.13.5",
+ "rustls",
  "serde",
  "serde_json",
  "speleodb-api",

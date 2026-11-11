@@ -21,7 +21,7 @@ vi.mock('../../../utils/openOrImport', () => ({
 }));
 
 import { importMenuItem, leadingMenuItems } from '../appMenuItems';
-import { openOrImportFilters, dmpImportFilters } from '../../../utils/fileDialogs';
+import { openOrImportFilters, inProjectImportFilters } from '../../../utils/fileDialogs';
 
 const t = ((key: string) => key) as unknown as Parameters<typeof importMenuItem>[0];
 
@@ -30,16 +30,18 @@ beforeEach(() => {
 });
 
 describe('hamburger import doors (#508)', () => {
-  it('the in-project Import row picks .dmp only', () => {
+  it('the in-project Import row picks .dmp/.stalx and flags itself as an import door', () => {
     const item = importMenuItem(t);
     expect(item.submenu).toBeUndefined();
     (item.onClick as () => void)();
-    expect(pickAndRouteMock).toHaveBeenCalledWith(dmpImportFilters(), 'Import Failed');
+    expect(pickAndRouteMock).toHaveBeenCalledWith(inProjectImportFilters(), 'Import Failed', { importDoor: true });
     // Pin the extension set itself, not just "equals the helper" - a helper
-    // that quietly regrew .tml/.stalx entries would still satisfy the line
+    // that quietly regrew .tml entries would still satisfy the line
     // above while re-offering formats Import cannot apply to an open project.
     const [filters] = pickAndRouteMock.mock.calls[0]!;
-    expect((filters as Array<{ extensions: string[] }>).flatMap((f) => f.extensions)).toEqual(['dmp']);
+    expect(
+      new Set((filters as Array<{ extensions: string[] }>).flatMap((f) => f.extensions)),
+    ).toEqual(new Set(['dmp', 'stalx']));
   });
 
   it('the Open / Import row keeps the full unified picker', () => {

@@ -1,7 +1,10 @@
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../store/uiStore';
-import { speleoProjectSessionIssuedFor } from '../store/speleoStore';
+import {
+  speleoProjectSessionIssuedFor,
+  speleoProjectSessionStillCurrent,
+} from '../store/speleoStore';
 import { invokeIpc } from '../utils/ipc';
 import { applySpeleoTreeReplacement } from '../utils/speleoTreeReplacement';
 import type { SpeleoOpenResult } from '../types/ipc.generated';
@@ -76,6 +79,11 @@ export interface RestoreRevisionArgs {
  * reopens the swapped tree in place, so this pulls it into the view via
  * `refreshProjectState` + `refreshLinkStatus` (loadProject would short-circuit on the
  * already-open project) and toasts. Throws on failure so the caller surfaces it.
+ *
+ * Resolves `false` - a quiet stale result, never a toast or a navigation - for any
+ * reply, success or failure, that lands after the login or the open project
+ * changed: the user is free to switch projects while the download runs, and the
+ * backend refuses to touch whatever they switched to.
  */
 export function useRestoreRevision() {
   const { t } = useTranslation();
@@ -95,26 +103,33 @@ export function useRestoreRevision() {
       chainForward = false,
     }: RestoreRevisionArgs) => {
       const issuedFor = speleoProjectSessionIssuedFor(projectId);
-      // The backend hardcodes concurrent_session:false for an in-place revision swap
-      // (the open project is unchanged), so unlike the open/adopt flow there is no
-      // concurrent-session notice to surface here.
-      await invokeIpc<SpeleoOpenResult>('speleodb_restore_revision', {
-        projectId,
-        projectName,
-        hexsha,
-        restore,
-        // Never waived for a View, whatever the caller passed.
-        discardLocal: restore && discardLocal,
-        // [#303] Likewise only meaningful for a Restore: a View leaves the project
-        // read-only, so there would be nothing to undo with the history it kept.
-        keepUndoHistory: restore && keepUndoHistory,
-        // ...and the acknowledgement only means anything alongside that history-keeping
-        // Restore, which is the only shape the backend consults it for.
-        discardUnpushed: restore && keepUndoHistory && discardUnpushed,
-        // ...and likewise the direction, which only selects a guard that a
-        // history-keeping Restore is the one caller to reach.
-        chainForward: restore && keepUndoHistory && chainForward,
-      });
+      try {
+        await invokeIpc<SpeleoOpenResult>('speleodb_restore_revision', {
+          projectId,
+          projectName,
+          hexsha,
+          restore,
+          // Never waived for a View, whatever the caller passed.
+          discardLocal: restore && discardLocal,
+          // [#303] Likewise only meaningful for a Restore: a View leaves the project
+          // read-only, so there would be nothing to undo with the history it kept.
+          keepUndoHistory: restore && keepUndoHistory,
+          // ...and the acknowledgement only means anything alongside that history-keeping
+          // Restore, which is the only shape the backend consults it for.
+          discardUnpushed: restore && keepUndoHistory && discardUnpushed,
+          // ...and likewise the direction, which only selects a guard that a
+          // history-keeping Restore is the one caller to reach.
+          chainForward: restore && keepUndoHistory && chainForward,
+        });
+      } catch (e) {
+        // The download is unbounded and nothing blocks the workspace while it runs,
+        // so the user may well have opened another project by now. The backend
+        // leaves that project alone and refuses the swap; whatever the reply says,
+        // it is about a project that is no longer on screen, so it ends quietly
+        // as a stale result rather than as an error toast over the new one.
+        if (!speleoProjectSessionStillCurrent(issuedFor)) return false;
+        throw e;
+      }
       // The backend closed and reopened the project at the swapped tree. Reconcile every
       // per-tree frontend store through the shared replacement seam. A false result means
       // this reply landed after the login or open project changed, so callers must stop.

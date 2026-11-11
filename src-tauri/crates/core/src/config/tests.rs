@@ -3165,32 +3165,6 @@ fn test_panels_config_deserializes_legacy_table_without_reveal_fields() {
 // SpeleoDB connection settings
 // ========================================================================
 
-#[test]
-fn speleodb_poll_interval_defaults_to_60_and_clamps_up_to_floor() {
-    // Default is 60 (not the u32 zero the old derived Default would have given).
-    assert_eq!(SpeleoDbConfig::default().poll_interval_seconds, 60);
-
-    // A hand-edited sub-floor value is corrected up on normalize (anti-spam).
-    let mut cfg = SpeleoDbConfig {
-        poll_interval_seconds: 5,
-        ..SpeleoDbConfig::default()
-    };
-    cfg.normalize();
-    assert_eq!(cfg.poll_interval_seconds, MIN_POLL_INTERVAL_SECONDS);
-
-    // A value at/above the floor is preserved.
-    let mut ok = SpeleoDbConfig {
-        poll_interval_seconds: 120,
-        ..SpeleoDbConfig::default()
-    };
-    ok.normalize();
-    assert_eq!(ok.poll_interval_seconds, 120);
-
-    // A config file that omits the field parses to the default (60).
-    let deserialized: SpeleoDbConfig = toml::from_str("").expect("empty speleodb parses");
-    assert_eq!(deserialized.poll_interval_seconds, 60);
-}
-
 // ========================================================================
 // Atomic save tests (#357 item 3: `write_atomically` = sibling temp file +
 // `sync_all` + rename, replacing a bare `fs::write` that truncated the
@@ -3744,4 +3718,89 @@ fn test_normalize_caps_general_collections() {
         vec!["workspace-basics".to_string()]
     );
     assert_eq!(ok.general.recent_projects.len(), 1);
+}
+
+// ========================================================================
+// Station-name column: hidden by default, including for existing configs
+// ========================================================================
+
+/// Save `panels` as an older build would have (no normalize), load it back.
+fn panels_after_load(panels: PanelsConfig) -> PanelsConfig {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let config = Config {
+        panels,
+        ..Default::default()
+    };
+    config.save_to_path(&path).unwrap();
+    Config::load_from_path(&path).unwrap().panels
+}
+
+#[test]
+fn test_station_name_column_starts_hidden() {
+    let panels = Config::default().panels;
+    assert!(panels
+        .data_table_station_hidden_columns
+        .contains(&"name".to_string()));
+    assert_eq!(panels.data_table_station_columns_seen, vec!["name"]);
+}
+
+#[test]
+fn test_station_name_column_is_hidden_once_for_a_config_from_before_it() {
+    // A config persisted before the column existed: its own hidden list, no
+    // `data_table_station_columns_seen` key at all.
+    let before = PanelsConfig {
+        data_table_station_hidden_columns: vec!["_x".to_string()],
+        data_table_station_columns_seen: Vec::new(),
+        ..Config::default().panels
+    };
+    let loaded = panels_after_load(before);
+    assert_eq!(loaded.data_table_station_hidden_columns, vec!["_x", "name"]);
+    assert_eq!(loaded.data_table_station_columns_seen, vec!["name"]);
+
+    // The user then shows it: a later load must respect that, not re-hide it.
+    let shown = PanelsConfig {
+        data_table_station_hidden_columns: vec!["_x".to_string()],
+        ..loaded
+    };
+    let reloaded = panels_after_load(shown);
+    assert_eq!(reloaded.data_table_station_hidden_columns, vec!["_x"]);
+    assert_eq!(reloaded.data_table_station_columns_seen, vec!["name"]);
+}
+
+#[test]
+fn test_an_empty_hidden_list_from_before_the_name_column_still_hides_it() {
+    // "Show all" was chosen before the column existed; it starts hidden anyway.
+    let loaded = panels_after_load(PanelsConfig {
+        data_table_station_hidden_columns: Vec::new(),
+        data_table_station_columns_seen: Vec::new(),
+        ..Config::default().panels
+    });
+    assert_eq!(loaded.data_table_station_hidden_columns, vec!["name"]);
+}
+
+#[test]
+fn test_a_config_file_without_the_seen_key_gets_the_name_column_hidden() {
+    // Exactly what a pre-change build wrote: no `data_table_station_columns_seen`
+    // key, and a hidden list without "name".
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let mut document = toml::Value::try_from(Config::default()).unwrap();
+    let panels = document
+        .get_mut("panels")
+        .and_then(toml::Value::as_table_mut)
+        .unwrap();
+    assert!(panels.remove("data_table_station_columns_seen").is_some());
+    panels.insert(
+        "data_table_station_hidden_columns".to_string(),
+        toml::Value::Array(vec![toml::Value::String("_lat".to_string())]),
+    );
+    std::fs::write(&path, toml::to_string(&document).unwrap()).unwrap();
+
+    let loaded = Config::load_from_path(&path).unwrap().panels;
+    assert_eq!(
+        loaded.data_table_station_hidden_columns,
+        vec!["_lat", "name"]
+    );
+    assert_eq!(loaded.data_table_station_columns_seen, vec!["name"]);
 }

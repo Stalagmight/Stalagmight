@@ -1,6 +1,8 @@
 import { invoke } from '@tauri-apps/api/core';
 import { trackCommand } from './telemetry';
 import { trackInvoke } from './debugLockup';
+import { speleoNetworkKind } from './speleoNetworkCommands';
+import { trackSpeleoNetworkCall } from '../store/speleoNetworkStore';
 
 const IPC_TRACE = import.meta.env.VITE_IPC_TRACE === 'true';
 
@@ -36,6 +38,14 @@ export type InvokeIpc = <T>(
   meta?: IpcMeta
 ) => Promise<T>;
 
+/** Send one IPC, counted as in flight while it runs when it reaches SpeleoDB
+    (the busy indicator and the SpeleoDB UI gating read that count). */
+function sendInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  return trackSpeleoNetworkCall(speleoNetworkKind(command, args), () =>
+    trackInvoke(command, invoke<T>(command, args)),
+  );
+}
+
 const invokeWithTrace: InvokeIpc = async <T>(command: string, args?: Record<string, unknown>, meta?: IpcMeta) => {
   if (!UNTRACKED_COMMANDS.has(command)) trackCommand(command);
   const start = nowMs();
@@ -46,7 +56,7 @@ const invokeWithTrace: InvokeIpc = async <T>(command: string, args?: Record<stri
   logStart(`[IPC] invoking ${command} for ${purpose}`, { command, purpose, ...fields });
 
   try {
-    const result = await trackInvoke(command, invoke<T>(command, args));
+    const result = await sendInvoke<T>(command, args);
     const durationMs = Math.round(nowMs() - start);
     console.debug(`[IPC] success ${command}`, { command, purpose, duration_ms: durationMs, ...fields });
     return result;
@@ -65,7 +75,7 @@ const invokeWithTrace: InvokeIpc = async <T>(command: string, args?: Record<stri
 
 const invokeNoTrace: InvokeIpc = <T>(command: string, args?: Record<string, unknown>, _meta?: IpcMeta) => {
   if (!UNTRACKED_COMMANDS.has(command)) trackCommand(command);
-  return trackInvoke(command, invoke<T>(command, args));
+  return sendInvoke<T>(command, args);
 };
 
 /**

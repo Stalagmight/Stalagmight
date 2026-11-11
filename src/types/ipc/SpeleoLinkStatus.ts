@@ -4,4 +4,4 @@ import type { RemoteState } from "./RemoteState";
 import type { SpeleoErrorDto } from "./SpeleoErrorDto";
 import type { UndoMode } from "./UndoMode";
 
-export interface SpeleoLinkStatus { is_remote: boolean, edit_enabled: boolean, has_unpushed_edits: boolean, unwound: boolean, permission: Permission | null, lock_holder: string | null, remote_state: RemoteState, access_denied: boolean, server_error: SpeleoErrorDto | null, exclude_geojson: boolean, undo_mode: UndoMode, force_editing: boolean, allow_force_edit: boolean, project_id: string | null, }
+export interface SpeleoLinkStatus { is_remote: boolean, edit_enabled: boolean, has_unpushed_edits: boolean, unwound: boolean, permission: Permission | null, lock_holder: string | null, remote_state: RemoteState, access_denied: boolean, server_error: SpeleoErrorDto | null, undo_mode: UndoMode, project_id: string | null, }

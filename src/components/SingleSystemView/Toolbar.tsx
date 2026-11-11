@@ -12,15 +12,12 @@ import {
 } from '../common/icons';
 import { AppMenu, type AppMenuItem } from '../common/AppMenu';
 import { useDismissableLayer } from '../../hooks/useDismissableLayer';
-import { holdsWriteLock } from '../../utils/quit';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { ToolGlyph, toolAccentVar } from '../common/toolIcons';
 import type { CSSProperties } from 'react';
 import DisplayMenu from './DisplayMenu';
 import { ModeCarousel } from './ModeCarousel';
 import TableSelectDropdown from './TableSelectDropdown';
-import { SpeleoStatusButton } from './SpeleoStatusButton';
-import { useSpeleoStore } from '../../store/speleoStore';
 import { useEditingBlocked } from '../../hooks/useEditingBlocked';
 import UndoHistoryDropdown from './UndoHistoryDropdown';
 import { TOOL_GROUPS, isNavigationTool, type ToolGroupDef } from '../../utils/toolGroups';
@@ -298,16 +295,6 @@ export default function Toolbar({
   // because both clusters own absolutely-positioned popovers that a clipping
   // context would cut off. Reclaiming that width needs a stage that REMOVES tool
   // controls (folding them into a menu), not one that resizes them.
-  // The SpeleoStatusButton's presence widens the left cluster, so its visibility
-  // gates re-measurement too.
-  const speleoLinkPresent = useSpeleoStore((s) => s.link != null);
-  // #270: the status button grows by a "!" badge when the project has changes only
-  // on this computer and no lock protecting them, so that flip changes the left
-  // cluster's width and must re-run the fit below, exactly like the button
-  // appearing at all.
-  const speleoUnpushedBadge = useSpeleoStore(
-    (s) => s.link?.hasUnpushedEdits === true && !holdsWriteLock(s.link),
-  );
   const CONDENSE_MAX = 5;
   const [condense, setCondense] = useState(0);
   const condenseRef = useRef(0);
@@ -352,8 +339,6 @@ export default function Toolbar({
     // constant-width chevron slot, so their availability no longer changes the
     // left cluster width and must not kick off a reset -> re-fit on every edit.
     editingBlocked,
-    speleoLinkPresent,
-    speleoUnpushedBadge,
     // The navigate group appearing/disappearing changes the right cluster's
     // natural width (#409), so its toggle must re-run the fit from scratch.
     showNavigationTools,
@@ -413,18 +398,20 @@ export default function Toolbar({
     setCarouselLeft(Math.max(minCenter, Math.min(maxCenter, windowCenter)));
   });
 
+  const splitToolbar = headerWidth > 0 && headerWidth < 720;
   const { displayCondensed, importCondensed, historyCondensed, tight, centerInFlow, clusterCls, centerCls } =
-    toolbarCondenseLayout(condense);
+    toolbarCondenseLayout(splitToolbar ? CONDENSE_MAX : condense);
   const centerStyle: CSSProperties | undefined = centerInFlow
     ? undefined
     : { left: carouselLeft ?? '50%' };
 
   return (
-    <header ref={headerRef} className="relative flex items-center justify-between px-4 py-2 border-b border-border bg-panel" data-testid="toolbar">
+    <header ref={headerRef} className={`relative flex items-center justify-between px-4 py-2 border-b border-border bg-panel ${splitToolbar ? 'flex-wrap gap-y-1' : ''}`} data-testid="toolbar">
       {/* Left section: hamburger menu, Import, then Undo/Redo */}
       <div
         ref={leftRef}
         className={`flex items-center ${clusterCls} ${tight ? 'gap-0.5' : 'gap-2'} transition-opacity ${placementModeActive ? 'opacity-45 grayscale' : ''}`}
+        style={splitToolbar ? { flexBasis: '100%' } : undefined}
         data-testid="toolbar-file-controls"
       >
         {/* Disabled during placement mode so the file/project actions that moved
@@ -437,9 +424,6 @@ export default function Toolbar({
           compact={tight}
           aria-label={t('singleView.menu.aria')}
         />
-        {/* SpeleoDB status button (#204/T2c) - right of the hamburger; hidden for
-            local projects. One click drives the single-writer hand-off. */}
-        <SpeleoStatusButton />
         {/* Import and Undo/Redo are survey-only (#243): Plan/Export are read-only
             workspaces, so the mutating file/history controls are HIDDEN there (not
             merely disabled) - undoing under the read-only map would mutate the survey
@@ -491,7 +475,6 @@ export default function Toolbar({
               // boundary. The button stays disabled (Undo / Ctrl+Z must keep doing
               // nothing); only HOVER opens the panel. Placement mode is excluded - that
               // reason for `disabled` must still suppress the panel entirely.
-              hoverableWhenEmpty={!placementModeActive}
               onSingleAction={onUndo}
               testId="toolbar-undo-button"
               ariaLabel={t('common.actions.undo')}
@@ -518,7 +501,6 @@ export default function Toolbar({
               // redo stack still has the forward chain step to show ("Redo into next
               // SpeleoDB version"), and hover is the only way to reach it while the button
               // itself stays correctly disabled.
-              hoverableWhenEmpty={!placementModeActive}
               onSingleAction={onRedo}
               testId="toolbar-redo-button"
               ariaLabel={t('common.actions.redo')}

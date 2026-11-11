@@ -24,17 +24,20 @@ use stalagmight_models::{NorthReference, Project, ShotKind as ModelShotKind, Sur
 /// - [`StationId::index`] is NOT stable: inserting or deleting a shot shifts the
 ///   indexes after it, and reversing a section renumbers station `i` to `N - i`.
 ///   Key anything persistent on `(section id, shot uuid)`, never on an index.
-/// - [`Shot::uuid`] is stable across edits and unique within its section only
-///   (the same UUID can appear in two sections), so key a shot on
-///   `(section id, uuid)`. A shot the file gives no usable UUID (files from before
-///   shot UUIDs, or a second shot repeating one in its section) gets one derived
-///   deterministically and is flagged [`Shot::uuid_derived`].
+/// - [`Shot::uuid`] is stable across edits and unique across the whole survey.
+///   A shot the file gives no usable UUID (files from before shot UUIDs, a second
+///   shot repeating one in its section, or a section repeating an id an earlier
+///   section holds - the same Ariane file imported twice, a merge of two copies)
+///   gets one derived deterministically and is flagged [`Shot::uuid_derived`].
+///   For the last case the derived id is the one the app's own open gives it;
+///   for the first two the app mints its own, so those match the app only once
+///   it has saved the file.
 ///
 /// # Ordering
 ///
 /// Every list is sorted, so the same file content always reads to the same
 /// value: sections by id, shots in
-/// survey order, merges by `(a, b)`, zero datums and comments and station
+/// survey order, merges by `(a, b)`, zero datums, comments, names and station
 /// positions by station, loop closures by id. [`Survey::modified_at`] changes
 /// on every save; leave it out of any content hash.
 #[derive(Debug, Clone, PartialEq)]
@@ -55,6 +58,9 @@ pub struct Survey {
     pub zero_datums: Vec<ZeroDatum>,
     pub loop_closures: Vec<LoopClosure>,
     pub station_comments: Vec<StationComment>,
+    /// Station names, e.g. the mNemo station number a DMP import recorded. Not
+    /// unique: mNemo numbers restart at 0 in every section.
+    pub station_names: Vec<StationName>,
     /// The zero datum whose station is the georeference origin of the local frame
     /// (the project's first resolvable datum, as the app defines it). `None` when
     /// the project has no usable datum. See [`StationPosition`].
@@ -63,8 +69,8 @@ pub struct Survey {
     /// the supported input for drawing a map; `None` unless requested in
     /// [`crate::ReadOptions`].
     pub stations: Option<Vec<StationPosition>>,
-    /// Cross-references (merges, datums, closures, comments) whose station no
-    /// longer exists in the file. They are dropped, and counted here.
+    /// Cross-references (merges, datums, closures, comments, names) whose station
+    /// no longer exists in the file. They are dropped, and counted here.
     pub unresolved_references: usize,
 }
 
@@ -120,10 +126,11 @@ pub enum CorrectionSource {
 pub struct Shot {
     /// Stable identity across revisions. See [`Shot::uuid_derived`].
     pub uuid: String,
-    /// `true` when the file had no usable UUID for this shot (none, or the same
-    /// one as an earlier shot in the section) and `uuid` was derived by this
-    /// crate from the shot's place: deterministic for the same file, but not a
-    /// persisted identity, so it can change once the app re-saves the file.
+    /// `true` when the file had no usable UUID for this shot (none, the same one
+    /// as an earlier shot in the section, or one a lower section already holds)
+    /// and `uuid` was derived: deterministic for the same file, but not a
+    /// persisted identity until the app re-saves the file. A repeat across
+    /// sections derives the id the app gives it, so it survives that save.
     pub uuid_derived: bool,
     pub kind: ShotKind,
     pub length: f64,
@@ -206,6 +213,13 @@ pub struct LoopClosure {
 pub struct StationComment {
     pub station: StationId,
     pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct StationName {
+    pub station: StationId,
+    pub name: String,
 }
 
 /// A station's measured (not loop-closure-adjusted) position, computed by the
@@ -318,6 +332,17 @@ impl Survey {
             })
             .collect();
         station_comments.sort_by_key(|c| c.station);
+        let mut station_names: Vec<StationName> = project
+            .station_names
+            .iter()
+            .filter_map(|(key, name)| {
+                Some(StationName {
+                    station: resolve(key)?,
+                    name: name.clone(),
+                })
+            })
+            .collect();
+        station_names.sort_by_key(|n| n.station);
         let frame_datum = project
             .frame_datum_key()
             .and_then(|key| project.resolve_key(&key))
@@ -399,6 +424,7 @@ impl Survey {
             zero_datums,
             loop_closures,
             station_comments,
+            station_names,
             frame_datum,
             stations,
             unresolved_references: unresolved,

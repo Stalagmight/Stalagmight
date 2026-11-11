@@ -1283,6 +1283,7 @@ impl Project {
         if let Some(rk) = removed_key.clone() {
             self.station_offsets.remove(&rk);
             self.station_comments.remove(&rk);
+            self.station_names.remove(&rk);
             self.zero_datums.retain(|zd| zd.station_ref != rk);
             self.station_merges
                 .retain(|m| m.station_a != rk && m.station_b != rk);
@@ -1583,6 +1584,7 @@ impl Project {
         if let Some(key) = created {
             self.station_offsets.remove(&key);
             self.station_comments.remove(&key);
+            self.station_names.remove(&key);
             self.zero_datums.retain(|zd| zd.station_ref != key);
             // `MergeTopology::retain` invalidates its own adjacency memo, so no
             // explicit cache maintenance is needed here.

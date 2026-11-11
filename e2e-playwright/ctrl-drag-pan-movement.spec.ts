@@ -290,6 +290,15 @@ test.describe('Ctrl+Drag Pan - Content Movement Verification', () => {
       await waitForActiveTool(page, 'pan');
       await waitForMapIdle(page);
 
+      // Measure the drag itself. A synthetic fast gesture can otherwise fling all
+      // stations outside the small canvas before the painted-position probe runs.
+      await page.evaluate(() => {
+        const map = (window as unknown as {
+          __stalagmight_map__: { dragPan: { enable: (options: { maxSpeed: number }) => void } };
+        }).__stalagmight_map__;
+        map.dragPan.enable({ maxSpeed: 0 });
+      });
+
       const canvas = page.getByTestId('map-canvas');
       const box = await canvas.boundingBox();
       expect(box).not.toBeNull();

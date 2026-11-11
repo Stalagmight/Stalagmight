@@ -666,3 +666,127 @@ describe('index.html anti-flash cover', () => {
     expect(htmlRules).not.toMatch(/@media[^{]*prefers-color-scheme/i);
   });
 });
+
+/** `#rrggbb`, or `rgba(r, g, b, a)` composited over `under` (a `#rrggbb`). */
+function solid(value: string, under: string): string {
+  if (value.startsWith('#')) return value;
+  const m = /^rgba\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)$/.exec(value);
+  if (!m) throw new Error(`unparsed colour ${value}`);
+  const alpha = Number(m[4]);
+  const base = [1, 3, 5].map((i) => parseInt(under.slice(i, i + 2), 16));
+  return `#${[m[1], m[2], m[3]]
+    .map((c, i) => Math.round(alpha * Number(c) + (1 - alpha) * base[i]!))
+    .map((c) => c.toString(16).padStart(2, '0'))
+    .join('')}`;
+}
+
+/**
+ * Warning PROSE (`text-warning-text`) sits on the panel, on the page background and
+ * on the warning washes (`bg-warning-10` / `bg-warning-20`, composited over either):
+ * the remove-copy and purge warnings, the insecure-HTTP note, the workspace's
+ * un-uploaded line. Every theme must keep it at WCAG AA for normal text, 4.5:1, on all six.
+ * `--cc-warning` itself is a fill colour and is not held to this.
+ */
+describe('warning text contrast', () => {
+  for (const theme of ALL_THEME_NAMES) {
+    it(`${theme}: warning-text reads at AA on the panel, the background and both washes`, () => {
+      const tokens = themeTokens[theme] as Record<string, string>;
+      const text = tokens['--cc-warning-text']!;
+      expect(text).toMatch(/^#[0-9a-fA-F]{6}$/);
+      for (const surface of ['--cc-panel', '--cc-background']) {
+        const under = tokens[surface]!;
+        for (const bg of [under, solid(tokens['--cc-warning-10']!, under), solid(tokens['--cc-warning-20']!, under)]) {
+          const ratio = contrast(text, bg);
+          expect(ratio, `${theme}: --cc-warning-text ${text} on ${bg} (over ${surface}) is ${ratio.toFixed(2)}:1`)
+            .toBeGreaterThanOrEqual(4.5);
+        }
+      }
+    });
+  }
+
+  it('would reject the light theme\'s fill yellow as text on its own wash', () => {
+    const tokens = themeTokens.light as Record<string, string>;
+    // 2.64:1 - what the un-uploaded tab and the warning boxes used to show.
+    expect(contrast(tokens['--cc-warning']!, solid(tokens['--cc-warning-20']!, tokens['--cc-panel']!))).toBeLessThan(4.5);
+  });
+});
+
+/**
+ * The SpeleoDB tab with un-uploaded changes says so by its text colour alone
+ * (src/components/SingleSystemView/LeftWorkspace.tsx). Selected, it is the warning
+ * text on the selected tab's accent wash (`bg-accent-10` over the panel): AA,
+ * 4.5:1. Not selected, it is dimmed toward the panel the way idle tabs are dimmer
+ * than the selected one (`text-warning-text-dim`, a `color-mix` in
+ * tailwind.config.js), and must still read: 3:1 or better on the panel.
+ */
+describe('warning tab text contrast', () => {
+  const twSource = fs.readFileSync(path.resolve(__dirname, '../../../tailwind.config.js'), 'utf8');
+  const dim = /'warning-text-dim':\s*'color-mix\(in srgb, var\(--cc-warning-text\) (\d+)%, var\(--cc-panel\)\)'/.exec(twSource);
+
+  it('dims the warning text by mixing it toward the panel', () => {
+    expect(dim, "tailwind.config.js 'warning-text-dim'").not.toBeNull();
+  });
+
+  const share = Number(dim?.[1] ?? 0) / 100;
+  for (const theme of ALL_THEME_NAMES) {
+    it(`${theme}: selected at AA on the accent wash, idle at 3:1 dimmed on the panel`, () => {
+      const tokens = themeTokens[theme] as Record<string, string>;
+      const panel = tokens['--cc-panel']!;
+      const text = tokens['--cc-warning-text']!;
+      const selected = contrast(text, solid(tokens['--cc-accent-10']!, panel));
+      expect(selected, `${theme}: selected ${selected.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5);
+      const rgb = [1, 3, 5].map((i) => parseInt(text.slice(i, i + 2), 16));
+      const dimmed = solid(`rgba(${rgb.join(', ')}, ${share})`, panel);
+      const idle = contrast(dimmed, panel);
+      expect(idle, `${theme}: dimmed ${dimmed} on ${panel} is ${idle.toFixed(2)}:1`).toBeGreaterThanOrEqual(3);
+      // Visibly dimmer than the full-strength text the selected tab shows.
+      expect(idle).toBeLessThan(contrast(text, panel) * 0.8);
+    });
+  }
+});
+
+/**
+ * The `secondary` Button fill (`bg-button-secondary` in tailwind.config.js) is the
+ * panel mixed a little toward the text colour, so the button stands apart from the
+ * panel it sits on, and its label must still read: AA (4.5:1) at rest and on hover
+ * in every theme whose text colour reaches AA on its plain panel. Solarized light's
+ * text colour does not (4.39:1 on the panel, already on master; follow-up #671), so
+ * that theme alone is held to 3.5:1 until its text colour is fixed.
+ */
+describe('secondary button fill', () => {
+  const twSource = fs.readFileSync(path.resolve(__dirname, '../../../tailwind.config.js'), 'utf8');
+  const rule = (name: string) => new RegExp(
+    `'${name}':\\s*'color-mix\\(in srgb, var\\(--cc-panel\\) (\\d+)%, var\\(--cc-text-primary\\)\\)'`,
+  ).exec(twSource);
+  const fill = rule('button-secondary');
+  const hover = rule('button-secondary-hover');
+
+  it('is the panel mixed toward the text colour, with a stronger hover', () => {
+    expect(fill, "tailwind.config.js 'button-secondary'").not.toBeNull();
+    expect(hover, "tailwind.config.js 'button-secondary-hover'").not.toBeNull();
+    expect(Number(hover?.[1])).toBeLessThan(Number(fill?.[1]));
+  });
+
+  /** CSS color-mix(in srgb, panel p%, text): straight interpolation of the encoded channels. */
+  const mixed = (panel: string, text: string, share: number) => {
+    const ch = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+    const [p, t] = [ch(panel), ch(text)];
+    return `#${p.map((v, i) => Math.round(v * share + t[i]! * (1 - share)).toString(16).padStart(2, '0')).join('')}`;
+  };
+
+  for (const theme of ALL_THEME_NAMES) {
+    it(`${theme}: the fill stands apart from the panel and its label reads`, () => {
+      const tokens = themeTokens[theme] as Record<string, string>;
+      const panel = tokens['--cc-panel']!;
+      const text = tokens['--cc-text-primary']!;
+      const floor = contrast(text, panel) >= 4.5 ? 4.5 : 3.5;
+      if (theme !== 'solarized_light') expect(floor, `${theme} text on its panel`).toBe(4.5);
+      for (const share of [Number(fill?.[1]) / 100, Number(hover?.[1]) / 100]) {
+        const bg = mixed(panel, text, share);
+        expect(contrast(bg, panel), `${theme}: ${bg} vs panel ${panel}`).toBeGreaterThan(1.08);
+        const label = contrast(text, bg);
+        expect(label, `${theme}: label ${text} on ${bg} is ${label.toFixed(2)}:1`).toBeGreaterThanOrEqual(floor);
+      }
+    });
+  }
+});

@@ -14,7 +14,8 @@ it.each([false, true])('keeps pending local autosave running while the message d
     config: { general: { auto_save: true, auto_save_interval_seconds: 1 } } as never,
     isDirty: false, integritySaveBlocked: false, saveProject: save as never,
   });
-  useSpeleoStore.setState({ link: { editState: 'editing', forceEditing: false } as never });
+  useSpeleoStore.setState({ link: { editState: 'editing', permission: 'READ_AND_WRITE', noAccess: false } as never,
+    session: { loggedIn: true, endpoint: 'https://synthetic.example', userEmail: 'user@example.com' } });
   const hook = renderHook(() => ({ autosave: useAutoSave(), actions: useProject() }));
   act(() => useProjectStore.setState({ isDirty: true }));
   expect(hook.result.current.autosave.status).toBe('pending');

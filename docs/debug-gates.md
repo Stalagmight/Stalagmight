@@ -243,6 +243,23 @@ must match the current token; the `Host` header must be `localhost:1420` or
 headers are set, so a cross-origin browser cannot read the token or drive the
 bridge. None of this exists in a production build.
 
+## Development-build-only options
+
+A few user-facing options exist only in a development build. Each is gated on both
+sides, so the backend never relies on the frontend hiding a control. Release builds
+include betas and release candidates: they are all built with the release profile.
+
+| Option | Backend gate | Frontend gate |
+|--------|--------------|---------------|
+| SpeleoDB "Allow insecure HTTP" (`speleodb.insecure_http`, [configuration](configuration.md)) | `INSECURE_HTTP_HONOURED` = `cfg!(debug_assertions)` in `src-tauri/crates/speleodb/src/speleodb/tls.rs`: the transport policy (`validate_endpoint`, and the client's `enforce`) ignores a stored or requested value in a release build | `import.meta.env.DEV` in `src/components/Dialogs/settings/SpeleoDbSettings.tsx`: no switch is rendered, and Connect sends no choice |
+
+The config field stays in the schema, so a file a development build wrote loads in
+every build. Write the build decision as a pure function of the build flag
+(`honoured_insecure_http(requested, dev_build)`) so a debug-build unit test pins what
+a release build does. Playwright runs against the dev server locally and a production
+build in CI; a spec that asserts a development-build-only control reads
+`window.__E2E_TEST__.devBuild` (set in `src/main.tsx`) and checks each mode.
+
 ## Conventions for new debug code
 
 1. **Per-operation backend log?** Use `tracing::debug!`, not `tracing::info!`.

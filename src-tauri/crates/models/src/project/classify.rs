@@ -34,7 +34,9 @@
 //! virtualness is *established* rather than edited: import finalize
 //! (`command_import.rs`) and the one-shot post-migration backfill
 //! (`project_load.rs`). It deliberately never runs anywhere else, so a later
-//! merge cannot silently flip a kind under the user.
+//! merge cannot silently flip a kind under the user. (The backfill also runs
+//! where a file is READ as the open path would read it - "Add .stalx"
+//! (`project_add.rs`) and the stalx reader - on the read copy only.)
 //!
 //! # Scope
 //!

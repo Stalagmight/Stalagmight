@@ -16,7 +16,10 @@ pub fn account_key(endpoint: &str, email: &str) -> String {
 }
 
 pub fn normalize_endpoint(endpoint: &str) -> String {
-    let trimmed = endpoint.trim();
+    // The same cleaning every entry point applies, so a pasted spelling with
+    // invisible characters around it is the same server identity as the clean one.
+    let cleaned = super::clean_endpoint_input(endpoint).unwrap_or_default();
+    let trimmed = cleaned.as_str();
     if let Ok(uri) = trimmed.parse::<http::Uri>() {
         if let Some(host) = uri.host() {
             let scheme = uri.scheme_str().unwrap_or("https").to_ascii_lowercase();

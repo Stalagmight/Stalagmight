@@ -29,7 +29,7 @@ const ARGS: RestoreRevisionArgs = {
   restore: true,
 };
 
-const RESTORED = { local_path: '/cache/p1.stalx', concurrent_session: false };
+const RESTORED = { local_path: '/cache/p1.stalx' };
 
 const run = async (over: Partial<RestoreRevisionArgs> = {}): Promise<void> => {
   const { result } = renderHook(() => useRestoreRevision());
@@ -114,6 +114,74 @@ describe('useRestoreRevision resets the gas-plan store (#345)', () => {
 
     expect(applied).toBe(false);
     expect(useGasPlanStore.getState().endpoint).toEqual({ section_id: 1, station_index: 2 });
+    expect(useProjectStore.getState().refreshProjectState).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A View / Restore download is unbounded and nothing blocks the workspace while it
+ * runs, so its reply can land after the user opened another project. The backend
+ * then refuses the swap (`SessionMoved`) and leaves that project alone; the reply is
+ * about a project no longer on screen and must end as a quiet stale result.
+ */
+describe('useRestoreRevision late replies', () => {
+  const SESSION_MOVED = {
+    message: 'the project changed while this request was in flight; nothing was changed - try again',
+    action: 'Retry',
+    status: null,
+    transport: null,
+    unpushed_local: null,
+    newer_schema: null,
+  };
+
+  const settle = async (over: Partial<RestoreRevisionArgs> = {}) => {
+    const { result } = renderHook(() => useRestoreRevision());
+    let outcome: { applied: boolean } | { thrown: unknown } = { applied: true };
+    await act(async () => {
+      try {
+        outcome = { applied: await result.current({ ...ARGS, ...over }) };
+      } catch (e) {
+        outcome = { thrown: e };
+      }
+    });
+    return outcome;
+  };
+
+  it.each([
+    ['a local project', null],
+    ['another SpeleoDB project', 'p2'],
+  ])('a refusal that lands after the user opened %s resolves false quietly', async (_, now) => {
+    invokeIpcMock.mockImplementation(async () => {
+      useSpeleoStore.setState({ remoteProjectId: now });
+      throw SESSION_MOVED;
+    });
+
+    for (const restore of [false, true]) {
+      expect(await settle({ restore })).toEqual({ applied: false });
+      useSpeleoStore.setState({ remoteProjectId: 'p1' });
+    }
+    expect(useUIStore.getState().showToast).not.toHaveBeenCalled();
+    expect(useUIStore.getState().setView).not.toHaveBeenCalled();
+    expect(useProjectStore.getState().refreshProjectState).not.toHaveBeenCalled();
+  });
+
+  it('any failure that lands after a sign-out or a new sign-in is stale too', async () => {
+    invokeIpcMock.mockImplementation(async () => {
+      useSpeleoStore.setState({
+        sessionGeneration: useSpeleoStore.getState().sessionGeneration + 1,
+      });
+      throw new Error('network went away');
+    });
+    expect(await settle()).toEqual({ applied: false });
+    expect(useUIStore.getState().showToast).not.toHaveBeenCalled();
+  });
+
+  it('still throws while the project it was issued for is the one open', async () => {
+    // e.g. the user switched away and straight back: the frontend sees the same
+    // project, the backend saw a new session and refused. The caller then shows the
+    // backend's own neutral "nothing was changed - try again".
+    invokeIpcMock.mockRejectedValue(SESSION_MOVED);
+    expect(await settle()).toEqual({ thrown: SESSION_MOVED });
     expect(useProjectStore.getState().refreshProjectState).not.toHaveBeenCalled();
   });
 });

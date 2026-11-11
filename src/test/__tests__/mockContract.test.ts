@@ -258,7 +258,6 @@ const UNMOCKED_COMMAND_REASONS: Record<string, string> = {
   execute_compass_import: 'no mocked spec drives the compass parse+execute two-step import flow',
   parse_walls: 'walls-import-dialog.spec.ts uses execute_walls_import directly; parse_walls is not called',
   speleodb_done: 'SpeleoDB write-workflow, env-gated live tests only, not mocked e2e',
-  speleodb_force_edit: 'SpeleoDB write-workflow, env-gated live tests only, not mocked e2e',
   speleodb_get_revisions: 'SpeleoDB write-workflow, env-gated live tests only, not mocked e2e',
   speleodb_open_project: 'SpeleoDB write-workflow, env-gated live tests only, not mocked e2e',
   speleodb_open_project_discarding_local:
@@ -399,4 +398,13 @@ describe('mock contract tripwire (#275)', () => {
 
     expect(stale, 'these allowlist entries no longer need an exemption; remove them').toEqual([]);
   });
+});
+
+it('retired SpeleoDB workspace metadata commands are absent from IPC and browser mocks', () => {
+  for (const command of ['speleodb_patch_project', 'speleodb_set_exclude_geojson', 'speleodb_set_undo_mode']) {
+    expect(libRsSource).not.toContain(`commands::speleodb::${command},`);
+    expect(mockTsSource).not.toContain(`case '${command}':`);
+  }
+  const barrel = fs.readFileSync(path.join(REPO_ROOT, 'src/types/ipc.generated.ts'), 'utf8');
+  expect(barrel).not.toContain('SpeleoProjectMetadataPatch');
 });

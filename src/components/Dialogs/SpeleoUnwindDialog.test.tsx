@@ -49,7 +49,7 @@ const openForward = (isLatest: boolean) => {
 describe('SpeleoUnwindDialog (#303)', () => {
   beforeEach(() => {
     invokeIpcMock.mockReset();
-    invokeIpcMock.mockResolvedValue({ local_path: '/cache/p1.stalx', concurrent_session: false });
+    invokeIpcMock.mockResolvedValue({ local_path: '/cache/p1.stalx' });
     // Stub the post-swap refresh the shared hook runs. Left real, it feeds the restore
     // RESULT to `get_project_state` and logs two failures per test - noise that would
     // hide a genuine one. What this file is about is the IPC payload and the copy.

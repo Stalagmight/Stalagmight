@@ -5,7 +5,6 @@ import { DialogWrapper } from './DialogWrapper';
 import { ValidationSettings } from './settings/ValidationSettings';
 import { SettingsSection } from './settings/SettingsSection';
 import { SettingRow } from './settings/SettingRow';
-import { ProjectSettingsSpeleoStub } from './settings/ProjectSettingsSpeleoStub';
 import { getPanelId, getTabId, type SettingsCategory } from './SettingsSidebar';
 import { Button } from '../common/Button';
 import { useUIStore } from '../../store/uiStore';
@@ -19,7 +18,7 @@ import { convertLength, convertLengthToMeters, clampPrecision } from '../../util
 
 // A compiler-checked subset of SettingsCategory, so these tabs can never drift
 // from the shared id helpers they are paired with.
-type ProjectSettingsTab = Extract<SettingsCategory, 'general' | 'validation' | 'speleodb'>;
+type ProjectSettingsTab = Extract<SettingsCategory, 'general' | 'validation'>;
 // The local (always-shown) tabs; the remote-only 'speleodb' tab is appended below.
 const TABS: readonly ProjectSettingsTab[] = ['general', 'validation'];
 const EMPTY_CHANGED: ReadonlySet<string> = new Set();
@@ -36,7 +35,7 @@ export function ProjectSettingsDialog() {
   const showToast = useUIStore((s) => s.showToast);
   // The SpeleoDB tab is only meaningful for a remote (linked) project.
   // The BOOLEAN, not the link object: `seedFromStatus` hands out a fresh link on
-  // every poll tick, so selecting the object re-rendered the whole settings dialog
+  // every status refresh, so selecting the object re-rendered the whole settings dialog
   // on each one.
   const isRemote = useSpeleoStore((s) => s.link != null);
   const { project, globalConfig, updateProjectSettings, setSurfaceElevation } = useProjectStore(
@@ -54,17 +53,7 @@ export function ProjectSettingsDialog() {
   const panelIdBase = useId();
 
   const [tab, setTab] = useState<ProjectSettingsTab>('general');
-  const renderedTabs = useMemo<readonly ProjectSettingsTab[]>(
-    () => (isRemote ? [...TABS, 'speleodb'] : TABS),
-    [isRemote],
-  );
-  // If the project unlinks from SpeleoDB while this dialog sits on the SpeleoDB tab
-  // (e.g. a convert-to-local from another surface), that tab disappears from
-  // renderedTabs and its panel is gated off - fall back to a valid tab so the body
-  // doesn't render blank.
-  useEffect(() => {
-    if (!isRemote && tab === 'speleodb') setTab('general');
-  }, [isRemote, tab]);
+  const renderedTabs = TABS;
   const [name, setName] = useState(project?.name ?? '');
   // Keep the General-tab name field in step when the project name changes underneath
   // us - the SpeleoDB tab's Save folds the server-authoritative name into the store
@@ -306,11 +295,7 @@ export function ProjectSettingsDialog() {
                   defaults={globalConfig?.validation ?? defaultConfig.validation}
                 />
               )}
-              {tab === 'speleodb' && isRemote && (
-                <div role="tabpanel" id={getPanelId(panelIdBase, 'speleodb')} aria-labelledby={getTabId(panelIdBase, 'speleodb')}>
-                  <ProjectSettingsSpeleoStub />
-                </div>
-              )}
+
             </div>
           </div>
 

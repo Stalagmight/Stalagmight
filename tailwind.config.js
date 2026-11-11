@@ -29,6 +29,18 @@ export default {
         hover: 'var(--cc-hover)',
         overlay: 'var(--cc-overlay)',
         warning: 'var(--cc-warning)',
+        // Warning prose (text-warning-text): AA on the panel and the warning washes.
+        'warning-text': 'var(--cc-warning-text)',
+        // The same warning text dimmed toward the panel, for an idle tab that carries
+        // a warning (the SpeleoDB tab with un-uploaded changes): 3:1 or better on the
+        // panel in every theme (tokens.test.ts).
+        'warning-text-dim': 'color-mix(in srgb, var(--cc-warning-text) 75%, var(--cc-panel))',
+        // The `secondary` Button fill: the panel nudged 8% toward the text colour,
+        // so a secondary button reads as a button instead of plain text on the panel
+        // (the global `button { border: none }` reset hides its border). Hover takes
+        // it to 14%. One rule for every theme; contrast pinned in tokens.test.ts.
+        'button-secondary': 'color-mix(in srgb, var(--cc-panel) 92%, var(--cc-text-primary))',
+        'button-secondary-hover': 'color-mix(in srgb, var(--cc-panel) 86%, var(--cc-text-primary))',
         error: 'var(--cc-error)',
         success: 'var(--cc-success)',
 

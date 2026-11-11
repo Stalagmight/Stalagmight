@@ -78,6 +78,7 @@ const HEADER_HIDE_GROUPS: Record<string, { nameKey: string; keys: string[] }> = 
  *  hide - no angle modes). X/Y toggle together as "Coordinates (m)", lat/long
  *  as the GPS pair. The index pill lives in the gutter, so it never hides. */
 const STATION_MENU_COLS: { keys: string[]; nameKey: string }[] = [
+  { keys: ['name'], nameKey: 'name' },
   { keys: ['_x', '_y'], nameKey: 'coordsMeters' },
   { keys: ['_lat', '_long'], nameKey: 'coordsGps' },
   { keys: ['_depth'], nameKey: 'depth' },
@@ -86,10 +87,11 @@ const STATION_MENU_COLS: { keys: string[]; nameKey: string }[] = [
   { keys: ['comment'], nameKey: 'comment' },
 ];
 
-/** Coordinate columns hidden by default (matches the backend serde default),
- *  used only as the pre-config-load initial state - once the persisted config
- *  arrives it is authoritative (an empty list there means "show all"). */
-const STATION_DEFAULT_HIDDEN = ['_x', '_y', '_lat', '_long'];
+/** Coordinate and station-name columns hidden by default (matches the backend
+ *  serde default), used only as the pre-config-load initial state - once the
+ *  persisted config arrives it is authoritative (an empty list there means
+ *  "show all"; the backend hides a column added since then once on load). */
+const STATION_DEFAULT_HIDDEN = ['_x', '_y', '_lat', '_long', 'name'];
 
 /** Pill-as-trigger picker used in the sub-header: the whole pill (rendered via
  *  {@link renderTrigger}, which embeds the chevron) toggles the dropdown.

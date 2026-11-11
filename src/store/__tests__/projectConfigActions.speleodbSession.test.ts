@@ -46,21 +46,21 @@ describe('settings save after SpeleoDB authentication', () => {
     expect(useSpeleoStore.getState().sessionGeneration).toBe(generation);
   });
 
-  it('clears the old session when settings move its server', async () => {
+  it('preserves authentication when the backend rejects an instance change', async () => {
     signIn(endpointA);
+    invokeIpcMock.mockRejectedValueOnce(new Error('Disconnect before changing servers.'));
+    expect((await useProjectStore.getState().updateConfig(configFor(endpointB))).success).toBe(false);
 
-    expect((await useProjectStore.getState().updateConfig(configFor(endpointB))).success).toBe(true);
-
-    expect(useSpeleoStore.getState().session).toBeNull();
+    expect(useSpeleoStore.getState().session?.endpoint).toBe(endpointA);
   });
 
-  it('compares the live session even when cached settings already match the requested server', async () => {
+  it('retains the live session when stale settings target a different instance', async () => {
     useProjectStore.setState({ config: configFor(endpointB) });
     signIn(endpointA);
 
     await useProjectStore.getState().updateConfig(configFor(endpointB));
 
-    expect(useSpeleoStore.getState().session).toBeNull();
+    expect(useSpeleoStore.getState().session?.endpoint).toBe(endpointA);
   });
 
   it('preserves equivalent spellings of the authenticated server', async () => {

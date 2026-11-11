@@ -771,16 +771,24 @@ struct DpCell {
     existing_count: usize,
 }
 
+/// The existing shots read away from `start_idx` in `direction`, at most
+/// `limit` of them.
 fn oriented_existing_shots(
     existing_shots: &[MatchShot],
     start_idx: usize,
     direction: MatchDirection,
+    limit: usize,
 ) -> Vec<MatchShot> {
     match direction {
-        MatchDirection::Forward => existing_shots[start_idx..].to_vec(),
+        MatchDirection::Forward => existing_shots[start_idx..]
+            .iter()
+            .take(limit)
+            .cloned()
+            .collect(),
         MatchDirection::Reverse => existing_shots[..=start_idx]
             .iter()
             .rev()
+            .take(limit)
             .map(MatchShot::reversed)
             .collect(),
     }
@@ -1091,56 +1099,39 @@ fn try_match_sequence(
         };
     }
 
-    let existing_oriented = oriented_existing_shots(existing_shots, start_idx, direction);
-    let n = import_shots.len();
-    let m = existing_oriented.len();
-    let mut dp: Vec<Vec<Option<DpCell>>> = vec![vec![None; m + 1]; n + 1];
-    dp[0][0] = Some(DpCell {
+    // The only pairing is import shot `k` with oriented existing shot `k`, so
+    // the matched prefixes are the whole search space: walk them in order and
+    // stop at the first pair under the per-shot floor. Only the first
+    // `import_shots.len()` oriented shots can ever be paired, so no more are
+    // built - copying the rest of a long section at every start made each
+    // section's scan quadratic in its length (#674).
+    let existing_oriented =
+        oriented_existing_shots(existing_shots, start_idx, direction, import_shots.len());
+    let mut candidates: Vec<DpCell> = Vec::new();
+    let mut cell = DpCell {
         score_sum: 0.0,
         weight_sum: 0.0,
         import_count: 0,
         existing_count: 0,
-    });
-
-    for i in 0..=n {
-        for j in 0..=m {
-            let Some(cell) = dp[i][j] else { continue };
-            if i + 1 > n || j + 1 > m {
-                continue;
-            }
-            let import_shot = &import_shots[i];
-            let existing_shot = &existing_oriented[j];
-            let score = compute_exploratory_shot_score(
-                import_shot,
-                existing_shot,
-                MatchDirection::Forward,
-                config,
-            );
-            if score < config.min_shot_score {
-                continue;
-            }
-            let weight = shot_weight(import_shot, config);
-            let next = DpCell {
-                score_sum: cell.score_sum + score * weight,
-                weight_sum: cell.weight_sum + weight,
-                import_count: cell.import_count + 1,
-                existing_count: cell.existing_count + 1,
-            };
-            let target = &mut dp[i + 1][j + 1];
-            let replace = target
-                .map(|old| cell_final_score(next, config) > cell_final_score(old, config))
-                .unwrap_or(true);
-            if replace {
-                *target = Some(next);
-            }
+    };
+    for (import_shot, existing_shot) in import_shots.iter().zip(&existing_oriented) {
+        let score = compute_exploratory_shot_score(
+            import_shot,
+            existing_shot,
+            MatchDirection::Forward,
+            config,
+        );
+        if score < config.min_shot_score {
+            break;
         }
-    }
-
-    let mut candidates: Vec<DpCell> = Vec::new();
-    for row in dp.iter().skip(1) {
-        for cell in row.iter().flatten() {
-            candidates.push(*cell);
-        }
+        let weight = shot_weight(import_shot, config);
+        cell = DpCell {
+            score_sum: cell.score_sum + score * weight,
+            weight_sum: cell.weight_sum + weight,
+            import_count: cell.import_count + 1,
+            existing_count: cell.existing_count + 1,
+        };
+        candidates.push(cell);
     }
 
     candidates.sort_by(|a, b| {

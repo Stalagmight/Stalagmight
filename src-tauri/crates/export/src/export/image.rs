@@ -47,6 +47,7 @@ use ts_rs::TS;
 use usvg::{Options, Tree};
 
 use super::atomic_write::write_atomic;
+use super::color_scale::{depth_color, distance_color, ExportColorScale, ResolvedScale};
 use crate::models::{Project, StationRef};
 
 /// Output image format.
@@ -99,6 +100,43 @@ fn is_xml_illegal_char(c: char) -> bool {
     (u < 0x20 && c != '\t' && c != '\n' && c != '\r') || u == 0xFFFE || u == 0xFFFF
 }
 
+/// The longest station name the export draws whole; longer names are cut to
+/// one char less and end in an ellipsis. Matches the live map's cap.
+const STATION_NAME_LABEL_MAX_CHARS: usize = 24;
+
+/// A station name as the export draws it: control characters and bidi
+/// overrides dropped (names come from the file, so they are untrusted text),
+/// trimmed, and capped at [`STATION_NAME_LABEL_MAX_CHARS`]. `None` when nothing
+/// is left, so an unnamed station gets no label rather than its index.
+///
+/// Mirrors the live map's `formatStationNameLabel` (`labelText.ts`), so the
+/// preview and the file say the same thing: it also drops the Arabic letter
+/// mark (U+061C) that `sanitize_display_text` keeps and the XML-illegal
+/// U+FFFE/U+FFFF (a name of only those would otherwise reserve space for an
+/// empty `<text>`), and trims a byte-order mark (U+FEFF) the way JavaScript's
+/// `trim` does - at both ends and again at the cut.
+fn station_name_label(name: Option<&str>) -> Option<String> {
+    let blank = |c: char| c.is_whitespace() || c == '\u{feff}';
+    let clean: String = crate::models::sanitize_display_text(name?, usize::MAX)
+        .chars()
+        .filter(|&c| c != '\u{061c}' && !is_xml_illegal_char(c))
+        .collect();
+    let clean = clean.trim_matches(blank);
+    if clean.is_empty() {
+        return None;
+    }
+    if clean.chars().count() <= STATION_NAME_LABEL_MAX_CHARS {
+        return Some(clean.to_string());
+    }
+    let mut out: String = clean
+        .chars()
+        .take(STATION_NAME_LABEL_MAX_CHARS - 1)
+        .collect();
+    out.truncate(out.trim_end_matches(blank).len());
+    out.push('\u{2026}');
+    Some(out)
+}
+
 fn escape_xml_text(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -146,9 +184,9 @@ const DEPTH_DEEP: &str = "#ff6b6b";
 /// The depth-gradient endpoints for one export: whatever the frontend resolved
 /// from the live theme, else the dark-theme constants.
 #[derive(Clone, Copy)]
-struct DepthRamp<'a> {
-    shallow: &'a str,
-    deep: &'a str,
+pub(super) struct DepthRamp<'a> {
+    pub(super) shallow: &'a str,
+    pub(super) deep: &'a str,
 }
 
 /// A `#rrggbb` literal, or `None`. Deliberately strict: `hex_to_rgb` answers
@@ -175,12 +213,17 @@ impl ExportImageOptions {
 /// map paints unreachable features. From `src/utils/distanceGradient.ts`.
 const DIST_NEAR: (u8, u8, u8) = (0xf4, 0xd0, 0x3f);
 const DIST_FAR: (u8, u8, u8) = (0x7d, 0x3c, 0x98);
-const DIST_UNREACHABLE: &str = "#666666";
+pub(super) const DIST_UNREACHABLE: &str = "#666666";
 
 /// Depth-gradient color for `depth` normalized over `[min_d, max_d]`, matching
 /// the survey map: a 2-stop HSL shortest-hue-path lerp shallow→deep. Non-finite
 /// input falls back to black; a flat range collapses to the shallow color.
-fn depth_gradient_color(depth: f64, min_d: f64, max_d: f64, ramp: DepthRamp<'_>) -> String {
+pub(super) fn depth_gradient_color(
+    depth: f64,
+    min_d: f64,
+    max_d: f64,
+    ramp: DepthRamp<'_>,
+) -> String {
     if !depth.is_finite() || !min_d.is_finite() || !max_d.is_finite() {
         return "#000000".to_string();
     }
@@ -195,7 +238,7 @@ fn depth_gradient_color(depth: f64, min_d: f64, max_d: f64, ramp: DepthRamp<'_>)
 /// station's z AND every shot's `depth_in`/`depth_out` (reference shots included,
 /// to match `MapCanvas` even though only non-reference shots are drawn). Falls
 /// back to `(0, 50)` when non-finite.
-fn depth_range(project: &Project, stations: &[crate::models::Station]) -> (f64, f64) {
+pub(super) fn depth_range(project: &Project, stations: &[crate::models::Station]) -> (f64, f64) {
     let mut min = f64::INFINITY;
     let mut max = f64::NEG_INFINITY;
     for s in stations {
@@ -222,12 +265,16 @@ fn depth_range(project: &Project, stations: &[crate::models::Station]) -> (f64, 
 /// (NOT linear light) - so a naive per-channel lerp is what actually matches the
 /// on-screen distance ramp. (The GPU renders float colors, so the export's 8-bit
 /// rounding lands within ±1 level of the map.)
-fn distance_gradient_color(value: Option<f64>, max: f64) -> String {
+pub(super) fn distance_gradient_color(value: Option<f64>, max: f64) -> String {
     let Some(v) = value.filter(|v| v.is_finite() && *v >= 0.0) else {
         return DIST_UNREACHABLE.to_string();
     };
     let safe_max = if max > 0.0 { max } else { 1.0 };
-    let t = (v / safe_max).clamp(0.0, 1.0);
+    distance_ramp_at((v / safe_max).clamp(0.0, 1.0))
+}
+
+/// The fixed near→far distance ramp at position `t` (0..1).
+pub(super) fn distance_ramp_at(t: f64) -> String {
     let lerp =
         |a: u8, b: u8| -> u8 { (f64::from(a) + t * (f64::from(b) - f64::from(a))).round() as u8 };
     format!(
@@ -290,6 +337,15 @@ pub struct ExportImageOptions {
     /// regardless of `color_mode`.
     #[serde(default)]
     pub show_station_labels: bool,
+    /// Whether to draw each station's name (e.g. the mNemo station number a
+    /// DMP import recorded) instead of its index, with the same points and
+    /// placement as `show_station_labels`. A point with no named station gets
+    /// no label - there is no fallback to the index. Opt-in (default `false`).
+    /// The UI keeps it exclusive with `show_station_labels`; when both arrive
+    /// `true`, the index labels win, so a caller that predates this option
+    /// keeps the meaning it always had.
+    #[serde(default)]
+    pub show_station_names: bool,
     /// Whether to draw section-name labels at the centroid of each section's
     /// drawn stations. Opt-in (default `false`); black text + white halo.
     #[serde(default)]
@@ -341,6 +397,16 @@ pub struct ExportImageOptions {
     #[serde(default)]
     #[ts(optional)]
     pub depth_deep: Option<String>,
+    /// The user's depth palette + Levels range (export panel). Absent = the
+    /// theme ramp above over the data's full extent - the pre-palette export.
+    #[serde(default)]
+    #[ts(optional)]
+    pub depth_scale: Option<ExportColorScale>,
+    /// The user's distance palette + Levels range. Absent = the fixed
+    /// near→far ramp over `0..max reachable`.
+    #[serde(default)]
+    #[ts(optional)]
+    pub distance_scale: Option<ExportColorScale>,
 }
 
 impl Default for ExportImageOptions {
@@ -352,6 +418,7 @@ impl Default for ExportImageOptions {
             show_penetration_labels: true,
             color_mode: ColorMode::None,
             show_station_labels: false,
+            show_station_names: false,
             show_section_names: false,
             show_station_comments: false,
             show_shot_comments: false,
@@ -359,6 +426,8 @@ impl Default for ExportImageOptions {
             include_reference_legs: false,
             depth_shallow: None,
             depth_deep: None,
+            depth_scale: None,
+            distance_scale: None,
         }
     }
 }
@@ -973,6 +1042,8 @@ pub fn generate_svg_string_with_stations(
     };
     let depth_rng = (mode == ColorMode::Depth).then(|| depth_range(project, &stations));
     let depth_ramp = options.depth_ramp();
+    let depth_scale = options.depth_scale.as_ref().map(ResolvedScale::new);
+    let distance_scale = options.distance_scale.as_ref().map(ResolvedScale::new);
     let dist_field = (mode == ColorMode::Distance).then(|| {
         // The map colors the distance ramp from MEASURED distances (it draws
         // adjusted geometry but deliberately computes the distance field from
@@ -1028,7 +1099,7 @@ pub fn generate_svg_string_with_stations(
                                 (Some(a), Some(b)) => Some((a + b) / 2.0),
                                 _ => None,
                             };
-                            distance_gradient_color(avg, *max)
+                            distance_color(avg, *max, distance_scale.as_ref())
                         }
                         None => DIST_UNREACHABLE.to_string(),
                     };
@@ -1047,7 +1118,8 @@ pub fn generate_svg_string_with_stations(
                         let t1 = (s + 1) as f64 / segs as f64;
                         let mid = shot.depth_in
                             + (shot.depth_out - shot.depth_in) * ((s as f64 + 0.5) / segs as f64);
-                        let color = depth_gradient_color(mid, min_d, max_d, depth_ramp);
+                        let color =
+                            depth_color(mid, (min_d, max_d), depth_ramp, depth_scale.as_ref());
                         let (ax, ay) = (x0 + (x1 - x0) * t0, y0 + (y1 - y0) * t0);
                         let (bx, by) = (x0 + (x1 - x0) * t1, y0 + (y1 - y0) * t1);
                         let _ = writeln!(
@@ -1202,6 +1274,7 @@ pub fn generate_svg_string_with_stations(
     let mut placed: Vec<(f64, f64, f64, f64)> = Vec::new();
     if options.show_penetration_labels
         || options.show_station_labels
+        || options.show_station_names
         || options.show_section_names
         || options.show_station_comments
         || options.show_shot_comments
@@ -1340,7 +1413,11 @@ pub fn generate_svg_string_with_stations(
     // not passage, and are excluded), so a point with no non-reference shot
     // (deg 0) is skipped by both sub-passes. Drop-on-collision is the
     // backstop, sharing `placed` with Passes 2-3.
-    if options.show_station_labels || options.show_station_comments {
+    //
+    // Index labels win when both label options arrive set: the UI keeps them
+    // exclusive, and a caller that predates names keeps the meaning it had.
+    let show_station_names = options.show_station_names && !options.show_station_labels;
+    if options.show_station_labels || show_station_names || options.show_station_comments {
         let mut point_uf = UnionFind::new(n);
         for merge in &project.station_merges {
             if let (Some(a_sr), Some(b_sr)) = (
@@ -1390,40 +1467,63 @@ pub fn generate_svg_string_with_stations(
         let char_w = label_size * PEN_LABEL_CHAR_WIDTH_RATIO;
         let quarter_turn = std::f64::consts::FRAC_PI_4;
 
-        // Pass 4a: station-index label at every point touched by at least
-        // one drawn shot (deg >= 1) - i.e. all stations on drawn passage,
-        // deduped by colocation. Representative station per point = smallest
-        // station index (deterministic).
-        if options.show_station_labels {
+        // Pass 4a: one label at every point touched by at least one drawn
+        // shot (deg >= 1) - i.e. all stations on drawn passage, deduped by
+        // colocation. The label is the station index, or with names on, the
+        // station name. Representative station per point = the smallest
+        // station index that has a label (deterministic): every station for
+        // index labels, only named ones for names, so a merge of an unnamed
+        // and a named station still shows the name, and a point with no
+        // named station gets no label.
+        if options.show_station_labels || show_station_names {
+            // Names mode cleans each name once (it decides who represents a
+            // point); index labels are formatted only for the chosen stations.
+            let names: Vec<Option<String>> = if show_station_names {
+                stations
+                    .iter()
+                    .map(|s| station_name_label(s.name.as_deref()))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let label_for = |i: usize| -> Option<String> {
+                if show_station_names {
+                    names[i].clone()
+                } else {
+                    Some(stations[i].station_ref.station_index.to_string())
+                }
+            };
             let mut rep: HashMap<usize, usize> = HashMap::new();
             for i in 0..n {
-                let root = point_uf.find(i);
-                rep.entry(root)
-                    .and_modify(|cur| {
-                        if i < *cur {
-                            *cur = i;
-                        }
-                    })
-                    .or_insert(i);
+                if show_station_names && names[i].is_none() {
+                    continue;
+                }
+                // Ascending `i`: the first entry per point is its smallest.
+                rep.entry(point_uf.find(i)).or_insert(i);
             }
-            let mut selected: Vec<usize> = degree
+            let mut selected: Vec<(usize, String)> = degree
                 .iter()
                 .filter(|&(_, &deg)| deg >= 1)
-                .map(|(&root, _)| rep[&root])
+                .filter_map(|(root, _)| rep.get(root).copied())
+                .filter_map(|si| label_for(si).map(|text| (si, text)))
                 .collect();
-            selected.sort_unstable();
+            selected.sort_unstable_by_key(|&(si, _)| si);
 
             if !selected.is_empty() {
                 let _ = writeln!(
                     svg,
-                    r##"<g class="station-labels" font-family="sans-serif" font-size="{size:.2}" fill="#000000" stroke="#ffffff" stroke-width="{halo:.2}" paint-order="stroke fill" text-anchor="middle" dominant-baseline="central">"##,
+                    r##"<g class="{class}" font-family="sans-serif" font-size="{size:.2}" fill="#000000" stroke="#ffffff" stroke-width="{halo:.2}" paint-order="stroke fill" text-anchor="middle" dominant-baseline="central">"##,
+                    class = if show_station_names {
+                        "station-names"
+                    } else {
+                        "station-labels"
+                    },
                     size = label_size,
                     halo = halo,
                 );
-                for si in selected {
+                for (si, text) in selected {
                     let sx = stations[si].coordinates.x;
                     let sy = -stations[si].coordinates.y;
-                    let text = stations[si].station_ref.station_index.to_string();
                     let text_w = char_w * text.chars().count() as f64;
                     let text_h = label_size;
                     let primary = label_open_space_angle(si, &stations, project, &station_index);
@@ -1431,7 +1531,11 @@ pub fn generate_svg_string_with_stations(
                     if let Some((lx, ly, bb)) =
                         place_near(sx, sy, &offsets, text_w, text_h, &placed)
                     {
-                        let _ = writeln!(svg, r#"<text x="{lx:.2}" y="{ly:.2}">{text}</text>"#,);
+                        let _ = writeln!(
+                            svg,
+                            r#"<text x="{lx:.2}" y="{ly:.2}">{t}</text>"#,
+                            t = escape_xml_text(&text),
+                        );
                         placed.push(bb);
                     }
                 }
@@ -3922,6 +4026,211 @@ mod tests {
             !svg.contains(r#"class="station-labels""#),
             "station-labels group should be absent when opted out: {svg}"
         );
+    }
+
+    // ---- Station names --------------------------------------------------
+
+    /// The three-shot line with names on stations 0 and 2; 1 and 3 unnamed.
+    fn named_line_project() -> Project {
+        let mut project = three_shot_line_project();
+        let sid = project.sections[0].id;
+        project
+            .station_names
+            .insert(StationRef::new(sid, 0).into(), "17".to_string());
+        project
+            .station_names
+            .insert(StationRef::new(sid, 2).into(), "19".to_string());
+        project
+    }
+
+    /// Station names only (no penetration labels, so every `<text>` is a name).
+    fn names_only() -> ExportImageOptions {
+        ExportImageOptions {
+            show_penetration_labels: false,
+            show_station_names: true,
+            ..Default::default()
+        }
+    }
+
+    fn sorted_texts(svg: &str) -> Vec<String> {
+        let mut texts: Vec<String> = parse_text_labels(svg)
+            .into_iter()
+            .map(|(_, _, text)| text)
+            .collect();
+        texts.sort();
+        texts
+    }
+
+    #[test]
+    fn station_names_label_named_stations_only() {
+        let svg = generate_svg_string(&named_line_project(), &names_only()).unwrap();
+        assert!(svg.contains(r#"class="station-names""#), "{svg}");
+        assert!(!svg.contains(r#"class="station-labels""#), "{svg}");
+        assert_eq!(
+            sorted_texts(&svg),
+            ["17", "19"],
+            "only the named stations are labelled, by name, with no index fallback: {svg}"
+        );
+        let labels = parse_text_labels(&svg);
+        let x_of = |name: &str| labels.iter().find(|(_, _, t)| t == name).unwrap().0;
+        assert!(
+            x_of("17") < x_of("19"),
+            "each name sits at its own station (0 west of 2): {svg}"
+        );
+    }
+
+    #[test]
+    fn station_names_absent_when_no_station_is_named_or_disabled() {
+        let svg = generate_svg_string(&three_shot_line_project(), &names_only()).unwrap();
+        assert!(!svg.contains("station-names"), "{svg}");
+        assert!(sorted_texts(&svg).is_empty(), "no index fallback: {svg}");
+
+        let svg = generate_svg_string(
+            &named_line_project(),
+            &ExportImageOptions {
+                show_penetration_labels: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(!svg.contains("station-names"), "names are opt-in: {svg}");
+        assert!(sorted_texts(&svg).is_empty(), "{svg}");
+    }
+
+    #[test]
+    fn station_labels_win_when_both_label_options_are_set() {
+        let svg = generate_svg_string(
+            &named_line_project(),
+            &ExportImageOptions {
+                show_station_labels: true,
+                ..names_only()
+            },
+        )
+        .unwrap();
+        assert!(svg.contains(r#"class="station-labels""#), "{svg}");
+        assert!(!svg.contains("station-names"), "{svg}");
+        assert_eq!(sorted_texts(&svg), ["0", "1", "2", "3"], "{svg}");
+    }
+
+    #[test]
+    fn station_name_label_sanitizes_trims_and_caps() {
+        assert_eq!(station_name_label(None), None);
+        assert_eq!(station_name_label(Some("")), None);
+        assert_eq!(station_name_label(Some("   ")), None);
+        assert_eq!(
+            station_name_label(Some("\u{202e}\n\0")),
+            None,
+            "a name of only controls and bidi overrides is no name"
+        );
+        assert_eq!(
+            station_name_label(Some(" 1\u{202e}7\n ")).as_deref(),
+            Some("17")
+        );
+        // The same rules as the live map's label: the Arabic letter mark goes,
+        // and a byte-order mark is trimmed like whitespace.
+        assert_eq!(
+            station_name_label(Some("\u{feff}\u{061c}17\u{feff}")).as_deref(),
+            Some("17")
+        );
+        assert_eq!(station_name_label(Some("\u{feff}")), None);
+        // XML-illegal noncharacters would leave an empty <text> that still
+        // reserves space: dropped, and a name of only those is no name.
+        assert_eq!(station_name_label(Some("\u{fffe}\u{ffff}")), None);
+        assert_eq!(
+            station_name_label(Some("1\u{fffe}7")).as_deref(),
+            Some("17")
+        );
+        // A byte-order mark right before the cut is trimmed there too.
+        assert_eq!(
+            station_name_label(Some(&format!(
+                "{}\u{feff}{}",
+                "c".repeat(22),
+                "d".repeat(10)
+            ))),
+            Some(format!("{}\u{2026}", "c".repeat(22)))
+        );
+
+        let exact = "b".repeat(STATION_NAME_LABEL_MAX_CHARS);
+        assert_eq!(
+            station_name_label(Some(&exact)).as_deref(),
+            Some(exact.as_str())
+        );
+        let capped = station_name_label(Some(&"a".repeat(40))).unwrap();
+        assert_eq!(capped.chars().count(), STATION_NAME_LABEL_MAX_CHARS);
+        assert!(capped.ends_with('\u{2026}'), "{capped}");
+        // A cut that lands after a space does not keep the space.
+        let spaced = format!("{} {}", "c".repeat(22), "d".repeat(10));
+        assert_eq!(
+            station_name_label(Some(&spaced)),
+            Some(format!("{}\u{2026}", "c".repeat(22)))
+        );
+        // Multi-byte chars are counted and cut as chars, never mid-byte.
+        let wide = station_name_label(Some(&"\u{17d}".repeat(30))).unwrap();
+        assert_eq!(wide.chars().count(), STATION_NAME_LABEL_MAX_CHARS);
+    }
+
+    #[test]
+    fn station_names_are_xml_escaped_and_parse() {
+        let mut project = three_shot_line_project();
+        let sid = project.sections[0].id;
+        project.station_names.insert(
+            StationRef::new(sid, 1).into(),
+            "a & b </text><script>x".to_string(),
+        );
+        let svg = generate_svg_string(&project, &names_only()).unwrap();
+        assert!(
+            svg.contains("a &amp; b &lt;/text&gt;&lt;script&gt;x"),
+            "station name must be XML-escaped: {svg}"
+        );
+        assert!(!svg.contains("<script>"), "{svg}");
+        assert!(
+            Tree::from_str(&svg, &Options::default()).is_ok(),
+            "station-name SVG must parse: {svg}"
+        );
+    }
+
+    #[test]
+    fn station_names_use_the_named_member_of_a_merged_point() {
+        // Branch:0 is merged onto Main:1. Main:1 has the lower global index but
+        // no name, so the point is labelled - once - with Branch:0's name, at
+        // Branch:0's own position (the representative's coordinates).
+        let mut project = three_shot_line_project();
+        let main_id = project.sections[0].id;
+        let branch_id = project
+            .add_section(SectionData {
+                name: Some("Branch".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![make_shot(10.0, 0.0, false), make_shot(10.0, 0.0, false)],
+                ..Default::default()
+            })
+            .id;
+        project.station_merges.push(StationMerge {
+            station_a: StationRef::new(branch_id, 0).into(),
+            station_b: StationRef::new(main_id, 1).into(),
+            merged_at: chrono::Utc::now(),
+        });
+        project
+            .station_names
+            .insert(StationRef::new(branch_id, 0).into(), "J".to_string());
+
+        let svg = generate_svg_string(&project, &names_only()).unwrap();
+        let labels = parse_text_labels(&svg);
+        assert_eq!(sorted_texts(&svg), ["J"], "{svg}");
+        let (x, y, _) = &labels[0];
+        assert!(
+            x.abs() < 1.0 && y.abs() < 1.0,
+            "the named member speaks for the point, at its own position: {svg}"
+        );
+    }
+
+    #[test]
+    fn station_names_render_from_supplied_stations() {
+        // The export commands render the closure-adjusted stations they pass
+        // in; the names must come along with them.
+        let project = named_line_project();
+        let stations = project.compute_station_coordinates();
+        let svg = generate_svg_string_with_stations(&project, &names_only(), stations).unwrap();
+        assert_eq!(sorted_texts(&svg), ["17", "19"], "{svg}");
     }
 
     #[test]

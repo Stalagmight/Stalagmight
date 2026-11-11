@@ -130,15 +130,14 @@ export function isDroppableFilePath(path: string, extensions: readonly string[] 
  * This is the filter set of every door that can OPEN something: the hamburger's
  * Open / Import row in both views, Ctrl+O, the EmptyState card, and Ctrl+I with
  * no project open. The in-project Import doors (toolbar button, hamburger
- * Import row, Ctrl+I) use `dmpImportFilters` instead (#508) - see there for
- * why. Every one of them routes the choice through `routeOpenedFile`, so the
+ * Import row, Ctrl+I) use `inProjectImportFilters` instead (#508) - see there
+ * for why. Every one of them routes the choice through `routeOpenedFile`, so the
  * filters decide only what the picker shows, never how a file is handled.
  *
- * A `.stalx` picked through a door labeled "Import" is a plain project open;
- * that's safe because the router's `.stalx` branch guards replacement behind
- * the SpeleoDB hand-back and unsaved-changes prompts (#270) - a picker-side
- * exclusion (the pre-#407 `inProjectImportFilters`) is not what protects data,
- * and it made Import reject files Open accepted.
+ * A `.stalx` picked through an Open door is a plain project open, guarded by
+ * the router's SpeleoDB hand-back and unsaved-changes prompts (#270). Through
+ * an in-project Import door it instead asks "Open as project" or "Add to
+ * <current project>" (#674); that choice is the router's, not the picker's.
  */
 export function openOrImportFilters() {
   return [
@@ -178,6 +177,19 @@ export function openOrImportFilters() {
  */
 export function dmpImportFilters() {
   return [{ name: 'mNemo DMP', extensions: [DMP_EXTENSION] }];
+}
+
+/**
+ * Filters for the IN-PROJECT Import doors (#674): `.dmp` (added to the open
+ * project) and `.stalx` (the router asks whether to open it as a project or add
+ * it to the open one). Everything else is new-project-only and stays on Open.
+ */
+export function inProjectImportFilters() {
+  return [
+    { name: 'mNemo DMP & Stalagmight Project', extensions: [DMP_EXTENSION, PROJECT_EXTENSION] },
+    ...dmpImportFilters(),
+    { name: 'Stalagmight Project', extensions: [PROJECT_EXTENSION] },
+  ];
 }
 
 export function exportSaveFilters(label: string, extension: string) {

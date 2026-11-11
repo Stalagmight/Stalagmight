@@ -9,9 +9,13 @@ use crate::models::{
     StationRef,
 };
 
+mod added_content;
 mod budget;
 pub mod history_view;
 mod persistence;
+mod uuid_remap;
+
+pub use added_content::{extend_unique_hashes, AddedContent, CarriedIgnore};
 
 /// Serialize a section-offset map in KEY order rather than in `HashMap`
 /// iteration order.
@@ -412,6 +416,11 @@ pub enum UndoData {
     /// - after: Snapshot after the operation (used for redo)
     ProjectSnapshotPair { before: String, after: String },
 
+    /// What one "Add .stalx to current project" brought (#674): undo removes
+    /// exactly it, redo reinstalls it with the same ids. See [`AddedContent`].
+    /// Boxed: the payload is far larger than every other variant.
+    AddedProjectContent(Box<AddedContent>),
+
     /// No undo data (for commands that can't be undone)
     None,
 }
@@ -507,6 +516,7 @@ impl UndoData {
             UndoData::StationMoveInfo { .. } => "StationMoveInfo",
             UndoData::ProjectSnapshot(_) => "ProjectSnapshot",
             UndoData::ProjectSnapshotPair { .. } => "ProjectSnapshotPair",
+            UndoData::AddedProjectContent(_) => "AddedProjectContent",
             UndoData::None => "None",
         }
     }

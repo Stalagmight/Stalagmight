@@ -114,12 +114,28 @@ const DEFAULT_EXCLUDED_DMP_SHOT_LENGTH = 1;
 
 /**
  * DMP imports skip length-1 standard shots by default.
+ *
+ * This is also the mNemo station-numbering rule: only the shots that pass it
+ * advance the station number (see `mnemoStationNumber`).
  */
 export function isImportableDmpShot(shot: DmpShot): boolean {
   if (shot.shot_type !== 'Standard') {
     return false;
   }
   return Math.abs(shot.length - DEFAULT_EXCLUDED_DMP_SHOT_LENGTH) > 1e-9;
+}
+
+/**
+ * The mNemo station number at the END of the importable shot at `index` (its
+ * position among the shots `isImportableDmpShot` keeps). mNemo numbers a
+ * section's start 0 and the end of its N-th shot N, so this is `index + 1`.
+ * ASSUMED, not confirmed against a device: that only the shots the importer
+ * keeps advance the device's counter. This is the one place the rule lives: if a
+ * device turns out to count other shot kinds too (1 m shots, CsA/CsB), this and
+ * the filter it is applied after are what change.
+ */
+export function mnemoStationNumber(index: number): number {
+  return index + 1;
 }
 
 /**
@@ -130,6 +146,7 @@ export function convertToEditableShots(shots: DmpShot[]): EditableShot[] {
     .filter(isImportableDmpShot)
     .map((shot, index) => ({
       id: index,
+      mnemoStation: mnemoStationNumber(index),
       azimuth_in: shot.heading_in,
       azimuth_out: shot.heading_out,
       length: shot.length,

@@ -5,7 +5,7 @@ import {
   seedProjectWithSections,
   waitForMapReady,
   waitForNoDialogs,
-  openAppMenu,
+  openDebugFromMenu,
   type SectionSeed,
 } from './helpers/app';
 
@@ -152,10 +152,9 @@ test.describe('Data table fullscreen mode', () => {
   test('Escape closes an open dialog before exiting fullscreen', async ({ page }) => {
     await enterFullScreen(page);
 
-    // Open a dialog (Debug Logs, via the hamburger menu, which stays in the
-    // reduced toolbar) to verify Escape closes it before exiting fullscreen.
-    await openAppMenu(page);
-    await page.getByTestId('global-debug-button').click();
+    // Open a dialog (Debug Logs, via the hamburger's Debug submenu, which stays
+    // in the reduced toolbar) to verify Escape closes it before exiting fullscreen.
+    await openDebugFromMenu(page);
     await expect(page.getByTestId('debug-dialog')).toBeVisible();
 
     // First Escape closes the dialog and stays fullscreen.

@@ -40,13 +40,6 @@ export const defaultConfig: Config = {
     "grid_spacing": 10.0,
     "font_size": 12,
     "font_color": "#f5f5f5",
-    "depth_gradient": {
-      "enabled": false,
-      "shallow_color": "#00bfff",
-      "deep_color": "#ff4444",
-      "shallow_depth": 0.0,
-      "deep_depth": 50.0
-    },
     "measure_path_color": "#22d3ee"
   },
   "section_colors": {
@@ -242,7 +235,11 @@ export const defaultConfig: Config = {
       "_x",
       "_y",
       "_lat",
-      "_long"
+      "_long",
+      "name"
+    ],
+    "data_table_station_columns_seen": [
+      "name"
     ],
     "data_table_station_column_widths": {},
     "new_section_column_order": [],
@@ -357,8 +354,17 @@ export const defaultConfig: Config = {
     "endpoint": null,
     "email": null,
     "insecure_http": false,
-    "allow_force_edit": false,
-    "poll_interval_seconds": 60,
     "undo_mode": "full"
+  },
+  "map_palette": {
+    "depth": {
+      "id": "theme",
+      "reversed": false
+    },
+    "distance": {
+      "id": "theme",
+      "reversed": false
+    },
+    "pinned": []
   }
 };

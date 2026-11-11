@@ -77,6 +77,7 @@ fn get_command_type(command: &Command) -> String {
         Command::Batch { .. } => "batch".to_string(),
         Command::UntrackImport { .. } => "untrack_import".to_string(),
         Command::MergeProjects { .. } => "merge_projects".to_string(),
+        Command::AddProjectFile { .. } => "add_project_file".to_string(),
         Command::RepairIntegrity => "repair_integrity".to_string(),
         Command::UpdateProjectSettings => "update_project_settings".to_string(),
         Command::SetSurfaceElevation => "set_surface_elevation".to_string(),
@@ -914,6 +915,24 @@ fn derive_preview_data(
                 .collect();
             Some(PreviewData {
                 changes,
+                additional_changes: 0,
+            })
+        }
+
+        // Add .stalx (#674): what the add brought, counted off its own record.
+        (Command::AddProjectFile { file_name, .. }, UndoData::AddedProjectContent(content)) => {
+            let shots: usize = content.sections.iter().map(|s| s.shots.len()).sum();
+            let row = |field: &str, value: String| FieldChange {
+                field: field.to_string(),
+                old_value: String::new(),
+                new_value: value,
+            };
+            Some(PreviewData {
+                changes: vec![
+                    row("File", file_name.clone()),
+                    row("Sections added", content.sections.len().to_string()),
+                    row("Shots added", shots.to_string()),
+                ],
                 additional_changes: 0,
             })
         }

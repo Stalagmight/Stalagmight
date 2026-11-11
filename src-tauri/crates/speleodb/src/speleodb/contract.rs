@@ -56,8 +56,10 @@ pub enum SpeleoDbAction {
 
 /// Why a transport attempt never reached (or never finished with) the server.
 ///
-/// [#270] Derived from the TYPED `ureq::Error` / `io::ErrorKind` at the point of
-/// failure (`client::classify_transport`), never from the error's Display text -
+/// [#270] Derived from the TYPED `reqwest::Error` / `io::ErrorKind` /
+/// `rustls::Error` at the point of failure (`client::network_error` /
+/// `client::api_error`, and `tls::enforce` for an unresolvable `http://` host),
+/// never from the error's Display text -
 /// `io::Error`'s message comes from `strerror`, so it is OS- and locale-
 /// dependent and unusable as a discriminant. Crosses IPC on
 /// [`SpeleoErrorDto::transport`] so the frontend renders a translated,
@@ -67,8 +69,7 @@ pub enum SpeleoDbAction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../bindings/")]
 pub enum TransportCause {
-    /// The host answered the dial with a refusal / dropped the connection
-    /// (nothing listening on that port, or the server closed on us).
+    /// The connection was refused, dropped, or the network/host was unreachable.
     Refused,
     /// A configured timeout elapsed (dial, response, or body read).
     Timeout,
@@ -76,10 +77,40 @@ pub enum TransportCause {
     Dns,
     /// The TLS handshake / certificate validation failed.
     Tls,
-    /// Anything else - no route, a blackholed address (the EINVAL this fix was
+    /// Anything else - a blackholed address (the EINVAL this fix was
     /// found through), an unclassified transport failure. Fails to the generic
     /// "could not reach the server" line rather than showing the raw errno.
     Unknown,
+}
+
+/// Why the endpoint policy (`tls::validate_endpoint`) refused a server address
+/// before any request was made. Crosses IPC on
+/// [`SpeleoErrorDto::endpoint_refusal`] so the frontend says what to change in a
+/// translated line instead of the backend's English sentence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../bindings/")]
+pub enum EndpointRefusal {
+    /// A plain `http://` server outside the automatic exceptions (`localhost`,
+    /// `127.0.0.1`, `192.168.x.x`; see `tls`), without the development-build
+    /// insecure-HTTP override.
+    PlainHttp,
+    /// Not a usable server address: no or an unknown scheme, no host, user info,
+    /// or an invalid port.
+    InvalidAddress,
+}
+
+impl EndpointRefusal {
+    /// The rule, in English, for the error's Display text (logs, and callers that
+    /// show the backend message as is).
+    #[must_use]
+    pub const fn reason(self) -> &'static str {
+        match self {
+            Self::PlainHttp => super::tls::PLAIN_HTTP_RULE,
+            Self::InvalidAddress => {
+                "Not a usable SpeleoDB address: it needs an http:// or https:// scheme, a host and a valid port."
+            }
+        }
+    }
 }
 
 /// The SpeleoDB endpoint a status came from, so [`map_status`] can apply the
@@ -208,11 +239,18 @@ pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto 
             project_id: project_id.clone(),
             local_path: local_path.clone(),
             last_edit_at: last_edit_at.clone(),
+            // Whose work it is needs the cache's owner record, which only the core
+            // can read; it fills this in where it knows (the online open).
+            other_owner: None,
         }),
         _ => None,
     };
     let newer_schema = match err {
         SpeleoDbError::NewerSchema(newer) => Some(newer.clone()),
+        _ => None,
+    };
+    let endpoint_refusal = match err {
+        SpeleoDbError::InsecureEndpoint { refusal, .. } => Some(*refusal),
         _ => None,
     };
     let (action, status, message) = match err {
@@ -250,12 +288,15 @@ pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto 
         // the build until someone decides which side of that line it is on.
         SpeleoDbError::NoEndpoint
         | SpeleoDbError::MissingCredentials
+        | SpeleoDbError::ServerChangeWhileConnected
         | SpeleoDbError::NewerSchema(_)
         | SpeleoDbError::Parse(_)
         | SpeleoDbError::Io(_)
         | SpeleoDbError::InvalidProjectId
         | SpeleoDbError::InvalidRevision
         | SpeleoDbError::InsecureEndpoint { .. }
+        | SpeleoDbError::UploadTooLarge { .. }
+        | SpeleoDbError::OtherAccountsCopy { .. }
         | SpeleoDbError::NoRemoteProject => (SpeleoDbAction::Fatal, None, err.to_string()),
     };
     SpeleoErrorDto {
@@ -265,6 +306,7 @@ pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto 
         transport,
         unpushed_local,
         newer_schema,
+        endpoint_refusal,
     }
 }
 
@@ -459,6 +501,30 @@ mod tests {
         assert_eq!(
             dto_for_error(Endpoint::User, &SpeleoDbError::NotAuthenticated).newer_schema,
             None
+        );
+    }
+
+    #[test]
+    fn an_endpoint_refusal_is_fatal_and_says_why() {
+        use super::EndpointRefusal;
+        for refusal in [EndpointRefusal::PlainHttp, EndpointRefusal::InvalidAddress] {
+            let dto = dto_for_error(
+                Endpoint::Login,
+                &SpeleoDbError::InsecureEndpoint {
+                    endpoint: "http://192.0.2.1/".to_owned(),
+                    refusal,
+                },
+            );
+            assert_eq!(dto.action, SpeleoDbAction::Fatal);
+            assert_eq!(dto.endpoint_refusal, Some(refusal));
+        }
+        // Only the policy's refusal carries it, so it is a sound discriminant.
+        let other = dto_for_error(Endpoint::Login, &SpeleoDbError::MissingCredentials);
+        assert_eq!(other.endpoint_refusal, None);
+        let json = serde_json::to_string(&other).expect("serialize dto");
+        assert!(
+            !json.contains("endpoint_refusal"),
+            "absent unless refused: {json}"
         );
     }
 

@@ -324,6 +324,45 @@ When all suggestions are exhausted (or skipped), the early import runs on the tr
 
 Sections unreachable after all passes remain in the wizard's manual segment-placement flow until the user places or discards them.
 
+## Station Names
+
+mNemo numbers a section's start station 0 and the end of its N-th shot N, and
+divers key their notes to those numbers. The `.dmp` file carries no station
+numbers, and every later edit - the shots the importer skips, an overlap trim,
+a deleted or added row, any edit after import - shifts the positional
+`S:I` station IDs, so the import records each station's mNemo number as its
+**name** (`Project.station_names`).
+
+- **Counting.** ASSUMED, not yet confirmed against a device: only the shots the
+  importer keeps advance the number - those `isImportableDmpShot` passes
+  (Standard, not 1 m). It matches the station numbers the wizard itself shows
+  before any edits. `mnemoStationNumber` in `src/hooks/useImportState.ts` is the
+  one place the rule lives (with the filter it runs after), so if a device
+  counts other shots too, that is what changes. `convertToEditableShots` stores
+  the result on each row as `mnemoStation` (the number of the row's END
+  station).
+- **Through the wizard.** Every edit spreads the row, so the number survives
+  interpolation, data replacement and Reference marking. A row the user adds
+  has none.
+- **Into the config.** `stationNamesForEmittedShots`
+  (`src/utils/importSectionConfig.ts`) turns the rows actually sent into
+  `ImportSectionConfig.station_names`: the end of emitted row k is station
+  k + 1; a start keeps the previous row's number (as an in-app delete keeps the
+  surviving start), so a station after an added row stays unnamed; only the
+  start of the first DMP row falls back to its number minus 1. A section whose
+  first m shots an overlap trim removed therefore starts at m, and the trimmed
+  numbers are gone with their stations - one name per station, no aliases.
+  Indices are in the emitted, pre-reverse order: the backend mirrors them for a
+  reversed import exactly like `station_comments`.
+- **After import.** Names are keyed by `StationKey`, so they follow their
+  station through later inserts, deletes, splits and reverses; a merge keeps
+  both stations' own numbers. The stations grid has a read-only Name column
+  (hidden by default; the eye menu shows it) and the detail panel shows
+  `S:I · name` on station links. On the map, the Display menu's **Station
+  names** labels each named station with its number in place of its ID (it
+  and **Station IDs** are one choice), and the image export has the same
+  **Station names** option.
+
 ## Key Types
 
 | Type | Location | Purpose |
@@ -345,6 +384,7 @@ Sections unreachable after all passes remain in the wizard's manual segment-plac
 |----------|----------|---------|
 | `applyAllOverlapTreatments` | `src/utils/overlapTreatment.ts` | Single-pass overlap mutation for all suggestions |
 | `buildBatchImport` | `src/components/Dialogs/DmpNewImportDialog.tsx` | Construct ordered `ImportSectionConfig[]` for backend |
+| `stationNamesForEmittedShots` | `src/utils/importSectionConfig.ts` | A section's station names (mNemo numbers) from its emitted rows |
 | `buildAdjacency` | `src/utils/segmentContext.ts` | Adjacency map from `importing`-type connections |
 | `computeDmpBfsContext` | `src/utils/segmentContext.ts` | BFS collecting DMP neighbor geometry + existing anchors |
 | `stationPositionFromShotLines` | `src/utils/segmentContext.ts` | Extract XY from backend `shot_lines` (station 0 = `[0][0]`, station N = `[N-1][1]`) |

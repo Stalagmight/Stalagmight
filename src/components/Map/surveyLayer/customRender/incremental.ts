@@ -24,6 +24,7 @@ import type { GpsOrigin } from '../../../../types/config';
 import type { SurveyData } from '../../../../types/survey-data';
 import type { DisplayColorContext, OverlayColorInput } from '../displayColor';
 import { computeMercatorAnchor } from './mercator';
+import { sameColorScaleInput } from '../../../../utils/palettes';
 
 /** What the incremental apply step must recompute. Section indices are into
  *  `next.sections` (declaration order, stable under a non-structural edit). */
@@ -93,6 +94,8 @@ export function sameColorGlobals(prev: DisplayColorContext, next: DisplayColorCo
   if (prev.depthRange.min !== next.depthRange.min || prev.depthRange.max !== next.depthRange.max) {
     return false;
   }
+  // The user's depth palette / Levels range recolours every depth-ramped feature.
+  if (!sameColorScaleInput(prev.depthScale, next.depthScale)) return false;
   // Severity mode: any edit rebuilds the severity arrays (new ref) and severity
   // is non-local, so require identical (⇒ only fires when severity is off/stable).
   if (next.showIssueSeverity && prev.issueSeverity !== next.issueSeverity) return false;
@@ -120,7 +123,13 @@ export function sameColorGlobals(prev: DisplayColorContext, next: DisplayColorCo
 function sameOverlay(a: OverlayColorInput | null, b: OverlayColorInput | null): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
-  return a.mode === b.mode && a.shots === b.shots && a.stations === b.stations && a.max === b.max;
+  return (
+    a.mode === b.mode &&
+    a.shots === b.shots &&
+    a.stations === b.stations &&
+    a.max === b.max &&
+    sameColorScaleInput(a.scale, b.scale)
+  );
 }
 
 /**
@@ -230,8 +239,11 @@ export function planColorOnlyUpdate(
   nextGpsOrigin: GpsOrigin | null,
   cachedAnchorX: number,
   cachedAnchorY: number,
+  /** Recolour even when the colour globals match: the buffers hold a live
+   *  colour-scale preview's approximate colours, not `prevCtx`'s. */
+  force = false,
 ): boolean {
-  if (sameColorGlobals(prevCtx, nextCtx)) return false;
+  if (!force && sameColorGlobals(prevCtx, nextCtx)) return false;
   if (!sameGpsOrigin(prevGpsOrigin, nextGpsOrigin)) return false;
   if (!sameSurveyLayout(prev, next)) return false;
   const [ax, ay] = computeMercatorAnchor(next, nextGpsOrigin);

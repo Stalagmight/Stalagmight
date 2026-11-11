@@ -4,10 +4,11 @@ import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore, type HeldLock } from '../../store/speleoStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
+import { useSpeleoOperationBusy } from '../../hooks/useSpeleoOperationBusy';
 import { useSpeleoLocalStates } from '../../hooks/useSpeleoLocalStates';
 import { hasUnpushedEdits, localStateUnknown, UNPUSHED_ACCENT } from '../../utils/speleoLocalState';
 import { humanizeSpeleoError } from '../../utils/speleoError';
-import { needsSpeleoHandBackPrompt } from '../../utils/quit';
+import { needsSpeleoExitPrompt } from '../../utils/speleoExit';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { TOAST_KEYS } from '../../utils/toastKeys';
@@ -38,14 +39,14 @@ import { useScreenOccupant } from '../../hooks/useScreenOccupant';
  *   agreement rather than having the UI offer what the backend would refuse.
  *
  * Dialog-wide:
- * - **Keep working** - dismiss and leave the locks held.
+ * - **Not now** - dismiss and leave the locks held.
  *
  * There is deliberately NO bulk release. The server verb is all-or-nothing and this
  * prompt is exactly where locks sitting over un-pushed work show up, so a single
  * button that frees every lock is the one action most likely to strand the work the
  * per-row rules exist to protect. Releasing is per project, and only where there is
  * nothing local to lose.
- * - Closing the dialog (X) is the "do nothing" exit - same as Keep working.
+ * - Closing the dialog (X) is the "do nothing" exit - same as Not now.
  */
 export default function HeldLockResumeDialog() {
   const { t } = useTranslation();
@@ -70,6 +71,9 @@ export default function HeldLockResumeDialog() {
 
   const locks = useMemo(() => heldLocks ?? [], [heldLocks]);
   const busy = busyId !== null;
+  // Another lock, upload or account call still running elsewhere: resuming or
+  // releasing now would start a second lock operation under it.
+  const operationBusy = useSpeleoOperationBusy();
 
   // The local half of the join, fetched once for every listed lock (#270).
   const lockIds = useMemo(() => locks.map((l) => l.projectId), [locks]);
@@ -98,7 +102,7 @@ export default function HeldLockResumeDialog() {
    *     every row to Release. Continue editing is the safe read of "unknown": it
    *     KEEPS the lock and opens the project so the user can look for themselves.
    *     A genuinely abandoned lock is still releasable from Project Settings, and
-   *     Keep working leaves everything as it was.
+   *     Not now leaves everything as it was.
    */
   const actionFor = (projectId: string): 'release' | 'continue' | 'checking' => {
     if (!loaded) return 'checking';
@@ -178,7 +182,7 @@ export default function HeldLockResumeDialog() {
         // resolvable, and nothing is lost.
         //
         // BOTH kinds of work at risk, in the guards' own order. Disk-dirty is the
-        // obvious one. The other is the reason `needsSpeleoHandBackPrompt` exists:
+        // obvious one. The other is the reason `needsSpeleoExitPrompt` exists:
         // the open project can be perfectly clean on disk and still hold un-pushed
         // edits or our write lock, and closing it backend-side hands neither back -
         // it just hides the local copy and drops the lock this very prompt is about.
@@ -193,7 +197,7 @@ export default function HeldLockResumeDialog() {
           );
           return;
         }
-        if (needsSpeleoHandBackPrompt(openLink)) {
+        if (needsSpeleoExitPrompt(openLink, false)) {
           showToast(
             t('speleodb.localEdits.heldLocks.unpushedWork', { name: lock.projectName }),
             TOAST_KEYS.SPELEODB_CONTINUE_EDITING_UNPUSHED,
@@ -291,7 +295,7 @@ export default function HeldLockResumeDialog() {
                   <button
                     type="button"
                     onClick={() => void continueEditing(lock)}
-                    disabled={busy}
+                    disabled={busy || operationBusy}
                     className="shrink-0 text-xs text-accent hover:underline disabled:opacity-50 disabled:no-underline"
                     aria-label={t('speleodb.localEdits.heldLocks.continueEditingAria', {
                       name: lock.projectName,
@@ -306,7 +310,7 @@ export default function HeldLockResumeDialog() {
                   <button
                     type="button"
                     onClick={() => void releaseOne(lock.projectId)}
-                    disabled={busy}
+                    disabled={busy || operationBusy}
                     className="shrink-0 text-xs text-danger hover:underline disabled:opacity-50 disabled:no-underline"
                     aria-label={t('speleodb.heldLocks.releaseOneAria', { name: lock.projectName })}
                     data-testid={`speleodb-held-lock-release-${lock.projectId}`}

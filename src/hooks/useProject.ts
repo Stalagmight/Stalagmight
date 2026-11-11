@@ -1,10 +1,9 @@
+import { dispatchProjectSave } from '../utils/dispatchProjectSave';
+import i18n from '../i18n';
 import { useCallback } from 'react';
 import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
-import { useSpeleoStore } from '../store/speleoStore';
 import { useShallow } from 'zustand/react/shallow';
-import { getErrorMessage } from '../utils/ipc';
-import { surfaceSaveFailure } from '../utils/saveFeedback';
 import {
   ensureExtension,
   exportSaveFilters,
@@ -13,7 +12,8 @@ import {
 import { openOrImport } from '../utils/openOrImport';
 import { newProjectGuarded, saveProjectAs } from '../utils/projectActions';
 import { debugLog } from '../utils/debugLog';
-import { needsSpeleoHandBackPrompt } from '../utils/quit';
+import { askSpeleoExit, openProjectNeedsSpeleoExitPrompt } from '../utils/speleoExit';
+import { confirmWorkspaceDrafts } from '../utils/workspaceDrafts';
 
 export function useProject() {
   const { setView, openDialog } = useUIStore(
@@ -28,7 +28,6 @@ export function useProject() {
   // depend on them - rebuilding the AppMenu items array + icon JSX on every tick.
   // Store ACTIONS have stable identities in zustand, so the handlers built from
   // them stay stable; the data fields re-render only when they actually change.
-  const saveProject = useProjectStore((s) => s.saveProject);
   const closeProject = useProjectStore((s) => s.closeProject);
   const exportCsv = useProjectStore((s) => s.exportCsv);
   const exportJson = useProjectStore((s) => s.exportJson);
@@ -54,60 +53,19 @@ export function useProject() {
     [],
   );
 
-  const handleSaveProject = useCallback(async (opts?: { closeAfterSave?: boolean }) => {
-    const link = useSpeleoStore.getState().link;
-    if (link?.editState === 'editing' && !link.forceEditing) {
-      if (opts?.closeAfterSave) {
-        openDialog('speleodb-close');
-      } else {
-        openDialog('speleodb-done', { mode: 'push' });
-      }
-      return;
-    }
-    // An untitled project goes through Save As, which surfaces its own failures
-    // (saveProjectAs guards on !success). Surfacing again here would double-report
-    // - the second openDialog('error') is treated as dialog-chaining. So only the
-    // direct save-to-existing-path branch surfaces.
-    if (!useProjectStore.getState().project?.file_path) {
-      return handleSaveProjectAs(opts);
-    }
-    try {
-      const result = await saveProject();
-      if (result && !result.success) {
-        surfaceSaveFailure(result.error, openDialog);
-      }
-      return result;
-    } catch (e) {
-      // store.saveProject rejects only on an IPC-transport failure (real save
-      // failures resolve as CommandResult{success:false}, handled above). Surface
-      // it here rather than letting it escape as an unhandled rejection - callers
-      // like the save-status retry and the menu Save invoke this without awaiting
-      // or catching (`void onSave()` / `() => onSave()`).
-      const message = getErrorMessage(e, 'Failed to save');
-      surfaceSaveFailure(message, openDialog);
-      return { success: false, error: message };
-    }
-  }, [saveProject, handleSaveProjectAs, openDialog]);
+  const handleSaveProject = dispatchProjectSave;
 
   const handleCloseProject = useCallback(async () => {
-    // A SpeleoDB project we still hold the write lock for routes through the close-
-    // flow guard (release with or without uploading) BEFORE the normal unsaved-changes
-    // prompt, so no in-app close affordance - hamburger Close, Save-and-Close, the
-    // overwrite-confirm close - can leave the server mutex stranded (fix 1). The
-    // dialog owns the actual close and handles both dirty states itself.
-    //
-    // #270: the lock is not the only thing worth guarding, and gating on it ALONE
-    // was the same defect `guardQuit` was fixed for - the states that strand the
-    // work hardest (`notifyReverifyDivergence`, a `ReLogin` that runs
-    // `clearSession()`) are exactly the ones that drop to read-only while KEEPING
-    // the unpushed edits. Closing there returned straight to the home screen with
-    // no notice at all. `needsSpeleoHandBackPrompt` is the exact predicate the two
-    // OTHER hand-back exits (open-another-.stalx, New Project) now use, and its
-    // unpushed-work half is literally shared with `guardQuit`, so none of the four
-    // can silently diverge again.
-    if (needsSpeleoHandBackPrompt(useSpeleoStore.getState().link)) {
-      openDialog('speleodb-close');
-      return { success: false, error: 'Showing dialog' };
+    // Unsent SpeleoDB input (an upload description, the conversion form) is asked
+    // about first, before any question whose answer uploads, releases or closes.
+    if (!await confirmWorkspaceDrafts()) return { success: false, error: 'Cancelled' };
+    // Holding the SpeleoDB lock over work SpeleoDB has not seen: the exit prompt
+    // decides (upload / keep the lock / discard) and closes the project itself.
+    if (openProjectNeedsSpeleoExitPrompt()) {
+      const closed = await askSpeleoExit('close');
+      if (!closed) return { success: false, error: 'Cancelled' };
+      setView('global');
+      return { success: true };
     }
     // Check for unsaved changes - use getState() to get current value, not stale closure
     const currentIsDirty = useProjectStore.getState().isDirty;
@@ -133,6 +91,10 @@ export function useProject() {
     const t1 = performance.now();
     if (result.success) {
       setView('global');
+    } else if (result.error !== 'Cancelled' && result.error !== 'Superseded' && result.error !== 'Already closing') {
+      // A failed lock release has already asked "Couldn't hand back the lock"
+      // (Cancel resolves 'Cancelled'); this is every other close failure.
+      openDialog('error', { title: i18n.t('projectClose.failedTitle'), message: result.error || i18n.t('projectClose.failedMessage') });
     }
     const t2 = performance.now();
     const { recordPerfTiming } = await import('../utils/memoryProbe');

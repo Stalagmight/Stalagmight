@@ -14,3 +14,4 @@ export { useTouchContextMenu } from './useTouchContextMenu';
 export { useUiScale } from './useUiScale';
 export { useScreenOccupant } from './useScreenOccupant';
 export { useAppUpdate } from './useAppUpdate';
+export { useHelpMenu } from './useHelpMenu';

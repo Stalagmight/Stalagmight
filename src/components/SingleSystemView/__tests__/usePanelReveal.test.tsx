@@ -145,3 +145,19 @@ describe('usePanelReveal - viewport-forced close (#260)', () => {
     expect(result.current.isPinnedOpen).toBe(true);
   });
 });
+
+it('programmatic reveal preserves preferences and focus keeps a floating dock accessible', () => {
+  vi.useFakeTimers();
+  useUIStore.setState({ sectionsPanelMode: 'pin', sectionsPanelOpen: false });
+  const { result } = renderHook(() => usePanelReveal('sections'));
+  act(() => result.current.revealTemporarily());
+  expect(result.current.isFloatingOpen).toBe(true);
+  expect(useUIStore.getState().sectionsPanelOpen).toBe(false);
+  expect(useUIStore.getState().sectionsPanelMode).toBe('pin');
+  act(() => { result.current.onRegionFocus(); });
+  act(() => { result.current.scheduleClose(100); vi.advanceTimersByTime(200); });
+  expect(result.current.isOpen).toBe(true);
+  act(() => result.current.close());
+  expect(result.current.isOpen).toBe(false);
+  vi.useRealTimers();
+});

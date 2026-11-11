@@ -16,7 +16,8 @@ import { useSpeleoStore, selectPushFailure } from '../../store/speleoStore';
  * button (pressing it again re-issues the verb, which clears this notice at the
  * start of the attempt and re-raises it only if the new attempt also fails).
  * While a dialog owning the failure is open the shell banner hides itself
- * ({@link PUSH_FAILURE_DIALOGS}); leaving the dialog with the failure unresolved
+ * ({@link PUSH_FAILURE_DIALOGS}, plus the exit and sign-out prompts, which are
+ * overlays of their own); leaving the dialog with the failure unresolved
  * hands the banner back, so the user is still reminded their changes are only on
  * this computer.
  */

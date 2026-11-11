@@ -138,6 +138,54 @@ test.describe('In-app update banner', () => {
   });
 
   /**
+   * One quit attempt asks at a time. Pressing the window X again while the
+   * unsent-input question of a restart is on screen used to start a second
+   * attempt whose own question answered the first with "no": the first then
+   * dropped the restart, and the "yes" that followed only quit, without the
+   * update. The second X now joins the attempt that is asking.
+   */
+  test('Restart survives a second window X while the unsent-input question is open', async ({ page }) => {
+    await setIpcOverrides(page, { install_app_update_and_restart: null });
+    await seedAvailable(page, '9.9.9');
+    await page.evaluate(() => {
+      const store = (window as unknown as { __E2E_TEST__: { updateStore: UpdateStoreApi } }).__E2E_TEST__.updateStore;
+      store.getState().startDownloading('9.9.9');
+      store.getState().setReady('9.9.9');
+    });
+    await page.getByTestId('update-banner-restart').click();
+
+    // The SpeleoDB project form holds unsent input, so the restart asks about it.
+    await page.evaluate(() => {
+      (window as unknown as {
+        __E2E_TEST__: { uiStore: { getState: () => { openDialog: (name: string) => void } } };
+      }).__E2E_TEST__.uiStore.getState().openDialog('publish-to-speleodb');
+    });
+    await page.getByTestId('publish-to-speleodb-dialog-description').fill('Synthetic system description');
+
+    await simulateCloseRequested(page);
+    await expect(page.getByTestId('exit-confirm-message')).toContainText('the SpeleoDB project form');
+    // The user presses the window X again while the question is open.
+    await simulateCloseRequested(page);
+    await expect(page.getByTestId('exit-confirm-dialog')).toBeVisible();
+    await page.getByTestId('exit-confirm-ok').click();
+
+    const installs = () =>
+      page.evaluate(
+        () =>
+          ((window as unknown as { __MOCK_EXIT_CALLS__?: Array<{ cmd: string }> }).__MOCK_EXIT_CALLS__ ?? []).filter(
+            (call) => call.cmd === 'install_app_update_and_restart',
+          ).length,
+      );
+    await expect.poll(installs).toBe(1);
+    const destroyed = await page.evaluate(
+      () =>
+        (window as unknown as { __MOCK_GET_WINDOW_TEARDOWN_COUNTS__?: () => { destroy: number } })
+          .__MOCK_GET_WINDOW_TEARDOWN_COUNTS__?.().destroy ?? -1,
+    );
+    expect(destroyed, 'the install takes the destroy\'s place').toBe(0);
+  });
+
+  /**
    * [review] About's "Check for updates" used to keep its own local result, so
    * its "see the update banner" line pointed at a banner the store had never
    * been told about. It now runs the SAME check path the launch hook does, and

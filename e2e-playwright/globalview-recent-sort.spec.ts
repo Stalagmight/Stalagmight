@@ -121,18 +121,18 @@ test.describe('GlobalView Recent Projects - path, relative time, sort', () => {
     // Default: last edited, newest first.
     expect(await cardOrder(page)).toEqual([ALPHA, BETA, GAMMA, LOCAL]);
 
-    // Switch to Name; direction is still descending → reverse alphabetical.
+    // Switching to Name starts alphabetically.
     await selectSortField(page, 'Name');
-    expect(await cardOrder(page)).toEqual([BETA, LOCAL, GAMMA, ALPHA]);
-
-    // Flip to ascending → alphabetical by name.
-    await page.getByTestId('recent-sort-direction').click();
     expect(await cardOrder(page)).toEqual([ALPHA, GAMMA, LOCAL, BETA]);
+
+    // Flip to descending; the preference survives reload.
+    await page.getByTestId('recent-sort-direction').click();
+    expect(await cardOrder(page)).toEqual([BETA, LOCAL, GAMMA, ALPHA]);
 
     // Preference survives a reload (persisted in localStorage).
     await page.reload();
     await switchToListTab(page);
-    expect(await cardOrder(page)).toEqual([ALPHA, GAMMA, LOCAL, BETA]);
+    expect(await cardOrder(page)).toEqual([BETA, LOCAL, GAMMA, ALPHA]);
   });
 
   test('sorts by section count', async ({ page }) => {
@@ -152,4 +152,33 @@ test.describe('GlobalView Recent Projects - path, relative time, sort', () => {
     await page.getByTestId('recent-sort-direction').click();
     expect(await cardOrder(page)).toEqual([LOCAL, GAMMA, BETA, ALPHA]);
   });
+});
+
+test('remote projects follow date and name sorting in cards and table', async ({ page }) => {
+  await setupMockedPage(page);
+  await switchToListTab(page);
+  await page.evaluate(() => {
+    const store = (window as unknown as { __E2E_TEST__: {
+      speleoStore: { setState: (state: unknown) => void };
+    } }).__E2E_TEST__.speleoStore;
+    store.setState({ remoteSummaries: Object.fromEntries([
+      ['older', 'A Remote', '2020-01-01T00:00:00Z'],
+      ['newer', 'Z Remote', '2030-01-01T00:00:00Z'],
+    ].map(([id, name, modified_date]) => [id, { id, name, modified_date,
+      permission: 'READ_AND_WRITE', lock_holder: null, type_tag: 'stalagmight', latest_commit_sha: null }])) });
+  });
+  const remoteOrder = (prefix: string) => page.locator(`[data-testid^="${prefix}"][data-remote="true"]`)
+    .evaluateAll((els) => els.map((el) => el.getAttribute('data-testid')));
+  await selectSortField(page, 'Last edited');
+  await expect.poll(() => remoteOrder('system-card-remote-')).toEqual(['system-card-remote-newer', 'system-card-remote-older']);
+  await page.getByTestId('recent-sort-direction').click();
+  await expect.poll(() => remoteOrder('system-card-remote-')).toEqual(['system-card-remote-older', 'system-card-remote-newer']);
+  await page.getByTestId('recent-density-table').click();
+  await page.getByTestId('recent-col-edited').click();
+  await expect.poll(() => remoteOrder('system-row-remote-')).toEqual(['system-row-remote-newer', 'system-row-remote-older']);
+  await expect(page.getByTestId('system-row-remote-newer').locator('time')).toHaveAttribute('datetime', '2030-01-01T00:00:00Z');
+  await page.getByTestId('recent-col-name').click();
+  await expect.poll(() => remoteOrder('system-row-remote-')).toEqual(['system-row-remote-older', 'system-row-remote-newer']);
+  await page.getByTestId('recent-col-name').click();
+  await expect.poll(() => remoteOrder('system-row-remote-')).toEqual(['system-row-remote-newer', 'system-row-remote-older']);
 });

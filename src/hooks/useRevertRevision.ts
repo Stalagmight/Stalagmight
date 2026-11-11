@@ -205,7 +205,7 @@ export function useRevertRevision() {
       // Pre-flight, deliberately BEFORE any IPC: a copy with un-pushed edits will be
       // refused by the restore anyway, so taking the lock first would block another
       // user for the duration of a call we already know fails. Read fresh from the
-      // store rather than from a render snapshot - an autosave or a poll can have
+      // store rather than from a render snapshot - an autosave or a refresh can have
       // flipped the bit since the dialog last rendered.
       if (!discardLocal && (useSpeleoStore.getState().link?.hasUnpushedEdits ?? false)) {
         return { kind: 'needs_discard', lockHeld: false };

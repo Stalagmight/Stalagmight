@@ -9,7 +9,7 @@ import type { SpeleoRewindTarget, SpeleoUnwindTarget } from '../types/ipc.genera
  * forward (`'forward'`, "Redo into next SpeleoDB version").
  *
  * One hook for both directions because the fetch policy is the interesting part and it
- * is identical: fetched ON DEMAND (`enabled` / `resolve`), not on the status poll, since
+ * is identical: fetched ON DEMAND (`enabled` / `resolve`), not on the status refresh, since
  * resolving either costs a `GET /revisions/` and the only thing that needs the answer is
  * the dropdown. `null` means there is nothing to reach in that direction -
  * backward: an empty repo, the root of the history, or a project whose undo history is

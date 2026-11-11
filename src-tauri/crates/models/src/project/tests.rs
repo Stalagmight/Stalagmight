@@ -168,7 +168,8 @@ fn project_serialization_is_key_ordered_and_state_determined() {
             .insert(start.clone(), (0.1, 0.2, 0.3));
         project
             .station_comments
-            .insert(start, format!("comment {i}"));
+            .insert(start.clone(), format!("comment {i}"));
+        project.station_names.insert(start, format!("{i}"));
     }
     assert_eq!(project.section_offsets.len(), 10);
     assert_eq!(project.station_offsets.len(), 20);
@@ -210,7 +211,7 @@ fn project_serialization_is_key_ordered_and_state_determined() {
     // cannot key an object by a struct), ordered by section then anchor - and
     // `SectionStart` sorts before `AfterShot`, so each section's station 0 leads.
     let value: serde_json::Value = serde_json::from_str(&previous).unwrap();
-    for field in ["station_offsets", "station_comments"] {
+    for field in ["station_offsets", "station_comments", "station_names"] {
         let entries = value[field].as_array().expect("array of pairs");
         let order: Vec<(u64, u8)> = entries
             .iter()
@@ -346,6 +347,9 @@ fn station_ref_traversals_cover_every_bearing_collection() {
     project
         .station_comments
         .insert(StationRef::new(a, 1).into(), "note".to_string());
+    project
+        .station_names
+        .insert(StationRef::new(a, 1).into(), "17".to_string());
 
     // READ traversal: every collection's label is visited.
     let mut labels: HashSet<String> = HashSet::new();
@@ -362,6 +366,7 @@ fn station_ref_traversals_cover_every_bearing_collection() {
         "zero datum",
         "station offset",
         "station comment",
+        "station name",
     ] {
         assert!(
             labels.contains(expected),
@@ -369,8 +374,8 @@ fn station_ref_traversals_cover_every_bearing_collection() {
         );
     }
     assert_eq!(
-        a1_hits, 5,
-        "a:1 is referenced once in each of the five collections"
+        a1_hits, 6,
+        "a:1 is referenced once in each of the six collections"
     );
 
     // REWRITE traversal: shifting a:1 -> a:2 must update every collection, incl.
@@ -408,6 +413,12 @@ fn station_ref_traversals_cover_every_bearing_collection() {
         .contains_key(&StationRef::new(a, 2).into()));
     assert!(!project
         .station_comments
+        .contains_key(&StationRef::new(a, 1).into()));
+    assert!(project
+        .station_names
+        .contains_key(&StationRef::new(a, 2).into()));
+    assert!(!project
+        .station_names
         .contains_key(&StationRef::new(a, 1).into()));
 }
 
@@ -15223,8 +15234,10 @@ fn suggest_orphan_placements_never_pairs_a_pre_existing_orphan_with_a_pre_existi
     // #446: a pre-existing floating component that had its chance against its
     // own import must not start getting matched against a pre-existing
     // anchored section just because SOME LATER, unrelated import happens.
-    // `target_sections` is built from `newly_imported_section_ids` alone, so
-    // a pre-existing anchor can never be a suggestion target. Both fixtures
+    // A pre-existing orphan's targets are drawn from the import alone, so a
+    // pre-existing anchor is never ITS target (since #674 it can be the
+    // target of an orphan the import touched - the one-shot section below is
+    // too short to be a leaf, so it offers no such match). Both fixtures
     // are shot-IDENTICAL (`orphan_leaf_shots`), so a broken guard would match
     // them with a near-perfect score - the empty result is the guard, not an
     // accident of mismatched shot shapes.
@@ -15309,13 +15322,74 @@ fn suggest_orphan_placements_still_suggests_a_pre_existing_orphan_against_a_newl
 }
 
 #[test]
+fn suggest_orphan_placements_places_a_newly_imported_orphan_onto_a_pre_existing_anchor() {
+    // #674: adding a datum-less file into an anchored project left its
+    // sections floating with no suggestion, because targets were drawn from
+    // the import alone and a datum-less import has no anchored section. An
+    // orphan the import TOUCHED may now go onto any anchored section. In the
+    // same project a pre-existing orphan, shot-identical to both, must still
+    // get nothing: its only anchored candidate is pre-existing too (#446).
+    let mut project = Project::new("AddIntoAnchored".to_string(), None);
+    let pre_anchor = project
+        .add_section(SectionData {
+            shots: orphan_leaf_shots(),
+            ..Default::default()
+        })
+        .id;
+    let pre_orphan = project
+        .add_section(SectionData {
+            shots: orphan_leaf_shots(),
+            ..Default::default()
+        })
+        .id;
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(pre_anchor, 0).into(),
+        gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+    });
+    let new_orphan = project
+        .add_section(SectionData {
+            shots: orphan_leaf_shots(),
+            ..Default::default()
+        })
+        .id;
+
+    let suggestions = project.suggest_orphan_placements(
+        &[new_orphan],
+        &crate::config::PlacementSuggestionConfig::default(),
+    );
+
+    assert!(
+        suggestions
+            .iter()
+            .any(|s| s.orphan_section_id == new_orphan && s.target_section_id == pre_anchor),
+        "a newly imported orphan must be suggested onto a pre-existing anchored \
+         section (#674): {suggestions:?}"
+    );
+    assert!(
+        suggestions
+            .iter()
+            .all(|s| s.orphan_section_id == new_orphan),
+        "the pre-existing orphan {pre_orphan:?} must not be re-suggested onto \
+         the pre-existing anchor (#446): {suggestions:?}"
+    );
+    assert!(
+        suggestions
+            .iter()
+            .all(|s| s.target_section_id == pre_anchor),
+        "only the anchored section is a target - never the other orphan: {suggestions:?}"
+    );
+}
+
+#[test]
 fn suggest_orphan_placements_never_suggests_two_floating_components_onto_each_other() {
     // #446: a suggestion TARGET must itself be datum-anchored - otherwise two
     // floating components can be suggested onto each other, a "placement"
     // that is circular and anchors nothing. A datum exists ELSEWHERE in the
     // project (on an unrelated section) so the project-wide
     // no-datum-at-all early-out does NOT short-circuit this case; only the
-    // per-target anchor check does.
+    // per-target anchor check does. Since #674 that anchored section IS a
+    // legal target for these newly imported orphans, so the assertion pins
+    // what must never happen - a target that floats - rather than "nothing".
     let mut project = Project::new("Floating".to_string(), None);
     let elsewhere = project
         .add_section(SectionData {
@@ -15347,9 +15421,9 @@ fn suggest_orphan_placements_never_suggests_two_floating_components_onto_each_ot
     );
 
     assert!(
-        suggestions.is_empty(),
+        suggestions.iter().all(|s| s.target_section_id == elsewhere),
         "two floating components must never be suggested onto each other - \
-         neither is datum-anchored (#446): {suggestions:?}"
+         neither is datum-anchored (#446): {a:?} {b:?} {suggestions:?}"
     );
 }
 

@@ -68,19 +68,13 @@ test.describe('Project CRUD Operations', () => {
       ).toBeVisible({ timeout: 10000 });
     });
 
-    test('should create with "Save immediately" without calling save_project', async ({ page }) => {
-      // Save-now flow should create directly at the selected path.
-      // If save_project is still called, this test fails.
-      await setIpcOverrides(page, {
-        save_project: { __throw: 'save_project should not be called for Save immediately on create' },
-      });
-
+    test('creates without an immediate-save option', async ({ page }) => {
       await openNewProjectDialog(page);
-      await page.getByTestId('new-project-name-input').fill('Save Now Single Write');
-      await page.getByTestId('new-project-save-immediately').check();
+      await expect(page.getByTestId('new-project-save-immediately')).toHaveCount(0);
+      await expect(page.getByText('Save project file immediately', { exact: true })).toHaveCount(0);
+      await page.getByTestId('new-project-name-input').fill('New Unsaved Project');
       await page.getByTestId('new-project-create-button').click();
-
-      await expect(page.getByTestId('single-system-view')).toBeVisible({ timeout: 10000 });
+      await expect(page.getByTestId('single-system-view')).toBeVisible();
       await expect(page.getByTestId('new-project-dialog')).not.toBeVisible();
     });
 

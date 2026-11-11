@@ -46,4 +46,40 @@ describe('Button (component-tier harness smoke)', () => {
     render(<Button variant="primary">Confirm</Button>);
     expect(screen.getByRole('button', { name: 'Confirm' })).toHaveAttribute('data-primary-action', '');
   });
+
+  it('has no yellow highlight variant: a main action is primary', () => {
+    render(
+      // The warning-yellow `highlight` variant is gone: the type check fails if it returns.
+      // @ts-expect-error highlight is not a Button variant
+      <Button variant="highlight">Open project</Button>,
+    );
+    expect(screen.getByRole('button', { name: 'Open project' }).className).not.toMatch(/warning/);
+  });
+
+  it('tints its icon with iconColor on the unfilled variants only', () => {
+    render(
+      <>
+        <Button icon={<svg data-testid="i-secondary" />} iconColor="#3fb6b6" data-testid="b-secondary">Save</Button>
+        <Button variant="ghost" icon={<svg />} iconColor="#3fb6b6" data-testid="b-ghost">Save</Button>
+        <Button variant="primary" icon={<svg />} iconColor="#3fb6b6" data-testid="b-primary">Save</Button>
+        <Button variant="danger" icon={<svg />} iconColor="#3fb6b6" data-testid="b-danger">Save</Button>
+        <Button icon={<svg />} data-testid="b-plain">Save</Button>
+      </>,
+    );
+    const iconSpan = (id: string) => screen.getByTestId(id).querySelector('span');
+    expect(iconSpan('b-secondary')).toHaveStyle({ color: '#3fb6b6' });
+    expect(iconSpan('b-ghost')).toHaveStyle({ color: '#3fb6b6' });
+    // A filled button keeps its own text colour on the icon: a tint could vanish on the fill.
+    expect(iconSpan('b-primary')?.getAttribute('style')).toBeNull();
+    expect(iconSpan('b-danger')?.getAttribute('style')).toBeNull();
+    expect(iconSpan('b-plain')?.getAttribute('style')).toBeNull();
+  });
+
+  it('fills the secondary variant with its own colour, not the panel it sits on', () => {
+    render(<Button data-testid="b">Reload</Button>);
+    const cls = screen.getByTestId('b').className;
+    expect(cls).toContain('bg-button-secondary');
+    expect(cls).toContain('hover:bg-button-secondary-hover');
+    expect(cls).not.toMatch(/(^|\s)bg-panel(\s|$)/);
+  });
 });

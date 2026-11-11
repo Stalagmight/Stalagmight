@@ -66,6 +66,30 @@ export const PANEL_SIZE_BOUNDS = {
 >;
 
 /**
+ * Minimum width (px, CSS pixels) of the left panel, whichever of its tabs
+ * (Sections, SpeleoDB) is showing. One floor for both tabs, so switching tabs
+ * never resizes the panel.
+ *
+ * Sized from the tab strip, which is what binds first. Measured in Playwright
+ * (Chromium, 14px labels, Arial-metric fonts, the widest UI fallback measured):
+ * the SpeleoDB tab needs 109px (padding, 16px icon, gap, "SpeleoDB" at medium
+ * weight) and Sections 100px; the tabs split the width equally, so 218px is the
+ * floor where neither clips. The SpeleoDB tab's content (wrapped header lines,
+ * stacked full-width buttons with wrapping labels, revision rows) stays inside
+ * the panel without horizontal overflow from 170px up, in every link state.
+ * 230 adds ~6px per tab of headroom for system UI fonts that run wider than
+ * the ones measurable here (macOS and Windows fonts were not measured). Under the UI scale (webview zoom) all of this scales
+ * together, so the floor holds in CSS px at any zoom, and a lower floor leaves
+ * the squeezed map more room at high zoom. It was 320 while the SpeleoDB tab
+ * was showing and 150 on Sections.
+ *
+ * Display-only: `PANEL_SIZE_BOUNDS.sections` (the persisted range, mirrored in
+ * Rust) is unchanged, so a stored width below this floor still loads and is
+ * simply shown at the floor.
+ */
+export const LEFT_WORKSPACE_MIN_WIDTH = 230;
+
+/**
  * Minimum width (px, CSS pixels) the map column must keep (#260).
  *
  * The side panels are sized in PIXELS and persist across sessions, but the
@@ -80,7 +104,10 @@ export const PANEL_SIZE_BOUNDS = {
  *   - top row: the fit-to-view / exit-focus button (left: 8, up to ~150 wide with
  *     its focus label) against the MapLibre NavigationControl (right, ~40) with
  *     the offline indicator inboard of it at `right-14` (56) - ~300px before they
- *     touch.
+ *     touch. The read-only notices beside the fit button (SpeleoDB, Closures
+ *     Computed View) are NOT sized into this floor: they are longer than the row
+ *     at this width, so `MapTopLeftOverlay` bounds the row at `right-14` and lets
+ *     them wrap, keeping their actions whole and clear of the zoom control.
  *   - bottom row: the depth/distance/gas legend (left: 10, ~120 wide) above the
  *     MapLibre ScaleControl (maxWidth 100) against the bottom-right attribution
  *     (~140) - also ~300px.

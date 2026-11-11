@@ -633,11 +633,32 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // run keeps whatever gas config get_config would otherwise return.
       let mockGasConfig: Record<string, unknown> | null = null;
 
+      // The `[map_palette]` block persisted via update_map_palette (the depth /
+      // distance colour palettes and pins), overlaid onto get_config / reload_config
+      // exactly like mockGasConfig.
+      let mockMapPalette: Record<string, unknown> | null = null;
+
       // Station comments set via set_station_comment, keyed
       // "sectionId:stationIndex". get_project_state derives its station array
       // from the project's sections on every refresh, so comments must be
       // threaded back in from here or an edit would vanish on the next refresh.
       const mockStationComments: Record<string, string> = {};
+
+      // Station names (the mNemo numbers a DMP import sends as `station_names`),
+      // keyed "sectionId:stationIndex" and threaded into get_project_state's
+      // derived stations like the comments above. Filled by import_sections;
+      // tests can also seed one through __MOCK_SET_STATION_NAME__. The mock
+      // never reverses an imported section, so the indexes are used as sent.
+      const mockStationNames: Record<string, string> = {};
+      (window as unknown as Record<string, unknown>).__MOCK_SET_STATION_NAME__ = (
+        sectionId: number,
+        stationIndex: number,
+        name: string | null,
+      ) => {
+        const key = `${sectionId}:${stationIndex}`;
+        if (name === null) delete mockStationNames[key];
+        else mockStationNames[key] = name;
+      };
 
       // Track last export_image call for test assertions
       let lastExportImageArgs: Record<string, unknown> | null = null;
@@ -940,6 +961,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         };
       };
 
+      const EXIT_RECORDED_COMMANDS = new Set([
+        'close_project', 'save_project', 'speleodb_done', 'speleodb_release_lock',
+        // A project switch / quit settles the open project's lock first.
+        'speleodb_settle_open_lock',
+        'speleodb_discard_cached_copy', 'speleodb_logout', 'speleodb_login',
+        'install_app_update_and_restart',
+        // Home's remove-copy prompt and Settings' purge: specs assert the consent
+        // flag each one carried.
+        'speleodb_remove_cached_copy', 'speleodb_purge_cached_copies', 'speleodb_open_project',
+      ]);
+
       return function mockCommand(
         cmd: string,
         args?: Record<string, unknown>
@@ -947,6 +979,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         // Skip logging for push_frontend_log to avoid infinite loop with console capture
         if (cmd !== 'push_frontend_log') {
           console.log(`[Mock IPC] Command: ${cmd}`, args);
+        }
+
+        // The exit-prompt / sign-out specs assert WHICH of these ran, with what, and in
+        // what order - recorded before the override map so an overridden reply (an
+        // upload that "fails", a release that throws) is still on the record.
+        if (EXIT_RECORDED_COMMANDS.has(cmd)) {
+          const win = window as unknown as Record<string, unknown>;
+          const log = (win.__MOCK_EXIT_CALLS__ as Array<{ cmd: string; args: unknown }> | undefined) ?? [];
+          log.push({ cmd, args: args ?? null });
+          win.__MOCK_EXIT_CALLS__ = log;
         }
 
         const overrideMap = (window as unknown as Record<string, unknown>).__MOCK_IPC_OVERRIDES__ as
@@ -1039,6 +1081,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 showStations: true,
                 showSectionNames: true,
                 showStationLabels: false,
+                showStationNames: false,
                 showShotData: false,
                 showReferenceShots: true,
                 showZeroDatum: true,
@@ -1292,6 +1335,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 showStations: true,
                 showSectionNames: true,
                 showStationLabels: false,
+                showStationNames: false,
                 showShotData: false,
                 showReferenceShots: true,
                 showZeroDatum: true,
@@ -1360,6 +1404,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 merged_with?: unknown[];
                 closures_with?: unknown[];
                 comment?: string | null;
+                name?: string | null;
               }>;
               stats: Record<string, unknown>;
               warnings: unknown[];
@@ -1448,6 +1493,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const stationMergedWith: Array<[number, unknown[]]> = [];
             const stationClosuresWith: Array<[number, unknown[]]> = [];
             const stationCommentsArr: Array<[number, string]> = [];
+            const stationNamesArr: Array<[number, string]> = [];
 
             jsonResult.stations.forEach((station, idx) => {
               const fOff = idx * STATION_FLOAT_STRIDE;
@@ -1462,6 +1508,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               if (station.merged_with?.length) stationMergedWith.push([idx, station.merged_with]);
               if (station.closures_with?.length) stationClosuresWith.push([idx, station.closures_with]);
               if (station.comment) stationCommentsArr.push([idx, station.comment]);
+              if (station.name) stationNamesArr.push([idx, station.name]);
             });
 
             const envelope = {
@@ -1472,7 +1519,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               // the header no longer carries a `collab` field; 4 to 5 for the
               // #438 north references (a project-level default plus one per
               // section header).
-              version: 5,
+              version: 6,
               loading_id: jsonResult.loadingId,
               // Added to the envelope at v3 alongside the ShotKind bits
               // (`load_binary.rs`): the decoder reads it unvalidated, so omitting
@@ -1545,6 +1592,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               station_merged_with: stationMergedWith,
               station_closures_with: stationClosuresWith,
               station_comments: stationCommentsArr,
+              station_names: stationNamesArr,
               stats: jsonResult.stats,
               warnings: jsonResult.warnings,
               display_settings: jsonResult.displaySettings,
@@ -1592,6 +1640,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             projectPath = null;
             return { success: true, section_ids: [] };
           }
+
+          // A project switch / quit hands the open project's lock back first. Nothing
+          // is held in a mocked run, so nothing is released (no `lock_release`); specs
+          // that drive a failed release override this reply.
+          case 'speleodb_settle_open_lock':
+            return { success: true, warnings: [], error: null, section_ids: [] };
 
           case 'cancel_loading': {
             // Idempotent - does nothing but shouldn't error
@@ -1707,6 +1761,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   });
 
                   const storedComment = mockStationComments[`${section.id}:${i}`];
+                  const storedName = mockStationNames[`${section.id}:${i}`];
                   mockStations.push({
                     station_ref: stationRef,
                     coordinates: { x: i * 10, y: 0, z: 0 },
@@ -1715,6 +1770,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     merged_with: mergedWith,
                     ...(closuresWith.length > 0 ? { closures_with: closuresWith } : {}),
                     ...(storedComment !== undefined ? { comment: storedComment } : {}),
+                    ...(storedName !== undefined ? { name: storedName } : {}),
                   });
                 }
               }
@@ -2496,6 +2552,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 shots,
               };
               currentProject?.sections.push(section);
+              const stationNames = Array.isArray(sectionData.station_names)
+                ? (sectionData.station_names as Array<[number, string]>)
+                : [];
+              for (const [stationIndex, name] of stationNames) {
+                if (stationIndex <= shots.length) mockStationNames[`${section.id}:${stationIndex}`] = name;
+              }
               return section;
             });
             const sectionIds = importedSections.map((section) => section.id as number);
@@ -3875,6 +3937,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 ...mockImportShotsView,
                 },
                 ...(mockGasConfig ? { gas: mockGasConfig } : {}),
+                ...(mockMapPalette ? { map_palette: mockMapPalette } : {}),
               };
             }
             return {
@@ -3926,13 +3989,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 grid_spacing: 10,
                 font_size: 12,
                 font_color: '#f5f5f5',
-                depth_gradient: {
-                  enabled: false,
-                  shallow_color: '#00bfff',
-                  deep_color: '#ff4444',
-                  shallow_depth: 0.0,
-                  deep_depth: 50.0,
-                },
               },
               section_colors: {
                 palette: ['#4ecdc4', '#ff6b6b', '#95e1d3', '#f38181', '#aa96da', '#fcbad3', '#a8d8ea', '#ffcb77'],
@@ -4050,7 +4106,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 data_table_azimuth_mode: 'avg',
                 data_table_inclination_mode: 'off',
                 data_table_station_column_order: [],
-                data_table_station_hidden_columns: ['_x', '_y', '_lat', '_long'],
+                data_table_station_hidden_columns: ['_x', '_y', '_lat', '_long', 'name'],
+                data_table_station_columns_seen: ['name'],
                 data_table_station_column_widths: {},
                 // The new-section dialog's grid layout. Present (not omitted) for
                 // the same reason as the reveal state below: get_config on a real
@@ -4131,18 +4188,43 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 preset: 'default',
                 overrides: {},
               },
+              // The real get_config always sends these sections (Rust Config::default,
+              // mirrored in src/types/ipc/defaultConfig.ts). Without them, Settings
+              // fills them in on the first edit and reports them as changed.
+              import: {
+                overlap_mode: 'import_data',
+              },
+              placement_suggestion: {
+                azimuth_sigma: 18.0,
+                length_sigma: 0.8,
+                depth_sigma: 0.35,
+                azimuth_weight: 0.35,
+                length_weight: 0.25,
+                depth_in_weight: 0.2,
+                depth_out_weight: 0.2,
+                min_shot_score: 0.15,
+                min_aggregate_score: 0.45,
+                max_reference_shots: 5,
+                max_suggestions: 10,
+                min_partial_ratio: 0.15,
+                short_shot_threshold: 0.5,
+                single_shot_penalty: 0.6,
+                max_azimuth_error_full: 25.0,
+                max_azimuth_error_partial: 35.0,
+                max_depth_error: 0.3,
+                max_length_error_fraction: 0.03,
+                max_length_error_floor: 0.4,
+              },
               // SpeleoDB config block: the real get_config always returns this
-              // (Rust SpeleoDbConfig::default), and SpeleoStatusButton reads
-              // config.speleodb.poll_interval_seconds on every project-view mount -
-              // omitting it here makes config.speleodb undefined and crashes the view.
+              // (Rust SpeleoDbConfig::default); Settings reads it directly.
               speleodb: {
                 endpoint: null,
                 email: null,
                 insecure_http: false,
-                poll_interval_seconds: 60,
               },
               // Spread LAST so a stored `[gas]` block wins over the literal's own.
               ...(mockGasConfig ? { gas: mockGasConfig } : {}),
+              ...(mockMapPalette ? { map_palette: mockMapPalette } : {}),
             };
 
           case 'update_config':
@@ -4161,6 +4243,19 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] update_gas_config called with:', args);
             const gas = args?.gas as Record<string, unknown> | undefined;
             if (gas) mockGasConfig = gas;
+            return null;
+          }
+
+          case 'update_map_palette': {
+            // Partial update of `[map_palette]` only, mirroring the Rust impl;
+            // overlaid in get_config like update_gas_config (see there).
+            console.log('[Mock IPC] update_map_palette called with:', args);
+            const palette = args?.palette as Record<string, unknown> | undefined;
+            if (palette) mockMapPalette = palette;
+            const win = window as unknown as Record<string, unknown>;
+            const calls = (win.__MOCK_MAP_PALETTE_CALLS__ as unknown[] | undefined) ?? [];
+            calls.push(palette ?? null);
+            win.__MOCK_MAP_PALETTE_CALLS__ = calls;
             return null;
           }
 
@@ -4291,6 +4386,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 ...mockImportShotsView,
                 },
                 ...(mockGasConfig ? { gas: mockGasConfig } : {}),
+                ...(mockMapPalette ? { map_palette: mockMapPalette } : {}),
               }, false];
             }
             // Return mock config with any test overrides applied
@@ -4344,13 +4440,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 grid_spacing: 10,
                 font_size: 12,
                 font_color: '#f5f5f5',
-                depth_gradient: {
-                  enabled: false,
-                  shallow_color: '#00bfff',
-                  deep_color: '#ff4444',
-                  shallow_depth: 0.0,
-                  deep_depth: 50.0,
-                },
               },
               section_colors: {
                 palette: ['#4ecdc4', '#ff6b6b', '#95e1d3', '#f38181', '#aa96da', '#fcbad3', '#a8d8ea', '#ffcb77'],
@@ -4468,7 +4557,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 data_table_azimuth_mode: 'avg',
                 data_table_inclination_mode: 'off',
                 data_table_station_column_order: [],
-                data_table_station_hidden_columns: ['_x', '_y', '_lat', '_long'],
+                data_table_station_hidden_columns: ['_x', '_y', '_lat', '_long', 'name'],
+                data_table_station_columns_seen: ['name'],
                 data_table_station_column_widths: {},
                 // The new-section dialog's grid layout. Present (not omitted) for
                 // the same reason as the reveal state below: get_config on a real
@@ -4553,6 +4643,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               // own, exactly as in get_config. (`panels` already picks up
               // mockDataTableView above.)
               ...(mockGasConfig ? { gas: mockGasConfig } : {}),
+              ...(mockMapPalette ? { map_palette: mockMapPalette } : {}),
             };
             return [baseConfig, false];
           }
@@ -4770,6 +4861,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               '       0.0        0.0      0:00           0  in',
             ].join('\n');
 
+          case 'export_value_histogram': {
+            // A fixed, plausible histogram so the export panel's Levels slider
+            // renders: depth over 0..40 m, distance over 0..250 m.
+            const kind = args?.kind as string | undefined;
+            const bins = (args?.bins as number | undefined) ?? 64;
+            const counts = Array.from({ length: bins }, (_, k) => Math.round(20 * Math.exp(-((k - bins / 3) ** 2) / (bins * 2))));
+            return kind === 'distance' ? { min: 0, max: 250, counts } : { min: 0, max: 40, counts };
+          }
+
           case 'preview_svg_export': {
             // Stick-map preview lives in the same backend command pipeline; the
             // mock returns a tiny but valid SVG so the preview component can
@@ -4777,8 +4877,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const opts = args?.options as Record<string, unknown> | undefined;
             const threshold = (opts?.branching_threshold as number | undefined) ?? 0;
             // Encode the threshold in a data attribute so tests can verify
-            // the preview re-fetches when the slider changes.
-            return `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" data-threshold="${threshold}"><rect width="100" height="100" fill="#ffffff"/><line x1="10" y1="50" x2="90" y2="50" stroke="#000000" stroke-width="1"/></svg>`;
+            // the preview re-fetches when the slider changes; likewise the
+            // colour scales the export would draw (palette head + levels).
+            const scaleTag = (sc: unknown): string => {
+              const v = sc as { palette?: string[]; levels?: { min: number; max: number; gamma: number } } | undefined;
+              if (!v) return 'none';
+              return `${v.palette?.[0] ?? 'theme'}:${v.levels ? `${v.levels.min}-${v.levels.max}-${v.levels.gamma}` : 'auto'}`;
+            };
+            return `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" data-threshold="${threshold}" data-depth-scale="${scaleTag(opts?.depth_scale)}" data-distance-scale="${scaleTag(opts?.distance_scale)}"><rect width="100" height="100" fill="#ffffff"/><line x1="10" y1="50" x2="90" y2="50" stroke="#000000" stroke-width="1"/></svg>`;
           }
 
           case 'export_image': {
@@ -5288,6 +5394,80 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] merge_projects called with:', args);
             return { success: true, section_ids: [] };
 
+          case 'add_project_file': {
+            console.log('[Mock IPC] add_project_file called with:', args);
+            const win = window as unknown as Record<string, unknown>;
+            const existing = win.__MOCK_ADD_PROJECT_FILE_CALLS__ as unknown[] | undefined;
+            const calls = Array.isArray(existing) ? existing : [];
+            calls.push(args ?? null);
+            win.__MOCK_ADD_PROJECT_FILE_CALLS__ = calls;
+            if (!currentProject) {
+              return { success: false, warnings: [], error: 'No project is open to add the file to', section_ids: [] };
+            }
+            const addedPath = (args?.path as string | undefined) ?? '';
+            const addedFileName = addedPath.split('/').pop() ?? addedPath;
+            // Mirrors `execute`'s guard_mutation, as set_surface_elevation does:
+            // `projectIsRemote` is the mock's read-only proxy.
+            if (projectIsRemote) {
+              return {
+                success: false,
+                warnings: [],
+                error: `EDIT_DISABLED: Add '${addedFileName}' to project is disabled: this SpeleoDB project is open read-only. Acquire the lock to edit.`,
+                section_ids: [],
+              };
+            }
+            sectionCounter++;
+            const addedSection = {
+              id: sectionCounter,
+              name: `Added ${sectionCounter}`,
+              surveyor: 'Test Surveyor',
+              date: new Date().toISOString().split('T')[0],
+              color: '#3b82f6',
+              direction: 'in',
+              shots: [
+                {
+                  id: mockShotId(sectionCounter, 0),
+                  azimuth_in: 0,
+                  azimuth_out: 0,
+                  length: 5,
+                  depth_in: 0,
+                  depth_out: 0,
+                  pitch_in: null,
+                  pitch_out: null,
+                  left: null,
+                  right: null,
+                  up: null,
+                  down: null,
+                  comment: null,
+                  kind: 'Normal',
+                  marker_index: null,
+                  temperature: null,
+                },
+              ],
+            };
+            currentProject.sections.push(addedSection);
+            return {
+              success: true,
+              warnings: [],
+              error: null,
+              section_ids: [addedSection.id],
+              // Shape of `add_receipt` (crates/core/src/core/state/project_add.rs).
+              import_receipt: {
+                source_format: 'Stalagmight',
+                file_name: addedFileName,
+                sections_found: 1,
+                sections_imported: 1,
+                shot_count: 1,
+                closures_requested: 0,
+                closures_created: 0,
+                unit_conversion: null,
+                warnings: [],
+                info: [],
+                zero_datum_created: null,
+              },
+            };
+          }
+
           case 'set_shot_kind': {
             console.log('[Mock IPC] set_shot_kind called with:', args);
             const sectionId = (args?.sectionId ?? args?.section_id) as number;
@@ -5553,6 +5733,18 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'check_for_app_update':
             return { status: { kind: 'up_to_date' }, current_version: '0.5.0', installs_on_quit: true };
 
+          case 'arm_forced_exit':
+            // The explicit "Quit now" past a running SpeleoDB transfer: the
+            // backend half (cut instead of wait) is covered in Rust.
+            (window as unknown as { __forcedExitArmed?: number }).__forcedExitArmed =
+              ((window as unknown as { __forcedExitArmed?: number }).__forcedExitArmed ?? 0) + 1;
+            return null;
+          case 'disarm_forced_exit':
+            // A "Quit now" whose window destroy failed takes the arm back; the
+            // backend half is covered in Rust.
+            (window as unknown as { __forcedExitDisarmed?: number }).__forcedExitDisarmed =
+              ((window as unknown as { __forcedExitDisarmed?: number }).__forcedExitDisarmed ?? 0) + 1;
+            return null;
           case 'arm_app_update_restart':
           case 'unarm_app_update_restart':
             // The backend's one-shot install consent. Succeeds here so a spec
@@ -5601,7 +5793,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               remote_state: 'unknown',
               access_denied: false,
               server_error: null,
-              exclude_geojson: false,
               // [#303] Dirty ONLY because a chain step walked this copy back to an older
               // revision - the user has edited nothing. Every consumer composes it with
               // has_unpushed_edits (`isUnwoundNotEdited`), and it is what makes the close
@@ -5639,11 +5830,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           // [#258 review] The provenance-scoped unwind. No payload, and no argument:
           // it releases whatever THIS process recorded acquiring, or nothing.
           case 'speleodb_release_lock_acquired_here':
-          case 'speleodb_set_exclude_geojson':
-          // [#303] The per-project undo-history policy write: no payload. The FE
-          // re-reads `speleodb_link_status` afterwards for the new value.
-          case 'speleodb_set_undo_mode':
-          // #215 lock release + delete: no payload.
           case 'speleodb_project_access_at':
           case 'speleodb_release_current_lock':
           // [#303] Which revision a chain step would load, backward and forward. `null`
@@ -5657,19 +5843,30 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           // state, not about the download it does on the way.
           case 'speleodb_discard_changes':
             return { kind: 'editing' };
+          // Sign-out's discard of a cached copy that is not open. Specs assert the
+          // invocation (via __MOCK_EXIT_CALLS__). Like the backend, it refuses
+          // without the explicit consent flag (the mock's copies all hold
+          // un-uploaded work: that is why the sign-out asks about them).
+          case 'speleodb_discard_cached_copy':
+            if (args?.discardUnpushed !== true) {
+              return {
+                success: false,
+                warnings: [],
+                error: 'This copy has changes that were never uploaded to SpeleoDB, or its state could not be read. Nothing was removed.',
+                section_ids: [],
+              };
+            }
+            return { success: true, warnings: [], error: null, section_ids: [] };
+          // Cached SpeleoDB copies on the home screen. Nothing is cached in a mocked
+          // run; specs that need copies (owner-classified) override the listing.
+          case 'speleodb_cached_projects':
+            return [];
+          case 'speleodb_remove_cached_copy':
+            return { success: true, warnings: [], error: null, section_ids: [] };
+          case 'speleodb_purge_cached_copies':
+            return { removed: 0, kept_unpushed: [], kept_open: [], failed: [], locks_released: [], locks_unchecked: [] };
           case 'speleodb_get_project_metadata':
-          case 'speleodb_patch_project':
-            // Deterministic project metadata for the #206 settings tab. patch echoes
-            // the same shape (a real server would return post-edit truth).
-            return {
-              name: 'Mock Cave',
-              description: '',
-              country: 'US',
-              visibility: 'PRIVATE',
-              latitude: null,
-              longitude: null,
-              exclude_geojson: false,
-            };
+            return { name: 'Mock Cave', description: '', country: 'US', visibility: 'PRIVATE', latitude: null, longitude: null, exclude_geojson: false };
           case 'speleodb_publish':
             // #207 publish result: the reloaded (now-remote) local .stalx path.
             return {

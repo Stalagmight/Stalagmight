@@ -1,4 +1,32 @@
 /**
+ * One character of whitespace or the invisible format characters copy-paste
+ * carries around an address (zero-width space/joiners, word joiner, BOM, soft
+ * hyphen, bidi marks, embeddings and isolates). `\s` covers Unicode whitespace
+ * including NBSP and the BOM but not NEL (U+0085), which Rust's
+ * `char::is_whitespace` does include, so it is listed. Mirrors
+ * `tls.rs::clean_endpoint_input` - keep the two sets in step.
+ */
+const EDGE_JUNK_CHAR = /[\s\u0085\u00AD\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069]/;
+
+/**
+ * Clean an endpoint as the user entered it, typed or pasted (#675): strip
+ * leading/trailing whitespace and invisible characters, keep everything inside.
+ * The backend applies the same cleaning before it validates and stores, so this
+ * only keeps the field showing what will actually be saved.
+ *
+ * A two-index scan, not a `^[..]+|[..]+$` regex: that pattern backtracks across
+ * every interior run, which is quadratic, and endpoints read from a shared
+ * `.stalx` reach this through `endpointsMatch`.
+ */
+export function cleanEndpointInput(input: string): string {
+  let start = 0;
+  let end = input.length;
+  while (start < end && EDGE_JUNK_CHAR.test(input.charAt(start))) start += 1;
+  while (end > start && EDGE_JUNK_CHAR.test(input.charAt(end - 1))) end -= 1;
+  return input.slice(start, end);
+}
+
+/**
  * "Are these two spellings the same SpeleoDB deployment?" - the frontend half of
  * the identity the backend keys credentials by.
  *
@@ -15,7 +43,7 @@
  * bargain `emailsMatch` makes with `lock_held_by_me`.
  */
 function normalizeEndpoint(endpoint: string): string {
-  const trimmed = endpoint.trim();
+  const trimmed = cleanEndpointInput(endpoint);
   try {
     const url = new URL(trimmed);
     // `URL` already drops a port that is its scheme's default, so `:443` on

@@ -212,6 +212,21 @@ export function getDepthColor(
     return null; // Invalid color format
   }
 
+  return hslRampAt(t, shallowHSL, deepHSL);
+}
+
+/**
+ * The depth ramp's colour at `t` (0 = shallow end, 1 = deep end) between two
+ * parsed HSL endpoints: the shortest-hue HSL walk {@link getDepthColor} has
+ * always used. Split out so the colour-scale "Theme" palette
+ * (src/utils/palettes) reproduces getDepthColor byte for byte from the same
+ * arithmetic rather than a copy of it.
+ */
+export function hslRampAt(
+  t: number,
+  shallowHSL: { h: number; s: number; l: number },
+  deepHSL: { h: number; s: number; l: number },
+): string {
   // Interpolate in HSL space (shortest hue path)
   const h = interpolateHue(shallowHSL.h, deepHSL.h, t);
   const s = shallowHSL.s + (deepHSL.s - shallowHSL.s) * t;

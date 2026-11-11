@@ -10,7 +10,7 @@ Shown at launch until you open a project. After that it lists recent projects.
 
 ![Start screen](../images/start-screen.png)
 
-1. **Menu**: New project, Open / Import, Settings, Debug Logs, Quit.
+1. **Menu**: New project, Open / Import, Settings, Debug (holds Debug Logs), Quit.
 2. **New project**: opens the [New Project dialog](new-project-dialog.md).
 3. **Open / Import**: open a `.stalx` project or import another format, for
    example [an Ariane survey](../workflows/importing-from-ariane.md).

@@ -6,7 +6,14 @@ import {
   speleoProjectSessionIssuedFor,
   speleoProjectSessionStillCurrent,
 } from '../speleoStore';
+import { useProjectStore } from '../projectStore';
 import type { SpeleoLinkStatus } from '../../types/ipc.generated';
+
+// The sign-out guard (uploads / discards / hands back locks before a sign-out) has
+// its own suite; here it only has to say "go ahead", or "cancelled" where a case
+// asks it to.
+const guardSignOutMock = vi.hoisted(() => vi.fn(async (_kind: string) => true));
+vi.mock('../../utils/speleoSignOut', () => ({ guardSpeleoSignOut: guardSignOutMock }));
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
 vi.mock('../../utils/ipc', () => ({
@@ -33,11 +40,9 @@ const status = (o: Partial<SpeleoLinkStatus> = {}): SpeleoLinkStatus => ({
   remote_state: 'up_to_date',
   access_denied: false,
   server_error: null,
-  exclude_geojson: false,
   // [#303] The hybrid undo stack's policy pair: Full, from the global default.
   undo_mode: 'full',
-  force_editing: false,
-  allow_force_edit: false,
+
   project_id: null,
   ...o,
 });
@@ -102,6 +107,26 @@ describe('speleoStore', () => {
         });
     });
 
+    it('does not let a delayed cold-session read overwrite a newer login', async () => {
+      let resolveStatus!: (value: unknown) => void;
+      invokeIpcMock.mockReturnValue(new Promise((resolve) => { resolveStatus = resolve; }));
+      const pending = useSpeleoStore.getState().refreshSession();
+      useSpeleoStore.getState().setSessionFromLogin({ user_email: 'new@x', endpoint: 'https://new.example' });
+      resolveStatus({ logged_in: true, user_email: 'old@x', endpoint: 'https://old.example' });
+      await pending;
+      expect(useSpeleoStore.getState().session?.userEmail).toBe('new@x');
+    });
+
+    it('does not resurrect a session after logout during a cold-session read', async () => {
+      let resolveStatus!: (value: unknown) => void;
+      invokeIpcMock.mockReturnValue(new Promise((resolve) => { resolveStatus = resolve; }));
+      const pending = useSpeleoStore.getState().refreshSession();
+      useSpeleoStore.getState().clearSession();
+      resolveStatus({ logged_in: true, user_email: 'old@x', endpoint: 'https://old.example' });
+      await pending;
+      expect(useSpeleoStore.getState().session).toBeNull();
+    });
+
     it('clearSession degrades an active edit to read-only', () => {
       useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true }));
       useSpeleoStore
@@ -135,7 +160,7 @@ describe('speleoStore', () => {
       // that never reached the server - and losing the token does not upload them.
       // Clearing it claimed "nothing outstanding" at the exact moment the work
       // became most stranded, which disarmed the quit guard and hid the Toolbar's
-      // unpushed-edits warning. The next authenticated poll re-seeds it.
+      // unpushed-edits warning. The next authenticated refresh re-seeds it.
       expect(s.link?.hasUnpushedEdits).toBe(true);
       expect(s.link?.remoteState).toBe('unknown');
       expect(s.link?.noAccess).toBe(false);
@@ -143,6 +168,43 @@ describe('speleoStore', () => {
       expect(s.link?.permission).toBe('READ_AND_WRITE');
       expect(s.divergence).toBeNull();
       expect(s.banner).toBeNull();
+    });
+
+    it.each([false, true])('refreshes project references after logout (failure: %s)', async (fails) => {
+      const recent = vi.spyOn(useProjectStore.getState(), 'loadRecentProjects').mockResolvedValue();
+      const config = vi.spyOn(useProjectStore.getState(), 'loadConfig').mockResolvedValue();
+      try {
+        useSpeleoStore.getState().setPendingAuth({ kind: 'logout' });
+        if (fails) invokeIpcMock.mockRejectedValueOnce(new Error('cleanup failed'));
+        else invokeIpcMock.mockResolvedValueOnce(null);
+        const result = await useSpeleoStore.getState().applyPendingAuth(null);
+        expect(result.ok).toBe(!fails);
+        expect(recent).toHaveBeenCalledOnce();
+        expect(config).toHaveBeenCalledOnce();
+      } finally {
+        recent.mockRestore();
+        config.mockRestore();
+      }
+    });
+
+    it('a sign-out the guard cancels never reaches the backend logout', async () => {
+      useSpeleoStore.getState().setSessionFromLogin({ user_email: 'u@x', endpoint: 'https://x/' });
+      useSpeleoStore.getState().setPendingAuth({ kind: 'logout' });
+      invokeIpcMock.mockReset();
+      guardSignOutMock.mockResolvedValueOnce(false);
+      expect(await useSpeleoStore.getState().applyPendingAuth('https://x/')).toEqual({ ok: false, cancelled: true });
+      expect(guardSignOutMock).toHaveBeenCalledWith('signOut');
+      expect(invokeIpcMock).not.toHaveBeenCalledWith('speleodb_logout');
+      expect(useSpeleoStore.getState().session?.userEmail).toBe('u@x');
+    });
+
+    it('logging in as SOMEONE ELSE signs the previous account out through the guard first', async () => {
+      useSpeleoStore.getState().setSessionFromLogin({ user_email: 'u@x', endpoint: 'https://x/' });
+      useSpeleoStore.getState().setPendingAuth({ kind: 'login', email: 'other@x', password: 'pw', token: '', useToken: false } as never);
+      guardSignOutMock.mockResolvedValueOnce(false);
+      expect(await useSpeleoStore.getState().applyPendingAuth('https://x/')).toEqual({ ok: false, cancelled: true });
+      expect(guardSignOutMock).toHaveBeenCalledWith('switch');
+      expect(invokeIpcMock.mock.calls.map((c) => c[0])).not.toContain('speleodb_login');
     });
 
     it('applyPendingAuth clears the session even when the logout command rejects', async () => {
@@ -206,8 +268,15 @@ describe('speleoStore', () => {
       expect(useSpeleoStore.getState().link?.lockedByOther).toBe(false);
     });
 
-    it('clears a prior lockedByOther once a later poll resolves no holder (fix 7)', () => {
-      // Someone else held it, then released: the next poll reports no holder, and the
+    it('does not call our own lock another user when editing is not enabled yet', () => {
+      useSpeleoStore.setState({ session: { loggedIn: true, userEmail: 'me@x', endpoint: 'https://example.com' } });
+      useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: false, lock_holder: 'ME@X' }));
+      expect(useSpeleoStore.getState().link?.lockedByOther).toBe(false);
+      expect(useSpeleoStore.getState().link?.editState).toBe('read-only');
+    });
+
+    it('clears a prior lockedByOther once a later refresh resolves no holder (fix 7)', () => {
+      // Someone else held it, then released: the next refresh reports no holder, and the
       // flag must drop (no "preserve prior" carry keeping the button stuck orange).
       useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: false, lock_holder: 'a@b' }));
       expect(useSpeleoStore.getState().link?.lockedByOther).toBe(true);
@@ -220,7 +289,7 @@ describe('speleoStore', () => {
       expect(useSpeleoStore.getState().link?.noAccess).toBe(true);
     });
 
-    it('surfaces an unexpected server_error, and clears it on the next clean poll (fix 12)', () => {
+    it('surfaces an unexpected server_error, and clears it on the next clean refresh (fix 12)', () => {
       const err = { message: 'No Project matches the given query.', action: 'Fatal' as const, status: 404, transport: null, unpushed_local: null, dump_candidates: null, dump_candidate_kind: null, newer_schema: null };
       useSpeleoStore.getState().seedFromStatus(status({ server_error: err }));
       expect(useSpeleoStore.getState().link?.serverError).toEqual(err);
@@ -228,17 +297,6 @@ describe('speleoStore', () => {
       expect(useSpeleoStore.getState().link?.serverError).toBeNull();
     });
 
-    it('carries force_editing + allow_force_edit through (#213)', () => {
-      useSpeleoStore
-        .getState()
-        .seedFromStatus(status({ edit_enabled: true, force_editing: true, allow_force_edit: true }));
-      const link = useSpeleoStore.getState().link;
-      expect(link?.forceEditing).toBe(true);
-      expect(link?.forceEditAllowed).toBe(true);
-      // A later poll that acquired the lock clears force-edit (backend-authoritative).
-      useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true, force_editing: false }));
-      expect(useSpeleoStore.getState().link?.forceEditing).toBe(false);
-    });
   });
 
   describe('refreshLinkStatus staleness guard', () => {
@@ -260,7 +318,7 @@ describe('speleoStore', () => {
       );
       const inFlight = useSpeleoStore.getState().refreshLinkStatus();
 
-      // The push lands while that poll is still waiting on the network.
+      // The push lands while that refresh is still waiting on the network.
       useSpeleoStore.getState().markDirty();
       useSpeleoStore.getState().applyPush({ kind: 'pushed' });
       expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(false);
@@ -273,7 +331,7 @@ describe('speleoStore', () => {
     });
 
     it('applies a reply when nothing mutated the link while it was in flight', async () => {
-      // The guard must not be so strict that ordinary polling stops working.
+      // The guard must not be so strict that ordinary refreshing stops working.
       useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true }));
       invokeIpcMock.mockResolvedValue(status({ edit_enabled: true, has_unpushed_edits: true }));
       await useSpeleoStore.getState().refreshLinkStatus();
@@ -282,13 +340,13 @@ describe('speleoStore', () => {
 
     it('keeps the FRESHER of two overlapping refreshes instead of dropping it', async () => {
       // `seedFromStatus` allocates a new link object every time, so a plain
-      // identity guard treated a rival poll's seed as a local mutation - and the
+      // identity guard treated a rival refresh's seed as a local mutation - and the
       // reply it discarded was the LATER one, holding newer truth.
       //
       // The path that matters: `handleRelease` releases the lock and awaits its own
-      // refresh. A periodic poll landing in that window reseeded `link`, the
+      // refresh. An overlapping refresh landing in that window reseeded `link`, the
       // release's own reply was thrown away, and the toolbar kept the green pen
-      // over a lock that no longer existed - until the next poll, up to 24h out.
+      // over a lock that no longer existed - until another status refresh.
       useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true }));
 
       const pending: Array<(s: SpeleoLinkStatus) => void> = [];
@@ -296,13 +354,13 @@ describe('speleoStore', () => {
         () => new Promise<SpeleoLinkStatus>((resolve) => pending.push(resolve)),
       );
 
-      const poll = useSpeleoStore.getState().refreshLinkStatus();
+      const refresh = useSpeleoStore.getState().refreshLinkStatus();
       const afterRelease = useSpeleoStore.getState().refreshLinkStatus();
       expect(pending).toHaveLength(2);
 
-      // The periodic poll answers first, still describing the held lock.
+      // The overlapping refresh answers first, still describing the held lock.
       pending[0]!(status({ edit_enabled: true }));
-      await poll;
+      await refresh;
       // Then the release's own refresh answers: the lock is gone.
       pending[1]!(status({ edit_enabled: false }));
       await afterRelease;
@@ -311,8 +369,8 @@ describe('speleoStore', () => {
     });
 
     it('lets an older reply lose to a newer one that already landed', async () => {
-      // Issue order, not arrival order. Without it the release-then-poll ordering
-      // is fixed but the poll-then-release one regresses.
+      // Issue order, not arrival order. Without it the release-then-refresh ordering
+      // is fixed but the refresh-then-release one regresses.
       useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true }));
 
       const pending: Array<(s: SpeleoLinkStatus) => void> = [];
@@ -342,8 +400,7 @@ describe('speleoStore', () => {
         lockedByOther: false,
         hasUnpushedEdits: false,
         unwound: false,
-        forceEditing: false,
-        forceEditAllowed: false,
+
         undoMode: 'full',
         remoteState: 'up_to_date',
         noAccess: false,
@@ -385,31 +442,6 @@ describe('speleoStore', () => {
       expect(useSpeleoStore.getState().link?.editState).toBe('read-only');
     });
 
-    it('a successful reconnect clears force-edit (#213)', () => {
-      // Enter force-edit, then reconnect (editing/fast_forwarded acquire the lock).
-      useSpeleoStore
-        .getState()
-        .seedFromStatus(status({ edit_enabled: true, force_editing: true }));
-      expect(useSpeleoStore.getState().link?.forceEditing).toBe(true);
-      useSpeleoStore.getState().applyStartEditing({ kind: 'editing' });
-      expect(useSpeleoStore.getState().link?.forceEditing).toBe(false);
-      expect(useSpeleoStore.getState().link?.editState).toBe('editing');
-    });
-
-    it('a contended reconnect (locked_by) preserves the force-edit session (#213)', () => {
-      // The acquire failed (someone else holds it): the force-editor keeps editing
-      // offline, so force-edit is NOT cleared and the gate stays on.
-      useSpeleoStore
-        .getState()
-        .seedFromStatus(status({ edit_enabled: true, force_editing: true }));
-      useSpeleoStore.getState().applyStartEditing({ kind: 'locked_by', email: 'a@b' });
-      const s = useSpeleoStore.getState();
-      expect(s.link?.forceEditing).toBe(true);
-      // Still editing (offline) - not downgraded to read-only - with the holder noted.
-      expect(s.link?.editState).toBe('editing');
-      expect(s.link?.lockedByOther).toBe(true);
-      expect(s.link?.lockHolder).toBe('a@b');
-    });
   });
 
   describe('applyUpdate', () => {
@@ -523,7 +555,7 @@ describe('speleoStore', () => {
 
     // [#303] The bug this pair exists to prevent: `markDirty` short-circuits on an
     // already-dirty link, and an unwound copy is ALWAYS already dirty, so mirroring a
-    // forward edit through it left `unwound` standing until the next poll - and
+    // forward edit through it left `unwound` standing until the next refresh - and
     // `isUnwoundNotEdited` kept routing the user to a discard of work they just made.
     it('markDirty leaves unwound standing on an already-dirty link', () => {
       useSpeleoStore
@@ -570,7 +602,7 @@ describe('speleoStore', () => {
   describe('clearLink', () => {
     it('drops link, divergence and banner', () => {
       useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true }));
-      useSpeleoStore.setState({ divergence: 'update', banner: { kind: 'concurrent_session' } });
+      useSpeleoStore.setState({ divergence: 'update', banner: { kind: 'push_unconfirmed' } });
       useSpeleoStore.getState().clearLink();
       const s = useSpeleoStore.getState();
       expect(s.link).toBeNull();
@@ -659,21 +691,18 @@ describe('speleoStore', () => {
   });
 
   describe('#200 banners', () => {
-    it('seedFromStatus raises the rendering-disabled banner when exclude_geojson is set', () => {
-      useSpeleoStore.getState().seedFromStatus(status({ exclude_geojson: true }));
-      expect(useSpeleoStore.getState().banner).toEqual({ kind: 'rendering_disabled' });
-    });
-
-    it('seedFromStatus clears its own rendering-disabled banner once the flag is off', () => {
-      useSpeleoStore.getState().seedFromStatus(status({ exclude_geojson: true }));
-      useSpeleoStore.getState().seedFromStatus(status({ exclude_geojson: false }));
+    it('a status refresh never raises a banner of its own', () => {
+      useSpeleoStore.getState().seedFromStatus(status());
       expect(useSpeleoStore.getState().banner).toBeNull();
     });
 
-    it('a rendering-disabled poll never clobbers transient push_unconfirmed feedback', () => {
-      useSpeleoStore.setState({ banner: { kind: 'push_unconfirmed' } });
-      useSpeleoStore.getState().seedFromStatus(status({ exclude_geojson: true }));
-      expect(useSpeleoStore.getState().banner).toEqual({ kind: 'push_unconfirmed' });
+    it.each([
+      { kind: 'push_unconfirmed' as const },
+      { kind: 'no_anchor' as const },
+    ])('a status refresh keeps the $kind banner', (banner) => {
+      useSpeleoStore.setState({ banner });
+      useSpeleoStore.getState().seedFromStatus(status());
+      expect(useSpeleoStore.getState().banner).toEqual(banner);
     });
 
     it('raiseNoAnchorBanner only claims a free banner slot', () => {
@@ -685,41 +714,16 @@ describe('speleoStore', () => {
       expect(useSpeleoStore.getState().banner).toEqual({ kind: 'push_unconfirmed' });
     });
 
-    it('rendering_disabled preempts a no_anchor banner (so Enable-rendering is reachable)', () => {
-      // Both conditions true: no_anchor holds the slot, then a poll sees
-      // exclude_geojson. rendering_disabled must take over - otherwise its
-      // Enable-rendering action (gated on the banner kind) is unreachable.
-      useSpeleoStore.setState({ banner: { kind: 'no_anchor' } });
-      useSpeleoStore.getState().seedFromStatus(status({ exclude_geojson: true }));
-      expect(useSpeleoStore.getState().banner).toEqual({ kind: 'rendering_disabled' });
-    });
-
-    it('a no_anchor notice is never clobbered by a poll when rendering is enabled', () => {
-      // exclude_geojson off: a no_anchor notice must survive routine polls (only a
-      // rendering_disabled banner that WE own is cleared when the flag goes off).
-      useSpeleoStore.setState({ banner: { kind: 'no_anchor' } });
-      useSpeleoStore.getState().seedFromStatus(status({ exclude_geojson: false }));
+    it('the no_anchor notice survives the refreshes that follow it', () => {
+      // The retired rendering-disabled banner used to claim this slot from
+      // no_anchor on every refresh; nothing may mask the notice now.
+      useSpeleoStore.getState().seedFromStatus(status());
+      useSpeleoStore.getState().raiseNoAnchorBanner();
+      useSpeleoStore.getState().seedFromStatus(status());
       expect(useSpeleoStore.getState().banner).toEqual({ kind: 'no_anchor' });
     });
 
-    it('enableRendering clears the rendering-disabled banner and PATCHes exclude=false', async () => {
-      useSpeleoStore.setState({ banner: { kind: 'rendering_disabled' } });
-      // set_exclude_geojson returns null; the follow-up refreshLinkStatus reads status.
-      invokeIpcMock.mockImplementation(async (cmd: string) =>
-        cmd === 'speleodb_link_status' ? status({ exclude_geojson: false }) : null,
-      );
-      await useSpeleoStore.getState().enableRendering();
-      expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_set_exclude_geojson', { exclude: false });
-      expect(useSpeleoStore.getState().banner).toBeNull();
-    });
 
-    it('enableRendering rethrows and leaves the banner intact so the caller can surface it', async () => {
-      useSpeleoStore.setState({ banner: { kind: 'rendering_disabled' } });
-      invokeIpcMock.mockRejectedValue(new Error('403'));
-      await expect(useSpeleoStore.getState().enableRendering()).rejects.toThrow('403');
-      // The banner must stay up so SpeleoBanner keeps itself open to show the error.
-      expect(useSpeleoStore.getState().banner).toEqual({ kind: 'rendering_disabled' });
-    });
   });
 
   // #201 refinements: the resume/release prompt fires only on login + app-open (not
@@ -737,6 +741,51 @@ describe('speleoStore', () => {
       expect(s.heldLockPromptOpen).toBe(true);
       // Consumed, so a later routine scan won't retro-prompt.
       expect(s.heldLockPromptPending).toBe(false);
+    });
+
+    it('does not prompt to recover the project opened while the startup scan was pending', async () => {
+      loggedInAs('me@x');
+      useProjectStore.setState({ project: null });
+      let finish!: (value: unknown) => void;
+      invokeIpcMock.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+      const scan = useSpeleoStore.getState().scanLocksOnOpen();
+      useProjectStore.setState({ project: { file_path: '/current.stalx' } as never });
+      useSpeleoStore.setState({ remoteProjectId: 'p1', heldLockPromptOpen: true });
+      finish([{ id: 'p1', name: 'Current', lock_holder: 'me@x' }]);
+      await scan;
+      expect(useSpeleoStore.getState().heldLocks).toBeNull();
+      expect(useSpeleoStore.getState().heldLockPromptOpen).toBe(false);
+      expect(useSpeleoStore.getState().remoteLocks).toEqual({ p1: 'me@x' });
+      useProjectStore.setState({ project: null });
+    });
+
+    it('defers other held projects until returning home while retaining the current project badge', async () => {
+      loggedInAs('me@x');
+      useProjectStore.setState({ project: { file_path: '/current.stalx' } as never });
+      useSpeleoStore.setState({ remoteProjectId: 'p1' });
+      invokeIpcMock.mockResolvedValue([
+        { id: 'p1', name: 'Current', lock_holder: 'me@x' },
+        { id: 'p2', name: 'Stranded', lock_holder: 'me@x' },
+      ]);
+      await useSpeleoStore.getState().scanLocksOnOpen();
+      expect(useSpeleoStore.getState().heldLocks).toEqual([{ projectId: 'p2', projectName: 'Stranded' }]);
+      expect(useSpeleoStore.getState().heldLockPromptOpen).toBe(false);
+      expect(useSpeleoStore.getState().heldLockPromptPending).toBe(true);
+      expect(useSpeleoStore.getState().remoteLocks).toEqual({ p1: 'me@x', p2: 'me@x' });
+      useProjectStore.setState({ project: null });
+      await useSpeleoStore.getState().scanLocksOnOpen();
+      expect(useSpeleoStore.getState().heldLockPromptOpen).toBe(true);
+    });
+
+    it('defers recovery while the open project id is still resolving', async () => {
+      loggedInAs('me@x');
+      useProjectStore.setState({ project: { file_path: '/current.stalx' } as never });
+      useSpeleoStore.setState({ remoteProjectId: null });
+      invokeIpcMock.mockResolvedValue([{ id: 'p1', name: 'Current', lock_holder: 'me@x' }]);
+      await useSpeleoStore.getState().scanLocksOnOpen();
+      expect(useSpeleoStore.getState().heldLockPromptOpen).toBe(false);
+      expect(useSpeleoStore.getState().heldLockPromptPending).toBe(true);
+      useProjectStore.setState({ project: null });
     });
 
     it('a routine badge refresh keeps the badges but does NOT re-open the prompt', async () => {
@@ -909,8 +958,7 @@ describe('speleoStore', () => {
           lockedByOther: false,
           hasUnpushedEdits: true,
           unwound: false,
-          forceEditing: false,
-          forceEditAllowed: false,
+
           undoMode: 'full',
           remoteState: 'unknown',
           noAccess: false,
@@ -991,12 +1039,110 @@ describe('speleoStore', () => {
   describe('PUSH_FAILURE_DIALOGS', () => {
     it.each([
       'speleodb-done',
-      'speleodb-close',
-      'speleodb-quit',
       'speleodb-revert',
       'speleodb-unwound-push',
     ])('covers %s', (id) => {
       expect(PUSH_FAILURE_DIALOGS).toContain(id);
     });
+
+    // No dialog opens these ids any more: the close and quit questions are the
+    // exit prompt's overlay, which the banner checks directly.
+    it('lists no dead dialog ids', () => {
+      expect(PUSH_FAILURE_DIALOGS).toEqual(['speleodb-done', 'speleodb-revert', 'speleodb-unwound-push']);
+    });
   });
+});
+
+describe('successful sign-in refresh', () => {
+  beforeEach(reset);
+
+  it('fetches project rows immediately without waiting for Settings to close', async () => {
+    invokeIpcMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'speleodb_login') return { user_email: 'me@x', endpoint: 'https://x/' };
+      if (cmd === 'speleodb_list_projects') return [{ id: 'p1', name: 'New cave', lock_holder: null }];
+      if (cmd === 'speleodb_link_status') return status();
+      return null;
+    });
+    useSpeleoStore.getState().setPendingAuth({
+      kind: 'login', email: 'me@x', password: 'synthetic', token: '', useToken: false,
+    });
+    expect(await useSpeleoStore.getState().applyPendingAuth('https://x/')).toEqual({ ok: true });
+    await vi.waitFor(() => {
+      expect(useSpeleoStore.getState().remoteProjects).toEqual({ p1: 'New cave' });
+    });
+    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_list_projects');
+  });
+
+  it.each([true, false])('logs in over the given insecure-HTTP choice (%s) and reloads the saved settings', async (insecureHttp) => {
+    invokeIpcMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'speleodb_login') return { user_email: 'me@x', endpoint: 'http://lab.example/' };
+      if (cmd === 'get_config') return null;
+      return null;
+    });
+    useSpeleoStore.getState().setPendingAuth({
+      kind: 'login', email: '', password: '', token: '<your_token_here>', useToken: true,
+    });
+    expect(await useSpeleoStore.getState().applyPendingAuth('http://lab.example/', insecureHttp)).toEqual({ ok: true });
+    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_login', expect.objectContaining({
+      endpoint: 'http://lab.example/', insecureHttp,
+    }));
+    // The backend saved that connection with the session; the app's copy follows.
+    expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'get_config')).toBe(true);
+  });
+
+  it('leaves the insecure-HTTP choice to the saved one when none is given', async () => {
+    invokeIpcMock.mockImplementation(async (cmd: string) =>
+      cmd === 'speleodb_login' ? { user_email: 'me@x', endpoint: 'https://x/' } : null);
+    useSpeleoStore.getState().setPendingAuth({
+      kind: 'login', email: '', password: '', token: '<your_token_here>', useToken: true,
+    });
+    await useSpeleoStore.getState().applyPendingAuth('https://x/');
+    const login = invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_login');
+    expect(login?.[1]).not.toHaveProperty('insecureHttp');
+  });
+});
+
+describe('refresh progress', () => {
+  beforeEach(reset);
+
+  it('stays active across overlapping listing requests and clears after failure', async () => {
+    loggedInAs('me@x');
+    let finish!: (value: unknown) => void;
+    let fail!: (error: Error) => void;
+    invokeIpcMock.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    invokeIpcMock.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
+    const first = useSpeleoStore.getState().scanLocksOnOpen();
+    const second = useSpeleoStore.getState().scanLocksOnOpen();
+    expect(useSpeleoStore.getState().projectRefreshCount).toBe(2);
+    finish([]);
+    await first;
+    expect(useSpeleoStore.getState().projectRefreshCount).toBe(1);
+    fail(new Error('offline'));
+    await second;
+    expect(useSpeleoStore.getState().projectRefreshCount).toBe(0);
+  });
+
+  it('clears status progress when a request fails', async () => {
+    let fail!: (error: Error) => void;
+    invokeIpcMock.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
+    const request = useSpeleoStore.getState().refreshLinkStatus();
+    expect(useSpeleoStore.getState().statusRefreshCount).toBe(1);
+    fail(new Error('offline'));
+    await request;
+    expect(useSpeleoStore.getState().statusRefreshCount).toBe(0);
+  });
+});
+
+it('does not apply an old account status after a successful replacement login', async () => {
+  reset();
+  useSpeleoStore.getState().seedFromStatus(status({ permission: 'READ_AND_WRITE' }));
+  const original = useSpeleoStore.getState().link;
+  let finish!: (value: SpeleoLinkStatus) => void;
+  invokeIpcMock.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+  const request = useSpeleoStore.getState().refreshLinkStatus();
+  useSpeleoStore.getState().setSessionFromLogin({ user_email: 'new@example.com', endpoint: 'https://x/' });
+  finish(status({ permission: 'ADMIN', edit_enabled: true }));
+  await request;
+  expect(useSpeleoStore.getState().link).toBe(original);
+  expect(useSpeleoStore.getState().statusRefreshCount).toBe(0);
 });

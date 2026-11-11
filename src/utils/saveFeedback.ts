@@ -248,6 +248,7 @@ export async function finishImportWithoutOrphanSuggestions(
   ui: ImportDialogUi,
   newlyImportedSectionIds: number[],
   receipt?: ImportReceipt,
+  stillCurrent?: () => boolean,
 ): Promise<void> {
   let finalReceipt: ImportReceiptWithUnanchoredCount | undefined = receipt;
   if (receipt) {
@@ -271,6 +272,8 @@ export async function finishImportWithoutOrphanSuggestions(
       // Non-fatal: proceed without the info line.
     }
   }
+  // The count IPC above is an await: the caller's own checks ran before it.
+  if (stillCurrent && !stillCurrent()) return;
   completeImportToSingleView(dialogName, ui, finalReceipt);
 }
 

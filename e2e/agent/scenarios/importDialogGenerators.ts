@@ -57,7 +57,7 @@ import {
 } from '../lib/surveyFileSpecs';
 import { corruptSpec } from '../lib/surveyFileCorrupt';
 import { corpusFileId, discoverCorpus, type CorpusEntry } from '../lib/fixtureCorpus';
-import { OVERLAP_MODES, VIRTUAL_SHOT_MODES, type ScreenId } from './importDialogModel';
+import { ORPHAN_OVERLAP_CHOICES, OVERLAP_MODES, VIRTUAL_SHOT_MODES, type ScreenId } from './importDialogModel';
 
 // ---------------------------------------------------------------------------
 // Move vocabulary
@@ -1003,13 +1003,31 @@ const ORPHAN: Generator[] = [
     },
   },
   {
-    name: 'orphan:overlap-mode',
-    weight: 5,
+    // One repeated shot's choice (#681). A disabled option (doubly-anchored
+    // target) is refused by the bridge as `option-absent`, which is the guard.
+    name: 'orphan:overlap-choice',
+    weight: 4,
     screens: ['orphan-placement'],
     build: (env) => {
-      if (!actionable(env.digest, 'overlap-mode-select')) return null;
-      const mode = pickFrom(() => env.ctx.rng(), OVERLAP_MODES) as string;
-      return select('overlap-mode-select', mode, `orphan overlap mode ${mode}`);
+      const index = pickFrom(() => env.ctx.rng(), indexedIds(env.digest, 'overlap-choice-'));
+      if (index === null) return null;
+      const choice = pickFrom(() => env.ctx.rng(), ORPHAN_OVERLAP_CHOICES) as string;
+      return select(`overlap-choice-${index}`, choice, `orphan overlap shot ${index} ${choice}`);
+    },
+  },
+  {
+    name: 'orphan:overlap-set-all',
+    weight: 3,
+    screens: ['orphan-placement'],
+    build: (env) => {
+      const live = [
+        'overlap-set-all-keep-existing',
+        'overlap-set-all-use-new',
+        'overlap-set-all-average',
+      ].filter((testid) => actionable(env.digest, testid));
+      const testid = pickFrom(() => env.ctx.rng(), live);
+      if (testid === null) return null;
+      return click(testid, `orphan overlap ${testid}`);
     },
   },
   {

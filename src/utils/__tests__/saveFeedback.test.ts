@@ -482,6 +482,36 @@ describe('finishImportWithoutOrphanSuggestions (#446)', () => {
     expect(message).not.toContain('unanchored');
   });
 
+  /** Injection: drop the `stillCurrent` check after the count await and the
+   *  old import closes the dialog, switches the view and toasts over the
+   *  project that replaced it. */
+  it('drops the completion when the project changed while the count was pending', async () => {
+    let resolveCount: (n: number) => void = () => {};
+    invokeIpcMock.mockReturnValue(new Promise<number>((r) => (resolveCount = r)));
+    const ui = mockUi();
+    let current = true;
+
+    const done = finishImportWithoutOrphanSuggestions('tml-import', ui, [1], receiptFixture(), () => current);
+    current = false;
+    resolveCount(2);
+    await done;
+
+    expect(ui.closeDialog).not.toHaveBeenCalled();
+    expect(ui.setView).not.toHaveBeenCalled();
+    expect(ui.showToast).not.toHaveBeenCalled();
+    expect(ui.openDialog).not.toHaveBeenCalled();
+  });
+
+  it('completes normally when the predicate still holds after the count', async () => {
+    invokeIpcMock.mockResolvedValue(0);
+    const ui = mockUi();
+
+    await finishImportWithoutOrphanSuggestions('tml-import', ui, [1], receiptFixture(), () => true);
+
+    expect(ui.closeDialog).toHaveBeenCalled();
+    expect(ui.showToast).toHaveBeenCalledTimes(1);
+  });
+
   it('does nothing (no IPC call) when there is no receipt to decorate', async () => {
     const ui = mockUi();
 

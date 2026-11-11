@@ -32,8 +32,6 @@ export default function SpeleoDiscardChangesDialog() {
   const { discardChanges } = useSpeleoActions();
 
   const unwound = isUnwoundNotEdited(link);
-  // [#303] Whether the lock question below is even ours to answer. `holdsWriteLock` is
-  // false for a #213 force-editor, who reaches this dialog dirty by design.
   const holdsLock = holdsWriteLock(link);
   const [busy, setBusy] = useState(false);
 
@@ -90,12 +88,6 @@ export default function SpeleoDiscardChangesDialog() {
           >
             {t('common.actions.cancel')}
           </Button>
-          {/* [#303] Only offer to hand back a lock this session actually holds. A #213
-              force-editor is dirty by design and holds none, so "release" would reach
-              `speleodb_release_current_lock` - the ADMIN-capable stuck-lock recovery verb -
-              and either fail outright or force-release the colleague's lock as a side
-              effect of the user discarding their own work. Discarding itself stays
-              available without the lock: that is the whole point of the escape hatch. */}
           {holdsLock && (
             <Button
               variant="secondary"

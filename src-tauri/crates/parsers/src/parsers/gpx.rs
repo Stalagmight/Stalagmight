@@ -836,6 +836,7 @@ pub fn waypoints_to_import_configs(
                 station_index: 0,
             },
             station_comments,
+            station_names: Vec::new(),
             azimuth_reference: Some(GPX_AZIMUTH_REFERENCE),
         });
     }
@@ -870,6 +871,7 @@ fn track_segment_to_config(
         shots: shots_from_points(&points, depth_inverted),
         placement,
         station_comments: Vec::new(),
+        station_names: Vec::new(),
         azimuth_reference: Some(GPX_AZIMUTH_REFERENCE),
     }
 }
@@ -900,6 +902,7 @@ fn route_to_config(
         shots: shots_from_points(&points, depth_inverted),
         placement,
         station_comments: Vec::new(),
+        station_names: Vec::new(),
         azimuth_reference: Some(GPX_AZIMUTH_REFERENCE),
     }
 }

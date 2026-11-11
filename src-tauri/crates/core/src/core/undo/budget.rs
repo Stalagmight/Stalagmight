@@ -65,6 +65,24 @@ impl UndoStack {
                 ..
             } => affected_sections.len() * 16 + previous_offsets.len() * BYTES_PER_OFFSET,
             UndoData::StationMoveInfo { .. } => 2 * BYTES_PER_SHOT,
+            // Sized by what the add brought (#674) - which is the point of the
+            // variant: it grows with the added file, never with the open cave.
+            UndoData::AddedProjectContent(content) => {
+                let shots: usize = content.sections.iter().map(|s| s.shots.len()).sum();
+                let refs = content.station_offsets.len()
+                    + content.station_comments.len()
+                    + content.station_names.len()
+                    + content.zero_datums.len()
+                    + content.station_merges.len()
+                    + content.loop_closures.len()
+                    + content.ignores.len()
+                    + content.file_hashes.len()
+                    + content.section_hashes.len();
+                shots * BYTES_PER_SHOT
+                    + refs * 256
+                    + (content.section_offsets.len() + content.moved_offsets.len())
+                        * BYTES_PER_OFFSET
+            }
             UndoData::InverseCommand(_) | UndoData::None => 0,
         };
         // Restored rows deliberately do not reserialize their command just to rebuild

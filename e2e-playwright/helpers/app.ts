@@ -156,6 +156,21 @@ export async function waitForNoDialogs(page: Page): Promise<void> {
   await expect(visibleDialogs).toHaveCount(0);
 }
 
+/**
+ * Wait until the quit-after-work gate has no quit pending (no waiting prompt, no
+ * watcher, no settle step scheduled), so nothing there can still re-issue a quit.
+ * A spec asserting that NO quit happened waits for this instead of sleeping past
+ * the settle delay.
+ */
+export async function waitForNoPendingQuit(page: Page): Promise<void> {
+  await expect.poll(() => page.evaluate(() => {
+    const pending = (window as unknown as { __E2E_TEST__?: { quitAfterWorkPending?: () => boolean } })
+      .__E2E_TEST__?.quitAfterWorkPending;
+    if (!pending) throw new Error('quitAfterWorkPending is not exposed');
+    return pending();
+  })).toBe(false);
+}
+
 export async function createSectionViaStore(page: Page, section: SectionSeed): Promise<void> {
   await page.evaluate(async (data) => {
     const e2e = (window as unknown as {
@@ -247,16 +262,17 @@ export async function openSettingsFromMenu(page: Page): Promise<void> {
   await expect(page.getByTestId('settings-dialog')).toBeVisible({ timeout: 5000 });
 }
 
-/** Open the Debug Logs dialog via the hamburger menu (global view). */
+/**
+ * Open the Debug Logs dialog via the hamburger menu. Debug Logs is the first row
+ * of the "Debug" submenu in both hamburgers (home screen and in-project).
+ */
 export async function openDebugFromMenu(page: Page): Promise<void> {
-  await openAppMenu(page);
-  await page.getByTestId('global-debug-button').click();
+  await openDebugStatsMenu(page, 'global-debug-button');
 }
 
 /**
- * Open the hamburger Debug submenu (Dev/Memory/Map/Zoom Stats toggles) and
- * click a specific item in it. Not to be confused with `openDebugFromMenu`,
- * which opens the unrelated Debug Logs dialog.
+ * Open the hamburger Debug submenu (Debug Logs, plus the Dev/Memory/Map/Zoom
+ * Stats toggles in-project) and click a specific item in it.
  *
  * Its toggle rows are checkable, so the submenu stays open after a click
  * (see AppMenu's activateLeaf) - clicking the "Debug" parent row again would

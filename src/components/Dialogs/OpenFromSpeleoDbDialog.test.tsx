@@ -3,11 +3,18 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 const confirmMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
-vi.mock('@tauri-apps/plugin-dialog', () => ({ confirm: confirmMock }));
+// The unsaved-edits question before a switch is in-app (`askExitChoice`); answer it
+// through `confirmMock`: true = discard, false = cancel, 'save' = save on this
+// computer first. The rest of the module (the drafts question) stays real.
+vi.mock('../../utils/exitConfirm', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../utils/exitConfirm')>(),
+  askExitChoice: (options: unknown) => Promise.resolve(confirmMock(options))
+    .then((answer: unknown) => (answer === 'save' ? 'save' : answer ? 'confirm' : 'cancel')),
+}));
 const invokeIpcMock = vi.hoisted(() => vi.fn());
 vi.mock('../../utils/ipc', () => ({
   invokeIpc: invokeIpcMock,
-  getErrorMessage: (_e: unknown, f?: string) => f ?? 'error',
+  getErrorMessage: (e: unknown, f?: string) => (e as { message?: string } | null)?.message ?? f ?? 'error',
 }));
 
 import OpenFromSpeleoDbDialog from './OpenFromSpeleoDbDialog';
@@ -35,7 +42,7 @@ function mockRoutes(overrides: Record<string, () => Promise<unknown>> = {}) {
       speleodb_session: () => Promise.resolve({ logged_in: true }),
       speleodb_list_projects: () => Promise.resolve([REMOTE_PROJECT]),
       speleodb_open_project: () =>
-        Promise.resolve({ local_path: '/cache/p1.stalx', concurrent_session: false }),
+        Promise.resolve({ local_path: '/cache/p1.stalx' }),
       ...overrides,
     };
     return (routes[cmd] ?? (() => Promise.resolve(undefined)))();
@@ -62,7 +69,6 @@ beforeEach(() => {
     showToast: showToastMock,
   });
 });
-
 
 /**
  * #270 (P1) - a TRANSIENT project-list failure must not log an authenticated user
@@ -208,7 +214,7 @@ describe('OpenFromSpeleoDbDialog with work at risk in the open project (#270)', 
     useSpeleoStore.setState({ link: null, remoteProjectId: null });
   });
 
-  it('says so in the browser instead of swapping the project out', async () => {
+  it('opens another project while preserving saved unpushed work', async () => {
     // A DIFFERENT remote project is open, saved to disk but never uploaded.
     useProjectStore.setState({ project: { file_path: '/cache/p9.stalx' } as never, isDirty: false });
     useSpeleoStore.setState({
@@ -219,8 +225,7 @@ describe('OpenFromSpeleoDbDialog with work at risk in the open project (#270)', 
         lockedByOther: false,
         hasUnpushedEdits: true,
         unwound: false,
-        forceEditing: false,
-        forceEditAllowed: false,
+
         undoMode: 'full',
         remoteState: 'unknown',
         noAccess: false,
@@ -231,23 +236,91 @@ describe('OpenFromSpeleoDbDialog with work at risk in the open project (#270)', 
     // The pull would have SUCCEEDED, so an unguarded open runs all the way through.
     mockRoutes({
       speleodb_open_project: () =>
-        Promise.resolve({ local_path: '/cache/p1/project.stalx', concurrent_session: false }),
+        Promise.resolve({ local_path: '/cache/p1/project.stalx' }),
     });
     render(<OpenFromSpeleoDbDialog />);
 
     await userEvent.click(await screen.findByTestId('open-from-speleodb-open-p1'));
 
-    expect(await screen.findByTestId('open-from-speleodb-error')).toBeInTheDocument();
-    // Nothing pulled, nothing loaded - and the browser is still up, so the user can
-    // pick something else or close it and hand the project back.
-    expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_open_project')).toBe(false);
-    expect(loadProjectMock).not.toHaveBeenCalled();
-    expect(closeDialogMock).not.toHaveBeenCalled();
+    await waitFor(() => expect(loadProjectMock).toHaveBeenCalled());
+    expect(confirmMock).not.toHaveBeenCalled();
+
   });
 });
 
+/**
+ * frontend#3 - Escape, the X or a backdrop click used to close the browser while an
+ * open was in flight; the unmount then made the open's outcome stale, so its error,
+ * including the 401 that should drop the session, was never shown.
+ */
+describe('OpenFromSpeleoDbDialog while an open is in flight (frontend#3)', () => {
+  const realClearSession = useSpeleoStore.getState().clearSession;
+  const deferredOpen = () => {
+    let fail!: (error: unknown) => void;
+    const pending = new Promise<never>((_resolve, reject) => { fail = reject; });
+    return { pending, fail };
+  };
 
-it.each(['read-only', 'locked'])('restores the browser after a cancelled %s warning', async (kind) => {
+  it('cannot be dismissed by Escape, the X, the backdrop or Close until the open ends', async () => {
+    const open = deferredOpen();
+    mockRoutes({ speleodb_open_project: () => open.pending });
+    render(<OpenFromSpeleoDbDialog />);
+    await userEvent.click(await screen.findByTestId('open-from-speleodb-open-p1'));
+
+    await userEvent.keyboard('{Escape}');
+    await userEvent.click(screen.getByTestId('open-from-speleodb-dialog-close'));
+    const backdrop = screen.getByTestId('open-from-speleodb-dialog-backdrop');
+    await userEvent.click(backdrop);
+    expect(screen.getByTestId('open-from-speleodb-close')).toBeDisabled();
+    expect(closeDialogMock).not.toHaveBeenCalled();
+
+    open.fail({ message: 'Project not found', action: 'Fatal', status: 404 });
+    expect(await screen.findByTestId('open-from-speleodb-error')).toHaveTextContent('Project not found');
+    await waitFor(() => expect(screen.getByTestId('open-from-speleodb-close')).toBeEnabled());
+    await userEvent.keyboard('{Escape}');
+    expect(closeDialogMock).toHaveBeenCalledOnce();
+  });
+
+  it('a 401 from the open signs out and keeps its message on the login prompt', async () => {
+    useSpeleoStore.setState({ clearSession: realClearSession, session: { loggedIn: true, userEmail: 'u@example.com', endpoint: 'https://x/' } });
+    let signedIn = true;
+    mockRoutes({
+      speleodb_session: () => Promise.resolve({ logged_in: signedIn }),
+      speleodb_open_project: () => {
+        signedIn = false;
+        return Promise.reject({ message: 'Your SpeleoDB session expired', action: 'ReLogin', status: 401 });
+      },
+    });
+    const generation = useSpeleoStore.getState().sessionGeneration;
+    render(<OpenFromSpeleoDbDialog />);
+    await userEvent.click(await screen.findByTestId('open-from-speleodb-open-p1'));
+
+    expect(await screen.findByTestId('open-from-speleodb-logged-out')).toBeInTheDocument();
+    // The session change re-ran the browser's session check; the reason survived it.
+    await waitFor(() => expect(invokeIpcMock.mock.calls.filter((c) => c[0] === 'speleodb_session')).toHaveLength(2));
+    expect(screen.getByTestId('open-from-speleodb-error')).toHaveTextContent('Your SpeleoDB session expired');
+    expect(useSpeleoStore.getState().session).toBeNull();
+    expect(useSpeleoStore.getState().sessionGeneration).toBe(generation + 1);
+  });
+
+  it('an open error that outlives the browser is toasted, and a 401 still drops the session', async () => {
+    const open = deferredOpen();
+    mockRoutes({ speleodb_open_project: () => open.pending });
+    const { unmount } = render(<OpenFromSpeleoDbDialog />);
+    await userEvent.click(await screen.findByTestId('open-from-speleodb-open-p1'));
+    // Something else took the dialog slot mid-open.
+    unmount();
+
+    open.fail({ message: 'Your SpeleoDB session expired', action: 'ReLogin', status: 401 });
+    await waitFor(() => expect(showToastMock).toHaveBeenCalledWith(
+      expect.stringContaining('Your SpeleoDB session expired'), 'speleodb-open-remote-error', 'error',
+    ));
+    expect(useSpeleoStore.getState().clearSession).toHaveBeenCalledOnce();
+  });
+});
+
+it.each(['read-only', 'locked'])('restores the browser after cancelling an unsaved switch to a %s project', async (kind) => {
+  useProjectStore.setState({ project: { file_path: '/old.stalx' } as never, isDirty: true });
   confirmMock.mockResolvedValue(false);
   mockRoutes({ speleodb_list_projects: async () => [{ ...REMOTE_PROJECT,
     permission: kind === 'read-only' ? 'READ_ONLY' : 'READ_AND_WRITE',

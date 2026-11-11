@@ -31,6 +31,7 @@ import {
   type SectionMetadata,
   isVirtualKind,
   shotKindFromFlags,
+  stationKindRank,
   STATION_FLAG_IS_ZERO_DATUM,
 } from '../../../types/survey-data';
 import { metersToMapCoords } from '../../../utils/coordinates';
@@ -82,6 +83,40 @@ export interface ResolveOptions {
    *  stations touched only by hidden kinds) are skipped, since they are
    *  filtered out of the hitbox layers and must stay non-interactive. */
   visibleKinds: VisibleKinds;
+  /** Drawn radius of a station marker at size 1 (disc + stroke), px. When set,
+   *  {@link SurveyGeometryIndex.nearestStation} gives a marker whose disc is under
+   *  the cursor to the best-ranked station, the one drawn on top. Omitted: plain
+   *  nearest. */
+  stationDiscPx?: number;
+  /** The size multiplier a station's marker is drawn at (the circle shader's:
+   *  hover / selection size, else 2 for a zero datum, else 1), scaling
+   *  `stationDiscPx`. Omitted: 2 for a zero datum, else 1. */
+  stationSizeMul?: (sectionId: number, zeroDatum: boolean) => number;
+  /** Drawn half-width of a shot line at width 1, px. When set,
+   *  {@link SurveyGeometryIndex.nearestShot} gives a line whose drawn width is
+   *  under the cursor to the best-ranked shot, the one drawn on top. Omitted:
+   *  plain nearest. */
+  shotHalfWidthPx?: number;
+  /** The width multiplier a section's lines are drawn at (the line shader's:
+   *  hover / selection width, else 1), scaling `shotHalfWidthPx`. Omitted: 1. */
+  shotWidthMul?: (sectionId: number) => number;
+  /** The section drawn above every rank (the selection's,
+   *  `SurveyCustomController.setRaisedSection`): its stations and shots outrank
+   *  all others in {@link SurveyGeometryIndex.nearestStation} /
+   *  {@link SurveyGeometryIndex.nearestShot}, the way they are drawn. */
+  raisedSectionId?: number | null;
+}
+
+/** Rank shift of a raised section's features: its real (0), jump (1) and
+ *  reference (2) rank as -3, -2 and -1, above every other section's, its own
+ *  kinds kept in order, as `writeLineDrawOrder` / `writeCircleDrawOrder` draw them. */
+const RAISED_RANK_SHIFT = 3;
+
+/** Draw rank of a shot kind: 0 Normal, 1 Jump, 2 Reference (the line draw order
+ *  and the shot pick; `stationKindRank` is the station counterpart). */
+function shotKindRank(flags: number): number {
+  const kind = shotKindFromFlags(flags);
+  return kind === 'Normal' ? 0 : kind === 'Jump' ? 1 : 2;
 }
 
 /**
@@ -284,15 +319,21 @@ export class SurveyGeometryIndex {
     return cached;
   }
 
-  /** Whether a station is currently drawn, and so hit-testable. Mirrors the
-   *  circle shader exactly: visible while ANY kind that touches it is visible.
-   *  A station with no legs at all keeps the both-off rule. */
+  /** Whether a station is currently drawn, and so hit-testable
+   *  ({@link isMaskVisible} of its kind mask). */
   private isStationVisible(
     sectionId: number,
     stationIndex: number,
     visible: VisibleKinds,
   ): boolean {
-    const mask = this.stationKindMask(sectionId).get(stationIndex) ?? 3;
+    return SurveyGeometryIndex.isMaskVisible(this.stationKindMask(sectionId).get(stationIndex) ?? 3, visible);
+  }
+
+  /** Whether a station with this kind mask is currently drawn, and so
+   *  hit-testable. Mirrors the circle shader exactly: visible while ANY kind
+   *  that touches it is visible. A station with no legs at all keeps the
+   *  both-off rule. */
+  private static isMaskVisible(mask: number, visible: VisibleKinds): boolean {
     if (mask === 0) return true; // a Normal shot touches it
     if ((mask & 1) !== 0 && visible.jump) return true;
     if ((mask & 2) !== 0 && visible.reference) return true;
@@ -302,6 +343,18 @@ export class SurveyGeometryIndex {
   /**
    * Nearest station (screen space) among the candidate sections, within
    * `maxDistance` px of (px, py). Returns null if none qualifies.
+   *
+   * Rank (`stationKindRank`: real, then jump, then reference) settles which of
+   * several stations takes the pick, the way the circles are drawn (real-line
+   * markers on top, `writeCircleDrawOrder`):
+   *  - stations at the same distance (coincident markers, e.g. a jump or
+   *    reference section tied in at a real station): the best rank;
+   *  - with `stationDiscPx`, when the cursor is on the drawn disc of a station
+   *    that outranks the nearest one: that station, since its marker covers
+   *    the nearer one's there. The visible edge of a worse-ranked marker poking
+   *    out from under it still picks the worse-ranked station.
+   * Among stations of one rank the nearest wins, as before. The raised
+   * section (`opts.raisedSectionId`) outranks every rank: it is drawn on top.
    */
   nearestStation(
     project: ProjectFn,
@@ -312,31 +365,57 @@ export class SurveyGeometryIndex {
     opts: ResolveOptions,
   ): NearestStationHit | null {
     this.ensureBuilt();
+    const disc = opts.stationDiscPx ?? 0;
+    const sizeMulOf = opts.stationSizeMul ?? ((_sid: number, zeroDatum: boolean) => (zeroDatum ? 2 : 1));
     let best: NearestStationHit | null = null;
+    let bestRank = 0;
+    // The best-ranked (then nearest) station whose drawn disc is under the cursor.
+    let covering: NearestStationHit | null = null;
+    let coveringRank = 0;
     for (const sid of sectionIds) {
       const idxs = this.sectionStationIdxs.get(sid);
       if (!idxs) continue;
       const kinds = opts.visibleKinds;
+      const masks = this.stationKindMask(sid);
       for (const g of idxs) {
-        if (!this.isStationVisible(sid, this.data.stationIndices[g]!, kinds)) continue;
+        const stationIndex = this.data.stationIndices[g]!;
+        const mask = masks.get(stationIndex) ?? 3;
+        if (!SurveyGeometryIndex.isMaskVisible(mask, kinds)) continue;
         const lngLat = this.stationLngLat(g);
         const p = project(lngLat);
         const dist = Math.hypot(p.x - px, p.y - py);
-        if (dist <= maxDistance && (!best || dist < best.distance)) {
-          best = {
-            ref: { section_id: sid, station_index: this.data.stationIndices[g]! },
-            distance: dist,
-            lngLat,
-          };
+        if (dist > maxDistance) continue;
+        const rank = stationKindRank(mask) - (sid === opts.raisedSectionId ? RAISED_RANK_SHIFT : 0);
+        const nearer = !best || dist < best.distance || (dist === best.distance && rank < bestRank);
+        const covers =
+          disc > 0 &&
+          dist <= disc * sizeMulOf(sid, (this.data.stationFlags[g]! & STATION_FLAG_IS_ZERO_DATUM) !== 0) &&
+          (!covering || rank < coveringRank || (rank === coveringRank && dist < covering.distance));
+        if (!nearer && !covers) continue;
+        const hit: NearestStationHit = { ref: { section_id: sid, station_index: stationIndex }, distance: dist, lngLat };
+        if (nearer) {
+          best = hit;
+          bestRank = rank;
+        }
+        if (covers) {
+          covering = hit;
+          coveringRank = rank;
         }
       }
     }
-    return best;
+    return covering && coveringRank < bestRank ? covering : best;
   }
 
   /**
    * Nearest shot segment (screen space) among the candidate sections, within
    * `maxDistance` px of (px, py). Returns null if none qualifies.
+   *
+   * Rank settles overlaps the way the lines are drawn (Normal on top of Jump on
+   * top of Reference, `writeLineDrawOrder`), as {@link nearestStation} does for
+   * markers: equal distances go to the better rank, and with `shotHalfWidthPx`
+   * a cursor on the drawn width of a better-ranked line picks it over a nearer,
+   * worse-ranked one it covers. Among shots of one kind the nearest wins. The
+   * raised section's shots outrank every kind, as they are drawn on top.
    */
   nearestShot(
     project: ProjectFn,
@@ -347,14 +426,21 @@ export class SurveyGeometryIndex {
     opts: ResolveOptions,
   ): NearestShotHit | null {
     this.ensureBuilt();
+    const half = opts.shotHalfWidthPx ?? 0;
     let best: NearestShotHit | null = null;
+    let bestRank = 0;
+    // The best-ranked (then nearest) shot whose drawn width is under the cursor.
+    let covering: NearestShotHit | null = null;
+    let coveringRank = 0;
     for (const sid of sectionIds) {
       const section = this.sectionById.get(sid);
       const lookup = this.stationLookup.get(sid);
       if (!section || !lookup) continue;
+      const reach = half > 0 ? half * (opts.shotWidthMul?.(sid) ?? 1) : 0;
       for (let i = 0; i < section.shotCount; i++) {
         const shotGlobalIdx = section.shotOffset + i;
-        if (!isKindVisible(this.data.shotFlags[shotGlobalIdx]!, opts.visibleKinds)) continue;
+        const flags = this.data.shotFlags[shotGlobalIdx]!;
+        if (!isKindVisible(flags, opts.visibleKinds)) continue;
         const fromGlobal = lookup.get(i);
         const toGlobal = lookup.get(i + 1);
         if (fromGlobal === undefined || toGlobal === undefined) continue;
@@ -363,19 +449,33 @@ export class SurveyGeometryIndex {
         const p1 = project(from);
         const p2 = project(to);
         const dist = distanceToLineSegment(px, py, p1.x, p1.y, p2.x, p2.y);
-        if (dist <= maxDistance && (!best || dist < best.distance)) {
-          best = {
-            sectionId: sid,
-            shotId: this.data.shotIds[shotGlobalIdx]!,
-            distance: dist,
-            t: projectParamOnSegment(px, py, p1.x, p1.y, p2.x, p2.y),
-            from,
-            to,
-          };
+        if (dist > maxDistance) continue;
+        const rank = shotKindRank(flags) - (sid === opts.raisedSectionId ? RAISED_RANK_SHIFT : 0);
+        const nearer = !best || dist < best.distance || (dist === best.distance && rank < bestRank);
+        const covers =
+          reach > 0 &&
+          dist <= reach &&
+          (!covering || rank < coveringRank || (rank === coveringRank && dist < covering.distance));
+        if (!nearer && !covers) continue;
+        const hit: NearestShotHit = {
+          sectionId: sid,
+          shotId: this.data.shotIds[shotGlobalIdx]!,
+          distance: dist,
+          t: projectParamOnSegment(px, py, p1.x, p1.y, p2.x, p2.y),
+          from,
+          to,
+        };
+        if (nearer) {
+          best = hit;
+          bestRank = rank;
+        }
+        if (covers) {
+          covering = hit;
+          coveringRank = rank;
         }
       }
     }
-    return best;
+    return covering && coveringRank < bestRank ? covering : best;
   }
 
   /**

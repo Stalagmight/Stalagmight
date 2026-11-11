@@ -28,8 +28,9 @@ vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: () => ({ destroy: destroyMock, close: vi.fn(async () => {}) }),
 }));
 
+// The tier-1 question is the in-app exit confirm now, not the native one.
 const confirmMock = vi.hoisted(() => vi.fn(async () => true));
-vi.mock('@tauri-apps/plugin-dialog', () => ({ confirm: confirmMock }));
+vi.mock('../../utils/exitConfirm', () => ({ askExitConfirm: confirmMock }));
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
 vi.mock('../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
@@ -47,6 +48,7 @@ import {
   resetUpdateRestartForTests,
 } from '../../utils/quit';
 import { useUpdateStore } from '../../store/updateStore';
+import { registerWorkspaceDraft } from '../../utils/workspaceDrafts';
 
 function Harness({
   shouldBlock,
@@ -456,6 +458,29 @@ describe('useBeforeUnload - the armed update restart (#579)', () => {
     expect(destroyMock).toHaveBeenCalledTimes(1);
   });
 
+  /**
+   * Unsent SpeleoDB input is asked about before every other tier. Declining keeps
+   * the window, runs no guard, and abandons a restart riding on the exit.
+   */
+  it('asks about unsent SpeleoDB input first, and declining abandons the quit and the restart', async () => {
+    const unregister = registerWorkspaceDraft({ label: () => 'the synthetic form', dirty: () => true, discard: vi.fn() });
+    confirmMock.mockResolvedValue(false);
+    const guard = vi.fn(() => false);
+    render(<Harness shouldBlock={false} guard={guard} />);
+    await flush();
+
+    await armRestart();
+    await pressWindowX();
+    unregister();
+
+    expect(confirmMock).toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('the synthetic form'),
+    }));
+    expect(guard).not.toHaveBeenCalled();
+    expect(destroyMock).not.toHaveBeenCalled();
+    expect(invokeIpcMock).toHaveBeenCalledWith('unarm_app_update_restart', undefined, expect.any(Object));
+  });
+
   it('toasts on a rejected install, drops the banner back, and does NOT close the window', async () => {
     const err = vi.spyOn(console, 'error').mockImplementation(() => {});
     const guard = vi.fn(() => false);
@@ -483,6 +508,35 @@ describe('useBeforeUnload - the armed update restart (#579)', () => {
     err.mockRestore();
 
     // The arm was spent by the attempt, so a later ordinary close destroys.
+    await pressWindowX();
+    expect(destroyMock).toHaveBeenCalledTimes(1);
+  });
+
+  // lock#6: the backend refuses a restart while a SpeleoDB transfer the user
+  // started is still running (Tauri cannot hold a restart's exit). The download is
+  // kept, so the banner stays on Restart, and the toast says why it did not restart.
+  it('a restart the backend refused over a running transfer keeps the banner on Restart and says why', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    render(<Harness shouldBlock={false} guard={() => false} />);
+    await flush();
+    const seq = useUpdateStore.getState().beginCheck();
+    useUpdateStore.getState().setAvailable(seq, { version: '9.9.9', notesUrl: 'https://x', installsOnQuit: true });
+    useUpdateStore.getState().startDownloading('9.9.9');
+    useUpdateStore.getState().setReady('9.9.9');
+
+    await armRestart();
+    invokeIpcMock.mockRejectedValueOnce({ kind: 'transfer_in_flight', message: 'a SpeleoDB transfer is still running' });
+    await pressWindowX();
+    err.mockRestore();
+
+    expect(destroyMock).not.toHaveBeenCalled();
+    expect(showToastMock).toHaveBeenCalledTimes(1);
+    expect(showToastMock.mock.calls[0]?.[0]).toContain('SpeleoDB transfer is still running');
+    expect(showToastMock.mock.calls[0]?.[1]).toBe('app-update-restart-waits-for-transfer');
+    expect(showToastMock.mock.calls[0]?.[2]).toBe('info');
+    expect(useUpdateStore.getState().status).toBe('ready');
+
+    // Nothing is left armed or latched: the next close is an ordinary quit.
     await pressWindowX();
     expect(destroyMock).toHaveBeenCalledTimes(1);
   });

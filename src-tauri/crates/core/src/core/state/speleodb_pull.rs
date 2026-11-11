@@ -3,11 +3,15 @@ use super::speleodb::{local_dto, validate_project_id};
 use super::speleodb_cache::{
     preserved_undo_mode, restore_display_settings, InheritedUndo, LocalEditsPolicy,
 };
+use super::speleodb_cached::copy_recorded_for_other_account;
 use super::speleodb_revisions::validate_hexsha;
 use super::AppState;
 use crate::speleodb::contract::{dto_for_error, Endpoint};
 use crate::speleodb::models::SpeleoProjectSummary;
-use crate::speleodb::{client, sync, SpeleoDbError, SpeleoErrorDto, SpeleoOpenResult};
+use crate::speleodb::{
+    client, sync, SpeleoDbError, SpeleoErrorDto, SpeleoOpenResult, SpeleoReadOnlyOpen,
+    TransportCause,
+};
 pub(super) fn usable_tip(tip: Option<String>, project_id: &str) -> Option<String> {
     let sha = tip?;
     if validate_hexsha(&sha).is_ok() {
@@ -37,6 +41,98 @@ impl Default for DownloadOptions {
             generation: None,
         }
     }
+}
+
+/// A connection failure is the only reason to open a cache instead of downloading.
+/// Never use cache availability to bypass access denial or invalid server content.
+fn offline_open_result(
+    dest: &std::path::Path,
+    endpoint: &str,
+    project_id: &str,
+    error: &SpeleoDbError,
+) -> Option<SpeleoOpenResult> {
+    if !matches!(
+        error,
+        SpeleoDbError::Transport {
+            cause: TransportCause::Refused | TransportCause::Timeout | TransportCause::Dns,
+            ..
+        }
+    ) {
+        return None;
+    }
+    let db = crate::persistence::Database::open_for_metadata(dest).ok()?;
+    let link = db.load_speleo_link().ok()??;
+    if link.project_id != project_id || link.endpoint != endpoint {
+        return None;
+    }
+    Some(SpeleoOpenResult {
+        local_path: dest.to_string_lossy().into_owned(),
+        offline: Some(true),
+        has_unpushed_edits: Some(link.has_unpushed_edits),
+        read_only: None,
+        other_owner: None,
+    })
+}
+
+/// An offline open of a copy that holds ANOTHER account's un-uploaded edits (its
+/// owner record names someone else) opens read-only and says whose work it is: the
+/// signed-in account must never take that work over (`speleodb_cached`). A clean
+/// copy, or one with no owner record, opens as before.
+fn other_accounts_work_read_only(
+    mut opened: SpeleoOpenResult,
+    dest: &std::path::Path,
+    endpoint: &str,
+    email: &str,
+) -> SpeleoOpenResult {
+    if opened.has_unpushed_edits == Some(true) {
+        opened.other_owner = copy_recorded_for_other_account((endpoint, email), dest);
+        if opened.other_owner.is_some() {
+            opened.read_only = Some(SpeleoReadOnlyOpen::OtherAccount);
+        }
+    }
+    opened
+}
+
+/// The guarded download's refusal names whose work the copy holds when its owner
+/// record names another account, so the prompt does not call it "your changes" and
+/// opens it read-only (`UnpushedLocalEdits::other_owner`).
+fn name_other_owner(
+    mut dto: SpeleoErrorDto,
+    dest: &std::path::Path,
+    endpoint: &str,
+    email: &str,
+) -> SpeleoErrorDto {
+    if let Some(local) = dto.unpushed_local.as_mut() {
+        local.other_owner = copy_recorded_for_other_account((endpoint, email), dest);
+    }
+    dto
+}
+
+/// Without a usable session the server cannot be asked anything, and nothing it
+/// could say would make the copy editable, so the cached copy of `project_id` opens
+/// read-only as it is: no network call, nothing written, un-uploaded edits kept.
+///
+/// Only the cached copy of THIS project qualifies (any instance: with no session
+/// there is no instance to compare against, and nothing is sent anywhere). No copy,
+/// or a copy that cannot be read, is no fallback - the caller reports the original
+/// error.
+fn signed_out_open_result(
+    dest: &std::path::Path,
+    project_id: &str,
+    reason: SpeleoReadOnlyOpen,
+) -> Option<SpeleoOpenResult> {
+    let db = crate::persistence::Database::open_for_metadata(dest).ok()?;
+    let link = db.load_speleo_link().ok()??;
+    if link.project_id != project_id {
+        return None;
+    }
+    Some(SpeleoOpenResult {
+        local_path: dest.to_string_lossy().into_owned(),
+        offline: None,
+        has_unpushed_edits: Some(link.has_unpushed_edits),
+        read_only: Some(reason),
+        other_owner: None,
+    })
 }
 
 impl AppState {
@@ -88,21 +184,56 @@ impl AppState {
         policy: LocalEditsPolicy,
     ) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
         validate_project_id(&project_id).map_err(local_dto)?;
+        let dest = self.speleodb_cache_path(&project_id).map_err(local_dto)?;
+        self.speleodb_pull_project_to(&dest, project_id, project_name, latest_commit_sha, policy)
+    }
+
+    /// [`Self::speleodb_pull_project`] into an explicit cache path (`project_id`
+    /// already validated), so tests can point it at a temporary cache.
+    pub(super) fn speleodb_pull_project_to(
+        &self,
+        dest: &std::path::Path,
+        project_id: String,
+        project_name: String,
+        latest_commit_sha: Option<String>,
+        policy: LocalEditsPolicy,
+    ) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
         let generation = self.reserve_download_generation();
-        let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
+        let dest = dest.to_path_buf();
+        // Endpoint, token and email from ONE session read, so the owner recorded
+        // below is the account whose token did the download.
+        let (endpoint, token, email) = match self.speleodb_active_account() {
+            Ok(account) => account,
+            Err(SpeleoDbError::NotAuthenticated) if policy == LocalEditsPolicy::Protect => {
+                return signed_out_open_result(&dest, &project_id, SpeleoReadOnlyOpen::SignedOut)
+                    .ok_or_else(|| local_dto(SpeleoDbError::NotAuthenticated));
+            }
+            Err(e) => return Err(local_dto(e)),
+        };
         let insecure_http = self.speleodb_insecure_http();
 
-        let dest = self.speleodb_cache_path(&project_id).map_err(local_dto)?;
-        if policy == LocalEditsPolicy::Protect {
-            self.guard_local_edits(&project_id, &dest)
-                .map_err(local_dto)?;
-        }
+        // Download first so offline opens can recover unsynced cached work too.
+        // install_linked_download_with_limits still refuses to replace unpushed edits.
 
-        let tip = match client::get_revisions(&endpoint, &token, insecure_http, &project_id) {
+        let tip = match self.speleodb_handle_auth(
+            Endpoint::GetProject,
+            client::get_revisions(&endpoint, &token, insecure_http, &project_id),
+        ) {
             Ok(history) => usable_tip(
                 sync::tip_of(&history.commits).map(str::to_owned),
                 &project_id,
             ),
+            Err(
+                e @ SpeleoDbError::Status {
+                    status: 401 | 403 | 404,
+                    ..
+                },
+            ) => {
+                if let Some(expired) = self.session_expired_open(&dest, &project_id, &e, policy) {
+                    return Ok(expired);
+                }
+                return Err(dto_for_error(Endpoint::GetProject, &e));
+            }
             Err(e) => {
                 tracing::warn!(
                     error = %e,
@@ -114,40 +245,69 @@ impl AppState {
                 None
             }
         };
-        let native = self
-            .speleodb_handle_auth(
-                Endpoint::DownloadStalx,
-                match tip.as_deref() {
-                    Some(sha) => client::download_stalx_at_hash(
-                        &endpoint,
-                        &token,
-                        insecure_http,
-                        &project_id,
-                        sha,
-                    ),
-                    None => client::download_stalx(&endpoint, &token, insecure_http, &project_id),
-                },
-            )
-            .map_err(|e| dto_for_error(Endpoint::DownloadStalx, &e))?;
+        // Un-uploaded local work of THIS account sitting on the server tip is a
+        // fast-forward, not a conflict: open it as it is (see
+        // `speleodb_local_fast_forward_open`). Another account's work, or work
+        // nobody recorded an owner for, goes through the guarded download below
+        // instead, whose refusal prompt asks, and its owner record is not touched.
+        if policy == LocalEditsPolicy::Protect {
+            if let Some(local) = self.speleodb_local_fast_forward_open(
+                &project_id,
+                &dest,
+                &endpoint,
+                &email,
+                tip.as_deref(),
+            ) {
+                // Already recorded as this account's (the arm requires it): refresh
+                // the record, which carries the project's current name.
+                self.speleodb_record_cache_owner(&dest, &endpoint, &email, &project_name);
+                return Ok(local);
+            }
+        }
+        let download = self.speleodb_handle_auth(
+            Endpoint::DownloadStalx,
+            match tip.as_deref() {
+                Some(sha) => client::download_stalx_at_hash(
+                    &endpoint,
+                    &token,
+                    insecure_http,
+                    &project_id,
+                    sha,
+                ),
+                None => client::download_stalx(&endpoint, &token, insecure_http, &project_id),
+            },
+        );
+        let native = match download {
+            Ok(native) => native,
+            Err(error) => {
+                if policy == LocalEditsPolicy::Protect {
+                    if let Some(cached) = offline_open_result(&dest, &endpoint, &project_id, &error)
+                    {
+                        return Ok(other_accounts_work_read_only(
+                            cached, &dest, &endpoint, &email,
+                        ));
+                    }
+                }
+                if let Some(expired) = self.session_expired_open(&dest, &project_id, &error, policy)
+                {
+                    return Ok(expired);
+                }
+                return Err(dto_for_error(Endpoint::DownloadStalx, &error));
+            }
+        };
 
         let base_sha = tip;
         let _ = latest_commit_sha; // A list hint cannot date an unpinned download.
         let link = crate::models::SpeleoLink {
             endpoint: endpoint.clone(),
             project_id: project_id.clone(),
-            project_name,
+            project_name: project_name.clone(),
             base_commit_sha: base_sha,
             has_unpushed_edits: false,
             last_edit_at: None,
             last_verify_at: None,
             undo_mode: None,
         };
-        let concurrent_session = {
-            let holder = self.speleodb_lock_holder(&endpoint, &token, insecure_http, &project_id);
-            self.speleodb_my_email()
-                .is_some_and(|me| sync::concurrent_session_notice(holder.as_deref(), &me))
-        };
-
         self.install_linked_download_with_limits(
             native.path(),
             &dest,
@@ -159,12 +319,45 @@ impl AppState {
                 ..DownloadOptions::default()
             },
         )
-        .map_err(local_dto)?;
+        .map_err(|e| name_other_owner(local_dto(e), &dest, &endpoint, &email))?;
+        self.speleodb_record_cache_owner(&dest, &endpoint, &email, &project_name);
 
         Ok(SpeleoOpenResult {
             local_path: dest.to_string_lossy().into_owned(),
-            concurrent_session,
+            offline: None,
+            has_unpushed_edits: None,
+            read_only: None,
+            other_owner: None,
         })
+    }
+
+    /// An open the server refused for the SESSION rather than for the project: a
+    /// 401, or a 403 the whoami probe confirmed is a dead token. `speleodb_handle_auth`
+    /// has already dropped the token, so the app is signed out now and the open
+    /// continues as a signed-out one (read-only cached copy, no further calls).
+    ///
+    /// A 403 or 404 while the token is still good is the server saying this account
+    /// may not have the project, and keeps the no-fallback rule: `None`.
+    fn session_expired_open(
+        &self,
+        dest: &std::path::Path,
+        project_id: &str,
+        error: &SpeleoDbError,
+        policy: LocalEditsPolicy,
+    ) -> Option<SpeleoOpenResult> {
+        if policy != LocalEditsPolicy::Protect
+            || !matches!(
+                error,
+                SpeleoDbError::Status {
+                    status: 401 | 403,
+                    ..
+                }
+            )
+            || self.speleodb_active_token().is_ok()
+        {
+            return None;
+        }
+        signed_out_open_result(dest, project_id, SpeleoReadOnlyOpen::SessionExpired)
     }
     pub(super) fn speleodb_fast_forward(
         &self,
@@ -173,10 +366,34 @@ impl AppState {
         insecure_http: bool,
         link: &crate::models::SpeleoLink,
         tip: Option<&str>,
-        policy: LocalEditsPolicy,
+        transition: (LocalEditsPolicy, u64, Option<Vec<u8>>),
     ) -> Result<String, SpeleoDbError> {
+        let (policy, generation, expected_snapshot) = transition;
+        let bytes = {
+            let project = self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if generation != self.speleodb_session_generation() {
+                return Err(SpeleoDbError::SessionMoved);
+            }
+            let bytes =
+                serde_json::to_vec(&*project).map_err(|e| SpeleoDbError::Io(e.to_string()))?;
+            if expected_snapshot
+                .as_ref()
+                .is_some_and(|expected| expected != &bytes)
+            {
+                return Err(SpeleoDbError::SessionMoved);
+            }
+            bytes
+        };
+        let was_editing = self.edit_enabled();
         let project_id = &link.project_id;
-        let pinned = usable_tip(tip.map(str::to_owned), project_id);
+        // A verified revision must be downloaded by its exact identifier.
+        let pinned = tip.map(str::to_owned);
+        if let Some(sha) = pinned.as_deref() {
+            validate_hexsha(sha)?;
+        }
         let native = self.speleodb_handle_auth(
             Endpoint::DownloadStalx,
             match pinned.as_deref() {
@@ -187,7 +404,10 @@ impl AppState {
             },
         )?;
         let dest = self.speleodb_cache_path(project_id)?;
-        let new_link = crate::models::SpeleoLink {
+        if policy == LocalEditsPolicy::Protect {
+            self.guard_local_edits(project_id, &dest)?;
+        }
+        let mut new_link = crate::models::SpeleoLink {
             endpoint: endpoint.to_owned(),
             project_id: project_id.clone(),
             project_name: link.project_name.clone(),
@@ -197,58 +417,92 @@ impl AppState {
             last_verify_at: Some(chrono::Utc::now().to_rfc3339()),
             undo_mode: None,
         };
-        self.install_linked_download(native.path(), &dest, new_link, policy, InheritedUndo::Drop)?;
-
-        let local_path = dest.to_string_lossy().into_owned();
-        self.close_project();
-        self.do_load_project_full(dest)
-            .map_err(|e| SpeleoDbError::Io(format!("reload after fast-forward failed: {e}")))?;
+        {
+            let db = crate::persistence::Database::open_existing_untrusted(
+                native.path(),
+                DOWNLOADED_VALUE_LIMIT,
+                DOWNLOADED_PROCESSING_DEADLINE,
+            )
+            .map_err(super::speleodb_cache_install::downloaded_file_error)?;
+            db.load_project()
+                .map_err(|e| SpeleoDbError::Parse(format!("invalid downloaded project: {e}")))?;
+            new_link.undo_mode = Some(self.effective_undo_mode(preserved_undo_mode(&db)));
+            db.save_speleo_link(Some(&new_link))
+                .map_err(|e| SpeleoDbError::Io(e.to_string()))?;
+        }
+        let staged = super::speleodb_cache_install::stage_download(
+            native.path(),
+            &dest,
+            InheritedUndo::Drop,
+            super::speleodb_cache_install::sync_staged_file,
+        )?;
+        {
+            let db = crate::persistence::Database::open_existing(&staged)
+                .map_err(|e| SpeleoDbError::Io(e.to_string()))?;
+            restore_display_settings(
+                &db,
+                &super::speleodb_cache::preserved_display_settings(&dest),
+            );
+        }
+        super::speleodb_cache_install::sync_staged_file(&staged)?;
+        let result = self
+            .open_project_download(
+                staged.to_path_buf(),
+                dest.clone(),
+                (generation, bytes),
+                was_editing,
+            )
+            .map_err(|e| SpeleoDbError::Io(e.message))?;
+        if !result.success {
+            return Err(SpeleoDbError::Io(
+                result
+                    .error
+                    .unwrap_or_else(|| "Could not reload project".into()),
+            ));
+        }
         self.speleodb_set_unwound_from(None);
         self.speleodb_set_inherited_through(None);
-        Ok(local_path)
+        Ok(dest.to_string_lossy().into_owned())
     }
 
-    /// Validate and stamp the downloaded file before it can replace a working cache.
-    /// A failed link write must never turn a remote project into an editable local file.
-    pub(super) fn install_linked_download(
+    /// Validate the downloaded file at `source` and stamp `link` into it, before it
+    /// can replace a working cache. A failed link write must never turn a remote
+    /// project into an editable local file.
+    pub(super) fn stamp_downloaded_link(
         &self,
         source: &std::path::Path,
-        dest: &std::path::Path,
         link: crate::models::SpeleoLink,
-        policy: LocalEditsPolicy,
-        undo: InheritedUndo,
-    ) -> Result<(), SpeleoDbError> {
-        self.install_linked_download_with_limits(
-            source,
-            dest,
-            link,
-            policy,
-            undo,
-            DownloadOptions::default(),
-        )
+    ) -> Result<crate::models::SpeleoLink, SpeleoDbError> {
+        self.stamp_downloaded_link_within(source, link, DownloadOptions::default().limits)
+    }
+
+    fn stamp_downloaded_link_within(
+        &self,
+        source: &std::path::Path,
+        mut link: crate::models::SpeleoLink,
+        limits: (i32, std::time::Duration),
+    ) -> Result<crate::models::SpeleoLink, SpeleoDbError> {
+        let db = crate::persistence::Database::open_existing_untrusted(source, limits.0, limits.1)
+            .map_err(super::speleodb_cache_install::downloaded_file_error)?;
+        // Decode the complete project before any working bytes are replaced.
+        db.load_project()
+            .map_err(|e| SpeleoDbError::Parse(format!("invalid downloaded project: {e}")))?;
+        link.undo_mode = Some(self.effective_undo_mode(preserved_undo_mode(&db)));
+        db.save_speleo_link(Some(&link))
+            .map_err(|e| SpeleoDbError::Io(format!("could not link downloaded project: {e}")))?;
+        Ok(link)
     }
 
     fn install_linked_download_with_limits(
         &self,
         source: &std::path::Path,
         dest: &std::path::Path,
-        mut link: crate::models::SpeleoLink,
+        link: crate::models::SpeleoLink,
         policy: LocalEditsPolicy,
         undo: InheritedUndo,
         options: DownloadOptions,
     ) -> Result<(), SpeleoDbError> {
-        {
-            let db = crate::persistence::Database::open_existing_untrusted(
-                source,
-                options.limits.0,
-                options.limits.1,
-            )
-            .map_err(super::speleodb_cache_install::downloaded_file_error)?;
-            link.undo_mode = Some(self.effective_undo_mode(preserved_undo_mode(&db)));
-            db.save_speleo_link(Some(&link)).map_err(|e| {
-                SpeleoDbError::Io(format!("could not link downloaded project: {e}"))
-            })?;
-        }
+        let link = self.stamp_downloaded_link_within(source, link, options.limits)?;
         let preserved_view = match options.generation {
             Some(generation) => self.replace_cache_for_session(
                 source,
@@ -563,6 +817,158 @@ mod tests {
     }
 
     #[test]
+    fn offline_fallback_requires_connection_failure_and_matching_cache_identity() {
+        let dir = tempfile::tempdir().expect("temp");
+        let dest = dir.path().join("project.stalx");
+        let mut cached_link = link();
+        cached_link.has_unpushed_edits = true;
+        let mut db = Database::open(&dest).expect("cache");
+        db.save_project(&Project::new("Cached".into(), None))
+            .expect("project");
+        db.save_speleo_link(Some(&cached_link)).expect("link");
+        for cause in [
+            TransportCause::Refused,
+            TransportCause::Timeout,
+            TransportCause::Dns,
+        ] {
+            let error = SpeleoDbError::Transport {
+                cause,
+                detail: "offline".into(),
+            };
+            let result = offline_open_result(
+                &dest,
+                &cached_link.endpoint,
+                &cached_link.project_id,
+                &error,
+            )
+            .expect("matching cache opens offline");
+            assert_eq!(result.offline, Some(true));
+            assert_eq!(result.has_unpushed_edits, Some(true));
+            assert!(offline_open_result(
+                &dest,
+                "https://other.example",
+                &cached_link.project_id,
+                &error
+            )
+            .is_none());
+            assert!(
+                offline_open_result(&dest, &cached_link.endpoint, "another-project", &error)
+                    .is_none()
+            );
+            assert!(offline_open_result(
+                &dir.path().join("missing.stalx"),
+                &cached_link.endpoint,
+                &cached_link.project_id,
+                &error
+            )
+            .is_none());
+        }
+        let errors = [
+            SpeleoDbError::Status {
+                status: 401,
+                message: "unauthorized".into(),
+            },
+            SpeleoDbError::Status {
+                status: 403,
+                message: "forbidden".into(),
+            },
+            SpeleoDbError::Status {
+                status: 404,
+                message: "gone".into(),
+            },
+            SpeleoDbError::Status {
+                status: 500,
+                message: "server error".into(),
+            },
+            SpeleoDbError::Parse("invalid download".into()),
+            SpeleoDbError::Io("unreadable".into()),
+            SpeleoDbError::Transport {
+                cause: TransportCause::Tls,
+                detail: "certificate".into(),
+            },
+            SpeleoDbError::Transport {
+                cause: TransportCause::Unknown,
+                detail: "unknown".into(),
+            },
+        ];
+        for error in errors {
+            assert!(offline_open_result(
+                &dest,
+                &cached_link.endpoint,
+                &cached_link.project_id,
+                &error
+            )
+            .is_none());
+        }
+        assert!(
+            db.load_speleo_link()
+                .expect("preserved link")
+                .expect("linked")
+                .has_unpushed_edits
+        );
+        db.save_speleo_link(None).expect("unlink");
+        assert!(offline_open_result(
+            &dest,
+            &cached_link.endpoint,
+            &cached_link.project_id,
+            &SpeleoDbError::Transport {
+                cause: TransportCause::Refused,
+                detail: "offline".into()
+            }
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn an_offline_http_hostname_endpoint_opens_its_cached_copy() {
+        // sdk#6: an `http://` endpoint the transport policy allows behaves like
+        // `https://` when it is offline. A hostname is outside the automatic HTTP
+        // exceptions, so it is allowed only with the insecure-HTTP override; then a
+        // host that does not resolve is the DNS transport failure, which is
+        // offline-eligible exactly as it is for https. Without the override it is
+        // refused before any request, and that refusal never opens the cache.
+        // `.invalid` never resolves (RFC 6761), so this is offline by construction.
+        let endpoint = "http://speleodb-offline.invalid:8000";
+        let mut cached_link = link();
+        cached_link.endpoint = endpoint.into();
+        let dir = tempfile::tempdir().expect("temp");
+        let dest = dir.path().join("project.stalx");
+        let mut db = Database::open(&dest).expect("cache");
+        db.save_project(&Project::new("Cached".into(), None))
+            .expect("project");
+        db.save_speleo_link(Some(&cached_link)).expect("link");
+        drop(db);
+
+        let refused = client::download_stalx(endpoint, "token", false, &cached_link.project_id)
+            .expect_err("a plain-http hostname is refused without the override");
+        assert!(
+            matches!(refused, SpeleoDbError::InsecureEndpoint { .. }),
+            "{refused:?}"
+        );
+        assert!(
+            offline_open_result(&dest, endpoint, &cached_link.project_id, &refused).is_none(),
+            "a refused endpoint is not offline"
+        );
+
+        let error = client::download_stalx(endpoint, "token", true, &cached_link.project_id)
+            .expect_err("an unresolvable host cannot be downloaded from");
+        assert!(
+            matches!(
+                error,
+                SpeleoDbError::Transport {
+                    cause: TransportCause::Dns,
+                    ..
+                }
+            ),
+            "an unresolvable http host must be an offline DNS failure, got {error:?}"
+        );
+        let opened = offline_open_result(&dest, endpoint, &cached_link.project_id, &error)
+            .expect("the cached copy opens offline");
+        assert_eq!(opened.offline, Some(true));
+        assert_eq!(opened.local_path, dest.to_string_lossy());
+    }
+
+    #[test]
     fn first_download_creates_its_nested_cache_directory() {
         crate::test_helpers::with_isolated_config(|| {
             let dir = tempfile::tempdir().expect("temp");
@@ -576,12 +982,13 @@ mod tests {
 
             AppState::new()
                 .expect("state")
-                .install_linked_download(
+                .install_linked_download_with_limits(
                     &source,
                     &dest,
                     link(),
                     LocalEditsPolicy::Protect,
                     InheritedUndo::Drop,
+                    DownloadOptions::default(),
                 )
                 .expect("first download installs without a pre-existing cache");
 
@@ -615,12 +1022,13 @@ mod tests {
             assert!(state.open_project(dest.clone()).success);
             let before = std::fs::read(&dest).expect("previous bytes");
             let err = state
-                .install_linked_download(
+                .install_linked_download_with_limits(
                     &source,
                     &dest,
                     link(),
                     LocalEditsPolicy::Protect,
                     InheritedUndo::Drop,
+                    DownloadOptions::default(),
                 )
                 .expect_err("a remote project must not open without its link");
             assert!(
@@ -660,12 +1068,13 @@ mod tests {
             }
             AppState::new()
                 .expect("state")
-                .install_linked_download(
+                .install_linked_download_with_limits(
                     &source,
                     &dest,
                     link(),
                     LocalEditsPolicy::Protect,
                     InheritedUndo::Drop,
+                    DownloadOptions::default(),
                 )
                 .expect("install");
             let db = Database::open_existing(&dest).expect("installed");

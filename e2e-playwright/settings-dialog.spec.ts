@@ -50,6 +50,26 @@ function filterTestableCategories(categories: string[]): string[] {
   return categories.filter((category) => category !== 'map');
 }
 
+test('SpeleoDB shortcut selects its tab without a mouse focus outline', async ({ page }) => {
+  await setupTauriMocks(page);
+  await page.goto('/');
+  await page.getByTestId('global-speleodb-button').click();
+  const speleo = page.getByTestId('settings-tab-speleodb');
+  const general = page.getByTestId('settings-tab-general');
+  await expect(page.getByTestId('settings-panel-speleodb')).toBeVisible();
+  await expect(speleo).toHaveAttribute('aria-selected', 'true');
+  await expect(speleo).toHaveAttribute('tabindex', '0');
+  await expect(speleo).toHaveCSS('box-shadow', 'none');
+  await expect(general).toHaveAttribute('tabindex', '-1');
+  await expect(general).toHaveCSS('box-shadow', 'none');
+  await general.click();
+  await expect(general).toHaveCSS('box-shadow', 'none');
+  await page.keyboard.press('ArrowDown');
+  const appearance = page.getByTestId('settings-tab-appearance');
+  await expect(appearance).toBeFocused();
+  await expect(appearance).not.toHaveCSS('box-shadow', 'none');
+});
+
 test.describe('Settings Dialog - Keyboard Shortcuts to Open', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
@@ -342,7 +362,7 @@ test.describe('Settings Dialog - Unsaved Changes Confirmation', () => {
     await createProject(page, 'Unsaved Changes Test');
   });
 
-  test('closing with unsaved changes shows Save/Discard/Cancel dialog', async ({ page }) => {
+  test('closing with unsaved changes shows Cancel and Discard only', async ({ page }) => {
     await openSettingsDialog(page);
 
     // Make a change in Shortcuts
@@ -365,10 +385,10 @@ test.describe('Settings Dialog - Unsaved Changes Confirmation', () => {
     // Unsaved changes dialog should appear
     await expect(page.locator('[data-testid="unsaved-changes-dialog"]')).toBeVisible({ timeout: 2000 });
 
-    // Verify all three buttons exist
+    // Only cancel and discard are available.
     await expect(page.locator('[data-testid="unsaved-cancel"]')).toBeVisible();
     await expect(page.locator('[data-testid="unsaved-discard"]')).toBeVisible();
-    await expect(page.locator('[data-testid="unsaved-save"]')).toBeVisible();
+    await expect(page.locator('[data-testid="unsaved-save"]')).toHaveCount(0);
   });
 
   test('Cancel in unsaved dialog returns to Settings', async ({ page }) => {
@@ -428,7 +448,7 @@ test.describe('Settings Dialog - Unsaved Changes Confirmation', () => {
     await expect(recorderAfter).toContainText('S'); // Original value
   });
 
-  test('Save in unsaved dialog saves and closes', async ({ page }) => {
+  test('Cancel returns to Settings where Save explicitly saves and closes', async ({ page }) => {
     await openSettingsDialog(page);
 
     // Make a change
@@ -445,8 +465,8 @@ test.describe('Settings Dialog - Unsaved Changes Confirmation', () => {
     await page.locator('[data-testid="settings-cancel-button"]').click();
     await expect(page.locator('[data-testid="unsaved-changes-dialog"]')).toBeVisible();
 
-    // Click Save
-    await page.locator('[data-testid="unsaved-save"]').click();
+    await page.locator('[data-testid="unsaved-cancel"]').click();
+    await page.locator('[data-testid="settings-save-button"]').click();
 
     // Settings should close
     await expect(page.locator('[data-testid="settings-dialog"]')).not.toBeVisible({ timeout: 5000 });
@@ -806,4 +826,22 @@ test.describe('Settings Dialog - All panels have testids', () => {
       await expect(page.locator(`[data-testid="settings-panel-${category}"]`)).toBeVisible({ timeout: 5000 });
     }
   });
+});
+
+test('SpeleoDB Close saves the endpoint without connecting and replaces Save and Cancel', async ({ page }) => {
+  await setupTauriMocks(page);
+  await page.goto('/');
+  await page.getByTestId('global-speleodb-button').click();
+  await expect(page.getByTestId('settings-save-button')).toHaveCount(0);
+  await expect(page.getByTestId('settings-cancel-button')).toHaveCount(0);
+  // The insecure-HTTP option exists only in a development build (the dev server
+  // locally, a production build in CI).
+  const devBuild = await page.evaluate(() => (window as unknown as { __E2E_TEST__: { devBuild?: boolean } }).__E2E_TEST__.devBuild === true);
+  await expect(page.getByTestId('toggle-speleodb-insecure-http')).toHaveCount(devBuild ? 1 : 0);
+  await page.getByTestId('input-speleodb-endpoint').fill('HTTP://192.168.1.25:8000');
+  await page.getByTestId('settings-close-button').click();
+  await expect(page.getByTestId('settings-dialog')).not.toBeVisible();
+  await page.getByTestId('global-speleodb-button').click();
+  await expect(page.getByTestId('input-speleodb-endpoint')).toHaveValue('http://192.168.1.25:8000');
+  await expect(page.getByTestId('speleodb-account-login-form')).toBeVisible();
 });

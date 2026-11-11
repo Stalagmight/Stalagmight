@@ -60,7 +60,9 @@ pub(crate) fn create_shot_impl(
     // and is stripped at its two dispatch arms instead (core/state/commands.rs,
     // undo_restore.rs) - its executor is shared with the importers, whose
     // identities our own parser legitimately adopted. That leaves
-    // `import_sections` as the one door that may carry identities.
+    // `import_sections` and `create_section_and_merge` as the doors that may
+    // carry identities; both rename any the project already holds
+    // (`Project::reassign_repeated_shot_uuids`).
     shot.uuid = None;
     state.execute(Command::CreateShot {
         section_id,

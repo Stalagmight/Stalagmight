@@ -95,9 +95,9 @@ test.describe('Section focus mode', () => {
     await expect(page.getByTestId('mode-carousel')).toBeVisible();
 
     // Both side panels collapse (their closed-state opener tabs appear and the
-    // panel bodies unmount); the data table opens (its body mounts, no opener tab).
+    // workspace remains mounted but hidden); the data table opens.
     await expect(page.getByTestId('panel-tab-sections')).toBeVisible();
-    await expect(page.getByTestId('sections-panel')).toHaveCount(0);
+    await expect(page.getByTestId('sections-panel')).toBeHidden();
     await expect(page.getByTestId('panel-tab-detail')).toBeVisible();
     await expect(page.getByTestId('detail-panel')).toHaveCount(0);
     await expect(page.getByTestId('data-table')).toBeVisible();
@@ -159,9 +159,9 @@ test.describe('Section focus mode', () => {
     await expect(focusName).toBeVisible();
     await expect(focusName).toContainText(SECTION_NAME);
     await expect(page.getByTestId('mode-carousel')).toBeVisible();
-    // Side panels collapse to their opener tabs (bodies unmount); the table opens.
+    // Side panels collapse to their opener tabs; the workspace stays mounted but hidden.
     await expect(page.getByTestId('panel-tab-sections')).toBeVisible();
-    await expect(page.getByTestId('sections-panel')).toHaveCount(0);
+    await expect(page.getByTestId('sections-panel')).toBeHidden();
     await expect(page.getByTestId('panel-tab-detail')).toBeVisible();
     await expect(page.getByTestId('detail-panel')).toHaveCount(0);
     await expect(page.getByTestId('data-table')).toBeVisible();

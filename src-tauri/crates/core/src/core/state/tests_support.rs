@@ -17,11 +17,17 @@ impl AppState {
         }
     }
 
+    /// Install `db` as the open project's database, and say what that makes the
+    /// open project the way an open would: a linked database is a SpeleoDB
+    /// project, read-only until an edit session binds a lock claim
+    /// (`speleodb_edit_gate`) - for which a fixture runs Start Editing.
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_database_for_tests(&self, db: Database) {
+        let link = db.load_speleo_link().ok().flatten();
         if let Ok(mut guard) = self.database.lock() {
             *guard = Some(db);
         }
+        self.speleodb_set_open_gate(link.as_ref());
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -39,7 +45,7 @@ impl AppState {
 /// spread across the family - a scan that stops seeing a file stops guarding it, and
 /// an absence assertion goes on passing while it does.
 #[cfg(test)]
-fn speleodb_prod_sources() -> [(&'static str, &'static str); 14] {
+fn speleodb_prod_sources() -> [(&'static str, &'static str); 20] {
     [
         ("speleodb.rs", include_str!("speleodb.rs")),
         ("speleodb_admin.rs", include_str!("speleodb_admin.rs")),
@@ -48,9 +54,14 @@ fn speleodb_prod_sources() -> [(&'static str, &'static str); 14] {
             "speleodb_cache_install.rs",
             include_str!("speleodb_cache_install.rs"),
         ),
+        ("speleodb_cached.rs", include_str!("speleodb_cached.rs")),
         (
             "speleodb_credentials.rs",
             include_str!("speleodb_credentials.rs"),
+        ),
+        (
+            "speleodb_edit_gate.rs",
+            include_str!("speleodb_edit_gate.rs"),
         ),
         ("speleodb_foreign.rs", include_str!("speleodb_foreign.rs")),
         (
@@ -63,13 +74,23 @@ fn speleodb_prod_sources() -> [(&'static str, &'static str); 14] {
         ),
         ("speleodb_logout.rs", include_str!("speleodb_logout.rs")),
         ("speleodb_project.rs", include_str!("speleodb_project.rs")),
+        (
+            "speleodb_write_guard.rs",
+            include_str!("speleodb_write_guard.rs"),
+        ),
         ("speleodb_pull.rs", include_str!("speleodb_pull.rs")),
+        ("speleodb_reload.rs", include_str!("speleodb_reload.rs")),
         ("speleodb_push.rs", include_str!("speleodb_push.rs")),
+        (
+            "speleodb_revision_swap.rs",
+            include_str!("speleodb_revision_swap.rs"),
+        ),
         (
             "speleodb_revisions.rs",
             include_str!("speleodb_revisions.rs"),
         ),
         ("speleodb_session.rs", include_str!("speleodb_session.rs")),
+        ("speleodb_sidecars.rs", include_str!("speleodb_sidecars.rs")),
     ]
     .map(|(name, src)| {
         // Only the top-level test module ends production. `speleodb_push.rs` also has
@@ -121,7 +142,10 @@ mod tests {
             .expect("the state module directory is readable")
             .filter_map(|entry| {
                 let name = entry.ok()?.file_name().to_string_lossy().into_owned();
-                (name.starts_with("speleodb") && name.ends_with(".rs")).then_some(name)
+                (name.starts_with("speleodb")
+                    && name.ends_with(".rs")
+                    && !name.ends_with("_tests.rs"))
+                .then_some(name)
             })
             .collect();
         on_disk.sort();
@@ -192,7 +216,7 @@ pub(super) fn sdk_fixture(body: &str) -> String {
                 for (key, value) in [
                     ("author_email", json!("test@example.com")),
                     ("author_name", json!("Test")),
-                    ("authored_date", json!("2026/01/01 00:00")),
+                    ("authored_date", json!("2026-01-01T00:00:00Z")),
                     ("dt_since", json!("now")),
                     ("formats", json!([])),
                     ("message", json!("Test")),
@@ -211,4 +235,145 @@ pub(super) fn sdk_fixture(body: &str) -> String {
         }
     }
     value.to_string()
+}
+
+/// A loopback SpeleoDB that answers EVERY request 200 with project `project_id`
+/// whose lock is held by `holder` (or by nobody), and records each request line.
+///
+/// For the holder-checked releases (lock#4): a release first asks who holds the
+/// lock and may send the release only when the answer is its own account, so a
+/// one-shot stub that answers the release alone no longer describes the
+/// protocol. Count the releases with [`release_posts`]. Never blocks a test that
+/// expects no traffic.
+#[cfg(test)]
+pub(super) fn lock_server(
+    project_id: &str,
+    holder: Option<String>,
+) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    lock_server_with(project_id, holder, false)
+}
+
+/// [`lock_server`] whose READS fail with a 503 (writes still answer 200): the
+/// holder of the lock cannot be found out, which is what a release must never
+/// treat as permission to release blind.
+#[cfg(test)]
+pub(super) fn lock_server_unreadable(
+    project_id: &str,
+) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    lock_server_with(project_id, None, true)
+}
+
+#[cfg(test)]
+fn lock_server_with(
+    project_id: &str,
+    holder: Option<String>,
+    reads_fail: bool,
+) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    use std::io::{Read as _, Write as _};
+    let Ok(listener) = std::net::TcpListener::bind("127.0.0.1:0") else {
+        return ("http://127.0.0.1:1".to_owned(), std::sync::Arc::default());
+    };
+    let port = listener.local_addr().map_or(1, |a| a.port());
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = std::sync::Arc::clone(&seen);
+    let mutex = holder.map_or_else(String::new, |user| {
+        format!(r#","active_mutex":{{"user":"{user}"}}"#)
+    });
+    let body = sdk_fixture(&format!(
+        r#"{{"id":"{project_id}","name":"Remote","permission":"READ_AND_WRITE"{mutex}}}"#
+    ));
+    // The release's reply is the project AFTER the release, as SpeleoDB sends it:
+    // no holder. (A reply that still names the releasing account is a release
+    // that did nothing, which the holder-checked release reports as a failure.)
+    let released = sdk_fixture(&format!(
+        r#"{{"id":"{project_id}","name":"Remote","permission":"READ_AND_WRITE"}}"#
+    ));
+    std::thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(150)));
+            let mut req = Vec::new();
+            let mut chunk = vec![0u8; 8 * 1024];
+            while let Ok(n) = stream.read(&mut chunk) {
+                if n == 0 {
+                    break;
+                }
+                req.extend_from_slice(&chunk[..n]);
+            }
+            let line = String::from_utf8_lossy(&req)
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .to_owned();
+            let resp = if reads_fail && line.starts_with("GET") {
+                "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\
+                 Connection: close\r\n\r\n"
+                    .to_owned()
+            } else {
+                let reply = if line.starts_with("POST") && line.contains("/release") {
+                    &released
+                } else {
+                    &body
+                };
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                    reply.len()
+                )
+            };
+            if let Ok(mut log) = log.lock() {
+                log.push(line);
+            }
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    (format!("http://127.0.0.1:{port}"), seen)
+}
+
+/// Model SpeleoDB's mutex across a multi-request stub that otherwise answers one
+/// static `body`: an acquire makes `acquirer` the holder, a release frees it, and
+/// every later project reply reports that holder instead of the fixture's.
+///
+/// The holder-checked release (lock#4) reads the holder AFTER the flow's own
+/// acquire, so a stub frozen on its pre-acquire answer would say "not yours" about
+/// a lock the flow has just taken. `held` is the stub's state, `None` until the
+/// first acquire or release.
+#[cfg(test)]
+pub(super) fn with_tracked_mutex(
+    request_line: &str,
+    body: &str,
+    held: &std::sync::Mutex<Option<serde_json::Value>>,
+    acquirer: &str,
+) -> String {
+    use serde_json::{json, Value};
+    let Ok(mut held) = held.lock() else {
+        return body.to_owned();
+    };
+    if request_line.starts_with("POST") && request_line.contains("/acquire") {
+        *held = Some(json!({ "user": acquirer }));
+    } else if request_line.starts_with("POST") && request_line.contains("/release") {
+        *held = Some(Value::Null);
+    }
+    let Some(holder) = held.clone() else {
+        return body.to_owned();
+    };
+    let Ok(mut value) = serde_json::from_str::<Value>(body) else {
+        return body.to_owned();
+    };
+    if let Some(obj) = value.as_object_mut() {
+        if obj.contains_key("id") {
+            obj.insert("active_mutex".to_owned(), holder);
+        }
+    }
+    value.to_string()
+}
+
+/// How many release requests a [`lock_server`] has received.
+#[cfg(test)]
+pub(super) fn release_posts(seen: &std::sync::Mutex<Vec<String>>) -> usize {
+    seen.lock().map_or(0, |log| {
+        log.iter()
+            .filter(|line| line.starts_with("POST") && line.contains("/release"))
+            .count()
+    })
 }

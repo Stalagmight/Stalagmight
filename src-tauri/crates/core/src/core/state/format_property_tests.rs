@@ -727,6 +727,18 @@ const DEGRADATIONS: &[Degradation] = &[
         },
         must_open: true,
     },
+    // `station_names` arrived WITHOUT a schema bump (outside readers pin v18),
+    // so a v18 file from before it takes the version fast path and nothing
+    // creates the table on open. It must load with no names and save again -
+    // the save re-creates the table inside its transaction.
+    Degradation {
+        id: "v18-file-without-station-names",
+        promise: "persistence/sqlite/read.rs `load_station_texts` reads an absent table as empty, \
+                  and write.rs creates it before its DELETE, so a pre-names v18 file opens and \
+                  saves",
+        surgery: |connection| connection.execute_batch("DROP TABLE station_names;"),
+        must_open: true,
+    },
 ];
 
 /// Apply one degradation to a fresh file and report what the loader did.

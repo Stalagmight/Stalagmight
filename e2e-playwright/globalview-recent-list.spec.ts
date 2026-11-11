@@ -52,6 +52,12 @@ test.describe('GlobalView Recent Projects - search, table view, missing files', 
     await switchToListTab(page);
   });
 
+  test('the hint describes double-click opening, and only that, for local projects', async ({ page }) => {
+    const status = page.getByTestId('globalview-list-status');
+    await expect(status).toContainText('Click to select, double-click to open, right-click for options.');
+    await expect(status).not.toContainText('SpeleoDB');
+  });
+
   test('search box is shown on the list tab and filters the cards', async ({ page }) => {
     const search = page.getByTestId('globalview-search-input');
     await expect(search).toBeVisible();

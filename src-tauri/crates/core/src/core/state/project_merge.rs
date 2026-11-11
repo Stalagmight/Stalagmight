@@ -1,12 +1,32 @@
+use super::project_append::append_project;
 use super::project_io::save_failure;
+use super::project_source::{read_source_project, with_suffix, SQLITE_SIDECARS};
 use super::AppState;
+use crate::core::command::{sanitize_display_text, MAX_FILE_NAME_LEN};
 use crate::core::CommandResult;
-use crate::models::{
-    Project, SectionId, StationKey, StationRef, FEATURE_ID_STRIDE, MAX_SECTIONS_IN_ID_SPACE,
-    MAX_SECTION_ID,
-};
+use crate::models::{Project, FEATURE_ID_STRIDE, MAX_SECTIONS_IN_ID_SPACE, MAX_SECTION_ID};
 use crate::persistence::Database;
 use std::path::PathBuf;
+
+/// How much of a source's path a merge refusal shows (a path, unlike a file
+/// name, has no natural bound).
+const MAX_MERGE_SOURCE_LABEL: usize = 4 * MAX_FILE_NAME_LEN;
+
+/// A source's path as a merge refusal names it: the whole path, since two
+/// sources can share a file name, cut from the FRONT when it is too long so
+/// the file name - the part that says which source failed - always survives.
+pub(super) fn merge_source_label(path: &std::path::Path) -> String {
+    let full = sanitize_display_text(&path.to_string_lossy(), usize::MAX);
+    let count = full.chars().count();
+    if count <= MAX_MERGE_SOURCE_LABEL {
+        return full;
+    }
+    let tail: String = full
+        .chars()
+        .skip(count - (MAX_MERGE_SOURCE_LABEL - 3))
+        .collect();
+    format!("...{tail}")
+}
 
 impl AppState {
     /// Merge multiple projects into a new project file
@@ -59,32 +79,18 @@ impl AppState {
             }
         }
 
-        // Load all source projects
-        let mut source_projects: Vec<Project> = Vec::new();
+        // Read every source the way "Add .stalx" does (#680): through a
+        // private copy, so opening an older file never migrates the user's own
+        // file in place, and normalized as an open would - shot uuids, closure
+        // ids, re-solved offsets, and the pending pre-v13 Jump/Reference
+        // classification, which is per file and would otherwise be lost: the
+        // merged output does not carry the source's flag.
+        let mut source_projects: Vec<Project> = Vec::with_capacity(source_paths.len());
         for path in &source_paths {
-            match Database::open_existing(path) {
-                Ok(db) => match db.load_project() {
-                    Ok(mut project) => {
-                        project.file_path = Some(path.clone());
-                        // Assign IDs to any legacy closures that have id=0
-                        project.assign_closure_ids();
-                        source_projects.push(project);
-                    }
-                    Err(e) => {
-                        return CommandResult::failure(format!(
-                            "Failed to load project '{}': {}",
-                            path.display(),
-                            e
-                        ));
-                    }
-                },
-                Err(e) => {
-                    return CommandResult::failure(format!(
-                        "Failed to open project '{}': {}",
-                        path.display(),
-                        e
-                    ));
-                }
+            let label = merge_source_label(path);
+            match read_source_project(path, &label, "merged") {
+                Ok(source) => source_projects.push(source.project),
+                Err(e) => return CommandResult::failure(e),
             }
         }
 
@@ -129,252 +135,20 @@ impl AppState {
         // already pinned by the first source.
         let mut surface_elevation_warning: Option<String> = None;
 
-        // Track section ID remapping: (old_project_idx, old_section_id) -> new_section_id
-        let mut section_id_map: std::collections::HashMap<(usize, SectionId), SectionId> =
-            std::collections::HashMap::new();
-
-        // Append sections from all projects
-        for (proj_idx, source_project) in source_projects.iter().enumerate() {
-            for section in &source_project.sections {
-                let old_section_id = section.id;
-                let new_section_id = merged_project.next_section_id;
-
-                // Shot identity rides along in `SectionData` (`ShotData::uuid`),
-                // so `add_section` reproduces each source shot's UUID by itself.
-                //
-                // Uniqueness is PER-SECTION here, matching the invariant the app
-                // actually enforces (`Project::ensure_unique_shot_uuids`, the
-                // section-scoped `duplicate_shot_uuid` integrity check, and
-                // `resolve_key`'s section-local lookup) - `Section::new` applies
-                // it as the sections are built. A project-wide dedupe would be
-                // stricter than the model AND than the format: two projects that
-                // imported the same Ariane file legitimately hold the same
-                // foreign ids (#423), and re-minting them here would throw away
-                // exactly the identity the import was preserving. The one
-                // consumer that needs document-wide uniqueness - the SpeleoDB
-                // sidecar - already drops repeats itself
-                // (`export::tml::harden_for_speleodb`).
-                merged_project.add_section(section.to_section_data());
-
-                // #438: `SectionData` cannot carry the north reference, so the
-                // copy would land on the merged project's default - reverting a
-                // corrected section to identity and rendering (and exporting) it
-                // rotated by its own declination.
-                //
-                // The RESOLVED reference, from the section's OWN project: a
-                // section that inherited its source project's default has to
-                // keep that value here, where the default is a different one.
-                // Merging the defaults themselves would be the wrong question -
-                // two projects can hold different ones legitimately, and only
-                // the per-section answer is unambiguous - so every copied
-                // section carries its own and the merged project declares no
-                // default at all.
-                let resolved = source_project.azimuth_reference_for(section);
-                if let Some(copied) = merged_project.get_section_mut(new_section_id) {
-                    copied.azimuth_reference = Some(resolved);
-                }
-
-                // Record the mapping
-                section_id_map.insert((proj_idx, old_section_id), new_section_id);
-            }
-
-            // Copy section offsets with remapped IDs. Through
-            // `write_section_offset` so an all-zero entry a source project is
-            // carrying (a file written before #413 finding 2 was fixed) is not
-            // copied forward into the merged project and re-serialized: the map
-            // means "sections that are actually displaced", and (0, 0) is the
-            // same geometry as no entry at all.
-            for (old_section_id, offset) in &source_project.section_offsets {
-                if let Some(&new_section_id) = section_id_map.get(&(proj_idx, *old_section_id)) {
-                    Project::write_section_offset(
-                        &mut merged_project.section_offsets,
-                        new_section_id,
-                        *offset,
-                    );
-                } else {
-                    tracing::warn!(
-                        project = %source_project.name,
-                        section_id = old_section_id,
-                        purpose = "merge section offsets",
-                        "Section offset references unknown section ID; skipping"
-                    );
-                }
-            }
-
-            // Copy station offsets with remapped section IDs. Resolve the source
-            // key to a positional index against the source, then store as a
-            // transitional Index anchor under the new section; redrive's
-            // reanchor pass canonicalizes it once merged shots are present.
-            for (old_key, offset) in &source_project.station_offsets {
-                if let Some(&new_section_id) = section_id_map.get(&(proj_idx, old_key.section_id)) {
-                    if let Some(src_sr) = source_project.resolve_key(old_key) {
-                        let new_key = StationKey::positional(new_section_id, src_sr.station_index);
-                        merged_project.station_offsets.insert(new_key, *offset);
-                    }
-                } else {
-                    tracing::warn!(
-                        project = %source_project.name,
-                        section_id = old_key.section_id,
-                        purpose = "merge station offsets",
-                        "Station offset references unknown section ID; skipping"
-                    );
-                }
-            }
-
-            // Copy station comments with remapped section IDs. Same transitional
-            // Index-anchor approach as station_offsets above: resolve the source
-            // key to a positional index, then store under the new section; the
-            // redrive reanchor pass canonicalizes it once the merged shots exist.
-            // (Without this, every per-station comment was silently dropped on
-            // merge while every sibling collection was copied.)
-            for (old_key, comment) in &source_project.station_comments {
-                if let Some(&new_section_id) = section_id_map.get(&(proj_idx, old_key.section_id)) {
-                    if let Some(src_sr) = source_project.resolve_key(old_key) {
-                        let new_key = StationKey::positional(new_section_id, src_sr.station_index);
-                        merged_project
-                            .station_comments
-                            .insert(new_key, comment.clone());
-                    }
-                } else {
-                    tracing::warn!(
-                        project = %source_project.name,
-                        section_id = old_key.section_id,
-                        purpose = "merge station comments",
-                        "Station comment references unknown section ID; skipping"
-                    );
-                }
-            }
-
-            // Copy zero datums with remapped section IDs
-            // Use store_zero_datum_without_repositioning to preserve original offsets
-            // (section_offsets were already copied above with remapped IDs)
-            for zd in &source_project.zero_datums {
-                if let Some(&new_section_id) =
-                    section_id_map.get(&(proj_idx, zd.station_ref.section_id))
-                {
-                    let Some(src_sr) = source_project.resolve_key(&zd.station_ref) else {
-                        continue;
-                    };
-                    let new_station_ref = StationRef::new(new_section_id, src_sr.station_index);
-                    // Use store-only helper to avoid triggering repositioning during merge
-                    if let Err(e) = merged_project
-                        .store_zero_datum_without_repositioning(new_station_ref, zd.gps)
-                    {
-                        return CommandResult::failure(format!(
-                            "Failed to copy zero datum from source project {}: {}",
-                            source_project.name, e
-                        ));
-                    }
-                } else {
-                    tracing::warn!(
-                        project = %source_project.name,
-                        section_id = zd.station_ref.section_id,
-                        purpose = "merge zero datums",
-                        "Zero datum references unknown section ID; skipping"
-                    );
-                }
-            }
-
-            // Copy station merges with remapped section IDs (only within same source project)
-            for merge in &source_project.station_merges {
-                if let (Some(&new_a_section), Some(&new_b_section)) = (
-                    section_id_map.get(&(proj_idx, merge.station_a.section_id)),
-                    section_id_map.get(&(proj_idx, merge.station_b.section_id)),
-                ) {
-                    let (Some(a_sr), Some(b_sr)) = (
-                        source_project.resolve_key(&merge.station_a),
-                        source_project.resolve_key(&merge.station_b),
-                    ) else {
-                        continue;
-                    };
-                    merged_project.record_station_merge(crate::models::StationMerge {
-                        station_a: StationKey::positional(new_a_section, a_sr.station_index),
-                        station_b: StationKey::positional(new_b_section, b_sr.station_index),
-                        merged_at: merge.merged_at,
-                    });
-                } else {
-                    tracing::warn!(
-                        project = %source_project.name,
-                        station_a_section = merge.station_a.section_id,
-                        station_b_section = merge.station_b.section_id,
-                        purpose = "merge station merges",
-                        "Station merge references unknown section ID; skipping"
-                    );
-                }
-            }
-
-            // Copy loop closures with remapped section IDs (only within same source project)
-            for closure in &source_project.loop_closures {
-                if let (Some(&new_a_section), Some(&new_b_section)) = (
-                    section_id_map.get(&(proj_idx, closure.station_a.section_id)),
-                    section_id_map.get(&(proj_idx, closure.station_b.section_id)),
-                ) {
-                    let (Some(a_sr), Some(b_sr)) = (
-                        source_project.resolve_key(&closure.station_a),
-                        source_project.resolve_key(&closure.station_b),
-                    ) else {
-                        continue;
-                    };
-                    merged_project
-                        .loop_closures
-                        .push(crate::models::LoopClosure {
-                            id: 0, // Reset to 0; assign_closure_ids() will reassign unique IDs
-                            station_a: StationKey::positional(new_a_section, a_sr.station_index),
-                            station_b: StationKey::positional(new_b_section, b_sr.station_index),
-                            path_length: closure.path_length,
-                            misclosure_distance: closure.misclosure_distance,
-                            error_percentage: closure.error_percentage,
-                            horizontal_misclosure: closure.horizontal_misclosure,
-                            vertical_misclosure: closure.vertical_misclosure,
-                            strategy: closure.strategy,
-                            is_aligned: closure.is_aligned,
-                        });
-                } else {
-                    tracing::warn!(
-                        project = %source_project.name,
-                        station_a_section = closure.station_a.section_id,
-                        station_b_section = closure.station_b.section_id,
-                        purpose = "merge loop closures",
-                        "Loop closure references unknown section ID; skipping"
-                    );
-                }
-            }
-
-            // Combine surface elevation: first `Some` wins; a disagreeing later
-            // source only produces a warning, it never overwrites. A NaN/infinite
-            // incoming value (never produced by a real Ariane import, but not
-            // provably impossible upstream) is skipped outright - adopting it as
-            // the merged value would poison every later comparison and export,
-            // and comparing it against `existing` would always read as
-            // "differs" without ever explaining why.
-            if let Some(incoming) = source_project.surface_elevation.filter(|v| v.is_finite()) {
-                match merged_project.surface_elevation {
-                    None => merged_project.surface_elevation = Some(incoming),
-                    // Strictly greater than 0.005 m (exclusive): a difference AT
-                    // the boundary is treated as agreement, matching the message's
-                    // own `{:.2}` rounding (see command_import.rs's identical
-                    // comparison, which this mirrors).
-                    Some(existing) if (existing - incoming).abs() > 0.005 => {
-                        if surface_elevation_warning.is_none() {
-                            surface_elevation_warning = Some(format!(
-                                "Source project's entrance elevation ({incoming:.2} m) differs from \
-                                 the merged project's value ({existing:.2} m); kept {existing:.2} m"
-                            ));
-                        }
-                    }
-                    Some(_) => {}
-                }
-            }
-
-            // Combine location if present
-            if let Some(ref loc) = source_project.location {
-                if merged_project.location.is_none() {
-                    merged_project.location = Some(loc.clone());
-                } else if let Some(ref mut merged_loc) = merged_project.location {
-                    if !merged_loc.contains(loc) {
-                        merged_loc.push_str(", ");
-                        merged_loc.push_str(loc);
-                    }
+        // A merge is "new empty project + append each source" (#674): the copy
+        // itself is the routine "Add .stalx to current project" shares, so the
+        // two cannot drift apart on what a copy carries.
+        for source_project in &source_projects {
+            let outcome = match append_project(&mut merged_project, source_project) {
+                Ok(outcome) => outcome,
+                Err(e) => return CommandResult::failure(e),
+            };
+            if let Some((incoming, existing)) = outcome.elevation_conflict {
+                if surface_elevation_warning.is_none() {
+                    surface_elevation_warning = Some(format!(
+                        "Source project's entrance elevation ({incoming:.2} m) differs from \
+                         the merged project's value ({existing:.2} m); kept {existing:.2} m"
+                    ));
                 }
             }
         }
@@ -482,6 +256,16 @@ impl AppState {
         }
 
         std::fs::rename(path, &archive_path)?;
+        // A `-wal` or hot `-journal` belongs to the database by NAME: left
+        // behind, the archive loses the WAL's commits (which the merge itself
+        // read) and a stale journal waits for whatever file next takes this
+        // name. Each moves with the database.
+        for suffix in SQLITE_SIDECARS {
+            let sidecar = with_suffix(path, suffix);
+            if sidecar.is_file() {
+                std::fs::rename(&sidecar, with_suffix(&archive_path, suffix))?;
+            }
+        }
         tracing::info!(
             original = ?path,
             archived = ?archive_path,

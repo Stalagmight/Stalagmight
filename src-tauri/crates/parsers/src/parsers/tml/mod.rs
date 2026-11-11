@@ -1500,6 +1500,7 @@ pub fn convert_tml_with_options(
             shots,
             placement,
             station_comments,
+            station_names: Vec::new(),
             azimuth_reference: Some(azimuth_reference),
         });
     }
@@ -6631,14 +6632,14 @@ mod tests {
 
     /// The series join must not manufacture a duplicate shot UUID.
     ///
-    /// Ariane shot ids are unique per SECTION, not per file, so two shots in
-    /// different sections may legally carry the same `<UUID>` (#423) - there is
-    /// a core test, `the_same_uuid_in_two_sections_of_one_file_is_left_alone`,
-    /// that requires exactly that to survive an import. Joining those two
-    /// sections would turn the legal repeat into a duplicate WITHIN one
-    /// section, and `ensure_unique_shot_uuids` keeps the FIRST and re-mints the
-    /// second - changing the identity of a shot that had one from the file and
-    /// moving every station cross-reference anchored on it.
+    /// A file can repeat one `<UUID>` in two of its sections. The import keeps
+    /// the id in the first section and gives the second a derived one (core
+    /// test `the_same_uuid_in_two_sections_of_one_file_stays_in_the_first_section`).
+    /// Joining those two sections would instead turn the repeat into a
+    /// duplicate WITHIN one section, and `ensure_unique_shot_uuids` keeps the
+    /// FIRST and re-mints the second at random - changing the identity of a
+    /// shot that had one from the file and moving every station
+    /// cross-reference anchored on it.
     ///
     /// So the join yields: the two chains stay separate even though they run in
     /// series. Fewer fragments is not worth a silently re-minted identity.

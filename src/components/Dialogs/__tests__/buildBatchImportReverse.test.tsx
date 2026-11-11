@@ -195,3 +195,55 @@ describe('buildBatchImport reverse mirroring', () => {
     expect(placement.target_station_index).toBe(TARGET_SHOTS - PICKED_STATION);
   });
 });
+
+describe('buildBatchImport station names', () => {
+  it('names the stations of every emitted section after its mNemo numbers', () => {
+    // Section 0 arrives with edits (its middle row deleted); section 1 without
+    // (so it is converted straight from the file). Each row's mNemo number is
+    // its 1-based position among the importable shots.
+    const dmpFile: DmpFile = {
+      version: 1,
+      sections: [dmpSection('Edited', 3), dmpSection('Untouched', 2)],
+    };
+    const selectionConfig: DmpSelectionConfig = {
+      selectedIndices: new Set([0, 1]),
+      defaultSurveyor: 'S',
+      defaultDate: null,
+      fileHash: null,
+      sectionHashes: [],
+    };
+    const connections: VirtualConnection[] = [0, 1].map((importSectionIndex) => ({
+      importSectionIndex,
+      importStationIndex: 0,
+      targetType: 'existing' as const,
+      existingSectionId: 99,
+      existingStationIndex: 0,
+    }));
+    const edited = edits('Edited', 3, false);
+    edited.shots = edited.shots.map((shot, i) => ({
+      ...shot,
+      mnemoStation: i + 1,
+      ...(i === 1 ? { isDeleted: true } : {}),
+    }));
+
+    const { configs } = buildBatchImport(
+      connections,
+      null,
+      dmpFile,
+      selectionConfig,
+      new Map([[0, edited]]),
+    );
+
+    const named = (name: string) => configs.find((c) => c.name === name)?.station_names;
+    expect(named('Edited')).toEqual([
+      [0, '0'],
+      [1, '1'],
+      [2, '3'],
+    ]);
+    expect(named('Untouched')).toEqual([
+      [0, '0'],
+      [1, '1'],
+      [2, '2'],
+    ]);
+  });
+});

@@ -2,22 +2,27 @@
 //!
 //! Three flows do this - the pull (`speleodb_open_project`), the fast-forward
 //! (`speleodb_start_editing` / `speleodb_update`), and the revision swap
-//! (`speleodb_restore_revision`) - and all three must handle the same two hazards
+//! (`speleodb_restore_revision`) - and all three must handle the same hazards
 //! around clobbering a file the app may still hold open:
 //!
 //! 1. the per-machine `display_settings` in the OLD file have to survive the
-//!    replace (the server copy has them stripped, #197), and
+//!    replace (the server copy has them stripped, #197),
 //! 2. any live SQLite handle to the destination has to be closed BEFORE the
-//!    replace, and the replace itself has to be atomic.
+//!    replace, and the replace itself has to be atomic, and
+//! 3. the OLD file's SQLite sidecars have to be out of the way before the new
+//!    file takes its name (`speleodb_sidecars`).
 //!
-//! [`AppState::replace_cache_stalx`] is the single chokepoint that does all of
-//! it, so no call site can forget half of it.
+//! Every flow stages through `stage_download`; the pull then renames through
+//! `replace_cache_for_session`, the fast-forward and the revision swap through
+//! the prepared reload (`install_prepared_database`), and
+//! [`AppState::replace_cache_stalx`] here is the unbound form of the same steps.
+//! Each of those renames handles all three, so no call site can forget one.
 //!
 //! It also carries the DATA-SAFETY half: the copy being replaced may hold edits
 //! the server has never seen, and those exist in no git anywhere - overwriting
 //! them is unrecoverable. So the plain verb REFUSES that replace
 //! ([`SpeleoDbError::WouldDiscardLocalEdits`], which crosses IPC as a typed
-//! routing signal for the keep-local / take-remote choice), and a caller that
+//! routing signal for the cancel / take-remote choice), and a caller that
 //! genuinely means to discard has to say so by name through
 //! [`AppState::replace_cache_stalx_abandoning`]. Same shape as the lock release
 //! (`speleodb_release_held_lock_best_effort` vs `_abandoning`): the safe verb is
@@ -175,7 +180,7 @@ impl AppState {
         // transient `SQLITE_BUSY`, and in both cases a read-write open would have
         // recovered work that reading the silence as "clean" would have overwritten.
         // Refusing is recoverable in a way overwriting is not: the frontend's prompt
-        // offers keep-local (nothing is touched) or an explicit take-remote.
+        // offers cancel (nothing is touched) or an explicit take-remote.
         let Some(local) = self.local_copy_state(project_id, dest) else {
             tracing::warn!(
                 project_id = %project_id,
@@ -273,7 +278,19 @@ impl AppState {
         )?;
         let preserved_view = preserved_display_settings(dest);
         let closed = self.close_project_if_open_at(dest);
+        // Our handle on `dest` is gone (or never existed), so any sidecar beside it
+        // belongs to the outgoing file - see `speleodb_sidecars`.
+        let sidecars = match super::speleodb_sidecars::SetAsideSidecars::take(dest) {
+            Ok(sidecars) => sidecars,
+            Err(error) => {
+                if closed {
+                    let _ = self.open_project(dest.to_path_buf());
+                }
+                return Err(error);
+            }
+        };
         if let Err(error) = std::fs::rename(&staged, dest) {
+            sidecars.restore();
             if closed {
                 let _ = self.open_project(dest.to_path_buf());
             }
@@ -281,6 +298,7 @@ impl AppState {
                 "could not install sanitized download: {error}"
             )));
         }
+        sidecars.discard();
         super::speleodb_cache_install::sync_cache_directory(dest);
         Ok(preserved_view)
     }

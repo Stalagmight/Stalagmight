@@ -368,10 +368,10 @@ mod tests {
     /// paths would pass just as well if the save had failed.
     fn save_marked_config(marked: bool) -> (PathBuf, bool) {
         let mut config = Config::default();
-        config.speleodb.insecure_http = marked;
+        config.general.auto_save = marked;
         config.save().expect("save the config");
         let path = Config::config_path().expect("config path");
-        let landed = Config::load().expect("read it back").speleodb.insecure_http == marked;
+        let landed = Config::load().expect("read it back").general.auto_save == marked;
         (path, landed)
     }
 
@@ -405,8 +405,8 @@ mod tests {
         assert!(
             Config::load()
                 .expect("read our config back")
-                .speleodb
-                .insecure_http,
+                .general
+                .auto_save,
             "the foreign write must not be able to land in the file this test wrote"
         );
         // And it took its directory with it: `join` returns after the worker's
@@ -489,8 +489,8 @@ mod tests {
         assert!(
             Config::load()
                 .expect("read our config back")
-                .speleodb
-                .insecure_http,
+                .general
+                .auto_save,
             "and the parent reads what the worker wrote"
         );
     }

@@ -721,6 +721,34 @@ mod tests {
         assert_eq!(managed.project_id, "../../../etc/passwd");
     }
 
+    /// The shape that would let a crafted link id through: an id like
+    /// `../outside` makes the cache slot it names resolve to the crafted file
+    /// itself, so the identity probe alone would call the file the canonical copy
+    /// and the load would open it - after which every write the app makes under
+    /// "the project's cache path" (the push snapshot, a pull, a revision restore)
+    /// would follow the id out of the cache. The UUID check in front of the
+    /// identity probe is what refuses it (and `speleodb_cache_path` validates the
+    /// id again, for a caller that skips the load).
+    #[test]
+    fn a_crafted_id_whose_cache_slot_is_the_file_itself_is_still_refused() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let root = temp.path().join("cache").join("speleodb");
+        std::fs::create_dir_all(&root).expect("cache root");
+        for crafted_id in ["../outside", "../../speleodb-escape"] {
+            let crafted = super::super::speleodb_local_state::cache_path_in(&root, crafted_id);
+            seed_linked(&crafted, crafted_id);
+            assert!(
+                super::super::speleodb_local_state::is_the_cached_copy(&root, crafted_id, &crafted),
+                "the fixture: the slot the id names IS this file"
+            );
+
+            let managed = refusal(foreign_link_in(Some(&root), &crafted))
+                .expect("a linked file whose id is not a UUID is refused, wherever it sits");
+            assert!(!managed.can_open_remote, "{crafted_id}");
+            assert_eq!(managed.project_id, crafted_id);
+        }
+    }
+
     #[test]
     fn no_cache_root_refuses_nothing() {
         let temp = tempfile::TempDir::new().expect("temp");

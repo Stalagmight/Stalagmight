@@ -70,9 +70,18 @@ pub struct PanelsConfig {
     /// Stations-table column order (grid column keys; empty = declaration order)
     #[serde(default)]
     pub data_table_station_column_order: Vec<String>,
-    /// Stations-table hidden column keys (both coordinate pairs start hidden)
+    /// Stations-table hidden column keys (both coordinate pairs and the station
+    /// name start hidden)
     #[serde(default = "default_station_hidden_columns")]
     pub data_table_station_hidden_columns: Vec<String>,
+    /// The [`STATION_COLUMNS_HIDDEN_ON_ARRIVAL`] this config has already been
+    /// given their hidden default for. The hidden list is authoritative once
+    /// persisted (an empty one means "show all"), so a column added after a
+    /// user's list was written would otherwise show up for them; load hides
+    /// each such column ONCE and records it here, so a user who later shows it
+    /// keeps it shown. Missing in configs written before it existed.
+    #[serde(default)]
+    pub data_table_station_columns_seen: Vec<String>,
     /// Stations-table column widths in pixels, keyed by grid column key.
     /// See `data_table_shot_column_widths` for the BTreeMap and the tolerant
     /// deserializer.
@@ -232,13 +241,51 @@ fn normalize_panel_mode(mode: &mut String) {
     }
 }
 
-fn default_station_hidden_columns() -> Vec<String> {
+/// Stations-table columns that arrived after users already had a persisted
+/// hidden list, and that should start hidden for them too (see
+/// `PanelsConfig::data_table_station_columns_seen`). A new column that should
+/// start hidden goes here AND into `default_station_hidden_columns`.
+pub const STATION_COLUMNS_HIDDEN_ON_ARRIVAL: [&str; 1] = ["name"];
+
+pub(super) fn default_station_hidden_columns() -> Vec<String> {
     vec![
         "_x".to_string(),
         "_y".to_string(),
         "_lat".to_string(),
         "_long".to_string(),
+        "name".to_string(),
     ]
+}
+
+pub(super) fn default_station_columns_seen() -> Vec<String> {
+    STATION_COLUMNS_HIDDEN_ON_ARRIVAL
+        .iter()
+        .map(|key| (*key).to_string())
+        .collect()
+}
+
+impl PanelsConfig {
+    /// Load-time migration: hide each [`STATION_COLUMNS_HIDDEN_ON_ARRIVAL`]
+    /// column this config has not been given its default for yet, once.
+    pub(super) fn hide_newly_arrived_station_columns(&mut self) {
+        for key in STATION_COLUMNS_HIDDEN_ON_ARRIVAL {
+            if self
+                .data_table_station_columns_seen
+                .iter()
+                .any(|k| k == key)
+            {
+                continue;
+            }
+            if !self
+                .data_table_station_hidden_columns
+                .iter()
+                .any(|k| k == key)
+            {
+                self.data_table_station_hidden_columns.push(key.to_string());
+            }
+            self.data_table_station_columns_seen.push(key.to_string());
+        }
+    }
 }
 
 fn default_data_table_hidden_columns() -> Vec<String> {

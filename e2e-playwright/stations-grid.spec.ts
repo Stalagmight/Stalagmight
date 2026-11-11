@@ -125,6 +125,34 @@ test.describe('Stations grid', () => {
     await page.keyboard.press('Escape');
   });
 
+  test('the name column shows each station name and is read-only', async ({ page }) => {
+    const sectionId = await getSectionId(page);
+    // Names as a DMP import records them (mNemo station numbers); station 2 has none.
+    await page.evaluate(async (sectionId) => {
+      const setName = (window as any).__MOCK_SET_STATION_NAME__;
+      setName(sectionId, 0, '7');
+      setName(sectionId, 1, '8');
+      setName(sectionId, 3, '10');
+      await (window as any).__E2E_TEST__.projectStore.getState().refreshProjectState();
+    }, sectionId);
+
+    // Hidden by default; the eye menu shows it.
+    await expect(page.getByTestId('grid-header-name')).toHaveCount(0);
+    await page.getByTestId('data-table-columns-menu').click();
+    await page.getByTestId('data-table-columns-dropdown').getByTestId('col-vis-name').check();
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('grid-header-name')).toBeVisible();
+    await expect(page.getByTestId('grid-cell-0-name')).toHaveText('7');
+    await expect(page.getByTestId('grid-cell-1-name')).toHaveText('8');
+    await expect(page.getByTestId('grid-cell-2-name')).toHaveText('');
+    await expect(page.getByTestId('grid-cell-3-name')).toHaveText('10');
+    // The positional id stays in the gutter beside it.
+    await expect(page.getByTestId('grid-gutter-1')).toHaveText(`${sectionId}:1`);
+
+    await page.getByTestId('grid-cell-1-name').dblclick();
+    await expect(page.getByTestId('grid-cell-editor')).toHaveCount(0);
+  });
+
   test('comment edits commit via set_station_comment and survive the refresh', async ({ page }) => {
     const sectionId = await getSectionId(page);
 
@@ -190,6 +218,8 @@ test.describe('Stations grid', () => {
     await expect(dropdown).toBeVisible();
 
     // Station entries, not the shots ones.
+    // The station name starts hidden, like the coordinate pairs.
+    await expect(dropdown.getByTestId('col-vis-name')).not.toBeChecked();
     await expect(dropdown.getByTestId('col-vis-_x')).toBeVisible();
     await expect(dropdown.getByTestId('col-vis-_zeroDatum')).toBeVisible();
     await expect(dropdown.getByTestId('col-vis-length')).toHaveCount(0);

@@ -969,7 +969,11 @@ fn round_significant(value: f64) -> f64 {
 /// sequence_order` - so once a run has crossed a save/reload, comparing ids
 /// against a pre-save snapshot would report the renumbering as drift. Everything
 /// else stays compared exactly, and a run that never saves never turns this on.
-fn canonicalize(value: &serde_json::Value, path: &str, id_agnostic: bool) -> serde_json::Value {
+pub(super) fn canonicalize(
+    value: &serde_json::Value,
+    path: &str,
+    id_agnostic: bool,
+) -> serde_json::Value {
     match value {
         serde_json::Value::Object(map) => {
             let child_base = if path.is_empty() {

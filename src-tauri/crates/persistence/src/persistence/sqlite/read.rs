@@ -10,6 +10,7 @@ use crate::models::{
     MAX_SECTION_ID,
 };
 
+use super::station_texts::StationTextTable;
 use super::Database;
 
 impl Database {
@@ -674,8 +675,9 @@ impl Database {
             None => max_existing + 1,
         };
 
-        // Load station comments
-        let station_comments = self.load_station_comments()?;
+        // Load station comments and names
+        let station_comments = self.load_station_texts(StationTextTable::Comments)?;
+        let station_names = self.load_station_texts(StationTextTable::Names)?;
 
         // Per-project validation thresholds (#57). The DB layer has no access to
         // the global config, so legacy projects (no row) fall back to the
@@ -722,6 +724,7 @@ impl Database {
             section_offsets,
             station_offsets,
             station_comments,
+            station_names,
             file_path: None,
             next_section_id,
             imported_file_hashes,
@@ -892,27 +895,33 @@ impl Database {
         Ok(offsets)
     }
 
-    fn load_station_comments(&self) -> Result<HashMap<StationKey, String>> {
-        let mut comments = HashMap::new();
+    /// Load one positional `(section_id, station_index, text)` table into a
+    /// `StationKey` map. The keys are transitional positional ones; the load
+    /// re-anchor pass canonicalizes them.
+    ///
+    /// A missing table reads as empty. That is not only for files older than
+    /// the table: `station_names` arrived without a schema bump (readers outside
+    /// the app pin v18), so a v18 file takes `ensure_schema_version`'s fast path
+    /// and `migrate_schema` never creates it on open, and read-only opens never
+    /// migrate at all.
+    fn load_station_texts(&self, table: StationTextTable) -> Result<HashMap<StationKey, String>> {
+        let mut texts = HashMap::new();
 
-        // Check if table exists (for backwards compatibility with older files)
         let table_exists: bool = self
             .conn
             .query_row(
-                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='station_comments'",
-                [],
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                [table.name()],
                 |row| row.get::<_, i64>(0),
             )
             .map(|c| c > 0)
             .unwrap_or(false);
 
         if !table_exists {
-            return Ok(comments);
+            return Ok(texts);
         }
 
-        let mut stmt = self
-            .conn
-            .prepare("SELECT section_id, station_index, comment FROM station_comments")?;
+        let mut stmt = self.conn.prepare(table.select_sql())?;
 
         let rows = stmt.query_map([], |row| {
             Ok((
@@ -923,11 +932,11 @@ impl Database {
         })?;
 
         for row in rows {
-            let (section_id, station_index, comment) = row?;
-            comments.insert(StationKey::positional(section_id, station_index), comment);
+            let (section_id, station_index, text) = row?;
+            texts.insert(StationKey::positional(section_id, station_index), text);
         }
 
-        Ok(comments)
+        Ok(texts)
     }
 
     /// Load the SpeleoDB hand-off link from the single-row `speleo_link` table

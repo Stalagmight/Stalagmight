@@ -15,7 +15,8 @@ map itself is the same map in all three.
 
 | | Survey | Plan | Export |
 |---|---|---|---|
-| Left Sections dock | shown | not rendered | not rendered |
+| Sections tab | shown | hidden | hidden |
+| SpeleoDB workspace | available | on request or already visible | on request or already visible |
 | Right dock | `DetailPanel` | `GasPlanPanel` | `ExportPanel` |
 | Bottom dock | `DataTable` | `PlanTablesPanel` | not rendered |
 | Toolbar tools | `TOOLBAR_ITEMS` | `READ_ONLY_TOOLBAR_ITEMS` | `READ_ONLY_TOOLBAR_ITEMS` |
@@ -49,11 +50,12 @@ not be. `DataTable`, `SectionsPanel`, `WarningResolution` and `DetailPanel` all
 shipped with exactly that bug.
 
 **There is no server backstop for this half of the predicate.** The backend's
-`AppState::guard_mutation` rejects a mutation only when `edit_enabled` is false,
-and that flag is false only for a remote SpeleoDB project opened without the
-write lock (`src-tauri/crates/core/src/core/state/app_state.rs`). A local project in Plan or
-Export is `edit_enabled == true` server-side, so read-only there rests entirely
-on UI gating - which is why the gating is linted.
+`AppState::guard_mutation` rejects a mutation only when `edit_enabled()` is
+false. That is not a stored flag: it is derived from the lock claim, and it is
+false only for a SpeleoDB project whose signed-in account holds no claim bound to
+the current session (`src-tauri/crates/core/src/core/state/speleodb_edit_gate.rs`). A local
+project in Plan or Export is always editable server-side, so read-only there
+rests entirely on UI gating - which is why the gating is linted.
 
 ### The one sanctioned gate
 
@@ -140,3 +142,25 @@ and docks over the freshly loaded ones. `uiStore.planDocks.test.ts` pins it.
   `e2e-playwright/mocks/tauri-ipc.ts` (unknown commands fall through to a warning
   and `null`, which the UI reads as failure), and the mock must initialize any
   store state your new gate reads, or the control is silently dead in every spec.
+
+## Left project workspace
+
+Sections remains Survey-only. All projects expose SpeleoDB navigation in every
+mode through the full toolbar button. Plan/Export keep the left dock hidden until
+requested unless SpeleoDB was selected before leaving Survey. Returning restores
+the Survey tab. History, synchronization and Close Project controls and links to application Settings remain accessible in every
+mode; survey and revision editing stay Survey-only. Hidden tab bodies retain their
+state, and tab navigation does not acquire or release a lock.
+
+Only Start Editing can open the remote edit gate, after acquiring the lock and
+verifying live revision history: the gate is the lock claim bound to the editing
+session, so editing without a held lock cannot happen. Releasing or losing the
+lock shuts it, and an in-place reload keeps a session only while its claim is
+bound - Take remote releases first, so it comes back read-only. Status refresh can
+close a lost session but cannot resume one. Switch to Read Only Mode requires locally saved and uploaded work.
+Reload Project preserves the existing mode and does not acquire a lock; pending
+work requires Discard changes / Cancel. Local settings retains validation and
+elevation gates, while linked names remain immutable. Account and connection forms
+exist only in application Settings. Local project editors expose only the centered conversion prompt in their SpeleoDB tab.
+The creation form saves, uploads and opens a fresh remote copy; successful conversion
+then exposes the managed-project workspace.

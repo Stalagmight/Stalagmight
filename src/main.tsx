@@ -25,6 +25,7 @@ import { useUpdateStore } from './store/updateStore';
 import { shotMaterialization } from './types/survey-data';
 import { getPerfTimings } from './utils/memoryProbe';
 import { routeOpenedFile } from './utils/openOrImport';
+import { quitAfterWorkPending } from './utils/quitAfterWork';
 import type { TestFileDialogQueueEntry } from './utils/fileDialogs';
 
 // Pipe frontend console.* calls into the Rust ring buffer for the debug dialog
@@ -101,6 +102,18 @@ declare global {
        * `loadProject`/`saveProject`, a strictly larger capability).
        */
       routeOpenedFile?: (path: string, errorTitle?: string) => Promise<void>;
+      /**
+       * `import.meta.env.DEV` of the bundle under test. Specs run against the dev
+       * server locally and a production build in CI; development-build-only UI
+       * (the SpeleoDB insecure-HTTP option) is asserted per mode.
+       */
+      devBuild?: boolean;
+      /**
+       * Whether the quit-after-work gate still has a quit pending (`utils/quitAfterWork`):
+       * a spec asserting that NO quit happened waits for this to read false instead of
+       * sleeping past the settle delay.
+       */
+      quitAfterWorkPending?: () => boolean;
     };
   }
 }
@@ -115,6 +128,7 @@ if (import.meta.env.DEV || import.meta.env.MODE === 'test' || import.meta.env.VI
   testAPI.globalViewStore = useGlobalViewStore;
   testAPI.gasPlanStore = useGasPlanStore;
   testAPI.speleoStore = useSpeleoStore;
+  testAPI.devBuild = import.meta.env.DEV;
   testAPI.exportStore = useExportStore;
   testAPI.networkStore = useNetworkStore;
   testAPI.updateStore = useUpdateStore;
@@ -123,6 +137,7 @@ if (import.meta.env.DEV || import.meta.env.MODE === 'test' || import.meta.env.VI
   // See the declaration above for why the router needs its own hook.
   testAPI.routeOpenedFile = (path: string, errorTitle?: string) =>
     routeOpenedFile(path, errorTitle ?? 'Import Failed');
+  testAPI.quitAfterWorkPending = quitAfterWorkPending;
   window.__E2E_TEST__ = testAPI;
 
   // Lazy-materialization guard for the load path: the harness reads this after

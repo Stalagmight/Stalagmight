@@ -997,20 +997,31 @@ impl Project {
         );
         let t_phase = std::time::Instant::now();
 
-        // Assign station comments
-        for (key, comment) in &self.station_comments {
-            let Some(sr) = self.resolve_key(key) else {
-                continue;
-            };
-            for station in &mut stations {
-                if station.station_ref == sr {
-                    station.comment = Some(comment.clone());
+        // Assign station comments and names through one ref -> position index.
+        // Names cover nearly every station of a DMP import, so the per-entry scan
+        // over all stations the comments used to do would be quadratic here
+        // (~8e9 comparisons on an 89k-station project). Stations are unique per
+        // ref - each section contributes `0..=shots.len()` once.
+        if !self.station_comments.is_empty() || !self.station_names.is_empty() {
+            let position: HashMap<StationRef, usize> = stations
+                .iter()
+                .enumerate()
+                .map(|(i, s)| (s.station_ref, i))
+                .collect();
+            for (key, comment) in &self.station_comments {
+                if let Some(&i) = self.resolve_key(key).and_then(|sr| position.get(&sr)) {
+                    stations[i].comment = Some(comment.clone());
+                }
+            }
+            for (key, name) in &self.station_names {
+                if let Some(&i) = self.resolve_key(key).and_then(|sr| position.get(&sr)) {
+                    stations[i].name = Some(name.clone());
                 }
             }
         }
         tracing::debug!(
             ms = t_phase.elapsed().as_millis() as u64,
-            "compute_station_coordinates: station comments"
+            "compute_station_coordinates: station comments and names"
         );
 
         *stations_out = stations;

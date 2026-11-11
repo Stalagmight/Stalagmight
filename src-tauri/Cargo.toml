@@ -1,6 +1,6 @@
 [package]
 name = "stalagmight"
-version = "0.5.1"
+version = "0.5.2"
 description = "Cave Survey Processing Application"
 authors = ["Stalagmight Team"]
 edition = "2021"
@@ -74,8 +74,12 @@ time = "0.3"
 tempfile = "3.24.0"
 
 # SpeleoDB's published async SDK and its native-file transport.
-speleodb-api = "=0.6.0"
+speleodb-api = "=0.6.2"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream"] }
+# The TLS stack reqwest already uses (same version, no extra features). Named
+# directly only so a handshake / certificate failure can be told apart by its
+# typed `rustls::Error` (TransportCause::Tls) instead of by error text.
+rustls = { version = "0.23", default-features = false, features = ["std"] }
 tokio = { version = "1", features = ["rt-multi-thread", "time", "net", "fs", "io-util"] }
 futures-util = "0.3"
 dotenvy = "0.15"

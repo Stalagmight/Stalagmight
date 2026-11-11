@@ -672,6 +672,96 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
   });
 
   /**
+   * The wizard records each imported station's mNemo number as its name:
+   * Main Passage has three importable shots, so its stations are named 0..3,
+   * and the project's stations come back carrying them.
+   */
+  test('sends each station mNemo number as its name and the stations carry it', async ({ page }) => {
+    await createProject(page, 'Station Names');
+    await createSectionViaStore(page, {
+      name: 'Anchor Section',
+      shots: [{ azimuth_in: 45, azimuth_out: 45, length: 10, depth_in: -1, depth_out: -2 }],
+    });
+    await page.evaluate(() => {
+      const setSuggestions = (window as unknown as Record<string, unknown>).__MOCK_SET_IMPORT_PLACEMENT_SUGGESTIONS__;
+      if (typeof setSuggestions !== 'function') {
+        throw new Error('Mock suggestion setter not available');
+      }
+      (setSuggestions as (suggestions: unknown[]) => void)([
+        {
+          existingStationIndex: 0,
+          importStationIndex: 0,
+          score: 0.95,
+          matchedShots: 0,
+          direction: 'forward',
+          isPartial: false,
+          confidence: 'high',
+          existingSectionName: 'Anchor Section',
+          importSectionIndex: 0,
+          importSectionName: 'Main Passage',
+          targetType: 'existing',
+          existingSectionId: 1,
+          targetImportIndex: null,
+        },
+      ]);
+    });
+    await page.evaluate(() => {
+      const tauri = (window as unknown as { __TAURI_INTERNALS__: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> } }).__TAURI_INTERNALS__;
+      const originalInvoke = tauri.invoke;
+      (window as unknown as { __CAPTURED_IMPORT_SECTIONS_ARGS__?: Array<Record<string, unknown>> }).__CAPTURED_IMPORT_SECTIONS_ARGS__ = [];
+      tauri.invoke = async (cmd: string, args?: Record<string, unknown>) => {
+        if (cmd === 'import_sections') {
+          (window as unknown as { __CAPTURED_IMPORT_SECTIONS_ARGS__?: Array<Record<string, unknown>> }).__CAPTURED_IMPORT_SECTIONS_ARGS__?.push(args ?? {});
+        }
+        return originalInvoke(cmd, args);
+      };
+    });
+
+    await openDmpSelectionDialog(page);
+    const dialog = page.locator('[data-testid="dmp-selection-dialog"]');
+    await expect(dialog.getByTestId('section-row-0')).toBeVisible({ timeout: 5000 });
+    await dialog.locator('[data-testid="select-none-button"]').click();
+    await page.locator('[data-testid="section-checkbox-0"]').click();
+    await proceedToDmpSectionConfig(page);
+    await expect(page.getByTestId('wizard-suggestion')).toBeVisible({ timeout: 10000 });
+    await page.getByTestId('confirm-button').click();
+
+    await expect.poll(async () => {
+      return page.evaluate(() => {
+        const calls = (window as unknown as { __CAPTURED_IMPORT_SECTIONS_ARGS__?: Array<Record<string, unknown>> }).__CAPTURED_IMPORT_SECTIONS_ARGS__ ?? [];
+        return calls.length;
+      });
+    }).toBeGreaterThan(0);
+    const sent = await page.evaluate(() => {
+      const calls = (window as unknown as { __CAPTURED_IMPORT_SECTIONS_ARGS__?: Array<{ sections?: Array<{ name: string; station_names: Array<[number, string]> }> }> }).__CAPTURED_IMPORT_SECTIONS_ARGS__ ?? [];
+      return calls.flatMap((call) => call.sections ?? []).find((section) => section.name === 'Main Passage')?.station_names ?? null;
+    });
+    expect(sent).toEqual([
+      [0, '0'],
+      [1, '1'],
+      [2, '2'],
+      [3, '3'],
+    ]);
+
+    await expect.poll(async () => {
+      return page.evaluate(() => {
+        const state = (window as unknown as {
+          __E2E_TEST__: { projectStore: { getState: () => {
+            project: { sections: Array<{ id: number; name: string }> } | null;
+            stations: Array<{ station_ref: { section_id: number; station_index: number }; name?: string }>;
+          } } };
+        }).__E2E_TEST__.projectStore.getState();
+        const imported = state.project?.sections.find((section) => section.name === 'Main Passage');
+        if (!imported) return null;
+        return state.stations
+          .filter((station) => station.station_ref.section_id === imported.id)
+          .sort((a, b) => a.station_ref.station_index - b.station_ref.station_index)
+          .map((station) => station.name ?? null);
+      });
+    }).toEqual(['0', '1', '2', '3']);
+  });
+
+  /**
    * Test: #567 item 2 - the suggestion phase's section-settings disclosure
    * starts collapsed and preserves a typed name across a collapse/re-open.
    */

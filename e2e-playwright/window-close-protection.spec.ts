@@ -333,24 +333,16 @@ test.describe('Window Close Protection', () => {
     await expect(page.getByTestId('single-system-view')).toBeVisible();
   });
 
-  test('window X on an UNWOUND copy defaults to keeping the lock', async ({
-    page,
-  }) => {
-    // [#303] The state the whole feature is built around, and until now unreachable from a
-    // spec: dirty ONLY because a chain step walked the copy back, with nothing of the
-    // user's in it. Calling that "changes that have not been uploaded" and pre-focusing
-    // "Push, release & quit" pointed a stray Enter at the one destructive answer - pushing
-    // records the older survey over the newer one for everyone.
-    await createProject(page, 'Window X Unwound Test');
-
-    await page.evaluate(() => {
+  /** Seed "we hold the lock" over work SpeleoDB has not seen. */
+  async function seedHeldLockWithChanges(page: Page, o: { unsaved: boolean; unwound: boolean }): Promise<void> {
+    await page.evaluate(({ unsaved, unwound }) => {
       const e2e = (window as unknown as {
         __E2E_TEST__?: {
           projectStore?: { setState: (s: unknown) => void };
           speleoStore?: { setState: (s: unknown) => void };
         };
       }).__E2E_TEST__;
-      e2e?.projectStore?.setState({ isDirty: false });
+      e2e?.projectStore?.setState({ isDirty: unsaved });
       e2e?.speleoStore?.setState({
         link: {
           permission: 'READ_AND_WRITE',
@@ -358,76 +350,51 @@ test.describe('Window Close Protection', () => {
           lockHolder: null,
           lockedByOther: false,
           hasUnpushedEdits: true,
-          // The term that separates "you have work to save" from "this is an older copy".
-          unwound: true,
-          forceEditing: false,
-          forceEditAllowed: false,
+          unwound,
           remoteState: 'up_to_date',
           noAccess: false,
           serverError: null,
         },
       });
-    });
+    }, o);
+  }
+
+  // Saved work under our lock used to quit silently, and the exit then released the
+  // lock over it - the bug behind the "conflict with yourself" on the next open. It
+  // now asks; an older copy the user stepped back to is no exception, and the
+  // window never uploads anything on its own.
+  test('window X on a saved unwound copy asks instead of releasing, and uploads nothing', async ({
+    page,
+  }) => {
+    await createProject(page, 'Window X Unwound Test');
+    await seedHeldLockWithChanges(page, { unsaved: false, unwound: true });
 
     await pressWindowCloseButton(page);
 
-    const dialog = page.getByTestId('speleodb-quit-dialog');
-    await expect(dialog).toBeVisible({ timeout: 5000 });
-    // The roles swap: leaving without uploading preserves the server survey, so THAT is what a
-    // stray Enter reaches, and pushing is reachable but no longer the default.
-    await expect(dialog.getByTestId('speleodb-quit-keep-lock')).toHaveAttribute(
-      'data-primary-action',
-      ''
-    );
-    await expect(dialog.getByTestId('speleodb-quit-push-release')).not.toHaveAttribute(
-      'data-primary-action',
-      ''
-    );
-    // ...and it stops describing the copy as work the user has not uploaded.
-    await expect(dialog).toContainText('older version of the survey');
+    await expect(page.getByTestId('speleodb-exit-dialog')).toBeVisible({ timeout: 5000 });
+    await page.getByTestId('speleodb-exit-keep').click();
+    await expect.poll(() => windowTeardownCounts(page)).toMatchObject({ close: 1 });
+    await pressWindowCloseButton(page);
+    await expect.poll(() => windowTeardownCounts(page)).toMatchObject({ destroy: 1 });
   });
 
-  test('window X prompts on unpushed SpeleoDB edits held under our write lock', async ({
+  test('window X offers upload, keep, discard and cancel for SpeleoDB edits under our lock', async ({
     page,
   }) => {
     await createProject(page, 'Window X Unpushed Test');
-
-    // Saved to disk (isDirty false) but NOT on the server: the exact state the old
-    // guard waved straight through.
-    await page.evaluate(() => {
-      const e2e = (window as unknown as {
-        __E2E_TEST__?: {
-          projectStore?: { setState: (s: unknown) => void };
-          speleoStore?: { setState: (s: unknown) => void };
-        };
-      }).__E2E_TEST__;
-      e2e?.projectStore?.setState({ isDirty: false });
-      e2e?.speleoStore?.setState({
-        link: {
-          permission: 'READ_AND_WRITE',
-          editState: 'editing',
-          lockHolder: null,
-          lockedByOther: false,
-          hasUnpushedEdits: true,
-          forceEditing: false,
-          forceEditAllowed: false,
-          remoteState: 'up_to_date',
-          noAccess: false,
-          serverError: null,
-        },
-      });
-    });
+    await seedHeldLockWithChanges(page, { unsaved: true, unwound: false });
 
     await pressWindowCloseButton(page);
 
-    const dialog = page.getByTestId('speleodb-quit-dialog');
+    const dialog = page.getByTestId('speleodb-exit-dialog');
     await expect(dialog).toBeVisible({ timeout: 5000 });
-    // Keeping the lock is the default local action, including when offline.
-    await expect(dialog.getByTestId('speleodb-quit-keep-lock')).toHaveAttribute('data-primary-action', '');
-    await expect(dialog.getByTestId('speleodb-quit-release')).toBeVisible();
-    await expect(dialog.getByTestId('speleodb-quit-release')).not.toHaveAttribute('data-primary-action', '');
-    await expect(dialog.getByTestId('speleodb-quit-push-release')).not.toHaveAttribute('data-primary-action', '');
-    await dialog.getByTestId('speleodb-quit-keep-lock').click();
+    await expect(dialog.getByTestId('speleodb-exit-upload')).toHaveAttribute('data-primary-action', '');
+    await expect(dialog.getByTestId('speleodb-exit-keep')).toBeVisible();
+    await dialog.getByTestId('speleodb-exit-cancel').click();
+    expect(await windowTeardownCounts(page)).toEqual({ destroy: 0, close: 0 });
+    await pressWindowCloseButton(page);
+    await dialog.getByTestId('speleodb-exit-discard').click();
+    await dialog.getByTestId('speleodb-exit-discard-confirm').click();
     await expect.poll(() => windowTeardownCounts(page)).toMatchObject({ close: 1 });
     // The mock records close(); explicitly deliver the event the native backend emits.
     await pressWindowCloseButton(page);
@@ -471,6 +438,6 @@ test.describe('Window Close Protection', () => {
     await expect.poll(async () => (await windowTeardownCounts(page)).destroy).toBe(1);
 
     await expect(page.getByTestId('unsaved-changes-dialog')).toBeHidden();
-    await expect(page.getByTestId('speleodb-quit-dialog')).toBeHidden();
+    await expect(page.getByTestId('speleodb-exit-dialog')).toHaveCount(0);
   });
 });

@@ -177,3 +177,21 @@ describe('ProjectSettingsDialog entrance elevation (#465)', () => {
     expect(closeDialog).toHaveBeenCalled();
   });
 });
+
+it('Local settings retains local name and elevation controls without SpeleoDB forms', async () => {
+  render(<Dialog />);
+  expect(await screen.findByRole('heading', { name: 'Local settings' })).toBeVisible();
+  expect(screen.getByTestId('project-settings-name')).toBeEnabled();
+  expect(screen.getByTestId('project-settings-elevation')).toBeEnabled();
+  expect(screen.queryByTestId('project-settings-tab-speleodb')).not.toBeInTheDocument();
+  expect(screen.queryByTestId('speleodb-account-login-form')).not.toBeInTheDocument();
+});
+
+it('Local settings keeps linked names immutable and respects the remote edit gate', async () => {
+  useSpeleoStore.setState({ link: { editState: 'read-only' } as never, projectLinkKind: 'remote' });
+  render(<Dialog />);
+  expect(await screen.findByRole('heading', { name: 'Local settings' })).toBeVisible();
+  expect(screen.getByTestId('project-settings-name')).toBeDisabled();
+  expect(screen.getByTestId('project-settings-elevation')).toBeDisabled();
+  expect(screen.queryByTestId('speleodb-settings-name')).not.toBeInTheDocument();
+});

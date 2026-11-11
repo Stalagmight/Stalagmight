@@ -199,7 +199,6 @@ describe('import fuzzer testid allowlists', () => {
       'speleodb-publish',
       'publish-to-speleodb-confirm',
       'speleodb-push',
-      'speleodb-force-edit-confirm',
       'save-as-button',
       'project-save-path-browse-button',
       'bulk-delete-confirm',

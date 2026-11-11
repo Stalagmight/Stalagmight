@@ -56,8 +56,8 @@ export function SpeleoBadgedIcon({
  * Deliberately tighter than `ExternalLinkIcon`, which is drawn for a 20-unit menu
  * slot: at badge scale its thin open box and separate arrow bars collapse into
  * mush. This compresses the frame, knocks its interior out in the panel colour
- * rather than outlining it, and haloes the arrow the way `EditNoLockGlyph` haloes
- * its "!", so the two shapes stay legible at 9px.
+ * rather than outlining it, and haloes the arrow in the panel colour, so the two
+ * shapes stay legible at 9px.
  */
 export function ExternalLinkGlyph({ size = 9 }: { size?: number }) {
   return (
@@ -78,19 +78,6 @@ export function ExternalLinkGlyph({ size = 9 }: { size?: number }) {
   );
 }
 
-/**
- * Filled pen glyph: we hold the SpeleoDB write lock and may edit.
- *
- * Deliberately a DIAGONAL body, because the family's other two writing glyphs -
- * `CrossedPencilGlyph` (read-only access) and `EditNoLockGlyph` (force-edit) -
- * are both vertical pencils. Differing on axis as well as adornment means "you
- * may write" separates from them before colour is read at all, which matters at
- * badge scale and for anyone who cannot rely on the green.
- *
- * Solid, never stroked: WebKit fattens strokes under the app's setZoom UI scale,
- * and Chromium/Playwright will not show you. The ferrule band is a
- * panel-coloured knockout, the same trick `CrossedPencilGlyph` uses for its slash.
- */
 export function PenGlyph({ size = 11 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
@@ -154,45 +141,9 @@ export function QuestionMarkGlyph({ size = 11 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
       {/* Filled hook (not a stroke - WebKit fattens strokes under the UI zoom), plus
-          the same dot the exclamation uses so the badge family reads consistently. */}
+          a filled dot. */}
       <path d="M5 5.4a3 3 0 015.95.6c0 1.5-1.05 2.15-1.75 2.75-.55.48-.7.95-.7 1.75H6.7c0-1.15.2-1.75.9-2.4.6-.56 1.5-1 1.5-1.95a1.35 1.35 0 00-2.7-.05z" />
       <circle cx="8" cy="12.4" r="1.5" />
-    </svg>
-  );
-}
-
-/** Filled exclamation-mark glyph (local/remote conflict). */
-export function ExclamationGlyph({ size = 11 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-      <path d="M6.6 2h2.8l-0.5 7h-1.8l-0.5-7z" />
-      <circle cx="8" cy="12.4" r="1.5" />
-    </svg>
-  );
-}
-
-/**
- * "Edit without the write lock" glyph (#213): a pencil + exclamation in a single
- * badge-sized box (so it takes no more space than the other badges), entirely in
- * `currentColor`. The exclamation carries a panel-coloured border (painted under
- * its fill) so it reads as separate from the pencil.
- */
-export function EditNoLockGlyph({ size = 11 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-      {/* vertical pencil (left), tip pointing down */}
-      <path d="M2.8 2h3.2v9l-1.6 3-1.6-3z" />
-      {/* exclamation right beside it, with a panel-coloured border to separate it */}
-      <g
-        style={{ stroke: 'var(--cc-panel)' }}
-        strokeWidth={1.3}
-        strokeLinejoin="round"
-        strokeLinecap="round"
-        paintOrder="stroke"
-      >
-        <path d="M7.7 2h2.3l-0.4 6.4h-1.5z" />
-        <circle cx="8.85" cy="12" r="1.3" />
-      </g>
     </svg>
   );
 }

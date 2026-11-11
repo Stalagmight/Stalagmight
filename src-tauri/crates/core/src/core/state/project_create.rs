@@ -148,6 +148,11 @@ impl AppState {
             // A session boundary (a project committed into the slot), bumped under
             // the guard per the `speleodb_session` rule.
             self.bump_speleodb_session();
+            // An add's pending ignores (#674) belong to the project that just left.
+            self.clear_pending_ignores();
+            // So does the record of renamed shot ids.
+            self.load_renamed_shots
+                .store(false, std::sync::atomic::Ordering::Relaxed);
         }
 
         if let Ok(mut undo_stack) = self.undo_stack.lock() {
@@ -160,17 +165,8 @@ impl AppState {
         self.clear_display_settings_cache();
         self.invalidate_adjusted_cache();
         // [Track B] (#191) A freshly-created local project is always editable;
-        // reset the gate so a previously-open read-only remote project's disabled
-        // flag can't leak in.
-        self.set_edit_enabled(true);
-        // #213: a new local project is never force-editing; clear any prior flag.
-        self.set_force_editing(false);
-        // [#473] A project created from nothing has no persisted history, so it cannot
-        // have lost any. Cleared for the same reason as the two gates above: the flag is
-        // per-project, the previous project may have set it, and a stale `true` here puts
-        // a banner reading "edit history could not be read and was discarded" over a
-        // brand-new empty project. Create is a project-slot commit like a load, and every
-        // commit must write this.
+        // the gate goes back to unmanaged (see `speleodb_edit_gate`).
+        self.speleodb_set_open_gate(None);
         self.set_history_discarded(false);
 
         CommandResult::success()
@@ -199,6 +195,16 @@ impl AppState {
         // coded failure).
         if let Err(f) = self.guard_mutation("Update project settings") {
             return f;
+        }
+        if self.speleodb_open_link().is_ok()
+            && self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_ref()
+                .is_some_and(|project| project.name != name)
+        {
+            return CommandResult::failure("Linked project names are managed by SpeleoDB".into());
         }
         let before_snapshot = self.capture_project_snapshot().ok();
         {
@@ -508,6 +514,8 @@ impl AppState {
         // A session boundary (a project committed into the slot), bumped under
         // the guard per the `speleodb_session` rule.
         self.bump_speleodb_session();
+        // An add's pending ignores (#674) belong to the project that just left.
+        self.clear_pending_ignores();
 
         // Commit 2: Database handle mutation
         *self
@@ -522,22 +530,17 @@ impl AppState {
             .clear();
 
         // [Track B] (#191) A freshly-created local project is always editable;
-        // reset the gate so a prior read-only remote project can't leak in.
-        self.set_edit_enabled(true);
-        // #213: a new local project is never force-editing; clear any prior flag.
-        self.set_force_editing(false);
-        // [#473] A project created from nothing has no persisted history, so it cannot
-        // have lost any. Cleared for the same reason as the two gates above: the flag is
-        // per-project, the previous project may have set it, and a stale `true` here puts
-        // a banner reading "edit history could not be read and was discarded" over a
-        // brand-new empty project. Create is a project-slot commit like a load, and every
-        // commit must write this.
+        // the gate goes back to unmanaged (see `speleodb_edit_gate`).
+        self.speleodb_set_open_gate(None);
         self.set_history_discarded(false);
 
         // Track whether the initial save is still pending: a deferred new project
         // has no file on disk yet, so its first import must durably persist it.
         self.initial_save_deferred
             .store(defer_initial_save, std::sync::atomic::Ordering::Relaxed);
+        // A new project has renamed nothing.
+        self.load_renamed_shots
+            .store(false, std::sync::atomic::Ordering::Relaxed);
 
         // Commit 4: Display settings cache
         if defer_initial_save {

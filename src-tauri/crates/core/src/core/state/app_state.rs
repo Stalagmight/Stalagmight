@@ -79,6 +79,13 @@ pub struct AppState {
     /// (ambiguous for reserved-path collisions), so the first import can durably
     /// persist it exactly once (#92 / PR #104).
     pub(super) initial_save_deferred: AtomicBool,
+    /// Whether the open project's shot UUIDs a file held in more than one
+    /// section were renamed (`Project::make_shot_uuids_project_unique`), by its
+    /// load or by a Repair. Until a save re-keys them, ignored warnings can be
+    /// stored against the old ids, and only then is it worth deriving the
+    /// replacement to match them. Set by both load paths once the project is
+    /// committed and by Repair; cleared on close and on project create.
+    pub(super) load_renamed_shots: AtomicBool,
     /// Undo/redo stack
     pub(super) undo_stack: Mutex<UndoStack>,
     /// Application configuration
@@ -106,19 +113,13 @@ pub struct AppState {
     /// SpeleoDB per-session connection state (endpoint, email, token store).
     /// Read-only spike (#183); the token never crosses into the webview.
     pub(super) speleodb: Mutex<super::speleodb::SpeleoDbSession>,
-    /// Whether the open project may be edited. TRANSIENT, never persisted,
-    /// DEFAULT-TRUE; `false` ONLY for a remote SpeleoDB project opened without a
-    /// write lock (#191). Reset to `true` on every open/close so a previously
-    /// read-only project can't leave the flag stuck. The mutation chokepoint
-    /// (`guard_mutation`) reads it.
-    pub(super) edit_enabled: AtomicBool,
-    /// Whether the open remote project is being edited WITHOUT the server write
-    /// lock (optimistic force-edit, #213). TRANSIENT, never persisted, DEFAULT
-    /// FALSE; `true` ONLY between `speleodb_force_edit` and the next reconnect
-    /// (a successful `speleodb_start_editing`) / close. When true, `edit_enabled`
-    /// is also true but NO lock is held, so `edit_enabled` alone must NOT be read
-    /// as "we hold the lock": every lock-release / re-verify path checks this too.
-    pub(super) force_editing: AtomicBool,
+    /// What the open project is as far as the edit gate is concerned: unmanaged
+    /// (always editable) or a SpeleoDB-managed project (editable only through a
+    /// bound lock claim). TRANSIENT, never persisted. There is deliberately NO
+    /// edit-gate boolean: `edit_enabled()` is derived from this, the claims and
+    /// the session generation - see `speleodb_edit_gate`. A leaf lock: nothing
+    /// else is ever taken while it is held.
+    pub(super) speleodb_open_gate: Mutex<super::speleodb_edit_gate::OpenProjectGate>,
     /// In-memory display settings cache (used when no DB is open, e.g., new unsaved project)
     pub(super) display_settings_cache: Mutex<HashMap<String, String>>,
     /// Serialization lock for command execution.
@@ -187,6 +188,10 @@ pub struct AppState {
     /// Transient, never persisted: it describes THIS read of the file, and the next save
     /// overwrites the unreadable rows anyway.
     pub(super) history_discarded: AtomicBool,
+    /// Ignored warnings an "Add .stalx" carried in for sections the open file's
+    /// database does not hold yet (#674; see `project_add.rs`). Written by the
+    /// next save, cleared with every project-slot commit. Transient.
+    pub(super) pending_ignores: Mutex<Vec<crate::persistence::ResolvedWarning>>,
     /// Memoized closure-adjusted station coordinates for the display-mode toggle.
     /// See [`AdjustedStationsCache`]. Transient; never persisted.
     pub(super) adjusted_cache: Mutex<Option<AdjustedStationsCache>>,
@@ -211,15 +216,24 @@ pub struct AppState {
     /// "stale release frees the successor's mutex" interleaving cannot fit in
     /// between. ORDER: this mutex is OUTERMOST - it is held across network calls,
     /// and code holding `project`/`database`/`undo_stack` must never block on it
-    /// (decide under `project`, drop it, then take this). See
-    /// `core::state::speleodb_session`.
+    /// (decide under `project`, drop it, then take this). Nor may a synchronous
+    /// Tauri command: those run on the main thread, and an upload or download
+    /// holds this for minutes. See `core::state::speleodb_session`.
     pub(super) speleodb_lock_ops: Mutex<()>,
+    /// The #202 lock re-verify running in the background, if any: started by one
+    /// edit, collected by a later one, so `execute()` never waits on the network.
+    /// See `AppState::speleodb_verify_lock_if_expired`. Held only briefly, never
+    /// across I/O.
+    pub(super) speleodb_reverify: Mutex<Option<super::speleodb::PendingReverify>>,
 }
 
 impl AppState {
     /// Create a new application state
     pub fn new() -> Result<Self> {
-        let config = Config::load().unwrap_or_default();
+        let mut config = Config::load().unwrap_or_default();
+        // A hand-edited endpoint gets the same cleaning as a settings save (#675).
+        config.speleodb.endpoint =
+            super::config::clean_endpoint(config.speleodb.endpoint.as_deref());
         // Load recent projects from config
         let recent = config.general.recent_projects.clone();
         let undo_limit = config.general.undo_history_limit;
@@ -249,17 +263,14 @@ impl AppState {
             project: Mutex::new(None),
             database: Mutex::new(None),
             initial_save_deferred: AtomicBool::new(false),
+            load_renamed_shots: AtomicBool::new(false),
             undo_stack: Mutex::new(UndoStack::new_with_limit(undo_limit)),
             config: Mutex::new(config),
             config_write_lock: Mutex::new(()),
             recent_projects: Mutex::new(recent),
             speleodb: Mutex::new(super::speleodb::SpeleoDbSession::default()),
-            // Default-true: editing is enabled unless a remote project is opened
-            // read-only (#191). Reset on open/close.
-            edit_enabled: AtomicBool::new(true),
-            // Default-false: force-edit (edit without the lock, #213) is opt-in and
-            // per-session. Reset on open/close alongside edit_enabled.
-            force_editing: AtomicBool::new(false),
+            // Nothing open: unmanaged, so editing never waits on a lock (#191).
+            speleodb_open_gate: Mutex::default(),
             display_settings_cache: Mutex::new(HashMap::new()),
             command_lock: Mutex::new(()),
             tile_cache: Arc::new(Mutex::new(tile_cache)),
@@ -270,10 +281,12 @@ impl AppState {
             unrecognised_shot_kinds: Mutex::new(None),
             // Default-false: no project is open, so no history has been discarded.
             history_discarded: AtomicBool::new(false),
+            pending_ignores: Mutex::new(Vec::new()),
             adjusted_cache: Mutex::new(None),
             adjusted_cache_generation: AtomicU64::new(0),
             speleodb_session_generation: AtomicU64::new(0),
             speleodb_lock_ops: Mutex::new(()),
+            speleodb_reverify: Mutex::new(None),
         })
     }
 
@@ -355,42 +368,17 @@ impl AppState {
     }
 
     // === Read-only edit gate + dirty bit (#191) ===
-
-    /// Whether the open project may currently be edited (transient; #191).
-    pub(super) fn edit_enabled(&self) -> bool {
-        self.edit_enabled.load(std::sync::atomic::Ordering::Relaxed)
-    }
-
-    /// Set the transient edit-enabled flag. `false` only for a remote SpeleoDB
-    /// project opened without a write lock; reset to `true` on every open/close.
-    pub(crate) fn set_edit_enabled(&self, v: bool) {
-        self.edit_enabled
-            .store(v, std::sync::atomic::Ordering::Relaxed);
-    }
-
-    /// Whether the open remote project is being force-edited without the write lock
-    /// (#213). When `true`, `edit_enabled` is also `true` but no lock is held, so a
-    /// caller that needs "we hold the lock" must AND this out (`edit_enabled &&
-    /// !force_editing`).
-    pub(super) fn force_editing(&self) -> bool {
-        self.force_editing
-            .load(std::sync::atomic::Ordering::Relaxed)
-    }
-
-    /// Set the transient force-edit flag (#213). `true` only between
-    /// `speleodb_force_edit` and the next reconnect/close; reset to `false` on every
-    /// open/close alongside `edit_enabled`.
-    pub(crate) fn set_force_editing(&self, v: bool) {
-        self.force_editing
-            .store(v, std::sync::atomic::Ordering::Relaxed);
-    }
+    //
+    // `edit_enabled()` lives in `speleodb_edit_gate`: it is derived from the lock
+    // claim, and there is no setter.
 
     /// THE mutation chokepoint (#191, D-B6). Every SURVEY-CONTENT mutation entry
     /// (`execute` + all its `execute_*` siblings, `undo`/`redo`/`undo_to`/`redo_to`,
     /// `set_project_name_for_path`) calls this FIRST, after
     /// taking `command_lock` and before mutating. `Err` aborts the mutation when
-    /// the open project is a remote SpeleoDB project opened read-only. No-op (`Ok`)
-    /// for local-only (default-true `edit_enabled`) projects and non-mutating reads.
+    /// the open project is a SpeleoDB project with no edit session (no bound lock
+    /// claim; see `speleodb_edit_gate`). No-op (`Ok`) for local-only projects, which
+    /// are always editable, and non-mutating reads.
     ///
     /// Non-survey project-DB writes are handled deliberately (the exemption the
     /// push/release flow #197 had to revisit):

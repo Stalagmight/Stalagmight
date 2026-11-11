@@ -74,6 +74,9 @@ impl AppState {
         // undo-less heal since (#413, finding 11's re-creation residue). A no-op
         // for every other variant.
         self.refresh_snapshot_pair_counterpart(&mut entry, HistoryMove::Undo);
+        // The same self-refresh for an add (#674): re-read what it brought off
+        // the live project, so the redo reinstalls what this undo removes.
+        self.refresh_added_content(&mut entry);
 
         // Apply undo based on undo_data type
         // IMPORTANT: No early returns after this point - all paths must flow
@@ -543,6 +546,24 @@ impl AppState {
                 }
             }
 
+            UndoData::AddedProjectContent(content) => {
+                // Remove exactly what the add brought, guard-free: an inverse
+                // consults no user-intent guard. Its saved ignores stay on disk
+                // (see `remove_pending_ignores`).
+                let mut guard = self
+                    .project
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                match guard.as_mut() {
+                    Some(project) => {
+                        content.remove_from(project);
+                        self.remove_pending_ignores(&content.section_ids());
+                        CommandResult::success()
+                    }
+                    None => CommandResult::failure("No project open".to_string()),
+                }
+            }
+
             UndoData::None => CommandResult::failure("This command cannot be undone".to_string()),
         };
 
@@ -627,6 +648,25 @@ impl AppState {
                 }
                 Err(_) => CommandResult::failure("Failed to lock project".to_string()),
             },
+            // Reinstall the recorded content verbatim - same section, shot and
+            // closure ids - never re-reading the file, which a reloaded entry
+            // does not even name (#674).
+            UndoData::AddedProjectContent(content) => {
+                let mut guard = self
+                    .project
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                match guard.as_mut() {
+                    Some(project) => match content.install_into(project) {
+                        Ok(()) => {
+                            self.add_pending_ignores(project, &content.ignores);
+                            CommandResult::success()
+                        }
+                        Err(e) => CommandResult::failure(e),
+                    },
+                    None => CommandResult::failure("No project open".to_string()),
+                }
+            }
             UndoData::CreatedSectionSnapshot {
                 section_id,
                 section_data,
@@ -1038,6 +1078,29 @@ impl AppState {
         };
         *section_data = section.to_section_data();
         *identity = SectionIdentity::of(section);
+    }
+
+    /// Re-record an add's content from the live project immediately before its
+    /// undo removes it (#674) - `refresh_created_section_identity` for a whole
+    /// add. Keeps the recorded payload when any of its sections is already gone,
+    /// rather than degrading it to what little is left.
+    fn refresh_added_content(&self, entry: &mut UndoEntry) {
+        let UndoData::AddedProjectContent(content) = &mut entry.undo_data else {
+            return;
+        };
+        let guard = match self.project.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let Some(project) = guard.as_ref() else {
+            return;
+        };
+        let ids = content.section_ids();
+        if !ids.iter().all(|id| project.get_section(*id).is_some()) {
+            return;
+        }
+        content.refresh_from(project);
+        content.ignores = self.ignores_on_sections(&ids);
     }
 
     /// Put a captured `section_offsets` slice back verbatim, `None` meaning "this

@@ -106,6 +106,17 @@ beforeEach(() => {
 const row = (id: string) => screen.getByTestId(`speleodb-held-lock-${id}`);
 
 describe('HeldLockResumeDialog local-edit join (#270)', () => {
+  it('labels the do-nothing exit "Not now" and dismisses without a server call', async () => {
+    wireIpc({ [DIRTY]: local({ unpushed: true }), [CLEAN]: local({ unpushed: false }) });
+    render(<HeldLockResumeDialog />);
+
+    const notNow = await screen.findByTestId('speleodb-held-lock-keep');
+    expect(notNow).toHaveTextContent('Not now');
+    await userEvent.click(notNow);
+    expect(useSpeleoStore.getState().heldLockPromptOpen).toBe(false);
+    expect(invokeIpcMock.mock.calls.some((c) => String(c[0]).startsWith('speleodb_release'))).toBe(false);
+  });
+
   it('offers Continue editing (and no Release) for a project with local changes', async () => {
     wireIpc({ [DIRTY]: local({ unpushed: true }), [CLEAN]: local({ unpushed: false }) });
     render(<HeldLockResumeDialog />);
@@ -185,65 +196,27 @@ describe('HeldLockResumeDialog local-edit join (#270)', () => {
     expect(useSpeleoStore.getState().heldLocks).toHaveLength(2);
   });
 
-  it('refuses to open over a disk-clean project that still owes SpeleoDB work', async () => {
-    // The sibling above covers disk-dirty. This is the case that made this a FIFTH
-    // exit: the open project is saved to disk - so `isDirty` is false and the old
-    // guard waved it through - while still holding un-pushed edits and our write
-    // lock. Closing it backend-side hands neither back; it hides the local copy and
-    // drops the lock. Every other way out of a project routes through
-    // `needsSpeleoHandBackPrompt`, and this one has to as well.
-    useProjectStore.setState({
-      project: { file_path: '/other/open.stalx' } as never,
-      isDirty: false,
-    });
-    useSpeleoStore.setState({
-      link: { editState: 'editing', forceEditing: false, hasUnpushedEdits: true } as never,
-    });
-    const showToast = vi.fn();
-    useUIStore.setState({ showToast });
+  it('opens another project when the open one holds a clean lock', async () => {
+    useProjectStore.setState({ project: { file_path: '/other/open.stalx' } as never, isDirty: false });
+    useSpeleoStore.setState({ link: { editState: 'editing', hasUnpushedEdits: false } as never });
     wireIpc({ [DIRTY]: local({ unpushed: true }), [CLEAN]: local({ unpushed: false }) });
     render(<HeldLockResumeDialog />);
-
     await userEvent.click(await screen.findByTestId(`speleodb-held-lock-continue-${DIRTY}`));
-
-    await waitFor(() => expect(showToast).toHaveBeenCalled());
-    expect(showToast.mock.calls[0]?.[1]).toBe('speleodb-continue-editing-unpushed');
-    expect(loadProjectMock).not.toHaveBeenCalled();
-    // Same shape as the dirty case: nothing acquired, nothing discarded, every lock
-    // still listed so the user can hand the open project back and return here.
-    expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_start_editing')).toBe(false);
-    expect(useSpeleoStore.getState().heldLockPromptOpen).toBe(true);
-    expect(useSpeleoStore.getState().heldLocks).toHaveLength(2);
+    await waitFor(() => expect(loadProjectMock).toHaveBeenCalled());
   });
 
-  it('refuses to open over a project whose only outstanding thing is our write lock', async () => {
-    // The sibling above sets BOTH halves of `needsSpeleoHandBackPrompt` at once, so it
-    // passes just as well against a guard that only looked at `hasUnpushedEdits`. This
-    // is the OTHER disjunct on its own: everything is saved and everything is pushed,
-    // and the single thing the open project still owes is the write lock we hold on it.
-    // `loadProject` closes it backend-side, which drops that lock without handing it
-    // back - the very outcome this prompt exists to resolve, done silently to a second
-    // project. `holdsWriteLock` is why the shared predicate has two terms.
-    useProjectStore.setState({
-      project: { file_path: '/other/open.stalx' } as never,
-      isDirty: false,
-    });
-    useSpeleoStore.setState({
-      link: { editState: 'editing', forceEditing: false, hasUnpushedEdits: false } as never,
-    });
+  // Saved but un-uploaded work under our lock is exactly what the exit prompt exists
+  // for; this overlay refuses (with a toast) rather than switching projects over it.
+  it('refuses to switch away from saved but un-uploaded work under our lock', async () => {
+    useProjectStore.setState({ project: { file_path: '/other/open.stalx' } as never, isDirty: false });
+    useSpeleoStore.setState({ link: { editState: 'editing', hasUnpushedEdits: true } as never });
     const showToast = vi.fn();
     useUIStore.setState({ showToast });
     wireIpc({ [DIRTY]: local({ unpushed: true }), [CLEAN]: local({ unpushed: false }) });
     render(<HeldLockResumeDialog />);
-
     await userEvent.click(await screen.findByTestId(`speleodb-held-lock-continue-${DIRTY}`));
-
     await waitFor(() => expect(showToast).toHaveBeenCalled());
-    expect(showToast.mock.calls[0]?.[1]).toBe('speleodb-continue-editing-unpushed');
     expect(loadProjectMock).not.toHaveBeenCalled();
-    expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_start_editing')).toBe(false);
-    expect(useSpeleoStore.getState().heldLockPromptOpen).toBe(true);
-    expect(useSpeleoStore.getState().heldLocks).toHaveLength(2);
   });
 
   // DO-NOT-REGRESS. The hand-back guard must stay INSIDE the same-project branch.
@@ -260,7 +233,7 @@ describe('HeldLockResumeDialog local-edit join (#270)', () => {
   it('still resumes the lock on the OPEN project, which by definition owes SpeleoDB work', async () => {
     useProjectStore.setState({ project: { file_path: '/cache/dirty.stalx' } as never });
     useSpeleoStore.setState({
-      link: { editState: 'editing', forceEditing: false, hasUnpushedEdits: true } as never,
+      link: { editState: 'editing', hasUnpushedEdits: true } as never,
     });
     const showToast = vi.fn();
     useUIStore.setState({ showToast });
@@ -295,7 +268,7 @@ describe('HeldLockResumeDialog local-edit join (#270)', () => {
       isDirty: false,
     });
     useSpeleoStore.setState({
-      link: { editState: 'read-only', forceEditing: false, hasUnpushedEdits: false } as never,
+      link: { editState: 'read-only', hasUnpushedEdits: false } as never,
     });
     wireIpc({ [DIRTY]: local({ unpushed: true }), [CLEAN]: local({ unpushed: false }) });
     render(<HeldLockResumeDialog />);

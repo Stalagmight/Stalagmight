@@ -25,6 +25,7 @@ import {
   getEffectiveShowShotData,
   getEffectiveShowStationComments,
   getEffectiveShowShotComments,
+  getEffectiveStationLabelMode,
   isShotKindVisible,
 } from '../../store/displaySelectors';
 import { getErrorMessage, invokeIpc } from '../../utils/ipc';
@@ -45,8 +46,6 @@ import { SATELLITE_BOTTOM_CANDIDATES } from './mapUtils';
 import { renderFatalMessage } from './surveyLayer/mapErrors';
 import PlacementOverlay from './PlacementOverlay';
 import GridOverlay from './GridOverlay';
-import { DepthLegend } from './DepthLegend';
-import { DistanceLegend } from './DistanceLegend';
 import { GasLegend } from './GasLegend';
 import { MapDevStatsPanels } from './MapDevStatsPanels';
 import CommentOverlay from './CommentOverlay';
@@ -63,6 +62,8 @@ import { useNetworkStore } from '../../store/networkStore';
 import { FEATURE_ID_STRIDE } from '../../utils/ids';
 import { debugLog } from '../../utils/debugLog';
 import { TOAST_KEYS } from '../../utils/toastKeys';
+import { useSurveyLayerColorScales } from './colorScale/useColorScaleInputs';
+import { MapColorLegends } from './MapColorLegends';
 
 // Stable empty warnings array fed to the survey-layer rebuild effect when
 // Issue-severity coloring is OFF. Module-level so its identity never changes
@@ -243,6 +244,7 @@ const MAP_CANVAS_UI_KEYS = [
   'showShotData',
   'showSectionNames',
   'showStationLabels',
+  'showStationNames',
   'showStationComments',
   'showShotComments',
   'showStations',
@@ -507,6 +509,7 @@ function MapCanvas() {
     showShotData,
     showSectionNames,
     showStationLabels,
+    showStationNames,
     showStationComments,
     showShotComments,
     showStations,
@@ -2152,6 +2155,11 @@ function MapCanvas() {
     return () => { cancelled = true; };
   }, [showGasPlan, gasOriginChosen, gasComputeGate, gasWaypoints, gasSegments, gasDiver, gasCylinders, gasPlanConfig, project?.modified_at, setGasReachField]);
 
+  // The user's depth / distance palette + Levels range (legend cog), live while
+  // a palette is previewed or a Levels handle dragged. Store-subscribed, so a drag
+  // never re-renders MapCanvas.
+  useSurveyLayerColorScales(surveyLayerRef, mapLoaded);
+
   // Apply the fetched field to the layer (feature-state + paint swap). Separate
   // from the rebuild path so re-rooting never triggers a feature rebuild.
   useEffect(() => {
@@ -2420,6 +2428,11 @@ function MapCanvas() {
   // section ids are per-project sequential (they collide across projects), a
   // regular useEffect would let the colliding section flash highlighted for one
   // frame before this cleared it.
+  //
+  // Each branch sets the new target BEFORE clearing the other two: every setter
+  // re-raises the selection's section (`raisedSectionOf`, section > station >
+  // shot), and this order moves the draw order at most once per change instead
+  // of rewriting it for an intermediate empty selection.
   useLayoutEffect(() => {
     if (!surveyLayerRef.current) return;
 
@@ -2428,14 +2441,14 @@ function MapCanvas() {
       surveyLayerRef.current.setSelectedShot(null, null);
       surveyLayerRef.current.setSelectedSection(null);
     } else if (selection?.type === 'shot' && selection.sectionId !== undefined && selection.shotId !== undefined) {
-      surveyLayerRef.current.setSelectedStation(null);
       surveyLayerRef.current.setSelectedShot(selection.sectionId, selection.shotId);
+      surveyLayerRef.current.setSelectedStation(null);
       surveyLayerRef.current.setSelectedSection(null);
     } else if (selection?.type === 'section' && selection.sectionId !== undefined) {
       // Section selection
+      surveyLayerRef.current.setSelectedSection(selection.sectionId);
       surveyLayerRef.current.setSelectedStation(null);
       surveyLayerRef.current.setSelectedShot(null, null);
-      surveyLayerRef.current.setSelectedSection(selection.sectionId);
     } else {
       surveyLayerRef.current.setSelectedStation(null);
       surveyLayerRef.current.setSelectedShot(null, null);
@@ -2485,11 +2498,11 @@ function MapCanvas() {
     surveyLayerRef.current.setShowSectionNames(showSectionNames);
   }, [showSectionNames, mapLoaded]);
 
-  // Sync station index labels visibility with SurveyLayer
+  // Sync the station labels (off / IDs / names) with SurveyLayer
   useEffect(() => {
     if (!surveyLayerRef.current) return;
-    surveyLayerRef.current.setShowStationLabels(showStationLabels);
-  }, [showStationLabels, mapLoaded]);
+    surveyLayerRef.current.setStationLabelMode(getEffectiveStationLabelMode(showStationLabels, showStationNames));
+  }, [showStationLabels, showStationNames, mapLoaded]);
 
   // Sync station comments visibility with SurveyLayer (gated by showStations)
   useEffect(() => {
@@ -4062,42 +4075,15 @@ function MapCanvas() {
       {/* Grid overlay using MapLibre layer */}
       {mapLoaded && map.current && <GridOverlay map={map.current} gpsOrigin={gpsOrigin} />}
 
-      {/* Depth legend when depth gradient is enabled (suppressed while the
-          distance overlay is active - distance wins visually, one legend). */}
-      {effectiveDepthGradient && !showDistanceGradient && (
-        <DepthLegend
-          minDepth={depthRange.min}
-          maxDepth={depthRange.max}
-          visible={effectiveDepthGradient}
-        />
-      )}
-
-      {/* Distance legend (#34): color key + "which overlay" cue. Hidden while
-          issue-severity owns the paint (e.g. the Warnings tab) so the legend
-          matches the visible overlay (#57 / Codex). */}
-      {showDistanceGradient && !effectiveIssueSeverity && distanceField && (
-        <DistanceLegend max={distanceField.max_reachable} visible={showDistanceGradient} />
-      )}
-      {/* While the field is being (re)computed - first toggle / re-root - show a
-          lightweight cue so a slow closure solve doesn't look frozen. */}
-      {showDistanceGradient && !effectiveIssueSeverity && !distanceField && (
-        <div
-          data-testid="distance-legend-loading"
-          style={{
-            position: 'absolute',
-            bottom: 50,
-            left: 10,
-            background: 'var(--cc-text-halo-alt)',
-            color: 'var(--cc-depth-text)',
-            borderRadius: 4,
-            padding: 8,
-            zIndex: 1,
-            fontSize: 11,
-          }}
-        >
-          {t('map.distanceLegend.computing')}
-        </div>
-      )}
+      {/* Depth / distance colour key + its colour-scale cog (distance wins the
+          slot; both hidden while issue-severity owns the paint, #57). */}
+      <MapColorLegends
+        showDepth={effectiveDepthGradient && !showDistanceGradient}
+        depthRange={depthRange}
+        surveyData={activeSurveyData}
+        showDistance={showDistanceGradient && !effectiveIssueSeverity}
+        distanceField={distanceField}
+      />
 
       {/* Gas reachable-frontier legend (#38) - gold→purple, 0 → turn budget. */}
       {showGasPlan && gasReachField && (

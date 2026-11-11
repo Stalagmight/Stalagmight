@@ -16,7 +16,7 @@ import { pickAndRoute } from './openOrImport';
 import { newProjectGuarded } from './projectActions';
 import { quitApp } from './quit';
 import { setProjectActionSource } from './telemetry';
-import { openOrImportFilters, dmpImportFilters } from './fileDialogs';
+import { openOrImportFilters, inProjectImportFilters } from './fileDialogs';
 import { useProjectStore } from '../store/projectStore';
 
 export type FileShortcutAction = 'new_file' | 'open_file' | 'import_dmp' | 'quit';
@@ -27,7 +27,7 @@ export type FileShortcutAction = 'new_file' | 'open_file' | 'import_dmp' | 'quit
  *
  * Ctrl+O always opens the unified picker (every file the app can open or
  * import). Ctrl+I follows whichever meaning "import" has right now (#508):
- * with a project open it is the additive door and narrows to `.dmp`, matching
+ * with a project open it is the additive door and narrows to `.dmp`/`.stalx` (#674), matching
  * the in-project toolbar button and hamburger row; with no project open there
  * is nothing to import into, so it stays an alias of Ctrl+O rather than
  * offering a picker that can only produce a new project from one format. The
@@ -57,7 +57,9 @@ export function runFileShortcutAction(action: FileShortcutAction): void {
     case 'import_dmp': {
       setProjectActionSource('keyboard');
       const additive = !!useProjectStore.getState().project;
-      void pickAndRoute(additive ? dmpImportFilters() : openOrImportFilters(), 'Import Failed');
+      void pickAndRoute(additive ? inProjectImportFilters() : openOrImportFilters(), 'Import Failed', {
+        importDoor: additive,
+      });
       break;
     }
     case 'quit':
