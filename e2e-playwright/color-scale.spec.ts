@@ -109,6 +109,38 @@ test.describe('Colour scale', () => {
     await waitForDrawnStations(page, 2);
   });
 
+  test('the palette list stays against its trigger when a search shrinks it', async ({ page }) => {
+    // A tall window puts the trigger low, so the list opens UPWARD: its top is
+    // placed from its height, which is what goes stale when it shrinks.
+    await page.setViewportSize({ width: 1280, height: 1100 });
+    await openCog(page, 'depth');
+    const trigger = page.locator('[data-testid="color-scale-palette-trigger"]');
+    const panel = page.locator('[data-testid="color-scale-palette-panel"]');
+    await trigger.click();
+    await expect(panel).toBeVisible();
+    const t0 = (await trigger.boundingBox())!;
+    const p0 = (await panel.boundingBox())!;
+    expect(p0.y + p0.height, 'the list opened above its trigger').toBeLessThanOrEqual(t0.y + 1);
+    // The gap between the bottom of the list and the top of the trigger.
+    const gap = async (): Promise<number> => {
+      const t = (await trigger.boundingBox())!;
+      const p = (await panel.boundingBox())!;
+      return Math.abs(t.y - (p.y + p.height));
+    };
+    expect(await gap()).toBeLessThan(10);
+    // One open row before (the Theme folder) and one match after: the row count
+    // is unchanged while the folder headers go, and the list shrinks.
+    const before = (await panel.boundingBox())!.height;
+    await page.locator('[data-testid="color-scale-palette-search"]').fill('viridis');
+    await expect(page.locator('[data-testid="color-scale-palette-option-mpl.viridis"]')).toBeVisible();
+    await expect.poll(async () => (await panel.boundingBox())!.height).toBeLessThan(before / 2);
+    await expect.poll(gap, { timeout: 2000 }).toBeLessThan(10);
+    // Clearing the search grows it back, still against the trigger.
+    await page.locator('[data-testid="color-scale-palette-search"]').fill('');
+    await expect.poll(async () => (await panel.boundingBox())!.height).toBeGreaterThan(before - 2);
+    await expect.poll(gap, { timeout: 2000 }).toBeLessThan(10);
+  });
+
   test('hovering a palette previews it on the map, Escape reverts, a click keeps it', async ({ page }) => {
     const themed = await stationFills(page);
     await openCog(page, 'depth');

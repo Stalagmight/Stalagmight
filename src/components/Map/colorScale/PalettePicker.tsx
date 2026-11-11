@@ -158,7 +158,11 @@ export function PalettePicker({
     gap: 4,
     width: PANEL_WIDTH,
     maxHeightCap: 420,
-    remeasureKey: `${visible.length}`,
+    // The list's height is its folder headers plus its open rows: re-place it
+    // when either count changes. Rows alone miss a search that drops every
+    // folder but one while keeping the row count (one Theme row open, then one
+    // match), which left the shrunk list hanging where the full one had been.
+    remeasureKey: `${groups.length}:${visible.length}`,
     // The list scrolls under the search box, not the panel: without this a
     // cleared search keeps the shrunk height of its few results.
     scrollRef: listRef,
