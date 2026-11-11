@@ -49,6 +49,12 @@ impl AppState {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         guard.as_ref().map(f)
     }
+
+    /// The path of the open project's file, if one is open.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn open_project_path_for_tests(&self) -> Option<std::path::PathBuf> {
+        self.open_project_path()
+    }
 }
 
 /// Every production region in the `core::state::speleodb*` family, paired with the
