@@ -2661,6 +2661,7 @@ The dropdown also closes when pressing Ctrl+Z or Ctrl+Y (global undo/redo shortc
 | Shot length > 50m | Warning | "Shot {section_id}:{position} length {length}m above maximum threshold {threshold}m" |
 | Depth change > 10m per shot | Warning | "Shot {section_id}:{position} depth change {change}m exceeds threshold {threshold}m" |
 | Azimuth in/out difference > 20 degrees (default `azimuth_diff_threshold`; configurable) | Warning | "Shot {section_id}:{position} azimuth in/out difference {dev}° exceeds threshold {threshold}°" |
+| Inclination in/out difference > 10 degrees (default `pitch_diff_threshold`; configurable; only when both are recorded and in range) | Warning | "Shot {section_id}:{position} inclination in/out difference {dev}° exceeds threshold {threshold}°" |
 | Zero length shot | Error | "Shot {section_id}:{position} has zero length" |
 | Negative length | Error | "Shot {section_id}:{position} has negative length: {length}m" |
 | Negative LRUD | Error | "Shot {section_id}:{position} has negative {direction} distance: {value}m" |

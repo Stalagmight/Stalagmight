@@ -253,6 +253,25 @@ describe('ShotTableEditor warning column', () => {
     expect(title).not.toContain('Azimuth in/out differs');
   });
 
+  it('does not repeat an inclination discrepancy the project already reports', () => {
+    useProjectStore.setState({
+      warnings: [warning({ code: 'PITCH_DEVIATION', message: 'backend inclination text' })] as never,
+    });
+    // Legs 30 apart trip the editor's own inclination check too.
+    render(
+      <ShotTableEditor
+        shots={[shot({ pitch_in: -10, pitch_out: 20 })]}
+        onShotChange={vi.fn()}
+        onAddShot={vi.fn()}
+        onDeleteShot={vi.fn()}
+        sectionId={7}
+      />
+    );
+    const title = screen.getByTestId('shot-warning-0').getAttribute('title') ?? '';
+    expect(title).toContain('backend inclination text');
+    expect(title).not.toContain('Pitch in/out differs');
+  });
+
   it('still runs its own checks for a row the project has never seen', () => {
     useProjectStore.setState({ warnings: [] as never });
     render(

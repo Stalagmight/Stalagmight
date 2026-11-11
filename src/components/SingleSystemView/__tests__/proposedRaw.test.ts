@@ -469,3 +469,23 @@ describe('pitch-only proposals (incl-from-depth) produce no ghost', () => {
     expect(newPreview('incl-from-depth', undefined, shot, {}, negativeLrudOf(shot))).toBeNull();
   });
 });
+
+describe('PITCH_DEVIATION options make the two inclination legs agree', () => {
+  const shot = makeShot({ pitch_in: 10, pitch_out: 24 });
+  it('use in / use out copy one leg onto both', () => {
+    expect(computeProposedRaw('pitch-use-in', undefined, shot, {}, [])).toEqual({ pitchIn: 10, pitchOut: 10 });
+    expect(computeProposedRaw('pitch-use-out', undefined, shot, {}, [])).toEqual({ pitchIn: 24, pitchOut: 24 });
+  });
+  it('average writes the mean to both legs', () => {
+    expect(computeProposedRaw('pitch-average', undefined, shot, {}, [])).toEqual({ pitchIn: 17, pitchOut: 17 });
+  });
+  it('a shot with no inclination is rejected rather than writing a fabricated 0', () => {
+    const none = makeShot({ pitch_in: null, pitch_out: null });
+    for (const id of ['pitch-use-in', 'pitch-use-out', 'pitch-average']) {
+      expect(computeProposedRaw(id, undefined, none, {}, [])).toEqual({ invalid: 'invalid' });
+    }
+  });
+  it('is pitch-only, so it draws no ghost', () => {
+    expect(newPreview('pitch-average', undefined, shot, {}, negativeLrudOf(shot))).toBeNull();
+  });
+});

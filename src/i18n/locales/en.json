@@ -1933,6 +1933,8 @@
       "resolveOptions": {
         "useIn": "Use azimuth in",
         "useOut": "Use azimuth out",
+        "useInclinationIn": "Use inclination in",
+        "useInclinationOut": "Use inclination out",
         "average": "Average",
         "manual": "Manual correction",
         "manualLength": "Set length",

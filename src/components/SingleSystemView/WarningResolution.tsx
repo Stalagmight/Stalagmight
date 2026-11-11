@@ -169,6 +169,20 @@ export function computeProposedRaw(
     }
     case 'normalize':
       return { azimuthIn: normalizeAzimuth(shot.azimuth_in), azimuthOut: normalizeAzimuth(shot.azimuth_out) };
+    // PITCH_DEVIATION: make the two inclination readings agree. Only offered
+    // when both legs are recorded, so the non-null fallbacks never apply.
+    case 'pitch-use-in': {
+      const p = shot.pitch_in ?? shot.pitch_out;
+      return p == null ? { invalid: 'invalid' } : { pitchIn: p, pitchOut: p };
+    }
+    case 'pitch-use-out': {
+      const p = shot.pitch_out ?? shot.pitch_in;
+      return p == null ? { invalid: 'invalid' } : { pitchIn: p, pitchOut: p };
+    }
+    case 'pitch-average': {
+      const p = recordedPitch(shot);
+      return p === null ? { invalid: 'invalid' } : { pitchIn: p, pitchOut: p };
+    }
     case 'incl-from-depth': {
       const p = impliedInclination(shot);
       return { pitchIn: p, pitchOut: p };
@@ -338,6 +352,19 @@ export function WarningResolution({
           { id: 'manual', label: t('detailPanel.warnings.resolveOptions.manual'), manual: 'azimuthInOut', disabled: geometryDisabled },
           ...maybeIgnore,
         ];
+      case 'PITCH_DEVIATION': {
+        // Two forward inclination readings that disagree (like AZIMUTH_DEVIATION
+        // for azimuth): keep one, average them, or type the right value.
+        const pitchOf = (v: number | null | undefined) => `${formatFixed(v ?? 0, undefined, precision.inclination)}°`;
+        const avg = recordedPitch(shot);
+        return [
+          { id: 'pitch-use-in', label: t('detailPanel.warnings.resolveOptions.useInclinationIn'), detail: pitchOf(shot.pitch_in), disabled: geometryDisabled },
+          { id: 'pitch-use-out', label: t('detailPanel.warnings.resolveOptions.useInclinationOut'), detail: pitchOf(shot.pitch_out), disabled: geometryDisabled },
+          { id: 'pitch-average', label: t('detailPanel.warnings.resolveOptions.average'), detail: pitchOf(avg), disabled: geometryDisabled },
+          { id: 'manual', label: t('detailPanel.warnings.resolveOptions.manualPitch'), manual: 'pitch', disabled: geometryDisabled },
+          ...maybeIgnore,
+        ];
+      }
       case 'INVALID_PITCH':
         // An out-of-range inclination is an error (not ignorable). Correct it
         // with a manual in-range pitch (issue #57, finding #9).
@@ -457,12 +484,12 @@ export function WarningResolution({
     }
   }, [warning.code, warning.severity, warning.datumStationIndex, warning.datumRefs, shot, geometryDisabled, editingBlocked, projectSaved, t, precision]);
 
-  // Default selection: prefer "Average" (the safe azimuth fix) when offered,
+  // Default selection: prefer "Average" (the safe azimuth / inclination fix) when offered,
   // else the first enabled option (falls back to Ignore when every fix is
   // locked, e.g. a frozen shot in the closure-adjusted view).
   useEffect(() => {
     const enabled = options.filter((o) => !o.disabled);
-    const preferred = enabled.find((o) => o.id === 'average') ?? enabled[0] ?? options[options.length - 1];
+    const preferred = enabled.find((o) => o.id === 'average' || o.id === 'pitch-average') ?? enabled[0] ?? options[options.length - 1];
     setSelected(preferred?.id ?? '');
     if (shot) {
       const rp = recordedPitch(shot);
@@ -766,6 +793,11 @@ export function WarningResolution({
         {shot && (warning.code === 'AZIMUTH_DEVIATION' || warning.code === 'INVALID_AZIMUTH') && (
           <div className="text-xs text-text-secondary mt-1">
             {t('detailPanel.labels.azimuthIn')} {az(shot.azimuth_in)} · {t('detailPanel.labels.azimuthOut')} {az(shot.azimuth_out)}
+          </div>
+        )}
+        {shot && warning.code === 'PITCH_DEVIATION' && (
+          <div className="text-xs text-text-secondary mt-1">
+            {t('detailPanel.labels.pitchIn')} {formatFixed(shot.pitch_in ?? 0, undefined, precision.inclination)}° · {t('detailPanel.labels.pitchOut')} {formatFixed(shot.pitch_out ?? 0, undefined, precision.inclination)}°
           </div>
         )}
         {shot && warning.code === 'LARGE_DEPTH_CHANGE' && (
