@@ -2604,7 +2604,7 @@
       "minHandle": "Min level: at or below it the readings agree",
       "warnHandle": "Warn level: the palette's middle",
       "maxHandle": "Max level: the palette's end, as for an error",
-      "note": "These levels change only the map's colors and the Errors labels. Which shots get a warning is set by the thresholds in Project Settings."
+      "note": "Only the map's colors and Errors labels change here. Which shots get a warning stays set by the thresholds in Project Settings."
     }
   },
   "editSection": {

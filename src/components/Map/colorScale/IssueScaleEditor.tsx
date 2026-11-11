@@ -72,6 +72,9 @@ export function IssueScaleEditor({ surveyData, closures, pickerPortalInto }: Iss
 
   return (
     <div className="flex flex-col gap-2" data-testid="issue-scale-editor">
+      <span className="text-[10px] text-text-secondary" data-testid="issue-scale-note">
+        {t('map.issueScale.note')}
+      </span>
       <PaletteRow kind="issues" testIdPrefix="issue-scale" pickerPortalInto={pickerPortalInto} />
       <div className="flex flex-col gap-1">
         <span className="text-[11px] font-medium text-text-secondary" id="issue-scale-combine-label">
@@ -117,9 +120,6 @@ export function IssueScaleEditor({ surveyData, closures, pickerPortalInto }: Iss
           ))}
         </div>
       </div>
-      <span className="text-[10px] text-text-secondary" data-testid="issue-scale-note">
-        {t('map.issueScale.note')}
-      </span>
     </div>
   );
 }
