@@ -2382,6 +2382,21 @@
       "fromStation": "from {{id}}",
       "computing": "Distance: computing…"
     },
+    "issueLegend": {
+      "title": "Survey Issues",
+      "aria": "Survey Issues colour scale: green where the readings agree, yellow at a warning threshold, red at three times it or for an error",
+      "error": "Error, or 3x threshold",
+      "warning": "Warning threshold",
+      "clear": "Readings agree",
+      "keyTitle": "Errors labels",
+      "key": {
+        "azimuth": "azimuth in vs out",
+        "inclination": "inclination in vs out",
+        "inclinationDepth": "inclination vs the depth change",
+        "length": "length vs depth change and inclination (shots steeper than {{degrees}}°)",
+        "closure": "loop closure error and misclosure"
+      }
+    },
     "errorLabels": {
       "abbrev": {
         "azimuth": "Δaz",

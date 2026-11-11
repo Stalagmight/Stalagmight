@@ -49,6 +49,7 @@ import { renderFatalMessage } from './surveyLayer/mapErrors';
 import PlacementOverlay from './PlacementOverlay';
 import GridOverlay from './GridOverlay';
 import { GasLegend } from './GasLegend';
+import { IssueLegend } from './IssueLegend';
 import { MapDevStatsPanels } from './MapDevStatsPanels';
 import CommentOverlay from './CommentOverlay';
 import MoveCommentCursorTag from './MoveCommentCursorTag';
@@ -4063,6 +4064,13 @@ function MapCanvas() {
         surveyData={activeSurveyData}
         showDistance={effectiveDistance}
         distanceField={distanceField}
+      />
+
+      {/* Survey Issues ramp + Errors labels key; beside a depth / distance legend. */}
+      <IssueLegend
+        showRamp={effectiveIssueSeverity}
+        showKey={effectiveShowShotErrors && (showShots || showStations)}
+        besideSelector={effectiveDepthGradient ? '[data-testid="depth-legend"]' : effectiveDistance ? '[data-testid^="distance-legend"]' : null}
       />
 
       {/* Gas reachable-frontier legend (#38) - gold→purple, 0 → turn budget. */}
