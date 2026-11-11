@@ -200,6 +200,10 @@ export const CLICKABLE_TESTIDS: ReadonlySet<string> = new Set([
   'orphan-skip',
   'orphan-accept-all',
   'orphan-close',
+  // the repeated-shots table's set-all buttons (#681)
+  'overlap-set-all-keep-existing',
+  'overlap-set-all-use-new',
+  'overlap-set-all-average',
   // dirty-discard overlay
   'dirty-dialog-keep-editing',
   'dirty-dialog-discard',
@@ -254,9 +258,14 @@ export const SELECTABLE_TESTIDS: ReadonlySet<string> = new Set([
 
 /**
  * Select id PATTERNS. `GpxPlacementDialog` renders one zero-datum picker per
- * track/route section, so the id carries the section index.
+ * track/route section, so the id carries the section index; the orphan dialog
+ * one choice per repeated shot, keyed by the new section's shot index.
  */
-export const SELECTABLE_PATTERNS: readonly RegExp[] = [/^gpx-placement-zero-datum-\d{1,3}$/];
+export const SELECTABLE_PATTERNS: readonly RegExp[] = [
+  /^gpx-placement-zero-datum-\d{1,3}$/,
+  // OrphanPlacementDialog's per-shot choice, one per repeated shot (#681).
+  /^overlap-choice-\d{1,3}$/,
+];
 
 /** Ids a `check` move may target (checkboxes and the segment-mode radios). */
 export const CHECKABLE_TESTIDS: ReadonlySet<string> = new Set([

@@ -1,6 +1,6 @@
 [package]
 name = "stalagmight"
-version = "0.5.1"
+version = "0.5.2"
 description = "Cave Survey Processing Application"
 authors = ["Stalagmight Team"]
 edition = "2021"

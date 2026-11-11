@@ -134,7 +134,10 @@
  *                    only JOIN components, and if it did, it must be undoable
  *   OVERLAP MODES    the two unconditional overlap treatments must always be
  *                    offered, and changing the treatment - which writes the
- *                    GLOBAL CONFIG mid-import - must not move the undo stack
+ *                    GLOBAL CONFIG mid-import - must not move the undo stack;
+ *                    in the orphan dialog (#681), Keep existing must always be
+ *                    offered on a repeated shot, and a per-shot choice or a
+ *                    set-all click must not move the undo stack
  *   IMPORT GATE      a second file routed into a screen an import owns must be
  *                    refused (#411's `importFlowOwnsScreen`)
  *   EXPORT CHORD     Ctrl+E must be inert while a dialog owns the screen -
@@ -438,7 +441,9 @@ import {
   ESCAPE_PATH,
   IMPORT_GUARDED_SCREENS,
   isEscaped,
+  isOrphanRepeatControl,
   NON_FLOW_SCREENS,
+  orphanRepeatBreach,
   progressMode,
   WEDGE_EXEMPT_SCREENS,
   type ScreenId,
@@ -649,9 +654,10 @@ const TOAST_INCOMPLETE = 'dmp-wizard-incomplete';
  * Written from the dialog as OBSERVED, not from its source: a hand-driven run
  * (`.agent-artifacts/orphan-proof-20260811/`) raised it with two suggestions
  * queued - "Connect Orphaned Sections / Section 1 of 2", one suggested
- * connection with a merge-station picker and an overlap mode, and four enabled
- * buttons. Accepting joins the orphan to a newly imported section; skipping and
- * closing only move through the queue.
+ * connection with a merge-station picker and an overlap mode (since #681, a
+ * table of repeated shots with a choice per shot), and four enabled buttons.
+ * Accepting joins the orphan to a newly imported section; skipping and closing
+ * only move through the queue.
  */
 const ORPHAN_ACCEPTS: ReadonlySet<string> = new Set(['orphan-accept', 'orphan-accept-all']);
 const ORPHAN_DECLINES: ReadonlySet<string> = new Set(['orphan-skip', 'orphan-close']);
@@ -2144,6 +2150,14 @@ export const importDialogFuzz: Scenario = {
             move.kind === 'input' && move.mode === 'select' && move.testid === 'overlap-mode-select'
               ? move.value
               : null;
+          // The orphan dialog's repeated-shot table (#681): a per-row choice
+          // or a set-all click, the twin of `overlapMode` above.
+          const orphanRepeatMove =
+            screenBefore === 'orphan-placement' &&
+            ((move.kind === 'input' && move.mode === 'select') || move.kind === 'ui') &&
+            isOrphanRepeatControl(move.testid)
+              ? move
+              : null;
           const sectionsBefore = before.sections;
           const undoBefore = before.undo;
           const orphanMove =
@@ -2422,6 +2436,21 @@ export const importDialogFuzz: Scenario = {
                   'the overlap mode is config, not project state',
               );
             }
+          }
+          if (orphanRepeatMove !== null) {
+            if (!outcome.performed && outcome.skip === 'option-absent') {
+              ctx.metric('overlapChoiceRefused');
+            }
+            const breach = orphanRepeatBreach({
+              testid: orphanRepeatMove.testid,
+              value: orphanRepeatMove.kind === 'input' ? orphanRepeatMove.value : null,
+              performed: outcome.performed,
+              skip: outcome.skip,
+              liveAfter: digest.live[orphanRepeatMove.testid],
+              undoBefore,
+              undoAfter: digest.undo,
+            });
+            if (breach !== null) fail(breach.headline, `  after: ${move.label}\n${breach.detail}`);
           }
           if (closeMove && outcome.performed) {
             ctx.metric('closeProjectInterjections');
