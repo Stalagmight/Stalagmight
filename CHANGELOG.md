@@ -28,6 +28,7 @@ Update this file every time a new version is tagged.
 
 ### Fixed
 
+- **Compass imports no longer invent a level back-sight inclination** - a back-sight with a bearing but no inclination was stored as 0°, so the two inclination readings of a sloping shot disagreed by its whole slope. The bearing is kept and the missing inclination stays empty. Projects imported before this keep the 0°: the new inclination in/out warning flags those shots, and its suggested fix keeps the real reading rather than averaging it with the 0°. Re-importing the `.dat` clears them
 - **Export mode no longer colors the map by survey issues** when the Warnings tab was the last tab open in the survey view
 
 ## [0.5.2] - 2026-11-10

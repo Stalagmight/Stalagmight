@@ -43,6 +43,18 @@ function impliedInclination(shot: Shot): number {
   return impliedPitchDeg(shot.length, shot.depth_in, shot.depth_out);
 }
 
+/**
+ * The pre-selected fix for an inclination in/out warning. Normally the average
+ * of the two readings. But when exactly one leg is exactly 0° the other one is
+ * kept instead: older Compass imports stored a back-sight's MISSING inclination
+ * as 0°, and averaging a real 30° with that would write 15° to both legs.
+ */
+export function pitchDeviationDefault(shot: Shot): 'pitch-use-in' | 'pitch-use-out' | 'pitch-average' {
+  if (shot.pitch_out === 0 && shot.pitch_in != null && shot.pitch_in !== 0) return 'pitch-use-in';
+  if (shot.pitch_in === 0 && shot.pitch_out != null && shot.pitch_out !== 0) return 'pitch-use-out';
+  return 'pitch-average';
+}
+
 /** What a manual option needs to render as an inline editable field. */
 export type ManualKind =
   | 'azimuth' // single corrected azimuth, applied to both in & out
@@ -355,9 +367,12 @@ export function WarningResolution({
         // for azimuth): keep one, average them, or type the right value.
         const pitchOf = (v: number | null | undefined) => `${formatFixed(v ?? 0, undefined, precision.inclination)}°`;
         const avg = recordedPitch(shot);
+        const zeroLegDefault = pitchDeviationDefault(shot);
+        const zeroLegNote = (id: string) =>
+          zeroLegDefault === id ? t('detailPanel.warnings.zeroInclinationLegNote') : undefined;
         return [
-          { id: 'pitch-use-in', label: t('detailPanel.warnings.resolveOptions.useInclinationIn'), detail: pitchOf(shot.pitch_in), disabled: geometryDisabled },
-          { id: 'pitch-use-out', label: t('detailPanel.warnings.resolveOptions.useInclinationOut'), detail: pitchOf(shot.pitch_out), disabled: geometryDisabled },
+          { id: 'pitch-use-in', label: t('detailPanel.warnings.resolveOptions.useInclinationIn'), detail: pitchOf(shot.pitch_in), selectedNote: zeroLegNote('pitch-use-in'), disabled: geometryDisabled },
+          { id: 'pitch-use-out', label: t('detailPanel.warnings.resolveOptions.useInclinationOut'), detail: pitchOf(shot.pitch_out), selectedNote: zeroLegNote('pitch-use-out'), disabled: geometryDisabled },
           { id: 'pitch-average', label: t('detailPanel.warnings.resolveOptions.average'), detail: pitchOf(avg), disabled: geometryDisabled },
           { id: 'manual', label: t('detailPanel.warnings.resolveOptions.manualPitch'), manual: 'pitch', disabled: geometryDisabled },
           ...maybeIgnore,
@@ -482,12 +497,14 @@ export function WarningResolution({
     }
   }, [warning.code, warning.severity, warning.datumStationIndex, warning.datumRefs, shot, geometryDisabled, editingBlocked, projectSaved, t, precision]);
 
-  // Default selection: prefer "Average" (the safe azimuth / inclination fix) when offered,
-  // else the first enabled option (falls back to Ignore when every fix is
-  // locked, e.g. a frozen shot in the closure-adjusted view).
+  // Default selection: prefer "Average" (the safe azimuth fix) when offered, and
+  // for an inclination in/out warning `pitchDeviationDefault` (average, unless
+  // one leg is a stored 0°), else the first enabled option (falls back to Ignore
+  // when every fix is locked, e.g. a frozen shot in the closure-adjusted view).
   useEffect(() => {
     const enabled = options.filter((o) => !o.disabled);
-    const preferred = enabled.find((o) => o.id === 'average' || o.id === 'pitch-average') ?? enabled[0] ?? options[options.length - 1];
+    const wanted = shot && warning.code === 'PITCH_DEVIATION' ? pitchDeviationDefault(shot) : 'average';
+    const preferred = enabled.find((o) => o.id === wanted) ?? enabled[0] ?? options[options.length - 1];
     setSelected(preferred?.id ?? '');
     if (shot) {
       const rp = recordedPitch(shot);

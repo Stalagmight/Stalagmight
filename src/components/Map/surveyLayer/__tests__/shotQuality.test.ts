@@ -43,7 +43,7 @@ describe('metricScore', () => {
  * threshold 20 for azimuth (5 and 60 in the strict / lenient variants) and 10
  * for inclination vs depth; every value here is exact in Float32.
  */
-describe('parity with the validator: score > 1 exactly when it warns', () => {
+describe('parity with the validator: score > 1 when it warns (exact for these f32-exact readings)', () => {
   const azCases: [number, number, number, boolean][] = [
     [45, 45, 20, false],
     [45, 50, 20, false],
@@ -108,6 +108,15 @@ describe('computeShotQualityMetrics', () => {
     const m = metricsOf({ length: 10, pitchIn: -80, pitchOut: 80 });
     expect(m.pitch).toBe(160);
     expect(m.dep).toBe(0);
+  });
+
+  it('withholds inclination vs depth on a shot shorter than its depth change, like the validator', () => {
+    const m = metricsOf({ length: 2, depthIn: 0, depthOut: 5, pitchIn: 30, pitchOut: 30 });
+    expect(m.dep).toBeNaN();
+    // ... while the length delta still says how much is missing.
+    expect(m.len).toBeCloseTo(2 - 10, 4);
+    // A vertical shot (length == depth change) is still checked.
+    expect(metricsOf({ length: 5, depthIn: 0, depthOut: 5, pitchIn: 90, pitchOut: 90 }).dep).toBeCloseTo(0, 4);
   });
 
   it('withholds the inclination metrics with no inclination, a leg out of range, or no length', () => {

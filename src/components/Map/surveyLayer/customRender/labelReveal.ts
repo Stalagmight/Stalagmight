@@ -57,9 +57,10 @@
  * name come in as RESERVED slots ({@link RevealInput.reserved}) - otherwise the
  * name would show at z10..13.5 only to lose its slot, and vanish, once they are.
  *
- * ERRORS LABELS (SHOT_ERROR / CLOSURE_ERROR) rank right after section names and
- * by their SCORE (worst first) within a pass, so where two overlap the worse
- * error is the one shown. They are not ordinal-decimated (tier 0). An error label that is
+ * ERRORS LABELS (SHOT_ERROR / CLOSURE_ERROR) rank by their SCORE (worst first)
+ * within a pass, so where two overlap the worse error is the one shown: those at
+ * or past a warning level right after section names, minor ones after station
+ * labels. They are not ordinal-decimated (tier 0). An error label that is
  * admitted at a ladder step but does not fit there RESERVES its box for the rest
  * of that step: no later candidate of the same pass may take the space, so at
  * every step a weaker error - or a station / shot label - never takes the room a
@@ -76,6 +77,7 @@ import type { LabelDescriptor } from './labelTessellate';
 import type { ExtentEm } from './labelLayout';
 import { LABEL_KIND_STYLE, interpolateStops } from './labelStyle';
 import { decimationAdmitZoom, decimationTier } from './labelDecimation';
+import { SCORE_WARNING } from '../issueScale';
 
 /** Reveal value for a label that never clears within the emit horizon (not
  *  emitted). Finite reveal values are always `<= buildZoom + slack`. */
@@ -198,20 +200,23 @@ export interface RevealInput {
 
 /** Collision priority (LOWER places first / wins overlaps), per design §5. Used
  *  as a SECONDARY sort key under the decimation tier, within one
- *  {@link labelVirtualRank} pass - it never lets a virtual label beat a real one. */
-export function labelPriority(kind: LabelKind, firstInSection: boolean): number {
+ *  {@link labelVirtualRank} pass - it never lets a virtual label beat a real one.
+ *  An Errors label at or past a warning level (`score >= 1`) outranks station
+ *  labels; a minor one comes after them, so trivial deltas do not crowd out
+ *  station IDs. Errors stay ordered worst first (the split is by score). */
+export function labelPriority(kind: LabelKind, firstInSection: boolean, score = 0): number {
   switch (kind) {
     case LABEL_KIND.SECTION_NAME:
       return 0;
     case LABEL_KIND.SHOT_ERROR:
     case LABEL_KIND.CLOSURE_ERROR:
-      return 1;
+      return score >= SCORE_WARNING ? 1 : 4;
     case LABEL_KIND.STATION_LABEL:
       return firstInSection ? 2 : 3;
     case LABEL_KIND.SHOT_LABEL:
-      return 4;
+      return 5;
     default:
-      return 5; // station + shot comments
+      return 6; // station + shot comments
   }
 }
 
@@ -442,7 +447,7 @@ export function computeRevealZooms(
       admitZoom,
       rank: labelVirtualRank(desc),
       tier: errorKind ? 0 : decimationTier(desc.ordinal),
-      priority: labelPriority(desc.kind, firstInSection),
+      priority: labelPriority(desc.kind, firstInSection, desc.score),
       scoreRank: errorKind ? -(desc.score ?? 0) : 0,
       ordinal: desc.ordinal,
       id: stableId(desc),

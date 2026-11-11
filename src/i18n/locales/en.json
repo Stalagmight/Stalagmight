@@ -1930,6 +1930,7 @@
       "fromInclinationNote": "From recorded inclination {{value}}°",
       "proposedImpossibleGeometry": "These values make the shot shorter than its depth change, so applying will raise an error.",
       "zoomToShot": "Zoom to the shot",
+      "zeroInclinationLegNote": "The other reading is exactly 0°. Projects imported from Compass before this version stored a missing back-sight inclination as 0°, so this keeps the real reading.",
       "resolveOptions": {
         "useIn": "Use azimuth in",
         "useOut": "Use azimuth out",

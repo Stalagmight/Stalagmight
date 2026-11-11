@@ -61,15 +61,16 @@ function desc(kind: LabelKind, over: Partial<LabelDescriptor> = {}): LabelDescri
 }
 
 describe('labelPriority', () => {
-  it('orders section > errors > first-in-section station > station > shot > comments', () => {
+  it('orders section > errors past a threshold > first station > station > minor errors > shot > comments', () => {
     expect(labelPriority(LABEL_KIND.SECTION_NAME, false)).toBe(0);
-    expect(labelPriority(LABEL_KIND.SHOT_ERROR, false)).toBe(1);
-    expect(labelPriority(LABEL_KIND.CLOSURE_ERROR, false)).toBe(1);
+    expect(labelPriority(LABEL_KIND.SHOT_ERROR, false, 1)).toBe(1);
+    expect(labelPriority(LABEL_KIND.CLOSURE_ERROR, false, 2.5)).toBe(1);
     expect(labelPriority(LABEL_KIND.STATION_LABEL, true)).toBe(2);
     expect(labelPriority(LABEL_KIND.STATION_LABEL, false)).toBe(3);
-    expect(labelPriority(LABEL_KIND.SHOT_LABEL, false)).toBe(4);
-    expect(labelPriority(LABEL_KIND.STATION_COMMENT, false)).toBe(5);
-    expect(labelPriority(LABEL_KIND.SHOT_COMMENT, false)).toBe(5);
+    expect(labelPriority(LABEL_KIND.SHOT_ERROR, false, 0.99)).toBe(4);
+    expect(labelPriority(LABEL_KIND.SHOT_LABEL, false)).toBe(5);
+    expect(labelPriority(LABEL_KIND.STATION_COMMENT, false)).toBe(6);
+    expect(labelPriority(LABEL_KIND.SHOT_COMMENT, false)).toBe(6);
   });
 });
 
@@ -945,14 +946,25 @@ describe('computeRevealZooms Errors labels', () => {
     expect(reveal[0]).toBe(14);
   });
 
-  it('beats a coincident station / shot label; a section name placed first beats it', () => {
+  it('past a threshold it beats a coincident station label; a minor one yields; section names beat both', () => {
     const vsStation = computeRevealZooms(
-      [desc(LABEL_KIND.STATION_LABEL, { flags: LABEL_FLAG.FIRST_IN_SECTION }), err(0.1)],
+      [desc(LABEL_KIND.STATION_LABEL, { flags: LABEL_FLAG.FIRST_IN_SECTION }), err(1.2)],
       [UNIT_EXT, UNIT_EXT],
       input(),
     );
     expect(vsStation[1]).toBe(14);
     expect(vsStation[0]).toBe(REVEAL_NEVER);
+    const minor = computeRevealZooms(
+      [desc(LABEL_KIND.STATION_LABEL, { flags: LABEL_FLAG.FIRST_IN_SECTION }), err(0.1)],
+      [UNIT_EXT, UNIT_EXT],
+      input(),
+    );
+    expect(minor[0]).toBe(14);
+    expect(minor[1]).toBe(REVEAL_NEVER);
+    // A minor error still beats a shot data label.
+    const vsShot = computeRevealZooms([desc(LABEL_KIND.SHOT_LABEL, { ordinal: 0 }), err(0.1)], [UNIT_EXT, UNIT_EXT], input());
+    expect(vsShot[1]).toBe(14);
+    expect(vsShot[0]).toBe(REVEAL_NEVER);
     const vsSection = computeRevealZooms([desc(LABEL_KIND.SECTION_NAME), err(3)], [UNIT_EXT, UNIT_EXT], input());
     expect(vsSection[0]).toBe(10);
     expect(vsSection[1]).toBe(REVEAL_NEVER);
@@ -966,7 +978,7 @@ describe('computeRevealZooms Errors labels', () => {
     const px = (v: number) => v / 1e6;
     const name = desc(LABEL_KIND.SECTION_NAME, { anchorX: 0 });
     const a = err(3, { anchorX: px(10), shotGlobal: 1 });
-    const b = err(1, { anchorX: px(20), shotGlobal: 2 });
+    const b = err(1.5, { anchorX: px(20), shotGlobal: 2 });
     const station = desc(LABEL_KIND.STATION_LABEL, { anchorX: px(20), stationGlobal: 3, flags: LABEL_FLAG.FIRST_IN_SECTION });
     const exts = [UNIT_EXT, UNIT_EXT, UNIT_EXT, UNIT_EXT];
     const reveal = computeRevealZooms([name, a, b, station], exts, input({ slack: 0 }));

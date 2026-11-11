@@ -32,6 +32,9 @@ import { lengthFixableFromInclination, lengthFromInclination } from '../../../ut
 import { azimuthDelta, impliedPitchDeg, pitchLegInRange, recordedPitch } from '../../../utils/shotGeometry';
 import { SCORE_MAX } from './issueScale';
 
+/** Float32-tolerant version of the validator's length-vs-depth-change slack. */
+const LENGTH_BELOW_DEPTH_SLACK_M = 1e-3;
+
 /** Below this recorded inclination (degrees) the length delta is withheld.
  *  At 15° a 1° inclination error moves the implied length of a 10 m shot by
  *  about 0.65 m; at 5° by about 7 m. */
@@ -70,8 +73,9 @@ export const WARNING_CODE_METRICS: Readonly<Record<string, number>> = {
 
 /**
  * Score one metric against its threshold: 0 for agreement, 1 at the warning
- * threshold, capped at 3. `score > 1` exactly when the validator warns
- * (`|v| > threshold`). A threshold of 0 or less means any disagreement is
+ * threshold, capped at 3. `score > 1` when the validator warns
+ * (`|v| > threshold`), up to Float32 rounding right at the threshold (the
+ * shot columns are Float32, the validator compares f64). A threshold of 0 or less means any disagreement is
  * beyond it, so a non-zero delta scores the maximum. A non-computable (NaN)
  * value scores 0.
  */
@@ -112,8 +116,13 @@ export function computeShotQualityMetrics(data: SurveyData): ShotQualityMetrics 
       lengthDelta[i] = NaN;
       continue;
     }
-    inclDepthDelta[i] = rec - impliedPitchDeg(length, depthIn, depthOut);
     const dz = depthOut - depthIn;
+    // A shot shorter than its depth change is the LENGTH_BELOW_DEPTH_CHANGE
+    // error, and the validator skips the inclination check there (its implied
+    // inclination is clamped to ±90° and means nothing). The margin is looser
+    // than Rust's 1e-6 m because these columns are Float32.
+    inclDepthDelta[i] =
+      length + LENGTH_BELOW_DEPTH_SLACK_M < Math.abs(dz) ? NaN : rec - impliedPitchDeg(length, depthIn, depthOut);
     const steepEnough = Math.abs(rec) >= LENGTH_DELTA_MIN_INCLINATION_DEG;
     const impliedLength =
       steepEnough && lengthFixableFromInclination(dz, rec) ? lengthFromInclination(dz, rec) : null;

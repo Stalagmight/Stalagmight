@@ -161,15 +161,15 @@ export interface LabelStyleInputs {
 /** The full per-kind uniform set the label shader reads (§3 of the design). All
  *  arrays are length {@link LABEL_KIND_COUNT}; `haloColor` is 4 floats per kind. */
 export interface LabelUniforms {
-  /** `u_text_size_px[5]` - DEVICE px (CSS size × DPR). */
+  /** `u_text_size_px[LABEL_KIND_COUNT]` - DEVICE px (CSS size × DPR). */
   textSizePx: Float32Array;
-  /** `u_opacity[5]` - 0..1. */
+  /** `u_opacity[LABEL_KIND_COUNT]` - 0..1. */
   opacity: Float32Array;
-  /** `u_kind_visible[5]` - toggle AND (zoom ≥ minzoom). */
+  /** `u_kind_visible[LABEL_KIND_COUNT]` - toggle AND (zoom ≥ minzoom). */
   kindVisible: Float32Array;
-  /** `u_halo_color[5]` - RGBA 0..1, 4 floats per kind. */
+  /** `u_halo_color[LABEL_KIND_COUNT]` - RGBA 0..1, 4 floats per kind. */
   haloColor: Float32Array;
-  /** `u_halo_width_px[5]` - DEVICE px (CSS halo × DPR, so the halo/size ratio the
+  /** `u_halo_width_px[LABEL_KIND_COUNT]` - DEVICE px (CSS halo × DPR, so the halo/size ratio the
    *  fragment uses is DPR-invariant → a constant CSS-px halo). */
   haloWidthPx: Float32Array;
   /** `u_hide_reference` scalar (0/1). */
