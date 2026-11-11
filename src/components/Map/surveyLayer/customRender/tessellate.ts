@@ -17,7 +17,11 @@
  * see `shaders.ts`.
  *
  * CIRCLES (stations): one quad per station, the disc + stroke ring drawn in the
- * fragment shader with a feathered edge (`shaders.ts`).
+ * fragment shader with a feathered edge (`shaders.ts`). The vertices sit in
+ * global station-index order, but the index buffer draws them by rank
+ * (`writeCircleDrawOrder`): reference-only stations first, then jump, then real
+ * ones, so where the markers of several sections coincide the real-line one is
+ * on top.
  *
  * Valid-shot selection mirrors `vtSurveyBuild.buildShotsPerFeature`: a shot
  * contributes only when both endpoint stations (`stationIndex` i and i+1) exist.
@@ -30,6 +34,7 @@ import {
   shotKindFromFlags,
   shotKindToFlags,
   STATION_FLAG_IS_ZERO_DATUM,
+  stationKindRank,
 } from '../../../../types/survey-data';
 import { metersToMapCoords } from '../../../../utils/coordinates';
 import { lngLatToMercator } from '../mercatorCoords';
@@ -142,12 +147,13 @@ export interface CircleBuffers {
    *  stations by the matching stock feature-state radius bump (hover 1.5x,
    *  selection 1.25x). Rewritten in place on a hover/selection-set change. */
   highlight: Float32Array;
-  /** Per-vertex all-reference flag (1 = every shot touching this station is a
-   *  reference shot, else 0). Mirrors the stock stations layer's
-   *  `allShotsReference` property: the shader collapses these stations when
-   *  reference shots are hidden (`setShowReferenceShots(false)`). */
+  /** Per-vertex station kind mask (see `computeStationAllReference`: 0 = a
+   *  Normal shot touches it, 1 = only Jumps, 2 = only References, 3 = both
+   *  virtual kinds or no legs). The shader collapses a station when every kind
+   *  that touches it is hidden; {@link writeCircleDrawOrder} ranks by it. */
   allReference: Float32Array;
-  /** Two triangles per station, `stationCount*6`, `UNSIGNED_INT`. */
+  /** Two triangles per station, `stationCount*6`, `UNSIGNED_INT`, in draw
+   *  order: by station rank, worst first ({@link writeCircleDrawOrder}). */
   indices: Uint32Array;
   byteLength: number;
 }
@@ -633,12 +639,13 @@ export interface CircleStationInputs {
 }
 
 /**
- * Emit one station's quad (4 verts + 6 indices) into `b` at output slot `out`,
- * reading its center/color/size/flags for global station index `g`. The single
- * writer shared by the full build and the incremental station recompute. In the
- * live (unexcluded) path `out === g`, so a station's vertices are always at
+ * Emit one station's quad (4 verts) into `b` at output slot `out`, reading its
+ * center/color/size/flags for global station index `g`. The single writer shared
+ * by the full build and the incremental station recompute. In the live
+ * (unexcluded) path `out === g`, so a station's vertices are always at
  * `[4g, 4g+4)` - the property the incremental path relies on to address a
- * changed station without a compaction map.
+ * changed station without a compaction map. The index buffer is written apart,
+ * by {@link writeCircleDrawOrder}, since the draw order is by rank, not slot.
  */
 function emitStation(
   b: CircleBuffers,
@@ -649,7 +656,7 @@ function emitStation(
   inputs: CircleStationInputs,
   allRef: number,
 ): void {
-  const { center, corner, fill, stroke, sizeMul, dim, hide, highlight, allReference, indices } = b;
+  const { center, corner, fill, stroke, sizeMul, dim, hide, highlight, allReference } = b;
   const { fillForStation, strokeForStation, dimForStation, hideForStation, highlightForStation } = inputs;
   const cx = stationRel[g * 2]!;
   const cy = stationRel[g * 2 + 1]!;
@@ -681,18 +688,50 @@ function emitStation(
     highlight[v] = hl;
     allReference[v] = allRef;
   }
-  const io = out * 6;
-  indices[io] = base;
-  indices[io + 1] = base + 1;
-  indices[io + 2] = base + 2;
-  indices[io + 3] = base;
-  indices[io + 4] = base + 2;
-  indices[io + 5] = base + 3;
+}
+
+/**
+ * Write the circle index buffer in draw order: every reference-rank station
+ * first, then jump, then real (`stationKindRank` of each slot's kind mask), slot
+ * order within a rank. The circles draw in one call with no depth test, so a
+ * later quad paints over an earlier one: where markers of several sections
+ * coincide (a jump or reference section tied in at a real station), the
+ * real-line marker ends on top. The hit test picks the same one
+ * (`SurveyGeometryIndex.nearestStation`).
+ *
+ * Reads the per-vertex kind mask already in `b.allReference`, so it works for
+ * the compacted (excluded) build and after an incremental re-emit alike.
+ * Returns whether any index changed, so the incremental path re-uploads the
+ * index buffer only when a station's rank moved.
+ */
+export function writeCircleDrawOrder(b: CircleBuffers): boolean {
+  const { indices, allReference, stationCount } = b;
+  const start = [0, 0, 0];
+  for (let s = 0; s < stationCount; s++) start[2 - stationKindRank(allReference[s * 4]!)]!++;
+  // Counts -> start offsets, drawing reference (bucket 0) first, real last.
+  start[2] = start[0]! + start[1]!;
+  start[1] = start[0]!;
+  start[0] = 0;
+  let changed = false;
+  for (let s = 0; s < stationCount; s++) {
+    const bucket = 2 - stationKindRank(allReference[s * 4]!);
+    const io = start[bucket]!++ * 6;
+    const base = s * 4;
+    if (indices[io] !== base) changed = true;
+    indices[io] = base;
+    indices[io + 1] = base + 1;
+    indices[io + 2] = base + 2;
+    indices[io + 3] = base;
+    indices[io + 4] = base + 2;
+    indices[io + 5] = base + 3;
+  }
+  return changed;
 }
 
 /**
  * Build the per-station quad buffers for station discs. Each station becomes 4
- * corner vertices and 6 indices. `fillForStation` / `strokeForStation` resolve
+ * corner vertices and 6 indices, the indices in rank draw order
+ * ({@link writeCircleDrawOrder}). `fillForStation` / `strokeForStation` resolve
  * packed RGBA per station (global index).
  */
 export function buildCircleBuffers(
@@ -745,14 +784,17 @@ export function buildCircleBuffers(
     emitStation(b, out, g, data, stationRel, inputs, allReferenceFlags ? allReferenceFlags[g]! : 0);
     out++;
   }
+  writeCircleDrawOrder(b);
   return b;
 }
 
 /**
  * Re-emit ONE station's circle vertices in place (incremental edit path). Valid
  * only for the unexcluded (live) build where output slot equals global index, so
- * the station occupies `[4g, 4g+4)`. `allRef` is the station's current
- * all-reference flag (the caller recomputes it per changed section).
+ * the station occupies `[4g, 4g+4)`. `allRef` is the station's current kind
+ * mask (the caller recomputes it per changed section). Leaves the index buffer
+ * alone: a caller that changed a station's rank calls
+ * {@link writeCircleDrawOrder}.
  */
 export function recomputeStation(
   b: CircleBuffers,

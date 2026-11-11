@@ -153,6 +153,9 @@ export default class SurveyLayer {
 
   // Config storage with fallback defaults for when config is null (initial load)
   private config: Config | null = null;
+  /** Stroke ring width of a station marker, px (zero-datum: 2x, like the radius). */
+  private static readonly STATION_STROKE_PX = 1;
+
   private static readonly DEFAULTS = {
     station: { radius: 4, hit_area: 10, hover_radius: 6, selection_radius: 5 },
     shot: { width: 2, hit_area: 8, hover_width: 4, selection_width: 3 },
@@ -1341,7 +1344,10 @@ export default class SurveyLayer {
     return (c) => this.map.project(c);
   }
 
-  /** Nearest visible station among candidate sections, within maxDistance px. */
+  /** Nearest visible station among candidate sections, within maxDistance px;
+   *  on overlapping markers, the real-line one drawn on top (see
+   *  `SurveyGeometryIndex.nearestStation`). Hover, click, context menu and the
+   *  measure snap all resolve here, so they agree. */
   private resolveStationAt(
     x: number,
     y: number,
@@ -1351,6 +1357,7 @@ export default class SurveyLayer {
     if (sections.size === 0 || !this.geoIndex) return null;
     return this.geoIndex.nearestStation(this.projector(), x, y, sections, maxDistance, {
       visibleKinds: this.visibleKinds(),
+      stationDiscPx: this.getStationRadius() + SurveyLayer.STATION_STROKE_PX,
     });
   }
 
@@ -3293,7 +3300,7 @@ export default class SurveyLayer {
       colorCtx,
       shotWidthPx: this.getShotWidth(),
       stationRadiusPx: this.getStationRadius(),
-      stationStrokePx: 1,
+      stationStrokePx: SurveyLayer.STATION_STROKE_PX,
       // Configured highlight bumps (C2): the custom survey shader derives the
       // hover / selection width + radius from these instead of baking 2x/1.5x.
       shotHoverWidthPx: this.getShotHoverWidth(),

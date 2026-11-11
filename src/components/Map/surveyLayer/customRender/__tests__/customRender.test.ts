@@ -13,6 +13,7 @@ import {
   computeCircleDim,
   recomputeLineColors,
   recomputeCircleColors,
+  writeCircleDrawOrder,
 } from '../tessellate';
 import { planColorOnlyUpdate } from '../incremental';
 import type { DisplayColorContext } from '../../displayColor';
@@ -314,6 +315,48 @@ describe('circle tessellation', () => {
     expect(Array.from(b.corner.slice(0, 8))).toEqual([-1, -1, 1, -1, 1, 1, -1, 1]);
     expect(Array.from(b.indices.slice(0, 6))).toEqual([0, 1, 2, 0, 2, 3]);
     expect(Array.from(b.indices.slice(6, 12))).toEqual([4, 5, 6, 4, 6, 7]);
+  });
+
+  // Where markers of several sections coincide (a jump / reference section tied
+  // in at a real station), the real-line one must draw on top. One draw call, no
+  // depth test: the LAST quad in the index buffer paints over the earlier ones.
+  it('draws stations by rank: reference first, then jump, real last (on top)', () => {
+    const d = makeFixture();
+    const rel = projectStationsRel(d, null, 0, 0);
+    // Kind masks per global station: 0 real, 2 reference-only, 1 jump-only, 3
+    // both virtual kinds (ranks as a jump).
+    const b = buildCircleBuffers(d, rel, fill, stroke, undefined, Float32Array.from([0, 2, 1, 3]));
+    const drawn = (bb: typeof b) =>
+      Array.from({ length: bb.stationCount }, (_, k) => bb.indices[k * 6]! / 4);
+    expect(drawn(b)).toEqual([1, 2, 3, 0]);
+    // Each quad keeps its own winding, just moved in the draw order.
+    expect(Array.from(b.indices.slice(18, 24))).toEqual([0, 1, 2, 0, 2, 3]);
+    // Vertices stay in global-index order (the incremental path relies on it).
+    expect(Array.from(b.fill.slice(0, 4))).toEqual([0, 0, 0, 255]);
+    expect(Array.from(b.fill.slice(4 * 4, 4 * 4 + 4))).toEqual([1, 0, 0, 255]);
+
+    // A compacted (excluded) build orders by slot, from the masks it kept.
+    const c = buildCircleBuffers(
+      d, rel, fill, stroke, { stationGlobalIndices: new Set([1]) }, Float32Array.from([0, 2, 1, 3]),
+    );
+    expect(drawn(c)).toEqual([1, 2, 0]); // slots: 0 = global 0, 1 = global 2, 2 = global 3
+  });
+
+  it('writeCircleDrawOrder reports whether the order changed', () => {
+    const d = makeFixture();
+    const rel = projectStationsRel(d, null, 0, 0);
+    const b = buildCircleBuffers(d, rel, fill, stroke);
+    expect(writeCircleDrawOrder(b)).toBe(false); // all real: already in slot order
+    // Station 3 becomes reference-only (an edit rewrote its per-vertex mask).
+    b.allReference.fill(2, 12, 16);
+    expect(writeCircleDrawOrder(b)).toBe(true);
+    expect(b.indices[0]).toBe(12); // now drawn first, under the rest
+    expect(b.indices[6]).toBe(0);
+    expect(writeCircleDrawOrder(b)).toBe(false);
+    // Station 0 turning reference-only too: slot order within a rank.
+    b.allReference.fill(2, 0, 4);
+    expect(writeCircleDrawOrder(b)).toBe(true);
+    expect(Array.from({ length: 4 }, (_, k) => b.indices[k * 6]! / 4)).toEqual([0, 3, 1, 2]);
   });
 
   it('centers are the anchor-relative station positions; colors propagate', () => {

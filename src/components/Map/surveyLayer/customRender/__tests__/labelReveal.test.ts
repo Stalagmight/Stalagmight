@@ -17,6 +17,7 @@ import {
   type ScreenBox,
 } from '../labelReveal';
 import type { LabelDescriptor } from '../labelTessellate';
+import { stationKindRank } from '../../../../../types/survey-data';
 import type { ExtentEm } from '../labelLayout';
 import { LABEL_KIND, LABEL_FLAG, type LabelKind } from '../labelShaders';
 import { LABEL_KIND_STYLE, interpolateStops } from '../labelStyle';
@@ -410,6 +411,16 @@ describe('labelVirtualRank', () => {
     expect(rank(LABEL_FLAG.ALL_REFERENCE)).toBe(VIRTUAL_RANK_REFERENCE);
     // On both a jump and a reference (or on no leg at all): a jump label.
     expect(rank(LABEL_FLAG.ALL_JUMP | LABEL_FLAG.ALL_REFERENCE)).toBe(VIRTUAL_RANK_JUMP);
+  });
+
+  it('matches the station marker rank (draw order + pick) for every kind mask', () => {
+    // A station's label and its marker must agree on who wins where sections
+    // meet. Flags from the mask exactly as `buildLabelDescriptors` stamps them.
+    for (const mask of [0, 1, 2, 3]) {
+      const flags =
+        mask === 0 ? 0 : ((mask & 1) !== 0 ? LABEL_FLAG.ALL_JUMP : 0) | ((mask & 2) !== 0 ? LABEL_FLAG.ALL_REFERENCE : 0);
+      expect(rank(flags)).toBe(stationKindRank(mask));
+    }
   });
 });
 

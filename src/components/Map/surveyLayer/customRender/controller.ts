@@ -23,7 +23,7 @@
  */
 import type { Map as MaplibreMap } from 'maplibre-gl';
 import type { GpsOrigin } from '../../../../types/config';
-import type { SurveyData } from '../../../../types/survey-data';
+import { type SurveyData, stationKindRank } from '../../../../types/survey-data';
 import { metersToMapCoords } from '../../../../utils/coordinates';
 import { debugLog } from '../../../../utils/debugLog';
 import { FEATURE_ID_STRIDE } from '../../../../utils/ids';
@@ -42,6 +42,7 @@ import {
   recomputeLineSection,
   recomputeStation,
   recomputeSectionAllReference,
+  writeCircleDrawOrder,
   recomputeLineColors,
   recomputeCircleColors,
   type StationRel,
@@ -850,19 +851,26 @@ export class SurveyCustomController {
 
     // Re-emit each dirty section's line range + its stations (all-reference
     // first, since a station read depends on it), collecting station slots.
+    // A kind edit can move a station between ranks, which reorders the circle
+    // draw (real-line markers on top): note it, and redo the index buffer below.
     const circleSlots: number[] = [];
+    let rankMoved = false;
     for (const si of plan.dirtySectionIdxs) {
       const section = next.sections[si]!;
-      recomputeSectionAllReference(next, lookup, section, allRef);
       const inner = lookup.get(section.id);
+      const rankBefore = inner ? Array.from(inner.values(), (g) => stationKindRank(allRef[g]!)) : [];
+      recomputeSectionAllReference(next, lookup, section, allRef);
       if (inner) {
+        let k = 0;
         for (const g of inner.values()) {
+          if (stationKindRank(allRef[g]!) !== rankBefore[k++]) rankMoved = true;
           recomputeStation(circle, g, next, rel, circleInputs, allRef[g]!);
           circleSlots.push(g);
         }
       }
       recomputeLineSection(line, si, next, rel, lookup, lineInputs);
     }
+    if (rankMoved && writeCircleDrawOrder(circle)) layer.uploadCircleIndices();
 
     // Sub-upload: one contiguous line range per section; coalesced station runs.
     for (const si of plan.dirtySectionIdxs) {

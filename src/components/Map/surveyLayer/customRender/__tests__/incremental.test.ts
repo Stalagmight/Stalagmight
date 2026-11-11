@@ -276,7 +276,7 @@ describe('planIncrementalUpdate', () => {
 // ─── Controller incremental apply (byte-identity + fallbacks) ──────────────
 
 const h = vi.hoisted(() => {
-  const state = { lineUploads: 0, circleUploads: 0, fullUpdates: 0 };
+  const state = { lineUploads: 0, circleUploads: 0, circleIndexUploads: 0, fullUpdates: 0 };
   class FakeLayer {
     readonly id: string;
     data: unknown;
@@ -307,6 +307,9 @@ const h = vi.hoisted(() => {
     }
     uploadCircleVertexRange(): void {
       state.circleUploads++;
+    }
+    uploadCircleIndices(): void {
+      state.circleIndexUploads++;
     }
   }
   return { state, FakeLayer };
@@ -368,6 +371,7 @@ describe('SurveyCustomController incremental apply', () => {
   beforeEach(() => {
     h.state.lineUploads = 0;
     h.state.circleUploads = 0;
+    h.state.circleIndexUploads = 0;
     h.state.fullUpdates = 0;
     vi.spyOn(console, 'info').mockImplementation(() => {});
     vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -428,6 +432,45 @@ describe('SurveyCustomController incremental apply', () => {
     const ref = new SurveyCustomController(makeFakeMap());
     ref.sync(params(next, dctx));
     expectDataEqual(dataOf(c), dataOf(ref));
+  });
+
+  // The circle index buffer draws stations by rank (real-line markers on top).
+  // A kind edit can move a station between ranks: the incremental path must
+  // redo the draw order (and re-upload it) to stay byte-identical to a rebuild,
+  // and leave it alone when no rank moved.
+  it('a kind edit that moves a station between ranks redoes the circle draw order', () => {
+    const prev = pinnedSurvey();
+    const c = new SurveyCustomController(makeFakeMap());
+    c.sync(params(prev));
+    const fu = h.state.fullUpdates;
+
+    // Section 2's first shot (global 3) Normal -> Jump: station (2,0) touches
+    // nothing else, so it drops from real to jump rank.
+    const jump = cloneSurvey(prev);
+    jump.shotFlags[3] = shotKindToFlags('Jump');
+    c.sync(params(jump));
+    expect(h.state.fullUpdates).toBe(fu); // incremental, not a rebuild
+    expect(h.state.circleIndexUploads).toBe(1);
+    const ref = new SurveyCustomController(makeFakeMap());
+    ref.sync(params(jump));
+    expectDataEqual(dataOf(c), dataOf(ref));
+
+    // A position edit moves no rank: no index re-upload.
+    const moved = cloneSurvey(jump);
+    moved.stationCoords[5 * 3] = moved.stationCoords[5 * 3]! + 3;
+    c.sync(params(moved));
+    expect(h.state.fullUpdates).toBe(fu);
+    expect(h.state.circleIndexUploads).toBe(1);
+
+    // And back to Normal: real again, drawn last.
+    const back = cloneSurvey(moved);
+    back.shotFlags[3] = 0;
+    c.sync(params(back));
+    expect(h.state.circleIndexUploads).toBe(2);
+    const ref2 = new SurveyCustomController(makeFakeMap());
+    ref2.sync(params(back));
+    expectDataEqual(dataOf(c), dataOf(ref2));
+    for (const x of [c, ref, ref2]) x.destroy();
   });
 
   it('a structural change falls back to a full rebuild', () => {

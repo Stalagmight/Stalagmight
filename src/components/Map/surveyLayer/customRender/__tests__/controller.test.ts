@@ -101,6 +101,9 @@ const h = vi.hoisted(() => {
     uploadCircleVertexRange(): void {
       this.uploadCalls++;
     }
+    uploadCircleIndices(): void {
+      this.uploadCalls++;
+    }
   }
 
   return { layerState, FakeLayer };

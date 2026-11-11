@@ -445,6 +445,18 @@ export class SurveyCustomLayer implements CustomLayerInterface {
     this.subUpload(this.circleGpu.allReference, c.allReference, 1, vStart, vCount);
   }
 
+  /**
+   * Re-upload the circle index buffer (same length) after the incremental edit
+   * path rewrote its draw order in `this.data.circle.indices` - a kind edit moved
+   * a station between ranks (`writeCircleDrawOrder`). Vertex buffers untouched.
+   */
+  uploadCircleIndices(): void {
+    const gl = this.gl;
+    if (!gl || this.disabled || !this.circleGpu || !this.data) return;
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.circleGpu.index);
+    gl.bufferSubData(gl.ELEMENT_ARRAY_BUFFER, 0, this.data.circle.indices);
+  }
+
   render(gl: WebGLRenderingContext | WebGL2RenderingContext, options: CustomRenderMethodInput): void {
     if (this.disabled || !(gl instanceof WebGL2RenderingContext)) return;
     const data = this.data;

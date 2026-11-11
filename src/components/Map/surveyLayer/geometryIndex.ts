@@ -31,6 +31,7 @@ import {
   type SectionMetadata,
   isVirtualKind,
   shotKindFromFlags,
+  stationKindRank,
   STATION_FLAG_IS_ZERO_DATUM,
 } from '../../../types/survey-data';
 import { metersToMapCoords } from '../../../utils/coordinates';
@@ -82,6 +83,11 @@ export interface ResolveOptions {
    *  stations touched only by hidden kinds) are skipped, since they are
    *  filtered out of the hitbox layers and must stay non-interactive. */
   visibleKinds: VisibleKinds;
+  /** Drawn radius of a station marker (disc + stroke), px; a zero-datum
+   *  station draws at twice that. When set, {@link SurveyGeometryIndex.nearestStation}
+   *  gives a marker whose disc is under the cursor to the best-ranked station,
+   *  the one drawn on top. Omitted: plain nearest. */
+  stationDiscPx?: number;
 }
 
 /**
@@ -284,15 +290,21 @@ export class SurveyGeometryIndex {
     return cached;
   }
 
-  /** Whether a station is currently drawn, and so hit-testable. Mirrors the
-   *  circle shader exactly: visible while ANY kind that touches it is visible.
-   *  A station with no legs at all keeps the both-off rule. */
+  /** Whether a station is currently drawn, and so hit-testable
+   *  ({@link isMaskVisible} of its kind mask). */
   private isStationVisible(
     sectionId: number,
     stationIndex: number,
     visible: VisibleKinds,
   ): boolean {
-    const mask = this.stationKindMask(sectionId).get(stationIndex) ?? 3;
+    return SurveyGeometryIndex.isMaskVisible(this.stationKindMask(sectionId).get(stationIndex) ?? 3, visible);
+  }
+
+  /** Whether a station with this kind mask is currently drawn, and so
+   *  hit-testable. Mirrors the circle shader exactly: visible while ANY kind
+   *  that touches it is visible. A station with no legs at all keeps the
+   *  both-off rule. */
+  private static isMaskVisible(mask: number, visible: VisibleKinds): boolean {
     if (mask === 0) return true; // a Normal shot touches it
     if ((mask & 1) !== 0 && visible.jump) return true;
     if ((mask & 2) !== 0 && visible.reference) return true;
@@ -302,6 +314,17 @@ export class SurveyGeometryIndex {
   /**
    * Nearest station (screen space) among the candidate sections, within
    * `maxDistance` px of (px, py). Returns null if none qualifies.
+   *
+   * Rank (`stationKindRank`: real, then jump, then reference) settles which of
+   * several stations takes the pick, the way the circles are drawn (real-line
+   * markers on top, `writeCircleDrawOrder`):
+   *  - stations at the same distance (coincident markers, e.g. a jump or
+   *    reference section tied in at a real station): the best rank;
+   *  - with `stationDiscPx`, when the cursor is on the drawn disc of a station
+   *    that outranks the nearest one: that station, since its marker covers
+   *    the nearer one's there. The visible edge of a worse-ranked marker poking
+   *    out from under it still picks the worse-ranked station.
+   * Among stations of one rank the nearest wins, as before.
    */
   nearestStation(
     project: ProjectFn,
@@ -312,26 +335,45 @@ export class SurveyGeometryIndex {
     opts: ResolveOptions,
   ): NearestStationHit | null {
     this.ensureBuilt();
+    const disc = opts.stationDiscPx ?? 0;
     let best: NearestStationHit | null = null;
+    let bestRank = 0;
+    // The best-ranked (then nearest) station whose drawn disc is under the cursor.
+    let covering: NearestStationHit | null = null;
+    let coveringRank = 0;
     for (const sid of sectionIds) {
       const idxs = this.sectionStationIdxs.get(sid);
       if (!idxs) continue;
       const kinds = opts.visibleKinds;
+      const masks = this.stationKindMask(sid);
       for (const g of idxs) {
-        if (!this.isStationVisible(sid, this.data.stationIndices[g]!, kinds)) continue;
+        const stationIndex = this.data.stationIndices[g]!;
+        const mask = masks.get(stationIndex) ?? 3;
+        if (!SurveyGeometryIndex.isMaskVisible(mask, kinds)) continue;
         const lngLat = this.stationLngLat(g);
         const p = project(lngLat);
         const dist = Math.hypot(p.x - px, p.y - py);
-        if (dist <= maxDistance && (!best || dist < best.distance)) {
-          best = {
-            ref: { section_id: sid, station_index: this.data.stationIndices[g]! },
-            distance: dist,
-            lngLat,
-          };
+        if (dist > maxDistance) continue;
+        const rank = stationKindRank(mask);
+        const nearer = !best || dist < best.distance || (dist === best.distance && rank < bestRank);
+        const sizeMul = (this.data.stationFlags[g]! & STATION_FLAG_IS_ZERO_DATUM) !== 0 ? 2 : 1;
+        const covers =
+          disc > 0 &&
+          dist <= disc * sizeMul &&
+          (!covering || rank < coveringRank || (rank === coveringRank && dist < covering.distance));
+        if (!nearer && !covers) continue;
+        const hit: NearestStationHit = { ref: { section_id: sid, station_index: stationIndex }, distance: dist, lngLat };
+        if (nearer) {
+          best = hit;
+          bestRank = rank;
+        }
+        if (covers) {
+          covering = hit;
+          coveringRank = rank;
         }
       }
     }
-    return best;
+    return covering && coveringRank < bestRank ? covering : best;
   }
 
   /**
