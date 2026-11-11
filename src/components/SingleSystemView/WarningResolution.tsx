@@ -17,6 +17,7 @@ import {
   lengthFixableFromInclination,
   exceedsSlopeLength,
 } from '../../utils/resolutionPreview';
+import { recordedPitch as recordedPitchOf, impliedPitchDeg } from '../../utils/shotGeometry';
 import { setSource } from '../../utils/telemetry';
 import type { Section, Shot, ShotUpdates } from '../../types/project';
 import type { GeometryPreview } from '../../store/uiStore';
@@ -28,8 +29,7 @@ const PREVIEW_COLOR = '#38bdf8';
 
 /** Average of the recorded pitch legs (degrees), or null if none recorded. */
 function recordedPitch(shot: Shot): number | null {
-  if (shot.pitch_in != null && shot.pitch_out != null) return (shot.pitch_in + shot.pitch_out) / 2;
-  return shot.pitch_in ?? shot.pitch_out ?? null;
+  return recordedPitchOf(shot.pitch_in, shot.pitch_out);
 }
 
 /** Signed inclination implied by the depth change and slope length, in the +down
@@ -40,9 +40,7 @@ function recordedPitch(shot: Shot): number | null {
  *  cross-check, with nothing negated in between (issue #57 finding #7, issue #296).
  *  Returns 0 for length<=0. */
 function impliedInclination(shot: Shot): number {
-  if (!(shot.length > 0)) return 0;
-  const ratio = (shot.depth_out - shot.depth_in) / shot.length;
-  return (Math.asin(Math.max(-1, Math.min(1, ratio))) * 180) / Math.PI;
+  return impliedPitchDeg(shot.length, shot.depth_in, shot.depth_out);
 }
 
 /** What a manual option needs to render as an inline editable field. */
