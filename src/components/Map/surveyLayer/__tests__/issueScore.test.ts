@@ -35,8 +35,8 @@ function fixture(opts: { merged?: number[][]; shots?: Record<number, ShotReading
   });
 }
 
-function scores(data: SurveyData, warnings: ProjectWarning[] = []) {
-  const s = computeIssueScores(data, computeShotQualityMetrics(data), warnings, scaleOf(T));
+function scores(data: SurveyData, warnings: ProjectWarning[] = [], scale = scaleOf(T)) {
+  const s = computeIssueScores(data, computeShotQualityMetrics(data), warnings, scale);
   return {
     shot: [...s.shotScore].map((v) => +v.toFixed(3)),
     station: [...s.stationScore].map((v) => +v.toFixed(3)),
@@ -114,6 +114,63 @@ describe('computeIssueScores: shots', () => {
   it('an unknown unresolved code floors at 1; a stale warning is skipped', () => {
     const s = scores(fixture(), [warn(1, 101, 'warning', { code: 'SOMETHING_NEW' }), warn(9, 999, 'error'), warn(1, 999, 'error')]);
     expect(s.shot).toEqual([1, 0, 0]);
+  });
+});
+
+describe('computeIssueScores: levels, switched-off errors, average', () => {
+  // az 30 of 20 -> 1.5, pitch 20 of 10 -> 2 on shot 101; shot 102 pristine.
+  const data = () => fixture({ shots: { 0: { azimuthIn: 0, azimuthOut: 30, pitchIn: 0, pitchOut: 20, length: 10 } } });
+
+  it('per-error levels regrade without touching the warnings', () => {
+    const lenient = issueScaleFrom(T, { inclination: { min: 0, warn: 20, max: 40 } }, [], 'worst');
+    expect(scores(data(), [], lenient).shot[0]).toBe(1.5); // pitch now 1, az 1.5 wins
+    const strictMin = issueScaleFrom(T, { azimuth: { min: 30, warn: 40, max: 50 } }, [], 'worst');
+    expect(scores(data(), [], strictMin).shot[0]).toBe(2); // az at Min scores 0
+  });
+
+  it('a switched-off error leaves the colour and the label score', () => {
+    const noPitch = issueScaleFrom(T, {}, ['inclination'], 'worst');
+    const s = scores(data(), [], noPitch);
+    expect(s.shot[0]).toBe(1.5);
+    expect(s.label[0]).toBe(1.5);
+    // Everything off: only the incl/depth-free remainder is gone too.
+    const allOff = issueScaleFrom(T, {}, ['azimuth', 'inclination', 'inclinationDepth', 'length'], 'worst');
+    expect(scores(data(), [], allOff).shot).toEqual([0, 0, 0]);
+  });
+
+  it('switched-off errors do not lift hard errors or the warning floor', () => {
+    const allOff = issueScaleFrom(T, {}, ['azimuth', 'inclination', 'inclinationDepth', 'length'], 'worst');
+    const s = scores(data(), [warn(1, 101, 'error'), warn(1, 102, 'warning', { code: 'SHORT_SHOT' })], allOff);
+    expect(s.shot.slice(0, 2)).toEqual([3, 1]);
+  });
+
+  it('average mode takes the mean palette position of a shot errors', () => {
+    const avg = issueScaleFrom(T, {}, ['inclinationDepth', 'length'], 'average');
+    // az 1.5 -> position 0.625, pitch 2 -> 0.75: mean 0.6875 -> score 1.75.
+    expect(scores(data(), [], avg).shot[0]).toBe(1.75);
+  });
+
+  it('average mode averages a station over every shot touching it (and its merge group)', () => {
+    const avg = issueScaleFrom(T, {}, ['inclinationDepth', 'length'], 'average');
+    const s = scores(data(), [], avg);
+    // Station 1 joins shot 101 (1.75 -> position 0.6875) and pristine shot 102 (0):
+    // mean 0.34375 -> 0.6875. Station 0 only touches shot 101.
+    expect(s.station.slice(0, 3)).toEqual([1.75, 0.688, 0]);
+    // Merging station 2 (pristine) with station 4 (pristine) keeps 0; merging
+    // station 0 with station 3 pulls in shot 201 (pristine): mean 0.34375.
+    const merged = scores(fixture({ merged: [[0, 3]], shots: { 0: { azimuthIn: 0, azimuthOut: 30, pitchIn: 0, pitchOut: 20, length: 10 } } }), [], avg);
+    expect(merged.station[0]).toBe(0.688);
+    expect(merged.station[3]).toBe(0.688);
+  });
+
+  it('average mode does not average away an over-anchored datum', () => {
+    const avg = issueScaleFrom(T, {}, [], 'average');
+    const datumError: ProjectWarning = {
+      ...warn(1, 101, 'error', { code: 'multiple_datums_per_merge_component' }),
+      datumRefs: [{ section_id: 2, station_index: 1 }],
+    };
+    const s = scores(fixture(), [datumError], avg);
+    expect(s.station[4]).toBe(3);
   });
 });
 
