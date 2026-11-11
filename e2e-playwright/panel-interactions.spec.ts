@@ -379,6 +379,14 @@ test.describe('Panel Interactions', () => {
           { azimuth_in: 45, azimuth_out: 225, length: 3, depth_in: -2, depth_out: -3, kind: 'Jump' },
         ],
       },
+      {
+        name: 'Repeat Only',
+        direction: 'in',
+        shots: [
+          { azimuth_in: 0, azimuth_out: 180, length: 10, depth_in: -1, depth_out: -2, kind: 'Reference' },
+          { azimuth_in: 0, azimuth_out: 180, length: 10, depth_in: -2, depth_out: -3, kind: 'Reference' },
+        ],
+      },
     ]);
     await waitForNoDialogs(page);
 
@@ -393,5 +401,19 @@ test.describe('Panel Interactions', () => {
     await expect(statValue('Total length')).toHaveText(/^13(\.0+)? m$/);
     // Averaged over the two shots that count toward the length.
     await expect(statValue('Average shot')).toHaveText(/^6\.50* m$/);
+    // The card says how much Reference length it leaves out.
+    await expect(sectionDetail.getByTestId('section-reference-length-note')).toHaveText(
+      /^Reference shots \(4(\.0+)? m\) are not counted in the length\.$/
+    );
+
+    // A section of Reference shots only: 0 m long, and no shot to average, so
+    // the average reads "-" rather than a 0 m shot.
+    await page.locator('[data-testid^="section-row-"]').filter({ hasText: 'Repeat Only' }).click();
+    await expect(sectionDetail).toContainText('Repeat Only');
+    await expect(statValue('Total length')).toHaveText(/^0(\.0+)? m$/);
+    await expect(statValue('Average shot')).toHaveText('-');
+    await expect(sectionDetail.getByTestId('section-reference-length-note')).toHaveText(
+      /^Reference shots \(20(\.0+)? m\) are not counted in the length\.$/
+    );
   });
 });
