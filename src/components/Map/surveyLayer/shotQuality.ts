@@ -30,16 +30,14 @@
 import type { SurveyData } from '../../../types/survey-data';
 import { lengthFixableFromInclination, lengthFromInclination } from '../../../utils/resolutionPreview';
 import { azimuthDelta, impliedPitchDeg, pitchLegInRange, recordedPitch } from '../../../utils/shotGeometry';
+import { SCORE_MAX } from './issueScale';
 
 /** Below this recorded inclination (degrees) the length delta is withheld.
  *  At 15° a 1° inclination error moves the implied length of a 10 m shot by
  *  about 0.65 m; at 5° by about 7 m. */
 export const LENGTH_DELTA_MIN_INCLINATION_DEG = 15;
 
-/** Score at a check's warning threshold (yellow). */
-export const SCORE_WARNING = 1;
-/** Highest score: an error, or 3x a warning threshold (red). */
-export const SCORE_MAX = 3;
+export { SCORE_MAX, SCORE_WARNING } from './issueScale';
 
 /** The project thresholds a metric is scored against, in degrees. */
 export interface ShotQualityThresholds {

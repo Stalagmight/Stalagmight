@@ -10,7 +10,7 @@
  */
 import { interpolateColor } from '../../../utils/colors';
 import type { MapThemeColors } from '../../../utils/themeColors';
-import { SCORE_MAX, SCORE_WARNING } from './shotQuality';
+import { SCORE_MAX, SCORE_WARNING } from './issueScale';
 
 const STEPS_PER_UNIT = 100;
 /** The last ramp built. The three colours are fixed across themes, so this is
