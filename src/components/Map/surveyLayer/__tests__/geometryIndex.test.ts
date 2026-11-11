@@ -715,3 +715,84 @@ describe('SurveyGeometryIndex.nearestStation rank priority', () => {
     expect(pick(same, 2.5, 0, [3, 1])).toBe(1);
   });
 });
+
+/**
+ * Overlapping shot lines of different kinds. The lines draw Normal on top
+ * (`writeLineDrawOrder`), and the pick must agree: a reference tie run over the
+ * real line must not take the real shot's click.
+ */
+describe('SurveyGeometryIndex.nearestShot rank priority', () => {
+  const m = (px: number) => (px * 111320) / SCALE;
+  const kindShot = (id: number, kind: 'Normal' | 'Jump' | 'Reference') => ({
+    id, azimuth_in: 0, azimuth_out: 0, length: 1, depth_in: 0, depth_out: 0,
+    pitch_in: null, pitch_out: null, left: null, right: null, up: null, down: null,
+    comment: null, kind, marker_index: null, temperature: null,
+  });
+  const st = (section_id: number, station_index: number, xPx: number, yPx: number): Station => ({
+    station_ref: { section_id, station_index },
+    coordinates: { x: m(xPx), y: m(yPx), z: 0 },
+    is_zero_datum: false, gps_coordinates: null, merged_with: [], closures_with: [],
+  });
+  /** Each section: one horizontal shot from x 0 to 40 px at height `y`. */
+  function build(specs: Array<{ id: number; kind: 'Normal' | 'Jump' | 'Reference'; y: number }>) {
+    const sections: Section[] = specs.map((s) => ({
+      id: s.id, name: `S${s.id}`, surveyor: null, date: null, color: '#ffffff', direction: 'in', quality: 1,
+      next_shot_id: 2, reverse_parity: false, gauge_shot_uuid: null, gauge_neighbour_uuid: null,
+      shots: [kindShot(s.id * 10, s.kind)],
+    }));
+    const stations = specs.flatMap((s) => [st(s.id, 0, 0, s.y), st(s.id, 1, 40, s.y)]);
+    return new SurveyGeometryIndex(surveyDataFromLegacy(sections, stations), null);
+  }
+  const HALF = 1; // shot width 2, the app default
+  const pick = (
+    index: SurveyGeometryIndex, xPx: number, yPx: number, ids: number[],
+    extra: { half?: number | null; mul?: (sid: number) => number; kinds?: { jump: boolean; reference: boolean } } = {},
+  ) => {
+    const half = extra.half === undefined ? HALF : extra.half;
+    return index.nearestShot(project, xPx, -yPx, ids, 4, {
+      visibleKinds: extra.kinds ?? ALL_KINDS,
+      ...(half === null ? {} : { shotHalfWidthPx: half }),
+      ...(extra.mul ? { shotWidthMul: extra.mul } : {}),
+    })?.sectionId ?? null;
+  };
+
+  // A reference and a jump line run exactly over the real line, listed first.
+  const over = build([
+    { id: 1, kind: 'Reference', y: 0 },
+    { id: 2, kind: 'Jump', y: 0 },
+    { id: 3, kind: 'Normal', y: 0 },
+  ]);
+
+  it('coincident lines: the real shot wins, then jump over reference', () => {
+    expect(pick(over, 20, 0, [1, 2, 3])).toBe(3);
+    expect(pick(over, 20, 3, [3, 2, 1])).toBe(3); // off the drawn width: tie-break alone
+    expect(pick(over, 20, 0, [1, 2, 3], { half: null })).toBe(3);
+    expect(pick(over, 20, 0, [1, 2])).toBe(2);
+    expect(pick(over, 20, 0, [1, 2], { kinds: { jump: false, reference: true } })).toBe(1);
+  });
+
+  // A reference line 1.5 px below the real one: their drawn widths touch.
+  const near = build([
+    { id: 1, kind: 'Reference', y: -1.5 },
+    { id: 3, kind: 'Normal', y: 0 },
+  ]);
+
+  it('on the drawn real line the real shot wins, though the reference is nearer', () => {
+    // 1 px below the real line (on its 1 px half-width), 0.5 px from the reference.
+    expect(pick(near, 20, -1, [1, 3])).toBe(3);
+    expect(pick(near, 20, -1, [1, 3], { half: null })).toBe(1); // plain nearest
+    // Off the real line's width: the reference.
+    expect(pick(near, 20, -1.4, [1, 3])).toBe(1);
+    // A selected real section draws wider (1.5x): 1.4 px is on it now.
+    expect(pick(near, 20, -1.4, [1, 3], { mul: (sid) => (sid === 3 ? 1.5 : 1) })).toBe(3);
+  });
+
+  it('shots of one kind keep the nearest pick', () => {
+    const same = build([
+      { id: 1, kind: 'Normal', y: -1.5 },
+      { id: 3, kind: 'Normal', y: 0 },
+    ]);
+    expect(pick(same, 20, -1, [1, 3])).toBe(1);
+    expect(pick(same, 20, -1, [3, 1])).toBe(1);
+  });
+});

@@ -104,6 +104,9 @@ const h = vi.hoisted(() => {
     uploadCircleIndices(): void {
       this.uploadCalls++;
     }
+    uploadLineIndices(): void {
+      this.uploadCalls++;
+    }
   }
 
   return { layerState, FakeLayer };
@@ -598,6 +601,20 @@ describe('SurveyCustomController highlight width/radius resolution (C2)', () => 
     expect(c.stationSizeMul(1, false)).toBeCloseTo(2.5); // hover wins over selection
     c.clearHighlights();
     expect(c.stationSizeMul(1, true)).toBe(2);
+  });
+
+  it('shotWidthMul follows the line shader: hover, then selection, else 1', () => {
+    const { map } = makeFakeMap();
+    const c = new SurveyCustomController(map);
+    c.sync({ ...makeParams(), shotWidthPx: 2, shotHoverWidthPx: 5, shotSelectionWidthPx: 3 });
+    expect(c.shotWidthMul(1)).toBe(1);
+    c.setSectionSelect([1]);
+    expect(c.shotWidthMul(1)).toBeCloseTo(1.5);
+    expect(c.shotWidthMul(2)).toBe(1);
+    c.setSectionHover([1]);
+    expect(c.shotWidthMul(1)).toBeCloseTo(2.5);
+    c.clearHighlights();
+    expect(c.shotWidthMul(1)).toBe(1);
   });
 });
 

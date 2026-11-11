@@ -186,22 +186,25 @@ it:
    (reached through `SurveyLayer.resolveStationAt` / `resolveShotAt`), using true
    endpoints rather than tile-clipped geometry.
 
-**Real-line markers on top.** Sections that start at a real station (a jump or
-reference tie-in) put several markers on one spot. The circle index buffer draws
-stations by `stationKindRank` - reference-only first, then jump, then real
-(`tessellate.writeCircleDrawOrder`; the vertices stay in global-index order, and
-the incremental path redoes the order when a kind edit moves a station between
-ranks) - so the real-line marker is drawn last, on top. `nearestStation` agrees:
-equal distances go to the better rank, and a cursor on the drawn disc of a
-better-ranked marker picks it over a nearer, worse-ranked centre it covers. The
-disc is sized as the shader draws it: `ResolveOptions.stationDiscPx` (radius +
-stroke) times `stationSizeMul` (`controller.stationSizeMul`: the hover or
-selection size of a highlighted section, else 2x for a zero datum). The edit
-path writes the new order through `COPY_WRITE_BUFFER`
-(`surveyCustomLayer.uploadCircleIndices`): it runs outside `render()`, and the
-element-array binding is VAO state. The visible edge of a worse-ranked
-marker still picks that marker, and stations of one rank keep the plain nearest
-pick. The ranks are the label declutter's (`labelVirtualRank`).
+**The real line on top.** A jump or reference section tied in at a real station
+puts several markers on one spot, and a reference tie surveyed along the real
+line runs over it. Each kind draws in one call with no depth test, so the index
+buffers draw by rank - reference first, then jump, then real
+(`tessellate.writeLineDrawOrder` by shot kind, `writeCircleDrawOrder` by
+`stationKindRank`) - and the real line ends on top. The vertices stay in SoA
+order, which the incremental path addresses; when a kind edit moves shots or a
+station between ranks it redoes the order and writes it through
+`COPY_WRITE_BUFFER` (`surveyCustomLayer.uploadLineIndices` /
+`uploadCircleIndices`): it runs outside `render()`, and the element-array binding
+is VAO state. The picks agree (`nearestStation` / `nearestShot`): equal distances
+go to the better rank, and a cursor on the drawn disc or line of a better-ranked
+feature picks it over a nearer, worse-ranked one it covers. The drawn size is the
+shader's: `ResolveOptions.stationDiscPx` (radius + stroke) times `stationSizeMul`
+(`controller.stationSizeMul`: the hover or selection size of a highlighted
+section, else 2x for a zero datum), and `shotHalfWidthPx` times `shotWidthMul`
+(`controller.shotWidthMul`). The visible edge of a worse-ranked feature still
+picks it, and features of one rank keep the plain nearest pick. The ranks are
+the label declutter's (`labelVirtualRank`).
 
 Every pick is a single nearest-within-tolerance resolve; the box in step 2 is
 only the candidate prefilter. The index's multi-hit box resolver went away with
@@ -402,7 +405,7 @@ the Zustand write.
 | Labels missing entirely | font readiness in `labelController` (the `label-font-unavailable` path) |
 | Labels vanish or flash while zooming | `labelReveal.ts` / `labelDecimation.ts` |
 | A jump / reference label shows where a real-line one should | `labelVirtualRank` and the per-rank passes in `labelReveal.ts`, then the flags `labelTessellate.ts` stamps |
-| A jump / reference marker drawn over, or clicked instead of, a real station at the same spot | `writeCircleDrawOrder` in `tessellate.ts` (and its call in `controller.tryIncremental`), then `geometryIndex.nearestStation` |
+| A jump / reference marker or line drawn over, or clicked instead of, the real one at the same spot | `writeCircleDrawOrder` / `writeLineDrawOrder` in `tessellate.ts` (and their calls in `controller.tryIncremental`), then `geometryIndex.nearestStation` / `nearestShot` |
 | Label text or placement wrong | `labelLayout.ts` (shaping, em offsets), `labelStyle.ts` (per-kind style) |
 | Sizes wrong after dragging the window to another monitor | the DPR watcher in `SurveyLayer` - device-pixel sizes are baked into the buffers |
 | Global View wrong but the survey map fine | `GlobalView/customRender/` - a separate implementation |

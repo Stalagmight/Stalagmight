@@ -17,11 +17,14 @@
  * see `shaders.ts`.
  *
  * CIRCLES (stations): one quad per station, the disc + stroke ring drawn in the
- * fragment shader with a feathered edge (`shaders.ts`). The vertices sit in
- * global station-index order, but the index buffer draws them by rank
- * (`writeCircleDrawOrder`): reference-only stations first, then jump, then real
- * ones, so where the markers of several sections coincide the real-line one is
- * on top.
+ * fragment shader with a feathered edge (`shaders.ts`).
+ *
+ * DRAW ORDER: each kind draws in one call with no depth test, so a later quad
+ * paints over an earlier one. The vertices sit in SoA order (what the
+ * incremental path addresses), but both index buffers draw by rank - reference
+ * first, then jump, then real (`writeLineDrawOrder` / `writeCircleDrawOrder`) -
+ * so where a jump or reference line or marker crosses or coincides with the real
+ * line, the real line is on top.
  *
  * Valid-shot selection mirrors `vtSurveyBuild.buildShotsPerFeature`: a shot
  * contributes only when both endpoint stations (`stationIndex` i and i+1) exist.
@@ -104,7 +107,8 @@ export interface LineBuffers {
    *  is highlighted and not dimmed; anchored sections are dimmed and excluded from
    *  the highlight). Rewritten in place on a hover/selection-set change. */
   highlight: Float32Array;
-  /** Two triangles per segment, `segmentCount*6`, `UNSIGNED_INT`. */
+  /** Two triangles per segment, `segmentCount*6`, `UNSIGNED_INT`, in draw
+   *  order: by shot kind, reference first, real last ({@link writeLineDrawOrder}). */
   indices: Uint32Array;
   /** Per-section `[segStart, segCount]` pairs (`sections.length * 2`), in
    *  section declaration order. `segStart` is the first drawn segment index for
@@ -365,7 +369,7 @@ function emitLineSection(
 ): number {
   const inner = lookup.get(section.id);
   if (!inner) return startSeg;
-  const { posA, posB, endpoint, side, colorFrom, colorTo, reference, dim, hide, highlight, indices } = b;
+  const { posA, posB, endpoint, side, colorFrom, colorTo, reference, dim, hide, highlight } = b;
   const { colorForShot, colorForShotEndpoints, dimForShot, hideForShot, highlightForShot } = inputs;
   let seg = startSeg;
   for (let i = 0; i < section.shotCount; i++) {
@@ -415,16 +419,45 @@ function emitLineSection(
       hide[v] = isHide;
       highlight[v] = isHighlight;
     }
-    const io = seg * 6;
+    seg++;
+  }
+  return seg;
+}
+
+/**
+ * Write the line index buffer in draw order: every Reference segment first, then
+ * Jump, then Normal (the per-vertex kind in `b.reference` is the rank), segment
+ * order within a kind. One draw call, no depth test: where a jump or reference
+ * line crosses or runs over the real line, the real line ends on top. Line
+ * counterpart of {@link writeCircleDrawOrder}; returns whether any index changed,
+ * so the incremental path re-uploads only when a kind edit moved a segment.
+ */
+export function writeLineDrawOrder(b: LineBuffers): boolean {
+  const { indices, reference, segmentCount } = b;
+  const start = [0, 0, 0];
+  for (let s = 0; s < segmentCount; s++) start[2 - lineKindRank(reference[s * 4]!)]!++;
+  start[2] = start[0]! + start[1]!;
+  start[1] = start[0]!;
+  start[0] = 0;
+  let changed = false;
+  for (let s = 0; s < segmentCount; s++) {
+    const io = start[2 - lineKindRank(reference[s * 4]!)]!++ * 6;
+    const base = s * 4;
+    if (indices[io] !== base) changed = true;
     indices[io] = base;
     indices[io + 1] = base + 1;
     indices[io + 2] = base + 2;
     indices[io + 3] = base + 2;
     indices[io + 4] = base + 1;
     indices[io + 5] = base + 3;
-    seg++;
   }
-  return seg;
+  return changed;
+}
+
+/** Draw rank of a segment from its per-vertex kind attribute (0 Normal, 1 Jump,
+ *  2 Reference - already the rank; clamped for safety). */
+function lineKindRank(kind: number): 0 | 1 | 2 {
+  return kind >= 1.5 ? 2 : kind >= 0.5 ? 1 : 0;
 }
 
 export function buildLineBuffers(
@@ -477,6 +510,7 @@ export function buildLineBuffers(
     sectionRanges[si * 2] = segStart;
     sectionRanges[si * 2 + 1] = seg - segStart;
   }
+  writeLineDrawOrder(b);
   return b;
 }
 
@@ -485,7 +519,8 @@ export function buildLineBuffers(
  * section's drawn-segment range is stable (unchanged SoA layout is the caller's
  * precondition), so this rewrites exactly the slots {@link buildLineBuffers}
  * wrote for that section - positions, colors, reference/dim/hide flags - leaving
- * every other section's bytes untouched. Never called with a build-time
+ * every other section's bytes untouched. Leaves the index buffer alone: a caller
+ * that changed a shot's kind calls {@link writeLineDrawOrder}. Never called with a build-time
  * exclusion (the live path hides via the per-vertex flag), so `exShots` is
  * omitted and the re-emit stays in lock-step with the stored range.
  */

@@ -43,6 +43,7 @@ import {
   recomputeStation,
   recomputeSectionAllReference,
   writeCircleDrawOrder,
+  writeLineDrawOrder,
   recomputeLineColors,
   recomputeCircleColors,
   type StationRel,
@@ -673,6 +674,20 @@ export class SurveyCustomController {
     return zeroDatum ? 2 : 1;
   }
 
+  /**
+   * The width multiplier the line shader draws a section's shots at: the
+   * configured hover / selection width of a highlighted section, else 1 (the
+   * `widthMul` choice in the line vertex shader). The shot pick sizes the drawn
+   * line with it (`SurveyGeometryIndex.nearestShot`).
+   */
+  shotWidthMul(sectionId: number): number {
+    const level = this.highlightLevel(sectionId);
+    const d = this.lastData;
+    if (level === HIGHLIGHT_HOVER && d) return d.lineHoverWidthMul;
+    if (level === HIGHLIGHT_SELECT && d) return d.lineSelectWidthMul;
+    return 1;
+  }
+
   /** Per-station / per-shot highlight predicates resolving the merged emphasis
    *  level for a feature's section (0 none, 1 selection, 2 hover). */
   private highlightPredicates(surveyData: SurveyData): {
@@ -866,10 +881,12 @@ export class SurveyCustomController {
 
     // Re-emit each dirty section's line range + its stations (all-reference
     // first, since a station read depends on it), collecting station slots.
-    // A kind edit can move a station between ranks, which reorders the circle
-    // draw (real-line markers on top): note it, and redo the index buffer below.
+    // Both index buffers draw by rank (the real line on top), so a kind edit -
+    // which moves its shots between ranks, and maybe stations - redoes the
+    // line order and, when a station's rank moved, the circle order below.
     const circleSlots: number[] = [];
     let rankMoved = false;
+    let anyKindEdited = false;
     for (const si of plan.dirtySectionIdxs) {
       const section = next.sections[si]!;
       const inner = lookup.get(section.id);
@@ -883,6 +900,7 @@ export class SurveyCustomController {
           break;
         }
       }
+      if (kindsEdited) anyKindEdited = true;
       const rankBefore = kindsEdited && inner ? Array.from(inner.values(), (g) => stationKindRank(allRef[g]!)) : null;
       recomputeSectionAllReference(next, lookup, section, allRef);
       if (inner) {
@@ -895,6 +913,7 @@ export class SurveyCustomController {
       }
       recomputeLineSection(line, si, next, rel, lookup, lineInputs);
     }
+    if (anyKindEdited && writeLineDrawOrder(line)) layer.uploadLineIndices();
     if (rankMoved && writeCircleDrawOrder(circle)) layer.uploadCircleIndices();
 
     // Sub-upload: one contiguous line range per section; coalesced station runs.

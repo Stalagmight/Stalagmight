@@ -276,7 +276,7 @@ describe('planIncrementalUpdate', () => {
 // ─── Controller incremental apply (byte-identity + fallbacks) ──────────────
 
 const h = vi.hoisted(() => {
-  const state = { lineUploads: 0, circleUploads: 0, circleIndexUploads: 0, fullUpdates: 0 };
+  const state = { lineUploads: 0, circleUploads: 0, circleIndexUploads: 0, lineIndexUploads: 0, fullUpdates: 0 };
   class FakeLayer {
     readonly id: string;
     data: unknown;
@@ -310,6 +310,9 @@ const h = vi.hoisted(() => {
     }
     uploadCircleIndices(): void {
       state.circleIndexUploads++;
+    }
+    uploadLineIndices(): void {
+      state.lineIndexUploads++;
     }
   }
   return { state, FakeLayer };
@@ -372,6 +375,7 @@ describe('SurveyCustomController incremental apply', () => {
     h.state.lineUploads = 0;
     h.state.circleUploads = 0;
     h.state.circleIndexUploads = 0;
+    h.state.lineIndexUploads = 0;
     h.state.fullUpdates = 0;
     vi.spyOn(console, 'info').mockImplementation(() => {});
     vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -424,10 +428,11 @@ describe('SurveyCustomController incremental apply', () => {
   // Kind edits are what move a station between draw ranks (real-line markers on
   // top), so the circle index order must follow them too. Random kind flips on
   // the interior sections, mixed with a position edit, against a fresh rebuild.
-  it('shot-kind edits stay byte-identical to a full rebuild, draw order included (property test)', () => {
+  it('shot-kind edits stay byte-identical to a full rebuild, both draw orders included (property test)', () => {
     const rand = rng(0x5EED);
     let incrementalRuns = 0;
     let reorders = 0;
+    let lineReorders = 0;
     for (let iter = 0; iter < 40; iter++) {
       let cur = pinnedSurvey();
       const c = new SurveyCustomController(makeFakeMap());
@@ -447,9 +452,11 @@ describe('SurveyCustomController incremental apply', () => {
         }
         const fu = h.state.fullUpdates;
         const iu = h.state.circleIndexUploads;
+        const lu = h.state.lineIndexUploads;
         c.sync(params(next));
         if (h.state.fullUpdates === fu) incrementalRuns++;
         if (h.state.circleIndexUploads > iu) reorders++;
+        if (h.state.lineIndexUploads > lu) lineReorders++;
         const ref = new SurveyCustomController(makeFakeMap());
         ref.sync(params(next));
         expectDataEqual(dataOf(c), dataOf(ref));
@@ -459,11 +466,13 @@ describe('SurveyCustomController incremental apply', () => {
       c.destroy();
     }
     // Pinned for this seed, like the position property test: 117 of the 120
-    // edits take the incremental path (3 dirty most sections and rebuild), and
-    // 82 of them rewrite the draw order. A regression that fell back to rebuilds,
-    // or never reordered, would still pass the byte-identity check alone.
+    // edits take the incremental path (3 dirty most sections and rebuild); 82 of
+    // them rewrite the circle draw order and 91 the line draw order. A
+    // regression that fell back to rebuilds, or never reordered, would still
+    // pass the byte-identity check alone.
     expect(incrementalRuns).toBe(117);
     expect(reorders).toBe(82);
+    expect(lineReorders).toBe(91);
   });
 
   it('depth-mode recolor via a z-move stays byte-identical', () => {
@@ -483,7 +492,7 @@ describe('SurveyCustomController incremental apply', () => {
   // A kind edit can move a station between ranks: the incremental path must
   // redo the draw order (and re-upload it) to stay byte-identical to a rebuild,
   // and leave it alone when no rank moved.
-  it('a kind edit that moves a station between ranks redoes the circle draw order', () => {
+  it('a kind edit redoes the line draw order and, when a station rank moved, the circle one', () => {
     const prev = pinnedSurvey();
     const c = new SurveyCustomController(makeFakeMap());
     c.sync(params(prev));
@@ -496,6 +505,7 @@ describe('SurveyCustomController incremental apply', () => {
     c.sync(params(jump));
     expect(h.state.fullUpdates).toBe(fu); // incremental, not a rebuild
     expect(h.state.circleIndexUploads).toBe(1);
+    expect(h.state.lineIndexUploads).toBe(1); // the jump shot now draws under the real ones
     const ref = new SurveyCustomController(makeFakeMap());
     ref.sync(params(jump));
     expectDataEqual(dataOf(c), dataOf(ref));
@@ -506,12 +516,14 @@ describe('SurveyCustomController incremental apply', () => {
     c.sync(params(moved));
     expect(h.state.fullUpdates).toBe(fu);
     expect(h.state.circleIndexUploads).toBe(1);
+    expect(h.state.lineIndexUploads).toBe(1);
 
     // And back to Normal: real again, drawn last.
     const back = cloneSurvey(moved);
     back.shotFlags[3] = 0;
     c.sync(params(back));
     expect(h.state.circleIndexUploads).toBe(2);
+    expect(h.state.lineIndexUploads).toBe(2);
     const ref2 = new SurveyCustomController(makeFakeMap());
     ref2.sync(params(back));
     expectDataEqual(dataOf(c), dataOf(ref2));

@@ -102,7 +102,7 @@ describe('SurveyCustomLayer resolves GL locations once at link time (#339)', () 
   // ELEMENT_ARRAY_BUFFER binding is VAO state, so that write must go through
   // COPY_WRITE_BUFFER, or it swaps the index buffer of whatever VAO MapLibre
   // left bound.
-  it('re-uploads the circle draw order without touching the element-array binding', () => {
+  it('re-uploads the draw orders without touching the element-array binding', () => {
     const gl = new FakeGl();
     const data = makeData();
     const layer = new SurveyCustomLayer('custom-survey', data);
@@ -116,6 +116,14 @@ describe('SurveyCustomLayer resolves GL locations once at link time (#339)', () 
     expect(binds[0]!.buffer).toBeInstanceOf(FakeWebGLBuffer);
     expect(binds[1]!.buffer).toBeNull(); // unbound after the write
     expect(gl.subDataCalls).toEqual([{ target: gl.COPY_WRITE_BUFFER, offset: 0, data: data.circle.indices }]);
+
+    // The line order, the same way, into the line index buffer.
+    const before = gl.bufferBinds.length;
+    layer.uploadLineIndices();
+    const lineBinds = gl.bufferBinds.slice(before);
+    expect(lineBinds.map((b) => b.target)).toEqual([gl.COPY_WRITE_BUFFER, gl.COPY_WRITE_BUFFER]);
+    expect(lineBinds[0]!.buffer).not.toBe(binds[0]!.buffer); // not the circle buffer
+    expect(gl.subDataCalls[1]).toEqual({ target: gl.COPY_WRITE_BUFFER, offset: 0, data: data.line.indices });
   });
 
   it('frees both programs on remove, after which render draws nothing', () => {

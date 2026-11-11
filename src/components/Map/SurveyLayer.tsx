@@ -1364,7 +1364,9 @@ export default class SurveyLayer {
     });
   }
 
-  /** Nearest visible shot among candidate sections, within maxDistance px. */
+  /** Nearest visible shot among candidate sections, within maxDistance px; on
+   *  overlapping lines, the real-line one drawn on top (see
+   *  `SurveyGeometryIndex.nearestShot`). */
   private resolveShotAt(
     x: number,
     y: number,
@@ -1374,6 +1376,8 @@ export default class SurveyLayer {
     if (sections.size === 0 || !this.geoIndex) return null;
     return this.geoIndex.nearestShot(this.projector(), x, y, sections, maxDistance, {
       visibleKinds: this.visibleKinds(),
+      shotHalfWidthPx: this.getShotWidth() / 2,
+      ...(this.customRender ? { shotWidthMul: this.customRender.shotWidthMul.bind(this.customRender) } : {}),
     });
   }
 

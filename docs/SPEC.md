@@ -2015,9 +2015,10 @@ the collision declutter together with a nested decimation band
 above that zoom - see [map-renderer.md](map-renderer.md). Where labels compete for
 the same space, a real-line label wins over a label that belongs only to jump or
 reference shots, and a jump label wins over a reference one. Station markers
-follow the same order: where markers of several sections coincide (a jump or
-reference section tied in at a real station), the real-line marker is drawn on
-top and takes the hover and the click. Shot
+and shot lines follow the same order: where they coincide or overlap (a jump or
+reference section tied in at a real station, or surveyed along the real line),
+the real-line marker or line is drawn on top and takes the hover and the click,
+then jump, then reference. Shot
 geometry itself is not simplified: no path simplification, no station merging,
 no zoom-based hiding.
 

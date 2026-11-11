@@ -14,6 +14,7 @@ import {
   recomputeLineColors,
   recomputeCircleColors,
   writeCircleDrawOrder,
+  writeLineDrawOrder,
 } from '../tessellate';
 import { planColorOnlyUpdate } from '../incremental';
 import type { DisplayColorContext } from '../../displayColor';
@@ -260,6 +261,46 @@ describe('line tessellation', () => {
     expect(Array.from(b.indices.slice(0, 6))).toEqual([0, 1, 2, 2, 1, 3]);
     // Segment 1 indices are offset by 4 verts.
     expect(Array.from(b.indices.slice(6, 12))).toEqual([4, 5, 6, 6, 5, 7]);
+  });
+
+  // Where a jump or reference line crosses or runs over the real line, the real
+  // line must draw on top: one draw call, no depth test, so it goes LAST.
+  it('draws segments by kind: reference first, then jump, Normal last (on top)', () => {
+    const d = makeFixture();
+    // Section 1's two valid shots (section 2's one shot has no end station).
+    d.shotFlags = new Uint8Array([shotKindToFlags('Reference'), 0, 0]);
+    const lookup = buildStationLookup(d);
+    const rel = projectStationsRel(d, null, 0, 0);
+    const drawn = (bb: ReturnType<typeof buildLineBuffers>) =>
+      Array.from({ length: bb.segmentCount }, (_, k) => bb.indices[k * 6]! / 4);
+    const b = buildLineBuffers(d, rel, lookup, stubColor);
+    expect(drawn(b)).toEqual([0, 1]); // reference (segment 0) first, real last
+    d.shotFlags = new Uint8Array([0, shotKindToFlags('Jump'), 0]);
+    const j = buildLineBuffers(d, rel, lookup, stubColor);
+    expect(drawn(j)).toEqual([1, 0]); // the jump (segment 1) under the real one
+    // Each quad keeps its winding, moved in the draw order.
+    expect(Array.from(j.indices.slice(6, 12))).toEqual([0, 1, 2, 2, 1, 3]);
+    // Vertices stay in SoA order (the incremental path addresses them by range).
+    expect(j.reference[0]).toBe(0);
+    expect(j.reference[4]).toBe(1);
+    // Jump over reference: both virtual, the jump on top.
+    d.shotFlags = new Uint8Array([shotKindToFlags('Jump'), shotKindToFlags('Reference'), 0]);
+    expect(drawn(buildLineBuffers(d, rel, lookup, stubColor))).toEqual([1, 0]);
+  });
+
+  it('writeLineDrawOrder reports whether the order changed', () => {
+    const d = makeFixture();
+    const lookup = buildStationLookup(d);
+    const rel = projectStationsRel(d, null, 0, 0);
+    const b = buildLineBuffers(d, rel, lookup, stubColor);
+    expect(writeLineDrawOrder(b)).toBe(false); // all Normal: slot order already
+    b.reference.fill(2, 0, 4); // segment 0 becomes a Reference
+    expect(writeLineDrawOrder(b)).toBe(false); // still first: same order
+    b.reference.fill(0, 0, 4);
+    b.reference.fill(2, 4, 8); // segment 1 becomes a Reference instead
+    expect(writeLineDrawOrder(b)).toBe(true);
+    expect(b.indices[0]).toBe(4);
+    expect(writeLineDrawOrder(b)).toBe(false);
   });
 
   it('posA/posB are the anchor-relative segment endpoints', () => {
