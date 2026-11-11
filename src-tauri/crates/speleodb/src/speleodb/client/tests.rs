@@ -691,13 +691,13 @@ fn live_used_api_calls_with_email_and_token() {
                     assert!(history.commits.iter().any(|c| c.id == first));
                     assert!(history.commits.iter().any(|c| c.id == second));
                     // A current server's instant or a pre-ISO server's wall time;
-                    // either way every revision has a time to show.
+                    // either way every revision has a time to show, and it is when
+                    // this test made the revision, not hours off.
                     for commit in &history.commits {
                         let date = commit.authored_date.as_deref().expect("revision time");
-                        assert_eq!(
-                            commit_dates::display_date(date).as_deref(),
-                            Some(date),
-                            "{label}: revision time {date:?} is not in a form the history shows"
+                        assert!(
+                            live_revision_time_is_plausible(date, chrono::Utc::now()),
+                            "{label}: revision time {date:?} is not this run's time"
                         );
                     }
                     assert_eq!(
@@ -734,6 +734,47 @@ fn live_used_api_calls_with_email_and_token() {
         deleted.expect("delete test-owned project");
     }
     eprintln!("live SpeleoDB API tests executed successfully; both test-created projects deleted");
+}
+
+/// Whether `date`, a revision time as the history gets it, is a commit made within
+/// the last hour: an instant in UTC, or the pre-ISO server's New York wall time
+/// (UTC-4 or UTC-5).
+fn live_revision_time_is_plausible(date: &str, now: chrono::DateTime<chrono::Utc>) -> bool {
+    let window = |instant: chrono::DateTime<chrono::Utc>| (now - instant).num_minutes().abs() <= 60;
+    if commit_dates::is_wall_time(date) {
+        let wall = chrono::NaiveDateTime::parse_from_str(date, "%Y/%m/%d %H:%M")
+            .expect("wall time")
+            .and_utc();
+        return [4, 5]
+            .into_iter()
+            .any(|hours| window(wall + chrono::Duration::hours(hours)));
+    }
+    commit_dates::display_date(date).as_deref() == Some(date)
+        && date
+            .parse::<chrono::DateTime<chrono::Utc>>()
+            .is_ok_and(window)
+}
+
+#[test]
+fn live_revision_times_are_checked_against_the_run_time() {
+    let now = "2026-11-11T07:08:30Z"
+        .parse::<chrono::DateTime<chrono::Utc>>()
+        .unwrap();
+    assert!(live_revision_time_is_plausible(
+        "2026-11-11T07:08:16.000Z",
+        now
+    ));
+    assert!(live_revision_time_is_plausible("2026/11/11 02:08", now));
+    // The same wall time read as UTC, or a time five hours off, is wrong.
+    assert!(!live_revision_time_is_plausible("2026/11/11 07:08", now));
+    assert!(!live_revision_time_is_plausible(
+        "2026-11-11T02:08:16.000Z",
+        now
+    ));
+    assert!(!live_revision_time_is_plausible(
+        "2026-11-11T07:08:16Z",
+        now
+    ));
 }
 
 #[test]
@@ -1420,4 +1461,87 @@ fn every_project_reply_from_a_pre_iso_server_decodes() {
         "Synthetic upload",
     ));
     s.finish();
+}
+
+#[test]
+fn pre_iso_dates_never_excuse_an_unexpected_success_status() {
+    // Create answers 201 and lock answers 200; another 2xx is the SDK's own
+    // refusal, whatever the dates in the body.
+    let s = Server::json(pre_iso_project());
+    let err = create_project_with(
+        &s.base,
+        "t",
+        false,
+        &json!({"name":"Synthetic","description":"Test","country":"US","type":"STALAGMIGHT"})
+            .to_string(),
+    )
+    .unwrap_err();
+    s.finish();
+    assert!(matches!(&err, SpeleoDbError::Parse(_)), "got {err:?}");
+    let s = Server::replies(vec![(202, pre_iso_project().to_string().into_bytes())]);
+    let err = acquire_lock(&s.base, "t", false, ID).unwrap_err();
+    s.finish();
+    assert!(matches!(&err, SpeleoDbError::Parse(_)), "got {err:?}");
+}
+
+#[test]
+fn an_embedded_commit_is_still_held_to_the_contract_apart_from_its_date() {
+    let mut no_author = pre_iso_project();
+    no_author["latest_commit"]
+        .as_object_mut()
+        .unwrap()
+        .remove("author_name");
+    let mut unknown_field = pre_iso_project();
+    unknown_field["latest_commit"]["surprise"] = json!(true);
+    let mut bad_parents = pre_iso_project();
+    bad_parents["latest_commit"]["parent_ids"] = json!("not a list");
+    let mut null_date = pre_iso_project();
+    null_date["latest_commit"]["authored_date"] = Value::Null;
+    for reply in [no_author, unknown_field, bad_parents, null_date] {
+        let s = Server::json(reply);
+        let err = get_project(&s.base, "t", false, ID).unwrap_err();
+        s.finish();
+        assert!(matches!(&err, SpeleoDbError::Parse(_)), "got {err:?}");
+    }
+}
+
+#[test]
+fn a_revision_date_that_is_not_a_string_stays_a_contract_mismatch() {
+    for date in [Value::Null, json!(42)] {
+        let mut commit = pre_iso_commit(SHA, "2026/11/10 03:18");
+        commit["authored_date"] = date;
+        let s = Server::json(
+            json!({"project":pre_iso_project(),"commits":[commit, pre_iso_commit(SHA, "2026/11/10 03:18")]}),
+        );
+        let err = get_revisions(&s.base, "t", false, ID).unwrap_err();
+        s.finish();
+        assert!(matches!(&err, SpeleoDbError::Parse(_)), "got {err:?}");
+    }
+}
+
+#[test]
+fn only_a_real_wall_time_passes_to_the_frontend() {
+    use super::commit_dates::display_date;
+    assert_eq!(
+        display_date(" 2026/11/10 03:18 ").as_deref(),
+        Some("2026/11/10 03:18")
+    );
+    // The shape, but not a date or time: shown as nothing rather than rolled over.
+    for raw in [
+        "2026/13/45 25:99",
+        "2026/02/30 10:00",
+        "2026/11/10 24:00",
+        "2026/1/10 03:18",
+    ] {
+        assert_eq!(display_date(raw), None, "{raw}");
+    }
+    assert_eq!(
+        display_date("2026-11-10T03:18:23-05:00").as_deref(),
+        Some("2026-11-10T08:18:23.000Z")
+    );
+    assert_eq!(
+        display_date("2026-11-10T08:18:23.123456789Z").as_deref(),
+        Some("2026-11-10T08:18:23.123Z")
+    );
+    assert_eq!(display_date("yesterday"), None);
 }

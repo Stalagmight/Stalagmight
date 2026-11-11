@@ -381,16 +381,18 @@ revision history shows the viewer's local time with its GMT offset, e.g.
 
 An older server sends New York wall time with no zone (`YYYY/MM/DD HH:MM`) and
 embeds a commit with such a date as every project's `latest_commit`. SDK 0.6.2
-refuses that date, so the client (`client/commit_dates.rs`) decodes a refused
-2xx reply again with those dates out of the SDK's way:
+refuses that date, so the client (`client/commit_dates.rs`) decodes a 2xx reply
+the SDK could not deserialize again with each unreadable date string set aside:
 
-- an embedded `latest_commit` becomes its bare id, the only part the app reads;
+- an embedded `latest_commit` keeps everything but its date, which the app
+  never reads (it reads only the commit's id);
 - a revision keeps its place, and its wall time passes through to the frontend,
   which converts it to an instant with the webview's time-zone data (DST-aware).
 
-Everything else in the reply is still held to the SDK contract, and a reply
-with no such date stays a contract mismatch. A revision time in neither form is
-not shown.
+Everything else in the reply, the rest of each commit included, is still held to
+the SDK contract. A reply with no such date, a date that is not a string, and an
+unexpected success status all stay a contract mismatch. A revision time in
+neither form (or a wall time that is not a real date and time) is not shown.
 
 ## Project workspace
 

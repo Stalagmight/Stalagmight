@@ -10,16 +10,20 @@
 //! newest commit in full.
 //!
 //! [`decode_reply`] decodes such a reply again with only those dates out of the
-//! SDK's way; everything else in it is still held to the SDK contract.
+//! SDK's way; everything else in it, the rest of each commit included, is still
+//! held to the SDK contract.
 
-use chrono::{DateTime, FixedOffset, SecondsFormat, Utc};
+use chrono::{DateTime, FixedOffset, NaiveDateTime, SecondsFormat, Utc};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 /// A date the SDK reads, standing in for one it cannot while the reply decodes.
 /// It never reaches the app: the caller takes every revision date from
-/// [`Reply::dates`], and a reduced `latest_commit` carries no date at all.
+/// [`Reply::dates`], and the app reads only the id of a `latest_commit`.
 const STAND_IN: &str = "1970-01-01T00:00:00Z";
+
+/// The old server's wall-time format.
+const WALL_TIME: &str = "%Y/%m/%d %H:%M";
 
 /// A revision date as the frontend gets it (`SpeleoRevision::authored_date`).
 ///
@@ -47,8 +51,9 @@ fn sdk_instant(text: &str) -> Option<DateTime<FixedOffset>> {
     text.parse().ok()
 }
 
-/// `2026/11/10 03:18`, the old server's zone-less wall time.
-fn is_wall_time(text: &str) -> bool {
+/// `2026/11/10 03:18`, the old server's zone-less wall time: exactly that shape,
+/// and a real date and time.
+pub(super) fn is_wall_time(text: &str) -> bool {
     let bytes = text.as_bytes();
     bytes.len() == 16
         && bytes.iter().enumerate().all(|(i, &b)| match i {
@@ -57,11 +62,20 @@ fn is_wall_time(text: &str) -> bool {
             13 => b == b':',
             _ => b.is_ascii_digit(),
         })
+        && NaiveDateTime::parse_from_str(text, WALL_TIME).is_ok()
 }
 
-/// Whether the SDK reads `value` as a commit date.
-fn sdk_readable(value: &Value) -> bool {
-    value.as_str().and_then(sdk_instant).is_some()
+/// Swap `date` for [`STAND_IN`] when it is a string the SDK cannot read. Whether
+/// it was swapped. A missing date, or one that is not a string, is left for the
+/// SDK to refuse.
+fn set_aside(date: &mut Value) -> bool {
+    let unreadable = date
+        .as_str()
+        .is_some_and(|text| sdk_instant(text).is_none());
+    if unreadable {
+        *date = Value::from(STAND_IN);
+    }
+    unreadable
 }
 
 /// A 2xx reply the SDK refused, decoded with its unreadable commit dates set aside.
@@ -83,23 +97,23 @@ impl<T> Reply<T> {
     }
 }
 
-/// Decode `body`, a 2xx reply the SDK refused, once every commit date it cannot
-/// read is out of the way:
-/// - each embedded `latest_commit` with such a date becomes that commit's bare id:
-///   the SDK's own string form of the field, and the only part of it the app reads
-///   (`client::project`);
-/// - each revision in a top-level `commits` list keeps its place with its date
-///   swapped for a stand-in, and [`Reply::dates`] carries the dates to show.
+/// Decode `body`, a 2xx reply the SDK could not deserialize, with every commit
+/// date it cannot read set aside: the date of each embedded `latest_commit` (the
+/// app reads only that commit's id) and of each revision in a top-level `commits`
+/// list (whose dates to show [`Reply::dates`] carries). Only a date that is a
+/// string is set aside; the rest of each commit, and of the reply, is still
+/// decoded by the SDK's own types.
 ///
 /// `None` when the reply holds no such date: the refusal is something else, and
 /// stays the SDK's contract mismatch. The decoder's error when it still does not
 /// decode, which names what else the reply gets wrong (the SDK's own error may
-/// name only a date).
+/// name only a date). The re-decode goes through a JSON value, so unlike the SDK's
+/// own pass it keeps the last of two duplicate keys rather than refusing them.
 pub(super) fn decode_reply<T: DeserializeOwned>(
     body: &[u8],
 ) -> Option<Result<Reply<T>, serde_json::Error>> {
     let mut value: Value = serde_json::from_slice(body).ok()?;
-    let mut changed = reduce_latest_commits(&mut value);
+    let mut changed = set_aside_latest_commit_dates(&mut value);
     let mut dates = Vec::new();
     if let Some(commits) = value.get_mut("commits").and_then(Value::as_array_mut) {
         for commit in commits {
@@ -108,10 +122,7 @@ pub(super) fn decode_reply<T: DeserializeOwned>(
                 continue;
             };
             dates.push(date.as_str().and_then(display_date));
-            if !sdk_readable(date) {
-                *date = Value::from(STAND_IN);
-                changed = true;
-            }
+            changed |= set_aside(date);
         }
     }
     if !changed {
@@ -120,32 +131,23 @@ pub(super) fn decode_reply<T: DeserializeOwned>(
     Some(serde_json::from_value(value).map(|value| Reply { value, dates }))
 }
 
-/// Reduce every `latest_commit` object under `value` whose date the SDK cannot
-/// read to its `id`. Whether any was reduced.
-fn reduce_latest_commits(value: &mut Value) -> bool {
+/// Set aside the date of every `latest_commit` object under `value`. Whether any
+/// was.
+fn set_aside_latest_commit_dates(value: &mut Value) -> bool {
     match value {
         Value::Object(map) => {
-            let mut changed = false;
-            if let Some(commit) = map.get_mut("latest_commit") {
-                let id = commit
-                    .get("authored_date")
-                    .filter(|date| !sdk_readable(date))
-                    .and(commit.get("id"))
-                    .filter(|id| id.is_string())
-                    .cloned();
-                if let Some(id) = id {
-                    *commit = id;
-                    changed = true;
-                }
-            }
+            let mut changed = map
+                .get_mut("latest_commit")
+                .and_then(|commit| commit.get_mut("authored_date"))
+                .is_some_and(set_aside);
             for child in map.values_mut() {
-                changed |= reduce_latest_commits(child);
+                changed |= set_aside_latest_commit_dates(child);
             }
             changed
         }
-        Value::Array(items) => items
-            .iter_mut()
-            .fold(false, |changed, item| reduce_latest_commits(item) | changed),
+        Value::Array(items) => items.iter_mut().fold(false, |changed, item| {
+            set_aside_latest_commit_dates(item) | changed
+        }),
         _ => false,
     }
 }

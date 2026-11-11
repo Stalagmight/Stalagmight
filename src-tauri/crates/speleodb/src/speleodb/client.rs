@@ -491,15 +491,21 @@ fn api_error<E: std::fmt::Debug>(error: ApiOpError<E>) -> SpeleoDbError {
     }
 }
 /// The reply of an SDK call that decodes a project or a revision list. A 2xx reply
-/// the SDK refused is decoded again with the commit dates a pre-ISO server writes
-/// set aside ([`commit_dates::decode_reply`]); any other refusal stays a contract
-/// mismatch.
+/// the SDK could not deserialize is decoded again with the commit dates a pre-ISO
+/// server writes set aside ([`commit_dates::decode_reply`]); any other refusal,
+/// an unexpected success status included, stays a contract mismatch.
 fn sdk_reply<T: serde::de::DeserializeOwned, E: std::fmt::Debug>(
     result: Result<T, ApiOpError<E>>,
 ) -> Result<commit_dates::Reply<T>, SpeleoDbError> {
     match result {
         Ok(value) => Ok(commit_dates::Reply::typed(value)),
-        Err(ApiOpError::Api(error)) if (200..300).contains(&error.status) => {
+        Err(ApiOpError::Api(error))
+            if (200..300).contains(&error.status)
+                && error
+                    .parse_error
+                    .as_deref()
+                    .is_some_and(|e| e.starts_with("failed to deserialize 2xx response body")) =>
+        {
             let reply = match commit_dates::decode_reply(&error.raw_body) {
                 Some(Ok(reply)) => reply,
                 Some(Err(detail)) => {
@@ -512,8 +518,9 @@ fn sdk_reply<T: serde::de::DeserializeOwned, E: std::fmt::Debug>(
             static NOTED: OnceLock<()> = OnceLock::new();
             NOTED.get_or_init(|| {
                 tracing::info!(
-                    "SpeleoDB sends commit dates in its pre-ISO format; \
-                     revision times are read as New York wall time"
+                    "SpeleoDB sent commit dates the SDK cannot read (a server from before \
+                     its ISO revision dates); revision times are read in the old format \
+                     or not shown"
                 );
             });
             Ok(reply)
