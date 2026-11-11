@@ -21,14 +21,11 @@ import { TOAST_KEYS } from '../../../utils/toastKeys';
 import { formatRevisionTime, parseRevisionDate } from '../../../utils/speleoRevisionTime';
 
 /**
- * sdk#7: a revision's server time as the viewer's local time with its GMT offset,
- * and the relative time as the tooltip. The server string is New York wall time
- * with no zone, so it is converted to an instant first (see `speleoRevisionTime`);
- * an unparseable value is shown as sent.
+ * sdk#7: a revision's time as the viewer's local time with its GMT offset, and the
+ * relative time as the tooltip. `date` is the server time as an instant (see
+ * `speleoRevisionTime`); a revision whose time cannot be placed shows none.
  */
-function RevisionWhen({ raw, id }: { raw: string; id: string }) {
-  const date = parseRevisionDate(raw);
-  if (!date) return <span data-testid={`speleodb-revision-date-${id}`}>{raw}</span>;
+function RevisionWhen({ date, id }: { date: Date; id: string }) {
   return (
     <time
       dateTime={date.toISOString()}
@@ -182,6 +179,7 @@ export function SpeleoRevisionHistory() {
             // Server order is newest-first, so index 0 is the current server HEAD:
             // restoring to it would be a no-op, so it is marked, not restorable.
             const isCurrent = idx === 0;
+            const when = rev.authored_date ? parseRevisionDate(rev.authored_date) : null;
             return (
               <li
                 key={rev.id}
@@ -212,9 +210,9 @@ export function SpeleoRevisionHistory() {
                     <span className="text-xs text-text-secondary truncate">
                       {rev.author_email || t('speleodb.revisions.unknownAuthor')}
                     </span>
-                    {rev.authored_date && (
+                    {when && (
                       <span className="text-xs text-text-secondary">
-                        · <RevisionWhen raw={rev.authored_date} id={rev.id} />
+                        · <RevisionWhen date={when} id={rev.id} />
                       </span>
                     )}
                   </div>

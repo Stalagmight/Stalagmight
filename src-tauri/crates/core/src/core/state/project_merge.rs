@@ -1,10 +1,32 @@
 use super::project_append::append_project;
 use super::project_io::save_failure;
+use super::project_source::{read_source_project, with_suffix, SQLITE_SIDECARS};
 use super::AppState;
+use crate::core::command::{sanitize_display_text, MAX_FILE_NAME_LEN};
 use crate::core::CommandResult;
 use crate::models::{Project, FEATURE_ID_STRIDE, MAX_SECTIONS_IN_ID_SPACE, MAX_SECTION_ID};
 use crate::persistence::Database;
 use std::path::PathBuf;
+
+/// How much of a source's path a merge refusal shows (a path, unlike a file
+/// name, has no natural bound).
+const MAX_MERGE_SOURCE_LABEL: usize = 4 * MAX_FILE_NAME_LEN;
+
+/// A source's path as a merge refusal names it: the whole path, since two
+/// sources can share a file name, cut from the FRONT when it is too long so
+/// the file name - the part that says which source failed - always survives.
+pub(super) fn merge_source_label(path: &std::path::Path) -> String {
+    let full = sanitize_display_text(&path.to_string_lossy(), usize::MAX);
+    let count = full.chars().count();
+    if count <= MAX_MERGE_SOURCE_LABEL {
+        return full;
+    }
+    let tail: String = full
+        .chars()
+        .skip(count - (MAX_MERGE_SOURCE_LABEL - 3))
+        .collect();
+    format!("...{tail}")
+}
 
 impl AppState {
     /// Merge multiple projects into a new project file
@@ -57,32 +79,18 @@ impl AppState {
             }
         }
 
-        // Load all source projects
-        let mut source_projects: Vec<Project> = Vec::new();
+        // Read every source the way "Add .stalx" does (#680): through a
+        // private copy, so opening an older file never migrates the user's own
+        // file in place, and normalized as an open would - shot uuids, closure
+        // ids, re-solved offsets, and the pending pre-v13 Jump/Reference
+        // classification, which is per file and would otherwise be lost: the
+        // merged output does not carry the source's flag.
+        let mut source_projects: Vec<Project> = Vec::with_capacity(source_paths.len());
         for path in &source_paths {
-            match Database::open_existing(path) {
-                Ok(db) => match db.load_project() {
-                    Ok(mut project) => {
-                        project.file_path = Some(path.clone());
-                        // Assign IDs to any legacy closures that have id=0
-                        project.assign_closure_ids();
-                        source_projects.push(project);
-                    }
-                    Err(e) => {
-                        return CommandResult::failure(format!(
-                            "Failed to load project '{}': {}",
-                            path.display(),
-                            e
-                        ));
-                    }
-                },
-                Err(e) => {
-                    return CommandResult::failure(format!(
-                        "Failed to open project '{}': {}",
-                        path.display(),
-                        e
-                    ));
-                }
+            let label = merge_source_label(path);
+            match read_source_project(path, &label, "merged") {
+                Ok(source) => source_projects.push(source.project),
+                Err(e) => return CommandResult::failure(e),
             }
         }
 
@@ -248,6 +256,16 @@ impl AppState {
         }
 
         std::fs::rename(path, &archive_path)?;
+        // A `-wal` or hot `-journal` belongs to the database by NAME: left
+        // behind, the archive loses the WAL's commits (which the merge itself
+        // read) and a stale journal waits for whatever file next takes this
+        // name. Each moves with the database.
+        for suffix in SQLITE_SIDECARS {
+            let sidecar = with_suffix(path, suffix);
+            if sidecar.is_file() {
+                std::fs::rename(&sidecar, with_suffix(&archive_path, suffix))?;
+            }
+        }
         tracing::info!(
             original = ?path,
             archived = ?archive_path,

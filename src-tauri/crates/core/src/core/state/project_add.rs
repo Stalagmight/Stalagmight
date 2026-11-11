@@ -1,27 +1,29 @@
 //! "Add .stalx to current project" (#674): append another project file's
 //! survey into the OPEN project, as one undoable command.
 //!
-//! The copy itself is [`append_project`], the routine "Merge projects" uses.
-//! What this file adds around it is what only an add needs: reading the source
-//! without touching it, placing a georeferenced source by its datum, carrying
-//! the source's dedup hashes and ignored warnings, refusing corruption without
-//! a whole-project snapshot, and the receipt.
+//! The source is read by [`read_source_project`] and copied by
+//! [`append_project`] (which also places a georeferenced source by its datum),
+//! the two routines "Merge projects" uses too. What this file adds around them
+//! is what only an add needs: carrying the source's dedup hashes and ignored
+//! warnings, refusing corruption without a whole-project snapshot, and the
+//! receipt.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use super::project_append::{append_project, AppendOutcome};
 use super::project_io::same_file;
+use super::project_source::{read_source_project, SourceProject};
 use super::AppState;
 use crate::core::command::{sanitize_display_text, ImportReceipt, MAX_FILE_NAME_LEN};
 use crate::core::{
     extend_unique_hashes, AddedContent, CarriedIgnore, Command, CommandResult, UndoData,
 };
 use crate::models::{
-    gps_to_local, warning_is_ignorable, ClassifyScope, GpsCoordinates, Project, SectionId,
-    SpeleoLink, FEATURE_ID_STRIDE, MAX_SECTIONS_IN_ID_SPACE, MAX_SECTION_ID,
+    warning_is_ignorable, Project, SectionId, FEATURE_ID_STRIDE, MAX_SECTIONS_IN_ID_SPACE,
+    MAX_SECTION_ID,
 };
-use crate::persistence::{Database, ResolvedWarning};
+use crate::persistence::ResolvedWarning;
 
 /// The import-dedup entry an add records for its source, in
 /// `Project::imported_file_hashes` beside the content hashes the importers
@@ -37,189 +39,6 @@ const STALX_IDENTITY_PREFIX: &str = "stalx-project:";
 
 fn stalx_identity(project: &Project) -> String {
     format!("{STALX_IDENTITY_PREFIX}{}", project.created_at.to_rfc3339())
-}
-
-/// The source as the add reads it.
-struct AddSource {
-    project: Project,
-    /// Its `resolved_warnings` rows; `None` when the table could not be read.
-    ignores: Option<Vec<ResolvedWarning>>,
-    link: Option<SpeleoLink>,
-}
-
-/// Read `path` WITHOUT touching it, normalized the way opening it would be.
-///
-/// Through a private copy: opening an older file migrates it in place, and the
-/// source - possibly a SpeleoDB-managed cache copy whose bytes are compared
-/// against its server commit - must stay exactly as it was. The source's undo
-/// history is never read.
-fn load_add_source(path: &Path, label: &str) -> Result<AddSource, String> {
-    let dir = tempfile::tempdir()
-        .map_err(|e| format!("Failed to prepare a private copy of '{label}': {e}"))?;
-    let copy = dir.path().join("source.stalx");
-    copy_regular_file(path, &copy, label)?;
-    let db = Database::open_existing(&copy)
-        .map_err(|e| format!("Failed to open project '{label}': {e}"))?;
-    let mut project = db
-        .load_project()
-        .map_err(|e| format!("Failed to load project '{label}': {e}"))?;
-    let ignores = db.load_resolved_warnings_verbatim().ok();
-    // An unreadable link table on a file whose project DID load is treated as
-    // no link: the copy carries survey data only either way, so the link only
-    // ever decides one receipt line.
-    let link = db.load_speleo_link().ok().flatten();
-    // The v12->v13 migration that just ran on the copy seeded every legacy
-    // reference shot as Jump and left this flag for the open path to finish.
-    // Read before the copy is dropped: it goes with the temp database, so an
-    // add that skipped it would leave those shots swimmable for good.
-    let kind_classification_pending = db.is_kind_classification_pending();
-    drop(db);
-    refuse_non_finite_placement(&project, label)?;
-
-    // What an open does to a freshly read project, in the same order
-    // (`do_load_project_full`): every shot gets a uuid (the identity ignores
-    // and cross-references are re-keyed onto), legacy closures get ids, the
-    // derived offsets are re-solved rather than trusted, and a pending #27
-    // Jump/Reference backfill is run on the source's own graph. Nothing is
-    // written back: the copy is discarded and the source stays untouched.
-    project.ensure_shot_uuids();
-    project.assign_closure_ids();
-    project.redrive_offsets_after_load();
-    if kind_classification_pending {
-        project.classify_virtual_shots(&ClassifyScope::WholeProject);
-    }
-    Ok(AddSource {
-        project,
-        ignores,
-        link,
-    })
-}
-
-/// Refuse a source whose placement data cannot be trusted: the file reader
-/// builds zero-datum GPS without `GpsCoordinates::new`'s validation, and reads
-/// offsets as stored. A NaN or infinite value would pass every tolerance
-/// comparison downstream (NaN is never greater than a tolerance) and be written
-/// into the open project as section offsets; an out-of-range datum would place
-/// the copy somewhere meaningless. Checked on the raw read, before anything
-/// derives from it.
-fn refuse_non_finite_placement(project: &Project, label: &str) -> Result<(), String> {
-    let refuse = |what: String| {
-        Err(format!(
-            "'{label}' was not added: {what}. The file is damaged or was written by \
-             another tool. No changes were made."
-        ))
-    };
-    for datum in &project.zero_datums {
-        let gps = &datum.gps;
-        if let Err(e) = GpsCoordinates::validate(gps.latitude, gps.longitude, gps.depth_reference) {
-            return refuse(format!("a zero datum has invalid GPS coordinates ({e})"));
-        }
-    }
-    if project
-        .section_offsets
-        .values()
-        .any(|(x, y)| !x.is_finite() || !y.is_finite())
-    {
-        return refuse("a section offset is not a finite number".to_string());
-    }
-    if project
-        .station_offsets
-        .values()
-        .any(|(x, y, z)| !x.is_finite() || !y.is_finite() || !z.is_finite())
-    {
-        return refuse("a station offset is not a finite number".to_string());
-    }
-    Ok(())
-}
-
-/// The largest `.stalx` an add reads: the ceiling a SpeleoDB download of a
-/// project file is already held to. The read runs under `command_lock`, so an
-/// unbounded one would stall every edit behind it (and fill the disk).
-const MAX_ADD_SOURCE_BYTES: u64 = crate::speleodb::client::NATIVE_LIMIT;
-
-/// Copy `path` to `dest`, refusing anything that is not a regular file of at
-/// most [`MAX_ADD_SOURCE_BYTES`]: a FIFO or a device named `*.stalx` would
-/// block or never end, and a directory cannot be a project.
-///
-/// The metadata check runs before the file is opened (opening a FIFO for
-/// reading blocks), and the copy itself is bounded too, so a file that grows
-/// or is swapped after the check still cannot exceed the ceiling.
-fn copy_regular_file(path: &Path, dest: &Path, label: &str) -> Result<(), String> {
-    let limit_mb = MAX_ADD_SOURCE_BYTES / (1024 * 1024);
-    let metadata = match std::fs::metadata(path) {
-        Ok(metadata) => metadata,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err(format!("File not found: {label}"));
-        }
-        Err(e) => return Err(format!("Failed to read '{label}': {e}")),
-    };
-    if !metadata.is_file() {
-        return Err(format!("'{label}' is not a project file"));
-    }
-    if metadata.len() > MAX_ADD_SOURCE_BYTES {
-        return Err(format!(
-            "'{label}' is larger than {limit_mb} MB, the largest project file that can be added"
-        ));
-    }
-    let source = std::fs::File::open(path).map_err(|e| format!("Failed to read '{label}': {e}"))?;
-    let mut target =
-        std::fs::File::create(dest).map_err(|e| format!("Failed to read '{label}': {e}"))?;
-    let copied = std::io::copy(
-        &mut std::io::Read::take(source, MAX_ADD_SOURCE_BYTES + 1),
-        &mut target,
-    )
-    .map_err(|e| format!("Failed to read '{label}': {e}"))?;
-    if copied > MAX_ADD_SOURCE_BYTES {
-        return Err(format!(
-            "'{label}' grew past {limit_mb} MB while it was being read, so it was not added"
-        ));
-    }
-    Ok(())
-}
-
-/// Translate the copied sections so a georeferenced source lands at its GPS
-/// position: its first resolvable datum's station goes to that datum's local
-/// position in the open project's frame, or to the origin when the open project
-/// had no frame (the copied datum then BECOMES the frame).
-///
-/// The whole copy moves rigidly, unanchored components included, so the
-/// source's own layout is preserved. Nothing pre-existing moves. A source with
-/// no datum is left where it is - placing it is the orphan-placement dialog's
-/// job, not a guess made here.
-fn place_by_datum(
-    project: &mut Project,
-    new_ids: &[SectionId],
-    frame_before: Option<GpsCoordinates>,
-) {
-    let new: HashSet<SectionId> = new_ids.iter().copied().collect();
-    let Some((station, gps)) = project
-        .zero_datums
-        .iter()
-        .filter(|zd| new.contains(&zd.station_ref.section_id))
-        .find_map(|zd| project.resolve_key(&zd.station_ref).map(|sr| (sr, zd.gps)))
-    else {
-        return;
-    };
-    let Some(current) = project.compute_station_raw_coords(station) else {
-        return;
-    };
-    let (target_x, target_y) = frame_before.map_or((0.0, 0.0), |frame| gps_to_local(&gps, &frame));
-    let (dx, dy) = (target_x - current.x, target_y - current.y);
-    // Non-finite is refused at the read; this keeps a NaN (which passes the dust
-    // test below) from ever reaching an offset should another route produce one.
-    if !dx.is_finite() || !dy.is_finite() {
-        tracing::warn!(
-            purpose = "place an added source by its datum",
-            "Datum placement is not finite; leaving the copy where it is"
-        );
-        return;
-    }
-    if dx.abs() <= Project::OFFSET_DUST_M && dy.abs() <= Project::OFFSET_DUST_M {
-        return;
-    }
-    for id in new_ids {
-        project.adjust_section_offset(*id, dx, dy);
-    }
 }
 
 /// Re-key the source's ignored warnings onto the copied sections, by shot uuid.
@@ -403,7 +222,7 @@ impl AppState {
             ));
         }
 
-        let source = match load_add_source(path, &label) {
+        let source = match read_source_project(path, &label, "added") {
             Ok(source) => source,
             Err(e) => return CommandResult::failure(e),
         };
@@ -453,7 +272,10 @@ impl AppState {
 
     /// The copy and everything that settles it. On any failure the project is
     /// returned to exactly what it was, by the same removal the undo runs.
-    fn append_into_open(project: &mut Project, source: &AddSource) -> Result<AppendReport, String> {
+    fn append_into_open(
+        project: &mut Project,
+        source: &SourceProject,
+    ) -> Result<AppendReport, String> {
         // Section-id budget (#555), before a single section is appended: shot
         // ids encode as `section_id * FEATURE_ID_STRIDE + position` in 32 bits,
         // and `Section::new` computes that unchecked.
@@ -476,7 +298,6 @@ impl AppState {
         } else {
             None
         };
-        let frame_before = project.frame_datum().map(|d| d.gps);
         let pre_critical = project.has_critical_integrity_violations();
         let closures_before = project.loop_closures.len();
         let baseline = AddedContent::stub(project, None);
@@ -509,7 +330,6 @@ impl AppState {
         // The append stores transitional positional keys; give them the stable
         // anchors an open would, before anything can renumber a station.
         project.reanchor_station_refs();
-        place_by_datum(project, &outcome.new_section_ids, frame_before);
 
         // Carry the source's dedup state, so re-importing the Ariane/DMP file it
         // was built from is still caught here, plus its own identity.
@@ -554,7 +374,7 @@ impl AppState {
 
     fn add_receipt(
         label: &str,
-        source: &AddSource,
+        source: &SourceProject,
         report: &AppendReport,
         shot_count: u32,
     ) -> ImportReceipt {
@@ -843,7 +663,7 @@ pub(super) fn set_add_window_hook(window: AddWindow, hook: impl FnOnce(&AppState
 /// file is known to trip it - and this is the way to exercise its rollback.
 #[cfg(test)]
 pub(super) fn append_in_memory(project: &mut Project, source: Project) -> Result<(), String> {
-    let source = AddSource {
+    let source = SourceProject {
         project: source,
         ignores: None,
         link: None,

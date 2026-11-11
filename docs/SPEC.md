@@ -1484,7 +1484,13 @@ user to delete the connected shots instead.
    - Enter new merged system name
    - Optional checkbox: "Archive original project files (rename to
      .stalx.archived)" - off by default
-5. Confirm → Systems merged into single file
+5. Confirm → Systems merged into single file. Each source is read like an
+   open would read it (through a private copy, so the source files are only
+   read - renamed only if you choose to archive them - and an older file's
+   pending shot classification is finished).
+   A system with a GPS zero datum is placed at its real position: the first
+   one's datum station becomes the origin, and every later one lands at its
+   GPS position relative to it. A system without a datum keeps its own layout.
 6. Auto-switch to Single System View
 7. User connects the systems using Merge Tool
 
