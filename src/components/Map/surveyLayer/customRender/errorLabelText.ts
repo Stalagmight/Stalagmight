@@ -22,13 +22,12 @@
  */
 import { formatFixed } from '../../../../i18n/format';
 import { convertLength } from '../../../../utils/formatStats';
-import { getErrorColor } from '../../../../utils/colors';
 import type { LengthUnit } from '../../../../types/config';
 import type { LoopClosure } from '../../../../types/project';
 import type { MapThemeColors } from '../../../../utils/themeColors';
-import { issueScoreColor, closureErrorScore, severityTextColor } from '../issueColor';
+import { closureColor, closureErrorScore, issueScoreColor, severityTextColor } from '../issueColor';
 import type { ErrorLabelInput } from '../issueScore';
-import { METRIC_AZ, METRIC_INCL_DEPTH, METRIC_LENGTH, METRIC_PITCH } from '../shotQuality';
+import { METRIC_AZ, METRIC_CLOSURE, METRIC_INCL_DEPTH, METRIC_LENGTH, METRIC_PITCH } from '../issueScale';
 
 const DEFAULT_ANGLE_PRECISION = 1;
 const DEFAULT_LENGTH_PRECISION = 1;
@@ -63,7 +62,8 @@ function length(prefix: string, meters: number, unit: LengthUnit, precision: num
  *  part to show. */
 export function formatShotErrorLabel(input: ErrorLabelInput, i: number): string | null {
   const { metrics, scores, format } = input;
-  const ignored = scores.ignored[i] ?? 0;
+  // Ignored on this shot, or switched off in the colour-scale settings.
+  const ignored = (scores.ignored[i] ?? 0) | input.scale.hiddenMask;
   const anglePrecision = format.precision?.azimuth ?? DEFAULT_ANGLE_PRECISION;
   const inclPrecision = format.precision?.inclination ?? DEFAULT_ANGLE_PRECISION;
   const lengthPrecision = format.precision?.length ?? DEFAULT_LENGTH_PRECISION;
@@ -76,10 +76,16 @@ export function formatShotErrorLabel(input: ErrorLabelInput, i: number): string 
   return parts.length > 0 ? parts.join(' ') : null;
 }
 
-/** The colour of shot `i`'s Errors label: the Survey Issues ramp at its label
- *  score, so the worst labels read red at a glance (darkened on a light map). */
+/** The colour of shot `i`'s Errors label: the Survey Issues palette at its
+ *  label score, so the worst labels stand out at a glance (darkened on a light
+ *  map). */
 export function shotErrorLabelColor(input: ErrorLabelInput, i: number, theme: MapThemeColors): string {
-  return severityTextColor(issueScoreColor(theme, input.scores.labelScore[i] ?? 0), theme);
+  return severityTextColor(issueScoreColor(theme, input.scores.labelScore[i] ?? 0, input.palette), theme);
+}
+
+/** Whether the loop-closure Errors labels are drawn (closures not switched off). */
+export function closureErrorLabelsOn(input: ErrorLabelInput): boolean {
+  return (input.scale.hiddenMask & METRIC_CLOSURE) === 0;
 }
 
 /** The Errors label text of a loop closure, or null when its stored metrics
@@ -97,11 +103,15 @@ export function formatClosureErrorLabel(
   return `${prefix} ${formatFixed(pct, undefined, 1)}% ${distance}`;
 }
 
-/** A closure label's score and colour: the closure line's own colour bands
- *  (darkened on a light map). */
-export function closureErrorLabelStyle(closure: LoopClosure, theme: MapThemeColors): { score: number; color: string } {
-  return {
-    score: closureErrorScore(closure.error_percentage),
-    color: severityTextColor(getErrorColor(closure.error_percentage), theme),
-  };
+/** A closure label's score and colour: the colour of the closure line itself
+ *  (on the Survey Issues scale while it paints the map, else the line's own
+ *  colour bands), darkened on a light map. */
+export function closureErrorLabelStyle(
+  closure: LoopClosure,
+  input: Pick<ErrorLabelInput, 'scale' | 'palette' | 'graded'>,
+  theme: MapThemeColors,
+): { score: number; color: string } {
+  const levels = input.scale.levels.closure;
+  const color = closureColor(closure.error_percentage, { graded: input.graded, levels, palette: input.palette, theme });
+  return { score: closureErrorScore(closure.error_percentage, levels), color: severityTextColor(color, theme) };
 }

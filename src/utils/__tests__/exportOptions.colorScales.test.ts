@@ -11,7 +11,7 @@ describe('withColorScales', () => {
   it('sends nothing extra for the default palette and range (export unchanged)', () => {
     const out = withColorScales(
       DEFAULT_IMAGE_OPTIONS,
-      exportScaleInputsFrom({ depth: THEME, distance: THEME, pinned: [] }, { exportScale: AUTO, palettePreview: null }),
+      exportScaleInputsFrom({ depth: THEME, distance: THEME}, { exportScale: AUTO, palettePreview: null }),
     );
     expect(out).toEqual(withThemeDepthRamp(DEFAULT_IMAGE_OPTIONS));
     expect(out).not.toHaveProperty('depth_scale');
@@ -22,7 +22,7 @@ describe('withColorScales', () => {
     const out = withColorScales(
       DEFAULT_IMAGE_OPTIONS,
       exportScaleInputsFrom(
-        { depth: { id: 'mpl.viridis', reversed: false }, distance: THEME, pinned: [] },
+        { depth: { id: 'mpl.viridis', reversed: false }, distance: THEME},
         { exportScale: { depth: null, distance: { min: 10, max: 90, gamma: 2 } }, palettePreview: null },
       ),
     );
@@ -36,7 +36,7 @@ describe('withColorScales', () => {
 
   it("follows the picker's live preview for its kind", () => {
     const inputs = exportScaleInputsFrom(
-      { depth: THEME, distance: THEME, pinned: [] },
+      { depth: THEME, distance: THEME},
       { exportScale: AUTO, palettePreview: { kind: 'distance', choice: { id: 'mpl.magma', reversed: true } } },
     );
     expect(inputs.depth.choice).toEqual(THEME);
@@ -47,7 +47,7 @@ describe('withColorScales', () => {
     const options = { ...DEFAULT_IMAGE_OPTIONS };
     withColorScales(
       options,
-      exportScaleInputsFrom({ depth: { id: 'mpl.jet', reversed: false }, distance: THEME, pinned: [] }, { exportScale: AUTO, palettePreview: null }),
+      exportScaleInputsFrom({ depth: { id: 'mpl.jet', reversed: false }, distance: THEME}, { exportScale: AUTO, palettePreview: null }),
     );
     expect(options).toEqual(DEFAULT_IMAGE_OPTIONS);
   });

@@ -38,6 +38,7 @@ import type { MapThemeColors } from '../../../../utils/themeColors';
 import type { ErrorLabelInput } from '../issueScore';
 import {
   closureErrorLabelStyle,
+  closureErrorLabelsOn,
   formatClosureErrorLabel,
   formatShotErrorLabel,
   shotErrorLabelColor,
@@ -420,7 +421,7 @@ export function buildLabelDescriptors(
   // ─── Loop closure error labels ─────────────────────────────────
   // One per closure, at the midpoint of its two stations (a single point in
   // the Closures Computed View, where a closed loop's ends coincide).
-  if (errors !== null && wants(LABEL_KIND.CLOSURE_ERROR)) for (const closure of errors.closures) {
+  if (errors !== null && closureErrorLabelsOn(errors) && wants(LABEL_KIND.CLOSURE_ERROR)) for (const closure of errors.closures) {
     const gA = lookup.get(closure.station_a.section_id)?.get(closure.station_a.station_index);
     const gB = lookup.get(closure.station_b.section_id)?.get(closure.station_b.station_index);
     if (gA === undefined || gB === undefined) continue;
@@ -431,7 +432,7 @@ export function buildLabelDescriptors(
       closure, errors.format.abbrev.loop, errors.format.lengthUnit, errors.format.precision?.length,
     );
     if (text === null) continue;
-    const style = closureErrorLabelStyle(closure, ctx.themeColors!);
+    const style = closureErrorLabelStyle(closure, errors, ctx.themeColors!);
     descriptors.push({
       kind: LABEL_KIND.CLOSURE_ERROR,
       text,

@@ -100,6 +100,7 @@ export function sameColorGlobals(prev: DisplayColorContext, next: DisplayColorCo
   if (!sameColorScaleInput(prev.depthScale, next.depthScale)) return false;
   // Survey Issues mode: scores are non-local, so require the identical object.
   if (next.showIssueSeverity && prev.issueScores !== next.issueScores) return false;
+  if (next.showIssueSeverity && (prev.issuePalette?.key ?? null) !== (next.issuePalette?.key ?? null)) return false;
   // An analytical overlay recolors every feature; enter / exit and every
   // recompute (a fresh value-map ref) forces a full rebuild. A geometry flush
   // that leaves the overlay untouched keeps the same map refs ⇒ still same.

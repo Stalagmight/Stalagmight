@@ -16,14 +16,14 @@ import {
   parsePaletteQuery,
   resolveChoice,
   THEME_PALETTE_ID,
-  type ColorScaleKind,
+  type PaletteKind,
   type Palette,
   type PaletteChoice,
   type PaletteGroupId,
 } from '../../../utils/palettes';
 
 export interface PalettePickerProps {
-  kind: ColorScaleKind;
+  kind: PaletteKind;
   /** The persisted choice (what the trigger shows and what Escape reverts to). */
   value: PaletteChoice;
   pinned: readonly string[];
@@ -95,8 +95,11 @@ export function PalettePicker({
     [],
   );
 
-  const nameOf = (p: Palette) => (p.id === THEME_PALETTE_ID ? t('map.colorScale.themePalette') : p.name);
-  const groupLabel = (g: string) => t(`map.colorScale.groups.${g}`);
+  // The theme entry of the Survey Issues picker is its original ramp, not a
+  // theme colour, so it is called "Default" there.
+  const themeName = kind === 'issues' ? t('map.colorScale.issuesDefaultPalette') : t('map.colorScale.themePalette');
+  const nameOf = (p: Palette) => (p.id === THEME_PALETTE_ID ? themeName : p.name);
+  const groupLabel = (g: string) => (g === 'theme' && kind === 'issues' ? themeName : t(`map.colorScale.groups.${g}`));
   const swatch = (id: string, reversed: boolean) => cssGradient(resolveChoice({ id, reversed }, kind, endpoints));
 
   const { text, reversed: queryReversed } = parsePaletteQuery(query);

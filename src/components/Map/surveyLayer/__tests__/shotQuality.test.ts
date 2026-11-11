@@ -6,9 +6,11 @@ import {
   shotMetricScore,
   METRIC_AZ,
   METRIC_INCL_DEPTH,
+  METRIC_LENGTH,
   METRIC_PITCH,
 } from '../shotQuality';
 import { surveyDataWithAdjustedStations } from '../../../../types/survey-data';
+import { issueScaleFrom } from '../issueScale';
 import { buildSurveyData, oneShot, type ShotReadings } from './surveyQualityFixture';
 
 const metricsOf = (r: ShotReadings) => {
@@ -163,7 +165,8 @@ describe('shotMetricScore', () => {
   const m = computeShotQualityMetrics(
     oneShot({ azimuthIn: 0, azimuthOut: 30, length: 10, depthIn: 0, depthOut: 5, pitchIn: 20, pitchOut: 40 }),
   );
-  const t = { azimuthDiff: 20, pitchDiff: 10, inclinationDepthDiff: 15 };
+  const T_DEG = { azimuthDiff: 20, pitchDiff: 10, inclinationDepthDiff: 15 };
+  const t = issueScaleFrom(T_DEG, {}, [], 'worst');
   it('takes the worst metric', () => {
     // az 30/20 = 1.5, pitch 20/10 = 2, incl/depth |30-30| = 0
     expect(shotMetricScore(m, 0, t, 0)).toBeCloseTo(2, 5);
@@ -171,6 +174,25 @@ describe('shotMetricScore', () => {
   it('skips the ignored metrics', () => {
     expect(shotMetricScore(m, 0, t, METRIC_PITCH)).toBeCloseTo(1.5, 5);
     expect(shotMetricScore(m, 0, t, METRIC_PITCH | METRIC_AZ)).toBeCloseTo(0, 4);
-    expect(shotMetricScore(m, 0, t, METRIC_AZ | METRIC_PITCH | METRIC_INCL_DEPTH)).toBe(0);
+    expect(shotMetricScore(m, 0, t, METRIC_AZ | METRIC_PITCH | METRIC_INCL_DEPTH | METRIC_LENGTH)).toBe(0);
+  });
+  it('averages the palette positions in average mode', () => {
+    const avg = { ...t, combine: 'average' as const };
+    // az 1.5 (position 0.625), pitch 2 (0.75), incl/depth ~0 (0), length ~0 (0):
+    // mean position 0.34375 -> score 0.6875.
+    expect(shotMetricScore(m, 0, avg, 0)).toBeCloseTo(0.6875, 4);
+    // Only az and pitch: mean position 0.6875 -> score 1.75.
+    expect(shotMetricScore(m, 0, avg, METRIC_INCL_DEPTH | METRIC_LENGTH)).toBeCloseTo(1.75, 5);
+  });
+  it('grades the length delta on its own levels', () => {
+    // 10 m recorded, 5 m depth change at 20/40 deg recorded (mean 30): implied
+    // length 10 m, so ΔL ~ 0; a 2 m warn level never reaches it.
+    const steep = computeShotQualityMetrics(
+      oneShot({ azimuthIn: 0, azimuthOut: 0, length: 12, depthIn: 0, depthOut: 5, pitchIn: 30, pitchOut: 30 }),
+    );
+    // ΔL = 12 - 5 / sin 30 = 2 m: at the default 1 m warn / 3 m max that is 2.
+    expect(shotMetricScore(steep, 0, t, METRIC_INCL_DEPTH)).toBeCloseTo(2, 4);
+    const lenient = issueScaleFrom(T_DEG, { length: { min: 0, warn: 2, max: 4 } }, [], 'worst');
+    expect(shotMetricScore(steep, 0, lenient, METRIC_INCL_DEPTH)).toBeCloseTo(1, 4);
   });
 });

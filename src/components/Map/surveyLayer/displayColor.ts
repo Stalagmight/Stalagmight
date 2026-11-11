@@ -13,6 +13,7 @@ import { scaleHex, type ColorScaleInput } from '../../../utils/palettes';
 import type { MapThemeColors } from '../../../utils/themeColors';
 import { type SurveyData, STATION_FLAG_IS_ZERO_DATUM } from '../../../types/survey-data';
 import { issueScoreColor } from './issueColor';
+import type { ResolvedPalette } from '../../../utils/palettes/sample';
 
 export type DepthRange = { min: number; max: number };
 
@@ -72,6 +73,9 @@ export interface DisplayColorContext {
   showIssueSeverity: boolean;
   /** Graded Survey Issues scores, 0 to 3 per shot / station (`issueScore.ts`). */
   issueScores?: { shotScore: Float32Array; stationScore: Float32Array } | undefined;
+  /** The Survey Issues palette (map legend cog). Null / absent = the default
+   *  green -> yellow -> red on its original code path. */
+  issuePalette?: ResolvedPalette | null;
   /** An analytical overlay (distance gradient / gas reach) active in the CUSTOM
    *  renderer. Null / absent = off. See {@link OverlayColorInput}. The stock
    *  feature builder ignores this - it colors by section/depth/severity and lets
@@ -152,7 +156,7 @@ export function resolveShotDisplayColor(
   ctx: DisplayColorContext,
 ): string {
   if (ctx.showIssueSeverity && ctx.issueScores) {
-    return issueScoreColor(ctx.themeColors, ctx.issueScores.shotScore[shotGlobalIdx] ?? 0);
+    return issueScoreColor(ctx.themeColors, ctx.issueScores.shotScore[shotGlobalIdx] ?? 0, ctx.issuePalette);
   }
   if (ctx.showDepthGradient) {
     const avgDepth = (data.shotDepthIn[shotGlobalIdx]! + data.shotDepthOut[shotGlobalIdx]!) / 2;
@@ -198,7 +202,7 @@ export function resolveStationDisplayColor(
   ctx: DisplayColorContext,
 ): string {
   if (ctx.showIssueSeverity && ctx.issueScores) {
-    return issueScoreColor(ctx.themeColors, ctx.issueScores.stationScore[stationGlobalIdx] ?? 0);
+    return issueScoreColor(ctx.themeColors, ctx.issueScores.stationScore[stationGlobalIdx] ?? 0, ctx.issuePalette);
   }
   const isZeroDatum = (data.stationFlags[stationGlobalIdx]! & STATION_FLAG_IS_ZERO_DATUM) !== 0;
   if (ctx.showDepthGradient) {

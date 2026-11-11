@@ -1,6 +1,7 @@
 /**
  * The Survey Issues inputs the map hands its survey layer: the warnings, the
- * project's thresholds, and how to format the Errors labels.
+ * committed colour scale (per-error levels, switched-off errors, combine mode),
+ * the palette, and how to format the Errors labels.
  *
  * Returns null while neither the graded colouring nor the labels are on, and a
  * stable object otherwise (it only changes when one of its inputs does). That
@@ -11,26 +12,16 @@ import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
-import { DEFAULT_VALIDATION_CONFIG } from '../../utils/validation';
 import type { ErrorLabelFormat, IssueRenderInput } from './surveyLayer/issueScore';
-import type { ShotQualityThresholds } from './surveyLayer/shotQuality';
+import { useIssuePalette, useIssueScale } from './colorScale/useIssueScale';
 
 export function useIssueRenderInput(colorOn: boolean, labelsOn: boolean): IssueRenderInput | null {
   const { t } = useTranslation();
   const warnings = useProjectStore((s) => s.warnings);
-  const projectValidation = useProjectStore((s) => s.project?.validation);
-  const configValidation = useProjectStore((s) => s.config?.validation);
   const lengthUnit = useProjectStore((s) => s.config?.units.length ?? 'meters');
   const precision = useDecimalPrecision();
-
-  const validation = projectValidation ?? configValidation ?? DEFAULT_VALIDATION_CONFIG;
-  const azimuthDiff = validation.azimuth_diff_threshold;
-  const pitchDiff = validation.pitch_diff_threshold;
-  const inclinationDepthDiff = validation.inclination_depth_diff_threshold;
-  const thresholds = useMemo<ShotQualityThresholds>(
-    () => ({ azimuthDiff, pitchDiff, inclinationDepthDiff }),
-    [azimuthDiff, pitchDiff, inclinationDepthDiff],
-  );
+  const scale = useIssueScale();
+  const palette = useIssuePalette();
 
   const labels = useMemo<ErrorLabelFormat | null>(
     () =>
@@ -51,7 +42,7 @@ export function useIssueRenderInput(colorOn: boolean, labelsOn: boolean): IssueR
   );
 
   return useMemo<IssueRenderInput | null>(
-    () => (colorOn || labels ? { color: colorOn, labels, warnings, thresholds } : null),
-    [colorOn, labels, warnings, thresholds],
+    () => (colorOn || labels ? { color: colorOn, labels, warnings, scale, palette } : null),
+    [colorOn, labels, warnings, scale, palette],
   );
 }

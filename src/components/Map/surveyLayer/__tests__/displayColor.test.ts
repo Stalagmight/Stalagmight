@@ -17,6 +17,7 @@ import {
   type DisplayColorContext,
 } from '../displayColor';
 import { closureErrorScore, issueScoreColor } from '../issueColor';
+import { defaultIssueLevels } from '../issueScale';
 import { surveyDataFromLegacy } from '../../../../types/survey-data';
 import { getMapThemeColors } from '../../../../utils/themeColors';
 import { getDepthColor } from '../../../../utils/colors';
@@ -247,13 +248,19 @@ describe('Survey Issues gradient (issue scores)', () => {
 });
 
 describe('closureErrorScore', () => {
-  it('maps the closure colour band edges onto the shot score scale', () => {
-    expect(closureErrorScore(0)).toBe(0);
-    expect(closureErrorScore(0.5)).toBe(0.5);
-    expect(closureErrorScore(1)).toBe(1);
-    expect(closureErrorScore(3)).toBe(2);
-    expect(closureErrorScore(5)).toBe(3);
-    expect(closureErrorScore(40)).toBe(3);
-    expect(closureErrorScore(NaN)).toBe(0);
+  const levels = defaultIssueLevels({ azimuthDiff: 1, pitchDiff: 1, inclinationDepthDiff: 1 }).closure;
+  it('maps the closure colour band edges onto the shot score scale with the default levels', () => {
+    expect(closureErrorScore(0, levels)).toBe(0);
+    expect(closureErrorScore(0.5, levels)).toBe(0.5);
+    expect(closureErrorScore(1, levels)).toBe(1);
+    expect(closureErrorScore(3, levels)).toBe(2);
+    expect(closureErrorScore(5, levels)).toBe(3);
+    expect(closureErrorScore(40, levels)).toBe(3);
+    expect(closureErrorScore(NaN, levels)).toBe(0);
+  });
+  it('follows the closure levels the user set', () => {
+    expect(closureErrorScore(2, { min: 1, warn: 2, max: 4 })).toBe(1);
+    expect(closureErrorScore(1, { min: 1, warn: 2, max: 4 })).toBe(0);
+    expect(closureErrorScore(3, { min: 1, warn: 2, max: 4 })).toBe(2);
   });
 });

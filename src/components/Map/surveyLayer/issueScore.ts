@@ -1,23 +1,24 @@
 /**
  * Graded issue scores for the map's Survey Issues colouring and Errors labels.
  *
- * Every shot gets a score from 0 to 3 (see `shotQuality.ts`): 0 when its
- * readings agree, 1 at a warning threshold, 3 at three times the threshold.
- * On top of the metric score:
+ * Every error of a shot scores 0 to 3 against its own Min / Warn / Max levels
+ * (`issueScale.ts`); the shot's score combines them - the worst, or the
+ * average, per the user's choice - leaving out errors the user switched off,
+ * errors that cannot be computed and errors whose warning was ignored. On top:
  *
  *   - an unresolved ERROR on the shot (zero length, length shorter than the
- *     depth change, ...) forces 3 (red);
+ *     depth change, ...) forces 3 (the palette's end);
  *   - any other unresolved warning (short / long shot, large depth change, or a
- *     code this module does not know) floors the colour at 1 (yellow), as the
- *     old three-colour mode did;
+ *     code this module does not know) floors the colour at 1 (the warn colour),
+ *     as the old three-colour mode did;
  *   - an IGNORED (resolved) AZIMUTH_DEVIATION / PITCH_DEVIATION /
  *     INCLINATION_DEPTH_MISMATCH drops that metric from the shot.
  *
- * `labelScore` is the score without the yellow floor: it ranks and colours the
- * Errors labels, which show the metric values. A station takes the highest
- * score of the shots touching it, raised to 3 when it is a datum of an
- * over-anchored merge group, and the score is shared across its merge group
- * (`stationMergedWith` is transitive, so one sweep per group is exact).
+ * `labelScore` is the score without the warn floor: it ranks and colours the
+ * Errors labels, which show the metric values. A station combines the shots
+ * touching it the same way (worst or average), is raised to 3 when it is a
+ * datum of an over-anchored merge group, and shares its score across its merge
+ * group (`stationMergedWith` is transitive, so one sweep per group is exact).
  *
  * Pure: aligned to the global shot / station indices `SurveyData` uses.
  */
@@ -25,16 +26,18 @@ import type { SectionMetadata, SurveyData } from '../../../types/survey-data';
 import type { ProjectWarning } from '../../../types/commands';
 import type { DecimalPrecision, LengthUnit } from '../../../types/config';
 import type { LoopClosure } from '../../../types/project';
+import type { ResolvedPalette } from '../../../utils/palettes/sample';
 import { buildStationLookup } from './customRender/tessellate';
+import { computeShotQualityMetrics, shotMetricScore, WARNING_CODE_METRICS, type ShotQualityMetrics } from './shotQuality';
 import {
-  computeShotQualityMetrics,
+  positionToScore,
+  sameIssueScale,
   SCORE_MAX,
   SCORE_WARNING,
-  shotMetricScore,
-  WARNING_CODE_METRICS,
-  type ShotQualityMetrics,
-  type ShotQualityThresholds,
-} from './shotQuality';
+  ScoreCombiner,
+  scoreToPosition,
+  type IssueScale,
+} from './issueScale';
 
 export interface IssueScores {
   /** Colour score per GLOBAL shot index. */
@@ -51,7 +54,7 @@ export function computeIssueScores(
   data: SurveyData,
   metrics: ShotQualityMetrics,
   warnings: readonly ProjectWarning[],
-  thresholds: ShotQualityThresholds,
+  scale: IssueScale,
 ): IssueScores {
   const n = data.shotCount;
   const shotScore = new Float32Array(n);
@@ -78,14 +81,28 @@ export function computeIssueScores(
   }
 
   // (2) Per-shot scores.
+  const combiner = new ScoreCombiner(scale.combine);
   for (let i = 0; i < n; i++) {
-    const metric = shotMetricScore(metrics, i, thresholds, ignored[i]!);
+    const metric = shotMetricScore(metrics, i, scale, ignored[i]! | scale.hiddenMask, combiner);
     labelScore[i] = hardError[i] ? SCORE_MAX : metric;
     shotScore[i] = hardError[i] ? SCORE_MAX : Math.max(metric, warned[i] ? SCORE_WARNING : 0);
   }
 
   // (3) (sectionId, stationIndex) -> global station index, the renderer's own map.
   const stationLookup = buildStationLookup(data);
+  const average = scale.combine === 'average';
+  // Average mode: palette-position sums and shot counts per station.
+  const posSum = average ? new Float64Array(data.stationCount) : null;
+  const posCount = average ? new Uint32Array(data.stationCount) : null;
+  const addTo = (g: number | undefined, s: number) => {
+    if (g === undefined) return;
+    if (posSum && posCount) {
+      posSum[g] = posSum[g]! + scoreToPosition(s);
+      posCount[g] = posCount[g]! + 1;
+    } else {
+      raise(stationScore, g, s);
+    }
+  };
 
   // (4) Each shot's score into its endpoint stations. Shot i of a section
   //     connects station_index i and i + 1.
@@ -94,39 +111,50 @@ export function computeIssueScores(
     if (!inner) continue;
     for (let i = 0; i < sec.shotCount; i++) {
       const s = shotScore[sec.shotOffset + i]!;
-      if (s === 0) continue;
-      raise(stationScore, inner.get(i), s);
-      raise(stationScore, inner.get(i + 1), s);
+      if (s === 0 && !average) continue;
+      addTo(inner.get(i), s);
+      addTo(inner.get(i + 1), s);
     }
   }
 
-  // (4b) An over-anchoring error is attached to one representative shot but
-  //      names every zero datum of the group in `datumRefs`; a datum can sit in
-  //      a different merge group from that shot, so colour each one directly.
-  for (const w of warnings) {
-    if (w.isResolved || !w.datumRefs) continue;
-    const s = w.severity === 'error' ? SCORE_MAX : SCORE_WARNING;
-    for (const ref of w.datumRefs) raise(stationScore, stationLookup.get(ref.section_id)?.get(ref.station_index), s);
-  }
-
-  // (5) Share the highest score across each transitive merge group.
+  // (5) Share the score across each transitive merge group: the highest, or
+  //     the average over every shot touching any member.
   const visited = new Uint8Array(data.stationCount);
   for (let g = 0; g < data.stationCount; g++) {
     if (visited[g]) continue;
     visited[g] = 1;
     const group = data.stationMergedWith.get(g);
-    if (!group || group.length === 0) continue;
     const members = [g];
-    for (const ref of group) {
+    for (const ref of group ?? []) {
       const mg = stationLookup.get(ref.section_id)?.get(ref.station_index);
       if (mg !== undefined) members.push(mg);
     }
-    let groupMax = 0;
-    for (const mg of members) groupMax = Math.max(groupMax, stationScore[mg]!);
+    let shared = 0;
+    if (posSum && posCount) {
+      let sum = 0;
+      let count = 0;
+      for (const mg of members) {
+        sum += posSum[mg]!;
+        count += posCount[mg]!;
+      }
+      shared = count > 0 ? positionToScore(sum / count) : 0;
+    } else {
+      for (const mg of members) shared = Math.max(shared, stationScore[mg]!);
+    }
     for (const mg of members) {
-      stationScore[mg] = groupMax;
+      stationScore[mg] = shared;
       visited[mg] = 1;
     }
+  }
+
+  // (6) An over-anchoring error is attached to one representative shot but
+  //     names every zero datum of the group in `datumRefs`; a datum can sit in
+  //     a different merge group from that shot, so colour each one directly.
+  //     After the sharing: a datum's own error is not averaged away.
+  for (const w of warnings) {
+    if (w.isResolved || !w.datumRefs) continue;
+    const s = w.severity === 'error' ? SCORE_MAX : SCORE_WARNING;
+    for (const ref of w.datumRefs) raise(stationScore, stationLookup.get(ref.section_id)?.get(ref.station_index), s);
   }
 
   return { shotScore, stationScore, labelScore, ignored };
@@ -168,7 +196,11 @@ export interface IssueRenderInput {
   /** The Errors labels are on (and how to format them), else null. */
   labels: ErrorLabelFormat | null;
   warnings: readonly ProjectWarning[];
-  thresholds: ShotQualityThresholds;
+  /** Per-error levels, the switched-off errors and the combine mode. */
+  scale: IssueScale;
+  /** The Survey Issues palette, or null for the default green -> yellow -> red
+   *  (which then takes its original code path, byte for byte). */
+  palette: ResolvedPalette | null;
 }
 
 /** Everything the label builder needs to draw the Errors labels. */
@@ -177,6 +209,11 @@ export interface ErrorLabelInput {
   scores: IssueScores;
   format: ErrorLabelFormat;
   closures: readonly LoopClosure[];
+  scale: IssueScale;
+  palette: ResolvedPalette | null;
+  /** Survey Issues paints the map: loop closures are coloured on the same
+   *  scale (else they keep their own colour bands). */
+  graded: boolean;
 }
 
 export interface IssueRender {
@@ -186,18 +223,14 @@ export interface IssueRender {
 
 interface RenderMemo {
   warnings: readonly ProjectWarning[];
-  thresholds: ShotQualityThresholds;
+  scale: IssueScale;
   scores: IssueScores;
-  format: ErrorLabelFormat | null;
+  input: IssueRenderInput;
   closures: readonly LoopClosure[];
   render: IssueRender;
 }
 
 const renderMemo = new WeakMap<SurveyData, RenderMemo>();
-
-function sameThresholds(a: ShotQualityThresholds, b: ShotQualityThresholds): boolean {
-  return a.azimuthDiff === b.azimuthDiff && a.pitchDiff === b.pitchDiff && a.inclinationDepthDiff === b.inclinationDepthDiff;
-}
 
 /**
  * The scores (and label input) for one flush, or null when neither the
@@ -214,33 +247,45 @@ export function resolveIssueRender(
   if (!input || (!input.color && !input.labels)) return null;
   const closureList = closures ?? EMPTY_CLOSURES;
   const prev = renderMemo.get(data);
+  const sameScores = !!prev && prev.warnings === input.warnings && sameIssueScale(prev.scale, input.scale);
   if (
     prev &&
-    prev.warnings === input.warnings &&
-    sameThresholds(prev.thresholds, input.thresholds) &&
-    prev.format === input.labels &&
+    sameScores &&
+    prev.input.labels === input.labels &&
+    prev.input.color === input.color &&
+    prev.input.palette?.key === input.palette?.key &&
     prev.closures === closureList
   ) {
     return prev.render;
   }
   const metrics = computeShotQualityMetrics(data);
-  const scores =
-    prev && prev.warnings === input.warnings && sameThresholds(prev.thresholds, input.thresholds)
-      ? prev.scores
-      : computeIssueScores(data, metrics, input.warnings, input.thresholds);
+  const scores = prev && sameScores ? prev.scores : computeIssueScores(data, metrics, input.warnings, input.scale);
   const render: IssueRender = {
     scores,
-    labels: input.labels ? { metrics, scores, format: input.labels, closures: closureList } : null,
+    labels: input.labels
+      ? {
+          metrics,
+          scores,
+          format: input.labels,
+          closures: closureList,
+          scale: input.scale,
+          palette: input.palette,
+          graded: input.color,
+        }
+      : null,
   };
-  renderMemo.set(data, {
-    warnings: input.warnings,
-    thresholds: input.thresholds,
-    scores,
-    format: input.labels,
-    closures: closureList,
-    render,
-  });
+  renderMemo.set(data, { warnings: input.warnings, scale: input.scale, scores, input, closures: closureList, render });
   return render;
 }
 
 const EMPTY_CLOSURES: readonly LoopClosure[] = [];
+
+/** The committed input with a live preview's scale and palette in place, or
+ *  the committed input itself when there is no preview. */
+export function withIssueOverride(
+  committed: IssueRenderInput | null,
+  preview: { scale: IssueScale; palette: ResolvedPalette | null } | null,
+): IssueRenderInput | null {
+  if (!preview || !committed) return committed;
+  return { ...committed, scale: preview.scale, palette: preview.palette };
+}

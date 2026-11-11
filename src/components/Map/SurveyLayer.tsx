@@ -41,7 +41,10 @@ import { DragGhostController } from './surveyLayer/dragGhostController';
 import type { GhostRenderData } from './surveyLayer/customRender/surveyGhostLayer';
 import { buildGhostRenderData } from './surveyLayer/dragGhostData';
 import { padProbeBox, type ProbeGeometry } from './surveyLayer/hitProbe';
-import { resolveIssueRender, type IssueRender, type IssueRenderInput } from './surveyLayer/issueScore';
+import { resolveIssueRender, withIssueOverride, type IssueRender, type IssueRenderInput } from './surveyLayer/issueScore';
+import { closureLineColor } from './surveyLayer/issueColor';
+import { loopClosureFeatures } from './surveyLayer/loopClosureLines';
+import type { IssueScalePreview } from './colorScale/useIssueScale';
 import { SurveyCustomController, buildCustomDimState, type CustomRenderExclusion } from './surveyLayer/customRender/controller';
 import { SurveyLabelController } from './surveyLayer/customRender/labelController';
 import { overlayInputFrom } from './surveyLayer/customRender/overlayColor';
@@ -70,7 +73,6 @@ import {
   type GasReachFeatureState,
 } from '../../utils/gasReach';
 import { metersToMapCoords } from '../../utils/coordinates';
-import { getErrorColor } from '../../utils/colors';
 import { trackNav } from '../../utils/telemetry';
 import { FEATURE_ID_STRIDE, sectionIdFromKey } from '../../utils/ids';
 import { MEASURE_TINT } from '../../utils/measurePath';
@@ -330,6 +332,11 @@ export default class SurveyLayer {
   // Survey Issues colouring + Errors labels (#22). Like showDepthGradient, cached
   // so the theme rebuild re-fires with the same mode.
   private issueInput: IssueRenderInput | null = null;
+  // The input update() last passed, and a live cog preview standing in for its
+  // scale / palette (`issueInput` is the two combined).
+  private committedIssueInput: IssueRenderInput | null = null;
+  private issueOverride: IssueScalePreview | null = null;
+  private issueFrame: number | null = null;
 
   // Distance-gradient overlay (#34). feature-state based so re-root needs no
   // feature rebuild; re-applied after source rebuilds because endApplyFeatures
@@ -1639,6 +1646,7 @@ export default class SurveyLayer {
       themeColors: this.themeColors,
       showIssueSeverity: !!this.issueInput?.color && !!this.cachedIssueRender,
       issueScores: this.cachedIssueRender?.scores,
+      issuePalette: this.issueInput?.palette ?? null,
       planIdleTint: this.isPlanIdleActive(),
     };
   }
@@ -1746,6 +1754,14 @@ export default class SurveyLayer {
     if (this.previewFrame !== null) cancelAnimationFrame(this.previewFrame);
     this.previewFrame = null;
     this.pendingPreview = null;
+  }
+
+  /** Teardown: drop both preview frames (the issues one is independent of the
+   *  depth / distance one, which every committed colour-scale change cancels). */
+  private cancelPreviewFrames(): void {
+    this.cancelPreviewFrame();
+    if (this.issueFrame !== null) cancelAnimationFrame(this.issueFrame);
+    this.issueFrame = null;
   }
 
   /** The active analytical overlay's colour input (distance carries its scale). */
@@ -2846,7 +2862,7 @@ export default class SurveyLayer {
         emit: 'line',
         coords: [a, b],
         movingEnd: 'uniform',
-        properties: { kind: 'closure', color: getErrorColor(lc.error_percentage) },
+        properties: { kind: 'closure', color: this.closureColor(lc.error_percentage) },
       });
     }
 
@@ -3039,7 +3055,7 @@ export default class SurveyLayer {
         emit: 'line',
         coords: [fromCoord, toCoord],
         movingEnd: aMoving && bMoving ? 'both' : aMoving ? 'from' : 'to',
-        properties: { kind: 'closure', color: getErrorColor(lc.error_percentage) },
+        properties: { kind: 'closure', color: this.closureColor(lc.error_percentage) },
       });
       closureExclusions.push(['all',
         ['==', ['get', 'stationA'], keyA],
@@ -3376,6 +3392,7 @@ export default class SurveyLayer {
       themeColors: this.themeColors,
       showIssueSeverity: !!this.issueInput?.color,
       issueScores: this.cachedIssueRender?.scores,
+      issuePalette: this.issueInput?.palette ?? null,
       // Analytical overlay ramp colors (distance #34 / gas-reach #38): the custom
       // layer has no feature-state, so it resolves them per feature at build time.
       overlay: this.overlayInput(),
@@ -3488,7 +3505,8 @@ export default class SurveyLayer {
     this.gpsOrigin = gpsOrigin;
     this.showDepthGradient = showDepthGradient;
     this.depthRange = normalizeDepthRange(depthRange);
-    this.issueInput = issueInput;
+    this.committedIssueInput = issueInput;
+    this.issueInput = withIssueOverride(issueInput, this.issueOverride);
 
     // Sections this flush removes (delete / undo-of-add), read BEFORE the cache
     // overwrite: their custom geometry vanishes synchronously in syncCustomRender
@@ -3510,7 +3528,7 @@ export default class SurveyLayer {
     ) ?? surveyDataFromLegacy(sections, stations);
 
     this.cachedSurveyData = surveyData;
-    this.cachedIssueRender = resolveIssueRender(surveyData, issueInput, loopClosures);
+    this.cachedIssueRender = resolveIssueRender(surveyData, this.issueInput, loopClosures);
     // INVARIANT: geoIndex is re-created (never mutated in place) on every flush -
     // its per-instance lazy caches rest on a fresh instance per geometry change.
     this.geoIndex = new SurveyGeometryIndex(surveyData, this.gpsOrigin);
@@ -3563,33 +3581,38 @@ export default class SurveyLayer {
     }
   }
 
-  /** Publish the loop-closure indicator lines to their GeoJSON source from the
-   *  cached closures + the geometry index. The custom renderer draws everything
-   *  else; loop closures stay a small stock GeoJSON overlay, like the gas route. */
+  /** Publish the loop-closure lines (`loopClosureFeatures`) to their source. */
   private publishLoopClosures(): void {
     const source = this.map.getSource(this.sourceId + '-loop-closures');
     if (!source || source.type !== 'geojson' || !this.geoIndex) return;
-    const features: GeoJSON.Feature[] = [];
-    for (const lc of this.cachedLoopClosures ?? []) {
-      const a = this.geoIndex.stationCoords(lc.station_a);
-      const b = this.geoIndex.stationCoords(lc.station_b);
-      if (!a || !b) continue;
-      features.push({
-        type: 'Feature',
-        geometry: { type: 'LineString', coordinates: [a, b] },
-        properties: {
-          stationA: `${lc.station_a.section_id}:${lc.station_a.station_index}`,
-          stationB: `${lc.station_b.section_id}:${lc.station_b.station_index}`,
-          sectionIdA: lc.station_a.section_id,
-          sectionIdB: lc.station_b.section_id,
-          errorPercentage: lc.error_percentage,
-          misclosureDistance: lc.misclosure_distance,
-          pathLength: lc.path_length,
-          color: getErrorColor(lc.error_percentage),
-        },
-      });
-    }
+    const features = loopClosureFeatures(this.cachedLoopClosures ?? [], this.geoIndex, (pct) => this.closureColor(pct));
     (source as maplibregl.GeoJSONSource).setData({ type: 'FeatureCollection', features });
+  }
+
+  /** A closure line's colour: graded while Survey Issues paints the map. */
+  private closureColor(errorPercentage: number): string {
+    return closureLineColor(errorPercentage, this.issueInput, this.themeColors);
+  }
+
+  /**
+   * Live preview of the Survey Issues levels / palette (legend cog): stands in
+   * for the committed scale and palette until `null`, recolouring shots,
+   * stations, Errors labels and closure lines through the normal colour-only
+   * path at most once per animation frame. A commit arrives through update().
+   */
+  previewIssueScale(preview: IssueScalePreview | null): void {
+    if (preview === null && this.issueOverride === null) return;
+    this.issueOverride = preview;
+    if (this.issueFrame !== null) return;
+    this.issueFrame = requestAnimationFrame(() => {
+      this.issueFrame = null;
+      const next = withIssueOverride(this.committedIssueInput, this.issueOverride);
+      if (next === this.issueInput || !this.cachedSurveyData || !hasLiveStyle(this.map)) return;
+      this.issueInput = next;
+      this.cachedIssueRender = resolveIssueRender(this.cachedSurveyData, next, this.cachedLoopClosures);
+      this.resyncCustomRenderFromStore();
+      this.publishLoopClosures();
+    });
   }
 
   /**
@@ -3636,7 +3659,7 @@ export default class SurveyLayer {
     if (this.cachedSections.length > 0 || this.cachedStations.length > 0) {
       this.update(
         this.cachedSections, this.cachedStations, this.cachedLoopClosures, this.gpsOrigin,
-        this.showDepthGradient, this.depthRange, this.cachedPrecision, this.issueInput,
+        this.showDepthGradient, this.depthRange, this.cachedPrecision, this.committedIssueInput,
       );
     }
   }
@@ -3688,7 +3711,7 @@ export default class SurveyLayer {
   }
 
   releaseVtRegistry(): void {
-    this.cancelPreviewFrame();
+    this.cancelPreviewFrames();
     this.customRender?.dispose();
     this.customLabels?.dispose();
     // The DPR watcher's matchMedia listener is a JS resource that survives
@@ -3706,7 +3729,7 @@ export default class SurveyLayer {
     // destroyed map (would throw in setData).
     this.updateScheduled = false;
     this.pendingUpdateArgs = null;
-    this.cancelPreviewFrame();
+    this.cancelPreviewFrames();
 
     // Restore any interact layers left hidden by an in-flight removal re-tile and
     // drop its listener/timer so nothing fires on the torn-down map.

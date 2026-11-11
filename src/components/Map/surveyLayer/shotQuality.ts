@@ -30,7 +30,16 @@
 import type { SurveyData } from '../../../types/survey-data';
 import { lengthFixableFromInclination, lengthFromInclination } from '../../../utils/resolutionPreview';
 import { azimuthDelta, impliedPitchDeg, pitchLegInRange, recordedPitch } from '../../../utils/shotGeometry';
-import { SCORE_MAX } from './issueScale';
+import {
+  levelScore,
+  METRIC_AZ,
+  METRIC_INCL_DEPTH,
+  METRIC_LENGTH,
+  METRIC_PITCH,
+  ScoreCombiner,
+  type IssueScale,
+  type IssueThresholds,
+} from './issueScale';
 
 /** Float32-tolerant version of the validator's length-vs-depth-change slack. */
 const LENGTH_BELOW_DEPTH_SLACK_M = 1e-3;
@@ -41,13 +50,10 @@ const LENGTH_BELOW_DEPTH_SLACK_M = 1e-3;
 export const LENGTH_DELTA_MIN_INCLINATION_DEG = 15;
 
 export { SCORE_MAX, SCORE_WARNING } from './issueScale';
+export { METRIC_AZ, METRIC_PITCH, METRIC_INCL_DEPTH, METRIC_LENGTH } from './issueScale';
 
-/** The project thresholds a metric is scored against, in degrees. */
-export interface ShotQualityThresholds {
-  azimuthDiff: number;
-  pitchDiff: number;
-  inclinationDepthDiff: number;
-}
+/** The project thresholds the default levels sit on, in degrees. */
+export type ShotQualityThresholds = IssueThresholds;
 
 export interface ShotQualityMetrics {
   azDelta: Float32Array;
@@ -55,12 +61,6 @@ export interface ShotQualityMetrics {
   inclDepthDelta: Float32Array;
   lengthDelta: Float32Array;
 }
-
-/** One bit per metric, for the per-shot "ignored" mask. */
-export const METRIC_AZ = 1;
-export const METRIC_PITCH = 2;
-export const METRIC_INCL_DEPTH = 4;
-export const METRIC_LENGTH = 8;
 
 /** Ignoring one of these warnings drops the metrics it is about from that
  *  shot's colour and label. The length delta restates the inclination-vs-depth
@@ -72,18 +72,16 @@ export const WARNING_CODE_METRICS: Readonly<Record<string, number>> = {
 };
 
 /**
- * Score one metric against its threshold: 0 for agreement, 1 at the warning
- * threshold, capped at 3. `score > 1` when the validator warns
- * (`|v| > threshold`), up to Float32 rounding right at the threshold (the
- * shot columns are Float32, the validator compares f64). A threshold of 0 or less means any disagreement is
- * beyond it, so a non-zero delta scores the maximum. A non-computable (NaN)
- * value scores 0.
+ * Score one metric against a warning threshold with the default levels (Min 0,
+ * Warn at the threshold, Max at 3x): 0 for agreement, 1 at the threshold,
+ * capped at 3. `score > 1` when the validator warns (`|v| > threshold`), up to
+ * Float32 rounding right at the threshold (the shot columns are Float32, the
+ * validator compares f64). A threshold of 0 or less means any disagreement is
+ * beyond it, so a non-zero delta scores the maximum. NaN scores 0.
  */
 export function metricScore(value: number, threshold: number): number {
-  const a = Math.abs(value);
-  if (!(a > 0)) return 0;
-  if (!(threshold > 0)) return SCORE_MAX;
-  return Math.min(a / threshold, SCORE_MAX);
+  const t = threshold > 0 ? threshold : 0;
+  return levelScore(value, { min: 0, warn: t, max: 3 * t });
 }
 
 const cache = new WeakMap<Float32Array, ShotQualityMetrics>();
@@ -138,16 +136,26 @@ function nanToNull(v: number): number | null {
   return Number.isNaN(v) ? null : v;
 }
 
-/** The highest score among a shot's metrics that are not in `ignored`. */
+/**
+ * A shot's combined score over its errors that are neither `excluded` (ignored
+ * on this shot, or switched off) nor uncomputable: the worst, or the average,
+ * per the scale. `combiner` is reused across shots to avoid allocating.
+ */
 export function shotMetricScore(
   m: ShotQualityMetrics,
   i: number,
-  t: ShotQualityThresholds,
-  ignored: number,
+  scale: IssueScale,
+  excluded: number,
+  combiner: ScoreCombiner = new ScoreCombiner(scale.combine),
 ): number {
-  let s = 0;
-  if (!(ignored & METRIC_AZ)) s = Math.max(s, metricScore(m.azDelta[i]!, t.azimuthDiff));
-  if (!(ignored & METRIC_PITCH)) s = Math.max(s, metricScore(m.pitchDelta[i]!, t.pitchDiff));
-  if (!(ignored & METRIC_INCL_DEPTH)) s = Math.max(s, metricScore(m.inclDepthDelta[i]!, t.inclinationDepthDiff));
-  return s;
+  combiner.reset();
+  const { levels } = scale;
+  const add = (bit: number, value: number, id: keyof IssueScale['levels']) => {
+    if (!(excluded & bit) && Number.isFinite(value)) combiner.add(levelScore(value, levels[id]));
+  };
+  add(METRIC_AZ, m.azDelta[i]!, 'azimuth');
+  add(METRIC_PITCH, m.pitchDelta[i]!, 'inclination');
+  add(METRIC_INCL_DEPTH, m.inclDepthDelta[i]!, 'inclinationDepth');
+  add(METRIC_LENGTH, m.lengthDelta[i]!, 'length');
+  return combiner.result();
 }

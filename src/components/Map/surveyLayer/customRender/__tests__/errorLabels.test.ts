@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { formatClosureErrorLabel, formatShotErrorLabel, closureErrorLabelStyle } from '../errorLabelText';
-import { severityTextColor } from '../../issueColor';
+import { issueScoreColor, severityTextColor } from '../../issueColor';
+import { resolveChoice } from '../../../../../utils/palettes';
 import { buildLabelDescriptors, type LabelBuildContext } from '../labelTessellate';
 import { LABEL_KIND, LABEL_FLAG } from '../labelShaders';
 import { LABEL_KIND_LAYOUT, shapeLabel, shapedExtent } from '../labelLayout';
 import { GlyphAtlas, SDF_BUFFER, type GlyphRasterizer, type RasterizedGlyph } from '../glyphAtlas';
 import { packCssColor } from '../colorPack';
 import { resolveIssueRender, type ErrorLabelFormat, type ErrorLabelInput } from '../../issueScore';
+import { issueScaleFrom } from '../../issueScale';
 import { buildSurveyData, oneShot, warn, type ShotReadings } from '../../__tests__/surveyQualityFixture';
 import { getMapThemeColors } from '../../../../../utils/themeColors';
 import { shotKindToFlags, type SurveyData } from '../../../../../types/survey-data';
@@ -29,7 +31,7 @@ function labelInput(
 ): ErrorLabelInput {
   const render = resolveIssueRender(
     data,
-    { color: false, labels: opts.format ?? FORMAT, warnings: opts.warnings ?? [], thresholds: T },
+    { color: false, labels: opts.format ?? FORMAT, warnings: opts.warnings ?? [], scale: issueScaleFrom(T, {}, [], 'worst'), palette: null },
     opts.closures ?? NO_CLOSURES,
   );
   return render!.labels!;
@@ -105,14 +107,22 @@ describe('formatClosureErrorLabel', () => {
   it('has no label for non-finite metrics', () => {
     expect(formatClosureErrorLabel(closure(NaN, 0.84), 'Loop', 'meters')).toBeNull();
   });
-  it('is coloured and scored like its closure line', () => {
+  const bands = { scale: issueScaleFrom(T, {}, [], 'worst'), palette: null, graded: false };
+  it('is coloured like its closure line: the colour bands while Survey Issues is off', () => {
     const dark = { ...theme, background: '#101418' };
-    expect(closureErrorLabelStyle(closure(2, 1), dark)).toEqual({ score: 1.5, color: '#eab308' });
-    expect(closureErrorLabelStyle(closure(7, 1), dark)).toEqual({ score: 3, color: '#ef4444' });
+    expect(closureErrorLabelStyle(closure(2, 1), bands, dark)).toEqual({ score: 1.5, color: '#eab308' });
+    expect(closureErrorLabelStyle(closure(7, 1), bands, dark)).toEqual({ score: 3, color: '#ef4444' });
+  });
+  it('is on the Survey Issues scale while it paints the map, palette included', () => {
+    const dark = { ...theme, background: '#101418' };
+    const graded = { ...bands, graded: true };
+    expect(closureErrorLabelStyle(closure(2, 1), graded, dark).color).toBe(issueScoreColor(dark, 1.5));
+    const viridis = resolveChoice({ id: 'mpl.viridis', reversed: false }, 'issues', dark);
+    expect(closureErrorLabelStyle(closure(7, 1), { ...graded, palette: viridis }, dark).color).toBe(viridis.hex(1));
   });
   it('darkens the text colour on a light map so yellow and green stay readable', () => {
     const light = { ...theme, background: '#f4efe6' };
-    expect(closureErrorLabelStyle(closure(2, 1), light).color).toBe('#816204');
+    expect(closureErrorLabelStyle(closure(2, 1), bands, light).color).toBe('#816204');
     expect(severityTextColor('#22c55e', light)).toBe('#136c34');
     expect(severityTextColor('#22c55e', { ...theme, background: '#101418' })).toBe('#22c55e');
     expect(severityTextColor('#22c55e', { ...theme, background: 'rgb(255, 255, 255)' })).toBe('#22c55e');

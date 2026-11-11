@@ -6,6 +6,7 @@ import {
   DEFAULT_PALETTE_CHOICE,
   THEME_PALETTE_ID,
   type ColorScaleKind,
+  type PaletteKind,
   type LevelsScale,
   type PaletteChoice,
 } from './palettes/types';
@@ -73,8 +74,8 @@ export const EXPORT_PALETTE_ENTRIES = 256;
  *  state (a live picker preview wins for its kind, so the export preview
  *  follows the picker like the map does). */
 export function exportScaleInputsFrom(
-  mapPalette: MapPaletteConfig | undefined,
-  session: { exportScale: Readonly<Record<ColorScaleKind, LevelsScale | null>>; palettePreview: { kind: ColorScaleKind; choice: PaletteChoice } | null },
+  mapPalette: Pick<MapPaletteConfig, 'depth' | 'distance'> | undefined,
+  session: { exportScale: Readonly<Record<ColorScaleKind, LevelsScale | null>>; palettePreview: { kind: PaletteKind; choice: PaletteChoice } | null },
 ): ExportScaleInputs {
   const choice = (kind: ColorScaleKind): PaletteChoice =>
     session.palettePreview?.kind === kind

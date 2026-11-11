@@ -14,9 +14,9 @@
  * Generated and curated palettes interpolate linearly in RGB between stops and
  * round, or pick a hard band for discrete palettes.
  */
-import { hexToHSL, hslRampAt } from '../colors';
+import { SEVERITY_GREEN, SEVERITY_RED, SEVERITY_YELLOW, hexToHSL, hslRampAt, interpolateColor } from '../colors';
 import { DISTANCE_FAR, DISTANCE_NEAR } from '../distanceGradient';
-import type { ColorScaleKind, Palette } from './types';
+import type { Palette, PaletteKind } from './types';
 
 export type Rgb = readonly [r: number, g: number, b: number];
 
@@ -139,6 +139,30 @@ function themeDistance(reversed: boolean): ResolvedPalette {
   };
 }
 
+/**
+ * The Survey Issues default: green -> yellow (the middle, the warn colour) ->
+ * red, interpolated in RGB like the original ramp. The map's own default path
+ * (`issueColor.ts`) quantises a score to hundredths first; position `t` maps to
+ * score `2t` below the middle and `1 + 4(t - 0.5)` above, so the two agree on
+ * every quantised score.
+ */
+function themeIssues(reversed: boolean): ResolvedPalette {
+  const hex = (t0: number): string => {
+    const t = reversed ? 1 - t0 : t0;
+    return t <= 0.5
+      ? interpolateColor(SEVERITY_GREEN, SEVERITY_YELLOW, t * 2)
+      : interpolateColor(SEVERITY_YELLOW, SEVERITY_RED, (t - 0.5) * 2);
+  };
+  return {
+    key: `theme-issues|${reversed ? 1 : 0}`,
+    isTheme: true,
+    bands: null,
+    hex,
+    rgb: (t) => parseHexRgb(hex(t)),
+    flatHex: () => hex(0),
+  };
+}
+
 function dataPalette(palette: Palette, reversed: boolean): ResolvedPalette {
   const discrete = palette.kind === 'discrete';
   const sample = discrete ? discreteRgb : stopsRgb;
@@ -163,10 +187,11 @@ function dataPalette(palette: Palette, reversed: boolean): ResolvedPalette {
 export function resolvePalette(
   palette: Palette,
   reversed: boolean,
-  kind: ColorScaleKind,
+  kind: PaletteKind,
   endpoints: ThemeRampEndpoints,
 ): ResolvedPalette {
   if (palette.kind === 'theme') {
+    if (kind === 'issues') return themeIssues(reversed);
     return kind === 'depth' ? themeDepth(endpoints, reversed) : themeDistance(reversed);
   }
   return dataPalette(palette, reversed);

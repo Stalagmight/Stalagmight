@@ -3,9 +3,11 @@ import { computeIssueScores, resolveIssueRender, type IssueRenderInput } from '.
 import { computeShotQualityMetrics, METRIC_AZ, METRIC_INCL_DEPTH, METRIC_LENGTH, METRIC_PITCH } from '../shotQuality';
 import type { ProjectWarning } from '../../../../types/commands';
 import type { SurveyData } from '../../../../types/survey-data';
+import { issueScaleFrom, type IssueThresholds } from '../issueScale';
 import { buildSurveyData, warn, type ShotReadings } from './surveyQualityFixture';
 
 const T = { azimuthDiff: 20, pitchDiff: 10, inclinationDepthDiff: 15 };
+const scaleOf = (t: IssueThresholds) => issueScaleFrom(t, {}, [], 'worst');
 
 /**
  * Standard fixture:
@@ -34,7 +36,7 @@ function fixture(opts: { merged?: number[][]; shots?: Record<number, ShotReading
 }
 
 function scores(data: SurveyData, warnings: ProjectWarning[] = []) {
-  const s = computeIssueScores(data, computeShotQualityMetrics(data), warnings, T);
+  const s = computeIssueScores(data, computeShotQualityMetrics(data), warnings, scaleOf(T));
   return {
     shot: [...s.shotScore].map((v) => +v.toFixed(3)),
     station: [...s.stationScore].map((v) => +v.toFixed(3)),
@@ -166,7 +168,8 @@ describe('resolveIssueRender', () => {
     color: true,
     labels: null,
     warnings: [],
-    thresholds: T,
+    scale: scaleOf(T),
+    palette: null,
     ...over,
   });
 
@@ -188,8 +191,8 @@ describe('resolveIssueRender', () => {
     const data = fixture({ shots: { 0: { azimuthIn: 90, azimuthOut: 100 } } });
     const warnings: ProjectWarning[] = [];
     const a = resolveIssueRender(data, input({ warnings }), none)!;
-    expect(resolveIssueRender(data, input({ warnings, thresholds: { ...T } }), none)).toBe(a);
-    const b = resolveIssueRender(data, input({ warnings, thresholds: { ...T, azimuthDiff: 5 } }), none)!;
+    expect(resolveIssueRender(data, input({ warnings, scale: scaleOf({ ...T }) }), none)).toBe(a);
+    const b = resolveIssueRender(data, input({ warnings, scale: scaleOf({ ...T, azimuthDiff: 5 }) }), none)!;
     expect(b.scores.shotScore[0]).toBe(2);
   });
 
