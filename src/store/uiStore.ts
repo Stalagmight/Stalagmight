@@ -97,7 +97,7 @@ export type DetailPanelTab = 'details' | 'warnings';
 // selectors without an import cycle); re-exported so existing imports keep working.
 export { colorModeOf, colorModeFlags, type ColorMode, type ColorOverlayFlags } from './colorMode';
 import { colorModeFlags, type ColorMode } from './colorMode';
-import { visitColorPatch, visitEndPatch, visitErrorsPatch } from './warningsVisit';
+import { visitColorPatch, visitEndPatch, visitErrorsPatch, visitToggleColorPatch } from './warningsVisit';
 
 /** Reveal behavior for a side/data panel.
  *  - `pin`: click to open; stays open (reflows the map) until closed.
@@ -1569,6 +1569,12 @@ export const useUIStore = create<UIStore>((set) => ({
   distanceGradientOrigin: null,
   distanceField: null,
   toggleDistanceGradient: () => {
+    // Every colour writer honours a Warnings-tab visit (see setColorMode).
+    const visit = useUIStore.getState();
+    if (isWarningsVisitActive(visit)) {
+      set(visitToggleColorPatch(visit, 'distance'));
+      return;
+    }
     const on = !useUIStore.getState().showDistanceGradient;
     // Distance and depth gradients are mutually exclusive - both paint the shots
     // layer, so enabling one suppresses the other (#34, report of mixed
@@ -1591,6 +1597,11 @@ export const useUIStore = create<UIStore>((set) => ({
   // Issue-severity coloring (#22) - runtime-only, never persisted.
   showIssueSeverity: false,
   toggleIssueSeverity: () => {
+    const visit = useUIStore.getState();
+    if (isWarningsVisitActive(visit)) {
+      set(visitToggleColorPatch(visit, 'issues'));
+      return;
+    }
     const on = !useUIStore.getState().showIssueSeverity;
     // Mutually exclusive with both gradients - all three paint the shots/stations
     // layer. Flip depth's *runtime* flag only (don't persist), and clear the
@@ -1600,6 +1611,11 @@ export const useUIStore = create<UIStore>((set) => ({
     set(on ? colorModeFlags('issues') : { showIssueSeverity: false });
   },
   setIssueSeverity: (on) => {
+    const visit = useUIStore.getState();
+    if (isWarningsVisitActive(visit)) {
+      if ((selectEffectiveColorMode(visit) === 'issues') !== on) set(visitToggleColorPatch(visit, 'issues'));
+      return;
+    }
     if (useUIStore.getState().showIssueSeverity === on) return;
     // Enabling issue-severity leaves the gas sub-mode (#38) - shared layer paint.
     if (on) useUIStore.getState().exitGasPlan();

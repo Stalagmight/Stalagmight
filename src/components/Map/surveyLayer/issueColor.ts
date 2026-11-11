@@ -13,12 +13,15 @@ import type { MapThemeColors } from '../../../utils/themeColors';
 import { SCORE_MAX, SCORE_WARNING } from './shotQuality';
 
 const STEPS_PER_UNIT = 100;
-const rampCache = new Map<string, readonly string[]>();
+/** The last ramp built. The three colours are fixed across themes, so this is
+ *  a one-entry cache that, unlike a keyed map, allocates nothing per call -
+ *  `issueScoreColor` runs once per shot and station on every build. */
+let lastRamp: { clear: string; warning: string; error: string; ramp: readonly string[] } | null = null;
 
 function rampFor(clear: string, warning: string, error: string): readonly string[] {
-  const key = `${clear}|${warning}|${error}`;
-  const hit = rampCache.get(key);
-  if (hit) return hit;
+  if (lastRamp && lastRamp.clear === clear && lastRamp.warning === warning && lastRamp.error === error) {
+    return lastRamp.ramp;
+  }
   const ramp: string[] = [];
   const warnStep = SCORE_WARNING * STEPS_PER_UNIT;
   const maxStep = SCORE_MAX * STEPS_PER_UNIT;
@@ -29,7 +32,7 @@ function rampFor(clear: string, warning: string, error: string): readonly string
         : interpolateColor(warning, error, (q - warnStep) / (maxStep - warnStep)),
     );
   }
-  rampCache.set(key, ramp);
+  lastRamp = { clear, warning, error, ramp };
   return ramp;
 }
 

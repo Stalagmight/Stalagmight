@@ -119,6 +119,25 @@ export function IssueLegend({ showRamp, showKey, besideSelector = null }: IssueL
   );
 }
 
+/**
+ * The selector of the other bottom-left legend on screen, if any, for
+ * `besideSelector`. Each state names its exact element (the loading cue and the
+ * finished legend are different nodes), so a swap between them changes the
+ * selector and the offset is measured again.
+ */
+export function otherLegendSelector(on: {
+  depth: boolean;
+  distance: boolean;
+  distanceReady: boolean;
+  gas: boolean;
+  gasReady: boolean;
+}): string | null {
+  if (on.gas) return on.gasReady ? '[data-testid="gas-legend"]' : '[data-testid="gas-legend-loading"]';
+  if (on.distance) return on.distanceReady ? '[data-testid="distance-legend"]' : '[data-testid="distance-legend-loading"]';
+  if (on.depth) return '[data-testid="depth-legend"]';
+  return null;
+}
+
 /** Width (+ gap) of the legend matched by `selector`, kept current while it is
  *  on screen; 0 when there is none. */
 function useBesideOffset(selector: string | null): number {

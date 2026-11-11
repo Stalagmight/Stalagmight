@@ -25,6 +25,7 @@ import type { SectionMetadata, SurveyData } from '../../../types/survey-data';
 import type { ProjectWarning } from '../../../types/commands';
 import type { DecimalPrecision, LengthUnit } from '../../../types/config';
 import type { LoopClosure } from '../../../types/project';
+import { buildStationLookup } from './customRender/tessellate';
 import {
   computeShotQualityMetrics,
   SCORE_MAX,
@@ -83,17 +84,8 @@ export function computeIssueScores(
     shotScore[i] = hardError[i] ? SCORE_MAX : Math.max(metric, warned[i] ? SCORE_WARNING : 0);
   }
 
-  // (3) (sectionId, stationIndex) -> global station index, as features.ts maps it.
-  const stationLookup = new Map<number, Map<number, number>>();
-  for (let g = 0; g < data.stationCount; g++) {
-    const sid = data.stationSectionIds[g]!;
-    let inner = stationLookup.get(sid);
-    if (!inner) {
-      inner = new Map();
-      stationLookup.set(sid, inner);
-    }
-    inner.set(data.stationIndices[g]!, g);
-  }
+  // (3) (sectionId, stationIndex) -> global station index, the renderer's own map.
+  const stationLookup = buildStationLookup(data);
 
   // (4) Each shot's score into its endpoint stations. Shot i of a section
   //     connects station_index i and i + 1.

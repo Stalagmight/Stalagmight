@@ -3648,6 +3648,11 @@ export default class SurveyLayer {
    *  buffers alive until the next SurveyLayer overwrites the globals (#mem).
    *  dispose() is the map-free counterpart of destroy(); it is idempotent, so the
    *  destroy() path (which nulls both refs before calling this) is unaffected. */
+  /** E2E: the emitted labels (kind, text, reveal zoom); see the label controller. */
+  labelSnapshot(): ReturnType<SurveyLabelController['snapshot']> {
+    return this.customLabels?.snapshot() ?? [];
+  }
+
   /**
    * Every drawn station center + shot segment in map coords, honoring the live
    * reference-shots toggle. Exposed for E2E: the custom renderer draws survey
@@ -3655,11 +3660,6 @@ export default class SurveyLayer {
    * project these instead of querying deleted stock layers (see MapCanvas's
    * `__stalagmight_geometry__` hook). Returns null before geometry is indexed.
    */
-  /** E2E: the emitted labels (kind, text, reveal zoom); see the label controller. */
-  labelSnapshot(): ReturnType<SurveyLabelController['snapshot']> {
-    return this.customLabels?.snapshot() ?? [];
-  }
-
   enumerateGeometry(): ReturnType<SurveyGeometryIndex['enumerateGeometry']> | null {
     if (!this.geoIndex) return null;
     return this.geoIndex.enumerateGeometry(this.visibleKinds());

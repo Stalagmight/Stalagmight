@@ -49,7 +49,7 @@ import { renderFatalMessage } from './surveyLayer/mapErrors';
 import PlacementOverlay from './PlacementOverlay';
 import GridOverlay from './GridOverlay';
 import { GasLegend } from './GasLegend';
-import { IssueLegend } from './IssueLegend';
+import { IssueLegend, otherLegendSelector } from './IssueLegend';
 import { MapDevStatsPanels } from './MapDevStatsPanels';
 import CommentOverlay from './CommentOverlay';
 import MoveCommentCursorTag from './MoveCommentCursorTag';
@@ -608,7 +608,7 @@ function MapCanvas() {
   const effectiveDepthGradient = colorMode === 'depth';
   const effectiveDistance = colorMode === 'distance';
   // Null while Survey Issues is off, so warning-only refreshes don't rebuild.
-  const issueInput = useIssueRenderInput(effectiveIssueSeverity, effectiveShowShotErrors);
+  const issueInput = useIssueRenderInput(effectiveIssueSeverity, effectiveShowShotErrors && (showShots || showStations));
 
   const alignedClosureIds = useMemo(() => {
     if (!project?.loop_closures) return new Set<bigint>();
@@ -4070,7 +4070,7 @@ function MapCanvas() {
       <IssueLegend
         showRamp={effectiveIssueSeverity}
         showKey={effectiveShowShotErrors && (showShots || showStations)}
-        besideSelector={effectiveDepthGradient ? '[data-testid="depth-legend"]' : effectiveDistance ? '[data-testid^="distance-legend"]' : null}
+        besideSelector={otherLegendSelector({ depth: effectiveDepthGradient, distance: effectiveDistance, distanceReady: !!distanceField, gas: showGasPlan && gasOriginChosen, gasReady: !!gasReachField })}
       />
 
       {/* Gas reachable-frontier legend (#38) - gold→purple, 0 → turn budget. */}

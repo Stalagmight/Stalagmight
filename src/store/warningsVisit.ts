@@ -8,7 +8,7 @@
  * tab brings the user's own settings back.
  */
 import type { ColorMode } from './colorMode';
-import { isWarningsVisitActive, selectEffectiveShowShotErrors } from './displaySelectors';
+import { isWarningsVisitActive, selectEffectiveColorMode, selectEffectiveShowShotErrors } from './displaySelectors';
 import type { UIStore } from './uiStore';
 
 type Patch = Partial<UIStore>;
@@ -27,6 +27,11 @@ export function visitColorPatch(s: UIStore, mode: ColorMode): Patch {
     warningsVisitOverride: { ...s.warningsVisitOverride, colorMode: mode },
     ...dropVisitDistance(s, mode),
   };
+}
+
+/** Toggle one colour mode during a visit (on, or back to Section). */
+export function visitToggleColorPatch(s: UIStore, mode: ColorMode): Patch {
+  return visitColorPatch(s, selectEffectiveColorMode(s) === mode ? 'section' : mode);
 }
 
 /** Flip the Errors labels during a visit. */

@@ -142,6 +142,22 @@ describe('the Warnings-tab visit', () => {
     expect(saved()).toHaveLength(0);
   });
 
+  it('every colour writer honours the visit, not just the Display menu', () => {
+    openWarnings();
+    useUIStore.getState().toggleDistanceGradient();
+    expect(effective().color).toBe('distance');
+    useUIStore.getState().toggleIssueSeverity();
+    expect(effective().color).toBe('issues');
+    useUIStore.getState().setIssueSeverity(false);
+    expect(effective().color).toBe('section');
+    useUIStore.getState().setIssueSeverity(true);
+    expect(effective().color).toBe('issues');
+    const s = useUIStore.getState();
+    expect([s.showDistanceGradient, s.showIssueSeverity, s.showDepthGradient]).toEqual([false, false, false]);
+    leaveWarnings();
+    expect(effective().color).toBe('section');
+  });
+
   it('Distance picked during the visit drives the distance overlay, and its cache goes with the visit', () => {
     openWarnings();
     useUIStore.getState().setColorMode('distance');

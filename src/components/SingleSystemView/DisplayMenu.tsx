@@ -2,9 +2,9 @@ import { useState, useRef, useEffect, type ReactNode, type CSSProperties } from 
 import { useTranslation } from 'react-i18next';
 import { useUIStore, type DisplayToggleKey, type ColorMode } from '../../store/uiStore';
 import {
-  isWarningsVisitActive,
   selectEffectiveColorMode,
   selectEffectiveShowShotErrors,
+  selectIssueDisplayAuto,
 } from '../../store/displaySelectors';
 import { useProjectStore } from '../../store/projectStore';
 import { useDismissableLayer } from '../../hooks/useDismissableLayer';
@@ -225,9 +225,10 @@ export default function DisplayMenu({
     // The PAINTED mode: during a Warnings-tab visit that is the visit's, not the
     // saved flags' (displaySelectors).
     colorMode: selectEffectiveColorMode(s),
-    visitActive: isWarningsVisitActive(s),
-    autoColor: s.warningsVisitOverride?.colorMode === undefined,
-    autoErrors: s.warningsVisitOverride?.showShotErrors === undefined,
+    // Flattened (plain booleans) so the shallow compare stays stable.
+    visitActive: selectIssueDisplayAuto(s).visit,
+    autoColor: selectIssueDisplayAuto(s).color,
+    autoErrors: selectIssueDisplayAuto(s).errors,
   })));
 
   // The element-toggle booleans, read as a keyed map so a pill can look itself
@@ -303,7 +304,7 @@ export default function DisplayMenu({
     const onColor = entityColored && active && item.entity
       ? getContrastColor(getThemeColor(syntacticVarName(item.entity)))
       : undefined;
-    const auto = item.key === 'showShotErrors' && visitActive && autoErrors;
+    const auto = item.key === 'showShotErrors' && autoErrors;
     const description = item.descriptionKey ? t(item.descriptionKey) : '';
     return (
       <Pill
@@ -419,7 +420,7 @@ export default function DisplayMenu({
                 <Pill label={t('displayMenu.items.section')} active={colorMode === 'section'} onClick={() => selectColorMode('section')} testId="display-color-section" />
                 <Pill label={t('displayMenu.items.depthGradient')} title={t('displayMenu.descriptions.depthGradient')} active={colorMode === 'depth'} onClick={() => selectColorMode('depth')} testId="display-toggle-showDepthGradient" />
                 <Pill label={t('displayMenu.items.distanceGradient')} title={t('displayMenu.descriptions.distanceGradient')} active={colorMode === 'distance'} onClick={() => selectColorMode('distance')} testId="display-toggle-showDistanceGradient" />
-                <Pill label={t('displayMenu.items.issueSeverity')} title={visitActive && autoColor ? `${t('displayMenu.descriptions.issueSeverity')}. ${t('displayMenu.warningsVisit.pillHint')}` : t('displayMenu.descriptions.issueSeverity')} auto={visitActive && autoColor && colorMode === 'issues'} active={colorMode === 'issues'} onClick={() => selectColorMode('issues')} testId="display-toggle-showIssueSeverity" />
+                <Pill label={t('displayMenu.items.issueSeverity')} title={autoColor ? `${t('displayMenu.descriptions.issueSeverity')}. ${t('displayMenu.warningsVisit.pillHint')}` : t('displayMenu.descriptions.issueSeverity')} auto={autoColor} active={colorMode === 'issues'} onClick={() => selectColorMode('issues')} testId="display-toggle-showIssueSeverity" />
                 {visitActive && (
                   <p className="basis-full pt-1 text-xs text-text-secondary" data-testid="display-warnings-visit-note">
                     {t('displayMenu.warningsVisit.note')}
