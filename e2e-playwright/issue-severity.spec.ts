@@ -310,10 +310,15 @@ test.describe('Issue Severity coloring (#22)', () => {
     expect(await isToggleOn(page, 'showDepthGradient')).toBe(false);
   });
 
-  test('switching to the Warnings tab auto-enables severity coloring and leaving reverts it', async ({ page }) => {
-    // The Warnings-tab auto-highlight is DERIVED from the tab (issue #57, finding
-    // #6) - it is never written to the store, so assert the rendered colors, not a
-    // store flag. The persisted toggle stays off throughout.
+  test('the Warnings tab turns on Survey Issues and Errors for the visit; leaving brings the saved settings back', async ({ page }) => {
+    // The visit is DERIVED from the tab (issue #57, finding #6) - never written to
+    // the saved flags - so assert the rendered colors and the Display menu, not a
+    // store flag. The saved toggles stay off throughout and nothing is saved.
+    const saves: string[] = [];
+    page.on('console', (msg) => {
+      const m = /\[Mock IPC\] save_display_setting: (\S+)/.exec(msg.text());
+      if (m) saves.push(m[1]!);
+    });
     expect(await issueSeverityFlag(page)).toBe(false);
 
     // Baseline (Details tab): section colors, not the clear-green severity color.
@@ -322,19 +327,52 @@ test.describe('Issue Severity coloring (#22)', () => {
       return Object.values(shots).some((c) => !isColor(c, SEV_CLEAR));
     }, { timeout: 3000 }).toBe(true);
 
-    // Opening the Warnings tab recomputes the map into issue-severity coloring
-    // (global setting defaults on). With no warnings every shot paints clear-green.
+    // Opening the Warnings tab paints Survey Issues (setting defaults on). With
+    // agreeing readings and no warnings every shot paints clear-green.
     await page.getByTestId('detail-tab-warnings').click();
     await expect.poll(async () => {
       const shots = await shotColorsById(page);
       const vals = Object.values(shots);
       return vals.length > 0 && vals.every((c) => isColor(c, SEV_CLEAR));
     }, { timeout: 3000 }).toBe(true);
-    // The persisted toggle was never mutated by the auto-highlight.
     expect(await issueSeverityFlag(page)).toBe(false);
+    await expect(page.getByTestId('issue-legend-ramp')).toBeVisible();
 
-    // Leaving recomputes from the persisted toggles (was off ⇒ section colors return).
+    // The Display menu shows both on, marked automatic, with the visit note.
+    await openDisplayMenu(page);
+    for (const key of ['showIssueSeverity', 'showShotErrors']) {
+      const pill = page.locator(`[data-testid="display-toggle-${key}"]`);
+      await expect(pill).toHaveAttribute('aria-pressed', 'true');
+      await expect(pill).toHaveAttribute('data-auto', 'true');
+    }
+    await expect(page.getByTestId('display-warnings-visit-note')).toBeVisible();
+
+    // A pick during the visit holds for the visit: Depth paints the depth legend.
+    await page.locator('[data-testid="display-toggle-showDepthGradient"]').click();
+    await expect(page.locator('[data-testid="depth-legend"]')).toBeVisible();
+    await expect(page.locator('[data-testid="display-toggle-showIssueSeverity"]')).toHaveAttribute('aria-pressed', 'false');
+    await page.keyboard.press('Escape');
+
+    // Leaving recomputes from the saved toggles: section colors, no legend.
     await page.getByTestId('detail-tab-details').click();
+    await expect.poll(async () => {
+      const shots = await shotColorsById(page);
+      return Object.values(shots).some((c) => !isColor(c, SEV_CLEAR));
+    }, { timeout: 3000 }).toBe(true);
+    await expect(page.locator('[data-testid="depth-legend"]')).toHaveCount(0);
+    await expect(page.getByTestId('issue-legend')).toHaveCount(0);
+    expect(saves.filter((s) => /showDepthGradient|showIssueSeverity|showShotErrors/.test(s))).toEqual([]);
+
+    // Coming back starts a fresh visit with the defaults on again.
+    await page.getByTestId('detail-tab-warnings').click();
+    await expect(page.getByTestId('issue-legend-ramp')).toBeVisible();
+  });
+
+  test('Export mode does not inherit the Warnings-tab colouring', async ({ page }) => {
+    await page.getByTestId('detail-tab-warnings').click();
+    await expect(page.getByTestId('issue-legend-ramp')).toBeVisible();
+    await page.locator('[data-testid="mode-export"]').click();
+    await expect(page.getByTestId('issue-legend')).toHaveCount(0);
     await expect.poll(async () => {
       const shots = await shotColorsById(page);
       return Object.values(shots).some((c) => !isColor(c, SEV_CLEAR));

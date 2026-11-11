@@ -579,6 +579,36 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
     await expect(page.getByTestId('warning-resolution-option-average')).toBeVisible();
   });
 
+  test('an inclination in/out warning offers keep-in, keep-out, average (default), set and ignore', async ({ page }) => {
+    await createProject(page, 'Pitch Deviation Resolve Test');
+    await seedProjectWithSections(page, sectionSeeds);
+    await waitForMapIdle(page);
+
+    const sectionId = (await getSectionIds(page))[0]!;
+    const shotIds = await getShotIdsForSection(page, sectionId);
+    await injectWarnings(page, [
+      {
+        sectionId,
+        shotId: shotIds[0]!,
+        shotIndex: 0,
+        code: 'PITCH_DEVIATION',
+        message: 'Shot 1:1 inclination in/out difference 14.0° exceeds threshold 10.0°',
+        severity: 'warning',
+        isResolved: false,
+      },
+    ]);
+
+    await page.keyboard.press('Control+3');
+    await expect(page.getByTestId('data-table')).toBeVisible({ timeout: 3000 });
+    await page.getByTestId(`warning-${sectionId}-${shotIds[0]!}`).click();
+
+    await expect(page.getByTestId('warning-resolution')).toBeVisible();
+    for (const id of ['pitch-use-in', 'pitch-use-out', 'pitch-average', 'manual', 'ignore']) {
+      await expect(page.getByTestId(`warning-resolution-option-${id}`)).toBeVisible();
+    }
+    await expect(page.getByTestId('warning-resolution-option-pitch-average')).toBeChecked();
+  });
+
   test('data-table warning indicator opens the resolve view even when the detail panel is closed', async ({ page }) => {
     await createProject(page, 'Closed Panel Resolve Test');
     await seedProjectWithSections(page, sectionSeeds);
