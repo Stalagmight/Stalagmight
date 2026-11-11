@@ -26,7 +26,7 @@ import SpeleoSignOutDialog from './components/Dialogs/SpeleoSignOutDialog';
 import ExitConfirmDialog from './components/Dialogs/ExitConfirmDialog';
 import SpeleoReleaseFailedDialog from './components/Dialogs/SpeleoReleaseFailedDialog';
 import { isDroppableFilePath } from './utils/fileDialogs';
-import { useBeforeUnload, useLoadingProgress, useTheme, useSyntacticHighlighting, useNetworkStatus, useUiScale, useAppUpdate, useHelpMenu } from './hooks';
+import { useBeforeUnload, useLoadingProgress, useTheme, useSyntacticHighlighting, useWarningsAutoDisplay, useNetworkStatus, useUiScale, useAppUpdate, useHelpMenu } from './hooks';
 import { useOnboarding } from './hooks/useOnboarding';
 import { registerOnboardingRestart } from './hooks/useOnboardingRestart';
 import { ORIENTATION_FLOW_ID } from './onboarding/flows';
@@ -130,6 +130,7 @@ function App() {
 
   // Apply syntactic-highlighting colors (sets --sh-* vars + data-sh-level)
   useSyntacticHighlighting();
+  useWarningsAutoDisplay();
 
   // Listen for loading progress events from backend
   useLoadingProgress();

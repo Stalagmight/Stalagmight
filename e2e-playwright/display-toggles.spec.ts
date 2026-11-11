@@ -229,7 +229,7 @@ test.describe('Label Toggle Click Coverage', () => {
     await waitForDrawnStations(page, 1);
   });
 
-  for (const toggleKey of ['showSectionNames', 'showStationLabels'] as const) {
+  for (const toggleKey of ['showSectionNames', 'showStationLabels', 'showShotErrors'] as const) {
     test(`toggling ${toggleKey} flips aria-pressed and back`, async ({ page }) => {
       await openDisplayMenu(page);
 
@@ -340,6 +340,28 @@ test.describe('Station IDs / Station names', () => {
     await page.locator('canvas').first().click({ position: { x: 5, y: 5 } });
     await page.keyboard.press('l');
     await expect.poll(() => stationLabelPair(page), { timeout: 2000 }).toEqual({ ids: true, names: false });
+  });
+});
+
+test.describe('Errors labels toggle', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupTauriMocks(page);
+    await page.goto('/');
+    await createProject(page, 'Errors Toggle Test');
+    await seedProjectWithSections(page, sectionSeeds);
+    await waitForMapReady(page);
+    await waitForDrawnStations(page, 1);
+  });
+
+  test('is saved with the project like the other label toggles', async ({ page }) => {
+    const saves: string[] = [];
+    page.on('console', (msg) => {
+      const m = /\[Mock IPC\] save_display_setting: (\S+)/.exec(msg.text());
+      if (m) saves.push(m[1]!);
+    });
+    await openDisplayMenu(page);
+    await toggleDisplayOption(page, 'showShotErrors');
+    await expect.poll(() => saves).toContain('showShotErrors=true');
   });
 });
 
@@ -871,6 +893,7 @@ test.describe('Display Menu State Persistence', () => {
     expect(await isToggleOn(page, 'showStationLabels')).toBe(false);
     expect(await isToggleOn(page, 'showStationNames')).toBe(false);
     expect(await isToggleOn(page, 'showShotData')).toBe(false);
+    expect(await isToggleOn(page, 'showShotErrors')).toBe(false);
     expect(await isToggleOn(page, 'showReferenceShots')).toBe(true);
     expect(await isToggleOn(page, 'showZeroDatum')).toBe(true);
     expect(await isToggleOn(page, 'showGrid')).toBe(false);

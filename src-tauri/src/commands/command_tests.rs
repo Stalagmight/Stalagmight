@@ -777,6 +777,7 @@ fn test_update_map_palette_normalizes_and_leaves_other_sections_alone() {
                 "mpl.viridis".into(),
                 "grad.cenote".into(),
             ],
+            ..crate::config::MapPaletteConfig::default()
         };
         config::update_map_palette_impl(state(&app).inner(), palette).expect("update palette");
 

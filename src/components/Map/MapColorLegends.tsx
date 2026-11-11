@@ -67,7 +67,7 @@ export function MapColorLegends({ showDepth, depthRange, surveyData, showDistanc
       );
     }
     return (
-      <div style={SLOT_STYLE} className="flex items-start gap-1">
+      <div style={SLOT_STYLE} className="flex items-start gap-1" data-legend-slot>
         <DistanceLegend max={distanceField.max_reachable} visible colorScale={scales.distance} embedded />
         <ColorScaleCog
           kind="distance"
@@ -81,7 +81,7 @@ export function MapColorLegends({ showDepth, depthRange, surveyData, showDistanc
 
   if (showDepth) {
     return (
-      <div style={SLOT_STYLE} className="flex items-start gap-1">
+      <div style={SLOT_STYLE} className="flex items-start gap-1" data-legend-slot>
         <DepthLegend
           minDepth={depthRange.min}
           maxDepth={depthRange.max}

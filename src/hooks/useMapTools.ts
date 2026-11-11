@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { MapMouseEvent } from 'maplibre-gl';
+import { selectDistanceOverlayActive } from '../store/displaySelectors';
 import { useUIStore, type Selection, type MeasureEndpoint } from '../store/uiStore';
 import { pickUIKeys, type UIStoreState } from '../store/uiSelectKeys';
 import { useProjectStore } from '../store/projectStore';
@@ -158,7 +159,6 @@ const MAP_TOOLS_UI_KEYS = [
   'showStations',
   'showShots',
   'showToast',
-  'showDistanceGradient',
   'setDistanceGradientOrigin',
   'appMode',
 ] as const satisfies readonly (keyof UIStoreState)[];
@@ -193,10 +193,11 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
     showStations,
     showShots,
     showToast,
-    showDistanceGradient,
     setDistanceGradientOrigin,
     appMode,
   } = useUIStore(useShallow(selectMapToolsUI));
+  // The painted distance overlay, including one picked during a Warnings-tab visit.
+  const showDistanceGradient = useUIStore(selectDistanceOverlayActive);
 
   // Gas origin-pick on map click belongs to the Plan workspace mode (former showGasPlan).
   const showGasPlan = appMode === 'plan';

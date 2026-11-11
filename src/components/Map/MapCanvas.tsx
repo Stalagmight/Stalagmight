@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import * as maplibregl from 'maplibre-gl';
 import type { SectionId, ShotId, StationRef, DistanceField } from '../../types/project';
 import type { GasReachField } from '../../types/ipc.generated';
-import type { BatchCommand, ProjectWarning } from '../../types/commands';
+import type { BatchCommand } from '../../types/commands';
 import { useProjectStore } from '../../store/projectStore';
 import {
   useUIStore,
@@ -27,6 +27,8 @@ import {
   getEffectiveShowShotComments,
   getEffectiveStationLabelMode,
   isShotKindVisible,
+  selectEffectiveColorMode,
+  selectEffectiveShowShotErrors,
 } from '../../store/displaySelectors';
 import { getErrorMessage, invokeIpc } from '../../utils/ipc';
 import { buildDistanceFeatureState, overlayApplyAction } from '../../utils/distanceGradient';
@@ -47,6 +49,7 @@ import { renderFatalMessage } from './surveyLayer/mapErrors';
 import PlacementOverlay from './PlacementOverlay';
 import GridOverlay from './GridOverlay';
 import { GasLegend } from './GasLegend';
+import { IssueLegend, otherLegendSelector } from './IssueLegend';
 import { MapDevStatsPanels } from './MapDevStatsPanels';
 import CommentOverlay from './CommentOverlay';
 import MoveCommentCursorTag from './MoveCommentCursorTag';
@@ -57,18 +60,15 @@ import { getMapThemeColors } from '../../utils/themeColors';
 import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { MapTopLeftOverlay } from './MapTopLeftOverlay';
+import { useIssueRenderInput } from './useIssueDisplay';
 import { useSpeleoStore, selectSpeleoReadOnly } from '../../store/speleoStore';
 import { useNetworkStore } from '../../store/networkStore';
 import { FEATURE_ID_STRIDE } from '../../utils/ids';
 import { debugLog } from '../../utils/debugLog';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 import { useSurveyLayerColorScales } from './colorScale/useColorScaleInputs';
+import { useSurveyLayerIssuePreview } from './colorScale/useIssueScale';
 import { MapColorLegends } from './MapColorLegends';
-
-// Stable empty warnings array fed to the survey-layer rebuild effect when
-// Issue-severity coloring is OFF. Module-level so its identity never changes
-// across renders - a per-render [] would defeat the rebuild-gating memo below.
-const EMPTY_WARNINGS: ProjectWarning[] = [];
 
 /**
  * How far a WATCHED Ctrl+left press has to travel before the custom pan takes
@@ -251,10 +251,7 @@ const MAP_CANVAS_UI_KEYS = [
   'showShots',
   'showReferenceShots',
   'showJumps',
-  'showDepthGradient',
-  'showDistanceGradient',
   'appMode',
-  'showIssueSeverity',
   'distanceGradientOrigin',
   'distanceField',
   'setDistanceField',
@@ -301,8 +298,6 @@ const MAP_CANVAS_UI_KEYS = [
   'geometryPreview',
   'resolvedTheme',
   'moveCommentSource',
-  'detailPanelOpen',
-  'detailPanelTab',
 ] as const satisfies readonly (keyof UIStoreState)[];
 
 const selectMapCanvasUI = (s: UIStoreState) => pickUIKeys(s, MAP_CANVAS_UI_KEYS);
@@ -395,7 +390,7 @@ function MapCanvas() {
   const pressClientRef = useRef<{ x: number; y: number } | null>(null);
   const { t } = useTranslation();
 
-  const { project, stations, surveyData, stationsAdjusted, surveyDataAdjusted, adjustedLoading, loadAdjustedGeometry, config, warnings, moveStation, moveSegment, getConnectedSectionIds, getAnchoredSectionIds, executeBatch } = useProjectStore();
+  const { project, stations, surveyData, stationsAdjusted, surveyDataAdjusted, adjustedLoading, loadAdjustedGeometry, config, moveStation, moveSegment, getConnectedSectionIds, getAnchoredSectionIds, executeBatch } = useProjectStore();
   const logMapInteractions = config?.debug?.map?.log_hit_detection ?? false;
 
   // Geometry display mode (measured vs read-only closure-adjusted).
@@ -516,10 +511,7 @@ function MapCanvas() {
     showShots,
     showReferenceShots,
     showJumps,
-    showDepthGradient,
-    showDistanceGradient,
     appMode,
-    showIssueSeverity,
     distanceGradientOrigin,
     distanceField,
     setDistanceField,
@@ -566,8 +558,6 @@ function MapCanvas() {
     geometryPreview,
     resolvedTheme,
     moveCommentSource,
-    detailPanelOpen,
-    detailPanelTab,
   } = useUIStore(useShallow(selectMapCanvasUI));
 
   // The gas overlay belongs to the Plan workspace mode (the former showGasPlan
@@ -609,29 +599,17 @@ function MapCanvas() {
   // here rather than sent stale - a stale positional ref names a REAL station, just the wrong one.
   const gasComputeGate = useGasPlanStore(useShallow(selectComputeGate));
 
-  // Issue-severity coloring is active when the user enabled it OR while the
-  // Warnings tab is open (auto-highlight, gated by the setting). It is DERIVED,
-  // never written to the store: leaving the tab simply recomputes the colors from
-  // the persisted toggles, so no "prior coloring" snapshot can be lost and every
-  // toggle of a coloring mode just triggers a recompute (issue #57, finding #6).
-  const highlightWarningsOnTabSwitch = config?.map.highlight_warnings_on_tab_switch ?? true;
-  // The gas sub-mode (#38) swaps the detail panel away from Warnings but leaves
-  // detailPanelTab='warnings' in the store, so the warnings-tab highlight would
-  // otherwise stay derived-true and force needless severity rebuilds under the gas
-  // overlay. Suppress it while gas owns the layer paint.
-  const effectiveIssueSeverity =
-    showIssueSeverity ||
-    (detailPanelOpen && detailPanelTab === 'warnings' && highlightWarningsOnTabSwitch && !showGasPlan);
-  // Severity takes visual precedence over the depth gradient when both apply.
-  const effectiveDepthGradient = showDepthGradient && !effectiveIssueSeverity;
-  // Gate the survey-layer rebuild on issue-severity coloring. `warnings` changes
-  // identity on every refreshWarnings (each edit/resolve/ignore), but warnings
-  // only affect colors when severity coloring is effectively ON - feed the rebuild
-  // a stable shared [] when OFF so warning-only refreshes don't rebuild the GeoJSON.
-  const severityWarnings = useMemo(
-    () => (effectiveIssueSeverity ? warnings : EMPTY_WARNINGS),
-    [effectiveIssueSeverity, warnings]
-  );
+  // The painted colour mode and Errors labels: the saved toggles, or the
+  // Warnings-tab visit defaults while that tab is on screen (displaySelectors).
+  // DERIVED, never written: leaving the tab recomputes from the saved toggles,
+  // so no "prior coloring" snapshot can be lost (issue #57, finding #6).
+  const colorMode = useUIStore(selectEffectiveColorMode);
+  const effectiveShowShotErrors = useUIStore(selectEffectiveShowShotErrors);
+  const effectiveIssueSeverity = colorMode === 'issues';
+  const effectiveDepthGradient = colorMode === 'depth';
+  const effectiveDistance = colorMode === 'distance';
+  // Null while Survey Issues is off, so warning-only refreshes don't rebuild.
+  const issueInput = useIssueRenderInput(effectiveIssueSeverity, effectiveShowShotErrors && (showShots || showStations));
 
   const alignedClosureIds = useMemo(() => {
     if (!project?.loop_closures) return new Set<bigint>();
@@ -1999,11 +1977,10 @@ function MapCanvas() {
         effectiveDepthGradient,
         depthRange,
         precision,
-        effectiveIssueSeverity,
-        severityWarnings
+        issueInput
       );
     }
-  }, [project, activeStations, mapLoaded, gpsOrigin, effectiveDepthGradient, depthRange, precision, geometryMode, surveyDataAdjusted, effectiveIssueSeverity, severityWarnings]);
+  }, [project, activeStations, mapLoaded, gpsOrigin, effectiveDepthGradient, depthRange, precision, geometryMode, surveyDataAdjusted, issueInput]);
 
   // (The Warnings-tab auto-highlight is now derived via `effectiveIssueSeverity`
   // above - no snapshot/restore effect needed, so nothing to lose on leave/unmount.)
@@ -2068,7 +2045,7 @@ function MapCanvas() {
   // Settings changes the whole field. It has to be in the deps or the ramp keeps
   // showing the pre-toggle routing until some unrelated edit bumps modified_at.
   useEffect(() => {
-    if (!showDistanceGradient) return undefined;
+    if (!effectiveDistance) return undefined;
     let cancelled = false;
     invokeIpc<DistanceField>(
       'get_station_distances_from',
@@ -2086,7 +2063,7 @@ function MapCanvas() {
       });
     return () => { cancelled = true; };
   }, [
-    showDistanceGradient,
+    effectiveDistance,
     distanceGradientOrigin,
     project?.modified_at,
     config?.gas.include_reference_legs,
@@ -2159,24 +2136,25 @@ function MapCanvas() {
   // a palette is previewed or a Levels handle dragged. Store-subscribed, so a drag
   // never re-renders MapCanvas.
   useSurveyLayerColorScales(surveyLayerRef, mapLoaded);
+  useSurveyLayerIssuePreview(surveyLayerRef, mapLoaded);
 
   // Apply the fetched field to the layer (feature-state + paint swap). Separate
   // from the rebuild path so re-rooting never triggers a feature rebuild.
   useEffect(() => {
     if (!surveyLayerRef.current || !mapLoaded) return;
-    if (showDistanceGradient && !effectiveIssueSeverity && distanceField && surveyData) {
+    if (effectiveDistance && distanceField && surveyData) {
       // Measured SoA: distances use surveyed geometry, and the builder only needs
       // section metadata + shot ids - never the lazy `section.shots` objects.
       const state = buildDistanceFeatureState(surveyData, distanceField);
       surveyLayerRef.current.setDistanceGradient(true, state);
-    } else if (overlayApplyAction(showDistanceGradient && !effectiveIssueSeverity, distanceField != null, surveyData != null, distanceFieldFailed) === 'off') {
+    } else if (overlayApplyAction(effectiveDistance, distanceField != null, surveyData != null, distanceFieldFailed) === 'off') {
       // Real off (mode disabled, severity coloring wins, no geometry, or a FAILED
       // recompute) -> base now. NOT while the origin is recomputing successfully
       // (field transiently null, mode still on, no failure): 'hold' keeps the old
       // ramp so a re-root never blinks base (#customRender).
       surveyLayerRef.current.setDistanceGradient(false, null);
     }
-  }, [showDistanceGradient, effectiveIssueSeverity, distanceField, surveyData, mapLoaded, surveyLayerRef, distanceFieldFailed]);
+  }, [effectiveDistance, distanceField, surveyData, mapLoaded, surveyLayerRef, distanceFieldFailed]);
 
   // Apply the gas field to the layer (feature-state + paint swap). Separate from
   // the fetch so re-rooting / re-computing never triggers a feature rebuild.
@@ -2247,7 +2225,7 @@ function MapCanvas() {
     originMarkerRef.current = null;
     // Suppressed while issue-severity owns the paint (the distance overlay isn't
     // drawn then), so the picked-origin ring doesn't linger over a severity map.
-    if (!map.current || !mapLoaded || !showDistanceGradient || effectiveIssueSeverity || !distanceGradientOrigin) {
+    if (!map.current || !mapLoaded || !effectiveDistance || !distanceGradientOrigin) {
       return undefined;
     }
     const originStation = activeStations.find(
@@ -2274,7 +2252,7 @@ function MapCanvas() {
       originMarkerRef.current?.remove();
       originMarkerRef.current = null;
     };
-  }, [showDistanceGradient, effectiveIssueSeverity, distanceGradientOrigin, activeStations, gpsOrigin, mapLoaded]);
+  }, [effectiveDistance, distanceGradientOrigin, activeStations, gpsOrigin, mapLoaded]);
 
   // Gas-plan origin marker (#38): a teal ring on the chosen origin (mirrors the
   // distance origin marker; teal to distinguish "start" from the gold→purple
@@ -2491,6 +2469,11 @@ function MapCanvas() {
     if (!surveyLayerRef.current) return;
     surveyLayerRef.current.setShowShotLabels(getEffectiveShowShotData(showShots, showShotData));
   }, [showShotData, showShots, mapLoaded]);
+
+  // Errors labels: shot labels follow Shots, closure labels follow Stations.
+  useEffect(() => {
+    surveyLayerRef.current?.setShowErrorLabels(effectiveShowShotErrors && showShots, effectiveShowShotErrors && showStations);
+  }, [effectiveShowShotErrors, showShots, showStations, mapLoaded]);
 
   // Sync section name labels visibility with SurveyLayer
   useEffect(() => {
@@ -4075,14 +4058,23 @@ function MapCanvas() {
       {/* Grid overlay using MapLibre layer */}
       {mapLoaded && map.current && <GridOverlay map={map.current} gpsOrigin={gpsOrigin} />}
 
-      {/* Depth / distance colour key + its colour-scale cog (distance wins the
-          slot; both hidden while issue-severity owns the paint, #57). */}
+      {/* Depth / distance colour key + its colour-scale cog (from the painted
+          colour mode, so a Warnings-tab visit is honoured). */}
       <MapColorLegends
-        showDepth={effectiveDepthGradient && !showDistanceGradient}
+        showDepth={effectiveDepthGradient}
         depthRange={depthRange}
         surveyData={activeSurveyData}
-        showDistance={showDistanceGradient && !effectiveIssueSeverity}
+        showDistance={effectiveDistance}
         distanceField={distanceField}
+      />
+
+      {/* Survey Issues ramp + Errors labels key; beside a depth / distance legend. */}
+      <IssueLegend
+        showRamp={effectiveIssueSeverity}
+        showKey={effectiveShowShotErrors && (showShots || showStations)}
+        besideSelector={otherLegendSelector({ depth: effectiveDepthGradient, distance: effectiveDistance, distanceReady: !!distanceField, gas: showGasPlan && gasOriginChosen, gasReady: !!gasReachField })}
+        surveyData={activeSurveyData}
+        closures={project?.loop_closures}
       />
 
       {/* Gas reachable-frontier legend (#38) - gold→purple, 0 → turn budget. */}

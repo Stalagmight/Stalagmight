@@ -57,16 +57,27 @@
  * name come in as RESERVED slots ({@link RevealInput.reserved}) - otherwise the
  * name would show at z10..13.5 only to lose its slot, and vanish, once they are.
  *
+ * ERRORS LABELS (SHOT_ERROR / CLOSURE_ERROR) rank by their SCORE (worst first)
+ * within a pass, so where two overlap the worse error is the one shown: those at
+ * or past a warning level right after section names, minor ones after station
+ * labels. They are not ordinal-decimated (tier 0). An error label that is
+ * admitted at a ladder step but does not fit there RESERVES its box for the rest
+ * of that step: no later candidate of the same pass may take the space, so at
+ * every step a weaker error - or a station / shot label - never takes the room a
+ * stronger error is waiting for. Reserved boxes never evict a placed winner, so
+ * the visible set stays monotone in zoom.
+ *
  * DETERMINISM ACROSS REBUILDS. The priority order uses a STABLE per-label id
  * (global shot / station index, or section id) rather than the array position,
  * so a pan-settle rebuild whose candidate membership shifts still resolves an
  * unchanged neighbourhood identically (padding absorbs the edge effects).
  */
-import { LABEL_KIND, LABEL_FLAG, type LabelKind } from './labelShaders';
+import { LABEL_KIND, LABEL_KIND_COUNT, LABEL_FLAG, type LabelKind } from './labelShaders';
 import type { LabelDescriptor } from './labelTessellate';
 import type { ExtentEm } from './labelLayout';
 import { LABEL_KIND_STYLE, interpolateStops } from './labelStyle';
 import { decimationAdmitZoom, decimationTier } from './labelDecimation';
+import { SCORE_WARNING } from '../issueScale';
 
 /** Reveal value for a label that never clears within the emit horizon (not
  *  emitted). Finite reveal values are always `<= buildZoom + slack`. */
@@ -189,18 +200,29 @@ export interface RevealInput {
 
 /** Collision priority (LOWER places first / wins overlaps), per design §5. Used
  *  as a SECONDARY sort key under the decimation tier, within one
- *  {@link labelVirtualRank} pass - it never lets a virtual label beat a real one. */
-export function labelPriority(kind: LabelKind, firstInSection: boolean): number {
+ *  {@link labelVirtualRank} pass - it never lets a virtual label beat a real one.
+ *  An Errors label at or past a warning level (`score >= 1`) outranks station
+ *  labels; a minor one comes after them, so trivial deltas do not crowd out
+ *  station IDs. Errors stay ordered worst first (the split is by score). */
+export function labelPriority(kind: LabelKind, firstInSection: boolean, score = 0): number {
   switch (kind) {
     case LABEL_KIND.SECTION_NAME:
       return 0;
+    case LABEL_KIND.SHOT_ERROR:
+    case LABEL_KIND.CLOSURE_ERROR:
+      return score >= SCORE_WARNING ? 1 : 4;
     case LABEL_KIND.STATION_LABEL:
-      return firstInSection ? 1 : 2;
+      return firstInSection ? 2 : 3;
     case LABEL_KIND.SHOT_LABEL:
-      return 3;
+      return 5;
     default:
-      return 4; // station + shot comments
+      return 6; // station + shot comments
   }
+}
+
+/** Whether a kind is an Errors label (ranked by score, reserves its box). */
+export function isErrorKind(kind: LabelKind): boolean {
+  return kind === LABEL_KIND.SHOT_ERROR || kind === LABEL_KIND.CLOSURE_ERROR;
 }
 
 /** Real-line labels: a Normal shot's own labels, or a station / section that at
@@ -253,12 +275,16 @@ interface Candidate {
   admitZoom: number;
   /** Which pass places it ({@link labelVirtualRank}). */
   rank: number;
-  /** Sort keys within a pass: tier (coarser first), kind priority, ordinal,
-   *  stable id. */
+  /** Sort keys within a pass: tier (coarser first), kind priority, score rank
+   *  (an Errors label's negated score, so the worst sorts first; 0 otherwise),
+   *  ordinal, stable id. */
   tier: number;
   priority: number;
+  scoreRank: number;
   ordinal: number;
   id: number;
+  /** An Errors label: reserves its box at a step where it does not fit. */
+  reserves: boolean;
   /** Ladder level it revealed at (set when placed; -1 while unrevealed). */
   level: number;
 }
@@ -412,6 +438,7 @@ export function computeRevealZooms(
       reveal[i] = admitZoom <= ladderMax + 1e-9 ? admitZoom : REVEAL_NEVER;
       continue;
     }
+    const errorKind = isErrorKind(desc.kind);
     candidates.push({
       index: i,
       desc,
@@ -419,10 +446,12 @@ export function computeRevealZooms(
       minzoom: style.minzoom,
       admitZoom,
       rank: labelVirtualRank(desc),
-      tier: decimationTier(desc.ordinal),
-      priority: labelPriority(desc.kind, firstInSection),
+      tier: errorKind ? 0 : decimationTier(desc.ordinal),
+      priority: labelPriority(desc.kind, firstInSection, desc.score),
+      scoreRank: errorKind ? -(desc.score ?? 0) : 0,
       ordinal: desc.ordinal,
       id: stableId(desc),
+      reserves: errorKind,
       level: -1,
     });
     if (style.minzoom < ladderStart) ladderStart = style.minzoom;
@@ -430,11 +459,13 @@ export function computeRevealZooms(
   if (candidates.length === 0) return reveal;
 
   // Zoom-INDEPENDENT priority order: coarser decimation tier first (so a finer
-  // tier can never evict it), then kind priority, then ordinal, then stable id.
+  // tier can never evict it), then kind priority, then score rank (worst error
+  // first), then ordinal, then stable id.
   candidates.sort(
     (a, b) =>
       a.tier - b.tier ||
       a.priority - b.priority ||
+      a.scoreRank - b.scoreRank ||
       a.ordinal - b.ordinal ||
       a.id - b.id ||
       a.index - b.index,
@@ -451,8 +482,8 @@ export function computeRevealZooms(
   for (let l = 0; l < levelCount; l++) {
     const z = ladderStart + l * step;
     // Per-kind CSS-px size at this ladder zoom (halo is a fixed per-kind width).
-    const sizeByKind = new Float64Array(LABEL_KIND.SHOT_COMMENT + 1);
-    for (let k = 0; k <= LABEL_KIND.SHOT_COMMENT; k++) {
+    const sizeByKind = new Float64Array(LABEL_KIND_COUNT);
+    for (let k = 0; k < LABEL_KIND_COUNT; k++) {
       sizeByKind[k] = interpolateStops(z, LABEL_KIND_STYLE[k as LabelKind].size);
     }
     levels.push({ z, wps: input.worldPixelScale * Math.pow(2, z - input.buildZoom), sizeByKind });
@@ -477,15 +508,19 @@ export function computeRevealZooms(
     const lv = levels[l]!;
     const grid: BoxGrid = new Map();
     for (const c of realWinners) insertBox(grid, boxAt(c, lv), cellSize);
+    // Boxes of Errors labels that did not fit at this step (module header).
+    const waiting: BoxGrid = new Map();
     // Try to reveal more, in the fixed priority order.
     for (const c of real) {
       if (c.level >= 0) continue; // already revealed
       if (lv.z + 1e-9 < c.admitZoom) continue; // decimation not yet admitted
       const box = boxAt(c, lv);
-      if (fits(grid, box, cellSize)) {
+      if (fits(grid, box, cellSize) && (waiting.size === 0 || fits(waiting, box, cellSize))) {
         place(c, l);
         realWinners.push(c);
         insertBox(grid, box, cellSize);
+      } else if (c.reserves) {
+        insertBox(waiting, box, cellSize);
       }
     }
   }
@@ -518,6 +553,8 @@ export function computeRevealZooms(
     const earliest = new Int32Array(pass.length).fill(-1);
     for (let l = 0; l < levelCount && pass.length > 0; l++) {
       const lv = levels[l]!;
+      // Errors labels of this pass that did not fit at this level (module header).
+      const waiting: BoxGrid = new Map();
       for (let j = 0; j < pass.length; j++) {
         const c = pass[j]!;
         if (c.level >= 0) continue; // already revealed
@@ -539,9 +576,15 @@ export function computeRevealZooms(
         }
         if (l < earliest[j]!) continue; // would overlap a better-rank label once both show
         const box = boxAt(c, lv);
-        if (fits(grids[l]!, box, cellSize) && (!reserving || fits(reservedGrids[l]!, box, cellSize))) {
+        if (
+          fits(grids[l]!, box, cellSize) &&
+          (!reserving || fits(reservedGrids[l]!, box, cellSize)) &&
+          (waiting.size === 0 || fits(waiting, box, cellSize))
+        ) {
           place(c, l);
           occupy(grids, c);
+        } else if (c.reserves) {
+          insertBox(waiting, box, cellSize);
         }
       }
     }
@@ -579,8 +622,10 @@ function reservedPhantoms(input: RevealInput, levelAt: (zoom: number) => number,
       rank,
       tier: 0,
       priority: 0,
+      scoreRank: 0,
       ordinal: desc.ordinal,
       id: stableId(desc),
+      reserves: false,
       level,
     });
   }

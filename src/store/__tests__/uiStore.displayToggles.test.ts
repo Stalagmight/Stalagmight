@@ -37,6 +37,7 @@ const getCleanTestState = () => ({
   showStationLabels: false,
   showStationNames: false,
   showShotData: false,
+  showShotErrors: false,
   showReferenceShots: true,
   showZeroDatum: true,
   showGrid: false,
@@ -92,6 +93,11 @@ describe('Display Toggle State', () => {
       expect(useUIStore.getState().showShotData).toBe(DISPLAY_DEFAULTS.showShotData);
     });
 
+    it('store showShotErrors uses DISPLAY_DEFAULTS value (off)', () => {
+      expect(useUIStore.getState().showShotErrors).toBe(DISPLAY_DEFAULTS.showShotErrors);
+      expect(DISPLAY_DEFAULTS.showShotErrors).toBe(false);
+    });
+
     it('store showReferenceShots uses DISPLAY_DEFAULTS value', () => {
       expect(useUIStore.getState().showReferenceShots).toBe(DISPLAY_DEFAULTS.showReferenceShots);
     });
@@ -126,6 +132,7 @@ describe('Display Toggle State', () => {
         'showStationLabels',
         'showStationNames',
         'showShotData',
+        'showShotErrors',
         'showReferenceShots',
         'showZeroDatum',
         'showGrid',
@@ -149,6 +156,7 @@ describe('Display Toggle State', () => {
         showStationLabels: !DISPLAY_DEFAULTS.showStationLabels,
         showStationNames: !DISPLAY_DEFAULTS.showStationNames,
         showShotData: !DISPLAY_DEFAULTS.showShotData,
+        showShotErrors: !DISPLAY_DEFAULTS.showShotErrors,
         showReferenceShots: !DISPLAY_DEFAULTS.showReferenceShots,
         showZeroDatum: !DISPLAY_DEFAULTS.showZeroDatum,
         showGrid: !DISPLAY_DEFAULTS.showGrid,
@@ -168,6 +176,7 @@ describe('Display Toggle State', () => {
       expect(state.showStationLabels).toBe(DISPLAY_DEFAULTS.showStationLabels);
       expect(state.showStationNames).toBe(DISPLAY_DEFAULTS.showStationNames);
       expect(state.showShotData).toBe(DISPLAY_DEFAULTS.showShotData);
+      expect(state.showShotErrors).toBe(DISPLAY_DEFAULTS.showShotErrors);
       expect(state.showReferenceShots).toBe(DISPLAY_DEFAULTS.showReferenceShots);
       expect(state.showZeroDatum).toBe(DISPLAY_DEFAULTS.showZeroDatum);
       expect(state.showGrid).toBe(DISPLAY_DEFAULTS.showGrid);
@@ -214,6 +223,7 @@ describe('Display Toggle State', () => {
         'showSectionNames',
         'showStationLabels',
         'showShotData',
+        'showShotErrors',
         'showReferenceShots',
         'showZeroDatum',
         'showGrid',

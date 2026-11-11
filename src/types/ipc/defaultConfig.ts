@@ -365,6 +365,12 @@ export const defaultConfig: Config = {
       "id": "theme",
       "reversed": false
     },
+    "issues": {
+      "id": "theme",
+      "reversed": false
+    },
+    "issues_combine": "worst",
+    "issues_hidden": [],
     "pinned": []
   }
 };

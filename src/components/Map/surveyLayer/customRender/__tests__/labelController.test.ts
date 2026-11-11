@@ -447,6 +447,15 @@ describe('SurveyLabelController all-kinds suppression + toggle routing', () => {
     expect(layer.lastStyle?.kindEnabled[LABEL_KIND.STATION_COMMENT]).toBe(true);
     c.setShotCommentsVisible(true);
     expect(layer.lastStyle?.kindEnabled[LABEL_KIND.SHOT_COMMENT]).toBe(true);
+    // Errors labels: shot labels and closure labels flip independently.
+    expect(layer.lastStyle?.kindEnabled).toHaveLength(7);
+    expect(layer.lastStyle?.kindEnabled[LABEL_KIND.SHOT_ERROR]).toBe(false);
+    c.setErrorLabelsVisible(true, false);
+    expect(layer.lastStyle?.kindEnabled[LABEL_KIND.SHOT_ERROR]).toBe(true);
+    expect(layer.lastStyle?.kindEnabled[LABEL_KIND.CLOSURE_ERROR]).toBe(false);
+    c.setErrorLabelsVisible(false, true);
+    expect(layer.lastStyle?.kindEnabled[LABEL_KIND.SHOT_ERROR]).toBe(false);
+    expect(layer.lastStyle?.kindEnabled[LABEL_KIND.CLOSURE_ERROR]).toBe(true);
     // Uniform flips, never a buffer rebuild.
     expect(layer.updateCalls).toBe(updatesBefore);
   });

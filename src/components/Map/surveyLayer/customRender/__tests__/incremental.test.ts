@@ -172,12 +172,17 @@ describe('sameColorGlobals', () => {
     expect(sameColorGlobals(ctx(), ctx({ themeColors: { ...THEME } as never }))).toBe(false);
     expect(sameColorGlobals(ctx(), ctx({ showDepthGradient: true }))).toBe(false);
     expect(sameColorGlobals(ctx(), ctx({ depthRange: { min: 0, max: 60 } }))).toBe(false);
-    // Severity on: the arrays are rebuilt per flush (new ref) -> never same.
-    const sev = { shotSeverity: new Uint8Array(0), stationSeverity: new Uint8Array(0) };
+    // Survey Issues on: new scores (an edit / a warnings refresh) -> not same;
+    // the memoized SAME scores object (nothing they depend on changed) -> same.
+    const sev = { shotScore: new Float32Array(0), stationScore: new Float32Array(0) };
     expect(sameColorGlobals(
-      ctx({ showIssueSeverity: true, issueSeverity: sev }),
-      ctx({ showIssueSeverity: true, issueSeverity: { ...sev } }),
+      ctx({ showIssueSeverity: true, issueScores: sev }),
+      ctx({ showIssueSeverity: true, issueScores: { ...sev } }),
     )).toBe(false);
+    expect(sameColorGlobals(
+      ctx({ showIssueSeverity: true, issueScores: sev }),
+      ctx({ showIssueSeverity: true, issueScores: sev }),
+    )).toBe(true);
   });
 
   it('treats analytical-overlay changes as color-global (forces a rebuild)', () => {

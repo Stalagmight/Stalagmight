@@ -35,3 +35,7 @@ Always fix errors. A warning may just mean the shot needs retaking, see
   length was a typo, like 5.4 for 25.4 here.
 - The dashed line (14) previews the fixed shot.
 - **Apply** (13).
+
+The fixes depend on the problem. Inclination in and out too far apart offers
+**Use inclination in**, **Use inclination out**, **Average** (the default) or
+**Set inclination**.

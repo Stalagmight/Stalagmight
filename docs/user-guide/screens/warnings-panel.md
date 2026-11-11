@@ -9,8 +9,10 @@ order: 8
 The **Warnings** tab of the right panel. It lists problems in the survey
 geometry, whether from the survey itself or from data entry, split into
 [errors and warnings](../concepts/errors-and-warnings.md). While it is open,
-the map is colored by problem: red is an error, yellow a warning, green no
-problem.
+the map uses **Survey Issues** coloring and **Errors** labels: each shot is
+graded from green (its readings agree) through yellow (at a warning threshold)
+to red (three times the threshold, or an error), and labelled with how far its
+readings disagree.
 
 ![Warnings panel](../images/warnings-panel.png)
 
@@ -49,5 +51,8 @@ problem.
   value, don't warn again)**.
 - Under **Show resolved**, resolved warnings are struck through. **Mark
   unresolved** brings one back.
-- The map coloring on this tab can be turned off in Settings: **Switching to
-  warnings tab highlights issues on the map**.
+- The map coloring and labels on this tab can be turned off in Settings:
+  **Switching to warnings tab highlights issues on the map**.
+- In the [Display menu](display-menu.md) you can pick another coloring or turn
+  **Errors** off while the tab is open. That lasts until you leave the tab and is
+  not saved.

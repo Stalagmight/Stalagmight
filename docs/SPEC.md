@@ -941,12 +941,27 @@ The three move tools are documented in detail in [move-tools.md](move-tools.md).
   stations unlabelled; the pill is disabled while the project has no names.
 - Station comments, shot comments
 - Shot data (azimuth, length, depth)
+- Errors: one label per shot with how far its readings disagree (Δaz azimuth in
+  vs out, Δinc inclination in vs out, Δi/d recorded inclination vs the one the
+  length and depth change imply, ΔL recorded length vs the one the depth change
+  and inclination imply - only on shots steeper than 15°), and one per loop
+  closure ("Loop 2.1% 0.84m"). A part that rounds to zero or whose warning was
+  ignored is left out. Where labels collide the worst error is shown. Saved per
+  project; off by default
 - Reference shots (faded, semi-transparent lines)
 - Zero datum (enlarged golden station dot)
 - Grid overlay (theme-aware; spacing chosen by the user from 1, 5, 10, 25, 50, 100 m - default 10 m)
 - Scale bar (always shown; not a toggle)
 - Satellite imagery
 - Depth color gradient, and the distance gradient: palette and Levels range from the legend cog (docs/color-palettes.md)
+- Survey Issues coloring: each shot graded by its worst disagreement, green
+  (agree) -> yellow (at the warning threshold) -> red (3x the threshold, or an
+  error); unresolved errors are red, other unresolved warnings at least yellow.
+  The legend cog sets the palette, worst or average, the errors that count and
+  per-error Min / Warn / Max levels (map only; never the validation thresholds)
+- While the Warnings tab is open (setting "Highlight warnings on tab switch"),
+  Survey Issues and Errors are on. Changes made then last until the tab is left
+  and are never saved; leaving restores the saved display settings
 - LRUD passage walls (future)
 
 #### Map Interactions
@@ -970,7 +985,7 @@ The three move tools are documented in detail in [move-tools.md](move-tools.md).
 | Station | Filled circle |
 | Selected station | Highlighted ring |
 | Zero datum | Golden station circle at 2x radius |
-| Validation warning | Red highlight, ⚠ icon |
+| Validation warning | Survey Issues mode: green -> yellow -> red by how far the readings disagree; ⚠ icon in the table and Warnings panel |
 | Marked as resolved | No map highlight; dimmed and struck through in the Detail Panel |
 | Loop closure line | Dashed line with error percentage |
 
@@ -2661,6 +2676,7 @@ The dropdown also closes when pressing Ctrl+Z or Ctrl+Y (global undo/redo shortc
 | Shot length > 50m | Warning | "Shot {section_id}:{position} length {length}m above maximum threshold {threshold}m" |
 | Depth change > 10m per shot | Warning | "Shot {section_id}:{position} depth change {change}m exceeds threshold {threshold}m" |
 | Azimuth in/out difference > 20 degrees (default `azimuth_diff_threshold`; configurable) | Warning | "Shot {section_id}:{position} azimuth in/out difference {dev}° exceeds threshold {threshold}°" |
+| Inclination in/out difference > 10 degrees (default `pitch_diff_threshold`; configurable; only when both are recorded and in range) | Warning | "Shot {section_id}:{position} inclination in/out difference {dev}° exceeds threshold {threshold}°" |
 | Zero length shot | Error | "Shot {section_id}:{position} has zero length" |
 | Negative length | Error | "Shot {section_id}:{position} has negative length: {length}m" |
 | Negative LRUD | Error | "Shot {section_id}:{position} has negative {direction} distance: {value}m" |

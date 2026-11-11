@@ -39,9 +39,10 @@ pub fn severity_for_code(code: &str) -> WarningSeverity {
         | "NON_FINITE_VALUE"
         | "LENGTH_BELOW_DEPTH_CHANGE"
         | MULTIPLE_DATUMS_PER_MERGE_COMPONENT => WarningSeverity::Error,
-        // SHORT_SHOT, LONG_SHOT, LARGE_DEPTH_CHANGE, AZIMUTH_DEVIATION and
-        // INCLINATION_DEPTH_MISMATCH are advisory; an unknown code defaults to
-        // advisory so a future warning is ignorable until classified.
+        // SHORT_SHOT, LONG_SHOT, LARGE_DEPTH_CHANGE, AZIMUTH_DEVIATION,
+        // PITCH_DEVIATION and INCLINATION_DEPTH_MISMATCH are advisory; an
+        // unknown code defaults to advisory so a future warning is ignorable
+        // until classified.
         _ => WarningSeverity::Warning,
     }
 }

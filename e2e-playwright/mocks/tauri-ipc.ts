@@ -1005,6 +1005,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         switch (cmd) {
           case 'update_project_settings': {
             // Per-project settings (#57): name + validation thresholds.
+            console.log('[Mock IPC] update_project_settings');
             if (currentProject) {
               if (typeof args?.name === 'string') currentProject.name = args.name;
               if (args?.validation) {
@@ -1083,6 +1084,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 showStationLabels: false,
                 showStationNames: false,
                 showShotData: false,
+                showShotErrors: false,
                 showReferenceShots: true,
                 showZeroDatum: true,
                 showGrid: false,
@@ -1337,6 +1339,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 showStationLabels: false,
                 showStationNames: false,
                 showShotData: false,
+                showShotErrors: false,
                 showReferenceShots: true,
                 showZeroDatum: true,
                 showGrid: false,
