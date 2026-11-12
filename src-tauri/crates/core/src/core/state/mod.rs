@@ -1,4 +1,5 @@
 mod app_state;
+mod command_combine_sections;
 mod command_comment;
 mod command_credit;
 mod command_delete_split;
@@ -62,6 +63,13 @@ mod adversarial_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod azimuth_reference_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::float_cmp,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod combine_sections_tests;
 #[cfg(test)]
 mod concurrency_tests;
 #[cfg(test)]

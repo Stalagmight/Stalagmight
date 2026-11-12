@@ -263,30 +263,38 @@ fn from_anchor(project: &Project, anchor: &StoredAnchor, stale: &mut u32) -> Opt
 
 /// The section `anchor`'s shots live in now: its recorded section while that
 /// still holds one of them (or the anchor names none, a shot-less section),
-/// else the first section that does. Shot uuids are project-unique, and a Split
-/// Section Here moves the shots past the cut into a new section.
-fn anchor_section<'p>(project: &'p Project, anchor: &PlanAnchor) -> Option<&'p Section> {
+/// else the first section that does. Shot uuids are project-unique; a Split
+/// Section Here moves the shots past the cut into a new section, and Combine
+/// Sections moves the other section's shots into the kept one.
+///
+/// Also returns the parity correction of a recorded section that Combine
+/// Sections retired ([`Project::resolve_retired_section`]): its shots now run
+/// with or against their new section's `reverse_parity`, and the pin's saved
+/// side has to be read against the parity THOSE shots would have.
+fn anchor_section<'p>(project: &'p Project, anchor: &PlanAnchor) -> Option<(&'p Section, bool)> {
     let holds = |section: &Section| {
         [&anchor.a, &anchor.b]
             .into_iter()
             .any(|uuid| PlanAnchor::position_of(project, section, uuid).is_some())
     };
-    let recorded = project.get_section(anchor.section_id);
+    let (recorded_id, parity_flip) = project.resolve_retired_section(anchor.section_id);
+    let recorded = project.get_section(recorded_id);
     if let Some(section) = recorded {
         if (anchor.a.is_none() && anchor.b.is_none()) || holds(section) {
-            return Some(section);
+            return Some((section, parity_flip));
         }
     }
-    project.sections.iter().find(|s| holds(s)).or(recorded)
+    let section = project.sections.iter().find(|s| holds(s)).or(recorded)?;
+    Some((section, parity_flip))
 }
 
 fn resolve_anchor(project: &Project, anchor: &PlanAnchor) -> Option<StationRef> {
-    let section = anchor_section(project, anchor)?;
+    let (section, parity_flip) = anchor_section(project, anchor)?;
     let n = section.shots.len();
     let pa = PlanAnchor::position_of(project, section, &anchor.a);
     let pb = PlanAnchor::position_of(project, section, &anchor.b);
     // A reverse since this anchor was written flips what "after" means.
-    let flipped = anchor.parity != section.reverse_parity;
+    let flipped = anchor.parity != (section.reverse_parity ^ parity_flip);
     let index = match (pa, pb) {
         // (1) Both present: the station is the end of `a` that faces `b`.
         (Some(pa), Some(pb)) if pa < pb => pa + 1,
@@ -1325,6 +1333,96 @@ mod tests {
             );
         }
         assert_eq!(stale, 0);
+    }
+
+    /// Combine Sections moves the other section's shots into the kept one,
+    /// reversing them when the two meet end to end or start to start. Every
+    /// pin, on either section and at every station including the two section
+    /// ends (which a pin names by ONE neighbour and a parity-corrected side),
+    /// must land on the same physical station, for every pairing and every
+    /// combination of the two sections' reverse parities.
+    #[test]
+    fn pins_on_both_sections_survive_a_combine() {
+        use crate::models::{
+            CombinePick, CombineSectionsOptions, SectionData, SectionEnd, ShotData,
+        };
+        let shot = |azimuth: f64, length: f64| ShotData {
+            azimuth_in: azimuth,
+            azimuth_out: azimuth,
+            length,
+            ..Default::default()
+        };
+        let ends = [SectionEnd::Start, SectionEnd::End];
+        for kept_end in ends {
+            for other_end in ends {
+                for (reverse_k, reverse_o) in
+                    [(false, false), (true, false), (false, true), (true, true)]
+                {
+                    let what =
+                        format!("{kept_end:?}-{other_end:?} reversed {reverse_k}/{reverse_o}");
+                    let mut project = Project::new("Pins".to_string(), None);
+                    let mut add = |shots: Vec<ShotData>| {
+                        project
+                            .add_section(SectionData {
+                                shots,
+                                ..Default::default()
+                            })
+                            .id
+                    };
+                    let k = add(vec![shot(90.0, 10.0), shot(80.0, 5.0)]);
+                    let o = add(vec![shot(0.0, 4.0), shot(300.0, 6.0), shot(270.0, 3.0)]);
+                    if reverse_k {
+                        assert!(project.reverse_section(k, false));
+                    }
+                    if reverse_o {
+                        assert!(project.reverse_section(o, false));
+                    }
+                    let index = |p: &Project, id, end| match end {
+                        SectionEnd::Start => 0,
+                        SectionEnd::End => p.get_section(id).unwrap().shots.len() as u32,
+                    };
+                    let join_k = StationRef::new(k, index(&project, k, kept_end));
+                    let join_o = StationRef::new(o, index(&project, o, other_end));
+                    project.merge_stations(join_k, join_o).unwrap();
+                    let xy = |p: &Project, r: StationRef| {
+                        let c = p.compute_station_raw_coords(r).unwrap();
+                        (c.x, c.y)
+                    };
+                    let pins: Vec<(StoredAnchor, (f64, f64))> = [(k, 2), (o, 3)]
+                        .into_iter()
+                        .flat_map(|(id, n)| (0..=n).map(move |i| StationRef::new(id, i)))
+                        .map(|r| (to_anchor(&project, Some(r)).unwrap(), xy(&project, r)))
+                        .collect();
+
+                    project
+                        .combine_sections(
+                            k,
+                            o,
+                            &CombineSectionsOptions {
+                                name: "K".to_string(),
+                                color: "#123456".to_string(),
+                                swap_lr: false,
+                                comment_pick: CombinePick::Kept,
+                                name_pick: CombinePick::Kept,
+                            },
+                        )
+                        .unwrap();
+
+                    let mut stale = 0;
+                    for (i, (pin, at)) in pins.iter().enumerate() {
+                        let placed = from_anchor(&project, pin, &mut stale);
+                        assert!(placed.is_some(), "{what}: pin {i} is stale");
+                        let placed = placed.unwrap();
+                        let (x, y) = xy(&project, placed);
+                        assert!(
+                            (x - at.0).hypot(y - at.1) < 1e-6,
+                            "{what}: pin {i} moved to {placed:?}"
+                        );
+                    }
+                    assert_eq!(stale, 0, "{what}");
+                }
+            }
+        }
     }
 
     /// Build a section of `n` shots and return `(project, section_id)`.

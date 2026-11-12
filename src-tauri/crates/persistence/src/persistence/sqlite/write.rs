@@ -427,6 +427,20 @@ impl Database {
             }
         }
 
+        // Sections Combine Sections retired (dive-plan pins only), same table.
+        // Absent when empty, so a project that never combined is unchanged.
+        if project.retired_sections.is_empty() {
+            tx.execute(
+                "DELETE FROM project_settings WHERE key = 'retired_sections'",
+                [],
+            )?;
+        } else {
+            tx.execute(
+                "INSERT OR REPLACE INTO project_settings (key, value) VALUES ('retired_sections', ?1)",
+                params![serde_json::to_string(&project.retired_sections)?],
+            )?;
+        }
+
         tx.commit()?;
         tracing::debug!("Transaction committed");
 

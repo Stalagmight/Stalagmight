@@ -737,6 +737,7 @@ impl Database {
         // legacy-seeding fallback - `None` genuinely means "unknown".
         let surface_elevation = self.load_project_surface_elevation()?;
         let default_azimuth_reference = self.load_project_default_azimuth_reference()?;
+        let retired_sections = self.load_project_retired_sections();
 
         // Pre-populate the section_id → index lookup so callers get
         // O(1) get_section without needing rebuild_section_index().
@@ -781,6 +782,7 @@ impl Database {
             validation,
             surface_elevation,
             default_azimuth_reference,
+            retired_sections,
             cascade_deferred: false,
             section_index_cache,
             shot_uuid_index,
@@ -1356,6 +1358,36 @@ impl Database {
             }
             parsed
         }))
+    }
+
+    /// Load the sections Combine Sections retired (`RetiredSection`), kept in
+    /// `project_settings` under `retired_sections` like the other project-level
+    /// values (no schema bump; readers that do not know the key skip it). A
+    /// missing key reads as none retired; an unparseable value too, with a
+    /// warning: the map only refines dive-plan pins, so a lost one costs a pin
+    /// that may need re-placing, never the survey.
+    pub fn load_project_retired_sections(
+        &self,
+    ) -> std::collections::BTreeMap<SectionId, crate::models::RetiredSection> {
+        let json: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM project_settings WHERE key = 'retired_sections'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .unwrap_or(None);
+        json.map(|s| {
+            serde_json::from_str(&s).unwrap_or_else(|e| {
+                tracing::warn!(
+                    error = %e,
+                    "stored retired_sections is present but unparseable; reading as none"
+                );
+                std::collections::BTreeMap::new()
+            })
+        })
+        .unwrap_or_default()
     }
 
     /// Load the project-level default north reference (#438). A missing key -

@@ -1899,6 +1899,9 @@ pub fn run() {
             commands::section::get_anchored_section_ids,
             commands::section::create_section_and_merge,
             commands::section::get_section_relationships,
+            commands::section::combine_candidate,
+            commands::section::combine_candidate_for_sections,
+            commands::section::combine_sections,
             commands::section::get_segment_geometry,
             // Shot commands
             commands::shot::create_shot,

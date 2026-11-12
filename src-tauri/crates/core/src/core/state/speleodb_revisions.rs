@@ -1107,6 +1107,7 @@ mod tests {
         assert_eq!(
             forward_calls,
             [
+                "command_combine_sections.rs",
                 "command_comment.rs",
                 "command_delete_split.rs",
                 "command_import.rs",

@@ -6,9 +6,9 @@ use std::path::PathBuf;
 use ts_rs::TS;
 
 use super::{
-    AzimuthReference, GpsBounds, LoopClosure, Section, SectionData, SectionId, SectionUpdates,
-    ShotData, ShotId, StationAnchor, StationKey, StationMerge, StationMergeWire, StationRef,
-    ZeroDatum,
+    AzimuthReference, GpsBounds, LoopClosure, RetiredSection, Section, SectionData, SectionId,
+    SectionUpdates, ShotData, ShotId, StationAnchor, StationKey, StationMerge, StationMergeWire,
+    StationRef, ZeroDatum,
 };
 use super::{LoopClosureWire, ZeroDatumWire};
 
@@ -35,6 +35,8 @@ use super::{Coordinates, GpsCoordinates, Shot, ShotUpdates, Station};
 use crate::config::ClosureAdjustmentConfig;
 
 mod classify;
+mod combine_candidate;
+mod combine_sections;
 mod connectivity;
 mod gauge;
 mod mutations;
@@ -59,9 +61,17 @@ mod anchor_fuzz;
     clippy::float_cmp,
     reason = "test module: panics on a failed assumption are the point"
 )]
+mod combine_sections_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::float_cmp,
+    reason = "test module: panics on a failed assumption are the point"
+)]
 mod split_section_tests;
 
 pub use classify::ClassifyScope;
+pub use combine_candidate::COMBINE_TOLERANCE_M;
 pub use gas::{
     CylRole, Cylinder, Diver, GasReachField, PlanMode, PlanSegment, RouteLeg, RouteProfilePoint,
     TankMaterial, Team,
@@ -353,6 +363,15 @@ pub struct Project {
     #[serde(default)]
     #[ts(optional)]
     pub default_azimuth_reference: Option<AzimuthReference>,
+
+    /// Sections Combine Sections folded into another, by their old id. Read
+    /// only by dive-plan pin resolution (see [`RetiredSection`]); persisted in
+    /// `project_settings` (no schema bump), and in every undo snapshot.
+    /// Omitted from serde when empty, so a project that never combined
+    /// serializes exactly as before.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[ts(skip)]
+    pub retired_sections: BTreeMap<SectionId, RetiredSection>,
 
     /// Transient flag (NOT persisted) - when true,
     /// [`Self::cascade_connection_offsets`] returns immediately. Used by
@@ -713,6 +732,7 @@ impl Project {
             validation: crate::config::ValidationConfig::default(),
             surface_elevation: None,
             default_azimuth_reference: None,
+            retired_sections: BTreeMap::new(),
             cascade_deferred: false,
             section_index_cache: HashMap::new(),
             shot_uuid_index: HashMap::new(),
