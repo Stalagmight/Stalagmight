@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use chrono::{NaiveDate, Utc};
 use rusqlite::{params, OptionalExtension};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::models::{
     AzimuthReference, ClosureStrategy, CorrectionSource, GpsCoordinates, LoopClosure,
@@ -558,8 +558,7 @@ impl Database {
                 let credit_rows = super::shot_credits::load_credit_rows(&self.conn)?;
                 let recorded =
                     super::shot_credits::load_recorded_legacy(&self.conn, &stored_legacy);
-                let mut claimed: std::collections::HashSet<(u32, &str)> =
-                    std::collections::HashSet::new();
+                let mut claimed: HashSet<(u32, &str)> = HashSet::new();
                 for section in sections.iter_mut() {
                     let section_id = section.id;
                     // The rows hold only while the legacy pair is the one this
@@ -737,7 +736,18 @@ impl Database {
         // legacy-seeding fallback - `None` genuinely means "unknown".
         let surface_elevation = self.load_project_surface_elevation()?;
         let default_azimuth_reference = self.load_project_default_azimuth_reference()?;
-        let counter_parity_shots = self.load_project_counter_parity_shots();
+        // Only shots this file holds: an entry for any other uuid is stale (a
+        // file edited by hand, or by a build that did not prune it), and
+        // would otherwise wait in the set for a shot that later takes that
+        // uuid, an Add of a copy of the same survey for one.
+        let mut counter_parity_shots = self.load_project_counter_parity_shots();
+        if !counter_parity_shots.is_empty() {
+            let held: HashSet<&str> = sections
+                .iter()
+                .flat_map(|s| s.shots.iter().filter_map(|shot| shot.uuid.as_deref()))
+                .collect();
+            counter_parity_shots.retain(|uuid| held.contains(uuid.as_str()));
+        }
 
         // Pre-populate the section_id → index lookup so callers get
         // O(1) get_section without needing rebuild_section_index().
@@ -1039,7 +1049,7 @@ impl Database {
         let mut columns = self
             .conn
             .prepare("SELECT name FROM pragma_table_info('speleo_link')")?;
-        let columns: std::collections::HashSet<String> = columns
+        let columns: HashSet<String> = columns
             .query_map([], |row| row.get::<_, String>(0))?
             .collect::<std::result::Result<_, _>>()?;
         // Named as expressions rather than as a dynamic column list so the SELECT
