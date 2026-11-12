@@ -87,6 +87,13 @@ export interface PeopleInputProps {
   autoFocus?: boolean;
   /** Dense variant for table cells: no box of its own, hidden label, smaller pills. */
   compact?: boolean;
+  /**
+   * With `compact`: wrap the pills onto as many lines as they need, each name
+   * whole (a long one wraps between words), instead of one truncating line. For
+   * cells whose row may grow (a read-only preview table), not the fixed-height
+   * data grid.
+   */
+  wrap?: boolean;
   /** Fires when typed-but-uncommitted text appears (true) or goes away (false). */
   onCommitPending?: (hasPending: boolean) => void;
   /** Text the input starts with (a table cell opened by typing a letter), list open. */
@@ -205,6 +212,7 @@ export function PeopleInput({
   id,
   autoFocus = false,
   compact = false,
+  wrap = false,
   onCommitPending,
   defaultText = '',
 }: PeopleInputProps) {
@@ -577,10 +585,10 @@ export function PeopleInput({
       : partial
         ? 'border-dashed border-accent-50 bg-accent-5 text-text-secondary'
         : 'border-accent-30 bg-accent-10 text-text-primary';
-    const size = compact ? 'h-5 px-1 gap-0.5' : 'h-6 px-1.5 gap-1';
+    const size = compact ? (wrap ? 'min-h-5 py-px px-1 gap-0.5' : 'h-5 px-1 gap-0.5') : 'h-6 px-1.5 gap-1';
     const body = (
       <>
-        <span className="truncate" data-testid={`${pillTestId}-label`}>
+        <span className={wrap ? 'whitespace-normal' : 'truncate'} data-testid={`${pillTestId}-label`}>
           {pillLabel}
         </span>
         {partial && (
@@ -718,11 +726,13 @@ export function PeopleInput({
   // Compact stays on one line (a table row has a fixed height): pills shrink
   // and truncate instead of wrapping, and the tooltip carries the full name.
   const fieldClass = compact
-    ? `flex-nowrap overflow-hidden min-h-[24px] h-full px-1 py-0.5 gap-0.5 bg-transparent focus-within:ring-1 focus-within:ring-inset focus-within:ring-accent`
+    ? wrap
+      ? `flex-wrap min-h-[24px] py-0.5 gap-0.5 bg-transparent`
+      : `flex-nowrap overflow-hidden min-h-[24px] h-full px-1 py-0.5 gap-0.5 bg-transparent focus-within:ring-1 focus-within:ring-inset focus-within:ring-accent`
     : `flex-wrap min-h-[32px] px-1.5 py-1 gap-1 rounded border border-border bg-background focus-within:border-accent ${KEYBOARD_RING}`;
 
   return (
-    <div className={`min-w-0 ${compact ? 'h-full' : ''}`} data-testid={testId} data-dropdown-open={showList || undefined}>
+    <div className={`min-w-0 ${compact && !wrap ? 'h-full' : ''}`} data-testid={testId} data-dropdown-open={showList || undefined}>
       <label
         id={labelId}
         htmlFor={disabled ? undefined : inputId}

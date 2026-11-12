@@ -985,13 +985,26 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           up: shot.up * scale,
           down: shot.down * scale,
         });
+        // `.../crowded...` gives every shot a full credit - five surveyors, two
+        // explorers, dates spanning a range - for the preview table's layout.
+        const crowded = (path ?? '').toLowerCase().includes('crowded');
+        const crowd = (date: string): Partial<TmlWire<TmlShot>> =>
+          crowded
+            ? {
+                credit: {
+                  surveyors: ['Ann Diver', 'Bo Lead', 'Cy Cave', 'Dee Deep', 'Eve Echo'].map((name) => ({ name })),
+                  explorers: ['Fay Fathom', 'Gus Grotto'].map((name) => ({ name })),
+                  date,
+                },
+              }
+            : {};
         const sections: TmlWire<TmlFile>['sections'] = [
           {
             name: 'Main Line',
             shots: [
-              buildMockTmlShot(1, 0, 'Main Line', 2),
-              buildMockTmlShot(2, 1, 'Main Line', 4, { comment: 'Restriction at the T' }),
-              buildMockTmlShot(3, 2, 'Main Line', 6, { excluded: true }),
+              buildMockTmlShot(1, 0, 'Main Line', 2, crowd('2026-03-02')),
+              buildMockTmlShot(2, 1, 'Main Line', 4, { comment: 'Restriction at the T', ...crowd('2026-04-11') }),
+              buildMockTmlShot(3, 2, 'Main Line', 6, { excluded: true, ...crowd('2026-04-11') }),
             ].map(scaleShot),
             surveyor: 'Synthetic Surveyor',
             date: '2026-01-02',
@@ -1004,8 +1017,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           {
             name: 'Side Passage',
             shots: [
-              buildMockTmlShot(4, 1, 'Side Passage', 3),
-              buildMockTmlShot(5, 4, 'Side Passage', 5, { shot_type: 'Virtual' }),
+              buildMockTmlShot(4, 1, 'Side Passage', 3, crowd('2026-03-02')),
+              buildMockTmlShot(5, 4, 'Side Passage', 5, { shot_type: 'Virtual', ...crowd('2026-04-11') }),
               // The loop closure, as the real format stores it: a Closure-type
               // ROW near the end of the file. from_id=1 (Main Line station 1)
               // and closure_to_id=4 (Side Passage station 1) keep the previous

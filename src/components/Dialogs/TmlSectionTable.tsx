@@ -16,10 +16,14 @@ import { PeopleInput } from '../common/PeopleInput';
 const NO_SUGGESTIONS: never[] = [];
 const noop = () => {};
 
-/** One read-only cell of people: compact pills (partial ones on only some shots), full detail on hover. */
+/**
+ * One read-only cell of people: compact pills (partial ones on only some
+ * shots), WRAPPED onto as many lines as the cell needs so every name shows
+ * whole - a truncated "Cy..." told nobody anything - with full detail on hover.
+ */
 function PeopleCell({ label, people, testId }: { label: string; people: AggregatedPerson[]; testId: string }) {
   return (
-    <div className="h-6 max-w-[9rem]">
+    <div className="min-w-0">
       <PeopleInput
         label={label}
         value={people}
@@ -28,9 +32,25 @@ function PeopleCell({ label, people, testId }: { label: string; people: Aggregat
         suggestions={NO_SUGGESTIONS}
         disabled
         compact
+        wrap
         testId={testId}
       />
     </div>
+  );
+}
+
+/**
+ * A date or a `first - last` range, each date unbroken. A range may wrap after
+ * its dash, so the column never forces the table wider than its panel (which
+ * clipped it behind a horizontal scrollbar).
+ */
+function DateText({ text }: { text: string }) {
+  const [first, last] = text.split(' - ');
+  if (last === undefined) return <span className="whitespace-nowrap">{text}</span>;
+  return (
+    <>
+      <span className="whitespace-nowrap">{first} -</span> <span className="whitespace-nowrap">{last}</span>
+    </>
   );
 }
 
@@ -85,16 +105,15 @@ export function TmlSectionTable({
                   data-testid="tml-select-all"
                 />
               </th>
+              {/* Width hints, so the people columns get the room (and their pills
+                  sit side by side) instead of the auto layout's even spread. */}
               <th className="px-2 py-1.5">{t('dialogs.tmlImport.table.section')}</th>
               <th className="px-2 py-1.5">{t('dialogs.tmlImport.table.shots')}</th>
-              <th className="px-2 py-1.5">{t('credit.surveyors')}</th>
-              <th className="px-2 py-1.5">{t('credit.explorers')}</th>
+              <th className="px-2 py-1.5 w-[38%]">{t('credit.surveyors')}</th>
+              <th className="px-2 py-1.5 w-[24%]">{t('credit.explorers')}</th>
               <th className="px-2 py-1.5">{t('dialogs.tmlImport.table.date')}</th>
-              {/* The swatch speaks for itself; the header stays for screen readers
-                  so the people columns leave the date room in the narrow panel. */}
-              <th className="px-2 py-1.5 w-6">
-                <span className="sr-only">{t('dialogs.tmlImport.table.color')}</span>
-              </th>
+              {/* No colour column: the swatch rides in the Section cell, so the
+                  people and date columns have the panel's width to themselves. */}
             </tr>
           </thead>
           <tbody>
@@ -117,6 +136,12 @@ export function TmlSectionTable({
                   />
                 </td>
                 <td className="px-2 py-1.5">
+                  <span
+                    className="mr-1.5 inline-block h-2.5 w-2.5 rounded-sm align-baseline"
+                    style={{ backgroundColor: section.color }}
+                    title={t('dialogs.tmlImport.table.color')}
+                    data-testid={`tml-section-${i}-color`}
+                  />
                   {section.name}
                   {section.is_branch_split && (
                     <span className="ml-1 text-xs text-text-tertiary">
@@ -147,11 +172,8 @@ export function TmlSectionTable({
                     testId={`tml-section-${i}-explorers`}
                   />
                 </td>
-                <td className="px-2 py-1.5 text-text-secondary whitespace-nowrap" data-testid={`tml-section-${i}-date`}>
-                  {credit.date ?? t('dialogs.tmlImport.stats.none')}
-                </td>
-                <td className="px-2 py-1.5">
-                  <div className="w-4 h-4 rounded" style={{ backgroundColor: section.color }} />
+                <td className="px-2 py-1.5 text-text-secondary" data-testid={`tml-section-${i}-date`}>
+                  {credit.date ? <DateText text={credit.date} /> : t('dialogs.tmlImport.stats.none')}
                 </td>
               </tr>
               );
