@@ -20,6 +20,7 @@ import { defaultConfig } from '../../types/config';
 import DeleteShotImpactDetails from './DeleteShotImpactDetails';
 import { setSource, trackDialogComplete } from '../../utils/telemetry';
 import { TOAST_KEYS } from '../../utils/toastKeys';
+import { sectionFirstDate, sectionSurveyorText } from '../../utils/sectionCredit';
 
 export default function EditSectionDialog() {
   const { t } = useTranslation();
@@ -96,8 +97,8 @@ export default function EditSectionDialog() {
   useEffect(() => {
     if (section) {
       setName(section.name ?? '');
-      setSurveyor(section.surveyor ?? '');
-      setDate(section.date ?? '');
+      setSurveyor(sectionSurveyorText(section));
+      setDate(sectionFirstDate(section));
       setColor(section.color);
       setDirection(section.direction ?? 'in');
       setQuality(section.quality ?? 1);
@@ -352,11 +353,16 @@ export default function EditSectionDialog() {
     setError(null);
 
     try {
-      // Update section metadata
+      // Update section metadata. Surveyor and date are per-shot now, and the
+      // legacy text fields SET every shot - so send them only when the user
+      // changed them, or saving a rename would flatten every shot's own
+      // credit into the section aggregate.
+      const surveyorChanged = !section || surveyor !== sectionSurveyorText(section);
+      const dateChanged = !section || date !== sectionFirstDate(section);
       const sectionResult = await updateSection(sectionId, {
         name: name.trim() || null,
-        surveyor: surveyor.trim() || null,
-        date: date.trim() || null,
+        ...(surveyorChanged ? { surveyor: surveyor.trim() || null } : {}),
+        ...(dateChanged ? { date: date.trim() || null } : {}),
         color,
         direction,
         quality,
@@ -697,8 +703,8 @@ export interface EditSectionDirtyState {
 export function isEditSectionDirty(state: EditSectionDirtyState, section: Section): boolean {
   return (
     state.name !== (section.name ?? '') ||
-    state.surveyor !== (section.surveyor ?? '') ||
-    state.date !== (section.date ?? '') ||
+    state.surveyor !== sectionSurveyorText(section) ||
+    state.date !== sectionFirstDate(section) ||
     state.color !== section.color ||
     state.direction !== (section.direction ?? 'in') ||
     state.quality !== (section.quality ?? 1) ||

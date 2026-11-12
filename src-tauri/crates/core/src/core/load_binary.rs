@@ -473,6 +473,8 @@ mod tests {
             station_count: 0,
             loop_count: 0,
             penetration_distance: 0.0,
+            first_survey_date: None,
+            last_survey_date: None,
         }
     }
 

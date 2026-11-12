@@ -33,8 +33,6 @@ function fixture(): { sections: Section[]; stations: Station[] } {
     {
       id: 1,
       name: 'Main',
-      surveyor: 'Alice',
-      date: '2024-01-15',
       color: '#ff0000',
       direction: 'in',
       quality: 1.0,
@@ -82,8 +80,6 @@ function fixture(): { sections: Section[]; stations: Station[] } {
     {
       id: 2,
       name: null,
-      surveyor: null,
-      date: null,
       color: '#00ff00',
       direction: 'out',
       quality: 0.5,
@@ -476,8 +472,6 @@ describe('SurveyData', () => {
         {
           id: sectionId,
           name: 'Deep',
-          surveyor: null,
-          date: null,
           color: '#0000ff',
           direction: 'in',
           quality: 1.0,

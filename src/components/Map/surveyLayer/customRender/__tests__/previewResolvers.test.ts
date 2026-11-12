@@ -31,7 +31,7 @@ function synthetic(sectionCount: number, shotsPerSection: number): SurveyData {
       });
     }
     sections.push({
-      id: s, name: `S${s}`, surveyor: null, date: null, color: '#ff0000', direction: 'in', quality: 1,
+      id: s, name: `S${s}`, color: '#ff0000', direction: 'in', quality: 1,
       next_shot_id: shotsPerSection, reverse_parity: false, gauge_shot_uuid: null, gauge_neighbour_uuid: null,
       shots,
     });

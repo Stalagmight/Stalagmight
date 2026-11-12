@@ -63,6 +63,7 @@ import type { UnrecognisedShotKind } from '../types/ipc/UnrecognisedShotKind';
 import type { SurveyData } from '../types/survey-data';
 import { emptySurveyData, surveyDataFromLegacy, surveyDataWithAdjustedStations } from '../types/survey-data';
 import { createProjectConfigActions, type ProjectConfigActions } from './projectConfigActions';
+import { createProjectShotActions, type ProjectShotActions } from './projectShotActions';
 import { createProjectHistoryBannerActions, HISTORY_BANNER_CLEARED, type ProjectHistoryBannerActions, type ProjectHistoryBannerState } from './projectHistoryBannerActions';
 import { runProjectSwitch, runConfirmedProjectSwitch, reserveProjectRequest, isProjectRequestCurrent, beginProjectMutation, isProjectMutationCurrent } from '../utils/projectTransition';
 import { releaseFailed, resolveReleaseFailure, settleOpenLockBeforeLeaving } from '../utils/speleoReleaseFailure';
@@ -217,7 +218,7 @@ export interface LoadProjectOutcome {
   superseded?: boolean;
 }
 
-export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBannerActions, ProjectHistoryBannerState {
+export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBannerActions, ProjectHistoryBannerState, ProjectShotActions {
   // State
   project: Project | null;
   /**
@@ -424,7 +425,6 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   createShot: (sectionId: SectionId, shot: ShotData, afterShotId?: ShotId, beforeShotId?: ShotId) => Promise<CommandResult>;
   updateShot: (sectionId: SectionId, shotId: ShotId, updates: ShotUpdatesPatch) => Promise<CommandResult>;
   deleteShot: (sectionId: SectionId, shotId: ShotId) => Promise<CommandResult>;
-  splitShotAtDistance: (sectionId: SectionId, shotId: ShotId, distance: number) => Promise<CommandResult>;
   deleteShotAndSplit: (sectionId: SectionId, shotId: ShotId, nameA: string, nameB: string) => Promise<CommandResult>;
   deleteLastShotAndSection: (sectionId: SectionId, shotId: ShotId) => Promise<CommandResult>;
   deleteShotRangeSplit: (sectionId: SectionId, startShotId: ShotId, endShotId: ShotId, nameA: string, nameB: string) => Promise<CommandResult>;
@@ -908,6 +908,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   // Config (loadConfig / updateConfig / updateGasConfig / setConfig live in projectConfigActions.ts)
   ...createProjectConfigActions(set, get),
   ...createProjectHistoryBannerActions(set, get),
+  // splitShotAtDistance / editShotCredit live in projectShotActions.ts
+  ...createProjectShotActions(executeCommand),
 
   // Loading state actions
   startLoading: (projectName: string, projectPath: string) => {
@@ -1891,14 +1893,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       'delete_shot',
       { sectionId, shotId },
       { purpose: 'delete shot from section', fields: { sectionId, shotId } }
-    );
-  },
-
-  splitShotAtDistance: async (sectionId: SectionId, shotId: ShotId, distance: number) => {
-    return executeCommand(
-      'split_shot_at_distance',
-      { sectionId, shotId, distance },
-      { purpose: 'insert station mid-shot', fields: { sectionId, shotId } }
     );
   },
 

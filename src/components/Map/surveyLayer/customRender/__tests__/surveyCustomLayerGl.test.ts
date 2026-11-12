@@ -11,7 +11,7 @@ function makeSurvey(): SurveyData {
   const d = emptySurveyData();
   d.sections = [
     {
-      id: 1, name: 'A', surveyor: null, date: null, color: '#ff0000',
+      id: 1, name: 'A', color: '#ff0000',
       direction: 'in' as never, quality: 0, next_shot_id: 2, shotOffset: 0, shotCount: 2,
     },
   ];

@@ -134,7 +134,7 @@ const THEME = {
 function survey(): SurveyData {
   const d = emptySurveyData();
   d.sections = [
-    { id: 1, name: null, surveyor: null, date: null, color: '#0a0b0c',
+    { id: 1, name: null, color: '#0a0b0c',
       direction: 'in' as never, quality: 0, next_shot_id: 3, shotOffset: 0, shotCount: 2 },
   ];
   d.shotCount = 2;

@@ -20,6 +20,7 @@ import { computeOverlapPairs, type MergeOption } from '../../utils/overlapHelper
 import { repeatedShots, type OverlapChoice } from '../../utils/overlapChoices';
 import { isRepeatDoublyAnchored, mergeOptionsOf, overlapParamsOf, placeSuggestion } from '../../utils/orphanPlacement';
 import OverlapShotTable, { type OverlapShotRow } from './OverlapShotTable';
+import { sectionFirstDate } from '../../utils/sectionCredit';
 
 interface OrphanPlacementDialogProps {
   suggestions: OrphanPlacementSuggestion[];
@@ -58,7 +59,7 @@ function sectionToDmpSection(section: Section): DmpSection {
     version: 1,
     name: section.name ?? '',
     direction: section.direction,
-    date: section.date ?? '',
+    date: sectionFirstDate(section),
     content_hash: '',
     shots: section.shots.map((s) => ({
       shot_type: 'Standard' as const,

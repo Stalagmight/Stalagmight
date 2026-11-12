@@ -1308,6 +1308,8 @@ mod tests {
             station_count: 4,
             loop_count: 0,
             penetration_distance: 0.0,
+            first_survey_date: None,
+            last_survey_date: None,
         };
 
         // The merge endpoint must serialize as positional wire form

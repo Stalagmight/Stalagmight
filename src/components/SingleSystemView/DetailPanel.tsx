@@ -26,6 +26,7 @@ import { useActiveStations } from '../../hooks/useActiveStations';
 import { setSource, trackContextMenuAction } from '../../utils/telemetry';
 import { SHOT_KIND_LABEL_KEY, nextShotKind } from '../../utils/shotKind';
 import { countUnresolvedErrors } from '../../utils/validation';
+import { formatCreditDateRange, formatPeople, sectionCreditSummary } from '../../utils/sectionCredit';
 import { warningKey, warningMessageTestId, warningOpenShotTestId, warningResolveTestId, warningUndoResolveTestId } from '../../utils/testId';
 
 /** Center/locate glyph (small ring + edge spokes), filled so it stays crisp
@@ -1171,6 +1172,9 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
   );
   const precision = useDecimalPrecision();
 
+  // Who surveyed the section and when: the aggregate over its shots.
+  const credit = useMemo(() => sectionCreditSummary(section), [section]);
+
   // Calculate section statistics
   const sectionLength = section.shots.reduce((sum, s) => sum + s.length, 0);
   const shotCount = section.shots.length;
@@ -1250,8 +1254,8 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
           {/* Section info */}
           <div className="space-y-2">
             <DetailRow label={t('common.labels.name')} value={section.name ?? t('detailPanel.section.unnamed')} />
-            <DetailRow label={t('detailPanel.labels.surveyor')} value={section.surveyor ?? t('detailPanel.placeholder.none')} />
-            <DetailRow label={t('common.labels.date')} value={section.date ?? t('detailPanel.placeholder.none')} />
+            <DetailRow label={t('detailPanel.labels.surveyor')} value={formatPeople(credit.surveyors) || t('detailPanel.placeholder.none')} />
+            <DetailRow label={t('common.labels.date')} value={formatCreditDateRange(credit) ?? t('detailPanel.placeholder.none')} />
             <DetailRow label={t('detailPanel.labels.color')} value={
               <div className="flex items-center gap-2">
                 <span
@@ -1399,13 +1403,10 @@ function ProjectStats({ project, stats, stations }: ProjectStatsProps) {
   const minDepth = depths.length > 0 ? Math.min(...depths) : 0;
   const maxDepth = depths.length > 0 ? Math.max(...depths) : 0;
 
-  // Calculate date range from sections
-  const dates = project.sections
-    .map((s) => s.date)
-    .filter((d): d is string => d !== null && d !== undefined)
-    .sort();
-  const earliestDate = dates.length > 0 ? dates[0] : null;
-  const latestDate = dates.length > 0 ? dates[dates.length - 1] : null;
+  // The survey date range over every shot, computed by the backend so a
+  // binary-loaded project's lazy sections are not materialized for it.
+  const earliestDate = stats.first_survey_date ?? null;
+  const latestDate = stats.last_survey_date ?? null;
 
     return (
       <div className="h-full bg-panel overflow-auto">

@@ -510,6 +510,16 @@ pub struct ProjectStats {
     pub loop_count: usize,
     /// Maximum straight-line distance from zero datum to any station
     pub penetration_distance: f64,
+    /// The earliest survey date of any shot; absent when no shot has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    #[ts(type = "string")]
+    pub first_survey_date: Option<chrono::NaiveDate>,
+    /// The latest survey date of any shot; absent when no shot has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    #[ts(type = "string")]
+    pub last_survey_date: Option<chrono::NaiveDate>,
 }
 
 /// # THE DETERMINISTIC-SERIALIZATION RULE FOR THE HASHMAPS

@@ -56,8 +56,6 @@ const filledNew = (tempId: number): EditableShot => ({
 const section = (shots: Shot[], over: Partial<Section> = {}): Section => ({
   id: 1,
   name: null,
-  surveyor: null,
-  date: null,
   color: '#ffffff',
   direction: 'in',
   quality: 1,

@@ -288,12 +288,18 @@ test.describe('Dialog Coverage - Edit Section', () => {
     }, sectionId);
 
     expect(updatedSection.name).toBe('Updated Section');
-    expect(updatedSection.surveyor).toBe('New Surveyor');
+    // The section's surveyor is per-shot now: the legacy field sets every shot.
+    expect(updatedSection.surveyor).toBeUndefined();
+    expect(
+      updatedSection.shots.every(
+        (shot: any) => shot.credit?.surveyors?.map((p: any) => p.name).join(';') === 'New Surveyor',
+      ),
+    ).toBe(true);
     // Closure-adjustment weight is no longer exposed in this dialog; the stored
     // value must survive a save untouched.
     expect(updatedSection.quality).toBe(1);
     expect(updatedSection.color).toBe('#123456');
-    expect(updatedSection.date).toBe('2026-02-01');
+    expect(updatedSection.shots.every((shot: any) => shot.credit?.date === '2026-02-01')).toBe(true);
     expect(updatedSection.shots[0]?.length).toBe(9.5);
   });
 

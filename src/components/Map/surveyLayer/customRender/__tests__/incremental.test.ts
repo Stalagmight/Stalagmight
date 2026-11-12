@@ -71,7 +71,7 @@ function buildSurvey(specs: SecSpec[]): SurveyData {
   for (const s of specs) {
     const shotCount = Math.max(0, s.stations.length - 1);
     d.sections.push({
-      id: s.id, name: null, surveyor: null, date: null, color: s.color,
+      id: s.id, name: null, color: s.color,
       direction: 'in' as never, quality: 0, next_shot_id: shotCount + 1, shotOffset, shotCount,
     });
     for (let i = 0; i < shotCount; i++) {

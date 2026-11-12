@@ -51,7 +51,8 @@ use stalagmight_lib::models::placement_suggest::{
 };
 use stalagmight_lib::models::{
     AlongLineResult, AzimuthReference, ClosurePair, ClosurePreview, ClosureRef, ClosureStrategy,
-    ClosureUpdate, ConnectivityResult, Coordinates, CorrectionSource, CylRole, Cylinder,
+    ClosureUpdate, ConnectivityResult, Coordinates, CorrectionSource, CreditEdit, CreditTargets,
+    CreditedPerson, CylRole, Cylinder, Person, SectionCreditSummary, SurveyCredit,
     DeleteShotImpact, DeleteShotRangeImpact, DistanceField, DivePlan, DivePlanMeta,
     DivePlanSnapshot, Diver, ExistingShotUpdate, FrozenShotRef, GasReachField, GpsBounds,
     GpsCoordinates, ImportPlacement, ImportSectionConfig, LoopClosureWire, MarkedPoint,
@@ -224,6 +225,13 @@ fn main() {
     export::<CorrectionSource>(&out_dir);
     export::<NorthReference>(&out_dir);
     export::<Section>(&out_dir);
+    // Per-shot survey credit (surveyors, explorers, date as people)
+    export::<Person>(&out_dir);
+    export::<SurveyCredit>(&out_dir);
+    export::<CreditTargets>(&out_dir);
+    export::<CreditEdit>(&out_dir);
+    export::<CreditedPerson>(&out_dir);
+    export::<SectionCreditSummary>(&out_dir);
     export::<SectionData>(&out_dir);
     export::<SectionUpdates>(&out_dir);
     export::<SectionStats>(&out_dir);
@@ -507,6 +515,12 @@ fn main() {
         "CorrectionSource",
         "NorthReference",
         "Section",
+        "Person",
+        "SurveyCredit",
+        "CreditTargets",
+        "CreditEdit",
+        "CreditedPerson",
+        "SectionCreditSummary",
         "SectionData",
         "SectionUpdates",
         "SectionStats",

@@ -79,6 +79,7 @@ function getCommandIcon(commandType: string): ReactNode {
       return <PlusIcon size={14} />;
     case 'update_shot':
     case 'update_section_metadata':
+    case 'edit_shot_credit':
       return <PencilIcon size={14} />;
     case 'delete_section':
     case 'delete_shot':

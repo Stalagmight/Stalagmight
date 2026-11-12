@@ -162,8 +162,8 @@ const THEME = { textHalo: '#111111', textHaloAlt: '#222222', depthShallow: '#00b
 function makeFixture(): SurveyData {
   const d = emptySurveyData();
   d.sections = [
-    { id: 1, name: 'A', surveyor: null, date: null, color: '#ff0000', direction: 'in' as never, quality: 0, next_shot_id: 2, shotOffset: 0, shotCount: 2 },
-    { id: 2, name: 'B', surveyor: null, date: null, color: '#00ff00', direction: 'in' as never, quality: 0, next_shot_id: 1, shotOffset: 2, shotCount: 1 },
+    { id: 1, name: 'A', color: '#ff0000', direction: 'in' as never, quality: 0, next_shot_id: 2, shotOffset: 0, shotCount: 2 },
+    { id: 2, name: 'B', color: '#00ff00', direction: 'in' as never, quality: 0, next_shot_id: 1, shotOffset: 2, shotCount: 1 },
   ];
   d.shotCount = 3;
   d.shotIds = new Uint32Array([0, 1, 0]);
@@ -1478,8 +1478,8 @@ describe('SurveyLabelController jump section names below the label band', () => 
     const params = makeParams();
     const d = params.surveyData;
     d.sections = [
-      { id: 1, name: 'A', surveyor: null, date: null, color: '#ff0000', direction: 'in' as never, quality: 0, next_shot_id: 2, shotOffset: 0, shotCount: 2 },
-      { id: 2, name: 'Jump to the downstream sump', surveyor: null, date: null, color: '#00ff00', direction: 'in' as never, quality: 0, next_shot_id: 1, shotOffset: 2, shotCount: 1 },
+      { id: 1, name: 'A', color: '#ff0000', direction: 'in' as never, quality: 0, next_shot_id: 2, shotOffset: 0, shotCount: 2 },
+      { id: 2, name: 'Jump to the downstream sump', color: '#00ff00', direction: 'in' as never, quality: 0, next_shot_id: 1, shotOffset: 2, shotCount: 1 },
     ];
     d.shotCount = 3;
     d.shotIds = new Uint32Array([0, 1, 0]);

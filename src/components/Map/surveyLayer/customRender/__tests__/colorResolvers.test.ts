@@ -18,7 +18,7 @@ import { GAS_FAR } from '../../../../../utils/gasReach';
 function fixtureWithComments(): SurveyData {
   const d = emptySurveyData();
   d.sections = [
-    { id: 1, name: 'A', surveyor: null, date: null, color: '#ff0000', direction: 'in' as never, quality: 0, next_shot_id: 3, shotOffset: 0, shotCount: 2 },
+    { id: 1, name: 'A', color: '#ff0000', direction: 'in' as never, quality: 0, next_shot_id: 3, shotOffset: 0, shotCount: 2 },
   ];
   d.shotCount = 2;
   d.shotIds = new Uint32Array([0, 1]);

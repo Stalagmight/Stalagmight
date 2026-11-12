@@ -53,7 +53,7 @@ function fakeAtlas(): GlyphAtlas {
 function fixture(): SurveyData {
   const d = emptySurveyData();
   d.sections = [
-    { id: 1, name: 'Alpha', surveyor: null, date: null, color: '#4ecdc4', direction: 'in' as never, quality: 0, next_shot_id: 2, shotOffset: 0, shotCount: 2 },
+    { id: 1, name: 'Alpha', color: '#4ecdc4', direction: 'in' as never, quality: 0, next_shot_id: 2, shotOffset: 0, shotCount: 2 },
   ];
   d.shotCount = 2;
   d.shotIds = new Uint32Array([0, 1]);
@@ -191,7 +191,7 @@ describe('buildLabelDescriptors', () => {
     const d = fixture();
     d.sections = [
       d.sections[0]!,
-      { id: 2, name: 'Tie', surveyor: null, date: null, color: '#8e44ad', direction: 'in' as never, quality: 0, next_shot_id: 1, shotOffset: 2, shotCount: 1 },
+      { id: 2, name: 'Tie', color: '#8e44ad', direction: 'in' as never, quality: 0, next_shot_id: 1, shotOffset: 2, shotCount: 1 },
     ];
     d.shotCount = 3;
     d.shotIds = new Uint32Array([0, 1, 0]);

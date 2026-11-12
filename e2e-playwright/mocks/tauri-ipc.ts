@@ -225,6 +225,89 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       const mockShotId = (sectionId: number, seq: number): number =>
         sectionId * MOCK_FEATURE_ID_STRIDE + seq;
 
+      // Per-shot survey credit, the shape the backend serves since surveyors,
+      // explorers and the date moved onto every shot (a section keeps none).
+      // Mock sections still carry the legacy section-level `surveyor`/`date`
+      // (every fixture builds them that way); exactly like the backend's
+      // migration, that is the credit of each shot that has none of its own.
+      // `withShotCredit` applies it to every project this mock hands out, so the
+      // app only ever sees the per-shot shape (`Shot.credit`, absent when empty).
+      type MockPerson = { name: string; email?: string };
+      type MockCredit = { surveyors: MockPerson[]; explorers: MockPerson[]; date: string | null };
+      const mockPersonKey = (p: MockPerson): string =>
+        `${p.name.trim().split(/\s+/).join(' ').toLowerCase()}\u0000${p.email?.trim().toLowerCase() ?? ''}`;
+      const mockDedupe = (people: MockPerson[]): MockPerson[] => {
+        const seen = new Set<string>();
+        return people.filter((p) => {
+          if (!p.name.trim()) return false;
+          const key = mockPersonKey(p);
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+      };
+      /** The backend's `credit::split_people`, for the mock's legacy text. */
+      const mockSplitPeople = (half: string): MockPerson[] => {
+        const text = half.trim();
+        const parts = text.split(',').map((p) => p.trim());
+        const lastFirst = !text.includes(';') && parts.length === 2
+          && parts.every((p) => p !== '' && !/\s/.test(p));
+        const pieces = lastFirst ? [text] : text.split(';').flatMap((piece) => piece.split(','));
+        return mockDedupe(
+          pieces
+            .map((piece) => piece.trim())
+            .filter((piece) => piece !== '' && !['unknown', 'none', '?'].includes(piece.toLowerCase()))
+            .map((name) => ({ name })),
+        );
+      };
+      /** `(explorers, surveyors)` of legacy text, as `credit::legacy_people`. */
+      const mockLegacyPeople = (text: string): { explorers: MockPerson[]; surveyors: MockPerson[]; halves: boolean } => {
+        const halves = text.split(' / ');
+        return halves.length === 2
+          ? { explorers: mockSplitPeople(halves[0] ?? ''), surveyors: mockSplitPeople(halves[1] ?? ''), halves: true }
+          : { explorers: [], surveyors: mockSplitPeople(text), halves: false };
+      };
+      const mockLegacyCredit = (surveyor: unknown, date: unknown): MockCredit | null => {
+        const people = typeof surveyor === 'string' ? mockLegacyPeople(surveyor) : { explorers: [], surveyors: [] };
+        const day = typeof date === 'string' && date !== '' ? date : null;
+        if (people.surveyors.length === 0 && people.explorers.length === 0 && day === null) return null;
+        return { surveyors: people.surveyors, explorers: people.explorers, date: day };
+      };
+      const mockShotCredit = (
+        section: Record<string, unknown>,
+        shot: Record<string, unknown>,
+      ): MockCredit => (shot.credit as MockCredit | undefined)
+        ?? mockLegacyCredit(section.surveyor, section.date)
+        ?? { surveyors: [], explorers: [], date: null };
+      const mockStoreCredit = (shot: Record<string, unknown>, credit: MockCredit): void => {
+        // An explicit empty credit stays EXPLICIT (it must not fall back to the
+        // legacy section template); `withShotCredit` leaves it off the wire, as
+        // the backend's `Shot::set_credit` does.
+        if (credit.surveyors.length === 0 && credit.explorers.length === 0 && credit.date === null) {
+          shot.credit = { surveyors: [], explorers: [], date: null };
+        } else {
+          shot.credit = credit;
+        }
+      };
+      const withShotCredit = <P extends { sections: unknown[] } | null>(project: P): P => {
+        if (!project) return project;
+        const sections = (project.sections as Array<Record<string, unknown>>).map((section) => {
+          const { surveyor, date, ...rest } = section;
+          const template = mockLegacyCredit(surveyor, date);
+          const shots = ((rest.shots as Array<Record<string, unknown>> | undefined) ?? []).map((shot) => {
+            const own = shot.credit as MockCredit | undefined;
+            const credit = own ?? template;
+            const { credit: _dropped, ...bare } = shot;
+            void _dropped;
+            const empty = !credit
+              || (credit.surveyors.length === 0 && credit.explorers.length === 0 && credit.date === null);
+            return empty ? bare : { ...bare, credit: structuredClone(credit) };
+          });
+          return { ...rest, shots };
+        });
+        return { ...project, sections };
+      };
+
       // #310: live plan pins are kept as opaque ANCHORS beside their positional refs, so a
       // survey edit that renumbers stations doesn't silently retarget them. The real backend
       // names a station by the shots on either side of it (core/state/dive_plan.rs's
@@ -1320,7 +1403,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // Return LoadProjectFullResult format
             return {
               loadingId,
-              project: currentProject,
+              project: withShotCredit(currentProject),
               stations: mockStations,
               stats: {
                 section_count: currentProject.sections.length,
@@ -1805,7 +1888,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               // showed the populated count. A deep clone keeps every consumer's
               // ref-identity check honest, not just the sections one. (Caused ~50
               // full-suite failures; smoke seeds once, so it never hit this.)
-              project: currentProject ? structuredClone(currentProject) : currentProject,
+              project: currentProject ? withShotCredit(structuredClone(currentProject)) : currentProject,
               stations: mockStations,
               stats: {
                 section_count: currentProject?.sections.length ?? 0,
@@ -5095,6 +5178,20 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               const section = (currentProject.sections as Array<{ id: number } & Record<string, unknown>>)
                 .find(s => s.id === sectionId);
               if (section && updates) {
+                // The legacy surveyor/date land on EVERY shot, as the backend's
+                // `SectionUpdates` does: the surveyors (and, for the Ariane
+                // "explorers / surveyors" form, the explorers) from the text.
+                const shots = (section.shots as Array<Record<string, unknown>> | undefined) ?? [];
+                for (const shot of shots) {
+                  const credit = structuredClone(mockShotCredit(section, shot));
+                  if ('surveyor' in updates) {
+                    const people = mockLegacyPeople((updates.surveyor as string | null) ?? '');
+                    credit.surveyors = people.surveyors;
+                    if (people.halves) credit.explorers = people.explorers;
+                  }
+                  if ('date' in updates) credit.date = (updates.date as string | null) ?? null;
+                  if ('surveyor' in updates || 'date' in updates) mockStoreCredit(shot, credit);
+                }
                 Object.assign(section, updates);
                 console.log('[Mock IPC] update_section: applied updates to section', sectionId, updates);
               }
@@ -5267,6 +5364,60 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             };
           }
 
+          case 'edit_shot_credit': {
+            console.log('[Mock IPC] edit_shot_credit called with:', args);
+            // The backend's `CreditEdit::apply` per targeted shot: per role, set,
+            // then remove, then add (by identity); `set_date` sets or clears.
+            const win = window as unknown as Record<string, unknown>;
+            const existing = win.__MOCK_EDIT_SHOT_CREDIT_CALLS__ as unknown[] | undefined;
+            const calls = Array.isArray(existing) ? existing : [];
+            calls.push(args ?? null);
+            win.__MOCK_EDIT_SHOT_CREDIT_CALLS__ = calls;
+            const targets = (args?.targets ?? null) as
+              | { type: 'section'; section_id: number }
+              | { type: 'shots'; shots: Array<[number, number]> }
+              | null;
+            const edit = (args?.edit ?? {}) as Record<string, unknown>;
+            const sections = (currentProject?.sections ?? []) as Array<Record<string, unknown> & { id: number }>;
+            const picked: Array<[Record<string, unknown>, Record<string, unknown>]> = [];
+            if (targets?.type === 'section') {
+              const section = sections.find((s) => s.id === targets.section_id);
+              if (!section) return { success: false, error: `Section ${targets.section_id} not found` };
+              for (const shot of (section.shots as Array<Record<string, unknown>>) ?? []) picked.push([section, shot]);
+            } else if (targets?.type === 'shots') {
+              for (const [sid, shid] of targets.shots) {
+                const section = sections.find((s) => s.id === sid);
+                const shot = ((section?.shots as Array<Record<string, unknown>> | undefined) ?? []).find((x) => x.id === shid);
+                if (!section || !shot) return { success: false, error: `Shot ${shid} not found in section ${sid}` };
+                picked.push([section, shot]);
+              }
+            } else {
+              return { success: false, error: 'edit_shot_credit: missing targets' };
+            }
+            const editRole = (current: MockPerson[], role: 'surveyors' | 'explorers'): MockPerson[] => {
+              const set = edit[`set_${role}`] as MockPerson[] | undefined;
+              const remove = (edit[`remove_${role}`] as MockPerson[] | undefined) ?? [];
+              const add = (edit[`add_${role}`] as MockPerson[] | undefined) ?? [];
+              let list = set ? mockDedupe(set) : [...current];
+              const removed = new Set(remove.map(mockPersonKey));
+              list = list.filter((p) => !removed.has(mockPersonKey(p)));
+              return mockDedupe([...list, ...add]);
+            };
+            const touched: number[] = [];
+            for (const [section, shot] of picked) {
+              const before = mockShotCredit(section, shot);
+              const after: MockCredit = {
+                surveyors: editRole(before.surveyors, 'surveyors'),
+                explorers: editRole(before.explorers, 'explorers'),
+                date: 'set_date' in edit ? ((edit.set_date as string | null) ?? null) : before.date,
+              };
+              mockStoreCredit(shot, after);
+              const sid = section.id as number;
+              if (!touched.includes(sid)) touched.push(sid);
+            }
+            return { success: true, section_ids: touched };
+          }
+
           case 'create_shot': {
             console.log('[Mock IPC] create_shot called with:', args);
             // Record calls for assertions (anchor args), mirroring execute_batch.
@@ -5320,6 +5471,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             } else if (beforeShotId !== null) {
               const i = section.shots.findIndex((s) => s.id === beforeShotId);
               if (i >= 0) insertAt = i;
+            }
+            // A new shot with no credit of its own takes its neighbour's - the
+            // one before it, or the next when inserting at the start - as the
+            // backend's `create_shot` does.
+            if (shotData.credit !== undefined) {
+              (newShot as Record<string, unknown>).credit = shotData.credit;
+            } else {
+              const neighbour = insertAt > 0 ? section.shots[insertAt - 1] : section.shots[0];
+              if (neighbour?.credit !== undefined) {
+                (newShot as Record<string, unknown>).credit = structuredClone(neighbour.credit);
+              }
             }
             section.shots.splice(insertAt, 0, newShot);
             return { success: true, section_ids: [], shot_id: nextId };

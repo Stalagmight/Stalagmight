@@ -45,9 +45,6 @@ import { displayStationName } from '../utils/formatters';
 export interface SectionMetadata {
   id: number;
   name: string | null;
-  surveyor: string | null;
-  /** ISO 8601 date string (matches IPC), or null. */
-  date: string | null;
   color: string;
   direction: SurveyDirection;
   quality: number;
@@ -492,8 +489,6 @@ export function surveyDataFromLegacy(
     data.sections.push({
       id: section.id,
       name: section.name,
-      surveyor: section.surveyor,
-      date: section.date,
       color: section.color,
       direction: section.direction,
       quality: section.quality,

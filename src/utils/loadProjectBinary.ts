@@ -312,8 +312,6 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
     const section = {
       id: sh.id,
       name: sh.name,
-      surveyor: sh.surveyor,
-      date: sh.date,
       color: sh.color,
       direction: sh.direction,
       quality: sh.quality,
@@ -540,8 +538,6 @@ function buildSurveyData(
   const sections: SectionMetadata[] = env.project_header.sections.map((sh) => ({
     id: sh.id,
     name: sh.name,
-    surveyor: sh.surveyor,
-    date: sh.date,
     color: sh.color,
     direction: sh.direction,
     quality: sh.quality,
