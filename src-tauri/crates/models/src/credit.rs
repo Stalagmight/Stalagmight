@@ -235,7 +235,9 @@ mod tests {
             .id;
         let shot_id = project.get_section(section).unwrap().shots[0].id;
 
-        project.split_shot_at_distance(section, shot_id, 4.0).unwrap();
+        project
+            .split_shot_at_distance(section, shot_id, 4.0)
+            .unwrap();
 
         let shots = &project.get_section(section).unwrap().shots;
         assert_eq!(shots.len(), 2);
