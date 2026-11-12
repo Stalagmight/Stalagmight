@@ -7,6 +7,7 @@ use crate::config::{
     normalize_column_widths, Config, GasConfig, MapPaletteConfig, DATA_TABLE_ANGLE_MODES,
 };
 use crate::core::AppState;
+use crate::models::Person;
 
 /// Get the current configuration
 #[tauri::command]
@@ -459,6 +460,37 @@ pub(crate) fn update_map_palette_impl(
         })
         .map(|_| ())
         .map_err(|e| e.to_string())
+}
+
+/// Remember `people` as the most recently credited, for the surveyor and
+/// explorer suggestions in every project (`[people].recent`, a partial write).
+///
+/// The given people move to the FRONT in order (`people[0]` becomes the most
+/// recent); an entry already listed under the same identity is replaced, so the
+/// new spelling wins; the list is then normalized and capped at
+/// [`crate::config::MAX_RECENT_PEOPLE`]. Returns the stored list. An empty (or
+/// all-invalid) input writes nothing and returns the current list. Partial for
+/// the same reason as [`update_gas_config`]; global config only, never the
+/// `.stalx` or SpeleoDB.
+#[tauri::command]
+pub fn remember_people(state: State<AppState>, people: Vec<Person>) -> Result<Vec<Person>, String> {
+    remember_people_impl(state.inner(), &people)
+}
+
+pub(crate) fn remember_people_impl(
+    state: &AppState,
+    people: &[Person],
+) -> Result<Vec<Person>, String> {
+    if !people.iter().any(Person::is_valid) {
+        return Ok(state.get_config().people.recent);
+    }
+    state
+        .modify_config(|config| {
+            config.people.remember(people);
+            Ok(())
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(state.get_config().people.recent)
 }
 
 /// Load all display settings from the current project database

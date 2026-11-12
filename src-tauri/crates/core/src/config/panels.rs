@@ -39,9 +39,19 @@ pub struct PanelsConfig {
     /// Shots-table column order (grid column keys; empty = declaration order)
     #[serde(default)]
     pub data_table_shot_column_order: Vec<String>,
-    /// Shots-table hidden column keys
+    /// Shots-table hidden column keys (the raw id columns and the survey
+    /// credit columns start hidden)
     #[serde(default = "default_data_table_hidden_columns")]
     pub data_table_shot_hidden_columns: Vec<String>,
+    /// The [`SHOT_COLUMNS_HIDDEN_ON_ARRIVAL`] this config has already been
+    /// given their hidden default for: the shots-table twin of
+    /// `data_table_station_columns_seen`. The hidden list is authoritative once
+    /// persisted (an empty one means "show all"), so a column added after a
+    /// user's list was written would otherwise show up for them; load hides
+    /// each such column ONCE and records it here, so a user who later shows it
+    /// keeps it shown. Missing in configs written before it existed.
+    #[serde(default)]
+    pub data_table_shot_columns_seen: Vec<String>,
     /// Shots-table column widths in pixels, keyed by grid column key. A missing
     /// key means "no override", so the column keeps its declared width. BTreeMap
     /// rather than HashMap so the serialized TOML key order is stable: this is
@@ -241,6 +251,20 @@ fn normalize_panel_mode(mode: &mut String) {
     }
 }
 
+/// Shots-table columns that arrived after users already had a persisted
+/// hidden list, and that should start hidden for them too (see
+/// `PanelsConfig::data_table_shot_columns_seen`): the per-shot survey credit
+/// (surveyors, explorers, survey date). A new column that should start hidden
+/// goes here AND into `default_data_table_hidden_columns`.
+pub const SHOT_COLUMNS_HIDDEN_ON_ARRIVAL: [&str; 3] = ["surveyors", "explorers", "survey_date"];
+
+pub(super) fn default_shot_columns_seen() -> Vec<String> {
+    SHOT_COLUMNS_HIDDEN_ON_ARRIVAL
+        .iter()
+        .map(|key| (*key).to_string())
+        .collect()
+}
+
 /// Stations-table columns that arrived after users already had a persisted
 /// hidden list, and that should start hidden for them too (see
 /// `PanelsConfig::data_table_station_columns_seen`). A new column that should
@@ -268,28 +292,42 @@ impl PanelsConfig {
     /// Load-time migration: hide each [`STATION_COLUMNS_HIDDEN_ON_ARRIVAL`]
     /// column this config has not been given its default for yet, once.
     pub(super) fn hide_newly_arrived_station_columns(&mut self) {
-        for key in STATION_COLUMNS_HIDDEN_ON_ARRIVAL {
-            if self
-                .data_table_station_columns_seen
-                .iter()
-                .any(|k| k == key)
-            {
-                continue;
-            }
-            if !self
-                .data_table_station_hidden_columns
-                .iter()
-                .any(|k| k == key)
-            {
-                self.data_table_station_hidden_columns.push(key.to_string());
-            }
-            self.data_table_station_columns_seen.push(key.to_string());
-        }
+        hide_newly_arrived(
+            &STATION_COLUMNS_HIDDEN_ON_ARRIVAL,
+            &mut self.data_table_station_hidden_columns,
+            &mut self.data_table_station_columns_seen,
+        );
+    }
+
+    /// Load-time migration: hide each [`SHOT_COLUMNS_HIDDEN_ON_ARRIVAL`]
+    /// column this config has not been given its default for yet, once.
+    pub(super) fn hide_newly_arrived_shot_columns(&mut self) {
+        hide_newly_arrived(
+            &SHOT_COLUMNS_HIDDEN_ON_ARRIVAL,
+            &mut self.data_table_shot_hidden_columns,
+            &mut self.data_table_shot_columns_seen,
+        );
     }
 }
 
-fn default_data_table_hidden_columns() -> Vec<String> {
-    vec!["section_id".to_string(), "shot_id".to_string()]
+/// Hide each of `arrived` that `seen` does not list yet (unless `hidden`
+/// already does), and record it in `seen` so it is never hidden again.
+fn hide_newly_arrived(arrived: &[&str], hidden: &mut Vec<String>, seen: &mut Vec<String>) {
+    for key in arrived {
+        if seen.iter().any(|k| k == key) {
+            continue;
+        }
+        if !hidden.iter().any(|k| k == key) {
+            hidden.push((*key).to_string());
+        }
+        seen.push((*key).to_string());
+    }
+}
+
+pub(super) fn default_data_table_hidden_columns() -> Vec<String> {
+    let mut hidden = vec!["section_id".to_string(), "shot_id".to_string()];
+    hidden.extend(default_shot_columns_seen());
+    hidden
 }
 
 /// The edit-section grid hides the azimuth legs and the whole inclination family

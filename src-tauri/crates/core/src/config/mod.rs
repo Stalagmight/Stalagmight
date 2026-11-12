@@ -4,6 +4,7 @@ pub mod defaults;
 mod general;
 mod map_palette;
 mod panels;
+mod people;
 mod speleodb_file;
 mod types;
 mod webkit;
@@ -18,6 +19,7 @@ pub use crate::models::config::*;
 pub use column_widths::normalize_column_widths;
 pub use map_palette::*;
 pub use panels::*;
+pub use people::*;
 // SpeleoDB connection settings live with their runtime consumer
 // (`crate::speleodb::config`); re-exported here so `crate::config::X` keeps working.
 pub use crate::speleodb::config::*;

@@ -515,6 +515,9 @@ pub const EVENT_NAMES: &[&str] = &[
     // Depth / distance colour palette + pins, written from the map legend cog
     // and the export panel (partial `[map_palette]` write).
     "command.update_map_palette",
+    // Surveyors / explorers added to a shot's credit, remembered as suggestions
+    // for every project (partial `[people]` write).
+    "command.remember_people",
     // Export panel Levels slider: histogram of the depths / distances the
     // image export colours.
     "command.export_value_histogram",
@@ -1134,7 +1137,10 @@ mod tests {
         //       command.speleodb_project_collaborators command, and the 11
         //       per-endpoint traffic events of each of its two reads
         //       (list-permissions, user-autocomplete) = 706.
-        assert_eq!(EVENT_NAMES.len(), 706);
+        //   + 1 the recent-people list behind the surveyor / explorer
+        //       suggestions (partial `[people]` write, every project):
+        //       command.remember_people = 707.
+        assert_eq!(EVENT_NAMES.len(), 707);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

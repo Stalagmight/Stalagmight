@@ -3804,3 +3804,183 @@ fn test_a_config_file_without_the_seen_key_gets_the_name_column_hidden() {
     );
     assert_eq!(loaded.data_table_station_columns_seen, vec!["name"]);
 }
+
+// ========================================================================
+// Survey credit columns (surveyors, explorers, survey date): hidden by
+// default in the shots table, including for existing configs
+// ========================================================================
+
+const CREDIT_COLUMNS: [&str; 3] = ["surveyors", "explorers", "survey_date"];
+
+#[test]
+fn test_survey_credit_columns_start_hidden() {
+    let panels = Config::default().panels;
+    for key in CREDIT_COLUMNS {
+        assert!(
+            panels
+                .data_table_shot_hidden_columns
+                .contains(&key.to_string()),
+            "{key} must start hidden"
+        );
+    }
+    assert_eq!(panels.data_table_shot_columns_seen, CREDIT_COLUMNS);
+    // A default config needs no migration: loading it changes nothing.
+    let loaded = panels_after_load(Config::default().panels);
+    assert_eq!(
+        loaded.data_table_shot_hidden_columns,
+        Config::default().panels.data_table_shot_hidden_columns
+    );
+}
+
+#[test]
+fn test_survey_credit_columns_are_hidden_once_for_a_config_from_before_them() {
+    // A config persisted before the columns existed: its own hidden list, no
+    // `data_table_shot_columns_seen` key at all.
+    let before = PanelsConfig {
+        data_table_shot_hidden_columns: vec!["shot_id".to_string(), "comment".to_string()],
+        data_table_shot_columns_seen: Vec::new(),
+        ..Config::default().panels
+    };
+    let loaded = panels_after_load(before);
+    assert_eq!(
+        loaded.data_table_shot_hidden_columns,
+        vec![
+            "shot_id",
+            "comment",
+            "surveyors",
+            "explorers",
+            "survey_date"
+        ]
+    );
+    assert_eq!(loaded.data_table_shot_columns_seen, CREDIT_COLUMNS);
+
+    // The user then shows two of them: a later load must respect that, not
+    // re-hide them.
+    let shown = PanelsConfig {
+        data_table_shot_hidden_columns: vec![
+            "shot_id".to_string(),
+            "comment".to_string(),
+            "survey_date".to_string(),
+        ],
+        ..loaded
+    };
+    let reloaded = panels_after_load(shown);
+    assert_eq!(
+        reloaded.data_table_shot_hidden_columns,
+        vec!["shot_id", "comment", "survey_date"]
+    );
+    assert_eq!(reloaded.data_table_shot_columns_seen, CREDIT_COLUMNS);
+    // The station-side migration is independent and still ran.
+    assert_eq!(reloaded.data_table_station_columns_seen, vec!["name"]);
+}
+
+#[test]
+fn test_an_empty_hidden_list_from_before_the_credit_columns_still_hides_them() {
+    // "Show all" was chosen before the columns existed; they start hidden anyway.
+    let loaded = panels_after_load(PanelsConfig {
+        data_table_shot_hidden_columns: Vec::new(),
+        data_table_shot_columns_seen: Vec::new(),
+        ..Config::default().panels
+    });
+    assert_eq!(loaded.data_table_shot_hidden_columns, CREDIT_COLUMNS);
+}
+
+#[test]
+fn test_a_config_file_without_the_shot_seen_key_gets_the_credit_columns_hidden() {
+    // Exactly what a pre-change build wrote: no `data_table_shot_columns_seen`
+    // key, and a hidden list without the credit columns.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let mut document = toml::Value::try_from(Config::default()).unwrap();
+    let panels = document
+        .get_mut("panels")
+        .and_then(toml::Value::as_table_mut)
+        .unwrap();
+    assert!(panels.remove("data_table_shot_columns_seen").is_some());
+    panels.insert(
+        "data_table_shot_hidden_columns".to_string(),
+        toml::Value::Array(vec![toml::Value::String("section_id".to_string())]),
+    );
+    std::fs::write(&path, toml::to_string(&document).unwrap()).unwrap();
+
+    let loaded = Config::load_from_path(&path).unwrap().panels;
+    assert_eq!(
+        loaded.data_table_shot_hidden_columns,
+        vec!["section_id", "surveyors", "explorers", "survey_date"]
+    );
+    assert_eq!(loaded.data_table_shot_columns_seen, CREDIT_COLUMNS);
+}
+
+// ========================================================================
+// Recent people (`[people]`): round trip and older files
+// ========================================================================
+
+#[test]
+fn test_recent_people_round_trip_through_config_toml() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let mut config = Config::default();
+    config.people.remember(&[
+        crate::models::Person {
+            name: "Ann Diver".to_string(),
+            email: Some("ann@caves.org".to_string()),
+        },
+        crate::models::Person {
+            name: "Bob".to_string(),
+            email: None,
+        },
+    ]);
+    config.save_to_path(&path).unwrap();
+    let loaded = Config::load_from_path(&path).unwrap();
+    assert_eq!(loaded.people, config.people);
+    assert_eq!(loaded.people.recent.len(), 2);
+    assert_eq!(
+        loaded.people.recent[0].email.as_deref(),
+        Some("ann@caves.org")
+    );
+}
+
+#[test]
+fn test_a_config_file_without_people_loads_an_empty_recent_list() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let mut document = toml::Value::try_from(Config::default()).unwrap();
+    let root = document.as_table_mut().unwrap();
+    // A default config may serialize an empty table, or omit it.
+    root.remove("people");
+    std::fs::write(&path, toml::to_string(&document).unwrap()).unwrap();
+
+    let loaded = Config::load_from_path(&path).unwrap();
+    assert!(loaded.people.recent.is_empty());
+}
+
+#[test]
+fn test_load_normalizes_a_hand_edited_people_table() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let mut document = toml::Value::try_from(Config::default()).unwrap();
+    let mut people = toml::value::Table::new();
+    people.insert(
+        "recent".to_string(),
+        toml::Value::try_from(vec![
+            toml::Value::try_from(HashMap::from([("name", " Ann ")])).unwrap(),
+            toml::Value::try_from(HashMap::from([("name", "ann")])).unwrap(),
+            toml::Value::try_from(HashMap::from([("name", "  ")])).unwrap(),
+        ])
+        .unwrap(),
+    );
+    document
+        .as_table_mut()
+        .unwrap()
+        .insert("people".to_string(), toml::Value::Table(people));
+    std::fs::write(&path, toml::to_string(&document).unwrap()).unwrap();
+
+    let loaded = Config::load_from_path(&path).unwrap();
+    assert_eq!(
+        loaded.people.recent,
+        vec![crate::models::Person {
+            name: "Ann".to_string(),
+            email: None
+        }]
+    );
+}

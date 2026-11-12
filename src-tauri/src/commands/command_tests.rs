@@ -206,6 +206,21 @@ fn test_get_config_defaults_panels() {
         vec!["_x", "_y", "_lat", "_long", "name"]
     );
     assert_eq!(cfg.panels.data_table_station_columns_seen, vec!["name"]);
+    // The raw ids and the survey credit columns start hidden in the shots table.
+    assert_eq!(
+        cfg.panels.data_table_shot_hidden_columns,
+        vec![
+            "section_id",
+            "shot_id",
+            "surveyors",
+            "explorers",
+            "survey_date"
+        ]
+    );
+    assert_eq!(
+        cfg.panels.data_table_shot_columns_seen,
+        vec!["surveyors", "explorers", "survey_date"]
+    );
     // The new-section dialog opens on what the old hand-rolled table showed.
     assert!(cfg.panels.new_section_column_order.is_empty());
     assert_eq!(
@@ -344,7 +359,13 @@ fn test_update_new_section_view_roundtrip() {
         assert!(cfg.panels.data_table_shot_column_order.is_empty());
         assert_eq!(
             cfg.panels.data_table_shot_hidden_columns,
-            vec!["section_id", "shot_id"]
+            vec![
+                "section_id",
+                "shot_id",
+                "surveyors",
+                "explorers",
+                "survey_date"
+            ]
         );
 
         // A partial update leaves the fields it omits alone.
@@ -793,6 +814,95 @@ fn test_update_map_palette_normalizes_and_leaves_other_sections_alone() {
         assert_eq!(
             cfg.panels.data_table_height, 321,
             "a partial palette write must not revert an unrelated [panels] value"
+        );
+    });
+}
+
+/// `remember_people` is the partial door for `[people].recent`: the given
+/// people move to the front in order, a known identity takes the new spelling,
+/// an empty call writes nothing, and other sections are left alone.
+#[test]
+fn test_remember_people_orders_dedupes_and_leaves_other_sections_alone() {
+    use crate::models::Person;
+    let person = |name: &str, email: Option<&str>| Person {
+        name: name.to_string(),
+        email: email.map(str::to_string),
+    };
+    with_config_lock(|| {
+        let app = app_with_state();
+        config::update_panel_sizes_impl(state(&app).inner(), None, None, Some(321), None)
+            .expect("update panel sizes");
+
+        let stored = config::remember_people_impl(
+            state(&app).inner(),
+            &[person("Ann", None), person("Bob", Some("bob@x.org"))],
+        )
+        .expect("remember");
+        assert_eq!(
+            stored,
+            vec![person("Ann", None), person("Bob", Some("bob@x.org"))]
+        );
+
+        let stored = config::remember_people_impl(
+            state(&app).inner(),
+            &[person(" BOB ", Some("Bob@X.org")), person("Cy", None)],
+        )
+        .expect("remember again");
+        assert_eq!(
+            stored,
+            vec![
+                person("BOB", Some("Bob@X.org")),
+                person("Cy", None),
+                person("Ann", None),
+            ],
+            "the new spelling wins and moves to the front"
+        );
+
+        let unchanged =
+            config::remember_people_impl(state(&app).inner(), &[]).expect("empty remember");
+        assert_eq!(unchanged, stored);
+        let unchanged = config::remember_people_impl(state(&app).inner(), &[person("  ", None)])
+            .expect("invalid remember");
+        assert_eq!(unchanged, stored);
+
+        let cfg = config::get_config(state(&app));
+        assert_eq!(cfg.people.recent, stored);
+        assert_eq!(
+            cfg.panels.data_table_height, 321,
+            "a partial people write must not revert an unrelated [panels] value"
+        );
+    });
+}
+
+/// The recent list never grows past `MAX_RECENT_PEOPLE`; the oldest fall off.
+#[test]
+fn test_remember_people_caps_the_list() {
+    use crate::config::MAX_RECENT_PEOPLE;
+    use crate::models::Person;
+    with_config_lock(|| {
+        let app = app_with_state();
+        let many: Vec<Person> = (0..MAX_RECENT_PEOPLE + 10)
+            .map(|i| Person {
+                name: format!("Person {i}"),
+                email: None,
+            })
+            .collect();
+        let stored =
+            config::remember_people_impl(state(&app).inner(), &many).expect("remember many");
+        assert_eq!(stored.len(), MAX_RECENT_PEOPLE);
+        assert_eq!(stored[0].name, "Person 0");
+        let newest = Person {
+            name: "Newest".to_string(),
+            email: None,
+        };
+        let stored =
+            config::remember_people_impl(state(&app).inner(), std::slice::from_ref(&newest))
+                .expect("remember one more");
+        assert_eq!(stored.len(), MAX_RECENT_PEOPLE);
+        assert_eq!(stored[0], newest);
+        assert_eq!(
+            stored.last().map(|p| p.name.as_str()),
+            Some(format!("Person {}", MAX_RECENT_PEOPLE - 2).as_str())
         );
     });
 }
