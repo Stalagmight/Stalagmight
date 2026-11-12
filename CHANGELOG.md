@@ -7,6 +7,8 @@ Update this file every time a new version is tagged.
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-11-12
+
 ### Added
 
 - **Survey Issues is graded by how far the readings disagree** - instead of three flat colors, each shot runs from green (its readings agree) through yellow (at the project's warning threshold) to red (three times the threshold). It looks at azimuth in vs out, inclination in vs out, the recorded inclination vs the one the depth change implies, and the recorded length vs the one the depth change and inclination imply (yellow at 1 m, red at 3 m). Errors are still red, other open warnings at least yellow, and ignoring a warning takes its difference out of the shot's color. A legend shows the scale ([#702](https://github.com/Stalagmight/Stalagmight/issues/702))
