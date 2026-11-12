@@ -21,6 +21,8 @@ import type { AzimuthReference } from '../types/ipc/AzimuthReference';
 import type { ValidationConfig } from '../types/ipc/ValidationConfig';
 import type { Section } from '../types/ipc/Section';
 import type { Shot } from '../types/ipc/Shot';
+import type { Person } from '../types/ipc/Person';
+import type { SurveyCredit } from '../types/ipc/SurveyCredit';
 import type { StationRef } from '../types/ipc/StationRef';
 import type { ClosureRef } from '../types/ipc/ClosureRef';
 import type { GpsCoordinates } from '../types/ipc/GpsCoordinates';
@@ -78,7 +80,7 @@ export interface LoadProjectFullResultWithSoa extends LoadProjectFullResult {
  * find the key absent rather than misalign - the bump is a deliberate fence, not
  * a decode requirement, and it keeps this constant honest about the shape.
  */
-const EXPECTED_VERSION = 6;
+const EXPECTED_VERSION = 7;
 /** f32 fields per shot. Mirror of SHOT_FLOAT_FIELDS in Rust. */
 const SHOT_FLOAT_FIELDS = 12;
 /** u32 fields per shot. Mirror of SHOT_UINT_FIELDS in Rust. */
@@ -102,6 +104,9 @@ export interface BinaryEnvelope {
   shots_uints: Uint8Array;
   shots_flags: Uint8Array;
   shot_comments: Array<[number, string]>;
+  /** Per-shot u32: index into the shot's SECTION `credits`, 0xFFFFFFFF for none.
+   *  Empty (zero bytes) when no shot of the project carries a credit (v7). */
+  shots_credit: Uint8Array;
   station_count: number;
   stations_floats: Uint8Array;
   stations_uints: Uint8Array;
@@ -143,13 +148,21 @@ interface ProjectHeaderBinary {
    * means.
    */
   default_azimuth_reference?: AzimuthReference | null;
+  /** Every distinct person any shot credits, once (v7); `CreditBinary` lists
+   *  index into it. */
+  credit_people: Person[];
+}
+
+/** One distinct survey credit of a section, people as `credit_people` indices. */
+interface CreditBinary {
+  surveyors: number[];
+  explorers: number[];
+  date: string | null;
 }
 
 interface SectionHeaderBinary {
   id: number;
   name: string | null;
-  surveyor: string | null;
-  date: string | null;
   color: string;
   direction: SurveyDirection;
   quality: number;
@@ -158,7 +171,11 @@ interface SectionHeaderBinary {
   next_shot_id: number;
   /** This section's own north reference (#438); absent/null inherits. */
   azimuth_reference?: AzimuthReference | null;
+  /** The section's distinct shot credits, indexed by `shots_credit` (v7). */
+  credits: CreditBinary[];
 }
+
+const NO_CREDIT = 0xFFFFFFFF;
 
 /**
  * `ALREADY_OPEN` is the backend saying the requested path is the project it
@@ -260,6 +277,13 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
   const shotCommentByIdx = new Map<number, string>();
   for (const [idx, c] of env.shot_comments) shotCommentByIdx.set(idx, c);
 
+  // Per-shot credit indices (v7); `null` when no shot of the project has one.
+  const shotsCredit = env.shots_credit.length > 0 ? bytesToUint32(env.shots_credit) : null;
+  if (shotsCredit !== null && shotsCredit.length !== env.shot_count) {
+    throw new Error(`shots_credit length mismatch: ${shotsCredit.length} vs ${env.shot_count}`);
+  }
+  const people = env.project_header.credit_people;
+
   // Build Section[] with a *lazy* `shots` getter backed by the typed
   // arrays we already have. Materializing all 75k Shot objects up
   // front committed bmalloc slabs for the Shot class that never
@@ -278,6 +302,9 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
   const sections: Section[] = env.project_header.sections.map((sh) => {
     const materializeShots = (): Shot[] => {
       const shots: Shot[] = new Array(sh.shot_count);
+      // The section's distinct credits, resolved once and SHARED by every shot
+      // that carries them - treat a shot's `credit` as immutable.
+      const credits: SurveyCredit[] = sh.credits.map((c) => decodeCredit(c, people));
       for (let j = 0; j < sh.shot_count; j++) {
         const globalIdx = sh.shot_offset + j;
         const fBase = globalIdx * SHOT_FLOAT_FIELDS;
@@ -302,6 +329,9 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
           kind: shotKindFromFlags(shotsFlags[globalIdx]!),
           marker_index: markerRaw === 0xFFFFFFFF ? null : markerRaw,
         };
+        const creditIdx = shotsCredit === null ? NO_CREDIT : shotsCredit[globalIdx]!;
+        const credit = creditIdx === NO_CREDIT ? undefined : credits[creditIdx];
+        if (credit !== undefined) shots[j]!.credit = credit;
       }
       return shots;
     };
@@ -602,6 +632,13 @@ function buildSurveyData(
 
 /** Convert a flat byte buffer to a Float32Array view. Aligns the buffer
  *  if needed (msgpack delivers Uint8Array with arbitrary byteOffset). */
+/** A section credit with its people resolved; an index past the table is dropped. */
+function decodeCredit(credit: CreditBinary, people: readonly Person[]): SurveyCredit {
+  const resolve = (ids: readonly number[]): Person[] =>
+    ids.map((id) => people[id]).filter((p): p is Person => p !== undefined);
+  return { surveyors: resolve(credit.surveyors), explorers: resolve(credit.explorers), date: credit.date ?? null };
+}
+
 function bytesToFloat32(bytes: Uint8Array): Float32Array {
   if ((bytes.byteOffset & 3) === 0) {
     return new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);

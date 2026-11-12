@@ -32,9 +32,9 @@ use serde_bytes::ByteBuf;
 
 use crate::core::loading::{DisplaySettings, LoadProjectFullResult};
 use crate::models::{
-    AzimuthReference, ClosureRef, FrozenShotRef, GpsCoordinates, LoopClosureWire, ProjectStats,
-    ProjectWarning, SectionId, ShotId, StationMergeWire, StationRef, SurveyDirection,
-    ZeroDatumWire,
+    AzimuthReference, ClosureRef, FrozenShotRef, GpsCoordinates, LoopClosureWire, Person,
+    ProjectStats, ProjectWarning, SectionId, ShotId, StationMergeWire, StationRef, SurveyCredit,
+    SurveyDirection, ZeroDatumWire,
 };
 
 /// f32 sentinel encoding `None` for nullable numeric fields. `f32::NAN`
@@ -93,7 +93,14 @@ pub const STATION_UINT_STRIDE: usize = STATION_UINT_FIELDS * 4;
 /// `station_names` list. A map field a stale frontend would ignore, but it
 /// would then show every imported mNemo station number as missing - the same
 /// "believes it has the whole project" case as 4 → 5.
-pub const BINARY_FORMAT_VERSION: u32 = 6;
+///
+/// Bumped 6 → 7 for per-shot survey credit: the section header lost its
+/// `surveyor`/`date` (a section keeps none - its shots do), the project header
+/// gained one `credit_people` table, every section header its distinct
+/// `credits`, and the envelope a `shots_credit` index per shot. A stale
+/// frontend would read the section headers positionally wrong and show every
+/// shot uncredited.
+pub const BINARY_FORMAT_VERSION: u32 = 7;
 
 #[derive(Serialize)]
 pub struct LoadProjectFullBinaryResult {
@@ -120,6 +127,11 @@ pub struct LoadProjectFullBinaryResult {
     /// Sparse map of (global_shot_index, comment). global_shot_index is the
     /// row index into the per-shot arrays above (NOT a Shot.id).
     pub shot_comments: Vec<(u32, String)>,
+    /// Per-shot u32: the index of the shot's credit in its SECTION's
+    /// [`SectionHeaderBinary::credits`], `u32::MAX` for a shot with none. EMPTY
+    /// (zero bytes, not `shot_count * 4`) when no shot of the project carries a
+    /// credit, so an uncredited project pays nothing.
+    pub shots_credit: ByteBuf,
 
     pub station_count: u32,
     /// Per-station f64 coordinates: x, y, z (24 bytes per station).
@@ -180,14 +192,24 @@ pub struct ProjectHeaderBinary {
     /// to "nothing recorded" and drew the survey uncorrected - the JSON path
     /// has carried it since the field existed.
     pub default_azimuth_reference: Option<AzimuthReference>,
+    /// Every distinct person any shot credits, once: the table the sections'
+    /// [`CreditBinary`] lists index into.
+    pub credit_people: Vec<Person>,
+}
+
+/// One distinct survey credit of a section, its people as indices into
+/// [`ProjectHeaderBinary::credit_people`].
+#[derive(Serialize)]
+pub struct CreditBinary {
+    pub surveyors: Vec<u32>,
+    pub explorers: Vec<u32>,
+    pub date: Option<NaiveDate>,
 }
 
 #[derive(Serialize)]
 pub struct SectionHeaderBinary {
     pub id: SectionId,
     pub name: Option<String>,
-    pub surveyor: Option<String>,
-    pub date: Option<NaiveDate>,
     pub color: String,
     pub direction: SurveyDirection,
     pub quality: f64,
@@ -197,6 +219,36 @@ pub struct SectionHeaderBinary {
     /// This section's own north reference (#438); `None` inherits
     /// [`ProjectHeaderBinary::default_azimuth_reference`].
     pub azimuth_reference: Option<AzimuthReference>,
+    /// The section's distinct shot credits, indexed by
+    /// [`LoadProjectFullBinaryResult::shots_credit`].
+    pub credits: Vec<CreditBinary>,
+}
+
+/// Interns people project-wide and credits per section for the envelope.
+#[derive(Default)]
+struct CreditTable {
+    people: Vec<Person>,
+    person_index: HashMap<Person, u32>,
+}
+
+impl CreditTable {
+    fn person(&mut self, person: &Person) -> u32 {
+        if let Some(index) = self.person_index.get(person) {
+            return *index;
+        }
+        let index = u32::try_from(self.people.len()).unwrap_or(u32::MAX);
+        self.people.push(person.clone());
+        self.person_index.insert(person.clone(), index);
+        index
+    }
+
+    fn credit(&mut self, credit: &SurveyCredit) -> CreditBinary {
+        CreditBinary {
+            surveyors: credit.surveyors.iter().map(|p| self.person(p)).collect(),
+            explorers: credit.explorers.iter().map(|p| self.person(p)).collect(),
+            date: credit.date,
+        }
+    }
 }
 
 /// Convert a `LoadProjectFullResult` into the binary-friendly layout.
@@ -227,12 +279,29 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
     let mut shots_flags = Vec::with_capacity(shot_count);
     let mut shot_comments: Vec<(u32, String)> = Vec::new();
     let mut sections_meta: Vec<SectionHeaderBinary> = Vec::with_capacity(project.sections.len());
+    let mut credit_table = CreditTable::default();
+    let mut shots_credit = Vec::with_capacity(shot_count * 4);
+    let mut any_credit = false;
 
     let mut shot_cursor: u32 = 0;
     for section in &project.sections {
         let shot_offset = shot_cursor;
         let shot_count = section.shots.len() as u32;
+        let mut credits: Vec<CreditBinary> = Vec::new();
+        let mut credit_index: HashMap<&SurveyCredit, u32> = HashMap::new();
         for shot in &section.shots {
+            // Credit: the section's distinct credits, one index per shot.
+            let index = match shot.credit.as_ref().filter(|c| !c.is_empty()) {
+                Some(credit) => {
+                    any_credit = true;
+                    *credit_index.entry(credit).or_insert_with(|| {
+                        credits.push(credit_table.credit(credit));
+                        u32::try_from(credits.len() - 1).unwrap_or(u32::MAX)
+                    })
+                }
+                None => u32::MAX,
+            };
+            shots_credit.extend_from_slice(&index.to_le_bytes());
             // Floats (f32): azimuth_in, azimuth_out, length, depth_in, depth_out,
             //               pitch_in, pitch_out, left, right, up, down, temperature.
             //
@@ -295,8 +364,6 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         sections_meta.push(SectionHeaderBinary {
             id: section.id,
             name: section.name.clone(),
-            surveyor: section.surveyor_names(),
-            date: section.first_survey_date(),
             color: section.color.clone(),
             direction: section.direction,
             quality: section.quality,
@@ -304,7 +371,11 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
             shot_count,
             next_shot_id: section.next_shot_id,
             azimuth_reference: section.azimuth_reference,
+            credits,
         });
+    }
+    if !any_credit {
+        shots_credit.clear();
     }
 
     // Stations.
@@ -406,6 +477,7 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         validation: project.validation,
         surface_elevation: project.surface_elevation,
         default_azimuth_reference: project.default_azimuth_reference,
+        credit_people: credit_table.people,
     };
 
     let result = LoadProjectFullBinaryResult {
@@ -418,6 +490,7 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         shots_uints: ByteBuf::from(shots_uints),
         shots_flags: ByteBuf::from(shots_flags),
         shot_comments,
+        shots_credit: ByteBuf::from(shots_credit),
         station_count: station_count as u32,
         stations_floats: ByteBuf::from(stations_floats),
         stations_uints: ByteBuf::from(stations_uints),
@@ -513,6 +586,8 @@ mod tests {
         shots_uints: ByteBuf,
         shots_flags: ByteBuf,
         shot_comments: Vec<(u32, String)>,
+        #[serde(default)]
+        shots_credit: ByteBuf,
         station_count: u32,
         stations_floats: ByteBuf,
         stations_uints: ByteBuf,
@@ -523,6 +598,8 @@ mod tests {
         name: String,
         sections: Vec<DecodedSection>,
         default_azimuth_reference: Option<AzimuthReference>,
+        #[serde(default)]
+        credit_people: Vec<Person>,
     }
     #[derive(Deserialize)]
     struct DecodedSection {
@@ -530,6 +607,14 @@ mod tests {
         shot_offset: u32,
         shot_count: u32,
         azimuth_reference: Option<AzimuthReference>,
+        #[serde(default)]
+        credits: Vec<DecodedCredit>,
+    }
+    #[derive(Deserialize)]
+    struct DecodedCredit {
+        surveyors: Vec<u32>,
+        explorers: Vec<u32>,
+        date: Option<NaiveDate>,
     }
 
     fn shot(id: u32, azimuth: f64, length: f64, depth_in: f64, depth_out: f64) -> Shot {
@@ -621,6 +706,93 @@ mod tests {
         assert!((azimuth_in - 90.0).abs() < 1e-3);
 
         let _ = Utc::now(); // silence unused-import on chrono::Utc
+    }
+
+    fn result_for(project: Project) -> LoadProjectFullResult {
+        LoadProjectFullResult {
+            loading_id: 1,
+            project,
+            stations: Vec::new(),
+            stats: empty_stats(),
+            warnings: Vec::new(),
+            display_settings: DisplaySettings::default(),
+            is_remote: false,
+        }
+    }
+
+    #[test]
+    fn credit_rides_as_one_people_table_and_per_section_indices() {
+        let person = |n: &str| Person::named(n).unwrap();
+        let day = NaiveDate::from_ymd_opt(2024, 2, 3);
+        let ann_bo = SurveyCredit {
+            surveyors: vec![person("Ann"), person("Bo")],
+            explorers: vec![person("Ex")],
+            date: day,
+        };
+        let bo = SurveyCredit {
+            surveyors: vec![person("Bo")],
+            explorers: Vec::new(),
+            date: None,
+        };
+        let mut project = new_project("credit");
+        let mut a = new_section(1, "A", "#ff0000");
+        for (i, credit) in [Some(&ann_bo), None, Some(&ann_bo), Some(&bo)]
+            .into_iter()
+            .enumerate()
+        {
+            let mut s = shot(100 + i as u32, 0.0, 1.0, 0.0, 0.0);
+            s.credit = credit.cloned();
+            a.shots.push(s);
+        }
+        let mut b = new_section(2, "B", "#00ff00");
+        let mut s = shot(200, 0.0, 1.0, 0.0, 0.0);
+        s.set_credit(bo.clone());
+        b.shots.push(s);
+        project.sections.push(a);
+        project.sections.push(b);
+
+        let decoded: DecodedResult =
+            rmp_serde::from_slice(&encode(result_for(project)).unwrap()).unwrap();
+        let names: Vec<&str> = decoded
+            .project_header
+            .credit_people
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
+        // Each person once, project-wide, in first-appearance order.
+        assert_eq!(names, ["Ann", "Bo", "Ex"]);
+        let index: Vec<u32> = decoded
+            .shots_credit
+            .chunks_exact(4)
+            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        // Section A: two distinct credits; section B its own list.
+        assert_eq!(index, [0, u32::MAX, 0, 1, 0]);
+        let a = &decoded.project_header.sections[0].credits;
+        assert_eq!(a.len(), 2);
+        assert_eq!(
+            (a[0].surveyors.as_slice(), a[0].explorers.as_slice()),
+            (&[0, 1][..], &[2][..])
+        );
+        assert_eq!(a[0].date, day);
+        assert_eq!(a[1].surveyors, [1]);
+        let b = &decoded.project_header.sections[1].credits;
+        assert_eq!(b.len(), 1);
+        assert_eq!(b[0].surveyors, [1]);
+    }
+
+    #[test]
+    fn an_uncredited_project_sends_no_credit_bytes() {
+        let mut project = new_project("bare");
+        let mut a = new_section(1, "A", "#ff0000");
+        a.shots.push(shot(100, 0.0, 1.0, 0.0, 0.0));
+        a.shots.push(shot(101, 0.0, 1.0, 0.0, 0.0));
+        project.sections.push(a);
+        let decoded: DecodedResult =
+            rmp_serde::from_slice(&encode(result_for(project)).unwrap()).unwrap();
+        assert!(decoded.shots_credit.is_empty());
+        assert!(decoded.project_header.credit_people.is_empty());
+        assert!(decoded.project_header.sections[0].credits.is_empty());
     }
 
     #[test]

@@ -89,7 +89,7 @@ impl Person {
 }
 
 /// The survey credit of one shot.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 pub struct SurveyCredit {
     /// Who surveyed the shot, in order.
     #[serde(default)]

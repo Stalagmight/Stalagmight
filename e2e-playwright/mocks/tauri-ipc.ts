@@ -1469,6 +1469,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     comment?: string | null;
                     kind?: string;
                     marker_index?: number | null;
+                    credit?: MockCredit;
                   }>;
                 }>;
                 station_merges?: unknown[]; zero_datums?: unknown[];
@@ -1510,12 +1511,46 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const shotsUintsView = new DataView(shotsUints.buffer);
             const sectionsMeta: Array<Record<string, unknown>> = [];
             const shotComments: Array<[number, string]> = [];
+            // Binary wire v7: one project-wide people table, each section's
+            // distinct credits as indices into it, one u32 per shot (empty
+            // buffer when no shot is credited) - `load_binary.rs::encode`.
+            const creditPeople: MockPerson[] = [];
+            const personIndex = new Map<string, number>();
+            const internPerson = (p: MockPerson): number => {
+              const key = JSON.stringify([p.name, p.email ?? null]);
+              let idx = personIndex.get(key);
+              if (idx === undefined) {
+                idx = creditPeople.length;
+                creditPeople.push(p);
+                personIndex.set(key, idx);
+              }
+              return idx;
+            };
+            const shotsCreditIdx = new Uint32Array(totalShots).fill(0xffffffff);
+            let anyCredit = false;
             let shotCursor = 0;
 
             for (const section of jsonResult.project.sections) {
               const shot_offset = shotCursor;
               const shot_count = section.shots?.length ?? 0;
+              const sectionCredits: Array<{ surveyors: number[]; explorers: number[]; date: string | null }> = [];
+              const creditKey = new Map<string, number>();
               for (const shot of section.shots ?? []) {
+                if (shot.credit) {
+                  const key = JSON.stringify(shot.credit);
+                  let ci = creditKey.get(key);
+                  if (ci === undefined) {
+                    ci = sectionCredits.length;
+                    sectionCredits.push({
+                      surveyors: shot.credit.surveyors.map(internPerson),
+                      explorers: shot.credit.explorers.map(internPerson),
+                      date: shot.credit.date,
+                    });
+                    creditKey.set(key, ci);
+                  }
+                  shotsCreditIdx[shotCursor] = ci;
+                  anyCredit = true;
+                }
                 const fOff = shotCursor * SHOT_FLOAT_STRIDE;
                 const nullToNaN = (v: number | null | undefined): number =>
                   v === null || v === undefined ? NaN : v;
@@ -1550,8 +1585,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               sectionsMeta.push({
                 id: section.id,
                 name: section.name ?? null,
-                surveyor: section.surveyor ?? null,
-                date: section.date ?? null,
                 color: section.color ?? '#888888',
                 direction: section.direction ?? 'Forward',
                 quality: section.quality ?? 1.0,
@@ -1564,8 +1597,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 // project default above, which is what a section that declares
                 // nothing carries on disk.
                 azimuth_reference: section.azimuth_reference ?? null,
+                credits: sectionCredits,
               });
             }
+            const shotsCredit = anyCredit
+              ? new Uint8Array(shotsCreditIdx.buffer)
+              : new Uint8Array(0);
 
             const STATION_FLOAT_STRIDE = 24;
             const STATION_UINT_STRIDE = 8;
@@ -1604,8 +1641,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               // Bumped from 3 to 4 when Ariane collaboration mode was removed:
               // the header no longer carries a `collab` field; 4 to 5 for the
               // #438 north references (a project-level default plus one per
-              // section header).
-              version: 6,
+              // section header); 6 to 7 for per-shot survey credit.
+              version: 7,
               loading_id: jsonResult.loadingId,
               // Added to the envelope at v3 alongside the ShotKind bits
               // (`load_binary.rs`): the decoder reads it unvalidated, so omitting
@@ -1664,12 +1701,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 // section that declares none inherits.
                 default_azimuth_reference:
                   jsonResult.project.default_azimuth_reference ?? null,
+                // Every distinct person any shot credits, once (v7).
+                credit_people: creditPeople,
               },
               shot_count: totalShots,
               shots_floats: shotsFloats,
               shots_uints: shotsUints,
               shots_flags: shotsFlags,
               shot_comments: shotComments,
+              shots_credit: shotsCredit,
               station_count: totalStations,
               stations_floats: stationsFloats,
               stations_uints: stationsUints,

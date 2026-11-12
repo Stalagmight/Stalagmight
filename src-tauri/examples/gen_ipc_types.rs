@@ -52,15 +52,15 @@ use stalagmight_lib::models::placement_suggest::{
 use stalagmight_lib::models::{
     AlongLineResult, AzimuthReference, ClosurePair, ClosurePreview, ClosureRef, ClosureStrategy,
     ClosureUpdate, ConnectivityResult, Coordinates, CorrectionSource, CreditEdit, CreditTargets,
-    CreditedPerson, CylRole, Cylinder, Person, SectionCreditSummary, SurveyCredit,
-    DeleteShotImpact, DeleteShotRangeImpact, DistanceField, DivePlan, DivePlanMeta,
-    DivePlanSnapshot, Diver, ExistingShotUpdate, FrozenShotRef, GasReachField, GpsBounds,
-    GpsCoordinates, ImportPlacement, ImportSectionConfig, LoopClosureWire, MarkedPoint,
-    NorthReference, PathShot, PlanAnchorSet, PlanMode, PlanSegment, Project, ProjectMetadata,
-    ProjectStats, ProjectWarning, RangeDeleteKind, RouteLeg, RouteProfilePoint, RulerEndpoint,
-    Section, SectionData, SectionRelationships, SectionStats, SectionUpdates, Shot, ShotData,
-    ShotKind, ShotUpdates, SpeleoLink, Station, StationMergeWire, StationPair, StationRef,
-    SurveyDirection, TankMaterial, Team, UnrecognisedShotKind, ZeroDatumWire,
+    CreditedPerson, CylRole, Cylinder, DeleteShotImpact, DeleteShotRangeImpact, DistanceField,
+    DivePlan, DivePlanMeta, DivePlanSnapshot, Diver, ExistingShotUpdate, FrozenShotRef,
+    GasReachField, GpsBounds, GpsCoordinates, ImportPlacement, ImportSectionConfig,
+    LoopClosureWire, MarkedPoint, NorthReference, PathShot, Person, PlanAnchorSet, PlanMode,
+    PlanSegment, Project, ProjectMetadata, ProjectStats, ProjectWarning, RangeDeleteKind, RouteLeg,
+    RouteProfilePoint, RulerEndpoint, Section, SectionCreditSummary, SectionData,
+    SectionRelationships, SectionStats, SectionUpdates, Shot, ShotData, ShotKind, ShotUpdates,
+    SpeleoLink, Station, StationMergeWire, StationPair, StationRef, SurveyCredit, SurveyDirection,
+    TankMaterial, Team, UnrecognisedShotKind, ZeroDatumWire,
 };
 use stalagmight_lib::parsers::compass::{CompassFile, CompassSurveySummary, InvalidShotCounts};
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};

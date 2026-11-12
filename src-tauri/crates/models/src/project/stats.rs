@@ -22,8 +22,10 @@ impl Project {
             shot_count += section_stats.shot_count;
             total_length += section_stats.total_length;
             for date in section.shots.iter().filter_map(|s| s.credit().date) {
-                first_survey_date = Some(first_survey_date.map_or(date, |d: chrono::NaiveDate| d.min(date)));
-                last_survey_date = Some(last_survey_date.map_or(date, |d: chrono::NaiveDate| d.max(date)));
+                first_survey_date =
+                    Some(first_survey_date.map_or(date, |d: chrono::NaiveDate| d.min(date)));
+                last_survey_date =
+                    Some(last_survey_date.map_or(date, |d: chrono::NaiveDate| d.max(date)));
             }
         }
 
