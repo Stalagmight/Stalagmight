@@ -707,3 +707,51 @@ fn a_shotless_section_keeps_its_surveyor_until_its_first_shot_takes_it() {
     assert_eq!(credits(&state, sid), vec![credit(&["ds"], &["nh"], None)]);
     assert_eq!(legacy(&state), (None, None));
 }
+
+/// Shots with no uuid (a file written before uuids existed) still get an exact
+/// undo of a legacy surveyor edit: the edit mints their identities first, so the
+/// undo record can address every one of them.
+#[test]
+fn a_legacy_surveyor_edit_of_uuidless_shots_undoes_exactly() {
+    let state = state_with_project();
+    let sid = create_section(&state, None, vec![shot(1.0), shot(2.0)]);
+    let ids = shot_ids(&state, sid);
+    assert!(
+        state
+            .execute(Command::EditShotCredit {
+                targets: CreditTargets::Shots {
+                    shots: vec![(sid, ids[0])],
+                },
+                edit: CreditEdit {
+                    set_surveyors: Some(vec![person("Own")]),
+                    ..Default::default()
+                },
+            })
+            .success
+    );
+    // Strip every uuid, as a pre-uuid file loads.
+    let mut project = state.get_project_state().unwrap();
+    for shot in &mut project.get_section_mut(sid).unwrap().shots {
+        shot.uuid = None;
+    }
+    project.rebuild_shot_uuid_index();
+    state.set_project_for_tests(project);
+    let before = credits(&state, sid);
+
+    assert!(
+        state
+            .execute(Command::UpdateSectionMetadata {
+                section_id: sid,
+                updates: SectionUpdates {
+                    surveyor: Some(Some("Everyone".to_string())),
+                    ..Default::default()
+                },
+            })
+            .success
+    );
+    assert!(credits(&state, sid)
+        .iter()
+        .all(|c| c == &credit(&["Everyone"], &[], None)));
+    assert!(state.undo().success);
+    assert_eq!(credits(&state, sid), before);
+}

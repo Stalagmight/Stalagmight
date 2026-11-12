@@ -173,6 +173,11 @@ impl AppState {
         else {
             return undo_data;
         };
+        // Both executors (`edit_shot_credit`, and `Project::update_section` for
+        // the legacy surveyor/date) mint a uuid for every shot they touch, so a
+        // changed shot without one is a bug - and dropping it here would make its
+        // undo silently incomplete. Say so rather than hide it.
+        let mut unaddressable = 0usize;
         let changes: Vec<ShotCreditChange> = changes
             .into_iter()
             .filter_map(|mut change| {
@@ -180,10 +185,25 @@ impl AppState {
                     .get_section(change.section_id)?
                     .get_shot(change.shot_id)?;
                 change.after = shot.credit().clone();
-                change.shot_uuid = shot.uuid.clone()?;
-                (change.after != change.before).then_some(change)
+                if change.after == change.before {
+                    return None;
+                }
+                let Some(uuid) = shot.uuid.clone().filter(|u| !u.is_empty()) else {
+                    unaddressable += 1;
+                    return None;
+                };
+                change.shot_uuid = uuid;
+                Some(change)
             })
             .collect();
+        if unaddressable > 0 {
+            tracing::warn!(
+                unaddressable,
+                purpose = "record a survey-credit undo",
+                "Changed shots without a uuid cannot be addressed by the undo; their credit \
+                 change will not be undone"
+            );
+        }
         if changes.is_empty() && section_values.is_none() {
             return UndoData::None;
         }
