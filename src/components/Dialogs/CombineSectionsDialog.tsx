@@ -158,7 +158,7 @@ export default function CombineSectionsDialog() {
     if (!candidate) {
       return (
         <div className="p-3 bg-error-10 border border-error-20 rounded text-error text-sm" data-testid="combine-not-joined">
-          These sections don't meet end to end.
+          {station ? "This station does not join exactly one other section's end." : "These sections don't meet end to end."}
         </div>
       );
     }

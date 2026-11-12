@@ -100,6 +100,16 @@ describe('CombineSectionsDialog', () => {
     expect(confirm()).toBeDisabled();
   });
 
+  it('says the station joins no single section end when opened from a station', async () => {
+    dialogData = { station: { section_id: 2, station_index: 0 } };
+    combineCandidateAtStation.mockResolvedValue(null);
+    render(<CombineSectionsDialog />);
+    expect(await screen.findByTestId('combine-not-joined')).toHaveTextContent(
+      "This station does not join exactly one other section's end"
+    );
+    expect(confirm()).toBeDisabled();
+  });
+
   it('shows the reason and disables confirm when blocked', async () => {
     combineCandidate.mockResolvedValue(candidate({ blocked: 'The sections use different azimuth references' }));
     render(<CombineSectionsDialog />);
