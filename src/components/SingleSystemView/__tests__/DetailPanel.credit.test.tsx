@@ -15,7 +15,7 @@ import { useUIStore } from '../../../store/uiStore';
 import { useProjectStore } from '../../../store/projectStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
 import type { Project, Section, Shot } from '../../../types/project';
-import type { SurveyCredit } from '../../../types/ipc.generated';
+import type { CommandResult, CreditEdit, CreditTargets, SurveyCredit } from '../../../types/ipc.generated';
 
 const tid = (id: string) => screen.getByTestId(id);
 const qid = (id: string) => screen.queryByTestId(id);
@@ -62,7 +62,7 @@ function project(): Project {
   return { sections: [section], station_merges: [], zero_datums: [], loop_closures: [] } as unknown as Project;
 }
 
-const editShotCredit = vi.fn(async () => ({ success: true, section_ids: [1] }));
+const editShotCredit = vi.fn(async (_targets: CreditTargets, _edit: CreditEdit) => ({ success: true, warnings: [], error: null, section_ids: [1] }) as CommandResult);
 
 function pillByLabel(field: 'surveyors' | 'explorers', label: string): HTMLElement {
   const pills = [...document.querySelectorAll<HTMLElement>(`[data-testid^="detail-credit-${field}-pill-"][data-testid$="-label"]`)];
