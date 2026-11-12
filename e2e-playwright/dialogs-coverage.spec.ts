@@ -254,12 +254,17 @@ test.describe('Dialog Coverage - Edit Section', () => {
     await expect(dialog).toBeVisible();
 
     const nameInput = dialog.getByTestId('section-name-input');
-    const surveyorInput = dialog.getByTestId('section-surveyor-input');
+    const surveyorInput = dialog.getByTestId('section-surveyors-input');
     const colorHexInput = dialog.getByTestId('section-color-hex-input');
     const dateInput = dialog.getByTestId('section-date-input');
 
     await nameInput.fill('Updated Section');
+    // Replace the surveyor: x the seeded one, add the new one (every shot).
+    await expect(dialog.getByTestId('section-surveyors-pill-0-label')).toHaveText('Test Surveyor');
+    await dialog.getByTestId('section-surveyors-pill-0-remove').click();
     await surveyorInput.fill('New Surveyor');
+    await surveyorInput.press('Enter');
+    await expect(dialog.getByTestId('section-surveyors-pill-0-label')).toHaveText('New Surveyor');
     await colorHexInput.fill('#123456');
     await dateInput.fill('2026-02-01');
     await page.keyboard.press('Escape');
@@ -288,7 +293,7 @@ test.describe('Dialog Coverage - Edit Section', () => {
     }, sectionId);
 
     expect(updatedSection.name).toBe('Updated Section');
-    // The section's surveyor is per-shot now: the legacy field sets every shot.
+    // The section's surveyor is per-shot now: one credit edit sets every shot.
     expect(updatedSection.surveyor).toBeUndefined();
     expect(
       updatedSection.shots.every(

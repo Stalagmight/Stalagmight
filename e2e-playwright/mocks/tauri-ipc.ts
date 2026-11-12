@@ -2637,12 +2637,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               kind: (shot.kind as string | undefined) ?? 'Normal',
               marker_index: (shot.marker_index as number | null | undefined) ?? null,
               temperature: (shot.temperature as number | null | undefined) ?? null,
+              // Per-shot credit (New Section puts its pills on every shot).
+              ...(shot.credit ? { credit: structuredClone(shot.credit) } : {}),
             }));
+            // `SectionData.surveyor/date` are the backend's legacy TEMPLATE for
+            // shots with no credit of their own; honour what the caller sent
+            // (New Section sends null), defaulting only when the key is absent.
             const section = {
               id: sectionCounter,
               name: (args?.name as string) ?? `Section ${sectionCounter}`,
-              surveyor: 'Test Surveyor',
-              date: new Date().toISOString().split('T')[0],
+              surveyor: args && 'surveyor' in args ? ((args.surveyor as string | null) ?? null) : 'Test Surveyor',
+              date: args && 'date' in args ? ((args.date as string | null) ?? null) : new Date().toISOString().split('T')[0],
               color: '#3b82f6',
               shots,
             };
