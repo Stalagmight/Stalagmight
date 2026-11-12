@@ -68,6 +68,11 @@ pub struct CombineCandidate {
     pub reverses: bool,
     /// Why the two cannot be combined; `None` when they can.
     pub blocked_reason: Option<String>,
+    /// Why `a` cannot be the KEPT section (the shot ids it would hand out),
+    /// though keeping `b` may still work.
+    pub blocked_keeping_a: Option<String>,
+    /// Why `b` cannot be the kept section.
+    pub blocked_keeping_b: Option<String>,
     pub shot_count_a: u32,
     pub shot_count_b: u32,
     /// The join stations' comments, set only when both have one and they

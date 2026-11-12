@@ -238,7 +238,12 @@ export default function ContextMenu() {
           : 'No other section ends at this station'
       );
     }
-    const blocked = combineCandidate.blocked_reason;
+    // Refused outright, or neither section can be the kept one.
+    const blocked =
+      combineCandidate.blocked_reason ??
+      (combineCandidate.blocked_keeping_a && combineCandidate.blocked_keeping_b
+        ? combineCandidate.blocked_keeping_a
+        : null);
     return [
       {
         label,

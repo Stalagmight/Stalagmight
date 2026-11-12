@@ -91,6 +91,8 @@ const candidate = (blocked: string | null) => ({
   merged: true,
   reverses: false,
   blocked_reason: blocked,
+  blocked_keeping_a: null,
+  blocked_keeping_b: null,
   shot_count_a: 3,
   shot_count_b: 1,
   comment_a: null,

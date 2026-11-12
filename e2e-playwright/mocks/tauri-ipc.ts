@@ -5421,6 +5421,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 merged: merges.some((m) => (same(m.station_a, a) && same(m.station_b, b)) || (same(m.station_a, b) && same(m.station_b, a))),
                 reverses: endA === endB,
                 blocked_reason: blocked,
+                blocked_keeping_a: null,
+                blocked_keeping_b: null,
                 shot_count_a: sa?.shots.length ?? 0,
                 shot_count_b: sb?.shots.length ?? 0,
                 comment_a: null,

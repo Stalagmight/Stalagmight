@@ -79,6 +79,8 @@ function candidate(overrides: Record<string, unknown> = {}) {
     merged: false,
     reverses: false,
     blocked_reason: null,
+    blocked_keeping_a: null,
+    blocked_keeping_b: null,
     shot_count_a: 3,
     shot_count_b: 2,
     comment_a: null,
@@ -192,6 +194,16 @@ describe('CombineSectionsDialog', () => {
     ];
     render(<CombineSectionsDialog />);
     expect(screen.getByTestId('combine-credit-none')).toBeInTheDocument();
+  });
+
+  it('starts on the section that can be kept when the other one has no shot ids left', async () => {
+    dialogData = { candidate: candidate({ blocked_keeping_a: 'Main-A has used up its shot numbers' }) };
+    render(<CombineSectionsDialog />);
+    expect(screen.getByTestId('combine-kept-label')).toHaveTextContent('Keep Main-B');
+    expect(screen.getByTestId('combine-confirm')).toBeEnabled();
+    fireEvent.click(screen.getByTestId('combine-swap-kept'));
+    expect(screen.getByTestId('combine-blocked')).toHaveTextContent('used up its shot numbers');
+    expect(screen.getByTestId('combine-confirm')).toBeDisabled();
   });
 
   it('shows why a blocked combine cannot run and never sends it', () => {

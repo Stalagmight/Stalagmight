@@ -62,17 +62,8 @@ impl AppState {
             let Some(project) = proj_guard.as_ref() else {
                 return CommandResult::failure("No project open".to_string());
             };
-            match project.combine_candidate_for_sections(kept, other) {
-                None => {
-                    return CommandResult::failure(format!(
-                        "Sections {kept} and {other} cannot be combined"
-                    ))
-                }
-                Some(candidate) => {
-                    if let Some(reason) = candidate.blocked_reason {
-                        return CommandResult::failure(reason);
-                    }
-                }
+            if let Some(reason) = project.combine_refusal(kept, other) {
+                return CommandResult::failure(reason);
             }
         }
 

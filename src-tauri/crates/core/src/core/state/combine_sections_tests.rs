@@ -350,3 +350,24 @@ fn keeping_the_higher_id_keeps_it() {
     let moved = xy(&state, StationRef::new(o, 0));
     assert!((moved.0 - far.0).hypot(moved.1 - far.1) < 1e-9);
 }
+
+/// Out of shot ids on the kept side: refused before anything happens, no undo
+/// entry; keeping the other section works.
+#[test]
+fn a_kept_section_without_shot_id_room_is_refused_with_no_undo_entry() {
+    let (state, k, o) = state();
+    let mut project = state.get_project_state().unwrap();
+    project.get_section_mut(k).unwrap().next_shot_id =
+        (k + 1) * crate::models::FEATURE_ID_STRIDE - 1;
+    state.set_project_for_tests(project);
+    let before = snapshot(&state);
+    let depth = state.get_undo_stack().len();
+
+    let refused = state.execute_combine_sections(k, o, options());
+    assert!(!refused.success);
+    assert!(refused.error.unwrap().contains("used up its shot numbers"));
+    assert_eq!(snapshot(&state), before);
+    assert_eq!(state.get_undo_stack().len(), depth);
+
+    assert!(state.execute_combine_sections(o, k, options()).success);
+}

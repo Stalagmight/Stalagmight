@@ -262,6 +262,42 @@ impl Project {
         None
     }
 
+    /// Why `kept` cannot take `other`'s shots: they get ids from
+    /// `kept.next_shot_id`, which only ever grows within a session, and must
+    /// stay inside `kept`'s id window (`kept.id * FEATURE_ID_STRIDE ..`) or they
+    /// collide with the next section's ids. Not renumbered in place: position-
+    /// keyed ignored warnings and the frontend's selection, hover and table
+    /// state address shots by id. A reload renumbers every section compactly.
+    pub(crate) fn shot_id_room_refusal(kept: &Section, other: &Section) -> Option<String> {
+        let window_end = u64::from(kept.id + 1) * u64::from(FEATURE_ID_STRIDE);
+        let last = u64::from(kept.next_shot_id) + other.shots.len() as u64;
+        (last > window_end).then(|| {
+            format!(
+                "{} has used up its shot numbers for this session, so {}'s shots would take \
+                 another section's numbers. Keep {} instead, or save and reopen the project \
+                 (which renumbers every shot) and combine again",
+                label(kept),
+                label(other),
+                label(other)
+            )
+        })
+    }
+
+    /// Why combining `other` into `kept` is refused, if it is: the pair's
+    /// reason, else the one that depends on which section is kept. The one
+    /// check `combine_sections` and the command both run before changing
+    /// anything.
+    pub fn combine_refusal(&self, kept: SectionId, other: SectionId) -> Option<String> {
+        let Some(candidate) = self.combine_candidate_for_sections(kept, other) else {
+            return Some(format!("Sections {kept} and {other} cannot be combined"));
+        };
+        candidate.blocked_reason.or(if candidate.section_a == kept {
+            candidate.blocked_keeping_a
+        } else {
+            candidate.blocked_keeping_b
+        })
+    }
+
     /// Why two sections' stored north references keep them apart, if they do.
     fn north_reference_mismatch(
         a: &Section,
@@ -375,6 +411,8 @@ impl Project {
             merged: touch.merged,
             reverses: pairing.end_a == pairing.end_b,
             blocked_reason: touch.blocked,
+            blocked_keeping_a: Self::shot_id_room_refusal(a, b),
+            blocked_keeping_b: Self::shot_id_room_refusal(b, a),
             shot_count_a: a.shots.len() as u32,
             shot_count_b: b.shots.len() as u32,
             comment_a,

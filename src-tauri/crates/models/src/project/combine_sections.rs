@@ -83,12 +83,12 @@ impl Project {
         other: SectionId,
         options: &CombineSectionsOptions,
     ) -> Result<(), String> {
+        if let Some(reason) = self.combine_refusal(kept, other) {
+            return Err(reason);
+        }
         let candidate = self
             .combine_candidate_for_sections(kept, other)
             .ok_or_else(|| format!("Sections {kept} and {other} cannot be combined"))?;
-        if let Some(reason) = candidate.blocked_reason {
-            return Err(reason);
-        }
         let (kept_end, other_end) = if candidate.section_a == kept {
             (candidate.end_a, candidate.end_b)
         } else {

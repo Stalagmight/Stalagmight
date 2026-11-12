@@ -1069,3 +1069,63 @@ fn each_query_builds_one_end_table() {
     assert!(project.combine_candidate_for_sections(k, o).is_some());
     assert_eq!(builds() - before, 1, "the pair query");
 }
+
+/// The other section's shots get ids from the kept section's `next_shot_id`,
+/// which only grows in a session. With no room left in the kept section's id
+/// window they would take the next section's ids, so keeping it is refused
+/// (with nothing changed) while keeping the other one still works.
+#[test]
+fn a_kept_section_without_shot_id_room_is_refused_but_the_other_can_be_kept() {
+    let (mut project, k, o) = pair(SectionEnd::End, SectionEnd::Start, true, 0.0);
+    let window_end = (k + 1) * crate::FEATURE_ID_STRIDE;
+    project.get_section_mut(k).unwrap().next_shot_id = window_end - 2;
+
+    let candidate = project.combine_candidate_for_sections(k, o).unwrap();
+    assert_eq!(candidate.blocked_reason, None);
+    let reason = candidate.blocked_keeping_a.clone().unwrap();
+    assert!(reason.contains("used up its shot numbers"), "{reason}");
+    assert_eq!(candidate.blocked_keeping_b, None);
+    assert_eq!(project.combine_refusal(k, o), Some(reason.clone()));
+    let before = serde_json::to_string(&project).unwrap();
+    assert_eq!(
+        project
+            .clone()
+            .combine_sections(k, o, &options())
+            .unwrap_err(),
+        reason
+    );
+    assert_eq!(serde_json::to_string(&project).unwrap(), before);
+
+    project.combine_sections(o, k, &options()).unwrap();
+    let ids: Vec<u32> = project
+        .get_section(o)
+        .unwrap()
+        .shots
+        .iter()
+        .map(|s| s.id)
+        .collect();
+    let window = o * crate::FEATURE_ID_STRIDE..(o + 1) * crate::FEATURE_ID_STRIDE;
+    assert!(ids.iter().all(|id| window.contains(id)), "{ids:?}");
+}
+
+/// Exactly at the edge: the last id handed out is the window's last one.
+#[test]
+fn the_shot_id_room_check_is_exact_at_the_edge() {
+    let (mut project, k, o) = pair(SectionEnd::End, SectionEnd::Start, true, 0.0);
+    let window_end = (k + 1) * crate::FEATURE_ID_STRIDE;
+    project.get_section_mut(k).unwrap().next_shot_id = window_end - 3;
+    assert_eq!(
+        project.combine_refusal(k, o),
+        None,
+        "three ids left for three shots"
+    );
+    project.combine_sections(k, o, &options()).unwrap();
+    let last = project
+        .get_section(k)
+        .unwrap()
+        .shots
+        .iter()
+        .map(|s| s.id)
+        .max();
+    assert_eq!(last, Some(window_end - 1));
+}

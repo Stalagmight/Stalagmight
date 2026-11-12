@@ -65,7 +65,11 @@ export default function CombineSectionsDialog() {
   const isStale = !candidate || !sectionA || !sectionB;
 
   // `a` (the lower id) is kept unless the user swaps.
-  const [keepB, setKeepB] = useState(false);
+  // Start on `b` only when `a` cannot be kept but `b` can (its shot numbers
+  // are used up for the session).
+  const [keepB, setKeepB] = useState(
+    () => Boolean(candidate?.blocked_keeping_a) && !candidate?.blocked_keeping_b
+  );
   const kept = keepB ? sectionB : sectionA;
   const other = keepB ? sectionA : sectionB;
   const keptId = (keepB ? candidate?.section_b : candidate?.section_a) ?? 0;
@@ -109,7 +113,8 @@ export default function CombineSectionsDialog() {
   const otherText = (a: string | null | undefined, b: string | null | undefined) => (keepB ? a : b) ?? '';
   const commentConflict = Boolean(candidate?.comment_a && candidate?.comment_b);
   const nameConflict = Boolean(candidate?.station_name_a && candidate?.station_name_b);
-  const blocked = candidate?.blocked_reason ?? null;
+  const blocked =
+    candidate?.blocked_reason ?? (keepB ? candidate?.blocked_keeping_b : candidate?.blocked_keeping_a) ?? null;
 
   const handleConfirm = async () => {
     if (isSubmitting || isStale || blocked) return;
