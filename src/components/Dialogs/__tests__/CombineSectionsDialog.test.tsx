@@ -66,6 +66,7 @@ vi.mock('../DialogWrapper', () => ({
   DialogWrapper: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 
+import '../../../i18n';
 import CombineSectionsDialog from '../CombineSectionsDialog';
 
 function candidate(overrides: Record<string, unknown> = {}) {
@@ -176,6 +177,20 @@ describe('CombineSectionsDialog', () => {
     fireEvent.click(screen.getByTestId('combine-confirm'));
     await waitFor(() => expect(combineSections).toHaveBeenCalled());
     expect(combineSections.mock.calls[0]?.[2]).toMatchObject({ name: '' });
+  });
+
+  it('counts one shot as "1 shot" everywhere', () => {
+    dialogData = { candidate: candidate({ shot_count_b: 1 }) };
+    sections = [
+      creditedSections()[0]!,
+      { ...creditedSections()[1]!, shots: [{ id: 51, length: 5, credit: credited(['Bob'], '2026-04-11', ['Cid']) }] },
+    ];
+    render(<CombineSectionsDialog />);
+    expect(screen.getByTestId('combine-summary')).toHaveTextContent(
+      'Combining Main-A (3 shots) and Main-B (1 shot) at station 2:3'
+    );
+    expect(screen.getByTestId('combine-credit-surveyors')).toHaveTextContent('Ann (3 shots), Bob (2 shots)');
+    expect(screen.getByTestId('combine-credit-explorers')).toHaveTextContent('Explorers: Cid (1 shot)');
   });
 
   it('summarises the combined credit from every shot of both sections', () => {

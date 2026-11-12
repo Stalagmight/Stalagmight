@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { isEditingBlockedNow } from '../../hooks/useEditingBlocked';
@@ -24,14 +25,20 @@ const sectionLabel = (section: Section | undefined, id: number) =>
  * it is, and before or after the kept one).
  */
 function CombinedCreditSummary({ shots }: { shots: Array<Pick<Shot, 'credit'>> }) {
+  const { t } = useTranslation();
   const summary = summarizeCredits(shots.map(shotCredit));
+  const shotCount = (count: number) => t('dialogs.combineSections.shots', { count });
   const people = (list: CreditedPerson[]) =>
-    list.map((p) => `${p.person.name} (${p.shots} ${p.shots === 1 ? 'shot' : 'shots'})`).join(', ');
+    list
+      .map((p) => t('dialogs.combineSections.personShots', { name: p.person.name, shots: shotCount(p.shots) }))
+      .join(', ');
   const dates = formatCreditDateRange(summary);
   const empty = summary.surveyors.length === 0 && summary.explorers.length === 0 && !dates;
   return (
     <div className="space-y-1 text-sm" data-testid="combine-credit">
-      <div className="text-text-secondary">Survey credit of the combined section ({summary.shot_count} shots)</div>
+      <div className="text-text-secondary">
+        {t('dialogs.combineSections.creditTitle', { shots: shotCount(summary.shot_count) })}
+      </div>
       {empty ? (
         <div data-testid="combine-credit-none">No surveyors, explorers or dates recorded on either section.</div>
       ) : (
@@ -56,6 +63,7 @@ function CombinedCreditSummary({ shots }: { shots: Array<Pick<Shot, 'credit'>> }
  * (from the station context menu or a two-section selection).
  */
 export default function CombineSectionsDialog() {
+  const { t } = useTranslation();
   const { closeDialog, dialogData, setSelection } = useUIStore();
   const { combineSections, project, stations } = useProjectStore();
   const candidate = dialogData.candidate as CombineCandidate | undefined;
@@ -101,7 +109,13 @@ export default function CombineSectionsDialog() {
   const joinLabel = join ? formatStationIdWithName(join.section_id, join.station_index, joinName) : '';
   const keptShots = (keepB ? candidate?.shot_count_b : candidate?.shot_count_a) ?? 0;
   const otherShots = (keepB ? candidate?.shot_count_a : candidate?.shot_count_b) ?? 0;
-  const summary = `Combining ${keptName} (${keptShots} shots) and ${otherName} (${otherShots} shots) at station ${joinLabel}`;
+  const summary = t('dialogs.combineSections.summary', {
+    kept: keptName,
+    keptShots: t('dialogs.combineSections.shots', { count: keptShots }),
+    other: otherName,
+    otherShots: t('dialogs.combineSections.shots', { count: otherShots }),
+    station: joinLabel,
+  });
   // Where the other section's shots go (wording from #713): the kept section
   // keeps its station 0 unless the join is at its start.
   const keptEnd = keepB ? candidate?.end_b : candidate?.end_a;

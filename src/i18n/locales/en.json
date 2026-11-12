@@ -1710,6 +1710,13 @@
       "mapImagery": {
         "title": "Map imagery"
       }
+    },
+    "combineSections": {
+      "summary": "Combining {{kept}} ({{keptShots}}) and {{other}} ({{otherShots}}) at station {{station}}",
+      "shots_one": "{{count}} shot",
+      "shots_other": "{{count}} shots",
+      "creditTitle": "Survey credit of the combined section ({{shots}})",
+      "personShots": "{{name}} ({{shots}})"
     }
   },
   "undo": {
