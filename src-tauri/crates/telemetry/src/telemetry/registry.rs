@@ -290,6 +290,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "action.dialog.publish-to-speleodb",
     "action.dialog.split-section",
     "action.dialog.split-section-here",
+    "action.dialog.combine-sections",
     "action.dialog.swap-comments",
     "action.dialog.unrecognised-shot-kind",
     "action.dialog.tml-import",
@@ -364,6 +365,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.publish-to-speleodb",
     "dialog-cancel.split-section",
     "dialog-cancel.split-section-here",
+    "dialog-cancel.combine-sections",
     "dialog-cancel.swap-comments",
     "dialog-cancel.unrecognised-shot-kind",
     "dialog-cancel.tml-import",
@@ -468,6 +470,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.publish-to-speleodb",
     "dwell.dialog.split-section",
     "dwell.dialog.split-section-here",
+    "dwell.dialog.combine-sections",
     "dwell.dialog.swap-comments",
     "dwell.dialog.unrecognised-shot-kind",
     "dwell.dialog.tml-import",
@@ -628,6 +631,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.publish-to-speleodb",
     "active-dwell.dialog.split-section",
     "active-dwell.dialog.split-section-here",
+    "active-dwell.dialog.combine-sections",
     "active-dwell.dialog.swap-comments",
     "active-dwell.dialog.unrecognised-shot-kind",
     "active-dwell.dialog.tml-import",
@@ -1117,7 +1121,8 @@ mod tests {
         //   + 4 Combine Sections (#707): command.combine_sections,
         //       command.combine_candidate, command.combine_candidate_at_station
         //       and undo-after.combine_sections = 691.
-        assert_eq!(EVENT_NAMES.len(), 691);
+        //   + 4 the full per-dialog set for combine-sections (#707) = 695.
+        assert_eq!(EVENT_NAMES.len(), 695);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

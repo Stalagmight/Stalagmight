@@ -278,6 +278,27 @@ export default function ContextMenu() {
     return items;
   };
 
+  /** "Combine 2 Sections..." when exactly two sections, the target among them, are selected (#707). */
+  const combineItems = (sectionId: SectionId): ContextMenuItem[] => {
+    const selectedSectionIds = [
+      ...new Set(
+        multiSelection
+          .filter((s) => s.type === 'section' && s.sectionId !== undefined)
+          .map((s) => s.sectionId as SectionId)
+      ),
+    ];
+    const [a, b] = selectedSectionIds;
+    if (selectedSectionIds.length !== 2 || !selectedSectionIds.includes(sectionId)) return [];
+    return [
+      {
+        label: 'Combine 2 Sections...',
+        action: () => {
+          openDialog('combine-sections', { a, b });
+        },
+      },
+    ];
+  };
+
   const buildMenuItems = (): ContextMenuItem[] => {
     if (!target) return [];
 
@@ -437,6 +458,14 @@ export default function ContextMenu() {
         },
       });
       items.push({ label: '', action: () => {}, separator: true });
+      if (isFirstStation || isLastStation) {
+        items.push({
+          label: 'Combine Sections...',
+          action: () => {
+            openDialog('combine-sections', { station: target.ref });
+          },
+        });
+      }
       if (!isFirstStation && !isLastStation) {
         items.push({
           label: 'Split Section Here',
@@ -631,6 +660,7 @@ export default function ContextMenu() {
           },
         },
         ...reverseItems(target.sectionId),
+        ...combineItems(target.sectionId),
         {
           label: 'Adjust Position...',
           action: () => {

@@ -2471,6 +2471,9 @@ function MapCanvas() {
       const splitId = stationRefToId({ section_id: dialogData.sectionId as number, station_index: splitAt.station_index });
       if (splitId && !highlightIds.includes(splitId)) highlightIds.push(splitId);
     }
+    const combineStation = activeDialog === 'combine-sections' ? (dialogData.station as StationRef | undefined) : undefined;
+    const combineId = combineStation ? stationRefToId(combineStation) : null;
+    if (combineId && !highlightIds.includes(combineId)) highlightIds.push(combineId);
 
     surveyLayerRef.current.setHighlightedStations(highlightIds);
   }, [snappedStation, mergeStationA, mergeStationB, activeDialog, dialogData, mapLoaded]);
