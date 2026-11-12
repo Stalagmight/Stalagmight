@@ -1235,6 +1235,7 @@ fn a_renamed_shot_keeps_its_record_parity() {
     remap.insert(k, old, "renamed".to_string());
 
     project.apply_shot_uuid_remap(&remap);
+    project.follow_counter_parity(&remap);
 
     let section = project.get_section(k).unwrap();
     assert_eq!(project.shot_record_parity(section, Some("renamed")), parity);
