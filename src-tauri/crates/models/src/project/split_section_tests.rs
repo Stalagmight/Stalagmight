@@ -397,3 +397,57 @@ fn comment_and_datum_go_to_the_chosen_half() {
         );
     }
 }
+
+/// Values stored under a NON-canonical key for the split station (a legacy
+/// `Index` anchor, as an old undo blob can carry) are found by resolving the
+/// key, like the merges are: the copy gets the name and the offset, and the
+/// comment and the zero datum go to the second half when asked.
+#[test]
+fn values_under_a_non_canonical_key_reach_the_copy() {
+    let (mut project, main, _) = project();
+    let legacy = crate::StationKey::new(main, crate::StationAnchor::Index(2));
+    project
+        .station_names
+        .insert(legacy.clone(), "S2".to_string());
+    project
+        .station_offsets
+        .insert(legacy.clone(), (0.0, 0.0, 0.25));
+    project
+        .station_comments
+        .insert(legacy.clone(), "legacy".to_string());
+    project.zero_datums.push(crate::ZeroDatum {
+        station_ref: legacy,
+        gps: GpsCoordinates {
+            latitude: 20.0,
+            longitude: -87.0,
+            depth_reference: 0.0,
+        },
+    });
+
+    let second = project
+        .split_section_at_station(main, 2, &options(SplitSide::B, SplitSide::B))
+        .unwrap();
+
+    let (end, copy) = (StationRef::new(main, 2), StationRef::new(second, 0));
+    assert_eq!(
+        project.station_name_for_ref(copy).map(String::as_str),
+        Some("S2")
+    );
+    assert_eq!(
+        project.station_name_for_ref(end).map(String::as_str),
+        Some("S2")
+    );
+    assert_eq!(project.station_offset_for_ref(copy), Some((0.0, 0.0, 0.25)));
+    assert_eq!(
+        project.station_comment_for_ref(copy).map(String::as_str),
+        Some("legacy")
+    );
+    assert!(
+        project.station_comment_for_ref(end).is_none(),
+        "the comment moved"
+    );
+    assert_eq!(
+        project.resolve_key(&project.zero_datums[0].station_ref),
+        Some(copy)
+    );
+}

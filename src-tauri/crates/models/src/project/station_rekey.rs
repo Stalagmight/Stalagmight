@@ -110,3 +110,50 @@ impl Project {
         unmoved
     }
 }
+
+/// Every stored key of `map` that names `station`, each RESOLVED rather than
+/// compared, so a non-canonical key (a legacy `Index` anchor from an old undo
+/// blob, a key frozen on a re-key clash) counts too. The canonical key comes
+/// first when present, so "the" value of a station is deterministic.
+pub(super) fn keys_naming<V>(
+    project: &Project,
+    map: &HashMap<StationKey, V>,
+    station: StationRef,
+) -> Vec<StationKey> {
+    let mut keys: Vec<StationKey> = map
+        .keys()
+        .filter(|key| project.resolve_key(key) == Some(station))
+        .cloned()
+        .collect();
+    if let Some(canonical) = project.key_for_ref(station) {
+        if let Some(at) = keys.iter().position(|key| *key == canonical) {
+            keys.swap(0, at);
+        }
+    }
+    keys
+}
+
+/// The value `map` holds for `station`, under whichever stored key names it.
+pub(super) fn value_naming<'m, V>(
+    project: &Project,
+    map: &'m HashMap<StationKey, V>,
+    station: StationRef,
+) -> Option<&'m V> {
+    keys_naming(project, map, station)
+        .first()
+        .and_then(|key| map.get(key))
+}
+
+/// Remove every entry of `map` that names `station`, returning the value
+/// [`value_naming`] would have returned.
+pub(super) fn take_naming<V>(
+    project: &Project,
+    map: &mut HashMap<StationKey, V>,
+    station: StationRef,
+) -> Option<V> {
+    let values: Vec<V> = keys_naming(project, map, station)
+        .iter()
+        .filter_map(|key| map.remove(key))
+        .collect();
+    values.into_iter().next()
+}

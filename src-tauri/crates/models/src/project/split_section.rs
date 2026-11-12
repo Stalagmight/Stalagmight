@@ -22,6 +22,9 @@
 //! `depth_in` of the shot after it, where the unsplit station averaged the
 //! two. Every other station keeps its depth, and every station keeps its xy.
 //!
+//! Lookups on the split station resolve every stored key, so a value under a
+//! non-canonical key (a legacy `Index` anchor) is handled like the rest.
+//!
 //! Gauge: the second half inherits the section's `reverse_parity`, and the
 //! least-squares gauge stays on the same physical station: the half that holds
 //! it gets a pair naming it (`keep_gauge_on_station`), re-captured when the
@@ -42,6 +45,7 @@ use crate::{
 };
 
 use super::gauge::{captured_gauge, GaugePair};
+use super::station_rekey::{take_naming, value_naming};
 
 impl Project {
     /// Split `section_id` at station `station_index`, which must be a
@@ -181,8 +185,7 @@ impl Project {
         copy: StationRef,
         options: &SplitSectionOptions,
     ) {
-        let (Some(end_key), Some(copy_key)) = (self.key_for_ref(end), self.key_for_ref(copy))
-        else {
+        let Some(copy_key) = self.key_for_ref(copy) else {
             return;
         };
         let is_end = |project: &Project, key: &StationKey| project.resolve_key(key) == Some(end);
@@ -208,28 +211,36 @@ impl Project {
             self.record_station_merge(merge);
         }
 
-        if let Some(name) = self.station_names.get(&end_key).cloned() {
+        // Every lookup resolves the stored keys, so a value stored under a
+        // non-canonical key for the split station is copied too.
+        if let Some(name) = value_naming(self, &self.station_names, end).cloned() {
             self.station_names.insert(copy_key.clone(), name);
         }
-        if let Some(offset) = self.station_offsets.get(&end_key).copied() {
+        if let Some(offset) = value_naming(self, &self.station_offsets, end).copied() {
             self.station_offsets.insert(copy_key.clone(), offset);
         }
-        match (
-            options.comment_side,
-            self.station_comments.get(&end_key).cloned(),
-        ) {
-            (SplitSide::A, _) | (_, None) => {}
-            (SplitSide::B, Some(comment)) => {
-                self.station_comments.remove(&end_key);
-                self.station_comments.insert(copy_key.clone(), comment);
-            }
-            (SplitSide::Both, Some(comment)) => {
-                self.station_comments.insert(copy_key.clone(), comment);
+        if let Some(comment) = value_naming(self, &self.station_comments, end).cloned() {
+            match options.comment_side {
+                SplitSide::A => {}
+                SplitSide::B => {
+                    let mut comments = std::mem::take(&mut self.station_comments);
+                    take_naming(self, &mut comments, end);
+                    comments.insert(copy_key.clone(), comment);
+                    self.station_comments = comments;
+                }
+                SplitSide::Both => {
+                    self.station_comments.insert(copy_key.clone(), comment);
+                }
             }
         }
         if options.datum_side == SplitSide::B {
-            for datum in &mut self.zero_datums {
-                if datum.station_ref == end_key {
+            let on_end: Vec<bool> = self
+                .zero_datums
+                .iter()
+                .map(|datum| is_end(self, &datum.station_ref))
+                .collect();
+            for (datum, on_end) in self.zero_datums.iter_mut().zip(on_end) {
+                if on_end {
                     datum.station_ref = copy_key.clone();
                 }
             }
