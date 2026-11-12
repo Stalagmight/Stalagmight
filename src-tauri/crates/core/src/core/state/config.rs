@@ -258,6 +258,14 @@ impl AppState {
             return Ok(Locked::NeedsLockOps(config));
         }
         config.webkit_memory = existing.webkit_memory.clone();
+        if door != ConfigWrite::Partial {
+            // `[people]` is owned by its partial door (`remember_people`). A whole
+            // write is built from a frontend snapshot (Settings), which either
+            // predates the latest remembered person or omits the table, and
+            // `#[serde(default)]` would turn an omitted table into an empty list:
+            // either way the recent people would silently go back or vanish.
+            config.people.clone_from(&existing.people);
+        }
         if instance_changed {
             // The account and its token belong to the old server. Settings saves a
             // new server before Connect signs in to it, so keeping either would

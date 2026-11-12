@@ -874,6 +874,31 @@ fn test_remember_people_orders_dedupes_and_leaves_other_sections_alone() {
     });
 }
 
+/// A whole-config save (Settings) never touches `[people]`: it is built from a
+/// snapshot that may predate the last remembered person, or omit the table.
+#[test]
+fn test_update_config_keeps_the_remembered_people() {
+    use crate::models::Person;
+    with_config_lock(|| {
+        let app = app_with_state();
+        let ann = Person {
+            name: "Ann".to_string(),
+            email: Some("ann@x.org".to_string()),
+        };
+        config::remember_people_impl(state(&app).inner(), std::slice::from_ref(&ann))
+            .expect("remember");
+
+        let mut snapshot = config::get_config(state(&app));
+        snapshot.people = crate::config::PeopleConfig::default();
+        snapshot.panels.data_table_height = 222;
+        config::update_config_impl(state(&app).inner(), snapshot).expect("whole save");
+
+        let cfg = config::get_config(state(&app));
+        assert_eq!(cfg.panels.data_table_height, 222, "the whole save applied");
+        assert_eq!(cfg.people.recent, vec![ann], "but left [people] alone");
+    });
+}
+
 /// The recent list never grows past `MAX_RECENT_PEOPLE`; the oldest fall off.
 #[test]
 fn test_remember_people_caps_the_list() {
