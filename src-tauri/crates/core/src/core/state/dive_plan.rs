@@ -1524,6 +1524,121 @@ mod tests {
         }
     }
 
+    /// A 5-shot section, reversed when asked, loaded into an `AppState`, with
+    /// every station's pin captured and its raw position.
+    fn delete_split_fixture(reversed: bool) -> (AppState, u32, Vec<(StoredAnchor, (f64, f64))>) {
+        use crate::core::Command;
+        use crate::models::{SectionData, ShotData};
+        let shot = |azimuth: f64, length: f64| ShotData {
+            azimuth_in: azimuth,
+            azimuth_out: azimuth,
+            length,
+            ..Default::default()
+        };
+        let mut project = Project::new("Pins".to_string(), None);
+        let id = project
+            .add_section(SectionData {
+                shots: vec![
+                    shot(90.0, 10.0),
+                    shot(80.0, 5.0),
+                    shot(0.0, 4.0),
+                    shot(300.0, 6.0),
+                    shot(270.0, 3.0),
+                ],
+                ..Default::default()
+            })
+            .id;
+        if reversed {
+            assert!(project.reverse_section(id, false));
+        }
+        let pins = (0..=5)
+            .map(|i| StationRef::new(id, i))
+            .map(|r| (to_anchor(&project, Some(r)).unwrap(), raw_xy(&project, r)))
+            .collect();
+        let state = AppState::new().unwrap();
+        state.execute(Command::CreateProject {
+            name: "Pins".to_string(),
+            location: None,
+        });
+        state.set_project_for_tests(project);
+        (state, id, pins)
+    }
+
+    /// Resolve `pins` after a delete-and-split: each one either lands on the
+    /// raw position it was dropped on or is reported stale (its station went
+    /// with the deleted shots) - never on a neighbouring station.
+    fn assert_pins_land_or_stale(
+        state: &AppState,
+        pins: &[(StoredAnchor, (f64, f64))],
+        what: &str,
+    ) -> usize {
+        let project = state.get_project_state().unwrap();
+        let mut stale = 0;
+        let mut landed = 0;
+        for (i, (pin, at)) in pins.iter().enumerate() {
+            let Some(placed) = from_anchor(&project, pin, &mut stale) else {
+                continue;
+            };
+            let (x, y) = raw_xy(&project, placed);
+            assert!(
+                (x - at.0).hypot(y - at.1) < 1e-6,
+                "{what}: pin {i} moved to {placed:?}"
+            );
+            landed += 1;
+        }
+        landed
+    }
+
+    /// Delete-and-split builds section B fresh. A reversed section's B must
+    /// keep its reverse parity, or every pin placed by one neighbour in it -
+    /// its terminal station, and the station at the deleted shot's far end -
+    /// lands one station off.
+    #[test]
+    fn pins_survive_a_delete_and_split_of_a_reversed_section() {
+        for reversed in [false, true] {
+            let (state, id, pins) = delete_split_fixture(reversed);
+            let shot_id = state
+                .get_project_state()
+                .unwrap()
+                .get_section(id)
+                .unwrap()
+                .shots[2]
+                .id;
+            let result =
+                state.execute_delete_shot_and_split(id, shot_id, "A".to_string(), "B".to_string());
+            assert!(result.success, "{:?}", result.error);
+            let what = format!("delete-split reversed {reversed}");
+            // Every station survives a single-shot delete-and-split.
+            assert_eq!(assert_pins_land_or_stale(&state, &pins, &what), 6, "{what}");
+        }
+    }
+
+    /// The same for the range path.
+    #[test]
+    fn pins_survive_a_range_delete_and_split_of_a_reversed_section() {
+        for reversed in [false, true] {
+            let (state, id, pins) = delete_split_fixture(reversed);
+            let shots = state
+                .get_project_state()
+                .unwrap()
+                .get_section(id)
+                .unwrap()
+                .shots
+                .clone();
+            let result = state.execute_delete_shot_range_split(
+                id,
+                shots[1].id,
+                shots[2].id,
+                "A".to_string(),
+                "B".to_string(),
+            );
+            assert!(result.success, "{:?}", result.error);
+            let what = format!("range delete-split reversed {reversed}");
+            // Station 2, between the two deleted shots, goes with them.
+            assert_eq!(assert_pins_land_or_stale(&state, &pins, &what), 5, "{what}");
+        }
+    }
+
     /// Build a section of `n` shots and return `(project, section_id)`.
     fn project_n_shots(n: usize) -> (Project, u32) {
         let mut project = Project::new("Test".to_string(), None);

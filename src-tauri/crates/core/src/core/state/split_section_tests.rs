@@ -562,3 +562,79 @@ fn a_position_keyed_ignore_follows_its_shot_into_the_second_half() {
     assert!(state.open_project(path).success, "reopen");
     assert_eq!(short_shot_verdicts(&state), vec![(second, true)]);
 }
+
+/// Delete-and-split builds its second section fresh too, and keeps the cut
+/// section's orientation the same way Split Section Here does: the reverse
+/// parity, and a captured gauge pair on the half that now holds its station.
+/// Without that the second section's gauge reads as unreversed, one station
+/// off the pair's physical station.
+#[test]
+fn a_delete_and_split_keeps_the_parity_and_the_gauge_on_the_second_section() {
+    for range in [false, true] {
+        let state = AppState::new().unwrap();
+        state.execute(Command::CreateProject {
+            name: "Gauge".to_string(),
+            location: None,
+        });
+        let main = create(
+            &state,
+            "Main",
+            (0..5_u8).map(|i| flat(90.0, 5.0 + f64::from(i))).collect(),
+        );
+        let reversed = state.execute(Command::ReverseSection {
+            section_id: main,
+            swap_left_right: false,
+        });
+        assert!(reversed.success, "{:?}", reversed.error);
+        let mut project = state.get_project_state().unwrap();
+        let section = project.get_section_mut(main).unwrap();
+        let pair = (section.shots[4].uuid.clone(), section.shots[3].uuid.clone());
+        (section.gauge_shot_uuid, section.gauge_neighbour_uuid) = pair.clone();
+        state.set_project_for_tests(project);
+        let gauge_at = state
+            .get_project_state()
+            .unwrap()
+            .compute_station_raw_coords(StationRef::new(main, 5))
+            .unwrap();
+
+        let result = if range {
+            state.execute_delete_shot_range_split(
+                main,
+                shot_id(&state, main, 1),
+                shot_id(&state, main, 2),
+                "A".to_string(),
+                "B".to_string(),
+            )
+        } else {
+            state.execute_delete_shot_and_split(
+                main,
+                shot_id(&state, main, 2),
+                "A".to_string(),
+                "B".to_string(),
+            )
+        };
+        assert!(result.success, "{:?}", result.error);
+        let project = state.get_project_state().unwrap();
+        let second = project.sections.iter().find(|s| s.id != main).unwrap();
+        assert!(second.reverse_parity, "range {range}");
+        assert_eq!(
+            (
+                second.gauge_shot_uuid.clone(),
+                second.gauge_neighbour_uuid.clone()
+            ),
+            pair,
+            "range {range}"
+        );
+        // The pair names shots[4] with shots[3] behind it: station 5 of the
+        // cut section, which is station 2 of the second.
+        let station = project
+            .compute_station_raw_coords(StationRef::new(second.id, 2))
+            .unwrap();
+        assert!(
+            (station.x - gauge_at.x).hypot(station.y - gauge_at.y) < 1e-9,
+            "range {range}"
+        );
+        let first = project.get_section(main).unwrap();
+        assert!(first.gauge_shot_uuid.is_none(), "range {range}");
+    }
+}

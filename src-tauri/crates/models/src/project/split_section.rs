@@ -44,7 +44,6 @@ use crate::{
     StationMerge, StationRef,
 };
 
-use super::gauge::{captured_gauge, GaugePair};
 use super::station_rekey::{take_naming, value_naming};
 
 impl Project {
@@ -78,9 +77,7 @@ impl Project {
         let direction = section.direction;
         let quality = section.quality;
         let azimuth_reference = section.azimuth_reference;
-        let reverse_parity = section.reverse_parity;
-        let gauge_station = Self::gauge_index(section);
-        let gauge_capture = captured_gauge(section);
+        let orientation = self.cut_orientation(section_id);
         let tail: Vec<ShotData> = section.shots[k..].iter().map(Shot::to_shot_data).collect();
 
         // The second half starts where the first ends: walk the first k shots
@@ -122,7 +119,6 @@ impl Project {
             .id;
         if let Some(second) = self.get_section_mut(second_id) {
             second.azimuth_reference = azimuth_reference;
-            second.reverse_parity = reverse_parity;
         }
         self.set_section_offset(second_id, (ox + dx, oy + dy));
         self.reindex_section_shot_uuids(section_id);
@@ -145,35 +141,10 @@ impl Project {
             StationRef::new(second_id, 0),
             options,
         );
-        self.keep_split_gauge(
-            section_id,
-            second_id,
-            k,
-            gauge_station,
-            gauge_capture.as_ref(),
-        );
+        if let Some(orientation) = &orientation {
+            self.settle_cut_halves(section_id, second_id, orientation, k, k);
+        }
         Ok(second_id)
-    }
-
-    /// Keep the gauge on the physical station `gauge` (an index into the
-    /// unsplit section, whose captured pair was `capture`) after a split at
-    /// station `k`.
-    fn keep_split_gauge(
-        &mut self,
-        first: SectionId,
-        second: SectionId,
-        k: usize,
-        gauge: usize,
-        capture: Option<&GaugePair>,
-    ) {
-        if gauge <= k {
-            self.keep_gauge_on_station(first, gauge, capture);
-        } else {
-            self.clear_unresolvable_gauge(first);
-        }
-        if gauge >= k {
-            self.keep_gauge_on_station(second, gauge - k, capture);
-        }
     }
 
     /// Give the second half's start (`copy`) what the split station (`end`)

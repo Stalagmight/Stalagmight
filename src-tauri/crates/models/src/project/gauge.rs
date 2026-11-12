@@ -65,7 +65,62 @@ pub(crate) fn gauge_pair_for_station(
     }
 }
 
+/// What a cut needs to keep a section's orientation and least-squares gauge,
+/// read BEFORE its shots move: its reverse parity and the gauge station it
+/// uses, with the pair a save captured for it, if any.
+#[derive(Debug, Clone)]
+pub struct CutOrientation {
+    reverse_parity: bool,
+    gauge_station: usize,
+    gauge_capture: Option<GaugePair>,
+}
+
 impl Project {
+    /// See [`CutOrientation`]; `None` when the section does not exist.
+    pub fn cut_orientation(&self, section_id: SectionId) -> Option<CutOrientation> {
+        let section = self.get_section(section_id)?;
+        Some(CutOrientation {
+            reverse_parity: section.reverse_parity,
+            gauge_station: Self::gauge_index(section),
+            gauge_capture: captured_gauge(section),
+        })
+    }
+
+    /// After a cut turned `first` into two sections - `first` keeping the
+    /// original stations `0..=first_end`, and the new `second` holding the
+    /// original stations from `second_start` on - give `second` the section's
+    /// reverse parity and keep the gauge on its physical station.
+    ///
+    /// The parity is what a single-neighbour dive-plan pin and the gauge
+    /// fallback read to know which end of a shot they sit on, so a second half
+    /// built fresh (parity false) out of a reversed section would put both one
+    /// station off. Split Section Here cuts AT a station (`first_end ==
+    /// second_start`, the station duplicated); a delete-and-split removes the
+    /// shots in between, and a gauge station the delete removed (strictly
+    /// between the two) is left to the halves' index fallback.
+    pub fn settle_cut_halves(
+        &mut self,
+        first: SectionId,
+        second: SectionId,
+        before: &CutOrientation,
+        first_end: usize,
+        second_start: usize,
+    ) {
+        if let Some(section) = self.get_section_mut(second) {
+            section.reverse_parity = before.reverse_parity;
+        }
+        let gauge = before.gauge_station;
+        let capture = before.gauge_capture.as_ref();
+        if gauge <= first_end {
+            self.keep_gauge_on_station(first, gauge, capture);
+        } else {
+            self.clear_unresolvable_gauge(first);
+        }
+        if gauge >= second_start {
+            self.keep_gauge_on_station(second, gauge - second_start, capture);
+        }
+    }
+
     /// Keep `section_id`'s gauge on its station `index`.
     ///
     /// `inherited` is the pair of the section the station came from, when that
