@@ -14,6 +14,7 @@ import type {
   Shot,
   SurveyCredit,
 } from '../types/ipc.generated';
+import { dedupePeople, isValidPerson, personKey } from './people';
 
 /** The credit of a shot that has none. Frozen: never mutate it. */
 export const EMPTY_CREDIT: SurveyCredit = Object.freeze({
@@ -33,35 +34,10 @@ export function isCreditEmpty(credit: SurveyCredit | undefined | null): boolean 
 }
 
 /**
- * A person's identity key: the name casefolded with whitespace collapsed, and
- * the email lowercased (a missing email only matches a missing email). Two
- * people are the same person exactly when their keys are equal - the rule
- * `Person::same_as` applies on the backend.
+ * Person identity lives in `utils/people` (one implementation, the backend's
+ * `Person::same_as`); re-exported so credit code keeps one import.
  */
-export function personKey(person: Person): string {
-  const name = person.name.trim().split(/\s+/).join(' ').toLowerCase();
-  const email = person.email?.trim().toLowerCase() ?? '';
-  return `${name}\u0000${email}`;
-}
-
-/** Whether two people are the same person (see {@link personKey}). */
-export function samePerson(a: Person, b: Person): boolean {
-  return personKey(a) === personKey(b);
-}
-
-/** `list` in order with duplicates (by identity) and blank names removed. */
-export function dedupePeople(list: readonly Person[]): Person[] {
-  const seen = new Set<string>();
-  const out: Person[] = [];
-  for (const p of list) {
-    if (!p.name.trim()) continue;
-    const key = personKey(p);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(p);
-  }
-  return out;
-}
+export { dedupePeople, personKey, samePerson } from './people';
 
 /** Aggregate a run of shot credits; mirrors `SectionCreditSummary::from_credits`. */
 export function summarizeCredits(credits: Iterable<SurveyCredit>): SectionCreditSummary {
@@ -73,7 +49,7 @@ export function summarizeCredits(credits: Iterable<SurveyCredit>): SectionCredit
   const tally = (acc: Map<string, CreditedPerson>, people: readonly Person[]): void => {
     const seenHere = new Set<string>();
     for (const person of people) {
-      if (!person.name.trim()) continue;
+      if (!isValidPerson(person)) continue;
       const key = personKey(person);
       if (seenHere.has(key)) continue;
       seenHere.add(key);

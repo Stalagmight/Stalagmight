@@ -74,6 +74,27 @@ fn identity_is_casefolded_name_and_lowercased_email() {
     assert!(Person::named("   ").is_none());
 }
 
+/// The vectors `src/utils/__tests__/people.test.ts` pins for the frontend's
+/// `personKey`: the two implementations must agree on every one of them.
+#[test]
+fn identity_vectors_shared_with_the_frontend() {
+    let raw = |name: &str, email: Option<&str>| Person {
+        name: name.to_string(),
+        email: email.map(str::to_string),
+    };
+    // No Unicode normalization and no sharp-s folding.
+    assert!(!raw("Jose\u{301}", None).same_as(&raw("Jos\u{e9}", None)));
+    assert!(!raw("Strau\u{df}", None).same_as(&raw("STRAUSS", None)));
+    assert!(raw("STRAU\u{df}", None).same_as(&raw("strau\u{df}", None)));
+    // NEL and NBSP are whitespace; U+FEFF is not.
+    assert!(raw("Ann\u{85}Lee", None).same_as(&raw("ann lee", None)));
+    assert!(raw("\u{a0}Ann \u{3000} Lee\u{2003}", None).same_as(&raw("ann lee", None)));
+    assert!(!raw("Ann\u{feff}Lee", None).same_as(&raw("ann lee", None)));
+    // The email is trimmed and lower-cased, its inner text kept.
+    assert!(raw("Ann", Some("\u{a0}A@X.org\n")).same_as(&raw("ann", Some("a@x.org"))));
+    assert!(!raw("Ann", Some("a @x.org")).same_as(&raw("ann", Some("a@x.org"))));
+}
+
 #[test]
 fn add_remove_and_dedupe_use_identity() {
     let mut list = vec![person("A", None)];

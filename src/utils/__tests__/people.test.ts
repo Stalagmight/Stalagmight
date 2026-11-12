@@ -67,12 +67,25 @@ describe('personKey / samePerson', () => {
     expect(samePerson({ name: 'José' }, { name: 'Jose' })).toBe(false);
   });
 
-  it('composed and decomposed accents are the same person', () => {
-    expect(samePerson({ name: 'José' }, { name: 'José' })).toBe(true);
+  // Identity is exactly the backend's `Person::same_as` (name split on Unicode
+  // whitespace and lower-cased; email trimmed and lower-cased): anything looser
+  // would merge two people the backend keeps apart.
+  it('compares like Rust: no Unicode normalization, no sharp-s folding', () => {
+    expect(samePerson({ name: 'Jose\u0301' }, { name: 'Jos\u00e9' })).toBe(false);
+    expect(samePerson({ name: 'Strau\u00df' }, { name: 'STRAUSS' })).toBe(false);
+    expect(samePerson({ name: 'STRAU\u00df' }, { name: 'strau\u00df' })).toBe(true);
   });
 
-  it('folds sharp s like its upper-case form', () => {
-    expect(samePerson({ name: 'Strauß' }, { name: 'STRAUSS' })).toBe(true);
+  it('collapses the whitespace Rust collapses, and only that', () => {
+    // NEL (U+0085) and NBSP are White_Space in Rust; U+FEFF is not.
+    expect(samePerson({ name: 'Ann\u0085Lee' }, { name: 'ann lee' })).toBe(true);
+    expect(samePerson({ name: '\u00a0Ann \u3000 Lee\u2003' }, { name: 'ann lee' })).toBe(true);
+    expect(samePerson({ name: 'Ann\ufeffLee' }, { name: 'ann lee' })).toBe(false);
+  });
+
+  it('trims and lower-cases the email but keeps inner text', () => {
+    expect(samePerson({ name: 'Ann', email: '\u00a0A@X.org\n' }, { name: 'ann', email: 'a@x.org' })).toBe(true);
+    expect(samePerson({ name: 'Ann', email: 'a @x.org' }, { name: 'ann', email: 'a@x.org' })).toBe(false);
   });
 
   it('cannot be confused by a name that ends where an email would start', () => {
@@ -94,6 +107,10 @@ describe('dedupePeople', () => {
 
   it('returns an empty list for an empty input', () => {
     expect(dedupePeople([])).toEqual([]);
+  });
+
+  it('drops people without a name, like the backend', () => {
+    expect(dedupePeople([{ name: '  ' }, { name: 'Ann' }, { name: '\u3000' }])).toEqual([{ name: 'Ann' }]);
   });
 });
 

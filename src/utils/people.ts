@@ -3,10 +3,13 @@
  *
  * Identity is the pair (name, email): the same name AND the same email is one
  * person, and a person without an email only equals another person without an
- * email. Names compare case-insensitively after whitespace is collapsed;
- * emails compare case-insensitively after trimming. Matching (autocomplete) is
- * looser than identity: it also ignores accents, so typing "jose" finds "José"
- * - but "José" and "Jose" stay two different people.
+ * email. It is EXACTLY the backend's `Person::same_as`
+ * (`src-tauri/crates/models/src/credit.rs`), so the frontend never merges two
+ * people the backend keeps apart or the other way round: the name is split on
+ * Unicode whitespace, re-joined with one space and lower-cased; the email is
+ * trimmed and lower-cased. Matching (autocomplete) is looser than identity: it
+ * also ignores accents, so typing "jose" finds "José" - but "José" and "Jose"
+ * stay two different people.
  *
  * Pure functions only, so the pill input and any table that lists people can
  * share them.
@@ -58,25 +61,41 @@ export function normalizeName(name: string): string {
 }
 
 /**
- * Case-fold: upper-casing first turns "ß" into "SS" (and so "ss"), which a
- * plain `toLowerCase` leaves alone. Locale-independent on purpose.
+ * Case-fold for MATCHING only: upper-casing first turns "ß" into "SS" (and so
+ * "ss"), which a plain `toLowerCase` leaves alone. Locale-independent on
+ * purpose. Identity does not use it (see {@link personKey}).
  */
 function caseFold(text: string): string {
   return text.toUpperCase().toLowerCase();
 }
 
+/**
+ * Rust's `char::is_whitespace` (the Unicode White_Space property), which
+ * `str::split_whitespace` and `str::trim` use. JavaScript's `\s` differs in
+ * two code points (it adds U+FEFF and lacks U+0085), so it is spelled out.
+ */
+const RUST_WHITESPACE_CLASS = '\\t\\n\\v\\f\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000';
+const RUST_WHITESPACE_RUN = new RegExp(`[${RUST_WHITESPACE_CLASS}]+`);
+const RUST_TRIM = new RegExp(`^[${RUST_WHITESPACE_CLASS}]+|[${RUST_WHITESPACE_CLASS}]+$`, 'g');
+
+/** `Person::name_key`: whitespace runs collapsed, ends trimmed, lower-cased. */
 function nameKey(name: string): string {
-  return caseFold(normalizeName(name));
+  return name
+    .split(RUST_WHITESPACE_RUN)
+    .filter((part) => part !== '')
+    .join(' ')
+    .toLowerCase();
 }
 
+/** `Person::email_key`: trimmed and lower-cased; an empty email is none (''). */
 function emailKey(email: string | null | undefined): string {
-  return (email ?? '').trim().toLowerCase();
+  return (email ?? '').replace(RUST_TRIM, '').toLowerCase();
 }
 
 /**
- * Identity key: case-folded collapsed name, U+0000, lower-cased trimmed email
- * (empty when there is none). U+0000 cannot appear in a typed name, so the
- * join is unambiguous.
+ * Identity key: `nameKey`, U+0000, `emailKey` (empty when there is none).
+ * U+0000 cannot appear in a typed name, so the join is unambiguous. Equal keys
+ * are exactly the backend's `Person::same_as`.
  */
 export function personKey(person: PersonLike): string {
   return `${nameKey(person.name)}\u0000${emailKey(person.email)}`;
@@ -86,11 +105,20 @@ export function samePerson(a: PersonLike, b: PersonLike): boolean {
   return personKey(a) === personKey(b);
 }
 
-/** Drop later duplicates (by {@link personKey}), keeping the first of each. */
+/** `Person::is_valid`: false for a name that is empty after trimming. */
+export function isValidPerson(person: PersonLike): boolean {
+  return nameKey(person.name) !== '';
+}
+
+/**
+ * Drop later duplicates (by {@link personKey}), keeping the first of each, and
+ * people without a name - the backend's `dedupe_people`.
+ */
 export function dedupePeople<T extends PersonLike>(people: readonly T[]): T[] {
   const seen = new Set<string>();
   const out: T[] = [];
   for (const person of people) {
+    if (!isValidPerson(person)) continue;
     const key = personKey(person);
     if (seen.has(key)) continue;
     seen.add(key);
