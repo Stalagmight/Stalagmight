@@ -73,6 +73,12 @@ pub(crate) struct EndTable {
     by_end: HashMap<(SectionId, SectionEnd), (f64, f64)>,
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many [`EndTable`]s this thread built: a query must build one.
+    pub(crate) static END_TABLE_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 impl EndTable {
     fn at(&self, id: SectionId, end: SectionEnd) -> Option<(f64, f64)> {
         self.by_end.get(&(id, end)).copied()
@@ -91,6 +97,8 @@ impl Project {
     /// See [`EndTable`]. The walk is the coordinate solver's
     /// (`compute_station_raw_xy`) without the station offsets.
     pub(crate) fn end_table(&self) -> EndTable {
+        #[cfg(test)]
+        END_TABLE_BUILDS.with(|builds| builds.set(builds.get() + 1));
         let mut ends = Vec::with_capacity(self.sections.len() * 2);
         for section in &self.sections {
             let start = self.section_offset(section.id);
@@ -377,8 +385,12 @@ impl Project {
     }
 
     /// Every pairing of an end of `s1` with an end of `s2` that touches.
-    fn touching_pairings(&self, s1: SectionId, s2: SectionId) -> Vec<(Pairing, Touch)> {
-        let table = self.end_table();
+    fn touching_pairings(
+        &self,
+        s1: SectionId,
+        s2: SectionId,
+        table: &EndTable,
+    ) -> Vec<(Pairing, Touch)> {
         let ends = [SectionEnd::Start, SectionEnd::End];
         ends.iter()
             .flat_map(|&end_a| ends.iter().map(move |&end_b| (end_a, end_b)))
@@ -389,7 +401,7 @@ impl Project {
                     b: s2,
                     end_b,
                 };
-                self.pairing_touch(pairing, &table)
+                self.pairing_touch(pairing, table)
                     .map(|touch| (pairing, touch))
             })
             .collect()
@@ -404,6 +416,17 @@ impl Project {
         s1: SectionId,
         s2: SectionId,
     ) -> Option<CombineCandidate> {
+        self.candidate_for_sections_with(s1, s2, &self.end_table())
+    }
+
+    /// [`Self::combine_candidate_for_sections`] against an end table the
+    /// caller already built (the station query builds one for its own search).
+    fn candidate_for_sections_with(
+        &self,
+        s1: SectionId,
+        s2: SectionId,
+        table: &EndTable,
+    ) -> Option<CombineCandidate> {
         if s1 == s2 {
             return None;
         }
@@ -411,7 +434,7 @@ impl Project {
         // same whichever section the caller names first or keeps.
         let (s1, s2) = (s1.min(s2), s1.max(s2));
         let (a, b) = (self.get_section(s1)?, self.get_section(s2)?);
-        let touching = self.touching_pairings(s1, s2);
+        let touching = self.touching_pairings(s1, s2, table);
         let eligible: Vec<&(Pairing, Touch)> = touching
             .iter()
             .filter(|(_, t)| t.blocked.is_none())
@@ -523,7 +546,7 @@ impl Project {
                     // meet at both ends are ambiguous from either. When it is
                     // eligible it is this pairing, the only eligible one.
                     touch.blocked = self
-                        .combine_candidate_for_sections(pairing.a, pairing.b)?
+                        .candidate_for_sections_with(pairing.a, pairing.b, &table)?
                         .blocked_reason;
                 }
                 self.candidate_for(*pairing, touch)

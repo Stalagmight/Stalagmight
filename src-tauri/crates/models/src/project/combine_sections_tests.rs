@@ -1054,3 +1054,18 @@ fn an_unaligned_closure_between_them_becomes_a_loop_inside_the_section() {
         "the adjustment closes the loop inside the one section"
     );
 }
+
+/// Each query walks every section's shots once for its end table, the
+/// station query included (it used to build a second one for the pair).
+#[test]
+fn each_query_builds_one_end_table() {
+    use super::combine_candidate::END_TABLE_BUILDS;
+    let (project, k, o) = pair(SectionEnd::End, SectionEnd::Start, true, 0.0);
+    let builds = || END_TABLE_BUILDS.with(std::cell::Cell::get);
+    let before = builds();
+    assert!(project.combine_candidate(StationRef::new(k, 2)).is_some());
+    assert_eq!(builds() - before, 1, "the station query");
+    let before = builds();
+    assert!(project.combine_candidate_for_sections(k, o).is_some());
+    assert_eq!(builds() - before, 1, "the pair query");
+}
