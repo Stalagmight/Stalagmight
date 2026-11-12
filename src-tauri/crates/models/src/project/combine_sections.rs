@@ -355,6 +355,19 @@ impl Project {
     ) -> Option<String> {
         let kept_section = self.get_section(kept)?;
         let other_section = self.get_section(other)?;
+        let kept_uuids: HashSet<&str> = kept_section
+            .shots
+            .iter()
+            .filter_map(|shot| shot.uuid.as_deref())
+            .collect();
+        if other_section
+            .shots
+            .iter()
+            .filter_map(|shot| shot.uuid.as_deref())
+            .any(|uuid| kept_uuids.contains(uuid))
+        {
+            return Some("The two sections share a shot identity".to_string());
+        }
         if kept_section.azimuth_reference != other_section.azimuth_reference {
             return Some("The sections use different azimuth references".to_string());
         }

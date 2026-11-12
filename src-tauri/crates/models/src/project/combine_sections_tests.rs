@@ -542,6 +542,14 @@ fn every_block_reason_refuses_without_a_change() {
 }
 
 #[test]
+fn sections_sharing_a_shot_identity_are_refused() {
+    let (mut project, kept, other) = joined(CombinePairing::KeptEndOtherStart);
+    let shared = uuids(&project, kept)[1].clone();
+    project.get_section_mut(other).unwrap().shots[2].uuid = Some(shared);
+    assert_refused(project, kept, other, "share a shot identity");
+}
+
+#[test]
 fn more_shots_than_a_section_holds_is_refused() {
     let half = Project::max_shots_per_section() / 2 + 1;
     let mut project = Project::new("Big".to_string(), None);
