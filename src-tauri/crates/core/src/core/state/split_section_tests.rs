@@ -782,3 +782,96 @@ fn a_delete_and_split_keeps_the_parity_and_the_gauge_on_the_second_section() {
         assert!(first.gauge_shot_uuid.is_none(), "range {range}");
     }
 }
+
+/// A loop closure crossing the cut: Main loops back on itself, closing from
+/// station 10 onto station 2 with a 0.5 m misclosure, and is split at station
+/// 5, where nothing else is merged. The closure is then the halves' only tie,
+/// and a closure must close a loop (every load and every later edit converts a
+/// sole-tie closure), so the split turns it into a merge and one half moves
+/// by the misclosure. The preview reports that move before anything changes,
+/// and the split then makes exactly that move.
+#[test]
+fn a_loop_closure_across_the_cut_is_previewed_as_a_move() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Loop".to_string(),
+        location: None,
+    });
+    let main = create(
+        &state,
+        "Main",
+        vec![
+            flat(90.0, 5.0),
+            flat(90.0, 5.0),
+            flat(0.0, 4.0),
+            flat(0.0, 4.0),
+            flat(270.0, 4.0),
+            flat(270.0, 4.0),
+            flat(180.0, 4.0),
+            flat(180.0, 4.0),
+            flat(90.0, 4.0),
+            flat(90.0, 3.5),
+            flat(180.0, 5.0),
+        ],
+    );
+    let closed = state.execute(Command::CreateLoopClosure {
+        station_a: StationRef::new(main, 2),
+        station_b: StationRef::new(main, 10),
+        closure_strategy: ClosureStrategy::default(),
+    });
+    assert!(closed.success, "{:?}", closed.error);
+    let before: Vec<(f64, f64)> = (0..=11)
+        .map(|i| raw_xy(&state, StationRef::new(main, i)))
+        .collect();
+    let snapshot = serde_json::to_string(&state.get_project_state().unwrap()).unwrap();
+    let at = SplitAt::Station { station_index: 5 };
+
+    let preview = state.split_section_preview(main, at, &options()).unwrap();
+    assert_eq!(
+        serde_json::to_string(&state.get_project_state().unwrap()).unwrap(),
+        snapshot,
+        "the preview changed the project"
+    );
+    assert_eq!(preview.closures_to_merges, 1);
+    assert!((preview.moved_m - 0.5).abs() < 1e-6, "{}", preview.moved_m);
+
+    let result = state.execute_split_section(main, at, options());
+    assert!(result.success, "{:?}", result.error);
+    let second = result.section_id.unwrap();
+    let project = state.get_project_state().unwrap();
+    assert!(
+        project.loop_closures.is_empty(),
+        "the closure became a merge"
+    );
+    let moved = |station: StationRef, index: usize| {
+        let (x, y) = raw_xy(&state, station);
+        (x - before[index].0).hypot(y - before[index].1)
+    };
+    let (moved_a, moved_b) = (
+        moved(StationRef::new(main, 0), 0),
+        moved(StationRef::new(second, 6), 11),
+    );
+    let (side, distance) = if moved_b >= moved_a {
+        (SplitSide::B, moved_b)
+    } else {
+        (SplitSide::A, moved_a)
+    };
+    assert_eq!(preview.moved_side, Some(side));
+    assert!((distance - preview.moved_m).abs() < 1e-6, "{distance}");
+}
+
+/// A split that leaves every tie in place moves nothing, and says so.
+#[test]
+fn a_plain_split_previews_no_move() {
+    let (state, main) = state();
+    let preview = state
+        .split_section_preview(main, SplitAt::Station { station_index: 1 }, &options())
+        .unwrap();
+    assert_eq!(preview.closures_to_merges, 0);
+    assert_eq!(preview.moved_side, None);
+    assert_eq!(preview.moved_m, 0.0);
+
+    let refused =
+        state.split_section_preview(main, SplitAt::Station { station_index: 0 }, &options());
+    assert!(refused.unwrap_err().contains("first or last station"));
+}

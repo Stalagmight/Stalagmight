@@ -4,8 +4,13 @@ use super::command_delete_split::section_budget_refusal;
 use super::AppState;
 use crate::core::{Command, CommandResult};
 use crate::models::{
-    Project, SectionId, ShotId, SplitAt, SplitSectionOptions, SplitSide, MIN_SPLIT_CHILD_LENGTH_M,
+    Coordinates, Project, SectionId, ShotId, SplitAt, SplitPreview, SplitSectionOptions, SplitSide,
+    StationRef, MIN_SPLIT_CHILD_LENGTH_M,
 };
+
+/// Below this a half "did not move" in [`AppState::split_section_preview`]:
+/// float noise from the walk, far under anything a survey resolves.
+const SPLIT_PREVIEW_STILL_M: f64 = 1e-6;
 
 impl AppState {
     /// Split a section in two at a mid-section station, or at a point along a
@@ -72,35 +77,15 @@ impl AppState {
             let Some(project) = proj_guard.as_mut() else {
                 return CommandResult::failure("No project open".to_string());
             };
-            let station_index = match cut {
-                Cut::Station(station_index) => station_index,
-                Cut::InShot {
-                    shot_id,
-                    distance,
-                    station_index,
-                } => {
-                    // `validate_cut` ran every check the shot split refuses
-                    // on, but the model shortens the tail before it inserts
-                    // the head, so a failure rolls back whatever it changed.
-                    if let Err(e) = project.split_shot_at_distance(section_id, shot_id, distance) {
-                        let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
-                        return CommandResult::failure(e);
-                    }
-                    station_index
-                }
-            };
-
-            match project.split_section_at_station(section_id, station_index, &options) {
-                Ok(id) => {
-                    // A half whose only tie is a loop closure is merged instead
-                    // (issue #8), as the delete-and-split path does.
-                    project.convert_orphan_closures_to_merges();
+            // `validate_cut` ran every check the model refuses on, but the
+            // shot split shortens the tail before it inserts the head, so any
+            // failure rolls back to the snapshot.
+            match Self::apply_cut(project, section_id, cut, &options) {
+                Ok((id, _)) => {
                     project.touch();
                     id
                 }
                 Err(e) => {
-                    // Not expected: `validate_cut` ran the same checks. Undo a
-                    // station the shot split may already have inserted.
                     let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
                     return CommandResult::failure(e);
                 }
@@ -134,6 +119,88 @@ impl AppState {
         CommandResult::success()
             .with_section_id(second_id)
             .with_section_ids(vec![section_id, second_id])
+    }
+
+    /// Make the validated `cut` in `project`: split the shot first when the
+    /// cut lands inside one, split the section, and turn every loop closure
+    /// the cut left as a sole tie into a merge (issue #8, as the
+    /// delete-and-split path does: a closure must close a loop). Returns the
+    /// second half's id and how many closures became merges.
+    fn apply_cut(
+        project: &mut Project,
+        section_id: SectionId,
+        cut: Cut,
+        options: &SplitSectionOptions,
+    ) -> Result<(SectionId, usize), String> {
+        let station_index = match cut {
+            Cut::Station(station_index) => station_index,
+            Cut::InShot {
+                shot_id,
+                distance,
+                station_index,
+            } => {
+                project.split_shot_at_distance(section_id, shot_id, distance)?;
+                station_index
+            }
+        };
+        let second = project.split_section_at_station(section_id, station_index, options)?;
+        Ok((second, project.convert_orphan_closures_to_merges()))
+    }
+
+    /// What Split Section Here would do beyond the cut, without doing it: the
+    /// split runs on a copy of the project. A loop closure whose ends only the
+    /// cut section joined (a closure from before the cut to past it, with
+    /// nothing else tying the halves) becomes the halves' only tie, and the
+    /// split turns it into a merge, moving one half by the loop's misclosure.
+    /// Refusing that split would only make the user delete the closure, split
+    /// and merge by hand, with the same move, and keeping the closure is not an
+    /// option: every load and every later edit converts a sole-tie closure
+    /// (docs/closures.md). So the dialog shows the move before the user
+    /// confirms. A refused split returns its reason.
+    pub fn split_section_preview(
+        &self,
+        section_id: SectionId,
+        at: SplitAt,
+        options: &SplitSectionOptions,
+    ) -> Result<SplitPreview, String> {
+        self.with_project(|project| {
+            let cut = Self::validate_cut(project, section_id, at)?;
+            let mut copy = project.clone();
+            let last = copy
+                .get_section(section_id)
+                .map_or(0, |section| section.shots.len() as u32);
+            let start = StationRef::new(section_id, 0);
+            let (start_before, end_before) = (
+                copy.compute_station_raw_coords(start),
+                copy.compute_station_raw_coords(StationRef::new(section_id, last)),
+            );
+            let (second, converted) = Self::apply_cut(&mut copy, section_id, cut, options)?;
+            let second_last = copy
+                .get_section(second)
+                .map_or(0, |section| section.shots.len() as u32);
+            let moved = |before: Option<Coordinates>, after: Option<Coordinates>| {
+                before.zip(after).map_or(0.0, |(b, a)| {
+                    ((a.x - b.x).powi(2) + (a.y - b.y).powi(2) + (a.z - b.z).powi(2)).sqrt()
+                })
+            };
+            let moved_a = moved(start_before, copy.compute_station_raw_coords(start));
+            let moved_b = moved(
+                end_before,
+                copy.compute_station_raw_coords(StationRef::new(second, second_last)),
+            );
+            let (moved_side, moved_m) = if moved_a.max(moved_b) <= SPLIT_PREVIEW_STILL_M {
+                (None, 0.0)
+            } else if moved_b >= moved_a {
+                (Some(SplitSide::B), moved_b)
+            } else {
+                (Some(SplitSide::A), moved_a)
+            };
+            Ok(SplitPreview {
+                closures_to_merges: u32::try_from(converted).unwrap_or(u32::MAX),
+                moved_side,
+                moved_m,
+            })
+        })
     }
 
     /// Resolve `at` to where the split cuts, or why it is refused. Read-only:

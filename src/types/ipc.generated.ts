@@ -61,6 +61,7 @@ export * from './ipc/UnrecognisedShotKind';
 export * from './ipc/VirtualShotMode';
 export * from './ipc/ShotUpdates';
 export * from './ipc/SplitAt';
+export * from './ipc/SplitPreview';
 export * from './ipc/SplitSectionOptions';
 export * from './ipc/SplitSide';
 export * from './ipc/CombineCandidate';

@@ -34,6 +34,12 @@ vi.mock('../../../hooks/useEditingBlocked', () => ({
 
 vi.mock('../../../utils/telemetry', () => ({ trackDialogComplete: vi.fn() }));
 
+const previewSplitSection = vi.fn();
+vi.mock('../../../utils/splitSection', () => ({
+  previewSplitSection: (...args: unknown[]) => previewSplitSection(...args),
+}));
+const NO_MOVE = { closures_to_merges: 0, moved_side: null, moved_m: 0 };
+
 vi.mock('../DialogWrapper', () => ({
   DialogWrapper: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
@@ -52,6 +58,7 @@ describe('SplitSectionHereDialog', () => {
     blocked = false;
     stations = [];
     splitSection.mockResolvedValue({ success: true });
+    previewSplitSection.mockResolvedValue(NO_MOVE);
     dialogData = { sectionId: 3, at: { type: 'station', station_index: 2 }, label: '3:2' };
   });
 
@@ -125,5 +132,55 @@ describe('SplitSectionHereDialog', () => {
     fireEvent.click(screen.getByTestId('split-here-confirm'));
     expect(splitSection).not.toHaveBeenCalled();
     expect(screen.getByTestId('split-here-error')).toHaveTextContent('Editing is disabled');
+  });
+
+  it('warns, before the split, that a loop closure across the cut will move a half', async () => {
+    previewSplitSection.mockResolvedValue({ closures_to_merges: 1, moved_side: 'b', moved_m: 0.5 });
+    render(<SplitSectionHereDialog />);
+    const warning = await screen.findByTestId('split-here-closure-warning');
+    expect(warning).toHaveTextContent(
+      'Main-B is tied to Main-A only by a loop closure, so the split turns it into a merge and moves Main-B'
+    );
+    expect(warning).toHaveTextContent('0.50');
+    expect(previewSplitSection).toHaveBeenCalledWith(
+      3,
+      { type: 'station', station_index: 2 },
+      expect.objectContaining({ datum_side: 'a' })
+    );
+    // Still the user's call: the split goes ahead.
+    expect(screen.getByTestId('split-here-confirm')).toBeEnabled();
+  });
+
+  it('names the first half and counts the closures when it is the one that moves', async () => {
+    previewSplitSection.mockResolvedValue({ closures_to_merges: 2, moved_side: 'a', moved_m: 1.25 });
+    render(<SplitSectionHereDialog />);
+    expect(await screen.findByTestId('split-here-closure-warning')).toHaveTextContent(
+      'Main-A is tied to Main-B only by 2 loop closures, so the split turns them into merges and moves Main-A'
+    );
+  });
+
+  it('shows no warning when nothing moves, or the preview is refused', async () => {
+    render(<SplitSectionHereDialog />);
+    await waitFor(() => expect(previewSplitSection).toHaveBeenCalled());
+    expect(screen.queryByTestId('split-here-closure-warning')).toBeNull();
+
+    previewSplitSection.mockRejectedValue('Station 2 is the first or last station');
+    render(<SplitSectionHereDialog />);
+    await waitFor(() => expect(previewSplitSection).toHaveBeenCalledTimes(2));
+    expect(screen.queryByTestId('split-here-closure-warning')).toBeNull();
+  });
+
+  it('asks again when the zero datum changes halves, which decides the half that moves', async () => {
+    stations = [station(2, { is_zero_datum: true })];
+    render(<SplitSectionHereDialog />);
+    await waitFor(() => expect(previewSplitSection).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByTestId('split-here-datum-side-b'));
+    await waitFor(() =>
+      expect(previewSplitSection).toHaveBeenLastCalledWith(
+        3,
+        { type: 'station', station_index: 2 },
+        expect.objectContaining({ datum_side: 'b' })
+      )
+    );
   });
 });

@@ -30,6 +30,22 @@ pub enum SplitSide {
     Both,
 }
 
+/// What Split Section Here would do beyond the cut, which the dialog shows
+/// before the user confirms (`AppState::split_section_preview`).
+///
+/// A loop closure from before the cut to past it, with nothing else tying the
+/// two halves, is left as their only tie. A closure must close a loop, so the
+/// split turns it into a merge, which moves one half by the loop's misclosure.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+pub struct SplitPreview {
+    /// How many loop closures the split turns into merges.
+    pub closures_to_merges: u32,
+    /// The half that moves to close them, if one moves.
+    pub moved_side: Option<SplitSide>,
+    /// How far it moves, in metres (0 when nothing moves).
+    pub moved_m: f64,
+}
+
 /// The choices the Split Section Here dialog sends.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 pub struct SplitSectionOptions {

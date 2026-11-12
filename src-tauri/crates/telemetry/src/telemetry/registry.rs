@@ -68,6 +68,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.delete_shot",
     "command.delete_shot_and_split",
     "command.split_section",
+    "command.split_section_preview",
     "command.combine_candidate",
     "command.combine_candidate_for_sections",
     "command.combine_sections",
@@ -1161,7 +1162,10 @@ mod tests {
         //       command.combine_candidate_for_sections, command.combine_sections,
         //       undo-after.combine_sections, and the full per-dialog set for
         //       combine-sections = 721.
-        assert_eq!(EVENT_NAMES.len(), 721);
+        //   + 1 the Split dialog's read-only preview of a loop closure the
+        //       split would turn into a merge: command.split_section_preview
+        //       = 722.
+        assert_eq!(EVENT_NAMES.len(), 722);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

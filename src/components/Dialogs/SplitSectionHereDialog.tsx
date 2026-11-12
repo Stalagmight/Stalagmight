@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { isEditingBlockedNow } from '../../hooks/useEditingBlocked';
@@ -6,8 +6,10 @@ import { getErrorMessage } from '../../utils/ipc';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { formatLength } from '../../utils/formatStats';
 import { MIN_SPLIT_CHILD_LENGTH_M } from '../../utils/shotSplit';
+import { previewSplitSection } from '../../utils/splitSection';
 import { defaultConfig } from '../../types/config';
 import type { SplitAt } from '../../types/ipc/SplitAt';
+import type { SplitPreview } from '../../types/ipc/SplitPreview';
 import type { SplitSide } from '../../types/ipc/SplitSide';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
@@ -62,6 +64,33 @@ export default function SplitSectionHereDialog() {
   const [error, setError] = useState<string | null>(null);
 
   const isValid = nameA.trim().length > 0 && nameB.trim().length > 0;
+
+  // A loop closure from before the cut to past it, with nothing else tying the
+  // halves, becomes a merge and moves one half: say so before the user confirms.
+  // Only the datum's side changes the answer (it decides which half is anchored).
+  const [preview, setPreview] = useState<SplitPreview | null>(null);
+  const previewDatumSide = isDatum ? datumSide : 'a';
+  useEffect(() => {
+    if (isStale || sectionId === undefined || !at) return;
+    let live = true;
+    const options = {
+      name_a: 'A',
+      name_b: 'B',
+      color_a: sectionColor,
+      color_b: sectionColor,
+      comment_side: 'a' as const,
+      datum_side: previewDatumSide,
+    };
+    previewSplitSection(sectionId, at, options)
+      .then((answer) => live && setPreview(answer))
+      .catch(() => live && setPreview(null));
+    return () => {
+      live = false;
+    };
+  }, [isStale, sectionId, at, sectionColor, previewDatumSide]);
+  const movedName = preview?.moved_side === 'a' ? nameA.trim() || 'A' : nameB.trim() || 'B';
+  const otherName = preview?.moved_side === 'a' ? nameB.trim() || 'B' : nameA.trim() || 'A';
+  const closures = preview?.closures_to_merges ?? 0;
 
   const summary =
     at?.type === 'shot' && shot
@@ -184,6 +213,17 @@ export default function SplitSectionHereDialog() {
         {hasComment &&
           sideChoice('comment', 'Keep the station comment on', commentSide, setCommentSide, ['a', 'b', 'both'])}
         {isDatum && sideChoice('datum', 'Keep the zero datum on', datumSide, setDatumSide, ['a', 'b'])}
+
+        {preview?.moved_side && (
+          <div
+            className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm"
+            data-testid="split-here-closure-warning"
+          >
+            {movedName} is tied to {otherName} only by {closures === 1 ? 'a loop closure' : `${closures} loop closures`},
+            so the split turns {closures === 1 ? 'it into a merge' : 'them into merges'} and moves {movedName}{' '}
+            {formatLength(preview.moved_m, lengthUnit, 2)} to close {closures === 1 ? 'it' : 'them'}.
+          </div>
+        )}
 
         {isStale && (
           <div className="p-3 bg-error-10 border border-error-20 rounded text-error text-sm" data-testid="split-here-stale">

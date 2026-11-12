@@ -60,8 +60,9 @@ use stalagmight_lib::models::{
     ProjectMetadata, ProjectStats, ProjectWarning, RangeDeleteKind, RouteLeg, RouteProfilePoint,
     RulerEndpoint, Section, SectionCreditSummary, SectionData, SectionEnd, SectionRelationships,
     SectionStats, SectionUpdates, Shot, ShotData, ShotKind, ShotUpdates, SpeleoLink, SplitAt,
-    SplitSectionOptions, SplitSide, Station, StationMergeWire, StationPair, StationRef,
-    SurveyCredit, SurveyDirection, TankMaterial, Team, UnrecognisedShotKind, ZeroDatumWire,
+    SplitPreview, SplitSectionOptions, SplitSide, Station, StationMergeWire, StationPair,
+    StationRef, SurveyCredit, SurveyDirection, TankMaterial, Team, UnrecognisedShotKind,
+    ZeroDatumWire,
 };
 use stalagmight_lib::parsers::compass::{CompassFile, CompassSurveySummary, InvalidShotCounts};
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};
@@ -247,6 +248,7 @@ fn main() {
     export::<CombineSectionsOptions>(&out_dir);
     export::<SectionEnd>(&out_dir);
     export::<SplitAt>(&out_dir);
+    export::<SplitPreview>(&out_dir);
     export::<SplitSectionOptions>(&out_dir);
     export::<SplitSide>(&out_dir);
     export::<ShotData>(&out_dir);
@@ -545,6 +547,7 @@ fn main() {
         "VirtualShotMode",
         "ShotUpdates",
         "SplitAt",
+        "SplitPreview",
         "SplitSectionOptions",
         "SplitSide",
         "CombineCandidate",

@@ -137,6 +137,14 @@ moving a group onto it would invent geometry.
   would count the same physical loop twice, and when it is the second half's
   only tie the promotion rule above would turn it into a merge and move the
   second half by the loop's misclosure.
+- A closure that CROSSES the cut (from a station before it to one past it, with
+  nothing merged at the split station) is promoted by that rule when it is the
+  halves' only tie, and one half moves by the misclosure. The split is not
+  refused and the promotion is not skipped: keeping a sole-tie closure would
+  only last until the next load or edit converts it, and refusing would leave
+  the user deleting the closure, splitting and merging by hand, with the same
+  move. Instead the Split dialog shows which half moves and how far before the
+  user confirms (`AppState::split_section_preview`, the split run on a copy).
 - **Combine Sections** re-keys a closure on either join station onto the one
   joined station, drops any closure between the two join stations (whatever
   its length, it would tie the joined station to itself), and

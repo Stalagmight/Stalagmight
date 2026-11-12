@@ -1591,7 +1591,11 @@ explorers and date). The two copies are NOT
 merged. Merges on the split station, its name and its manual offset go to both
 copies; its loop closures stay on the first half; the dialog picks the half for
 its comment (A, B or both) and its zero datum (A or B). Names default to
-`<name>-A` / `<name>-B`, each half has a colour picker. One undo step.
+`<name>-A` / `<name>-B`, each half has a colour picker. A loop closure from
+before the cut to past it, with nothing else tying the halves, is left as their
+only tie, which the split turns into a merge (a closure must close a loop),
+moving one half by the loop's misclosure; the dialog says which half moves and
+how far before the user confirms (`split_section_preview`). One undo step.
 
 **Combine Sections** (an end station's context menu, or the section menu when
 exactly two sections are selected): two sections that meet end to end become

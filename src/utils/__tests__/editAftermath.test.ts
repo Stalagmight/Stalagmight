@@ -168,11 +168,12 @@ describe('the armed tool state across a split or a combine', () => {
   });
 
   it('is cleared when shots moved between sections, the undo or redo of either included', async () => {
-    for (const [before, after] of [
+    const cases: [never[], never[]][] = [
       [BEFORE_SPLIT, AFTER_SPLIT], // split, or the redo of one
       [AFTER_SPLIT, BEFORE_SPLIT], // the undo of a split, or a combine
       [[section(MAIN, 6)], [section(MAIN, 4), section(SECOND, 2)]], // the undo of a combine
-    ]) {
+    ];
+    for (const [before, after] of cases) {
       armEverything();
       const edit = await beforeSurveyEdit(before);
       applyEditAftermath(undefined, after, edit);

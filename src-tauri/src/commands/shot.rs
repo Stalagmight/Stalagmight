@@ -3,7 +3,7 @@ use tauri::State;
 use crate::core::{AppState, Command, CommandResult};
 use crate::models::{
     CreditEdit, CreditTargets, DeleteShotImpact, DeleteShotRangeImpact, SectionId, ShotData,
-    ShotId, ShotKind, ShotUpdates, SplitAt, SplitSectionOptions,
+    ShotId, ShotKind, ShotUpdates, SplitAt, SplitPreview, SplitSectionOptions,
 };
 
 /// Create a new shot
@@ -180,6 +180,29 @@ pub(crate) fn split_section_impl(
     options: SplitSectionOptions,
 ) -> CommandResult {
     state.execute_split_section(section_id, at, options)
+}
+
+/// What Split Section Here would do beyond the cut, without doing it: how many
+/// loop closures it would turn into merges, and how far that moves a half. The
+/// dialog shows it before the user confirms; a refused split returns its
+/// reason.
+#[tauri::command]
+pub fn split_section_preview(
+    state: State<AppState>,
+    section_id: SectionId,
+    at: SplitAt,
+    options: SplitSectionOptions,
+) -> Result<SplitPreview, String> {
+    split_section_preview_impl(state.inner(), section_id, at, &options)
+}
+
+pub(crate) fn split_section_preview_impl(
+    state: &AppState,
+    section_id: SectionId,
+    at: SplitAt,
+    options: &SplitSectionOptions,
+) -> Result<SplitPreview, String> {
+    state.split_section_preview(section_id, at, options)
 }
 
 /// Insert a station mid-shot by splitting a shot at a given distance

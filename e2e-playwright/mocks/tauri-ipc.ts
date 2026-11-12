@@ -5325,6 +5325,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] delete_shot_and_split called with:', args);
             return { success: true, section_ids: [] };
 
+          case 'split_section_preview': {
+            // Nothing in the mock's survey ties the halves by a loop closure alone, so a split
+            // moves nothing. A spec can set `__MOCK_SPLIT_PREVIEW__` to show the warning.
+            const win = window as unknown as Record<string, unknown>;
+            return (
+              win.__MOCK_SPLIT_PREVIEW__ ?? { closures_to_merges: 0, moved_side: null, moved_m: 0 }
+            );
+          }
+
           case 'split_section': {
             console.log('[Mock IPC] split_section called with:', args);
             const win = window as unknown as Record<string, unknown>;
