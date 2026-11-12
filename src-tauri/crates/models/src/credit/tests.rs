@@ -43,7 +43,7 @@ fn legacy_splitter_table() {
         ("UNKNOWN; A", &[], &["A"]),
         ("", &[], &[]),
         ("   ", &[], &[]),
-        // Duplicates go, by identity (casefold + whitespace collapse).
+        // Duplicates go, by identity (lowercase + whitespace collapse).
         ("A, a, B", &[], &["A", "B"]),
         ("John  Doe; john doe", &[], &["John  Doe"]),
     ];
@@ -62,7 +62,7 @@ fn split_names_splits_on_both_separators_without_the_last_first_rule() {
 }
 
 #[test]
-fn identity_is_casefolded_name_and_lowercased_email() {
+fn identity_is_lowercased_name_and_email() {
     let a = person("John  Doe", None);
     assert!(a.same_as(&person(" john doe ", None)));
     assert!(!a.same_as(&person("John Doe", Some("j@x.org"))));

@@ -21,7 +21,7 @@ pub struct SurveyCredit { pub surveyors: Vec<Person>, pub explorers: Vec<Person>
 
 - `Shot.credit` and `ShotData.credit` hold a `SurveyCredit` (`#[serde(default)]`, TS-optional on
   `ShotData`). Every copy of a shot (split, reverse, undo, project append, insert) carries it.
-- **Person identity.** Names are compared after casefolding and collapsing whitespace. Emails are
+- **Person identity.** Names are compared after lowercasing and collapsing whitespace. Emails are
   compared lowercased. Two people are the same when their names and emails are both equal, and an
   email of `None` only matches `None`. Lists keep their order and drop duplicates.
 - **`Section` keeps no surveyor or date.** `Section::credit_summary()` computes the aggregate: each

@@ -17,7 +17,7 @@ use crate::{SectionId, ShotId};
 
 /// One person credited on a shot.
 ///
-/// Identity is [`Person::same_as`]: the names after casefolding and collapsing
+/// Identity is [`Person::same_as`]: the names after lowercasing and collapsing
 /// whitespace, AND the emails lowercased, where `None` only matches `None`.
 /// The derived `PartialEq` is structural (exact spelling), which is what a
 /// snapshot comparison wants; list operations use the identity.
@@ -57,7 +57,7 @@ impl Person {
         Self::new(name, None)
     }
 
-    /// The name as compared: casefolded, runs of whitespace collapsed to one
+    /// The name as compared: lowercased, runs of whitespace collapsed to one
     /// space, ends trimmed.
     pub fn name_key(&self) -> String {
         self.name
@@ -273,7 +273,7 @@ impl RoleBuilder {
     }
 }
 
-/// Placeholder texts that name nobody, compared casefolded.
+/// Placeholder texts that name nobody, compared ignoring ASCII case.
 const PLACEHOLDERS: [&str; 3] = ["unknown", "none", "?"];
 
 /// Split a legacy free-text surveyor into `(explorers, surveyors)`.

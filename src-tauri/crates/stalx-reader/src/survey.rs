@@ -160,7 +160,7 @@ pub struct Shot {
     pub date: Option<String>,
 }
 
-/// One person credited on a shot. Names are compared casefolded with
+/// One person credited on a shot. Names are compared lowercased with
 /// whitespace collapsed, emails lowercased; a person without an email is a
 /// different person from one with.
 #[derive(Debug, Clone, PartialEq, Eq)]

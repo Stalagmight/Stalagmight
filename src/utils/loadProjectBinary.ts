@@ -634,8 +634,6 @@ function buildSurveyData(
   };
 }
 
-/** Convert a flat byte buffer to a Float32Array view. Aligns the buffer
- *  if needed (msgpack delivers Uint8Array with arbitrary byteOffset). */
 /** A section credit with its people resolved; an index past the table is dropped. */
 function decodeCredit(credit: CreditBinary, people: readonly Person[]): SurveyCredit {
   const resolve = (ids: readonly number[]): Person[] =>
@@ -643,6 +641,8 @@ function decodeCredit(credit: CreditBinary, people: readonly Person[]): SurveyCr
   return { surveyors: resolve(credit.surveyors), explorers: resolve(credit.explorers), date: credit.date ?? null };
 }
 
+/** Convert a flat byte buffer to a Float32Array view. Aligns the buffer
+ *  if needed (msgpack delivers Uint8Array with arbitrary byteOffset). */
 function bytesToFloat32(bytes: Uint8Array): Float32Array {
   if ((bytes.byteOffset & 3) === 0) {
     return new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
