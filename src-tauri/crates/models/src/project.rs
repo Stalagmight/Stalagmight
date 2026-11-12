@@ -36,8 +36,11 @@ use crate::config::ClosureAdjustmentConfig;
 
 mod classify;
 mod connectivity;
+mod gauge;
 mod mutations;
 mod shots;
+mod split_section;
+mod station_rekey;
 
 mod integrity;
 mod merge_topology;
@@ -50,6 +53,13 @@ mod uuid_unique;
 
 #[cfg(test)]
 mod anchor_fuzz;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::float_cmp,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod split_section_tests;
 
 pub use classify::ClassifyScope;
 pub use gas::{

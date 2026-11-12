@@ -5,18 +5,22 @@ use crate::models::{
     MAX_SECTIONS_IN_ID_SPACE, MAX_SECTION_ID,
 };
 
-/// Both split paths turn one section into two, so both MINT a section id
-/// (#555) through the same `Project::add_section` door `create_section` guards,
-/// while going nowhere near `create_section` itself. Refused before either path
-/// mutates anything: a split that ran out of ids half-way would leave section A
-/// truncated with nowhere to put its tail.
-fn section_budget_refusal(project: &Project, section_id: SectionId) -> Option<CommandResult> {
+/// Every split path (both delete-and-split paths and Split Section Here) turns
+/// one section into two, so each MINTS a section id (#555) through the same
+/// `Project::add_section` door `create_section` guards, while going nowhere
+/// near `create_section` itself. Refused before any path mutates anything: a
+/// split that ran out of ids half-way would leave section A truncated with
+/// nowhere to put its tail.
+pub(super) fn section_budget_refusal(
+    project: &Project,
+    section_id: SectionId,
+) -> Option<CommandResult> {
     if project.next_section_id <= MAX_SECTION_ID {
         return None;
     }
     Some(CommandResult::failure(format!(
-        "Cannot split section {section_id}: the delete would split it into two \
-         sections, but the project has reached the maximum number of sections \
+        "Cannot split section {section_id}: the split needs a second section, \
+         but the project has reached the maximum number of sections \
          (limit = {MAX_SECTIONS_IN_ID_SPACE}); shot ids encode as \
          section_id * {FEATURE_ID_STRIDE} + position in 32 bits, so section ids \
          past {MAX_SECTION_ID} cannot hold shots"

@@ -499,6 +499,10 @@ impl Project {
 
         let t = distance / shot.length;
         let mid_depth = shot.depth_in + t * (shot.depth_out - shot.depth_in);
+        // Every field of the parent that is not geometry or identity travels to
+        // the head piece, including any per-shot field added later: the struct
+        // update copies them all, and only the fields a split must change are
+        // named here.
         let head_data = ShotData {
             // The head child is a NEW shot; only the tail keeps the parent's
             // identity (see this method's doc comment - it is what makes every
@@ -507,23 +511,15 @@ impl Project {
             // shots with one id, and the FIRST-wins repair would then re-mint
             // the tail - moving every anchor. See [`ShotData::uuid`].
             uuid: None,
-            azimuth_in: shot.azimuth_in,
-            azimuth_out: shot.azimuth_out,
             length: distance,
-            depth_in: shot.depth_in,
             depth_out: mid_depth,
-            pitch_in: shot.pitch_in,
-            pitch_out: shot.pitch_out,
-            left: shot.left,
-            right: shot.right,
-            up: shot.up,
-            down: shot.down,
+            // A comment and a marker annotate one physical spot, so they stay on
+            // the tail (the parent's identity) and are not duplicated.
             comment: None,
-            kind: shot.kind,
             marker_index: None,
-            temperature: shot.temperature,
-            // Both pieces were surveyed together, by the same people.
-            credit: shot.credit.as_deref().cloned(),
+            // Everything else travels, credit included: both pieces were
+            // surveyed together, by the same people.
+            ..shot.to_shot_data()
         };
         let tail_updates = ShotUpdates {
             length: Some(tail_length),

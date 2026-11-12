@@ -201,7 +201,7 @@ pub fn reverse_shots(shots: &mut [ShotData], swap_lr: bool) {
 /// visible, which beats one of them vanishing.  No traced path reaches this today
 /// (load, snapshot restore and the offset redrive all canonicalize `Index`
 /// anchors first), so the ordinary reverse pays one pass that finds nothing.
-fn frozen_remaps(
+pub(super) fn frozen_remaps(
     stored: &HashSet<StationKey>,
     rebuilt: &HashMap<StationKey, StationKey>,
 ) -> HashSet<StationKey> {

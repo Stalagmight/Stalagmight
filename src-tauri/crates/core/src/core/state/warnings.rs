@@ -9,6 +9,48 @@ use crate::persistence::Database;
 
 use super::AppState;
 
+/// Which section each live shot uuid is in now, for an ignored-warning row
+/// (keyed by `(section_id, shot_uuid)`) whose stored section no longer holds
+/// its shot. Split Section Here, delete-and-split and Combine Sections all move
+/// shots to another section with their uuid, and the ignore has to follow the
+/// shot instead of silently lapsing.
+///
+/// Only a uuid exactly one live shot holds has a home: shot uuids are unique
+/// across the live project, and a repeat (a legacy file) stays where its row
+/// says. Shared by the read side (`compute_project_*`) and the save carry-over
+/// (`project_io`), so an ignore that follows its shot in the session is also
+/// re-keyed by the next save.
+pub(super) struct ShotHomes<'p> {
+    homes: std::collections::HashMap<&'p str, Option<SectionId>>,
+}
+
+impl<'p> ShotHomes<'p> {
+    pub(super) fn of(project: &'p Project) -> Self {
+        let mut homes: std::collections::HashMap<&'p str, Option<SectionId>> =
+            std::collections::HashMap::new();
+        for section in &project.sections {
+            for shot in &section.shots {
+                if let Some(uuid) = shot.uuid.as_deref() {
+                    homes
+                        .entry(uuid)
+                        .and_modify(|home| *home = None)
+                        .or_insert(Some(section.id));
+                }
+            }
+        }
+        Self { homes }
+    }
+
+    /// The section `uuid` moved to, when `stored` (the row's section) no longer
+    /// holds it and exactly one other section does.
+    pub(super) fn moved_to(&self, stored: SectionId, uuid: &str) -> Option<SectionId> {
+        match self.homes.get(uuid) {
+            Some(Some(home)) if *home != stored => Some(*home),
+            _ => None,
+        }
+    }
+}
+
 impl AppState {
     /// Compute project warnings from the given project.
     /// Used by both get_project_warnings command and load_project_full for validation phase.
@@ -76,6 +118,9 @@ impl AppState {
         };
         let mut resolved_by_renamed: std::collections::HashMap<(u32, String), HashSet<&str>> =
             std::collections::HashMap::new();
+        // A shot that a split or a combine moved into another section keeps its
+        // uuid, so its ignore follows it there (see `ShotHomes`).
+        let homes = ShotHomes::of(project);
         for r in &resolved {
             match &r.shot_uuid {
                 Some(uuid) => {
@@ -83,14 +128,23 @@ impl AppState {
                         .entry((r.section_id, uuid.as_str()))
                         .or_default()
                         .insert(r.warning_code.as_str());
-                    if derive_aliases && !live_ids.contains(&(r.section_id, uuid.as_str())) {
-                        resolved_by_renamed
-                            .entry((
-                                r.section_id,
-                                crate::models::reminted_shot_uuid(r.section_id, uuid),
-                            ))
-                            .or_default()
-                            .insert(r.warning_code.as_str());
+                    let renamed =
+                        derive_aliases && !live_ids.contains(&(r.section_id, uuid.as_str())) && {
+                            let alias = crate::models::reminted_shot_uuid(r.section_id, uuid);
+                            let held = live_ids.contains(&(r.section_id, alias.as_str()));
+                            resolved_by_renamed
+                                .entry((r.section_id, alias))
+                                .or_default()
+                                .insert(r.warning_code.as_str());
+                            held
+                        };
+                    if !renamed {
+                        if let Some(home) = homes.moved_to(r.section_id, uuid) {
+                            resolved_by_uuid
+                                .entry((home, uuid.as_str()))
+                                .or_default()
+                                .insert(r.warning_code.as_str());
+                        }
                     }
                 }
                 None => {

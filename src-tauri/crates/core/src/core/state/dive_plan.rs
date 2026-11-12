@@ -17,7 +17,7 @@ use crate::config::GasConfig;
 use crate::models::project::gas::{MAX_SEGMENT_SPEED_M_PER_MIN, MIN_SEGMENT_SPEED_M_PER_MIN};
 use crate::models::{
     Cylinder, DivePlan, DivePlanMeta, DivePlanSnapshot, Diver, MarkedPoint, PlanAnchorSet,
-    PlanSegment, Project, StationRef, DIVE_PLAN_SCHEMA_VERSION,
+    PlanSegment, Project, Section, StationRef, DIVE_PLAN_SCHEMA_VERSION,
 };
 use crate::persistence::plnx::{PlnxMeta, PlnxStore};
 
@@ -261,8 +261,27 @@ fn from_anchor(project: &Project, anchor: &StoredAnchor, stale: &mut u32) -> Opt
     resolved
 }
 
+/// The section `anchor`'s shots live in now: its recorded section while that
+/// still holds one of them (or the anchor names none, a shot-less section),
+/// else the first section that does. Shot uuids are project-unique, and a Split
+/// Section Here moves the shots past the cut into a new section.
+fn anchor_section<'p>(project: &'p Project, anchor: &PlanAnchor) -> Option<&'p Section> {
+    let holds = |section: &Section| {
+        [&anchor.a, &anchor.b]
+            .into_iter()
+            .any(|uuid| PlanAnchor::position_of(project, section, uuid).is_some())
+    };
+    let recorded = project.get_section(anchor.section_id);
+    if let Some(section) = recorded {
+        if (anchor.a.is_none() && anchor.b.is_none()) || holds(section) {
+            return Some(section);
+        }
+    }
+    project.sections.iter().find(|s| holds(s)).or(recorded)
+}
+
 fn resolve_anchor(project: &Project, anchor: &PlanAnchor) -> Option<StationRef> {
-    let section = project.get_section(anchor.section_id)?;
+    let section = anchor_section(project, anchor)?;
     let n = section.shots.len();
     let pa = PlanAnchor::position_of(project, section, &anchor.a);
     let pb = PlanAnchor::position_of(project, section, &anchor.b);
@@ -314,7 +333,7 @@ fn resolve_anchor(project: &Project, anchor: &PlanAnchor) -> Option<StationRef> 
             }
         }
     }
-    Some(StationRef::new(anchor.section_id, index as u32))
+    Some(StationRef::new(section.id, index as u32))
 }
 
 /// Place a stored station, whichever form it was written in.
@@ -1263,6 +1282,48 @@ mod tests {
             Some(StationRef::new(sec, 3)),
             "the junction moved one index along because a shot was inserted before it"
         );
+        assert_eq!(stale, 0);
+    }
+
+    /// Split Section Here moves the shots past the cut into a new section, so an
+    /// anchor recorded against the old section id must follow its shots there.
+    /// The split station itself stays the first half's end.
+    #[test]
+    fn anchors_past_a_section_split_resolve_in_the_second_half() {
+        let (mut project, sec) = project_n_shots(5);
+        let anchors: Vec<_> = (0..=5)
+            .map(|i| to_anchor(&project, Some(StationRef::new(sec, i))).unwrap())
+            .collect();
+
+        let second = project
+            .split_section_at_station(
+                sec,
+                2,
+                &crate::models::SplitSectionOptions {
+                    name_a: "A".to_string(),
+                    name_b: "B".to_string(),
+                    color_a: "#111111".to_string(),
+                    color_b: "#222222".to_string(),
+                    comment_side: crate::models::SplitSide::A,
+                    datum_side: crate::models::SplitSide::A,
+                },
+            )
+            .unwrap();
+
+        let mut stale = 0;
+        for (i, anchor) in anchors.iter().enumerate() {
+            let i = i as u32;
+            let expected = if i <= 2 {
+                StationRef::new(sec, i)
+            } else {
+                StationRef::new(second, i - 2)
+            };
+            assert_eq!(
+                from_anchor(&project, anchor, &mut stale),
+                Some(expected),
+                "anchor for station {i}"
+            );
+        }
         assert_eq!(stale, 0);
     }
 

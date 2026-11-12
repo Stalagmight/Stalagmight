@@ -5307,6 +5307,62 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] delete_shot_and_split called with:', args);
             return { success: true, section_ids: [] };
 
+          case 'split_section': {
+            console.log('[Mock IPC] split_section called with:', args);
+            const win = window as unknown as Record<string, unknown>;
+            const existing = win.__MOCK_SPLIT_SECTION_CALLS__ as unknown[] | undefined;
+            const calls = Array.isArray(existing) ? existing : [];
+            calls.push(args ?? null);
+            win.__MOCK_SPLIT_SECTION_CALLS__ = calls;
+
+            type MockSection = { id: number; name: string; color: string; shots: Array<{ id: number } & Record<string, unknown>> } & Record<string, unknown>;
+            const sections = (currentProject?.sections ?? []) as MockSection[];
+            const sectionId = (args?.sectionId ?? args?.section_id) as number;
+            const at = args?.at as { type: 'station'; station_index: number } | { type: 'shot'; shot_id: number; distance: number } | undefined;
+            const options = args?.options as { name_b: string; color_b: string; name_a: string; color_a: string } | undefined;
+            const section = sections.find((s) => s.id === sectionId);
+            if (!section || !at || !options) {
+              return { success: false, error: `Section ${sectionId} not found`, section_ids: [], warnings: [] };
+            }
+            let k: number;
+            if (at.type === 'station') {
+              k = at.station_index;
+            } else {
+              const idx = section.shots.findIndex((s) => s.id === at.shot_id);
+              if (idx < 0) {
+                return { success: false, error: `Shot ${at.shot_id} not found`, section_ids: [], warnings: [] };
+              }
+              const target = section.shots[idx] as Record<string, unknown> & { id: number };
+              const length = (target.length as number) ?? 0;
+              if (at.distance < 0.01) {
+                k = idx;
+              } else if (length - at.distance < 0.01) {
+                k = idx + 1;
+              } else {
+                const nextId = section.shots.reduce((max, s) => Math.max(max, s.id), 0) + 1;
+                section.shots.splice(idx, 0, { ...target, id: nextId, length: at.distance, comment: null, marker_index: null });
+                target.length = length - at.distance;
+                k = idx + 1;
+              }
+            }
+            if (k <= 0 || k >= section.shots.length) {
+              return { success: false, error: 'Cannot split a section at its first or last station', section_ids: [], warnings: [] };
+            }
+            sectionCounter = Math.max(sectionCounter, ...sections.map((s) => s.id)) + 1;
+            const newSection: MockSection = {
+              ...section,
+              id: sectionCounter,
+              name: options.name_b,
+              color: options.color_b,
+              shots: section.shots.slice(k),
+            };
+            section.shots = section.shots.slice(0, k);
+            section.name = options.name_a;
+            section.color = options.color_a;
+            sections.push(newSection);
+            return { success: true, section_id: newSection.id, section_ids: [section.id, newSection.id], warnings: [], error: null };
+          }
+
           case 'preview_delete_shot_range': {
             console.log('[Mock IPC] preview_delete_shot_range called with:', args);
             const sectionId = (args?.sectionId as number | undefined) ?? 1;
