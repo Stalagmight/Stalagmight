@@ -25,7 +25,7 @@ import { useSectionCreditDraft } from './useSectionCreditDraft';
 export default function EditSectionDialog() {
   const { t } = useTranslation();
   const { closeDialog, dialogData, openDialog, showToast } = useUIStore();
-  const { updateSection, createShot, updateShot, deleteShot, editShotCredit, project, isShotFrozen } = useProjectStore();
+  const { updateSection, createShot, updateShot, deleteShot, editShotCredit, executeBatch, project, isShotFrozen } = useProjectStore();
 
   const sectionId = dialogData.sectionId as number | undefined;
   const section = project?.sections.find((s) => s.id === sectionId);
@@ -354,31 +354,31 @@ export default function EditSectionDialog() {
     // Taken before anything awaits: it commits a name still being typed.
     const creditEdit = credit.takeEdit();
     try {
-      // Update section metadata. Surveyors, explorers and the date are per
-      // shot and never go through `updateSection` (its legacy surveyor/date
-      // would SET every shot); they are one credit edit below.
-      const sectionResult = await updateSection(sectionId, {
-        name: name.trim() || null,
-        color,
-        direction,
-        quality,
-      });
-
-      if (!sectionResult.success) {
-        setError(sectionResult.error ?? 'Failed to update section');
+      // Section metadata and the credit of every saved shot are ONE undo step:
+      // a metadata update is only sent when something in it changed (an
+      // unchanged one was an invisible step a second Ctrl+Z "did nothing"
+      // on), and both together go in one batch. The credit edit runs before
+      // the shot edits below, so a shot added here inherits its neighbour's
+      // new credit. Surveyors, explorers and the date never go through the
+      // section update (its legacy surveyor/date would SET every shot).
+      const metadataChanged = !section || isSectionMetadataChanged({ name, color, direction, quality }, section);
+      const updates = { name: name.trim() || null, color, direction, quality };
+      const creditCommand = creditEdit
+        ? ({ type: 'edit_shot_credit', targets: { type: 'section', section_id: sectionId }, edit: creditEdit } as const)
+        : null;
+      const result =
+        metadataChanged && creditCommand
+          ? await executeBatch([{ type: 'update_section_metadata', section_id: sectionId, updates }, creditCommand])
+          : metadataChanged
+            ? await updateSection(sectionId, updates)
+            : creditCommand
+              ? await editShotCredit(creditCommand.targets, creditCommand.edit)
+              : null;
+      if (result && !result.success) {
+        setError(result.error ?? 'Failed to update section');
         return;
       }
-
-      // The credit of every saved shot, as ONE undo step. Before the shot
-      // edits below, so a shot added here inherits its neighbour's new credit.
-      if (creditEdit) {
-        const creditResult = await editShotCredit({ type: 'section', section_id: sectionId }, creditEdit);
-        if (!creditResult.success) {
-          setError(creditResult.error ?? 'Failed to update the survey credit');
-          return;
-        }
-        credit.reset();
-      }
+      if (creditCommand) credit.reset();
 
       // Process shot changes
       const originalShots = section?.shots ?? [];
@@ -701,6 +701,24 @@ export interface EditSectionDirtyState {
   shots: readonly EditableShot[];
 }
 
+/** The section-level fields Save sends through `update_section_metadata`. */
+export interface SectionMetadataState {
+  name: string;
+  color: string;
+  direction: 'in' | 'out';
+  quality: number;
+}
+
+/** Whether any of them differs from the saved section (the rule `isEditSectionDirty` uses). */
+export function isSectionMetadataChanged(state: SectionMetadataState, section: Section): boolean {
+  return (
+    state.name !== (section.name ?? '') ||
+    state.color !== section.color ||
+    state.direction !== (section.direction ?? 'in') ||
+    state.quality !== (section.quality ?? 1)
+  );
+}
+
 /**
  * Whether the dialog holds unsaved changes.
  *
@@ -714,11 +732,8 @@ export interface EditSectionDirtyState {
  */
 export function isEditSectionDirty(state: EditSectionDirtyState, section: Section): boolean {
   return (
-    state.name !== (section.name ?? '') ||
+    isSectionMetadataChanged(state, section) ||
     state.creditChanged ||
-    state.color !== section.color ||
-    state.direction !== (section.direction ?? 'in') ||
-    state.quality !== (section.quality ?? 1) ||
     state.shots.some((s) => s.isDeleted === true || (s.isNew === true && !isBlankNewShot(s))) ||
     state.shots.some((s) => {
       const original = section.shots.find((o) => o.id === s.id);

@@ -1,6 +1,6 @@
 // Command and IPC payload types generated from Rust.
 
-import type { ShotData, StationRef, Coordinates, GpsCoordinates, ClosureStrategy, ShotUpdates, SectionId, ShotId } from './project';
+import type { ShotData, StationRef, Coordinates, GpsCoordinates, ClosureStrategy, ShotUpdates, SectionId, ShotId, SectionUpdates } from './project';
 import type { CreditEdit, CreditTargets } from './ipc.generated';
 
 export type {
@@ -92,4 +92,7 @@ export type BatchCommand =
   | { type: 'update_shot'; section_id: SectionId; shot_id: ShotId; updates: ShotUpdates }
   // Per-shot survey credit (surveyors / explorers / date), batchable so a grid
   // edit that also touches credit columns stays one undo unit.
-  | { type: 'edit_shot_credit'; targets: CreditTargets; edit: CreditEdit };
+  | { type: 'edit_shot_credit'; targets: CreditTargets; edit: CreditEdit }
+  // Edit Section's Save: a rename / recolour and the shots' credit edit go in
+  // one batch, so the Save is one undo step.
+  | { type: 'update_section_metadata'; section_id: SectionId; updates: SectionUpdates };

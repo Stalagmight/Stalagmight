@@ -123,7 +123,8 @@ describe('Edit Section survey credit', () => {
     await act(async () => {
       fireEvent.click(tid('edit-section-save'));
     });
-    expect(updateSection).toHaveBeenCalledWith(1, expect.not.objectContaining({ surveyor: expect.anything() }));
+    // Nothing else changed, so no section update: Save is this one credit edit.
+    expect(updateSection).not.toHaveBeenCalled();
     expect(editShotCredit).toHaveBeenCalledTimes(1);
     expect(editShotCredit).toHaveBeenCalledWith(
       { type: 'section', section_id: 1 },

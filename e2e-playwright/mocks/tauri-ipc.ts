@@ -3691,6 +3691,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 result = mockHandler('delete_section', {
                   sectionId: command.section_id,
                 }) as typeof result;
+              } else if (command?.type === 'update_section_metadata') {
+                // Edit Section's Save: a rename beside the credit edit, one step.
+                result = mockHandler('update_section', {
+                  sectionId: command.section_id,
+                  updates: command.updates,
+                }) as typeof result;
               } else if (command?.type === 'edit_shot_credit') {
                 // Data-table paste / fill of the credit columns (one per shot).
                 result = mockHandler('edit_shot_credit', {
