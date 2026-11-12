@@ -22,6 +22,7 @@ use crate::{
     CombineCandidate, Section, SectionEnd, SectionId, StationKey, StationRef, FEATURE_ID_STRIDE,
 };
 
+use super::station_rekey::value_naming;
 use super::Project;
 
 /// How far apart (metres) the two join stations may be and still count as the
@@ -106,18 +107,6 @@ impl Project {
         }
         let by_end = ends.iter().map(|(id, end, p)| ((*id, *end), *p)).collect();
         EndTable { ends, by_end }
-    }
-
-    /// The text a keyed station collection holds for `station`, by resolving
-    /// each stored key.
-    fn text_at<'p>(
-        map: &'p HashMap<StationKey, String>,
-        project: &Project,
-        station: StationRef,
-    ) -> Option<&'p String> {
-        map.iter()
-            .find(|(key, _)| project.resolve_key(key) == Some(station))
-            .map(|(_, text)| text)
     }
 
     /// Does `station` carry a resolvable zero datum?
@@ -360,8 +349,8 @@ impl Project {
         let station_a = StationRef::new(a.id, end_index(a, pairing.end_a));
         let station_b = StationRef::new(b.id, end_index(b, pairing.end_b));
         let differing = |map: &HashMap<StationKey, String>| match (
-            Self::text_at(map, self, station_a),
-            Self::text_at(map, self, station_b),
+            value_naming(self, map, station_a),
+            value_naming(self, map, station_b),
         ) {
             (Some(x), Some(y)) if x != y => (Some(x.clone()), Some(y.clone())),
             _ => (None, None),

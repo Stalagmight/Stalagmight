@@ -37,6 +37,7 @@ use crate::{
 
 use super::gauge::captured_gauge;
 use super::reverse::shot_run_displacement;
+use super::station_rekey::take_naming;
 use super::Project;
 
 /// The joined station's text, from the kept and the other join station's.
@@ -230,23 +231,29 @@ impl Project {
         let Some(key) = self.key_for_ref(join_k) else {
             return;
         };
-        let comment_k = take_at(self, Field::Comments, join_k);
-        let comment_o = take_at(self, Field::Comments, join_o);
+        let mut comments = std::mem::take(&mut self.station_comments);
+        let comment_k = take_naming(self, &mut comments, join_k);
+        let comment_o = take_naming(self, &mut comments, join_o);
         if let Some(text) = pick_text(comment_k, comment_o, options.comment_pick, "\n") {
-            self.station_comments.insert(key.clone(), text);
+            comments.insert(key.clone(), text);
         }
-        let name_k = take_at(self, Field::Names, join_k);
-        let name_o = take_at(self, Field::Names, join_o);
+        self.station_comments = comments;
+        let mut names = std::mem::take(&mut self.station_names);
+        let name_k = take_naming(self, &mut names, join_k);
+        let name_o = take_naming(self, &mut names, join_o);
         if let Some(text) = pick_text(name_k, name_o, options.name_pick, " / ") {
-            self.station_names.insert(key.clone(), text);
+            names.insert(key.clone(), text);
         }
+        self.station_names = names;
         // The kept station's own offset (or none) wins, so the kept section
         // stays exactly in place; the candidate check bounds the difference.
-        let offset_k = take_offset_at(self, join_k);
-        take_offset_at(self, join_o);
+        let mut offsets = std::mem::take(&mut self.station_offsets);
+        let offset_k = take_naming(self, &mut offsets, join_k);
+        take_naming(self, &mut offsets, join_o);
         if let Some(offset) = offset_k {
-            self.station_offsets.insert(key, offset);
+            offsets.insert(key, offset);
         }
+        self.station_offsets = offsets;
     }
 
     /// Drop loop closures inside `section_id` that the combine made identical
@@ -273,45 +280,4 @@ impl Project {
             self.loop_closures.retain(|c| !duplicates.contains(&c.id));
         }
     }
-}
-
-#[derive(Clone, Copy)]
-enum Field {
-    Comments,
-    Names,
-}
-
-/// Remove every entry of a keyed text collection that names `station`,
-/// returning the first one's text.
-fn take_at(project: &mut Project, field: Field, station: StationRef) -> Option<String> {
-    let map = match field {
-        Field::Comments => &project.station_comments,
-        Field::Names => &project.station_names,
-    };
-    let keys: Vec<StationKey> = map
-        .keys()
-        .filter(|key| project.resolve_key(key) == Some(station))
-        .cloned()
-        .collect();
-    let map = match field {
-        Field::Comments => &mut project.station_comments,
-        Field::Names => &mut project.station_names,
-    };
-    let texts: Vec<String> = keys.iter().filter_map(|key| map.remove(key)).collect();
-    texts.into_iter().next()
-}
-
-/// Remove every station offset that names `station`, returning the first.
-fn take_offset_at(project: &mut Project, station: StationRef) -> Option<(f64, f64, f64)> {
-    let keys: Vec<StationKey> = project
-        .station_offsets
-        .keys()
-        .filter(|key| project.resolve_key(key) == Some(station))
-        .cloned()
-        .collect();
-    let offsets: Vec<(f64, f64, f64)> = keys
-        .iter()
-        .filter_map(|key| project.station_offsets.remove(key))
-        .collect();
-    offsets.into_iter().next()
 }
