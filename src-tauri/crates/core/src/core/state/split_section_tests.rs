@@ -484,3 +484,24 @@ fn a_split_survives_a_save_and_a_reopen() {
     );
     assert!(project.check_structural_integrity().is_empty());
 }
+
+/// The split mints the second half's id (#555): with no id left it is refused
+/// through the shared `section_budget_refusal`, before anything changes.
+#[test]
+fn a_split_with_no_section_id_left_is_refused() {
+    let (state, main) = state();
+    let mut project = state.get_project_state().unwrap();
+    project.next_section_id = crate::models::MAX_SECTIONS_IN_ID_SPACE as u32;
+    state.set_project_for_tests(project);
+    let before = lengths(&state);
+
+    let result =
+        state.execute_split_section(main, SplitAt::Station { station_index: 1 }, options());
+
+    assert!(!result.success);
+    assert!(result
+        .error
+        .unwrap_or_default()
+        .contains("maximum number of sections"));
+    assert_eq!(lengths(&state), before);
+}

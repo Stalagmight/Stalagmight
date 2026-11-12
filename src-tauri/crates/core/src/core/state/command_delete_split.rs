@@ -19,8 +19,8 @@ pub(super) fn section_budget_refusal(
         return None;
     }
     Some(CommandResult::failure(format!(
-        "Cannot split section {section_id}: the split needs a second section, \
-         but the project has reached the maximum number of sections \
+        "Cannot split section {section_id}: to split it into two sections needs \
+         a new section id, but the project has reached the maximum number of sections \
          (limit = {MAX_SECTIONS_IN_ID_SPACE}); shot ids encode as \
          section_id * {FEATURE_ID_STRIDE} + position in 32 bits, so section ids \
          past {MAX_SECTION_ID} cannot hold shots"
