@@ -1565,9 +1565,13 @@ fn pair_split_section_then_undo_is_identity(
     if !split.success {
         return None;
     }
-    if !twins.right.undo().success {
-        return None;
-    }
+    let undo = twins.right.undo();
+    assert!(
+        undo.success,
+        "{pair}: the split of section {section_id} at station {station_index} succeeded but \
+         its undo failed: {:?}",
+        undo.error
+    );
     let mut found = twins.compare(pair, Mask::Strict);
     let (unwound, _) = twins.unwind_and_compare(pair, Mask::Strict);
     found.absorb(unwound.prefixed("AFTER UNWIND: "));

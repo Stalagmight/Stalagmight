@@ -5,14 +5,12 @@ import { isEditingBlockedNow } from '../../hooks/useEditingBlocked';
 import { getErrorMessage } from '../../utils/ipc';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { formatLength } from '../../utils/formatStats';
+import { MIN_SPLIT_CHILD_LENGTH_M } from '../../utils/shotSplit';
 import { defaultConfig } from '../../types/config';
 import type { SplitAt } from '../../types/ipc/SplitAt';
 import type { SplitSide } from '../../types/ipc/SplitSide';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
-
-/** A cut this close to a shot end snaps to that end's station, as the backend does. */
-const SNAP_TOLERANCE_M = 0.01;
 
 /**
  * "Split Section Here" (#335): cut one section into two at a station, or at a
@@ -40,8 +38,9 @@ export default function SplitSectionHereDialog() {
   const splitStationIndex = (() => {
     if (at?.type === 'station') return at.station_index;
     if (!shot || at?.type !== 'shot') return null;
-    if (at.distance < SNAP_TOLERANCE_M) return shotIndex;
-    if (shot.length - at.distance < SNAP_TOLERANCE_M) return shotIndex + 1;
+    // A cut this close to a shot end snaps to that end's station, as the backend does.
+    if (at.distance < MIN_SPLIT_CHILD_LENGTH_M) return shotIndex;
+    if (shot.length - at.distance < MIN_SPLIT_CHILD_LENGTH_M) return shotIndex + 1;
     return null;
   })();
   const splitStation =

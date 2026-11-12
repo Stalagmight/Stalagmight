@@ -3,8 +3,8 @@
 use super::AppState;
 use crate::core::{Command, CommandResult};
 use crate::models::{
-    SectionId, SplitAt, SplitSectionOptions, FEATURE_ID_STRIDE, MAX_SECTIONS_IN_ID_SPACE,
-    MAX_SECTION_ID, MIN_SPLIT_CHILD_LENGTH_M,
+    SectionId, SplitAt, SplitSectionOptions, SplitSide, FEATURE_ID_STRIDE,
+    MAX_SECTIONS_IN_ID_SPACE, MAX_SECTION_ID, MIN_SPLIT_CHILD_LENGTH_M,
 };
 
 impl AppState {
@@ -24,6 +24,11 @@ impl AppState {
         };
         if let Err(f) = self.guard_mutation("Split section") {
             return f;
+        }
+        if options.datum_side == SplitSide::Both {
+            return CommandResult::failure(
+                "A zero datum can stay on only one half of a split".to_string(),
+            );
         }
         tracing::info!(
             section_id,
@@ -74,8 +79,10 @@ impl AppState {
                         ));
                     };
                     let length = section.shots[pos].length;
-                    if !distance.is_finite() {
-                        return CommandResult::failure("Distance must be finite".to_string());
+                    if !distance.is_finite() || distance < 0.0 || distance > length {
+                        return CommandResult::failure(format!(
+                            "Distance {distance} is outside shot {shot_id} (0 to {length} m)"
+                        ));
                     }
                     if distance < MIN_SPLIT_CHILD_LENGTH_M {
                         pos as u32
@@ -91,8 +98,6 @@ impl AppState {
                                     .to_string(),
                             );
                         }
-                        let station_count = section.shots.len() as u32 + 1;
-                        let _ = station_count;
                         if let Err(e) =
                             project.split_shot_at_distance(section_id, shot_id, distance)
                         {

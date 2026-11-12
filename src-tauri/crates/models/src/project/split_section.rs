@@ -5,12 +5,27 @@
 //! id) ends on it and the second half starts on a co-located copy. The halves
 //! are NOT merged to each other; each can move on its own afterwards. What sat
 //! on the split station follows the #335 rules:
-//! - merges and loop closures there are copied to both copies, so whatever the
-//!   station was tied to stays tied to both halves;
+//! - merges there are copied to both copies, so whatever the station was
+//!   merged to stays merged to both halves;
+//! - loop closures there stay on the first half's end and are NOT copied: a
+//!   copy double-counts the same physical loop in the least-squares
+//!   adjustment, and when the copy is the second half's only tie,
+//!   `convert_orphan_closures_to_merges` promotes it to a rigid merge and
+//!   moves the second half by the loop's misclosure;
 //! - its name and manual position offset go to both copies (one physical
 //!   station);
 //! - its comment goes to the half the caller picks, or both;
 //! - its zero datum goes to the half the caller picks.
+//!
+//! Depth: the copies are independent stations, so the first half's end reads
+//! `depth_out` of the shot before the cut and the second half's start reads
+//! `depth_in` of the shot after it, where the unsplit station averaged the
+//! two. Every other station keeps its depth, and every station keeps its xy.
+//!
+//! Gauge: the second half inherits the section's `reverse_parity`. The
+//! least-squares gauge pair stays with the half holding both of its shots and
+//! is cleared on both halves when the cut separates them, so no half names a
+//! gauge shot it does not hold.
 
 use chrono::Utc;
 
@@ -52,7 +67,35 @@ impl Project {
         let direction = section.direction;
         let quality = section.quality;
         let azimuth_reference = section.azimuth_reference;
+        let reverse_parity = section.reverse_parity;
         let tail: Vec<ShotData> = section.shots[k..].iter().map(Shot::to_shot_data).collect();
+        let half_of = |uuid: &Option<String>| -> Option<bool> {
+            let uuid = uuid.as_deref()?;
+            let position = section
+                .shots
+                .iter()
+                .position(|s| s.uuid.as_deref() == Some(uuid))?;
+            Some(position >= k)
+        };
+        // Which half keeps the gauge pair: `Some(true)` the second, `Some(false)`
+        // the first, `None` neither (the cut separates it, or it names a shot
+        // the section does not hold).
+        let gauge_in_second = match (&section.gauge_shot_uuid, &section.gauge_neighbour_uuid) {
+            (None, None) => Some(false),
+            (Some(_), None) => half_of(&section.gauge_shot_uuid),
+            (Some(_), Some(_)) => match (
+                half_of(&section.gauge_shot_uuid),
+                half_of(&section.gauge_neighbour_uuid),
+            ) {
+                (Some(shot), Some(neighbour)) if shot == neighbour => Some(shot),
+                _ => None,
+            },
+            (None, Some(_)) => None,
+        };
+        let gauge = (
+            section.gauge_shot_uuid.clone(),
+            section.gauge_neighbour_uuid.clone(),
+        );
 
         // The second half starts where the first ends: walk the first k shots
         // from the section's start, exactly as the coordinate solver does.
@@ -80,6 +123,10 @@ impl Project {
         first.name = Some(options.name_a.clone());
         first.color = options.color_a.clone();
         first.shots.truncate(k);
+        if gauge_in_second != Some(false) {
+            first.gauge_shot_uuid = None;
+            first.gauge_neighbour_uuid = None;
+        }
 
         let second_id = self
             .add_section(SectionData {
@@ -94,6 +141,10 @@ impl Project {
             .id;
         if let Some(second) = self.get_section_mut(second_id) {
             second.azimuth_reference = azimuth_reference;
+            second.reverse_parity = reverse_parity;
+            if gauge_in_second == Some(true) {
+                (second.gauge_shot_uuid, second.gauge_neighbour_uuid) = gauge;
+            }
         }
         self.set_section_offset(second_id, (ox + dx, oy + dy));
         self.reindex_section_shot_uuids(section_id);
@@ -177,26 +228,6 @@ impl Project {
             self.station_merges.push(merge);
         }
 
-        let closure_copies: Vec<_> = self
-            .loop_closures
-            .iter()
-            .filter_map(|c| {
-                let (a, b) = (is_end(self, &c.station_a), is_end(self, &c.station_b));
-                let mut copied = c.clone();
-                match (a, b) {
-                    (true, false) => copied.station_a = copy_key.clone(),
-                    (false, true) => copied.station_b = copy_key.clone(),
-                    _ => return None,
-                }
-                Some(copied)
-            })
-            .collect();
-        for mut closure in closure_copies {
-            closure.id = self.next_closure_id;
-            self.next_closure_id += 1;
-            self.loop_closures.push(closure);
-        }
-
         if let Some(name) = self.station_names.get(&end_key).cloned() {
             self.station_names.insert(copy_key.clone(), name);
         }
@@ -260,8 +291,18 @@ mod tests {
         }
     }
 
-    /// "Main": four shots bending east then north, plus a side section whose
-    /// start is merged to Main's station 2.
+    /// `shot` reading `depth` at its start and one metre deeper at its end, so
+    /// a station's two readings differ.
+    fn sloped(azimuth: f64, length: f64, depth: f64) -> ShotData {
+        ShotData {
+            depth_in: depth,
+            depth_out: depth + 1.0,
+            ..shot(azimuth, length)
+        }
+    }
+
+    /// "Main": four sloping shots bending east then north, plus a side section
+    /// whose start is merged to Main's station 2.
     fn project() -> (Project, SectionId, SectionId) {
         let mut project = Project::new("Split".to_string(), None);
         let main = project
@@ -269,10 +310,10 @@ mod tests {
                 name: Some("Main".to_string()),
                 surveyor: Some("Bob".to_string()),
                 shots: vec![
-                    shot(90.0, 10.0),
-                    shot(90.0, 5.0),
-                    shot(0.0, 7.0),
-                    shot(45.0, 3.0),
+                    sloped(90.0, 10.0, 10.0),
+                    sloped(90.0, 5.0, 12.0),
+                    sloped(0.0, 7.0, 14.0),
+                    sloped(45.0, 3.0, 16.0),
                 ],
                 ..Default::default()
             })
@@ -297,23 +338,118 @@ mod tests {
         ((c.x * 1e6).round() / 1e6, (c.y * 1e6).round() / 1e6)
     }
 
+    fn z(project: &Project, section: SectionId, index: u32) -> f64 {
+        project
+            .compute_station_raw_coords(StationRef::new(section, index))
+            .unwrap()
+            .z
+    }
+
+    /// Main is offset first, so a second half placed without the section's
+    /// own offset lands in the wrong place. The split station's two readings
+    /// differ (15 m arriving, 16 m leaving): the unsplit station averaged them,
+    /// and each copy now reads its own side.
     #[test]
     fn every_station_keeps_its_position_across_the_split() {
         let (mut project, main, _) = project();
+        project.set_section_offset(main, (100.0, -40.0));
         let before: Vec<_> = (0..=4).map(|i| xy(&project, main, i)).collect();
+        let before_z: Vec<_> = (0..=4).map(|i| z(&project, main, i)).collect();
+        assert_eq!(before_z[3], 15.5, "setup: the unsplit station averages");
+
+        let second = project
+            .split_section_at_station(main, 3, &options(SplitSide::A, SplitSide::A))
+            .unwrap();
+
+        assert_eq!(project.get_section(main).unwrap().shots.len(), 3);
+        assert_eq!(project.get_section(second).unwrap().shots.len(), 1);
+        let after: Vec<_> = (0..=3)
+            .map(|i| xy(&project, main, i))
+            .chain(std::iter::once(xy(&project, second, 1)))
+            .collect();
+        assert_eq!(after, before);
+        assert_eq!(xy(&project, second, 0), before[3], "the copy is co-located");
+
+        for i in 0..3 {
+            assert_eq!(z(&project, main, i), before_z[i as usize], "station {i}");
+        }
+        assert_eq!(z(&project, second, 1), before_z[4]);
+        assert_eq!(
+            z(&project, main, 3),
+            15.0,
+            "the first half's end reads depth_out"
+        );
+        assert_eq!(
+            z(&project, second, 0),
+            16.0,
+            "the second half's start reads depth_in"
+        );
+    }
+
+    /// A reversed four-shot section whose gauge pair names `shots[shot]` and
+    /// `shots[neighbour]` (positions after the reverse).
+    fn reversed_with_gauge(shot: usize, neighbour: usize) -> (Project, SectionId) {
+        let mut project = Project::new("Gauge".to_string(), None);
+        let main = project
+            .add_section(SectionData {
+                shots: (0..4)
+                    .map(|i| self::shot(90.0, 5.0 + f64::from(i)))
+                    .collect(),
+                ..Default::default()
+            })
+            .id;
+        assert!(project.reverse_section(main, false));
+        let section = project.get_section_mut(main).unwrap();
+        section.gauge_shot_uuid = section.shots[shot].uuid.clone();
+        section.gauge_neighbour_uuid = section.shots[neighbour].uuid.clone();
+        (project, main)
+    }
+
+    fn gauge_pair(project: &Project, section: SectionId) -> (Option<String>, Option<String>) {
+        let s = project.get_section(section).unwrap();
+        (s.gauge_shot_uuid.clone(), s.gauge_neighbour_uuid.clone())
+    }
+
+    #[test]
+    fn a_gauge_pair_past_the_cut_moves_to_the_second_half_with_the_parity() {
+        let (mut project, main) = reversed_with_gauge(3, 2);
+        let pair = gauge_pair(&project, main);
+        assert!(pair.0.is_some() && pair.1.is_some());
 
         let second = project
             .split_section_at_station(main, 2, &options(SplitSide::A, SplitSide::A))
             .unwrap();
 
-        assert_eq!(project.get_section(main).unwrap().shots.len(), 2);
-        assert_eq!(project.get_section(second).unwrap().shots.len(), 2);
-        let after: Vec<_> = (0..=2)
-            .map(|i| xy(&project, main, i))
-            .chain((1..=2).map(|i| xy(&project, second, i)))
-            .collect();
-        assert_eq!(after, before);
-        assert_eq!(xy(&project, second, 0), before[2], "the copy is co-located");
+        assert!(project.get_section(main).unwrap().reverse_parity);
+        assert!(project.get_section(second).unwrap().reverse_parity);
+        assert_eq!(gauge_pair(&project, main), (None, None));
+        assert_eq!(gauge_pair(&project, second), pair);
+    }
+
+    #[test]
+    fn a_gauge_pair_the_cut_separates_is_cleared_on_both_halves() {
+        let (mut project, main) = reversed_with_gauge(2, 1);
+
+        let second = project
+            .split_section_at_station(main, 2, &options(SplitSide::A, SplitSide::A))
+            .unwrap();
+
+        assert!(project.get_section(second).unwrap().reverse_parity);
+        assert_eq!(gauge_pair(&project, main), (None, None));
+        assert_eq!(gauge_pair(&project, second), (None, None));
+    }
+
+    #[test]
+    fn a_gauge_pair_before_the_cut_stays_on_the_first_half() {
+        let (mut project, main) = reversed_with_gauge(0, 1);
+        let pair = gauge_pair(&project, main);
+
+        let second = project
+            .split_section_at_station(main, 2, &options(SplitSide::A, SplitSide::A))
+            .unwrap();
+
+        assert_eq!(gauge_pair(&project, main), pair);
+        assert_eq!(gauge_pair(&project, second), (None, None));
     }
 
     #[test]

@@ -52,8 +52,17 @@ These are the maintainer answers on #335:
 - **Shot target:** inserts a station at the click point (`split_shot_at_distance`,
   `crates/models/src/project/shots.rs:434`), then splits. A click near either end of the shot snaps
   to that station.
-- **Shared station:** duplicated into two independent co-located stations. Merges and closures at
-  that station are copied to both copies.
+- **Shared station:** duplicated into two independent co-located stations. Merges at that station
+  are copied to both copies, as are its name and manual offset. **Loop closures stay on the first
+  half only** (a deliberate departure from the #335 answer): a copied closure would count the same
+  physical loop twice in the least-squares adjustment, and when it is the second half's only tie
+  the orphan-closure rule (#8) promotes it to a merge, which moves the second half by the loop's
+  misclosure.
+- **Depth:** the halves are independent, so the first half's end takes the incoming shot's
+  `depth_out` and the second half's start the outgoing shot's `depth_in`, instead of their
+  average. Every other station keeps its position exactly.
+- **Gauge:** the least-squares gauge pair moves to the half holding both of its shots, and is
+  cleared where it would not resolve. The second half keeps the section's reverse parity.
 - **Comment and datum:** the user picks which half keeps the comment (A, B or both) and the zero
   datum (A or B).
 - **Metadata:**
@@ -61,7 +70,8 @@ These are the maintainer answers on #335:
   - Names default to `<name>-A` / `<name>-B`.
   - Colours start as the original's, with a picker for each half.
   - Surveyor and date are copied.
-- **Stage drops:** repaired best effort. Selection is cleared.
+- **Stage drops:** a plan anchor whose shots moved into the second half is found again by shot
+  uuid. Selection is cleared.
 - **Dialog summary:** "Splitting X at station Y" / "Splitting X 30 cm (10%) along shot Y", in
   display units and display IDs.
 - **Delete-and-split:** keeps its own dialog and gains colour pickers.
@@ -73,8 +83,8 @@ the overrides are cleared.
 ## Part 3: Combine Sections
 
 **Eligible** when an end of section A and an end of section B are the same point: either merged
-together, or co-located within 1 mm (the state a fresh split leaves). A join at a mid-section
-station is a branch and is not offered.
+together, or co-located within 1 mm in measured (not closure-adjusted) positions, which is the
+state a fresh split leaves. A join at a mid-section station is a branch and is not offered.
 
 **Blocked, with the reason shown in the menu:**
 
@@ -82,14 +92,14 @@ station is a branch and is not offered.
 |---|---|
 | Different azimuth reference | B's bearings would change meaning |
 | Different quality | Quality weights the least-squares adjustment (`project/lsq.rs:450`) |
-| A and B also connect at a second place | The single section would contain a loop |
+| A and B also connect at a second place, by a merge or an aligned closure | The single section would contain a rigid loop. An unaligned closure does not block: it stays as a loop to adjust inside the combined section |
 | Result over 99,999 shots | Per-section shot-id budget (`shots.rs:140`) |
 | Read-only (closure view, Plan, Export) | Same as every mutation |
 
 **Behaviour:**
 - **Kept section:** the lower id by default, with a swap control in the dialog. It keeps its
-  direction, and the other section is reversed first if needed. All four end pairings are
-  supported.
+  direction, and the other section is reversed first if needed, swapping its left and right
+  wall distances so the walls stay on the correct sides. All four end pairings are supported.
 - **Credit:** every shot of the other section whose effective surveyor or date differs from the
   kept section's gets an override. The dialog shows the result per surveyor and date, e.g.
   "Surveyor A 212 m (2026-03-02), Surveyor B 96 m (2026-04-11)".
@@ -101,6 +111,7 @@ station is a branch and is not offered.
   - Comments: pick A, B or both.
   - Station names: pick one if they differ.
   - The zero datum is kept.
+  - Manual station offsets: when both ends carry a different one, the dialog asks which to keep.
   - Merges to other stations are combined and de-duplicated; the A-B join merge is dropped.
   - A zero-length closure between the two ends is dropped.
 - **After:** the result is selected. One undo step.
@@ -160,9 +171,11 @@ primitives:
 ## Open questions
 
 1. A split leaves the two halves unmerged (per #335). Routes and gas planning are disconnected
-   across the split until the user merges them. Confirm this is intended. Combine works either
-   way.
-2. The Ariane importer cuts sections where the explorer changes (`docs/ariane-import.md`, trip
+   across the split until the user merges them, and the split station's depth is no longer
+   averaged across the cut. Confirm this is intended. Combine works either way.
+2. Loop closures on the split station stay on the first half instead of being copied to both
+   (see Part 2). Confirm.
+3. The Ariane importer cuts sections where the explorer changes (`docs/ariane-import.md`, trip
    cut). With per-shot credit it could keep the mainline in one section. Follow-up?
 
 ## Follow-ups (not in scope)
