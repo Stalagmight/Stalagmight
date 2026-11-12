@@ -247,7 +247,8 @@ fn credit_edit_sanitizes_and_bounds_what_it_stores() {
         ..Default::default()
     };
     let after = edit.apply(&SurveyCredit::default());
-    assert_eq!(after.surveyors.len(), MAX_PEOPLE_PER_ROLE);
+    // The first MAX entries are all that count, the blank one among them.
+    assert_eq!(after.surveyors.len(), MAX_PEOPLE_PER_ROLE - 1);
     assert_eq!(
         after.surveyors[0].name.chars().count(),
         MAX_PERSON_TEXT_CHARS
@@ -336,4 +337,40 @@ fn split_names_are_clamped_like_every_stored_person() {
         assert_eq!(people[0].name.chars().count(), MAX_PERSON_TEXT_CHARS);
         assert_eq!(people[0].sanitized().as_ref(), Some(&people[0]));
     }
+}
+
+/// An edit's lists are cut to what a role can hold before they are sanitized
+/// or deduplicated: the first `MAX_PEOPLE_PER_ROLE` entries are all that count.
+#[test]
+fn an_edit_takes_the_first_max_entries_before_deduplicating() {
+    let mut set = vec![person("A", None); MAX_PEOPLE_PER_ROLE];
+    set.push(person("Past The Cap", None));
+    let edit = CreditEdit {
+        set_surveyors: Some(set.clone()),
+        add_explorers: Some(set),
+        ..Default::default()
+    };
+    let after = edit.apply(&SurveyCredit::default());
+    assert_eq!(names(&after.surveyors), ["A"]);
+    assert_eq!(names(&after.explorers), ["A"]);
+
+    let huge: Vec<Person> = (0..1_000_000)
+        .map(|i| Person {
+            name: format!("P{i}"),
+            email: None,
+        })
+        .collect();
+    let edit = CreditEdit {
+        set_surveyors: Some(huge.clone()),
+        remove_surveyors: Some(huge),
+        ..Default::default()
+    };
+    let started = std::time::Instant::now();
+    let after = edit.apply(&SurveyCredit::default());
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(500),
+        "took {:?}",
+        started.elapsed()
+    );
+    assert!(after.surveyors.is_empty(), "every kept person was removed");
 }

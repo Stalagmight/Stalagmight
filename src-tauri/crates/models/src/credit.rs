@@ -494,20 +494,40 @@ fn edit_role(
     remove: Option<&[Person]>,
     add: Option<&[Person]>,
 ) -> Vec<Person> {
-    let mut list: Vec<Person> = match set {
-        Some(set) => dedupe_people(set.iter().filter_map(Person::sanitized).collect()),
+    // Every incoming list is cut to what a role can hold BEFORE anything is
+    // sanitized or deduplicated: an IPC payload is not otherwise bounded.
+    let base: Vec<Person> = match set {
+        Some(set) => set
+            .iter()
+            .take(MAX_PEOPLE_PER_ROLE)
+            .filter_map(Person::sanitized)
+            .collect(),
         None => current.to_vec(),
     };
-    for person in remove.unwrap_or_default() {
-        remove_person(&mut list, person);
-    }
-    for person in add.unwrap_or_default().iter().filter_map(Person::sanitized) {
+    let removed: HashSet<(String, Option<String>)> = remove
+        .unwrap_or_default()
+        .iter()
+        .take(MAX_PIECES_PER_ROLE)
+        .map(Person::identity)
+        .collect();
+    let mut seen: HashSet<(String, Option<String>)> = HashSet::new();
+    let mut list: Vec<Person> = Vec::new();
+    let added = add
+        .unwrap_or_default()
+        .iter()
+        .take(MAX_PEOPLE_PER_ROLE)
+        .filter_map(Person::sanitized);
+    let kept = base
+        .into_iter()
+        .filter(|person| !removed.contains(&person.identity()));
+    for person in kept.chain(added) {
         if list.len() >= MAX_PEOPLE_PER_ROLE {
             break;
         }
-        add_person(&mut list, person);
+        if person.is_valid() && seen.insert(person.identity()) {
+            list.push(person);
+        }
     }
-    list.truncate(MAX_PEOPLE_PER_ROLE);
     list
 }
 

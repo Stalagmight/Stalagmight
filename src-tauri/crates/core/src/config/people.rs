@@ -73,7 +73,14 @@ impl PeopleConfig {
     /// is replaced, so the new spelling wins. Then [`Self::normalize`] (which
     /// caps the list). Empty or invalid input changes nothing.
     pub fn remember(&mut self, people: &[Person]) {
-        let fresh = dedupe_people(people.iter().filter_map(Person::sanitized).collect());
+        // Cut to what the list can hold BEFORE sanitizing or deduplicating.
+        let fresh = dedupe_people(
+            people
+                .iter()
+                .take(MAX_RECENT_PEOPLE)
+                .filter_map(Person::sanitized)
+                .collect(),
+        );
         if fresh.is_empty() {
             return;
         }
@@ -100,6 +107,15 @@ mod tests {
 
     fn names(config: &PeopleConfig) -> Vec<&str> {
         config.recent.iter().map(|p| p.name.as_str()).collect()
+    }
+
+    #[test]
+    fn remember_takes_the_first_entries_before_deduplicating() {
+        let mut config = PeopleConfig::default();
+        let mut people = vec![person("A", None); MAX_RECENT_PEOPLE];
+        people.push(person("Past The Cap", None));
+        config.remember(&people);
+        assert_eq!(names(&config), ["A"]);
     }
 
     #[test]
