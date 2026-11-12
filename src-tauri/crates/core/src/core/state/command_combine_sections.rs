@@ -67,6 +67,11 @@ impl AppState {
             }
         }
 
+        // The other section's shots move into the kept one (reversed, when
+        // the ends match), and a prepend renumbers the kept one's stations:
+        // position-keyed ignores on either would lapse (see the pin's doc).
+        self.pin_position_keyed_ignores_before_move(&[kept, other]);
+
         let before_snapshot = match self.capture_project_snapshot() {
             Ok(s) => s,
             Err(result) => return result,

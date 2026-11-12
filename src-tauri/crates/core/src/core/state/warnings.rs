@@ -401,6 +401,74 @@ impl AppState {
         }
     }
 
+    /// Pin the position-keyed ignores of `section_ids`' shots to the shots'
+    /// uuids BEFORE a structural edit moves those shots to another section or
+    /// index (Split Section Here, Combine Sections, and the reverse inside a
+    /// combine). A NULL-uuid row is keyed by `(section_id, shot_id)`, and the
+    /// move changes both, so the ignore would lapse - or, once a later
+    /// renumber lands another shot on that id, suppress the wrong warning. A
+    /// uuid-keyed row then follows its shot through [`ShotHomes`], in the
+    /// session and through the save.
+    ///
+    /// The same rule as [`Self::pin_position_keyed_warnings_after_reverse`]
+    /// (which see for why): only onto a uuid the FILE already holds. A shot
+    /// whose uuid is not on disk yet keeps its position-keyed row, which the
+    /// move then strands - the same residual the reverse documents.
+    pub(super) fn pin_position_keyed_ignores_before_move(&self, section_ids: &[SectionId]) {
+        let live: std::collections::HashMap<(u32, u32), String> = {
+            let guard = match self.project.lock() {
+                Ok(g) => g,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            let Some(project) = guard.as_ref() else {
+                return;
+            };
+            section_ids
+                .iter()
+                .filter_map(|sid| project.get_section(*sid))
+                .flat_map(|section| {
+                    section
+                        .shots
+                        .iter()
+                        .filter_map(move |shot| Some(((section.id, shot.id), shot.uuid.clone()?)))
+                })
+                .collect()
+        };
+        if live.is_empty() {
+            return;
+        }
+        let db_guard = match self.database.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let Some(db) = db_guard.as_ref() else {
+            return;
+        };
+        let live: std::collections::HashMap<(u32, u32), String> = live
+            .into_iter()
+            .filter(|((section_id, _), uuid)| {
+                db.shot_uuid_is_persisted(*section_id, uuid)
+                    .unwrap_or(false)
+            })
+            .collect();
+        if live.is_empty() {
+            return;
+        }
+        match db.backfill_resolved_warning_uuids(&live) {
+            Ok(0) => {}
+            Ok(n) => tracing::info!(
+                pinned = n,
+                "Pinned position-keyed warning ignores to their shot's UUID before a section \
+                 split or combine"
+            ),
+            Err(e) => tracing::warn!(
+                reason = %e,
+                purpose = "pin ignores across a section split or combine",
+                "Could not pin position-keyed warning ignores; one may lapse with its moved shot"
+            ),
+        }
+    }
+
     /// Load resolved warnings from database.
     ///
     /// [#517] Verbatim, like the save carry-over: a shape this build's SELECT

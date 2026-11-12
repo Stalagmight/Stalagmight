@@ -371,3 +371,58 @@ fn a_kept_section_without_shot_id_room_is_refused_with_no_undo_entry() {
 
     assert!(state.execute_combine_sections(o, k, options()).success);
 }
+
+/// A POSITION-keyed ignore on a shot of the other section, which the combine
+/// reverses and moves into the kept one: pinned to the shot's persisted uuid
+/// before the move, it follows the shot, in the session and through a save.
+#[test]
+fn a_position_keyed_ignore_follows_its_shot_through_a_reversing_combine() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let path = temp.path().join("combine.stalx");
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Combine".to_string(),
+        location: None,
+    });
+    let k = create(&state, "K", vec![shot(90.0, 10.0)]);
+    let o = create(&state, "O", vec![shot(0.0, 0.1), shot(0.0, 5.0)]);
+    let merged = state.execute(Command::MergeStations {
+        station_a: StationRef::new(k, 1),
+        station_b: StationRef::new(o, 2),
+    });
+    assert!(merged.success, "{:?}", merged.error);
+    assert!(
+        state
+            .execute(Command::SaveProject {
+                path: Some(path.clone())
+            })
+            .success
+    );
+    let short_id = state
+        .get_project_state()
+        .unwrap()
+        .get_section(o)
+        .unwrap()
+        .shots[0]
+        .id;
+    state
+        .save_resolved_warning(&crate::persistence::ResolvedWarning {
+            section_id: o,
+            shot_id: short_id,
+            warning_code: "SHORT_SHOT".to_string(),
+            resolved_at: chrono::Utc::now(),
+            resolved_comment: None,
+            shot_uuid: None,
+        })
+        .unwrap();
+    assert_eq!(short_shot_verdicts(&state), vec![(o, true)]);
+
+    let result = state.execute_combine_sections(k, o, options());
+    assert!(result.success, "{:?}", result.error);
+    assert_eq!(short_shot_verdicts(&state), vec![(k, true)]);
+
+    assert!(state.execute(Command::SaveProject { path: None }).success);
+    assert!(state.execute(Command::CloseProject).success);
+    assert!(state.open_project(path).success, "reopen");
+    assert_eq!(short_shot_verdicts(&state), vec![(k, true)]);
+}

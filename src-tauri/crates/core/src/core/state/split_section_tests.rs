@@ -505,3 +505,60 @@ fn a_split_with_no_section_id_left_is_refused() {
         .contains("maximum number of sections"));
     assert_eq!(lengths(&state), before);
 }
+
+/// A POSITION-keyed ignore (no shot uuid: the resolve command stores one when
+/// the uuid is not on disk yet, and pre-v8 files carry them) is keyed by
+/// `(section_id, shot_id)`, both of which the split changes for the shots
+/// past the cut. It is pinned to the shot's persisted uuid first, so it
+/// follows the shot like a uuid-keyed one.
+#[test]
+fn a_position_keyed_ignore_follows_its_shot_into_the_second_half() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let path = temp.path().join("split.stalx");
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Split".to_string(),
+        location: None,
+    });
+    let main = create(
+        &state,
+        "Main",
+        vec![flat(90.0, 5.0), flat(90.0, 5.0), flat(90.0, 0.1)],
+    );
+    assert!(
+        state
+            .execute(Command::SaveProject {
+                path: Some(path.clone())
+            })
+            .success
+    );
+    let short_id = state
+        .get_project_state()
+        .unwrap()
+        .get_section(main)
+        .unwrap()
+        .shots[2]
+        .id;
+    state
+        .save_resolved_warning(&crate::persistence::ResolvedWarning {
+            section_id: main,
+            shot_id: short_id,
+            warning_code: "SHORT_SHOT".to_string(),
+            resolved_at: chrono::Utc::now(),
+            resolved_comment: None,
+            shot_uuid: None,
+        })
+        .unwrap();
+    assert_eq!(short_shot_verdicts(&state), vec![(main, true)]);
+
+    let result =
+        state.execute_split_section(main, SplitAt::Station { station_index: 1 }, options());
+    assert!(result.success, "{:?}", result.error);
+    let second = result.section_id.unwrap();
+    assert_eq!(short_shot_verdicts(&state), vec![(second, true)]);
+
+    assert!(state.execute(Command::SaveProject { path: None }).success);
+    assert!(state.execute(Command::CloseProject).success);
+    assert!(state.open_project(path).success, "reopen");
+    assert_eq!(short_shot_verdicts(&state), vec![(second, true)]);
+}

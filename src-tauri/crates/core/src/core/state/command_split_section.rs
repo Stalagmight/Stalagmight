@@ -35,6 +35,10 @@ impl AppState {
             "Executing split_section as single undo unit"
         );
 
+        // The shots past the cut move to a new section: position-keyed
+        // ignores on them would lapse (see the pin's doc).
+        self.pin_position_keyed_ignores_before_move(&[section_id]);
+
         let before_snapshot = match self.capture_project_snapshot() {
             Ok(s) => s,
             Err(result) => return result,
