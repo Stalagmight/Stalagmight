@@ -51,6 +51,7 @@ station menu, the Sections panel and the command always agree.
 | Both join stations carry a zero datum, or (co-located) both rigid groups are anchored | Two datums in one rigid group |
 | Join stations' manual offsets differ by more than 1 mm | The joined station keeps the kept one's offset |
 | A merged join more than 1 mm apart | The merge is torn, and the combine would move the other section |
+| The two sections share a shot identity (one shot uuid in both) | The combined section would hold one shot twice, and every anchor names the first (from #713) |
 | More than 99,999 shots, sections that do not meet or meet at both ends, a section with no shots | Shot-id budget; nothing or something ambiguous to combine |
 | Read-only (closure view, Plan, Export, SpeleoDB lock) | `guard_mutation`, like every edit |
 
@@ -110,6 +111,35 @@ station menu, the Sections panel and the command always agree.
 - **Rigid ties through a third section also block** (the safer reading of
   "connected at a second place"). This matches the forest invariant
   `merge_stations` keeps.
+
+## Compared with Nico's #713
+
+Borrowed:
+- The shared-shot-identity refusal.
+- Test shapes:
+  - every refusal leaves the project byte-identical, keeping either section;
+  - an aligned closure from the merged join into either section;
+  - keeping the higher id leaves the closure-adjusted geometry in place;
+  - a one-shot lower section's gauge keeps its side;
+  - the station query with unknown and out-of-range input;
+  - keeping the higher id.
+- The dialog line "X will be [reversed and] added before/after Y".
+
+Kept on purpose:
+- **Stricter eligibility.** Only a linear join counts: the two end stations,
+  merged to each other and nothing else, or co-located with no merges. #713
+  joins through the joined station's own merges (a third section at the join).
+- **The offset block instead of a kept/other choice.** A manual offset moves one
+  station, not the chain beyond it. Joining the two chains therefore places
+  every other station of the other section from the KEPT end's chain position.
+  When the two ends' offsets differ by `d`, those stations move by `d` whichever
+  offset the joined station keeps (#713's module doc says so). That is a
+  geometry change of arbitrary size. It also tears any merge from the other
+  section's middle into an anchored group, which no cascade then closes. So
+  combining stays blocked above 1 mm, which bounds the move by the same
+  tolerance as the co-location test.
+- **A torn merged join (more than 1 mm apart) is blocked.** #713 joins merged
+  ends however far apart they are drawn, which moves the other section by the gap.
 
 ## Dive-plan pins
 

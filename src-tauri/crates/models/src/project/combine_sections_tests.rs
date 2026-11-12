@@ -516,11 +516,57 @@ fn the_kept_join_station_never_takes_the_other_offset() {
 }
 
 fn blocked(project: &Project, k: SectionId, o: SectionId) -> String {
-    project
+    let reason = project
         .combine_candidate_for_sections(k, o)
         .unwrap()
         .blocked_reason
-        .unwrap_or_default()
+        .unwrap_or_default();
+    if !reason.is_empty() {
+        assert_refused_without_a_change(project, k, o, &reason);
+    }
+    reason
+}
+
+/// A blocked candidate is refused by the combine itself, with the same reason
+/// and nothing changed, keeping either section (pattern from #713).
+fn assert_refused_without_a_change(project: &Project, k: SectionId, o: SectionId, reason: &str) {
+    for (kept, other) in [(k, o), (o, k)] {
+        let mut copy = project.clone();
+        let before = serde_json::to_string(&copy).unwrap();
+        let error = copy.combine_sections(kept, other, &options()).unwrap_err();
+        assert_eq!(error, reason, "keeping {kept}");
+        assert_eq!(
+            serde_json::to_string(&copy).unwrap(),
+            before,
+            "keeping {kept}"
+        );
+    }
+}
+
+/// The same shot uuid in both sections would put one shot in the combined
+/// section twice (from #713).
+#[test]
+fn sections_sharing_a_shot_identity_are_refused() {
+    let (mut project, k, o) = pair(SectionEnd::End, SectionEnd::Start, true, 0.0);
+    let shared = project.get_section(k).unwrap().shots[1].uuid.clone();
+    project.get_section_mut(o).unwrap().shots[2].uuid = shared;
+    project.rebuild_shot_uuid_index();
+    assert!(blocked(&project, k, o).contains("share a shot identity"));
+}
+
+/// An aligned closure from the merged join into either section is a second
+/// rigid tie (from #713).
+#[test]
+fn an_aligned_closure_from_the_join_into_either_section_blocks() {
+    for (from, to) in [((true, 2), (false, 1)), ((false, 0), (true, 1))] {
+        let (mut project, k, o) = pair(SectionEnd::End, SectionEnd::Start, true, 0.0);
+        let at = |(is_k, index): (bool, u32)| StationRef::new(if is_k { k } else { o }, index);
+        push_closure(&mut project, at(from), at(to), true);
+        assert!(
+            blocked(&project, k, o).contains("connected elsewhere"),
+            "{from:?} -> {to:?}"
+        );
+    }
 }
 
 #[test]
@@ -742,6 +788,67 @@ fn the_gauge_station_survives_keeping_either_section() {
             assert!(project.get_section(kept).unwrap().gauge_shot_uuid.is_some());
         }
     }
+}
+
+fn adjusted_xy(project: &Project, at: StationRef) -> (f64, f64) {
+    let station = project
+        .compute_adjusted_station_coordinates(&crate::config::ClosureAdjustmentConfig::default())
+        .into_iter()
+        .find(|s| s.station_ref == at)
+        .unwrap();
+    (station.coordinates.x, station.coordinates.y)
+}
+
+/// Keeping the HIGHER id must keep the lower id's gauge station, which the
+/// component used, or the closure-adjusted geometry jumps by the adjustment
+/// residual (test shape from #713, which measured a 3.4 m jump without it).
+#[test]
+fn keeping_the_higher_id_leaves_the_adjusted_geometry_in_place() {
+    for other_end in [SectionEnd::Start, SectionEnd::End] {
+        let (mut project, low, high) = pair(SectionEnd::End, other_end, true, 0.0);
+        // A loop with a real misclosure, so the solve has a residual to place.
+        push_closure(
+            &mut project,
+            StationRef::new(low, 1),
+            StationRef::new(high, 2),
+            false,
+        );
+        project.loop_closures[0].misclosure_distance = 0.4;
+        project.capture_missing_gauge_anchors();
+        let probe = project.key_for_ref(StationRef::new(high, 1)).unwrap();
+        let before = adjusted_xy(&project, StationRef::new(high, 1));
+
+        project.combine_sections(high, low, &options()).unwrap();
+
+        let after = adjusted_xy(&project, project.resolve_key(&probe).unwrap());
+        assert!(
+            dist(before, after) < 1e-5,
+            "{other_end:?}: {before:?} -> {after:?}"
+        );
+    }
+}
+
+/// A one-shot lower section, reversed, names its gauge side by its parity;
+/// the combined section has the kept one's parity, so the station is named
+/// afresh (from #713).
+#[test]
+fn a_one_shot_lower_sections_gauge_keeps_its_side() {
+    let mut project = Project::new("Gauge".to_string(), None);
+    let low = add(&mut project, "Low", vec![shot(90.0, 4.0)]);
+    assert!(project.reverse_section(low, false));
+    project.capture_missing_gauge_anchors();
+    let high = add(&mut project, "High", vec![shot(0.0, 5.0), shot(45.0, 3.0)]);
+    let target = xy(&project, StationRef::new(low, 0));
+    place(&mut project, high, 2, target, 0.0);
+    project
+        .merge_stations(StationRef::new(low, 0), StationRef::new(high, 2))
+        .unwrap();
+    let before = xy(&project, project.adjustment_anchor_for_tests(low).unwrap());
+
+    project.combine_sections(high, low, &options()).unwrap();
+
+    let after = xy(&project, project.adjustment_anchor_for_tests(high).unwrap());
+    assert!(dist(before, after) < 1e-9, "{before:?} -> {after:?}");
 }
 
 /// The retired id points at the kept section with the parity relation of the

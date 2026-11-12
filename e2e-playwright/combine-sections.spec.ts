@@ -122,7 +122,8 @@ test.describe('Combine Sections', () => {
     await item.click();
     await expect(page.getByTestId('combine-sections-dialog')).toBeVisible();
     // End to end: the other section is reversed to line up.
-    await expect(page.getByTestId('combine-reverse-notice')).toContainText('West will be reversed');
+    await expect(page.getByTestId('combine-plan')).toHaveText('West will be reversed and added after East.');
+    await expect(page.getByTestId('combine-reverse-notice')).toBeVisible();
     await expect(page.getByTestId('combine-swap-lr')).toBeChecked();
     await page.getByTestId('combine-confirm').click();
     await waitForNoDialogs(page);

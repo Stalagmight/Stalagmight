@@ -200,11 +200,24 @@ impl Project {
         if a.shots.is_empty() || b.shots.is_empty() {
             return Some("A section with no shots cannot be combined".to_string());
         }
+        // One uuid in both would put the same shot in the section twice, and
+        // every `AfterShot` anchor names the first of them (from #713).
+        let uuids_a: HashSet<&str> = a.shots.iter().filter_map(|s| s.uuid.as_deref()).collect();
+        if b.shots
+            .iter()
+            .filter_map(|s| s.uuid.as_deref())
+            .any(|uuid| uuids_a.contains(uuid))
+        {
+            return Some(format!(
+                "{name_a} and {name_b} share a shot identity (one shot uuid in both), so the \
+                 combined section would hold the same shot twice"
+            ));
+        }
         let (ref_a, ref_b) = (self.azimuth_reference_for(a), self.azimuth_reference_for(b));
         if ref_a.north != ref_b.north || (ref_a.correction - ref_b.correction).abs() > 1e-9 {
             return Some(format!(
-                "{name_a} and {name_b} use different north references, so {name_b}'s \
-                 bearings would change meaning"
+                "{name_a} and {name_b} use different north references, so one section's \
+                 bearings would change meaning in the other"
             ));
         }
         if (a.quality - b.quality).abs() > 1e-12 {
@@ -375,6 +388,9 @@ impl Project {
         if s1 == s2 {
             return None;
         }
+        // Lower id first, so the answer (and every reason's wording) is the
+        // same whichever section the caller names first or keeps.
+        let (s1, s2) = (s1.min(s2), s1.max(s2));
         let (a, b) = (self.get_section(s1)?, self.get_section(s2)?);
         let touching = self.touching_pairings(s1, s2);
         let eligible: Vec<&(Pairing, Touch)> = touching

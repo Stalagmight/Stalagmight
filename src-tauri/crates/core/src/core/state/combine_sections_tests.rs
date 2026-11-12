@@ -299,3 +299,54 @@ fn an_end_to_end_combine_undoes_the_reverse_too() {
     assert!(state.undo().success);
     assert_eq!(snapshot(&state), before);
 }
+
+/// The station query answers `None` for an unknown section and for a station
+/// that is not a section end, including one past the end (from #713).
+#[test]
+fn the_station_query_refuses_unknown_and_out_of_range_stations() {
+    let (state, k, o) = state();
+    for station in [
+        StationRef::new(999, 0),
+        StationRef::new(k, 1),
+        StationRef::new(o, 4),
+        StationRef::new(o, u32::MAX),
+    ] {
+        assert_eq!(
+            state.combine_candidate(station).unwrap(),
+            None,
+            "{station:?}"
+        );
+    }
+    assert!(state
+        .combine_candidate(StationRef::new(k, 2))
+        .unwrap()
+        .is_some());
+    assert_eq!(state.combine_candidate_for_sections(k, 999).unwrap(), None);
+    assert_eq!(state.combine_candidate_for_sections(k, k).unwrap(), None);
+}
+
+/// Keeping the higher id keeps it: the lower id is the one retired (from
+/// #713), and every station of both stays where it was.
+#[test]
+fn keeping_the_higher_id_keeps_it() {
+    let (state, k, o) = state();
+    let xy = |state: &AppState, at: StationRef| {
+        let c = state
+            .get_project_state()
+            .unwrap()
+            .compute_station_raw_coords(at)
+            .unwrap();
+        (c.x, c.y)
+    };
+    let far = xy(&state, StationRef::new(k, 0));
+
+    let result = state.execute_combine_sections(o, k, options());
+
+    assert!(result.success, "{:?}", result.error);
+    assert_eq!(result.section_id, Some(o));
+    assert_eq!(shot_counts(&state), vec![(o, 5)]);
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.resolve_retired_section(k), (o, false));
+    let moved = xy(&state, StationRef::new(o, 0));
+    assert!((moved.0 - far.0).hypot(moved.1 - far.1) < 1e-9);
+}

@@ -96,6 +96,12 @@ export default function CombineSectionsDialog() {
   const keptShots = (keepB ? candidate?.shot_count_b : candidate?.shot_count_a) ?? 0;
   const otherShots = (keepB ? candidate?.shot_count_a : candidate?.shot_count_b) ?? 0;
   const summary = `Combining ${keptName} (${keptShots} shots) and ${otherName} (${otherShots} shots) at station ${joinLabel}`;
+  // Where the other section's shots go (wording from #713): the kept section
+  // keeps its station 0 unless the join is at its start.
+  const keptEnd = keepB ? candidate?.end_b : candidate?.end_a;
+  const plan = `${otherName} will be ${candidate?.reverses ? 'reversed and ' : ''}added ${
+    keptEnd === 'start' ? 'before' : 'after'
+  } ${keptName}.`;
 
   const keptText = (a: string | null | undefined, b: string | null | undefined) => (keepB ? b : a) ?? '';
   const otherText = (a: string | null | undefined, b: string | null | undefined) => (keepB ? a : b) ?? '';
@@ -171,6 +177,7 @@ export default function CombineSectionsDialog() {
     >
       <div className="space-y-4">
         <p className="text-text-secondary" data-testid="combine-summary">{summary}</p>
+        {!isStale && <p className="text-sm" data-testid="combine-plan">{plan}</p>}
 
         <div className="flex items-center justify-between gap-2 text-sm">
           <span data-testid="combine-kept-label">
@@ -210,8 +217,8 @@ export default function CombineSectionsDialog() {
         {candidate?.reverses && (
           <div className="space-y-2 text-sm" data-testid="combine-reverse-notice">
             <p>
-              {otherName} will be reversed to line up with {keptName}: its bearings are reciprocated and its
-              depths swapped, so every station stays where it is.
+              Reversing {otherName} reciprocates its bearings and swaps its depths, so every station stays where
+              it is.
             </p>
             <label className="flex items-center gap-2 cursor-pointer">
               <input

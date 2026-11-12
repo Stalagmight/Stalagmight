@@ -106,6 +106,7 @@ describe('CombineSectionsDialog', () => {
     expect(screen.getByTestId('combine-name')).toHaveValue('Main');
     expect(screen.getByTestId('combine-color')).toHaveValue('#111111');
     expect(screen.getByTestId('combine-direction-note')).toHaveTextContent("keeps Main-A's survey direction (In)");
+    expect(screen.getByTestId('combine-plan')).toHaveTextContent('Main-B will be added after Main-A.');
     expect(screen.queryByTestId('combine-reverse-notice')).toBeNull();
     expect(screen.queryByTestId('combine-comment-pick')).toBeNull();
     expect(screen.queryByTestId('combine-name-pick')).toBeNull();
@@ -130,6 +131,7 @@ describe('CombineSectionsDialog', () => {
     fireEvent.click(screen.getByTestId('combine-swap-kept'));
     expect(screen.getByTestId('combine-summary')).toHaveTextContent('Combining Main-B (2 shots) and Main-A (3 shots) at station 5:0');
     expect(screen.getByTestId('combine-color')).toHaveValue('#222222');
+    expect(screen.getByTestId('combine-plan')).toHaveTextContent('Main-A will be added before Main-B.');
     expect(screen.getByTestId('combine-direction-note')).toHaveTextContent('(Out)');
     fireEvent.click(screen.getByTestId('combine-confirm'));
     await waitFor(() => expect(combineSections).toHaveBeenCalled());
@@ -139,7 +141,8 @@ describe('CombineSectionsDialog', () => {
   it('says the other section is reversed and offers the wall swap', async () => {
     dialogData = { candidate: candidate({ reverses: true, end_b: 'end' }) };
     render(<CombineSectionsDialog />);
-    expect(screen.getByTestId('combine-reverse-notice')).toHaveTextContent('Main-B will be reversed to line up');
+    expect(screen.getByTestId('combine-plan')).toHaveTextContent('Main-B will be reversed and added after Main-A.');
+    expect(screen.getByTestId('combine-reverse-notice')).toHaveTextContent('Reversing Main-B');
     fireEvent.click(screen.getByTestId('combine-swap-lr'));
     fireEvent.click(screen.getByTestId('combine-confirm'));
     await waitFor(() => expect(combineSections).toHaveBeenCalled());
