@@ -53,11 +53,15 @@ describe('collaborator suggestions', () => {
     expect(calls()).toHaveLength(1);
   });
 
-  it('names a collaborator with no known name by their email', () => {
+  it('names a collaborator with no known name by their email local part, never the address', () => {
+    // The NAME reaches sections.surveyor and the TML / JSON exports, which must
+    // not carry an email.
     expect(collaboratorPerson({ name: null, email: ' quiet@caves.example ', level: 'READ_ONLY' })).toEqual({
-      name: 'quiet@caves.example',
+      name: 'quiet',
       email: 'quiet@caves.example',
     });
+    expect(collaboratorPerson({ name: '  ', email: 'a.b@x.org', level: 'ADMIN' }).name).toBe('a.b');
+    expect(collaboratorPerson({ name: 'Ann Smith', email: 'ann@x.org', level: 'ADMIN' }).name).toBe('Ann Smith');
   });
 
   it('never asks for a local project or while signed out', () => {
