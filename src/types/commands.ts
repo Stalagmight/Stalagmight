@@ -1,6 +1,7 @@
 // Command and IPC payload types generated from Rust.
 
 import type { ShotData, StationRef, Coordinates, GpsCoordinates, ClosureStrategy, ShotUpdates, SectionId, ShotId } from './project';
+import type { CreditEdit, CreditTargets } from './ipc.generated';
 
 export type {
   CommandResult,
@@ -62,6 +63,8 @@ export type {
   OrphanPlacementSuggestion,
   SegmentGeometry,
   SegmentSectionGeometry,
+  CreditTargets,
+  CreditEdit,
 } from './ipc.generated';
 
 // Batch command types for execute_batch IPC.
@@ -86,4 +89,7 @@ export type BatchCommand =
   // Per-shot field edit - lets the data-table grid commit a multi-cell edit
   // (paste/fill) as one undo unit. Nested payload uses snake_case (it bypasses
   // Tauri's top-level camelCase conversion). ShotUpdates fields are all optional.
-  | { type: 'update_shot'; section_id: SectionId; shot_id: ShotId; updates: ShotUpdates };
+  | { type: 'update_shot'; section_id: SectionId; shot_id: ShotId; updates: ShotUpdates }
+  // Per-shot survey credit (surveyors / explorers / date), batchable so a grid
+  // edit that also touches credit columns stays one undo unit.
+  | { type: 'edit_shot_credit'; targets: CreditTargets; edit: CreditEdit };

@@ -46,6 +46,7 @@ Commands go through a two-phase capture during execution:
 | `ZeroDatumInfo` | SetZeroDatum (and legacy persisted RemoveZeroDatum entries) | Restore GPS + offsets directly, at the datum's recorded index | Execute the original command |
 | `SegmentMoveInfo` | MoveSegment | Restore section offsets directly | Reapply offset to affected sections |
 | `ProjectSnapshotPair` | Batch, DeleteSection, DeleteShot, ReverseSection, MergeStations, UnmergeStations, UnmergeStationPair, MoveStation, MoveComment, RemoveZeroDatum, CreateLoopClosure (distributing strategies only), and the label-only RepairIntegrity / UpdateProjectSettings / SetSurfaceElevation (see below) | Re-record "after" from the live project, then restore "before" JSON (see below) | Re-record "before" from the live project, then restore "after" JSON |
+| `ShotCredits` | EditShotCredit, and an UpdateSectionMetadata that sets the legacy surveyor/date | Write each recorded shot's `before` credit back, by uuid (a shot that is gone is skipped with a warning, never a wedge); for a section edit, then put its other previous values back | EditShotCredit: write each `after` credit, by uuid. UpdateSectionMetadata: execute the original command |
 | `AddedProjectContent` | AddProjectFile (#674) | Re-record what the add brought from the live project, then remove exactly that and put back the two project fields it changed (see below) | Reinstall the recorded content verbatim - same section, shot and closure ids |
 | `None` | Non-undoable commands | N/A | N/A |
 
