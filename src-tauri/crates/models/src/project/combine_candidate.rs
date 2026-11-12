@@ -63,13 +63,49 @@ fn distance(a: (f64, f64), b: (f64, f64)) -> f64 {
     (a.0 - b.0).hypot(a.1 - b.1)
 }
 
+/// Every section end's chain position (section offset plus the shot walk,
+/// without manual station offsets), computed ONCE per query: a candidate
+/// query looks for co-located ends across the whole project, and walking every
+/// section per pairing made a right-click O(sections x shots).
+pub(crate) struct EndTable {
+    ends: Vec<(SectionId, SectionEnd, (f64, f64))>,
+    by_end: HashMap<(SectionId, SectionEnd), (f64, f64)>,
+}
+
+impl EndTable {
+    fn at(&self, id: SectionId, end: SectionEnd) -> Option<(f64, f64)> {
+        self.by_end.get(&(id, end)).copied()
+    }
+
+    /// Every section end within the tolerance of `point`.
+    fn near(&self, point: (f64, f64)) -> impl Iterator<Item = (SectionId, SectionEnd)> + '_ {
+        self.ends
+            .iter()
+            .filter(move |(_, _, p)| distance(*p, point) <= COMBINE_TOLERANCE_M)
+            .map(|(id, end, _)| (*id, *end))
+    }
+}
+
 impl Project {
-    /// Horizontal chain position of a station: section offset plus the shot
-    /// walk, WITHOUT its manual station offset.
-    fn chain_xy(&self, station: StationRef) -> Option<(f64, f64)> {
-        let (x, y) = self.compute_station_raw_xy(station)?;
-        let (ox, oy, _) = self.station_offset_for_ref(station).unwrap_or_default();
-        Some((x - ox, y - oy))
+    /// See [`EndTable`]. The walk is the coordinate solver's
+    /// (`compute_station_raw_xy`) without the station offsets.
+    pub(crate) fn end_table(&self) -> EndTable {
+        let mut ends = Vec::with_capacity(self.sections.len() * 2);
+        for section in &self.sections {
+            let start = self.section_offset(section.id);
+            let reference = self.azimuth_reference_for(section);
+            let (mut x, mut y) = start;
+            for shot in &section.shots {
+                let azimuth = shot.average_azimuth_true_rad(reference);
+                let horizontal = shot.horizontal_length();
+                x += horizontal * azimuth.sin();
+                y += horizontal * azimuth.cos();
+            }
+            ends.push((section.id, SectionEnd::Start, start));
+            ends.push((section.id, SectionEnd::End, (x, y)));
+        }
+        let by_end = ends.iter().map(|(id, end, p)| ((*id, *end), *p)).collect();
+        EndTable { ends, by_end }
     }
 
     /// The text a keyed station collection holds for `station`, by resolving
@@ -91,31 +127,20 @@ impl Project {
             .any(|datum| self.resolve_key(&datum.station_ref) == Some(station))
     }
 
-    /// Every other section end (not `a` or `b`) within the tolerance of `at`.
-    fn third_end_at(&self, at: (f64, f64), a: SectionId, b: SectionId) -> Option<SectionId> {
-        self.sections
-            .iter()
-            .filter(|s| s.id != a && s.id != b)
-            .find(|s| {
-                [SectionEnd::Start, SectionEnd::End].iter().any(|end| {
-                    self.chain_xy(StationRef::new(s.id, end_index(s, *end)))
-                        .is_some_and(|p| distance(p, at) <= COMBINE_TOLERANCE_M)
-                })
-            })
-            .map(|s| s.id)
-    }
-
     /// Whether `pairing`'s two end stations are the same point (`None` when
     /// they are not), and if so why combining there is blocked, if it is.
-    fn pairing_touch(&self, pairing: Pairing) -> Option<Touch> {
+    fn pairing_touch(&self, pairing: Pairing, ends: &EndTable) -> Option<Touch> {
         let section_a = self.get_section(pairing.a)?;
         let section_b = self.get_section(pairing.b)?;
         let at_a = StationRef::new(pairing.a, end_index(section_a, pairing.end_a));
         let at_b = StationRef::new(pairing.b, end_index(section_b, pairing.end_b));
+        let (pa, pb) = (
+            ends.at(pairing.a, pairing.end_a)?,
+            ends.at(pairing.b, pairing.end_b)?,
+        );
+        let apart = distance(pa, pb);
         let group_a = self.get_merge_group(at_a);
         let merged = group_a.contains(&at_b);
-        let (pa, pb) = (self.chain_xy(at_a)?, self.chain_xy(at_b)?);
-        let apart = distance(pa, pb);
         if !merged && apart > COMBINE_TOLERANCE_M {
             return None;
         }
@@ -134,7 +159,11 @@ impl Project {
                     .to_string(),
             )
         } else {
-            self.third_end_at(pa, pairing.a, pairing.b).map(|third| {
+            let third = ends
+                .near(pa)
+                .map(|(id, _)| id)
+                .find(|id| *id != pairing.a && *id != pairing.b);
+            third.map(|third| {
                 format!(
                     "{} also ends at this point, so it is a branch; only two sections that \
                      meet end to end can be combined",
@@ -317,6 +346,7 @@ impl Project {
 
     /// Every pairing of an end of `s1` with an end of `s2` that touches.
     fn touching_pairings(&self, s1: SectionId, s2: SectionId) -> Vec<(Pairing, Touch)> {
+        let table = self.end_table();
         let ends = [SectionEnd::Start, SectionEnd::End];
         ends.iter()
             .flat_map(|&end_a| ends.iter().map(move |&end_b| (end_a, end_b)))
@@ -327,7 +357,8 @@ impl Project {
                     b: s2,
                     end_b,
                 };
-                self.pairing_touch(pairing).map(|touch| (pairing, touch))
+                self.pairing_touch(pairing, &table)
+                    .map(|touch| (pairing, touch))
             })
             .collect()
     }
@@ -396,22 +427,38 @@ impl Project {
         } else {
             return None;
         };
-        // Every other section with an end at this point, merged or co-located.
-        let mut partners: Vec<(Pairing, Touch)> = Vec::new();
-        for other in self.sections.iter().filter(|s| s.id != section.id) {
-            for other_end in [SectionEnd::Start, SectionEnd::End] {
-                let pairing = Pairing {
-                    a: section.id,
-                    end_a: end,
-                    b: other.id,
-                    end_b: other_end,
-                };
-                if let Some(touch) = self.pairing_touch(pairing) {
-                    partners.push((pairing, touch));
+        // Every other section with an end at this point: merged to it, or
+        // co-located with it.
+        let table = self.end_table();
+        let at = table.at(section.id, end)?;
+        let group = self.get_merge_group(station);
+        let mut other_ends: Vec<(SectionId, SectionEnd)> = table.near(at).collect();
+        for member in &group {
+            if let Some(other) = self.get_section(member.section_id) {
+                if member.station_index == 0 {
+                    other_ends.push((other.id, SectionEnd::Start));
+                }
+                if member.station_index as usize == other.shots.len() {
+                    other_ends.push((other.id, SectionEnd::End));
                 }
             }
         }
-        let group = self.get_merge_group(station);
+        other_ends.retain(|(id, _)| *id != section.id);
+        other_ends.sort_by_key(|(id, end)| (*id, *end == SectionEnd::End));
+        other_ends.dedup();
+        let partners: Vec<(Pairing, Touch)> = other_ends
+            .into_iter()
+            .filter_map(|(id, other_end)| {
+                let pairing = Pairing {
+                    a: section.id,
+                    end_a: end,
+                    b: id,
+                    end_b: other_end,
+                };
+                self.pairing_touch(pairing, &table)
+                    .map(|touch| (pairing, touch))
+            })
+            .collect();
         match partners.as_slice() {
             [] if group.len() <= 1 => None,
             [] => {

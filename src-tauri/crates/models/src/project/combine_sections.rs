@@ -14,8 +14,8 @@
 //! - the join merge, and a zero-length closure between the two ends, go;
 //! - a comment or name both carry is kept once if identical, otherwise per
 //!   the dialog's choice (kept, other, or both joined);
-//! - the kept station's manual offset wins (the candidate check bounds the
-//!   difference by the tolerance);
+//! - the kept station's manual offset (or none) wins, the other's is dropped
+//!   (the candidate check bounds the difference by the tolerance);
 //! - a zero datum on either (never both) and closures to other stations move
 //!   onto the joined station.
 //!
@@ -240,9 +240,11 @@ impl Project {
         if let Some(text) = pick_text(name_k, name_o, options.name_pick, " / ") {
             self.station_names.insert(key.clone(), text);
         }
+        // The kept station's own offset (or none) wins, so the kept section
+        // stays exactly in place; the candidate check bounds the difference.
         let offset_k = take_offset_at(self, join_k);
-        let offset_o = take_offset_at(self, join_o);
-        if let Some(offset) = offset_k.or(offset_o) {
+        take_offset_at(self, join_o);
+        if let Some(offset) = offset_k {
             self.station_offsets.insert(key, offset);
         }
     }

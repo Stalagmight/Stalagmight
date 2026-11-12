@@ -485,7 +485,11 @@ fn the_join_station_is_settled_per_the_choices() {
             project.station_offset_for_ref(joined),
             Some((0.0004, 0.0, 0.0))
         );
-        assert_eq!(project.station_offsets.len(), 1);
+        assert_eq!(
+            project.station_offsets.len(),
+            1,
+            "the other station's offset is dropped"
+        );
         assert_eq!(
             project.loop_closures.len(),
             1,
@@ -496,6 +500,19 @@ fn the_join_station_is_settled_per_the_choices() {
             Some(joined)
         );
     }
+}
+
+/// Only the other join station was moved (by less than the tolerance): its
+/// offset is dropped so the kept section's end stays exactly where it was.
+#[test]
+fn the_kept_join_station_never_takes_the_other_offset() {
+    let (mut project, k, o) = pair(SectionEnd::End, SectionEnd::Start, false, 0.0);
+    let key = project.key_for_ref(StationRef::new(o, 0)).unwrap();
+    project.station_offsets.insert(key, (0.0006, 0.0, 0.0));
+    let before = xy(&project, StationRef::new(k, 2));
+    project.combine_sections(k, o, &options()).unwrap();
+    assert!(project.station_offsets.is_empty());
+    assert!(dist(xy(&project, StationRef::new(k, 2)), before) < 1e-12);
 }
 
 fn blocked(project: &Project, k: SectionId, o: SectionId) -> String {
@@ -852,4 +869,57 @@ fn combining_end_to_end_equals_reversing_then_combining() {
     };
     assert_eq!(shots(&direct), shots(&manual));
     assert_eq!(stations(&direct, k), stations(&manual, k));
+}
+
+/// An unaligned closure between the two sections does not block: after the
+/// combine it is a loop closure inside one section, which the adjustment
+/// solves like any other.
+#[test]
+fn an_unaligned_closure_between_them_becomes_a_loop_inside_the_section() {
+    let mut project = Project::new("Loop".to_string(), None);
+    let k = add(&mut project, "K", vec![shot(90.0, 10.0), shot(0.0, 10.0)]);
+    let o = add(&mut project, "O", vec![shot(270.0, 10.0), shot(180.0, 9.5)]);
+    project
+        .merge_stations(StationRef::new(k, 2), StationRef::new(o, 0))
+        .unwrap();
+    project
+        .create_loop_closure(
+            StationRef::new(k, 0),
+            StationRef::new(o, 2),
+            ClosureStrategy::default(),
+        )
+        .unwrap();
+    assert_eq!(
+        project
+            .combine_candidate_for_sections(k, o)
+            .unwrap()
+            .blocked_reason,
+        None
+    );
+
+    project.combine_sections(k, o, &options()).unwrap();
+
+    let closure = &project.loop_closures[0];
+    assert_eq!(
+        project.resolve_key(&closure.station_a),
+        Some(StationRef::new(k, 0))
+    );
+    assert_eq!(
+        project.resolve_key(&closure.station_b),
+        Some(StationRef::new(k, 4))
+    );
+    let adjusted = project
+        .compute_adjusted_station_coordinates(&crate::config::ClosureAdjustmentConfig::default());
+    let at = |i: u32| {
+        adjusted
+            .iter()
+            .find(|s| s.station_ref == StationRef::new(k, i))
+            .unwrap()
+            .coordinates
+    };
+    let (start, end) = (at(0), at(4));
+    assert!(
+        (start.x - end.x).hypot(start.y - end.y) < 0.01,
+        "the adjustment closes the loop inside the one section"
+    );
 }
