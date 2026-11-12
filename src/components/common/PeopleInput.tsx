@@ -89,6 +89,8 @@ export interface PeopleInputProps {
   compact?: boolean;
   /** Fires when typed-but-uncommitted text appears (true) or goes away (false). */
   onCommitPending?: (hasPending: boolean) => void;
+  /** Text the input starts with (a table cell opened by typing a letter), list open. */
+  defaultText?: string;
 }
 
 type Option =
@@ -185,6 +187,7 @@ export function PeopleInput({
   autoFocus = false,
   compact = false,
   onCommitPending,
+  defaultText = '',
 }: PeopleInputProps) {
   const { t } = useTranslation();
   const baseId = useId();
@@ -200,13 +203,13 @@ export function PeopleInput({
   // `textRef` mirrors the input synchronously, so the blur that follows a Tab
   // commit can never commit the same text twice. React 18 re-renders between
   // the two today (discrete events flush), but the field should not depend on it.
-  const [text, setTextState] = useState('');
-  const textRef = useRef('');
+  const [text, setTextState] = useState(defaultText);
+  const textRef = useRef(defaultText);
   const setText = useCallback((next: string) => {
     textRef.current = next;
     setTextState(next);
   }, []);
-  const [listOpen, setListOpen] = useState(false);
+  const [listOpen, setListOpen] = useState(defaultText.trim() !== '');
   // Keyboard / hover highlight, valid only for the text it was set on: any edit
   // falls back to the default highlight of the new results.
   const [nav, setNav] = useState<{ text: string; index: number } | null>(null);
@@ -345,7 +348,8 @@ export function PeopleInput({
   const pickOption = (option: Option) => {
     setText('');
     closeList();
-    addPeople([option.kind === 'suggestion' ? option.suggestion.person : resolveTyped(option.name)]);
+    // The "Add <typed>" row is an explicit "someone new": exactly the typed name.
+    addPeople([option.kind === 'suggestion' ? option.suggestion.person : { name: option.name }]);
   };
 
   /** Commit the typed text: the highlighted suggestion if asked and there is one, else the typed names. */

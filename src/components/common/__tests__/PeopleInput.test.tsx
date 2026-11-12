@@ -455,7 +455,9 @@ describe('PeopleInput - pills', () => {
     render(<Harness initial={partialValue} />);
     act(() => screen.getByTestId('people-pill-1-remove').focus());
     expect(screen.getByTestId('people-pill-1-tooltip')).toHaveTextContent('Bob');
-    expect(screen.getByTestId('people-pill-1-tooltip')).not.toHaveTextContent('shots');
+    // A full pill over several shots says so; only partial pills say "N of M".
+    expect(screen.getByTestId('people-pill-1-tooltip')).toHaveTextContent('On all 30 shots');
+    expect(screen.getByTestId('people-pill-1-tooltip')).not.toHaveTextContent('of 30');
   });
 
   it('names a SpeleoDB collaborator in the tooltip', async () => {
@@ -607,5 +609,83 @@ describe('PeopleInput - accessibility and layout', () => {
     render(<Harness compact />);
     expect(screen.getByText('Surveyors')).toHaveClass('sr-only');
     expect(screen.getByRole('combobox', { name: 'Surveyors' })).toBeInTheDocument();
+  });
+});
+
+describe('PeopleInput - typed names resolve to SpeleoDB collaborators', () => {
+  const ALICE: PersonLike = { name: 'Alice Ng', email: 'alice@caves.org' };
+  const SMITH_A: PersonLike = { name: 'John Smith', email: 'jsmith@caves.org' };
+  const SMITH_B: PersonLike = { name: 'John Smith', email: 'john.smith@divers.example' };
+
+  it('an email typed in full becomes the one collaborator with that email', async () => {
+    const user = userEvent.setup();
+    const onAdd = vi.fn();
+    render(<Harness onAdd={onAdd} suggestions={[{ person: ALICE, source: 'speleodb' }]} />);
+    await user.type(input(), 'ALICE@caves.org');
+    // An email match is not a name prefix, so nothing is highlighted...
+    expect(screen.getByTestId('people-suggestion-0')).toHaveAttribute('aria-selected', 'false');
+    await user.keyboard('{Enter}');
+    // ...and the typed text still takes the collaborator's identity.
+    expect(onAdd).toHaveBeenCalledWith(ALICE);
+    expect(pillLabels()).toEqual(['Alice Ng']);
+  });
+
+  it('a name typed in full and left with Tab becomes that collaborator, email included', async () => {
+    const user = userEvent.setup();
+    const onAdd = vi.fn();
+    render(<Harness onAdd={onAdd} suggestions={[{ person: ALICE, source: 'speleodb' }, { person: ROB, source: 'recent' }]} />);
+    await user.type(input(), 'alice ng');
+    await user.keyboard('{Tab}');
+    expect(onAdd).toHaveBeenCalledWith(ALICE);
+  });
+
+  it('two same-named collaborators: Enter asks instead of guessing, the list tells them apart', async () => {
+    const user = userEvent.setup();
+    const onAdd = vi.fn();
+    render(
+      <Harness
+        onAdd={onAdd}
+        suggestions={[
+          { person: SMITH_A, source: 'speleodb' },
+          { person: SMITH_B, source: 'speleodb' },
+        ]}
+      />,
+    );
+    await user.type(input(), 'John Smith');
+    await user.keyboard('{Enter}');
+    expect(onAdd).not.toHaveBeenCalled();
+    expect(input().value).toBe('John Smith');
+    expect(screen.getByTestId('people-status')).toHaveTextContent('Several people are called John Smith');
+    const rows = within(screen.getByTestId('people-suggestions')).getAllByRole('option');
+    expect(rows.map((row) => row.textContent)).toEqual(
+      expect.arrayContaining([expect.stringContaining('jsmith@caves.org'), expect.stringContaining('john.smith@divers.example')]),
+    );
+    await user.click(screen.getByTestId('people-suggestion-1'));
+    expect(onAdd).toHaveBeenCalledTimes(1);
+    // The pill shows just enough to tell the two apart.
+    expect(pillLabels()[0]).toMatch(/^John Smith \((jsmith|john\.smith)\)$/);
+  });
+
+  it('a name typed in full that two collaborators share stays a plain name on blur', async () => {
+    const user = userEvent.setup();
+    const onAdd = vi.fn();
+    render(
+      <Harness
+        onAdd={onAdd}
+        suggestions={[
+          { person: SMITH_A, source: 'speleodb' },
+          { person: SMITH_B, source: 'speleodb' },
+        ]}
+      />,
+    );
+    await user.type(input(), 'John Smith');
+    act(() => input().blur());
+    expect(onAdd).toHaveBeenCalledWith({ name: 'John Smith' });
+  });
+
+  it('starts with defaultText and its suggestions open', () => {
+    render(<Harness defaultText="Ja" />);
+    expect(input().value).toBe('Ja');
+    expect(list()).toBeInTheDocument();
   });
 });
