@@ -13,7 +13,7 @@ Status: DRAFT. Questions are folded in one batch at a time.
 - **Credit survives both.** Surveyors care about credit for the line they surveyed. Today
   surveyor and date live only on the section, so a combine would credit one section's metres to
   the other section's surveyor. Shots gain optional surveyor and date overrides. That is the
-  smallest schema change that keeps credit exact.
+  smallest storage change that keeps credit exact.
 
 ## Why not copy Ariane
 
@@ -33,12 +33,12 @@ re-label rows.
 
 | | |
 |---|---|
-| Schema | `ALTER TABLE shots ADD COLUMN surveyor TEXT` and `ALTER TABLE shots ADD COLUMN date TEXT`. Same pattern as the `uuid` column (`persistence/sqlite/schema.rs:485`). |
-| Meaning | `NULL`: same as my section. `""`: explicitly unknown. Any other value overrides the section. |
+| Storage | A new `shot_credits` table: `(shot_uuid PRIMARY KEY, surveyor, date)`, one row per shot that overrides its section. No schema version bump and no change to the `shots` table, like `station_names` (#697): SpeleoDB reads a `.stalx` through OpenSpeleo's Python reader, which accepts exactly v18 and only its known tables. Keyed by shot uuid, not position, so an older build that rewrites `shots` in place cannot shift credit onto another shot. See `persistence/sqlite/shot_credits.rs`. |
+| Meaning | No row: the shot inherits both values. In a row, per column: `NULL` inherits it, `''` is explicitly unknown, any other value overrides the section. |
 | Effective value | The shot's override, falling back to the section's value. |
-| Existing files | Every shot loads as `NULL`, so every file means exactly what it meant before. No backfill. |
+| Existing files | No table, so every shot inherits and every file means exactly what it meant before. No backfill. An unreadable row is skipped, never fatal. Older builds drop the overrides when they save. |
 | Exports | Ariane TML writes explorer and date per row (`export/tml.rs:791-792`), so it writes the effective value. JSON export and the `stalx-reader` crate gain optional per-shot fields. CSV does not export surveyor today. |
-| UI | Read-only Surveyor and Date columns in the shots table (hidden by default). Edit Section lists overrides ("also: Surveyor B, 8 shots"). |
+| UI | The shot Detail panel shows the shot's credit where it differs from its section's, with the section's beside it. Table columns wait for the credit view, because saved table views would surface them unasked. |
 
 The `""` sentinel is needed for one case. Combining an unattributed section into an attributed one
 must not credit the unattributed shots to the attributed surveyor.
@@ -153,7 +153,7 @@ primitives:
 
 ## Delivery
 
-1. Per-shot attribution (schema, model, IPC, exports, read-only columns).
+1. Per-shot attribution (storage, model, IPC, exports, Detail panel).
 2. Split Section Here (#335).
 3. Combine Sections.
 

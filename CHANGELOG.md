@@ -7,10 +7,6 @@ Update this file every time a new version is tagged.
 
 ## [Unreleased]
 
-### Added
-
-- **A shot can carry its own surveyor and date** - where a shot was surveyed by someone else, or on another day, than the rest of its section, it keeps that credit through save and reopen, and the shot details show it, for example "Surveyed: Ann · 2026-04-11 (section: Bob)". Ariane (TML) export writes each shot's own explorer and date. This lays the ground for combining sections from different trips without losing who surveyed what. Older versions of Stalagmight open these projects but drop the per-shot credit if they save them ([#707](https://github.com/Stalagmight/Stalagmight/issues/707))
-
 ## [0.5.3] - 2026-11-12
 
 ### Added
