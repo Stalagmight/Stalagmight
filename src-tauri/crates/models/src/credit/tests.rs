@@ -170,3 +170,106 @@ fn credit_round_trips_and_tolerates_missing_keys() {
     assert_eq!(names(&partial.surveyors), ["X"]);
     assert!(partial.explorers.is_empty() && partial.date.is_none());
 }
+
+#[test]
+fn credit_edit_sets_then_removes_then_adds() {
+    let before = SurveyCredit {
+        surveyors: vec![person("A", None), person("B", None)],
+        explorers: vec![person("E", None)],
+        date: NaiveDate::from_ymd_opt(2020, 1, 1),
+    };
+    let edit = CreditEdit {
+        add_surveyors: Some(vec![person("b", None), person("C", None)]),
+        remove_surveyors: Some(vec![person(" a ", None)]),
+        ..Default::default()
+    };
+    assert_eq!(edit.kind(), CreditEditKind::Surveyors);
+    assert_eq!(edit.label(), "Edit surveyors");
+    let after = edit.apply(&before);
+    assert_eq!(names(&after.surveyors), ["B", "C"]);
+    assert_eq!(after.explorers, before.explorers);
+    assert_eq!(after.date, before.date);
+
+    let edit = CreditEdit {
+        set_explorers: Some(vec![person("X", None), person("x", None)]),
+        add_explorers: Some(vec![person("Y", Some("y@x.org"))]),
+        remove_explorers: Some(vec![person("X", None)]),
+        set_date: Some(None),
+        ..Default::default()
+    };
+    assert_eq!(edit.kind(), CreditEditKind::Mixed);
+    let after = edit.apply(&before);
+    assert_eq!(names(&after.explorers), ["Y"]);
+    assert_eq!(after.date, None);
+    assert_eq!(names(&after.surveyors), ["A", "B"]);
+
+    assert_eq!(CreditEdit::default().kind(), CreditEditKind::Nothing);
+    assert_eq!(CreditEdit::default().apply(&before), before);
+}
+
+#[test]
+fn credit_edit_sanitizes_and_bounds_what_it_stores() {
+    let long = "n".repeat(MAX_PERSON_TEXT_CHARS + 50);
+    let edit = CreditEdit {
+        add_surveyors: Some(
+            std::iter::once(Person {
+                name: format!("  {long}  "),
+                email: Some("   ".to_string()),
+            })
+            .chain(std::iter::once(Person {
+                name: "   ".to_string(),
+                email: None,
+            }))
+            .chain((0..MAX_PEOPLE_PER_ROLE + 10).map(|i| person(&format!("P{i}"), None)))
+            .collect(),
+        ),
+        ..Default::default()
+    };
+    let after = edit.apply(&SurveyCredit::default());
+    assert_eq!(after.surveyors.len(), MAX_PEOPLE_PER_ROLE);
+    assert_eq!(
+        after.surveyors[0].name.chars().count(),
+        MAX_PERSON_TEXT_CHARS
+    );
+    assert_eq!(after.surveyors[0].email, None);
+}
+
+#[test]
+fn credit_edit_wire_shape() {
+    use ts_rs::TS;
+    let edit: CreditEdit = serde_json::from_str(r#"{"set_date":null}"#).unwrap();
+    assert_eq!(edit.set_date, Some(None));
+    let edit: CreditEdit = serde_json::from_str(r#"{"set_date":"2021-02-03"}"#).unwrap();
+    assert_eq!(edit.set_date, Some(NaiveDate::from_ymd_opt(2021, 2, 3)));
+    let edit: CreditEdit = serde_json::from_str("{}").unwrap();
+    assert_eq!(edit, CreditEdit::default());
+    assert_eq!(serde_json::to_string(&CreditEdit::default()).unwrap(), "{}");
+    let round: CreditEdit = serde_json::from_str(
+        &serde_json::to_string(&CreditEdit {
+            set_date: Some(None),
+            ..Default::default()
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        round.set_date,
+        Some(None),
+        "a clear survives the round trip"
+    );
+    let decl = CreditEdit::decl();
+    assert!(decl.contains("set_date?: string | null"), "{decl}");
+    assert!(decl.contains("add_surveyors?: Array<Person>"), "{decl}");
+
+    let targets: CreditTargets =
+        serde_json::from_str(r#"{"type":"shots","shots":[[1,100001]]}"#).unwrap();
+    assert_eq!(
+        targets,
+        CreditTargets::Shots {
+            shots: vec![(1, 100_001)]
+        }
+    );
+    let targets: CreditTargets =
+        serde_json::from_str(r#"{"type":"section","section_id":4}"#).unwrap();
+    assert_eq!(targets, CreditTargets::Section { section_id: 4 });
+}

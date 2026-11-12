@@ -2,7 +2,8 @@ use tauri::State;
 
 use crate::core::{AppState, Command, CommandResult};
 use crate::models::{
-    DeleteShotImpact, DeleteShotRangeImpact, SectionId, ShotData, ShotId, ShotKind, ShotUpdates,
+    CreditEdit, CreditTargets, DeleteShotImpact, DeleteShotRangeImpact, SectionId, ShotData,
+    ShotId, ShotKind, ShotUpdates,
 };
 
 /// Create a new shot
@@ -294,4 +295,23 @@ pub(crate) fn set_shot_kind_impl(
         shot_id,
         kind,
     })
+}
+
+/// Edit the survey credit (surveyors, explorers, date) of a whole section or of
+/// explicit shots, as ONE undo step however many shots it touches.
+#[tauri::command]
+pub fn edit_shot_credit(
+    state: State<AppState>,
+    targets: CreditTargets,
+    edit: CreditEdit,
+) -> CommandResult {
+    edit_shot_credit_impl(state.inner(), targets, edit)
+}
+
+pub(crate) fn edit_shot_credit_impl(
+    state: &AppState,
+    targets: CreditTargets,
+    edit: CreditEdit,
+) -> CommandResult {
+    state.execute(Command::EditShotCredit { targets, edit })
 }

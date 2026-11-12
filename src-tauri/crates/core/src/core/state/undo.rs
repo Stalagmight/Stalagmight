@@ -143,6 +143,11 @@ impl AppState {
                 }
             }
 
+            UndoData::ShotCredits {
+                changes,
+                section_values,
+            } => self.undo_shot_credits(changes, section_values.as_ref()),
+
             UndoData::SectionSnapshot {
                 section_id,
                 section_data,
@@ -979,6 +984,15 @@ impl AppState {
                     }
                     _ => CommandResult::failure("Unsupported closure redo command".to_string()),
                 }
+            }
+            // An `EditShotCredit` names explicit shots by in-session id, which a
+            // reload renumbers - so its redo writes the recorded `after` credits
+            // by uuid instead of re-executing. (A section-metadata edit re-executes
+            // below: it names its section by the id that survives a save.)
+            UndoData::ShotCredits { changes, .. }
+                if matches!(entry.command, Command::EditShotCredit { .. }) =>
+            {
+                self.write_recorded_credits(changes, true)
             }
             _ => {
                 // Re-execute the original command for other undo data types.

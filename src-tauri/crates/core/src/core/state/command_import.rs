@@ -814,6 +814,21 @@ impl AppState {
                 crate::models::reverse_shots(&mut shots, false);
                 displacement
             });
+            // The dialog's Surveyors / Explorers / date, when set, replace what
+            // the file said on EVERY imported shot (the legacy `surveyor`/`date`
+            // stay a template for the uncredited ones, via `Section::new`).
+            let overrides = crate::models::CreditEdit {
+                set_surveyors: config.surveyors.clone(),
+                set_explorers: config.explorers.clone(),
+                set_date: config.override_date.map(Some),
+                ..Default::default()
+            };
+            if overrides.kind() != crate::models::CreditEditKind::Nothing {
+                for shot in &mut shots {
+                    let credit = overrides.apply(shot.credit());
+                    shot.credit = (!credit.is_empty()).then_some(credit);
+                }
+            }
             let section_data = SectionData {
                 name: config.name.clone(),
                 surveyor: config.surveyor.clone(),

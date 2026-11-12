@@ -89,6 +89,22 @@ impl AppState {
             ));
         }
 
+        // A new shot was surveyed by the same people, on the same day, as the
+        // one it continues: with no credit of its own it takes its
+        // neighbour's - the shot before the insert point, or the next one when
+        // inserting at the start. Here, at the FORWARD executor only: redo and
+        // restore replay the recorded shot, credit included, through the
+        // `Section` methods.
+        if data.credit().is_empty() {
+            if let Some(section) = project.get_section(section_id) {
+                let neighbour = match shot_index.checked_sub(1) {
+                    Some(previous) => section.shots.get(previous),
+                    None => section.shots.first(),
+                };
+                data.credit = neighbour.and_then(|shot| shot.credit.clone());
+            }
+        }
+
         let mut warnings = Vec::new();
         // Per-project thresholds (#57) so create-time warnings match the panel.
         warnings.extend(Validator::validate_shot(

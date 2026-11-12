@@ -11,6 +11,8 @@ use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use crate::{SectionId, ShotId};
+
 /// One person credited on a shot.
 ///
 /// Identity is [`Person::same_as`]: the names after casefolding and collapsing
@@ -264,6 +266,180 @@ fn looks_like_last_first(half: &str) -> bool {
         && parts
             .iter()
             .all(|p| !p.is_empty() && !p.contains(char::is_whitespace))
+}
+
+/// Longest name or email a credit edit stores, in chars. Longer text is cut on
+/// a char boundary: a person is a label, and an unbounded one would ride into
+/// every save, undo entry and export.
+pub const MAX_PERSON_TEXT_CHARS: usize = 256;
+
+/// Most people one role of one shot can list.
+pub const MAX_PEOPLE_PER_ROLE: usize = 200;
+
+fn clamp_chars(text: &str) -> &str {
+    match text.char_indices().nth(MAX_PERSON_TEXT_CHARS) {
+        Some((cut, _)) => &text[..cut],
+        None => text,
+    }
+}
+
+impl Person {
+    /// The person as a credit edit stores it: trimmed, clamped to
+    /// [`MAX_PERSON_TEXT_CHARS`], an empty email dropped. `None` for an empty
+    /// name.
+    pub fn sanitized(&self) -> Option<Person> {
+        Person::new(
+            clamp_chars(self.name.trim()),
+            self.email.as_deref().map(|e| clamp_chars(e.trim())),
+        )
+    }
+}
+
+/// Which shots a [`CreditEdit`] applies to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum CreditTargets {
+    /// Every shot of one section.
+    Section { section_id: SectionId },
+    /// Explicit shots, as `(section_id, shot_id)` pairs (in-session ids).
+    Shots { shots: Vec<(SectionId, ShotId)> },
+}
+
+/// One edit of the survey credit of a set of shots
+/// (`Command::EditShotCredit`).
+///
+/// Per role the order is: `set_*` replaces the list, then `remove_*` drops
+/// people, then `add_*` appends those not already there. `set_date` sets
+/// (`Some(Some(d))`) or clears (`Some(None)`) the date; absent leaves it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct CreditEdit {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub add_surveyors: Option<Vec<Person>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub remove_surveyors: Option<Vec<Person>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub set_surveyors: Option<Vec<Person>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub add_explorers: Option<Vec<Person>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub remove_explorers: Option<Vec<Person>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub set_explorers: Option<Vec<Person>>,
+    #[serde(
+        default,
+        deserialize_with = "double_option_date",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(type = "string | null")]
+    #[ts(optional)]
+    pub set_date: Option<Option<NaiveDate>>,
+}
+
+/// `absent -> None`, `null -> Some(None)`, a date -> `Some(Some(d))`.
+fn double_option_date<'de, D>(de: D) -> Result<Option<Option<NaiveDate>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<NaiveDate>::deserialize(de).map(Some)
+}
+
+/// What a [`CreditEdit`] changes, for labels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CreditEditKind {
+    Surveyors,
+    Explorers,
+    Date,
+    Mixed,
+    Nothing,
+}
+
+impl CreditEdit {
+    fn touches_surveyors(&self) -> bool {
+        self.add_surveyors.is_some()
+            || self.remove_surveyors.is_some()
+            || self.set_surveyors.is_some()
+    }
+
+    fn touches_explorers(&self) -> bool {
+        self.add_explorers.is_some()
+            || self.remove_explorers.is_some()
+            || self.set_explorers.is_some()
+    }
+
+    /// Which part of the credit this edit touches.
+    pub fn kind(&self) -> CreditEditKind {
+        match (
+            self.touches_surveyors(),
+            self.touches_explorers(),
+            self.set_date.is_some(),
+        ) {
+            (false, false, false) => CreditEditKind::Nothing,
+            (true, false, false) => CreditEditKind::Surveyors,
+            (false, true, false) => CreditEditKind::Explorers,
+            (false, false, true) => CreditEditKind::Date,
+            _ => CreditEditKind::Mixed,
+        }
+    }
+
+    /// The history label of this edit: "Edit surveyors", "Edit explorers",
+    /// "Edit survey date" or "Edit survey credit".
+    pub fn label(&self) -> &'static str {
+        match self.kind() {
+            CreditEditKind::Surveyors => "Edit surveyors",
+            CreditEditKind::Explorers => "Edit explorers",
+            CreditEditKind::Date => "Edit survey date",
+            CreditEditKind::Mixed | CreditEditKind::Nothing => "Edit survey credit",
+        }
+    }
+
+    /// The credit `before` becomes under this edit.
+    pub fn apply(&self, before: &SurveyCredit) -> SurveyCredit {
+        SurveyCredit {
+            surveyors: edit_role(
+                &before.surveyors,
+                self.set_surveyors.as_deref(),
+                self.remove_surveyors.as_deref(),
+                self.add_surveyors.as_deref(),
+            ),
+            explorers: edit_role(
+                &before.explorers,
+                self.set_explorers.as_deref(),
+                self.remove_explorers.as_deref(),
+                self.add_explorers.as_deref(),
+            ),
+            date: self.set_date.unwrap_or(before.date),
+        }
+    }
+}
+
+fn edit_role(
+    current: &[Person],
+    set: Option<&[Person]>,
+    remove: Option<&[Person]>,
+    add: Option<&[Person]>,
+) -> Vec<Person> {
+    let mut list: Vec<Person> = match set {
+        Some(set) => dedupe_people(set.iter().filter_map(Person::sanitized).collect()),
+        None => current.to_vec(),
+    };
+    for person in remove.unwrap_or_default() {
+        remove_person(&mut list, person);
+    }
+    for person in add.unwrap_or_default().iter().filter_map(Person::sanitized) {
+        if list.len() >= MAX_PEOPLE_PER_ROLE {
+            break;
+        }
+        add_person(&mut list, person);
+    }
+    list.truncate(MAX_PEOPLE_PER_ROLE);
+    list
 }
 
 /// One person in a [`SectionCreditSummary`], with how many of the section's

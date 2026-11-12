@@ -23792,6 +23792,17 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
                 offset: Coordinates::new(1.0, 2.0, 0.0),
             }),
         );
+        // A per-shot credit edit is metadata, but still an edit of the project.
+        assert_disabled(
+            "execute:EditShotCredit",
+            &state.execute(Command::EditShotCredit {
+                targets: crate::models::CreditTargets::Section { section_id: sid },
+                edit: crate::models::CreditEdit {
+                    set_date: Some(None),
+                    ..Default::default()
+                },
+            }),
+        );
         assert_disabled(
             "execute:ReverseSection",
             &state.execute(Command::ReverseSection {

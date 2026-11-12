@@ -797,6 +797,13 @@ impl Project {
         section_id: SectionId,
         updates: &SectionUpdates,
     ) -> Option<&Section> {
+        if updates.surveyor.is_some() || updates.date.is_some() {
+            // The legacy surveyor/date land on every shot; give each an
+            // identity first so an undo can address it after a reload.
+            self.get_section(section_id)?;
+            self.ensure_section_shot_uuids(section_id);
+            self.reindex_section_shot_uuids(section_id);
+        }
         let section = self.get_section_mut(section_id)?;
         section.apply_updates(updates);
         self.touch();
@@ -865,7 +872,7 @@ impl Project {
     ///
     /// Does NOT update [`Self::shot_uuid_index`]; pair it with
     /// [`Self::reindex_section_shot_uuids`] when the section's shots also move.
-    pub(crate) fn ensure_section_shot_uuids(&mut self, section_id: SectionId) {
+    pub fn ensure_section_shot_uuids(&mut self, section_id: SectionId) {
         let Some(section) = self.get_section_mut(section_id) else {
             return;
         };

@@ -57,6 +57,7 @@ impl AppState {
             | UpdateShot { .. }
             | DeleteShot { .. }
             | SetShotKind { .. }
+            | EditShotCredit { .. }
             | MergeStations { .. }
             | UnmergeStations { .. }
             | UnmergeStationPair { .. }
@@ -162,6 +163,8 @@ impl AppState {
             | CloseProject
             | UpdateSectionMetadata { .. }
             | SetShotKind { .. }
+            // Survey credit is per-shot metadata: no geometry, no references.
+            | EditShotCredit { .. }
             // Station comments are metadata keyed by station identity; they are
             // never geometry-derived and can never introduce merge drift, so they
             // must NOT run the reconcile epilogue. Classifying them GEOMETRY_ONLY
@@ -773,6 +776,7 @@ impl AppState {
                 shot_id,
                 kind,
             } => self.set_shot_kind(*section_id, *shot_id, *kind),
+            Command::EditShotCredit { targets, edit } => self.edit_shot_credit(targets, edit),
             Command::MergeStations {
                 station_a,
                 station_b,
@@ -1070,6 +1074,9 @@ impl AppState {
                 // to come back together, so both are batchable.
                 | Command::DeleteSection { .. }
                 | Command::UntrackImport { .. }
+                // Metadata only, and already one step for many shots; a batch
+                // may still group it with other edits of the same action.
+                | Command::EditShotCredit { .. }
         )
     }
 

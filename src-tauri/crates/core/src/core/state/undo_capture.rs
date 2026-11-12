@@ -170,16 +170,26 @@ impl AppState {
                 }
             }
 
+            // The legacy surveyor/date land on every shot, so the undo has to
+            // record each shot's credit rather than one section value.
+            Command::UpdateSectionMetadata { updates, .. }
+                if updates.surveyor.is_some() || updates.date.is_some() =>
+            {
+                Self::credit_undo_stub(project, cmd)
+            }
+            Command::EditShotCredit { .. } => Self::credit_undo_stub(project, cmd),
+
             Command::UpdateSectionMetadata {
                 section_id,
                 updates,
             } => {
                 if let Some(section) = project.get_section(*section_id) {
                     // Capture previous section metadata
+                    // surveyor/date are unset here: the arm above takes them.
                     let prev_updates = SectionUpdates {
                         name: updates.name.as_ref().map(|_| section.name.clone()),
-                        surveyor: updates.surveyor.as_ref().map(|_| section.surveyor_names()),
-                        date: updates.date.as_ref().map(|_| section.first_survey_date()),
+                        surveyor: None,
+                        date: None,
                         color: updates.color.as_ref().map(|_| section.color.clone()),
                         direction: updates.direction.map(|_| section.direction),
                         quality: updates.quality.map(|_| section.quality),
@@ -692,6 +702,11 @@ impl AppState {
                 } else {
                     undo_data
                 }
+            }
+
+            // Read each shot's credit back after the edit, keep what changed.
+            Command::EditShotCredit { .. } | Command::UpdateSectionMetadata { .. } => {
+                Self::finalize_credit_undo(project, undo_data)
             }
 
             // MoveComment: finalize is a no-op; execute_move_comment handles its own snapshots.

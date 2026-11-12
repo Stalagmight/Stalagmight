@@ -70,6 +70,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.disarm_forced_exit",
     "command.discard_app_update_download",
     "command.download_app_update",
+    "command.edit_shot_credit",
     "command.execute_batch",
     "command.execute_gpx_import",
     "command.execute_tml_import",
@@ -375,6 +376,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "undo-after.delete_section",
     "undo-after.delete_shot",
     "undo-after.delete_shot_and_split",
+    "undo-after.edit_shot_credit",
     "undo-after.execute_batch",
     "undo-after.execute_compass_import",
     "undo-after.execute_gpx_import",
@@ -1101,7 +1103,10 @@ mod tests {
         //       distance over the export's own range):
         //       command.export_value_histogram = 680.
         //   + 1 the "Errors" display toggle: action.toggle.showShotErrors = 681.
-        assert_eq!(EVENT_NAMES.len(), 681);
+        //   + 2 per-shot survey credit (surveyors / explorers / date as people):
+        //       the one-step credit edit and how often it is undone straight
+        //       after: command.edit_shot_credit, undo-after.edit_shot_credit = 683.
+        assert_eq!(EVENT_NAMES.len(), 683);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there
