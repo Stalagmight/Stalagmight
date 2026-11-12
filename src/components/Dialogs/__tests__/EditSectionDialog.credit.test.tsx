@@ -132,6 +132,33 @@ describe('Edit Section survey credit', () => {
     );
   });
 
+  it('shows a person just added at the end, beside the input', () => {
+    seed([null, null, null]);
+    // Bo first appears on the SECOND shot, so a person added to every shot
+    // would sort before Bo by first appearance.
+    const project = useProjectStore.getState().project!;
+    const section = project.sections[0]!;
+    useProjectStore.setState({
+      project: {
+        ...project,
+        sections: [
+          {
+            ...section,
+            shots: section.shots.map((s, i) => ({
+              ...s,
+              credit: { surveyors: i === 1 ? [ann, bo] : [ann], explorers: [], date: null },
+            })),
+          },
+        ],
+      },
+    });
+    render(<EditSectionDialog />);
+    typePerson('surveyors', 'Cy Cave');
+    const labels = screen.getAllByTestId(/^section-surveyors-pill-\d+-label$/).map((el) => el.textContent);
+    // On every shot now, which by first appearance would put Cy before Bo.
+    expect(labels).toEqual(['Ann Diver', 'Bo Lead', 'Cy Cave']);
+  });
+
   it('sends no credit edit when only the name changed', async () => {
     seed([null, null, null]);
     render(<EditSectionDialog />);

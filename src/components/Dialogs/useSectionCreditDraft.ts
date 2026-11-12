@@ -25,6 +25,7 @@ import {
   type PendingCredit,
 } from '../../utils/creditEdit';
 import { shotCredit } from '../../utils/sectionCredit';
+import { useStablePeopleOrder } from '../../hooks/useStablePeopleOrder';
 
 export interface SectionCreditDraft {
   people: SectionPeopleProps;
@@ -63,9 +64,13 @@ export function useSectionCreditDraft(section: Pick<Section, 'shots'> | undefine
   const edit = useMemo(() => toCreditEdit(pending), [pending]);
   const { aggregate, changed } = useMemo(() => previewCreditEdit(credits, edit), [credits, edit]);
 
+  // A pill just added sits at the end, beside the input it was typed in, for
+  // as long as the dialog is open (the hook's memory lives with it).
+  const surveyors = useStablePeopleOrder(aggregate.surveyors, 'dialog');
+  const explorers = useStablePeopleOrder(aggregate.explorers, 'dialog');
   const people: SectionPeopleProps = {
-    surveyors: aggregate.surveyors,
-    explorers: aggregate.explorers,
+    surveyors,
+    explorers,
     onAdd: (role, person) => setPending((p) => pendAdd(p, role, person)),
     onRemove: (role, person) => setPending((p) => pendRemove(p, role, person)),
     onPromote: (role, person) => setPending((p) => pendAdd(p, role, person)),

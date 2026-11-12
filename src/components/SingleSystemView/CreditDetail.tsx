@@ -19,6 +19,7 @@ import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { useEditingBlocked } from '../../hooks/useEditingBlocked';
+import { useStablePeopleOrder } from '../../hooks/useStablePeopleOrder';
 import { setSource } from '../../utils/telemetry';
 import { CreditDateInput, CreditPeopleFields } from '../common/CreditFields';
 import { Panel } from '../common/Panel';
@@ -62,11 +63,18 @@ export function CreditDetail({ targets, credits, scope }: CreditDetailProps) {
   const add = (role: CreditRole, person: PersonLike) => send({ [`add_${role}`]: [toPerson(person)] });
   const remove = (role: CreditRole, person: PersonLike) => send({ [`remove_${role}`]: [toPerson(person)] });
 
+  // Pills keep their places while this selection is shown; a person just
+  // added goes at the end, beside the input, even after the refresh re-sorts
+  // the shots' aggregate by first appearance.
+  const orderScope = useMemo(() => JSON.stringify(targets), [targets]);
+  const surveyors = useStablePeopleOrder(aggregate.surveyors, orderScope);
+  const explorers = useStablePeopleOrder(aggregate.explorers, orderScope);
+
   return (
     <div className="space-y-3" data-testid="detail-credit" data-scope={scope}>
       <CreditPeopleFields
-        surveyors={aggregate.surveyors}
-        explorers={aggregate.explorers}
+        surveyors={surveyors}
+        explorers={explorers}
         onAdd={add}
         onRemove={remove}
         onPromote={add}

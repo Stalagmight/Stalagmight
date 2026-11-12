@@ -5,7 +5,7 @@
  * modes show the pills without any way to change them.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, fireEvent, screen } from '@testing-library/react';
+import { act, render, fireEvent, screen } from '@testing-library/react';
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => []) }));
 
@@ -200,6 +200,34 @@ describe('Detail panel survey credit - several shots', () => {
     // On every shot now, so a full pill (the union keeps first-appearance order).
     const cy = pillByLabel('surveyors', 'Cy Cave');
     expect(cy.dataset.partial).toBeUndefined();
+  });
+
+  it('puts a person just added at the end, and keeps them there after the refresh', () => {
+    render(<DetailPanel />);
+    typePerson('surveyors', 'Cy Cave');
+    const labels = () => screen.getAllByTestId(/^detail-credit-surveyors-pill-\d+-label$/).map((el) => el.textContent);
+    expect(labels()).toEqual(['Ann Diver', 'Bo Lead', 'Cy Cave']);
+    // The store refreshes with Cy on every shot: by first appearance Cy would
+    // now come second.
+    act(() => {
+      const project = useProjectStore.getState().project!;
+      const section = project.sections[0]!;
+      useProjectStore.setState({
+        project: {
+          ...project,
+          sections: [
+            {
+              ...section,
+              shots: section.shots.map((s) => ({
+                ...s,
+                credit: { ...s.credit!, surveyors: [...s.credit!.surveyors, { name: 'Cy Cave' }] },
+              })),
+            },
+          ],
+        },
+      });
+    });
+    expect(labels()).toEqual(['Ann Diver', 'Bo Lead', 'Cy Cave']);
   });
 
   it('promotes a partial pill to every selected shot', () => {
