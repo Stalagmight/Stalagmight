@@ -111,6 +111,17 @@ export function isValidPerson(person: PersonLike): boolean {
 }
 
 /**
+ * Whether typed text names `person` exactly: the same name, or the same email
+ * (both compared as identity compares them). What a typed name resolves
+ * through when it is committed as text rather than picked from the list.
+ */
+export function typedNames(typed: string, person: PersonLike): boolean {
+  const name = nameKey(typed);
+  if (name === '') return false;
+  return name === nameKey(person.name) || emailKey(typed) === emailKey(person.email);
+}
+
+/**
  * Drop later duplicates (by {@link personKey}), keeping the first of each, and
  * people without a name - the backend's `dedupe_people`.
  */

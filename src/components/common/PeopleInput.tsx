@@ -43,6 +43,7 @@ import {
   personKey,
   rankSuggestions,
   splitTypedNames,
+  typedNames,
   type PersonLike,
   type RankedSuggestion,
   type Suggestion,
@@ -247,7 +248,15 @@ export function PeopleInput({
   }, [ranked, query, selectedKeys]);
 
   const showList = !disabled && listOpen && options.length > 0;
-  const defaultIndex = ranked[0]?.match === 'name-prefix' ? 0 : -1;
+  // Two or more different people carry exactly the typed name (two "John
+  // Smith"s with different emails): Enter must not quietly pick one of them.
+  const ambiguous = useMemo(() => {
+    if (query === '') return false;
+    const typedKey = personKey({ name: query });
+    const same = ranked.filter((r) => personKey({ name: r.person.name }) === typedKey);
+    return same.length > 1 && !same.some((r) => personKey(r.person) === typedKey);
+  }, [query, ranked]);
+  const defaultIndex = ranked[0]?.match === 'name-prefix' && !ambiguous ? 0 : -1;
   const activeIndex = !showList
     ? -1
     : nav && nav.text === text
@@ -307,11 +316,30 @@ export function PeopleInput({
     if (names.length > 0) setAnnouncement(t('common.peopleInput.announce.added', { name: names.join(', ') }));
   };
 
-  /** A typed name that is exactly a known person becomes that person (with its metadata). */
+  /**
+   * Typed text that names exactly one known person becomes that person, email
+   * included, so a name typed out in full still gets the identity the list
+   * would have given it. In order: the ONE SpeleoDB collaborator whose name or
+   * email it is; else the known person with exactly that identity (this name,
+   * no email); else the one known person of any source whose name or email it
+   * is. Several matches, or none, give a new person with just the typed name -
+   * never a guess between two same-named people.
+   */
   const resolveTyped = (name: string): PersonLike => {
+    const matching = (source?: Suggestion['source']) => {
+      const seen = new Map<string, PersonLike>();
+      for (const s of suggestions) {
+        if ((source === undefined || s.source === source) && typedNames(name, s.person)) seen.set(personKey(s.person), s.person);
+      }
+      return [...seen.values()];
+    };
+    const collaborators = matching('speleodb');
+    if (collaborators.length === 1) return collaborators[0]!;
     const key = personKey({ name });
-    const known = suggestions.filter((s) => personKey(s.person) === key);
-    return (known.find((s) => s.source === 'speleodb') ?? known[0])?.person ?? { name };
+    const exact = suggestions.find((s) => personKey(s.person) === key);
+    if (exact) return exact.person;
+    const known = matching();
+    return known.length === 1 ? known[0]! : { name };
   };
 
   const pickOption = (option: Option) => {
@@ -402,6 +430,12 @@ export function PeopleInput({
         if (activeIndex < 0 && textRef.current.trim() === '') return;
         event.preventDefault();
         event.stopPropagation();
+        if (activeIndex < 0 && ambiguous) {
+          // Ask which one instead of guessing: show the candidates.
+          setListOpen(true);
+          setAnnouncement(t('common.peopleInput.announce.ambiguous', { name: query }));
+          return;
+        }
         commit(true);
         return;
       }
@@ -496,7 +530,11 @@ export function PeopleInput({
     const promotable = partial && onPromote !== undefined && !disabled;
     const armed = armedKey === key && index === value.length - 1;
     const isSpeleo = speleoKeys.has(key);
-    const onShots = partial ? t('common.peopleInput.onShots', { carrying: entry.count, total: entry.total }) : '';
+    const onShots = partial
+      ? t('common.peopleInput.onShots', { carrying: entry.count, total: entry.total })
+      : typeof entry.total === 'number' && entry.total > 1
+        ? t('common.peopleInput.onAllShots', { count: entry.total })
+        : '';
     const details = [email, isSpeleo ? t('common.peopleInput.speleodbCollaborator') : '', onShots].filter(Boolean);
 
     const tone = armed

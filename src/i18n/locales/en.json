@@ -74,8 +74,11 @@
         "added": "Added {{name}}",
         "removed": "Removed {{name}}",
         "armed": "Press Backspace again to remove {{name}}",
-        "duplicate": "{{name}} is already listed"
-      }
+        "duplicate": "{{name}} is already listed",
+        "ambiguous": "Several people are called {{name}}: pick one from the list"
+      },
+      "onAllShots_one": "On {{count}} shot",
+      "onAllShots_other": "On all {{count}} shots"
     }
   },
   "app": {
@@ -4020,5 +4023,23 @@
   "projectClose": {
     "failedTitle": "Close Project failed",
     "failedMessage": "The project is still open. Try again."
+  },
+  "credit": {
+    "surveyors": "Surveyors",
+    "explorers": "Explorers",
+    "dateLabel": "Survey date",
+    "placeholders": {
+      "surveyors": "Type a name, Enter to add",
+      "explorers": "Type a name, Enter to add"
+    },
+    "date": {
+      "none": "No date",
+      "pickForAll": "Pick a date",
+      "mixed": "{{range}}, differs per shot",
+      "mixedUndated_one": "{{range}}, {{count}} shot undated",
+      "mixedUndated_other": "{{range}}, {{count}} shots undated",
+      "setForAll": "Set for all shots",
+      "keepPerShot": "Keep per-shot dates"
+    }
   }
 }
