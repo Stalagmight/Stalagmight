@@ -27,7 +27,7 @@ export interface CreditPeopleFieldsProps {
   /** Clicking a partial pill (on some of the shots): put that person on all of them. */
   onPromote?: (role: CreditRole, person: PersonLike) => void;
   disabled?: boolean;
-  /** Test IDs `<prefix>-surveyors` and `<prefix>-explorers` (see PeopleInput for the children). */
+  /** Test IDs `<prefix>-people` (both fields), `<prefix>-surveyors` and `<prefix>-explorers` (see PeopleInput for the children). */
   testIdPrefix: string;
   /** Typed-but-uncommitted text in either field appears (true) or goes away (false). */
   onCommitPending?: (hasPending: boolean) => void;
@@ -93,7 +93,7 @@ export function CreditPeopleFields({
   return (
     <div
       className={layout === 'columns' ? 'grid grid-cols-2 gap-3' : 'space-y-3'}
-      data-testid={`${testIdPrefix}-credit-people`}
+      data-testid={`${testIdPrefix}-people`}
     >
       {field('surveyors', surveyors)}
       {field('explorers', explorers)}

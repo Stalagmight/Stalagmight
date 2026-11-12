@@ -92,6 +92,7 @@ describe('Detail panel survey credit - one shot', () => {
   it('shows the shot people and date', () => {
     render(<DetailPanel />);
     expect(tid('detail-credit').dataset.scope).toBe('shot');
+    expect(tid('detail-credit-people')).toContainElement(tid('detail-credit-surveyors'));
     expect(tid('detail-credit-surveyors-pill-0-label')).toHaveTextContent('Ann Diver');
     expect(tid('detail-credit-surveyors-pill-1-label')).toHaveTextContent('Bo Lead');
     expect(qid('detail-credit-surveyors-pill-0')?.dataset.partial).toBeUndefined();
