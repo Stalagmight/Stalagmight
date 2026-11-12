@@ -454,6 +454,10 @@ impl Database {
                 let shot_rows = shot_stmt.query_map([], |row| {
                     let section_id: u32 = row.get(0)?;
                     let seq: i64 = row.get(1)?;
+                    // `uuid` column was added in schema v6; pre-v6 rows return
+                    // NULL here. Treat NULL and empty string the same - the next
+                    // save mints a fresh UUID and persists it.
+                    let uuid = row.get::<_, Option<String>>(17)?.filter(|s| !s.is_empty());
                     Ok((
                         section_id,
                         Shot {
@@ -506,14 +510,9 @@ impl Database {
                             ),
                             marker_index: row.get(15)?,
                             temperature: row.get(16)?,
-                            // `uuid` column was added in schema v6; pre-v6
-                            // rows return NULL here.  Treat NULL and empty
-                            // string the same - the next save mints a
-                            // fresh UUID and persists it.
-                            uuid: row.get::<_, Option<String>>(17)?.filter(|s| !s.is_empty()),
-                            credit: u32::try_from(seq)
-                                .ok()
-                                .and_then(|seq| credits.get(&(section_id, seq)).cloned()),
+                            // #707: a shot's credit row is keyed by its uuid.
+                            credit: uuid.as_ref().and_then(|u| credits.get(u).cloned()),
+                            uuid,
                         },
                     ))
                 })?;

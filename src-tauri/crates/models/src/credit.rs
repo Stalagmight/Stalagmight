@@ -58,7 +58,12 @@ impl ShotCredit {
 
     /// The form a `Shot` stores: `None` when both values are inherited, so
     /// "no overrides" has exactly one representation.
-    pub fn into_stored(self) -> Option<ShotCredit> {
+    pub fn into_stored(mut self) -> Option<ShotCredit> {
+        // An empty name says no more than "unknown", and is what an unknown
+        // surveyor reloads as (`''`), so store it that way from the start.
+        if matches!(&self.surveyor, Some(Some(name)) if name.is_empty()) {
+            self.surveyor = Some(None);
+        }
         (!self.is_inherited()).then_some(self)
     }
 
@@ -184,5 +189,56 @@ mod tests {
             serde_json::from_str::<ShotCredit>("{}").unwrap(),
             ShotCredit::default()
         );
+    }
+
+    #[test]
+    fn no_override_has_one_stored_form_and_an_empty_name_is_unknown() {
+        assert_eq!(ShotCredit::INHERITED.into_stored(), None);
+        let empty = ShotCredit {
+            surveyor: Some(Some(String::new())),
+            date: None,
+        };
+        assert_eq!(
+            empty.into_stored(),
+            Some(ShotCredit {
+                surveyor: Some(None),
+                date: None,
+            })
+        );
+        let shot = crate::Shot::new(
+            0,
+            crate::ShotData {
+                credit: Some(ShotCredit::INHERITED),
+                ..Default::default()
+            },
+        );
+        assert_eq!(shot.credit, None, "Some(inherited) must not reach a shot");
+    }
+
+    #[test]
+    fn splitting_a_shot_keeps_its_credit_on_both_pieces() {
+        let ann = ShotCredit {
+            surveyor: Some(Some("Ann".to_string())),
+            date: Some(Some(day(2026, 4, 11))),
+        };
+        let mut project = crate::Project::new("Split".to_string(), None);
+        let section = project
+            .add_section(crate::SectionData {
+                surveyor: Some("Bob".to_string()),
+                shots: vec![crate::ShotData {
+                    length: 10.0,
+                    credit: Some(ann.clone()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+            .id;
+        let shot_id = project.get_section(section).unwrap().shots[0].id;
+
+        project.split_shot_at_distance(section, shot_id, 4.0).unwrap();
+
+        let shots = &project.get_section(section).unwrap().shots;
+        assert_eq!(shots.len(), 2);
+        assert!(shots.iter().all(|s| s.credit.as_ref() == Some(&ann)));
     }
 }

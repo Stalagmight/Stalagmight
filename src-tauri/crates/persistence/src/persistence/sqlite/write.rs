@@ -4,7 +4,7 @@ use rusqlite::params;
 
 use crate::models::Project;
 
-use super::shot_credits::{save_shot_credits, CREATE_SHOT_CREDITS};
+use super::shot_credits::{save_shot_credit, CREATE_SHOT_CREDITS};
 use super::station_texts::{StationTextTable, CREATE_STATION_NAMES};
 use super::{Database, SCHEMA_VERSION};
 
@@ -151,12 +151,12 @@ impl Database {
                         uuid,
                     ],
                 )?;
+                // Per-shot credit overrides (#707), keyed by the uuid just written.
+                if let Some(credit) = &shot.credit {
+                    save_shot_credit(&tx, &uuid, credit)?;
+                }
             }
         }
-
-        // Per-shot credit overrides (#707), keyed by the same (section_id,
-        // sequence_order) the shot rows above were written with.
-        save_shot_credits(&tx, project)?;
 
         // Save station merges. Cross-references are stored as stable
         // `StationKey` anchors in memory but persisted positionally (resolved

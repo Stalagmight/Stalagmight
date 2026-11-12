@@ -146,3 +146,65 @@ fn credit_leaves_every_table_an_outside_reader_reads_unchanged() {
         );
     }
 }
+
+/// An older build that saves in place rewrites the `shots` rows without
+/// touching `shot_credits`. Rows are keyed by shot uuid, so when that save
+/// deleted the first shot and renumbered the rest, each credit still lands on
+/// its own shot rather than on whichever shot moved into its old position.
+#[test]
+fn credit_follows_its_shot_when_the_rows_are_renumbered_behind_its_back() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("renumbered.stalx");
+    let mut db = Database::open(&path).unwrap();
+    db.save_project(&project_with_credit()).unwrap();
+    db.conn
+        .execute_batch(
+            "DELETE FROM shots WHERE sequence_order = 0;
+             UPDATE shots SET sequence_order = 0 WHERE sequence_order = 1;
+             UPDATE shots SET sequence_order = 1 WHERE sequence_order = 2;",
+        )
+        .unwrap();
+
+    let loaded = db.load_project().unwrap();
+    let mut expected = credits(&project_with_credit());
+    expected.remove(0);
+    assert_eq!(credits(&loaded), expected);
+}
+
+/// One unreadable cell must not make the project unopenable: the table only
+/// carries overrides, so a row this build cannot read is skipped and its shot
+/// inherits, while every readable row still applies.
+#[test]
+fn an_unreadable_credit_row_is_skipped_not_fatal() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("hostile.stalx");
+    let mut db = Database::open(&path).unwrap();
+    db.save_project(&project_with_credit()).unwrap();
+    let first_uuid: String = db
+        .conn
+        .query_row(
+            "SELECT uuid FROM shots WHERE sequence_order = 0",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    db.conn
+        .execute_batch("INSERT INTO shot_credits VALUES (42, 'not a uuid', NULL)")
+        .unwrap();
+    db.conn
+        .execute(
+            "INSERT INTO shot_credits VALUES (?1, X'00FF', NULL)",
+            [&first_uuid],
+        )
+        .unwrap();
+    db.conn
+        .execute_batch("INSERT INTO shot_credits VALUES ('', 'Nobody', NULL)")
+        .unwrap();
+
+    let loaded = db.load_project().unwrap();
+    assert_eq!(
+        credits(&loaded),
+        credits(&project_with_credit()),
+        "the readable rows still apply and the bad ones change nothing"
+    );
+}

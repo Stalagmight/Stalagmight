@@ -654,7 +654,8 @@ impl Shot {
             kind: data.kind,
             marker_index: data.marker_index,
             temperature: data.temperature,
-            credit: data.credit,
+            // One representation of "no overrides": `None`, never `Some(inherited)`.
+            credit: data.credit.and_then(ShotCredit::into_stored),
         }
     }
 
