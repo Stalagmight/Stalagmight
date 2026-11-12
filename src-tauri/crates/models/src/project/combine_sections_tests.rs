@@ -267,15 +267,22 @@ fn a_comment_on_the_other_section_follows_its_station() {
     }
 }
 
-/// Puts a comment, a name, a z-only manual offset and a zero datum on both
-/// joined ends (kept's station 2, other's station 0).
+fn datum(project: &mut Project, at: StationRef) {
+    let station_ref = project.key_for_ref(at).unwrap();
+    project.zero_datums.push(ZeroDatum {
+        station_ref,
+        gps: GpsCoordinates {
+            latitude: 20.0,
+            longitude: -87.0,
+            depth_reference: 0.0,
+        },
+    });
+}
+
+/// Puts a comment, a name and a z-only manual offset on both joined ends
+/// (kept's station 2, other's station 0), and a zero datum on other's.
 fn both_ends_loaded() -> (Project, SectionId, SectionId) {
     let (mut project, kept, other) = joined(CombinePairing::KeptEndOtherStart);
-    let gps = GpsCoordinates {
-        latitude: 20.0,
-        longitude: -87.0,
-        depth_reference: 0.0,
-    };
     for (at, label, z) in [
         (StationRef::new(kept, 2), "kept", 0.5),
         (StationRef::new(other, 0), "other", 0.25),
@@ -285,12 +292,9 @@ fn both_ends_loaded() -> (Project, SectionId, SectionId) {
             .station_comments
             .insert(key.clone(), label.to_string());
         project.station_names.insert(key.clone(), label.to_string());
-        project.station_offsets.insert(key.clone(), (0.0, 0.0, z));
-        project.zero_datums.push(ZeroDatum {
-            station_ref: key,
-            gps,
-        });
+        project.station_offsets.insert(key, (0.0, 0.0, z));
     }
+    datum(&mut project, StationRef::new(other, 0));
     (project, kept, other)
 }
 
@@ -350,7 +354,7 @@ fn the_joined_station_keeps_what_the_caller_picks() {
         assert_eq!(project.station_comments.len(), 1);
         assert_eq!(project.station_names.len(), 1);
         assert_eq!(project.station_offsets.len(), 1);
-        assert_eq!(project.zero_datums.len(), 1, "the kept end's datum wins");
+        assert_eq!(project.zero_datums.len(), 1);
         assert_eq!(
             project.resolve_key(&project.zero_datums[0].station_ref),
             Some(at)
@@ -566,6 +570,18 @@ fn an_aligned_closure_from_the_merged_join_into_either_section_is_refused() {
         project.loop_closures.push(c);
         assert_refused(project, kept, other, "another station");
     }
+}
+
+#[test]
+fn ends_that_only_lie_together_with_a_zero_datum_on_each_side_are_refused() {
+    let (mut project, kept, other) = joined(CombinePairing::KeptEndOtherStart);
+    datum(&mut project, StationRef::new(kept, 0));
+    datum(&mut project, StationRef::new(other, 3));
+    assert_refused(project, kept, other, "Both sections already have a zero datum");
+
+    let (mut project, kept, other) = joined(CombinePairing::KeptEndOtherStart);
+    datum(&mut project, StationRef::new(kept, 0));
+    assert_eq!(blocked(&project, kept, other), "", "one datum is fine");
 }
 
 #[test]

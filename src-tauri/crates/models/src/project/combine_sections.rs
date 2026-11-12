@@ -384,12 +384,19 @@ impl Project {
                 "The combined section would hold {total} shots; a section holds at most {limit}"
             ));
         }
-        if self.connected_elsewhere(kept, other, kept_end, other_end, merges) {
+        let joined = reach(merges, kept_end);
+        if self.connected_elsewhere(kept, other, &joined, other_end) {
             return Some(
                 "The sections already connect at another station, so the combined section \
                  would loop back on itself"
                     .to_string(),
             );
+        }
+        if !joined.contains(&other_end)
+            && self.section_has_zero_datum(kept)
+            && self.section_has_zero_datum(other)
+        {
+            return Some("Both sections already have a zero datum".to_string());
         }
         None
     }
@@ -407,14 +414,12 @@ impl Project {
         &self,
         kept: SectionId,
         other: SectionId,
-        kept_end: StationRef,
+        joined: &HashSet<StationRef>,
         other_end: StationRef,
-        merges: &Adjacency,
     ) -> bool {
-        if !reach(merges, kept_end).contains(&other_end) {
+        if !joined.contains(&other_end) {
             return self.get_rigid_connected_section_ids(kept).contains(&other);
         }
-        let joined = reach(merges, kept_end);
         let edges = self.rigid_edges();
         let slot: HashMap<SectionId, usize> = self
             .sections
