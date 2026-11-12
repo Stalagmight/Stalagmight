@@ -114,6 +114,25 @@ const SEPARATOR = /[;\r\n]/;
 const KEYBOARD_RING =
   '[html[data-input-modality=keyboard]_&:focus-within]:ring-1 [html[data-input-modality=keyboard]_&:focus-within]:ring-accent';
 
+/**
+ * Where the mouse pointer last was, page-wide. Read when a suggestion list
+ * opens, so a list that appears UNDER a resting pointer can tell the browser's
+ * "the content moved under the cursor" events from the user moving the mouse.
+ */
+let lastPointer: { x: number; y: number } | null = null;
+let trackingPointer = false;
+function trackPointer(): void {
+  if (trackingPointer || typeof window === 'undefined') return;
+  trackingPointer = true;
+  window.addEventListener(
+    'mousemove',
+    (event) => {
+      lastPointer = { x: event.clientX, y: event.clientY };
+    },
+    { capture: true, passive: true },
+  );
+}
+
 function isPartial(entry: PeopleInputValue): boolean {
   return typeof entry.count === 'number' && typeof entry.total === 'number' && entry.count < entry.total;
 }
@@ -251,6 +270,9 @@ export function PeopleInput({
   }, [ranked, query, selectedKeys]);
 
   const showList = !disabled && listOpen && options.length > 0;
+  useLayoutEffect(() => {
+    if (showList) hoverOrigin.current = lastPointer;
+  }, [showList]);
   // Two or more different people carry exactly the typed name (two "John
   // Smith"s with different emails): Enter must not quietly pick one of them.
   const ambiguous = useMemo(() => {
@@ -296,6 +318,15 @@ export function PeopleInput({
     setListOpen(false);
     setNav(null);
   }, []);
+
+  // Hover moves the highlight only after the pointer really MOVED over the
+  // list. A list that opens (or scrolls) under a resting pointer gets
+  // mouseenter / mouseover, and even mousemove, for the row that slid under
+  // it; following those put the highlight on whatever row happened to be
+  // there - the "Add <typed>" row, say - so Enter created a new person instead
+  // of taking the default-highlighted match.
+  useEffect(trackPointer, []);
+  const hoverOrigin = useRef<{ x: number; y: number } | null>(null);
 
   /** Add each person not already listed; a repeat flashes the existing pill instead. */
   const addPeople = (people: PersonLike[]) => {
@@ -626,6 +657,15 @@ export function PeopleInput({
     );
   };
 
+  /** A mousemove over row `index`: follow it only if the pointer moved since the last one seen. */
+  const hoverRow = (event: MouseEvent<HTMLDivElement>, index: number) => {
+    const at = { x: event.clientX, y: event.clientY };
+    const before = hoverOrigin.current;
+    hoverOrigin.current = at;
+    if (before === null || (before.x === at.x && before.y === at.y)) return;
+    if (!nav || nav.text !== text || nav.index !== index) setNav({ text, index });
+  };
+
   const renderOption = (option: Option, index: number) => {
     const active = index === activeIndex;
     const rowClass = `flex items-center gap-2 cursor-pointer ${compact ? 'px-2 py-0.5' : 'px-2 py-1'} ${
@@ -639,7 +679,7 @@ export function PeopleInput({
           role="option"
           aria-selected={active}
           className={`${rowClass} text-text-secondary ${index > 0 ? 'border-t border-border' : ''}`}
-          onMouseEnter={() => setNav({ text, index })}
+          onMouseMove={(event) => hoverRow(event, index)}
           onClick={() => pickOption(option)}
           data-testid={`${testId}-suggestion-add`}
         >
@@ -657,7 +697,7 @@ export function PeopleInput({
         role="option"
         aria-selected={active}
         className={rowClass}
-        onMouseEnter={() => setNav({ text, index })}
+        onMouseMove={(event) => hoverRow(event, index)}
         onClick={() => pickOption(option)}
         data-testid={`${testId}-suggestion-${index}`}
       >

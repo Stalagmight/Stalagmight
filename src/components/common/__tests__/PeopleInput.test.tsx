@@ -273,13 +273,44 @@ describe('PeopleInput - suggestions', () => {
     expect(onAdd).toHaveBeenCalledWith({ name: 'smi' });
   });
 
-  it('highlights on mouse hover', async () => {
+  it('highlights the row the mouse moves over', async () => {
     const user = userEvent.setup();
     render(<Harness />);
+    fireEvent.mouseMove(window, { clientX: 40, clientY: 40 });
     await user.type(input(), 'ro');
-    await user.hover(screen.getByTestId('people-suggestion-1'));
+    fireEvent.mouseMove(screen.getByTestId('people-suggestion-1'), { clientX: 60, clientY: 52 });
     expect(screen.getByTestId('people-suggestion-1')).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByTestId('people-suggestion-0')).toHaveAttribute('aria-selected', 'false');
+  });
+
+  // The data-table popover opens by double-click, so its list appears right
+  // where the pointer rests. The row that slides under it gets mouseenter /
+  // mouseover (and a same-coordinates mousemove); following those moved the
+  // highlight onto "Add <typed>", and Enter created a new person instead of
+  // taking the default-highlighted prefix match.
+  it('keeps the default highlight when the list opens under a resting pointer', async () => {
+    const user = userEvent.setup();
+    const onAdd = vi.fn();
+    render(<Harness onAdd={onAdd} />);
+    fireEvent.mouseMove(window, { clientX: 120, clientY: 90 });
+    // Typed with the keyboard: no click, so the pointer stays where it rests.
+    input().focus();
+    await user.type(input(), 'Ro', { skipClick: true });
+    const add = screen.getByTestId('people-suggestion-add');
+    fireEvent.mouseEnter(add, { clientX: 120, clientY: 90 });
+    fireEvent.mouseOver(add, { clientX: 120, clientY: 90 });
+    fireEvent.mouseMove(add, { clientX: 120, clientY: 90 });
+    expect(screen.getByTestId('people-suggestion-0')).toHaveAttribute('aria-selected', 'true');
+    expect(add).toHaveAttribute('aria-selected', 'false');
+
+    // A real movement over the list does move it.
+    fireEvent.mouseMove(add, { clientX: 126, clientY: 93 });
+    expect(add).toHaveAttribute('aria-selected', 'true');
+
+    // And Enter takes what is highlighted.
+    fireEvent.mouseMove(screen.getByTestId('people-suggestion-0'), { clientX: 126, clientY: 70 });
+    await user.keyboard('{Enter}');
+    expect(onAdd).toHaveBeenCalledWith(ROB);
   });
 
   it('offers "Add <typed>" unless the typed text is exactly a known identity', async () => {
