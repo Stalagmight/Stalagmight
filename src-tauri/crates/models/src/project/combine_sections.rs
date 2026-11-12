@@ -30,7 +30,8 @@
 //!
 //! Gauge: the kept section's least-squares gauge pair is captured before its
 //! shots move, so a prepend does not walk the gauge onto the new station 0.
-//! The other section's gauge pair goes with it.
+//! A component's gauge sits on its lowest section id, so when the other
+//! section has the lower id its gauge station replaces the kept section's.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -98,6 +99,21 @@ fn value_at<'a, V>(
 /// Both values are present and differ.
 fn differ<V: PartialEq>(a: Option<&V>, b: Option<&V>) -> bool {
     matches!((a, b), (Some(a), Some(b)) if a != b)
+}
+
+/// A gauge pair naming `section`'s station `station`; see
+/// [`Section::gauge_shot_uuid`].
+fn gauge_pair_at(section: &Section, station: usize) -> (Option<String>, Option<String>) {
+    let uuid = |index: usize| section.shots.get(index).and_then(|s| s.uuid.clone());
+    if station + 1 < section.shots.len() {
+        (uuid(station), uuid(station + 1))
+    } else if station >= 2 {
+        (uuid(station - 1), uuid(station - 2))
+    } else if section.reverse_parity {
+        (station.checked_sub(1).and_then(uuid), None)
+    } else {
+        (uuid(station), None)
+    }
 }
 
 /// Each shot's effective `(surveyor, date, length)`, in section order.
@@ -182,12 +198,27 @@ impl Project {
 
         self.ensure_section_shot_uuids(kept);
         self.ensure_section_shot_uuids(other);
+        if let Some(section) = self.get_section_mut(other) {
+            Self::capture_missing_gauge_anchor(section);
+        }
         if pairing.reverses_other() {
             self.reverse_section(other, true);
         }
         if let Some(section) = self.get_section_mut(kept) {
             Self::capture_missing_gauge_anchor(section);
         }
+        // The lower id carries the component's gauge, so keeping the higher
+        // one has to keep the other section's gauge station.
+        let other_gauge = (other < kept)
+            .then(|| self.get_section(other))
+            .flatten()
+            .map(|section| {
+                (
+                    section.gauge_shot_uuid.clone(),
+                    section.gauge_neighbour_uuid.clone(),
+                    Self::gauge_index(section) as u32,
+                )
+            });
 
         // After the reverse the other section always joins at its start
         // (append) or its end (prepend).
@@ -274,6 +305,19 @@ impl Project {
             .filter_map(|(key, sr)| Some((key, self.key_for_ref(moved(sr))?)))
             .collect();
         self.map_station_refs(|key| rebuilt.get(&key).cloned().unwrap_or(key));
+
+        if let Some((shot, neighbour, index)) = other_gauge {
+            let station = moved(StationRef::new(other, index)).station_index as usize;
+            if let Some(section) = self.get_section_mut(kept) {
+                // Without a neighbour the side comes from the parity, which is
+                // kept's now; name the station afresh instead.
+                (section.gauge_shot_uuid, section.gauge_neighbour_uuid) = if neighbour.is_some() {
+                    (shot, neighbour)
+                } else {
+                    gauge_pair_at(section, station)
+                };
+            }
+        }
 
         self.tidy_joined_relationships(kept);
         self.touch();

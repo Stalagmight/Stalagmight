@@ -173,6 +173,97 @@ fn a_prepend_keeps_the_kept_sections_gauge_station() {
     assert_eq!(section.gauge_shot_uuid.as_deref(), Some(first.as_str()));
 }
 
+/// The uuids of the shots touching `at`, which name it physically.
+fn touching(project: &Project, at: StationRef) -> Vec<String> {
+    let shots = &project.get_section(at.section_id).unwrap().shots;
+    let index = at.station_index as usize;
+    let mut out: Vec<String> = [index.checked_sub(1), Some(index)]
+        .into_iter()
+        .flatten()
+        .filter_map(|i| shots.get(i))
+        .map(|s| s.uuid.clone().unwrap())
+        .collect();
+    out.sort();
+    out
+}
+
+/// The shots touching the gauge station of `section`'s component.
+fn gauge(project: &Project, section: SectionId) -> Vec<String> {
+    touching(project, project.adjustment_anchor_for_tests(section).unwrap())
+}
+
+fn adjusted_xy(project: &Project, at: StationRef) -> (f64, f64) {
+    let station = project
+        .compute_adjusted_station_coordinates(&ClosureAdjustmentConfig::default())
+        .into_iter()
+        .find(|s| s.station_ref == at)
+        .unwrap();
+    (station.coordinates.x, station.coordinates.y)
+}
+
+#[test]
+fn keeping_the_higher_id_keeps_the_lower_ids_gauge_station() {
+    for pairing in [
+        CombinePairing::KeptEndOtherStart,
+        CombinePairing::KeptEndOtherEnd,
+    ] {
+        // `joined` keeps the lower id; combine the other way round.
+        let (mut project, low, high) = joined(pairing);
+        let (l, h) = pairing.ends(2, 3);
+        let m = merge(&project, StationRef::new(low, l), StationRef::new(high, h));
+        project.station_merges.push(m);
+        let c = closure(
+            &project,
+            StationRef::new(low, 1),
+            StationRef::new(high, 2),
+            false,
+        );
+        project.loop_closures.push(c);
+        let probe = project.key_for_ref(StationRef::new(high, 1)).unwrap();
+        let gauge_before = gauge(&project, low);
+        let xy_before = adjusted_xy(&project, StationRef::new(high, 1));
+        assert_ne!(gauge_before, touching(&project, StationRef::new(high, 0)));
+
+        project.combine_sections(high, low, &options()).unwrap();
+
+        assert_eq!(gauge(&project, high), gauge_before, "{pairing:?}");
+        let xy_after = adjusted_xy(&project, project.resolve_key(&probe).unwrap());
+        assert!(
+            (xy_after.0 - xy_before.0).abs() < 1e-5 && (xy_after.1 - xy_before.1).abs() < 1e-5,
+            "{pairing:?}: {xy_before:?} -> {xy_after:?}"
+        );
+    }
+}
+
+#[test]
+fn a_single_shot_lower_ids_gauge_keeps_its_side() {
+    let mut project = Project::new("Gauge".to_string(), None);
+    let low = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 4.0)],
+            ..Default::default()
+        })
+        .id;
+    assert!(project.reverse_section(low, false));
+    project.capture_missing_gauge_anchors();
+    let high = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 5.0), shot(45.0, 3.0)],
+            ..Default::default()
+        })
+        .id;
+    let target = xy(&project, low, 0);
+    place(&mut project, high, 2, target);
+    let m = merge(&project, StationRef::new(low, 0), StationRef::new(high, 2));
+    project.station_merges.push(m);
+    let gauge_before = gauge(&project, low);
+    assert_eq!(gauge_before, touching(&project, StationRef::new(low, 1)));
+
+    project.combine_sections(high, low, &options()).unwrap();
+
+    assert_eq!(gauge(&project, high), gauge_before);
+}
+
 fn day(m: u32, d: u32) -> NaiveDate {
     NaiveDate::from_ymd_opt(2026, m, d).unwrap()
 }

@@ -367,7 +367,7 @@ impl Project {
     /// been saved yet) or whose recorded shots are gone. That fallback is what an
     /// already-existing project uses until its first save, and it deliberately reproduces the
     /// legacy answer - station 0 - so upgrading moves nobody.
-    fn gauge_index(section: &Section) -> usize {
+    pub(super) fn gauge_index(section: &Section) -> usize {
         let position_of = |uuid: &Option<String>| -> Option<usize> {
             let uuid = uuid.as_deref()?;
             section
