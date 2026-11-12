@@ -164,6 +164,18 @@ describe('CombineSectionsDialog', () => {
     expect(combineSections.mock.calls[0]?.[2]).toMatchObject({ comment_pick: 'both', name_pick: 'other' });
   });
 
+  it('leaves an unnamed kept section unnamed instead of naming it "Section N"', async () => {
+    sections = creditedSections().map((s) => (s.id === 2 ? { ...s, name: null as unknown as string } : s));
+    render(<CombineSectionsDialog />);
+    const field = screen.getByTestId('combine-name');
+    expect(field).toHaveValue('');
+    expect(field).toHaveAttribute('placeholder', expect.stringContaining('Section 2'));
+    expect(screen.getByTestId('combine-confirm')).toBeEnabled();
+    fireEvent.click(screen.getByTestId('combine-confirm'));
+    await waitFor(() => expect(combineSections).toHaveBeenCalled());
+    expect(combineSections.mock.calls[0]?.[2]).toMatchObject({ name: '' });
+  });
+
   it('summarises the combined credit from every shot of both sections', () => {
     render(<CombineSectionsDialog />);
     expect(screen.getByTestId('combine-credit')).toHaveTextContent('(5 shots)');

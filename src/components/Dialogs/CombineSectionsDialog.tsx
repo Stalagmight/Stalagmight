@@ -73,7 +73,9 @@ export default function CombineSectionsDialog() {
   const keptName = sectionLabel(kept, keptId);
   const otherName = sectionLabel(other, otherId);
 
-  const defaultName = defaultCombinedName(keptName, otherName);
+  // From the RAW names: an unnamed kept section defaults to unnamed (the field
+  // shows the "Section N" label as its placeholder), not to that label.
+  const defaultName = defaultCombinedName(kept?.name ?? '', other?.name ?? '');
   const [name, setName] = useState<string | null>(null);
   const [color, setColor] = useState<string | null>(null);
   const [swapLr, setSwapLr] = useState(true);
@@ -108,10 +110,9 @@ export default function CombineSectionsDialog() {
   const commentConflict = Boolean(candidate?.comment_a && candidate?.comment_b);
   const nameConflict = Boolean(candidate?.station_name_a && candidate?.station_name_b);
   const blocked = candidate?.blocked_reason ?? null;
-  const isValid = shownName.trim().length > 0;
 
   const handleConfirm = async () => {
-    if (isSubmitting || isStale || blocked || !isValid) return;
+    if (isSubmitting || isStale || blocked) return;
     if (isEditingBlockedNow()) {
       setError('Editing is disabled in the current view.');
       return;
@@ -197,6 +198,7 @@ export default function CombineSectionsDialog() {
               id="combine-name"
               type="text"
               value={shownName}
+              placeholder={`${keptName} (leave empty to keep it unnamed)`}
               onChange={(e) => setName(e.target.value)}
               className="w-full"
               disabled={isSubmitting}
@@ -281,7 +283,7 @@ export default function CombineSectionsDialog() {
           <Button
             variant="primary"
             onClick={handleConfirm}
-            disabled={isSubmitting || isStale || Boolean(blocked) || !isValid}
+            disabled={isSubmitting || isStale || Boolean(blocked)}
             data-primary-action=""
             data-testid="combine-confirm"
           >
