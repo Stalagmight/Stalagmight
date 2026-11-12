@@ -12,7 +12,9 @@
 
 use serde_json::Value;
 
-use super::{api_error, client, Endpoint, SpeleoDbError, READ_TIMEOUT};
+use std::time::Instant;
+
+use super::{api_error, client, Endpoint, SpeleoDbError, TransportCause, READ_TIMEOUT};
 use speleodb_api::ApiOpError;
 
 /// Most collaborators one listing keeps, and so most name lookups it makes.
@@ -24,6 +26,12 @@ const MAX_TEXT_CHARS: usize = 255;
 
 /// The autocomplete endpoint refuses a shorter query.
 const MIN_QUERY_CHARS: usize = 3;
+
+/// The total time one listing's name lookups may take, whatever the per-request
+/// timeout: up to [`MAX_COLLABORATORS`] sequential lookups at the client's 30 s
+/// read timeout could otherwise hold the call for about 25 minutes. What is
+/// resolved by then is returned; the rest stay unnamed.
+pub(super) const LOOKUP_BUDGET: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// One user with access to a project.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,30 +115,46 @@ fn reply_json<T: serde::Serialize, E: std::fmt::Debug>(
 /// One user's display name by exact email (`GET /user/autocomplete/`), or
 /// `None` when the lookup fails, the email is too short to query, or no row
 /// matches it exactly. Never an error: a name is a nicety.
+/// Bounded by the same [`LOOKUP_BUDGET`] as a listing's lookups.
 pub fn lookup_user_name(base: &str, token: &str, insecure: bool, email: &str) -> Option<String> {
     let c = client(base, Some(token), insecure, READ_TIMEOUT).ok()?;
-    lookup(&c, email).ok().flatten()
+    let deadline = Instant::now() + c.settings.lookup_budget;
+    lookup(&c, email, deadline).ok().flatten()
 }
 
-fn lookup(c: &super::SdkClient, email: &str) -> Result<Option<String>, SpeleoDbError> {
+/// One exact-email name lookup, abandoned at `deadline` (a timeout error).
+fn lookup(
+    c: &super::SdkClient,
+    email: &str,
+    deadline: Instant,
+) -> Result<Option<String>, SpeleoDbError> {
     if email.chars().count() < MIN_QUERY_CHARS {
         return Ok(None);
     }
+    let out_of_time = || SpeleoDbError::Transport {
+        cause: TransportCause::Timeout,
+        detail: "the collaborator name lookups ran out of time".into(),
+    };
+    let remaining = deadline
+        .checked_duration_since(Instant::now())
+        .filter(|left| !left.is_zero())
+        .ok_or_else(out_of_time)?;
     // Not retried: a suggestion is not worth a second request.
     let value = c.call(Endpoint::UserAutocomplete, false, || async {
-        reply_json(
-            c.http.v2_user_autocomplete_list(None, email).await,
-            "user autocomplete",
-        )
+        let reply = tokio::time::timeout(remaining, c.http.v2_user_autocomplete_list(None, email))
+            .await
+            .map_err(|_| out_of_time())?;
+        reply_json(reply, "user autocomplete")
     })?;
     Ok(exact_name(&value, email))
 }
 
 /// Everyone with access to project `id`, with their names where the name
-/// lookup knows them. The permission list failing fails the call; a name
-/// lookup failing only leaves that name unknown, and a transport failure stops
-/// the remaining lookups (the server is not answering, so each would wait out
-/// its own timeout).
+/// lookup knows them. The permission list failing fails the call. The name
+/// lookups share one [`LOOKUP_BUDGET`], and the FIRST lookup that does not
+/// come back OK (an error status, a reply the client cannot read, a transport
+/// failure, the budget spent) stops the rest: the names resolved so far are
+/// returned and the others stay unknown.
 pub fn list_project_collaborators(
     base: &str,
     token: &str,
@@ -145,15 +169,15 @@ pub fn list_project_collaborators(
         )?;
         permission_rows(&value)
     })?;
+    let deadline = Instant::now() + c.settings.lookup_budget;
     let mut out = Vec::with_capacity(rows.len());
     let mut lookups_open = true;
     for (email, level) in rows {
         let mut name = None;
         if lookups_open {
-            match lookup(&c, &email) {
+            match lookup(&c, &email, deadline) {
                 Ok(found) => name = found,
-                Err(SpeleoDbError::Transport { .. }) => lookups_open = false,
-                Err(_) => {}
+                Err(_) => lookups_open = false,
             }
         }
         out.push(ProjectCollaborator { email, level, name });
