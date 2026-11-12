@@ -7,6 +7,10 @@ Update this file every time a new version is tagged.
 
 ## [Unreleased]
 
+### Added
+
+- **Split a section without deleting a shot** - right-click a station in the middle of a section, or a point along one of its shots, and choose Split Section Here. The section splits there into two that start out side by side, each with its own name and color (by default `<name>-A` and `<name>-B`). Shots past the split move to the second section with everything attached to them. A station merge on the split point ties both halves; a loop closure stays with the first half. If the split point has a comment or a zero datum, you choose which half keeps it. A point along a shot gets a new station first; a click within 1 cm of either end of the shot splits at that end instead. One Undo puts the section back ([#335](https://github.com/Stalagmight/Stalagmight/issues/335))
+
 ## [0.5.3] - 2026-11-12
 
 ### Added
