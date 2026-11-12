@@ -741,7 +741,7 @@ mod tests {
             .enumerate()
         {
             let mut s = shot(100 + i as u32, 0.0, 1.0, 0.0, 0.0);
-            s.credit = credit.cloned();
+            s.credit = credit.cloned().map(std::sync::Arc::new);
             a.shots.push(s);
         }
         let mut b = new_section(2, "B", "#00ff00");

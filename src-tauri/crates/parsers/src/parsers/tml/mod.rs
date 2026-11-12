@@ -6383,6 +6383,40 @@ mod tests {
     /// Ariane 26.3+ writes the two roles as separate `XMLExplorer` /
     /// `XMLSurveyor` elements; when either names somebody they win over the
     /// legacy combined field, and every imported shot carries its own credit.
+    /// A crafted `Explorer` field with a hundred thousand names per role parses
+    /// promptly and keeps at most `MAX_PEOPLE_PER_ROLE` people per role.
+    #[test]
+    fn a_huge_people_field_imports_bounded() {
+        let names: String = (0..100_000)
+            .map(|i| format!("Person {i}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let explorer = format!(
+            "&lt;Explorer&gt;{names}&lt;/Explorer&gt;&lt;Surveyor&gt;{names}&lt;/Surveyor&gt;"
+        );
+        let xml = wrap_xml(
+            &TripShot {
+                id: 1,
+                from_id: -1,
+                section: "A",
+                explorer: &explorer,
+                ..TripShot::default()
+            }
+            .xml(),
+        );
+        let started = std::time::Instant::now();
+        let tml = parse_synthetic_tmlu(&xml);
+        let (configs, _, _) = convert_tml_to_import_configs(&tml, false, false).expect("cvt");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "took {:?}",
+            started.elapsed()
+        );
+        let credit = configs[0].shots[0].credit();
+        assert_eq!(credit.explorers.len(), crate::models::MAX_PEOPLE_PER_ROLE);
+        assert_eq!(credit.surveyors.len(), crate::models::MAX_PEOPLE_PER_ROLE);
+    }
+
     #[test]
     fn the_xml_role_elements_win_and_each_shot_carries_its_credit() {
         let shot = |id: i64, explorer: &'static str, xml: &str| {

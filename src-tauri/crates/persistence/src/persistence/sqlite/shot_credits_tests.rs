@@ -426,3 +426,63 @@ fn credit_leaves_every_table_an_outside_reader_reads_unchanged_but_the_legacy_pa
     };
     assert!(plain_pairs.iter().all(|p| p == &(None, None)));
 }
+
+/// A `sections.surveyor` holding a hundred thousand names (a crafted file:
+/// nothing but the file size bounds the column) loads promptly, gives each
+/// role at most `MAX_PEOPLE_PER_ROLE` people, and the section's shots SHARE the
+/// one fallback credit instead of a copy each.
+#[test]
+fn a_huge_legacy_surveyor_loads_bounded_and_shared() {
+    let dir = TempDir::new().unwrap();
+    let mut project = Project::new("Huge".to_string(), None);
+    let id = section_with(&mut project, vec![SurveyCredit::default(); 2_000]);
+    let path = save(&dir, "huge.stalx", &project);
+    let names: String = (0..100_000)
+        .map(|i| format!("Person {i}"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    let conn = Connection::open(&path).unwrap();
+    conn.execute(
+        "UPDATE sections SET surveyor = ?1 WHERE id = ?2",
+        rusqlite::params![format!("{names} / {names}"), id],
+    )
+    .unwrap();
+    drop(conn);
+
+    let started = std::time::Instant::now();
+    let loaded = reload(&path);
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "took {:?}",
+        started.elapsed()
+    );
+    let section = loaded.get_section(id).unwrap();
+    let first = section.shots[0].credit();
+    assert_eq!(first.surveyors.len(), crate::models::MAX_PEOPLE_PER_ROLE);
+    assert_eq!(first.explorers.len(), crate::models::MAX_PEOPLE_PER_ROLE);
+    let shared = section.shots[0].credit.as_ref().unwrap();
+    assert!(section.shots.iter().all(|s| s
+        .credit
+        .as_ref()
+        .is_some_and(|c| std::sync::Arc::ptr_eq(c, shared))));
+}
+
+/// A legacy or imported name longer than a stored person may be is clamped
+/// when it is read, so a save and reopen gives back exactly what was shown.
+#[test]
+fn a_long_legacy_name_survives_a_save_unchanged() {
+    let dir = TempDir::new().unwrap();
+    let mut project = Project::new("Long".to_string(), None);
+    let id = section_with(&mut project, vec![SurveyCredit::default(); 2]);
+    let path = save(&dir, "long.stalx", &project);
+    let long = "n".repeat(crate::models::MAX_PERSON_TEXT_CHARS + 30);
+    sql(
+        &path,
+        &format!("UPDATE sections SET surveyor = '{long}' WHERE id = {id};"),
+    );
+    let once = reload(&path);
+    let name = &credits_of(&once, id)[0].surveyors[0].name;
+    assert_eq!(name.chars().count(), crate::models::MAX_PERSON_TEXT_CHARS);
+    let again = reload(&save(&dir, "again.stalx", &once));
+    assert_eq!(credits_of(&again, id), credits_of(&once, id));
+}

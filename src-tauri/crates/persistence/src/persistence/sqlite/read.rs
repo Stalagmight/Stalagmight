@@ -552,10 +552,12 @@ impl Database {
                 let credit_rows = super::shot_credits::load_credit_rows(&self.conn)?;
                 let mut claimed: std::collections::HashSet<&str> = std::collections::HashSet::new();
                 for section in sections.iter_mut() {
-                    let fallback = crate::models::SurveyCredit::from_legacy(
+                    // Computed once per section and SHARED by every shot that
+                    // falls back to it - one allocation, not one per shot.
+                    let fallback = std::sync::Arc::new(crate::models::SurveyCredit::from_legacy(
                         section.legacy_surveyor.take().as_deref(),
                         section.legacy_date.take(),
-                    );
+                    ));
                     for shot in &mut section.shots {
                         let row = shot
                             .uuid
@@ -564,7 +566,7 @@ impl Database {
                             .filter(|(u, _)| claimed.insert(u.as_str()));
                         match row {
                             Some((_, credit)) => shot.set_credit(credit.clone()),
-                            None => shot.set_credit(fallback.clone()),
+                            None => shot.set_shared_credit(&fallback),
                         }
                     }
                 }

@@ -7,6 +7,8 @@
 //! People are stored BY VALUE - a name and an optional email, no registry ids -
 //! so a shot copied between projects carries its credit with it.
 
+use std::collections::HashSet;
+
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -209,13 +211,66 @@ pub fn remove_person(list: &mut Vec<Person>, person: &Person) -> bool {
 }
 
 /// `list` in order with duplicates (by identity) and invalid people removed;
-/// the first spelling of each person wins.
+/// the first spelling of each person wins. Linear: identities go through a
+/// hash set, never a pairwise scan.
 pub fn dedupe_people(list: Vec<Person>) -> Vec<Person> {
-    let mut out: Vec<Person> = Vec::with_capacity(list.len());
-    for person in list {
-        add_person(&mut out, person);
+    let mut seen: HashSet<(String, Option<String>)> = HashSet::with_capacity(list.len());
+    list.into_iter()
+        .filter(|person| person.is_valid() && seen.insert(person.identity()))
+        .collect()
+}
+
+/// Most pieces one role's free text is read for. A role keeps at most
+/// [`MAX_PEOPLE_PER_ROLE`] people; this bounds the work on text that repeats
+/// the same few names (or empty pieces) a million times, which no survey does
+/// and a crafted file can.
+pub const MAX_PIECES_PER_ROLE: usize = MAX_PEOPLE_PER_ROLE * 16;
+
+/// One role's people as they are read from text: every piece sanitized
+/// ([`Person::sanitized`]: trimmed, clamped to [`MAX_PERSON_TEXT_CHARS`]),
+/// placeholders and empty pieces dropped, duplicates removed through a hash set
+/// of identities, and never more than [`MAX_PEOPLE_PER_ROLE`] people.
+struct RoleBuilder {
+    people: Vec<Person>,
+    seen: HashSet<(String, Option<String>)>,
+}
+
+impl RoleBuilder {
+    fn new() -> Self {
+        Self {
+            people: Vec::new(),
+            seen: HashSet::new(),
+        }
     }
-    out
+
+    fn is_full(&self) -> bool {
+        self.people.len() >= MAX_PEOPLE_PER_ROLE
+    }
+
+    fn push_piece(&mut self, piece: &str) {
+        let piece = piece.trim();
+        if self.is_full()
+            || piece.is_empty()
+            || PLACEHOLDERS.iter().any(|p| piece.eq_ignore_ascii_case(p))
+        {
+            return;
+        }
+        if let Some(person) = Person::named(clamp_chars(piece)) {
+            if self.seen.insert(person.identity()) {
+                self.people.push(person);
+            }
+        }
+    }
+
+    /// Read up to [`MAX_PIECES_PER_ROLE`] pieces, stopping once the role is full.
+    fn extend<'a>(&mut self, pieces: impl Iterator<Item = &'a str>) {
+        for piece in pieces.take(MAX_PIECES_PER_ROLE) {
+            if self.is_full() {
+                break;
+            }
+            self.push_piece(piece);
+        }
+    }
 }
 
 /// Placeholder texts that name nobody, compared casefolded.
@@ -232,49 +287,39 @@ const PLACEHOLDERS: [&str; 3] = ["unknown", "none", "?"];
 /// * Pieces are trimmed. Empty pieces and the placeholders `unknown`, `none`
 ///   and `?` are dropped, and duplicates are removed.
 pub fn legacy_people(text: &str) -> (Vec<Person>, Vec<Person>) {
-    let halves: Vec<&str> = text.split(" / ").collect();
-    if let [explorers, surveyors] = halves.as_slice() {
-        (split_people(explorers), split_people(surveyors))
-    } else {
-        (Vec::new(), split_people(text))
+    // Lazily: a crafted text can hold a million separators.
+    let mut halves = text.split(" / ");
+    match (halves.next(), halves.next(), halves.next()) {
+        (Some(explorers), Some(surveyors), None) => {
+            (split_people(explorers), split_people(surveyors))
+        }
+        _ => (Vec::new(), split_people(text)),
     }
 }
 
 /// Split one role's free text into people (the per-half rule of
 /// [`legacy_people`]).
+///
+/// Bounded like every splitter here (see [`RoleBuilder`]): at most
+/// [`MAX_PEOPLE_PER_ROLE`] people, each clamped to [`MAX_PERSON_TEXT_CHARS`].
 pub fn split_people(half: &str) -> Vec<Person> {
     let half = half.trim();
-    let mut people = Vec::new();
+    let mut role = RoleBuilder::new();
     if looks_like_last_first(half) {
-        push_piece(&mut people, half);
-        return people;
+        role.push_piece(half);
+    } else {
+        role.extend(half.split(';').flat_map(|piece| piece.split(',')));
     }
-    for piece in half.split(';') {
-        for name in piece.split(',') {
-            push_piece(&mut people, name);
-        }
-    }
-    people
+    role.people
 }
 
 /// Split free text on `,` and `;` alone (no `Last, First` rule): the importers'
 /// rule for a field that holds only names, such as an Ariane explorer list.
+/// Bounded like [`split_people`].
 pub fn split_names(text: &str) -> Vec<Person> {
-    let mut people = Vec::new();
-    for name in text.split([',', ';']) {
-        push_piece(&mut people, name);
-    }
-    people
-}
-
-fn push_piece(people: &mut Vec<Person>, piece: &str) {
-    let piece = piece.trim();
-    if piece.is_empty() || PLACEHOLDERS.iter().any(|p| piece.eq_ignore_ascii_case(p)) {
-        return;
-    }
-    if let Some(person) = Person::named(piece) {
-        add_person(people, person);
-    }
+    let mut role = RoleBuilder::new();
+    role.extend(text.split([',', ';']));
+    role.people
 }
 
 /// `Last, First`: exactly two comma parts, each a single non-empty word, and no
@@ -283,11 +328,13 @@ fn looks_like_last_first(half: &str) -> bool {
     if half.contains(';') {
         return false;
     }
-    let parts: Vec<&str> = half.split(',').map(str::trim).collect();
-    parts.len() == 2
-        && parts
+    let mut parts = half.split(',').map(str::trim);
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some(last), Some(first), None) => [last, first]
             .iter()
-            .all(|p| !p.is_empty() && !p.contains(char::is_whitespace))
+            .all(|p| !p.is_empty() && !p.contains(char::is_whitespace)),
+        _ => false,
+    }
 }
 
 /// Longest name or email a credit edit stores, in chars. Longer text is cut on

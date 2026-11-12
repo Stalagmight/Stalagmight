@@ -101,7 +101,7 @@ impl AppState {
                     Some(previous) => section.shots.get(previous),
                     None => section.shots.first(),
                 };
-                data.credit = neighbour.and_then(|shot| shot.credit.clone());
+                data.credit = neighbour.and_then(|shot| shot.credit.as_deref().cloned());
             }
         }
 

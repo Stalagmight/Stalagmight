@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use serde::{Deserialize, Deserializer, Serialize};
 use ts_rs::TS;
 
@@ -283,19 +285,34 @@ pub struct Shot {
     /// serializes every shot, so an uncredited project pays nothing for the
     /// field. `#[ts(optional)]` is explicit because ts-rs only infers it from
     /// the literal `Option::is_none` predicate.
-    #[serde(default, skip_serializing_if = "credit_absent_or_empty")]
+    ///
+    /// Behind an [`Arc`] so shots that share one credit share one allocation:
+    /// a section's legacy surveyor/date becomes the credit of every shot that
+    /// has no row of its own (`persistence::sqlite::shot_credits`), and a
+    /// copy per shot let a file with a long legacy list and many shots blow
+    /// up the memory of every open. The wire shape is the credit itself.
+    #[serde(default, skip_serializing_if = "shared_credit_absent_or_empty")]
     #[ts(optional)]
-    pub credit: Option<SurveyCredit>,
+    pub credit: Option<Arc<SurveyCredit>>,
 }
 
-/// `skip_serializing_if` for [`Shot::credit`] and [`ShotData::credit`]: absent
-/// and empty are the same fact, so both leave the key off the wire.
+/// `skip_serializing_if` for [`ShotData::credit`]: absent and empty are the
+/// same fact, so both leave the key off the wire.
 #[expect(
     clippy::ref_option,
     reason = "serde calls skip_serializing_if with &FieldType; Option<&SurveyCredit> does not typecheck there"
 )]
 fn credit_absent_or_empty(credit: &Option<SurveyCredit>) -> bool {
     credit.as_ref().is_none_or(SurveyCredit::is_empty)
+}
+
+/// [`credit_absent_or_empty`] for [`Shot::credit`].
+#[expect(
+    clippy::ref_option,
+    reason = "serde calls skip_serializing_if with &FieldType; Option<&Arc<_>> does not typecheck there"
+)]
+fn shared_credit_absent_or_empty(credit: &Option<Arc<SurveyCredit>>) -> bool {
+    credit.as_deref().is_none_or(SurveyCredit::is_empty)
 }
 
 /// `Some` for a credit worth storing, `None` for an empty one - the one
@@ -679,18 +696,24 @@ impl Shot {
             kind: data.kind,
             marker_index: data.marker_index,
             temperature: data.temperature,
-            credit: data.credit.and_then(stored_credit),
+            credit: data.credit.and_then(stored_credit).map(Arc::new),
         }
     }
 
     /// This shot's survey credit; the empty credit when it has none.
     pub fn credit(&self) -> &SurveyCredit {
-        self.credit.as_ref().unwrap_or(&EMPTY_CREDIT)
+        self.credit.as_deref().unwrap_or(&EMPTY_CREDIT)
     }
 
     /// Replace this shot's survey credit (an empty one is stored as `None`).
     pub fn set_credit(&mut self, credit: SurveyCredit) {
-        self.credit = stored_credit(credit);
+        self.credit = stored_credit(credit).map(Arc::new);
+    }
+
+    /// Give this shot a credit SHARED with other shots: one allocation for all
+    /// of them (an empty one is stored as `None`).
+    pub fn set_shared_credit(&mut self, credit: &Arc<SurveyCredit>) {
+        self.credit = (!credit.is_empty()).then(|| Arc::clone(credit));
     }
 
     /// Apply partial updates to this shot
@@ -812,7 +835,7 @@ impl Shot {
             kind: self.kind,
             marker_index: self.marker_index,
             temperature: self.temperature,
-            credit: self.credit.clone().and_then(stored_credit),
+            credit: self.credit.as_deref().cloned().and_then(stored_credit),
         }
     }
 }
@@ -892,7 +915,7 @@ impl From<Shot> for ShotData {
             kind: shot.kind,
             marker_index: shot.marker_index,
             temperature: shot.temperature,
-            credit: shot.credit.and_then(stored_credit),
+            credit: shot.credit.as_deref().cloned().and_then(stored_credit),
         }
     }
 }
@@ -1426,7 +1449,7 @@ mod tests {
         );
         // An empty Some is reachable through a hand-built value; it must leave
         // the wire exactly like None does.
-        shot.credit = Some(SurveyCredit::default());
+        shot.credit = Some(Arc::new(SurveyCredit::default()));
         let wire = serde_json::to_value(&shot).unwrap();
         assert!(!wire.as_object().unwrap().contains_key("credit"), "{wire}");
 

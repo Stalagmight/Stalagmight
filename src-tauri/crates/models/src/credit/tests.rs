@@ -294,3 +294,46 @@ fn credit_edit_wire_shape() {
         serde_json::from_str(r#"{"type":"section","section_id":4}"#).unwrap();
     assert_eq!(targets, CreditTargets::Section { section_id: 4 });
 }
+
+/// A crafted legacy or imported text with a hundred thousand names used to cost
+/// a pairwise scan with allocations per compare (it hung): the splitters are
+/// linear, stop at [`MAX_PEOPLE_PER_ROLE`] and clamp every name.
+#[test]
+fn the_splitters_are_bounded_on_huge_text() {
+    let many: String = (0..100_000)
+        .map(|i| format!("Person {i}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let started = std::time::Instant::now();
+    let surveyors = split_people(&many);
+    let names = split_names(&many);
+    let (explorers, legacy_surveyors) = legacy_people(&format!("{many} / {many}"));
+    let duplicates = split_names(&"A, ".repeat(1_000_000));
+    let separators = legacy_people(&" / ".repeat(1_000_000));
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "took {:?}",
+        started.elapsed()
+    );
+    for list in [&surveyors, &names, &explorers, &legacy_surveyors] {
+        assert_eq!(list.len(), MAX_PEOPLE_PER_ROLE);
+    }
+    assert_eq!(surveyors[0].name, "Person 0");
+    assert_eq!(duplicates.len(), 1);
+    assert!(separators.0.is_empty());
+}
+
+/// Every split name is stored the way it reads back after a save: clamped to
+/// [`MAX_PERSON_TEXT_CHARS`] at the split, so a reopen cannot change it.
+#[test]
+fn split_names_are_clamped_like_every_stored_person() {
+    let long = "x".repeat(MAX_PERSON_TEXT_CHARS + 44);
+    for people in [
+        split_people(&long),
+        split_names(&format!("{long}; B")),
+        legacy_people(&format!("{long} / {long}")).0,
+    ] {
+        assert_eq!(people[0].name.chars().count(), MAX_PERSON_TEXT_CHARS);
+        assert_eq!(people[0].sanitized().as_ref(), Some(&people[0]));
+    }
+}

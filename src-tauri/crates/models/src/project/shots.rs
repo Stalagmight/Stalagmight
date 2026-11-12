@@ -523,7 +523,7 @@ impl Project {
             marker_index: None,
             temperature: shot.temperature,
             // Both pieces were surveyed together, by the same people.
-            credit: shot.credit.clone(),
+            credit: shot.credit.as_deref().cloned(),
         };
         let tail_updates = ShotUpdates {
             length: Some(tail_length),
