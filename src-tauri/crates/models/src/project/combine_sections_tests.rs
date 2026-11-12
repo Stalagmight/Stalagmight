@@ -550,6 +550,25 @@ fn sections_sharing_a_shot_identity_are_refused() {
 }
 
 #[test]
+fn an_aligned_closure_from_the_merged_join_into_either_section_is_refused() {
+    for (from, to) in [((true, 2), (false, 1)), ((false, 0), (true, 1))] {
+        let (mut project, kept, other) = joined(CombinePairing::KeptEndOtherStart);
+        let m = merge(
+            &project,
+            StationRef::new(kept, 2),
+            StationRef::new(other, 0),
+        );
+        project.station_merges.push(m);
+        let at = |(is_kept, index): (bool, u32)| {
+            StationRef::new(if is_kept { kept } else { other }, index)
+        };
+        let c = closure(&project, at(from), at(to), true);
+        project.loop_closures.push(c);
+        assert_refused(project, kept, other, "another station");
+    }
+}
+
+#[test]
 fn a_missing_section_is_blocked() {
     let (project, kept, other) = joined(CombinePairing::KeptEndOtherStart);
     let merges = project.build_station_merge_adjacency();

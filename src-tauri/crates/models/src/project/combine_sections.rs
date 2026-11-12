@@ -400,8 +400,9 @@ impl Project {
     /// Ends that only lie together become rigidly linked by the combine, so any
     /// rigid path between the sections closes a loop. Ends that are already
     /// merged (directly or through a third section's station) are linked
-    /// already; then only a path avoiding the joined station's rigid group is a
-    /// second connection.
+    /// already; then every rigid edge not inside the joined station's merge
+    /// group counts, so an aligned closure from the joined station into either
+    /// section is a loop too.
     fn connected_elsewhere(
         &self,
         kept: SectionId,
@@ -413,13 +414,8 @@ impl Project {
         if !reach(merges, kept_end).contains(&other_end) {
             return self.get_rigid_connected_section_ids(kept).contains(&other);
         }
+        let joined = reach(merges, kept_end);
         let edges = self.rigid_edges();
-        let mut rigid: Adjacency = HashMap::new();
-        for &(a, b) in &edges {
-            rigid.entry(a).or_default().push(b);
-            rigid.entry(b).or_default().push(a);
-        }
-        let joined = reach(&rigid, kept_end);
         let slot: HashMap<SectionId, usize> = self
             .sections
             .iter()
@@ -428,7 +424,7 @@ impl Project {
             .collect();
         let mut sets = UnionFind::new(self.sections.len());
         for (a, b) in edges {
-            if joined.contains(&a) || joined.contains(&b) {
+            if joined.contains(&a) && joined.contains(&b) {
                 continue;
             }
             if let (Some(&i), Some(&j)) = (slot.get(&a.section_id), slot.get(&b.section_id)) {
