@@ -253,8 +253,7 @@ export default function CombineSectionsDialog() {
           <CombinedCreditSummary
             shots={(() => {
               const moved = candidate?.reverses ? [...other.shots].reverse() : other.shots;
-              const prepends = (keepB ? candidate?.end_b : candidate?.end_a) === 'start';
-              return prepends ? [...moved, ...kept.shots] : [...kept.shots, ...moved];
+              return keptEnd === 'start' ? [...moved, ...kept.shots] : [...kept.shots, ...moved];
             })()}
           />
         )}

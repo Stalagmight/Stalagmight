@@ -89,6 +89,8 @@ test.describe('Combine Sections', () => {
     await expect(dialog).toBeVisible();
     await expect(page.getByTestId('combine-summary')).toHaveText(/Combining Main-A \(2 shots\) and Main-B \(2 shots\) at station/);
     await expect(page.getByTestId('combine-name')).toHaveValue('Main');
+    // The combined survey credit is summarised from both halves' shots.
+    await expect(page.getByTestId('combine-credit')).toContainText('(4 shots)');
     await page.getByTestId('combine-confirm').click();
     await expect(dialog).not.toBeVisible();
 

@@ -112,7 +112,7 @@ station menu, the Sections panel and the command always agree.
   "connected at a second place"). This matches the forest invariant
   `merge_stations` keeps.
 
-## Compared with Nico's #713
+## Compared with #713
 
 Borrowed:
 - The shared-shot-identity refusal.
