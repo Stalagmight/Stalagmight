@@ -595,3 +595,46 @@ fn a_push_snapshot_keeps_the_credit_tables() {
         assert_eq!(credits_of(&pulled, id), credits_of(&project, id));
     }
 }
+
+/// A section with no shots has no shot to carry its legacy surveyor/date: it
+/// keeps them, and writes them back, save after save.
+#[test]
+fn a_shotless_section_keeps_its_legacy_pair_across_saves() {
+    let dir = TempDir::new().unwrap();
+    let mut project = Project::new("Empty".to_string(), None);
+    let id = section_with(&mut project, Vec::new());
+    let path = save(&dir, "empty.stalx", &project);
+    sql(
+        &path,
+        &format!(
+            "UPDATE sections SET surveyor = 'Empty Guy', date = '2020-01-02' WHERE id = {id};"
+        ),
+    );
+    let once = reload(&path);
+    let section = once.get_section(id).unwrap();
+    assert_eq!(section.legacy_surveyor.as_deref(), Some("Empty Guy"));
+    assert_eq!(section.legacy_date, NaiveDate::from_ymd_opt(2020, 1, 2));
+
+    let again_path = save(&dir, "again.stalx", &once);
+    let db = Database::open_readonly(&again_path).unwrap();
+    let stored: (Option<String>, Option<String>) = db
+        .conn
+        .query_row(
+            "SELECT surveyor, date FROM sections WHERE id = ?1",
+            [id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        stored,
+        (
+            Some("Empty Guy".to_string()),
+            Some("2020-01-02".to_string())
+        )
+    );
+    let twice = reload(&again_path);
+    assert_eq!(
+        twice.get_section(id).unwrap().legacy_surveyor.as_deref(),
+        Some("Empty Guy")
+    );
+}

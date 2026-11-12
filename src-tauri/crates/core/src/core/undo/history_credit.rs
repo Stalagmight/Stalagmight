@@ -102,6 +102,10 @@ pub(super) fn legacy_section_values(
     let mut prev = section_values
         .and_then(|(_, json)| serde_json::from_str::<serde_json::Value>(json).ok())
         .unwrap_or_else(|| serde_json::json!({}));
+    // A shot-less section recorded its own previous pair in the values.
+    if changes.is_empty() {
+        return prev.to_string();
+    }
     if let Some(map) = prev.as_object_mut() {
         map.insert(
             "surveyor".to_string(),

@@ -91,8 +91,12 @@ impl Database {
         for section in &project.sections {
             // The legacy columns keep their meaning for every older reader: the
             // distinct surveyor names joined with ", " and the earliest date.
-            let legacy_surveyor = section.surveyor_names();
-            let first_date = section.first_survey_date();
+            // A shot-less section writes back the legacy pair it keeps.
+            let (legacy_surveyor, first_date) = if section.shots.is_empty() {
+                (section.legacy_surveyor.clone(), section.legacy_date)
+            } else {
+                (section.surveyor_names(), section.first_survey_date())
+            };
             let legacy_date = first_date.map(|d| d.to_string());
             // What a shot with no credit row reads back as (`shot_credits`).
             let fallback =

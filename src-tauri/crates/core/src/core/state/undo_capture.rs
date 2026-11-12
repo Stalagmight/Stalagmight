@@ -38,6 +38,14 @@ impl AppState {
                 before_shot_uuid: None,
                 uuid: None,
                 previous_offsets: project.capture_rigid_connected_section_offsets(*section_id),
+                // Read BEFORE the insert: a first shot takes the section's
+                // legacy pair (`AppState::create_shot`), and only the stub can
+                // still see it.
+                consumed_legacy: project
+                    .get_section(*section_id)
+                    .filter(|s| s.shots.is_empty())
+                    .filter(|s| s.legacy_surveyor.is_some() || s.legacy_date.is_some())
+                    .map(|s| (s.legacy_surveyor.clone(), s.legacy_date)),
             },
 
             // For DeleteSection, capture full project snapshot (before/after pair)
@@ -574,11 +582,13 @@ impl AppState {
                 // The one field that had to be read BEFORE the insert, carried
                 // across from the stub `generate_undo_data` built (#413, finding
                 // 27's second arm).
-                let previous_offsets = match &undo_data {
+                let (previous_offsets, consumed_legacy) = match &undo_data {
                     UndoData::CreatedShotSnapshot {
-                        previous_offsets, ..
-                    } => previous_offsets.clone(),
-                    _ => std::collections::HashMap::new(),
+                        previous_offsets,
+                        consumed_legacy,
+                        ..
+                    } => (previous_offsets.clone(), consumed_legacy.clone()),
+                    _ => (std::collections::HashMap::new(), None),
                 };
                 // Capture full snapshot of the just-created shot so that redo can
                 // restore it with its original ID instead of re-executing CreateShot
@@ -632,6 +642,7 @@ impl AppState {
                             before_shot_uuid: anchor_uuid(*before_shot_id),
                             uuid: shot.uuid.clone(),
                             previous_offsets,
+                            consumed_legacy,
                         }
                     } else {
                         // The stub could not be completed, so it must not be

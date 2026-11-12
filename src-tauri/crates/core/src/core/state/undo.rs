@@ -198,6 +198,7 @@ impl AppState {
                 before_shot_id,
                 uuid,
                 previous_offsets,
+                consumed_legacy,
                 ..
             } => {
                 // Undo a CreateShot by removing the shot it created - resolved
@@ -228,6 +229,11 @@ impl AppState {
                             // recorded map instead of trusting that re-derivation
                             // (#413, finding 27's second arm).
                             self.restore_captured_section_offsets(previous_offsets);
+                            // Shot-less again: the section keeps the legacy
+                            // pair its first shot took.
+                            if let Some(pair) = consumed_legacy {
+                                self.restore_consumed_legacy(*section_id, pair);
+                            }
                         }
                         removed
                     }
@@ -891,6 +897,12 @@ impl AppState {
                                 }
                             };
                             if ok {
+                                // The re-created first shot carries the pair as
+                                // its credit again; the section lets it go.
+                                if let Some(section) = project.get_section_mut(*section_id) {
+                                    section.legacy_surveyor = None;
+                                    section.legacy_date = None;
+                                }
                                 CommandResult::success()
                             } else {
                                 CommandResult::failure("Failed to redo shot creation".to_string())

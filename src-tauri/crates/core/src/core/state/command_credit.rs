@@ -114,11 +114,22 @@ impl AppState {
                     return UndoData::None;
                 };
                 // The other fields, previous values only for what the update
-                // sets - the `PreviousValues` capture, minus surveyor/date.
+                // sets - the `PreviousValues` capture, minus surveyor/date. A
+                // shot-less section keeps the legacy pair itself, so there its
+                // previous surveyor/date are section values too.
+                let shotless = section.shots.is_empty();
                 let prev = SectionUpdates {
                     name: updates.name.as_ref().map(|_| section.name.clone()),
-                    surveyor: None,
-                    date: None,
+                    surveyor: updates
+                        .surveyor
+                        .as_ref()
+                        .filter(|_| shotless)
+                        .map(|_| section.legacy_surveyor.clone()),
+                    date: updates
+                        .date
+                        .as_ref()
+                        .filter(|_| shotless)
+                        .map(|_| section.legacy_date),
                     color: updates.color.as_ref().map(|_| section.color.clone()),
                     direction: updates.direction.map(|_| section.direction),
                     quality: updates.quality.map(|_| section.quality),

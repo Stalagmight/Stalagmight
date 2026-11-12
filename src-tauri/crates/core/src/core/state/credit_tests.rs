@@ -660,3 +660,50 @@ fn a_credit_edit_undoes_after_save_and_reopen() {
     assert!(state.redo().success);
     assert_eq!(credits(&state, sid), after);
 }
+
+#[test]
+fn a_shotless_section_keeps_its_surveyor_until_its_first_shot_takes_it() {
+    let state = state_with_project();
+    let sid = create_section(&state, Some("nh / ds"), Vec::new());
+    let legacy = |state: &AppState| {
+        let project = state.get_project_state().unwrap();
+        let section = project.get_section(sid).unwrap();
+        (section.legacy_surveyor.clone(), section.legacy_date)
+    };
+    assert_eq!(legacy(&state), (Some("nh / ds".to_string()), None));
+
+    // A legacy edit of a shot-less section edits the pair, undoably.
+    assert!(
+        state
+            .execute(Command::UpdateSectionMetadata {
+                section_id: sid,
+                updates: SectionUpdates {
+                    surveyor: Some(Some("Solo".to_string())),
+                    date: Some(day(4)),
+                    ..Default::default()
+                },
+            })
+            .success
+    );
+    assert_eq!(legacy(&state), (Some("Solo".to_string()), day(4)));
+    assert!(state.undo().success);
+    assert_eq!(legacy(&state), (Some("nh / ds".to_string()), None));
+
+    // The first shot takes the pair as its credit; the section lets it go.
+    let appended = state.execute(Command::CreateShot {
+        section_id: sid,
+        shot: shot(1.0),
+        after_shot_id: None,
+        before_shot_id: None,
+    });
+    assert!(appended.success, "{:?}", appended.error);
+    assert_eq!(credits(&state, sid), vec![credit(&["ds"], &["nh"], None)]);
+    assert_eq!(legacy(&state), (None, None));
+
+    // Undo: shot-less again, the pair is back; redo: the shot takes it again.
+    assert!(state.undo().success);
+    assert_eq!(legacy(&state), (Some("nh / ds".to_string()), None));
+    assert!(state.redo().success);
+    assert_eq!(credits(&state, sid), vec![credit(&["ds"], &["nh"], None)]);
+    assert_eq!(legacy(&state), (None, None));
+}

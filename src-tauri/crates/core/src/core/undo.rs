@@ -326,6 +326,15 @@ pub enum UndoData {
         #[serde(skip_serializing_if = "HashMap::is_empty")]
         #[serde(serialize_with = "ordered_section_offsets")]
         previous_offsets: HashMap<SectionId, Option<(f64, f64)>>,
+        /// The legacy surveyor/date the section held when this shot was the
+        /// first one appended into it (`Section::legacy_surveyor`): the shot
+        /// took it as its credit and the section let it go. The undo, which
+        /// leaves the section shot-less again, gives it back.
+        ///
+        /// FORMAT EVOLUTION (additive, no schema bump): absent in entries
+        /// written before it existed and for every other insert.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        consumed_legacy: Option<(Option<String>, Option<chrono::NaiveDate>)>,
     },
 
     /// Merge info for unmerging stations
@@ -1752,6 +1761,7 @@ mod tests {
                 before_shot_uuid: None,
                 uuid: uuid.map(str::to_string),
                 previous_offsets: HashMap::new(),
+                consumed_legacy: None,
             },
             timestamp: None,
         }
@@ -2215,6 +2225,7 @@ mod tests {
                     before_shot_uuid: None,
                     uuid: None,
                     previous_offsets: HashMap::new(),
+                    consumed_legacy: None,
                 },
                 timestamp: None,
             },

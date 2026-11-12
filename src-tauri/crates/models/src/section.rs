@@ -51,18 +51,23 @@ pub struct Section {
     pub id: SectionId,
     /// Optional human-readable name
     pub name: Option<String>,
-    /// LEGACY, read-only: the free-text surveyor a section carried before the
-    /// survey credit moved onto its shots. Never serialized and absent from the
-    /// TS shape; an old project snapshot or undo payload that still carries
-    /// `"surveyor"` deserializes into it, and
-    /// [`Section::absorb_legacy_credit`] moves it onto the shots. Read who
-    /// surveyed a section with [`Section::credit_summary`].
-    #[serde(default, rename = "surveyor", skip_serializing)]
+    /// LEGACY: the free-text surveyor a section carried before the survey
+    /// credit moved onto its shots. Absent from the TS shape. An old project
+    /// snapshot or undo payload that still carries `"surveyor"` deserializes
+    /// into it, and [`Section::absorb_legacy_credit`] moves it onto the shots.
+    ///
+    /// A section WITH NO SHOTS keeps it: there is no shot to carry it, so it
+    /// stays the section's own (written to `sections.surveyor`, serialized in
+    /// undo snapshots) until the first shot arrives and takes it as its credit
+    /// (`AppState::create_shot`). Only such a section ever holds one, so the key
+    /// is on the wire only for a shot-less section. Read who surveyed a section
+    /// with [`Section::credit_summary`].
+    #[serde(default, rename = "surveyor", skip_serializing_if = "Option::is_none")]
     #[ts(skip)]
     pub legacy_surveyor: Option<String>,
-    /// LEGACY, read-only: the section-level survey date, absorbed like
+    /// LEGACY: the section-level survey date, kept and absorbed like
     /// [`Section::legacy_surveyor`].
-    #[serde(default, rename = "date", skip_serializing)]
+    #[serde(default, rename = "date", skip_serializing_if = "Option::is_none")]
     #[ts(skip)]
     pub legacy_date: Option<NaiveDate>,
     /// Display color (hex format, e.g., "#4ecdc4")
@@ -469,12 +474,17 @@ fn default_section_quality() -> f64 {
 impl Section {
     /// Create a new section from section data
     pub fn new(id: SectionId, data: SectionData) -> Self {
-        let template = SurveyCredit::from_legacy(data.surveyor.as_deref(), data.date);
+        let template = std::sync::Arc::new(SurveyCredit::from_legacy(
+            data.surveyor.as_deref(),
+            data.date,
+        ));
+        // A shot-less section keeps the legacy pair: no shot can carry it yet.
+        let shotless = data.shots.is_empty();
         let mut section = Self {
             id,
             name: data.name,
-            legacy_surveyor: None,
-            legacy_date: None,
+            legacy_surveyor: data.surveyor.filter(|_| shotless),
+            legacy_date: data.date.filter(|_| shotless),
             color: data.color,
             direction: data.direction.unwrap_or_default(),
             quality: if data.quality.is_finite() && data.quality > 0.0 {
@@ -532,11 +542,14 @@ impl Section {
                 }
             }
             // The legacy section-level surveyor/date is a template for the
-            // shots that carry no credit of their own.
-            if !template.is_empty() && shot_data.credit().is_empty() {
-                shot_data.credit = Some(template.clone());
-            }
+            // shots that carry no credit of their own, SHARED by all of them.
+            let inherits = shot_data.credit().is_empty();
             section.add_shot(shot_data);
+            if inherits {
+                if let Some(shot) = section.shots.last_mut() {
+                    shot.set_shared_credit(&template);
+                }
+            }
         }
         if repaired > 0 {
             // Losing a foreign identity is exactly the kind of thing that is
@@ -594,9 +607,10 @@ impl Section {
     pub fn to_section_data(&self) -> SectionData {
         SectionData {
             name: self.name.clone(),
-            // The credit rides on the shots; the template stays empty.
-            surveyor: None,
-            date: None,
+            // The credit rides on the shots; only a shot-less section still
+            // holds a legacy pair, which is then its template.
+            surveyor: self.legacy_surveyor.clone(),
+            date: self.legacy_date,
             color: self.color.clone(),
             direction: Some(self.direction),
             quality: self.quality,
@@ -696,6 +710,15 @@ impl Section {
         if let Some(v) = &updates.name {
             self.name.clone_from(v);
         }
+        if self.shots.is_empty() {
+            // No shot to carry them: the section keeps the legacy pair.
+            if let Some(v) = &updates.surveyor {
+                self.legacy_surveyor = v.clone().filter(|t| !t.trim().is_empty());
+            }
+            if let Some(v) = &updates.date {
+                self.legacy_date = *v;
+            }
+        }
         if let Some(v) = &updates.surveyor {
             self.set_legacy_surveyor_on_every_shot(v.as_deref());
         }
@@ -760,23 +783,33 @@ impl Section {
 
     /// Move a legacy section-level surveyor/date (read from an old snapshot
     /// or undo payload into [`Self::legacy_surveyor`]/[`Self::legacy_date`])
-    /// onto every shot whose credit is empty, then clear the legacy fields.
+    /// onto every shot whose credit is empty, then clear the legacy fields. A
+    /// section with no shots keeps them (see [`Self::legacy_surveyor`]).
     /// Returns whether any shot changed. Idempotent.
     pub fn absorb_legacy_credit(&mut self) -> bool {
-        let surveyor = self.legacy_surveyor.take();
-        let date = self.legacy_date.take();
-        let template = SurveyCredit::from_legacy(surveyor.as_deref(), date);
+        if self.shots.is_empty() {
+            return false;
+        }
+        let template = std::sync::Arc::new(self.take_legacy_template());
         if template.is_empty() {
             return false;
         }
         let mut changed = false;
         for shot in &mut self.shots {
             if shot.credit().is_empty() {
-                shot.set_credit(template.clone());
+                shot.set_shared_credit(&template);
                 changed = true;
             }
         }
         changed
+    }
+
+    /// The legacy pair as a credit template, clearing it from the section.
+    pub fn take_legacy_template(&mut self) -> SurveyCredit {
+        SurveyCredit::from_legacy(
+            self.legacy_surveyor.take().as_deref(),
+            self.legacy_date.take(),
+        )
     }
 
     /// Split shots at the given shot ID, excluding the target shot.
@@ -1738,5 +1771,27 @@ mod tests {
         let decl = Section::decl();
         assert!(!decl.contains("surveyor"), "{decl}");
         assert!(!decl.contains(" date"), "{decl}");
+    }
+
+    #[test]
+    fn a_shotless_section_keeps_its_legacy_pair_on_the_wire() {
+        let date = NaiveDate::from_ymd_opt(2022, 3, 4);
+        let section = Section::new(
+            7,
+            SectionData {
+                surveyor: Some("Lone Surveyor".to_string()),
+                date,
+                ..Default::default()
+            },
+        );
+        assert_eq!(section.legacy_surveyor.as_deref(), Some("Lone Surveyor"));
+        assert_eq!(section.legacy_date, date);
+        let data = section.to_section_data();
+        assert_eq!(data.surveyor.as_deref(), Some("Lone Surveyor"));
+        let json = serde_json::to_value(&section).unwrap();
+        assert_eq!(json["surveyor"], "Lone Surveyor");
+        let mut back: Section = serde_json::from_value(json).unwrap();
+        assert!(!back.absorb_legacy_credit(), "nothing to absorb into");
+        assert_eq!(back.legacy_surveyor.as_deref(), Some("Lone Surveyor"));
     }
 }

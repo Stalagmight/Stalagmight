@@ -566,12 +566,14 @@ impl Database {
                     // build wrote beside them. An older build keeps the rows but
                     // rewrites the pair; its edit is then the newer truth.
                     let rows_hold = recorded.get(&section_id) == stored_legacy.get(&section_id);
+                    // A section with no shots keeps its legacy pair: nothing
+                    // can carry it (`Section::legacy_surveyor`).
+                    if section.shots.is_empty() {
+                        continue;
+                    }
                     // Computed once per section and SHARED by every shot that
                     // falls back to it - one allocation, not one per shot.
-                    let fallback = std::sync::Arc::new(crate::models::SurveyCredit::from_legacy(
-                        section.legacy_surveyor.take().as_deref(),
-                        section.legacy_date.take(),
-                    ));
+                    let fallback = std::sync::Arc::new(section.take_legacy_template());
                     for shot in &mut section.shots {
                         let row = shot
                             .uuid

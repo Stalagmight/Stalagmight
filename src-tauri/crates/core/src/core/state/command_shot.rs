@@ -1,7 +1,8 @@
 use super::AppState;
 use crate::core::{CommandResult, Validator};
 use crate::models::{
-    shot_display_position, SectionId, ShotData, ShotId, ShotKind, ShotUpdates, FEATURE_ID_STRIDE,
+    shot_display_position, SectionId, ShotData, ShotId, ShotKind, ShotUpdates, SurveyCredit,
+    FEATURE_ID_STRIDE,
 };
 
 impl AppState {
@@ -95,13 +96,26 @@ impl AppState {
         // inserting at the start. Here, at the FORWARD executor only: redo and
         // restore replay the recorded shot, credit included, through the
         // `Section` methods.
+        //
+        // The FIRST shot of a shot-less section takes the legacy surveyor/date
+        // the section kept (`Section::legacy_surveyor`) instead, and the
+        // section lets it go below; the undo gives it back
+        // (`CreatedShotSnapshot::consumed_legacy`).
         if data.credit().is_empty() {
             if let Some(section) = project.get_section(section_id) {
-                let neighbour = match shot_index.checked_sub(1) {
-                    Some(previous) => section.shots.get(previous),
-                    None => section.shots.first(),
-                };
-                data.credit = neighbour.and_then(|shot| shot.credit.as_deref().cloned());
+                if section.shots.is_empty() {
+                    data.credit = SurveyCredit::from_legacy(
+                        section.legacy_surveyor.as_deref(),
+                        section.legacy_date,
+                    )
+                    .stored();
+                } else {
+                    let neighbour = match shot_index.checked_sub(1) {
+                        Some(previous) => section.shots.get(previous),
+                        None => section.shots.first(),
+                    };
+                    data.credit = neighbour.and_then(|shot| shot.credit.as_deref().cloned());
+                }
             }
         }
 
@@ -124,6 +138,10 @@ impl AppState {
 
         if let Some(new_shot) = shot {
             let new_shot_id = new_shot.id;
+            if let Some(section) = project.get_section_mut(section_id) {
+                section.legacy_surveyor = None;
+                section.legacy_date = None;
+            }
             tracing::debug!(
                 section_id,
                 shot_id = new_shot_id,
@@ -348,6 +366,27 @@ impl AppState {
     /// undone (both anchors absent and position 0 - an `add_shot` append into a
     /// section that had no shots); it is re-checked against the live section
     /// before it is honored.
+    /// Give a section that is shot-less again the legacy pair its first shot
+    /// took (the undo of that shot's creation).
+    pub(super) fn restore_consumed_legacy(
+        &self,
+        section_id: SectionId,
+        pair: &(Option<String>, Option<chrono::NaiveDate>),
+    ) {
+        let mut guard = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(section) = guard
+            .as_mut()
+            .and_then(|p| p.get_section_mut(section_id))
+            .filter(|s| s.shots.is_empty())
+        {
+            section.legacy_surveyor.clone_from(&pair.0);
+            section.legacy_date = pair.1;
+        }
+    }
+
     pub(super) fn remove_created_shot(
         &self,
         section_id: SectionId,
