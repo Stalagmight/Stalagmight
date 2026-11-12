@@ -3,7 +3,9 @@
 use super::command_delete_split::section_budget_refusal;
 use super::AppState;
 use crate::core::{Command, CommandResult};
-use crate::models::{SectionId, SplitAt, SplitSectionOptions, SplitSide, MIN_SPLIT_CHILD_LENGTH_M};
+use crate::models::{
+    Project, SectionId, ShotId, SplitAt, SplitSectionOptions, SplitSide, MIN_SPLIT_CHILD_LENGTH_M,
+};
 
 impl AppState {
     /// Split a section in two at a mid-section station, or at a point along a
@@ -35,6 +37,21 @@ impl AppState {
             "Executing split_section as single undo unit"
         );
 
+        // Every refusal is decided first, read-only: the ignore pin below
+        // writes to the database, so a refused split must not reach it.
+        let cut = {
+            let Ok(proj_guard) = self.project.lock() else {
+                return CommandResult::failure("Failed to lock project".to_string());
+            };
+            let Some(project) = proj_guard.as_ref() else {
+                return CommandResult::failure("No project open".to_string());
+            };
+            match Self::validate_cut(project, section_id, at) {
+                Ok(cut) => cut,
+                Err(reason) => return CommandResult::failure(reason),
+            }
+        };
+
         // The shots past the cut move to a new section: position-keyed
         // ignores on them would lapse (see the pin's doc).
         self.pin_position_keyed_ignores_before_move(&[section_id]);
@@ -55,56 +72,18 @@ impl AppState {
             let Some(project) = proj_guard.as_mut() else {
                 return CommandResult::failure("No project open".to_string());
             };
-            let Some(section) = project.get_section(section_id) else {
-                return CommandResult::failure(format!("Section {section_id} not found"));
-            };
-            // The split mints the second half's id (#555); refuse before any
-            // mutation rather than truncate the first half with nowhere to put
-            // the rest.
-            if let Some(refusal) = section_budget_refusal(project, section_id) {
-                return refusal;
-            }
-
-            // Resolve the cut to a station index, splitting the shot first when
-            // the cut lands inside one. Every refusal happens before that
-            // insert, so nothing below needs a rollback except a model error.
-            let station_index = match at {
-                SplitAt::Station { station_index } => station_index,
-                SplitAt::Shot { shot_id, distance } => {
-                    let Some(pos) = section.shots.iter().position(|s| s.id == shot_id) else {
-                        return CommandResult::failure(format!(
-                            "Shot {shot_id} not found in section {section_id}"
-                        ));
-                    };
-                    let length = section.shots[pos].length;
-                    if !distance.is_finite() || distance < 0.0 || distance > length {
-                        return CommandResult::failure(format!(
-                            "Distance {distance} is outside shot {shot_id} (0 to {length} m)"
-                        ));
+            let station_index = match cut {
+                Cut::Station(station_index) => station_index,
+                Cut::InShot {
+                    shot_id,
+                    distance,
+                    station_index,
+                } => {
+                    if let Err(e) = project.split_shot_at_distance(section_id, shot_id, distance) {
+                        let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
+                        return CommandResult::failure(e);
                     }
-                    if distance < MIN_SPLIT_CHILD_LENGTH_M {
-                        pos as u32
-                    } else if length - distance < MIN_SPLIT_CHILD_LENGTH_M {
-                        pos as u32 + 1
-                    } else {
-                        // Same guard as Insert Station: a new station inside a
-                        // shot of an adjusted network changes that network.
-                        if project.is_shot_frozen_by_id(section_id, shot_id) {
-                            return CommandResult::failure(
-                                "Cannot split a frozen shot. This shot is part of an \
-                                 adjusted survey network."
-                                    .to_string(),
-                            );
-                        }
-                        // The new station is always a mid-section one, so the
-                        // split below cannot refuse it for being an end.
-                        if let Err(e) =
-                            project.split_shot_at_distance(section_id, shot_id, distance)
-                        {
-                            return CommandResult::failure(e);
-                        }
-                        pos as u32 + 1
-                    }
+                    station_index
                 }
             };
 
@@ -117,8 +96,8 @@ impl AppState {
                     id
                 }
                 Err(e) => {
-                    // Only reachable after a shot split inserted a station: every
-                    // other refusal is validated before the model mutates.
+                    // Not expected: `validate_cut` ran the same checks. Undo a
+                    // station the shot split may already have inserted.
                     let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
                     return CommandResult::failure(e);
                 }
@@ -153,4 +132,69 @@ impl AppState {
             .with_section_id(second_id)
             .with_section_ids(vec![section_id, second_id])
     }
+
+    /// Resolve `at` to where the split cuts, or why it is refused. Read-only:
+    /// every refusal of the split is decided here, before anything changes.
+    fn validate_cut(project: &Project, section_id: SectionId, at: SplitAt) -> Result<Cut, String> {
+        let Some(section) = project.get_section(section_id) else {
+            return Err(format!("Section {section_id} not found"));
+        };
+        // The split mints the second half's id (#555); refuse rather than
+        // truncate the first half with nowhere to put the rest.
+        if let Some(refusal) = section_budget_refusal(project, section_id) {
+            return Err(refusal.error.unwrap_or_default());
+        }
+        let cut = match at {
+            SplitAt::Station { station_index } => Cut::Station(station_index),
+            SplitAt::Shot { shot_id, distance } => {
+                let Some(pos) = section.shots.iter().position(|s| s.id == shot_id) else {
+                    return Err(format!("Shot {shot_id} not found in section {section_id}"));
+                };
+                let length = section.shots[pos].length;
+                if !distance.is_finite() || distance < 0.0 || distance > length {
+                    return Err(format!(
+                        "Distance {distance} is outside shot {shot_id} (0 to {length} m)"
+                    ));
+                }
+                if distance < MIN_SPLIT_CHILD_LENGTH_M {
+                    Cut::Station(pos as u32)
+                } else if length - distance < MIN_SPLIT_CHILD_LENGTH_M {
+                    Cut::Station(pos as u32 + 1)
+                } else {
+                    // Same guard as Insert Station: a new station inside a
+                    // shot of an adjusted network changes that network.
+                    if project.is_shot_frozen_by_id(section_id, shot_id) {
+                        return Err("Cannot split a frozen shot. This shot is part of an \
+                                    adjusted survey network."
+                            .to_string());
+                    }
+                    // The new station is always a mid-section one, so the
+                    // split cannot refuse it for being an end.
+                    return Ok(Cut::InShot {
+                        shot_id,
+                        distance,
+                        station_index: pos as u32 + 1,
+                    });
+                }
+            }
+        };
+        if let Cut::Station(station_index) = cut {
+            if let Some(refusal) = project.split_station_refusal(section_id, station_index) {
+                return Err(refusal);
+            }
+        }
+        Ok(cut)
+    }
+}
+
+/// Where a validated split cuts: at an existing station, or inside a shot,
+/// which first gets a station inserted `distance` along it.
+#[derive(Debug, Clone, Copy)]
+enum Cut {
+    Station(u32),
+    InShot {
+        shot_id: ShotId,
+        distance: f64,
+        station_index: u32,
+    },
 }

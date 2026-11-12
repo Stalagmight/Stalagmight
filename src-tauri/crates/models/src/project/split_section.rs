@@ -62,17 +62,13 @@ impl Project {
         if options.datum_side == SplitSide::Both {
             return Err("A zero datum can stay on only one half of a split".to_string());
         }
+        if let Some(refusal) = self.split_station_refusal(section_id, station_index) {
+            return Err(refusal);
+        }
         let section = self
             .get_section(section_id)
             .ok_or_else(|| format!("Section {section_id} not found"))?;
-        let shot_count = section.shots.len();
         let k = station_index as usize;
-        if k == 0 || k >= shot_count {
-            return Err(format!(
-                "Station {station_index} is the first or last station of section \
-                 {section_id}; split at a station in the middle"
-            ));
-        }
 
         let direction = section.direction;
         let quality = section.quality;
@@ -145,6 +141,26 @@ impl Project {
             self.settle_cut_halves(section_id, second_id, orientation, k, k);
         }
         Ok(second_id)
+    }
+
+    /// Why `section_id` cannot be split at its station `station_index`, if it
+    /// cannot: the section is missing, or the station is not a mid-section
+    /// one. Read-only, so a caller can refuse before changing anything.
+    pub fn split_station_refusal(
+        &self,
+        section_id: SectionId,
+        station_index: u32,
+    ) -> Option<String> {
+        let Some(section) = self.get_section(section_id) else {
+            return Some(format!("Section {section_id} not found"));
+        };
+        let k = station_index as usize;
+        (k == 0 || k >= section.shots.len()).then(|| {
+            format!(
+                "Station {station_index} is the first or last station of section \
+                 {section_id}; split at a station in the middle"
+            )
+        })
     }
 
     /// Give the second half's start (`copy`) what the split station (`end`)

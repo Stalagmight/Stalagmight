@@ -563,6 +563,80 @@ fn a_position_keyed_ignore_follows_its_shot_into_the_second_half() {
     assert_eq!(short_shot_verdicts(&state), vec![(second, true)]);
 }
 
+/// The uuid each stored ignore is pinned to, in row order.
+fn ignore_uuids(state: &AppState) -> Vec<Option<String>> {
+    state
+        .load_resolved_warnings()
+        .unwrap()
+        .into_iter()
+        .map(|row| row.shot_uuid)
+        .collect()
+}
+
+/// A refused split changes nothing, the database included: the pin of
+/// position-keyed ignores (a database write) runs only once every refusal has
+/// passed.
+#[test]
+fn a_refused_split_leaves_position_keyed_ignores_unpinned() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let path = temp.path().join("split.stalx");
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Split".to_string(),
+        location: None,
+    });
+    let main = create(
+        &state,
+        "Main",
+        vec![flat(90.0, 5.0), flat(90.0, 5.0), flat(90.0, 0.1)],
+    );
+    assert!(
+        state
+            .execute(Command::SaveProject {
+                path: Some(path.clone())
+            })
+            .success
+    );
+    state
+        .save_resolved_warning(&crate::persistence::ResolvedWarning {
+            section_id: main,
+            shot_id: shot_id(&state, main, 2),
+            warning_code: "SHORT_SHOT".to_string(),
+            resolved_at: chrono::Utc::now(),
+            resolved_comment: None,
+            shot_uuid: None,
+        })
+        .unwrap();
+
+    for (at, what) in [
+        (SplitAt::Station { station_index: 0 }, "an end station"),
+        (
+            SplitAt::Shot {
+                shot_id: shot_id(&state, main, 0),
+                distance: 0.001,
+            },
+            "a cut that snaps to an end",
+        ),
+        (
+            SplitAt::Shot {
+                shot_id: shot_id(&state, main, 1),
+                distance: 9.0,
+            },
+            "a distance off the shot",
+        ),
+    ] {
+        let result = state.execute_split_section(main, at, options());
+        assert!(!result.success, "{what}");
+        assert_eq!(ignore_uuids(&state), vec![None], "{what}");
+    }
+
+    // The same ignore IS pinned by a split that goes ahead.
+    let result =
+        state.execute_split_section(main, SplitAt::Station { station_index: 1 }, options());
+    assert!(result.success, "{:?}", result.error);
+    assert!(ignore_uuids(&state)[0].is_some());
+}
+
 /// Delete-and-split builds its second section fresh too, and keeps the cut
 /// section's orientation the same way Split Section Here does: the reverse
 /// parity, and a captured gauge pair on the half that now holds its station.
