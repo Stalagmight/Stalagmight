@@ -717,19 +717,46 @@ fn different_manual_offsets_on_the_join_block() {
     assert!(blocked(&project, k, o).contains("moved by different amounts"));
 }
 
-#[test]
-fn the_shot_budget_blocks() {
+/// Two sections of `k_shots` and `o_shots`, merged end to start.
+fn budget_pair(k_shots: u32, o_shots: u32) -> (Project, SectionId, SectionId) {
     let mut project = Project::new("Budget".to_string(), None);
     let k = add(
         &mut project,
         "K",
-        (0..99_995).map(|_| shot(90.0, 1.0)).collect(),
+        (0..k_shots).map(|_| shot(90.0, 1.0)).collect(),
     );
-    let o = add(&mut project, "O", (0..5).map(|_| shot(90.0, 1.0)).collect());
+    let o = add(
+        &mut project,
+        "O",
+        (0..o_shots).map(|_| shot(90.0, 1.0)).collect(),
+    );
     project
-        .merge_stations(StationRef::new(k, 99_995), StationRef::new(o, 0))
+        .merge_stations(StationRef::new(k, k_shots), StationRef::new(o, 0))
         .unwrap();
+    (project, k, o)
+}
+
+#[test]
+fn the_shot_budget_blocks() {
+    let (project, k, o) = budget_pair(99_995, 5);
     assert!(blocked(&project, k, o).contains("at most 99999"));
+}
+
+/// Exactly at the edge: 99,999 shots between them (the most a section may
+/// hold) combine, one more does not.
+#[test]
+fn the_shot_budget_is_exact_at_99_999() {
+    let (mut project, k, o) = budget_pair(99_994, 5);
+    assert_eq!(project.combine_refusal(k, o), None);
+    project.combine_sections(k, o, &options()).unwrap();
+    assert_eq!(project.get_section(k).unwrap().shots.len(), 99_999);
+
+    let (project, k, o) = budget_pair(99_994, 6);
+    let reason = blocked(&project, k, o);
+    assert!(
+        reason.contains("would have 100000 shots (at most 99999)"),
+        "{reason}"
+    );
 }
 
 #[test]
