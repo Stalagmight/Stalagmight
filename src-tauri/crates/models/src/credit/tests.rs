@@ -96,6 +96,25 @@ fn identity_vectors_shared_with_the_frontend() {
 }
 
 #[test]
+fn join_distinct_names_writes_each_display_name_once() {
+    let people = vec![
+        person("Jo Diver", Some("jo@caves.example")),
+        person("Ann", None),
+        person("JO   diver", Some("jo.diver@divers.example")),
+        person("ann", Some("ann@x.org")),
+    ];
+    assert_eq!(
+        join_names(&people).as_deref(),
+        Some("Jo Diver, Ann, JO   diver, ann")
+    );
+    assert_eq!(
+        join_distinct_names(&people).as_deref(),
+        Some("Jo Diver, Ann")
+    );
+    assert_eq!(join_distinct_names(&[]), None);
+}
+
+#[test]
 fn add_remove_and_dedupe_use_identity() {
     let mut list = vec![person("A", None)];
     assert!(!add_person(&mut list, person("a", None)));

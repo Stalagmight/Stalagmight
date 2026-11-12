@@ -90,15 +90,18 @@ impl Database {
         // Save sections and shots
         for section in &project.sections {
             // The legacy columns keep their meaning for every older reader: the
-            // distinct surveyor names joined with ", " and the earliest date.
-            // A shot-less section writes back the legacy pair it keeps.
+            // distinct surveyor NAMES joined with ", " (two people sharing a name
+            // appear once) and the earliest date. A shot-less section writes
+            // back the legacy pair it keeps.
             let (legacy_surveyor, first_date) = if section.shots.is_empty() {
                 (section.legacy_surveyor.clone(), section.legacy_date)
             } else {
-                (section.surveyor_names(), section.first_survey_date())
+                (section.legacy_surveyor_text(), section.first_survey_date())
             };
             let legacy_date = first_date.map(|d| d.to_string());
-            // What a shot with no credit row reads back as (`shot_credits`).
+            // What a shot with no credit row reads back as (`shot_credits`),
+            // computed from the text actually written: a shot whose credit it
+            // does not reproduce (both same-named people, an email) gets a row.
             let fallback =
                 crate::models::SurveyCredit::from_legacy(legacy_surveyor.as_deref(), first_date);
             tx.execute(

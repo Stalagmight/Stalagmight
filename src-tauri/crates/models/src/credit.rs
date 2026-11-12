@@ -187,6 +187,24 @@ pub fn join_names(people: &[Person]) -> Option<String> {
     )
 }
 
+/// The names of `people` joined with `", "`, each DISPLAY name once (compared
+/// as [`Person::name_key`] compares them, the first spelling kept), or `None`
+/// for an empty list.
+///
+/// For the legacy `sections.surveyor` text only, which older builds and
+/// SpeleoDB show as-is: two different people sharing a name (different
+/// emails) are one name there, not "Jo Diver, Jo Diver". The per-shot tables
+/// still keep both people.
+pub fn join_distinct_names(people: &[Person]) -> Option<String> {
+    let mut seen = HashSet::new();
+    let names: Vec<&str> = people
+        .iter()
+        .filter(|p| seen.insert(p.name_key()))
+        .map(|p| p.name.as_str())
+        .collect();
+    (!names.is_empty()).then(|| names.join(", "))
+}
+
 /// Whether `list` holds someone who is [`Person::same_as`] `person`.
 pub fn contains_person(list: &[Person], person: &Person) -> bool {
     list.iter().any(|p| p.same_as(person))

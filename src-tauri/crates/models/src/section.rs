@@ -776,6 +776,14 @@ impl Section {
         super::join_names(&self.credit_summary().surveyor_people())
     }
 
+    /// The legacy `sections.surveyor` text: [`Self::surveyor_names`] with each
+    /// display name once ([`super::join_distinct_names`]), so two same-named
+    /// people with different emails do not read as a duplicate in older
+    /// builds and SpeleoDB. The people themselves live in the per-shot tables.
+    pub fn legacy_surveyor_text(&self) -> Option<String> {
+        super::join_distinct_names(&self.credit_summary().surveyor_people())
+    }
+
     /// The earliest shot date; what the legacy `sections.date` column carries.
     pub fn first_survey_date(&self) -> Option<NaiveDate> {
         self.shots.iter().filter_map(|s| s.credit().date).min()

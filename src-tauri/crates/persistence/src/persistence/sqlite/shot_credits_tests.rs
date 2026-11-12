@@ -184,6 +184,47 @@ fn the_legacy_columns_carry_the_section_aggregate() {
     assert_eq!(row(ids[2]), (None, None));
 }
 
+/// Two DIFFERENT people who share a display name: the legacy column names
+/// them once (older builds and SpeleoDB show it as-is, and "Jo Diver, Jo
+/// Diver" reads as a duplicate), while the shot keeps both, emails included,
+/// because the writer compares each shot against what the legacy text reads
+/// back as and writes the rows that differ.
+#[test]
+fn same_named_people_are_one_name_in_the_legacy_column_and_both_on_reopen() {
+    let dir = TempDir::new().unwrap();
+    let mut project = Project::new("Jo".to_string(), None);
+    let both = SurveyCredit {
+        surveyors: vec![
+            person("Jo Diver", Some("jo@caves.example")),
+            person("jo  diver", Some("jo.diver@divers.example")),
+        ],
+        explorers: Vec::new(),
+        date: day(3),
+    };
+    let only_one = SurveyCredit {
+        surveyors: vec![person("Jo Diver", None)],
+        explorers: Vec::new(),
+        date: day(3),
+    };
+    let id = section_with(&mut project, vec![both.clone(), only_one.clone()]);
+    let path = save(&dir, "jo.stalx", &project);
+
+    let db = Database::open_readonly(&path).unwrap();
+    let surveyor: Option<String> = db
+        .conn
+        .query_row("SELECT surveyor FROM sections WHERE id = ?1", [id], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(surveyor.as_deref(), Some("Jo Diver"));
+    // The shot with both people needs its row; the one the legacy text
+    // reproduces exactly does not.
+    assert_eq!(count(&db, "shot_credits"), 1);
+    drop(db);
+
+    assert_eq!(credits_of(&reload(&path), id), vec![both, only_one]);
+}
+
 #[test]
 fn an_old_file_without_the_tables_splits_the_legacy_surveyor() {
     let dir = TempDir::new().unwrap();
