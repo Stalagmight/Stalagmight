@@ -1,0 +1,172 @@
+# Split Section Here (#335) and Combine Sections, with per-shot credit
+
+Status: DRAFT. Questions are folded in one batch at a time.
+
+## Summary
+
+- **Split Section Here.** Right-click a station or shot in the middle of a section to split the
+  section there. No shot is deleted, and the action is one undo step. The maintainer answers on
+  #335 are the spec.
+- **Combine Sections.** Right-click the station where two sections' ends meet, or select two
+  sections in the Sections panel, to join them into one. One undo step. This is the inverse of
+  Split.
+- **Credit survives both.** Surveyors care about credit for the line they surveyed. Today
+  surveyor and date live only on the section, so a combine would credit one section's metres to
+  the other section's surveyor. Shots gain optional surveyor and date overrides. That is the
+  smallest schema change that keeps credit exact.
+
+## Why not copy Ariane
+
+Ariane's `DATA TOOLS > SECTION -> MERGE` re-labels rows. In Ariane a section is a label on each
+row, and connectivity comes from each row's `FromID`. Ariane keeps credit because explorer and
+date are stored on every row. Ariane has no split command.
+
+Stalagmight differs in two ways:
+- A section owns an ordered shot chain and one surveyor/date/azimuth reference/quality
+  (`crates/models/src/section.rs:55-58,122`).
+- Station `i+1` is the end of shot `i` (`project.rs:1410-1419`).
+
+So a combine has to stitch two chains and re-point every stored station reference, not only
+re-label rows.
+
+## Part 1: per-shot attribution
+
+| | |
+|---|---|
+| Schema | `ALTER TABLE shots ADD COLUMN surveyor TEXT` and `ALTER TABLE shots ADD COLUMN date TEXT`. Same pattern as the `uuid` column (`persistence/sqlite/schema.rs:485`). |
+| Meaning | `NULL`: same as my section. `""`: explicitly unknown. Any other value overrides the section. |
+| Effective value | The shot's override, falling back to the section's value. |
+| Existing files | Every shot loads as `NULL`, so every file means exactly what it meant before. No backfill. |
+| Exports | Ariane TML writes explorer and date per row (`export/tml.rs:791-792`), so it writes the effective value. JSON export and the `stalx-reader` crate gain optional per-shot fields. CSV does not export surveyor today. |
+| UI | Read-only Surveyor and Date columns in the shots table (hidden by default). Edit Section lists overrides ("also: Surveyor B, 8 shots"). |
+
+The `""` sentinel is needed for one case. Combining an unattributed section into an attributed one
+must not credit the unattributed shots to the attributed surveyor.
+
+## Part 2: Split Section Here (#335)
+
+These are the maintainer answers on #335:
+- **Entry point:** wherever "Insert Station..." appears (`src/components/common/ContextMenu.tsx:489`).
+  Survey mode only, and disabled in the read-only closure view.
+- **Station target:** splits there. A section's first or last station offers no split.
+- **Shot target:** inserts a station at the click point (`split_shot_at_distance`,
+  `crates/models/src/project/shots.rs:434`), then splits. A click near either end of the shot snaps
+  to that station.
+- **Shared station:** duplicated into two independent co-located stations. Merges and closures at
+  that station are copied to both copies.
+- **Comment and datum:** the user picks which half keeps the comment (A, B or both) and the zero
+  datum (A or B).
+- **Metadata:**
+  - The first half keeps the original section id.
+  - Names default to `<name>-A` / `<name>-B`.
+  - Colours start as the original's, with a picker for each half.
+  - Surveyor and date are copied.
+- **Stage drops:** repaired best effort. Selection is cleared.
+- **Dialog summary:** "Splitting X at station Y" / "Splitting X 30 cm (10%) along shot Y", in
+  display units and display IDs.
+- **Delete-and-split:** keeps its own dialog and gains colour pickers.
+
+**Credit addition:** shots keep their overrides. Then each half is *folded*: if every shot in a
+half has the same effective surveyor (or date), that value becomes the half's section value and
+the overrides are cleared.
+
+## Part 3: Combine Sections
+
+**Eligible** when an end of section A and an end of section B are the same point: either merged
+together, or co-located within 1 mm (the state a fresh split leaves). A join at a mid-section
+station is a branch and is not offered.
+
+**Blocked, with the reason shown in the menu:**
+
+| Condition | Why |
+|---|---|
+| Different azimuth reference | B's bearings would change meaning |
+| Different quality | Quality weights the least-squares adjustment (`project/lsq.rs:450`) |
+| A and B also connect at a second place | The single section would contain a loop |
+| Result over 99,999 shots | Per-section shot-id budget (`shots.rs:140`) |
+| Read-only (closure view, Plan, Export) | Same as every mutation |
+
+**Behaviour:**
+- **Kept section:** the lower id by default, with a swap control in the dialog. It keeps its
+  direction, and the other section is reversed first if needed. All four end pairings are
+  supported.
+- **Credit:** every shot of the other section whose effective surveyor or date differs from the
+  kept section's gets an override. The dialog shows the result per surveyor and date, e.g.
+  "Surveyor A 212 m (2026-03-02), Surveyor B 96 m (2026-04-11)".
+- **Direction:** the kept section's value wins (direction is metadata only), and the dialog says
+  so.
+- **Name and colour:** name defaults to the kept section's (`X-A` + `X-B` defaults to `X`). A
+  colour picker defaults to the kept section's colour.
+- **Joined station:**
+  - Comments: pick A, B or both.
+  - Station names: pick one if they differ.
+  - The zero datum is kept.
+  - Merges to other stations are combined and de-duplicated; the A-B join merge is dropped.
+  - A zero-length closure between the two ends is dropped.
+- **After:** the result is selected. One undo step.
+
+## Visual preview
+
+Both dialogs preview the result on the map before confirming. They reuse existing renderer
+primitives:
+- Highlight the involved sections (`setSectionSelect`, which accepts an array).
+- Ring the station being split or joined (`setHighlightedStations`).
+- Dim everything else (`setDimming`).
+- Draw the resulting section(s) as a ghost in the chosen colour (`GeometryPreview` /
+  `setGhostSection`), updating live as the colour picker changes.
+
+## Implementation notes
+
+- **Backend:** both operations are direct `AppState` methods modelled on
+  `execute_delete_shot_and_split` (`crates/core/src/core/state/command_delete_split.rs`):
+  - command lock, then `guard_mutation`, then before-snapshot
+  - mutate
+  - `reconcile_geometry`
+  - `push_snapshot_undo` (one `ProjectSnapshotPair`), then `mark_remote_forward_edit`
+- **Station references:** re-pointed by resolving to positional refs and re-keying with
+  `key_for_ref`. One shared helper relocates the keys of a section's index range to another
+  section, used by both operations. Collisions at the shared station are resolved explicitly per
+  the dialog choices, never by a `HashMap` `collect()` that silently keeps one entry.
+- **Combine eligibility:** a read-only `combine_candidate` query reports the eligibility, the
+  pairing, the default kept section, the credit summary and the blocking reason. The context menu
+  and the dialog use it, as the Merge tool uses its connectivity check.
+- **Registries and gates:**
+  - `MUTATION_ENTRYPOINTS`
+  - the SpeleoDB unwind file list
+  - the telemetry registry and `UNDOABLE_COMMANDS`
+  - dialog telemetry
+  - the IPC mock and its contract test
+
+## Verification
+
+- **Unit tests:**
+  - old files load with no overrides; save/reopen round-trip; TML per-row explorer
+  - split at a station and on a shot, the end snap, a single-shot section, credit folding
+  - combine in all four pairings; every reference re-pointed; join collisions; each refusal;
+    credit overrides; exact undo/redo
+- **Metamorphic:** compare geometry, station keys, comments, merges and effective credit per shot.
+  - `combine(split(p, s)) == p`
+  - splitting a combined section at the join restores both inputs
+  - Both operations join the undo fuzzer.
+- **Playwright:** split a mid station and see two sections. Combine at the joined end and see one
+  section with both surveyors credited. Undo restores each.
+
+## Delivery
+
+1. Per-shot attribution (schema, model, IPC, exports, read-only columns).
+2. Split Section Here (#335).
+3. Combine Sections.
+
+## Open questions
+
+1. A split leaves the two halves unmerged (per #335). Routes and gas planning are disconnected
+   across the split until the user merges them. Confirm this is intended. Combine works either
+   way.
+2. The Ariane importer cuts sections where the explorer changes (`docs/ariane-import.md`, trip
+   cut). With per-shot credit it could keep the mainline in one section. Follow-up?
+
+## Follow-ups (not in scope)
+
+- A per-surveyor / per-trip credit view.
+- Editing per-shot credit in the shots table.
+- Markers at section ends on the map.
