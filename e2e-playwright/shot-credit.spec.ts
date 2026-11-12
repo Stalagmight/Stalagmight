@@ -71,7 +71,7 @@ test.describe('Shot credit in the Detail panel', () => {
     const credit = page.getByTestId('shot-credit');
     await expect(credit).toBeVisible();
     await expect(credit).toContainText('Ann · 2026-04-11');
-    await expect(credit).toContainText('(section: Bob)');
+    await expect(credit).toContainText('(section: Bob · 2026-03-02)');
   });
 
   test('a shot crediting what its section does shows no credit row', async ({ page }) => {

@@ -2007,7 +2007,7 @@
       "kindBadge": "{{kind}} shot",
       "markAs": "Mark as {{kind}}",
       "creditUnknown": "Unknown",
-      "creditSection": "section: {{surveyor}}"
+      "creditSection": "section: {{credit}}"
     },
     "section": {
       "title": "Section",

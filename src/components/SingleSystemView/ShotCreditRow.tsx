@@ -13,16 +13,19 @@ export function ShotCreditRow({ shot, section }: { shot: Pick<Shot, 'credit'>; s
   const credit = creditOverride(shot, { surveyor: section.surveyor, date: section.date });
   if (!credit) return null;
   const unknown = t('detailPanel.shot.creditUnknown');
-  const who = credit.surveyor ?? unknown;
+  // Both values, for the shot and for its section, so a row that differs only
+  // in its date still says what differs.
+  const describe = (surveyor: string | null, date: string | null) =>
+    `${surveyor ?? unknown} · ${date ?? unknown}`;
   return (
     <DetailRow
       testId="shot-credit"
       label={t('detailPanel.labels.surveyed')}
       value={
         <>
-          {credit.date ? `${who} · ${credit.date}` : who}{' '}
+          {describe(credit.surveyor, credit.date)}{' '}
           <span className="text-text-secondary">
-            ({t('detailPanel.shot.creditSection', { surveyor: section.surveyor ?? unknown })})
+            ({t('detailPanel.shot.creditSection', { credit: describe(section.surveyor, section.date) })})
           </span>
         </>
       }
