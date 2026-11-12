@@ -33,19 +33,43 @@ export interface CreditCellEditorProps {
   onClose: () => void;
 }
 
-/** Below the cell, left-aligned to it, kept inside the window. */
-function usePlacement(anchor: HTMLElement | null, boxRef: React.RefObject<HTMLDivElement | null>) {
+/**
+ * Below the cell, left-aligned to it, kept inside the window, and following it:
+ * opening the popover often coincides with the grid scrolling that cell into
+ * view, so a scroll re-places it rather than closing it. `onLost` runs when the
+ * cell itself is gone (virtualized away, the table closed).
+ */
+function usePlacement(
+  anchor: HTMLElement | null,
+  boxRef: React.RefObject<HTMLDivElement | null>,
+  onLost: () => void,
+) {
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const onLostRef = useRef(onLost);
+  onLostRef.current = onLost;
   useLayoutEffect(() => {
     const box = boxRef.current;
-    if (!anchor || !box) return;
-    const cell = anchor.getBoundingClientRect();
-    const { width, height } = box.getBoundingClientRect();
-    const margin = 8;
-    const below = cell.bottom + 2;
-    const top = below + height + margin > window.innerHeight ? Math.max(margin, cell.top - height - 2) : below;
-    const left = Math.max(margin, Math.min(cell.left, window.innerWidth - width - margin));
-    setPos({ top, left });
+    if (!anchor || !box) return undefined;
+    const place = () => {
+      if (!anchor.isConnected) {
+        onLostRef.current();
+        return;
+      }
+      const cell = anchor.getBoundingClientRect();
+      const { width, height } = box.getBoundingClientRect();
+      const margin = 8;
+      const below = cell.bottom + 2;
+      const top = below + height + margin > window.innerHeight ? Math.max(margin, cell.top - height - 2) : below;
+      const left = Math.max(margin, Math.min(cell.left, window.innerWidth - width - margin));
+      setPos((prev) => (prev && prev.top === top && prev.left === left ? prev : { top, left }));
+    };
+    place();
+    window.addEventListener('scroll', place, { capture: true, passive: true });
+    window.addEventListener('resize', place);
+    return () => {
+      window.removeEventListener('scroll', place, { capture: true });
+      window.removeEventListener('resize', place);
+    };
   }, [anchor, boxRef]);
   return pos;
 }
@@ -56,7 +80,6 @@ const sameList = (a: readonly Person[], b: readonly Person[]) =>
 export function CreditCellEditor({ shot, field, anchor, seed = '', onCommit, onClose }: CreditCellEditorProps) {
   const { t } = useTranslation();
   const boxRef = useRef<HTMLDivElement>(null);
-  const pos = usePlacement(anchor, boxRef);
   const role = field === 'survey_date' ? null : field;
   const original = role ? (shot.credit?.[role] ?? []) : [];
   // A ref beside the state: the blur a commit triggers adds a typed name
@@ -99,7 +122,10 @@ export function CreditCellEditor({ shot, field, anchor, seed = '', onCommit, onC
     }),
     [],
   );
-  useDismissableLayer({ open: true, onDismiss: commit, contains: [boxRef, suggestionsRef], survivesUnrelatedScroll: false });
+  const pos = usePlacement(anchor, boxRef, commit);
+  // Outside mousedowns commit; scrolls only move the popover (see usePlacement),
+  // so the only scroll the shared layer reacts to is the page's own.
+  useDismissableLayer({ open: true, onDismiss: commit, contains: [boxRef, suggestionsRef], survivesUnrelatedScroll: true });
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     // Keys the field did not keep (PeopleInput stops the ones it uses).
