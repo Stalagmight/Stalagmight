@@ -42,14 +42,6 @@ impl AppState {
             let Some(project) = proj_guard.as_mut() else {
                 return CommandResult::failure("No project open".to_string());
             };
-            let Some(candidate) = project.combine_candidate(kept, other) else {
-                return CommandResult::failure(format!(
-                    "Sections {kept} and {other} do not meet end to end"
-                ));
-            };
-            if let Some(reason) = candidate.blocked {
-                return CommandResult::failure(reason);
-            }
             if let Err(e) = project.combine_sections(kept, other, &options) {
                 let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
                 return CommandResult::failure(e);
