@@ -914,9 +914,9 @@ fn build_sections(mut raw_shots: Vec<RawShot>) -> (Vec<TmlSection>, Vec<TmlClosu
         tracing::debug!(joins, "Joined contiguous TML chains");
     }
 
-    // Then give each TRIP its own run: Ariane writes surveyor/date/colour on
-    // every shot row, a run carries only its FIRST shot's, and the rest used to
-    // be dropped without a word (#427).
+    // Then give each COLOUR its own run: Ariane writes people, date and colour
+    // on every shot row, and a section holds one colour - the people and date
+    // are per-shot credit (#329) and never cut (#427).
     //
     // Strictly AFTER the join, which is decided on the chain ends the FILE has.
     // A cut end is not one of those - it has an in-section successor by
@@ -5506,10 +5506,43 @@ mod tests {
         );
     }
 
-    /// A config carries ONE surveyor, date and colour, so absorbing a chain
-    /// surveyed by someone else on another day would silently reattribute it.
+    /// A config carries ONE colour, so absorbing a chain drawn in another
+    /// colour would silently recolour it.
     #[test]
-    fn the_join_refuses_chains_from_a_different_trip() {
+    fn the_join_refuses_chains_of_a_different_colour() {
+        let tml = series_a_b(
+            TripShot {
+                id: 2,
+                from_id: 1,
+                section: "A",
+                depth: 9.0,
+                ..TripShot::default()
+            },
+            TripShot {
+                id: 3,
+                from_id: 2,
+                section: "B",
+                explorer: "Somebody Else",
+                date: "2025-02-02",
+                color: "0x112233ff",
+                depth: 11.0,
+                ..TripShot::default()
+            },
+        );
+
+        assert_eq!(
+            section_names(&tml),
+            vec!["A", "B"],
+            "a different colour must not be merged away"
+        );
+        assert_eq!(tml.sections[1].surveyor.as_deref(), Some("Somebody Else"));
+    }
+
+    /// People and dates are per-shot credit (#329), so a chain surveyed by
+    /// someone else on another day joins like any other continuation, and every
+    /// shot keeps its own credit.
+    #[test]
+    fn the_join_merges_chains_whose_credit_differs_and_keeps_it_per_shot() {
         let tml = series_a_b(
             TripShot {
                 id: 2,
@@ -5529,12 +5562,19 @@ mod tests {
             },
         );
 
+        assert_eq!(section_names(&tml), vec!["A + B"]);
+        let (configs, _, _) = convert_tml_to_import_configs(&tml, false, false).expect("cvt");
+        let last = configs[0].shots.last().expect("shots").credit();
         assert_eq!(
-            section_names(&tml),
-            vec!["A", "B"],
-            "different trip metadata must not be merged away"
+            crate::models::join_names(&last.explorers).as_deref(),
+            Some("Somebody Else")
         );
-        assert_eq!(tml.sections[1].surveyor.as_deref(), Some("Somebody Else"));
+        assert_eq!(last.date, NaiveDate::from_ymd_opt(2025, 2, 2));
+        let first = configs[0].shots[0].credit();
+        assert_eq!(
+            crate::models::join_names(&first.explorers).as_deref(),
+            Some("Tester")
+        );
     }
 
     /// One declared Ariane section, two trips: a chain surveyed by a second
@@ -5708,23 +5748,25 @@ mod tests {
             .find(|w| w.contains("recorded a different"))
             .expect("the colour a section holds once does collapse, which the receipt must say");
         assert!(
-            note.starts_with("1 shot at 1 trip change in 1 section recorded a different colour"),
+            note.starts_with("1 shot at 1 colour change in 1 section recorded a different colour"),
             "the report names the counts and the field: {note}"
         );
     }
 
     /// A chain of `count` shots under one declared name, whose `trip_of`
-    /// picks each shot's `(explorer, date)`. Ids and `from_id`s run 1..=count.
-    fn one_chain(count: i64, trip_of: impl Fn(i64) -> (String, String)) -> TmlFile {
+    /// picks each shot's `(explorer, date, colour)`. Ids and `from_id`s run
+    /// 1..=count.
+    fn one_chain(count: i64, trip_of: impl Fn(i64) -> (String, String, String)) -> TmlFile {
         let shots: Vec<String> = (1..=count)
             .map(|id| {
-                let (explorer, date) = trip_of(id);
+                let (explorer, date, color) = trip_of(id);
                 TripShot {
                     id,
                     from_id: id - 1,
                     section: "A",
                     explorer: &explorer,
                     date: &date,
+                    color: &color,
                     depth: id as f64,
                     ..TripShot::default()
                 }
@@ -5734,17 +5776,67 @@ mod tests {
         parse_synthetic_tmlu(&wrap_xml(&shots.join("\n")))
     }
 
+    /// A distinct Ariane colour per `n` (`0xRRGGBBAA`).
+    fn nth_colour(n: i64) -> String {
+        format!("0x{:06x}ff", n * 0x0101)
+    }
+
+    /// The round trip that broke (#329): one section whose shots carry three
+    /// different teams and days, in one colour, exported to Ariane and read
+    /// back. The people and date are per-shot credit, so it is ONE section
+    /// again, every shot with exactly its own credit, and nothing to report.
+    #[test]
+    fn a_run_with_three_credit_trips_in_one_colour_stays_one_section() {
+        let tml = one_chain(6, |id| {
+            let trip = (id - 1) / 2 + 1; // 1,1,2,2,3,3
+            (
+                format!("Team {trip}"),
+                format!("2025-0{trip}-01"),
+                nth_colour(7),
+            )
+        });
+
+        assert_eq!(section_names(&tml), vec!["A"]);
+        let (configs, _, warnings) =
+            convert_tml_to_import_configs(&tml, false, false).expect("cvt");
+        assert_eq!(configs.len(), 1);
+        let credits: Vec<(Option<String>, Option<NaiveDate>)> = configs[0]
+            .shots
+            .iter()
+            .map(|s| {
+                let credit = s.credit();
+                (crate::models::join_names(&credit.explorers), credit.date)
+            })
+            .collect();
+        let expected: Vec<(Option<String>, Option<NaiveDate>)> = (1..=6)
+            .map(|id| {
+                let trip = (id - 1) / 2 + 1;
+                (
+                    Some(format!("Team {trip}")),
+                    NaiveDate::from_ymd_opt(2025, trip, 1),
+                )
+            })
+            .collect();
+        assert_eq!(credits, expected, "every shot keeps exactly its own credit");
+        assert!(
+            !warnings.iter().any(|w| w.contains("recorded a different")),
+            "nothing collapsed: {warnings:?}"
+        );
+    }
+
     /// A date per shot ROW - a data-entry timestamp, or a crafted file - would
     /// mint one section per shot from one declared name. The cut is capped, and
     /// what the cap refuses to cut is reported rather than dropped.
     #[test]
     fn the_cut_is_capped_and_the_rest_is_reported() {
         let rows = MAX_TRIP_CUTS_PER_RUN as i64 + 11;
+        // A colour per row (the per-ROW date is there too, and must not cut).
         // 28-day "months" keep every generated date valid without date arithmetic.
         let tml = one_chain(rows, |id| {
             (
                 "Tester".to_owned(),
                 format!("2024-{:02}-{:02}", 1 + id / 28, 1 + id % 28),
+                nth_colour(id),
             )
         });
 
@@ -5763,8 +5855,7 @@ mod tests {
         let (configs, _, warnings) =
             convert_tml_to_import_configs(&tml, false, false).expect("cvt");
         assert_eq!(configs.len(), MAX_TRIP_CUTS_PER_RUN + 1);
-        // What the cap left uncut keeps its own dates: the credit is per shot,
-        // so nothing collapsed and there is nothing to report.
+        // What the cap left uncut keeps its own dates (the credit is per shot)...
         let last = &configs[MAX_TRIP_CUTS_PER_RUN].shots;
         let dates: std::collections::HashSet<_> =
             last.iter().filter_map(|s| s.credit().date).collect();
@@ -5773,9 +5864,14 @@ mod tests {
             last.len(),
             "every uncut shot kept its own date"
         );
+        // ...but not its own colour, which a section holds once: reported.
+        let note = warnings
+            .iter()
+            .find(|w| w.contains("recorded a different"))
+            .expect("the colours the cap could not cut are reported");
         assert!(
-            !warnings.iter().any(|w| w.contains("recorded a different")),
-            "{warnings:?}"
+            note.starts_with("10 shots at 10 colour changes in 1 section"),
+            "{note}"
         );
     }
 
@@ -5801,7 +5897,7 @@ mod tests {
                         from_id: if seq == 0 { -1 } else { id - 1 },
                         section: "A",
                         explorer: "Tester",
-                        date: &format!("2024-{:02}-{:02}", 1 + seq / 28, 1 + seq % 28),
+                        color: &nth_colour(seq + 1),
                         depth: seq as f64,
                         ..TripShot::default()
                     }
@@ -5825,11 +5921,13 @@ mod tests {
         );
         assert_eq!(linearize::first_linearity_violation(&tml.sections), None);
 
-        // What the budget refused to cut still imports with each shot's own
-        // date, so there is no collapse to report.
+        // What the budget refused to cut collapses onto its part's colour,
+        // and the receipt says so rather than dropping it in silence.
         let (_, _, warnings) = convert_tml_to_import_configs(&tml, false, false).expect("cvt");
         assert!(
-            !warnings.iter().any(|w| w.contains("recorded a different")),
+            warnings
+                .iter()
+                .any(|w| w.contains("recorded a different colour")),
             "{warnings:?}"
         );
     }
@@ -5870,7 +5968,11 @@ mod tests {
     fn a_run_holding_three_trips_is_cut_into_three_rebased_parts() {
         let tml = one_chain(6, |id| {
             let trip = (id - 1) / 2 + 1; // 1,1,2,2,3,3
-            (format!("Team {trip}"), format!("2025-0{trip}-01"))
+            (
+                format!("Team {trip}"),
+                format!("2025-0{trip}-01"),
+                nth_colour(trip),
+            )
         });
 
         assert_eq!(
@@ -5924,7 +6026,8 @@ mod tests {
         let stub = [
             tml_shot_xml_az_len(20, 1, "Main", 0.0, 2.0),
             tml_shot_xml_az_len(21, 20, "Main", 0.0, 2.0)
-                .replace("<Explorer>Tester</Explorer>", "<Explorer>Ada</Explorer>"),
+                .replace("<Explorer>Tester</Explorer>", "<Explorer>Ada</Explorer>")
+                .replace("<Color>0x8f6112ff</Color>", "<Color>0x112233ff</Color>"),
         ];
         let xml = wrap_xml(
             &[
@@ -5989,6 +6092,7 @@ mod tests {
                 from_id: 1,
                 section: "A",
                 explorer: "Ada",
+                color: "0x112233ff",
                 depth: 9.0,
                 ..TripShot::default()
             }
@@ -5998,6 +6102,7 @@ mod tests {
                 from_id: 2,
                 section: "A (trip 2)",
                 explorer: "Ada",
+                color: "0x112233ff",
                 depth: 11.0,
                 ..TripShot::default()
             }
@@ -6049,6 +6154,7 @@ mod tests {
                 excluded: true,
                 explorer: "T1",
                 date: "2025-01-01",
+                color: "0x112233ff",
                 depth: 5.0,
                 ..TripShot::default()
             }
@@ -6128,7 +6234,7 @@ mod tests {
             .find(|w| w.contains("recorded a different"))
             .expect("three shots did lose their colour");
         assert!(
-            note.starts_with("3 shots at 1 trip change in 1 section recorded a different colour"),
+            note.starts_with("3 shots at 1 colour change in 1 section recorded a different colour"),
             "three shots on ONE collapsed trip is one change: {note}"
         );
     }
@@ -6140,8 +6246,13 @@ mod tests {
             if !retrip {
                 return xml;
             }
-            let out = xml.replace("<Explorer>Tester</Explorer>", "<Explorer>Ada</Explorer>");
-            assert_ne!(out, xml, "the fixture's explorer element moved");
+            let out = xml
+                .replace("<Explorer>Tester</Explorer>", "<Explorer>Ada</Explorer>")
+                .replace("<Color>0x8f6112ff</Color>", "<Color>0x112233ff</Color>");
+            assert!(
+                out.contains("<Explorer>Ada</Explorer>") && out.contains("0x112233ff"),
+                "the fixture's explorer or colour element moved"
+            );
             out
         };
         let xml = wrap_xml(
@@ -6228,6 +6339,7 @@ mod tests {
         let second_trip = TripShot {
             explorer: "Ada Lovelace",
             date: "2025-03-04",
+            color: "0x112233ff",
             ..TripShot::default()
         };
         let shots = [

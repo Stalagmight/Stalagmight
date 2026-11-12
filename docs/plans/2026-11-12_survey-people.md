@@ -93,6 +93,10 @@ plus one u32 credit index per shot. The TS decoder (`loadProjectBinary.ts`) rebu
 
 ## Imports
 
+Ariane sections are cut only where the COLOUR changes (a section holds one colour); people and
+dates are per shot and never cut, so a section with mixed per-shot credit round-trips through
+Ariane as one section. TML duplicate detection uses the file hash only, so it is unaffected.
+
 | Format | Mapping |
 |---|---|
 | Ariane TML | Per shot. Ariane 26.3 and later write `XMLExplorer`/`XMLSurveyor`; those are preferred when non-empty. Otherwise the legacy `Explorer` field is used. In its element form (`<Explorer>..</Explorer><Surveyor>..</Surveyor>`), each half goes to its role. In the plain form, `a / b` gives explorer `a` and surveyor `b`, and a single value gives explorers, as Ariane's field name and openspeleo-lib say. Names inside a role are split on `,` and `;`. |

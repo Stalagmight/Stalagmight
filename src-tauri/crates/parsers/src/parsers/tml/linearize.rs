@@ -13,10 +13,13 @@
 //! so that the run that continues is the mainline rather than whichever
 //! successor happened to be written first.
 //!
-//! This module also owns the TRIP rule - the (surveyor, date, colour) triple a
-//! `models::Section` can carry one of. Ariane records it per shot, so the same
-//! triple decides where runs may merge (`join_contiguous_chains`) and where a
-//! run has to be cut (`split_runs_at_trip_boundaries`).
+//! This module also owns the TRIP rule. Ariane records people, date and colour
+//! on every shot row; since #329 the people and date are per-shot credit, so
+//! the only value a `models::Section` still holds once is the COLOUR. A "trip"
+//! here is therefore a colour: it decides where runs may merge
+//! (`join_contiguous_chains`) and where a run has to be cut
+//! (`split_runs_at_trip_boundaries`). Credit changes neither, so a section with
+//! mixed per-shot people and dates round-trips through Ariane as one section.
 
 use std::collections::HashMap;
 
@@ -94,10 +97,11 @@ struct JoinRefusals {
 ///   an excluded shot never joins. The alternative - seam on the last
 ///   surviving shot - would re-introduce toggle dependence, because which shot
 ///   that is changes with the toggle.
-/// * **Mismatched trip metadata.** A config carries one surveyor, one date and
-///   one colour, and a run takes its FIRST shot's (see `linearize_section`), so
-///   absorbing a chain surveyed by someone else on another day would silently
-///   reattribute it. Only chains that agree on all three merge.
+/// * **A different colour.** A config carries one colour, the run's FIRST
+///   station shot's (see `trip_head`), so absorbing a chain drawn in another
+///   colour would silently recolour it. People and dates do not matter: they
+///   ride on each shot (#329), so a chain surveyed by someone else on another
+///   day merges and keeps its own credit.
 /// * **A shot UUID already in the run.** Ariane shot ids are unique per
 ///   SECTION, so two sections may legally repeat a `<UUID>` (#423); merging
 ///   them would turn that into an intra-section duplicate that
@@ -342,14 +346,15 @@ pub(super) fn first_linearity_violation(sections: &[TmlSection]) -> Option<Strin
     None
 }
 
-/// The trip a run is attributed to: its people and date (the shot credit) and
-/// its colour. Ariane writes them on EVERY shot row, so a run can change trip
-/// halfway down. The credit survives per shot either way; the colour is the
-/// one value a `models::Section` holds once.
-type Trip<'a> = (Option<&'a SurveyCredit>, &'a str);
+/// The trip a run is attributed to, for sectioning: its COLOUR. Ariane writes
+/// people, date and colour on EVERY shot row, so a run can change any of them
+/// halfway down. The people and date are the shot's own credit and survive per
+/// shot wherever they change; the colour is the one value a `models::Section`
+/// holds once, so it alone cuts a run (and refuses a join).
+type Trip<'a> = &'a str;
 
 fn trip_of(shot: &TmlShot) -> Trip<'_> {
-    (shot.credit.as_ref(), shot.color.as_str())
+    shot.color.as_str()
 }
 
 /// The trip a section was named after: its head shot's (see [`trip_head`]).
@@ -389,9 +394,9 @@ fn trip_head(shots: &[TmlShot]) -> Option<&TmlShot> {
 
 /// Most cuts one run may be given.
 ///
-/// Ariane writes the trip on every shot row, so a file whose rows carry a
-/// per-ROW date (a data-entry timestamp, or a crafted file) would otherwise
-/// mint one section per shot from a single declared name - unbounded
+/// Ariane writes the colour on every shot row, so a file whose rows carry a
+/// per-ROW colour (a crafted file) would otherwise mint one section per shot
+/// from a single declared name - unbounded
 /// amplification of file-controlled input into project objects, each with its
 /// own name, placement and undo entry.
 ///
@@ -447,18 +452,17 @@ pub(super) fn cut_budget(existing_runs: usize) -> usize {
     MAX_TRIP_CUTS_PER_FILE.min(MAX_SECTIONS_IN_ID_SPACE.saturating_sub(existing_runs))
 }
 
-/// Cut each run where the trip changes between two ADJACENT stations (#427).
+/// Cut each run where the COLOUR changes between two ADJACENT stations (#427).
 ///
-/// A run takes its metadata from its first shot (see `linearize_section`), so
-/// before this a chain surveyed by two teams over three days imported entirely
-/// under the first team and the first date, and the other values were dropped
-/// on the floor with nothing said. Cutting gives each trip its own run, which
-/// is the only place the model has to put them - `Section` carries one of each
-/// and `Shot` carries none.
+/// A run takes its colour from its first station shot (see `trip_head`), and a
+/// `Section` holds one, so a chain drawn in two colours would otherwise import
+/// entirely in the first. Cutting gives each colour its own run. People and
+/// dates never cut (#329): they are per-shot credit, and cutting on them broke
+/// the round trip of a section with mixed credit through Ariane into one
+/// section per credit change.
 ///
 /// This is the SAME rule `join_contiguous_chains` applies from the other side
-/// ("only chains that agree on all three merge"), so the two cannot fight over
-/// a seam. It runs AFTER the join all the same: see the call site for what
+/// ("only chains of one colour merge"), so the two cannot fight over a seam. It runs AFTER the join all the same: see the call site for what
 /// offering a cut end to the join costs.
 ///
 /// **Adjacency is the whole rule.** A trip change across a non-station shot is
@@ -642,7 +646,7 @@ pub(super) fn collapsed_trip_report(
     }
 
     Some(format!(
-        "{shots} shot{} at {changes} trip change{} in {sections_hit} section{} recorded a \
+        "{shots} shot{} at {changes} colour change{} in {sections_hit} section{} recorded a \
          different colour from the section importing them; Ariane records it per shot, a \
          section holds one, and there was no station boundary to split on",
         if shots == 1 { "" } else { "s" },

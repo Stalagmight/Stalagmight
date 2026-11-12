@@ -38,9 +38,10 @@ Both formats use the same XML schema. TML files use long element names (`Azimut`
 - Survey date, per shot (part of the credit above)
 - Section color (converted from Ariane's integer RGB format), taken from the section's first shot
 
-Those three are the section's **trip**, and Ariane records them on EVERY shot
-row - see [The trip cut](#the-trip-cut) for what happens when they change
-mid-chain.
+Ariane records all three on EVERY shot row. The people and date are per-shot
+credit (#329) and import onto each shot as they are; the colour is the one value
+a section holds once, so it is the section's **trip** for sectioning - see
+[The trip cut](#the-trip-cut) for what happens when it changes mid-chain.
 
 ### Per-shot
 - Azimuth (normalized to 0-360; Ariane stores a single forward azimuth, not a backsight pair)
@@ -131,26 +132,34 @@ Ariane stores survey data as a flat list of shots with `FromID` linkage. The par
 
 A `Section` holds ONE colour; since #329 every `Shot` carries its own people
 and date (its survey credit). Ariane writes all three on every shot row, so a
-chain surveyed by two teams over three days used to import entirely under its
-FIRST shot's values, with the rest discarded silently (#427). The credit now
-survives per shot either way; the run is still cut where the credit or colour
-changes, so each team's trip stays its own section.
+chain drawn in two colours used to import entirely in its FIRST shot's colour
+(#427). The credit survives per shot wherever it changes, so it never cuts a
+run; only a COLOUR change does. (Before per-shot credit the cut also fired on
+people and dates, which broke the round trip: one section with mixed per-shot
+credit, exported to Ariane and imported again, came back as one `(trip N)`
+section per credit change.)
 
-Each linearized run is therefore **cut where the trip changes between two
-adjacent stations**, and each part keeps its own surveyor, date and colour. The
-parts after the first are named `"<name> (trip N)"` - backend-owned English, the
-same as the `(branch N)` suffix beside it (`linearize.rs`, `format!("{section_name}
-(branch {branch_number})")`); the only translated string in this area is the
-wizard's `(branch)` BADGE, which is driven by `is_branch_split` and not by a
-name. Each part hangs off the station it was cut at (`FromImporting`), so the
-geometry is byte-for-byte what the uncut run produced. This is the same
-(surveyor, date, colour) triple `join_contiguous_chains` refuses to merge
-across, applied to the cut side.
+Each linearized run is therefore **cut where the colour changes between two
+adjacent stations**, and each part keeps its own colour; every shot keeps its
+own credit either way. The parts after the first are named
+`"<name> (trip N)"` - backend-owned English, the same as the `(branch N)` suffix
+beside it (`linearize.rs`, `format!("{section_name} (branch {branch_number})")`);
+the only translated string in this area is the wizard's `(branch)` BADGE, which
+is driven by `is_branch_split` and not by a name. Each part hangs off the
+station it was cut at (`FromImporting`), so the geometry is byte-for-byte what
+the uncut run produced. This is the same colour rule `join_contiguous_chains`
+applies when it refuses to merge across a seam; chains that differ only in
+people or date join, each shot keeping its credit.
 
-A run takes those three values from its first shot that could be a STATION of it
-(non-CLOSURE, non-excluded), not simply its first shot: a run headed by an
-excluded shot was otherwise named after a shot the default import does not keep,
-and every shot it did keep then read as a collapsed trip that never happened.
+A run takes its colour (and the preview's surveyor and date) from its first
+shot that could be a STATION of it (non-CLOSURE, non-excluded), not simply its
+first shot: a run headed by an excluded shot was otherwise coloured after a shot
+the default import does not keep, and every shot it did keep then read as a
+collapsed colour change that never happened.
+
+Duplicate-import detection is unaffected: an Ariane import tracks the whole
+FILE's hash, not per-section hashes (those are the mNemo path's), so how a file
+is cut into sections does not change whether a re-import is recognised.
 
 Three rules bound it, the first two mirroring the join:
 
@@ -160,16 +169,16 @@ Three rules bound it, the first two mirroring the join:
   would depend on the include-excluded toggle, which sectioning must be
   invariant to. What cannot be cut keeps each shot's own credit; only a colour
   that differs from its section's is lost, and that is counted and named on the
-  receipt ("N shots in M sections recorded a different colour...").
+  receipt ("N shots at K colour changes in M sections recorded a different
+  colour...").
 - **The cut runs AFTER the join.** A cut end is not a chain end - it has an
   in-section successor by construction - and offering it to the join let an
   unrelated branch at that junction splice onto the mainline's head. The cost,
   pinned by `a_chain_continuing_a_cut_tail_stays_its_own_section`, is that a
   chain continuing a cut tail under its own name is not absorbed into it.
-- **A cut budget, per run AND per file.** The trip is file-controlled and
-  written on every row, so a file carrying a per-ROW date - a data-entry
-  timestamp, or a crafted file - would otherwise mint one section per shot from
-  a single declared name. `MAX_TRIP_CUTS_PER_RUN` (256) sits far above real
+- **A cut budget, per run AND per file.** The colour is file-controlled and
+  written on every row, so a file carrying a per-ROW colour - a crafted file -
+  would otherwise mint one section per shot from a single declared name. `MAX_TRIP_CUTS_PER_RUN` (256) sits far above real
   multi-trip surveys (about five years of WEEKLY survey days under one declared
   name; the largest real file measured cuts none at all) and far below
   degeneracy. It is not enough on its own, because a file chooses how many RUNS
@@ -387,12 +396,13 @@ Parsed but dropped:
   then the trim removes it - so writing `&#13;` would not help either. Interior whitespace, and the
   U+200B shot-comment marker (not whitespace in Unicode terms), are unaffected. CSV export is
   lossless here by contrast; this is a property of the XML text format, not of the comment.
-- **Per-shot surveyor / date / color survive as far as the section model allows.**
-  A run is cut per trip ([The trip cut](#the-trip-cut)), so several teams over
-  several days arrive as several sections rather than one. What a cut cannot
-  express - a trip that changes across a CLOSURE or excluded shot, with no
-  station seam to cut at - still collapses to the run head, and is counted on
-  the receipt rather than dropped in silence ([#427](https://github.com/Stalagmight/Stalagmight/issues/427)).
+- **Per-shot surveyor / date survive exactly; per-shot colour as far as the
+  section model allows.** People and dates are per-shot credit, so several
+  teams over several days arrive as one section with each shot's own credit. A
+  run is cut where the colour changes ([The trip cut](#the-trip-cut)); what a
+  cut cannot express - a colour that changes across a CLOSURE or excluded shot,
+  with no station seam to cut at - collapses to the run head's colour, and is
+  counted on the receipt rather than dropped in silence ([#427](https://github.com/Stalagmight/Stalagmight/issues/427)).
 - **Ariane 26.3's separate `XMLExplorer` / `XMLSurveyor` elements are read
   when non-empty** (#329). The survey behind #427 found them synthesized EMPTY on
   a resave of our own export, with the legacy combined `Explorer` still carrying
