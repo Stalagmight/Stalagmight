@@ -138,7 +138,8 @@ moving a group onto it would invent geometry.
   only tie the promotion rule above would turn it into a merge and move the
   second half by the loop's misclosure.
 - **Combine Sections** re-keys a closure on either join station onto the one
-  joined station, drops a zero-length closure between the two join ends, and
+  joined station, drops any closure between the two join stations (whatever
+  its length, it would tie the joined station to itself), and
   drops a closure the combine made identical to another one. An UNALIGNED
   closure between the two sections does not block the combine: it becomes a
   closure inside one section, which the least-squares solve adjusts like any

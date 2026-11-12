@@ -59,7 +59,8 @@ station menu, the Sections panel and the command always agree.
 
 1. Reverse the other section when the ends match, with `reverse_section`.
 2. Settle the join:
-   - The join merge and a zero-length closure between the two ends go.
+   - The join merge and any closure between the two join stations go (either
+     would tie the joined station to itself).
    - A comment or name both stations carry is kept once if identical, else per
      the pick: kept, other or both (joined with a newline, or ` / ` for names).
    - The kept station's offset (or none) wins.

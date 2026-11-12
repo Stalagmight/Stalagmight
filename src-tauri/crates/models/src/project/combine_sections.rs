@@ -11,7 +11,8 @@
 //! section's counter.
 //!
 //! The two join stations become ONE station:
-//! - the join merge, and a zero-length closure between the two ends, go;
+//! - the join merge, and any loop closure between the two join stations (it
+//!   would tie the joined station to itself), go;
 //! - a comment or name both carry is kept once if identical, otherwise per
 //!   the dialog's choice (kept, other, or both joined);
 //! - the kept station's manual offset (or none) wins, the other's is dropped
