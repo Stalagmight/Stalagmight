@@ -328,6 +328,22 @@ fn credit_is_written_only_where_the_other_sections_value_differs() {
     );
 }
 
+#[test]
+fn an_empty_surveyor_counts_as_unknown_in_the_credit() {
+    let (mut project, kept, other) = joined(CombinePairing::KeptEndOtherStart);
+    project.get_section_mut(other).unwrap().surveyor = Some(String::new());
+
+    let runs: Vec<_> = project
+        .combine_candidate(kept, other)
+        .unwrap()
+        .credit
+        .iter()
+        .map(|r| (r.surveyor.clone(), r.length_m))
+        .collect();
+
+    assert_eq!(runs, vec![(None, 28.0)]);
+}
+
 fn comment_at(project: &Project, at: StationRef) -> Option<String> {
     let key = project.key_for_ref(at)?;
     project.station_comments.get(&key).cloned()

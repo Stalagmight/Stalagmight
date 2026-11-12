@@ -116,7 +116,8 @@ fn gauge_pair_at(section: &Section, station: usize) -> (Option<String>, Option<S
     }
 }
 
-/// Each shot's effective `(surveyor, date, length)`, in section order.
+/// Each shot's effective `(surveyor, date, length)`, in section order. An
+/// empty surveyor is unknown, the same as none.
 fn shot_credits(section: &Section) -> Vec<(Option<String>, Option<NaiveDate>, f64)> {
     section
         .shots
@@ -126,6 +127,7 @@ fn shot_credits(section: &Section) -> Vec<(Option<String>, Option<NaiveDate>, f6
             (
                 credit
                     .surveyor_or(section.surveyor.as_deref())
+                    .filter(|surveyor| !surveyor.is_empty())
                     .map(str::to_owned),
                 credit.date_or(section.date),
                 shot.length,
