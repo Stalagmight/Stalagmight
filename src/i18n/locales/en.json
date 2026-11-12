@@ -1995,8 +1995,7 @@
       "comment": "Comment",
       "color": "Color",
       "latitude": "Latitude",
-      "longitude": "Longitude",
-      "surveyor": "Surveyor"
+      "longitude": "Longitude"
     },
     "placeholder": {
       "none": "None"
@@ -2077,6 +2076,12 @@
       "viaSuffix": ")",
       "metrics": "Path {{path}} | Error {{error}} | {{percent}}",
       "unavailable": "Closure metrics unavailable"
+    },
+    "multiShot": {
+      "title_one": "{{count}} shot selected",
+      "title_other": "{{count}} shots selected",
+      "summary_one": "{{shots}} shots in 1 section. Changes apply to every selected shot.",
+      "summary_other": "{{shots}} shots in {{count}} sections. Changes apply to every selected shot."
     }
   },
   "displayMenu": {

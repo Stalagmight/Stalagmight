@@ -26,7 +26,8 @@ import { useActiveStations } from '../../hooks/useActiveStations';
 import { setSource, trackContextMenuAction } from '../../utils/telemetry';
 import { SHOT_KIND_LABEL_KEY, nextShotKind } from '../../utils/shotKind';
 import { countUnresolvedErrors } from '../../utils/validation';
-import { formatCreditDateRange, formatPeople, sectionCreditSummary } from '../../utils/sectionCredit';
+import { shotCredit } from '../../utils/sectionCredit';
+import { CreditDetail, MultiShotDetail, sectionCredits, useSelectedShots } from './CreditDetail';
 import { warningKey, warningMessageTestId, warningOpenShotTestId, warningResolveTestId, warningUndoResolveTestId } from '../../utils/testId';
 
 /** Center/locate glyph (small ring + edge spokes), filled so it stays crisp
@@ -156,6 +157,9 @@ interface DetailsContentProps {
 function DetailsContent({ selection, project, stations }: DetailsContentProps) {
   const { t } = useTranslation();
   const { stats } = useProjectStore();
+  // Several shots selected (and nothing else): edit their survey credit together.
+  const multiShots = useSelectedShots(project);
+  if (multiShots) return <MultiShotDetail picks={multiShots} />;
 
   if (!selection) {
     // Show project stats when nothing is selected
@@ -971,6 +975,8 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
   const endStationExists = endStation !== undefined;
 
   const kindBadge = t('detailPanel.shot.kindBadge', { kind: t(SHOT_KIND_LABEL_KEY[shot.kind]) });
+  const shotTargets = useMemo(() => ({ type: 'shots' as const, shots: [[section.id, shot.id] as [number, number]] }), [section.id, shot.id]);
+  const shotCredits = useMemo(() => [shotCredit(shot)], [shot]);
 
   const handleCycleShotKind = async () => {
     trackContextMenuAction('cycle-shot-kind', 'detail-panel');
@@ -1137,6 +1143,10 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
               <p className="text-sm mt-1">{shot.comment}</p>
             </div>
           )}
+
+          <div className="pt-2 border-t border-border">
+            <CreditDetail targets={shotTargets} credits={shotCredits} scope="shot" />
+          </div>
         </div>
       </Panel>
 
@@ -1172,8 +1182,8 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
   );
   const precision = useDecimalPrecision();
 
-  // Who surveyed the section and when: the aggregate over its shots.
-  const credit = useMemo(() => sectionCreditSummary(section), [section]);
+  // Who surveyed the section and when: the aggregate over its shots, editable.
+  const credits = useMemo(() => sectionCredits(section), [section]);
 
   // Calculate section statistics
   const sectionLength = section.shots.reduce((sum, s) => sum + s.length, 0);
@@ -1254,8 +1264,6 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
           {/* Section info */}
           <div className="space-y-2">
             <DetailRow label={t('common.labels.name')} value={section.name ?? t('detailPanel.section.unnamed')} />
-            <DetailRow label={t('detailPanel.labels.surveyor')} value={formatPeople(credit.surveyors) || t('detailPanel.placeholder.none')} />
-            <DetailRow label={t('common.labels.date')} value={formatCreditDateRange(credit) ?? t('detailPanel.placeholder.none')} />
             <DetailRow label={t('detailPanel.labels.color')} value={
               <div className="flex items-center gap-2">
                 <span
@@ -1265,6 +1273,11 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
                 <span>{section.color}</span>
               </div>
             } />
+          </div>
+
+          {/* Survey credit of every shot of the section */}
+          <div className="pt-2 border-t border-border">
+            <CreditDetail targets={{ type: 'section', section_id: section.id }} credits={credits} scope="section" />
           </div>
 
           {/* Survey statistics */}
