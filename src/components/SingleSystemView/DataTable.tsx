@@ -23,6 +23,8 @@ import { setSource } from '../../utils/telemetry';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { invokeIpc } from '../../utils/ipc';
 import { buildShotColumns } from './dataTableShotColumns';
+import { CREDIT_COLUMN_KEYS, isCreditColumn } from './dataTableCreditColumns';
+import { useDataTableCredit } from './useDataTableCredit';
 import { buildStationColumns } from './dataTableStationColumns';
 import RawTableView from './RawTableView';
 import { DetailLink } from '../common/DetailLink';
@@ -603,7 +605,7 @@ export default function DataTable({ sections }: DataTableProps) {
   const [azimuthMode, setAzimuthMode] = useState<'avg' | 'inout' | 'off'>('avg');
   const [inclinationMode, setInclinationMode] = useState<'avg' | 'inout' | 'off'>('off');
   const [hiddenShotCols, setHiddenShotCols] = useState<ReadonlySet<string>>(
-    () => new Set(['section_id', 'shot_id'])
+    () => new Set(['section_id', 'shot_id', ...CREDIT_COLUMN_KEYS])
   );
   // The stations view keeps its own order/visibility (no angle modes there);
   // persisted alongside the shot view state below.
@@ -754,6 +756,32 @@ export default function DataTable({ sections }: DataTableProps) {
     [rowEntries]
   );
 
+  // Rows handed to the grid, materializing each draft as a Shot-shaped row
+  // whose id is the (negative) draft key.
+  const gridShotRows = useMemo(
+    () => rowEntries.map((e) => (e.kind === 'shot' ? e.shot : materializeDraft(e.draft))),
+    [rowEntries]
+  );
+
+  // The grid's name-box content, lifted into the condensed panel header:
+  // "<column> <row>" for a single cell, "3R × 2C" for a range.
+  const [gridSel, setGridSel] = useState<{
+    rows: number;
+    cols: number;
+    activeRow: number;
+    activeColKey: string;
+  } | null>(null);
+  // Surveyors / Explorers / Survey date: columns, popover editor, type-to-edit.
+  const credit = useDataTableCredit({
+    t,
+    sectionId: selectedSectionId,
+    rows: gridShotRows,
+    shotIndexAt,
+    editingBlocked,
+    active: gridSel ? { row: gridSel.activeRow, colKey: gridSel.activeColKey } : null,
+  });
+
+
   const applyDraftEdit = useCallback((key: number, colKey: string, value: unknown) => {
     setDrafts((prev) =>
       prev.map((draft) => {
@@ -872,10 +900,11 @@ export default function DataTable({ sections }: DataTableProps) {
         return;
       }
       selectShotRow(entry.shot);
+      if (isCreditColumn(colKey)) return credit.applyCell(entry.shot, colKey, value);
       const updates = buildShotUpdates(entry.shot, [{ colKey, value }]);
       if (Object.keys(updates).length > 0) void updateShot(selectedSection.id, entry.shot.id, updates);
     },
-    [selectedSection, editingBlocked, rowEntries, selectShotRow, updateShot, applyDraftEdit]
+    [selectedSection, editingBlocked, rowEntries, selectShotRow, updateShot, applyDraftEdit, credit]
   );
 
   // Multi-cell paste/fill → one execute_batch (one undo).
@@ -1147,7 +1176,7 @@ export default function DataTable({ sections }: DataTableProps) {
     [selectedSection, triggerPanToShot]
   );
 
-  const shotColumns = useMemo(
+  const baseShotColumns = useMemo(
     () =>
       buildShotColumns({
         t,
@@ -1170,18 +1199,16 @@ export default function DataTable({ sections }: DataTableProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [t, precision, selectedSectionId, editingBlocked, isShotFrozen, warnings, shotIndexAt, handleCycleShotKind, triggerResolveWarning]
   );
+  // The credit columns sit just before the comment, which absorbs the leftover width.
+  const shotColumns = useMemo(() => {
+    const at = baseShotColumns.findIndex((c) => c.key === 'comment');
+    return [...baseShotColumns.slice(0, at), ...credit.columns, ...baseShotColumns.slice(at)];
+  }, [baseShotColumns, credit.columns]);
 
   // Localized grid chrome; rowNoun makes the context menus speak in shots
   // (or stations), not rows.
   const gridLabels = useGridLabels('dataTable.shotNoun');
   const stationGridLabels = useGridLabels('dataTable.stationNoun');
-
-  // Rows handed to the grid, materializing each draft as a Shot-shaped row
-  // whose id is the (negative) draft key.
-  const gridShotRows = useMemo(
-    () => rowEntries.map((e) => (e.kind === 'shot' ? e.shot : materializeDraft(e.draft))),
-    [rowEntries]
-  );
 
   const shotScrollToRow = useMemo(() => {
     if (scrollToKey === null) return null;
@@ -1189,14 +1216,6 @@ export default function DataTable({ sections }: DataTableProps) {
     return idx >= 0 ? idx : null;
   }, [scrollToKey, rowEntries]);
 
-  // The grid's name-box content, lifted into the condensed panel header:
-  // "<column> <row>" for a single cell, "3R × 2C" for a range.
-  const [gridSel, setGridSel] = useState<{
-    rows: number;
-    cols: number;
-    activeRow: number;
-    activeColKey: string;
-  } | null>(null);
   const selectionIndicator = useMemo(() => {
     if (!gridSel || tableView !== 'shots' || !selectedSection) return null;
     if (gridSel.rows > 1 || gridSel.cols > 1) return `${gridSel.rows}R × ${gridSel.cols}C`;
@@ -1713,7 +1732,7 @@ export default function DataTable({ sections }: DataTableProps) {
             anchorScope={panelRef}
             {...(tableView === 'shots'
               ? {
-                  extraRows: { warnings: true, sectionId: true, shotId: true },
+                  extraRows: { warnings: true, sectionId: true, shotId: true, credit: true },
                   angleModes: {
                     azimuth: {
                       mode: azimuthMode,
@@ -1744,7 +1763,8 @@ export default function DataTable({ sections }: DataTableProps) {
 
       {/* Table. Both grids scroll internally and are sized to this body exactly,
           so the wrapper must never scroll alongside them (double scrollbars). */}
-      <div ref={gridBodyRef} className="flex-1 overflow-hidden">
+      <div ref={gridBodyRef} className="flex-1 overflow-hidden" onKeyDownCapture={credit.onKeyDownCapture}>
+          {credit.editor}
           {rawTableSelection !== null ? (
             rawTableSelection === '' ? (
               <div className="flex items-center justify-center h-full text-text-secondary">

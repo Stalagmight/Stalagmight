@@ -76,6 +76,10 @@ export interface GridColumn<Row> {
    *  while every other column in the grid stays editable. `dir` mirrors the
    *  click's Shift modifier, so Shift+Space cycles backwards. */
   activate?: (row: Row, rowIdx: number, dir: 1 | -1) => void;
+  /** Enter on this single cell runs {@link activate} instead of moving down: for
+   *  a column whose editor is a popover (a people list), where Enter is the
+   *  "edit" key users reach for. */
+  activateOnEnter?: boolean;
   /** Parse a raw typed/pasted string into the value to commit. Return
    *  `undefined` to SKIP the write (e.g. a non-finite number, or an empty string
    *  into a non-nullable numeric - never silently write 0). Defaults to a

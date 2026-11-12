@@ -1289,6 +1289,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         case 'Enter': {
           e.preventDefault();
           if (!rectIsSingleCell(rect)) { cycle(false); return; }
+          if (!e.shiftKey && colAt(colIdx)?.activateOnEnter && activateCell(row, colIdx, 1)) return;
           // GS: Enter on a single cell moves down (Shift+Enter up); F2/typing edits.
           const t = arrowTarget(row, colIdx, e.shiftKey ? -1 : 1, 0, rowCount, colCount);
           moveFocusTo(t.row, t.colIdx, false);

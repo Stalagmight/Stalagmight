@@ -13,6 +13,36 @@ import type { CellEdit } from '../common/SpreadsheetGrid/types';
 import type { Shot, ShotUpdates, SectionId } from '../../types/project';
 import type { BatchCommand } from '../../types/commands';
 import { circularMeanDegrees, normalizeAngle } from '../../utils/angles';
+import type { CreditEdit, Person } from '../../types/ipc.generated';
+import { personKey } from '../../utils/people';
+
+/** The survey-credit column keys (`dataTableCreditColumns.tsx`); never `update_shot` fields. */
+const CREDIT_KEYS = new Set(['surveyors', 'explorers', 'survey_date']);
+
+const samePeople = (a: readonly Person[], b: readonly Person[]) =>
+  a.length === b.length && a.every((p, i) => personKey(p) === personKey(b[i]!) && p.name === b[i]!.name);
+
+/**
+ * The credit edit a shot's credit-cell edits make: each edited cell SETS that
+ * list (or the date), as a paste, fill or clear means; a value equal to what
+ * the shot holds is no edit. Null when nothing changes.
+ */
+export function creditEditForCells(
+  shot: Pick<Shot, 'credit'>,
+  edits: { colKey: string; value: unknown }[],
+): CreditEdit | null {
+  const edit: CreditEdit = {};
+  for (const { colKey, value } of edits) {
+    if (colKey === 'survey_date') {
+      const date = typeof value === 'string' && value !== '' ? value : null;
+      if (date !== (shot.credit?.date ?? null)) edit.set_date = date;
+    } else if (colKey === 'surveyors' || colKey === 'explorers') {
+      const people = Array.isArray(value) ? (value as Person[]) : [];
+      if (!samePeople(people, shot.credit?.[colKey] ?? [])) edit[`set_${colKey}`] = people;
+    }
+  }
+  return Object.keys(edit).length > 0 ? edit : null;
+}
 
 /** Virtual column key for the displayed average azimuth (not a real shot field). */
 export const AZIMUTH_AVG_KEY = '_azimuth_avg';
@@ -110,9 +140,16 @@ export function buildShotUpdateBatch(
     else byRow.set(e.row, [e]);
   }
   const commands: BatchCommand[] = [];
-  for (const [row, rowEdits] of byRow) {
+  for (const [row, allEdits] of byRow) {
     const shot = shots[row];
     if (!shot) continue;
+    // Credit cells go through the credit command, one per shot, in the same batch.
+    const credit = creditEditForCells(shot, allEdits.filter((e) => CREDIT_KEYS.has(e.colKey)));
+    if (credit) {
+      commands.push({ type: 'edit_shot_credit', targets: { type: 'shots', shots: [[sectionId, shot.id]] }, edit: credit });
+    }
+    const rowEdits = allEdits.filter((e) => !CREDIT_KEYS.has(e.colKey));
+    if (rowEdits.length === 0) continue;
     const updates = buildShotUpdates(shot, rowEdits);
     if (Object.keys(updates).length === 0) continue;
     commands.push({ type: 'update_shot', section_id: sectionId, shot_id: shot.id, updates });

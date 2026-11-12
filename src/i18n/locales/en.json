@@ -4040,6 +4040,10 @@
       "mixedUndated_other": "{{range}}, {{count}} shots undated",
       "setForAll": "Set for all shots",
       "keepPerShot": "Keep per-shot dates"
+    },
+    "cellEditor": {
+      "hint": "Enter to save, Esc to cancel",
+      "done": "Done"
     }
   }
 }
