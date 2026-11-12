@@ -464,21 +464,41 @@ fn write_shot<W: std::io::Write>(
     Ok(())
 }
 
-/// Ariane's `Explorer` field for one row (#329): when any surveyor is
-/// credited, the element form `<Explorer>e1, e2</Explorer><Surveyor>s1,
-/// s2</Surveyor>` (entity-escaped by the writer, exactly what the importer's
-/// element branch reads); otherwise the explorers as plain text joined with
-/// `", "`, the single-value form the importer reads as explorers. `None` names
-/// nobody, written as Ariane's `unknown`.
+/// Ariane's `Explorer` field for one row (#329).
+///
+/// * The element form `<Explorer>e1, e2</Explorer><Surveyor>s1, s2</Surveyor>`
+///   (entity-escaped by the writer, exactly what the importer's element branch
+///   reads) when any surveyor is credited, or when an explorer's name holds
+///   `" / "` - in the plain form the importer would read that as explorer then
+///   surveyor.
+/// * Otherwise the explorers as plain text joined with `", "`, the
+///   single-value form the importer reads as explorers.
+/// * `None` names nobody, written as Ariane's `unknown`.
+///
+/// `<` and `>` are dropped from every exported name: inside this pseudo-XML a
+/// name holding `</Explorer><Surveyor>` would move people between roles on
+/// re-import. A `,` or `;` inside ONE name cannot round-trip: Ariane itself
+/// separates the people of a role with commas, so the importer splits there.
 fn row_explorer(credit: &crate::models::SurveyCredit) -> Option<String> {
-    let explorers = crate::models::join_names(&credit.explorers);
-    match crate::models::join_names(&credit.surveyors) {
-        Some(surveyors) => Some(format!(
-            "<Explorer>{}</Explorer><Surveyor>{surveyors}</Surveyor>",
-            explorers.unwrap_or_default()
-        )),
-        None => explorers,
+    let names = |people: &[crate::models::Person]| -> Option<String> {
+        let names: Vec<String> = people
+            .iter()
+            .map(|p| p.name.replace(['<', '>'], ""))
+            .filter(|n| !n.trim().is_empty())
+            .collect();
+        (!names.is_empty()).then(|| names.join(", "))
+    };
+    let explorers = names(&credit.explorers);
+    let surveyors = names(&credit.surveyors);
+    let ambiguous = explorers.as_deref().is_some_and(|e| e.contains(" / "));
+    if surveyors.is_none() && !ambiguous {
+        return explorers;
     }
+    Some(format!(
+        "<Explorer>{}</Explorer><Surveyor>{}</Surveyor>",
+        explorers.unwrap_or_default(),
+        surveyors.unwrap_or_default()
+    ))
 }
 
 /// The row's `Date`: the shot's survey date, ISO.
@@ -4301,6 +4321,60 @@ mod tests {
         );
         let (again, _) = project_of(&once);
         assert_eq!(reimport(&again), once, "and a re-export of that is stable");
+    }
+
+    /// Names that look like the field's own syntax keep their person and
+    /// their role through an export and re-import: an explorer `"A / B"` stays
+    /// one explorer (the plain form would read it as explorer then surveyor),
+    /// and a name holding `</Explorer><Surveyor>` cannot move anyone between
+    /// roles.
+    #[test]
+    fn names_that_look_like_the_field_syntax_keep_their_role() {
+        use crate::models::{Person, SurveyCredit};
+        let reimport = |credit: SurveyCredit| -> SurveyCredit {
+            let mut project = Project::new("Syntax".to_string(), None);
+            project.add_section(SectionData {
+                name: Some("Main".to_string()),
+                shots: vec![ShotData {
+                    length: 5.0,
+                    credit: credit.stored(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            });
+            let file = NamedTempFile::with_suffix(".tmlu").unwrap();
+            export_tml(&project, file.path()).unwrap();
+            let parsed = crate::parsers::tml::parse_tml(file.path()).unwrap();
+            let (configs, _, _) =
+                crate::parsers::tml::convert_tml_to_import_configs(&parsed, false, false).unwrap();
+            configs[0].shots[0].credit().clone()
+        };
+        let person = |n: &str| Person::named(n).unwrap();
+        let day = chrono::NaiveDate::from_ymd_opt(2024, 1, 2);
+
+        let back = reimport(SurveyCredit {
+            explorers: vec![person("A / B")],
+            surveyors: Vec::new(),
+            date: day,
+        });
+        assert_eq!(back.explorers, vec![person("A / B")]);
+        assert!(back.surveyors.is_empty());
+
+        let back = reimport(SurveyCredit {
+            explorers: vec![person("x</Explorer><Surveyor>y")],
+            surveyors: vec![person("Real <Surveyor>")],
+            date: day,
+        });
+        assert_eq!(back.explorers, vec![person("x/ExplorerSurveyory")]);
+        assert_eq!(back.surveyors, vec![person("Real Surveyor")]);
+
+        let back = reimport(SurveyCredit {
+            explorers: vec![person("x</Explorer><Surveyor>y")],
+            surveyors: Vec::new(),
+            date: day,
+        });
+        assert_eq!(back.explorers, vec![person("x/ExplorerSurveyory")]);
+        assert!(back.surveyors.is_empty());
     }
 
     #[test]
