@@ -324,13 +324,11 @@ describe('theme-aware display defaults', () => {
       expect(lightDisplayDefaults).toHaveProperty('font_color');
       expect(lightDisplayDefaults).toHaveProperty('grid_spacing');
       expect(lightDisplayDefaults).toHaveProperty('font_size');
-      expect(lightDisplayDefaults).toHaveProperty('depth_gradient');
     });
 
-    it('has depth gradient settings', () => {
-      expect(lightDisplayDefaults.depth_gradient).toHaveProperty('enabled');
-      expect(lightDisplayDefaults.depth_gradient).toHaveProperty('shallow_color');
-      expect(lightDisplayDefaults.depth_gradient).toHaveProperty('deep_color');
+    it('no longer carries the dead depth_gradient section (#380)', () => {
+      expect(lightDisplayDefaults).not.toHaveProperty('depth_gradient');
+      expect(getThemedDisplayDefaults('dark')).not.toHaveProperty('depth_gradient');
     });
   });
 
@@ -383,7 +381,6 @@ describe('theme-aware display defaults', () => {
       const result1 = getThemedDisplayDefaults('light');
       const result2 = getThemedDisplayDefaults('light');
       expect(result1).not.toBe(result2);
-      expect(result1.depth_gradient).not.toBe(result2.depth_gradient);
     });
   });
 

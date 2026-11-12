@@ -21,7 +21,7 @@ upload, draw).
 | Layer id | Controller | GL layer | Draws |
 |---|---|---|---|
 | `survey-custom-render` | `customRender/controller.ts` | `surveyCustomLayer.ts` | shots as screen-width lines, stations as fragment circles |
-| `survey-custom-labels` | `customRender/labelController.ts` | `surveyCustomLabelLayer.ts` | all five label kinds (`labelShaders.LABEL_KIND`) |
+| `survey-custom-labels` | `customRender/labelController.ts` | `surveyCustomLabelLayer.ts` | all seven label kinds (`labelShaders.LABEL_KIND`): the five stock ones plus the shot and loop-closure Errors labels |
 | `survey-measure-path-custom` | `customRender/measurePathController.ts` | `surveyMeasurePathLayer.ts` | the ruler's along-cave-line tint |
 | `survey-drag-ghost` | `surveyLayer/dragGhostController.ts` | `customRender/surveyGhostLayer.ts` | the moving-geometry preview during a move drag |
 | (global map) | `GlobalView/customRender/globalController.ts` | `globalCustomLayer.ts` | the multi-system Global View |
@@ -110,7 +110,32 @@ would have made in a paint expression happen at build time in
 `colorResolvers.ts::makeColorResolvers`. Precedence: an active **analytical
 overlay** (distance gradient, gas reach) owns the shot color and station fill
 outright; otherwise the **move-comment tint** if that tool is active; otherwise
-`surveyLayer/displayColor.ts` - severity, then depth ramp, then section color.
+`surveyLayer/displayColor.ts` - Survey Issues score, then depth ramp, then section color.
+The depth ramp and the distance overlay take the user's palette + Levels range
+when one is set (`ColorScaleInput`; see [color-palettes.md](color-palettes.md),
+which also covers the LUT-backed live preview).
+
+**Survey Issues** is graded, not three flat colors. `surveyLayer/shotQuality.ts`
+measures per shot how far its readings disagree (azimuth in vs out, inclination
+in vs out, inclination vs the depth change, length vs the depth change) and
+`issueScale.ts` scores each against its Min / Warn / Max levels: 0 at Min, 1 at
+Warn, 3 at Max. The default levels sit on the project's thresholds (Warn) and
+three times them (Max). `issueScore.ts` combines a shot's metrics (worst or
+average, leaving out switched-off ones), forces 3 for an unresolved error,
+floors other unresolved warnings at 1, drops a metric whose warning was
+ignored, and combines the shots of each station the same way (shared across
+merge groups). `issueColor.ts` ramps through the chosen palette (default green
+-> yellow at score 1 -> red at score 3), quantized to hundredths so there are
+at most 301 colors per palette. See [color-palettes.md](color-palettes.md#survey-issues-colors)
+for the cog. The metrics are computed from the
+recorded shot columns, so the Raw Data and Closures Computed views share them;
+`resolveIssueRender` memoizes per `SurveyData`, and an unchanged scores object
+keeps `incremental.ts`' cheap path.
+
+Which color mode is painted is decided in one place,
+`displaySelectors.selectEffectiveColorMode`: the saved flags, or, while the
+Warnings tab is on screen, Survey Issues unless the user picked another mode
+during that visit (`store/warningsVisit.ts`).
 
 Two details are worth respecting. `overlayColor.ts` reproduces MapLibre's
 data-driven ramp *byte for byte* - it floors where `colorPack.packCssColor`
@@ -145,7 +170,42 @@ also folds in the decimation band, and the shader just compares
 (a label that appeared can never vanish on zooming further in): the decimation
 moduli are the nested chain `4 -> 2 -> 1`, each admitted set a subset of the
 next, and the reveal ladder re-seeds already-revealed winners at every step so a
-finer-tier label cannot evict a coarser one. `labelTessellate.ts` stamps the
+finer-tier label cannot evict a coarser one.
+
+**Real line first.** Labels of virtual geometry never take a real-line label's
+spot. `labelVirtualRank` puts every label in one of three ranks from the flags it
+already carries: real (a Normal shot's labels, or a station / section a Normal
+shot touches), jump, then reference (shot labels by their own kind, stations and
+section names by the `ALL_JUMP` / `ALL_REFERENCE` pair - the better kind
+touching them; a pure function of the flags, so a hide toggle never reorders
+labels). The ladder runs once per rank, best first. A later rank leaves free
+every slot an earlier rank's winner holds, including one it only takes further
+up the ladder: a jump label may show at `z` only if it clears each real winner
+at `max(z, its reveal)`, the first zoom at which both are drawn. Real labels
+therefore reveal exactly as they would with no virtual labels, and jump labels
+as they would with no reference labels; tier, kind and ordinal still order
+labels within a rank. A label that loses its spot on a reveal-only rerun
+(re-showing jumps, say) uploads an unreachable reveal and stays hidden, as a
+fresh build would leave it. Below the 13.5 label band only section names are
+built, yet a jump / reference section's name must not show there only to lose
+its spot, and vanish, once the station and shot labels around it are built: the
+section-only build gathers the shown expensive kinds near each such name and
+passes them to the reveal pass as `reserved` slots, held from their decimation
+floor.
+
+The **Errors labels** (`SHOT_ERROR`, `CLOSURE_ERROR`) carry a severity score
+(`descriptor.score`). They rank right after section names and, among
+themselves, worst first; they are not ordinal-decimated. An Errors label that
+is admitted but does not fit reserves its box for the rest of that ladder step,
+so neither a weaker error nor a station / shot label takes the place of a
+stronger error at that zoom; the randomized property test in
+`labelReveal.test.ts` pins that a weaker overlapping error is not visible while
+a stronger one is hidden. This all happens within a virtual rank: a jump
+shot's error label never takes a real-line label's spot. Section names keep their place (placed from
+z10). The text comes from `errorLabelText.ts` (one label per shot, all parts or
+none, ASCII signs); the shot label sits above the shot midpoint so Shot data
+(below) can show with it, and the closure label at the midpoint of the closure's
+stations. `labelTessellate.ts` stamps the
 quads; `labelController.ts` scopes the build to a padded viewport, emits a slack
 window above the build zoom so a modest zoom-in needs no rebuild at all, and
 defers the first build until the font promise resolves.
@@ -174,6 +234,43 @@ it:
 3. trim to the exact pick with the index's `nearestStation` / `nearestShot`
    (reached through `SurveyLayer.resolveStationAt` / `resolveShotAt`), using true
    endpoints rather than tile-clipped geometry.
+
+**The real line on top.** A jump or reference section tied in at a real station
+puts several markers on one spot, and a reference tie surveyed along the real
+line runs over it. Each kind draws in one call with no depth test, so the index
+buffers draw by rank - reference first, then jump, then real
+(`tessellate.writeLineDrawOrder` by shot kind, `writeCircleDrawOrder` by
+`stationKindRank`) - and the real line ends on top. The vertices stay in SoA
+order, which the incremental path addresses; when a kind edit moves shots or a
+station between ranks it redoes the order and writes it through
+`COPY_WRITE_BUFFER` (`surveyCustomLayer.uploadLineIndices` /
+`uploadCircleIndices`): it runs outside `render()`, and the element-array binding
+is VAO state. The picks agree (`nearestStation` / `nearestShot`): equal distances
+go to the better rank, and a cursor on the drawn disc or line of a better-ranked
+feature picks it over a nearer, worse-ranked one it covers. The drawn size is the
+shader's: `ResolveOptions.stationDiscPx` (radius + stroke) times `stationSizeMul`
+(`controller.stationSizeMul`: the hover or selection size of a highlighted
+section, else 2x for a zero datum), and `shotHalfWidthPx` times `shotWidthMul`
+(`controller.shotWidthMul`). The visible edge of a worse-ranked feature still
+picks it, and features of one rank keep the plain nearest pick. The ranks are
+the label declutter's (`labelVirtualRank`).
+
+**The selection on top.** The selected section, or the section of the selected
+station or shot (`raisedSection.raisedSectionOf`), draws above every rank: the
+writers take a per-vertex raised flag (built with `computeLineDim` /
+`computeCircleDim`) and draw those quads after all others, in the same kind
+order among themselves.
+`SurveyLayer.updateVisualState` pushes it to `controller.setRaisedSection`, which
+rewrites and re-uploads only the index buffers whose order moved; every build
+and the incremental reorder keep it. The picks rank the raised section above
+real line (`ResolveOptions.raisedSectionId`: its kinds' ranks shifted by 3), so
+where it overlaps the main line the click goes to it, as drawn, in every tool
+that picks through `resolveStationAt` / `resolveShotAt` (merge and measure snaps
+too); to reach a real-line station it covers, clear the selection first (Escape,
+or in the Select tool a click on empty map). MapCanvas sets the new selection
+before clearing the old one, so a change moves the order at most once. Hover
+changes no order, and labels ignore the selection. The single selected station or shot is drawn
+again above everything by the interact overlay, as before.
 
 Every pick is a single nearest-within-tolerance resolve; the box in step 2 is
 only the candidate prefilter. The index's multi-hit box resolver went away with
@@ -373,7 +470,12 @@ the Zustand write.
 | Click or hover misses a feature | `hitProbe.ts` padding, then `geometryIndex.sectionsIntersectingBox`, then the camera snapshot key |
 | Labels missing entirely | font readiness in `labelController` (the `label-font-unavailable` path) |
 | Labels vanish or flash while zooming | `labelReveal.ts` / `labelDecimation.ts` |
+| A jump / reference label shows where a real-line one should | `labelVirtualRank` and the per-rank passes in `labelReveal.ts`, then the flags `labelTessellate.ts` stamps |
+| A jump / reference marker or line drawn over, or clicked instead of, the real one at the same spot | `writeCircleDrawOrder` / `writeLineDrawOrder` in `tessellate.ts` (and their calls in `controller.tryIncremental`), then `geometryIndex.nearestStation` / `nearestShot` |
+| A selected section still drawn under the real line, or stays on top after deselecting | `SurveyLayer.updateVisualState` -> `raisedSectionOf` -> `controller.setRaisedSection`, then `ResolveOptions.raisedSectionId` for the click |
 | Label text or placement wrong | `labelLayout.ts` (shaping, em offsets), `labelStyle.ts` (per-kind style) |
+| Survey Issues color or an Errors label value looks wrong | `shotQuality.ts` (the metrics, parity-tested against the Rust validator), `issueScale.ts` (levels, combine), `issueScore.ts` (floors, ignores), `errorLabelText.ts` |
+| Survey Issues on / off when it should not be | `displaySelectors.selectEffectiveColorMode` and `store/warningsVisit.ts` (the Warnings-tab visit) |
 | Sizes wrong after dragging the window to another monitor | the DPR watcher in `SurveyLayer` - device-pixel sizes are baked into the buffers |
 | Global View wrong but the survey map fine | `GlobalView/customRender/` - a separate implementation |
 | Imagery drawn with no source names, or the wrong ones | `MapAttribution.tsx` visibility prop at the mount site, then `tile_attribution.rs` (a failed fetch backs off for 5 min and serves the fallback) |

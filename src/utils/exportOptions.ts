@@ -1,5 +1,15 @@
 import { getMapThemeColors } from './themeColors';
 import type { ExportImageOptions } from '../types/commands';
+import type { ExportColorScale, MapPaletteConfig } from '../types/ipc.generated';
+import { resolveChoice } from './palettes';
+import {
+  DEFAULT_PALETTE_CHOICE,
+  THEME_PALETTE_ID,
+  type ColorScaleKind,
+  type PaletteKind,
+  type LevelsScale,
+  type PaletteChoice,
+} from './palettes/types';
 
 /** The two image-export options that pick what a station's label says. */
 export type StationLabelOption = 'show_station_labels' | 'show_station_names';
@@ -47,4 +57,69 @@ export function setStationLabelOption(
 export function withThemeDepthRamp(options: ExportImageOptions): ExportImageOptions {
   const { depthShallow, depthDeep } = getMapThemeColors();
   return { ...options, depth_shallow: depthShallow, depth_deep: depthDeep };
+}
+
+/** What the export's colour scales are built from: the palette choice per kind
+ *  (persisted `[map_palette]`, or the picker's live preview) and the export's
+ *  own session Levels range per kind. */
+export interface ExportScaleInputs {
+  depth: { choice: PaletteChoice; scale: LevelsScale | null };
+  distance: { choice: PaletteChoice; scale: LevelsScale | null };
+}
+
+/** Entries in the palette table sent to the exporter. */
+export const EXPORT_PALETTE_ENTRIES = 256;
+
+/** The export inputs from the persisted palettes and the colour-scale session
+ *  state (a live picker preview wins for its kind, so the export preview
+ *  follows the picker like the map does). */
+export function exportScaleInputsFrom(
+  mapPalette: Pick<MapPaletteConfig, 'depth' | 'distance'> | undefined,
+  session: { exportScale: Readonly<Record<ColorScaleKind, LevelsScale | null>>; palettePreview: { kind: PaletteKind; choice: PaletteChoice } | null },
+): ExportScaleInputs {
+  const choice = (kind: ColorScaleKind): PaletteChoice =>
+    session.palettePreview?.kind === kind
+      ? session.palettePreview.choice
+      : (mapPalette?.[kind] ?? DEFAULT_PALETTE_CHOICE);
+  return {
+    depth: { choice: choice('depth'), scale: session.exportScale.depth },
+    distance: { choice: choice('distance'), scale: session.exportScale.distance },
+  };
+}
+
+/** One kind's `ExportColorScale`, or undefined for the untouched default so the
+ *  exporter keeps its original ramp and range byte for byte. */
+function exportScaleFor(
+  kind: ColorScaleKind,
+  { choice, scale }: { choice: PaletteChoice; scale: LevelsScale | null },
+): ExportColorScale | undefined {
+  const defaultPalette = choice.id === THEME_PALETTE_ID && !choice.reversed;
+  if (defaultPalette && scale === null) return undefined;
+  const out: ExportColorScale = {};
+  if (!defaultPalette) {
+    const palette = resolveChoice(choice, kind, getMapThemeColors());
+    const table: string[] = [];
+    for (let i = 0; i < EXPORT_PALETTE_ENTRIES; i++) {
+      table.push(palette.hex(i / (EXPORT_PALETTE_ENTRIES - 1)) ?? '#808080');
+    }
+    out.palette = table;
+  }
+  if (scale) out.levels = { min: scale.min, max: scale.max, gamma: scale.gamma };
+  return out;
+}
+
+/**
+ * {@link withThemeDepthRamp} plus the user's depth / distance colour scales.
+ * Both image commands go through here (the export and its preview), for the
+ * same can't-drift reason as the theme endpoints.
+ */
+export function withColorScales(options: ExportImageOptions, inputs: ExportScaleInputs): ExportImageOptions {
+  const out: ExportImageOptions = withThemeDepthRamp(options);
+  const depth = exportScaleFor('depth', inputs.depth);
+  const distance = exportScaleFor('distance', inputs.distance);
+  if (depth) out.depth_scale = depth;
+  else delete out.depth_scale;
+  if (distance) out.distance_scale = distance;
+  else delete out.distance_scale;
+  return out;
 }

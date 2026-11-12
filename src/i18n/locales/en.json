@@ -433,7 +433,6 @@
         "interface": "Interface",
         "grid": "Grid",
         "font": "Font",
-        "depthGradient": "Depth Gradient",
         "sectionColors": "Section Colors",
         "measure": "Measure tool"
       },
@@ -468,33 +467,6 @@
           "aria": "Font color"
         }
       },
-      "depthGradient": {
-        "enabled": {
-          "label": "Enable depth gradient",
-          "help": "Color shots based on their depth",
-          "aria": "Enable depth gradient coloring"
-        },
-        "shallowColor": {
-          "label": "Shallow color",
-          "help": "Color at the shallow depth threshold",
-          "aria": "Shallow depth color"
-        },
-        "deepColor": {
-          "label": "Deep color",
-          "help": "Color at the deep depth threshold",
-          "aria": "Deep depth color"
-        },
-        "shallowDepth": {
-          "label": "Shallow depth",
-          "help": "Depth value where gradient starts (in configured depth unit)",
-          "aria": "Shallow depth threshold"
-        },
-        "deepDepth": {
-          "label": "Deep depth",
-          "help": "Depth value where gradient ends (in configured depth unit)",
-          "aria": "Deep depth threshold"
-        }
-      },
       "sectionColors": {
         "label": "Color palette",
         "help": "Colors assigned to new sections (click to change)",
@@ -506,8 +478,7 @@
         "aria": "Measure path highlight color"
       },
       "validation": {
-        "fontSize": "Font size must be between 8 and 32",
-        "depthRange": "Shallow depth must be less than deep depth"
+        "fontSize": "Font size must be between 8 and 32"
       }
     },
     "validation": {
@@ -1959,9 +1930,12 @@
       "fromInclinationNote": "From recorded inclination {{value}}°",
       "proposedImpossibleGeometry": "These values make the shot shorter than its depth change, so applying will raise an error.",
       "zoomToShot": "Zoom to the shot",
+      "zeroInclinationLegNote": "The other reading is exactly 0°. Projects imported from Compass before this version stored a missing back-sight inclination as 0°, so this keeps the real reading.",
       "resolveOptions": {
         "useIn": "Use azimuth in",
         "useOut": "Use azimuth out",
+        "useInclinationIn": "Use inclination in",
+        "useInclinationOut": "Use inclination out",
         "average": "Average",
         "manual": "Manual correction",
         "manualLength": "Set length",
@@ -2120,6 +2094,7 @@
       "referenceShots": "References",
       "stationComments": "Station comments",
       "shotData": "Shot data",
+      "shotErrors": "Errors",
       "shotComments": "Shot comments",
       "zeroDatum": "Zero datum",
       "grid": "Grid",
@@ -2128,6 +2103,10 @@
       "distanceGradient": "Distance",
       "issueSeverity": "Survey Issues",
       "devStats": "Dev stats"
+    },
+    "warningsVisit": {
+      "note": "Survey Issues and Errors are on while the Warnings tab is open. Changes here last until you leave the tab.",
+      "pillHint": "On while the Warnings tab is open"
     },
     "descriptions": {
       "stations": "Show station markers",
@@ -2140,13 +2119,14 @@
       "referenceShots": "Show reference shots (survey ties)",
       "stationComments": "Show station comments on map",
       "shotData": "Show shot data labels",
+      "shotErrors": "Label each shot with how far its readings disagree, and each loop closure with its error",
       "shotComments": "Show shot comments on map",
       "zeroDatum": "Show zero datum stations",
       "grid": "Show grid overlay",
       "satellite": "Show satellite imagery",
       "depthGradient": "Color by depth",
       "distanceGradient": "Color by along-cave distance from the entrance (click a station to re-root)",
-      "issueSeverity": "Color shots and stations by validation issues (red = error, yellow = warning, green = clear)",
+      "issueSeverity": "Color shots and stations by how far their readings disagree: green agrees, yellow is at a warning threshold, red is an error or 3x the threshold",
       "devStats": "Show developer stats overlay"
     }
   },
@@ -2404,6 +2384,91 @@
       "fromStation": "from {{id}}",
       "computing": "Distance: computing…"
     },
+    "issueLegend": {
+      "title": "Survey Issues",
+      "aria": "Survey Issues color scale: the start of the palette where the readings agree, its middle at an error's warn level, its end at the max level or for an error",
+      "error": "Max level, or an error",
+      "warning": "Warn level",
+      "clear": "Min level: readings agree",
+      "keyTitle": "Errors labels",
+      "key": {
+        "azimuth": "azimuth in vs out",
+        "inclination": "inclination in vs out",
+        "inclinationDepth": "inclination vs depth change",
+        "length": "length vs depth change and inclination, on shots over {{degrees}}°",
+        "closure": "loop closure error and misclosure"
+      },
+      "allOff": "All errors are switched off in the color settings."
+    },
+    "errorLabels": {
+      "abbrev": {
+        "azimuth": "Δaz",
+        "inclination": "Δinc",
+        "inclinationDepth": "Δi/d",
+        "length": "ΔL",
+        "closure": "Loop"
+      }
+    },
+    "colorScale": {
+      "settingsButton": "Color scale settings",
+      "title": {
+        "depth": "Depth colors",
+        "distance": "Distance colors",
+        "issues": "Survey Issues colors"
+      },
+      "palette": "Palette",
+      "themePalette": "Theme",
+      "reverse": "Reverse",
+      "reverseAria": "Reverse the palette",
+      "resetPalette": "Reset palette to the theme default",
+      "resetRange": "Reset range to the full data range",
+      "range": "Range",
+      "min": "Min",
+      "max": "Max",
+      "gamma": "Mid",
+      "gammaHelp": "Midpoint gamma, as in Levels: 1.00 is linear, higher pushes the middle color toward the start",
+      "minHandle": "Range start",
+      "midHandle": "Midpoint",
+      "maxHandle": "Range end",
+      "midValue": "Mid {{value}}",
+      "histogram": "Histogram of {{kind}} values",
+      "kind": {
+        "depth": "depth",
+        "distance": "distance"
+      },
+      "search": "Search palettes",
+      "noResults": "No palettes match",
+      "pin": "Pin {{name}} to the top",
+      "unpin": "Unpin {{name}}",
+      "groups": {
+        "pinned": "Pinned",
+        "theme": "Theme",
+        "mpl-perceptual": "Perceptually uniform",
+        "mpl-sequential": "Sequential",
+        "mpl-sequential-2": "Sequential (2)",
+        "mpl-diverging": "Diverging",
+        "mpl-cyclic": "Cyclic",
+        "mpl-qualitative": "Qualitative",
+        "mpl-misc": "Miscellaneous",
+        "grad-basics": "Basics",
+        "grad-spectrum": "Spectrum",
+        "grad-blues": "Blues",
+        "grad-greens": "Greens",
+        "grad-reds": "Reds and oranges",
+        "grad-purples": "Purples and pinks",
+        "grad-earth": "Browns and earth",
+        "grad-grays": "Grays",
+        "grad-metals": "Metals"
+      },
+      "saveFailed": "Could not save the color palette. It will be back to the previous one next time.",
+      "pinLimit": "You can pin up to {{count}} palettes. Unpin one to pin another.",
+      "noValues": {
+        "depth": "This survey has no depths to color.",
+        "distance": "No station is reachable from an entrance, so nothing is colored by distance. Set a zero datum to use this."
+      },
+      "issuesDefaultPalette": "Default",
+      "resetIssuesPalette": "Reset palette to the default green, yellow, red"
+    },
     "gasLegend": {
       "title": "Gas reach",
       "aria": "Gas-to-reach scale from {{min}} (near) to {{max}} (reachable limit)",
@@ -2507,6 +2572,40 @@
       "zoom": "Zoom",
       "zoomLevels": "{{countFormatted}} levels",
       "zooming": "Zooming"
+    },
+    "issueScale": {
+      "title": "Survey Issues colors",
+      "combine": "Color a shot by",
+      "combineMode": {
+        "worst": "Worst error",
+        "average": "Average"
+      },
+      "combineHelp": {
+        "worst": "A shot takes the color of its worst error.",
+        "average": "A shot takes the average color of its errors: one error at Max and one at Min give the warn color."
+      },
+      "errors": "Errors",
+      "metric": {
+        "azimuth": "Azimuth in vs out",
+        "inclination": "Inclination in vs out",
+        "inclinationDepth": "Inclination vs depth change",
+        "length": "Length vs depth change",
+        "closure": "Loop closure"
+      },
+      "enableAria": "Use {{name}} in the colors and labels",
+      "summary": "warn {{warn}}, max {{max}}",
+      "off": "Off",
+      "offHint": "Off: left out of the colors and the Errors labels",
+      "noValues": "No values to show in this survey",
+      "resetLevels": "Reset levels to the default",
+      "histogram": "Histogram of {{name}} values (log scale)",
+      "min": "Min",
+      "warn": "Warn",
+      "max": "Max",
+      "minHandle": "Min level: at or below it the readings agree",
+      "warnHandle": "Warn level: the palette's middle",
+      "maxHandle": "Max level: the palette's end, as for an error",
+      "note": "Only the map's colors and Errors labels change here. Which shots get a warning stays set by the thresholds in Project Settings."
     }
   },
   "editSection": {

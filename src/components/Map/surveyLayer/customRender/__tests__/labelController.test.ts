@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Map as MaplibreMap } from 'maplibre-gl';
-import { emptySurveyData, STATION_FLAG_IS_ZERO_DATUM, type SurveyData } from '../../../../../types/survey-data';
+import { emptySurveyData, shotKindToFlags, STATION_FLAG_IS_ZERO_DATUM, type SurveyData } from '../../../../../types/survey-data';
 import type { MapThemeColors } from '../../../../../utils/themeColors';
 import { GlyphAtlas, SDF_BUFFER, type GlyphRasterizer, type RasterizedGlyph } from '../glyphAtlas';
 import { LABEL_KIND, LABEL_FLAG } from '../labelShaders';
@@ -8,6 +8,7 @@ import { FEATURE_ID_STRIDE } from '../../../../../utils/ids';
 import type { LabelRenderData } from '../surveyCustomLabelLayer';
 import { SurveyLabelController, type LabelSyncParams } from '../labelController';
 import { CUSTOM_LABELS_SYNC_HOOK } from '../labelsGate';
+import { REVEAL_CEILING } from '../labelReveal';
 import { computeMercatorAnchor } from '../mercator';
 import { projectStationsRel } from '../tessellate';
 
@@ -446,6 +447,15 @@ describe('SurveyLabelController all-kinds suppression + toggle routing', () => {
     expect(layer.lastStyle?.kindEnabled[LABEL_KIND.STATION_COMMENT]).toBe(true);
     c.setShotCommentsVisible(true);
     expect(layer.lastStyle?.kindEnabled[LABEL_KIND.SHOT_COMMENT]).toBe(true);
+    // Errors labels: shot labels and closure labels flip independently.
+    expect(layer.lastStyle?.kindEnabled).toHaveLength(7);
+    expect(layer.lastStyle?.kindEnabled[LABEL_KIND.SHOT_ERROR]).toBe(false);
+    c.setErrorLabelsVisible(true, false);
+    expect(layer.lastStyle?.kindEnabled[LABEL_KIND.SHOT_ERROR]).toBe(true);
+    expect(layer.lastStyle?.kindEnabled[LABEL_KIND.CLOSURE_ERROR]).toBe(false);
+    c.setErrorLabelsVisible(false, true);
+    expect(layer.lastStyle?.kindEnabled[LABEL_KIND.SHOT_ERROR]).toBe(false);
+    expect(layer.lastStyle?.kindEnabled[LABEL_KIND.CLOSURE_ERROR]).toBe(true);
     // Uniform flips, never a buffer rebuild.
     expect(layer.updateCalls).toBe(updatesBefore);
   });
@@ -1392,6 +1402,156 @@ describe('SurveyLabelController reveal rerun on toggle', () => {
     c.setReferenceShotsVisible(false);
     expect(layer.revealCalls).toBeGreaterThan(revealBefore);
     expect(layer.updateCalls).toBe(updatesBefore);
+  });
+});
+
+describe('SurveyLabelController rerun keeps a lost virtual label hidden', () => {
+  beforeEach(() => {
+    h.layerState.disabledAfterAdd = false;
+    h.layerState.last = null;
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  /** Section B's one shot is a Jump laid exactly over section A's first (real)
+   *  shot, so their shot labels share an anchor and overlap at every zoom. */
+  function jumpOverRealParams(): LabelSyncParams {
+    const params = makeParams();
+    const d = params.surveyData;
+    d.stationCount = 5;
+    d.stationSectionIds = new Uint32Array([1, 1, 1, 2, 2]);
+    d.stationIndices = new Uint32Array([0, 1, 2, 0, 1]);
+    d.stationCoords = new Float64Array([0, 0, 0, 10, 0, -1, 10, 10, -2, 0, 0, 0, 10, 0, -1]);
+    d.stationFlags = new Uint8Array([STATION_FLAG_IS_ZERO_DATUM, 0, 0, 0, 0]);
+    d.shotFlags = new Uint8Array([0, 0, shotKindToFlags('Jump')]);
+    return params;
+  }
+
+  /** Reveal zooms of the shot-label vertices, split by whether they carry JUMP. */
+  function shotLabelReveals(layer: FakeLabelLayer): { real: number[]; jump: number[] } {
+    const { kind, revealZoom, flags } = vfl(layer);
+    const out = { real: [] as number[], jump: [] as number[] };
+    for (let v = 0; v < kind.length; v++) {
+      if (kind[v] !== LABEL_KIND.SHOT_LABEL) continue;
+      ((flags[v]! & LABEL_FLAG.JUMP) !== 0 ? out.jump : out.real).push(revealZoom[v]!);
+    }
+    return out;
+  }
+
+  it('re-showing jumps hides the jump label that loses to a real one, rather than drawing it on top at the horizon', () => {
+    const cam = makeCameraMap(18);
+    const c = cameraController(cam.map);
+    c.setShotLabelsVisible(true);
+    // Built with jumps hidden: the jump label is no candidate, so it is emitted
+    // uncontested (the shader hides it while jumps are off).
+    c.setJumpShotsVisible(false);
+    c.sync(jumpOverRealParams());
+    const layer = h.layerState.last!;
+    const built = shotLabelReveals(layer);
+    expect(built.jump.length).toBeGreaterThan(0);
+    const realBefore = built.real.slice();
+
+    c.setJumpShotsVisible(true);
+    const after = shotLabelReveals(layer);
+    // The jump label now loses its slot to the coincident real label: hidden at
+    // every zoom the map reaches, not parked at the emit horizon (z22 here).
+    for (const r of after.jump) expect(r).toBeGreaterThan(REVEAL_CEILING);
+    // The real labels keep their reveals.
+    expect(after.real).toEqual(realBefore);
+    expect(Math.max(...after.real)).toBeLessThanOrEqual(REVEAL_CEILING);
+  });
+});
+
+describe('SurveyLabelController jump section names below the label band', () => {
+  beforeEach(() => {
+    h.layerState.disabledAfterAdd = false;
+    h.layerState.last = null;
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  /** Real section A (stations at x = -3000, 0, 10) and a jump section J tied in at
+   *  A's middle station: J's name sits on A's station label there. */
+  function tiedJumpParams(): LabelSyncParams {
+    const params = makeParams();
+    const d = params.surveyData;
+    d.sections = [
+      { id: 1, name: 'A', surveyor: null, date: null, color: '#ff0000', direction: 'in' as never, quality: 0, next_shot_id: 2, shotOffset: 0, shotCount: 2 },
+      { id: 2, name: 'Jump to the downstream sump', surveyor: null, date: null, color: '#00ff00', direction: 'in' as never, quality: 0, next_shot_id: 1, shotOffset: 2, shotCount: 1 },
+    ];
+    d.shotCount = 3;
+    d.shotIds = new Uint32Array([0, 1, 0]);
+    d.shotSectionIds = new Uint32Array([1, 1, 2]);
+    d.shotFlags = new Uint8Array([0, 0, shotKindToFlags('Jump')]);
+    d.stationCount = 5;
+    d.stationSectionIds = new Uint32Array([1, 1, 1, 2, 2]);
+    d.stationIndices = new Uint32Array([0, 1, 2, 0, 1]);
+    d.stationCoords = new Float64Array([-3000, 0, 0, 0, 0, -1, 10, 0, -2, 0, 0, -1, 0, 30, -1]);
+    d.stationFlags = new Uint8Array([STATION_FLAG_IS_ZERO_DATUM, 0, 0, 0, 0]);
+    return params;
+  }
+
+  /** Reveal zooms of J's section name (the all-jump one), [] when not emitted. */
+  function jumpNameReveals(layer: FakeLabelLayer): number[] {
+    const { kind, revealZoom, flags } = vfl(layer);
+    const out: number[] = [];
+    for (let v = 0; v < kind.length; v++) {
+      if (kind[v] === LABEL_KIND.SECTION_NAME && (flags[v]! & LABEL_FLAG.ALL_JUMP) !== 0) out.push(revealZoom[v]!);
+    }
+    return out;
+  }
+
+  it('shows at z12 while station labels are off, and is left out once they are on - as the full build leaves it', () => {
+    const cam = makeCameraMap(12);
+    const c = cameraController(cam.map);
+    c.sync(tiedJumpParams());
+    const layer = h.layerState.last!;
+    // Nothing to leave free: J's name shows below the band.
+    expect(jumpNameReveals(layer).length).toBeGreaterThan(0);
+    expect(Math.max(...jumpNameReveals(layer))).toBeLessThan(13.5);
+
+    // Station labels on: A's station label (drawn from the band up) outranks
+    // J's name, so the name is not shown below the band either. It stays in the
+    // buffer, hidden at every zoom the map reaches, so a reveal-only rerun
+    // still sees the slot it holds.
+    const hidden = (r: number[]) => r.length > 0 && r.every((z) => z > REVEAL_CEILING);
+    c.setStationLabelMode('id');
+    expect(hidden(jumpNameReveals(layer))).toBe(true);
+    // A rerun (jumps hidden, then shown again) leaves it hidden.
+    c.setJumpShotsVisible(false);
+    c.setJumpShotsVisible(true);
+    expect(hidden(jumpNameReveals(layer))).toBe(true);
+
+    // Past the band, the full build agrees: the name never shows there.
+    cam.state.zoom = 14;
+    c.sync(tiedJumpParams());
+    // (A full build reserves nothing, so the name is simply not emitted.)
+    expect(jumpNameReveals(h.layerState.last!)).toEqual([]);
+  });
+
+  // Station names mode (#697) labels only named stations, with longer boxes:
+  // the reservation must build the same text as the full build.
+  it('in names mode it reserves the names a full build draws, not IDs', () => {
+    const cam = makeCameraMap(12);
+    const c = cameraController(cam.map);
+    c.setStationLabelMode('name');
+    // No station is named, so the full build draws no station label at the
+    // tie-in and nothing holds J's name back, below the band or past it.
+    c.sync(tiedJumpParams());
+    expect(Math.max(...jumpNameReveals(h.layerState.last!))).toBeLessThan(13.5);
+    cam.state.zoom = 14;
+    c.sync(tiedJumpParams());
+    expect(jumpNameReveals(h.layerState.last!).length).toBeGreaterThan(0);
+
+    // Name the tie-in station (A's g1): its name outranks J's, below the band too.
+    const named = tiedJumpParams();
+    named.surveyData.stationNames = new Map([[1, 'Tie-in at the restriction']]);
+    cam.state.zoom = 12;
+    c.sync(named);
+    const reveals = jumpNameReveals(h.layerState.last!);
+    expect(reveals.length > 0 && reveals.every((z) => z > REVEAL_CEILING)).toBe(true);
   });
 });
 

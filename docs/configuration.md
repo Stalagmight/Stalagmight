@@ -107,13 +107,6 @@ font_size = 12                      # Map label font size
 font_color = "#f5f5f5"              # Map label color
 measure_path_color = "#22d3ee"      # Along-line tint for the measure tool's path
 
-[display.depth_gradient]
-enabled = false                     # Color shots by depth
-shallow_color = "#00bfff"           # Gradient endpoint at shallow_depth
-deep_color = "#ff4444"              # Gradient endpoint at deep_depth
-shallow_depth = 0.0
-deep_depth = 50.0
-
 [section_colors]
 # Colors handed to new sections, in order; wraps around when all are used
 palette = ["#4ecdc4", "#ff6b6b", "#95e1d3", "#f38181",
@@ -327,6 +320,15 @@ all_thirds_safety_margin_bar = 0.0  # Extra bar held back from every cylinder un
 recalc_hold_stage2_bar = 100.0      # Back-gas held pressures for the Phase-2 return-leg
 recalc_hold_stage1_bar = 70.0       # recalc (carried now; that path is not implemented yet)
 
+[map_palette]
+# Depth / distance coloring palettes, chosen from the map legend's cog or the
+# Export panel (see docs/color-palettes.md). Ids come from the frontend catalogue;
+# an unknown id loads as-is and draws as "theme". The Levels range is session-only
+# and not stored anywhere.
+depth = { id = "theme", reversed = false }
+distance = { id = "theme", reversed = false }
+pinned = []                         # Palette ids pinned to the top of the picker (at most 64)
+
 [debug.map]
 show_hitboxes = false               # Show red overlay for interaction hitbox areas
 log_hit_detection = false           # Log hit detection events to browser console
@@ -529,6 +531,7 @@ than carried over.
 |-------------|-------------|------------------|
 | `display.station_size` | `map.station.radius` | no |
 | `display.line_thickness` | `map.shot.width` | no |
+| `display.depth_gradient.*` (never read) | `[map_palette]` and the legend's Levels range | no |
 | `snap.enabled_merge` | `map.snap.enabled_merge` | yes |
 | `snap.enabled_measure` | `map.snap.enabled_measure` | yes |
 | `snap.threshold_pixels` | `map.snap.threshold` | yes |

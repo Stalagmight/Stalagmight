@@ -43,8 +43,8 @@ pub struct ValidationConfig {
     /// `core::validation`).
     #[serde(default = "default_azimuth_diff_threshold")]
     pub azimuth_diff_threshold: f64,
-    /// Threshold for pitch in/out difference warning (degrees) - compares the
-    /// two recorded inclination legs against each other.
+    /// Threshold for the PITCH_DEVIATION warning (degrees) - compares the two
+    /// recorded inclination legs against each other, when both are recorded.
     #[serde(default = "default_pitch_diff_threshold")]
     pub pitch_diff_threshold: f64,
     /// Threshold (degrees) for the INCLINATION_DEPTH_MISMATCH warning: how far

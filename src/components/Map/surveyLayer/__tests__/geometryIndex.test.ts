@@ -588,3 +588,261 @@ describe('SurveyGeometryIndex.sectionsIntersectingBox camera cache', () => {
     expect(spy.mock.calls.length).toBe(16);
   });
 });
+
+/**
+ * Overlapping markers of different ranks. The circles draw real-line stations
+ * on top (`writeCircleDrawOrder`), and the pick must agree: a jump or reference
+ * section tied in at a real station must not take the real station's click.
+ */
+describe('SurveyGeometryIndex.nearestStation rank priority', () => {
+  /** px -> meters under the test projection (1 degree = SCALE px). */
+  const m = (px: number) => (px * 111320) / SCALE;
+  const kindShot = (id: number, kind: 'Normal' | 'Jump' | 'Reference') => ({
+    id, azimuth_in: 0, azimuth_out: 0, length: 1, depth_in: 0, depth_out: 0,
+    pitch_in: null, pitch_out: null, left: null, right: null, up: null, down: null,
+    comment: null, kind, marker_index: null, temperature: null,
+  });
+  const sec = (id: number, kind: 'Normal' | 'Jump' | 'Reference'): Section => ({
+    id, name: `S${id}`, surveyor: null, date: null, color: '#ffffff', direction: 'in', quality: 1,
+    next_shot_id: 2, reverse_parity: false, gauge_shot_uuid: null, gauge_neighbour_uuid: null,
+    shots: [kindShot(id * 10, kind)],
+  });
+  const st = (section_id: number, station_index: number, xPx: number, yPx: number): Station => ({
+    station_ref: { section_id, station_index },
+    coordinates: { x: m(xPx), y: m(yPx), z: 0 },
+    is_zero_datum: false, gps_coordinates: null, merged_with: [], closures_with: [],
+  });
+  /** Each section: station 0 at `at`, station 1 30 px further along its own
+   *  direction, out of reach of every probe below. */
+  function build(specs: Array<{ id: number; kind: 'Normal' | 'Jump' | 'Reference'; at: [number, number]; dir: [number, number] }>) {
+    const sections = specs.map((s) => sec(s.id, s.kind));
+    const stations = specs.flatMap((s) => [
+      st(s.id, 0, s.at[0], s.at[1]),
+      st(s.id, 1, s.at[0] + 30 * s.dir[0], s.at[1] + 30 * s.dir[1]),
+    ]);
+    return new SurveyGeometryIndex(surveyDataFromLegacy(sections, stations), null);
+  }
+  const DISC = 5; // radius 4 + stroke 1, the app default
+  const pick = (
+    index: SurveyGeometryIndex, xPx: number, yPx: number, ids: number[],
+    visibleKinds: { jump: boolean; reference: boolean } = ALL_KINDS, disc: number | null = DISC,
+  ) =>
+    index.nearestStation(project, xPx, -yPx, ids, 10, disc === null ? { visibleKinds } : { visibleKinds, stationDiscPx: disc })
+      ?.ref.section_id ?? null;
+
+  // A tie-in: a reference and a jump section start ON the real station, listed
+  // (and so iterated) before it.
+  const tieIn = build([
+    { id: 1, kind: 'Reference', at: [0, 0], dir: [0, -1] },
+    { id: 2, kind: 'Jump', at: [0, 0], dir: [0, 1] },
+    { id: 3, kind: 'Normal', at: [0, 0], dir: [1, 0] },
+  ]);
+
+  it('coincident markers: the real station wins, whatever the section order', () => {
+    expect(pick(tieIn, 0, 0, [1, 2, 3])).toBe(3);
+    expect(pick(tieIn, 0, 0, [3, 2, 1])).toBe(3);
+    // Off the discs but within reach: equal distances, rank still decides.
+    expect(pick(tieIn, -7, 0, [1, 2, 3])).toBe(3);
+    // No disc size passed: the equal-distance tie-break alone.
+    expect(pick(tieIn, 0, 0, [1, 2, 3], ALL_KINDS, null)).toBe(3);
+  });
+
+  it('coincident virtual markers: the jump beats the reference', () => {
+    expect(pick(tieIn, 0, 0, [1, 2])).toBe(2);
+    expect(pick(tieIn, 0, 0, [2, 1])).toBe(2);
+    // Jumps hidden: the reference is all that is drawn there.
+    expect(pick(tieIn, 0, 0, [1, 2], { jump: false, reference: true })).toBe(1);
+  });
+
+  // A reference station 3 px right of a real one: their discs overlap, the real
+  // one drawn on top.
+  const offset = build([
+    { id: 1, kind: 'Reference', at: [3, 0], dir: [0, -1] },
+    { id: 3, kind: 'Normal', at: [0, 0], dir: [-1, 0] },
+  ]);
+
+  it('on the real disc the real station wins, though the reference centre is nearer', () => {
+    // 2.5 px from the real centre (inside its disc), 0.5 px from the reference one.
+    expect(pick(offset, 2.5, 0, [1, 3])).toBe(3);
+    // Without the disc size, plain nearest (the old behaviour).
+    expect(pick(offset, 2.5, 0, [1, 3], ALL_KINDS, null)).toBe(1);
+  });
+
+  it('the visible edge of the reference marker still picks the reference', () => {
+    // 6 px from the real centre (off its disc), 3 px from the reference one.
+    expect(pick(offset, 6, 0, [1, 3])).toBe(1);
+    // Off both discs: nearest, as before.
+    expect(pick(offset, 0, 7, [1, 3])).toBe(3);
+    expect(pick(offset, 3, 7.5, [1, 3])).toBe(1);
+  });
+
+  it('sizes the drawn disc like the shader: zero datum 2x, highlight size', () => {
+    // Real zero-datum station at 0, reference 6 px right: the real disc is
+    // 10 px there (2 x 5), so 7 px out is still on it.
+    const sections = [sec(1, 'Reference'), sec(3, 'Normal')];
+    const stations = [
+      st(1, 0, 6, 0), st(1, 1, 6, -30),
+      { ...st(3, 0, 0, 0), is_zero_datum: true }, st(3, 1, -30, 0),
+    ];
+    const zd = new SurveyGeometryIndex(surveyDataFromLegacy(sections, stations), null);
+    expect(pick(zd, 7, 0, [1, 3])).toBe(3);
+    // A hovered real section draws at the hover size (1.5x = 7.5 px), which
+    // wins over the zero-datum 2x: 7 px is on its disc, 8 px is off.
+    const hover = (sid: number, zero: boolean) => (sid === 3 ? 1.5 : zero ? 2 : 1);
+    const pickSized = (x: number) =>
+      zd.nearestStation(project, x, 0, [1, 3], 10, {
+        visibleKinds: ALL_KINDS, stationDiscPx: DISC, stationSizeMul: hover,
+      })?.ref.section_id;
+    expect(pickSized(7)).toBe(3);
+    expect(pickSized(8)).toBe(1);
+    // Plain offset fixture, real section selected (1.25x = 6.25 px disc): 6 px
+    // out is now on the real disc, though nearer the reference centre.
+    const sel = (sid: number) => (sid === 3 ? 1.25 : 1);
+    expect(
+      offset.nearestStation(project, 6, 0, [1, 3], 10, {
+        visibleKinds: ALL_KINDS, stationDiscPx: DISC, stationSizeMul: sel,
+      })?.ref.section_id,
+    ).toBe(3);
+  });
+
+  // The selection's section is drawn above every rank (#700 review), so it
+  // takes the pick where its marker is drawn, and only there.
+  it('the raised section outranks every rank, where its marker is drawn', () => {
+    const raisedPick = (index: SurveyGeometryIndex, xPx: number, yPx: number, ids: number[], raised: number | null) =>
+      index.nearestStation(project, xPx, -yPx, ids, 10, {
+        visibleKinds: ALL_KINDS, stationDiscPx: DISC, raisedSectionId: raised,
+      })?.ref.section_id ?? null;
+    // Coincident tie-in: the raised jump or reference station beats the real one.
+    expect(raisedPick(tieIn, 0, 0, [1, 2, 3], 2)).toBe(2);
+    expect(raisedPick(tieIn, 0, 0, [3, 2, 1], 1)).toBe(1);
+    expect(raisedPick(tieIn, 0, 0, [1, 2, 3], 3)).toBe(3);
+    expect(raisedPick(tieIn, 0, 0, [1, 2, 3], null)).toBe(3);
+    // On the raised reference's disc it beats a nearer real centre...
+    expect(raisedPick(offset, 0.5, 0, [1, 3], 1)).toBe(1);
+    expect(raisedPick(offset, 0.5, 0, [1, 3], null)).toBe(3);
+    // ...but the real marker's edge showing past it still picks the real one.
+    expect(raisedPick(offset, -4, 0, [1, 3], 1)).toBe(3);
+  });
+
+  it('stations of one rank keep the nearest pick', () => {
+    const same = build([
+      { id: 1, kind: 'Normal', at: [3, 0], dir: [0, -1] },
+      { id: 3, kind: 'Normal', at: [0, 0], dir: [-1, 0] },
+    ]);
+    // Inside section 3's disc but nearer section 1's centre: nearest wins.
+    expect(pick(same, 2.5, 0, [1, 3])).toBe(1);
+    expect(pick(same, 2.5, 0, [3, 1])).toBe(1);
+  });
+});
+
+/**
+ * Overlapping shot lines of different kinds. The lines draw Normal on top
+ * (`writeLineDrawOrder`), and the pick must agree: a reference tie run over the
+ * real line must not take the real shot's click.
+ */
+describe('SurveyGeometryIndex.nearestShot rank priority', () => {
+  const m = (px: number) => (px * 111320) / SCALE;
+  const kindShot = (id: number, kind: 'Normal' | 'Jump' | 'Reference') => ({
+    id, azimuth_in: 0, azimuth_out: 0, length: 1, depth_in: 0, depth_out: 0,
+    pitch_in: null, pitch_out: null, left: null, right: null, up: null, down: null,
+    comment: null, kind, marker_index: null, temperature: null,
+  });
+  const st = (section_id: number, station_index: number, xPx: number, yPx: number): Station => ({
+    station_ref: { section_id, station_index },
+    coordinates: { x: m(xPx), y: m(yPx), z: 0 },
+    is_zero_datum: false, gps_coordinates: null, merged_with: [], closures_with: [],
+  });
+  /** Each section: one horizontal shot from x 0 to 40 px at height `y`. */
+  function build(specs: Array<{ id: number; kind: 'Normal' | 'Jump' | 'Reference'; y: number }>) {
+    const sections: Section[] = specs.map((s) => ({
+      id: s.id, name: `S${s.id}`, surveyor: null, date: null, color: '#ffffff', direction: 'in', quality: 1,
+      next_shot_id: 2, reverse_parity: false, gauge_shot_uuid: null, gauge_neighbour_uuid: null,
+      shots: [kindShot(s.id * 10, s.kind)],
+    }));
+    const stations = specs.flatMap((s) => [st(s.id, 0, 0, s.y), st(s.id, 1, 40, s.y)]);
+    return new SurveyGeometryIndex(surveyDataFromLegacy(sections, stations), null);
+  }
+  const HALF = 1; // shot width 2, the app default
+  const pick = (
+    index: SurveyGeometryIndex, xPx: number, yPx: number, ids: number[],
+    extra: { half?: number | null; mul?: (sid: number) => number; kinds?: { jump: boolean; reference: boolean } } = {},
+  ) => {
+    const half = extra.half === undefined ? HALF : extra.half;
+    return index.nearestShot(project, xPx, -yPx, ids, 4, {
+      visibleKinds: extra.kinds ?? ALL_KINDS,
+      ...(half === null ? {} : { shotHalfWidthPx: half }),
+      ...(extra.mul ? { shotWidthMul: extra.mul } : {}),
+    })?.sectionId ?? null;
+  };
+
+  // A reference and a jump line run exactly over the real line, listed first.
+  const over = build([
+    { id: 1, kind: 'Reference', y: 0 },
+    { id: 2, kind: 'Jump', y: 0 },
+    { id: 3, kind: 'Normal', y: 0 },
+  ]);
+
+  it('coincident lines: the real shot wins, then jump over reference', () => {
+    expect(pick(over, 20, 0, [1, 2, 3])).toBe(3);
+    expect(pick(over, 20, 3, [3, 2, 1])).toBe(3); // off the drawn width: tie-break alone
+    expect(pick(over, 20, 0, [1, 2, 3], { half: null })).toBe(3);
+    expect(pick(over, 20, 0, [1, 2])).toBe(2);
+    expect(pick(over, 20, 0, [1, 2], { kinds: { jump: false, reference: true } })).toBe(1);
+  });
+
+  // A reference line 1.5 px below the real one: their drawn widths touch.
+  const near = build([
+    { id: 1, kind: 'Reference', y: -1.5 },
+    { id: 3, kind: 'Normal', y: 0 },
+  ]);
+
+  it('on the drawn real line the real shot wins, though the reference is nearer', () => {
+    // 1 px below the real line (on its 1 px half-width), 0.5 px from the reference.
+    expect(pick(near, 20, -1, [1, 3])).toBe(3);
+    expect(pick(near, 20, -1, [1, 3], { half: null })).toBe(1); // plain nearest
+    // Off the real line's width: the reference.
+    expect(pick(near, 20, -1.4, [1, 3])).toBe(1);
+    // A selected real section draws wider (1.5x): 1.4 px is on it now.
+    expect(pick(near, 20, -1.4, [1, 3], { mul: (sid) => (sid === 3 ? 1.5 : 1) })).toBe(3);
+  });
+
+  it('the raised section outranks every kind, where its line is drawn', () => {
+    const raisedPick = (index: SurveyGeometryIndex, xPx: number, yPx: number, ids: number[], raised: number | null) =>
+      index.nearestShot(project, xPx, -yPx, ids, 4, {
+        visibleKinds: ALL_KINDS, shotHalfWidthPx: HALF, raisedSectionId: raised,
+      })?.sectionId ?? null;
+    expect(raisedPick(over, 20, 0, [1, 2, 3], 1)).toBe(1);
+    expect(raisedPick(over, 20, 0, [3, 2, 1], 2)).toBe(2);
+    expect(raisedPick(over, 20, 0, [1, 2, 3], null)).toBe(3);
+    // 1 px below the real line: on both drawn lines, the raised reference wins.
+    expect(raisedPick(near, 20, -1, [1, 3], 1)).toBe(1);
+    // 0.2 px below it: off the reference's width, so the real line, as drawn.
+    expect(raisedPick(near, 20, -0.2, [1, 3], 1)).toBe(3);
+  });
+
+  // Inside the raised section its own kinds keep their order, as drawn: here a
+  // Reference shot out and a Normal shot straight back over it, so station 0
+  // (reference-only) and station 2 (real) coincide, both listed reference first.
+  it('inside the raised section, its real line still beats its own virtual one', () => {
+    const section: Section = {
+      id: 5, name: 'S5', surveyor: null, date: null, color: '#ffffff', direction: 'in', quality: 1,
+      next_shot_id: 2, reverse_parity: false, gauge_shot_uuid: null, gauge_neighbour_uuid: null,
+      shots: [kindShot(50, 'Reference'), kindShot(51, 'Normal')],
+    };
+    const loop = new SurveyGeometryIndex(
+      surveyDataFromLegacy([section], [st(5, 0, 0, 0), st(5, 1, 40, 0), st(5, 2, 0, 0)]), null,
+    );
+    const opts = { visibleKinds: ALL_KINDS, raisedSectionId: 5, shotHalfWidthPx: HALF, stationDiscPx: 5 };
+    expect(loop.nearestShot(project, 20, 0, [5], 4, opts)?.shotId).toBe(51); // the Normal shot
+    expect(loop.nearestStation(project, 0, 0, [5], 10, opts)?.ref.station_index).toBe(2);
+  });
+
+  it('shots of one kind keep the nearest pick', () => {
+    const same = build([
+      { id: 1, kind: 'Normal', y: -1.5 },
+      { id: 3, kind: 'Normal', y: 0 },
+    ]);
+    expect(pick(same, 20, -1, [1, 3])).toBe(1);
+    expect(pick(same, 20, -1, [3, 1])).toBe(1);
+  });
+});

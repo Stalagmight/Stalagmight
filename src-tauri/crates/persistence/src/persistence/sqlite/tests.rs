@@ -803,8 +803,8 @@ fn shot_uuid_is_persisted_reflects_the_shots_table() {
     assert!(!db.shot_uuid_is_persisted(0, "transient-uuid").unwrap());
 }
 
-/// The check is SECTION-SCOPED, because `ensure_unique_shot_uuids` only de-dups within a
-/// section - two sections can legitimately hold the same shot UUID.
+/// The check is SECTION-SCOPED, because a file saved before shot UUIDs were project-wide
+/// unique can hold the same shot UUID in two sections (the load renames one copy).
 ///
 /// Unscoped, the query answers "persisted" for section 1 because section 0's copy is on disk,
 /// and the caller then keys an ignore by a UUID that is still in-memory-only for the section it

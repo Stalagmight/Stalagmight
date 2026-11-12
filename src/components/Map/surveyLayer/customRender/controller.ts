@@ -23,7 +23,7 @@
  */
 import type { Map as MaplibreMap } from 'maplibre-gl';
 import type { GpsOrigin } from '../../../../types/config';
-import type { SurveyData } from '../../../../types/survey-data';
+import { type SurveyData, stationKindRank } from '../../../../types/survey-data';
 import { metersToMapCoords } from '../../../../utils/coordinates';
 import { debugLog } from '../../../../utils/debugLog';
 import { FEATURE_ID_STRIDE } from '../../../../utils/ids';
@@ -42,6 +42,8 @@ import {
   recomputeLineSection,
   recomputeStation,
   recomputeSectionAllReference,
+  writeCircleDrawOrder,
+  writeLineDrawOrder,
   recomputeLineColors,
   recomputeCircleColors,
   type StationRel,
@@ -50,6 +52,7 @@ import {
   type CircleStationInputs,
 } from './tessellate';
 import { makeColorResolvers } from './colorResolvers';
+import { makePreviewResolvers, segmentShotOrder, writePreviewColors } from './previewResolvers';
 import { planIncrementalUpdate, planColorOnlyUpdate, coalesceVertexRuns } from './incremental';
 import { SurveyCustomLayer, type CustomRenderData } from './surveyCustomLayer';
 import {
@@ -263,6 +266,9 @@ export class SurveyCustomController {
   private segmentHoverState: ReadonlySet<number> = EMPTY_FEATURE_SET;
   private sectionHoverState: ReadonlySet<number> = EMPTY_FEATURE_SET;
   private sectionSelectState: ReadonlySet<number> = EMPTY_FEATURE_SET;
+  /** The section drawn above every rank (the selection's; see
+   *  {@link setRaisedSection}), or null. Re-applied on every build. */
+  private raisedSectionId: number | null = null;
   /** Cached build products backing the cheap dim-only refresh (setDimming),
    *  the drag hide refresh (setDragHide), and the incremental edit path: the
    *  last CustomRenderData (its per-vertex arrays are rewritten in place) plus
@@ -271,6 +277,11 @@ export class SurveyCustomController {
   private lastData: CustomRenderData | null = null;
   private lastLookup: Map<number, Map<number, number>> | null = null;
   private lastSurveyData: SurveyData | null = null;
+  /** The colour buffers hold a live colour-scale preview (approximate), so the
+   *  next sync must recolour exactly even if its colour globals look unchanged. */
+  private previewed = false;
+  /** Segment -> shot order for the preview's flat loop, keyed by the built data. */
+  private previewOrder: { data: CustomRenderData; order: Uint32Array } | null = null;
   private lastStationRel: StationRel | null = null;
   private lastAllReference: Float32Array | null = null;
 
@@ -304,9 +315,17 @@ export class SurveyCustomController {
     // a pure global recolor (overlay / theme / depth-mode toggle) with unchanged
     // geometry re-uploads just the two color buffers. Either beats a full rebuild.
     if (this.active && this.layer && prevParams) {
-      if (this.tryIncremental(prevParams, params)) return;
-      if (this.tryColorOnly(prevParams, params)) return;
+      if (this.previewed) {
+        // A preview left approximate colours behind: recolour exactly (or, if the
+        // geometry moved under the preview, fall through to a full build).
+        this.previewed = false;
+        if (this.tryColorOnly(prevParams, params, true)) return;
+      } else {
+        if (this.tryIncremental(prevParams, params)) return;
+        if (this.tryColorOnly(prevParams, params)) return;
+      }
     }
+    this.previewed = false;
     const data = this.build(params);
     if (!this.active) this.enable(data);
     else this.layer?.update(data);
@@ -536,6 +555,12 @@ export class SurveyCustomController {
       dims?.dimForStation, hides?.hideForStation, highlights?.highlightForStation,
     );
 
+    const raised = this.raisedFlags(surveyData, lookup, params.exclude);
+    if (raised) {
+      writeLineDrawOrder(line, raised.line);
+      writeCircleDrawOrder(circle, raised.circle);
+    }
+
     const data: CustomRenderData = { anchorX, anchorY, line, circle, ...this.sizeFields(params) };
 
     const totalBytes = line.byteLength + circle.byteLength;
@@ -657,6 +682,35 @@ export class SurveyCustomController {
     return HIGHLIGHT_NONE;
   }
 
+  /**
+   * The size multiplier the circle shader draws a station marker at (radius and
+   * stroke both scale by it): a hovered / selected section's markers take the
+   * configured highlight size, which wins over the zero-datum 2x, else 1 - the
+   * `sizeMul` choice in the circle vertex shader (`shaders.ts`). The station
+   * pick sizes the drawn disc with it (`SurveyGeometryIndex.nearestStation`).
+   */
+  stationSizeMul(sectionId: number, zeroDatum: boolean): number {
+    const level = this.highlightLevel(sectionId);
+    const d = this.lastData;
+    if (level === HIGHLIGHT_HOVER && d) return d.circleHoverSizeMul;
+    if (level === HIGHLIGHT_SELECT && d) return d.circleSelectSizeMul;
+    return zeroDatum ? 2 : 1;
+  }
+
+  /**
+   * The width multiplier the line shader draws a section's shots at: the
+   * configured hover / selection width of a highlighted section, else 1 (the
+   * `widthMul` choice in the line vertex shader). The shot pick sizes the drawn
+   * line with it (`SurveyGeometryIndex.nearestShot`).
+   */
+  shotWidthMul(sectionId: number): number {
+    const level = this.highlightLevel(sectionId);
+    const d = this.lastData;
+    if (level === HIGHLIGHT_HOVER && d) return d.lineHoverWidthMul;
+    if (level === HIGHLIGHT_SELECT && d) return d.lineSelectWidthMul;
+    return 1;
+  }
+
   /** Per-station / per-shot highlight predicates resolving the merged emphasis
    *  level for a feature's section (0 none, 1 selection, 2 hover). */
   private highlightPredicates(surveyData: SurveyData): {
@@ -768,6 +822,43 @@ export class SurveyCustomController {
   }
 
   /**
+   * Draw one section's lines and markers above every other section, whatever
+   * their kinds (null: none). SurveyLayer raises the selection's section - the
+   * selected section, or the section of the selected station or shot - so the
+   * whole of it shows where it runs over the real line; the hit test gives it
+   * the click there too (`ResolveOptions.raisedSectionId`). Only the two index
+   * buffers change: they are rewritten and re-uploaded when an order moved.
+   * State is stored regardless, so the next build reproduces it.
+   */
+  setRaisedSection(sectionId: number | null): void {
+    if (this.raisedSectionId === sectionId) return;
+    this.raisedSectionId = sectionId;
+    const { layer, lastData, lastLookup, lastSurveyData } = this;
+    if (!this.active || !layer || !lastData || !lastLookup || !lastSurveyData) return;
+    const raised = this.raisedFlags(lastSurveyData, lastLookup, this.lastParams?.exclude);
+    const lineMoved = writeLineDrawOrder(lastData.line, raised?.line);
+    const circleMoved = writeCircleDrawOrder(lastData.circle, raised?.circle);
+    if (lineMoved) layer.uploadLineIndices();
+    if (circleMoved) layer.uploadCircleIndices();
+    if (lineMoved || circleMoved) this.map.triggerRepaint();
+  }
+
+  /** Per-vertex raised flags for the draw-order writers (the raised section's
+   *  shots and stations), in the buffers' layout; null when none is raised. */
+  private raisedFlags(
+    survey: SurveyData,
+    lookup: Map<number, Map<number, number>>,
+    exclude?: CustomRenderExclusion,
+  ): { line: Float32Array; circle: Float32Array } | null {
+    const sid = this.raisedSectionId;
+    if (sid === null) return null;
+    return {
+      line: computeLineDim(survey, lookup, (_g, sectionId) => sectionId === sid, exclude),
+      circle: computeCircleDim(survey, (g) => survey.stationSectionIds[g] === sid, exclude),
+    };
+  }
+
+  /**
    * Recompute + re-upload the two per-vertex highlight-level arrays from the
    * merged emphasis sources. Sibling of {@link setDimming}: the cheap
    * per-interaction path recomputes ONLY the highlight arrays from the cached SoA
@@ -850,19 +941,41 @@ export class SurveyCustomController {
 
     // Re-emit each dirty section's line range + its stations (all-reference
     // first, since a station read depends on it), collecting station slots.
+    // Both index buffers draw by rank (the real line on top), so a kind edit -
+    // which moves its shots between ranks, and maybe stations - redoes the
+    // line order and, when a station's rank moved, the circle order below.
     const circleSlots: number[] = [];
+    let rankMoved = false;
+    let anyKindEdited = false;
     for (const si of plan.dirtySectionIdxs) {
       const section = next.sections[si]!;
-      recomputeSectionAllReference(next, lookup, section, allRef);
       const inner = lookup.get(section.id);
+      // A station's kind mask reads only its section's shot kinds (the layout is
+      // fixed by the plan's gate), so only a kind edit can move a rank: snapshot
+      // the ranks just then, not on every position edit.
+      let kindsEdited = false;
+      for (let i = section.shotOffset; i < section.shotOffset + section.shotCount; i++) {
+        if (prev.shotFlags[i] !== next.shotFlags[i]) {
+          kindsEdited = true;
+          break;
+        }
+      }
+      if (kindsEdited) anyKindEdited = true;
+      const rankBefore = kindsEdited && inner ? Array.from(inner.values(), (g) => stationKindRank(allRef[g]!)) : null;
+      recomputeSectionAllReference(next, lookup, section, allRef);
       if (inner) {
+        let k = 0;
         for (const g of inner.values()) {
+          if (rankBefore && stationKindRank(allRef[g]!) !== rankBefore[k++]) rankMoved = true;
           recomputeStation(circle, g, next, rel, circleInputs, allRef[g]!);
           circleSlots.push(g);
         }
       }
       recomputeLineSection(line, si, next, rel, lookup, lineInputs);
     }
+    const raised = anyKindEdited || rankMoved ? this.raisedFlags(next, lookup) : null;
+    if (anyKindEdited && writeLineDrawOrder(line, raised?.line)) layer.uploadLineIndices();
+    if (rankMoved && writeCircleDrawOrder(circle, raised?.circle)) layer.uploadCircleIndices();
 
     // Sub-upload: one contiguous line range per section; coalesced station runs.
     for (const si of plan.dirtySectionIdxs) {
@@ -892,7 +1005,7 @@ export class SurveyCustomController {
    * color-only (see {@link planColorOnlyUpdate}) or a build-time exclusion is
    * active (compaction breaks the g↦[4g] map, as for {@link tryIncremental}).
    */
-  private tryColorOnly(prevParams: CustomSyncParams, params: CustomSyncParams): boolean {
+  private tryColorOnly(prevParams: CustomSyncParams, params: CustomSyncParams, force = false): boolean {
     const prev = this.lastSurveyData;
     const layer = this.layer;
     const line = this.lastData?.line;
@@ -904,7 +1017,7 @@ export class SurveyCustomController {
     if (
       !planColorOnlyUpdate(
         prev, next, prevParams.colorCtx, params.colorCtx,
-        prevParams.gpsOrigin, params.gpsOrigin, this.lastData.anchorX, this.lastData.anchorY,
+        prevParams.gpsOrigin, params.gpsOrigin, this.lastData.anchorX, this.lastData.anchorY, force,
       )
     ) {
       return false;
@@ -922,6 +1035,33 @@ export class SurveyCustomController {
     // size uniforms (a size-only change rides here with no extra upload).
     Object.assign(this.lastData, this.sizeFields(params));
     this.lastSurveyData = next;
+    this.map.triggerRepaint();
+    return true;
+  }
+
+  /**
+   * Live colour-scale preview (palette hover, Levels drag): recolour the CURRENT
+   * geometry with `colorCtx` through LUT-backed resolvers and re-upload only the
+   * four colour buffers. No labels, no geometry, no snapshot change - the next
+   * {@link sync} replaces these approximate colours with exact ones. Returns
+   * false when there is nothing live to recolour (the caller then syncs).
+   */
+  previewColors(colorCtx: DisplayColorContext): boolean {
+    if (this.disposed || this.fatal || !this.active) return false;
+    const params = this.lastParams;
+    const data = this.lastSurveyData;
+    const layer = this.layer;
+    const line = this.lastData?.line;
+    const circle = this.lastData?.circle;
+    const lookup = this.lastLookup;
+    if (!params || params.exclude || !data || !layer || !line || !circle || !lookup) return false;
+    const built = this.lastData!;
+    if (this.previewOrder?.data !== built) {
+      this.previewOrder = { data: built, order: segmentShotOrder(data, lookup) };
+    }
+    writePreviewColors(data, this.previewOrder.order, makePreviewResolvers(data, colorCtx), line, circle.fill);
+    layer.updateColors(line.colorFrom, line.colorTo, circle.fill, circle.stroke);
+    this.previewed = true;
     this.map.triggerRepaint();
     return true;
   }

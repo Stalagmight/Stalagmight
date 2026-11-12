@@ -453,7 +453,7 @@ impl Section {
             azimuth_reference: None,
         };
 
-        // Per-section UUID uniqueness, enforced where a `Vec<ShotData>` becomes
+        // In-section UUID uniqueness, enforced where a `Vec<ShotData>` becomes
         // shots. This is the only door for a whole shot VECTOR - a TML import, a
         // section split, a project merge and a section-level undo restore all
         // come through here. It is NOT the only door into a section: the
@@ -481,8 +481,10 @@ impl Section {
         //
         // Policy matches `Project::ensure_unique_shot_uuids` (the pre-save
         // backstop): the FIRST occurrence keeps the id, later ones are cleared
-        // and get a fresh mint from `Shot::new`. Cross-SECTION repeats are legal
-        // by design and untouched.
+        // and get a fresh mint from `Shot::new`. A repeat ACROSS sections is not
+        // visible from here; every door that creates sections from foreign ids
+        // settles it once the sections exist
+        // (`Project::reassign_repeated_shot_uuids`).
         let mut seen: HashSet<String> = HashSet::new();
         let mut repaired = 0usize;
         for mut shot_data in data.shots {
@@ -500,7 +502,7 @@ impl Section {
             tracing::warn!(
                 section_id = id,
                 repaired,
-                purpose = "per-section shot uuid uniqueness (#423)",
+                purpose = "in-section shot uuid uniqueness (#423)",
                 "Section carried repeated (or empty) shot UUIDs; kept the first \
                  occurrence and minted fresh identities for the rest"
             );

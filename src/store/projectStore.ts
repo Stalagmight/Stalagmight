@@ -9,7 +9,8 @@ import { trackCommand, setSource, peekProjectActionSource, clearProjectActionSou
 import { debugLog } from '../utils/debugLog';
 import { extractFilename } from '../utils/path';
 import type { SaveErrorKind } from '../utils/saveErrors';
-import { withThemeDepthRamp } from '../utils/exportOptions';
+import { exportScaleInputsFrom, withColorScales } from '../utils/exportOptions';
+import { useColorScaleStore } from './colorScaleStore';
 import {
   isEditDisabledError,
   isReverifyDivergedError,
@@ -2458,7 +2459,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     // non-depth modes. See `utils/exportOptions.ts`.
     await invokeIpc('export_image', {
       path,
-      options: withThemeDepthRamp(options),
+      options: withColorScales(options, exportScaleInputsFrom(get().config?.map_palette, useColorScaleStore.getState())),
     }, {
       purpose: 'export map image',
       fields: { path, format: options.format },

@@ -21,6 +21,7 @@ import type { MapThemeColors } from '../../../../utils/themeColors';
 import { formatFixed } from '../../../../i18n/format';
 import { getDepthColor } from '../../../../utils/colors';
 import { displayStationName } from '../../../../utils/formatters';
+import { scaleHex, type ColorScaleInput } from '../../../../utils/palettes';
 
 /**
  * Shot-label text: azimuth (°), length (m), depth (m), each at its configured
@@ -92,6 +93,15 @@ export interface LabelColorContext {
   /** Flat label color (theme `--cc-depth-text`) used when depth mode is off or
    *  the ramp declines the value. */
   labelColor: string;
+  /** The user's depth palette + Levels range; null / absent = the theme ramp
+   *  over `depthMin..depthMax` through the original getDepthColor call. */
+  depthScale?: ColorScaleInput | null;
+}
+
+function labelDepthColor(value: number, ctx: LabelColorContext): string | null {
+  if (!ctx.showDepthGradient) return null;
+  if (ctx.depthScale) return scaleHex(value, ctx.depthScale, { min: ctx.depthMin, max: ctx.depthMax });
+  return getDepthColor(value, ctx.depthShallow, ctx.depthDeep, ctx.depthMin, ctx.depthMax);
 }
 
 /**
@@ -101,10 +111,7 @@ export interface LabelColorContext {
  * midpoint depth the caller already computed for the fill.
  */
 export function resolveShotLabelColor(avgDepth: number, ctx: LabelColorContext): string {
-  const depthColor = ctx.showDepthGradient
-    ? getDepthColor(avgDepth, ctx.depthShallow, ctx.depthDeep, ctx.depthMin, ctx.depthMax)
-    : null;
-  return depthColor ?? ctx.labelColor;
+  return labelDepthColor(avgDepth, ctx) ?? ctx.labelColor;
 }
 
 /**
@@ -112,10 +119,7 @@ export function resolveShotLabelColor(avgDepth: number, ctx: LabelColorContext):
  * flat `labelColor`. Mirrors `features.ts` (`getDepthColor(z, ...) ?? labelColor`).
  */
 export function resolveStationLabelColor(z: number, ctx: LabelColorContext): string {
-  const depthColor = ctx.showDepthGradient
-    ? getDepthColor(z, ctx.depthShallow, ctx.depthDeep, ctx.depthMin, ctx.depthMax)
-    : null;
-  return depthColor ?? ctx.labelColor;
+  return labelDepthColor(z, ctx) ?? ctx.labelColor;
 }
 
 /** Section-name color: the section's own color (never depth-ramped), matching
@@ -137,8 +141,10 @@ export function labelColorContextFrom(
   showDepthGradient: boolean,
   depthRange: { min: number; max: number },
   themeColors: Pick<MapThemeColors, 'depthShallow' | 'depthDeep' | 'labelColor'>,
+  depthScale: ColorScaleInput | null = null,
 ): LabelColorContext {
   return {
+    depthScale,
     showDepthGradient,
     depthShallow: themeColors.depthShallow,
     depthDeep: themeColors.depthDeep,

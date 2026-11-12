@@ -98,6 +98,34 @@ describe('SurveyCustomLayer resolves GL locations once at link time (#339)', () 
     expect(gl.count('vertexAttribPointer')).toBe(3 * 19);
   });
 
+  // The edit path re-uploads the circle draw order outside render(). The
+  // ELEMENT_ARRAY_BUFFER binding is VAO state, so that write must go through
+  // COPY_WRITE_BUFFER, or it swaps the index buffer of whatever VAO MapLibre
+  // left bound.
+  it('re-uploads the draw orders without touching the element-array binding', () => {
+    const gl = new FakeGl();
+    const data = makeData();
+    const layer = new SurveyCustomLayer('custom-survey', data);
+    layer.onAdd(fakeMap, asGl(gl));
+    const bindsBefore = gl.bufferBinds.length;
+    data.circle.indices.reverse();
+    layer.uploadCircleIndices();
+    const binds = gl.bufferBinds.slice(bindsBefore);
+    expect(binds.some((b) => b.target === gl.ELEMENT_ARRAY_BUFFER)).toBe(false);
+    expect(binds.map((b) => b.target)).toEqual([gl.COPY_WRITE_BUFFER, gl.COPY_WRITE_BUFFER]);
+    expect(binds[0]!.buffer).toBeInstanceOf(FakeWebGLBuffer);
+    expect(binds[1]!.buffer).toBeNull(); // unbound after the write
+    expect(gl.subDataCalls).toEqual([{ target: gl.COPY_WRITE_BUFFER, offset: 0, data: data.circle.indices }]);
+
+    // The line order, the same way, into the line index buffer.
+    const before = gl.bufferBinds.length;
+    layer.uploadLineIndices();
+    const lineBinds = gl.bufferBinds.slice(before);
+    expect(lineBinds.map((b) => b.target)).toEqual([gl.COPY_WRITE_BUFFER, gl.COPY_WRITE_BUFFER]);
+    expect(lineBinds[0]!.buffer).not.toBe(binds[0]!.buffer); // not the circle buffer
+    expect(gl.subDataCalls[1]).toEqual({ target: gl.COPY_WRITE_BUFFER, offset: 0, data: data.line.indices });
+  });
+
   it('frees both programs on remove, after which render draws nothing', () => {
     const gl = new FakeGl();
     const layer = new SurveyCustomLayer('custom-survey', makeData());

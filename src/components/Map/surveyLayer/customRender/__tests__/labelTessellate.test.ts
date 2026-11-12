@@ -17,6 +17,7 @@ import {
   type SurveyData,
 } from '../../../../../types/survey-data';
 import { commentColorForKey } from '../../displayColor';
+import { labelVirtualRank, VIRTUAL_RANK_JUMP, VIRTUAL_RANK_REAL, VIRTUAL_RANK_REFERENCE } from '../labelReveal';
 
 /**
  * Label descriptor extraction + per-glyph buffer emission (#customRender labels,
@@ -181,6 +182,48 @@ describe('buildLabelDescriptors', () => {
     // does not.
     expect(byStation.get(2)!.flags & LABEL_FLAG.ALL_REFERENCE).toBe(LABEL_FLAG.ALL_REFERENCE);
     expect(byStation.get(0)!.flags & LABEL_FLAG.ALL_REFERENCE).toBe(0);
+  });
+
+  it('flags let the declutter rank every label: real, jump or reference (real line first)', () => {
+    // Shot 1 is a Jump: station g1 still touches the real shot 0 (a real-line
+    // label), g2 only the jump. A second section of one Reference shot is all
+    // virtual, so its name and stations rank as reference labels.
+    const d = fixture();
+    d.sections = [
+      d.sections[0]!,
+      { id: 2, name: 'Tie', surveyor: null, date: null, color: '#8e44ad', direction: 'in' as never, quality: 0, next_shot_id: 1, shotOffset: 2, shotCount: 1 },
+    ];
+    d.shotCount = 3;
+    d.shotIds = new Uint32Array([0, 1, 0]);
+    d.shotSectionIds = new Uint32Array([1, 1, 2]);
+    d.shotFlags = new Uint8Array([0, shotKindToFlags('Jump'), shotKindToFlags('Reference')]);
+    d.shotAzimuthIn = new Float32Array([312, 45, 90]);
+    d.shotLength = new Float32Array([4, 3, 5]);
+    d.shotDepthIn = new Float32Array([1, 2, 1]);
+    d.shotDepthOut = new Float32Array([2, 4, 1]);
+    d.stationCount = 5;
+    d.stationSectionIds = new Uint32Array([1, 1, 1, 2, 2]);
+    d.stationIndices = new Uint32Array([0, 1, 2, 0, 1]);
+    d.stationCoords = new Float64Array([0, 0, 0, 10, 0, -1, 20, 0, -2, 0, 5, 0, 5, 5, 0]);
+    d.stationFlags = new Uint8Array([0, 0, 0, 0, 0]);
+    d.shotComments = new Map();
+    d.stationComments = new Map();
+    const descs = buildLabelDescriptors(d, null, 0, 0, CTX);
+    const rank = (x: LabelDescriptor | undefined): number => labelVirtualRank(x!);
+
+    const shot = (g: number) => descs.find((x) => x.kind === LABEL_KIND.SHOT_LABEL && x.shotGlobal === g);
+    expect([0, 1, 2].map((g) => rank(shot(g)))).toEqual([VIRTUAL_RANK_REAL, VIRTUAL_RANK_JUMP, VIRTUAL_RANK_REFERENCE]);
+    const station = (g: number) => descs.find((x) => x.kind === LABEL_KIND.STATION_LABEL && x.stationGlobal === g);
+    expect([0, 1, 2, 3, 4].map((g) => rank(station(g)))).toEqual([
+      VIRTUAL_RANK_REAL,
+      VIRTUAL_RANK_REAL,
+      VIRTUAL_RANK_JUMP,
+      VIRTUAL_RANK_REFERENCE,
+      VIRTUAL_RANK_REFERENCE,
+    ]);
+    const section = (id: number) => descs.find((x) => x.kind === LABEL_KIND.SECTION_NAME && x.sectionId === id);
+    expect(rank(section(1))).toBe(VIRTUAL_RANK_REAL);
+    expect(rank(section(2))).toBe(VIRTUAL_RANK_REFERENCE);
   });
 
   it('colors comments with labelColor and section names with the section color', () => {

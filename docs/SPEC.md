@@ -276,7 +276,7 @@ Project (Cave System)
 │   ├── azimuth_reference: Option<AzimuthReference>
 │   └── Shots[]
 │       ├── id: u32 (internal, immutable)
-│       ├── uuid: Option<String> (persistent identity, schema v6+)
+│       ├── uuid: Option<String> (persistent identity, schema v6+, unique across the project)
 │       ├── azimuth_in: f64 (degrees, 0-360)
 │       ├── azimuth_out: f64 (degrees, 0-360)
 │       ├── length: f64 (meters)
@@ -325,6 +325,14 @@ Examples:
 - 0:15 → 16th station of section 0
 - Merged station: [0:15, 1:0] → Station 15 of section 0 merged with station 0 of section 1
 ```
+
+A station's stored identity is not this index but the shot UUID before it
+(`StationAnchor::AfterShot`). Shot UUIDs are unique across the whole project:
+an import, merge or Add that brings an id the project already holds renames the
+newcomer's copy to a derived id, and a file saved before that rule is healed the
+same way on load, with its undo history translated alongside (see
+[ariane-export.md](ariane-export.md#shot-uuids) and
+[undo-redo.md](undo-redo.md#a-loaded-history-follows-the-loads-shot-uuid-heal)).
 
 The index is positional: inserting, deleting or reversing shots renumbers it.
 A station can also carry a **name**, free text stored apart from the shots and
@@ -936,12 +944,27 @@ The three move tools are documented in detail in [move-tools.md](move-tools.md).
   stations unlabelled; the pill is disabled while the project has no names.
 - Station comments, shot comments
 - Shot data (azimuth, length, depth)
+- Errors: one label per shot with how far its readings disagree (Δaz azimuth in
+  vs out, Δinc inclination in vs out, Δi/d recorded inclination vs the one the
+  length and depth change imply, ΔL recorded length vs the one the depth change
+  and inclination imply - only on shots steeper than 15°), and one per loop
+  closure ("Loop 2.1% 0.84m"). A part that rounds to zero or whose warning was
+  ignored is left out. Where labels collide the worst error is shown. Saved per
+  project; off by default
 - Reference shots (faded, semi-transparent lines)
 - Zero datum (enlarged golden station dot)
 - Grid overlay (theme-aware; spacing chosen by the user from 1, 5, 10, 25, 50, 100 m - default 10 m)
 - Scale bar (always shown; not a toggle)
 - Satellite imagery
-- Depth color gradient (configurable palette)
+- Depth color gradient, and the distance gradient: palette and Levels range from the legend cog (docs/color-palettes.md)
+- Survey Issues coloring: each shot graded by its worst disagreement, green
+  (agree) -> yellow (at the warning threshold) -> red (3x the threshold, or an
+  error); unresolved errors are red, other unresolved warnings at least yellow.
+  The legend cog sets the palette, worst or average, the errors that count and
+  per-error Min / Warn / Max levels (map only; never the validation thresholds)
+- While the Warnings tab is open (setting "Highlight warnings on tab switch"),
+  Survey Issues and Errors are on. Changes made then last until the tab is left
+  and are never saved; leaving restores the saved display settings
 - LRUD passage walls (future)
 
 #### Map Interactions
@@ -965,7 +988,7 @@ The three move tools are documented in detail in [move-tools.md](move-tools.md).
 | Station | Filled circle |
 | Selected station | Highlighted ring |
 | Zero datum | Golden station circle at 2x radius |
-| Validation warning | Red highlight, ⚠ icon |
+| Validation warning | Survey Issues mode: green -> yellow -> red by how far the readings disagree; ⚠ icon in the table and Warnings panel |
 | Marked as resolved | No map highlight; dimmed and struck through in the Detail Panel |
 | Loop closure line | Dashed line with error percentage |
 
@@ -1734,7 +1757,7 @@ The sidebar displays 12 settings categories, with a visual separator before the 
 | Appearance | Theme mode (dark/light/auto), day and night color theme selection with preview cards, 10 color themes |
 | Units | Length/depth/angle units, decimal precision |
 | Gas planning | Swim speed, jump RMV multiplier, whether reference legs count toward gas |
-| Display | Background/grid/font colors, grid spacing, font size, depth gradient settings, section color palette |
+| Display | Grid/font colors, grid spacing, font size, measure-path color, section color palette |
 | Map | Satellite provider/toggle/GPS origin, zoom settings, pan/zoom controls, station/shot appearance, snap settings, animation settings |
 | Validation | Shot length min/max warnings, depth change warnings, azimuth deviation warnings, in/out difference thresholds |
 | Export | Default image format (PNG/SVG/PDF), default DPI, default layer includes (satellite, grid, labels) |
@@ -2032,8 +2055,18 @@ export function formatDate(date: Date, locale: string): string {
 Only labels are thinned by zoom: each label carries a baked reveal zoom that folds
 the collision declutter together with a nested decimation band
 (`labelReveal.ts` / `labelDecimation.ts`), and the shader draws a label only at or
-above that zoom - see [map-renderer.md](map-renderer.md). Shot geometry itself is
-not simplified: no path simplification, no station merging, no zoom-based hiding.
+above that zoom - see [map-renderer.md](map-renderer.md). Where labels compete for
+the same space, a real-line label wins over a label that belongs only to jump or
+reference shots, and a jump label wins over a reference one. Station markers
+and shot lines follow the same order: where they coincide or overlap (a jump or
+reference section tied in at a real station, or surveyed along the real line),
+the real-line marker or line is drawn on top and takes the hover and the click,
+then jump, then reference. The selection's section (the selected section, or
+the section of the selected station or shot) is drawn above all of them and
+takes the hover and the click where it overlaps them; labels keep the rank
+order. Shot
+geometry itself is not simplified: no path simplification, no station merging,
+no zoom-based hiding.
 
 ### 13.3 Data Table Virtualization
 
@@ -2646,6 +2679,7 @@ The dropdown also closes when pressing Ctrl+Z or Ctrl+Y (global undo/redo shortc
 | Shot length > 50m | Warning | "Shot {section_id}:{position} length {length}m above maximum threshold {threshold}m" |
 | Depth change > 10m per shot | Warning | "Shot {section_id}:{position} depth change {change}m exceeds threshold {threshold}m" |
 | Azimuth in/out difference > 20 degrees (default `azimuth_diff_threshold`; configurable) | Warning | "Shot {section_id}:{position} azimuth in/out difference {dev}° exceeds threshold {threshold}°" |
+| Inclination in/out difference > 10 degrees (default `pitch_diff_threshold`; configurable; only when both are recorded and in range) | Warning | "Shot {section_id}:{position} inclination in/out difference {dev}° exceeds threshold {threshold}°" |
 | Zero length shot | Error | "Shot {section_id}:{position} has zero length" |
 | Negative length | Error | "Shot {section_id}:{position} has negative length: {length}m" |
 | Negative LRUD | Error | "Shot {section_id}:{position} has negative {direction} distance: {value}m" |

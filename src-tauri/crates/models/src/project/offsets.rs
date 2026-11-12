@@ -803,6 +803,15 @@ impl Project {
     /// correctly. Returns the number of merges that had drifted (0 = file was
     /// already consistent, the common case).
     pub fn redrive_offsets_after_load(&mut self) -> usize {
+        self.redrive_offsets_after_load_reporting().0
+    }
+
+    /// [`Self::redrive_offsets_after_load`], also returning the shot UUIDs the
+    /// load renamed to make them unique across the project
+    /// ([`Self::make_shot_uuids_project_unique`]). The open path hands that remap
+    /// to the persisted undo history, whose entries were recorded against the old
+    /// ids.
+    pub fn redrive_offsets_after_load_reporting(&mut self) -> (usize, super::ShotUuidRemap) {
         self.rebuild_section_index();
         self.rebuild_shot_uuid_index();
         // Normalize any closure that is really a sole-bridge attachment into a
@@ -815,6 +824,13 @@ impl Project {
         // recover the intended endpoint). Re-minting the duplicate first gives the
         // second station its own UUID so the re-anchor stays faithful.
         self.ensure_unique_shot_uuids();
+        // Then ACROSS sections: a file saved before shot UUIDs were project-wide
+        // unique can hold one id in several sections (an Ariane file imported
+        // twice, a merge of two copies). The lowest section keeps it, the others
+        // get a derived replacement - derived, so every read of the file agrees.
+        // Still before the re-anchor, so positional refs canonicalize straight to
+        // the new ids.
+        let renamed = self.make_shot_uuids_project_unique();
         // Upgrade any positional (Index) ref from an older file to the stable
         // shot-UUID anchor now that shots (with UUIDs) are loaded.
         self.reanchor_station_refs();
@@ -846,7 +862,7 @@ impl Project {
         // whose closure was torn by an edit that predates the re-measure, opens
         // holding the truth instead of the claim (#469 item 2).
         self.remeasure_closure_alignment();
-        healed
+        (healed, renamed)
     }
 
     /// The orphanhood question [`Self::convert_orphan_closures_to_merges`] asks of

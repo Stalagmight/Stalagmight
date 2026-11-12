@@ -140,6 +140,25 @@ impl<'a> Drop for CascadeDeferGuard<'a> {
 }
 
 impl AppState {
+    /// Rename the shot UUIDs of `new_sections` that another section of the open
+    /// project already holds ([`crate::models::Project::reassign_repeated_shot_uuids`]):
+    /// the project keeps its ids, the newly created sections yield.
+    pub(super) fn reassign_repeated_shot_uuids(&self, new_sections: &[SectionId]) {
+        if new_sections.is_empty() {
+            return;
+        }
+        // Recover a poisoned lock, as the import loop around this does: skipping
+        // the rename would leave a repeat the integrity epilogue then reads as
+        // corruption, refusing the whole import.
+        let mut guard = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(project) = guard.as_mut() {
+            project.reassign_repeated_shot_uuids(new_sections);
+        }
+    }
+
     /// Execute a create-section-and-merge operation as a single atomic undo/redo unit.
     /// This is used when importing a new section and immediately merging one of its stations
     /// with an existing station. Both operations are combined into a single undo entry.
@@ -194,6 +213,10 @@ impl AppState {
         let Some(new_section_id) = create_result.section_id else {
             return CommandResult::failure("Section created but no ID returned".to_string());
         };
+        // The shots are the caller's (`ShotData::uuid` is not stripped at this
+        // door), so an id the project already holds is renamed before the merge
+        // below anchors on it.
+        self.reassign_repeated_shot_uuids(&[new_section_id]);
 
         // Step 2: Create the station reference for the newly created section
         let import_station_ref = StationRef {
@@ -1126,6 +1149,14 @@ impl AppState {
         // import (no closures yet) this is a near-no-op single pass
         // that early-exits on the first iteration.  `disarm` consumes
         // the guard so its Drop becomes a no-op for the success path.
+        // An Ariane file's `<UUID>`s are carried verbatim (#423), so importing a
+        // file twice - or a file whose sections repeat one another - brings ids
+        // the project already holds. Rename the newcomers' repeats now, once for
+        // the whole import (per section would rescan the project every time):
+        // before the integrity epilogue below, which treats an id held by two
+        // sections as corruption, and before the after-snapshot the undo entry
+        // records.
+        self.reassign_repeated_shot_uuids(&all_section_ids);
         cascade_guard.disarm();
         let cascade_start = std::time::Instant::now();
         if let Ok(mut proj_guard) = self.project.lock() {

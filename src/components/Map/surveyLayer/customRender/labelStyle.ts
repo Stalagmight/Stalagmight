@@ -54,6 +54,7 @@ const COMMENT_HALO_WIDTH = 1.5;
  *   - station label:  size 14→9 / 18→11,  opacity 14→0.7 / 18→1, halo 2,   minzoom 14, alt
  *   - section name:   size 12→11 / 18→14, opacity 1 (const),     halo 1.5, minzoom 10, main
  *   - comments:       size 14→8 / 18→10,  opacity 0.85 (const),  halo 1.5, minzoom 14, alt
+ *   - errors (shot + closure): size 14→9 / 18→12, opacity 1, halo 2, minzoom 14, alt
  */
 export const LABEL_KIND_STYLE: Record<LabelKind, KindStyle> = {
   [LABEL_KIND.SHOT_LABEL]: {
@@ -88,6 +89,22 @@ export const LABEL_KIND_STYLE: Record<LabelKind, KindStyle> = {
     size: [[14, 8], [18, 10]],
     opacity: [[0, 0.85]],
     haloWidth: COMMENT_HALO_WIDTH,
+    minzoom: 14,
+    halo: 'textHaloAlt',
+  },
+  // Errors labels: the shot-label size, fully opaque (they are coloured by
+  // severity, and a faded red reads as a lesser error), the same halo.
+  [LABEL_KIND.SHOT_ERROR]: {
+    size: [[14, 9], [18, 12]],
+    opacity: [[0, 1]],
+    haloWidth: 2,
+    minzoom: 14,
+    halo: 'textHaloAlt',
+  },
+  [LABEL_KIND.CLOSURE_ERROR]: {
+    size: [[14, 9], [18, 12]],
+    opacity: [[0, 1]],
+    haloWidth: 2,
     minzoom: 14,
     halo: 'textHaloAlt',
   },
@@ -144,15 +161,15 @@ export interface LabelStyleInputs {
 /** The full per-kind uniform set the label shader reads (§3 of the design). All
  *  arrays are length {@link LABEL_KIND_COUNT}; `haloColor` is 4 floats per kind. */
 export interface LabelUniforms {
-  /** `u_text_size_px[5]` - DEVICE px (CSS size × DPR). */
+  /** `u_text_size_px[LABEL_KIND_COUNT]` - DEVICE px (CSS size × DPR). */
   textSizePx: Float32Array;
-  /** `u_opacity[5]` - 0..1. */
+  /** `u_opacity[LABEL_KIND_COUNT]` - 0..1. */
   opacity: Float32Array;
-  /** `u_kind_visible[5]` - toggle AND (zoom ≥ minzoom). */
+  /** `u_kind_visible[LABEL_KIND_COUNT]` - toggle AND (zoom ≥ minzoom). */
   kindVisible: Float32Array;
-  /** `u_halo_color[5]` - RGBA 0..1, 4 floats per kind. */
+  /** `u_halo_color[LABEL_KIND_COUNT]` - RGBA 0..1, 4 floats per kind. */
   haloColor: Float32Array;
-  /** `u_halo_width_px[5]` - DEVICE px (CSS halo × DPR, so the halo/size ratio the
+  /** `u_halo_width_px[LABEL_KIND_COUNT]` - DEVICE px (CSS halo × DPR, so the halo/size ratio the
    *  fragment uses is DPR-invariant → a constant CSS-px halo). */
   haloWidthPx: Float32Array;
   /** `u_hide_reference` scalar (0/1). */

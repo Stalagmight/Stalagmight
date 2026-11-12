@@ -539,7 +539,17 @@ impl AppState {
             // claim the derive-don't-hook rule exists to avoid having to make.
             let frame_before = project.frame_datum_key();
             // Drop dangling refs/orphans and re-mint duplicate shot UUIDs.
-            project.repair_structural_integrity();
+            let repaired = project.repair_structural_integrity();
+            // A cross-section repeat is healed by renaming, exactly as a load
+            // does, so ignores stored against the old ids need the same alias
+            // lookup until the next save re-keys them.
+            if repaired
+                .iter()
+                .any(|v| v.category == "duplicate_shot_uuid_across_sections")
+            {
+                self.load_renamed_shots
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+            }
             // Demote any merge that bridges two independently datum-anchored
             // groups back to a loop closure. It must run BEFORE the conversion
             // and the re-solve: it is the one repair `resolve_offsets` cannot do

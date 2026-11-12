@@ -34,6 +34,15 @@ import { buildStationLookup, computeStationAllReference, projectStationsRel } fr
 import { LABEL_KIND, LABEL_FLAG, type LabelKind } from './labelShaders';
 import { shapeLabel, type ShapedLabel, type ShapeCache } from './labelLayout';
 import type { GlyphAtlas } from './glyphAtlas';
+import type { MapThemeColors } from '../../../../utils/themeColors';
+import type { ErrorLabelInput } from '../issueScore';
+import {
+  closureErrorLabelStyle,
+  closureErrorLabelsOn,
+  formatClosureErrorLabel,
+  formatShotErrorLabel,
+  shotErrorLabelColor,
+} from './errorLabelText';
 
 /**
  * Padded viewport rectangle in ANCHOR-RELATIVE mercator (`mercator - anchor`),
@@ -97,6 +106,12 @@ export interface LabelDescriptor {
   /** Shot id within its section (shot label + shot comment) - the immovable
    *  feature id is `sectionId * FEATURE_ID_STRIDE + shotId`. */
   shotId?: number;
+  /** Errors labels: the severity score (0-3) that ranks them in the declutter. */
+  score?: number;
+  /** Closure error label: the OTHER end's section + global station (the first
+   *  end is `sectionId` / `stationGlobal`), for drag-hide and dim. */
+  pairSectionId?: number;
+  pairStationGlobal?: number;
 }
 
 /** Inputs `buildLabelDescriptors` needs beyond the survey geometry: the shared
@@ -115,6 +130,10 @@ export interface LabelBuildContext {
    * (`commentColorForKey`) - no import cycle.
    */
   commentColor?: ((ownerKey: string) => Rgba8) | undefined;
+  /** The Errors labels' input (`issueScore.resolveIssueRender`); absent = none. */
+  errors?: ErrorLabelInput | null | undefined;
+  /** Theme for the Errors labels' severity colours (required with `errors`). */
+  themeColors?: MapThemeColors | undefined;
   /**
    * What station labels say. ABSENT = `'id'` (the station index). `'name'`
    * labels each station with its name and skips unnamed stations - every other
@@ -171,6 +190,40 @@ function projectMeters(
 }
 
 /**
+ * Whether an anchor lies inside `viewport`, or inside any rect of a list. A list
+ * is bucketed by a grid as coarse as its widest rect, so each anchor checks only
+ * the few rects around it, however many there are.
+ */
+function anchorFilter(viewport: ViewportRel | readonly ViewportRel[]): (x: number, y: number) => boolean {
+  const within = (r: ViewportRel, x: number, y: number): boolean =>
+    x >= r.minX && x <= r.maxX && y >= r.minY && y <= r.maxY;
+  if (!Array.isArray(viewport)) {
+    const r = viewport as ViewportRel;
+    return (x, y) => within(r, x, y);
+  }
+  const rects = viewport as readonly ViewportRel[];
+  if (rects.length === 0) return () => false;
+  let cell = 0;
+  for (const r of rects) cell = Math.max(cell, r.maxX - r.minX, r.maxY - r.minY);
+  if (!(cell > 0)) return (x, y) => rects.some((r) => within(r, x, y));
+  const buckets = new Map<string, ViewportRel[]>();
+  for (const r of rects) {
+    for (let cx = Math.floor(r.minX / cell); cx <= Math.floor(r.maxX / cell); cx++) {
+      for (let cy = Math.floor(r.minY / cell); cy <= Math.floor(r.maxY / cell); cy++) {
+        const key = `${cx},${cy}`;
+        const list = buckets.get(key);
+        if (list) list.push(r);
+        else buckets.set(key, [r]);
+      }
+    }
+  }
+  return (x, y) => {
+    const list = buckets.get(`${Math.floor(x / cell)},${Math.floor(y / cell)}`);
+    return list !== undefined && list.some((r) => within(r, x, y));
+  };
+}
+
+/**
  * Walk the SoA once and emit a {@link LabelDescriptor} for every label the stock
  * layers would build: shot labels (+ shot comments), station labels (+ station
  * comments), and section names. Reproduces `features.ts`' anchor placement,
@@ -185,7 +238,7 @@ export function buildLabelDescriptors(
   anchorY: number,
   ctx: LabelBuildContext,
   kinds?: ReadonlySet<LabelKind>,
-  viewport?: ViewportRel,
+  viewport?: ViewportRel | readonly ViewportRel[],
 ): LabelDescriptor[] {
   const descriptors: LabelDescriptor[] = [];
   // Kind filter (Phase 2 builds station labels only; Phase 3 drops the arg to
@@ -195,9 +248,9 @@ export function buildLabelDescriptors(
   // whole-survey. Note the ORDINAL loops still run in full below (a shot's global
   // running index / a station's global ordinal must stay stable regardless of
   // what is on screen, so decimation parity holds) - only the `push` is gated.
-  const inView = (x: number, y: number): boolean =>
-    viewport === undefined ||
-    (x >= viewport.minX && x <= viewport.maxX && y >= viewport.minY && y <= viewport.maxY);
+  // A list of rects keeps anchors inside ANY of them (the reservations around
+  // each jump / reference section name, see labelReveal's `reserved`).
+  const inView = viewport === undefined ? () => true : anchorFilter(viewport);
   const lookup = buildStationLookup(data);
   // allRef[g] is the per-station kind mask (#27): 0 = a Normal shot touches it,
   // 1 = only Jumps, 2 = only References, 3 = both / no legs. Carried into the
@@ -215,11 +268,13 @@ export function buildLabelDescriptors(
   const stationRel = projectStationsRel(data, gpsOrigin, anchorX, anchorY);
   const { colorCtx } = ctx;
 
-  // ─── Shot labels (+ shot comments) ─────────────────────────────
+  // ─── Shot labels (+ shot comments, shot error labels) ─────────
   const wantShotLabel = wants(LABEL_KIND.SHOT_LABEL);
   const wantShotComment = wants(LABEL_KIND.SHOT_COMMENT);
+  const errors = ctx.errors && ctx.themeColors ? ctx.errors : null;
+  const wantShotError = errors !== null && wants(LABEL_KIND.SHOT_ERROR);
   let globalShotOrdinal = 0;
-  if (wantShotLabel || wantShotComment) for (const section of data.sections) {
+  if (wantShotLabel || wantShotComment || wantShotError) for (const section of data.sections) {
     const inner = lookup.get(section.id);
     if (!inner) continue;
     for (let i = 0; i < section.shotCount; i++) {
@@ -259,6 +314,20 @@ export function buildLabelDescriptors(
         sectionId: section.id,
         shotGlobal: shotGlobalIdx,
         shotId,
+      });
+      const errorText = wantShotError && shotInView ? formatShotErrorLabel(errors, shotGlobalIdx) : null;
+      if (errorText !== null) descriptors.push({
+        kind: LABEL_KIND.SHOT_ERROR,
+        text: errorText,
+        anchorX: ax,
+        anchorY: ay,
+        color: packCssColor(shotErrorLabelColor(errors!, shotGlobalIdx, ctx.themeColors!)),
+        ordinal: 0,
+        flags: virtualFlag,
+        sectionId: section.id,
+        shotGlobal: shotGlobalIdx,
+        shotId,
+        score: errors!.scores.labelScore[shotGlobalIdx] ?? 0,
       });
       const shotComment = wantShotComment && shotInView ? data.shotComments.get(shotGlobalIdx) : undefined;
       if (shotComment !== undefined) {
@@ -347,6 +416,37 @@ export function buildLabelDescriptors(
         });
       }
     }
+  }
+
+  // ─── Loop closure error labels ─────────────────────────────────
+  // One per closure, at the midpoint of its two stations (a single point in
+  // the Closures Computed View, where a closed loop's ends coincide).
+  if (errors !== null && closureErrorLabelsOn(errors) && wants(LABEL_KIND.CLOSURE_ERROR)) for (const closure of errors.closures) {
+    const gA = lookup.get(closure.station_a.section_id)?.get(closure.station_a.station_index);
+    const gB = lookup.get(closure.station_b.section_id)?.get(closure.station_b.station_index);
+    if (gA === undefined || gB === undefined) continue;
+    const ax = (stationRel[gA * 2]! + stationRel[gB * 2]!) / 2;
+    const ay = (stationRel[gA * 2 + 1]! + stationRel[gB * 2 + 1]!) / 2;
+    if (!inView(ax, ay)) continue;
+    const text = formatClosureErrorLabel(
+      closure, errors.format.abbrev.loop, errors.format.lengthUnit, errors.format.precision?.length,
+    );
+    if (text === null) continue;
+    const style = closureErrorLabelStyle(closure, errors, ctx.themeColors!);
+    descriptors.push({
+      kind: LABEL_KIND.CLOSURE_ERROR,
+      text,
+      anchorX: ax,
+      anchorY: ay,
+      color: packCssColor(style.color),
+      ordinal: 0,
+      flags: 0,
+      sectionId: closure.station_a.section_id,
+      stationGlobal: gA,
+      pairSectionId: closure.station_b.section_id,
+      pairStationGlobal: gB,
+      score: style.score,
+    });
   }
 
   // ─── Section names ─────────────────────────────────────────────

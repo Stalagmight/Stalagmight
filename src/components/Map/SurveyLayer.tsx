@@ -17,6 +17,7 @@ import {
   resolveShotDisplayColor,
   resolveStationDisplayColor,
   type DepthRange,
+  type OverlayColorInput,
   type DisplayColorContext,
   type GhostSectionData,
 } from './surveyLayer/displayColor';
@@ -40,10 +41,14 @@ import { DragGhostController } from './surveyLayer/dragGhostController';
 import type { GhostRenderData } from './surveyLayer/customRender/surveyGhostLayer';
 import { buildGhostRenderData } from './surveyLayer/dragGhostData';
 import { padProbeBox, type ProbeGeometry } from './surveyLayer/hitProbe';
-import { computeIssueSeverity, type IssueSeverity } from './surveyLayer/severity';
+import { resolveIssueRender, withIssueOverride, type IssueRender, type IssueRenderInput } from './surveyLayer/issueScore';
+import { closureLineColor } from './surveyLayer/issueColor';
+import { loopClosureFeatures } from './surveyLayer/loopClosureLines';
+import type { IssueScalePreview } from './colorScale/useIssueScale';
 import { SurveyCustomController, buildCustomDimState, type CustomRenderExclusion } from './surveyLayer/customRender/controller';
 import { SurveyLabelController } from './surveyLayer/customRender/labelController';
 import { overlayInputFrom } from './surveyLayer/customRender/overlayColor';
+import { sameColorScaleInput, type ColorScaleInput } from '../../utils/palettes/scale';
 import { MeasurePathController } from './surveyLayer/customRender/measurePathController';
 import { isStyleRestoring, onStyleRestored } from './surveyLayer/customRender/styleRestore';
 import type { MeasurePathRenderData } from './surveyLayer/customRender/surveyMeasurePathLayer';
@@ -54,7 +59,6 @@ import {
 } from './surveyLayer/customRender/measurePathTessellate';
 import { packCssColor } from './surveyLayer/customRender/colorPack';
 import type { SurveyData } from '../../types/survey-data';
-import type { ProjectWarning } from '../../types/commands';
 import { getMapThemeColors, type MapThemeColors } from '../../utils/themeColors';
 import {
   distanceColorExpression,
@@ -69,7 +73,6 @@ import {
   type GasReachFeatureState,
 } from '../../utils/gasReach';
 import { metersToMapCoords } from '../../utils/coordinates';
-import { getErrorColor } from '../../utils/colors';
 import { trackNav } from '../../utils/telemetry';
 import { FEATURE_ID_STRIDE, sectionIdFromKey } from '../../utils/ids';
 import { MEASURE_TINT } from '../../utils/measurePath';
@@ -79,6 +82,7 @@ import { clearFeatureCountsForPrefix } from '../../utils/memoryProbe';
 import { shouldSuppressMapError, type MapErrorEventLike } from './surveyLayer/mapErrors';
 import { diffRemovedSectionIds } from './surveyLayer/sectionDiff';
 import { InteractOverlayHideController, overlayPaintDigest, overlayTouchesRemovedSections } from './surveyLayer/interactOverlayHide';
+import { raisedSectionOf } from './surveyLayer/raisedSection';
 import type { SemanticMapTarget } from './surveyLayer/semanticTarget';
 import { SemanticTargetPreference } from './surveyLayer/semanticTargetPreference';
 
@@ -154,6 +158,9 @@ export default class SurveyLayer {
 
   // Config storage with fallback defaults for when config is null (initial load)
   private config: Config | null = null;
+  /** Stroke ring width of a station marker, px (zero-datum: 2x, like the radius). */
+  private static readonly STATION_STROKE_PX = 1;
+
   private static readonly DEFAULTS = {
     station: { radius: 4, hit_area: 10, hover_radius: 6, selection_radius: 5 },
     shot: { width: 2, hit_area: 8, hover_width: 4, selection_width: 3 },
@@ -250,8 +257,7 @@ export default class SurveyLayer {
     showDepthGradient: boolean;
     depthRange: DepthRange;
     precision: DecimalPrecision | undefined;
-    showIssueSeverity: boolean;
-    warnings: ProjectWarning[];
+    issueInput: IssueRenderInput | null;
   } | null = null;
   private updateScheduled = false;
   /** Coalesced-call counter, surfaced to memory probe for instrumentation. */
@@ -323,16 +329,30 @@ export default class SurveyLayer {
   private showDepthGradient: boolean = false;
   private depthRange: DepthRange = { min: 0, max: 50 };
 
-  // Issue-severity coloring mode (#22). Like showDepthGradient, cached so the
-  // lazy-labels zoom rebuild and theme rebuild re-fire with the same mode.
-  private showIssueSeverity: boolean = false;
-  private cachedWarnings: ProjectWarning[] = [];
+  // Survey Issues colouring + Errors labels (#22). Like showDepthGradient, cached
+  // so the theme rebuild re-fires with the same mode.
+  private issueInput: IssueRenderInput | null = null;
+  // The input update() last passed, and a live cog preview standing in for its
+  // scale / palette (`issueInput` is the two combined).
+  private committedIssueInput: IssueRenderInput | null = null;
+  private issueOverride: IssueScalePreview | null = null;
+  private issueFrame: number | null = null;
 
   // Distance-gradient overlay (#34). feature-state based so re-root needs no
   // feature rebuild; re-applied after source rebuilds because endApplyFeatures
   // clears state before tile IDs can be reused for different merged groups.
   private distanceMode: boolean = false;
   private distanceState: DistanceFeatureState | null = null;
+  // The user's depth / distance palette + Levels range (legend cog). Null = the
+  // theme ramp over the data extent: the pre-palette colours, byte for byte.
+  private depthScale: ColorScaleInput | null = null;
+  private distanceScale: ColorScaleInput | null = null;
+  // Live preview (palette hover / Levels drag): the latest preview scales,
+  // coalesced to one recolour per animation frame, and whether the buffers hold
+  // preview colours that the next setColorScales must replace exactly.
+  private pendingPreview: { depth: ColorScaleInput | null; distance: ColorScaleInput | null } | null = null;
+  private previewFrame: number | null = null;
+  private previewShown = false;
   // Gas reachable-frontier overlay (#38). Same feature-state mechanics as the
   // distance gradient (own `gasReach` key); mutually exclusive with it (both own
   // the shots/stations color paint), enforced upstream in uiStore.
@@ -384,11 +404,11 @@ export default class SurveyLayer {
 
   // SoA survey data + geometry resolver for the last applied build (#mem).
   // The resolver serves per-item hit-testing over merged features and the
-  // interact overlay's geometry/color lookups. `cachedIssueSeverity` mirrors
-  // the severity arrays the build used so overlay colors match exactly.
+  // interact overlay's geometry/color lookups. `cachedIssueRender` holds the
+  // issue scores the build used so overlay colors match exactly.
   private cachedSurveyData: SurveyData | null = null;
   private geoIndex: SurveyGeometryIndex | null = null;
-  private cachedIssueSeverity: IssueSeverity | undefined;
+  private cachedIssueRender: IssueRender | null = null;
 
   // Flag-gated custom WebGL render prototype (#customRender). No-op unless the
   // `stalagmight_custom_render` gate is on; see surveyLayer/customRender/.
@@ -1342,7 +1362,11 @@ export default class SurveyLayer {
     return (c) => this.map.project(c);
   }
 
-  /** Nearest visible station among candidate sections, within maxDistance px. */
+  /** Nearest visible station among candidate sections, within maxDistance px;
+   *  on overlapping markers, the one drawn on top - the raised section's, else
+   *  the real-line one (see
+   *  `SurveyGeometryIndex.nearestStation`). Hover, click, context menu and the
+   *  measure snap all resolve here, so they agree. */
   private resolveStationAt(
     x: number,
     y: number,
@@ -1352,10 +1376,17 @@ export default class SurveyLayer {
     if (sections.size === 0 || !this.geoIndex) return null;
     return this.geoIndex.nearestStation(this.projector(), x, y, sections, maxDistance, {
       visibleKinds: this.visibleKinds(),
+      stationDiscPx: this.getStationRadius() + SurveyLayer.STATION_STROKE_PX,
+      raisedSectionId: this.raisedSectionId(),
+      ...(this.customRender
+        ? { stationSizeMul: this.customRender.stationSizeMul.bind(this.customRender) }
+        : {}),
     });
   }
 
-  /** Nearest visible shot among candidate sections, within maxDistance px. */
+  /** Nearest visible shot among candidate sections, within maxDistance px; on
+   *  overlapping lines, the one drawn on top - the raised section's, else the
+   *  real-line one (see `SurveyGeometryIndex.nearestShot`). */
   private resolveShotAt(
     x: number,
     y: number,
@@ -1365,6 +1396,9 @@ export default class SurveyLayer {
     if (sections.size === 0 || !this.geoIndex) return null;
     return this.geoIndex.nearestShot(this.projector(), x, y, sections, maxDistance, {
       visibleKinds: this.visibleKinds(),
+      shotHalfWidthPx: this.getShotWidth() / 2,
+      raisedSectionId: this.raisedSectionId(),
+      ...(this.customRender ? { shotWidthMul: this.customRender.shotWidthMul.bind(this.customRender) } : {}),
     });
   }
 
@@ -1500,8 +1534,15 @@ export default class SurveyLayer {
   // custom renderer (setSectionHover / setSectionSelect / setHighlight, wired from
   // the setHoveredSection / setSelectedSection / setHoveredSegment setters);
   // individual hover/selection/snap render via the interact overlay (#mem).
+  // The selection's whole section draws above every rank (no-op when unchanged).
   private updateVisualState() {
+    this.customRender?.setRaisedSection(this.raisedSectionId());
     this.refreshInteractOverlay();
+  }
+
+  /** The section drawn on top and given the click (see `raisedSectionOf`). */
+  private raisedSectionId(): number | null {
+    return raisedSectionOf(this.selectedSectionId, this.selectedStationId, this.selectedShotId);
   }
 
   /**
@@ -1601,9 +1642,11 @@ export default class SurveyLayer {
     return {
       showDepthGradient: this.showDepthGradient,
       depthRange: this.depthRange,
+      depthScale: this.depthScale,
       themeColors: this.themeColors,
-      showIssueSeverity: this.showIssueSeverity && !!this.cachedIssueSeverity,
-      issueSeverity: this.cachedIssueSeverity,
+      showIssueSeverity: !!this.issueInput?.color && !!this.cachedIssueRender,
+      issueScores: this.cachedIssueRender?.scores,
+      issuePalette: this.issueInput?.palette ?? null,
       planIdleTint: this.isPlanIdleActive(),
     };
   }
@@ -1658,6 +1701,78 @@ export default class SurveyLayer {
     // rebuilds the survey geometry with the new overlay colors.
     this.applyOverlayPaint();
     this.resyncCustomRenderFromStore();
+  }
+
+  /**
+   * Apply the user's depth / distance palette + Levels range (map legend cog).
+   * `null` = the theme ramp over the data extent. A no-op when neither changed;
+   * otherwise a colour-only recolour (no feature rebuild, no flushUpdate) plus
+   * the interact overlay's distance expression.
+   */
+  setColorScales(depth: ColorScaleInput | null, distance: ColorScaleInput | null): void {
+    this.cancelPreviewFrame();
+    const unchanged =
+      sameColorScaleInput(this.depthScale, depth) && sameColorScaleInput(this.distanceScale, distance);
+    // After a preview the buffers hold approximate colours even when the
+    // committed scale is unchanged (hover, then Escape): resync regardless.
+    if (unchanged && !this.previewShown) return;
+    this.previewShown = false;
+    this.depthScale = depth;
+    this.distanceScale = distance;
+    if (!this.map || !hasLiveStyle(this.map)) return;
+    this.applyOverlayPaint();
+    this.resyncCustomRenderFromStore();
+  }
+
+  /**
+   * Live preview of a colour scale while the user hovers palettes or drags a
+   * Levels handle: a LUT recolour of the survey colour buffers only (no labels,
+   * no interact overlay), at most once per animation frame. The committed
+   * scales are untouched; {@link setColorScales} ends the preview exactly.
+   */
+  previewColorScales(depth: ColorScaleInput | null, distance: ColorScaleInput | null): void {
+    this.pendingPreview = { depth, distance };
+    if (this.previewFrame !== null) return;
+    this.previewFrame = requestAnimationFrame(() => {
+      this.previewFrame = null;
+      const pending = this.pendingPreview;
+      this.pendingPreview = null;
+      if (!pending || !this.customRender || !this.map || !hasLiveStyle(this.map)) return;
+      const ctx: DisplayColorContext = {
+        ...this.displayColorContext(),
+        depthScale: pending.depth,
+        overlay: overlayInputFrom(
+          this.distanceMode, this.distanceState, this.gasReachMode, this.gasReachState, pending.distance,
+        ),
+        commentTint: this.activeTool === 'move_comment',
+      };
+      if (this.customRender.previewColors(ctx)) this.previewShown = true;
+    });
+  }
+
+  private cancelPreviewFrame(): void {
+    if (this.previewFrame !== null) cancelAnimationFrame(this.previewFrame);
+    this.previewFrame = null;
+    this.pendingPreview = null;
+  }
+
+  /** Teardown: drop both preview frames (the issues one is independent of the
+   *  depth / distance one, which every committed colour-scale change cancels). */
+  private cancelPreviewFrames(): void {
+    this.cancelPreviewFrame();
+    if (this.issueFrame !== null) cancelAnimationFrame(this.issueFrame);
+    this.issueFrame = null;
+  }
+
+  /** The active analytical overlay's colour input (distance carries its scale). */
+  private overlayInput(): OverlayColorInput | null {
+    return overlayInputFrom(
+      this.distanceMode,
+      this.distanceState,
+      this.gasReachMode,
+      this.gasReachState,
+      this.distanceScale,
+    );
   }
 
   /**
@@ -1765,6 +1880,7 @@ export default class SurveyLayer {
           this.distanceState?.max ?? 0,
           this.themeColors.grayLine,
           ['get', 'dist'] as ExpressionSpecification,
+          this.distanceScale,
         )
       : this.gasReachMode
         ? gasReachColorExpression(
@@ -2200,14 +2316,14 @@ export default class SurveyLayer {
     return this.showDepthGradient;
   }
 
-  getDepthRange(): DepthRange {
-    // Return a copy to prevent external mutation
-    return { min: this.depthRange.min, max: this.depthRange.max };
-  }
-
   // Control shot data labels visibility (custom label layer uniform).
   setShowShotLabels(show: boolean) {
     this.customLabels?.setShotLabelsVisible(show);
+  }
+
+  // Errors labels: shot labels follow Shots, closure labels follow Stations.
+  setShowErrorLabels(shots: boolean, closures: boolean) {
+    this.customLabels?.setErrorLabelsVisible(shots, closures);
   }
 
   // Control section name labels visibility (custom label layer uniform).
@@ -2522,6 +2638,7 @@ export default class SurveyLayer {
         this.distanceState?.max ?? 0,
         this.themeColors.grayLine,
         ['get', 'dist'] as ExpressionSpecification,
+        this.distanceScale,
       );
     }
     if (this.gasReachMode) {
@@ -2581,7 +2698,7 @@ export default class SurveyLayer {
     return buildGhostRenderData(set, {
       dpr: (typeof window !== 'undefined' && window.devicePixelRatio) || 1,
       themeColors: this.themeColors,
-      overlay: overlayInputFrom(this.distanceMode, this.distanceState, this.gasReachMode, this.gasReachState),
+      overlay: this.overlayInput(),
       shotsVisible: this.shotsVisible,
       stationsVisible: this.stationsVisible,
       selShotWidth: this.getShotSelectionWidth(),
@@ -2745,7 +2862,7 @@ export default class SurveyLayer {
         emit: 'line',
         coords: [a, b],
         movingEnd: 'uniform',
-        properties: { kind: 'closure', color: getErrorColor(lc.error_percentage) },
+        properties: { kind: 'closure', color: this.closureColor(lc.error_percentage) },
       });
     }
 
@@ -2938,7 +3055,7 @@ export default class SurveyLayer {
         emit: 'line',
         coords: [fromCoord, toCoord],
         movingEnd: aMoving && bMoving ? 'both' : aMoving ? 'from' : 'to',
-        properties: { kind: 'closure', color: getErrorColor(lc.error_percentage) },
+        properties: { kind: 'closure', color: this.closureColor(lc.error_percentage) },
       });
       closureExclusions.push(['all',
         ['==', ['get', 'stationA'], keyA],
@@ -3196,8 +3313,7 @@ export default class SurveyLayer {
     showDepthGradient: boolean = false,
     depthRange: DepthRange = { min: 0, max: 50 },
     precision?: DecimalPrecision,
-    showIssueSeverity: boolean = false,
-    warnings: ProjectWarning[] = []
+    issueInput: IssueRenderInput | null = null,
   ) {
     // Overwrite the pending args - last-call-wins is correct because the
     // builder is deterministic in its inputs; coalescing equivalent calls
@@ -3210,8 +3326,7 @@ export default class SurveyLayer {
       showDepthGradient,
       depthRange,
       precision,
-      showIssueSeverity,
-      warnings,
+      issueInput,
     };
     this.coalescedUpdateCallsSinceLastFlush += 1;
 
@@ -3235,8 +3350,7 @@ export default class SurveyLayer {
         args.showDepthGradient,
         args.depthRange,
         args.precision,
-        args.showIssueSeverity,
-        args.warnings,
+        args.issueInput,
       );
       return;
     }
@@ -3258,8 +3372,7 @@ export default class SurveyLayer {
         args.showDepthGradient,
         args.depthRange,
         args.precision,
-        args.showIssueSeverity,
-        args.warnings,
+        args.issueInput,
       );
     });
   }
@@ -3275,12 +3388,14 @@ export default class SurveyLayer {
     const colorCtx: DisplayColorContext = {
       showDepthGradient: this.showDepthGradient,
       depthRange: this.depthRange,
+      depthScale: this.depthScale,
       themeColors: this.themeColors,
-      showIssueSeverity: this.showIssueSeverity,
-      issueSeverity: this.cachedIssueSeverity,
+      showIssueSeverity: !!this.issueInput?.color,
+      issueScores: this.cachedIssueRender?.scores,
+      issuePalette: this.issueInput?.palette ?? null,
       // Analytical overlay ramp colors (distance #34 / gas-reach #38): the custom
       // layer has no feature-state, so it resolves them per feature at build time.
-      overlay: overlayInputFrom(this.distanceMode, this.distanceState, this.gasReachMode, this.gasReachState),
+      overlay: this.overlayInput(),
       // Move-comment palette tint (#52): custom features carry no commentColor
       // property, so the resolvers recompute it (only while move_comment is active).
       commentTint: this.activeTool === 'move_comment',
@@ -3294,7 +3409,7 @@ export default class SurveyLayer {
       colorCtx,
       shotWidthPx: this.getShotWidth(),
       stationRadiusPx: this.getStationRadius(),
-      stationStrokePx: 1,
+      stationStrokePx: SurveyLayer.STATION_STROKE_PX,
       // Configured highlight bumps (C2): the custom survey shader derives the
       // hover / selection width + radius from these instead of baking 2x/1.5x.
       shotHoverWidthPx: this.getShotHoverWidth(),
@@ -3302,17 +3417,19 @@ export default class SurveyLayer {
       stationHoverRadiusPx: this.getStationHoverRadius(),
       stationSelectionRadiusPx: this.getStationSelectionRadius(),
     });
-    // Custom LABEL layer (#customRender labels). Shares surveyData + theme; its
-    // own composed gate no-ops when off. Builds all five kinds, viewport-scoped
-    // with collision; a synchronous rebuild here keeps the edit path immediate.
+    // Custom LABEL layer (#customRender labels). Shares surveyData + theme; builds
+    // every kind viewport-scoped with collision; a synchronous rebuild here keeps
+    // the edit path immediate.
     this.customLabels?.sync({
       surveyData,
       gpsOrigin: this.gpsOrigin,
       themeColors: this.themeColors,
       showDepthGradient: this.showDepthGradient,
       depthRange: this.depthRange,
+      depthScale: this.depthScale,
       precision: this.cachedPrecision,
       commentTint: this.activeTool === 'move_comment',
+      errors: this.cachedIssueRender?.labels,
     });
   }
 
@@ -3345,8 +3462,7 @@ export default class SurveyLayer {
     showDepthGradient: boolean = false,
     depthRange: DepthRange = { min: 0, max: 50 },
     precision?: DecimalPrecision,
-    showIssueSeverity: boolean = false,
-    warnings: ProjectWarning[] = [],
+    issueInput: IssueRenderInput | null = null,
   ): void {
     // Cancel any pending coalesced flush so we don't re-run with stale args.
     this.updateScheduled = false;
@@ -3359,8 +3475,7 @@ export default class SurveyLayer {
       showDepthGradient,
       depthRange,
       precision,
-      showIssueSeverity,
-      warnings,
+      issueInput,
     );
   }
 
@@ -3372,14 +3487,13 @@ export default class SurveyLayer {
     showDepthGradient: boolean,
     depthRange: DepthRange,
     precision: DecimalPrecision | undefined,
-    showIssueSeverity: boolean = false,
-    warnings: ProjectWarning[] = [],
+    issueInput: IssueRenderInput | null = null,
   ): void {
     if (isStyleRestoring(this.map)) {
       this.deferredUpdate = () =>
         this.flushUpdate(
           sections, stations, loopClosures, gpsOrigin, showDepthGradient, depthRange,
-          precision, showIssueSeverity, warnings,
+          precision, issueInput,
         );
       return;
     }
@@ -3391,8 +3505,8 @@ export default class SurveyLayer {
     this.gpsOrigin = gpsOrigin;
     this.showDepthGradient = showDepthGradient;
     this.depthRange = normalizeDepthRange(depthRange);
-    this.showIssueSeverity = showIssueSeverity;
-    this.cachedWarnings = warnings;
+    this.committedIssueInput = issueInput;
+    this.issueInput = withIssueOverride(issueInput, this.issueOverride);
 
     // Sections this flush removes (delete / undo-of-add), read BEFORE the cache
     // overwrite: their custom geometry vanishes synchronously in syncCustomRender
@@ -3413,11 +3527,8 @@ export default class SurveyLayer {
       useUIStore.getState().geometryMode
     ) ?? surveyDataFromLegacy(sections, stations);
 
-    const issueSeverity = showIssueSeverity
-      ? computeIssueSeverity(surveyData, warnings)
-      : undefined;
     this.cachedSurveyData = surveyData;
-    this.cachedIssueSeverity = issueSeverity;
+    this.cachedIssueRender = resolveIssueRender(surveyData, this.issueInput, loopClosures);
     // INVARIANT: geoIndex is re-created (never mutated in place) on every flush -
     // its per-instance lazy caches rest on a fresh instance per geometry change.
     this.geoIndex = new SurveyGeometryIndex(surveyData, this.gpsOrigin);
@@ -3470,33 +3581,39 @@ export default class SurveyLayer {
     }
   }
 
-  /** Publish the loop-closure indicator lines to their GeoJSON source from the
-   *  cached closures + the geometry index. The custom renderer draws everything
-   *  else; loop closures stay a small stock GeoJSON overlay, like the gas route. */
+  /** Publish the loop-closure lines (`loopClosureFeatures`) to their source. */
   private publishLoopClosures(): void {
     const source = this.map.getSource(this.sourceId + '-loop-closures');
     if (!source || source.type !== 'geojson' || !this.geoIndex) return;
-    const features: GeoJSON.Feature[] = [];
-    for (const lc of this.cachedLoopClosures ?? []) {
-      const a = this.geoIndex.stationCoords(lc.station_a);
-      const b = this.geoIndex.stationCoords(lc.station_b);
-      if (!a || !b) continue;
-      features.push({
-        type: 'Feature',
-        geometry: { type: 'LineString', coordinates: [a, b] },
-        properties: {
-          stationA: `${lc.station_a.section_id}:${lc.station_a.station_index}`,
-          stationB: `${lc.station_b.section_id}:${lc.station_b.station_index}`,
-          sectionIdA: lc.station_a.section_id,
-          sectionIdB: lc.station_b.section_id,
-          errorPercentage: lc.error_percentage,
-          misclosureDistance: lc.misclosure_distance,
-          pathLength: lc.path_length,
-          color: getErrorColor(lc.error_percentage),
-        },
-      });
-    }
+    const features = loopClosureFeatures(this.cachedLoopClosures ?? [], this.geoIndex, (pct) => this.closureColor(pct));
     (source as maplibregl.GeoJSONSource).setData({ type: 'FeatureCollection', features });
+  }
+
+  /** A closure line's colour: graded while Survey Issues paints the map. */
+  private closureColor(errorPercentage: number): string {
+    return closureLineColor(errorPercentage, this.issueInput, this.themeColors);
+  }
+
+  /**
+   * Live preview of the Survey Issues levels / palette (legend cog): stands in
+   * for the committed scale and palette until `null`, recolouring shots,
+   * stations, Errors labels and closure lines through the normal colour-only
+   * path at most once per animation frame. A commit arrives through update().
+   */
+  previewIssueScale(preview: IssueScalePreview | null): void {
+    if (preview === null && this.issueOverride === null) return;
+    this.issueOverride = preview;
+    if (this.issueFrame !== null) return;
+    this.issueFrame = requestAnimationFrame(() => {
+      this.issueFrame = null;
+      const next = withIssueOverride(this.committedIssueInput, this.issueOverride);
+      if (next === this.issueInput || !this.cachedSurveyData || !hasLiveStyle(this.map)) return;
+      this.issueInput = next;
+      this.cachedIssueRender = resolveIssueRender(this.cachedSurveyData, next, this.cachedLoopClosures);
+      // Paint the data the scores index (a pending update() repaints the store's).
+      if (this.customRender) this.syncCustomRender(this.cachedSurveyData);
+      this.publishLoopClosures();
+    });
   }
 
   /**
@@ -3543,8 +3660,7 @@ export default class SurveyLayer {
     if (this.cachedSections.length > 0 || this.cachedStations.length > 0) {
       this.update(
         this.cachedSections, this.cachedStations, this.cachedLoopClosures, this.gpsOrigin,
-        this.showDepthGradient, this.depthRange, this.cachedPrecision, this.showIssueSeverity,
-        this.cachedWarnings,
+        this.showDepthGradient, this.depthRange, this.cachedPrecision, this.committedIssueInput,
       );
     }
   }
@@ -3556,6 +3672,11 @@ export default class SurveyLayer {
    *  buffers alive until the next SurveyLayer overwrites the globals (#mem).
    *  dispose() is the map-free counterpart of destroy(); it is idempotent, so the
    *  destroy() path (which nulls both refs before calling this) is unaffected. */
+  /** E2E: the emitted labels (kind, text, reveal zoom); see the label controller. */
+  labelSnapshot(): ReturnType<SurveyLabelController['snapshot']> {
+    return this.customLabels?.snapshot() ?? [];
+  }
+
   /**
    * Every drawn station center + shot segment in map coords, honoring the live
    * reference-shots toggle. Exposed for E2E: the custom renderer draws survey
@@ -3591,6 +3712,7 @@ export default class SurveyLayer {
   }
 
   releaseVtRegistry(): void {
+    this.cancelPreviewFrames();
     this.customRender?.dispose();
     this.customLabels?.dispose();
     // The DPR watcher's matchMedia listener is a JS resource that survives
@@ -3608,6 +3730,7 @@ export default class SurveyLayer {
     // destroyed map (would throw in setData).
     this.updateScheduled = false;
     this.pendingUpdateArgs = null;
+    this.cancelPreviewFrames();
 
     // Restore any interact layers left hidden by an in-flight removal re-tile and
     // drop its listener/timer so nothing fires on the torn-down map.

@@ -24,6 +24,7 @@ import type { GpsOrigin } from '../../../../types/config';
 import type { SurveyData } from '../../../../types/survey-data';
 import type { DisplayColorContext, OverlayColorInput } from '../displayColor';
 import { computeMercatorAnchor } from './mercator';
+import { sameColorScaleInput } from '../../../../utils/palettes';
 
 /** What the incremental apply step must recompute. Section indices are into
  *  `next.sections` (declaration order, stable under a non-structural edit). */
@@ -82,9 +83,11 @@ export function sameSurveyLayout(prev: SurveyData, next: SurveyData): boolean {
  * Whether the GLOBAL color inputs are unchanged, so color differences are
  * confined to the sections whose geometry / section-color changed. A change to
  * any of these can recolor every section, which the incremental path cannot
- * bound cheaply - the caller full-rebuilds instead. In issue-severity mode the
- * per-flush `issueSeverity` arrays are freshly computed (new identity) and a
- * move can shift severity non-locally, so severity mode always falls back here.
+ * bound cheaply - the caller full-rebuilds instead. In Survey Issues mode the
+ * scores are recomputed whenever the geometry or the warnings change (new
+ * identity) and a change can move scores non-locally (warnings, merge groups),
+ * so a new scores object always falls back here; an unchanged one (memoized in
+ * `issueScore.resolveIssueRender`) keeps the incremental path.
  */
 export function sameColorGlobals(prev: DisplayColorContext, next: DisplayColorContext): boolean {
   if (prev.themeColors !== next.themeColors) return false;
@@ -93,9 +96,11 @@ export function sameColorGlobals(prev: DisplayColorContext, next: DisplayColorCo
   if (prev.depthRange.min !== next.depthRange.min || prev.depthRange.max !== next.depthRange.max) {
     return false;
   }
-  // Severity mode: any edit rebuilds the severity arrays (new ref) and severity
-  // is non-local, so require identical (⇒ only fires when severity is off/stable).
-  if (next.showIssueSeverity && prev.issueSeverity !== next.issueSeverity) return false;
+  // The user's depth palette / Levels range recolours every depth-ramped feature.
+  if (!sameColorScaleInput(prev.depthScale, next.depthScale)) return false;
+  // Survey Issues mode: scores are non-local, so require the identical object.
+  if (next.showIssueSeverity && prev.issueScores !== next.issueScores) return false;
+  if (next.showIssueSeverity && (prev.issuePalette?.key ?? null) !== (next.issuePalette?.key ?? null)) return false;
   // An analytical overlay recolors every feature; enter / exit and every
   // recompute (a fresh value-map ref) forces a full rebuild. A geometry flush
   // that leaves the overlay untouched keeps the same map refs ⇒ still same.
@@ -120,7 +125,13 @@ export function sameColorGlobals(prev: DisplayColorContext, next: DisplayColorCo
 function sameOverlay(a: OverlayColorInput | null, b: OverlayColorInput | null): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
-  return a.mode === b.mode && a.shots === b.shots && a.stations === b.stations && a.max === b.max;
+  return (
+    a.mode === b.mode &&
+    a.shots === b.shots &&
+    a.stations === b.stations &&
+    a.max === b.max &&
+    sameColorScaleInput(a.scale, b.scale)
+  );
 }
 
 /**
@@ -230,8 +241,11 @@ export function planColorOnlyUpdate(
   nextGpsOrigin: GpsOrigin | null,
   cachedAnchorX: number,
   cachedAnchorY: number,
+  /** Recolour even when the colour globals match: the buffers hold a live
+   *  colour-scale preview's approximate colours, not `prevCtx`'s. */
+  force = false,
 ): boolean {
-  if (sameColorGlobals(prevCtx, nextCtx)) return false;
+  if (!force && sameColorGlobals(prevCtx, nextCtx)) return false;
   if (!sameGpsOrigin(prevGpsOrigin, nextGpsOrigin)) return false;
   if (!sameSurveyLayout(prev, next)) return false;
   const [ax, ay] = computeMercatorAnchor(next, nextGpsOrigin);

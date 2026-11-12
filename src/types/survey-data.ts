@@ -186,6 +186,21 @@ export function shotKindToFlags(kind: ShotKind): number {
 export function isVirtualKind(kind: ShotKind): boolean {
   return kind !== 'Normal';
 }
+
+/**
+ * Rank of a station from the kinds of shot that touch it, as the station kind
+ * mask encodes them (0 = a Normal shot touches it, bit 1 = a Jump, bit 2 = a
+ * Reference; 3 is also the no-legs default): 0 real, 1 jump, 2 reference. A
+ * station on both a Jump and a Reference ranks as a jump.
+ *
+ * Where the markers of several sections coincide (a jump or reference section
+ * tied in at a real station), the better rank is drawn on top and takes the
+ * click. The same ranks order the map's label declutter (`labelVirtualRank`).
+ */
+export function stationKindRank(mask: number): 0 | 1 | 2 {
+  if (mask === 0) return 0;
+  return (mask & 1) !== 0 ? 1 : 2;
+}
 /** Bit position of the `is_zero_datum` flag in `stationFlags`. */
 export const STATION_FLAG_IS_ZERO_DATUM = 0b01;
 

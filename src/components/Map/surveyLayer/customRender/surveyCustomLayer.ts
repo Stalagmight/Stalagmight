@@ -445,6 +445,35 @@ export class SurveyCustomLayer implements CustomLayerInterface {
     this.subUpload(this.circleGpu.allReference, c.allReference, 1, vStart, vCount);
   }
 
+  /**
+   * Re-upload the line / circle index buffer (same length) after the incremental
+   * edit path rewrote its draw order in `this.data` - a kind edit moved shots or
+   * a station between ranks (`writeLineDrawOrder` / `writeCircleDrawOrder`).
+   * Vertex buffers untouched.
+   */
+  uploadLineIndices(): void {
+    if (this.lineGpu && this.data) this.rewriteIndexBuffer(this.lineGpu.index, this.data.line.indices);
+  }
+
+  /** Circle counterpart of {@link uploadLineIndices}. */
+  uploadCircleIndices(): void {
+    if (this.circleGpu && this.data) this.rewriteIndexBuffer(this.circleGpu.index, this.data.circle.indices);
+  }
+
+  /**
+   * Written through `COPY_WRITE_BUFFER`, not `ELEMENT_ARRAY_BUFFER`: this runs on
+   * the edit path, outside `render()`, and the element-array binding is VAO
+   * state - binding it here would swap the index buffer of whatever VAO MapLibre
+   * left bound after its last draw.
+   */
+  private rewriteIndexBuffer(buf: WebGLBuffer, indices: Uint32Array): void {
+    const gl = this.gl;
+    if (!gl || this.disabled) return;
+    gl.bindBuffer(gl.COPY_WRITE_BUFFER, buf);
+    gl.bufferSubData(gl.COPY_WRITE_BUFFER, 0, indices);
+    gl.bindBuffer(gl.COPY_WRITE_BUFFER, null);
+  }
+
   render(gl: WebGLRenderingContext | WebGL2RenderingContext, options: CustomRenderMethodInput): void {
     if (this.disabled || !(gl instanceof WebGL2RenderingContext)) return;
     const data = this.data;
