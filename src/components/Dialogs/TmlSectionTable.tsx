@@ -19,7 +19,7 @@ const noop = () => {};
 /** One read-only cell of people: compact pills (partial ones on only some shots), full detail on hover. */
 function PeopleCell({ label, people, testId }: { label: string; people: AggregatedPerson[]; testId: string }) {
   return (
-    <div className="h-6 max-w-[11rem]">
+    <div className="h-6 max-w-[9rem]">
       <PeopleInput
         label={label}
         value={people}
@@ -75,7 +75,7 @@ export function TmlSectionTable({
         <table className="w-full text-sm">
           <thead className="bg-surface-alt sticky top-0">
             <tr className="text-left text-text-tertiary text-xs">
-              <th className="px-3 py-1.5 w-8">
+              <th className="px-2 py-1.5 w-8">
                 <input
                   type="checkbox"
                   checked={allSelected}
@@ -85,12 +85,16 @@ export function TmlSectionTable({
                   data-testid="tml-select-all"
                 />
               </th>
-              <th className="px-3 py-1.5">{t('dialogs.tmlImport.table.section')}</th>
-              <th className="px-3 py-1.5">{t('dialogs.tmlImport.table.shots')}</th>
-              <th className="px-3 py-1.5">{t('credit.surveyors')}</th>
-              <th className="px-3 py-1.5">{t('credit.explorers')}</th>
-              <th className="px-3 py-1.5">{t('dialogs.tmlImport.table.date')}</th>
-              <th className="px-3 py-1.5 w-6">{t('dialogs.tmlImport.table.color')}</th>
+              <th className="px-2 py-1.5">{t('dialogs.tmlImport.table.section')}</th>
+              <th className="px-2 py-1.5">{t('dialogs.tmlImport.table.shots')}</th>
+              <th className="px-2 py-1.5">{t('credit.surveyors')}</th>
+              <th className="px-2 py-1.5">{t('credit.explorers')}</th>
+              <th className="px-2 py-1.5">{t('dialogs.tmlImport.table.date')}</th>
+              {/* The swatch speaks for itself; the header stays for screen readers
+                  so the people columns leave the date room in the narrow panel. */}
+              <th className="px-2 py-1.5 w-6">
+                <span className="sr-only">{t('dialogs.tmlImport.table.color')}</span>
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -102,7 +106,7 @@ export function TmlSectionTable({
                 className={`border-t border-border ${selected.has(i) ? '' : 'opacity-50'}`}
                 data-testid={`tml-section-row-${i}`}
               >
-                <td className="px-3 py-1.5">
+                <td className="px-2 py-1.5">
                   <input
                     type="checkbox"
                     checked={selected.has(i)}
@@ -112,7 +116,7 @@ export function TmlSectionTable({
                     data-testid={`tml-section-${i}`}
                   />
                 </td>
-                <td className="px-3 py-1.5">
+                <td className="px-2 py-1.5">
                   {section.name}
                   {section.is_branch_split && (
                     <span className="ml-1 text-xs text-text-tertiary">
@@ -128,7 +132,7 @@ export function TmlSectionTable({
                     </span>
                   )}
                 </td>
-                <td className="px-3 py-1.5">{importableShots(section, includeExcluded).length}</td>
+                <td className="px-2 py-1.5">{importableShots(section, includeExcluded).length}</td>
                 <td className="px-2 py-1">
                   <PeopleCell
                     label={t('dialogs.tmlImport.table.surveyorsOf', { name: section.name })}
@@ -143,10 +147,10 @@ export function TmlSectionTable({
                     testId={`tml-section-${i}-explorers`}
                   />
                 </td>
-                <td className="px-3 py-1.5 text-text-secondary whitespace-nowrap" data-testid={`tml-section-${i}-date`}>
+                <td className="px-2 py-1.5 text-text-secondary whitespace-nowrap" data-testid={`tml-section-${i}-date`}>
                   {credit.date ?? t('dialogs.tmlImport.stats.none')}
                 </td>
-                <td className="px-3 py-1.5">
+                <td className="px-2 py-1.5">
                   <div className="w-4 h-4 rounded" style={{ backgroundColor: section.color }} />
                 </td>
               </tr>
