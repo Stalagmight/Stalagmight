@@ -216,11 +216,18 @@ export default function ContextMenu() {
     };
   }, [combineKey]);
   const combineCandidate = combineAnswer?.key === combineKey ? combineAnswer.candidate : undefined;
-  /** The Combine item: disabled while checking, and with the reason when blocked. */
+  /**
+   * The Combine item, disabled with the reason when blocked. On a station it
+   * appears once the answer is in (most section ends have no partner, and a
+   * placeholder that then vanished would make the menu jump); on a two-section
+   * selection it is always offered, so it shows disabled while checking.
+   */
   const combineItems = (label: string): ContextMenuItem[] => {
     if (!combineKey) return [];
     if (combineCandidate === undefined) {
-      return [{ label, action: () => {}, disabled: true, hint: 'Checking whether these sections can be combined...' }];
+      return combineKey.startsWith('sections')
+        ? [{ label, action: () => {}, disabled: true, hint: 'Checking whether these sections can be combined...' }]
+        : [];
     }
     if (combineCandidate === null) {
       return combineKey.startsWith('sections')
