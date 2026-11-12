@@ -20,12 +20,12 @@ import { defaultConfig } from '../../types/config';
 import DeleteShotImpactDetails from './DeleteShotImpactDetails';
 import { setSource, trackDialogComplete } from '../../utils/telemetry';
 import { TOAST_KEYS } from '../../utils/toastKeys';
-import { sectionFirstDate, sectionSurveyorText } from '../../utils/sectionCredit';
+import { useSectionCreditDraft } from './useSectionCreditDraft';
 
 export default function EditSectionDialog() {
   const { t } = useTranslation();
   const { closeDialog, dialogData, openDialog, showToast } = useUIStore();
-  const { updateSection, createShot, updateShot, deleteShot, project, isShotFrozen } = useProjectStore();
+  const { updateSection, createShot, updateShot, deleteShot, editShotCredit, project, isShotFrozen } = useProjectStore();
 
   const sectionId = dialogData.sectionId as number | undefined;
   const section = project?.sections.find((s) => s.id === sectionId);
@@ -44,8 +44,9 @@ export default function EditSectionDialog() {
 
   // Form state
   const [name, setName] = useState('');
-  const [surveyor, setSurveyor] = useState('');
-  const [date, setDate] = useState('');
+  // Surveyors, explorers and the date live on every shot: a pending edit of
+  // all of them, applied on Save as one undo step (see useSectionCreditDraft).
+  const credit = useSectionCreditDraft(section);
   const [color, setColor] = useState(getThemeColor('--cc-station-default'));
   const [direction, setDirection] = useState<'in' | 'out'>('in');
   const [quality, setQuality] = useState(1);
@@ -97,8 +98,6 @@ export default function EditSectionDialog() {
   useEffect(() => {
     if (section) {
       setName(section.name ?? '');
-      setSurveyor(sectionSurveyorText(section));
-      setDate(sectionFirstDate(section));
       setColor(section.color);
       setDirection(section.direction ?? 'in');
       setQuality(section.quality ?? 1);
@@ -352,17 +351,14 @@ export default function EditSectionDialog() {
     setIsLoading(true);
     setError(null);
 
+    // Taken before anything awaits: it commits a name still being typed.
+    const creditEdit = credit.takeEdit();
     try {
-      // Update section metadata. Surveyor and date are per-shot now, and the
-      // legacy text fields SET every shot - so send them only when the user
-      // changed them, or saving a rename would flatten every shot's own
-      // credit into the section aggregate.
-      const surveyorChanged = !section || surveyor !== sectionSurveyorText(section);
-      const dateChanged = !section || date !== sectionFirstDate(section);
+      // Update section metadata. Surveyors, explorers and the date are per
+      // shot and never go through `updateSection` (its legacy surveyor/date
+      // would SET every shot); they are one credit edit below.
       const sectionResult = await updateSection(sectionId, {
         name: name.trim() || null,
-        ...(surveyorChanged ? { surveyor: surveyor.trim() || null } : {}),
-        ...(dateChanged ? { date: date.trim() || null } : {}),
         color,
         direction,
         quality,
@@ -371,6 +367,17 @@ export default function EditSectionDialog() {
       if (!sectionResult.success) {
         setError(sectionResult.error ?? 'Failed to update section');
         return;
+      }
+
+      // The credit of every saved shot, as ONE undo step. Before the shot
+      // edits below, so a shot added here inherits its neighbour's new credit.
+      if (creditEdit) {
+        const creditResult = await editShotCredit({ type: 'section', section_id: sectionId }, creditEdit);
+        if (!creditResult.success) {
+          setError(creditResult.error ?? 'Failed to update the survey credit');
+          return;
+        }
+        credit.reset();
       }
 
       // Process shot changes
@@ -452,7 +459,10 @@ export default function EditSectionDialog() {
 
   // Track if form has been modified
   const isDirty = section
-    ? isEditSectionDirty({ name, surveyor, date, color, direction, quality, shots }, section)
+    ? isEditSectionDirty(
+        { name, creditChanged: credit.changed || credit.hasPendingText, color, direction, quality, shots },
+        section,
+      )
     : false;
 
   // Per-project validation thresholds (#57) so inline warnings match the
@@ -496,14 +506,16 @@ export default function EditSectionDialog() {
         <div className={expanded ? 'min-h-0 shrink overflow-y-auto' : undefined}>
         <SectionMetadataForm
           name={name}
-          surveyor={surveyor}
-          date={date}
+          people={credit.people}
+          peopleColumns
+          date=""
+          dateAggregate={credit.dateAggregate}
+          onDateChange={credit.onDateChange}
+          {...(credit.onDateReset ? { onDateReset: credit.onDateReset } : {})}
           color={color}
           direction={direction}
           quality={quality}
           onNameChange={setName}
-          onSurveyorChange={setSurveyor}
-          onDateChange={setDate}
           onColorChange={setColor}
           onQualityChange={setQuality}
           onDirectionChange={setDirection}
@@ -511,7 +523,7 @@ export default function EditSectionDialog() {
           // Closure-adjustment weight is not settable here for now. The stored
           // value is preserved on save; it is just not exposed.
           showQuality={false}
-          disabled={isLoading}
+          disabled={isLoading || editingBlocked}
         />
         </div>
 
@@ -681,8 +693,8 @@ export function plannedShotInserts(rows: readonly EditableShot[]): PlannedShotIn
 /** The form snapshot the dialog diffs against the saved section. */
 export interface EditSectionDirtyState {
   name: string;
-  surveyor: string;
-  date: string;
+  /** The pending survey-credit edit changes a shot, or a people field holds typed text. */
+  creditChanged: boolean;
   color: string;
   direction: 'in' | 'out';
   quality: number;
@@ -703,8 +715,7 @@ export interface EditSectionDirtyState {
 export function isEditSectionDirty(state: EditSectionDirtyState, section: Section): boolean {
   return (
     state.name !== (section.name ?? '') ||
-    state.surveyor !== sectionSurveyorText(section) ||
-    state.date !== sectionFirstDate(section) ||
+    state.creditChanged ||
     state.color !== section.color ||
     state.direction !== (section.direction ?? 'in') ||
     state.quality !== (section.quality ?? 1) ||
