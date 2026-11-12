@@ -577,13 +577,37 @@ fn different_north_references_or_qualities_block() {
         5.0,
         CorrectionSource::Manual,
     ));
-    assert!(blocked(&project, k, o).contains("north references"));
+    assert!(blocked(&project, k, o).contains("north reference"));
     let mut clone = project.clone();
     assert!(clone.combine_sections(k, o, &options()).is_err());
 
     let (mut project, k, o) = pair(SectionEnd::End, SectionEnd::Start, true, 0.0);
     project.get_section_mut(o).unwrap().quality = 2.0;
     assert!(blocked(&project, k, o).contains("quality"));
+}
+
+/// The stored references are compared, not the resolved ones: O declares the
+/// very reference the project default resolves K to, and the combined section
+/// would keep only K's `None`, so a later default change would rotate O's
+/// shots.
+#[test]
+fn a_declared_reference_and_the_project_default_block_even_when_equal() {
+    let declared =
+        AzimuthReference::from_parts(NorthReference::Magnetic, 5.0, CorrectionSource::Manual);
+    let (mut project, k, o) = pair(SectionEnd::End, SectionEnd::Start, true, 0.0);
+    project.default_azimuth_reference = Some(declared);
+    project.get_section_mut(o).unwrap().azimuth_reference = Some(declared);
+    assert_eq!(
+        project.azimuth_reference_for_id(k),
+        project.azimuth_reference_for_id(o),
+        "setup: both resolve alike"
+    );
+    assert!(blocked(&project, k, o).contains("follows the project's default north reference"));
+
+    // Both declaring the same one is fine as far as north goes (the default
+    // rotated K under the merge, so the join itself is now torn).
+    project.get_section_mut(k).unwrap().azimuth_reference = Some(declared);
+    assert!(!blocked(&project, k, o).contains("north reference"));
 }
 
 /// A second rigid tie between the two (directly, through a third section, or

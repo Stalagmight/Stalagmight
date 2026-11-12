@@ -213,12 +213,13 @@ impl Project {
                  combined section would hold the same shot twice"
             ));
         }
-        let (ref_a, ref_b) = (self.azimuth_reference_for(a), self.azimuth_reference_for(b));
-        if ref_a.north != ref_b.north || (ref_a.correction - ref_b.correction).abs() > 1e-9 {
-            return Some(format!(
-                "{name_a} and {name_b} use different north references, so one section's \
-                 bearings would change meaning in the other"
-            ));
+        // The RAW references: the combined section keeps only the kept one's
+        // `azimuth_reference`, so a section that declares its own reference and
+        // one that follows the project default must not merge even while they
+        // resolve alike. A later change of the default would silently rotate
+        // the shots that brought their own.
+        if let Some(reason) = Self::north_reference_mismatch(a, b, &name_a, &name_b) {
+            return Some(reason);
         }
         if (a.quality - b.quality).abs() > 1e-12 {
             return Some(format!(
@@ -262,6 +263,35 @@ impl Project {
             ));
         }
         None
+    }
+
+    /// Why two sections' stored north references keep them apart, if they do.
+    fn north_reference_mismatch(
+        a: &Section,
+        b: &Section,
+        name_a: &str,
+        name_b: &str,
+    ) -> Option<String> {
+        match (a.azimuth_reference, b.azimuth_reference) {
+            (None, None) => None,
+            (Some(x), Some(y))
+                if x.north == y.north && (x.correction - y.correction).abs() <= 1e-9 =>
+            {
+                None
+            }
+            (Some(_), Some(_)) => Some(format!(
+                "{name_a} and {name_b} use different north references, so one section's \
+                 bearings would change meaning in the other"
+            )),
+            (None, Some(_)) => Some(format!(
+                "{name_a} follows the project's default north reference and {name_b} declares \
+                 its own; set the same reference on both first"
+            )),
+            (Some(_), None) => Some(format!(
+                "{name_b} follows the project's default north reference and {name_a} declares \
+                 its own; set the same reference on both first"
+            )),
+        }
     }
 
     /// Are the join stations' sections still rigidly connected (merges and
