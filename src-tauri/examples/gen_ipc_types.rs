@@ -23,7 +23,7 @@ use stalagmight_lib::config::{
     DebugConfig, DecimalPrecision, DisplayConfig, DpvRig, DpvUnit, ExportConfig, GasConfig,
     GasUnits, GeneralConfig, GlobalViewConfig, GpsOrigin, ImportConfig, IssueCombine, LengthUnit,
     LoggingConfig, MapAnimationConfig, MapConfig, MapControlsConfig, MapDebugConfig,
-    MapPaletteConfig, MapSnapConfig, OverlapMode, PaletteChoiceConfig, PanelsConfig,
+    MapPaletteConfig, MapSnapConfig, OverlapMode, PaletteChoiceConfig, PanelsConfig, PeopleConfig,
     PlacementSuggestionConfig, ProviderCacheConfig, ReservePreset, ReserveProfile,
     SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig, SpeleoDbConfig,
     StationConfig, SyntacticHighlightLevel, SyntacticHighlightPreset, SyntacticHighlightingConfig,
@@ -369,6 +369,7 @@ fn main() {
     export::<MapPaletteConfig>(&out_dir);
     export::<PaletteChoiceConfig>(&out_dir);
     export::<IssueCombine>(&out_dir);
+    export::<PeopleConfig>(&out_dir);
     export::<GasUnits>(&out_dir);
     export::<ReservePreset>(&out_dir);
     export::<ReserveProfile>(&out_dir);
@@ -656,6 +657,7 @@ fn main() {
         "MapPaletteConfig",
         "PaletteChoiceConfig",
         "IssueCombine",
+        "PeopleConfig",
         "GasUnits",
         "ReservePreset",
         "ReserveProfile",

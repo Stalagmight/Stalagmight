@@ -181,6 +181,7 @@ export * from './ipc/GasConfig';
 export * from './ipc/MapPaletteConfig';
 export * from './ipc/PaletteChoiceConfig';
 export * from './ipc/IssueCombine';
+export * from './ipc/PeopleConfig';
 export * from './ipc/GasUnits';
 export * from './ipc/ReservePreset';
 export * from './ipc/ReserveProfile';

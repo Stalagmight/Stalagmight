@@ -721,6 +721,22 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // exactly like mockGasConfig.
       let mockMapPalette: Record<string, unknown> | null = null;
 
+      // `[people].recent` persisted via remember_people: the people last added to
+      // a shot's credit, most recent first, deduped by identity, capped at 200
+      // (Rust `PeopleConfig::remember`). Overlaid onto get_config / reload_config
+      // like mockMapPalette. Specs may seed it with window.__MOCK_RECENT_PEOPLE__
+      // (read until the first remember_people write, so an init script that runs
+      // after this one still seeds it).
+      const MOCK_MAX_RECENT_PEOPLE = 200;
+      let mockRecentPeopleWritten: Array<{ name: string; email?: string }> | null = null;
+      const mockRecentPeople = (): Array<{ name: string; email?: string }> => {
+        if (mockRecentPeopleWritten) return [...mockRecentPeopleWritten];
+        const seeded = (window as unknown as Record<string, unknown>).__MOCK_RECENT_PEOPLE__;
+        return Array.isArray(seeded)
+          ? (seeded as Array<{ name: string; email?: string }>).slice(0, MOCK_MAX_RECENT_PEOPLE)
+          : [];
+      };
+
       // Station comments set via set_station_comment, keyed
       // "sectionId:stationIndex". get_project_state derives its station array
       // from the project's sections on every refresh, so comments must be
@@ -4064,6 +4080,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 },
                 ...(mockGasConfig ? { gas: mockGasConfig } : {}),
                 ...(mockMapPalette ? { map_palette: mockMapPalette } : {}),
+                people: { recent: mockRecentPeople() },
               };
             }
             return {
@@ -4227,7 +4244,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 data_table_height: 200,
                 wizard_map_panel_width: 480,
                 data_table_shot_column_order: [],
-                data_table_shot_hidden_columns: ['section_id', 'shot_id'],
+                data_table_shot_hidden_columns: ['section_id', 'shot_id', 'surveyors', 'explorers', 'survey_date'],
+                data_table_shot_columns_seen: ['surveyors', 'explorers', 'survey_date'],
                 data_table_shot_column_widths: {},
                 data_table_azimuth_mode: 'avg',
                 data_table_inclination_mode: 'off',
@@ -4351,6 +4369,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               // Spread LAST so a stored `[gas]` block wins over the literal's own.
               ...(mockGasConfig ? { gas: mockGasConfig } : {}),
               ...(mockMapPalette ? { map_palette: mockMapPalette } : {}),
+              people: { recent: mockRecentPeople() },
             };
 
           case 'update_config':
@@ -4370,6 +4389,36 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const gas = args?.gas as Record<string, unknown> | undefined;
             if (gas) mockGasConfig = gas;
             return null;
+          }
+
+          case 'remember_people': {
+            // Partial `[people].recent` write, mirroring `PeopleConfig::remember`:
+            // the given people move to the front in order (a known identity takes
+            // the new spelling), then dedupe + cap. Empty input writes nothing.
+            console.log('[Mock IPC] remember_people called with:', args);
+            const rawPeople = args?.people;
+            const given = Array.isArray(rawPeople) ? (rawPeople as MockPerson[]) : [];
+            const fresh = mockDedupe(
+              given
+                .filter((p) => typeof p?.name === 'string')
+                .map((p) => {
+                  const email = typeof p.email === 'string' ? p.email.trim() : '';
+                  return email ? { name: p.name.trim(), email } : { name: p.name.trim() };
+                })
+                .filter((p) => p.name !== ''),
+            );
+            if (fresh.length > 0) {
+              const freshKeys = new Set(fresh.map(mockPersonKey));
+              mockRecentPeopleWritten = mockDedupe([
+                ...fresh,
+                ...mockRecentPeople().filter((p) => !freshKeys.has(mockPersonKey(p))),
+              ]).slice(0, MOCK_MAX_RECENT_PEOPLE);
+            }
+            const win = window as unknown as Record<string, unknown>;
+            const calls = (win.__MOCK_REMEMBER_PEOPLE_CALLS__ as unknown[] | undefined) ?? [];
+            calls.push(given);
+            win.__MOCK_REMEMBER_PEOPLE_CALLS__ = calls;
+            return mockRecentPeople();
           }
 
           case 'update_map_palette': {
@@ -4513,6 +4562,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 },
                 ...(mockGasConfig ? { gas: mockGasConfig } : {}),
                 ...(mockMapPalette ? { map_palette: mockMapPalette } : {}),
+                people: { recent: mockRecentPeople() },
               }, false];
             }
             // Return mock config with any test overrides applied
@@ -4678,7 +4728,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 data_table_height: 200,
                 wizard_map_panel_width: 480,
                 data_table_shot_column_order: [],
-                data_table_shot_hidden_columns: ['section_id', 'shot_id'],
+                data_table_shot_hidden_columns: ['section_id', 'shot_id', 'surveyors', 'explorers', 'survey_date'],
+                data_table_shot_columns_seen: ['surveyors', 'explorers', 'survey_date'],
                 data_table_shot_column_widths: {},
                 data_table_azimuth_mode: 'avg',
                 data_table_inclination_mode: 'off',
@@ -4770,6 +4821,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               // mockDataTableView above.)
               ...(mockGasConfig ? { gas: mockGasConfig } : {}),
               ...(mockMapPalette ? { map_palette: mockMapPalette } : {}),
+              people: { recent: mockRecentPeople() },
             };
             return [baseConfig, false];
           }
