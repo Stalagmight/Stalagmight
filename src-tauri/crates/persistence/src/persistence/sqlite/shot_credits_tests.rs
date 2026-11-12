@@ -207,10 +207,76 @@ fn an_old_file_without_the_tables_splits_the_legacy_surveyor() {
     assert_eq!(credits_of(&reload(&resaved), id), credits_of(&loaded, id));
 }
 
+/// An older build keeps the credit tables (it does not know them) and the
+/// shot uuids, but edits the section's surveyor/date in the legacy columns.
+/// Its retyped text is the newer truth: every shot of the section shows it,
+/// rows or not.
 #[test]
-fn an_older_builds_edits_keep_their_meaning() {
+fn an_older_builds_retyped_surveyor_wins_over_the_rows() {
     let dir = TempDir::new().unwrap();
     let mut project = Project::new("Mixed".to_string(), None);
+    let id = section_with(
+        &mut project,
+        vec![
+            credit(&["Kept"], &["Ex"], day(1)),
+            credit(&["Other Person"], &[], day(2)),
+        ],
+    );
+    let untouched = section_with(&mut project, vec![credit(&["Stays"], &["Too"], day(3))]);
+    project.ensure_shot_uuids();
+    let path = save(&dir, "older.stalx", &project);
+    sql(
+        &path,
+        &format!("UPDATE sections SET surveyor = 'Typed In Old Build' WHERE id = {id};"),
+    );
+    let loaded = reload(&path);
+    assert_eq!(
+        credits_of(&loaded, id),
+        vec![
+            credit(&["Typed In Old Build"], &[], day(1)),
+            credit(&["Typed In Old Build"], &[], day(1)),
+        ]
+    );
+    assert_eq!(
+        credits_of(&loaded, untouched),
+        vec![credit(&["Stays"], &["Too"], day(3))],
+        "a section whose pair is untouched keeps its rows"
+    );
+
+    // A retyped date alone counts too.
+    let path = save(&dir, "older-date.stalx", &project);
+    sql(
+        &path,
+        &format!("UPDATE sections SET date = '2001-02-03' WHERE id = {id};"),
+    );
+    let loaded = reload(&path);
+    let date = NaiveDate::from_ymd_opt(2001, 2, 3);
+    assert!(credits_of(&loaded, id)
+        .iter()
+        .all(|c| c == &credit(&["Kept", "Other Person"], &[], date)));
+}
+
+/// Rows with no record of the pair they were written beside (the record table
+/// lost, or a row for a section it never named) do not apply.
+#[test]
+fn rows_without_a_recorded_pair_do_not_apply() {
+    let dir = TempDir::new().unwrap();
+    let mut project = Project::new("Unrecorded".to_string(), None);
+    let id = section_with(&mut project, vec![credit(&["Kept"], &["Ex"], day(1))]);
+    let path = save(&dir, "unrecorded.stalx", &project);
+    sql(&path, "DROP TABLE credit_sections;");
+    assert_eq!(
+        credits_of(&reload(&path), id),
+        vec![credit(&["Kept"], &[], day(1))]
+    );
+}
+
+/// Shots an older build added (new uuids, no row) fall back to the pair it
+/// left untouched, while the shots with rows keep theirs.
+#[test]
+fn an_older_builds_new_shots_fall_back_while_rows_hold() {
+    let dir = TempDir::new().unwrap();
+    let mut project = Project::new("Added".to_string(), None);
     let id = section_with(
         &mut project,
         vec![
@@ -219,28 +285,24 @@ fn an_older_builds_edits_keep_their_meaning() {
         ],
     );
     project.ensure_shot_uuids();
-    let path = save(&dir, "older.stalx", &project);
-    let second_uuid = project.get_section(id).unwrap().shots[1]
+    let path = save(&dir, "added.stalx", &project);
+    let second = project.get_section(id).unwrap().shots[1]
         .uuid
         .clone()
         .unwrap();
-    // An older build: deleted the second shot's row (it re-created that shot),
-    // added a row for a shot it then deleted, and re-typed the section text.
     sql(
         &path,
         &format!(
-            "DELETE FROM shot_credits WHERE shot_uuid = '{second_uuid}';
+            "UPDATE shots SET uuid = 'added-by-old-build' WHERE uuid = '{second}';
              INSERT INTO shot_credits (section_id, shot_uuid, date, surveyors, explorers)
-                 VALUES ({id}, 'no-such-shot', NULL, '1', '');
-             UPDATE sections SET surveyor = 'Typed In Old Build', date = NULL WHERE id = {id};"
+                 VALUES ({id}, 'no-such-shot', NULL, '1', '');"
         ),
     );
-    let loaded = reload(&path);
     assert_eq!(
-        credits_of(&loaded, id),
+        credits_of(&reload(&path), id),
         vec![
             credit(&["Kept"], &["Ex"], day(1)),
-            credit(&["Typed In Old Build"], &[], None),
+            credit(&["Kept"], &[], day(1)),
         ]
     );
 }
@@ -278,7 +340,8 @@ fn unreadable_and_dangling_rows_are_skipped_not_fatal() {
                  VALUES ({id}, '{}', 'not a date', '1, 2,3, 99,x', '1');
              INSERT INTO shot_credits (section_id, shot_uuid, date, surveyors, explorers)
                  VALUES ({id}, '{}', X'01', X'02', '');
-             UPDATE sections SET surveyor = 'Fallback', date = NULL WHERE id = {id};",
+             UPDATE sections SET surveyor = 'Fallback', date = NULL WHERE id = {id};
+             UPDATE credit_sections SET surveyor = 'Fallback', date = NULL WHERE section_id = {id};",
             uuids[0], uuids[1]
         ),
     );
@@ -516,4 +579,19 @@ fn a_long_legacy_name_survives_a_save_unchanged() {
     assert_eq!(name.chars().count(), crate::models::MAX_PERSON_TEXT_CHARS);
     let again = reload(&save(&dir, "again.stalx", &once));
     assert_eq!(credits_of(&again, id), credits_of(&once, id));
+}
+
+/// The credit tables are project data: a SpeleoDB push snapshot keeps all
+/// three (`PUSH_SNAPSHOT_LOCAL_TABLES` strips only machine-local tables), so a
+/// collaborator who pulls it sees the same credit.
+#[test]
+fn a_push_snapshot_keeps_the_credit_tables() {
+    let dir = TempDir::new().unwrap();
+    let (project, ids) = rich_project();
+    let path = save(&dir, "push.stalx", &project);
+    Database::sanitize_push_snapshot(&path, false, None).unwrap();
+    let pulled = reload(&path);
+    for id in ids {
+        assert_eq!(credits_of(&pulled, id), credits_of(&project, id));
+    }
 }

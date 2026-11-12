@@ -355,6 +355,10 @@ impl Database {
             // Build the empty sections first so we can address them by
             // ID when partitioning the bulk shot stream below.
             let mut section_by_id: HashMap<u32, usize> = HashMap::with_capacity(section_rows.len());
+            // Each section's legacy surveyor/date exactly as stored, to compare
+            // with what this build recorded writing (`shot_credits`).
+            let mut stored_legacy: HashMap<u32, super::shot_credits::LegacyPair> =
+                HashMap::with_capacity(section_rows.len());
             for section_row in section_rows {
                 let (
                     id,
@@ -372,6 +376,7 @@ impl Database {
                     azimuth_source,
                     azimuth_epoch_year,
                 ) = section_row;
+                stored_legacy.insert(id, (surveyor.clone(), date_str.clone()));
                 let date = date_str.and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok());
                 let direction = direction_str
                     .and_then(|s| s.parse::<SurveyDirection>().ok())
@@ -551,10 +556,16 @@ impl Database {
                 // (`shot_credits`). A uuid repeated inside one section reads
                 // its row once, for its first shot, as the writer wrote it.
                 let credit_rows = super::shot_credits::load_credit_rows(&self.conn)?;
+                let recorded =
+                    super::shot_credits::load_recorded_legacy(&self.conn, &stored_legacy);
                 let mut claimed: std::collections::HashSet<(u32, &str)> =
                     std::collections::HashSet::new();
                 for section in sections.iter_mut() {
                     let section_id = section.id;
+                    // The rows hold only while the legacy pair is the one this
+                    // build wrote beside them. An older build keeps the rows but
+                    // rewrites the pair; its edit is then the newer truth.
+                    let rows_hold = recorded.get(&section_id) == stored_legacy.get(&section_id);
                     // Computed once per section and SHARED by every shot that
                     // falls back to it - one allocation, not one per shot.
                     let fallback = std::sync::Arc::new(crate::models::SurveyCredit::from_legacy(
@@ -565,6 +576,7 @@ impl Database {
                         let row = shot
                             .uuid
                             .as_deref()
+                            .filter(|_| rows_hold)
                             .and_then(|u| credit_rows.get_key_value(&(section_id, u.to_owned())))
                             .filter(|((_, u), _)| claimed.insert((section_id, u.as_str())));
                         match row {

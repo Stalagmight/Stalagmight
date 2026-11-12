@@ -82,7 +82,11 @@ surveyor names joined with `", "`, the earliest shot date). A shot WITHOUT a
 row reads its credit from those two columns through the legacy splitter, which
 is the migration for older files and for shots an older build added; the
 writer therefore writes a row only where that fallback would read back
-something else. See `persistence/sqlite/shot_credits.rs`.
+something else. A third table, `credit_sections (section_id, surveyor, date)`,
+records the legacy pair this build wrote; an older build keeps the rows but may
+retype `sections.surveyor`/`date`, and a section whose pair no longer matches
+the record ignores its rows (the retyped text wins). All three tables are
+project data and ride in SpeleoDB pushes. See `persistence/sqlite/shot_credits.rs`.
 
 ## Save Pipeline
 

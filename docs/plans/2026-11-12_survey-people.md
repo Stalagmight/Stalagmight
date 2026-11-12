@@ -75,6 +75,10 @@ How this feature fits:
   - `shot_credits (section_id, shot_uuid, date, surveyors, explorers)`, keyed by
     `(section_id, shot_uuid)`, where the people columns are comma-joined ids from `credit_people`.
 
+  - `credit_sections (section_id, surveyor, date)`: the legacy pair this build wrote. A section
+    whose `sections.surveyor`/`date` no longer match it (an older build retyped them) ignores its
+    rows, so the retyped text wins.
+
   A shot's row says that its credit is explicit, even when the lists are empty. A shot with no row
   falls back to the legacy section columns through the splitter. That makes old files and shots
   saved by older builds work unchanged.

@@ -4,7 +4,9 @@ use rusqlite::params;
 
 use crate::models::Project;
 
-use super::shot_credits::{write_credit_rows, CREATE_CREDIT_TABLES, RECREATE_CREDIT_TABLES};
+use super::shot_credits::{
+    write_credit_rows, write_recorded_legacy, CREATE_CREDIT_TABLES, RECREATE_CREDIT_TABLES,
+};
 use super::station_texts::{StationTextTable, CREATE_STATION_NAMES};
 use super::{Database, SCHEMA_VERSION};
 
@@ -123,6 +125,13 @@ impl Database {
                         .and_then(|r| r.source.epoch_year()),
                     Utc::now().to_rfc3339()
                 ],
+            )?;
+            // What this build wrote, so a later open can tell an older build's
+            // retyped surveyor/date from ours (`shot_credits`).
+            write_recorded_legacy(
+                &tx,
+                section.id,
+                (legacy_surveyor.as_deref(), legacy_date.as_deref()),
             )?;
 
             for (seq, shot) in section.shots.iter().enumerate() {

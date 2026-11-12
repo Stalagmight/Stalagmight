@@ -17,6 +17,13 @@
 //! and a file written before shot uuids were project-unique can hold one uuid
 //! in several sections, each with its own credit.
 //!
+//! An older build keeps both tables (it does not know them) and keeps the shot
+//! uuids, but it edits the section's surveyor and date in those legacy
+//! columns. So `credit_sections (section_id, surveyor, date)` records the pair
+//! THIS build wrote, and a section's rows apply only while its `sections` pair
+//! still matches that record: once an older build has retyped it, the typed
+//! text is the newer truth and every shot of the section falls back to it.
+//!
 //! A shot WITHOUT a row takes its credit from those legacy columns through
 //! [`crate::models::SurveyCredit::from_legacy`]. That is the migration for every
 //! file written before this feature, and for shots an older build added. The
@@ -46,6 +53,11 @@ pub(super) const CREATE_CREDIT_TABLES: &str = "
         name TEXT NOT NULL,
         email TEXT
     );
+    CREATE TABLE IF NOT EXISTS credit_sections (
+        section_id INTEGER PRIMARY KEY,
+        surveyor TEXT,
+        date TEXT
+    );
     CREATE TABLE IF NOT EXISTS shot_credits (
         section_id INTEGER NOT NULL,
         shot_uuid TEXT NOT NULL,
@@ -62,7 +74,11 @@ pub(super) const CREATE_CREDIT_TABLES: &str = "
 pub(super) const RECREATE_CREDIT_TABLES: &str = "
     DROP TABLE IF EXISTS shot_credits;
     DROP TABLE IF EXISTS credit_people;
+    DROP TABLE IF EXISTS credit_sections;
 ";
+
+/// A section's legacy `(sections.surveyor, sections.date)`, as stored text.
+pub(super) type LegacyPair = (Option<String>, Option<String>);
 
 /// A shot's address in `shot_credits`: its section and its uuid. A uuid alone
 /// is not enough - a file written before uuids were project-unique can hold
@@ -112,6 +128,51 @@ pub(super) fn write_credit_rows(
         ])?;
     }
     Ok(())
+}
+
+/// Record, per section, the legacy pair this save wrote into `sections`.
+pub(super) fn write_recorded_legacy(
+    tx: &Transaction<'_>,
+    section_id: u32,
+    pair: (Option<&str>, Option<&str>),
+) -> Result<()> {
+    tx.execute(
+        "INSERT INTO credit_sections (section_id, surveyor, date) VALUES (?1, ?2, ?3)",
+        params![section_id, pair.0, pair.1],
+    )?;
+    Ok(())
+}
+
+/// The legacy pair recorded for each section in `stored` (rows naming no
+/// section of the file are not kept). Missing table, or an unreadable row,
+/// means "nothing recorded", so that section's credit rows do not apply.
+pub(super) fn load_recorded_legacy(
+    conn: &Connection,
+    stored: &HashMap<u32, LegacyPair>,
+) -> HashMap<u32, LegacyPair> {
+    let mut recorded = HashMap::new();
+    if !table_exists(conn, "credit_sections") {
+        return recorded;
+    }
+    let Ok(mut stmt) = conn.prepare("SELECT section_id, surveyor, date FROM credit_sections")
+    else {
+        return recorded;
+    };
+    let Ok(iter) = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, u32>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, Option<String>>(2)?,
+        ))
+    }) else {
+        return recorded;
+    };
+    for (section_id, surveyor, date) in iter.flatten() {
+        if stored.contains_key(&section_id) {
+            recorded.insert(section_id, (surveyor, date));
+        }
+    }
+    recorded
 }
 
 fn table_exists(conn: &Connection, name: &str) -> bool {
