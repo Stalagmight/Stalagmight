@@ -155,9 +155,15 @@ test.describe('Combine Sections', () => {
     await expect(page.getByRole('button', { name: 'Split Section Here' })).toHaveCount(0);
   });
 
-  test('is absent where no other section ends', async ({ page }) => {
+  test('keeps its row, disabled, where no other section ends; none on a mid station', async ({ page }) => {
     const [main] = await seed(page, [{ name: 'Main', count: 3 }]);
     await openContextMenu(page, { type: 'station', ref: { section_id: main!.id, station_index: 3 } });
+    const item = page.getByRole('button', { name: 'Combine Sections...' });
+    await expect(item).toBeDisabled();
+    await expect(item).toHaveAttribute('title', 'No other section ends at this station');
+
+    await page.keyboard.press('Escape');
+    await openContextMenu(page, { type: 'station', ref: { section_id: main!.id, station_index: 1 } });
     await expect(page.getByRole('button', { name: 'Edit Station' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Combine Sections...' })).toHaveCount(0);
   });

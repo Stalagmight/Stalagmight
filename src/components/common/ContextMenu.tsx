@@ -217,22 +217,26 @@ export default function ContextMenu() {
   }, [combineKey]);
   const combineCandidate = combineAnswer?.key === combineKey ? combineAnswer.candidate : undefined;
   /**
-   * The Combine item, disabled with the reason when blocked. On a station it
-   * appears once the answer is in (most section ends have no partner, and a
-   * placeholder that then vanished would make the menu jump); on a two-section
-   * selection it is always offered, so it shows disabled while checking.
+   * The Combine row. Whether it is offered is known synchronously (an END
+   * station, or exactly two selected sections), so the row is always there
+   * from the first render: disabled with "Checking..." while the backend's
+   * answer is in flight, then enabled, or disabled with the reason. Inserting
+   * it only once the answer arrived shifted every row below it under the
+   * pointer (and moved the whole menu, whose `top` follows `items.length`),
+   * the same hazard the stage-drop count above is frozen against.
    */
   const combineItems = (label: string): ContextMenuItem[] => {
     if (!combineKey) return [];
+    const disabled = (hint: string): ContextMenuItem[] => [{ label, action: () => {}, disabled: true, hint }];
     if (combineCandidate === undefined) {
-      return combineKey.startsWith('sections')
-        ? [{ label, action: () => {}, disabled: true, hint: 'Checking whether these sections can be combined...' }]
-        : [];
+      return disabled('Checking whether the sections can be combined...');
     }
     if (combineCandidate === null) {
-      return combineKey.startsWith('sections')
-        ? [{ label, action: () => {}, disabled: true, hint: 'These sections cannot be combined' }]
-        : [];
+      return disabled(
+        combineKey.startsWith('sections')
+          ? 'These sections cannot be combined'
+          : 'No other section ends at this station'
+      );
     }
     const blocked = combineCandidate.blocked_reason;
     return [
