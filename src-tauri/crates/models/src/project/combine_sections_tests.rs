@@ -550,6 +550,23 @@ fn sections_sharing_a_shot_identity_are_refused() {
 }
 
 #[test]
+fn a_missing_section_is_blocked() {
+    let (project, kept, other) = joined(CombinePairing::KeptEndOtherStart);
+    let merges = project.build_station_merge_adjacency();
+    let missing = other + 100;
+    for (a, b) in [(kept, missing), (missing, other)] {
+        let reason = project.combine_blocked(
+            a,
+            b,
+            StationRef::new(a, 0),
+            StationRef::new(b, 0),
+            &merges,
+        );
+        assert!(reason.is_some_and(|r| r.contains("no longer exists")));
+    }
+}
+
+#[test]
 fn more_shots_than_a_section_holds_is_refused() {
     let half = Project::max_shots_per_section() / 2 + 1;
     let mut project = Project::new("Big".to_string(), None);

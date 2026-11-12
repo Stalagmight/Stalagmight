@@ -345,7 +345,7 @@ impl Project {
     }
 
     /// Why combining at `kept_end`/`other_end` is refused, if it is.
-    fn combine_blocked(
+    pub(super) fn combine_blocked(
         &self,
         kept: SectionId,
         other: SectionId,
@@ -353,8 +353,11 @@ impl Project {
         other_end: StationRef,
         merges: &Adjacency,
     ) -> Option<String> {
-        let kept_section = self.get_section(kept)?;
-        let other_section = self.get_section(other)?;
+        let (Some(kept_section), Some(other_section)) =
+            (self.get_section(kept), self.get_section(other))
+        else {
+            return Some(format!("Section {kept} or {other} no longer exists"));
+        };
         let kept_uuids: HashSet<&str> = kept_section
             .shots
             .iter()
