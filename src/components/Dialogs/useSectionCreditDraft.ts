@@ -36,9 +36,10 @@ export interface SectionCreditDraft {
   /** A people field holds typed text that is not a pill yet. */
   hasPendingText: boolean;
   /**
-   * The edit Save should send, or null for none. Commits typed-but-unadded
-   * text first (by blurring the field, which adds it the way leaving the field
-   * always does), so a name typed and then saved with the keyboard is kept.
+   * The edit Save should send, or null for none. Commits whatever the focused
+   * field holds first (by blurring it, which adds a typed name / sets a typed
+   * date the way leaving the field always does), so a value typed and then
+   * saved with the keyboard is kept.
    */
   takeEdit: () => CreditEdit | null;
   /** Forget the pending edit (the section was saved or reloaded). */
@@ -75,9 +76,9 @@ export function useSectionCreditDraft(section: Pick<Section, 'shots'> | undefine
   };
 
   const takeEdit = useCallback((): CreditEdit | null => {
-    if (pendingTextRef.current && document.activeElement instanceof HTMLElement) {
-      document.activeElement.blur();
-    }
+    // Leaving the focused field commits what it holds, exactly as clicking
+    // Save would: a name being typed becomes a pill, a date being typed is set.
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
     const next = toCreditEdit(pendingRef.current);
     if (Object.keys(next).length === 0) return null;
     return previewCreditEdit(credits, next).changed ? next : null;

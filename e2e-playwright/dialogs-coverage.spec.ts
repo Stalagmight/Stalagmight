@@ -267,7 +267,8 @@ test.describe('Dialog Coverage - Edit Section', () => {
     await expect(dialog.getByTestId('section-surveyors-pill-0-label')).toHaveText('New Surveyor');
     await colorHexInput.fill('#123456');
     await dateInput.fill('2026-02-01');
-    await page.keyboard.press('Escape');
+    // The date commits on Enter (or when the field is left), never per keystroke.
+    await dateInput.press('Enter');
 
     // The shot table is a SpreadsheetGrid: one editor overlays the active cell.
     await dialog.getByTestId('shot-editor-cell-0-length').dblclick();

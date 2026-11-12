@@ -91,6 +91,7 @@ export function CreditCellEditor({ shot, field, anchor, seed = '', onCommit, onC
     setListState(listRef.current);
   }, []);
   const [date, setDate] = useState(shot.credit?.date ?? '');
+  const dateRef = useRef<HTMLInputElement>(null);
   const typingRef = useRef(seed.trim() !== '');
   const doneRef = useRef(false);
   const suggestions = usePeopleSuggestions();
@@ -101,7 +102,9 @@ export function CreditCellEditor({ shot, field, anchor, seed = '', onCommit, onC
     doneRef.current = true;
     if (role) {
       if (!sameList(listRef.current, original)) onCommit({ [`set_${role}`]: listRef.current });
-    } else {
+    } else if (!dateRef.current?.validity?.badInput) {
+      // A half-typed date reads as '' with badInput set: that is no edit, not
+      // "clear the date".
       const next = date === '' ? null : date;
       if (next !== (shot.credit?.date ?? null)) onCommit({ set_date: next });
     }
@@ -177,6 +180,7 @@ export function CreditCellEditor({ shot, field, anchor, seed = '', onCommit, onC
         <label className="block text-sm text-text-secondary">
           <span className="mb-1 block">{label}</span>
           <input
+            ref={dateRef}
             type="date"
             value={date}
             onChange={(e) => setDate(e.target.value)}

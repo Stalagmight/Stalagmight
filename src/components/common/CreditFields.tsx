@@ -14,7 +14,6 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { PeopleInput, type PeopleInputValue } from './PeopleInput';
-import { DatePicker } from './DatePicker';
 import { usePeopleSuggestions } from '../../hooks/usePeopleSuggestions';
 import { rememberPeople } from '../../store/recentPeople';
 import type { CreditDateAggregate, CreditRole } from '../../utils/creditEdit';
@@ -104,7 +103,7 @@ export function CreditPeopleFields({
 
 export interface CreditDateInputProps {
   value: CreditDateAggregate;
-  /** A date sets it on every shot the field covers; `null` clears it. */
+  /** A date sets it on every shot the field covers; `null` clears it. Called on commit only. */
   onChange: (date: string | null) => void;
   /** Offered after a date was set over shots that had different ones: back to per-shot dates. */
   onReset?: () => void;
@@ -113,11 +112,80 @@ export interface CreditDateInputProps {
   testId: string;
 }
 
+interface DraftDateInputProps {
+  /** The committed date ('' for none). */
+  value: string;
+  onCommit: (date: string | null) => void;
+  /** Escape on an unchanged input. */
+  onCancel?: () => void;
+  disabled: boolean;
+  autoFocus?: boolean;
+  testId: string;
+  label: string;
+}
+
+/**
+ * A native date input (the control New Section uses) that COMMITS only on
+ * Enter or leaving the field. A date input reports a value every time the
+ * typed segments make a valid date, so typing 2026-04-11 over 2026-03-02 passes
+ * through 2026-04-01; committing each of those wrote one undo step per segment.
+ * Escape puts the committed date back (and, when nothing was changed, cancels
+ * through `onCancel`). A half-typed date is never committed as "no date".
+ */
+function DraftDateInput({ value, onCommit, onCancel, disabled, autoFocus = false, testId, label }: DraftDateInputProps) {
+  const [draft, setDraft] = useState(value);
+  // The committed value moved (a commit landed, or another view changed it).
+  const [seen, setSeen] = useState(value);
+  if (seen !== value) {
+    setSeen(value);
+    setDraft(value);
+  }
+  const commit = (input: HTMLInputElement) => {
+    // An incomplete date reads as '' with badInput set: keep what is committed.
+    if (input.validity?.badInput) {
+      setDraft(value);
+      return;
+    }
+    if (draft !== value) onCommit(draft === '' ? null : draft);
+  };
+  return (
+    <input
+      type="date"
+      value={draft}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={(event) => commit(event.currentTarget)}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          event.stopPropagation();
+          commit(event.currentTarget);
+        } else if (event.key === 'Escape') {
+          if (draft !== value) {
+            event.preventDefault();
+            event.stopPropagation();
+            setDraft(value);
+          } else if (onCancel) {
+            event.preventDefault();
+            event.stopPropagation();
+            onCancel();
+          }
+        }
+      }}
+      disabled={disabled}
+      autoFocus={autoFocus}
+      aria-label={label}
+      className="h-9 w-40 px-2"
+      data-testid={testId}
+    />
+  );
+}
+
 /**
  * The survey date of one shot or of many. One shared date (or none) is a date
  * input. Shots with different dates show their range, read-only, and an
  * explicit "Set for all shots" that opens the input, so one click can never
- * flatten per-shot dates by accident.
+ * flatten per-shot dates by accident. Either way the date is committed on Enter
+ * or when the field is left, never while typing.
  */
 export function CreditDateInput({ value, onChange, onReset, disabled = false, testId }: CreditDateInputProps) {
   const { t } = useTranslation();
@@ -126,22 +194,24 @@ export function CreditDateInput({ value, onChange, onReset, disabled = false, te
   if (value.kind === 'uniform' || settingAll) {
     return (
       <div className="flex min-w-0 items-center gap-2">
-        <div className="w-32 shrink-0">
-          <DatePicker
-            value={value.kind === 'uniform' ? (value.date ?? '') : ''}
-            onChange={(next) => {
-              setSettingAll(false);
-              onChange(next === '' ? null : next);
-            }}
-            disabled={disabled}
-            placeholder={value.kind === 'mixed' ? t('credit.date.pickForAll') : t('credit.date.none')}
-            data-testid={testId}
-          />
-        </div>
+        <DraftDateInput
+          value={value.kind === 'uniform' ? (value.date ?? '') : ''}
+          onCommit={(next) => {
+            setSettingAll(false);
+            onChange(next);
+          }}
+          {...(settingAll ? { onCancel: () => setSettingAll(false) } : {})}
+          disabled={disabled}
+          autoFocus={settingAll}
+          testId={testId}
+          label={value.kind === 'mixed' ? t('credit.date.pickForAll') : t('credit.dateLabel')}
+        />
         {settingAll && (
           <button
             type="button"
             className="text-xs text-text-secondary underline-offset-2 hover:text-text-primary hover:underline"
+            // Before the input's blur, which would commit what it holds.
+            onMouseDown={(event) => event.preventDefault()}
             onClick={() => setSettingAll(false)}
             data-testid={`${testId}-set-all-cancel`}
           >

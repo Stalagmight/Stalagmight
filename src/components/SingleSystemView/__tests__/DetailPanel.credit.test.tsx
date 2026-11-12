@@ -115,6 +115,52 @@ describe('Detail panel survey credit - one shot', () => {
     );
   });
 
+  // A date input reports a value whenever its typed segments form a valid
+  // date, so typing 2026-04-11 over 2026-03-02 passes through 2026-04-01.
+  // Only the final date may become an undo step.
+  it('commits the date once, on Enter, not at every intermediate parse', () => {
+    render(<DetailPanel />);
+    const date = tid('detail-credit-date') as HTMLInputElement;
+    fireEvent.change(date, { target: { value: '2026-04-02' } });
+    fireEvent.change(date, { target: { value: '2026-04-01' } });
+    fireEvent.change(date, { target: { value: '2026-04-11' } });
+    expect(editShotCredit).not.toHaveBeenCalled();
+    fireEvent.keyDown(date, { key: 'Enter' });
+    expect(editShotCredit).toHaveBeenCalledTimes(1);
+    expect(editShotCredit).toHaveBeenCalledWith({ type: 'shots', shots: [[1, 102]] }, { set_date: '2026-04-11' });
+  });
+
+  it('commits the date once when the field is left', () => {
+    render(<DetailPanel />);
+    const date = tid('detail-credit-date') as HTMLInputElement;
+    fireEvent.change(date, { target: { value: '2026-04-01' } });
+    fireEvent.change(date, { target: { value: '2026-04-11' } });
+    fireEvent.blur(date);
+    fireEvent.blur(date);
+    expect(editShotCredit).toHaveBeenCalledTimes(1);
+    expect(editShotCredit).toHaveBeenCalledWith({ type: 'shots', shots: [[1, 102]] }, { set_date: '2026-04-11' });
+  });
+
+  it('Escape puts the committed date back without writing anything', () => {
+    render(<DetailPanel />);
+    const date = tid('detail-credit-date') as HTMLInputElement;
+    fireEvent.change(date, { target: { value: '2026-04-11' } });
+    fireEvent.keyDown(date, { key: 'Escape' });
+    expect(date.value).toBe('2026-03-02');
+    fireEvent.blur(date);
+    expect(editShotCredit).not.toHaveBeenCalled();
+  });
+
+  it('never turns a half-typed date into "no date"', () => {
+    render(<DetailPanel />);
+    const date = tid('detail-credit-date') as HTMLInputElement;
+    Object.defineProperty(date, 'validity', { value: { badInput: true }, configurable: true });
+    fireEvent.change(date, { target: { value: '' } });
+    fireEvent.blur(date);
+    expect(editShotCredit).not.toHaveBeenCalled();
+    expect(date.value).toBe('2026-03-02');
+  });
+
   it('is read-only in the closure-adjusted view: no x, no input', () => {
     useUIStore.setState({ geometryMode: 'closureAdjusted' });
     render(<DetailPanel />);
@@ -171,6 +217,9 @@ describe('Detail panel survey credit - several shots', () => {
     expect(qid('detail-credit-date')).toBeNull();
     fireEvent.click(tid('detail-credit-date-set-all'));
     fireEvent.change(tid('detail-credit-date'), { target: { value: '2026-05-01' } });
+    expect(editShotCredit).not.toHaveBeenCalled();
+    fireEvent.keyDown(tid('detail-credit-date'), { key: 'Enter' });
+    expect(editShotCredit).toHaveBeenCalledTimes(1);
     expect(editShotCredit).toHaveBeenLastCalledWith(
       { type: 'shots', shots: [[1, 101], [1, 102], [1, 103]] },
       { set_date: '2026-05-01' },

@@ -182,6 +182,16 @@ describe('the credit cell popover', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  it('does not clear the date for a half-typed one', () => {
+    const { onCommit, onClose } = renderEditor('survey_date', { surveyors: [], explorers: [], date: '2026-03-02' });
+    const date = screen.getByTestId('credit-cell-editor-date');
+    Object.defineProperty(date, 'validity', { value: { badInput: true }, configurable: true });
+    fireEvent.change(date, { target: { value: '' } });
+    fireEvent.keyDown(date, { key: 'Enter' });
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalled();
+  });
+
   it('sets or clears the date of the shot', () => {
     const { onCommit } = renderEditor('survey_date', { surveyors: [], explorers: [], date: '2026-03-02' });
     const date = screen.getByTestId('credit-cell-editor-date');

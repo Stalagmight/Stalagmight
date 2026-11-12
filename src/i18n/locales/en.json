@@ -4033,7 +4033,6 @@
       "explorers": "Type a name, Enter to add"
     },
     "date": {
-      "none": "No date",
       "pickForAll": "Pick a date",
       "mixed": "{{range}}, differs per shot",
       "mixedUndated_one": "{{range}}, {{count}} shot undated",

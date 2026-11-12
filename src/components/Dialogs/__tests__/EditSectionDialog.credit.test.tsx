@@ -174,11 +174,26 @@ describe('Edit Section survey credit', () => {
     expect(qid('section-date-input')).toBeNull();
     fireEvent.click(tid('section-date-input-set-all'));
     fireEvent.change(tid('section-date-input'), { target: { value: '2026-05-01' } });
+    fireEvent.keyDown(tid('section-date-input'), { key: 'Enter' });
     // Back to per-shot dates is offered while the new date is pending.
     expect(tid('section-date-input-reset')).toBeInTheDocument();
     await act(async () => {
       fireEvent.click(tid('edit-section-save'));
     });
     expect(editShotCredit).toHaveBeenCalledWith({ type: 'section', section_id: 1 }, { set_date: '2026-05-01' });
+  });
+
+  it('takes a date still being typed when Save is pressed', async () => {
+    seed(['2026-03-02', '2026-03-02', '2026-03-02']);
+    render(<EditSectionDialog />);
+    const date = tid('section-date-input') as HTMLInputElement;
+    date.focus();
+    fireEvent.change(date, { target: { value: '2026-04-01' } });
+    fireEvent.change(date, { target: { value: '2026-04-11' } });
+    await act(async () => {
+      fireEvent.click(tid('edit-section-save'));
+    });
+    expect(editShotCredit).toHaveBeenCalledTimes(1);
+    expect(editShotCredit).toHaveBeenCalledWith({ type: 'section', section_id: 1 }, { set_date: '2026-04-11' });
   });
 });
