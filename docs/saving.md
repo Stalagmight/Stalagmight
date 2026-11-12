@@ -74,7 +74,8 @@ source survey, not repaired.
 Surveyors, explorers and the survey date are stored per shot, in two side
 tables that carry no schema bump (SpeleoDB's reader accepts exactly v18 and
 ignores tables it does not know): `credit_people (id, name, email)` and
-`shot_credits (shot_uuid PK, date, surveyors, explorers)`, the people columns
+`shot_credits (section_id, shot_uuid, date, surveyors, explorers)`, keyed by
+`(section_id, shot_uuid)`, the people columns
 comma-joined `credit_people` ids. The legacy `sections.surveyor` and
 `sections.date` are still written, as the section aggregate (the distinct
 surveyor names joined with `", "`, the earliest shot date). A shot WITHOUT a

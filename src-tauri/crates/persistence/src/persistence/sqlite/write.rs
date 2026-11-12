@@ -4,7 +4,7 @@ use rusqlite::params;
 
 use crate::models::Project;
 
-use super::shot_credits::{write_credit_rows, CREATE_CREDIT_TABLES};
+use super::shot_credits::{write_credit_rows, CREATE_CREDIT_TABLES, RECREATE_CREDIT_TABLES};
 use super::station_texts::{StationTextTable, CREATE_STATION_NAMES};
 use super::{Database, SCHEMA_VERSION};
 
@@ -31,7 +31,9 @@ impl Database {
         // have it yet. Create it here, inside the transaction, the way the
         // `closure_id` column is ensured below, so the DELETE cannot fail.
         tx.execute(CREATE_STATION_NAMES, [])?;
-        // The per-shot credit tables carry no bump either (see `shot_credits`).
+        // The per-shot credit tables carry no bump either (see `shot_credits`);
+        // rewritten whole by every save, so recreated rather than emptied.
+        tx.execute_batch(RECREATE_CREDIT_TABLES)?;
         tx.execute_batch(CREATE_CREDIT_TABLES)?;
 
         // Clear existing data (delete children before parents for foreign key compliance)
@@ -50,8 +52,6 @@ impl Database {
             DELETE FROM station_offsets;
             DELETE FROM station_comments;
             DELETE FROM station_names;
-            DELETE FROM shot_credits;
-            DELETE FROM credit_people;
             DELETE FROM loop_closures;
             DELETE FROM imported_file_hashes;
             DELETE FROM imported_section_hashes;
@@ -78,25 +78,12 @@ impl Database {
             ],
         )?;
 
-        // A credit row is keyed by shot uuid, and a file saved before uuids
-        // were project-unique can hold one uuid in several sections. The reader
-        // gives a row to the FIRST holder in (section id, position) order - the
-        // order it loads in - so only that holder may write one; the others fall
-        // back to their section's legacy columns.
-        let mut first_holder: std::collections::HashMap<&str, (u32, usize)> =
-            std::collections::HashMap::new();
-        {
-            let mut by_id: Vec<&crate::models::Section> = project.sections.iter().collect();
-            by_id.sort_by_key(|s| s.id);
-            for section in by_id {
-                for (seq, shot) in section.shots.iter().enumerate() {
-                    if let Some(uuid) = shot.uuid.as_deref().filter(|u| !u.is_empty()) {
-                        first_holder.entry(uuid).or_insert((section.id, seq));
-                    }
-                }
-            }
-        }
-        let mut credit_rows: Vec<(String, crate::models::SurveyCredit)> = Vec::new();
+        // Credit rows are keyed by (section, shot uuid): see `shot_credits`. A
+        // uuid repeated INSIDE one section (a corrupt file the save heals
+        // elsewhere) keeps its first shot's row.
+        let mut credit_rows: Vec<((u32, String), crate::models::SurveyCredit)> = Vec::new();
+        let mut credit_keys: std::collections::HashSet<(u32, String)> =
+            std::collections::HashSet::new();
 
         // Save sections and shots
         for section in &project.sections {
@@ -154,10 +141,8 @@ impl Database {
                 // A row only where the legacy fallback would read back something
                 // else - so an uncredited shot, or one that agrees with its
                 // section's columns, costs nothing.
-                let owns_row =
-                    recorded.is_none_or(|u| first_holder.get(u) == Some(&(section.id, seq)));
-                if owns_row && shot.credit() != &fallback {
-                    credit_rows.push((uuid.clone(), shot.credit().clone()));
+                if shot.credit() != &fallback && credit_keys.insert((section.id, uuid.clone())) {
+                    credit_rows.push(((section.id, uuid.clone()), shot.credit().clone()));
                 }
                 tx.execute(
                     r"INSERT INTO shots (

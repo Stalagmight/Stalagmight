@@ -230,8 +230,8 @@ fn an_older_builds_edits_keep_their_meaning() {
         &path,
         &format!(
             "DELETE FROM shot_credits WHERE shot_uuid = '{second_uuid}';
-             INSERT INTO shot_credits (shot_uuid, date, surveyors, explorers)
-                 VALUES ('no-such-shot', NULL, '1', '');
+             INSERT INTO shot_credits (section_id, shot_uuid, date, surveyors, explorers)
+                 VALUES ({id}, 'no-such-shot', NULL, '1', '');
              UPDATE sections SET surveyor = 'Typed In Old Build', date = NULL WHERE id = {id};"
         ),
     );
@@ -274,10 +274,10 @@ fn unreadable_and_dangling_rows_are_skipped_not_fatal() {
              INSERT INTO credit_people (id, name, email) VALUES (1, 'Good', NULL);
              INSERT INTO credit_people (id, name, email) VALUES (2, '   ', NULL);
              INSERT INTO credit_people (id, name, email) VALUES (3, X'00ff', NULL);
-             INSERT INTO shot_credits (shot_uuid, date, surveyors, explorers)
-                 VALUES ('{}', 'not a date', '1, 2,3, 99,x', '1');
-             INSERT INTO shot_credits (shot_uuid, date, surveyors, explorers)
-                 VALUES ('{}', X'01', X'02', '');
+             INSERT INTO shot_credits (section_id, shot_uuid, date, surveyors, explorers)
+                 VALUES ({id}, '{}', 'not a date', '1, 2,3, 99,x', '1');
+             INSERT INTO shot_credits (section_id, shot_uuid, date, surveyors, explorers)
+                 VALUES ({id}, '{}', X'01', X'02', '');
              UPDATE sections SET surveyor = 'Fallback', date = NULL WHERE id = {id};",
             uuids[0], uuids[1]
         ),
@@ -293,8 +293,11 @@ fn unreadable_and_dangling_rows_are_skipped_not_fatal() {
     assert_eq!(got[2], credit(&["Fallback"], &[], None));
 }
 
+/// A file saved before shot uuids were project-unique can hold one uuid in
+/// several sections. Rows are keyed by (section, uuid), so each of those shots
+/// keeps its own credit across a save and reopen.
 #[test]
-fn a_uuid_repeated_across_sections_gives_its_row_to_the_first_holder() {
+fn a_uuid_repeated_across_sections_keeps_each_sections_credit() {
     let dir = TempDir::new().unwrap();
     let mut project = Project::new("Repeat".to_string(), None);
     let a = section_with(&mut project, vec![credit(&["First"], &["E1"], None)]);
@@ -307,8 +310,36 @@ fn a_uuid_repeated_across_sections_gives_its_row_to_the_first_holder() {
         credits_of(&loaded, a),
         vec![credit(&["First"], &["E1"], None)]
     );
-    // The second holder falls back to its own section's legacy columns.
-    assert_eq!(credits_of(&loaded, b), vec![credit(&["Second"], &[], None)]);
+    assert_eq!(
+        credits_of(&loaded, b),
+        vec![credit(&["Second"], &["E2"], None)]
+    );
+}
+
+/// A table of the shape an unreleased build wrote (rows keyed by uuid alone)
+/// is not an error: its rows are ignored, every shot falls back to the legacy
+/// columns, and the next save rewrites the table in the current shape.
+#[test]
+fn a_credit_table_of_another_shape_is_ignored_then_replaced() {
+    let dir = TempDir::new().unwrap();
+    let mut project = Project::new("Shape".to_string(), None);
+    let id = section_with(&mut project, vec![credit(&["Kept"], &["Ex"], None)]);
+    let path = save(&dir, "shape.stalx", &project);
+    sql(
+        &path,
+        "DROP TABLE shot_credits;
+         CREATE TABLE shot_credits (shot_uuid TEXT PRIMARY KEY, date TEXT,
+             surveyors TEXT NOT NULL DEFAULT '', explorers TEXT NOT NULL DEFAULT '');",
+    );
+    let loaded = reload(&path);
+    assert_eq!(credits_of(&loaded, id), vec![credit(&["Kept"], &[], None)]);
+    let mut fixed = loaded;
+    fixed.get_section_mut(id).unwrap().shots[0].set_credit(credit(&["Kept"], &["Ex"], None));
+    let resaved = reload(&save(&dir, "resaved.stalx", &fixed));
+    assert_eq!(
+        credits_of(&resaved, id),
+        vec![credit(&["Kept"], &["Ex"], None)]
+    );
 }
 
 /// Every row of `table` as text, in rowid order, minus `skip` columns.

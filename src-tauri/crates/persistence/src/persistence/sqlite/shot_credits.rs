@@ -1,8 +1,9 @@
 //! Per-shot survey credit: `credit_people` and `shot_credits`.
 //!
 //! - `credit_people (id, name, email)` holds each distinct person once.
-//! - `shot_credits (shot_uuid PK, date, surveyors, explorers)` holds a shot's
-//!   credit, the people columns as comma-joined `credit_people` ids.
+//! - `shot_credits (section_id, shot_uuid, date, surveyors, explorers)`, keyed
+//!   by `(section_id, shot_uuid)`, holds a shot's credit, the people columns as
+//!   comma-joined `credit_people` ids.
 //!
 //! Like `station_names`, the tables arrived WITHOUT a schema bump: SpeleoDB's
 //! Python reader (see `station_texts`) accepts exactly v18, ignores tables it
@@ -11,6 +12,10 @@
 //! as the section aggregate (the distinct surveyor names joined with `", "`,
 //! and the earliest shot date), so that reader - and any older build of this
 //! app - sees what it always saw.
+//!
+//! Rows are keyed by `(section_id, shot_uuid)`: `sections.id` is persisted,
+//! and a file written before shot uuids were project-unique can hold one uuid
+//! in several sections, each with its own credit.
 //!
 //! A shot WITHOUT a row takes its credit from those legacy columns through
 //! [`crate::models::SurveyCredit::from_legacy`]. That is the migration for every
@@ -42,24 +47,39 @@ pub(super) const CREATE_CREDIT_TABLES: &str = "
         email TEXT
     );
     CREATE TABLE IF NOT EXISTS shot_credits (
-        shot_uuid TEXT PRIMARY KEY,
+        section_id INTEGER NOT NULL,
+        shot_uuid TEXT NOT NULL,
         date TEXT,
         surveyors TEXT NOT NULL DEFAULT '',
-        explorers TEXT NOT NULL DEFAULT ''
+        explorers TEXT NOT NULL DEFAULT '',
+        PRIMARY KEY (section_id, shot_uuid)
     );
 ";
 
-/// Write one row per `(uuid, credit)`, interning people. The caller passes
-/// only the shots that need a row, each uuid once.
+/// Run by `save_project` in place of a DELETE: every save rewrites both tables
+/// whole, and recreating them also replaces the shape an unreleased build of
+/// this feature wrote (rows keyed by uuid alone).
+pub(super) const RECREATE_CREDIT_TABLES: &str = "
+    DROP TABLE IF EXISTS shot_credits;
+    DROP TABLE IF EXISTS credit_people;
+";
+
+/// A shot's address in `shot_credits`: its section and its uuid. A uuid alone
+/// is not enough - a file written before uuids were project-unique can hold
+/// one uuid in several sections, and each of those shots keeps its own credit.
+pub(super) type CreditKey = (u32, String);
+
+/// Write one row per `((section, uuid), credit)`, interning people. The caller
+/// passes only the shots that need a row, each key once.
 pub(super) fn write_credit_rows(
     tx: &Transaction<'_>,
-    rows: &[(String, SurveyCredit)],
+    rows: &[(CreditKey, SurveyCredit)],
 ) -> Result<()> {
     let mut ids: HashMap<(String, Option<String>), i64> = HashMap::new();
     let mut insert_person =
         tx.prepare("INSERT INTO credit_people (id, name, email) VALUES (?1, ?2, ?3)")?;
     let mut insert_row = tx.prepare(
-        "INSERT INTO shot_credits (shot_uuid, date, surveyors, explorers) VALUES (?1, ?2, ?3, ?4)",
+        "INSERT INTO shot_credits (section_id, shot_uuid, date, surveyors, explorers) VALUES (?1, ?2, ?3, ?4, ?5)",
     )?;
     let mut intern = |person: &Person| -> Result<i64> {
         let key = (person.name.clone(), person.email.clone());
@@ -73,7 +93,7 @@ pub(super) fn write_credit_rows(
         ids.insert(key, id);
         Ok(id)
     };
-    for (uuid, credit) in rows {
+    for ((section_id, uuid), credit) in rows {
         let mut join = |people: &[Person]| -> Result<String> {
             let mut out = Vec::with_capacity(people.len());
             for person in people {
@@ -84,6 +104,7 @@ pub(super) fn write_credit_rows(
         let surveyors = join(&credit.surveyors)?;
         let explorers = join(&credit.explorers)?;
         insert_row.execute(params![
+            section_id,
             uuid,
             credit.date.map(|d| d.to_string()),
             surveyors,
@@ -102,9 +123,10 @@ fn table_exists(conn: &Connection, name: &str) -> bool {
     .is_ok_and(|c| c > 0)
 }
 
-/// Every readable `shot_credits` row, by shot uuid. Missing tables read as no
-/// rows; unreadable rows and people are skipped.
-pub(super) fn load_credit_rows(conn: &Connection) -> Result<HashMap<String, SurveyCredit>> {
+/// Every readable `shot_credits` row, by `(section, shot uuid)`. Missing tables
+/// read as no rows; unreadable rows and people are skipped, and so is a table of
+/// another shape (an unreleased build of this feature keyed rows by uuid alone).
+pub(super) fn load_credit_rows(conn: &Connection) -> Result<HashMap<CreditKey, SurveyCredit>> {
     let mut rows = HashMap::new();
     if !table_exists(conn, "shot_credits") {
         return Ok(rows);
@@ -138,18 +160,27 @@ pub(super) fn load_credit_rows(conn: &Connection) -> Result<HashMap<String, Surv
             .collect();
         dedupe_people(list)
     };
-    let mut stmt =
-        conn.prepare("SELECT shot_uuid, date, surveyors, explorers FROM shot_credits")?;
+    let Ok(mut stmt) =
+        conn.prepare("SELECT section_id, shot_uuid, date, surveyors, explorers FROM shot_credits")
+    else {
+        tracing::warn!(
+            purpose = "read per-shot survey credit",
+            "shot_credits has an unexpected shape; every shot falls back to its section's \
+             legacy surveyor/date"
+        );
+        return Ok(rows);
+    };
     let iter = stmt.query_map([], |row| {
         Ok((
-            row.get::<_, String>(0),
-            row.get::<_, Option<String>>(1),
+            row.get::<_, u32>(0),
+            row.get::<_, String>(1),
             row.get::<_, Option<String>>(2),
             row.get::<_, Option<String>>(3),
+            row.get::<_, Option<String>>(4),
         ))
     })?;
-    for (uuid, date, surveyors, explorers) in iter.flatten() {
-        let Ok(uuid) = uuid else {
+    for (section_id, uuid, date, surveyors, explorers) in iter.flatten() {
+        let (Ok(section_id), Ok(uuid)) = (section_id, uuid) else {
             continue;
         };
         if uuid.is_empty() {
@@ -162,7 +193,7 @@ pub(super) fn load_credit_rows(conn: &Connection) -> Result<HashMap<String, Surv
         let surveyors = surveyors.ok().flatten().unwrap_or_default();
         let explorers = explorers.ok().flatten().unwrap_or_default();
         rows.insert(
-            uuid,
+            (section_id, uuid),
             SurveyCredit {
                 surveyors: resolve(&surveyors),
                 explorers: resolve(&explorers),

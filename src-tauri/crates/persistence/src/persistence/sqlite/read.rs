@@ -546,12 +546,15 @@ impl Database {
                     );
                 }
 
-                // Per-shot survey credit: a shot's own row, else its section's
-                // legacy surveyor/date (`shot_credits`). A row goes to the FIRST
-                // holder of its uuid in load order, as the writer assumes.
+                // Per-shot survey credit: a shot's own row, keyed by its
+                // section and uuid, else its section's legacy surveyor/date
+                // (`shot_credits`). A uuid repeated inside one section reads
+                // its row once, for its first shot, as the writer wrote it.
                 let credit_rows = super::shot_credits::load_credit_rows(&self.conn)?;
-                let mut claimed: std::collections::HashSet<&str> = std::collections::HashSet::new();
+                let mut claimed: std::collections::HashSet<(u32, &str)> =
+                    std::collections::HashSet::new();
                 for section in sections.iter_mut() {
+                    let section_id = section.id;
                     // Computed once per section and SHARED by every shot that
                     // falls back to it - one allocation, not one per shot.
                     let fallback = std::sync::Arc::new(crate::models::SurveyCredit::from_legacy(
@@ -562,8 +565,8 @@ impl Database {
                         let row = shot
                             .uuid
                             .as_deref()
-                            .and_then(|u| credit_rows.get_key_value(u))
-                            .filter(|(u, _)| claimed.insert(u.as_str()));
+                            .and_then(|u| credit_rows.get_key_value(&(section_id, u.to_owned())))
+                            .filter(|((_, u), _)| claimed.insert((section_id, u.as_str())));
                         match row {
                             Some((_, credit)) => shot.set_credit(credit.clone()),
                             None => shot.set_shared_credit(&fallback),

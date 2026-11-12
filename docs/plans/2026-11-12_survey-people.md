@@ -70,10 +70,10 @@ reader:
 - validates `sections.surveyor` as `str | None` and `sections.date` as one ISO date.
 
 How this feature fits:
-- New uuid-keyed side tables:
+- New side tables, keyed by section and shot uuid:
   - `credit_people (id, name, email)`
-  - `shot_credits (shot_uuid PK, date, surveyors, explorers)`, where the people columns are
-    comma-joined ids from `credit_people`.
+  - `shot_credits (section_id, shot_uuid, date, surveyors, explorers)`, keyed by
+    `(section_id, shot_uuid)`, where the people columns are comma-joined ids from `credit_people`.
 
   A shot's row says that its credit is explicit, even when the lists are empty. A shot with no row
   falls back to the legacy section columns through the splitter. That makes old files and shots
