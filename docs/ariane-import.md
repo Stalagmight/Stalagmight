@@ -24,16 +24,18 @@ Both formats use the same XML schema. TML files use long element names (`Azimut`
 
 ### Per-section
 - Section name (with `SectionDescription` suffix stripped)
-- Surveyor / explorer, taken from the section's first shot. Ariane's `Explorer`
-  is ONE element holding two roles, in two encodings: a plain compound string
-  (`"nh / ds"`) or an entity-escaped element pair
-  (`<Explorer>nh</Explorer><Surveyor>ds</Surveyor>`). Both halves are kept and
-  rejoined with `" / "` - the form real files already use, and the form export
-  writes back - so the round trip is idempotent. Splitting the compound into
-  people is [#329](https://github.com/Stalagmight/Stalagmight/issues/329) and is
-  not done here. A half spelled `unknown`, `None` or empty is dropped on its
-  own, so an unfilled explorer no longer takes the surveyor with it (#427).
-- Survey date, taken from the section's first shot
+- Explorers / surveyors and the survey date, read PER SHOT into the shot's
+  survey credit (#329); a section keeps none of its own. Ariane 26.3+'s
+  `XMLExplorer` / `XMLSurveyor` elements win when either names somebody.
+  Otherwise the legacy `Explorer` element is read, which is ONE field holding
+  two roles in two encodings: an entity-escaped element pair
+  (`<Explorer>nh</Explorer><Surveyor>ds</Surveyor>`), each half to its role; or
+  plain text, where `a / b` is explorer `a` and surveyor `b` and a single value
+  is explorers. Names inside a role are split on `,` and `;`; `unknown`, `None`,
+  `?` and empty names are dropped one by one, so an unfilled explorer never takes
+  the surveyor with it (#427). The import preview shows them as one line,
+  `"explorers / surveyors"`.
+- Survey date, per shot (part of the credit above)
 - Section color (converted from Ariane's integer RGB format), taken from the section's first shot
 
 Those three are the section's **trip**, and Ariane records them on EVERY shot
@@ -127,10 +129,12 @@ Ariane stores survey data as a flat list of shots with `FromID` linkage. The par
 
 ### The trip cut
 
-A `Section` holds ONE surveyor, one date and one colour; a `Shot` holds none of
-the three. Ariane writes all three on every shot row, so a chain surveyed by two
-teams over three days used to import entirely under its FIRST shot's values,
-with the rest discarded silently (#427).
+A `Section` holds ONE colour; since #329 every `Shot` carries its own people
+and date (its survey credit). Ariane writes all three on every shot row, so a
+chain surveyed by two teams over three days used to import entirely under its
+FIRST shot's values, with the rest discarded silently (#427). The credit now
+survives per shot either way; the run is still cut where the credit or colour
+changes, so each team's trip stays its own section.
 
 Each linearized run is therefore **cut where the trip changes between two
 adjacent stations**, and each part keeps its own surveyor, date and colour. The
@@ -154,8 +158,9 @@ Three rules bound it, the first two mirroring the join:
   or excluded shot is not cut, because that shot is not in the import's station
   index and the part after it would resolve to no parent - and whether it does
   would depend on the include-excluded toggle, which sectioning must be
-  invariant to. What cannot be cut is counted and named on the receipt instead
-  ("N shots in M sections recorded a different surveyor/date/colour...").
+  invariant to. What cannot be cut keeps each shot's own credit; only a colour
+  that differs from its section's is lost, and that is counted and named on the
+  receipt ("N shots in M sections recorded a different colour...").
 - **The cut runs AFTER the join.** A cut end is not a chain end - it has an
   in-section successor by construction - and offering it to the join let an
   unrelated branch at that junction splice onto the mainline's head. The cost,
@@ -388,13 +393,10 @@ Parsed but dropped:
   express - a trip that changes across a CLOSURE or excluded shot, with no
   station seam to cut at - still collapses to the run head, and is counted on
   the receipt rather than dropped in silence ([#427](https://github.com/Stalagmight/Stalagmight/issues/427)).
-- **Ariane 26.3's separate `XMLExplorer` / `XMLSurveyor` elements are not read.**
-  The survey behind #427 found them synthesized EMPTY on a resave of our own
-  export, with the legacy combined `Explorer` still carrying the data, so
-  reading them would change nothing on any file seen so far; preferring them
-  when non-empty belongs with [#329](https://github.com/Stalagmight/Stalagmight/issues/329),
-  which is where the element names can be confirmed against a file that fills
-  them.
+- **Ariane 26.3's separate `XMLExplorer` / `XMLSurveyor` elements are read
+  when non-empty** (#329). The survey behind #427 found them synthesized EMPTY on
+  a resave of our own export, with the legacy combined `Explorer` still carrying
+  the data - which is exactly the case that falls back to `Explorer`.
 - **Dates parse strictly as `%Y-%m-%d`.** Any other spelling reads as no date at
   all, with nothing said (#427 records this; it is not yet fixed).
 

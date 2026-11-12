@@ -1716,16 +1716,30 @@ pub fn convert_compass_to_import_configs(
     for ci in creation_order {
         let chain = &chains[ci];
         let p = placement[ci].clone().unwrap_or(ImportPlacement::Origin);
+        // The team are the surveyors of every shot of the survey, on its date;
+        // the credit rides on the shots, so the section template stays empty.
+        let credit =
+            crate::models::SurveyCredit::from_team(chain.surveyor.as_deref(), Some(chain.date))
+                .stored();
+        let shots = chain
+            .shots
+            .iter()
+            .cloned()
+            .map(|mut shot| {
+                shot.credit.clone_from(&credit);
+                shot
+            })
+            .collect();
         configs.push(ImportSectionConfig {
             reverse: false,
             section_index: chain.section_index,
             name: Some(chain.label.clone()),
-            surveyor: chain.surveyor.clone(),
-            date: Some(chain.date),
+            surveyor: None,
+            date: None,
             color: SECTION_COLORS[chain.section_index as usize % SECTION_COLORS.len()].to_string(),
             direction: None,
             quality: 1.0,
-            shots: chain.shots.clone(),
+            shots,
             placement: p,
             station_comments: chain.station_comments.clone(),
             station_names: Vec::new(),
@@ -1840,6 +1854,36 @@ fn topological_sort_configs(configs: &mut Vec<ImportSectionConfig>) {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn the_survey_team_is_every_shots_surveyors_on_the_survey_date() {
+        let dir = tempfile::tempdir().unwrap();
+        let dat = "Synthetic Cave\r\n\
+             SURVEY NAME: T\r\n\
+             SURVEY DATE: 7 10 1979\r\n\
+             SURVEY TEAM:\r\n\
+             Ann Smith, Bo; Cy\r\n\
+             DECLINATION: 0.00  FORMAT: DMMDLRUDLADN  CORRECTIONS: 0.00 0.00 0.00\r\n\
+             \r\n\
+             FROM TO LENGTH BEARING INC LEFT UP DOWN RIGHT FLAGS COMMENTS\r\n\
+             \r\n\
+             T1 T2 10.00 90.00 0.00 1.00 2.00 3.00 4.00\r\n\
+             T2 T3 10.00 90.00 0.00 1.00 2.00 3.00 4.00\r\n\x0c\r\n";
+        let path = dir.path().join("team.dat");
+        std::fs::write(&path, dat).unwrap();
+        let parsed = parse_compass(&path).unwrap();
+        let (configs, _, _) =
+            convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
+        assert_eq!(configs.len(), 1);
+        assert_eq!(configs[0].surveyor, None, "the credit rides on the shots");
+        assert_eq!(configs[0].shots.len(), 2);
+        for shot in &configs[0].shots {
+            let credit = shot.credit();
+            let names: Vec<&str> = credit.surveyors.iter().map(|p| p.name.as_str()).collect();
+            assert_eq!(names, ["Ann Smith", "Bo", "Cy"]);
+            assert_eq!(credit.date, chrono::NaiveDate::from_ymd_opt(1979, 7, 10));
+        }
+    }
 
     fn fixture(name: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))

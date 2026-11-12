@@ -20,9 +20,8 @@
 
 use std::collections::HashMap;
 
-use chrono::NaiveDate;
-
 use super::{RawShot, TmlSection, TmlShot, TmlShotType};
+use crate::models::SurveyCredit;
 // Sections whose shot ids all fit the `section_id * FEATURE_ID_STRIDE + seq`
 // encode, as a COUNT (42_949). Shared with the import/merge boundary checks
 // (#555) so the cut budget below and the mint-time refusals cannot drift apart.
@@ -144,9 +143,7 @@ pub(super) fn join_contiguous_chains(
     let survives_import = |shot: &TmlShot| shot.shot_type != TmlShotType::Closure && !shot.excluded;
     let joinable_end = |s: &TmlSection| s.shots.last().is_some_and(survives_import);
     let joinable_start = |s: &TmlSection| s.shots.first().is_some_and(survives_import);
-    let same_trip = |a: &TmlSection, b: &TmlSection| {
-        a.surveyor == b.surveyor && a.date == b.date && a.color == b.color
-    };
+    let same_trip = |a: &TmlSection, b: &TmlSection| section_trip(a) == section_trip(b);
 
     // Which chain ends at a given shot id. Ids are unique here (duplicates bail
     // out above), so a shot ends at most one chain.
@@ -345,13 +342,19 @@ pub(super) fn first_linearity_violation(sections: &[TmlSection]) -> Option<Strin
     None
 }
 
-/// The trip a run is attributed to: one surveyor, one date, one colour, which
-/// is all a `models::Section` can hold. Ariane writes all three on EVERY shot
-/// row, so a run can change trip halfway down.
-type Trip<'a> = (Option<&'a str>, Option<NaiveDate>, &'a str);
+/// The trip a run is attributed to: its people and date (the shot credit) and
+/// its colour. Ariane writes them on EVERY shot row, so a run can change trip
+/// halfway down. The credit survives per shot either way; the colour is the
+/// one value a `models::Section` holds once.
+type Trip<'a> = (Option<&'a SurveyCredit>, &'a str);
 
 fn trip_of(shot: &TmlShot) -> Trip<'_> {
-    (shot.explorer.as_deref(), shot.date, shot.color.as_str())
+    (shot.credit.as_ref(), shot.color.as_str())
+}
+
+/// The trip a section was named after: its head shot's (see [`trip_head`]).
+fn section_trip(section: &TmlSection) -> Option<Trip<'_>> {
+    trip_head(&section.shots).map(trip_of)
 }
 
 /// Whether this shot can be the station on one side of a cut.
@@ -595,8 +598,9 @@ fn cut_run(section: TmlSection, cuts: &[usize]) -> Vec<TmlSection> {
 ///
 /// After [`split_runs_at_trip_boundaries`] the only shots left disagreeing with
 /// their own section are the ones whose trip changed where there was no seam to
-/// cut. They still import - under the section's trip, not their own - so this
-/// is the receipt's record of what was collapsed.
+/// cut. Their surveyors, explorers and date import with them - the credit is
+/// per shot - so the one value that collapses is the COLOUR, which a section
+/// holds once. This is the receipt's record of that.
 ///
 /// Counts against the toggle the import will actually run with: a shot the
 /// filter drops takes its metadata out of the project with it, and reporting
@@ -608,33 +612,26 @@ pub(super) fn collapsed_trip_report(
     let mut shots = 0usize;
     let mut changes = 0usize;
     let mut sections_hit = 0usize;
-    let (mut any_surveyor, mut any_date, mut any_color) = (false, false, false);
 
     for section in sections {
         let mut hit = false;
-        // The trip of the previous IMPORTABLE shot, while it was one this
-        // section could not carry. A thousand shots on one collapsed trip are
+        // The colour of the previous IMPORTABLE shot, while it was one this
+        // section could not carry. A thousand shots on one collapsed colour are
         // one place the file lost a value, not a thousand.
-        let mut collapsed_run: Option<Trip<'_>> = None;
+        let mut collapsed_run: Option<&str> = None;
         for shot in &section.shots {
             if shot.shot_type == TmlShotType::Closure || (!include_excluded && shot.excluded) {
                 continue;
             }
-            let surveyor = shot.explorer != section.surveyor;
-            let date = shot.date != section.date;
-            let color = shot.color != section.color;
-            if !(surveyor || date || color) {
+            if shot.color == section.color {
                 collapsed_run = None;
                 continue;
             }
-            any_surveyor |= surveyor;
-            any_date |= date;
-            any_color |= color;
             shots += 1;
             hit = true;
-            if collapsed_run != Some(trip_of(shot)) {
+            if collapsed_run != Some(shot.color.as_str()) {
                 changes += 1;
-                collapsed_run = Some(trip_of(shot));
+                collapsed_run = Some(shot.color.as_str());
             }
         }
         sections_hit += usize::from(hit);
@@ -644,26 +641,10 @@ pub(super) fn collapsed_trip_report(
         return None;
     }
 
-    let mut fields: Vec<&str> = Vec::with_capacity(3);
-    if any_surveyor {
-        fields.push("surveyor");
-    }
-    if any_date {
-        fields.push("date");
-    }
-    if any_color {
-        fields.push("colour");
-    }
-    let fields = match fields.as_slice() {
-        [one] => (*one).to_string(),
-        [first, second] => format!("{first} or {second}"),
-        _ => "surveyor, date or colour".to_string(),
-    };
-
     Some(format!(
         "{shots} shot{} at {changes} trip change{} in {sections_hit} section{} recorded a \
-         different {fields} from the section importing them; Ariane records those per shot, a \
-         section holds one of each, and there was no station boundary to split on",
+         different colour from the section importing them; Ariane records it per shot, a \
+         section holds one, and there was no station boundary to split on",
         if shots == 1 { "" } else { "s" },
         if changes == 1 { "" } else { "s" },
         if sections_hit == 1 { "" } else { "s" },
@@ -915,8 +896,14 @@ pub(super) fn linearize_section(
                 up: s.up,
                 down: s.down,
                 comment: s.comment.clone(),
-                explorer: s.explorer.clone(),
+                explorer: super::people::people_line(&s.explorers, &s.surveyors),
                 date: s.date,
+                credit: Some(SurveyCredit {
+                    surveyors: s.surveyors.clone(),
+                    explorers: s.explorers.clone(),
+                    date: s.date,
+                })
+                .filter(|c| !c.is_empty()),
                 color: s.color.clone(),
                 excluded: s.excluded,
                 latitude: s.latitude,

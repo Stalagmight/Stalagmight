@@ -357,6 +357,7 @@ mod tests {
             longitude: 0.0,
             closure_to_id: -1,
             section: String::new(),
+            credit: None,
         }
     }
 

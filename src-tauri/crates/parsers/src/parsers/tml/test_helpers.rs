@@ -36,6 +36,7 @@ pub fn sample_tml_shot() -> TmlShot {
         longitude: 0.0,
         closure_to_id: -1,
         section: String::new(),
+        credit: None,
     }
 }
 

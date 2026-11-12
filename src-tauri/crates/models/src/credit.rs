@@ -19,7 +19,12 @@ use crate::{SectionId, ShotId};
 /// whitespace, AND the emails lowercased, where `None` only matches `None`.
 /// The derived `PartialEq` is structural (exact spelling), which is what a
 /// snapshot comparison wants; list operations use the identity.
+///
+/// `export_to` without `export`, like `ImportPlacement`: the file is written by
+/// the gen_ipc_types example, but the member-crate path lets the parsers'
+/// `TmlShot` export test compute its sibling import.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../bindings/Person.ts")]
 pub struct Person {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -90,6 +95,7 @@ impl Person {
 
 /// The survey credit of one shot.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../bindings/SurveyCredit.ts")]
 pub struct SurveyCredit {
     /// Who surveyed the shot, in order.
     #[serde(default)]
@@ -126,6 +132,22 @@ impl SurveyCredit {
             explorers,
             date,
         }
+    }
+
+    /// A survey team as the cave-survey text formats write it (Compass
+    /// `SURVEY TEAM:`, a Walls `team:` comment): surveyors, split on `,` and
+    /// `;` ([`split_names`]), with the survey's date.
+    pub fn from_team(team: Option<&str>, date: Option<NaiveDate>) -> Self {
+        Self {
+            surveyors: team.map(split_names).unwrap_or_default(),
+            explorers: Vec::new(),
+            date,
+        }
+    }
+
+    /// `ShotData::credit` of a whole imported run: `None` for an empty credit.
+    pub fn stored(self) -> Option<Self> {
+        (!self.is_empty()).then_some(self)
     }
 
     /// The same credit with every list deduplicated and invalid people dropped.

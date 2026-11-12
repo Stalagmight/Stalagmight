@@ -903,9 +903,10 @@ fn per_trip_sections_survive_an_export_and_re_import_unchanged() {
             .sections
             .iter()
             .map(|s| {
+                // A plain Ariane value is the shot's EXPLORERS (#329).
                 (
                     s.name.clone().unwrap_or_default(),
-                    s.surveyor_names().clone(),
+                    crate::models::join_names(&s.credit_summary().explorer_people()),
                 )
             })
             .collect()
@@ -937,6 +938,6 @@ fn per_trip_sections_survive_an_export_and_re_import_unchanged() {
     assert_eq!(
         trips(&round_tripped),
         expected,
-        "and both trips come back with their own surveyor"
+        "and both trips come back with their own explorer"
     );
 }

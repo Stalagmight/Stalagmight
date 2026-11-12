@@ -87,8 +87,10 @@ pub struct StationId {
 pub struct Section {
     pub id: u32,
     pub name: Option<String>,
+    /// The distinct surveyor names of its shots joined with `", "` (each shot
+    /// carries its own credit: [`Shot::surveyors`]).
     pub surveyor: Option<String>,
-    /// ISO 8601 date (`YYYY-MM-DD`).
+    /// The earliest shot date, ISO 8601 (`YYYY-MM-DD`).
     pub date: Option<String>,
     pub direction: Direction,
     pub quality: f64,
@@ -147,6 +149,31 @@ pub struct Shot {
     pub temperature: Option<f64>,
     pub marker_index: Option<u32>,
     pub comment: Option<String>,
+    /// Who surveyed this shot, in order.
+    pub surveyors: Vec<Person>,
+    /// Who explored (first laid line through) this shot, in order.
+    pub explorers: Vec<Person>,
+    /// The day this shot was surveyed, ISO 8601 (`YYYY-MM-DD`).
+    pub date: Option<String>,
+}
+
+/// One person credited on a shot. Names are compared casefolded with
+/// whitespace collapsed, emails lowercased; a person without an email is a
+/// different person from one with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Person {
+    pub name: String,
+    pub email: Option<String>,
+}
+
+impl Person {
+    fn from_model(person: &stalagmight_models::Person) -> Self {
+        Self {
+            name: person.name.clone(),
+            email: person.email.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -623,6 +650,19 @@ impl Shot {
             temperature: shot.temperature,
             marker_index: shot.marker_index,
             comment: shot.comment.clone(),
+            surveyors: shot
+                .credit()
+                .surveyors
+                .iter()
+                .map(Person::from_model)
+                .collect(),
+            explorers: shot
+                .credit()
+                .explorers
+                .iter()
+                .map(Person::from_model)
+                .collect(),
+            date: shot.credit().date.map(|d| d.format("%Y-%m-%d").to_string()),
         }
     }
 }

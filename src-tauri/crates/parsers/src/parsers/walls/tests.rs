@@ -2554,3 +2554,22 @@ fn a_utf16_srv_is_refused_by_name() {
         "the error must name the encoding, got {err:?}"
     );
 }
+
+// ----- survey team -> per-shot surveyors ------------------------------------
+
+#[test]
+fn the_team_comment_is_every_shots_surveyors_on_the_survey_date() {
+    let srv = "; team: Ann Smith, Bo; Cy\n#DATE 2017-05-07\n#UNITS meters ORDER=DA Tape=SS\n\
+               A\tB\t21.1\t339\t13\t13\n\
+               B\tC\t8.1\t62\t13\t11.9\n";
+    let (configs, _, _) = convert_one(parse_srv(srv));
+    assert_eq!(configs.len(), 1);
+    assert_eq!(configs[0].surveyor, None, "the credit rides on the shots");
+    for shot in &configs[0].shots {
+        let credit = shot.credit();
+        let names: Vec<&str> = credit.surveyors.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["Ann Smith", "Bo", "Cy"]);
+        assert!(credit.explorers.is_empty());
+        assert_eq!(credit.date, NaiveDate::from_ymd_opt(2017, 5, 7));
+    }
+}

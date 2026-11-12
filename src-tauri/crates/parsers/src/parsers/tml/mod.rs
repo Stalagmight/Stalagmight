@@ -17,7 +17,9 @@ use ts_rs::TS;
 
 use crate::models::config::DEFAULT_INCLINATION_DEPTH_DIFF_THRESHOLD;
 use crate::models::shot::implied_pitch_deg;
-use crate::models::{ImportClosure, ImportPlacement, ImportSectionConfig, ShotData, ShotKind};
+use crate::models::{
+    ImportClosure, ImportPlacement, ImportSectionConfig, Person, ShotData, ShotKind, SurveyCredit,
+};
 
 use azimuth::tml_azimuth_reference;
 use import_options::{build_selection_index, determine_placement, PlacementInput};
@@ -27,6 +29,8 @@ mod azimuth;
 mod decode;
 mod import_options;
 mod linearize;
+mod people;
+pub use people::people_line;
 // `test-support` (never on in production builds) keeps these fixture builders
 // compiled for the root crate's tests, which can no longer see a dependency's
 // `#[cfg(test)]` items now that the parsers live in their own crate.
@@ -167,9 +171,17 @@ pub struct TmlShot {
     pub up: f64,
     pub down: f64,
     pub comment: Option<String>,
+    /// The shot's people as one display line (`people::people_line`):
+    /// `"explorers / surveyors"`, either role alone when the other is empty.
     pub explorer: Option<String>,
     #[ts(type = "string | null")]
     pub date: Option<NaiveDate>,
+    /// The shot's survey credit - explorers, surveyors and [`Self::date`] -
+    /// as the import writes it onto the shot; `None` when it names nobody and
+    /// no date.
+    #[serde(default)]
+    #[ts(optional)]
+    pub credit: Option<SurveyCredit>,
     pub color: String,
     pub excluded: bool,
     pub latitude: f64,
@@ -230,7 +242,8 @@ struct RawShot {
     up: f64,
     down: f64,
     comment: Option<String>,
-    explorer: Option<String>,
+    explorers: Vec<Person>,
+    surveyors: Vec<Person>,
     date: Option<NaiveDate>,
     color: String,
     excluded: bool,
@@ -267,6 +280,9 @@ fn normalize_key_bytes(name: &[u8]) -> Option<&'static str> {
         b"Down" | b"D" => Some("down"),
         b"Comment" | b"CM" => Some("comment"),
         b"Explorer" | b"EX" => Some("explorer"),
+        // Ariane 26.3+: the two roles as separate elements (`people.rs`).
+        b"XMLExplorer" => Some("xml_explorer"),
+        b"XMLSurveyor" => Some("xml_surveyor"),
         b"Date" | b"DT" => Some("date"),
         b"Color" | b"CL" => Some("color"),
         b"Excluded" | b"EXC" => Some("excluded"),
@@ -572,97 +588,6 @@ fn foreign_shot_uuid(shot_id: i64, raw: Option<&str>) -> Option<String> {
     Some(raw.to_owned())
 }
 
-/// How the two halves of Ariane's one people-field are rejoined. `" / "` is
-/// what the compound values in real files already use, so a file that arrives
-/// with `"nh / ds"` leaves this app unchanged, and one that arrives in the
-/// element form leaves it in the form Ariane's own users write.
-const EXPLORER_SURVEYOR_SEPARATOR: &str = " / ";
-
-/// Ariane's placeholder for a half nobody filled in. Dropped per HALF, so
-/// `<Explorer>unknown</Explorer><Surveyor>ds</Surveyor>` keeps `ds` instead of
-/// throwing the whole field away (#427). Case-insensitive: the placeholder is
-/// a word this format writes, not a value, and `Unknown` is the same word.
-fn is_explorer_placeholder(value: &str) -> bool {
-    value.is_empty() || value.eq_ignore_ascii_case("None") || value.eq_ignore_ascii_case("unknown")
-}
-
-/// The text of `<tag>…</tag>` inside an already-unescaped field value, with the
-/// byte offset of its OPENING tag so the caller can keep DOCUMENT order and see
-/// what came before it.
-fn tagged_half<'a>(raw: &'a str, tag: &str) -> Option<(usize, &'a str)> {
-    let open = format!("<{tag}>");
-    let opens_at = raw.find(&open)?;
-    let rest = &raw[opens_at + open.len()..];
-    // An unterminated half keeps everything after the open tag - the same
-    // recovery the previous single-half reader did.
-    Some((
-        opens_at,
-        rest.split_once(format!("</{tag}>").as_str())
-            .map_or(rest, |(text, _)| text),
-    ))
-}
-
-/// Read Ariane's `Explorer`, which is ONE element holding TWO roles.
-///
-/// Two encodings occur: a plain compound string (`"nh / ds"` - the form every
-/// file in the #411 survey used) and an entity-escaped element pair
-/// (`"<Explorer>nh</Explorer><Surveyor>ds</Surveyor>"`). Both halves are kept:
-/// the surveyor half used to be dropped outright, and an `"unknown"` explorer
-/// half took the surveyor down with it (#427).
-///
-/// Splitting a compound value into PEOPLE is [#329], not this: the halves are
-/// rejoined into the single string `Section::surveyor` holds, which the TML
-/// export writes straight back into `Explorer`, so the round trip is stable and
-/// idempotent: a re-import splits the plain form on the same separator, applies
-/// the same per-half rules, and rejoins - and anything that survived those rules
-/// once survives them again unchanged. Identical halves collapse to one - "the
-/// same person did both" is not two names.
-///
-/// Halves come out in DOCUMENT order, and any text before the first tag is a
-/// half of its own: this field is a person's name in a file nobody validates,
-/// so the reader keeps what is there rather than deciding which part of it was
-/// meant.
-///
-/// [#329]: https://github.com/Stalagmight/Stalagmight/issues/329
-fn parse_explorer_field(raw: &str) -> Option<String> {
-    let halves: Vec<&str> = if raw.contains("<Explorer>") || raw.contains("<Surveyor>") {
-        let mut found: Vec<(usize, &str)> = ["Explorer", "Surveyor"]
-            .iter()
-            .filter_map(|tag| tagged_half(raw, tag))
-            .collect();
-        // Text before the first opening tag is somebody's name that lost its
-        // element, not noise to drop on the floor.
-        if let Some(first_tag) = found.iter().map(|(at, _)| *at).min() {
-            let lead = &raw[..first_tag];
-            if !lead.trim().is_empty() {
-                found.push((0, lead));
-            }
-        }
-        found.sort_by_key(|(at, _)| *at);
-        found.into_iter().map(|(_, text)| text).collect()
-    } else {
-        // The plain compound form gets the SAME per-half treatment, on the same
-        // separator this rejoins with. Splitting it verbatim instead let
-        // "unknown / ds" carry Ariane's placeholder into `Section::surveyor`
-        // and back out through the export, while the element form dropped it.
-        raw.split(EXPLORER_SURVEYOR_SEPARATOR).collect()
-    };
-
-    let mut kept: Vec<&str> = Vec::with_capacity(halves.len());
-    for half in halves {
-        let half = half.trim();
-        if !is_explorer_placeholder(half) && !kept.contains(&half) {
-            kept.push(half);
-        }
-    }
-
-    if kept.is_empty() {
-        None
-    } else {
-        Some(kept.join(EXPLORER_SURVEYOR_SEPARATOR))
-    }
-}
-
 /// Build a `RawShot` from parsed field map.
 fn build_raw_shot(
     fields: &HashMap<&str, String>,
@@ -704,9 +629,11 @@ fn build_raw_shot(
         .get("comment")
         .filter(|c| !c.is_empty() && *c != "None")
         .cloned();
-    let explorer = fields
-        .get("explorer")
-        .and_then(|e| parse_explorer_field(e.as_str()));
+    let (explorers, surveyors) = people::shot_people(
+        fields.get("explorer").map(String::as_str),
+        fields.get("xml_explorer").map(String::as_str),
+        fields.get("xml_surveyor").map(String::as_str),
+    );
 
     Ok(RawShot {
         id,
@@ -725,7 +652,8 @@ fn build_raw_shot(
         up: parse_f64(fields, "up"),
         down: parse_f64(fields, "down"),
         comment,
-        explorer,
+        explorers,
+        surveyors,
         date,
         color,
         excluded: fields
@@ -1492,8 +1420,10 @@ pub fn convert_tml_with_options(
             reverse: false,
             section_index,
             name: Some(section.name.clone()),
-            surveyor: section.surveyor.clone(),
-            date: section.date,
+            // The credit rides on every shot (Ariane records it per row), so
+            // the section-level template stays empty.
+            surveyor: None,
+            date: None,
             color: section.color.clone(),
             direction: None, // Ariane doesn't distinguish in/out direction
             quality: 1.0,
@@ -1952,7 +1882,7 @@ pub fn normalize_tml_shot(shot: &TmlShot, depth_in: f64) -> ShotData {
         },
         marker_index: None,
         temperature: None,
-        credit: None,
+        credit: shot.credit.clone(),
     }
 }
 
@@ -2520,6 +2450,7 @@ mod tests {
                 longitude: 0.0,
                 closure_to_id: -1,
                 section: "Test".to_string(),
+                credit: None,
             }],
             surveyor: None,
             date: None,
@@ -2572,6 +2503,7 @@ mod tests {
                 longitude: 0.0,
                 closure_to_id: -1,
                 section: "Test".to_string(),
+                credit: None,
             }],
             surveyor: None,
             date: None,
@@ -3949,6 +3881,7 @@ mod tests {
             longitude: 0.0,
             closure_to_id: -1,
             section: "Test".to_string(),
+            credit: None,
         }];
 
         let shot_data = convert_shots_to_shot_data(&shots, 0.0, false);
@@ -3980,6 +3913,7 @@ mod tests {
             longitude: 0.0,
             closure_to_id: -1,
             section: "Test".to_string(),
+            credit: None,
         }];
 
         let shot_data = convert_shots_to_shot_data(&shots, 0.0, false);
@@ -4103,6 +4037,7 @@ mod tests {
             longitude: 0.0,
             closure_to_id: -1,
             section: "Test".to_string(),
+            credit: None,
         };
 
         // Negative azimuth → normalized
@@ -4156,6 +4091,7 @@ mod tests {
                 longitude: 0.0,
                 closure_to_id: -1,
                 section: "Test".to_string(),
+                credit: None,
             },
             TmlShot {
                 uuid: None,
@@ -4180,6 +4116,7 @@ mod tests {
                 longitude: 0.0,
                 closure_to_id: -1,
                 section: "Test".to_string(),
+                credit: None,
             },
             TmlShot {
                 uuid: None,
@@ -4204,6 +4141,7 @@ mod tests {
                 longitude: 0.0,
                 closure_to_id: -1,
                 section: "Test".to_string(),
+                credit: None,
             },
         ];
 
@@ -4247,6 +4185,7 @@ mod tests {
             longitude: 0.0,
             closure_to_id: -1,
             section: "S".to_string(),
+            credit: None,
         };
 
         let tml = TmlFile {
@@ -4323,6 +4262,7 @@ mod tests {
             longitude: 0.0,
             closure_to_id,
             section: "S".to_string(),
+            credit: None,
         };
 
         let tml = TmlFile {
@@ -4418,6 +4358,7 @@ mod tests {
             longitude: 0.0,
             closure_to_id: -1,
             section: "S".to_string(),
+            credit: None,
         };
 
         let tml = TmlFile {
@@ -4503,6 +4444,7 @@ mod tests {
             longitude: 0.0,
             closure_to_id: -1,
             section: "S".to_string(),
+            credit: None,
         };
 
         let tml = TmlFile {
@@ -5723,6 +5665,7 @@ mod tests {
                 excluded: true,
                 explorer: "Ada Lovelace",
                 date: "2025-03-04",
+                color: "0x112233ff",
                 depth: 9.0,
                 ..TripShot::default()
             }
@@ -5751,16 +5694,22 @@ mod tests {
             "the shot that disagrees is not being imported, so nothing was lost: {kept:?}"
         );
 
-        let (_, _, included) = convert_tml_to_import_configs(&tml, true, false).expect("cvt");
+        let (configs, _, included) = convert_tml_to_import_configs(&tml, true, false).expect("cvt");
+        // The credit is per shot, so the uncut shot keeps its own people and
+        // date - nothing of it is lost.
+        let kept = configs[0].shots[1].credit();
+        assert_eq!(
+            crate::models::join_names(&kept.explorers).as_deref(),
+            Some("Ada Lovelace")
+        );
+        assert_eq!(kept.date, NaiveDate::from_ymd_opt(2025, 3, 4));
         let note = included
             .iter()
             .find(|w| w.contains("recorded a different"))
-            .expect("importing it does lose its values, which the receipt must say");
+            .expect("the colour a section holds once does collapse, which the receipt must say");
         assert!(
-            note.starts_with(
-                "1 shot at 1 trip change in 1 section recorded a different surveyor or date"
-            ),
-            "the report names the counts and the fields: {note}"
+            note.starts_with("1 shot at 1 trip change in 1 section recorded a different colour"),
+            "the report names the counts and the field: {note}"
         );
     }
 
@@ -5814,13 +5763,19 @@ mod tests {
         let (configs, _, warnings) =
             convert_tml_to_import_configs(&tml, false, false).expect("cvt");
         assert_eq!(configs.len(), MAX_TRIP_CUTS_PER_RUN + 1);
-        let note = warnings
-            .iter()
-            .find(|w| w.contains("recorded a different"))
-            .expect("the uncut trips must reach the receipt");
+        // What the cap left uncut keeps its own dates: the credit is per shot,
+        // so nothing collapsed and there is nothing to report.
+        let last = &configs[MAX_TRIP_CUTS_PER_RUN].shots;
+        let dates: std::collections::HashSet<_> =
+            last.iter().filter_map(|s| s.credit().date).collect();
+        assert_eq!(
+            dates.len(),
+            last.len(),
+            "every uncut shot kept its own date"
+        );
         assert!(
-            note.starts_with("10 shots at 10 trip changes in 1 section recorded a different date"),
-            "the report names what the cap left behind: {note}"
+            !warnings.iter().any(|w| w.contains("recorded a different")),
+            "{warnings:?}"
         );
     }
 
@@ -5870,14 +5825,12 @@ mod tests {
         );
         assert_eq!(linearize::first_linearity_violation(&tml.sections), None);
 
+        // What the budget refused to cut still imports with each shot's own
+        // date, so there is no collapse to report.
         let (_, _, warnings) = convert_tml_to_import_configs(&tml, false, false).expect("cvt");
-        let note = warnings
-            .iter()
-            .find(|w| w.contains("recorded a different"))
-            .expect("what the budget refused to cut must reach the receipt");
         assert!(
-            note.contains("trip changes in"),
-            "and it names how many places were collapsed: {note}"
+            !warnings.iter().any(|w| w.contains("recorded a different")),
+            "{warnings:?}"
         );
     }
 
@@ -6142,25 +6095,26 @@ mod tests {
     /// the shots, so a 3-shot stretch does not read as three findings.
     #[test]
     fn a_collapsed_stretch_is_reported_as_one_trip_change() {
-        let on_trip = |id: i64, excluded: bool, explorer: &str| {
+        let on_trip = |id: i64, excluded: bool, explorer: &'static str, color: &'static str| {
             TripShot {
                 id,
                 from_id: id - 1,
                 section: "A",
                 excluded,
                 explorer,
+                color,
                 depth: id as f64,
                 ..TripShot::default()
             }
             .xml()
         };
         let shots = [
-            on_trip(1, false, "Team One"),
+            on_trip(1, false, "Team One", "0x8f6112ff"),
             // No station seam here, so the three shots after it cannot be cut off.
-            on_trip(2, true, "Team One"),
-            on_trip(3, false, "Team Two"),
-            on_trip(4, false, "Team Two"),
-            on_trip(5, false, "Team Two"),
+            on_trip(2, true, "Team One", "0x8f6112ff"),
+            on_trip(3, false, "Team Two", "0x112233ff"),
+            on_trip(4, false, "Team Two", "0x112233ff"),
+            on_trip(5, false, "Team Two", "0x112233ff"),
         ]
         .join("\n");
         let tml = parse_synthetic_tmlu(&wrap_xml(&shots));
@@ -6172,9 +6126,9 @@ mod tests {
         let note = warnings
             .iter()
             .find(|w| w.contains("recorded a different"))
-            .expect("three shots did lose their surveyor");
+            .expect("three shots did lose their colour");
         assert!(
-            note.starts_with("3 shots at 1 trip change in 1 section recorded a different surveyor"),
+            note.starts_with("3 shots at 1 trip change in 1 section recorded a different colour"),
             "three shots on ONE collapsed trip is one change: {note}"
         );
     }
@@ -6314,6 +6268,74 @@ mod tests {
     /// Ariane's `Explorer` is one element holding two roles. The surveyor half
     /// used to be dropped, and an `unknown` explorer half took the surveyor
     /// down with it (#427).
+    /// Ariane 26.3+ writes the two roles as separate `XMLExplorer` /
+    /// `XMLSurveyor` elements; when either names somebody they win over the
+    /// legacy combined field, and every imported shot carries its own credit.
+    #[test]
+    fn the_xml_role_elements_win_and_each_shot_carries_its_credit() {
+        let shot = |id: i64, explorer: &'static str, xml: &str| {
+            TripShot {
+                id,
+                from_id: id - 1,
+                section: "A",
+                explorer,
+                depth: id as f64,
+                ..TripShot::default()
+            }
+            .xml()
+            .replace("<Explorer>", &format!("{xml}<Explorer>"))
+        };
+        let xml = wrap_xml(
+            &[
+                shot(
+                    1,
+                    "old / older",
+                    "<XMLExplorer>New</XMLExplorer><XMLSurveyor>S1; S2</XMLSurveyor>",
+                ),
+                shot(
+                    2,
+                    "nh / ds",
+                    "<XMLExplorer></XMLExplorer><XMLSurveyor>unknown</XMLSurveyor>",
+                ),
+            ]
+            .join("\n"),
+        );
+        let tml = parse_synthetic_tmlu(&xml);
+        let shots: Vec<&TmlShot> = tml.sections.iter().flat_map(|s| s.shots.iter()).collect();
+        let people = |shot: &TmlShot| {
+            let credit = shot.credit.clone().unwrap_or_default();
+            let names = |list: &[Person]| list.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+            (names(&credit.explorers), names(&credit.surveyors))
+        };
+        assert_eq!(
+            people(shots[0]),
+            (
+                vec!["New".to_string()],
+                vec!["S1".to_string(), "S2".to_string()]
+            )
+        );
+        assert_eq!(
+            people(shots[1]),
+            (vec!["nh".to_string()], vec!["ds".to_string()]),
+            "empty role elements fall back to the legacy field"
+        );
+
+        let (configs, _, _) = convert_tml_to_import_configs(&tml, false, false).expect("cvt");
+        let imported: Vec<&ShotData> = configs.iter().flat_map(|c| c.shots.iter()).collect();
+        assert_eq!(imported.len(), 2);
+        assert!(
+            configs.iter().all(|c| c.surveyor.is_none()),
+            "the credit rides on the shots"
+        );
+        assert_eq!(imported[0].credit.as_ref(), shots[0].credit.as_ref());
+        assert_eq!(imported[1].credit.as_ref(), shots[1].credit.as_ref());
+        assert_eq!(
+            imported[0].credit().date,
+            NaiveDate::from_ymd_opt(2024, 6, 15),
+            "the row date is part of the shot credit"
+        );
+    }
+
     #[test]
     fn both_halves_of_the_combined_explorer_field_survive() {
         let surveyor_of = |explorer: &str| {
@@ -6350,8 +6372,8 @@ mod tests {
         assert_eq!(surveyor_of(&elements("unknown", "unknown")), None);
         assert_eq!(
             surveyor_of(&elements("nh", "nh")).as_deref(),
-            Some("nh"),
-            "one person in both roles is one name"
+            Some("nh / nh"),
+            "one person in both roles is credited in both"
         );
         assert_eq!(
             surveyor_of("nh / ds").as_deref(),
@@ -6362,9 +6384,8 @@ mod tests {
         assert_eq!(
             surveyor_of("&lt;Surveyor&gt;ds&lt;/Surveyor&gt;&lt;Explorer&gt;nh&lt;/Explorer&gt;")
                 .as_deref(),
-            Some("ds / nh"),
-            "halves come out in DOCUMENT order, not in the order this reader \
-             happens to look for the tags"
+            Some("nh / ds"),
+            "each half goes to its ROLE, whatever order the tags come in"
         );
         assert_eq!(
             surveyor_of("bare&lt;Surveyor&gt;ds&lt;/Surveyor&gt;").as_deref(),

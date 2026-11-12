@@ -660,16 +660,29 @@ pub fn convert_walls_to_import_configs(
     let mut configs: Vec<ImportSectionConfig> = Vec::with_capacity(chains.len());
     for &ci in &placements.creation_order {
         let chain = &chains[ci];
+        // The team are the surveyors of every shot of the survey, on its date;
+        // the credit rides on the shots, so the section template stays empty.
+        let credit =
+            crate::models::SurveyCredit::from_team(chain.surveyor.as_deref(), chain.date).stored();
+        let shots = chain
+            .shots
+            .iter()
+            .cloned()
+            .map(|mut shot| {
+                shot.credit.clone_from(&credit);
+                shot
+            })
+            .collect();
         configs.push(ImportSectionConfig {
             reverse: false,
             section_index: chain.section_index,
             name: Some(chain.label.clone()),
-            surveyor: chain.surveyor.clone(),
-            date: chain.date,
+            surveyor: None,
+            date: None,
             color: SECTION_COLORS[chain.section_index as usize % SECTION_COLORS.len()].to_string(),
             direction: None,
             quality: 1.0,
-            shots: chain.shots.clone(),
+            shots,
             placement: placements.placement[ci]
                 .clone()
                 .unwrap_or(ImportPlacement::Origin),
