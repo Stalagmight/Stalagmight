@@ -30,11 +30,12 @@ import {
   type FocusEvent,
   type KeyboardEvent,
   type MouseEvent,
+  type CSSProperties,
   type ReactNode,
+  type RefObject,
 } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
-import { useAnchoredFixedMenu } from '../../hooks/useAnchoredFixedMenu';
 import { useDismissableLayer } from '../../hooks/useDismissableLayer';
 import {
   disambiguationLabels,
@@ -100,6 +101,11 @@ const LIST_Z_INDEX = 9999;
 const LIST_MAX_HEIGHT = 260;
 /** So the list stays usable under a narrow table cell. */
 const MIN_LIST_WIDTH = 220;
+/** Smallest list worth showing when the window is very short. */
+const MIN_LIST_HEIGHT = 64;
+/** Space kept between the list and the field, and between the list and the window's (or app chrome's) edges. */
+const LIST_GAP = 2;
+const EDGE_MARGIN = 8;
 const SEPARATOR = /[;\r\n]/;
 /** The keyboard-only focus ring other inputs get from `focus:ring-1` (see index.css's input-modality gate). */
 const KEYBOARD_RING =
@@ -107,6 +113,49 @@ const KEYBOARD_RING =
 
 function isPartial(entry: PeopleInputValue): boolean {
   return typeof entry.count === 'number' && typeof entry.total === 'number' && entry.count < entry.total;
+}
+
+/**
+ * Place the portaled list under the field, left-aligned and at least as wide
+ * as it. It opens ABOVE only when it does not fit below and there is more
+ * room above: unlike `useAnchoredFixedMenu` (which always takes the roomier
+ * side), an autocomplete reads top-down from the field, and flipping it over
+ * a dialog's title whenever the field sits low in the dialog is jarring.
+ * Measure-then-place like that hook: a hidden first pass gives the natural
+ * height, and the app chrome (`--toolbar-h` / `--statusbar-h`) bounds it.
+ */
+function useListPlacement(
+  open: boolean,
+  anchorRef: RefObject<HTMLElement | null>,
+  listRef: RefObject<HTMLElement | null>,
+  remeasureKey: string,
+): CSSProperties {
+  const [placement, setPlacement] = useState<{ top: number; left: number; width: number; maxHeight: number } | null>(null);
+  useLayoutEffect(() => {
+    const anchor = anchorRef.current;
+    const list = listRef.current;
+    if (!open || !anchor || !list) {
+      setPlacement(null);
+      return;
+    }
+    const rect = anchor.getBoundingClientRect();
+    const styles = getComputedStyle(anchor);
+    const topBound = (parseFloat(styles.getPropertyValue('--toolbar-h')) || 0) + EDGE_MARGIN;
+    const bottomBound = window.innerHeight - (parseFloat(styles.getPropertyValue('--statusbar-h')) || 0) - EDGE_MARGIN;
+    const natural = Math.min(list.scrollHeight, LIST_MAX_HEIGHT);
+    const below = bottomBound - rect.bottom - LIST_GAP;
+    const above = rect.top - topBound - LIST_GAP;
+    const up = natural > below && above > below;
+    const maxHeight = Math.max(Math.min(natural, up ? above : below), MIN_LIST_HEIGHT);
+    const width = Math.max(rect.width, MIN_LIST_WIDTH);
+    const left = Math.max(EDGE_MARGIN, Math.min(rect.left, window.innerWidth - width - EDGE_MARGIN));
+    setPlacement({ top: up ? rect.top - LIST_GAP - maxHeight : rect.bottom + LIST_GAP, left, width, maxHeight });
+  }, [open, anchorRef, listRef, remeasureKey]);
+
+  if (!placement) {
+    return { position: 'fixed', top: 0, left: 0, zIndex: LIST_Z_INDEX, visibility: 'hidden', pointerEvents: 'none' };
+  }
+  return { position: 'fixed', ...placement, zIndex: LIST_Z_INDEX, visibility: 'visible' };
 }
 
 function highlightRange(text: string, range: TextRange | null): ReactNode {
@@ -412,21 +461,9 @@ export function PeopleInput({
     inputRef.current?.focus();
   };
 
-  // The list is as wide as the field (but never narrower than MIN_LIST_WIDTH).
-  const [listWidth, setListWidth] = useState(MIN_LIST_WIDTH);
-  useLayoutEffect(() => {
-    if (!showList) return;
-    const width = fieldRef.current?.getBoundingClientRect().width ?? 0;
-    setListWidth(Math.max(MIN_LIST_WIDTH, Math.round(width)));
-  }, [showList]);
-  const listStyle = useAnchoredFixedMenu(showList, fieldRef, listRef, {
-    align: 'center',
-    gap: 2,
-    width: listWidth,
-    maxHeightCap: LIST_MAX_HEIGHT,
-    // A committed pill can wrap the field onto another line, moving its bottom edge.
-    remeasureKey: `${options.length}:${value.length}`,
-  });
+  // Re-placed when the rows change (the list's height) or a pill changes the
+  // field's height by wrapping onto another line.
+  const listStyle = useListPlacement(showList, fieldRef, listRef, `${options.length}:${value.length}`);
   useDismissableLayer({
     open: showList,
     onDismiss: closeList,
@@ -596,9 +633,11 @@ export function PeopleInput({
     );
   };
 
+  // Compact stays on one line (a table row has a fixed height): pills shrink
+  // and truncate instead of wrapping, and the tooltip carries the full name.
   const fieldClass = compact
-    ? `min-h-[24px] h-full px-1 py-0.5 gap-0.5 bg-transparent focus-within:ring-1 focus-within:ring-inset focus-within:ring-accent`
-    : `min-h-[32px] px-1.5 py-1 gap-1 rounded border border-border bg-background focus-within:border-accent ${KEYBOARD_RING}`;
+    ? `flex-nowrap overflow-hidden min-h-[24px] h-full px-1 py-0.5 gap-0.5 bg-transparent focus-within:ring-1 focus-within:ring-inset focus-within:ring-accent`
+    : `flex-wrap min-h-[32px] px-1.5 py-1 gap-1 rounded border border-border bg-background focus-within:border-accent ${KEYBOARD_RING}`;
 
   return (
     <div className={`min-w-0 ${compact ? 'h-full' : ''}`} data-testid={testId} data-dropdown-open={showList || undefined}>
@@ -611,7 +650,7 @@ export function PeopleInput({
       </label>
       <div
         ref={fieldRef}
-        className={`flex w-full min-w-0 flex-wrap items-center text-sm ${fieldClass} ${disabled ? 'cursor-default' : 'cursor-text'}`}
+        className={`flex w-full min-w-0 items-center text-sm ${fieldClass} ${disabled ? 'cursor-default' : 'cursor-text'}`}
         onMouseDown={onFieldMouseDown}
         data-testid={`${testId}-field`}
       >
@@ -641,8 +680,8 @@ export function PeopleInput({
             onKeyDown={onKeyDown}
             onPaste={onPaste}
             onBlur={onBlur}
-            className={`min-w-[4rem] flex-1 rounded-none border-0 bg-transparent p-0 text-text-primary placeholder:text-text-secondary focus:outline-none focus-visible:outline-none ${
-              compact ? 'h-5 text-xs' : 'h-6'
+            className={`flex-1 rounded-none border-0 bg-transparent p-0 text-text-primary placeholder:text-text-secondary focus:outline-none focus-visible:outline-none ${
+              compact ? 'h-5 min-w-[3rem] text-xs' : 'h-6 min-w-[4rem]'
             }`}
             data-testid={`${testId}-input`}
           />
@@ -659,7 +698,7 @@ export function PeopleInput({
             role="listbox"
             aria-labelledby={labelId}
             className={`overflow-auto rounded border border-border bg-panel py-1 shadow-lg ${compact ? 'text-xs' : 'text-sm'}`}
-            style={{ ...listStyle, zIndex: LIST_Z_INDEX }}
+            style={listStyle}
             // Keep the focus (and the typed text) in the input while picking.
             onMouseDown={(event) => event.preventDefault()}
             data-testid={`${testId}-suggestions`}
