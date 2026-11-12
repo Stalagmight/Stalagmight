@@ -5138,9 +5138,40 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           }
 
           case 'combine_candidate':
-          case 'combine_candidate_at_station':
+          case 'combine_candidate_at_station': {
             console.log(`[Mock IPC] ${cmd} called with:`, args);
-            return null;
+            // Simplified join: any two sections meet kept-end to other-start,
+            // the lower id kept. At a station, only a section end qualifies.
+            type MockSection = { id: number; surveyor?: string | null; date?: string | null; shots: Array<{ length?: number }> };
+            const sections = (currentProject?.sections ?? []) as MockSection[];
+            let pair: [number, number] | null = null;
+            if (cmd === 'combine_candidate') {
+              pair = [args?.a as number, args?.b as number];
+            } else {
+              const station = args?.station as { section_id: number; station_index: number } | undefined;
+              const own = sections.find((s) => s.id === station?.section_id);
+              const partner = sections.find((s) => s.id !== station?.section_id && s.shots.length > 0);
+              const atEnd = own && station && (station.station_index === 0 || station.station_index === own.shots.length);
+              if (own && partner && atEnd) pair = [own.id, partner.id];
+            }
+            if (!pair) return null;
+            const [lo, hi] = [Math.min(...pair), Math.max(...pair)];
+            const kept = sections.find((s) => s.id === lo);
+            const other = sections.find((s) => s.id === hi);
+            if (!kept || !other || kept === other || kept.shots.length === 0 || other.shots.length === 0) return null;
+            const length = (s: MockSection) => s.shots.reduce((sum, shot) => sum + (shot.length ?? 0), 0);
+            return {
+              kept: kept.id,
+              other: other.id,
+              pairing: 'kept_end_other_start',
+              reverse_other: false,
+              blocked: null,
+              comment_conflict: false,
+              name_conflict: false,
+              offset_conflict: false,
+              credit: [kept, other].map((s) => ({ surveyor: s.surveyor ?? null, date: s.date ?? null, length_m: length(s) })),
+            };
+          }
 
           case 'preview_delete_shot_range': {
             console.log('[Mock IPC] preview_delete_shot_range called with:', args);
