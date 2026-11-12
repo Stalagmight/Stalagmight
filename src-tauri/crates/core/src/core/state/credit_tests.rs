@@ -137,6 +137,87 @@ fn a_section_wide_edit_is_one_undo_step_and_round_trips() {
     assert_eq!(credits(&state, sid), after);
 }
 
+/// A data-table paste of credit cells: one `EditShotCredit` per shot inside
+/// ONE batch. Each sub-command applies, and one undo takes them all back.
+#[test]
+fn credit_edits_run_inside_a_batch_as_one_undo_step() {
+    let state = state_with_project();
+    let sid = create_section(&state, None, vec![shot(1.0), shot(2.0)]);
+    let ids = shot_ids(&state, sid);
+    let before = credits(&state, sid);
+    let steps = undo_len(&state);
+    let set = |shot_id: ShotId, name: &str| Command::EditShotCredit {
+        targets: CreditTargets::Shots {
+            shots: vec![(sid, shot_id)],
+        },
+        edit: CreditEdit {
+            set_surveyors: Some(vec![person(name)]),
+            ..Default::default()
+        },
+    };
+
+    let r = state.execute(Command::Batch {
+        commands: vec![set(ids[0], "Ann"), set(ids[1], "Bo")],
+    });
+    assert!(r.success, "{:?}", r.error);
+    assert_eq!(
+        credits(&state, sid),
+        vec![credit(&["Ann"], &[], None), credit(&["Bo"], &[], None)]
+    );
+    assert_eq!(undo_len(&state), steps + 1);
+    assert!(state.undo().success);
+    assert_eq!(credits(&state, sid), before);
+}
+
+/// Edit Section's Save: a rename and a credit edit in ONE batch are one undo
+/// step - a single undo restores both, and nothing else is left to undo.
+#[test]
+fn a_rename_and_a_credit_edit_batch_into_one_undo_step() {
+    let state = state_with_project();
+    let sid = create_section(&state, None, vec![shot(1.0), shot(2.0)]);
+    let before = credits(&state, sid);
+    let steps = undo_len(&state);
+
+    let r = state.execute(Command::Batch {
+        commands: vec![
+            Command::UpdateSectionMetadata {
+                section_id: sid,
+                updates: SectionUpdates {
+                    name: Some(Some("Renamed".to_string())),
+                    ..Default::default()
+                },
+            },
+            Command::EditShotCredit {
+                targets: CreditTargets::Section { section_id: sid },
+                edit: CreditEdit {
+                    add_surveyors: Some(vec![person("Ann")]),
+                    ..Default::default()
+                },
+            },
+        ],
+    });
+    assert!(r.success, "{:?}", r.error);
+    let name = |state: &AppState| {
+        state
+            .get_project_state()
+            .unwrap()
+            .get_section(sid)
+            .unwrap()
+            .name
+            .clone()
+    };
+    assert_eq!(name(&state).as_deref(), Some("Renamed"));
+    assert!(credits(&state, sid)
+        .iter()
+        .all(|c| c == &credit(&["Ann"], &[], None)));
+    assert_eq!(undo_len(&state), steps + 1, "one step for the whole Save");
+
+    assert!(state.undo().success);
+    assert_eq!(name(&state).as_deref(), Some("S"));
+    assert_eq!(credits(&state, sid), before);
+    assert_eq!(undo_len(&state), steps);
+}
+
 #[test]
 fn explicit_targets_touch_only_those_shots_and_label_the_role() {
     let state = state_with_project();

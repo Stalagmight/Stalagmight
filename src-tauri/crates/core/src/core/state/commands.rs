@@ -1077,6 +1077,10 @@ impl AppState {
                 // Metadata only, and already one step for many shots; a batch
                 // may still group it with other edits of the same action.
                 | Command::EditShotCredit { .. }
+                // Edit Section's Save renames / recolours a section AND edits its
+                // shots' credit in one user action, so both go in one batch and
+                // come back with one undo.
+                | Command::UpdateSectionMetadata { .. }
         )
     }
 
