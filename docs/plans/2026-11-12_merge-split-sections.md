@@ -150,13 +150,32 @@ section, whose parity is unrelated to theirs, so a pin on the other section's
 end stations could land one station off.
 
 Plans live in the `.plnx` beside the project, outside the undo step, so they
-cannot be re-keyed. Instead the project keeps `retired_sections: other ->
-{ into: kept, parity_flip }`. It is stored in `project_settings` (no schema
-bump; readers that do not know the key skip it) and travels with every undo
-snapshot. Pin resolution follows that chain and XORs the flip into the parity
-comparison, and finds the section by shot uuid (#710's `anchor_section`). A test
-pins every station of both sections over every pairing and every parity
-combination.
+cannot be re-keyed. The first answer here, a map of retired section ids with a
+parity relation, broke under undo. The plan store recaptures every anchor
+whenever a pin moves, so pins captured AFTER a combine were written against the
+kept section's parity. The undo then removed the map entry with the rest of the
+snapshot, and those pins landed one station off.
+
+So the orientation is a property of each shot RECORD, not of a section. A
+shot's record parity is its section's `reverse_parity`, flipped when its uuid
+is in `Project::counter_parity_shots`. A reverse flips the section's flag and
+every record together, so their relation is unchanged. A combine toggles the
+other section's shots in the set whenever the two parities differ. Every
+shot's record parity therefore changes only when that record is reversed.
+
+- **Pins.** A pin records its neighbours' record parities (`parity`, and
+  `parity_b` for the second neighbour, which differs across a combine join) and
+  compares each with that shot's record parity wherever the shot lives now.
+  Plans written before `parity_b` existed read `parity` for both, as before.
+- **Undo.** The set is part of the project, so every undo snapshot restores it
+  with the shots.
+- **Storage.** It is persisted in `project_settings` (no schema bump), pruned
+  to the shots the project holds, and follows a uuid rename.
+- **Section.** The pin's section is found by shot uuid (#710's
+  `anchor_section`).
+- **Tests.** One test checks every station of both sections across a combine.
+  Another checks every station of the combined section across its undo and
+  redo. Both run over every pairing and every parity combination.
 
 ## Follow-ups
 

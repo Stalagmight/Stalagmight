@@ -193,11 +193,7 @@ fn a_combine_survives_a_save_and_a_reopen() {
 
     assert_eq!(snapshot_sections(&state), before);
     let project = state.get_project_state().unwrap();
-    assert_eq!(
-        project.resolve_retired_section(o),
-        (k, false),
-        "the retired section survives the save"
-    );
+    assert!(project.get_section(o).is_none());
     assert!(project.check_structural_integrity().is_empty());
 }
 
@@ -346,7 +342,10 @@ fn keeping_the_higher_id_keeps_it() {
     assert_eq!(result.section_id, Some(o));
     assert_eq!(shot_counts(&state), vec![(o, 5)]);
     let project = state.get_project_state().unwrap();
-    assert_eq!(project.resolve_retired_section(k), (o, false));
+    assert!(
+        project.get_section(k).is_none(),
+        "the lower id is the one removed"
+    );
     let moved = xy(&state, StationRef::new(o, 0));
     assert!((moved.0 - far.0).hypot(moved.1 - far.1) < 1e-9);
 }
@@ -425,4 +424,75 @@ fn a_position_keyed_ignore_follows_its_shot_through_a_reversing_combine() {
     assert!(state.execute(Command::CloseProject).success);
     assert!(state.open_project(path).success, "reopen");
     assert_eq!(short_shot_verdicts(&state), vec![(k, true)]);
+}
+
+/// Shots that join a section of the other parity keep their own record
+/// parity (`counter_parity_shots`), through a save and a reopen.
+#[test]
+fn the_record_parity_of_the_other_sections_shots_survives_a_save() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let path = temp.path().join("parity.stalx");
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Parity".to_string(),
+        location: None,
+    });
+    let k = create(&state, "K", vec![shot(90.0, 10.0), shot(90.0, 5.0)]);
+    let o = create(&state, "O", vec![shot(0.0, 5.0), shot(0.0, 3.0)]);
+    assert!(
+        state
+            .execute(Command::ReverseSection {
+                section_id: k,
+                swap_left_right: false,
+            })
+            .success
+    );
+    // K is reversed (parity true): its end is now the old station 0.
+    let merged = state.execute(Command::MergeStations {
+        station_a: StationRef::new(k, 2),
+        station_b: StationRef::new(o, 0),
+    });
+    assert!(merged.success, "{:?}", merged.error);
+    let o_uuids: std::collections::BTreeSet<String> = state
+        .get_project_state()
+        .unwrap()
+        .get_section(o)
+        .unwrap()
+        .shots
+        .iter()
+        .map(|s| s.uuid.clone().unwrap())
+        .collect();
+
+    assert!(state.execute_combine_sections(k, o, options()).success);
+    assert_eq!(
+        state.get_project_state().unwrap().counter_parity_shots,
+        o_uuids
+    );
+
+    assert!(
+        state
+            .execute(Command::SaveProject {
+                path: Some(path.clone())
+            })
+            .success
+    );
+    assert!(state.execute(Command::CloseProject).success);
+    assert!(state.open_project(path).success, "reopen");
+    assert_eq!(
+        state.get_project_state().unwrap().counter_parity_shots,
+        o_uuids
+    );
+
+    assert!(
+        state.undo().success,
+        "the loaded history undoes the combine"
+    );
+    assert!(
+        state
+            .get_project_state()
+            .unwrap()
+            .counter_parity_shots
+            .is_empty(),
+        "the undo puts the orientation back with the shots"
+    );
 }

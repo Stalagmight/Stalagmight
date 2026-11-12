@@ -1,14 +1,14 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use ts_rs::TS;
 
 use super::{
-    AzimuthReference, GpsBounds, LoopClosure, RetiredSection, Section, SectionData, SectionId,
-    SectionUpdates, ShotData, ShotId, StationAnchor, StationKey, StationMerge, StationMergeWire,
-    StationRef, ZeroDatum,
+    AzimuthReference, GpsBounds, LoopClosure, Section, SectionData, SectionId, SectionUpdates,
+    ShotData, ShotId, StationAnchor, StationKey, StationMerge, StationMergeWire, StationRef,
+    ZeroDatum,
 };
 use super::{LoopClosureWire, ZeroDatumWire};
 
@@ -364,14 +364,25 @@ pub struct Project {
     #[ts(optional)]
     pub default_azimuth_reference: Option<AzimuthReference>,
 
-    /// Sections Combine Sections folded into another, by their old id. Read
-    /// only by dive-plan pin resolution (see [`RetiredSection`]); persisted in
-    /// `project_settings` (no schema bump), and in every undo snapshot.
-    /// Omitted from serde when empty, so a project that never combined
-    /// serializes exactly as before.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    /// Shots whose RECORD orientation runs against their section's
+    /// [`Section::reverse_parity`], by uuid: a shot's record parity is its
+    /// section's parity, flipped when its uuid is here
+    /// ([`Self::shot_record_parity`]).
+    ///
+    /// A parity flips with every reverse of the record, which is what a
+    /// single-neighbour dive-plan pin reads to know which end of its shot it
+    /// sits on. While every shot of a section shares the section's parity, the
+    /// section's flag says it all. Combine Sections breaks that: the other
+    /// section's shots join a section whose parity can differ from theirs, and
+    /// they are recorded here (toggled) so every shot keeps its own. Because
+    /// this lives on the project, every undo snapshot carries it with the
+    /// shots, so an undo puts the shots and their orientation back together.
+    ///
+    /// Persisted in `project_settings` (no schema bump); omitted from serde
+    /// when empty, so a project that never combined serializes as before.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     #[ts(skip)]
-    pub retired_sections: BTreeMap<SectionId, RetiredSection>,
+    pub counter_parity_shots: BTreeSet<String>,
 
     /// Transient flag (NOT persisted) - when true,
     /// [`Self::cascade_connection_offsets`] returns immediately. Used by
@@ -732,7 +743,7 @@ impl Project {
             validation: crate::config::ValidationConfig::default(),
             surface_elevation: None,
             default_azimuth_reference: None,
-            retired_sections: BTreeMap::new(),
+            counter_parity_shots: BTreeSet::new(),
             cascade_deferred: false,
             section_index_cache: HashMap::new(),
             shot_uuid_index: HashMap::new(),

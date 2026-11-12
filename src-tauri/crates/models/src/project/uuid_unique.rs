@@ -271,6 +271,13 @@ impl Project {
         for section in &mut self.sections {
             remap.rewrite_section(section);
         }
+        // A renamed shot keeps its record parity (`counter_parity_shots`).
+        let renamed: Vec<String> = remap
+            .iter()
+            .filter(|(_, old, _)| self.counter_parity_shots.contains(*old))
+            .map(|(_, _, new)| new.to_string())
+            .collect();
+        self.counter_parity_shots.extend(renamed);
         self.map_station_refs(|mut key| {
             remap.rewrite_key(&mut key);
             key

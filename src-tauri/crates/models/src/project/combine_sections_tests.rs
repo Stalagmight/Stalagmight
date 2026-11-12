@@ -875,24 +875,83 @@ fn a_one_shot_lower_sections_gauge_keeps_its_side() {
     assert!(dist(before, after) < 1e-9, "{before:?} -> {after:?}");
 }
 
-/// The retired id points at the kept section with the parity relation of the
-/// other section's shots, and chains through a later combine.
-#[test]
-fn the_retired_section_records_where_its_shots_went() {
-    let (mut project, k, o) = pair(SectionEnd::End, SectionEnd::End, true, 0.0);
-    project.combine_sections(k, o, &options()).unwrap();
-    assert_eq!(
-        project.resolve_retired_section(o),
-        (k, true),
-        "O was reversed to line up"
-    );
-    assert_eq!(project.resolve_retired_section(k), (k, false));
+/// Every shot's RECORD parity (`Project::shot_record_parity`), by uuid.
+fn record_parities(project: &Project) -> std::collections::BTreeMap<String, bool> {
+    project
+        .sections
+        .iter()
+        .flat_map(|s| {
+            s.shots.iter().map(move |shot| {
+                (
+                    shot.uuid.clone().unwrap(),
+                    project.shot_record_parity(s, shot.uuid.as_deref()),
+                )
+            })
+        })
+        .collect()
+}
 
-    let c = add(&mut project, "C", vec![shot(0.0, 2.0)]);
-    let end = StationRef::new(k, project.get_section(k).unwrap().shots.len() as u32);
-    project.merge_stations(end, StationRef::new(c, 0)).unwrap();
-    project.combine_sections(c, k, &options()).unwrap();
-    assert_eq!(project.resolve_retired_section(o).0, c);
+/// A shot's record parity flips exactly when its record is reversed: the
+/// combine reverses the other section's records when the ends match, and
+/// otherwise every shot keeps its own record parity, whatever the kept
+/// section's `reverse_parity` (the other section's shots are recorded in
+/// `counter_parity_shots` when it differs). Every pairing, every parity mix,
+/// keeping either section; a second combine stacks on the first.
+#[test]
+fn every_shot_keeps_its_record_parity_through_a_combine() {
+    for kept_end in [SectionEnd::Start, SectionEnd::End] {
+        for other_end in [SectionEnd::Start, SectionEnd::End] {
+            for (reverse_k, reverse_o) in
+                [(false, false), (true, false), (false, true), (true, true)]
+            {
+                for keep_lower in [true, false] {
+                    let what = format!(
+                        "{kept_end:?}-{other_end:?} reversed {reverse_k}/{reverse_o} keep_lower {keep_lower}"
+                    );
+                    let (mut project, k, o) = pair(kept_end, other_end, false, 0.0);
+                    for (id, reverse) in [(k, reverse_k), (o, reverse_o)] {
+                        if reverse {
+                            assert!(project.reverse_section(id, false));
+                        }
+                    }
+                    // The reverses moved the ends: re-place O so the pairing's
+                    // two ends meet again, and merge them.
+                    let end = |p: &Project, id: SectionId, e: SectionEnd| {
+                        StationRef::new(id, end_index(p, id, e))
+                    };
+                    let target = xy(&project, end(&project, k, kept_end));
+                    let at_o = end(&project, o, other_end);
+                    place(&mut project, o, at_o.station_index, target, 0.0);
+                    project
+                        .merge_stations(end(&project, k, kept_end), at_o)
+                        .unwrap();
+                    let (kept, other) = if keep_lower { (k, o) } else { (o, k) };
+                    let reverses = project
+                        .combine_candidate_for_sections(k, o)
+                        .unwrap()
+                        .reverses;
+                    let other_uuids: Vec<String> = project
+                        .get_section(other)
+                        .unwrap()
+                        .shots
+                        .iter()
+                        .map(|s| s.uuid.clone().unwrap())
+                        .collect();
+                    let mut expected = record_parities(&project);
+                    if reverses {
+                        for uuid in &other_uuids {
+                            let parity = expected.get_mut(uuid).unwrap();
+                            *parity = !*parity;
+                        }
+                    }
+
+                    project.combine_sections(kept, other, &options()).unwrap();
+
+                    assert_eq!(record_parities(&project), expected, "{what}");
+                }
+            }
+        }
+    }
 }
 
 /// Split then combine at the join gives back the section: same shots, same
@@ -1128,4 +1187,28 @@ fn the_shot_id_room_check_is_exact_at_the_edge() {
         .map(|s| s.id)
         .max();
     assert_eq!(last, Some(window_end - 1));
+}
+
+/// A shot renamed by the cross-section uniqueness heal keeps its record parity.
+#[test]
+fn a_renamed_shot_keeps_its_record_parity() {
+    let (mut project, k, o) = pair(SectionEnd::End, SectionEnd::End, true, 0.0);
+    project.combine_sections(k, o, &options()).unwrap();
+    let section = project.get_section(k).unwrap();
+    let shot = section.shots.last().unwrap();
+    let (old, parity) = (
+        shot.uuid.clone().unwrap(),
+        project.shot_record_parity(section, shot.uuid.as_deref()),
+    );
+    assert!(
+        project.counter_parity_shots.contains(&old),
+        "setup: a combined shot"
+    );
+    let mut remap = crate::ShotUuidRemap::default();
+    remap.insert(k, old, "renamed".to_string());
+
+    project.apply_shot_uuid_remap(&remap);
+
+    let section = project.get_section(k).unwrap();
+    assert_eq!(project.shot_record_parity(section, Some("renamed")), parity);
 }

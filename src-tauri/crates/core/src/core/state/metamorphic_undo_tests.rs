@@ -1781,8 +1781,8 @@ fn pair_combine_sections_then_undo_is_identity(
 }
 
 /// The stored project minus what a split-then-combine is allowed to change:
-/// the id allocators, the shot ids (positions instead), the retired-section
-/// record, and the gauge pair's SPELLING (the gauge station itself is compared
+/// the id allocators, the shot ids (positions instead), and the gauge pair's
+/// SPELLING (the gauge station itself is compared
 /// separately, through the solver's own anchor).
 fn survey_content(state: &AppState) -> String {
     let snapshot = mask_timestamps(&canonical_snapshot(state, true));
@@ -1791,7 +1791,6 @@ fn survey_content(state: &AppState) -> String {
     };
     if let serde_json::Value::Object(map) = &mut value {
         map.remove("next_section_id");
-        map.remove("retired_sections");
         if let Some(serde_json::Value::Array(sections)) = map.get_mut("sections") {
             for section in sections {
                 if let serde_json::Value::Object(section) = section {

@@ -737,7 +737,7 @@ impl Database {
         // legacy-seeding fallback - `None` genuinely means "unknown".
         let surface_elevation = self.load_project_surface_elevation()?;
         let default_azimuth_reference = self.load_project_default_azimuth_reference()?;
-        let retired_sections = self.load_project_retired_sections();
+        let counter_parity_shots = self.load_project_counter_parity_shots();
 
         // Pre-populate the section_id → index lookup so callers get
         // O(1) get_section without needing rebuild_section_index().
@@ -782,7 +782,7 @@ impl Database {
             validation,
             surface_elevation,
             default_azimuth_reference,
-            retired_sections,
+            counter_parity_shots,
             cascade_deferred: false,
             section_index_cache,
             shot_uuid_index,
@@ -1360,19 +1360,18 @@ impl Database {
         }))
     }
 
-    /// Load the sections Combine Sections retired (`RetiredSection`), kept in
-    /// `project_settings` under `retired_sections` like the other project-level
-    /// values (no schema bump; readers that do not know the key skip it). A
-    /// missing key reads as none retired; an unparseable value too, with a
-    /// warning: the map only refines dive-plan pins, so a lost one costs a pin
+    /// Load the shots whose record orientation runs against their section's
+    /// parity (`Project::counter_parity_shots`), kept in `project_settings`
+    /// under `counter_parity_shots` like the other project-level values (no
+    /// schema bump; readers that do not know the key skip it). A missing key
+    /// reads as none; an unparseable value too, with a warning: the set only
+    /// refines single-neighbour dive-plan pins, so a lost entry costs a pin
     /// that may need re-placing, never the survey.
-    pub fn load_project_retired_sections(
-        &self,
-    ) -> std::collections::BTreeMap<SectionId, crate::models::RetiredSection> {
+    pub fn load_project_counter_parity_shots(&self) -> std::collections::BTreeSet<String> {
         let json: Option<String> = self
             .conn
             .query_row(
-                "SELECT value FROM project_settings WHERE key = 'retired_sections'",
+                "SELECT value FROM project_settings WHERE key = 'counter_parity_shots'",
                 [],
                 |row| row.get(0),
             )
@@ -1382,9 +1381,9 @@ impl Database {
             serde_json::from_str(&s).unwrap_or_else(|e| {
                 tracing::warn!(
                     error = %e,
-                    "stored retired_sections is present but unparseable; reading as none"
+                    "stored counter_parity_shots is present but unparseable; reading as none"
                 );
-                std::collections::BTreeMap::new()
+                std::collections::BTreeSet::new()
             })
         })
         .unwrap_or_default()

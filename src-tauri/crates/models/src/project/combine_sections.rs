@@ -21,8 +21,9 @@
 //!
 //! Every other stored station reference moves with its station, the gauge
 //! stays on the same physical station (the lower section id's gauge, which is
-//! the one the component used), and the other section's id is retired with its
-//! parity relation for dive-plan pins (`RetiredSection`).
+//! the one the component used), and when the two sections' reverse parities
+//! differ the other section's shots keep their own record parity for dive-plan
+//! pins (`Project::counter_parity_shots`).
 //!
 //! Credit: survey credit (surveyors, explorers, date) lives on every shot and
 //! travels with it, through the reverse too, so every shot keeps its own
@@ -31,8 +32,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    CombinePick, CombineSectionsOptions, RetiredSection, SectionEnd, SectionId, Shot, ShotData,
-    StationKey, StationRef,
+    CombinePick, CombineSectionsOptions, SectionEnd, SectionId, Shot, ShotData, StationKey,
+    StationRef,
 };
 
 use super::gauge::captured_gauge;
@@ -59,20 +60,13 @@ fn pick_text(
 }
 
 impl Project {
-    /// Where a section id's shots live now, following the sections Combine
-    /// Sections retired: `(id, parity_flip)`, `id` unchanged and `false` for a
-    /// section that was never retired. Bounded, so a corrupt map with a cycle
-    /// cannot loop.
-    pub fn resolve_retired_section(&self, id: SectionId) -> (SectionId, bool) {
-        let (mut id, mut flip) = (id, false);
-        for _ in 0..=self.retired_sections.len() {
-            let Some(retired) = self.retired_sections.get(&id) else {
-                break;
-            };
-            flip ^= retired.parity_flip;
-            id = retired.into;
-        }
-        (id, flip)
+    /// A shot's RECORD parity: its section's `reverse_parity`, flipped when
+    /// the shot came from a section whose parity differed (see
+    /// [`Project::counter_parity_shots`]). Flips with every reverse of the
+    /// record, wherever the record lives.
+    pub fn shot_record_parity(&self, section: &crate::Section, shot_uuid: Option<&str>) -> bool {
+        section.reverse_parity
+            ^ shot_uuid.is_some_and(|uuid| self.counter_parity_shots.contains(uuid))
     }
 
     /// Combine `other` into `kept`. Re-runs the candidate check first, so an
@@ -175,13 +169,15 @@ impl Project {
         let unmoved = self.rekey_station_refs(&homes, "combine sections");
         self.dedupe_closures_in(kept);
         self.keep_gauge_on_station(kept, gauge as usize, gauge_capture.as_ref());
-        self.retired_sections.insert(
-            other,
-            RetiredSection {
-                into: kept,
-                parity_flip,
-            },
-        );
+        if parity_flip {
+            // The other section's shots now live under the kept section's
+            // parity: toggle them so each keeps its own record parity.
+            for uuid in other_shots.iter().filter_map(|data| data.uuid.as_ref()) {
+                if !self.counter_parity_shots.remove(uuid) {
+                    self.counter_parity_shots.insert(uuid.clone());
+                }
+            }
+        }
         if cfg!(debug_assertions) {
             self.for_each_station_ref(|label, key| {
                 debug_assert!(

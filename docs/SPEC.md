@@ -310,7 +310,7 @@ Project (Cave System)
     ├── validation: ValidationConfig
     ├── surface_elevation: Option<f64>
     ├── default_azimuth_reference: Option<AzimuthReference>
-    ├── retired_sections: {section_id -> {into, parity_flip}} (sections Combine Sections folded away; dive-plan pins only)
+    ├── counter_parity_shots: {shot_uuid} (shots whose record orientation runs against their section's parity after a Combine; dive-plan pins only)
     └── display toggles (show_stations, show_shots, grid_spacing, geometry_mode, ...)
 ```
 

@@ -83,23 +83,3 @@ pub struct CombineCandidate {
     pub station_name_a: Option<String>,
     pub station_name_b: Option<String>,
 }
-
-/// A section Combine Sections folded into another, kept so that dive-plan pins
-/// stored against it still land on the same physical station.
-///
-/// A plan pin at a section end names one neighbouring shot and a side, and
-/// that side is corrected by comparing the section's `reverse_parity` with the
-/// parity recorded in the pin (`dive_plan::resolve_anchor`). Once the other
-/// section's shots live in the kept section, that comparison reads the KEPT
-/// section's parity, which is unrelated to the parity the pin recorded. The
-/// pins live in the `.plnx` beside the project, outside the undo step, so they
-/// cannot be re-keyed; instead the project records, per retired section, how
-/// its shots' orientation relates to the section that absorbed them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RetiredSection {
-    /// The section it was combined into.
-    pub into: SectionId,
-    /// True when its shots run against `into`'s parity: the retired section's
-    /// effective parity is `into.reverse_parity ^ parity_flip`.
-    pub parity_flip: bool,
-}
