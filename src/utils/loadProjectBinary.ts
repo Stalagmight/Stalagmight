@@ -23,6 +23,7 @@ import type { Section } from '../types/ipc/Section';
 import type { Shot } from '../types/ipc/Shot';
 import type { Person } from '../types/ipc/Person';
 import type { SurveyCredit } from '../types/ipc/SurveyCredit';
+import { noteLazySectionCredits } from './projectPeople';
 import type { StationRef } from '../types/ipc/StationRef';
 import type { ClosureRef } from '../types/ipc/ClosureRef';
 import type { GpsCoordinates } from '../types/ipc/GpsCoordinates';
@@ -371,6 +372,9 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
       enumerable: true,
       configurable: true,
     });
+    // The people autocomplete reads a section's distinct credits without
+    // materializing its shots (utils/projectPeople).
+    noteLazySectionCredits(section, () => sh.credits.map((c) => decodeCredit(c, people)));
     return section;
   });
 
