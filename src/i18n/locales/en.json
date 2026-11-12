@@ -1978,7 +1978,8 @@
       "color": "Color",
       "latitude": "Latitude",
       "longitude": "Longitude",
-      "surveyor": "Surveyor"
+      "surveyor": "Surveyor",
+      "surveyed": "Surveyed"
     },
     "placeholder": {
       "none": "None"
@@ -2004,7 +2005,9 @@
       "startStation": "Start station",
       "endStation": "End station",
       "kindBadge": "{{kind}} shot",
-      "markAs": "Mark as {{kind}}"
+      "markAs": "Mark as {{kind}}",
+      "creditUnknown": "Unknown",
+      "creditSection": "section: {{surveyor}}"
     },
     "section": {
       "title": "Section",

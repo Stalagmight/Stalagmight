@@ -21,6 +21,7 @@ export interface SectionSeed {
     down?: number | null;
     comment?: string | null;
     kind?: string;
+    credit?: { surveyor?: string | null; date?: string | null };
   }>;
 }
 

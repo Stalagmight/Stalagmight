@@ -11,6 +11,8 @@ import { Panel } from '../common/Panel';
 import { Button } from '../common/Button';
 import { WarningResolution } from './WarningResolution';
 import { ProjectStatsActions } from './ProjectStatsActions';
+import { DetailRow } from './DetailRow';
+import { ShotCreditRow } from './ShotCreditRow';
 import { AlertCircleIcon, AlertTriangleIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, LinkOffIcon } from '../common/icons';
 import { DetailLink } from '../common/DetailLink';
 import { EntityBlob } from '../common/EntityBlob';
@@ -1044,6 +1046,7 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
         <div className="space-y-3">
           <DetailRow label={t('detailPanel.labels.id')} value={formatShotId(section.id, shotPosition)} />
           <DetailRow label={t('detailPanel.labels.section')} value={section.name ?? t('sections.defaultName', { id: section.id })} />
+          <ShotCreditRow shot={shot} section={section} />
           <DetailRow label={t('detailPanel.labels.length')} value={`${formatFixed(shot.length, undefined, precision.length)} ${t('common.units.meters')}`} />
           <DetailRow label={t('detailPanel.labels.azimuthIn')} value={`${formatFixed(shot.azimuth_in, undefined, precision.azimuth)}°`} />
           <DetailRow label={t('detailPanel.labels.azimuthOut')} value={`${formatFixed(shot.azimuth_out, undefined, precision.azimuth)}°`} />
@@ -1724,15 +1727,6 @@ function StatCard({ label, value }: { label: string; value: string }) {
     <div className="text-sm">
       <div className="text-text-secondary text-xs">{label}</div>
       <div className="font-medium">{value}</div>
-    </div>
-  );
-}
-
-function DetailRow({ label, value, testId }: { label: string; value: React.ReactNode; testId?: string }) {
-  return (
-    <div className="flex justify-between text-sm" data-testid={testId}>
-      <span className="text-text-secondary">{label}:</span>
-      <span>{value}</span>
     </div>
   );
 }
