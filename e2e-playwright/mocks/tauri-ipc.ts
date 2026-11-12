@@ -1306,8 +1306,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               isIndeterminate: true,
             });
 
+            // Surveyed length leaves out Reference shots, as the backend does (#689).
             const shotLengths = defaultSections.flatMap((section) =>
-              (section.shots ?? []).map((shot: { length?: number }) => shot.length ?? 0)
+              (section.shots ?? [])
+                .filter((shot: { kind?: string }) => shot.kind !== 'Reference')
+                .map((shot: { length?: number }) => shot.length ?? 0)
             );
             const totalLength = shotLengths.reduce((sum, length) => sum + length, 0);
             // Absolute station z, as the backend fills it (#481) - not the raw
@@ -1788,10 +1791,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   count + ((section as { shots?: Array<{ length?: number }> }).shots?.length ?? 0),
                 0
               ) ?? 0;
+            // Surveyed length leaves out Reference shots, as the backend does (#689).
             const totalLength =
               currentProject?.sections.reduce((total: number, section) => {
-                const shots = (section as { shots?: Array<{ length?: number }> }).shots ?? [];
-                return total + shots.reduce((sum, shot) => sum + (shot.length ?? 0), 0);
+                const shots = (section as { shots?: Array<{ length?: number; kind?: string }> }).shots ?? [];
+                return (
+                  total +
+                  shots.reduce((sum, shot) => (shot.kind === 'Reference' ? sum : sum + (shot.length ?? 0)), 0)
+                );
               }, 0) ?? 0;
 
             return {

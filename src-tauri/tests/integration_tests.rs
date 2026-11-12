@@ -1554,17 +1554,15 @@ fn test_section_stats() {
     let stats = section.stats();
 
     assert_eq!(stats.shot_count, 2);
-    // total_length still counts every shot; #27 deliberately left it raw so no
-    // number users already read shifts on upgrade.
-    assert!((stats.total_length - 25.0).abs() < 0.001);
-    // The reference leg is not swimmable, so it drops out of the swum figure.
-    assert!((stats.swum_length - 10.0).abs() < 0.001);
+    // A Reference repeats passage already surveyed, so its length is left out
+    // of the total (#689) while it still counts as a shot.
+    assert!((stats.total_length - 10.0).abs() < 0.001);
     assert_eq!(stats.reference_shot_count, 1);
     assert_eq!(stats.jump_shot_count, 0);
 }
 
-/// A jump counts separately from a reference, and unlike a reference it still
-/// counts as swum (#27 q7/q13).
+/// A jump counts separately from a reference, and unlike a reference its length
+/// counts toward the total: it is surveyed passage (#27 q7, #689).
 #[test]
 fn test_section_stats_splits_jumps_from_references() {
     let mut project = create_test_project();
@@ -1579,8 +1577,7 @@ fn test_section_stats_splits_jumps_from_references() {
 
     let stats = project.get_section(0).unwrap().stats();
 
-    assert_eq!(stats.total_length, 25.0);
-    assert_eq!(stats.swum_length, 25.0, "a jump IS swum");
+    assert_eq!(stats.total_length, 25.0, "a jump's length counts");
     assert_eq!(stats.jump_shot_count, 1);
     assert_eq!(stats.reference_shot_count, 0);
 }

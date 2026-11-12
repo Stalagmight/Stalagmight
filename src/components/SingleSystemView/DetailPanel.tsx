@@ -24,7 +24,7 @@ import { formatFixed, formatPercent, formatNumber, formatDate } from '../../i18n
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { useActiveStations } from '../../hooks/useActiveStations';
 import { setSource, trackContextMenuAction } from '../../utils/telemetry';
-import { SHOT_KIND_LABEL_KEY, nextShotKind } from '../../utils/shotKind';
+import { SHOT_KIND_LABEL_KEY, nextShotKind, surveyedLength } from '../../utils/shotKind';
 import { countUnresolvedErrors } from '../../utils/validation';
 import { warningKey, warningMessageTestId, warningOpenShotTestId, warningResolveTestId, warningUndoResolveTestId } from '../../utils/testId';
 
@@ -1172,10 +1172,15 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
   const precision = useDecimalPrecision();
 
   // Calculate section statistics
-  const sectionLength = section.shots.reduce((sum, s) => sum + s.length, 0);
+  // Length leaves out Reference shots, matching the project total it is a
+  // share of (#689); the average is over the same shots.
+  const { length: sectionLength, shotCount: lengthShotCount } = surveyedLength(section.shots);
   const shotCount = section.shots.length;
   const referenceCount = section.shots.filter((s) => s.kind !== 'Normal').length;
-  const avgShotLength = shotCount > 0 ? sectionLength / shotCount : 0;
+  const avgShotLength = lengthShotCount > 0 ? sectionLength / lengthShotCount : null;
+  // Reference length is left out of the section length; say so, or a section of
+  // Reference shots reads "0.0 m" with no reason next to a table of real lengths.
+  const referenceLength = section.shots.reduce((sum, s) => (s.kind === 'Reference' ? sum + s.length : sum), 0);
   const contributionPercent = totalProjectLength > 0
     ? (sectionLength / totalProjectLength) * 100
     : 0;
@@ -1271,11 +1276,18 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
             <div className="grid grid-cols-2 gap-x-4 gap-y-1">
               <StatCard label={t('detailPanel.section.totalLength')} value={`${formatFixed(sectionLength, undefined, precision.length)} ${t('common.units.meters')}`} />
               <StatCard label={t('detailPanel.section.shotCount')} value={formatNumber(shotCount)} />
-              <StatCard label={t('detailPanel.section.avgShot')} value={`${formatFixed(avgShotLength, undefined, precision.length)} ${t('common.units.meters')}`} />
+              <StatCard label={t('detailPanel.section.avgShot')} value={avgShotLength === null ? '-' : `${formatFixed(avgShotLength, undefined, precision.length)} ${t('common.units.meters')}`} />
               {referenceCount > 0 && (
                 <StatCard label={t('detailPanel.section.referenceShots')} value={formatNumber(referenceCount)} />
               )}
             </div>
+            {referenceLength > 0 && (
+              <p className="text-xs text-text-secondary" data-testid="section-reference-length-note">
+                {t('detailPanel.section.referenceLengthNote', {
+                  length: `${formatFixed(referenceLength, undefined, precision.length)} ${t('common.units.meters')}`,
+                })}
+              </p>
+            )}
           </div>
 
           {/* Depth range */}

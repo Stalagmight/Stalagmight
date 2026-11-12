@@ -242,7 +242,7 @@ See [TESTING.md](TESTING.md) for the tiers and which one a test belongs in, and
 | **Section** | A group of consecutive shots collected during a single survey session. Has metadata (name, surveyor, date). |
 | **Virtual Shot** | A shot that is not a permanent surveyed leg. Since #27 it is one of two kinds, and the distinction drives gas and penetration. |
 | **Jump** | A virtual shot a diver **swims**: a shortcut between two mainlines. Counts toward gas (at `jump_rmv_multiplier`) and penetration. Drawn faded. |
-| **Reference Shot** | A virtual shot that is **not swimmable**: a tape tie or backsight used to connect sections that aren't physically connected yet. Excluded from gas, penetration and route distance unless `gas.include_reference_legs` is on. Drawn fainter than a jump. |
+| **Reference Shot** | A virtual shot that is **not swimmable**: a tape tie or backsight used to connect sections that aren't physically connected yet. Excluded from gas, penetration and route distance unless `gas.include_reference_legs` is on. Always excluded from survey length, since it repeats passage already surveyed (#689). Drawn fainter than a jump. |
 | **Zero Datum** | A station with GPS coordinates assigned. The fixed reference point for the coordinate system. |
 | **LRUD** | Left, Right, Up, Down - passage dimension measurements at a station. |
 | **Loop Closure** | When two survey paths meet at the same physical point, creating a loop. |
@@ -423,7 +423,10 @@ The transformation is implemented in `src-tauri/crates/models/src/geo.rs` with:
 These are derived from shot data, not stored:
 
 - Station coordinates (from azimuth, length, depth chain)
-- Section statistics (total length, depth range, shot count)
+- Section statistics (total length, depth range, shot count). Total length
+  sums permanent and jump shots only: a reference shot repeats passage already
+  surveyed, so counting it would double-count (#689). Shot count includes every
+  shot.
 - Loop closure errors
 - Penetration distance (maximum line distance from zero datum)
 
