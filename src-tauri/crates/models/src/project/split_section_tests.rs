@@ -451,3 +451,38 @@ fn values_under_a_non_canonical_key_reach_the_copy() {
         Some(copy)
     );
 }
+
+/// The read-only check a cut inside a shot runs before it inserts a station:
+/// exact at the shot cap (99,999 shots) and at the end of the section's id
+/// window.
+#[test]
+fn the_shot_insert_check_is_exact_at_the_cap_and_the_id_window() {
+    let mut project = Project::new("Cap".to_string(), None);
+    let full = project
+        .add_section(SectionData {
+            shots: (0..99_998).map(|_| shot(90.0, 1.0)).collect(),
+            ..Default::default()
+        })
+        .id;
+    assert_eq!(project.shot_insert_refusal(full), None, "99,998 shots");
+    assert!(project.add_shot(full, shot(90.0, 1.0)).is_some());
+    let reason = project.shot_insert_refusal(full).unwrap();
+    assert!(reason.contains("maximum of 99999 shots"), "{reason}");
+
+    let small = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 1.0)],
+            ..Default::default()
+        })
+        .id;
+    let window_end = (small + 1) * crate::FEATURE_ID_STRIDE;
+    project.get_section_mut(small).unwrap().next_shot_id = window_end - 1;
+    assert_eq!(project.shot_insert_refusal(small), None, "one id left");
+    project.get_section_mut(small).unwrap().next_shot_id = window_end;
+    let reason = project.shot_insert_refusal(small).unwrap();
+    assert!(reason.contains("used up its shot numbers"), "{reason}");
+    assert!(
+        project.shot_insert_refusal(small + 1).is_some(),
+        "no section"
+    );
+}

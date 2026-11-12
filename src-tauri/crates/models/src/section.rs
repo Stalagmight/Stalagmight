@@ -618,6 +618,16 @@ impl Section {
         }
     }
 
+    /// How many more shot ids this section can hand out in this session.
+    /// They come from `next_shot_id`, which only grows (a delete does not give
+    /// its id back), and must stay inside the section's id window
+    /// (`id * FEATURE_ID_STRIDE ..`) or they take the next section's ids. A
+    /// reload renumbers every section compactly.
+    pub fn shot_ids_left(&self) -> u64 {
+        let window_end = (u64::from(self.id) + 1) * u64::from(FEATURE_ID_STRIDE);
+        window_end.saturating_sub(u64::from(self.next_shot_id))
+    }
+
     /// Add a shot to the end of this section
     pub fn add_shot(&mut self, data: ShotData) -> &Shot {
         let shot = Shot::new(self.next_shot_id, data);

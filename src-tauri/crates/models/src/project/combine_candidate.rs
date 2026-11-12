@@ -242,16 +242,13 @@ impl Project {
         None
     }
 
-    /// Why `kept` cannot take `other`'s shots: they get ids from
-    /// `kept.next_shot_id`, which only ever grows within a session, and must
-    /// stay inside `kept`'s id window (`kept.id * FEATURE_ID_STRIDE ..`) or they
-    /// collide with the next section's ids. Not renumbered in place: position-
+    /// Why `kept` cannot take `other`'s shots: they get new ids from `kept`,
+    /// which has only [`Section::shot_ids_left`] of them. Not renumbered in
+    /// place: position-
     /// keyed ignored warnings and the frontend's selection, hover and table
     /// state address shots by id. A reload renumbers every section compactly.
     pub(crate) fn shot_id_room_refusal(kept: &Section, other: &Section) -> Option<String> {
-        let window_end = u64::from(kept.id + 1) * u64::from(FEATURE_ID_STRIDE);
-        let last = u64::from(kept.next_shot_id) + other.shots.len() as u64;
-        (last > window_end).then(|| {
+        (other.shots.len() as u64 > kept.shot_ids_left()).then(|| {
             format!(
                 "{} has used up its shot numbers for this session: keep {}, or save and \
                  reopen",

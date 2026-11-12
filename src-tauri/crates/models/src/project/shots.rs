@@ -141,6 +141,28 @@ impl Project {
         FEATURE_ID_STRIDE.saturating_sub(1) as usize
     }
 
+    /// Why one more shot cannot go into `section_id`, if it cannot: the
+    /// section is missing, holds the most shots a section may, or has no shot
+    /// id left in this session ([`crate::Section::shot_ids_left`]). Read-only, so a
+    /// caller can refuse before changing anything.
+    pub fn shot_insert_refusal(&self, section_id: SectionId) -> Option<String> {
+        let Some(section) = self.get_section(section_id) else {
+            return Some(format!("Section {section_id} not found"));
+        };
+        if section.shots.len() >= Self::max_shots_per_section() {
+            return Some(format!(
+                "Section {section_id} has reached the maximum of {} shots",
+                Self::max_shots_per_section()
+            ));
+        }
+        (section.shot_ids_left() == 0).then(|| {
+            format!(
+                "Section {section_id} has used up its shot numbers for this session: save \
+                 and reopen to add a station to it"
+            )
+        })
+    }
+
     /// Add a shot to a section
     pub fn add_shot(&mut self, section_id: SectionId, data: ShotData) -> Option<&Shot> {
         let section = self.get_section_mut(section_id)?;

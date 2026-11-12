@@ -637,6 +637,76 @@ fn a_refused_split_leaves_position_keyed_ignores_unpinned() {
     assert!(ignore_uuids(&state)[0].is_some());
 }
 
+/// A cut inside a shot inserts a station: a new shot of the section, with an
+/// id from the section's window. With no id left there it would take the next
+/// section's first id, so the cut is refused before anything changes; a cut at
+/// an existing station needs no new shot id in the section and still works.
+#[test]
+fn a_cut_inside_a_shot_with_no_shot_id_left_is_refused() {
+    let (state, main) = state();
+    let mut project = state.get_project_state().unwrap();
+    project.get_section_mut(main).unwrap().next_shot_id =
+        (main + 1) * crate::models::FEATURE_ID_STRIDE;
+    state.set_project_for_tests(project);
+    let depth = state.get_undo_stack().len();
+
+    let refused = state.execute_split_section(
+        main,
+        SplitAt::Shot {
+            shot_id: shot_id(&state, main, 1),
+            distance: 2.0,
+        },
+        options(),
+    );
+    assert!(!refused.success);
+    let reason = refused.error.unwrap();
+    assert!(reason.contains("used up its shot numbers"), "{reason}");
+    assert_eq!(lengths(&state), vec![vec![5.0, 7.0, 3.0]]);
+    assert_eq!(state.get_undo_stack().len(), depth);
+
+    let result =
+        state.execute_split_section(main, SplitAt::Station { station_index: 1 }, options());
+    assert!(result.success, "{:?}", result.error);
+}
+
+/// The shot cap, exactly at its edge: a section of 99,999 shots (the most a
+/// section may hold) cannot take the station a cut inside a shot inserts, and
+/// is refused before anything changes.
+#[test]
+fn a_cut_inside_a_shot_of_a_full_section_is_refused() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Full".to_string(),
+        location: None,
+    });
+    let mut project = state.get_project_state().unwrap();
+    let full = project
+        .add_section(crate::models::SectionData {
+            shots: (0..99_999).map(|_| flat(90.0, 1.0)).collect(),
+            ..Default::default()
+        })
+        .id;
+    state.set_project_for_tests(project);
+    let depth = state.get_undo_stack().len();
+
+    let refused = state.execute_split_section(
+        full,
+        SplitAt::Shot {
+            shot_id: shot_id(&state, full, 10),
+            distance: 0.5,
+        },
+        options(),
+    );
+    assert!(!refused.success);
+    let reason = refused.error.unwrap();
+    assert!(reason.contains("maximum of 99999 shots"), "{reason}");
+    let project = state.get_project_state().unwrap();
+    let section = project.get_section(full).unwrap();
+    assert_eq!(section.shots.len(), 99_999);
+    assert!(section.shots.iter().all(|shot| shot.length == 1.0));
+    assert_eq!(state.get_undo_stack().len(), depth);
+}
+
 /// Delete-and-split builds its second section fresh too, and keeps the cut
 /// section's orientation the same way Split Section Here does: the reverse
 /// parity, and a captured gauge pair on the half that now holds its station.

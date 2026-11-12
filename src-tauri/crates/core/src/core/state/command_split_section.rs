@@ -79,6 +79,9 @@ impl AppState {
                     distance,
                     station_index,
                 } => {
+                    // `validate_cut` ran every check the shot split refuses
+                    // on, but the model shortens the tail before it inserts
+                    // the head, so a failure rolls back whatever it changed.
                     if let Err(e) = project.split_shot_at_distance(section_id, shot_id, distance) {
                         let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
                         return CommandResult::failure(e);
@@ -167,6 +170,13 @@ impl AppState {
                         return Err("Cannot split a frozen shot. This shot is part of an \
                                     adjusted survey network."
                             .to_string());
+                    }
+                    // The station goes in as a new shot of this section,
+                    // so it needs room under the shot cap and an id left
+                    // in the section's window; checked here, before the
+                    // shot split changes anything.
+                    if let Some(refusal) = project.shot_insert_refusal(section_id) {
+                        return Err(refusal);
                     }
                     // The new station is always a mid-section one, so the
                     // split cannot refuse it for being an end.
