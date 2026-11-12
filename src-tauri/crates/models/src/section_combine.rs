@@ -89,6 +89,7 @@ pub struct CombineCandidate {
 /// kept section and `B` the other one.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 pub struct CombineOptions {
+    /// Empty leaves the combined section unnamed.
     pub name: String,
     /// `#rrggbb`.
     pub color: String,

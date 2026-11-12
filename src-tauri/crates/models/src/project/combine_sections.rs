@@ -245,7 +245,7 @@ impl Project {
         let Some(section) = self.get_section_mut(kept) else {
             return Err(format!("Section {kept} not found"));
         };
-        section.name = Some(options.name.clone());
+        section.name = (!options.name.is_empty()).then(|| options.name.clone());
         section.color.clone_from(&options.color);
         for shot in data {
             section.add_shot(shot);
