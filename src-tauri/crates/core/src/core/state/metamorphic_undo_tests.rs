@@ -1038,6 +1038,14 @@ struct PairOutcome {
 const PAIRS: &[Pair] = &[
     // ---------------------------------------------------------------------
     Pair {
+        id: "split-section-then-undo-is-identity",
+        promise: "command_split_section.rs execute_split_section - Split Section Here is ONE \
+                  undo entry: undoing it restores every section, shot, merge, closure, datum, \
+                  comment and credit exactly (#335)",
+        run: pair_split_section_then_undo_is_identity,
+    },
+    // ---------------------------------------------------------------------
+    Pair {
         id: "range-shift-is-n-single-deletes",
         promise: "command_delete_split.rs execute_delete_shot_range_shift - an ATOMIC range \
                   gap-close: identical to the n single deletes on every range that removes no \
@@ -1514,6 +1522,51 @@ fn pair_reverse_twice_is_identity(
         if !reversed.success {
             return None;
         }
+    }
+    let mut found = twins.compare(pair, Mask::Strict);
+    let (unwound, _) = twins.unwind_and_compare(pair, Mask::Strict);
+    found.absorb(unwound.prefixed("AFTER UNWIND: "));
+    Some(found)
+}
+
+/// Split Section Here (#335) at a random mid-section station, then undo it,
+/// against doing nothing. Every comment/datum side is drawn, so the copies the
+/// split makes onto the second half's start all have to vanish on undo.
+fn pair_split_section_then_undo_is_identity(
+    twins: &Twins,
+    rng: &mut Rng,
+    pair: &'static str,
+) -> Option<Comparison> {
+    let section_id = section_with_shots(&twins.left, rng, 2)?;
+    let shot_count = twins
+        .left
+        .get_project_state()?
+        .get_section(section_id)?
+        .shots
+        .len();
+    let station_index = 1 + rng.below(shot_count - 1) as u32;
+    let side = |n: usize| match n {
+        0 => crate::models::SplitSide::A,
+        1 => crate::models::SplitSide::B,
+        _ => crate::models::SplitSide::Both,
+    };
+    let split = twins.right.execute_split_section(
+        section_id,
+        crate::models::SplitAt::Station { station_index },
+        crate::models::SplitSectionOptions {
+            name_a: "split-a".to_string(),
+            name_b: "split-b".to_string(),
+            color_a: "#111111".to_string(),
+            color_b: "#222222".to_string(),
+            comment_side: side(rng.below(3)),
+            datum_side: side(rng.below(2)),
+        },
+    );
+    if !split.success {
+        return None;
+    }
+    if !twins.right.undo().success {
+        return None;
     }
     let mut found = twins.compare(pair, Mask::Strict);
     let (unwound, _) = twins.unwind_and_compare(pair, Mask::Strict);

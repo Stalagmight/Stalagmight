@@ -2114,6 +2114,15 @@ pub(super) enum Op {
     DeleteShotAndSplit {
         shot: ShotRefT,
     },
+    /// Split Section Here (#335): at the shot's end station, or `distance`
+    /// along it when `along` is set. `side` picks where the split station's
+    /// comment (0 A, 1 B, 2 both) and zero datum (even A, odd B) go.
+    SplitSection {
+        shot: ShotRefT,
+        along: bool,
+        distance: f64,
+        side: u8,
+    },
     DeleteLastShotAndSection {
         shot: ShotRefT,
     },
@@ -2274,6 +2283,15 @@ impl Op {
             Self::DeleteShotAndSplit { shot: target } => {
                 format!("deleteShotAndSplit({})", shot(target))
             }
+            Self::SplitSection {
+                shot: target,
+                along,
+                distance,
+                side,
+            } => format!(
+                "splitSection({},along={along},{distance},side={side})",
+                shot(target)
+            ),
             Self::DeleteLastShotAndSection { shot: target } => {
                 format!("deleteLastShotAndSection({})", shot(target))
             }
@@ -4461,7 +4479,7 @@ impl Fuzzer {
             .find(|(id, _)| *id == section_id)
             .map(|(_, shots)| shots.clone())
             .unwrap_or_default();
-        match self.rng.below(5) {
+        match self.rng.below(6) {
             0 => {
                 // Distances AT the boundaries are the interesting ones: a split
                 // there degenerates into a zero-length shot.
@@ -4480,6 +4498,16 @@ impl Fuzzer {
             }),
             2 => Some(Op::DeleteLastShotAndSection {
                 shot: Self::shot_ref(targets, section_id, shot_id),
+            }),
+            3 => Some(Op::SplitSection {
+                shot: Self::shot_ref(targets, section_id, shot_id),
+                along: self.rng.chance(50),
+                distance: if self.rng.chance(20) {
+                    *self.rng.pick(&[0.0, 1e-9, 0.005])
+                } else {
+                    self.rng.float(0.1, 8.0)
+                },
+                side: self.rng.below(6) as u8,
             }),
             _ => {
                 if shots.len() < 2 {
@@ -4890,6 +4918,53 @@ impl Fuzzer {
                         "split-a".to_string(),
                         "split-b".to_string(),
                     ),
+                ))
+            }
+            Op::SplitSection {
+                shot,
+                along,
+                distance,
+                side,
+            } => {
+                let Some((section_id, shot_id)) = refs.shot(shot, targets) else {
+                    return refs.skip(&op.describe());
+                };
+                let at = if *along {
+                    crate::models::SplitAt::Shot {
+                        shot_id,
+                        distance: *distance,
+                    }
+                } else {
+                    let position = self
+                        .state
+                        .get_project_state()
+                        .and_then(|p| {
+                            p.get_section(section_id)?
+                                .shots
+                                .iter()
+                                .position(|s| s.id == shot_id)
+                        })
+                        .unwrap_or(0);
+                    crate::models::SplitAt::Station {
+                        station_index: position as u32 + 1,
+                    }
+                };
+                let pick = |n: u8| match n {
+                    0 => crate::models::SplitSide::A,
+                    1 => crate::models::SplitSide::B,
+                    _ => crate::models::SplitSide::Both,
+                };
+                let options = crate::models::SplitSectionOptions {
+                    name_a: "split-a".to_string(),
+                    name_b: "split-b".to_string(),
+                    color_a: "#111111".to_string(),
+                    color_b: "#222222".to_string(),
+                    comment_side: pick(side % 3),
+                    datum_side: pick(side % 2),
+                };
+                Some(Drawn::new(
+                    format!("splitSection(s={section_id},at={at:?})"),
+                    self.state.execute_split_section(section_id, at, options),
                 ))
             }
             Op::DeleteLastShotAndSection { shot } => {
