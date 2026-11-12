@@ -28,6 +28,7 @@ mod speleodb_admin;
 mod speleodb_cache;
 mod speleodb_cache_install;
 mod speleodb_cached;
+mod speleodb_collaborators;
 mod speleodb_credentials;
 mod speleodb_edit_gate;
 mod speleodb_foreign;

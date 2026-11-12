@@ -493,6 +493,20 @@ pub async fn speleodb_remove_link_at(
     run_blocking(app, move |s| s.speleodb_remove_link_at(path, expected)).await
 }
 
+/// Everyone with access to SpeleoDB project `project_id` (the signed-in user
+/// included), with display names where the server knows them: the survey-credit
+/// people inputs' suggestions for a linked project. Two bounded reads, served
+/// from an in-memory per-project cache for ten minutes:
+/// `GET /api/v2/projects/{id}/permissions/user/`, then
+/// `GET /api/v2/user/autocomplete/?query=<email>` per user.
+#[tauri::command]
+pub async fn speleodb_project_collaborators(
+    app: AppHandle,
+    project_id: String,
+) -> Result<Vec<stalagmight_core::speleodb::SpeleoCollaborator>, SpeleoErrorDto> {
+    run_blocking(app, move |s| s.speleodb_project_collaborators(project_id)).await
+}
+
 /// GET the open remote project's editable metadata so the Project Settings tab can
 /// prefill the current server truth (#206). No lock; permission-free read.
 #[tauri::command]

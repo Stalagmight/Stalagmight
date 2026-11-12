@@ -6072,6 +6072,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return { removed: 0, kept_unpushed: [], kept_open: [], failed: [], locks_released: [], locks_unchecked: [] };
           case 'speleodb_get_project_metadata':
             return { name: 'Mock Cave', description: '', country: 'US', visibility: 'PRIVATE', latitude: null, longitude: null, exclude_geojson: false };
+          case 'speleodb_project_collaborators': {
+            // The linked project's collaborators as survey-credit suggestions;
+            // specs override via __MOCK_SPELEODB_COLLABORATORS__.
+            const override = (window as unknown as Record<string, unknown>).__MOCK_SPELEODB_COLLABORATORS__;
+            if (Array.isArray(override)) return override;
+            return [
+              { name: 'Mock Collaborator', email: 'collaborator@example.org', level: 'READ_AND_WRITE' },
+              { name: null, email: 'test@example.com', level: 'ADMIN' },
+            ];
+          }
           case 'speleodb_publish':
             // #207 publish result: the reloaded (now-remote) local .stalx path.
             return {

@@ -17,7 +17,11 @@ use super::models::{
 use super::native::NativeFile;
 use super::{SpeleoDbError, TransportCause};
 
+mod collaborators;
 mod commit_dates;
+pub use collaborators::{
+    list_project_collaborators, lookup_user_name, ProjectCollaborator, MAX_COLLABORATORS,
+};
 
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
 const TRANSFER_TIMEOUT: Duration = Duration::from_secs(120);

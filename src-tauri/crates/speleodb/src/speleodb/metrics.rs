@@ -47,6 +47,10 @@ pub(crate) enum Endpoint {
     Release,
     PatchProject,
     CreateProject,
+    /// `GET /projects/{id}/permissions/user/`: who has access (survey credit).
+    ListPermissions,
+    /// `GET /user/autocomplete/`: a collaborator's display name.
+    UserAutocomplete,
 }
 
 impl Endpoint {
@@ -70,6 +74,8 @@ impl Endpoint {
         Endpoint::Release,
         Endpoint::PatchProject,
         Endpoint::CreateProject,
+        Endpoint::ListPermissions,
+        Endpoint::UserAutocomplete,
     ];
 
     /// The stable wire label for this endpoint (the `<kind>` in the event name).
@@ -87,6 +93,8 @@ impl Endpoint {
             Endpoint::Release => "release",
             Endpoint::PatchProject => "patch-project",
             Endpoint::CreateProject => "create-project",
+            Endpoint::ListPermissions => "list-permissions",
+            Endpoint::UserAutocomplete => "user-autocomplete",
         }
     }
 }

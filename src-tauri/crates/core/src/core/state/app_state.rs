@@ -122,6 +122,10 @@ pub struct AppState {
     pub(super) speleodb_open_gate: Mutex<super::speleodb_edit_gate::OpenProjectGate>,
     /// In-memory display settings cache (used when no DB is open, e.g., new unsaved project)
     pub(super) display_settings_cache: Mutex<HashMap<String, String>>,
+    /// The SpeleoDB collaborator listings already fetched, per (endpoint,
+    /// account, project) - survey-credit suggestions (`speleodb_collaborators`).
+    /// A leaf lock.
+    pub(super) speleodb_collaborators: Mutex<super::speleodb_collaborators::CollaboratorCache>,
     /// Serialization lock for command execution.
     /// Held for the entire duration of execute(), undo(), and redo() to prevent
     /// concurrent commands from interleaving (especially with batch sub-commands).
@@ -272,6 +276,7 @@ impl AppState {
             // Nothing open: unmanaged, so editing never waits on a lock (#191).
             speleodb_open_gate: Mutex::default(),
             display_settings_cache: Mutex::new(HashMap::new()),
+            speleodb_collaborators: Mutex::new(HashMap::new()),
             command_lock: Mutex::new(()),
             tile_cache: Arc::new(Mutex::new(tile_cache)),
             tilemap_cache: Arc::new(Mutex::new(TilemapCache::new())),

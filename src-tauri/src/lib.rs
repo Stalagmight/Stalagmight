@@ -1880,6 +1880,7 @@ pub fn run() {
             // SpeleoDB Enable-rendering PATCH (#200)
             // SpeleoDB Project Settings metadata (#206) + create-on-SDB publish (#207)
             commands::speleodb::speleodb_get_project_metadata,
+            commands::speleodb::speleodb_project_collaborators,
             commands::speleodb::speleodb_publish,
             // SpeleoDB project settings: release the open project lock
             commands::speleodb::speleodb_release_current_lock,

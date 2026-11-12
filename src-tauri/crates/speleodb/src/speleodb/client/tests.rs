@@ -1584,3 +1584,85 @@ fn a_refused_reply_without_a_commit_date_is_not_decoded_again() {
     let body = pre_iso_project().to_string().into_bytes();
     assert!(matches!(decode_reply::<types::Project>(&body), Some(Ok(_))));
 }
+
+/// The collaborator listing: one permission list, then one exact-email name
+/// lookup per user; a lookup that fails or finds no exact match leaves the
+/// name unknown without failing the list.
+#[test]
+fn collaborators_are_listed_then_named_by_exact_email() {
+    let token = "<your_token_here>";
+    let permissions = json!({
+        "permissions": [
+            {"user": "ann@example.org", "level": "ADMIN",
+             "creation_date": "2026-01-01T00:00:00Z", "modified_date": "2026-01-01T00:00:00Z"},
+            {"user": "bo@example.org", "level": "READ_ONLY",
+             "creation_date": "2026-01-01T00:00:00Z", "modified_date": "2026-01-01T00:00:00Z"},
+            {"user": "cy@example.org", "level": "SOMETHING_NEW",
+             "creation_date": "2026-01-01T00:00:00Z", "modified_date": "2026-01-01T00:00:00Z"},
+        ],
+        "project": project_json(),
+    });
+    let s = Server::replies(vec![
+        (200, permissions.to_string().into_bytes()),
+        (
+            200,
+            json!([
+                {"email": "ann.other@example.org", "name": "Wrong", "label": "x"},
+                {"email": "ann@example.org", "name": "Ann Smith", "label": "Ann Smith"},
+            ])
+            .to_string()
+            .into_bytes(),
+        ),
+        (404, br#"{"detail":"Not found"}"#.to_vec()),
+        (200, b"[]".to_vec()),
+    ]);
+    let got = list_project_collaborators(&s.base, token, false, ID).unwrap();
+    let requests = s.finish();
+    assert_eq!(
+        got,
+        vec![
+            ProjectCollaborator {
+                email: "ann@example.org".into(),
+                level: "ADMIN".into(),
+                name: Some("Ann Smith".into()),
+            },
+            ProjectCollaborator {
+                email: "bo@example.org".into(),
+                level: "READ_ONLY".into(),
+                name: None,
+            },
+            ProjectCollaborator {
+                email: "cy@example.org".into(),
+                level: "SOMETHING_NEW".into(),
+                name: None,
+            },
+        ],
+        "an unknown level is kept verbatim, not a parse failure"
+    );
+    assert_eq!(requests.len(), 4, "a failed lookup is not retried");
+    assert!(requests[0].starts_with(&format!("GET /api/v2/projects/{ID}/permissions/user/ ")));
+    assert!(requests[1].starts_with("GET /api/v2/user/autocomplete/?query=ann%40example.org "));
+    assert!(requests[2].starts_with("GET /api/v2/user/autocomplete/?query=bo%40example.org "));
+    for request in &requests {
+        assert!(request
+            .to_lowercase()
+            .contains(&format!("authorization: bearer {token}")));
+    }
+}
+
+/// A failed permission list fails the call; a malformed one is a contract
+/// mismatch, not an empty list.
+#[test]
+fn a_failed_permission_list_fails_the_collaborator_listing() {
+    let s = Server::replies(vec![(403, br#"{"detail":"Forbidden"}"#.to_vec())]);
+    let err = list_project_collaborators(&s.base, "<your_token_here>", false, ID).unwrap_err();
+    assert!(
+        matches!(err, SpeleoDbError::Status { status: 403, .. }),
+        "{err}"
+    );
+    assert_eq!(s.finish().len(), 1);
+    let s = Server::json(json!({"unexpected": true}));
+    let err = list_project_collaborators(&s.base, "<your_token_here>", false, ID).unwrap_err();
+    assert!(matches!(err, SpeleoDbError::Parse(_)), "{err}");
+    assert_eq!(s.finish().len(), 1);
+}
