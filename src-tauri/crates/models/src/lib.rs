@@ -11,6 +11,7 @@ pub mod azimuth_reference;
 mod azimuth_reference_tests;
 pub mod comment_split;
 pub mod config;
+pub mod credit;
 pub mod dive_plan;
 pub mod geo;
 pub mod id_stride;
@@ -27,6 +28,7 @@ pub mod warning;
 
 pub use angle::*;
 pub use azimuth_reference::*;
+pub use credit::ShotCredit;
 pub use dive_plan::*;
 pub use geo::*;
 pub use id_stride::*;

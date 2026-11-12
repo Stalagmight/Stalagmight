@@ -147,6 +147,12 @@ pub struct Shot {
     pub temperature: Option<f64>,
     pub marker_index: Option<u32>,
     pub comment: Option<String>,
+    /// Who surveyed this shot: its own surveyor where it has one (sections
+    /// combined from different trips keep each trip's credit), otherwise its
+    /// section's [`Section::surveyor`]. `None` when unknown.
+    pub surveyor: Option<String>,
+    /// ISO 8601 date (`YYYY-MM-DD`) this shot was surveyed, by the same rule.
+    pub date: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -414,7 +420,7 @@ impl Survey {
                                 let derived = shot.uuid.as_ref().is_some_and(|uuid| {
                                     derived_uuids.contains(&(section.id, uuid.clone()))
                                 });
-                                Shot::from_model(shot, derived)
+                                Shot::from_model(shot, derived, section)
                             })
                             .collect(),
                     }
@@ -597,7 +603,11 @@ impl UnionFind {
 }
 
 impl Shot {
-    fn from_model(shot: &stalagmight_models::Shot, uuid_derived: bool) -> Self {
+    fn from_model(
+        shot: &stalagmight_models::Shot,
+        uuid_derived: bool,
+        section: &stalagmight_models::Section,
+    ) -> Self {
         Self {
             // The reader fills every missing UUID before converting.
             uuid: shot.uuid.clone().unwrap_or_default(),
@@ -621,6 +631,14 @@ impl Shot {
             temperature: shot.temperature,
             marker_index: shot.marker_index,
             comment: shot.comment.clone(),
+            surveyor: shot
+                .credit()
+                .surveyor_or(section.surveyor.as_deref())
+                .map(str::to_owned),
+            date: shot
+                .credit()
+                .date_or(section.date)
+                .map(|d| d.format("%Y-%m-%d").to_string()),
         }
     }
 }

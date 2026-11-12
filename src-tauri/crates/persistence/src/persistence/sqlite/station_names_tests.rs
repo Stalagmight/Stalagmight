@@ -150,7 +150,7 @@ fn a_file_without_the_table_opens_reads_and_saves() {
 }
 
 /// Every row of `table` as text, in rowid order, minus `skip` columns.
-fn dump(db: &Database, table: &str, skip: &[&str]) -> Vec<Vec<String>> {
+pub(super) fn dump(db: &Database, table: &str, skip: &[&str]) -> Vec<Vec<String>> {
     if !table_exists(db, table) {
         return Vec::new();
     }

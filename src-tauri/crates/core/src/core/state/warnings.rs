@@ -140,6 +140,7 @@ impl AppState {
             for (shot_index, shot) in section.shots.iter().enumerate() {
                 // Convert Shot to ShotData for validation
                 let shot_data = ShotData {
+                    credit: None,
                     // Validation reads geometry only; identity is irrelevant and
                     // this value is never used to build a shot.
                     uuid: None,

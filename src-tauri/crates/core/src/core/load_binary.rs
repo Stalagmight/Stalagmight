@@ -33,7 +33,7 @@ use serde_bytes::ByteBuf;
 use crate::core::loading::{DisplaySettings, LoadProjectFullResult};
 use crate::models::{
     AzimuthReference, ClosureRef, FrozenShotRef, GpsCoordinates, LoopClosureWire, ProjectStats,
-    ProjectWarning, SectionId, ShotId, StationMergeWire, StationRef, SurveyDirection,
+    ProjectWarning, SectionId, ShotCredit, ShotId, StationMergeWire, StationRef, SurveyDirection,
     ZeroDatumWire,
 };
 
@@ -93,7 +93,12 @@ pub const STATION_UINT_STRIDE: usize = STATION_UINT_FIELDS * 4;
 /// `station_names` list. A map field a stale frontend would ignore, but it
 /// would then show every imported mNemo station number as missing - the same
 /// "believes it has the whole project" case as 4 → 5.
-pub const BINARY_FORMAT_VERSION: u32 = 6;
+///
+/// Bumped 6 → 7 for per-shot survey credit (#707): the envelope gained the
+/// sparse `shot_credits` list. A stale frontend would ignore it and credit
+/// every shot of a combined section to the section's surveyor - the same
+/// "believes it has the whole project" case again.
+pub const BINARY_FORMAT_VERSION: u32 = 7;
 
 #[derive(Serialize)]
 pub struct LoadProjectFullBinaryResult {
@@ -120,6 +125,9 @@ pub struct LoadProjectFullBinaryResult {
     /// Sparse map of (global_shot_index, comment). global_shot_index is the
     /// row index into the per-shot arrays above (NOT a Shot.id).
     pub shot_comments: Vec<(u32, String)>,
+    /// Sparse map of (global_shot_index, credit) for shots that override their
+    /// section's surveyor or date (#707). A shot not listed inherits both.
+    pub shot_credits: Vec<(u32, ShotCredit)>,
 
     pub station_count: u32,
     /// Per-station f64 coordinates: x, y, z (24 bytes per station).
@@ -226,6 +234,7 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
     let mut shots_uints = Vec::with_capacity(shot_count * SHOT_UINT_STRIDE);
     let mut shots_flags = Vec::with_capacity(shot_count);
     let mut shot_comments: Vec<(u32, String)> = Vec::new();
+    let mut shot_credits: Vec<(u32, ShotCredit)> = Vec::new();
     let mut sections_meta: Vec<SectionHeaderBinary> = Vec::with_capacity(project.sections.len());
 
     let mut shot_cursor: u32 = 0;
@@ -289,6 +298,10 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
                 if !comment.is_empty() {
                     shot_comments.push((shot_cursor, comment.clone()));
                 }
+            }
+            // Sparse credit (#707): only shots that override their section.
+            if let Some(credit) = &shot.credit {
+                shot_credits.push((shot_cursor, credit.clone()));
             }
             shot_cursor += 1;
         }
@@ -418,6 +431,7 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         shots_uints: ByteBuf::from(shots_uints),
         shots_flags: ByteBuf::from(shots_flags),
         shot_comments,
+        shot_credits,
         station_count: station_count as u32,
         stations_floats: ByteBuf::from(stations_floats),
         stations_uints: ByteBuf::from(stations_uints),
@@ -532,6 +546,7 @@ mod tests {
 
     fn shot(id: u32, azimuth: f64, length: f64, depth_in: f64, depth_out: f64) -> Shot {
         Shot {
+            credit: None,
             id,
             uuid: None,
             azimuth_in: azimuth,
@@ -625,6 +640,7 @@ mod tests {
         let mut project = new_project("t");
         let mut sec = new_section(1, "S", "#abcdef");
         sec.shots.push(Shot {
+            credit: None,
             id: 1,
             uuid: None,
             azimuth_in: 0.0,

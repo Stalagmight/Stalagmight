@@ -18,6 +18,7 @@ import { decode as msgpackDecode } from '@msgpack/msgpack';
 import type { LoadProjectFullResult } from '../types/ipc/LoadProjectFullResult';
 import type { Project } from '../types/ipc/Project';
 import type { AzimuthReference } from '../types/ipc/AzimuthReference';
+import type { ShotCredit } from '../types/ipc/ShotCredit';
 import type { ValidationConfig } from '../types/ipc/ValidationConfig';
 import type { Section } from '../types/ipc/Section';
 import type { Shot } from '../types/ipc/Shot';
@@ -77,8 +78,12 @@ export interface LoadProjectFullResultWithSoa extends LoadProjectFullResult {
  * envelope is map-encoded (`rmp_serde::to_vec_named`), so a stale reader would
  * find the key absent rather than misalign - the bump is a deliberate fence, not
  * a decode requirement, and it keeps this constant honest about the shape.
+ *
+ * 7 adds the sparse `shot_credits` list (#707): shots that override their
+ * section's surveyor or date. A stale reader would credit every shot of a
+ * combined section to the section's surveyor.
  */
-const EXPECTED_VERSION = 6;
+const EXPECTED_VERSION = 7;
 /** f32 fields per shot. Mirror of SHOT_FLOAT_FIELDS in Rust. */
 const SHOT_FLOAT_FIELDS = 12;
 /** u32 fields per shot. Mirror of SHOT_UINT_FIELDS in Rust. */
@@ -102,6 +107,7 @@ export interface BinaryEnvelope {
   shots_uints: Uint8Array;
   shots_flags: Uint8Array;
   shot_comments: Array<[number, string]>;
+  shot_credits: Array<[number, ShotCredit]>;
   station_count: number;
   stations_floats: Uint8Array;
   stations_uints: Uint8Array;
@@ -259,6 +265,8 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
   // Index shot comments by global shot index for O(1) lookup.
   const shotCommentByIdx = new Map<number, string>();
   for (const [idx, c] of env.shot_comments) shotCommentByIdx.set(idx, c);
+  // Sparse per-shot credit (#707); a shot not listed inherits its section's.
+  const shotCreditByIdx = new Map<number, ShotCredit>(env.shot_credits);
 
   // Build Section[] with a *lazy* `shots` getter backed by the typed
   // arrays we already have. Materializing all 75k Shot objects up
@@ -302,6 +310,8 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
           kind: shotKindFromFlags(shotsFlags[globalIdx]!),
           marker_index: markerRaw === 0xFFFFFFFF ? null : markerRaw,
         };
+        const credit = shotCreditByIdx.get(globalIdx);
+        if (credit) shots[j]!.credit = credit;
       }
       return shots;
     };

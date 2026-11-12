@@ -505,6 +505,7 @@ pub fn convert_walls_to_import_configs(
                     _ => own_lrud,
                 };
                 shots.push(ShotData {
+                    credit: None,
                     // Walls files carry no shot identity; every shot gets a
                     // fresh mint.
                     uuid: None,

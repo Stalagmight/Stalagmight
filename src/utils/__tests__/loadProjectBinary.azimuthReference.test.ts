@@ -46,7 +46,7 @@ function envelope(overrides: {
   });
 
   return {
-    version: 6,
+    version: 7,
     loading_id: 1,
     is_remote: false,
     project_header: {
@@ -82,6 +82,7 @@ function envelope(overrides: {
     shots_uints: new Uint8Array(0),
     shots_flags: new Uint8Array(0),
     shot_comments: [],
+    shot_credits: [],
     station_count: 0,
     stations_floats: new Uint8Array(0),
     stations_uints: new Uint8Array(0),

@@ -4,7 +4,7 @@ use ts_rs::TS;
 /// Unique identifier for a shot within a section
 pub type ShotId = u32;
 
-use super::{normalize_azimuth, AzimuthReference, SectionId, FEATURE_ID_STRIDE};
+use super::{normalize_azimuth, AzimuthReference, SectionId, ShotCredit, FEATURE_ID_STRIDE};
 
 /// Convert a raw ShotId to a 1-indexed display position.
 ///
@@ -273,6 +273,11 @@ pub struct Shot {
     pub marker_index: Option<u32>,
     /// Water temperature in celsius
     pub temperature: Option<f64>,
+    /// Who surveyed this shot and when, where that differs from its section
+    /// (#707). Inherited (the default) for every shot from an older file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub credit: Option<ShotCredit>,
 }
 
 /// Data for creating or updating a shot
@@ -323,6 +328,11 @@ pub struct ShotData {
     pub marker_index: Option<u32>,
     #[serde(default)]
     pub temperature: Option<f64>,
+    /// Survey credit overrides, carried through every rebuild from data so a
+    /// split, reverse, combine or undo keeps who surveyed each shot (#707).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub credit: Option<ShotCredit>,
 }
 
 /// Accepts either the modern [`ShotKind`] string or a legacy `is_reference` /
@@ -372,7 +382,7 @@ where
 /// absent → `None` (no update), `null` → `Some(None)`, value → `Some(Some(v))`.
 /// With plain `#[serde(default)]`, `null` folds into the outer `None` and a
 /// clear sent by the frontend becomes a silent no-op.
-fn double_option<'de, T, D>(de: D) -> Result<Option<Option<T>>, D::Error>
+pub(crate) fn double_option<'de, T, D>(de: D) -> Result<Option<Option<T>>, D::Error>
 where
     T: Deserialize<'de>,
     D: Deserializer<'de>,
@@ -644,6 +654,7 @@ impl Shot {
             kind: data.kind,
             marker_index: data.marker_index,
             temperature: data.temperature,
+            credit: data.credit,
         }
     }
 
@@ -738,6 +749,11 @@ impl Shot {
         horizontal_length_from_slope(self.length, self.depth_out - self.depth_in)
     }
 
+    /// This shot's credit overrides; inherited from the section when unset.
+    pub fn credit(&self) -> &ShotCredit {
+        self.credit.as_ref().unwrap_or(&ShotCredit::INHERITED)
+    }
+
     /// Get depth change for this shot
     pub fn depth_change(&self) -> f64 {
         self.depth_out - self.depth_in
@@ -766,6 +782,7 @@ impl Shot {
             kind: self.kind,
             marker_index: self.marker_index,
             temperature: self.temperature,
+            credit: self.credit.clone(),
         }
     }
 }
@@ -840,6 +857,7 @@ impl From<Shot> for ShotData {
             kind: shot.kind,
             marker_index: shot.marker_index,
             temperature: shot.temperature,
+            credit: shot.credit,
         }
     }
 }
@@ -851,6 +869,7 @@ mod tests {
 
     fn base_shot_data() -> ShotData {
         ShotData {
+            credit: None,
             uuid: None,
             azimuth_in: 10.0,
             azimuth_out: 20.0,

@@ -556,6 +556,7 @@ mod repair;
 mod schema;
 mod schema_guard;
 mod settings;
+mod shot_credits;
 mod station_texts;
 mod undo;
 mod warnings;
@@ -655,6 +656,13 @@ mod diagnostic_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod newer_schema_tests;
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod shot_credit_tests;
 
 #[cfg(test)]
 #[expect(

@@ -119,6 +119,9 @@ pub struct CountLimits {
     /// row may name no station at all, so the table is capped on its own rather
     /// than through the shots it would resolve against.
     pub station_names: usize,
+    /// Per-shot survey credit overrides (#707). At most one per shot, but a row
+    /// may name no shot at all, so the table is capped on its own.
+    pub shot_credits: usize,
 }
 
 impl Default for CountLimits {
@@ -130,6 +133,7 @@ impl Default for CountLimits {
             loop_closures: 50_000,
             // One per station: at most every shot's end plus every section start.
             station_names: 2_100_000,
+            shot_credits: 2_000_000,
         }
     }
 }
@@ -164,6 +168,12 @@ impl CountLimits {
         self.station_names = max;
         self
     }
+
+    #[must_use]
+    pub fn shot_credits(mut self, max: usize) -> Self {
+        self.shot_credits = max;
+        self
+    }
 }
 
 /// Which [`CountLimits`] cap a file exceeded.
@@ -180,6 +190,8 @@ pub enum Limit {
     LoopClosures,
     /// [`CountLimits::station_names`].
     StationNames,
+    /// [`CountLimits::shot_credits`].
+    ShotCredits,
 }
 
 impl std::fmt::Display for Limit {
@@ -190,6 +202,7 @@ impl std::fmt::Display for Limit {
             Self::StationMerges => "station merges",
             Self::LoopClosures => "loop closures",
             Self::StationNames => "station names",
+            Self::ShotCredits => "shot credits",
         })
     }
 }
@@ -444,6 +457,7 @@ fn check_row_counts(conn: &rusqlite::Connection, limits: CountLimits) -> Result<
         ),
         ("loop_closures", Limit::LoopClosures, limits.loop_closures),
         ("station_names", Limit::StationNames, limits.station_names),
+        ("shot_credits", Limit::ShotCredits, limits.shot_credits),
     ] {
         let exists: i64 = conn
             .query_row(

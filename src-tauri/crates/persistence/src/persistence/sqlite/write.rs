@@ -4,6 +4,7 @@ use rusqlite::params;
 
 use crate::models::Project;
 
+use super::shot_credits::{save_shot_credits, CREATE_SHOT_CREDITS};
 use super::station_texts::{StationTextTable, CREATE_STATION_NAMES};
 use super::{Database, SCHEMA_VERSION};
 
@@ -30,6 +31,8 @@ impl Database {
         // have it yet. Create it here, inside the transaction, the way the
         // `closure_id` column is ensured below, so the DELETE cannot fail.
         tx.execute(CREATE_STATION_NAMES, [])?;
+        // Same for `shot_credits` (#707), which also arrived without a bump.
+        tx.execute(CREATE_SHOT_CREDITS, [])?;
 
         // Clear existing data (delete children before parents for foreign key compliance)
         // NOTE: speleo_link is intentionally NOT cleared here (see save_speleo_link
@@ -39,6 +42,7 @@ impl Database {
         // save_speleo_link (stamp on pull) and the dirty-bit setter (#191).
         tx.execute_batch(
             r"
+            DELETE FROM shot_credits;
             DELETE FROM shots;
             DELETE FROM sections;
             DELETE FROM station_merges;
@@ -149,6 +153,10 @@ impl Database {
                 )?;
             }
         }
+
+        // Per-shot credit overrides (#707), keyed by the same (section_id,
+        // sequence_order) the shot rows above were written with.
+        save_shot_credits(&tx, project)?;
 
         // Save station merges. Cross-references are stored as stable
         // `StationKey` anchors in memory but persisted positionally (resolved

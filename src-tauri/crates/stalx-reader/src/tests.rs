@@ -638,6 +638,41 @@ fn station_names_are_counted_against_their_own_cap() {
     .is_ok());
 }
 
+/// #707: a shot that overrides its section's credit reads back with its own
+/// surveyor and date, its neighbours keep the section's, and the overrides
+/// table is capped like every other one a hostile upload could fill.
+#[test]
+fn a_shots_own_credit_reads_back_and_its_table_is_capped() {
+    let mut project = full_project();
+    project.sections[0].surveyor = Some("Bob".to_string());
+    project.sections[0].shots[1].credit = Some(stalagmight_models::ShotCredit {
+        surveyor: Some(Some("Ann".to_string())),
+        date: Some(Some("2026-04-11".parse().unwrap())),
+    });
+    let dir = TempDir::new().unwrap();
+    let path = save(&dir, &project);
+
+    let survey = read_file_with(&path, &ReadOptions::default()).unwrap();
+    let shots = &survey.sections[0].shots;
+    assert_eq!(shots[0].surveyor.as_deref(), Some("Bob"));
+    assert_eq!(shots[1].surveyor.as_deref(), Some("Ann"));
+    assert_eq!(shots[1].date.as_deref(), Some("2026-04-11"));
+
+    let options = ReadOptions::default().count_limits(CountLimits::default().shot_credits(0));
+    let err = read_file_with(&path, &options).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            ReadError::TooComplex {
+                what: Limit::ShotCredits,
+                count: 1,
+                max: 0
+            }
+        ),
+        "{err}"
+    );
+}
+
 #[test]
 fn the_frame_datum_anchors_its_component_even_when_it_is_not_the_lowest() {
     // The app refuses a second datum in one component, but a crafted or older

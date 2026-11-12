@@ -442,6 +442,9 @@ impl Database {
             // is friendly to the query planner: it can stream rows
             // sequentially without re-preparing.
             {
+                // Per-shot credit overrides (#707) live in their own table, keyed
+                // like the shot rows; a shot without a row inherits its section's.
+                let credits = self.load_shot_credits()?;
                 let mut shot_stmt = self.conn.prepare(
                     r"SELECT section_id, sequence_order, azimuth_in, azimuth_out, length, depth_in, depth_out,
                               pitch_in, pitch_out, left_distance, right_distance, up_distance, down_distance,
@@ -508,6 +511,9 @@ impl Database {
                             // string the same - the next save mints a
                             // fresh UUID and persists it.
                             uuid: row.get::<_, Option<String>>(17)?.filter(|s| !s.is_empty()),
+                            credit: u32::try_from(seq)
+                                .ok()
+                                .and_then(|seq| credits.get(&(section_id, seq)).cloned()),
                         },
                     ))
                 })?;

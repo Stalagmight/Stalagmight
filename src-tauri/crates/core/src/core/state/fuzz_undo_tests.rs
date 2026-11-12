@@ -1716,6 +1716,7 @@ pub(super) fn random_shot(rng: &mut Rng) -> ShotData {
     let azimuth = rng.float(0.0, 359.9);
     let depth_in = rng.float(0.0, 30.0);
     ShotData {
+        credit: None,
         // `None` mints a fresh identity on insert, as every user-created shot
         // does; the uuid streams the identity oracles draw on come from the
         // project, not from the generator.

@@ -5,6 +5,7 @@ use rusqlite::{params, Connection, MAIN_DB};
 
 use crate::models::FEATURE_ID_STRIDE;
 
+use super::shot_credits::CREATE_SHOT_CREDITS;
 use super::station_texts::CREATE_STATION_NAMES;
 use super::{Database, SCHEMA_VERSION, UNDO_FORMAT_SAFE_VERSION};
 
@@ -341,6 +342,8 @@ impl Database {
         // through the fast path never gets here, so the read path tolerates the
         // table's absence instead of relying on this.
         self.conn.execute(CREATE_STATION_NAMES, [])?;
+        // Per-shot credit (#707), likewise without a bump - see `shot_credits`.
+        self.conn.execute(CREATE_SHOT_CREDITS, [])?;
 
         // Ensure speleo_link table exists (schema v9: SpeleoDB hand-off identity
         // + dirty bit, #189). This CREATE IF NOT EXISTS is what makes the table
@@ -485,7 +488,6 @@ impl Database {
                 .execute("ALTER TABLE shots ADD COLUMN uuid TEXT", [])?;
             tracing::info!("Added uuid column to shots table (schema v6)");
         }
-
         // Add shot_uuid column to resolved_warnings (schema v7→v8: key "Ignore"
         // suppression by the shot's stable UUID, issue #57). Pre-v8 rows keep
         // shot_uuid NULL and continue to match by the legacy
@@ -1650,6 +1652,8 @@ impl Database {
         // Station names - see `station_texts` for why this table carries no
         // schema bump.
         self.conn.execute(CREATE_STATION_NAMES, [])?;
+        // Per-shot credit (#707), likewise without a bump - see `shot_credits`.
+        self.conn.execute(CREATE_SHOT_CREDITS, [])?;
 
         Ok(())
     }

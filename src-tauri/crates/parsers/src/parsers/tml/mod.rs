@@ -1919,6 +1919,7 @@ pub fn normalize_tml_shot(shot: &TmlShot, depth_in: f64) -> ShotData {
     let az = crate::models::normalize_azimuth(shot.azimuth);
 
     ShotData {
+        credit: None,
         // The file's own shot id, carried so the round trip re-emits it (#423).
         // The TML importer is the only one that sets this; every other importer
         // leaves it `None` and gets a fresh mint, exactly as before.

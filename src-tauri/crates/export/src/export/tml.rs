@@ -790,6 +790,19 @@ fn build_export_shots_with_report(
         let color = color_to_ariane(&section.color);
         let explorer = section.surveyor.clone();
         let date = section.date.map(|d| d.format("%Y-%m-%d").to_string());
+        // #707: a shot row credits the shot's own surveyor and date where it
+        // overrides its section (sections combined from different trips). START
+        // rows are not shots and keep the section's values.
+        let shot_explorer = |shot: &Shot| {
+            shot.credit()
+                .surveyor_or(section.surveyor.as_deref())
+                .map(str::to_owned)
+        };
+        let shot_date = |shot: &Shot| {
+            shot.credit()
+                .date_or(section.date)
+                .map(|d| d.format("%Y-%m-%d").to_string())
+        };
 
         // Which datum this entrance's START sits on. The root uses the FRAME datum
         // (see `root_section_id` above); any other entrance uses its own section's
@@ -899,8 +912,8 @@ fn build_export_shots_with_report(
                     up: shot.up.unwrap_or(0.0),
                     down: shot.down.unwrap_or(0.0),
                     comment: shot.comment.clone(),
-                    explorer: explorer.clone(),
-                    date: date.clone(),
+                    explorer: shot_explorer(shot),
+                    date: shot_date(shot),
                     color: color.clone(),
                     latitude: 0.0,
                     longitude: 0.0,
@@ -967,8 +980,8 @@ fn build_export_shots_with_report(
                         up: shot.up.unwrap_or(0.0),
                         down: shot.down.unwrap_or(0.0),
                         comment: shot.comment.clone(),
-                        explorer: explorer.clone(),
-                        date: date.clone(),
+                        explorer: shot_explorer(shot),
+                        date: shot_date(shot),
                         color: color.clone(),
                         latitude: 0.0,
                         longitude: 0.0,
@@ -1040,8 +1053,8 @@ fn build_export_shots_with_report(
                             up: shot.up.unwrap_or(0.0),
                             down: shot.down.unwrap_or(0.0),
                             comment: shot.comment.clone(),
-                            explorer: explorer.clone(),
-                            date: date.clone(),
+                            explorer: shot_explorer(shot),
+                            date: shot_date(shot),
                             color: color.clone(),
                             latitude: 0.0,
                             longitude: 0.0,
@@ -1108,8 +1121,8 @@ fn build_export_shots_with_report(
                             up: shot.up.unwrap_or(0.0),
                             down: shot.down.unwrap_or(0.0),
                             comment: shot.comment.clone(),
-                            explorer: explorer.clone(),
-                            date: date.clone(),
+                            explorer: shot_explorer(shot),
+                            date: shot_date(shot),
                             color: color.clone(),
                             latitude: 0.0,
                             longitude: 0.0,
@@ -1178,8 +1191,8 @@ fn build_export_shots_with_report(
                             up: shot.up.unwrap_or(0.0),
                             down: shot.down.unwrap_or(0.0),
                             comment: shot.comment.clone(),
-                            explorer: explorer.clone(),
-                            date: date.clone(),
+                            explorer: shot_explorer(shot),
+                            date: shot_date(shot),
                             color: color.clone(),
                             latitude: 0.0,
                             longitude: 0.0,
@@ -1294,8 +1307,8 @@ fn build_export_shots_with_report(
                 up: shot.up.unwrap_or(0.0),
                 down: shot.down.unwrap_or(0.0),
                 comment: shot.comment.clone(),
-                explorer: explorer.clone(),
-                date: date.clone(),
+                explorer: shot_explorer(shot),
+                date: shot_date(shot),
                 color: color.clone(),
                 latitude: 0.0,
                 longitude: 0.0,
@@ -5628,6 +5641,32 @@ mod tests {
         );
         assert_eq!(sidecar[0].section, "Main Line");
         assert_eq!(sidecar[0].explorer.as_deref(), Some("Alice Bob"));
+    }
+
+    #[test]
+    fn a_shot_row_credits_the_shots_own_surveyor_and_date() {
+        // #707: a section combined from two trips keeps each trip's credit, and
+        // Ariane stores explorer and date per row, so the row carries the
+        // shot's override. The START row is not a shot and keeps the section's.
+        let mut project = simple_project();
+        project.sections[0].shots[1].credit = Some(crate::models::ShotCredit {
+            surveyor: Some(Some("Ann".to_string())),
+            date: Some(chrono::NaiveDate::from_ymd_opt(2026, 4, 11)),
+        });
+
+        let rows = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
+        let credit: Vec<_> = rows
+            .iter()
+            .map(|r| (r.shot_type, r.explorer.as_deref(), r.date.as_deref()))
+            .collect();
+        assert_eq!(
+            credit,
+            vec![
+                ("START", Some("Alice"), Some("2025-06-15")),
+                ("REAL", Some("Alice"), Some("2025-06-15")),
+                ("REAL", Some("Ann"), Some("2026-04-11")),
+            ]
+        );
     }
 
     #[test]

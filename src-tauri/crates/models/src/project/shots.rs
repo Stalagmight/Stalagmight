@@ -522,6 +522,8 @@ impl Project {
             kind: shot.kind,
             marker_index: None,
             temperature: shot.temperature,
+            // Both children are the same surveyed leg, so both keep its credit.
+            credit: shot.credit.clone(),
         };
         let tail_updates = ShotUpdates {
             length: Some(tail_length),

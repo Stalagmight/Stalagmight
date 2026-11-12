@@ -57,6 +57,14 @@ pub struct JsonShot {
     pub kind: ShotKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
+    /// Present only where the shot overrides its section (#707): the surveyor
+    /// who surveyed it, or `null` when that is explicitly unknown. Absent means
+    /// the section's `surveyor`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub surveyor: Option<Option<String>>,
+    /// Same rule as `surveyor`, for the survey date (`YYYY-MM-DD`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub date: Option<Option<String>>,
 }
 
 impl JsonExport {
@@ -102,6 +110,8 @@ impl JsonExport {
                             },
                             kind: shot.kind,
                             comment: shot.comment.clone(),
+                            surveyor: shot.credit().surveyor.clone(),
+                            date: shot.credit().date.map(|d| d.map(|d| d.to_string())),
                         })
                         .collect(),
                 })

@@ -1386,6 +1386,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     comment?: string | null;
                     kind?: string;
                     marker_index?: number | null;
+                    credit?: { surveyor?: string | null; date?: string | null };
                   }>;
                 }>;
                 station_merges?: unknown[]; zero_datums?: unknown[];
@@ -1427,6 +1428,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const shotsUintsView = new DataView(shotsUints.buffer);
             const sectionsMeta: Array<Record<string, unknown>> = [];
             const shotComments: Array<[number, string]> = [];
+            // Sparse per-shot credit (#707), mirroring the Rust encoder.
+            const shotCredits: Array<[number, { surveyor?: string | null; date?: string | null }]> = [];
             let shotCursor = 0;
 
             for (const section of jsonResult.project.sections) {
@@ -1462,6 +1465,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 shotsFlags[shotCursor] =
                   shot.kind === 'Jump' ? 1 : shot.kind === 'Reference' ? 2 : 0;
                 if (shot.comment) shotComments.push([shotCursor, shot.comment]);
+                if (shot.credit) shotCredits.push([shotCursor, shot.credit]);
                 shotCursor++;
               }
               sectionsMeta.push({
@@ -1522,7 +1526,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               // the header no longer carries a `collab` field; 4 to 5 for the
               // #438 north references (a project-level default plus one per
               // section header).
-              version: 6,
+              version: 7,
               loading_id: jsonResult.loadingId,
               // Added to the envelope at v3 alongside the ShotKind bits
               // (`load_binary.rs`): the decoder reads it unvalidated, so omitting
@@ -1587,6 +1591,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               shots_uints: shotsUints,
               shots_flags: shotsFlags,
               shot_comments: shotComments,
+              shot_credits: shotCredits,
               station_count: totalStations,
               stations_floats: stationsFloats,
               stations_uints: stationsUints,
@@ -2485,12 +2490,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               kind: (shot.kind as string | undefined) ?? 'Normal',
               marker_index: (shot.marker_index as number | null | undefined) ?? null,
               temperature: (shot.temperature as number | null | undefined) ?? null,
+              // #707: per-shot credit rides through untouched, as the real backend keeps it.
+              ...(shot.credit ? { credit: shot.credit } : {}),
             }));
             const section = {
               id: sectionCounter,
               name: (args?.name as string) ?? `Section ${sectionCounter}`,
-              surveyor: 'Test Surveyor',
-              date: new Date().toISOString().split('T')[0],
+              // Honour the caller's surveyor and date (#707's credit spec compares a
+              // shot's credit against them); the defaults are the old constants.
+              surveyor: (args?.surveyor as string | undefined) ?? 'Test Surveyor',
+              date: (args?.date as string | undefined) ?? new Date().toISOString().split('T')[0],
               color: '#3b82f6',
               shots,
             };
