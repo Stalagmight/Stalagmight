@@ -427,6 +427,7 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   splitShotAtDistance: (sectionId: SectionId, shotId: ShotId, distance: number) => Promise<CommandResult>;
   deleteShotAndSplit: (sectionId: SectionId, shotId: ShotId, nameA: string, nameB: string) => Promise<CommandResult>;
   splitSection: (sectionId: SectionId, at: import('../types/ipc/SplitAt').SplitAt, options: import('../types/ipc/SplitSectionOptions').SplitSectionOptions) => Promise<CommandResult>;
+  combineSections: (kept: SectionId, other: SectionId, options: import('../types/ipc/CombineOptions').CombineOptions) => Promise<CommandResult>;
   deleteLastShotAndSection: (sectionId: SectionId, shotId: ShotId) => Promise<CommandResult>;
   deleteShotRangeSplit: (sectionId: SectionId, startShotId: ShotId, endShotId: ShotId, nameA: string, nameB: string) => Promise<CommandResult>;
   deleteShotRangeShift: (sectionId: SectionId, startShotId: ShotId, endShotId: ShotId) => Promise<CommandResult>;
@@ -1913,13 +1914,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
   splitSection: (sectionId, at, options) => executeCommand('split_section', { sectionId, at, options }, { purpose: 'split section', fields: { sectionId } }),
 
-  deleteLastShotAndSection: async (sectionId: SectionId, shotId: ShotId) => {
-    return executeCommand(
-      'delete_last_shot_and_section',
-      { sectionId, shotId },
-      { purpose: 'remove single-shot section', fields: { sectionId, shotId } }
-    );
-  },
+  combineSections: (kept, other, options) => executeCommand('combine_sections', { kept, other, options }, { purpose: 'combine sections', fields: { kept, other } }),
+
+  deleteLastShotAndSection: (sectionId, shotId) => executeCommand('delete_last_shot_and_section', { sectionId, shotId }, { purpose: 'remove single-shot section', fields: { sectionId, shotId } }),
 
   deleteShotRangeSplit: async (
     sectionId: SectionId,
