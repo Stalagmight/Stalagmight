@@ -88,7 +88,7 @@ positions. Horizontal, because a split leaves the two ends at their own depth re
 would refuse to rejoin what Split just cut. Combining averages the joined station's depth again.
 A join at a mid-section station is a branch and is not offered.
 
-**Blocked, with the reason shown in the menu:**
+**Blocked, with the reason shown in the dialog** (the menu offers Combine on every section end and the dialog then explains, so building the menu stays synchronous):
 
 | Condition | Why |
 |---|---|
