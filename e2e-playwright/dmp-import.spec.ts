@@ -672,6 +672,83 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
   });
 
   /**
+   * Step 1's default Surveyors / Explorers pills reach every imported shot:
+   * typed into the pill fields (Enter, and ';'), sent as the import's
+   * overrides (never the legacy free text), stored on the shots, and offered
+   * as the next import's defaults.
+   */
+  test('default surveyors and explorers become the credit of every imported shot', async ({ page }) => {
+    await createProject(page, 'Default People');
+    await createSectionViaStore(page, {
+      name: 'Anchor Section',
+      shots: [{ azimuth_in: 45, azimuth_out: 45, length: 10, depth_in: -1, depth_out: -2 }],
+    });
+    await page.evaluate(() => {
+      const setSuggestions = (window as unknown as Record<string, unknown>).__MOCK_SET_IMPORT_PLACEMENT_SUGGESTIONS__;
+      (setSuggestions as (suggestions: unknown[]) => void)([
+        {
+          existingStationIndex: 0,
+          importStationIndex: 0,
+          score: 0.95,
+          matchedShots: 0,
+          direction: 'forward',
+          isPartial: false,
+          confidence: 'high',
+          existingSectionName: 'Anchor Section',
+          importSectionIndex: 0,
+          importSectionName: 'Main Passage',
+          targetType: 'existing',
+          existingSectionId: 1,
+          targetImportIndex: null,
+        },
+      ]);
+    });
+
+    await openDmpSelectionDialog(page);
+    const dialog = page.getByTestId('dmp-selection-dialog');
+    await expect(dialog.getByTestId('section-row-0')).toBeVisible({ timeout: 5000 });
+    await dialog.getByTestId('select-none-button').click();
+    await page.getByTestId('section-checkbox-0').click();
+
+    await dialog.getByTestId('default-surveyors-input').fill('Ann Diver');
+    await dialog.getByTestId('default-surveyors-input').press('Enter');
+    await dialog.getByTestId('default-surveyors-input').pressSequentially('Cy Reel;');
+    await dialog.getByTestId('default-explorers-input').fill('Bo Lead');
+    await dialog.getByTestId('default-explorers-input').press('Enter');
+    await expect(dialog.getByTestId('default-surveyors-pill-1-label')).toHaveText('Cy Reel');
+    await expect(dialog.getByTestId('default-explorers-pill-0-label')).toHaveText('Bo Lead');
+
+    await proceedToDmpSectionConfig(page);
+    await expect(page.getByTestId('wizard-suggestion')).toBeVisible({ timeout: 10000 });
+    await page.getByTestId('confirm-button').click();
+
+    const importedCredit = () =>
+      page.evaluate(() => {
+        type Shot = { credit?: { surveyors: Array<{ name: string }>; explorers: Array<{ name: string }> } };
+        const e2e = (window as unknown as {
+          __E2E_TEST__: { projectStore: { getState: () => { project: { sections: Array<{ name: string | null; shots: Shot[] }> } | null } } };
+        }).__E2E_TEST__;
+        const section = e2e.projectStore.getState().project?.sections.find((s) => s.name === 'Main Passage');
+        return (section?.shots ?? []).map((shot) => ({
+          surveyors: (shot.credit?.surveyors ?? []).map((p) => p.name),
+          explorers: (shot.credit?.explorers ?? []).map((p) => p.name),
+        }));
+      });
+    await expect.poll(async () => (await importedCredit()).length, { timeout: 10000 }).toBeGreaterThan(0);
+    const credit = await importedCredit();
+    expect(credit.length).toBeGreaterThan(0);
+    for (const shot of credit) {
+      expect(shot).toEqual({ surveyors: ['Ann Diver', 'Cy Reel'], explorers: ['Bo Lead'] });
+    }
+
+    // The next import starts from the same people.
+    await openDmpSelectionDialog(page);
+    const again = page.getByTestId('dmp-selection-dialog');
+    await expect(again.getByTestId('default-surveyors-pill-0-label')).toHaveText('Ann Diver');
+    await expect(again.getByTestId('default-explorers-pill-0-label')).toHaveText('Bo Lead');
+  });
+
+  /**
    * The wizard records each imported station's mNemo number as its name:
    * Main Passage has three importable shots, so its stations are named 0..3,
    * and the project's stations come back carrying them.

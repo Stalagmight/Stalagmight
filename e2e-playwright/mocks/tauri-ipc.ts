@@ -2666,7 +2666,28 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const importedSections = rawSections.map((sectionData) => {
               sectionCounter++;
               const rawShots = Array.isArray(sectionData.shots) ? (sectionData.shots as Array<Record<string, unknown>>) : [];
+              // The backend's import overrides (`command_import.rs`): the dialog's
+              // Surveyors / Explorers / date, when sent, REPLACE what each shot's
+              // own credit said; otherwise the shot keeps the credit it arrived with.
+              const setSurveyors = Array.isArray(sectionData.surveyors)
+                ? mockDedupe(sectionData.surveyors as MockPerson[])
+                : undefined;
+              const setExplorers = Array.isArray(sectionData.explorers)
+                ? mockDedupe(sectionData.explorers as MockPerson[])
+                : undefined;
+              const overrideDate = typeof sectionData.override_date === 'string' ? sectionData.override_date : undefined;
+              const importedCredit = (shot: Record<string, unknown>): { credit?: MockCredit } => {
+                const own = (shot.credit as MockCredit | undefined) ?? { surveyors: [], explorers: [], date: null };
+                const credit: MockCredit = {
+                  surveyors: setSurveyors ?? own.surveyors,
+                  explorers: setExplorers ?? own.explorers,
+                  date: overrideDate ?? own.date,
+                };
+                const empty = credit.surveyors.length === 0 && credit.explorers.length === 0 && credit.date === null;
+                return empty ? {} : { credit: structuredClone(credit) };
+              };
               const shots = rawShots.map((shot, index) => ({
+                ...importedCredit(shot),
                 id: mockShotId(sectionCounter, index),
                 azimuth_in: (shot.azimuth_in as number) ?? 0,
                 azimuth_out: (shot.azimuth_out as number) ?? 0,
@@ -2687,7 +2708,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               const section = {
                 id: sectionCounter,
                 name: (sectionData.name as string) ?? `Section ${sectionCounter}`,
-                surveyor: (sectionData.surveyor as string) ?? 'Test Surveyor',
+                // The legacy template for uncredited shots. An explicit null (every
+                // import dialog now sends one) means none; only a config built
+                // without the key gets the fixture default.
+                surveyor: sectionData.surveyor === undefined ? 'Test Surveyor' : (sectionData.surveyor as string | null),
                 date: (sectionData.date as string) ?? new Date().toISOString().split('T')[0],
                 color: (sectionData.color as string) ?? '#3b82f6',
                 direction: (sectionData.direction as string) ?? 'in',
