@@ -129,7 +129,11 @@ export function buildCreditColumns(ctx: CreditColumnContext): GridColumn<Shot>[]
     activateOnEnter: true,
     activate: (_row, rowIndex) => ctx.onOpenEditor(rowIndex, key),
     render: (shot, rowIndex): ReactNode => (
-      <span className="block h-full w-full min-w-0" onDoubleClick={openOnDoubleClick(rowIndex, key)}>
+      <span
+        className="block h-full w-full min-w-0"
+        onDoubleClick={openOnDoubleClick(rowIndex, key)}
+        data-testid={`credit-cell-${key}`}
+      >
         <PeopleCell people={shot.credit?.[key] ?? []} ctx={ctx} />
       </span>
     ),
@@ -154,6 +158,7 @@ export function buildCreditColumns(ctx: CreditColumnContext): GridColumn<Shot>[]
         <span
           className="flex h-full w-full items-center tabular-nums"
           onDoubleClick={openOnDoubleClick(rowIndex, 'survey_date')}
+          data-testid="credit-cell-survey_date"
         >
           {shot.credit?.date ?? ''}
         </span>
