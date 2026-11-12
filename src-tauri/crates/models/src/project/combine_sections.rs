@@ -155,7 +155,8 @@ impl Project {
             return None;
         }
         let merged = reach(&self.build_station_merge_adjacency(), station);
-        let ends = |s: &Section| [0, s.shots.len() as u32].map(|index| StationRef::new(s.id, index));
+        let ends =
+            |s: &Section| [0, s.shots.len() as u32].map(|index| StationRef::new(s.id, index));
         let others: Vec<&Section> = self
             .sections
             .iter()

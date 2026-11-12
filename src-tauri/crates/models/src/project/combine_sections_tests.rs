@@ -189,7 +189,10 @@ fn touching(project: &Project, at: StationRef) -> Vec<String> {
 
 /// The shots touching the gauge station of `section`'s component.
 fn gauge(project: &Project, section: SectionId) -> Vec<String> {
-    touching(project, project.adjustment_anchor_for_tests(section).unwrap())
+    touching(
+        project,
+        project.adjustment_anchor_for_tests(section).unwrap(),
+    )
 }
 
 fn adjusted_xy(project: &Project, at: StationRef) -> (f64, f64) {
@@ -684,7 +687,12 @@ fn ends_that_only_lie_together_with_a_zero_datum_on_each_side_are_refused() {
     let (mut project, kept, other) = joined(CombinePairing::KeptEndOtherStart);
     datum(&mut project, StationRef::new(kept, 0));
     datum(&mut project, StationRef::new(other, 3));
-    assert_refused(project, kept, other, "Both sections already have a zero datum");
+    assert_refused(
+        project,
+        kept,
+        other,
+        "Both sections already have a zero datum",
+    );
 
     let (mut project, kept, other) = joined(CombinePairing::KeptEndOtherStart);
     datum(&mut project, StationRef::new(kept, 0));
@@ -697,13 +705,8 @@ fn a_missing_section_is_blocked() {
     let merges = project.build_station_merge_adjacency();
     let missing = other + 100;
     for (a, b) in [(kept, missing), (missing, other)] {
-        let reason = project.combine_blocked(
-            a,
-            b,
-            StationRef::new(a, 0),
-            StationRef::new(b, 0),
-            &merges,
-        );
+        let reason =
+            project.combine_blocked(a, b, StationRef::new(a, 0), StationRef::new(b, 0), &merges);
         assert!(reason.is_some_and(|r| r.contains("no longer exists")));
     }
 }
