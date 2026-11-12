@@ -3,8 +3,8 @@ use tauri::State;
 
 use crate::core::{AppState, Command, CommandResult};
 use crate::models::{
-    ClosureStrategy, Coordinates, SectionId, SectionRelationships, SectionUpdates, ShotData,
-    StationRef, SurveyDirection,
+    ClosureStrategy, CombineCandidate, CombineOptions, Coordinates, SectionId,
+    SectionRelationships, SectionUpdates, ShotData, StationRef, SurveyDirection,
 };
 
 pub use crate::models::{SegmentGeometry, SegmentSectionGeometry};
@@ -140,6 +140,48 @@ pub fn get_rigid_connected_section_ids(
     section_id: SectionId,
 ) -> Result<Vec<SectionId>, String> {
     state.get_rigid_connected_section_ids(section_id)
+}
+
+/// Join two sections whose ends meet into one, keeping `kept`'s id and
+/// direction (#707).
+#[tauri::command]
+pub fn combine_sections(
+    state: State<AppState>,
+    kept: SectionId,
+    other: SectionId,
+    options: CombineOptions,
+) -> CommandResult {
+    combine_sections_impl(state.inner(), kept, other, options)
+}
+
+pub(crate) fn combine_sections_impl(
+    state: &AppState,
+    kept: SectionId,
+    other: SectionId,
+    options: CombineOptions,
+) -> CommandResult {
+    state.execute_combine_sections(kept, other, options)
+}
+
+/// Whether two sections can be combined; `None` when they do not meet end to
+/// end.
+#[tauri::command]
+pub fn combine_candidate(
+    state: State<AppState>,
+    a: SectionId,
+    b: SectionId,
+) -> Result<Option<CombineCandidate>, String> {
+    state.combine_candidate(a, b)
+}
+
+/// The combine offered at a section-end station; `None` unless exactly one
+/// other section's end meets it there.
+#[tauri::command]
+pub fn combine_candidate_at_station(
+    state: State<AppState>,
+    station: StationRef,
+) -> Result<Option<CombineCandidate>, String> {
+    state.combine_candidate_at_station(station)
 }
 
 /// Get all section IDs belonging to segments that contain a zero datum

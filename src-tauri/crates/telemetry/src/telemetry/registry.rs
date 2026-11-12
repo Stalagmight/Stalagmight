@@ -68,6 +68,9 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.delete_shot",
     "command.delete_shot_and_split",
     "command.split_section",
+    "command.combine_sections",
+    "command.combine_candidate",
+    "command.combine_candidate_at_station",
     "command.disarm_forced_exit",
     "command.discard_app_update_download",
     "command.download_app_update",
@@ -379,6 +382,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "undo-after.delete_shot",
     "undo-after.delete_shot_and_split",
     "undo-after.split_section",
+    "undo-after.combine_sections",
     "undo-after.execute_batch",
     "undo-after.execute_compass_import",
     "undo-after.execute_gpx_import",
@@ -1110,7 +1114,10 @@ mod tests {
         //   + 6 "Split Section Here" (#335): command.split_section,
         //       undo-after.split_section, and the full per-dialog set for
         //       split-section-here = 687.
-        assert_eq!(EVENT_NAMES.len(), 687);
+        //   + 4 Combine Sections (#707): command.combine_sections,
+        //       command.combine_candidate, command.combine_candidate_at_station
+        //       and undo-after.combine_sections = 691.
+        assert_eq!(EVENT_NAMES.len(), 691);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

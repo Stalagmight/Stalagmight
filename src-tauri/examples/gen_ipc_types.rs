@@ -51,16 +51,16 @@ use stalagmight_lib::models::placement_suggest::{
 };
 use stalagmight_lib::models::{
     AlongLineResult, AzimuthReference, ClosurePair, ClosurePreview, ClosureRef, ClosureStrategy,
-    ClosureUpdate, ConnectivityResult, Coordinates, CorrectionSource, CylRole, Cylinder,
-    DeleteShotImpact, DeleteShotRangeImpact, DistanceField, DivePlan, DivePlanMeta,
-    DivePlanSnapshot, Diver, ExistingShotUpdate, FrozenShotRef, GasReachField, GpsBounds,
-    GpsCoordinates, ImportPlacement, ImportSectionConfig, LoopClosureWire, MarkedPoint,
-    NorthReference, PathShot, PlanAnchorSet, PlanMode, PlanSegment, Project, ProjectMetadata,
-    ProjectStats, ProjectWarning, RangeDeleteKind, RouteLeg, RouteProfilePoint, RulerEndpoint,
-    Section, SectionData, SectionRelationships, SectionStats, SectionUpdates, Shot, ShotCredit,
-    ShotData, ShotKind, ShotUpdates, SpeleoLink, SplitAt, SplitSectionOptions, SplitSide, Station,
-    StationMergeWire, StationPair, StationRef, SurveyDirection, TankMaterial, Team,
-    UnrecognisedShotKind, ZeroDatumWire,
+    ClosureUpdate, CombineCandidate, CombineOptions, CombinePairing, ConnectivityResult,
+    Coordinates, CorrectionSource, CreditRun, CylRole, Cylinder, DeleteShotImpact,
+    DeleteShotRangeImpact, DistanceField, DivePlan, DivePlanMeta, DivePlanSnapshot, Diver,
+    ExistingShotUpdate, FrozenShotRef, GasReachField, GpsBounds, GpsCoordinates, ImportPlacement,
+    ImportSectionConfig, LoopClosureWire, MarkedPoint, NorthReference, PathShot, PlanAnchorSet,
+    PlanMode, PlanSegment, Project, ProjectMetadata, ProjectStats, ProjectWarning, RangeDeleteKind,
+    RouteLeg, RouteProfilePoint, RulerEndpoint, Section, SectionData, SectionRelationships,
+    SectionStats, SectionUpdates, Shot, ShotCredit, ShotData, ShotKind, ShotUpdates, SpeleoLink,
+    SplitAt, SplitSectionOptions, SplitSide, Station, StationMergeWire, StationPair, StationRef,
+    SurveyDirection, TankMaterial, Team, UnrecognisedShotKind, ZeroDatumWire,
 };
 use stalagmight_lib::parsers::compass::{CompassFile, CompassSurveySummary, InvalidShotCounts};
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};
@@ -237,6 +237,10 @@ fn main() {
     export::<SplitAt>(&out_dir);
     export::<SplitSectionOptions>(&out_dir);
     export::<SplitSide>(&out_dir);
+    export::<CombineCandidate>(&out_dir);
+    export::<CombineOptions>(&out_dir);
+    export::<CombinePairing>(&out_dir);
+    export::<CreditRun>(&out_dir);
     export::<ShotData>(&out_dir);
     export::<ShotKind>(&out_dir);
     export::<UnrecognisedShotKind>(&out_dir);

@@ -5114,6 +5114,34 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return { success: true, section_id: newSection.id, section_ids: [section.id, newSection.id], warnings: [], error: null };
           }
 
+          case 'combine_sections': {
+            console.log('[Mock IPC] combine_sections called with:', args);
+            const win = window as unknown as Record<string, unknown>;
+            const existing = win.__MOCK_COMBINE_SECTIONS_CALLS__ as unknown[] | undefined;
+            const calls = Array.isArray(existing) ? existing : [];
+            calls.push(args ?? null);
+            win.__MOCK_COMBINE_SECTIONS_CALLS__ = calls;
+
+            type MockSection = { id: number; name: string; color: string; shots: unknown[] } & Record<string, unknown>;
+            const sections = (currentProject?.sections ?? []) as MockSection[];
+            const kept = sections.find((s) => s.id === (args?.kept as number));
+            const other = sections.find((s) => s.id === (args?.other as number));
+            const options = args?.options as { name: string; color: string } | undefined;
+            if (!kept || !other || kept === other || !options) {
+              return { success: false, error: 'Sections do not meet end to end', section_ids: [], warnings: [] };
+            }
+            kept.shots = [...kept.shots, ...other.shots];
+            kept.name = options.name;
+            kept.color = options.color;
+            sections.splice(sections.indexOf(other), 1);
+            return { success: true, section_id: kept.id, section_ids: [], warnings: [], error: null };
+          }
+
+          case 'combine_candidate':
+          case 'combine_candidate_at_station':
+            console.log(`[Mock IPC] ${cmd} called with:`, args);
+            return null;
+
           case 'preview_delete_shot_range': {
             console.log('[Mock IPC] preview_delete_shot_range called with:', args);
             const sectionId = (args?.sectionId as number | undefined) ?? 1;
