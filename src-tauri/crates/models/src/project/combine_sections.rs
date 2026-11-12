@@ -155,23 +155,48 @@ impl Project {
             return None;
         }
         let merged = reach(&self.build_station_merge_adjacency(), station);
-        let here = self.compute_station_raw_xy(station)?;
-        let mut partners = self
+        let ends = |s: &Section| [0, s.shots.len() as u32].map(|index| StationRef::new(s.id, index));
+        let others: Vec<&Section> = self
             .sections
             .iter()
             .filter(|s| s.id != station.section_id && !s.shots.is_empty())
-            .filter(|s| {
-                [0, s.shots.len() as u32].into_iter().any(|index| {
-                    let end = StationRef::new(s.id, index);
-                    merged.contains(&end) || self.within_join_tolerance(here, end)
-                })
-            })
-            .map(|s| s.id);
-        let other = partners.next()?;
-        if partners.next().is_some() {
-            return None;
+            .collect();
+        let mut partners: Vec<SectionId> = others
+            .iter()
+            .filter(|s| ends(s).iter().any(|end| merged.contains(end)))
+            .map(|s| s.id)
+            .collect();
+        if partners.len() < 2 {
+            let offsets: HashMap<StationRef, (f64, f64)> = self
+                .station_offsets
+                .iter()
+                .filter_map(|(key, &(x, y, _))| Some((self.resolve_key(key)?, (x, y))))
+                .collect();
+            let raw_xy = |at: StationRef| {
+                let (x, y) = self.compute_station_walk_xy(at)?;
+                let (ox, oy) = offsets.get(&at).copied().unwrap_or_default();
+                Some((x + ox, y + oy))
+            };
+            let here = raw_xy(station)?;
+            for section in others {
+                if partners.len() > 1 {
+                    break;
+                }
+                if !partners.contains(&section.id)
+                    && ends(section).into_iter().any(|end| {
+                        raw_xy(end).is_some_and(|(x, y)| {
+                            (x - here.0).hypot(y - here.1) <= JOIN_TOLERANCE_M
+                        })
+                    })
+                {
+                    partners.push(section.id);
+                }
+            }
         }
-        self.combine_candidate(station.section_id, other)
+        match partners[..] {
+            [other] => self.combine_candidate(station.section_id, other),
+            _ => None,
+        }
     }
 
     /// Join `other` onto `kept`, which keeps its id and direction. Refused, with

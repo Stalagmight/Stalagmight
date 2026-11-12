@@ -160,6 +160,17 @@ impl Project {
     /// avoids an O(group × merges) traversal per call - the dominant cost when
     /// merging the thousands of stations of a large import.
     pub(crate) fn compute_station_raw_xy(&self, station_ref: StationRef) -> Option<(f64, f64)> {
+        let (mut x, mut y) = self.compute_station_walk_xy(station_ref)?;
+        if let Some((ox, oy, _)) = self.station_offset_for_ref(station_ref) {
+            x += ox;
+            y += oy;
+        }
+        Some((x, y))
+    }
+
+    /// [`Self::compute_station_raw_xy`] without the station's manual offset,
+    /// for callers that resolve the offsets once for many stations.
+    pub(super) fn compute_station_walk_xy(&self, station_ref: StationRef) -> Option<(f64, f64)> {
         let section = self.get_section(station_ref.section_id)?;
         let (offset_x, offset_y) = self
             .section_offsets
@@ -174,10 +185,6 @@ impl Project {
             let horizontal = shot.horizontal_length();
             x += horizontal * azimuth_rad.sin();
             y += horizontal * azimuth_rad.cos();
-        }
-        if let Some((ox, oy, _)) = self.station_offset_for_ref(station_ref) {
-            x += ox;
-            y += oy;
         }
         Some((x, y))
     }
