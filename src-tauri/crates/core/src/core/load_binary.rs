@@ -746,7 +746,7 @@ mod tests {
         }
         let mut b = new_section(2, "B", "#00ff00");
         let mut s = shot(200, 0.0, 1.0, 0.0, 0.0);
-        s.set_credit(bo.clone());
+        s.set_credit(bo);
         b.shots.push(s);
         project.sections.push(a);
         project.sections.push(b);

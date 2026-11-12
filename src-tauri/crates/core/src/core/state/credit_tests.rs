@@ -114,6 +114,22 @@ fn a_section_wide_edit_is_one_undo_step_and_round_trips() {
     let top = &state.get_undo_stack()[0];
     assert_eq!(top.description, "Edit survey credit (3 shots)");
     assert_eq!(top.command_type, "edit_shot_credit");
+    let rows: Vec<(&str, &str, &str)> = top
+        .preview_data
+        .as_ref()
+        .unwrap()
+        .changes
+        .iter()
+        .map(|c| (c.field.as_str(), c.old_value.as_str(), c.new_value.as_str()))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("Surveyors", "", "Ann, Bo"),
+            ("Date", "", "2024-05-03"),
+            ("Shots", "", "3"),
+        ]
+    );
 
     assert!(state.undo().success);
     assert_eq!(credits(&state, sid), before);
@@ -273,6 +289,19 @@ fn a_legacy_section_surveyor_edit_sets_every_shot_and_undoes_exactly() {
             &credit(&["ds"], &["nh"], day(u32::try_from(i).unwrap() + 1))
         );
     }
+
+    // The history shows the legacy edit like any section edit, its old value
+    // read off the per-shot record.
+    let top = &state.get_undo_stack()[0];
+    assert_eq!(top.command_type, "update_section_metadata");
+    let preview = top.preview_data.as_ref().unwrap();
+    let surveyor = preview
+        .changes
+        .iter()
+        .find(|c| c.field == "Surveyor")
+        .unwrap();
+    assert_eq!(surveyor.old_value, "P0, P1, P2");
+    assert_eq!(surveyor.new_value, "nh / ds");
 
     assert!(state.undo().success);
     assert_eq!(credits(&state, sid), before);

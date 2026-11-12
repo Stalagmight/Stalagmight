@@ -14,7 +14,7 @@ use crate::speleodb::{SpeleoCollaborator, SpeleoDbError, SpeleoErrorDto};
 /// How long a project's listing is served from memory before it is fetched
 /// again: long enough that typing in a people input never re-asks the server,
 /// short enough that a collaborator added on the web shows up within a session.
-const CACHE_TTL: Duration = Duration::from_secs(10 * 60);
+const CACHE_TTL: Duration = Duration::from_mins(10);
 
 /// Most listings kept in memory at once (one per project actually asked about).
 const CACHE_CAPACITY: usize = 32;
@@ -66,6 +66,10 @@ impl AppState {
     /// A 403 on the permission list (an account without the right to see who
     /// else has access) is not an error here: the signed-in user alone is still
     /// a useful suggestion.
+    #[expect(
+        clippy::result_large_err,
+        reason = "IPC returns the shared structured SpeleoDB error"
+    )]
     pub fn speleodb_project_collaborators(
         &self,
         project_id: String,
