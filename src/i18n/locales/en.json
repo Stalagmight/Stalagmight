@@ -60,7 +60,23 @@
       "meters": "m",
       "percent": "%"
     },
-    "offline": "Offline"
+    "offline": "Offline",
+    "peopleInput": {
+      "addNew": "Add \"{{name}}\"",
+      "remove": "Remove {{name}}",
+      "promote": "Add {{name}} to all shots",
+      "promoteHint": "Click to add to all shots",
+      "onShots": "On {{carrying}} of {{total}} shots",
+      "noEmail": "no email",
+      "speleodbBadge": "SpeleoDB",
+      "speleodbCollaborator": "SpeleoDB collaborator",
+      "announce": {
+        "added": "Added {{name}}",
+        "removed": "Removed {{name}}",
+        "armed": "Press Backspace again to remove {{name}}",
+        "duplicate": "{{name}} is already listed"
+      }
+    }
   },
   "app": {
     "dropOverlay": {
