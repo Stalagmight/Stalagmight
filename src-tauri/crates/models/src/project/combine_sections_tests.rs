@@ -796,6 +796,27 @@ fn ends_merged_but_apart_still_meet() {
     let candidate = project.combine_candidate(kept, other).unwrap();
     assert_eq!(candidate.pairing, CombinePairing::KeptEndOtherStart);
     assert_eq!(candidate.blocked, None);
+    let expected_uuids = [uuids(&project, kept), uuids(&project, other)].concat();
+    let expected_lengths = [lengths(&project, kept), lengths(&project, other)].concat();
+    let (end, far) = (xy(&project, kept, 2), xy(&project, other, 0));
+    let walk: Vec<_> = (0..=3)
+        .map(|i| {
+            let at = xy(&project, other, i);
+            (at.0 - far.0, at.1 - far.1)
+        })
+        .collect();
+
+    project.combine_sections(kept, other, &options()).unwrap();
+
+    assert_eq!(uuids(&project, kept), expected_uuids);
+    assert_eq!(lengths(&project, kept), expected_lengths);
+    for (i, (dx, dy)) in walk.into_iter().enumerate() {
+        let at = xy(&project, kept, 2 + i as u32);
+        assert!(
+            (at.0 - end.0 - dx).abs() < 1e-5 && (at.1 - end.1 - dy).abs() < 1e-5,
+            "the other section takes the kept section's walk"
+        );
+    }
 }
 
 #[test]

@@ -21,9 +21,12 @@
 //! differs from the kept section's gets that value as an override, so no metre
 //! changes hands. Nothing is folded afterwards.
 //!
-//! Positions: every station keeps its measured xy, with two exceptions. The
-//! other section's stations move by the (at most 1 mm) gap between the ends
-//! when they did not coincide exactly, and by the difference between the two
+//! Positions: the kept section's stations keep their measured xy, and the
+//! other section's raw positions take the kept section's walk from the joined
+//! station. Ends that only lie together are at most 1 mm apart, so that moves
+//! them by no more. Merged ends are joined as merged, however far apart they
+//! were drawn: the merge is the user's statement that they are one station.
+//! The other section's stations also move by the difference between the two
 //! ends' manual offsets when those differed. Depth is the inverse of a split's:
 //! the joined station now averages the `depth_out` of the shot arriving and the
 //! `depth_in` of the shot leaving, where each unmerged end read its own.
