@@ -61,6 +61,9 @@ describe('SplitSectionHereDialog', () => {
     expect(screen.getByTestId('split-here-name-b')).toHaveValue('Main-B');
     expect(screen.getByTestId('split-here-color-a')).toHaveValue('#123456');
     expect(screen.getByTestId('split-here-summary')).toHaveTextContent('Splitting Main at station 3:2');
+    expect(screen.getByTestId('split-here-credit-note')).toHaveTextContent(
+      'Each shot keeps its own surveyors, explorers and survey date.'
+    );
   });
 
   it('sends a station split and clears the selection', async () => {

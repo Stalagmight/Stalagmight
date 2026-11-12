@@ -172,6 +172,9 @@ export default function SplitSectionHereDialog() {
     >
       <div className="space-y-4">
         <p className="text-text-secondary" data-testid="split-here-summary">{summary}</p>
+        <p className="text-sm text-text-secondary" data-testid="split-here-credit-note">
+          Each shot keeps its own surveyors, explorers and survey date.
+        </p>
 
         <div className="space-y-3">
           {half('a', 'Section A name (first half)', nameA, setNameA, colorA, setColorA)}
