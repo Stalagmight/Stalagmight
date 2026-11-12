@@ -64,6 +64,7 @@ import type { SurveyData } from '../types/survey-data';
 import { emptySurveyData, surveyDataFromLegacy, surveyDataWithAdjustedStations } from '../types/survey-data';
 import { createProjectConfigActions, type ProjectConfigActions } from './projectConfigActions';
 import { createProjectShotActions, type ProjectShotActions } from './projectShotActions';
+import { createSectionStructureActions, type SectionStructureActions } from './sectionStructureActions';
 import { createProjectHistoryBannerActions, HISTORY_BANNER_CLEARED, type ProjectHistoryBannerActions, type ProjectHistoryBannerState } from './projectHistoryBannerActions';
 import { runProjectSwitch, runConfirmedProjectSwitch, reserveProjectRequest, isProjectRequestCurrent, beginProjectMutation, isProjectMutationCurrent } from '../utils/projectTransition';
 import { releaseFailed, resolveReleaseFailure, settleOpenLockBeforeLeaving } from '../utils/speleoReleaseFailure';
@@ -218,7 +219,7 @@ export interface LoadProjectOutcome {
   superseded?: boolean;
 }
 
-export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBannerActions, ProjectHistoryBannerState, ProjectShotActions {
+export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBannerActions, ProjectHistoryBannerState, ProjectShotActions, SectionStructureActions {
   // State
   project: Project | null;
   /**
@@ -910,6 +911,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   ...createProjectHistoryBannerActions(set, get),
   // splitShotAtDistance / editShotCredit live in projectShotActions.ts
   ...createProjectShotActions(executeCommand),
+  // splitSection / combineSections live in sectionStructureActions.ts
+  ...createSectionStructureActions(executeCommand),
 
   // Loading state actions
   startLoading: (projectName: string, projectPath: string) => {

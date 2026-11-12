@@ -174,6 +174,7 @@ export default class SurveyLayer {
   private snappedStationId: string | null = null;
   private hoveredSectionId: string | null = null;
   private selectedSectionId: string | null = null;
+  private previewSectionIds: readonly SectionId[] = [];
   private highlightedStationIds: string[] = [];
   // Multi-section hover for Move Segment tool (highlights all connected sections)
   private hoveredSegmentSectionIds: string[] = [];
@@ -2298,17 +2299,25 @@ export default class SurveyLayer {
     // Convert numeric SectionId to string for consistent comparison
     const stringId = sectionId !== null ? String(sectionId) : null;
     if (this.selectedSectionId === stringId) return;
-    if (this.shouldLogInteraction()) {
-      console.debug('[Selection] Selected section changed', {
-        previous: this.selectedSectionId,
-        next: stringId,
-      });
-    }
+    if (this.shouldLogInteraction()) console.debug('[Selection] Selected section changed', { previous: this.selectedSectionId, next: stringId });
     this.selectedSectionId = stringId;
-    // Custom renderer ignores feature-state; drive its per-vertex highlight flag
-    // at selection level (smaller bump than hover, matching stock `selected`).
-    this.customRender?.setSectionSelect(sectionId !== null ? [sectionId] : []);
+    this.syncSectionSelect();
     this.updateVisualState();
+  }
+
+  /** Sections an open dialog previews (Combine Sections), highlighted on top of the selection; `[]` clears. */
+  setPreviewSections(sectionIds: readonly SectionId[]): void {
+    if (sectionIds.length === 0 && (this.previewSectionIds ?? []).length === 0) return;
+    this.previewSectionIds = sectionIds;
+    this.syncSectionSelect();
+  }
+
+  // Custom renderer ignores feature-state; drive its per-vertex highlight flag
+  // at selection level (smaller bump than hover, matching stock `selected`).
+  private syncSectionSelect(): void {
+    const selected = this.selectedSectionId !== null ? [Number(this.selectedSectionId)] : [];
+    // `?? []`: a layer built without its constructor (the tests' Object.create) has no field yet.
+    this.customRender?.setSectionSelect([...selected, ...(this.previewSectionIds ?? [])]);
   }
 
   // Depth gradient accessors - return current depth mode state
