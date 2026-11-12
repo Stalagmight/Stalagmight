@@ -1,6 +1,6 @@
 # Per-shot survey credit: surveyors, explorers and date as people
 
-Status: IMPLEMENTING. Issues #328, #329. Companion: `2026-11-12_merge-split-sections.md`.
+Status: IMPLEMENTED (UI wired). Issues #328, #329. Companion: `2026-11-12_merge-split-sections.md`.
 
 ## Goal
 
@@ -127,10 +127,23 @@ Results are cached in memory per project. The command is
   - Hovering a pill shows the full name, email, source and shot count.
   - A pill shows the shortest text that tells same-named people apart.
   - A pill for someone on only some of the shots is dashed and reads "N of M shots".
-- **Suggestions:** project people, then remembered people (local, so they carry across
-  projects), then SpeleoDB collaborators. They are matched on name and email.
+- **Suggestions:** project people (any shot, either role), then the linked SpeleoDB project's
+  collaborators (fetched in the background when signed in; a failure is silent), then recently
+  entered people. The recent list lives in config.toml `[people] recent` (newest first, at most
+  200, written only through `remember_people`), so it carries across projects. Typed text that
+  names exactly one collaborator, by name or email, takes that collaborator's identity; a name two
+  collaborators share is never guessed.
 - **Where it appears:** Surveyors and Explorers fields everywhere Surveyor could be entered: New
-  Section, Edit Section, the import dialogs, Zero Datum config and Suggestion settings.
-- **Detail panel:** shows a shot's credit, editable. With several shots selected, it edits all of
-  them in one step. A section shows its aggregate.
-- **Data table:** optional Surveyors, Explorers and Date columns, hidden by default.
+  Section (prefilled with the session's last used people; the pills and date go on every shot
+  entered), Edit Section, the mNemo wizard and its defaults, Zero Datum config, Suggestion
+  settings. The Ariane preview shows each section's people read-only.
+- **Edit Section:** the union of the shots' people with partial pills; adding, removing and
+  promoting are a pending edit sent on Save as ONE `editShotCredit` on the section. A date that
+  differs per shot shows its range until "Set for all shots".
+- **Detail panel:** a shot's credit, editable, one undo step per change. Two or more selected shots
+  (and nothing else) get a view that edits all of them at once, with the same union semantics. A
+  section edits every shot through the section target. Read-only modes keep the pills only.
+- **Data table:** optional Surveyors, Explorers and Survey date columns, hidden by default (and
+  hidden once for configs saved before they existed). Enter, F2, Space, a double click or a typed
+  letter opens a popover that commits one `editShotCredit` for the shot; paste, fill and clear
+  write whole lists through the batch, one `edit_shot_credit` per shot.
