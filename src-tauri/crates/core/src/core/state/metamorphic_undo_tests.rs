@@ -138,6 +138,15 @@ enum Mask {
     /// is present at all - is still compared exactly, so "one route lost a uuid"
     /// and "one route has a shot the other does not" both still fail.
     MintedUuids,
+    /// Every `Shot::id` is replaced by its position, and the id allocators are
+    /// not compared.
+    ///
+    /// Only for pairs where one route RENUMBERS shots it moves between
+    /// sections: Combine Sections gives the joined shots fresh ids from the
+    /// kept section, and the split before it spent a section id, so ids and
+    /// allocators differ by construction. Uuids - the identity every station
+    /// reference anchors to - and every other field are still compared exactly.
+    ShotIds,
 }
 
 /// Replace every RFC-3339 wall-clock timestamp with a placeholder.
@@ -279,17 +288,21 @@ fn resort_set_like(snapshot: &str) -> String {
 }
 
 fn observe(state: &AppState, mask: Mask) -> Observed {
-    // The timestamp mask is UNCONDITIONAL, for both mask modes: no pair can
+    // The timestamp mask is UNCONDITIONAL, for every mask mode: no pair can
     // control which instant its two routes run at.
-    let stored = mask_timestamps(&canonical_snapshot(state, false));
+    let stored = mask_timestamps(&canonical_snapshot(state, mask == Mask::ShotIds));
     Observed {
         stored: match mask {
-            Mask::Strict => stored,
+            Mask::Strict | Mask::ShotIds => stored,
             Mask::MintedUuids => resort_set_like(&mask_uuids(&stored)),
         },
         verdict: integrity_verdict(state),
         adjusted: adjusted_geometry_of(state),
-        allocators: allocators(state),
+        allocators: if mask == Mask::ShotIds {
+            BTreeMap::new()
+        } else {
+            allocators(state)
+        },
     }
 }
 
@@ -1046,6 +1059,14 @@ const PAIRS: &[Pair] = &[
     },
     // ---------------------------------------------------------------------
     Pair {
+        id: "split-then-combine-is-identity",
+        promise: "docs/plans/2026-11-12_split-combine-sections.md, Verification - \
+                  combine(split(p, s)) == p: Combine Sections is the inverse of Split Section \
+                  Here, and each is one undo entry (#707)",
+        run: pair_split_then_combine_is_identity,
+    },
+    // ---------------------------------------------------------------------
+    Pair {
         id: "range-shift-is-n-single-deletes",
         promise: "command_delete_split.rs execute_delete_shot_range_shift - an ATOMIC range \
                   gap-close: identical to the n single deletes on every range that removes no \
@@ -1575,6 +1596,117 @@ fn pair_split_section_then_undo_is_identity(
     let mut found = twins.compare(pair, Mask::Strict);
     let (unwound, _) = twins.unwind_and_compare(pair, Mask::Strict);
     found.absorb(unwound.prefixed("AFTER UNWIND: "));
+    Some(found)
+}
+
+/// Split Section Here (#335) at a random mid-section station, then Combine
+/// Sections (#707) the halves back, against doing nothing; then undo both,
+/// one entry each.
+///
+/// The cut is drawn past the section's least-squares gauge pair: a cut between
+/// the pair clears it (documented on the split), and no combine can know to
+/// restore it. Comment and datum go to one half, never both, since a comment
+/// on both halves comes back as the two joined by a newline.
+fn pair_split_then_combine_is_identity(
+    twins: &Twins,
+    rng: &mut Rng,
+    pair: &'static str,
+) -> Option<Comparison> {
+    let section_id = section_with_shots(&twins.left, rng, 2)?;
+    let original = twins
+        .left
+        .get_project_state()?
+        .get_section(section_id)?
+        .clone();
+    let name = original.name.clone().unwrap_or_default();
+    let position = |uuid: &Option<String>| {
+        original
+            .shots
+            .iter()
+            .position(|s| s.uuid.is_some() && s.uuid == *uuid)
+    };
+    let past_gauge = [&original.gauge_shot_uuid, &original.gauge_neighbour_uuid]
+        .into_iter()
+        .filter_map(position)
+        .max()
+        .map_or(1, |p| p + 1);
+    let last = original.shots.len() - 1;
+    if past_gauge > last {
+        return None;
+    }
+    let station_index = (past_gauge + rng.below(last - past_gauge + 1)) as u32;
+    let side = |n: usize| {
+        if n == 0 {
+            crate::models::SplitSide::A
+        } else {
+            crate::models::SplitSide::B
+        }
+    };
+
+    let split = twins.right.execute_split_section(
+        section_id,
+        crate::models::SplitAt::Station { station_index },
+        crate::models::SplitSectionOptions {
+            name_a: "split-a".to_string(),
+            name_b: "split-b".to_string(),
+            color_a: "#111111".to_string(),
+            color_b: "#222222".to_string(),
+            comment_side: side(rng.below(2)),
+            datum_side: side(rng.below(2)),
+        },
+    );
+    if !split.success {
+        return None;
+    }
+    let second = split.section_id?;
+    let combine = twins.right.execute_combine_sections(
+        section_id,
+        second,
+        crate::models::CombineOptions {
+            name,
+            color: original.color.clone(),
+            comment_side: side(rng.below(2)),
+            name_side: side(rng.below(2)),
+            offset_side: side(rng.below(2)),
+        },
+    );
+    if !combine.success {
+        // A section that already looped through another one splits into two
+        // halves connected twice, which Combine refuses by design.
+        let blocked = twins
+            .right
+            .combine_candidate(section_id, second)
+            .ok()
+            .flatten()
+            .is_some_and(|c| c.blocked.is_some());
+        if blocked {
+            return None;
+        }
+        return Some(Comparison {
+            problems: vec![format!(
+                "combining the halves of section {section_id} split at station {station_index} \
+                 was refused though nothing blocks it: {:?}",
+                combine.error
+            )],
+            ..Comparison::default()
+        });
+    }
+    let mut found = twins.compare(pair, Mask::ShotIds);
+
+    for step in ["combine", "split"] {
+        let undo = twins.right.undo();
+        assert!(
+            undo.success,
+            "{pair}: the {step} of section {section_id} at station {station_index} succeeded but \
+             its undo failed: {:?}",
+            undo.error
+        );
+    }
+    found.absorb(
+        twins
+            .compare(pair, Mask::Strict)
+            .prefixed("AFTER BOTH UNDOS: "),
+    );
     Some(found)
 }
 
