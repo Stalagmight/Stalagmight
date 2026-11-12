@@ -4,7 +4,7 @@
 use super::AppState;
 use crate::core::{Command, CommandResult};
 use crate::models::{
-    CombineCandidate, CombineSectionsOptions, Project, SectionId, SectionUpdates, StationRef,
+    CombineCandidate, CombineSectionsOptions, SectionId, SectionUpdates, StationRef,
 };
 
 impl AppState {
@@ -16,7 +16,7 @@ impl AppState {
         &self,
         station: StationRef,
     ) -> Result<Option<CombineCandidate>, String> {
-        self.with_open_project(|project| project.combine_candidate(station))
+        self.with_project(|project| Ok(project.combine_candidate(station)))
     }
 
     /// Read-only: can sections `a` and `b` be combined (the Sections panel's
@@ -27,18 +27,7 @@ impl AppState {
         a: SectionId,
         b: SectionId,
     ) -> Result<Option<CombineCandidate>, String> {
-        self.with_open_project(|project| project.combine_candidate_for_sections(a, b))
-    }
-
-    fn with_open_project<T>(&self, read: impl FnOnce(&Project) -> T) -> Result<T, String> {
-        let guard = self
-            .project
-            .lock()
-            .map_err(|_| "Failed to lock project".to_string())?;
-        let project = guard
-            .as_ref()
-            .ok_or_else(|| "No project open".to_string())?;
-        Ok(read(project))
+        self.with_project(|project| Ok(project.combine_candidate_for_sections(a, b)))
     }
 
     /// Combine `other` into `kept` (see `Project::combine_sections`). One undo
