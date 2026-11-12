@@ -302,4 +302,59 @@ test.describe('Survey people', () => {
     ]);
     await expect(cell).toContainText('Eve Echo');
   });
+
+  test('a credit cell hands the keyboard to its popover: double click, typing and Escape', async ({ page }) => {
+    // The popover's field must own the keyboard. When it did not, the grid
+    // took the keys: a letter became a one-letter explorer written straight
+    // to the shot, and Escape left the popover open over the table.
+    const sectionId = await seedSection(page);
+    const shotId = (await firstSection(page)).shots[0]!.id;
+    await page.keyboard.press('Control+3');
+    await page.getByTestId('data-table-columns-menu').click();
+    await page.getByTestId('col-vis-explorers').click();
+    await page.keyboard.press('Escape');
+    const cell = page.getByTestId(`shot-cell-${sectionId}-${shotId}-explorers`);
+    const scroller = page.getByRole('grid');
+    const editor = page.getByTestId('credit-cell-editor');
+    const input = page.getByTestId('credit-cell-editor-people-input');
+    const list = page.getByTestId('credit-cell-editor-people-suggestions');
+
+    await cell.dblclick();
+    await expect(editor).toBeVisible();
+    await expect(input).toBeFocused();
+    await page.keyboard.type('Al');
+    await expect(input).toHaveValue('Al');
+    await expect(list).toBeVisible();
+    // Escape walks out: the list, the typed text, then the popover, back to the grid.
+    await page.keyboard.press('Escape');
+    await expect(list).toBeHidden();
+    await page.keyboard.press('Escape');
+    await expect(input).toHaveValue('');
+    await expect(editor).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(editor).toBeHidden();
+    await expect(scroller).toBeFocused();
+    expect(await creditCalls(page)).toEqual([]);
+
+    // The grid taking the focus back while the popover is open does not keep it.
+    await cell.dblclick();
+    await expect(input).toBeFocused();
+    await scroller.evaluate((el) => (el as HTMLElement).focus());
+    await expect(input).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(editor).toBeHidden();
+
+    // A letter on the selected cell opens the popover with it; the rest follows.
+    await page.keyboard.type('Zoe');
+    await expect(editor).toBeVisible();
+    await expect(input).toBeFocused();
+    await expect(input).toHaveValue('Zoe');
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Enter');
+    await expect(editor).toBeHidden();
+    await expect(scroller).toBeFocused();
+    await expect.poll(() => creditCalls(page)).toEqual([
+      { targets: { type: 'shots', shots: [[sectionId, shotId]] }, edit: { set_explorers: [{ name: 'Zoe' }] } },
+    ]);
+  });
 });
