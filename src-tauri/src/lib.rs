@@ -1907,6 +1907,7 @@ pub fn run() {
             commands::shot::set_shot_kind,
             commands::shot::split_shot_at_distance,
             commands::shot::delete_shot_and_split,
+            commands::shot::split_section,
             commands::shot::delete_last_shot_and_section,
             commands::shot::preview_delete_shot_range,
             commands::shot::delete_shot_range_split,

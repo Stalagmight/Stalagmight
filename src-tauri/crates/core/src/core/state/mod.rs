@@ -6,6 +6,7 @@ mod command_move;
 mod command_query;
 mod command_section;
 mod command_shot;
+mod command_split_section;
 mod command_split_shot;
 mod command_station;
 mod commands;

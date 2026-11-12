@@ -3,6 +3,7 @@ use tauri::State;
 use crate::core::{AppState, Command, CommandResult};
 use crate::models::{
     DeleteShotImpact, DeleteShotRangeImpact, SectionId, ShotData, ShotId, ShotKind, ShotUpdates,
+    SplitAt, SplitSectionOptions,
 };
 
 /// Create a new shot
@@ -158,6 +159,27 @@ pub(crate) fn delete_shot_and_split_impl(
     name_b: String,
 ) -> CommandResult {
     state.execute_delete_shot_and_split(section_id, shot_id, name_a, name_b)
+}
+
+/// Split a section in two at a mid-section station or a point along a shot,
+/// deleting nothing (#335).
+#[tauri::command]
+pub fn split_section(
+    state: State<AppState>,
+    section_id: SectionId,
+    at: SplitAt,
+    options: SplitSectionOptions,
+) -> CommandResult {
+    split_section_impl(state.inner(), section_id, at, options)
+}
+
+pub(crate) fn split_section_impl(
+    state: &AppState,
+    section_id: SectionId,
+    at: SplitAt,
+    options: SplitSectionOptions,
+) -> CommandResult {
+    state.execute_split_section(section_id, at, options)
 }
 
 /// Insert a station mid-shot by splitting a shot at a given distance

@@ -38,6 +38,7 @@ mod classify;
 mod connectivity;
 mod mutations;
 mod shots;
+mod split_section;
 
 mod integrity;
 mod merge_topology;

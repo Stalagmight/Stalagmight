@@ -1110,6 +1110,7 @@ mod tests {
                 "command_comment.rs",
                 "command_delete_split.rs",
                 "command_import.rs",
+                "command_split_section.rs",
                 "command_split_shot.rs",
                 "commands.rs",
                 "project_create.rs",

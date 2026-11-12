@@ -58,8 +58,9 @@ use stalagmight_lib::models::{
     NorthReference, PathShot, PlanAnchorSet, PlanMode, PlanSegment, Project, ProjectMetadata,
     ProjectStats, ProjectWarning, RangeDeleteKind, RouteLeg, RouteProfilePoint, RulerEndpoint,
     Section, SectionData, SectionRelationships, SectionStats, SectionUpdates, Shot, ShotCredit,
-    ShotData, ShotKind, ShotUpdates, SpeleoLink, Station, StationMergeWire, StationPair,
-    StationRef, SurveyDirection, TankMaterial, Team, UnrecognisedShotKind, ZeroDatumWire,
+    ShotData, ShotKind, ShotUpdates, SpeleoLink, SplitAt, SplitSectionOptions, SplitSide, Station,
+    StationMergeWire, StationPair, StationRef, SurveyDirection, TankMaterial, Team,
+    UnrecognisedShotKind, ZeroDatumWire,
 };
 use stalagmight_lib::parsers::compass::{CompassFile, CompassSurveySummary, InvalidShotCounts};
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};
@@ -233,6 +234,9 @@ fn main() {
     export::<ExistingShotUpdate>(&out_dir);
     export::<Shot>(&out_dir);
     export::<ShotCredit>(&out_dir);
+    export::<SplitAt>(&out_dir);
+    export::<SplitSectionOptions>(&out_dir);
+    export::<SplitSide>(&out_dir);
     export::<ShotData>(&out_dir);
     export::<ShotKind>(&out_dir);
     export::<UnrecognisedShotKind>(&out_dir);

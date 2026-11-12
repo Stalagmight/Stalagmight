@@ -23665,6 +23665,7 @@ const MUTATION_ENTRYPOINTS: &[&str] = &[
     "execute_delete_shot_range_shift",
     "execute_delete_last_shot_and_section",
     "execute_split_shot_at_distance",
+    "execute_split_section",
     "execute_create_and_merge",
     "execute_import_sections",
     // by-path / metadata methods (gated only when path == the OPEN project)
@@ -23681,7 +23682,7 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
     // guard_mutation AND add its name to MUTATION_ENTRYPOINTS + a call below.
     assert_eq!(
         MUTATION_ENTRYPOINTS.len(),
-        26,
+        27,
         "update both the routing and this list when adding a mutation entry"
     );
 
@@ -23807,6 +23808,21 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
         assert_disabled(
             "execute_delete_shot_and_split",
             &state.execute_delete_shot_and_split(sid, shid, "A".to_string(), "B".to_string()),
+        );
+        assert_disabled(
+            "execute_split_section",
+            &state.execute_split_section(
+                sid,
+                crate::models::SplitAt::Station { station_index: 1 },
+                crate::models::SplitSectionOptions {
+                    name_a: "A".to_string(),
+                    name_b: "B".to_string(),
+                    color_a: "#111111".to_string(),
+                    color_b: "#222222".to_string(),
+                    comment_side: crate::models::SplitSide::A,
+                    datum_side: crate::models::SplitSide::A,
+                },
+            ),
         );
         assert_disabled(
             "execute_delete_shot_range_split",

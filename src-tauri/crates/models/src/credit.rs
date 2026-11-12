@@ -110,6 +110,55 @@ impl ShotCredit {
     }
 }
 
+impl crate::Section {
+    /// Fold uniform credit back into the section (#707). Where every shot
+    /// credits the same surveyor, that becomes the section's surveyor and the
+    /// shots' surveyor overrides are cleared; likewise for the date. A section
+    /// split out of a combined one so ends up with plain section credit again.
+    /// Credit is never moved: every shot's effective values are unchanged.
+    pub fn fold_credit(&mut self) {
+        let surveyors: Vec<Option<String>> = self
+            .shots
+            .iter()
+            .map(|shot| {
+                shot.credit()
+                    .surveyor_or(self.surveyor.as_deref())
+                    .map(str::to_owned)
+            })
+            .collect();
+        if let Some(first) = surveyors.first() {
+            if surveyors.iter().all(|s| s == first) {
+                self.surveyor = first.clone();
+                for shot in &mut self.shots {
+                    if let Some(credit) = shot.credit.as_mut() {
+                        credit.surveyor = None;
+                    }
+                }
+            }
+        }
+
+        let dates: Vec<Option<NaiveDate>> = self
+            .shots
+            .iter()
+            .map(|shot| shot.credit().date_or(self.date))
+            .collect();
+        if let Some(first) = dates.first() {
+            if dates.iter().all(|d| d == first) {
+                self.date = *first;
+                for shot in &mut self.shots {
+                    if let Some(credit) = shot.credit.as_mut() {
+                        credit.date = None;
+                    }
+                }
+            }
+        }
+
+        for shot in &mut self.shots {
+            shot.credit = shot.credit.take().and_then(ShotCredit::into_stored);
+        }
+    }
+}
+
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
