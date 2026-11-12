@@ -213,7 +213,7 @@ The function handles two target paths:
 
 ### Merge Station Picker
 
-When multiple overlap offsets are possible, a dropdown lets the user choose which station pair to merge at. This controls which shots are "actionable" (subject to the overlap mode) versus past-merge (deleted at import).
+When multiple overlap offsets are possible, a dropdown lets the user choose which station pair to merge at. This controls which shots are "actionable" (subject to the overlap mode) versus past-merge, which are imported unchanged as ordinary shots - drawn on top of the passage they repeat and counted again. The picker therefore opens on the last option, the end of the repeat, so every repeated shot is actionable (`defaultMergeOffset`, #685); the matcher's own `preferredMergeOffset`, usually a station inside the repeat, only feeds the ranking.
 
 ### Doubly-Anchored Guard
 
