@@ -2727,9 +2727,7 @@
     "incomplete_other": "Rows {{rows}} are missing required values. Fill them in or delete the rows to continue.",
     "labels": {
       "color": "Color",
-      "date": "Date",
-      "name": "Section Name",
-      "surveyor": "Surveyor"
+      "name": "Section Name"
     },
     "pasteCapped_one": "{{count}} pasted cell was dropped: the table cannot grow any further.",
     "pasteCapped_other": "{{count}} pasted cells were dropped: the table cannot grow any further.",
@@ -2753,13 +2751,11 @@
       "color": "Color",
       "directionShort": "Dir",
       "quality": "Closure Adj. Weight",
-      "reverse": "Reverse numbering",
-      "surveyor": "Surveyor"
+      "reverse": "Reverse numbering"
     },
     "placeholders": {
       "color": "#RRGGBB",
-      "name": "Section name",
-      "surveyor": "Surveyor"
+      "name": "Section name"
     }
   },
   "sections": {

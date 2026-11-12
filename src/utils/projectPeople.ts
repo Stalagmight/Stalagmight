@@ -63,6 +63,6 @@ export function sectionPeople(section: Pick<Section, 'shots'>): Person[] {
 
 /** Everyone the project credits, once each, in section order. */
 export function projectPeople(project: Pick<Project, 'sections'> | null | undefined): Person[] {
-  if (!project) return [];
+  if (!project || !Array.isArray(project.sections)) return [];
   return dedupePeople(project.sections.flatMap(sectionPeople));
 }

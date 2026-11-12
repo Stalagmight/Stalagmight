@@ -5,7 +5,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
 import { ExpandIcon, ShrinkIcon } from '../common/icons';
 import { DialogWrapper } from './DialogWrapper';
-import type { Shot, SectionData } from '../../types/project';
+import type { Shot, SectionData, ShotData } from '../../types/project';
 import { SpreadsheetGrid } from '../common/SpreadsheetGrid';
 import type { CellEdit } from '../common/SpreadsheetGrid/types';
 import {
@@ -49,6 +49,9 @@ import { getNumberFormatLocale } from '../../i18n/format';
 import { nextShotKind } from '../../utils/shotKind';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { TOAST_KEYS } from '../../utils/toastKeys';
+import { CreditPeopleFields } from '../common/CreditFields';
+import { listPeopleProps, type CreditLists } from '../common/SectionMetadataForm';
+import { personKey } from '../../utils/people';
 
 /** Grid height to assume before the first measurement, and under jsdom (which
  *  has no ResizeObserver). Tall enough that virtualization renders rows. */
@@ -59,7 +62,7 @@ const ROW_AREA_MIN = 120;
 
 interface SavedFormState {
   name: string;
-  surveyor: string;
+  people: CreditLists;
   date: string;
   color: string;
   /** The full grid contents, including partially-filled rows, so a cancelled
@@ -72,7 +75,7 @@ interface SavedFormState {
 
 export default function ImportDialog() {
   const { t } = useTranslation();
-  const { closeDialog, openDialog, startPlacementMode, dialogData, resolvedTheme, showToast } =
+  const { closeDialog, openDialog, startPlacementMode, dialogData, resolvedTheme, showToast, lastUsedCredit, setLastUsedCredit } =
     useUIStore();
   const { createSection, createSectionAndMerge, moveSection, project } = useProjectStore();
   const precision = useDecimalPrecision();
@@ -86,7 +89,11 @@ export default function ImportDialog() {
 
   // Form state
   const [name, setName] = useState<string>(restored?.name ?? '');
-  const [surveyor, setSurveyor] = useState<string>(restored?.surveyor ?? '');
+  // Surveyors / explorers of every shot entered here, prefilled with the ones
+  // the last section of this session was created or imported with.
+  const [initialPeople] = useState<CreditLists>(() => restored?.people ?? lastUsedCredit);
+  const [people, setPeople] = useState<CreditLists>(initialPeople);
+  const [peopleTyping, setPeopleTyping] = useState(false);
   const [date, setDate] = useState<string>(restored?.date ?? '');
 
   // Row keys are handed out from a monotonic counter and NEVER reused: the grid
@@ -384,20 +391,26 @@ export default function ImportDialog() {
 
   const handleSubmit = () => {
     if (!submitAllowed) return;
+    // The people and date go on every shot (a section holds none of its own).
+    const credit =
+      people.surveyors.length > 0 || people.explorers.length > 0 || date !== ''
+        ? { surveyors: people.surveyors, explorers: people.explorers, date: date || null }
+        : null;
     const sectionData: SectionData = {
       name: name || null,
-      surveyor: surveyor || null,
-      date: date || null,
+      surveyor: null,
+      date: null,
       color,
       direction: null,
       quality: 1.0,
-      shots: collectShots(drafts),
+      shots: collectShots(drafts).map((shot): ShotData => (credit ? { ...shot, credit } : shot)),
     };
+    setLastUsedCredit(people);
 
     // Save form state so we can restore on cancel
     const formState: SavedFormState = {
       name,
-      surveyor,
+      people,
       date,
       color,
       drafts,
@@ -432,8 +445,17 @@ export default function ImportDialog() {
   // incomplete one - discarding it still loses typing. Judged by value, the same
   // rule the grid and the Create gate use: a cleared optional leaves its key
   // behind, so counting keys offered to discard an empty grid.
+  // The prefilled people are not a change; a name still being typed is.
+  const peopleChanged = (['surveyors', 'explorers'] as const).some(
+    (role) => people[role].map(personKey).join('\n') !== initialPeople[role].map(personKey).join('\n')
+  );
   const isDirty =
-    name !== '' || surveyor !== '' || date !== '' || drafts.some((d) => !isBlankDraft(d));
+    name !== '' || peopleChanged || peopleTyping || date !== '' || drafts.some((d) => !isBlankDraft(d));
+  const peopleProps = listPeopleProps(
+    people,
+    (role, next) => setPeople((prev) => ({ ...prev, [role]: next(prev[role]) })),
+    setPeopleTyping
+  );
 
   return (
     <DialogWrapper
@@ -446,56 +468,54 @@ export default function ImportDialog() {
     >
       <div className={`flex flex-col gap-4 ${expanded ? 'h-full' : ''}`}>
         {/* Metadata */}
-        <div className="grid shrink-0 grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm text-text-secondary mb-1">
-              {t('newSection.labels.name')}
-            </label>
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="w-full"
-              placeholder={t('newSection.placeholders.name')}
-              data-testid="section-name-input"
-            />
+        <div className="shrink-0 space-y-3">
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm text-text-secondary mb-1">
+                {t('newSection.labels.name')}
+              </label>
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                className="w-full"
+                placeholder={t('newSection.placeholders.name')}
+                data-testid="section-name-input"
+              />
+            </div>
+            <div className="flex gap-4">
+              <div className="min-w-0 flex-1">
+                <label className="block text-sm text-text-secondary mb-1">
+                  {t('credit.dateLabel')}
+                </label>
+                <input
+                  type="date"
+                  value={date}
+                  onChange={(e) => setDate(e.target.value)}
+                  className="w-full"
+                  data-testid="import-section-date-input"
+                />
+              </div>
+              <div className="w-24 shrink-0">
+                <label className="block text-sm text-text-secondary mb-1">
+                  {t('newSection.labels.color')}
+                </label>
+                <input
+                  type="color"
+                  value={color}
+                  onChange={(e) => setColor(e.target.value)}
+                  className="w-full h-9"
+                  data-testid="import-section-color-input"
+                />
+              </div>
+            </div>
           </div>
-          <div>
-            <label className="block text-sm text-text-secondary mb-1">
-              {t('newSection.labels.surveyor')}
-            </label>
-            <input
-              type="text"
-              value={surveyor}
-              onChange={(e) => setSurveyor(e.target.value)}
-              className="w-full"
-              data-testid="import-section-surveyor-input"
-            />
-          </div>
-          <div>
-            <label className="block text-sm text-text-secondary mb-1">
-              {t('newSection.labels.date')}
-            </label>
-            <input
-              type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-              className="w-full"
-              data-testid="import-section-date-input"
-            />
-          </div>
-          <div>
-            <label className="block text-sm text-text-secondary mb-1">
-              {t('newSection.labels.color')}
-            </label>
-            <input
-              type="color"
-              value={color}
-              onChange={(e) => setColor(e.target.value)}
-              className="w-full h-9"
-              data-testid="import-section-color-input"
-            />
-          </div>
+          <CreditPeopleFields
+            {...peopleProps}
+            layout="columns"
+            disabled={editingBlocked}
+            testIdPrefix="import-section"
+          />
         </div>
 
         {/* Shots grid, under the dialog's own chrome rather than the grid's
