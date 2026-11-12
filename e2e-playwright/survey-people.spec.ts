@@ -227,6 +227,32 @@ test.describe('Survey people', () => {
     await expect(page.getByTestId('section-surveyors-pill-3-label')).toHaveText('John Smith (jsmith)');
   });
 
+  test('the typing input shares the last pill row when there is room for it', async ({ page }) => {
+    // The 3-shot multi-selection whose Explorers pills ("Cy Cave 2/3",
+    // "Dee Deep 1/3") left the input alone on an empty second row.
+    const sectionId = await seedSection(page);
+    const shots = (await firstSection(page)).shots.map((s) => s.id);
+    await page.evaluate(
+      async ([sid, ids]) => {
+        const ps = (window as unknown as { __E2E_TEST__: { projectStore: { getState: () => Record<string, (...a: unknown[]) => Promise<unknown>> } } })
+          .__E2E_TEST__.projectStore.getState();
+        await ps.editShotCredit({ type: 'shots', shots: [[sid, ids[0]], [sid, ids[1]]] }, { set_explorers: [{ name: 'Cy Cave' }] });
+        await ps.editShotCredit({ type: 'shots', shots: [[sid, ids[1]]] }, { add_explorers: [{ name: 'Dee Deep' }] });
+        const ui = (window as unknown as E2EWindow).__E2E_TEST__.uiStore.getState();
+        ui.setSelection({ type: 'shot', sectionId: sid, shotId: ids[0] });
+        ui.addToSelection({ type: 'shot', sectionId: sid, shotId: ids[1] });
+        ui.addToSelection({ type: 'shot', sectionId: sid, shotId: ids[2] });
+      },
+      [sectionId, shots] as const,
+    );
+    await expect(page.getByTestId('detail-credit-explorers-pill-1-count')).toHaveText('1/3');
+    const pill = await page.getByTestId('detail-credit-explorers-pill-1').boundingBox();
+    const input = await page.getByTestId('detail-credit-explorers-input').boundingBox();
+    expect(pill && input).toBeTruthy();
+    expect(Math.abs(input!.y + input!.height / 2 - (pill!.y + pill!.height / 2))).toBeLessThan(4);
+    expect(input!.x).toBeGreaterThan(pill!.x + pill!.width);
+  });
+
   test('Escape closes the suggestion list, then clears the text, without closing the dialog', async ({ page }) => {
     const sectionId = await seedSection(page);
     await openDialog(page, 'edit-section', { sectionId });

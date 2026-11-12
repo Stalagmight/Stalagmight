@@ -722,8 +722,11 @@ export function PeopleInput({
             onKeyDown={onKeyDown}
             onPaste={onPaste}
             onBlur={onBlur}
-            className={`flex-1 rounded-none border-0 bg-transparent p-0 text-text-primary placeholder:text-text-secondary focus:outline-none focus-visible:outline-none ${
-              compact ? 'h-5 min-w-[3rem] text-xs' : 'h-6 min-w-[4rem]'
+            // Grows into whatever the last pill row leaves, and only wraps onto a
+            // row of its own when less than ~6 characters remain: a wider minimum
+            // left an empty second row under pills that nearly filled the field.
+            className={`min-w-[6ch] flex-1 rounded-none border-0 bg-transparent p-0 text-text-primary placeholder:text-text-secondary focus:outline-none focus-visible:outline-none ${
+              compact ? 'h-5 text-xs' : 'h-6'
             }`}
             data-testid={`${testId}-input`}
           />
