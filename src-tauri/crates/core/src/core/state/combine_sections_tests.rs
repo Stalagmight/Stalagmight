@@ -127,3 +127,63 @@ fn a_refused_combine_changes_nothing_and_leaves_no_undo_entry() {
     assert!(state.get_undo_stack().is_empty());
     assert_eq!(state.capture_project_snapshot().unwrap(), before);
 }
+
+#[test]
+fn the_station_query_refuses_unknown_and_out_of_range_stations() {
+    let (state, main, second) = split_state();
+    for station in [
+        StationRef::new(999, 0),
+        StationRef::new(main, 2),
+        StationRef::new(second, 3),
+        StationRef::new(second, u32::MAX),
+    ] {
+        assert_eq!(
+            state.combine_candidate_at_station(station).unwrap(),
+            None,
+            "{station:?}"
+        );
+    }
+}
+
+#[test]
+fn keeping_the_higher_id_keeps_it() {
+    let (state, main, second) = split_state();
+
+    let result = state.execute_combine_sections(second, main, options());
+
+    assert!(result.success, "{:?}", result.error);
+    assert_eq!(result.section_id, Some(second));
+    let project = state.get_project_state().unwrap();
+    let ids: Vec<SectionId> = project.sections.iter().map(|s| s.id).collect();
+    assert_eq!(ids, vec![second]);
+    assert_eq!(lengths(&state), vec![vec![5.0, 7.0, 3.0]]);
+}
+
+#[test]
+fn a_combine_of_missing_sections_changes_nothing_and_leaves_no_undo_entry() {
+    let (state, main, _) = split_state();
+    let extra = state.execute(Command::CreateSection {
+        name: Some("Extra".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#0000ff".to_string(),
+        direction: None,
+        shots: vec![shot(2.0)],
+    });
+    assert!(extra.success);
+    let before = state.capture_project_snapshot().unwrap();
+
+    for (kept, other) in [(998, 999), (main, 999), (999, main)] {
+        let result = state.execute_combine_sections(kept, other, options());
+        assert!(!result.success, "{kept} {other}");
+    }
+
+    assert_eq!(state.capture_project_snapshot().unwrap(), before);
+    assert_eq!(state.get_undo_stack().len(), 1);
+    assert!(state.undo().success);
+    assert_eq!(
+        lengths(&state),
+        vec![vec![5.0], vec![7.0, 3.0]],
+        "the next undo reverts the step before"
+    );
+}
