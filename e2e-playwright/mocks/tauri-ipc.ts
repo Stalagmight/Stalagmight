@@ -5431,7 +5431,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 station_name_b: null,
               };
             };
-            const BRANCH = 'Another station is merged at this point, so it is a branch; only two sections that meet end to end can be combined';
+            const BRANCH = 'Another station is merged here (a branch)';
             const forStation = (at: Ref) => {
               if (!isEnd(at)) return null;
               const partners = partnersOf(at);

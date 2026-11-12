@@ -15,7 +15,10 @@ import type { CombineCandidate } from '../../types/ipc/CombineCandidate';
 import { formatShotId, formatStationIdWithName } from '../../utils/formatters';
 import { setSource, trackContextMenuAction, trackDialogComplete } from '../../utils/telemetry';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
-import { MenuRow, MenuSeparator } from './MenuRow';
+import { MENU_ROW_HEIGHT_PX, MENU_ROW_HINT_HEIGHT_PX, MenuRow, MenuSeparator } from './MenuRow';
+
+/** The widest the menu grows; a hint line wraps within it. */
+const MENU_MAX_WIDTH_PX = 288;
 import {
   ArrowUpRightIcon,
   BookmarkIcon,
@@ -217,7 +220,9 @@ export default function ContextMenu() {
   }, [combineKey]);
   const combineCandidate = combineAnswer?.key === combineKey ? combineAnswer.candidate : undefined;
   /**
-   * The Combine row. Whether it is offered is known synchronously (an END
+   * The Combine row, always with a hint line (visible under the label, and as
+   * its tooltip): "Checking...", the reason it is disabled, or what it joins.
+   * Whether it is offered is known synchronously (an END
    * station, or exactly two selected sections), so the row is always there
    * from the first render: disabled with "Checking..." while the backend's
    * answer is in flight, then enabled, or disabled with the reason. Inserting
@@ -244,6 +249,12 @@ export default function ContextMenu() {
       (combineCandidate.blocked_keeping_a && combineCandidate.blocked_keeping_b
         ? combineCandidate.blocked_keeping_a
         : null);
+    const name = (id: SectionId) => project?.sections.find((s) => s.id === id)?.name?.trim() || `Section ${id}`;
+    const { section_a: a, section_b: b } = combineCandidate;
+    const clicked = combineKey.startsWith('station') ? Number(combineKey.split(':')[1]) : null;
+    // The enabled row says what it joins, so the row's height never depends on
+    // the answer.
+    const joins = clicked === null ? `${name(a)} and ${name(b)} meet end to end` : `With ${name(clicked === a ? b : a)}`;
     return [
       {
         label,
@@ -251,7 +262,7 @@ export default function ContextMenu() {
           openDialog('combine-sections', { candidate: combineCandidate, preview: combinePreview(combineCandidate) });
         },
         disabled: blocked !== null,
-        hint: blocked ?? undefined,
+        hint: blocked ?? joins,
       },
     ];
   };
@@ -923,10 +934,17 @@ export default function ContextMenu() {
     return null;
   }
 
-  // Adjust position to stay within viewport
+  // Adjust position to stay within viewport. A row with a hint is taller (its
+  // hint is a fixed two lines, so the height is known before it renders), and
+  // a menu with hints may be as wide as its max width.
+  const menuHeight = items.reduce(
+    (height, item) => height + MENU_ROW_HEIGHT_PX + (item.hint !== undefined ? MENU_ROW_HINT_HEIGHT_PX : 0),
+    0
+  );
+  const menuWidth = items.some((item) => item.hint !== undefined) ? MENU_MAX_WIDTH_PX : 200;
   const adjustedPosition = {
-    x: Math.min(position.x, window.innerWidth - 200),
-    y: Math.min(position.y, window.innerHeight - items.length * 36 - 20),
+    x: Math.min(position.x, window.innerWidth - menuWidth),
+    y: Math.min(position.y, window.innerHeight - menuHeight - 20),
   };
 
   return (
@@ -936,7 +954,7 @@ export default function ContextMenu() {
         ref={menuRef}
         className="absolute bg-panel border border-border rounded-lg shadow-xl py-1 min-w-[180px]"
         data-testid="context-menu"
-        style={{ left: adjustedPosition.x, top: adjustedPosition.y }}
+        style={{ left: adjustedPosition.x, top: adjustedPosition.y, maxWidth: MENU_MAX_WIDTH_PX }}
       >
         {items.map((item, index) => {
           if (item.separator) {
@@ -950,6 +968,7 @@ export default function ContextMenu() {
               onClick={() => { setSource('context-menu'); item.action(); }}
               disabled={item.disabled}
               title={item.hint}
+              hint={item.hint}
               label={item.label}
               icon={item.icon}
               showIcons={showIcons}

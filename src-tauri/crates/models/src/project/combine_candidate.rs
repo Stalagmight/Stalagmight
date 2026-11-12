@@ -142,19 +142,10 @@ impl Project {
             return None;
         }
         let blocked = if merged {
-            (group_a.len() > 2).then(|| {
-                format!(
-                    "{} stations are merged at this point, so it is a branch; only two \
-                     sections that meet end to end can be combined",
-                    group_a.len()
-                )
-            })
+            (group_a.len() > 2)
+                .then(|| format!("{} stations are merged here (a branch)", group_a.len()))
         } else if group_a.len() > 1 || self.get_merge_group(at_b).len() > 1 {
-            Some(
-                "Another station is merged at this point, so it is a branch; only two \
-                 sections that meet end to end can be combined"
-                    .to_string(),
-            )
+            Some("Another station is merged here (a branch)".to_string())
         } else {
             let third = ends
                 .near(pa)
@@ -162,8 +153,7 @@ impl Project {
                 .find(|id| *id != pairing.a && *id != pairing.b);
             third.map(|third| {
                 format!(
-                    "{} also ends at this point, so it is a branch; only two sections that \
-                     meet end to end can be combined",
+                    "{} also ends here (a branch)",
                     self.get_section(third)
                         .map_or_else(|| format!("Section {third}"), label)
                 )
@@ -175,7 +165,7 @@ impl Project {
             // the other section by the gap.
             (apart > COMBINE_TOLERANCE_M).then(|| {
                 format!(
-                    "The merged join stations are {:.1} mm apart; realign the merge first",
+                    "The merged join stations are {:.1} mm apart",
                     apart * 1000.0
                 )
             })
@@ -206,8 +196,7 @@ impl Project {
             .any(|uuid| uuids_a.contains(uuid))
         {
             return Some(format!(
-                "{name_a} and {name_b} share a shot identity (one shot uuid in both), so the \
-                 combined section would hold the same shot twice"
+                "{name_a} and {name_b} share a shot identity (the same shot uuid)"
             ));
         }
         // The RAW references: the combined section keeps only the kept one's
@@ -220,14 +209,12 @@ impl Project {
         }
         if (a.quality - b.quality).abs() > 1e-12 {
             return Some(format!(
-                "{name_a} and {name_b} have different quality factors, which weight the \
-                 loop-closure adjustment differently"
+                "{name_a} and {name_b} have different quality factors"
             ));
         }
         if self.rigidly_connected_beyond_join(at_a, at_b) {
             return Some(format!(
-                "{name_a} and {name_b} are also connected elsewhere (directly or through \
-                 other sections), so the combined section would close a loop onto itself"
+                "{name_a} and {name_b} are also connected elsewhere (a loop)"
             ));
         }
         if self.has_datum_at(at_a) && self.has_datum_at(at_b) {
@@ -237,25 +224,18 @@ impl Project {
             && self.section_has_zero_datum(pairing.a)
             && self.section_has_zero_datum(pairing.b)
         {
-            return Some(format!(
-                "{name_a} and {name_b} are each anchored by a zero datum; joining them \
-                 would over-constrain one rigid group"
-            ));
+            return Some(format!("{name_a} and {name_b} each have a zero datum"));
         }
         let offset = |at| self.station_offset_for_ref(at).unwrap_or_default();
         let (oa, ob) = (offset(at_a), offset(at_b));
         let moved = ((oa.0 - ob.0).powi(2) + (oa.1 - ob.1).powi(2) + (oa.2 - ob.2).powi(2)).sqrt();
         if moved > COMBINE_TOLERANCE_M {
-            return Some(
-                "The two join stations were moved by different amounts; move one onto the \
-                 other first"
-                    .to_string(),
-            );
+            return Some("The join stations were moved by different amounts".to_string());
         }
         let budget = FEATURE_ID_STRIDE.saturating_sub(1) as usize;
         if a.shots.len() + b.shots.len() > budget {
             return Some(format!(
-                "The combined section would have {} shots; a section holds at most {budget}",
+                "The combined section would have {} shots (at most {budget})",
                 a.shots.len() + b.shots.len()
             ));
         }
@@ -273,11 +253,9 @@ impl Project {
         let last = u64::from(kept.next_shot_id) + other.shots.len() as u64;
         (last > window_end).then(|| {
             format!(
-                "{} has used up its shot numbers for this session, so {}'s shots would take \
-                 another section's numbers. Keep {} instead, or save and reopen the project \
-                 (which renumbers every shot) and combine again",
+                "{} has used up its shot numbers for this session: keep {}, or save and \
+                 reopen",
                 label(kept),
-                label(other),
                 label(other)
             )
         })
@@ -313,16 +291,15 @@ impl Project {
                 None
             }
             (Some(_), Some(_)) => Some(format!(
-                "{name_a} and {name_b} use different north references, so one section's \
-                 bearings would change meaning in the other"
+                "{name_a} and {name_b} use different north references"
             )),
             (None, Some(_)) => Some(format!(
-                "{name_a} follows the project's default north reference and {name_b} declares \
-                 its own; set the same reference on both first"
+                "{name_a} follows the project's default north reference, {name_b} declares \
+                 its own"
             )),
             (Some(_), None) => Some(format!(
-                "{name_b} follows the project's default north reference and {name_a} declares \
-                 its own; set the same reference on both first"
+                "{name_b} follows the project's default north reference, {name_a} declares \
+                 its own"
             )),
         }
     }
@@ -483,8 +460,7 @@ impl Project {
             ([(pairing, touch), ..], _) => {
                 let mut touch = touch.clone();
                 touch.blocked = Some(format!(
-                    "{} and {} meet at both ends; right-click the end station where they \
-                     should be combined",
+                    "{} and {} meet at both ends (a loop)",
                     label(a),
                     label(b)
                 ));
@@ -568,11 +544,7 @@ impl Project {
                 };
                 let touch = Touch {
                     merged: true,
-                    blocked: Some(
-                        "This station is merged to the middle of another section, so it is \
-                         a branch; only two sections that meet end to end can be combined"
-                            .to_string(),
-                    ),
+                    blocked: Some("Merged to the middle of another section (a branch)".to_string()),
                 };
                 self.candidate_for(pairing, touch)
             }
@@ -592,8 +564,7 @@ impl Project {
             [(pairing, touch), ..] => {
                 let mut touch = touch.clone();
                 touch.blocked = Some(format!(
-                    "{} section ends meet at this point, so it is a branch; only two \
-                     sections that meet end to end can be combined",
+                    "{} section ends meet here (a branch)",
                     partners.len() + 1
                 ));
                 self.candidate_for(*pairing, touch)

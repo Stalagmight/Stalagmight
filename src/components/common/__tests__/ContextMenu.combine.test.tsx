@@ -69,7 +69,7 @@ vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => k
 import ContextMenu from '../ContextMenu';
 
 const rows = () => screen.getAllByRole('button').filter((b) => b.getAttribute('data-testid')?.startsWith('context-menu-item-'));
-const labels = () => rows().map((r) => r.textContent);
+const labels = () => rows().map((r) => r.getAttribute('aria-label') ?? r.textContent);
 const combineRow = () => screen.getByRole('button', { name: 'Combine Sections...' });
 
 function openOn(stationIndex: number) {
@@ -106,16 +106,42 @@ describe('ContextMenu Combine Sections row', () => {
     vi.clearAllMocks();
   });
 
+  /** The visible hint line of the Combine row. */
+  const hintLine = () => screen.getByTestId(`${combineRow().getAttribute('data-testid')}-hint`);
+
   it('is reserved, disabled, while the answer is pending, and the rows never move', async () => {
     openOn(3);
     const before = labels();
     expect(combineRow()).toBeDisabled();
     expect(combineRow()).toHaveAttribute('title', expect.stringContaining('Checking'));
+    expect(hintLine()).toHaveTextContent('Checking whether the sections can be combined...');
 
     await act(async () => resolveCandidate(candidate(null)));
 
     expect(labels()).toEqual(before);
     expect(combineRow()).toBeEnabled();
+    expect(hintLine()).toHaveTextContent('With Section 2');
+  });
+
+  it('shows the reason as a visible line under the label, not only as a tooltip', async () => {
+    openOn(3);
+    await act(async () => resolveCandidate(candidate('3 section ends meet here (a branch)')));
+    expect(hintLine()).toHaveTextContent('3 section ends meet here (a branch)');
+    expect(hintLine()).toBeVisible();
+    expect(combineRow()).toHaveAttribute('title', '3 section ends meet here (a branch)');
+  });
+
+  it('positions the menu for the taller hinted row', () => {
+    dialogData = {
+      target: { type: 'station', ref: { section_id: 1, station_index: 3 } },
+      position: { x: 10, y: window.innerHeight - 5 },
+      survivesScroll: true,
+    };
+    render(<ContextMenu />);
+    const menu = screen.getByTestId('context-menu');
+    // One child per item (row or separator), 36 px each, plus the hint's 32.
+    const height = menu.children.length * 36 + 32;
+    expect(menu.style.top).toBe(`${window.innerHeight - height - 20}px`);
   });
 
   it('stays in place with the reason when the answer is a refusal or nothing to combine', async () => {

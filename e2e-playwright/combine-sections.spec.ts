@@ -152,6 +152,8 @@ test.describe('Combine Sections', () => {
     const item = page.getByRole('button', { name: 'Combine Sections...' });
     await expect(item).toBeDisabled();
     await expect(item).toHaveAttribute('title', /branch/);
+    // The reason is shown, not only as a tooltip.
+    await expect(item).toContainText('(a branch)');
     await expect(page.getByRole('button', { name: 'Split Section Here' })).toHaveCount(0);
   });
 
@@ -161,6 +163,7 @@ test.describe('Combine Sections', () => {
     const item = page.getByRole('button', { name: 'Combine Sections...' });
     await expect(item).toBeDisabled();
     await expect(item).toHaveAttribute('title', 'No other section ends at this station');
+    await expect(item).toContainText('No other section ends at this station');
 
     await page.keyboard.press('Escape');
     await openContextMenu(page, { type: 'station', ref: { section_id: main!.id, station_index: 1 } });
