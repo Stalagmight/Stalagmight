@@ -1,9 +1,11 @@
 /**
- * The data table's survey-credit columns, wired: the column definitions, the
- * popover editor over the active credit cell, and type-to-edit (a printable
- * key on a credit cell opens the popover seeded with it, instead of writing a
- * one-letter person). Kept out of `DataTable.tsx`, which is past its size
- * ratchet. See `dataTableCreditColumns.tsx` for the cell semantics.
+ * The data table's survey-credit columns, wired: the column definitions and
+ * the popover editor over a credit cell. The grid opens it (`openEditor`) from
+ * Enter, F2, Space, a double click or a typed character, which the field then
+ * starts with. While it is open the keyboard is the popover's: a key that
+ * reaches the grid instead never acts on the grid. Kept out of `DataTable.tsx`,
+ * which is past its size ratchet. See `dataTableCreditColumns.tsx` for the cell
+ * semantics.
  */
 import { useCallback, useMemo, useState, type KeyboardEvent, type ReactNode } from 'react';
 import type { TFunction } from 'i18next';
@@ -13,8 +15,8 @@ import { disambiguationLabels, personKey } from '../../utils/people';
 import { setSource } from '../../utils/telemetry';
 import type { GridColumn } from '../common/SpreadsheetGrid/types';
 import type { CreditEdit, Shot } from '../../types/ipc.generated';
-import { buildCreditColumns, isCreditColumn, type CreditColumnKey } from './dataTableCreditColumns';
-import { CreditCellEditor } from './CreditCellEditor';
+import { buildCreditColumns, type CreditColumnKey } from './dataTableCreditColumns';
+import { CREDIT_EDITOR_FIELD, CREDIT_EDITOR_TEST_ID, CreditCellEditor } from './CreditCellEditor';
 import { creditEditForCells } from './dataTableEdits';
 
 interface Options {
@@ -24,21 +26,19 @@ interface Options {
   rows: readonly Shot[];
   shotIndexAt: (gridRowIndex: number) => number | null;
   editingBlocked: boolean;
-  /** The grid's active cell, for type-to-edit. */
-  active: { row: number; colKey: string } | null;
 }
 
 export interface DataTableCredit {
   columns: GridColumn<Shot>[];
   /** The open popover, if any. */
   editor: ReactNode;
-  /** On the grid's wrapper: a printable key on a credit cell opens its popover. */
+  /** On the grid's wrapper: while the popover is open, keys never reach the grid. */
   onKeyDownCapture: (event: KeyboardEvent<HTMLElement>) => void;
   /** A single grid edit of a credit cell (a one-cell paste or clear). */
   applyCell: (shot: Shot, colKey: string, value: unknown) => void;
 }
 
-export function useDataTableCredit({ t, sectionId, rows, shotIndexAt, editingBlocked, active }: Options): DataTableCredit {
+export function useDataTableCredit({ t, sectionId, rows, shotIndexAt, editingBlocked }: Options): DataTableCredit {
   const editShotCredit = useProjectStore((s) => s.editShotCredit);
   const [editing, setEditing] = useState<{ shotId: number; field: CreditColumnKey; seed: string } | null>(null);
 
@@ -68,7 +68,7 @@ export function useDataTableCredit({ t, sectionId, rows, shotIndexAt, editingBlo
         shotIndexAt,
         labels,
         speleoKeys,
-        onOpenEditor: (rowIndex, field) => open(rowIndex, field),
+        onOpenEditor: open,
       }),
     [t, editingBlocked, shotIndexAt, labels, speleoKeys, open],
   );
@@ -90,24 +90,32 @@ export function useDataTableCredit({ t, sectionId, rows, shotIndexAt, editingBlo
     [send],
   );
 
+  // The popover's field normally has the focus (CreditCellEditor takes it back
+  // if the grid grabs it). Should a key still reach the grid underneath, the
+  // grid must not act on it - a letter went straight to the shot as a
+  // one-letter person, Delete would clear the selection. Escape closes the
+  // popover; any other key moves the focus into the field, and a printable one
+  // is left to land there (the browser types into whatever keydown focused).
+  const shot = editing ? rows.find((r) => r.id === editing.shotId) : undefined;
+  const isOpen = editing !== null && shot !== undefined && sectionId !== null;
   const onKeyDownCapture = useCallback(
     (event: KeyboardEvent<HTMLElement>) => {
-      if (editing || !active || !isCreditColumn(active.colKey)) return;
-      if (event.ctrlKey || event.metaKey || event.altKey || event.key.length !== 1 || event.key === ' ') return;
-      if (event.nativeEvent.isComposing) return;
-      // Only from the grid itself, never from an input inside it.
-      const target = event.target as HTMLElement;
-      if (target.closest('input, textarea, [contenteditable="true"]')) return;
-      event.preventDefault();
+      if (!isOpen || (event.target as Element).closest(`[data-testid="${CREDIT_EDITOR_TEST_ID}"]`)) return;
       event.stopPropagation();
-      open(active.row, active.colKey, active.colKey === 'survey_date' ? '' : event.key);
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setEditing(null);
+        return;
+      }
+      const printable = event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey;
+      if (!printable) event.preventDefault();
+      document.querySelector<HTMLElement>(CREDIT_EDITOR_FIELD)?.focus();
     },
-    [editing, active, open],
+    [isOpen],
   );
 
-  const shot = editing ? rows.find((r) => r.id === editing.shotId) : undefined;
   const editor =
-    editing && shot && sectionId !== null ? (
+    isOpen ? (
       <CreditCellEditor
         key={`${editing.shotId}:${editing.field}`}
         shot={shot}

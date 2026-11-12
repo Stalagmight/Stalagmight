@@ -771,14 +771,13 @@ export default function DataTable({ sections }: DataTableProps) {
     activeRow: number;
     activeColKey: string;
   } | null>(null);
-  // Surveyors / Explorers / Survey date: columns, popover editor, type-to-edit.
+  // Surveyors / Explorers / Survey date: columns and their popover editor.
   const credit = useDataTableCredit({
     t,
     sectionId: selectedSectionId,
     rows: gridShotRows,
     shotIndexAt,
     editingBlocked,
-    active: gridSel ? { row: gridSel.activeRow, colKey: gridSel.activeColKey } : null,
   });
 
 

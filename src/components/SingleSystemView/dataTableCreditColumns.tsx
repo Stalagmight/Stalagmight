@@ -5,8 +5,9 @@
  * they existed).
  *
  * A cell shows compact pills (full name, email and SpeleoDB status on hover).
- * Editing opens a popover (`CreditCellEditor`): Enter, F2, Space or a double
- * click. The grid's bulk paths work as for every other column: a paste, a
+ * Editing opens a popover (`CreditCellEditor`): Enter, F2, Space, a double
+ * click, or a typed character, which the popover's field starts with. The grid
+ * never edits these cells as text (`openEditor`). The grid's bulk paths work as for every other column: a paste, a
  * fill-handle drag or a clear writes the whole list (or date) of each cell,
  * one `edit_shot_credit` per shot, all in one batch. On the clipboard a cell
  * is `Name <email>; Name`.
@@ -69,8 +70,8 @@ export interface CreditColumnContext {
   labels: ReadonlyMap<string, string>;
   /** People known as SpeleoDB collaborators of the linked project, by person key. */
   speleoKeys: ReadonlySet<string>;
-  /** Open the popover editor over this cell. */
-  onOpenEditor: (rowIndex: number, colKey: CreditColumnKey) => void;
+  /** Open the popover editor over this cell, its field starting with `seed`. */
+  onOpenEditor: (rowIndex: number, colKey: CreditColumnKey, seed: string) => void;
 }
 
 function PeopleCell({ people, ctx }: { people: readonly Person[]; ctx: CreditColumnContext }) {
@@ -109,11 +110,6 @@ export function buildCreditColumns(ctx: CreditColumnContext): GridColumn<Shot>[]
   // Not on a draft row: a shot that does not exist yet has no credit to edit,
   // and gets its neighbour's when it is created.
   const isEditable = (_row: Shot, rowIndex: number) => !geometryReadOnly && shotIndexAt(rowIndex) !== null;
-  const openOnDoubleClick = (rowIndex: number, key: CreditColumnKey) => (event: { stopPropagation: () => void }) => {
-    if (geometryReadOnly || shotIndexAt(rowIndex) === null) return;
-    event.stopPropagation();
-    ctx.onOpenEditor(rowIndex, key);
-  };
 
   const peopleColumn = (key: CreditRole, header: string): GridColumn<Shot> => ({
     key,
@@ -126,14 +122,9 @@ export function buildCreditColumns(ctx: CreditColumnContext): GridColumn<Shot>[]
     editable: true,
     isEditable,
     noInlineEdit: true,
-    activateOnEnter: true,
-    activate: (_row, rowIndex) => ctx.onOpenEditor(rowIndex, key),
-    render: (shot, rowIndex): ReactNode => (
-      <span
-        className="block h-full w-full min-w-0"
-        onDoubleClick={openOnDoubleClick(rowIndex, key)}
-        data-testid={`credit-cell-${key}`}
-      >
+    openEditor: (_row, rowIndex, seed) => ctx.onOpenEditor(rowIndex, key, seed),
+    render: (shot): ReactNode => (
+      <span className="block h-full w-full min-w-0" data-testid={`credit-cell-${key}`}>
         <PeopleCell people={shot.credit?.[key] ?? []} ctx={ctx} />
       </span>
     ),
@@ -152,14 +143,10 @@ export function buildCreditColumns(ctx: CreditColumnContext): GridColumn<Shot>[]
       editable: true,
       isEditable,
       noInlineEdit: true,
-      activateOnEnter: true,
-      activate: (_row, rowIndex) => ctx.onOpenEditor(rowIndex, 'survey_date'),
-      render: (shot, rowIndex): ReactNode => (
-        <span
-          className="flex h-full w-full items-center tabular-nums"
-          onDoubleClick={openOnDoubleClick(rowIndex, 'survey_date')}
-          data-testid="credit-cell-survey_date"
-        >
+      // A date input cannot start from a typed letter, so the popover opens without it.
+      openEditor: (_row, rowIndex) => ctx.onOpenEditor(rowIndex, 'survey_date', ''),
+      render: (shot): ReactNode => (
+        <span className="flex h-full w-full items-center tabular-nums" data-testid="credit-cell-survey_date">
           {shot.credit?.date ?? ''}
         </span>
       ),

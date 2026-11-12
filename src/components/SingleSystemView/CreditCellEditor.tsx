@@ -7,6 +7,8 @@
  * value changed. Enter on the empty field (or the date input) commits and
  * closes; a click outside commits too, including a name still being typed;
  * Escape walks out of the field (list, then typed text) and then cancels.
+ *
+ * The field owns the keyboard while the popover is open (`useFieldFocus`).
  */
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
@@ -20,6 +22,10 @@ import { peopleValues, withPerson, withoutPerson } from '../common/SectionMetada
 import { personKey, type PersonLike } from '../../utils/people';
 import type { CreditEdit, Person, Shot } from '../../types/ipc.generated';
 import type { CreditColumnKey } from './dataTableCreditColumns';
+
+export const CREDIT_EDITOR_TEST_ID = 'credit-cell-editor';
+/** The popover's one text or date input. */
+export const CREDIT_EDITOR_FIELD = `[data-testid="${CREDIT_EDITOR_TEST_ID}"] input`;
 
 export interface CreditCellEditorProps {
   shot: Shot;
@@ -37,7 +43,9 @@ export interface CreditCellEditorProps {
  * Below the cell, left-aligned to it, kept inside the window, and following it:
  * opening the popover often coincides with the grid scrolling that cell into
  * view, so a scroll re-places it rather than closing it. `onLost` runs when the
- * cell itself is gone (virtualized away, the table closed).
+ * cell itself is gone (virtualized away, the table closed), or was never there
+ * (a key typed on an active cell scrolled out of view): a popover that cannot be
+ * placed would stay invisible, holding the keyboard.
  */
 function usePlacement(
   anchor: HTMLElement | null,
@@ -49,7 +57,11 @@ function usePlacement(
   onLostRef.current = onLost;
   useLayoutEffect(() => {
     const box = boxRef.current;
-    if (!anchor || !box) return undefined;
+    if (!box) return undefined;
+    if (!anchor) {
+      onLostRef.current();
+      return undefined;
+    }
     const place = () => {
       if (!anchor.isConnected) {
         onLostRef.current();
@@ -72,6 +84,62 @@ function usePlacement(
     };
   }, [anchor, boxRef]);
   return pos;
+}
+
+/**
+ * Put the keyboard in the field, and keep it there while the popover is open.
+ *
+ * Not `autoFocus`: React runs that as the box mounts, while it is still
+ * `visibility: hidden` waiting for `usePlacement`, and neither WebKit nor
+ * Chromium focuses a hidden element. The focus stayed on the grid, which then
+ * took the keys: a typed letter went to the shot as a one-letter person, and
+ * Escape left the popover open. So focus once the box is placed, again on the
+ * next frame (after whatever focus handling the opening gesture still has to
+ * run), and take it back when the grid holding the cell grabs it while the
+ * popover is open. A press outside is the user leaving (the dismiss commits),
+ * and `closingRef` marks a close that hands the focus back on purpose.
+ */
+function useFieldFocus(
+  boxRef: RefObject<HTMLDivElement | null>,
+  anchor: HTMLElement | null,
+  placed: boolean,
+  closingRef: RefObject<boolean>,
+) {
+  useLayoutEffect(() => {
+    const box = boxRef.current;
+    if (!placed || !box) return undefined;
+    const focusField = () => {
+      const field = box.querySelector<HTMLInputElement>('input');
+      if (!field || closingRef.current || box.contains(document.activeElement)) return;
+      field.focus({ preventScroll: true });
+      if (field.type === 'text') field.setSelectionRange(field.value.length, field.value.length);
+    };
+    focusField();
+    const frame = requestAnimationFrame(focusField);
+    let pressed = false;
+    const onPress = () => {
+      pressed = true;
+    };
+    const onRelease = () => {
+      pressed = false;
+    };
+    const onFocusIn = (event: FocusEvent) => {
+      const target = event.target;
+      if (pressed || !(target instanceof Element) || box.contains(target)) return;
+      if (anchor && (target.contains(anchor) || anchor.contains(target))) focusField();
+    };
+    const press = ['mousedown', 'pointerdown', 'touchstart'] as const;
+    const release = ['mouseup', 'pointerup', 'pointercancel', 'touchend', 'touchcancel'] as const;
+    for (const type of press) window.addEventListener(type, onPress, true);
+    for (const type of release) window.addEventListener(type, onRelease, true);
+    document.addEventListener('focusin', onFocusIn, true);
+    return () => {
+      cancelAnimationFrame(frame);
+      for (const type of press) window.removeEventListener(type, onPress, true);
+      for (const type of release) window.removeEventListener(type, onRelease, true);
+      document.removeEventListener('focusin', onFocusIn, true);
+    };
+  }, [boxRef, anchor, placed, closingRef]);
 }
 
 const sameList = (a: readonly Person[], b: readonly Person[]) =>
@@ -126,6 +194,7 @@ export function CreditCellEditor({ shot, field, anchor, seed = '', onCommit, onC
     [],
   );
   const pos = usePlacement(anchor, boxRef, commit);
+  useFieldFocus(boxRef, anchor, pos !== null, doneRef);
   // Outside mousedowns commit; scrolls only move the popover (see usePlacement),
   // so the only scroll the shared layer reacts to is the page's own.
   useDismissableLayer({ open: true, onDismiss: commit, contains: [boxRef, suggestionsRef], survivesUnrelatedScroll: true });
@@ -155,7 +224,7 @@ export function CreditCellEditor({ shot, field, anchor, seed = '', onCommit, onC
       className="w-80 rounded border border-border bg-panel p-2 shadow-lg"
       style={{ position: 'fixed', zIndex: 60, top: pos?.top ?? 0, left: pos?.left ?? 0, visibility: pos ? 'visible' : 'hidden' }}
       onKeyDown={onKeyDown}
-      data-testid="credit-cell-editor"
+      data-testid={CREDIT_EDITOR_TEST_ID}
       data-field={field}
     >
       {role ? (
@@ -170,7 +239,6 @@ export function CreditCellEditor({ shot, field, anchor, seed = '', onCommit, onC
           suggestions={suggestions}
           placeholder={t(`credit.placeholders.${role}`)}
           testId="credit-cell-editor-people"
-          autoFocus
           defaultText={seed}
           onCommitPending={(has) => {
             typingRef.current = has;
@@ -185,7 +253,6 @@ export function CreditCellEditor({ shot, field, anchor, seed = '', onCommit, onC
             value={date}
             onChange={(e) => setDate(e.target.value)}
             className="w-full"
-            autoFocus
             data-testid="credit-cell-editor-date"
           />
         </label>
