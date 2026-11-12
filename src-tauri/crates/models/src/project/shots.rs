@@ -137,7 +137,7 @@ impl Project {
         false
     }
 
-    fn max_shots_per_section() -> usize {
+    pub(super) fn max_shots_per_section() -> usize {
         FEATURE_ID_STRIDE.saturating_sub(1) as usize
     }
 

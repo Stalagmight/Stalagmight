@@ -415,28 +415,33 @@ impl Project {
     /// using.
     pub fn capture_missing_gauge_anchors(&mut self) {
         for section in &mut self.sections {
-            if section.gauge_shot_uuid.is_some() || section.shots.is_empty() {
-                continue;
-            }
-            let last = section.shots.len() - 1;
-            let gauge = if section.reverse_parity {
-                section.shots.len()
-            } else {
-                0
-            };
-            // The shot the gauge station touches, and the one beyond it that gives it a side.
-            let (x, y) = if gauge == 0 {
-                (0usize, 1usize)
-            } else {
-                (last, last.wrapping_sub(1))
-            };
-            section.gauge_shot_uuid = section.shots.get(x).and_then(|s| s.uuid.clone());
-            section.gauge_neighbour_uuid = if x == y {
-                None
-            } else {
-                section.shots.get(y).and_then(|s| s.uuid.clone())
-            };
+            Self::capture_missing_gauge_anchor(section);
         }
+    }
+
+    /// [`Self::capture_missing_gauge_anchors`] for one section.
+    pub(super) fn capture_missing_gauge_anchor(section: &mut Section) {
+        if section.gauge_shot_uuid.is_some() || section.shots.is_empty() {
+            return;
+        }
+        let last = section.shots.len() - 1;
+        let gauge = if section.reverse_parity {
+            section.shots.len()
+        } else {
+            0
+        };
+        // The shot the gauge station touches, and the one beyond it that gives it a side.
+        let (x, y) = if gauge == 0 {
+            (0usize, 1usize)
+        } else {
+            (last, last.wrapping_sub(1))
+        };
+        section.gauge_shot_uuid = section.shots.get(x).and_then(|s| s.uuid.clone());
+        section.gauge_neighbour_uuid = if x == y {
+            None
+        } else {
+            section.shots.get(y).and_then(|s| s.uuid.clone())
+        };
     }
 
     /// The gauge station `section_id`'s component would use, for tests that need to assert it

@@ -35,6 +35,7 @@ use super::{Coordinates, GpsCoordinates, Shot, ShotUpdates, Station};
 use crate::config::ClosureAdjustmentConfig;
 
 mod classify;
+mod combine_sections;
 mod connectivity;
 mod mutations;
 mod shots;
@@ -1609,6 +1610,13 @@ mod tests;
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod station_names_tests;
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod combine_sections_tests;
 
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
