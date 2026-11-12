@@ -67,6 +67,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.delete_section",
     "command.delete_shot",
     "command.delete_shot_and_split",
+    "command.split_section",
     "command.disarm_forced_exit",
     "command.discard_app_update_download",
     "command.download_app_update",
@@ -285,6 +286,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "action.dialog.speleodb-revert",
     "action.dialog.publish-to-speleodb",
     "action.dialog.split-section",
+    "action.dialog.split-section-here",
     "action.dialog.swap-comments",
     "action.dialog.unrecognised-shot-kind",
     "action.dialog.tml-import",
@@ -358,6 +360,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.speleodb-revert",
     "dialog-cancel.publish-to-speleodb",
     "dialog-cancel.split-section",
+    "dialog-cancel.split-section-here",
     "dialog-cancel.swap-comments",
     "dialog-cancel.unrecognised-shot-kind",
     "dialog-cancel.tml-import",
@@ -375,6 +378,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "undo-after.delete_section",
     "undo-after.delete_shot",
     "undo-after.delete_shot_and_split",
+    "undo-after.split_section",
     "undo-after.execute_batch",
     "undo-after.execute_compass_import",
     "undo-after.execute_gpx_import",
@@ -459,6 +463,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.speleodb-revert",
     "dwell.dialog.publish-to-speleodb",
     "dwell.dialog.split-section",
+    "dwell.dialog.split-section-here",
     "dwell.dialog.swap-comments",
     "dwell.dialog.unrecognised-shot-kind",
     "dwell.dialog.tml-import",
@@ -618,6 +623,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.speleodb-revert",
     "active-dwell.dialog.publish-to-speleodb",
     "active-dwell.dialog.split-section",
+    "active-dwell.dialog.split-section-here",
     "active-dwell.dialog.swap-comments",
     "active-dwell.dialog.unrecognised-shot-kind",
     "active-dwell.dialog.tml-import",
@@ -1101,7 +1107,10 @@ mod tests {
         //       distance over the export's own range):
         //       command.export_value_histogram = 680.
         //   + 1 the "Errors" display toggle: action.toggle.showShotErrors = 681.
-        assert_eq!(EVENT_NAMES.len(), 681);
+        //   + 6 "Split Section Here" (#335): command.split_section,
+        //       undo-after.split_section, and the full per-dialog set for
+        //       split-section-here = 687.
+        assert_eq!(EVENT_NAMES.len(), 687);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import * as maplibregl from 'maplibre-gl';
 import type { SectionId, ShotId, StationRef, DistanceField } from '../../types/project';
 import type { GasReachField } from '../../types/ipc.generated';
+import type { SplitAt } from '../../types/ipc/SplitAt';
 import type { BatchCommand } from '../../types/commands';
 import { useProjectStore } from '../../store/projectStore';
 import {
@@ -262,6 +263,8 @@ const MAP_CANVAS_UI_KEYS = [
   'selection',
   'mergeStationA',
   'mergeStationB',
+  'activeDialog',
+  'dialogData',
   'measureStart',
   'measureEnd',
   'measureDirect',
@@ -522,6 +525,8 @@ function MapCanvas() {
     selection,
     mergeStationA,
     mergeStationB,
+    activeDialog,
+    dialogData,
     measureStart,
     measureEnd,
     measureDirect,
@@ -2461,8 +2466,14 @@ function MapCanvas() {
     const mergeBId = stationRefToId(mergeStationB);
     if (mergeBId && !highlightIds.includes(mergeBId)) highlightIds.push(mergeBId);
 
+    const splitAt = activeDialog === 'split-section-here' ? (dialogData.at as SplitAt | undefined) : undefined;
+    if (splitAt?.type === 'station') {
+      const splitId = stationRefToId({ section_id: dialogData.sectionId as number, station_index: splitAt.station_index });
+      if (splitId && !highlightIds.includes(splitId)) highlightIds.push(splitId);
+    }
+
     surveyLayerRef.current.setHighlightedStations(highlightIds);
-  }, [snappedStation, mergeStationA, mergeStationB, mapLoaded]);
+  }, [snappedStation, mergeStationA, mergeStationB, activeDialog, dialogData, mapLoaded]);
 
   // Sync shot data labels visibility with SurveyLayer (gated by showShots)
   useEffect(() => {

@@ -10,6 +10,7 @@ import { useSpeleoStore, selectSpeleoReadOnly } from '../../store/speleoStore';
 import type { StationRef, SectionId, ShotId, ShotKind } from '../../types/project';
 import { getDeleteShotDialog } from '../../utils/contextMenuHelpers';
 import { canSplitShot } from '../../utils/shotSplit';
+import { formatShotId, formatStationIdWithName } from '../../utils/formatters';
 import { setSource, trackContextMenuAction, trackDialogComplete } from '../../utils/telemetry';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { MenuRow, MenuSeparator } from './MenuRow';
@@ -436,6 +437,18 @@ export default function ContextMenu() {
         },
       });
       items.push({ label: '', action: () => {}, separator: true });
+      if (!isFirstStation && !isLastStation) {
+        items.push({
+          label: 'Split Section Here',
+          action: () => {
+            openDialog('split-section-here', {
+              sectionId,
+              at: { type: 'station', station_index: target.ref.station_index },
+              label: formatStationIdWithName(sectionId, target.ref.station_index, currentStation?.name),
+            });
+          },
+        });
+      }
       items.push({
         label: 'Edit Section',
         action: () => {
@@ -499,6 +512,18 @@ export default function ContextMenu() {
             });
           },
           disabled: !sourceShot || !canSplitShot(sourceShot.length),
+        },
+        {
+          label: 'Split Section Here',
+          action: () => {
+            if (!sourceShot || target.alongT === undefined) return;
+            openDialog('split-section-here', {
+              sectionId: target.sectionId,
+              at: { type: 'shot', shot_id: target.shotId, distance: target.alongT * sourceShot.length },
+              label: formatShotId(target.sectionId, shotIndex + 1),
+            });
+          },
+          disabled: !sourceShot || target.alongT === undefined,
         },
         // A context menu has room to offer both other kinds outright, which is
         // clearer than the table cell's cycle (#27). Only the kinds the shot is
