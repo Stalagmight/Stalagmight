@@ -9,6 +9,30 @@
 import { useTranslation } from 'react-i18next';
 import type { TmlFile } from '../../types/commands';
 import { importableShots } from '../../utils/tmlImportStats';
+import { tmlSectionCredit } from '../../utils/tmlSectionCredit';
+import type { AggregatedPerson } from '../../utils/creditEdit';
+import { PeopleInput } from '../common/PeopleInput';
+
+const NO_SUGGESTIONS: never[] = [];
+const noop = () => {};
+
+/** One read-only cell of people: compact pills (partial ones on only some shots), full detail on hover. */
+function PeopleCell({ label, people, testId }: { label: string; people: AggregatedPerson[]; testId: string }) {
+  return (
+    <div className="h-6 max-w-[11rem]">
+      <PeopleInput
+        label={label}
+        value={people}
+        onAdd={noop}
+        onRemove={noop}
+        suggestions={NO_SUGGESTIONS}
+        disabled
+        compact
+        testId={testId}
+      />
+    </div>
+  );
+}
 
 export interface TmlSectionTableProps {
   tmlFile: TmlFile;
@@ -63,13 +87,16 @@ export function TmlSectionTable({
               </th>
               <th className="px-3 py-1.5">{t('dialogs.tmlImport.table.section')}</th>
               <th className="px-3 py-1.5">{t('dialogs.tmlImport.table.shots')}</th>
-              <th className="px-3 py-1.5">{t('dialogs.tmlImport.table.surveyor')}</th>
+              <th className="px-3 py-1.5">{t('credit.surveyors')}</th>
+              <th className="px-3 py-1.5">{t('credit.explorers')}</th>
               <th className="px-3 py-1.5">{t('dialogs.tmlImport.table.date')}</th>
               <th className="px-3 py-1.5 w-6">{t('dialogs.tmlImport.table.color')}</th>
             </tr>
           </thead>
           <tbody>
-            {tmlFile.sections.map((section, i) => (
+            {tmlFile.sections.map((section, i) => {
+              const credit = tmlSectionCredit(section, includeExcluded);
+              return (
               <tr
                 key={i}
                 className={`border-t border-border ${selected.has(i) ? '' : 'opacity-50'}`}
@@ -102,17 +129,29 @@ export function TmlSectionTable({
                   )}
                 </td>
                 <td className="px-3 py-1.5">{importableShots(section, includeExcluded).length}</td>
-                <td className="px-3 py-1.5 text-text-secondary">
-                  {section.surveyor ?? t('dialogs.tmlImport.stats.none')}
+                <td className="px-2 py-1">
+                  <PeopleCell
+                    label={t('dialogs.tmlImport.table.surveyorsOf', { name: section.name })}
+                    people={credit.surveyors}
+                    testId={`tml-section-${i}-surveyors`}
+                  />
                 </td>
-                <td className="px-3 py-1.5 text-text-secondary">
-                  {section.date ?? t('dialogs.tmlImport.stats.none')}
+                <td className="px-2 py-1">
+                  <PeopleCell
+                    label={t('dialogs.tmlImport.table.explorersOf', { name: section.name })}
+                    people={credit.explorers}
+                    testId={`tml-section-${i}-explorers`}
+                  />
+                </td>
+                <td className="px-3 py-1.5 text-text-secondary whitespace-nowrap" data-testid={`tml-section-${i}-date`}>
+                  {credit.date ?? t('dialogs.tmlImport.stats.none')}
                 </td>
                 <td className="px-3 py-1.5">
                   <div className="w-4 h-4 rounded" style={{ backgroundColor: section.color }} />
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </div>

@@ -1313,11 +1313,12 @@
       "table": {
         "section": "Section",
         "shots": "Shots",
-        "surveyor": "Surveyor",
         "date": "Date",
         "color": "Color",
         "branch": "(branch)",
-        "reanchored": "(moved to origin)"
+        "reanchored": "(moved to origin)",
+        "surveyorsOf": "Surveyors of {{name}}",
+        "explorersOf": "Explorers of {{name}}"
       },
       "sectionsToImport": "Sections to import",
       "selectedCount": "{{selected}} of {{total}} selected",
