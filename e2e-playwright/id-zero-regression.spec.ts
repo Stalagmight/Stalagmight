@@ -35,11 +35,10 @@ async function injectId0Fixture(page: Page) {
   }, { timeout: 5000 });
 
   await page.evaluate(() => {
+    // The survey credit rides on each shot (a section keeps none of its own).
     const testSection = {
       id: 0,
       name: 'Zero Section',
-      surveyor: 'Test Surveyor',
-      date: '2026-01-20',
       color: '#4ecdc4',
       direction: 'in' as const,
       shots: [{
@@ -59,6 +58,7 @@ async function injectId0Fixture(page: Page) {
         kind: 'Normal',
         marker_index: 0,
         temperature: null,
+        credit: { surveyors: [{ name: 'Test Surveyor' }], explorers: [], date: '2026-01-20' },
       }]
     };
 
@@ -303,8 +303,6 @@ test.describe('ID=0 Bug Fixes', () => {
       const otherSection = {
         id: 1,
         name: 'One Section',
-        surveyor: 'Test Surveyor',
-        date: '2026-01-20',
         color: '#ff6b6b',
         direction: 'in' as const,
         shots: [],
