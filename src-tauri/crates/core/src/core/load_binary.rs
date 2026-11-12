@@ -525,6 +525,8 @@ mod tests {
         shots_uints: ByteBuf,
         shots_flags: ByteBuf,
         shot_comments: Vec<(u32, String)>,
+        #[serde(default)]
+        shot_credits: Vec<(u32, ShotCredit)>,
         station_count: u32,
         stations_floats: ByteBuf,
         stations_uints: ByteBuf,
@@ -633,6 +635,37 @@ mod tests {
         assert!((azimuth_in - 90.0).abs() < 1e-3);
 
         let _ = Utc::now(); // silence unused-import on chrono::Utc
+    }
+
+    #[test]
+    fn a_shot_credit_is_indexed_globally_across_sections() {
+        let mut project = new_project("credit");
+        let mut sec_a = new_section(1, "A", "#ff0000");
+        sec_a.shots.push(shot(101, 0.0, 10.0, 0.0, -1.0));
+        sec_a.shots.push(shot(102, 90.0, 5.0, -1.0, -2.0));
+        let mut sec_b = new_section(2, "B", "#00ff00");
+        sec_b.shots.push(shot(201, 45.0, 7.0, 0.0, -0.5));
+        sec_b.shots.push(shot(202, 45.0, 7.0, -0.5, -1.0));
+        let credit = ShotCredit {
+            surveyor: Some(Some("Ann".to_string())),
+            date: None,
+        };
+        sec_b.shots[1].credit = Some(credit.clone());
+        project.sections.push(sec_a);
+        project.sections.push(sec_b);
+        project.next_section_id = 3;
+
+        let result = LoadProjectFullResult {
+            loading_id: 1,
+            project,
+            stations: Vec::new(),
+            stats: empty_stats(),
+            warnings: Vec::new(),
+            display_settings: DisplaySettings::default(),
+            is_remote: false,
+        };
+        let decoded: DecodedResult = rmp_serde::from_slice(&encode(result).unwrap()).unwrap();
+        assert_eq!(decoded.shot_credits, vec![(3, credit)]);
     }
 
     #[test]

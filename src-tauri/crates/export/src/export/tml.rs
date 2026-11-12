@@ -5670,6 +5670,61 @@ mod tests {
     }
 
     #[test]
+    fn a_shot_in_the_reversed_prefix_of_a_split_entrance_keeps_its_own_credit() {
+        // #707: a root datum mid-section splits the section into a forward block
+        // and a reversed prefix; the reversed rows are built at a separate site.
+        let mut project = Project::new("Split Credit".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Main".to_string()),
+            surveyor: Some("Bob".to_string()),
+            color: "#ff0000".to_string(),
+            shots: ["a", "b", "c"]
+                .iter()
+                .enumerate()
+                .map(|(i, c)| ShotData {
+                    azimuth_in: 10.0 * (i as f64 + 1.0),
+                    azimuth_out: 10.0 * (i as f64 + 1.0) + 180.0,
+                    length: 1.0,
+                    depth_in: i as f64,
+                    depth_out: i as f64 + 1.0,
+                    comment: Some((*c).to_string()),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        });
+        project.zero_datums.push(ZeroDatum {
+            station_ref: StationRef {
+                section_id: 0,
+                station_index: 2,
+            }
+            .into(),
+            gps: GpsCoordinates::new(20.0, -87.0, 0.0).unwrap(),
+        });
+        project.sections[0].shots[0].credit = Some(crate::models::ShotCredit {
+            surveyor: Some(Some("Ann".to_string())),
+            date: None,
+        });
+
+        let rows = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
+        let mut credit: Vec<_> = rows
+            .iter()
+            .filter(|r| r.shot_type != "START")
+            .map(|r| {
+                (
+                    r.comment.as_deref().unwrap().trim_start_matches('\u{200b}'),
+                    r.explorer.as_deref(),
+                )
+            })
+            .collect();
+        credit.sort();
+        assert_eq!(
+            credit,
+            vec![("a", Some("Ann")), ("b", Some("Bob")), ("c", Some("Bob"))]
+        );
+    }
+
+    #[test]
     fn the_sidecar_normalizes_azimuth_for_every_shot_type() {
         // The server normalises REAL shots and passes every other type through
         // raw, so a VIRTUAL leg at -10 degrees walks off in a direction nothing

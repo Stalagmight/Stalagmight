@@ -162,6 +162,34 @@ mod tests {
     }
 
     #[test]
+    fn a_shot_exports_its_own_credit_only_where_it_overrides_the_section() {
+        let mut project = Project::new("Credit".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Main".to_string()),
+            surveyor: Some("Bob".to_string()),
+            color: "#4ecdc4".to_string(),
+            shots: vec![ShotData::default(); 3],
+            ..Default::default()
+        });
+        project.sections[0].shots[1].credit = Some(crate::models::ShotCredit {
+            surveyor: Some(None),
+            date: None,
+        });
+        project.sections[0].shots[2].credit = Some(crate::models::ShotCredit {
+            surveyor: Some(Some("Ann".to_string())),
+            date: Some(chrono::NaiveDate::from_ymd_opt(2026, 4, 11)),
+        });
+
+        let value = serde_json::to_value(JsonExport::from_project(&project)).unwrap();
+        let shots = value["sections"][0]["shots"].as_array().unwrap();
+        assert!(shots[0].get("surveyor").is_none() && shots[0].get("date").is_none());
+        assert!(shots[1]["surveyor"].is_null() && shots[1].get("surveyor").is_some());
+        assert!(shots[1].get("date").is_none());
+        assert_eq!(shots[2]["surveyor"], "Ann");
+        assert_eq!(shots[2]["date"], "2026-04-11");
+    }
+
+    #[test]
     fn test_export_json_empty_project() {
         let project = Project::new("Empty".to_string(), None);
         let file = NamedTempFile::new().unwrap();
