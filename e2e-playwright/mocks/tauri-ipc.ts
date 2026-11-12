@@ -616,6 +616,19 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       (window as unknown as Record<string, unknown>).__MOCK_RESET_UNDO_REDO_CALLS__ = () => {
         undoRedoCalls = [];
       };
+      // Survey-credit edits are undoable for real here (the backend's
+      // EditShotCredit keeps each touched shot's before-credit): one step per
+      // edit_shot_credit, or per execute_batch that carries any. Other commands
+      // stay untracked, so `undo` with an empty credit stack is the old no-op.
+      type MockCreditStep = Array<{ shot: Record<string, unknown>; before: unknown; after: unknown }>;
+      const mockCreditUndo: MockCreditStep[] = [];
+      const mockCreditRedo: MockCreditStep[] = [];
+      // Set while execute_batch runs, so its credit sub-commands share one step.
+      let mockCreditBatchStep: MockCreditStep | null = null;
+      const mockRestoreCredit = (shot: Record<string, unknown>, credit: unknown): void => {
+        if (credit === undefined) delete shot.credit;
+        else shot.credit = structuredClone(credit);
+      };
       // Counts native file-picker opens so a spec can prove the read-only-map guard
       // blocks Import (Ctrl+I) in Plan/Export before the picker even opens (#243).
       // Incremented inside the dialog `open` mock below (same init-script closure).
@@ -3637,6 +3650,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // frontend compose rather than replay. A batch reversing the same section twice
             // must therefore emit two entries, not one.
             const reversedSections: Array<{ section_id: number; shot_count: number }> = [];
+            const creditStep: MockCreditStep = [];
+            mockCreditBatchStep = creditStep;
             for (const command of commands) {
               let result:
                 | {
@@ -3671,6 +3686,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 result = mockHandler('delete_section', {
                   sectionId: command.section_id,
                 }) as typeof result;
+              } else if (command?.type === 'edit_shot_credit') {
+                // Data-table paste / fill of the credit columns (one per shot).
+                result = mockHandler('edit_shot_credit', {
+                  targets: command.targets,
+                  edit: command.edit,
+                }) as typeof result;
               } else if (command?.type === 'reverse_section') {
                 // Multi-section reverse (#24) is batched so it is atomic and
                 // costs one undo, so the batch has to replay it too.
@@ -3683,6 +3704,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 }
               }
               if (result && result.success === false) {
+                mockCreditBatchStep = null;
                 if (currentProject && projectBefore) {
                   Object.assign(currentProject, projectBefore);
                 }
@@ -3692,6 +3714,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 Object.assign(mockStationComments, commentsBefore);
                 return result;
               }
+            }
+            mockCreditBatchStep = null;
+            if (creditStep.length > 0) {
+              mockCreditUndo.push(creditStep);
+              mockCreditRedo.length = 0;
             }
             return {
               success: true,
@@ -4074,15 +4101,23 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             };
 
           case 'undo':
-          case 'redo':
+          case 'redo': {
             undoRedoCalls.push(cmd);
+            const from = cmd === 'undo' ? mockCreditUndo : mockCreditRedo;
+            const to = cmd === 'undo' ? mockCreditRedo : mockCreditUndo;
+            const step = from.pop();
+            if (step) {
+              for (const entry of step) mockRestoreCredit(entry.shot, cmd === 'undo' ? entry.before : entry.after);
+              to.push(step);
+            }
             return { success: true, section_ids: [] };
+          }
 
           case 'can_undo':
-            return false;
+            return mockCreditUndo.length > 0;
 
           case 'can_redo':
-            return false;
+            return mockCreditRedo.length > 0;
 
           case 'get_undo_state':
             return { can_undo: false, can_redo: false };
@@ -5520,7 +5555,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               return mockDedupe([...list, ...add]);
             };
             const touched: number[] = [];
+            const step: MockCreditStep = [];
             for (const [section, shot] of picked) {
+              const stored = shot.credit === undefined ? undefined : structuredClone(shot.credit);
               const before = mockShotCredit(section, shot);
               const after: MockCredit = {
                 surveyors: editRole(before.surveyors, 'surveyors'),
@@ -5528,8 +5565,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 date: 'set_date' in edit ? ((edit.set_date as string | null) ?? null) : before.date,
               };
               mockStoreCredit(shot, after);
+              step.push({ shot, before: stored, after: structuredClone(shot.credit) });
               const sid = section.id as number;
               if (!touched.includes(sid)) touched.push(sid);
+            }
+            if (mockCreditBatchStep) mockCreditBatchStep.push(...step);
+            else if (step.length > 0) {
+              mockCreditUndo.push(step);
+              mockCreditRedo.length = 0;
             }
             return { success: true, section_ids: touched };
           }
