@@ -1,5 +1,6 @@
 //! Combine Sections as one atomic undo/redo unit: the inverse of Split Section
-//! Here (`command_split_section.rs`), and built the same way.
+//! Here (`command_split_section.rs`) for a split at a station with no other
+//! connections, and built the same way.
 
 use super::AppState;
 use crate::core::{Command, CommandResult};

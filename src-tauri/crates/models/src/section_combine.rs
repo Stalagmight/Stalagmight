@@ -1,5 +1,7 @@
 //! Arguments and answers for Combine Sections: join two sections that meet at
-//! one end station each into one section. The inverse of Split Section Here.
+//! one end station each into one section. The inverse of Split Section Here
+//! for a split at a station with no other connections (a split at a junction
+//! leaves a branch, which is never combined).
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;

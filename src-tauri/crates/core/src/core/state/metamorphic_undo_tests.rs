@@ -1048,7 +1048,8 @@ const PAIRS: &[Pair] = &[
     Pair {
         id: "split-then-combine-at-the-join-is-identity",
         promise: "combine_sections.rs module doc - Combine Sections is the inverse of Split \
-                  Section Here: combining a fresh split at its join, with the original name and \
+                  Section Here for a split at a station with no other connections: combining \
+                  a fresh split at its join, with the original name and \
                   colour, gives back the section, every shot's survey credit included (shot ids \
                   and the id allocators aside)",
         run: pair_split_then_combine_at_the_join_is_identity,

@@ -1294,3 +1294,72 @@ fn a_renamed_shot_keeps_its_record_parity() {
     let section = project.get_section(k).unwrap();
     assert_eq!(project.shot_record_parity(section, Some("renamed")), parity);
 }
+
+/// Combine undoes a split only at a station with no other connections. Split
+/// at a junction, every connection there is copied to both halves, so the join
+/// is a branch and the combine is refused with that reason (not with "also
+/// connected elsewhere (a loop)", which a path through the junction would
+/// otherwise also report). Three shapes: a side passage starting at the
+/// junction, one passing through it, and one starting there and looping back
+/// onto the main line past the cut.
+#[test]
+fn a_split_at_a_junction_reports_the_branch_not_a_loop() {
+    for shape in ["starts there", "passes through", "loops back"] {
+        let mut project = Project::new("Junction".to_string(), None);
+        let main = add(
+            &mut project,
+            "Main",
+            vec![
+                shot(90.0, 10.0),
+                shot(45.0, 5.0),
+                shot(0.0, 7.0),
+                shot(300.0, 3.0),
+            ],
+        );
+        let junction = StationRef::new(main, 2);
+        let side = add(
+            &mut project,
+            "Side",
+            vec![shot(180.0, 6.0), shot(180.0, 6.0)],
+        );
+        let at = u32::from(shape == "passes through");
+        let target = xy(&project, junction);
+        place(&mut project, side, at, target, 0.0);
+        project
+            .merge_stations(junction, StationRef::new(side, at))
+            .unwrap();
+        if shape == "loops back" {
+            // A rigid tie back onto the main line, past the cut.
+            push_closure(
+                &mut project,
+                StationRef::new(side, 2),
+                StationRef::new(main, 4),
+                true,
+            );
+        }
+        let second = project
+            .split_section_at_station(
+                main,
+                2,
+                &SplitSectionOptions {
+                    name_a: "Main-A".to_string(),
+                    name_b: "Main-B".to_string(),
+                    color_a: "#123456".to_string(),
+                    color_b: "#123456".to_string(),
+                    comment_side: SplitSide::A,
+                    datum_side: SplitSide::A,
+                },
+            )
+            .unwrap();
+
+        let pair = blocked(&project, main, second);
+        let station = project
+            .combine_candidate(StationRef::new(main, 2))
+            .unwrap()
+            .blocked_reason
+            .unwrap_or_default();
+        for reason in [&pair, &station] {
+            assert!(reason.ends_with("(a branch)"), "{shape}: {reason}");
+        }
+    }
+}

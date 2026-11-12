@@ -1607,7 +1607,9 @@ for a branch, different north references or quality, a second rigid tie between
 the two, two zero datums, join stations moved by different amounts, or more
 than 99,999 shots, or two sections that share a shot identity. Every shot keeps
 its own surveyors, explorers and date; the dialog summarises the combined credit.
-One undo step. Rules and edge cases: [plans/2026-11-12_merge-split-sections.md](plans/2026-11-12_merge-split-sections.md).
+Combining the two halves of a split gives the section back only when nothing
+else was connected at the split station: a split at a junction ties both halves
+to it, a branch. One undo step. Rules and edge cases: [plans/2026-11-12_merge-split-sections.md](plans/2026-11-12_merge-split-sections.md).
 
 ## 8. Command System
 

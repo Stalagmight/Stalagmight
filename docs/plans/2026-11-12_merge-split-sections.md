@@ -5,7 +5,8 @@ Status: implemented on `feat/merge-split-sections` (not yet a PR).
 Split Section Here (#335) is ported from #710 without #709's per-shot credit;
 the branch sits on the per-shot people model (`2026-11-12_survey-people.md`).
 Combine Sections is new: two sections that meet end to end become one, the
-inverse of a split. Both are one undo step.
+inverse of a split at a station with no other connections (a split at a
+junction leaves a branch, which is never combined). Both are one undo step.
 
 ## What
 

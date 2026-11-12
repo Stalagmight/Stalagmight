@@ -1,5 +1,7 @@
 //! Combine Sections: join two sections that meet end to end into one, the
-//! inverse of Split Section Here.
+//! inverse of Split Section Here for a split at a station with no other
+//! connections (a split at a junction copies its merges to both halves, which
+//! leaves a branch, never combined).
 //!
 //! The KEPT section keeps its id, its shot ids, its direction, its station 0
 //! orientation and its exact position. The OTHER section is reversed first when
