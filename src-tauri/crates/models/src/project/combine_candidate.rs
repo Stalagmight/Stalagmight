@@ -68,27 +68,70 @@ fn distance(a: (f64, f64), b: (f64, f64)) -> f64 {
 /// without manual station offsets), computed ONCE per query: a candidate
 /// query looks for co-located ends across the whole project, and walking every
 /// section per pairing made a right-click O(sections x shots).
+///
+/// The ends are also bucketed on a grid one tolerance wide, so the ends near a
+/// point are in its cell or the eight around it and a lookup reads only those,
+/// not every end in the project: a pile of sections at one point (unplaced
+/// sections all start at the origin) made each partner's third-end check a
+/// full scan, O(sections^2) per right-click.
 pub(crate) struct EndTable {
     ends: Vec<(SectionId, SectionEnd, (f64, f64))>,
     by_end: HashMap<(SectionId, SectionEnd), (f64, f64)>,
+    cells: HashMap<(i64, i64), Vec<usize>>,
 }
 
 #[cfg(test)]
 thread_local! {
     /// How many [`EndTable`]s this thread built: a query must build one.
     pub(crate) static END_TABLE_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// How many ends [`EndTable::near`] has compared against a point.
+    pub(crate) static END_TABLE_PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The grid cell `point` falls in. `as` saturates (and reads NaN as 0); a
+/// non-finite position then fails the exact distance test in `near`, so the
+/// cell it lands in does not matter.
+fn cell_of(point: (f64, f64)) -> (i64, i64) {
+    (
+        (point.0 / COMBINE_TOLERANCE_M).floor() as i64,
+        (point.1 / COMBINE_TOLERANCE_M).floor() as i64,
+    )
 }
 
 impl EndTable {
+    fn new(ends: Vec<(SectionId, SectionEnd, (f64, f64))>) -> Self {
+        let by_end = ends.iter().map(|(id, end, p)| ((*id, *end), *p)).collect();
+        let mut cells: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+        for (i, (_, _, p)) in ends.iter().enumerate() {
+            cells.entry(cell_of(*p)).or_default().push(i);
+        }
+        Self {
+            ends,
+            by_end,
+            cells,
+        }
+    }
+
     fn at(&self, id: SectionId, end: SectionEnd) -> Option<(f64, f64)> {
         self.by_end.get(&(id, end)).copied()
     }
 
-    /// Every section end within the tolerance of `point`.
+    /// Every section end within the tolerance of `point`, lazily: a caller
+    /// that stops at the first match reads only the ends before it.
     fn near(&self, point: (f64, f64)) -> impl Iterator<Item = (SectionId, SectionEnd)> + '_ {
-        self.ends
-            .iter()
-            .filter(move |(_, _, p)| distance(*p, point) <= COMBINE_TOLERANCE_M)
+        let (cx, cy) = cell_of(point);
+        (-1..=1)
+            .flat_map(move |dx| {
+                (-1..=1).map(move |dy| (cx.saturating_add(dx), cy.saturating_add(dy)))
+            })
+            .filter_map(|cell| self.cells.get(&cell))
+            .flatten()
+            .map(|&i| &self.ends[i])
+            .filter(move |(_, _, p)| {
+                #[cfg(test)]
+                END_TABLE_PROBES.with(|probes| probes.set(probes.get() + 1));
+                distance(*p, point) <= COMBINE_TOLERANCE_M
+            })
             .map(|(id, end, _)| (*id, *end))
     }
 }
@@ -113,8 +156,7 @@ impl Project {
             ends.push((section.id, SectionEnd::Start, start));
             ends.push((section.id, SectionEnd::End, (x, y)));
         }
-        let by_end = ends.iter().map(|(id, end, p)| ((*id, *end), *p)).collect();
-        EndTable { ends, by_end }
+        EndTable::new(ends)
     }
 
     /// Does `station` carry a resolvable zero datum?
@@ -515,22 +557,28 @@ impl Project {
         other_ends.retain(|(id, _)| *id != section.id);
         other_ends.sort_by_key(|(id, end)| (*id, *end == SectionEnd::End));
         other_ends.dedup();
-        let partners: Vec<(Pairing, Touch)> = other_ends
-            .into_iter()
-            .filter_map(|(id, other_end)| {
-                let pairing = Pairing {
-                    a: section.id,
-                    end_a: end,
-                    b: id,
-                    end_b: other_end,
-                };
-                self.pairing_touch(pairing, &table)
-                    .map(|touch| (pairing, touch))
-            })
-            .collect();
-        match partners.as_slice() {
-            [] if group.len() <= 1 => None,
-            [] => {
+        let touch_with = |(id, other_end): (SectionId, SectionEnd)| {
+            let pairing = Pairing {
+                a: section.id,
+                end_a: end,
+                b: id,
+                end_b: other_end,
+            };
+            self.pairing_touch(pairing, &table)
+                .map(|touch| (pairing, touch))
+        };
+        // Two or more partners is a branch whatever each pairing says, and
+        // the answer names only the first: touch no more of them than that.
+        // Every one of them touches (each is co-located or merged here).
+        if other_ends.len() > 1 {
+            let count = other_ends.len() + 1;
+            let (pairing, mut touch) = other_ends.into_iter().find_map(touch_with)?;
+            touch.blocked = Some(format!("{count} section ends meet here (a branch)"));
+            return self.candidate_for(pairing, touch);
+        }
+        match other_ends.into_iter().find_map(touch_with) {
+            None if group.len() <= 1 => None,
+            None => {
                 // Merged to a station that is not a section end: a branch.
                 let other = group.iter().find(|s| **s != station)?;
                 let pairing = Pairing {
@@ -545,8 +593,7 @@ impl Project {
                 };
                 self.candidate_for(pairing, touch)
             }
-            [(pairing, touch)] => {
-                let mut touch = touch.clone();
+            Some((pairing, mut touch)) => {
                 if touch.blocked.is_none() {
                     // The pair's own answer decides, so the station menu, the
                     // Sections panel and the command agree: two sections that
@@ -556,15 +603,7 @@ impl Project {
                         .candidate_for_sections_with(pairing.a, pairing.b, &table)?
                         .blocked_reason;
                 }
-                self.candidate_for(*pairing, touch)
-            }
-            [(pairing, touch), ..] => {
-                let mut touch = touch.clone();
-                touch.blocked = Some(format!(
-                    "{} section ends meet here (a branch)",
-                    partners.len() + 1
-                ));
-                self.candidate_for(*pairing, touch)
+                self.candidate_for(pairing, touch)
             }
         }
     }

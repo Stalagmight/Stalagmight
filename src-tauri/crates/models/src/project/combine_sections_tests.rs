@@ -1156,6 +1156,60 @@ fn each_query_builds_one_end_table() {
     assert_eq!(builds() - before, 1, "the pair query");
 }
 
+/// `spread` one-shot sections far apart from each other, then `pile` one-shot
+/// sections that all start at one point (as unplaced sections all start at the
+/// origin), their far ends fanned out so no two meet.
+fn spread_then_pile(spread: u32, pile: u32) -> (Project, Vec<SectionId>) {
+    let mut project = Project::new("Pile".to_string(), None);
+    for i in 0..spread {
+        let id = add(&mut project, "Spread", vec![shot(90.0, 10.0)]);
+        project.adjust_section_offset(id, 100.0 * f64::from(i + 1), 500.0);
+    }
+    let piled = (0..pile)
+        .map(|i| add(&mut project, "Pile", vec![shot(0.5 * f64::from(i), 10.0)]))
+        .collect();
+    (project, piled)
+}
+
+fn probes() -> usize {
+    super::combine_candidate::END_TABLE_PROBES.with(std::cell::Cell::get)
+}
+
+/// The station query at a pile of `K` section ends reads O(K) ends, however
+/// many other sections the project holds: one lookup for the partners, and
+/// one pairing's checks (two or more partners are a branch whatever each
+/// pairing says). It used to scan every end once per partner.
+#[test]
+fn the_station_query_at_a_pile_reads_only_the_ends_there() {
+    let (project, piled) = spread_then_pile(400, 200);
+    let before = probes();
+    let candidate = project
+        .combine_candidate(StationRef::new(piled[0], 0))
+        .unwrap();
+    let read = probes() - before;
+    assert_eq!(
+        candidate.blocked_reason.as_deref(),
+        Some("200 section ends meet here (a branch)")
+    );
+    assert!(read <= 200 + 8, "{read} ends read for a pile of 200");
+}
+
+/// The pair query for two sections that meet alone reads a handful of ends,
+/// not every end in the project (the third-end check used to scan them all).
+#[test]
+fn the_pair_query_reads_only_the_ends_near_the_join() {
+    let (mut project, _) = spread_then_pile(400, 0);
+    let k = add(&mut project, "K", vec![shot(90.0, 10.0)]);
+    let o = add(&mut project, "O", vec![shot(0.0, 10.0)]);
+    let target = xy(&project, StationRef::new(k, 1));
+    place(&mut project, o, 0, target, 0.0);
+    let before = probes();
+    let candidate = project.combine_candidate_for_sections(k, o).unwrap();
+    let read = probes() - before;
+    assert_eq!(candidate.blocked_reason, None);
+    assert!(read <= 8, "{read} ends read");
+}
+
 /// The other section's shots get ids from the kept section's `next_shot_id`,
 /// which only grows in a session. With no room left in the kept section's id
 /// window they would take the next section's ids, so keeping it is refused
