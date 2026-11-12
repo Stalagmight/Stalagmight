@@ -4,6 +4,7 @@ use rusqlite::params;
 
 use crate::models::Project;
 
+use super::shot_credits::{write_credit_rows, CREATE_CREDIT_TABLES};
 use super::station_texts::{StationTextTable, CREATE_STATION_NAMES};
 use super::{Database, SCHEMA_VERSION};
 
@@ -30,6 +31,8 @@ impl Database {
         // have it yet. Create it here, inside the transaction, the way the
         // `closure_id` column is ensured below, so the DELETE cannot fail.
         tx.execute(CREATE_STATION_NAMES, [])?;
+        // The per-shot credit tables carry no bump either (see `shot_credits`).
+        tx.execute_batch(CREATE_CREDIT_TABLES)?;
 
         // Clear existing data (delete children before parents for foreign key compliance)
         // NOTE: speleo_link is intentionally NOT cleared here (see save_speleo_link
@@ -47,6 +50,8 @@ impl Database {
             DELETE FROM station_offsets;
             DELETE FROM station_comments;
             DELETE FROM station_names;
+            DELETE FROM shot_credits;
+            DELETE FROM credit_people;
             DELETE FROM loop_closures;
             DELETE FROM imported_file_hashes;
             DELETE FROM imported_section_hashes;
@@ -73,12 +78,36 @@ impl Database {
             ],
         )?;
 
+        // A credit row is keyed by shot uuid, and a file saved before uuids
+        // were project-unique can hold one uuid in several sections. The reader
+        // gives a row to the FIRST holder in (section id, position) order - the
+        // order it loads in - so only that holder may write one; the others fall
+        // back to their section's legacy columns.
+        let mut first_holder: std::collections::HashMap<&str, (u32, usize)> =
+            std::collections::HashMap::new();
+        {
+            let mut by_id: Vec<&crate::models::Section> = project.sections.iter().collect();
+            by_id.sort_by_key(|s| s.id);
+            for section in by_id {
+                for (seq, shot) in section.shots.iter().enumerate() {
+                    if let Some(uuid) = shot.uuid.as_deref().filter(|u| !u.is_empty()) {
+                        first_holder.entry(uuid).or_insert((section.id, seq));
+                    }
+                }
+            }
+        }
+        let mut credit_rows: Vec<(String, crate::models::SurveyCredit)> = Vec::new();
+
         // Save sections and shots
         for section in &project.sections {
             // The legacy columns keep their meaning for every older reader: the
             // distinct surveyor names joined with ", " and the earliest date.
             let legacy_surveyor = section.surveyor_names();
-            let legacy_date = section.first_survey_date().map(|d| d.to_string());
+            let first_date = section.first_survey_date();
+            let legacy_date = first_date.map(|d| d.to_string());
+            // What a shot with no credit row reads back as (`shot_credits`).
+            let fallback =
+                crate::models::SurveyCredit::from_legacy(legacy_surveyor.as_deref(), first_date);
             tx.execute(
                 "INSERT INTO sections (id, name, surveyor, date, color, direction, quality, reverse_parity, gauge_shot_uuid, gauge_neighbour_uuid, azimuth_north, azimuth_correction, azimuth_source, azimuth_epoch_year, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                 params![
@@ -119,10 +148,17 @@ impl Database {
                 // `<UUID>`.  Mint one lazily here for any shot that arrived
                 // without (e.g. loaded from a pre-v6 .stalx) so we never
                 // write NULL twice.
-                let uuid = shot
-                    .uuid
-                    .clone()
-                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                let recorded = shot.uuid.as_deref().filter(|u| !u.is_empty());
+                let uuid =
+                    recorded.map_or_else(|| uuid::Uuid::new_v4().to_string(), str::to_string);
+                // A row only where the legacy fallback would read back something
+                // else - so an uncredited shot, or one that agrees with its
+                // section's columns, costs nothing.
+                let owns_row =
+                    recorded.is_none_or(|u| first_holder.get(u) == Some(&(section.id, seq)));
+                if owns_row && shot.credit() != &fallback {
+                    credit_rows.push((uuid.clone(), shot.credit().clone()));
+                }
                 tx.execute(
                     r"INSERT INTO shots (
                         section_id, sequence_order,
@@ -153,6 +189,8 @@ impl Database {
                 )?;
             }
         }
+
+        write_credit_rows(&tx, &credit_rows)?;
 
         // Save station merges. Cross-references are stored as stable
         // `StationKey` anchors in memory but persisted positionally (resolved

@@ -546,12 +546,32 @@ impl Database {
                     );
                 }
 
+                // Per-shot survey credit: a shot's own row, else its section's
+                // legacy surveyor/date (`shot_credits`). A row goes to the FIRST
+                // holder of its uuid in load order, as the writer assumes.
+                let credit_rows = super::shot_credits::load_credit_rows(&self.conn)?;
+                let mut claimed: std::collections::HashSet<&str> = std::collections::HashSet::new();
+                for section in sections.iter_mut() {
+                    let fallback = crate::models::SurveyCredit::from_legacy(
+                        section.legacy_surveyor.take().as_deref(),
+                        section.legacy_date.take(),
+                    );
+                    for shot in &mut section.shots {
+                        let row = shot
+                            .uuid
+                            .as_deref()
+                            .and_then(|u| credit_rows.get_key_value(u))
+                            .filter(|(u, _)| claimed.insert(u.as_str()));
+                        match row {
+                            Some((_, credit)) => shot.set_credit(credit.clone()),
+                            None => shot.set_credit(fallback.clone()),
+                        }
+                    }
+                }
+
                 // Advance each section's next_shot_id past its loaded
                 // shots so future appends don't collide with persisted IDs.
-                // The legacy section-level surveyor/date is the credit of every
-                // shot that carries none of its own.
                 for section in sections.iter_mut() {
-                    section.absorb_legacy_credit();
                     section.next_shot_id = section
                         .id
                         .saturating_mul(FEATURE_ID_STRIDE)
