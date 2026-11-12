@@ -83,8 +83,10 @@ the overrides are cleared.
 ## Part 3: Combine Sections
 
 **Eligible** when an end of section A and an end of section B are the same point: either merged
-together, or co-located within 1 mm in measured (not closure-adjusted) positions, which is the
-state a fresh split leaves. A join at a mid-section station is a branch and is not offered.
+together, or within 1 mm of each other horizontally in measured (not closure-adjusted)
+positions. Horizontal, because a split leaves the two ends at their own depth readings; a 3D test
+would refuse to rejoin what Split just cut. Combining averages the joined station's depth again.
+A join at a mid-section station is a branch and is not offered.
 
 **Blocked, with the reason shown in the menu:**
 
@@ -92,7 +94,7 @@ state a fresh split leaves. A join at a mid-section station is a branch and is n
 |---|---|
 | Different azimuth reference | B's bearings would change meaning |
 | Different quality | Quality weights the least-squares adjustment (`project/lsq.rs:450`) |
-| A and B also connect at a second place, by a merge or an aligned closure | The single section would contain a rigid loop. An unaligned closure does not block: it stays as a loop to adjust inside the combined section |
+| A and B also connect at a second place, by a merge or an aligned closure (paths through the joined station's own merges do not count: Split copies those to both halves) | The single section would contain a rigid loop. An unaligned closure does not block: it stays as a loop to adjust inside the combined section |
 | Result over 99,999 shots | Per-section shot-id budget (`shots.rs:140`) |
 | Read-only (closure view, Plan, Export) | Same as every mutation |
 
