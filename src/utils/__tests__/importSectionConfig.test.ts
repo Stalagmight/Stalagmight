@@ -62,7 +62,8 @@ function zeroDatum(
     gps: GPS,
     metadata: {
       name: 'Anchor',
-      surveyor: 'S',
+      surveyors: [{ name: 'S' }],
+      explorers: [],
       date: '2026-01-01',
       color: '#4ecdc4',
       direction: 'in',
@@ -83,11 +84,46 @@ describe('buildZeroDatumSectionConfig', () => {
     const config = buildZeroDatumSectionConfig(zeroDatum(0, false, [3]));
     expect(config.section_index).toBe(2);
     expect(config.name).toBe('Anchor');
-    expect(config.surveyor).toBe('S');
+    expect(config.surveyor).toBeNull();
+    expect(config.surveyors).toEqual([{ name: 'S' }]);
     expect(config.color).toBe('#4ecdc4');
     expect(config.reverse).toBe(false);
     expect(config.shots).toHaveLength(9);
     expect(config.station_comments).toEqual([]);
+  });
+
+  it('sends the dialog people and date as overrides of every imported shot', () => {
+    // Injection: drop `...importCreditFields(...)` (or send the legacy text
+    // instead) and the backend gets no surveyors / explorers / override_date,
+    // so the pills the user entered never reach a shot.
+    const base = zeroDatum(0, false);
+    const config = buildZeroDatumSectionConfig({
+      ...base,
+      metadata: {
+        ...base.metadata,
+        surveyors: [{ name: 'Ann' }, { name: 'Bo', email: 'bo@example.org' }],
+        explorers: [{ name: 'Cy' }],
+      },
+    });
+    expect(config.surveyor).toBeNull();
+    expect(config.surveyors).toEqual([{ name: 'Ann' }, { name: 'Bo', email: 'bo@example.org' }]);
+    expect(config.explorers).toEqual([{ name: 'Cy' }]);
+    expect(config.override_date).toBe('2026-01-01');
+    expect(config.date).toBe('2026-01-01');
+  });
+
+  it('leaves the shots as the file credits them when no people or date are set', () => {
+    // An empty list must NOT be sent: `surveyors: []` would replace what the
+    // file said with nobody.
+    const base = zeroDatum(0, false);
+    const config = buildZeroDatumSectionConfig({
+      ...base,
+      metadata: { ...base.metadata, surveyors: [], explorers: [], date: null },
+    });
+    expect('surveyors' in config).toBe(false);
+    expect('explorers' in config).toBe(false);
+    expect('override_date' in config).toBe(false);
+    expect(config.date).toBeNull();
   });
 
   it('sends an in-range pick verbatim, deletions or not', () => {

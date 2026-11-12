@@ -29,7 +29,7 @@ function makeShot(id: number, overrides: Partial<{
 
 /** Create a minimal SectionEditState. */
 function makeEdits(shots: ReturnType<typeof makeShot>[]): SectionEditState {
-  return { name: 'S', surveyor: '', date: '', color: '', direction: 'in', quality: 1.0, reverse: false, shots };
+  return { name: 'S', date: '', color: '', direction: 'in', quality: 1.0, reverse: false, shots };
 }
 
 /** Create an importing-type VirtualConnection. */

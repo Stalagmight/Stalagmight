@@ -90,7 +90,7 @@ function editableShot(id: number): EditableShot {
 function edits(name: string, shotCount: number, reverse: boolean): SectionEditState {
   return {
     name,
-    surveyor: 'S',
+    surveyors: [{ name: 'S' }],
     date: '2026-01-01',
     color: '#ffffff',
     direction: 'in',
@@ -113,7 +113,8 @@ function build(directPlacements: DirectPlacement[] | undefined) {
   };
   const selectionConfig: DmpSelectionConfig = {
     selectedIndices: new Set([0, 1]),
-    defaultSurveyor: 'S',
+    defaultSurveyors: [{ name: 'S' }],
+    defaultExplorers: [],
     defaultDate: null,
     fileHash: null,
     sectionHashes: [],
@@ -207,7 +208,8 @@ describe('buildBatchImport station names', () => {
     };
     const selectionConfig: DmpSelectionConfig = {
       selectedIndices: new Set([0, 1]),
-      defaultSurveyor: 'S',
+      defaultSurveyors: [{ name: 'S' }],
+      defaultExplorers: [],
       defaultDate: null,
       fileHash: null,
       sectionHashes: [],

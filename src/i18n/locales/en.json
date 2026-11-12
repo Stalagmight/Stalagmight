@@ -1568,8 +1568,6 @@
       "duplicateHashWarning": "File may have been imported before (same hash detected)",
       "duplicateSectionsWarning": "{{duplicates}} of {{total}} sections already imported (auto-deselected)",
       "defaultValues": "Default Values (apply to all sections)",
-      "surveyorLabel": "Surveyor",
-      "surveyorPlaceholder": "Enter surveyor name...",
       "dateOverrideLabel": "Date Override",
       "selectAll": "Select All",
       "selectNone": "Select None",

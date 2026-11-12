@@ -10,6 +10,10 @@ import { defaultConfig } from '../../types/config';
 import { formatLength, formatDepthRange } from '../../utils/formatStats';
 import { isImportableDmpShot } from '../../hooks/useImportState';
 import type { DmpFile } from '../../types/commands';
+import type { Person } from '../../types/ipc.generated';
+import { CreditPeopleFields } from '../common/CreditFields';
+import { listPeopleProps, type CreditLists } from '../common/SectionMetadataForm';
+import { personKey } from '../../utils/people';
 
 /**
  * Configuration produced by DmpSelectionDialog (Step 1)
@@ -18,8 +22,10 @@ import type { DmpFile } from '../../types/commands';
 export interface DmpSelectionConfig {
   /** Indices of selected sections from the DMP file */
   selectedIndices: Set<number>;
-  /** Default surveyor name to apply to all sections */
-  defaultSurveyor: string;
+  /** Default surveyors for every section (a section may change its own) */
+  defaultSurveyors: Person[];
+  /** Default explorers for every section */
+  defaultExplorers: Person[];
   /** Optional date override to apply to all sections */
   defaultDate: string | null;
   /** SHA256 hash of the source DMP file, null if computation failed */
@@ -86,12 +92,19 @@ function calculateMetadata(dmpFile: DmpFile, selectedIndices: Set<number>) {
   };
 }
 
+/** Same people in the same order, per role. */
+function samePeopleLists(a: CreditLists, b: CreditLists): boolean {
+  const same = (x: readonly Person[], y: readonly Person[]) =>
+    x.length === y.length && x.every((p, i) => personKey(p) === personKey(y[i]!));
+  return same(a.surveyors, b.surveyors) && same(a.explorers, b.explorers);
+}
+
 /**
  * Step 1 of DMP Import: Select sections and set default values.
  *
  * This dialog displays:
  * - DMP file metadata header (version, sections, shots, length, date range)
- * - Default values section (surveyor, date override)
+ * - Default values section (surveyors, explorers, date override)
  * - Bulk selection controls (All, None, Invert)
  * - Section table with checkboxes
  *
@@ -195,17 +208,27 @@ export default function DmpSelectionDialog({
     return () => { cancelled = true; };
   }, [filePath, calculateFileHash, checkDuplicateImport]);
 
-  // Get last used surveyor from session memory
-  const lastUsedSurveyor = useUIStore((state) => state.lastUsedSurveyor);
-  const setLastUsedSurveyor = useUIStore((state) => state.setLastUsedSurveyor);
+  // The people the last section was created or imported with this session
+  const setLastUsedCredit = useUIStore((state) => state.setLastUsedCredit);
 
-  // Default values state - initialize surveyor with last used value from session
-  const [defaultSurveyor, setDefaultSurveyor] = useState(lastUsedSurveyor);
+  // Default values state - the people start as the last used ones
+  const [initialPeople] = useState<CreditLists>(() => {
+    const last = useUIStore.getState().lastUsedCredit;
+    return { surveyors: [...last.surveyors], explorers: [...last.explorers] };
+  });
+  const [defaultPeople, setDefaultPeople] = useState<CreditLists>(initialPeople);
+  // A name typed into a people field but not added yet is a change too.
+  const [peopleTextPending, setPeopleTextPending] = useState(false);
   const [defaultDate, setDefaultDate] = useState('');
 
   // Track initial state for isDirty calculation
-  const [initialSurveyor] = useState(lastUsedSurveyor);
   const [initialDate] = useState('');
+
+  const peopleProps = listPeopleProps(
+    defaultPeople,
+    (role, next) => setDefaultPeople((prev) => ({ ...prev, [role]: next(prev[role]) })),
+    setPeopleTextPending,
+  );
 
   // Section selection state - default to sections with at least 2 importable shots
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(() => {
@@ -233,8 +256,9 @@ export default function DmpSelectionDialog({
 
   // Check if form has changes
   const isDirty = useMemo(() => {
-    // Check surveyor/date changes
-    if (defaultSurveyor !== initialSurveyor) return true;
+    // Check people/date changes
+    if (peopleTextPending) return true;
+    if (!samePeopleLists(defaultPeople, initialPeople)) return true;
     if (defaultDate !== initialDate) return true;
 
     // Check selection changes
@@ -244,7 +268,7 @@ export default function DmpSelectionDialog({
     }
 
     return false;
-  }, [defaultSurveyor, initialSurveyor, defaultDate, initialDate, selectedIndices, initialSelection]);
+  }, [peopleTextPending, defaultPeople, initialPeople, defaultDate, initialDate, selectedIndices, initialSelection]);
 
   // Calculate metadata for header based on selected sections (updates in real-time)
   const metadata = useMemo(
@@ -294,10 +318,8 @@ export default function DmpSelectionDialog({
 
   // Handle Continue button click
   const handleContinue = useCallback(() => {
-    // Save surveyor to session memory for next import
-    if (defaultSurveyor.trim()) {
-      setLastUsedSurveyor(defaultSurveyor.trim());
-    }
+    // Remember the people for the next import (and New Section) this session.
+    setLastUsedCredit({ surveyors: defaultPeople.surveyors, explorers: defaultPeople.explorers });
 
     const sectionHashes: string[] = [];
     for (const idx of selectedIndices) {
@@ -309,13 +331,14 @@ export default function DmpSelectionDialog({
 
     const config: DmpSelectionConfig = {
       selectedIndices,
-      defaultSurveyor,
+      defaultSurveyors: defaultPeople.surveyors,
+      defaultExplorers: defaultPeople.explorers,
       defaultDate: defaultDate.trim() || null,
       fileHash,
       sectionHashes,
     };
     onContinue(config);
-  }, [selectedIndices, defaultSurveyor, defaultDate, fileHash, dmpFile.sections, onContinue, setLastUsedSurveyor]);
+  }, [selectedIndices, defaultPeople, defaultDate, fileHash, dmpFile.sections, onContinue, setLastUsedCredit]);
 
   // Calculate section counts for display
   const nonEmptySectionCount = useMemo(() => {
@@ -380,21 +403,9 @@ export default function DmpSelectionDialog({
 
         {/* Default values section */}
         <Panel title={t('dialogs.dmpSelection.defaultValues')}>
-          <div className="flex gap-4" data-testid="dmp-default-values">
-            <div className="flex-1">
-              <label className="block text-sm text-text-secondary mb-1">
-                {t('dialogs.dmpSelection.surveyorLabel')}
-              </label>
-              <input
-                type="text"
-                value={defaultSurveyor}
-                onChange={(e) => setDefaultSurveyor(e.target.value)}
-                placeholder={t('dialogs.dmpSelection.surveyorPlaceholder')}
-                className="w-full"
-                data-testid="default-surveyor-input"
-              />
-            </div>
-            <div className="flex-1">
+          <div className="space-y-3" data-testid="dmp-default-values">
+            <CreditPeopleFields {...peopleProps} layout="columns" testIdPrefix="default" />
+            <div className="w-1/2 pr-1.5">
               <label className="block text-sm text-text-secondary mb-1">
                 {t('dialogs.dmpSelection.dateOverrideLabel')}
               </label>

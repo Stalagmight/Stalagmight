@@ -59,7 +59,6 @@ const blankNew = (tempId: number): EditableShot =>
 
 const edits = (shots: EditableShot[]): SectionEditState => ({
   name: 'S',
-  surveyor: '',
   date: '',
   color: '',
   direction: 'in',

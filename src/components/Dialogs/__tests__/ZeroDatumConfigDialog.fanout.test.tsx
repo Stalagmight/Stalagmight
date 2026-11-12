@@ -35,7 +35,10 @@ vi.mock('../DialogWrapper', () => ({
     children: React.ReactNode | ((p: { requestClose: () => void }) => React.ReactNode);
   }) => <div>{typeof children === 'function' ? children({ requestClose: () => {} }) : children}</div>,
 }));
-vi.mock('../../common/SectionMetadataForm', () => ({ SectionMetadataForm: () => null }));
+vi.mock('../../common/SectionMetadataForm', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../common/SectionMetadataForm')>()),
+  SectionMetadataForm: () => null,
+}));
 
 const captured = vi.hoisted(() => ({ props: null as unknown }));
 vi.mock('../../common/ShotTableEditor', () => ({
@@ -95,7 +98,8 @@ function dmpFile(): DmpFile {
 
 const selectionConfig = {
   selectedIndices: new Set([0]),
-  defaultSurveyor: 'S',
+  defaultSurveyors: [{ name: 'S' }],
+  defaultExplorers: [],
   defaultDate: '2026-01-01',
 } as unknown as DmpSelectionConfig;
 

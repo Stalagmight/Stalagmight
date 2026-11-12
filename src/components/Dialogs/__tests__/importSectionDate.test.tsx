@@ -91,7 +91,7 @@ const dmpSection = () => ({
 const editsWithDate = (date: string): SectionEditState =>
   ({
     name: 'Sump',
-    surveyor: 'Diver',
+    surveyors: [{ name: 'Diver' }],
     date,
     color: '#ffffff',
     direction: 'in',
@@ -109,7 +109,8 @@ function batchDate(opts: { editedDate?: string; defaultDate?: string | null }): 
   const dmpFile = { version: 1, sections: [dmpSection()] } as unknown as DmpFile;
   const selectionConfig: DmpSelectionConfig = {
     selectedIndices: new Set([0]),
-    defaultSurveyor: 'Diver',
+    defaultSurveyors: [{ name: 'Diver' }],
+    defaultExplorers: [],
     defaultDate: opts.defaultDate ?? null,
     fileHash: null,
     sectionHashes: [],
@@ -138,7 +139,6 @@ function placementDate(opts: { editedDate?: string; defaultDate?: string | null 
   return buildPlacementSectionData({
     dmpSection: dmpSection(),
     edits: opts.editedDate === undefined ? undefined : editsWithDate(opts.editedDate),
-    defaultSurveyor: 'Diver',
     defaultDate: opts.defaultDate ?? null,
     palette: ['#4ecdc4'],
     paletteIndex: 0,
@@ -219,7 +219,6 @@ describe('buildPlacementSectionData section date', () => {
     const data = buildPlacementSectionData({
       dmpSection: dmpSection(),
       edits: undefined,
-      defaultSurveyor: 'Diver',
       defaultDate: null,
       palette: ['#111111', '#222222'],
       paletteIndex: 1,
@@ -227,7 +226,8 @@ describe('buildPlacementSectionData section date', () => {
     });
     expect(data).toMatchObject({
       name: 'Sump',
-      surveyor: 'Diver',
+      // Overlay-only data: the people ride on the batch import, not here.
+      surveyor: null,
       color: '#222222',
       direction: 'in',
       quality: 1.0,
@@ -242,7 +242,6 @@ describe('buildPlacementSectionData section date', () => {
     const data = buildPlacementSectionData({
       dmpSection: dmpSection(),
       edits: undefined,
-      defaultSurveyor: null,
       defaultDate: null,
       palette: ['#111111', '#222222'],
       paletteIndex: -1,
