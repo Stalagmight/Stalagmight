@@ -1639,6 +1639,60 @@ mod tests {
         }
     }
 
+    /// The frontend anchors its positional refs (the plan pins, and the
+    /// distance-gradient origin) through `plan_anchors_for_refs` before an
+    /// edit and places them again through `plan_refs_for_anchors` after it.
+    /// Across a Split Section Here, its undo and its redo, every station of the
+    /// cut section - the split station and the ones that move to the second
+    /// half included - must land on the same physical station each time.
+    #[test]
+    fn anchors_survive_a_split_its_undo_and_its_redo() {
+        for reversed in [false, true] {
+            let (state, id, _) = delete_split_fixture(reversed);
+            let before = state.get_project_state().unwrap();
+            let refs: Vec<StationRef> = (0..=5).map(|i| StationRef::new(id, i)).collect();
+            let at: Vec<(f64, f64)> = refs.iter().map(|r| raw_xy(&before, *r)).collect();
+            let anchors: Vec<StoredAnchor> = state
+                .plan_anchors_for_refs(refs)
+                .unwrap()
+                .into_iter()
+                .map(Option::unwrap)
+                .collect();
+            let assert_land = |what: &str| {
+                let project = state.get_project_state().unwrap();
+                let placed = state.plan_refs_for_anchors(anchors.clone()).unwrap();
+                for (i, (placed, at)) in placed.iter().zip(&at).enumerate() {
+                    assert!(placed.is_some(), "{what}: pin {i} is stale");
+                    let placed = placed.unwrap();
+                    let (x, y) = raw_xy(&project, placed);
+                    assert!(
+                        (x - at.0).hypot(y - at.1) < 1e-6,
+                        "{what}: pin {i} moved to {placed:?}"
+                    );
+                }
+            };
+
+            let split = state.execute_split_section(
+                id,
+                crate::models::SplitAt::Station { station_index: 2 },
+                crate::models::SplitSectionOptions {
+                    name_a: "A".to_string(),
+                    name_b: "B".to_string(),
+                    color_a: "#111111".to_string(),
+                    color_b: "#222222".to_string(),
+                    comment_side: crate::models::SplitSide::A,
+                    datum_side: crate::models::SplitSide::A,
+                },
+            );
+            assert!(split.success, "{:?}", split.error);
+            assert_land(&format!("split, reversed {reversed}"));
+            assert!(state.undo().success);
+            assert_land(&format!("undo, reversed {reversed}"));
+            assert!(state.redo().success);
+            assert_land(&format!("redo, reversed {reversed}"));
+        }
+    }
+
     /// Build a section of `n` shots and return `(project, section_id)`.
     fn project_n_shots(n: usize) -> (Project, u32) {
         let mut project = Project::new("Test".to_string(), None);

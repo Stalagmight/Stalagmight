@@ -2400,7 +2400,8 @@
       "mergeChecking": "Checking merge compatibility...",
       "mergeNotPossible": "Merge not possible.",
       "anchoredSegmentsError": "Failed to load anchored segments. Move Segment is temporarily blocked.",
-      "noCommentToMove": "No comment to move"
+      "noCommentToMove": "No comment to move",
+      "distanceOriginReset": "The station the distance colors started from is gone, so they start from the entrance again"
     },
     "depthLegend": {
       "aria": "Depth scale from {{min}} (shallow) to {{max}} (deep)",

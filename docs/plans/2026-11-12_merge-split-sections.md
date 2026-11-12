@@ -172,17 +172,34 @@ shot's record parity therefore changes only when that record is reversed.
 - **Undo.** The set is part of the project, so every undo snapshot restores it
   with the shots.
 - **Storage.** It is persisted in `project_settings` (no schema bump), pruned
-  to the shots the project holds, and follows a uuid rename.
+  to the shots the project holds on save and on load. The load heal of a
+  project's own repeated uuids carries an entry onto the renamed copy too (both
+  copies read it before the heal); a copy Add .stalx or Merge projects renames
+  takes its entry from its own source, never from the target shot it yielded
+  the uuid to.
 - **Section.** The pin's section is found by shot uuid (#710's
   `anchor_section`).
 - **Tests.** One test checks every station of both sections across a combine.
   Another checks every station of the combined section across its undo and
   redo. Both run over every pairing and every parity combination.
 
+## Frontend positional refs
+
+Split and Combine move shots between sections, which no index transform (the
+reverse's `i -> N - i`) describes. The distance-gradient origin is therefore
+anchored like a plan pin around every survey edit (`beforeSurveyEdit` /
+`afterSurveyEdit` in `utils/reverseAftermath.ts`): `plan_anchors_for_refs`
+before, `plan_refs_for_anchors` after, so it follows its station into the
+second half of a split, past a prepending combine, and back through the undo.
+An origin that places nowhere is cleared with an info notice (the ramp starts
+from the entrance again) instead of re-rooting silently. An edit that moved
+shots between sections (a section vanished, or one appeared while another
+changed its shot count) also clears the selection, the merge staging, the
+move-comment pickup and the comment popover, as a reverse does.
+
 ## Follow-ups
 
-- Delete-and-split does not copy `reverse_parity` to its second half (an
-  existing gap). Single-neighbour pins and the gauge fallback past such a cut
-  read a reset parity.
+- Delete-and-split now copies `reverse_parity` and the gauge to its second half
+  (`Project::settle_cut_halves`, shared with Split Section Here).
 - Plans in the older station-key anchor format are not repaired past a split or
   a combine. Only the pair format is (as #710 noted).
