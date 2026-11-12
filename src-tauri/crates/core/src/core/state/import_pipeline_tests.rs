@@ -902,7 +902,12 @@ fn per_trip_sections_survive_an_export_and_re_import_unchanged() {
         project
             .sections
             .iter()
-            .map(|s| (s.name.clone().unwrap_or_default(), s.surveyor.clone()))
+            .map(|s| {
+                (
+                    s.name.clone().unwrap_or_default(),
+                    s.surveyor_names().clone(),
+                )
+            })
             .collect()
     };
 

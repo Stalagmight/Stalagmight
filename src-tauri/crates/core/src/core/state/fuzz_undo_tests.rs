@@ -1742,6 +1742,7 @@ pub(super) fn random_shot(rng: &mut Rng) -> ShotData {
         ]),
         marker_index: rng.chance(15).then(|| rng.range(0, 9) as u32),
         temperature: rng.chance(30).then(|| rng.float(4.0, 30.0)),
+        credit: None,
     }
 }
 

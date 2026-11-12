@@ -73,8 +73,8 @@ impl JsonExport {
                 .map(|s| JsonSection {
                     id: s.id,
                     name: s.name.clone(),
-                    surveyor: s.surveyor.clone(),
-                    date: s.date.map(|d| d.to_string()),
+                    surveyor: s.surveyor_names(),
+                    date: s.first_survey_date().map(|d| d.to_string()),
                     color: s.color.clone(),
                     shots: s
                         .shots

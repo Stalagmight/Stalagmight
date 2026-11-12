@@ -384,8 +384,11 @@ impl Database {
 
                 let section_data = SectionData {
                     name,
-                    surveyor,
-                    date,
+                    // Carried below as the section's LEGACY credit instead: the
+                    // shots are not loaded yet, so a template here would land
+                    // on none of them.
+                    surveyor: None,
+                    date: None,
                     color,
                     direction: Some(direction),
                     quality,
@@ -422,6 +425,8 @@ impl Database {
                      The file was written by an incompatible tool or is corrupted."
                 );
                 let mut section = Section::new(id, section_data);
+                section.legacy_surveyor = surveyor;
+                section.legacy_date = date;
                 section.reverse_parity = reverse_parity;
                 section.gauge_shot_uuid = gauge_shot_uuid;
                 section.gauge_neighbour_uuid = gauge_neighbour_uuid;
@@ -508,6 +513,7 @@ impl Database {
                             // string the same - the next save mints a
                             // fresh UUID and persists it.
                             uuid: row.get::<_, Option<String>>(17)?.filter(|s| !s.is_empty()),
+                            credit: None,
                         },
                     ))
                 })?;
@@ -542,7 +548,10 @@ impl Database {
 
                 // Advance each section's next_shot_id past its loaded
                 // shots so future appends don't collide with persisted IDs.
+                // The legacy section-level surveyor/date is the credit of every
+                // shot that carries none of its own.
                 for section in sections.iter_mut() {
+                    section.absorb_legacy_credit();
                     section.next_shot_id = section
                         .id
                         .saturating_mul(FEATURE_ID_STRIDE)

@@ -178,8 +178,8 @@ impl AppState {
                     // Capture previous section metadata
                     let prev_updates = SectionUpdates {
                         name: updates.name.as_ref().map(|_| section.name.clone()),
-                        surveyor: updates.surveyor.as_ref().map(|_| section.surveyor.clone()),
-                        date: updates.date.as_ref().map(|_| section.date),
+                        surveyor: updates.surveyor.as_ref().map(|_| section.surveyor_names()),
+                        date: updates.date.as_ref().map(|_| section.first_survey_date()),
                         color: updates.color.as_ref().map(|_| section.color.clone()),
                         direction: updates.direction.map(|_| section.direction),
                         quality: updates.quality.map(|_| section.quality),

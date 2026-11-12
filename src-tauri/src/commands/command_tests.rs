@@ -1753,6 +1753,9 @@ fn test_import_sections_persists_deferred_new_project() {
             station_names: Vec::new(),
             placement: crate::models::ImportPlacement::Origin,
             azimuth_reference: None,
+            explorers: None,
+            override_date: None,
+            surveyors: None,
         }];
         let result = import::import_sections(
             state(&app),
@@ -1917,6 +1920,9 @@ fn test_import_sections_provenance_params_decorate_receipt() {
             station_names: Vec::new(),
             placement: crate::models::ImportPlacement::Origin,
             azimuth_reference: None,
+            explorers: None,
+            override_date: None,
+            surveyors: None,
         }];
 
         let result = import::import_sections(
@@ -1977,6 +1983,9 @@ fn test_import_sections_sanitizes_hostile_zero_datum_section_name() {
                 station_index: 0,
             },
             azimuth_reference: None,
+            explorers: None,
+            override_date: None,
+            surveyors: None,
         }];
 
         let result = import::import_sections(
@@ -2035,6 +2044,9 @@ fn test_import_sections_without_provenance_params_leaves_receipt_defaults() {
             station_names: Vec::new(),
             placement: crate::models::ImportPlacement::Origin,
             azimuth_reference: None,
+            explorers: None,
+            override_date: None,
+            surveyors: None,
         }];
 
         let result = import::import_sections(
@@ -2200,6 +2212,9 @@ fn test_import_sections_deferred_save_failure_warns_no_phantom() {
             station_names: Vec::new(),
             placement: crate::models::ImportPlacement::Origin,
             azimuth_reference: None,
+            explorers: None,
+            override_date: None,
+            surveyors: None,
         }];
         let result = import::import_sections(
             state(&app),
@@ -2327,6 +2342,9 @@ fn test_import_sections_deferred_save_permission_denied_humanizes_no_marker_leak
             station_names: Vec::new(),
             placement: crate::models::ImportPlacement::Origin,
             azimuth_reference: None,
+            explorers: None,
+            override_date: None,
+            surveyors: None,
         }];
         let result = import::import_sections(
             state(&app),
@@ -2401,6 +2419,9 @@ fn test_import_sections_deferred_save_generic_open_failure_is_not_a_denial() {
             station_names: Vec::new(),
             placement: crate::models::ImportPlacement::Origin,
             azimuth_reference: None,
+            explorers: None,
+            override_date: None,
+            surveyors: None,
         }];
         let result = import::import_sections(
             state(&app),
@@ -5612,7 +5633,7 @@ fn test_create_section_with_date_roundtrip() {
     );
     assert_success(&result);
     let section = get_section(state(&app), result.section_id.unwrap()).unwrap();
-    assert_eq!(section.date, Some(date));
+    assert_eq!(section.first_survey_date(), Some(date));
     assert_eq!(section.direction, SurveyDirection::Out);
 }
 

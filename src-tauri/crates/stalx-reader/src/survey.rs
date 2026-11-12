@@ -392,8 +392,10 @@ impl Survey {
                     Section {
                         id: section.id,
                         name: section.name.clone(),
-                        surveyor: section.surveyor.clone(),
-                        date: section.date.map(|d| d.format("%Y-%m-%d").to_string()),
+                        surveyor: section.surveyor_names(),
+                        date: section
+                            .first_survey_date()
+                            .map(|d| d.format("%Y-%m-%d").to_string()),
                         direction: match section.direction {
                             SurveyDirection::In => Direction::In,
                             SurveyDirection::Out => Direction::Out,

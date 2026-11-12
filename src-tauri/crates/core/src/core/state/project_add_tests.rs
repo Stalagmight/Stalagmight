@@ -269,8 +269,11 @@ fn canonical_merge_output(merged: &Project, result: &CommandResult) -> String {
 /// to the origin): with that placement call disabled, the merge still produces
 /// the previous value `9_039_697_118_154_861_914`, so placement is the only
 /// change - the #680 source read (private copy, normalized like an open) moves
-/// nothing for these sources.
-const MERGE_PARITY_DIGEST: u64 = 17_078_245_016_113_985_025;
+/// nothing for these sources. Re-pinned for per-shot survey credit: each
+/// section's `surveyor` left the section and rides on every shot as `credit`
+/// (the same person, `user1`, on each of the source's shots); nothing else in
+/// the canonical form moved.
+const MERGE_PARITY_DIGEST: u64 = 7_905_845_170_930_071_176;
 
 /// #674 parity: "Merge projects" must produce exactly what it produced before
 /// its per-source loop became the append that "Add .stalx" shares. Rich on
@@ -313,6 +316,7 @@ fn merge_output_is_unchanged_by_the_append_extraction() {
         "squeeze",
         "junction",
         "sump",
+        "user1",
     ] {
         assert!(canonical.contains(needle), "canonical form lacks {needle}");
     }

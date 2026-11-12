@@ -295,8 +295,8 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         sections_meta.push(SectionHeaderBinary {
             id: section.id,
             name: section.name.clone(),
-            surveyor: section.surveyor.clone(),
-            date: section.date.clone(),
+            surveyor: section.surveyor_names(),
+            date: section.first_survey_date(),
             color: section.color.clone(),
             direction: section.direction,
             quality: section.quality,
@@ -549,6 +549,7 @@ mod tests {
             kind: ShotKind::Normal,
             marker_index: None,
             temperature: None,
+            credit: None,
         }
     }
 
@@ -642,6 +643,7 @@ mod tests {
             kind: ShotKind::Reference,
             marker_index: Some(7),
             temperature: None,
+            credit: None,
         });
         sec.next_shot_id = 2;
         project.sections.push(sec);

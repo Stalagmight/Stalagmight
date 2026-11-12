@@ -75,13 +75,17 @@ impl Database {
 
         // Save sections and shots
         for section in &project.sections {
+            // The legacy columns keep their meaning for every older reader: the
+            // distinct surveyor names joined with ", " and the earliest date.
+            let legacy_surveyor = section.surveyor_names();
+            let legacy_date = section.first_survey_date().map(|d| d.to_string());
             tx.execute(
                 "INSERT INTO sections (id, name, surveyor, date, color, direction, quality, reverse_parity, gauge_shot_uuid, gauge_neighbour_uuid, azimuth_north, azimuth_correction, azimuth_source, azimuth_epoch_year, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                 params![
                     section.id,
                     section.name,
-                    section.surveyor,
-                    section.date.map(|d| d.to_string()),
+                    legacy_surveyor,
+                    legacy_date,
                     section.color,
                     section.direction.to_string(),
                     section.quality,

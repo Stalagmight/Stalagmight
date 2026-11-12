@@ -788,8 +788,10 @@ fn build_export_shots_with_report(
             .unwrap_or(&format!("Section {}", section.id))
             .to_string();
         let color = color_to_ariane(&section.color);
-        let explorer = section.surveyor.clone();
-        let date = section.date.map(|d| d.format("%Y-%m-%d").to_string());
+        let explorer = section.surveyor_names();
+        let date = section
+            .first_survey_date()
+            .map(|d| d.format("%Y-%m-%d").to_string());
 
         // Which datum this entrance's START sits on. The root uses the FRAME datum
         // (see `root_section_id` above); any other entrance uses its own section's
@@ -5615,7 +5617,12 @@ mod tests {
         // character inside one of those fields re-cuts the survey.
         let mut project = simple_project();
         project.sections[0].name = Some("Main\u{220e}Line".to_string());
-        project.sections[0].surveyor = Some("Alice\u{220e}Bob".to_string());
+        for shot in &mut project.sections[0].shots {
+            shot.set_credit(crate::models::SurveyCredit::from_legacy(
+                Some("Alice\u{220e}Bob"),
+                None,
+            ));
+        }
 
         let user = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
         assert_eq!(user[0].section, "Main\u{220e}Line");

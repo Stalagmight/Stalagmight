@@ -6,8 +6,8 @@ use std::str::FromStr;
 use ts_rs::TS;
 
 use super::{
-    AzimuthReference, Coordinates, GpsCoordinates, Shot, ShotData, ShotId, ShotKind, ShotUpdates,
-    StationRef, FEATURE_ID_STRIDE,
+    legacy_people, AzimuthReference, Coordinates, GpsCoordinates, Person, SectionCreditSummary,
+    Shot, ShotData, ShotId, ShotKind, ShotUpdates, StationRef, SurveyCredit, FEATURE_ID_STRIDE,
 };
 
 /// Unique identifier for a section
@@ -51,11 +51,20 @@ pub struct Section {
     pub id: SectionId,
     /// Optional human-readable name
     pub name: Option<String>,
-    /// Surveyor who collected this data
-    pub surveyor: Option<String>,
-    /// Date of the survey
-    #[ts(type = "string | null")]
-    pub date: Option<NaiveDate>,
+    /// LEGACY, read-only: the free-text surveyor a section carried before the
+    /// survey credit moved onto its shots. Never serialized and absent from the
+    /// TS shape; an old project snapshot or undo payload that still carries
+    /// `"surveyor"` deserializes into it, and
+    /// [`Section::absorb_legacy_credit`] moves it onto the shots. Read who
+    /// surveyed a section with [`Section::credit_summary`].
+    #[serde(default, rename = "surveyor", skip_serializing)]
+    #[ts(skip)]
+    pub legacy_surveyor: Option<String>,
+    /// LEGACY, read-only: the section-level survey date, absorbed like
+    /// [`Section::legacy_surveyor`].
+    #[serde(default, rename = "date", skip_serializing)]
+    #[ts(skip)]
+    pub legacy_date: Option<NaiveDate>,
     /// Display color (hex format, e.g., "#4ecdc4")
     pub color: String,
     /// Survey direction (In = entering cave, Out = exiting)
@@ -177,7 +186,11 @@ impl SectionIdentity {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct SectionData {
     pub name: Option<String>,
+    /// LEGACY template: free text split by [`legacy_people`] and given, with
+    /// [`Self::date`], to every shot whose credit is empty when the section is
+    /// built ([`Section::new`]). The section itself keeps no surveyor.
     pub surveyor: Option<String>,
+    /// LEGACY template date, applied with [`Self::surveyor`].
     #[ts(type = "string | null")]
     pub date: Option<NaiveDate>,
     pub color: String,
@@ -223,6 +236,9 @@ pub struct SectionUpdates {
     )]
     #[ts(optional)]
     pub name: Option<Option<String>>,
+    /// LEGACY: set on EVERY shot of the section - the surveyors (and, for the
+    /// Ariane `"explorers / surveyors"` form, the explorers) parsed by
+    /// [`legacy_people`]. `null` clears every shot's surveyors.
     #[serde(
         default,
         deserialize_with = "double_option",
@@ -230,6 +246,7 @@ pub struct SectionUpdates {
     )]
     #[ts(optional)]
     pub surveyor: Option<Option<String>>,
+    /// LEGACY: set on EVERY shot of the section; `null` clears every shot's date.
     #[serde(
         default,
         deserialize_with = "double_option",
@@ -292,9 +309,26 @@ pub struct ImportSectionConfig {
     /// Index of this section in the import array (used for fromImporting references)
     pub section_index: u32,
     pub name: Option<String>,
+    /// LEGACY template, as [`SectionData::surveyor`]: given to every imported
+    /// shot whose credit is empty.
     pub surveyor: Option<String>,
+    /// LEGACY template date, as [`SectionData::date`].
     #[ts(type = "string | null")]
     pub date: Option<NaiveDate>,
+    /// When set, REPLACES the surveyors of every imported shot (the import
+    /// dialog's Surveyors field). `None` keeps what the file said.
+    #[serde(default)]
+    #[ts(optional)]
+    pub surveyors: Option<Vec<Person>>,
+    /// When set, replaces the explorers of every imported shot.
+    #[serde(default)]
+    #[ts(optional)]
+    pub explorers: Option<Vec<Person>>,
+    /// When set, replaces the survey date of every imported shot.
+    #[serde(default)]
+    #[ts(optional)]
+    #[ts(type = "string")]
+    pub override_date: Option<NaiveDate>,
     pub color: String,
     #[serde(default)]
     pub direction: Option<SurveyDirection>,
@@ -435,11 +469,12 @@ fn default_section_quality() -> f64 {
 impl Section {
     /// Create a new section from section data
     pub fn new(id: SectionId, data: SectionData) -> Self {
+        let template = SurveyCredit::from_legacy(data.surveyor.as_deref(), data.date);
         let mut section = Self {
             id,
             name: data.name,
-            surveyor: data.surveyor,
-            date: data.date,
+            legacy_surveyor: None,
+            legacy_date: None,
             color: data.color,
             direction: data.direction.unwrap_or_default(),
             quality: if data.quality.is_finite() && data.quality > 0.0 {
@@ -495,6 +530,11 @@ impl Section {
                     shot_data.uuid = None;
                     repaired += 1;
                 }
+            }
+            // The legacy section-level surveyor/date is a template for the
+            // shots that carry no credit of their own.
+            if !template.is_empty() && shot_data.credit().is_empty() {
+                shot_data.credit = Some(template.clone());
             }
             section.add_shot(shot_data);
         }
@@ -554,8 +594,9 @@ impl Section {
     pub fn to_section_data(&self) -> SectionData {
         SectionData {
             name: self.name.clone(),
-            surveyor: self.surveyor.clone(),
-            date: self.date,
+            // The credit rides on the shots; the template stays empty.
+            surveyor: None,
+            date: None,
             color: self.color.clone(),
             direction: Some(self.direction),
             quality: self.quality,
@@ -656,10 +697,14 @@ impl Section {
             self.name.clone_from(v);
         }
         if let Some(v) = &updates.surveyor {
-            self.surveyor.clone_from(v);
+            self.set_legacy_surveyor_on_every_shot(v.as_deref());
         }
         if let Some(v) = &updates.date {
-            self.date = *v;
+            for shot in &mut self.shots {
+                let mut credit = shot.credit().clone();
+                credit.date = *v;
+                shot.set_credit(credit);
+            }
         }
         if let Some(v) = &updates.color {
             self.color.clone_from(v);
@@ -674,6 +719,64 @@ impl Section {
                 self.quality = default_section_quality();
             }
         }
+    }
+
+    /// [`SectionUpdates::surveyor`]: the legacy free text set on every shot.
+    /// The surveyors are replaced by the text's; the explorers only when the
+    /// text is in the Ariane `"explorers / surveyors"` form, so a plain name
+    /// typed into a legacy Surveyor field leaves every shot's explorers alone.
+    fn set_legacy_surveyor_on_every_shot(&mut self, text: Option<&str>) {
+        let text = text.unwrap_or_default();
+        let has_explorer_half = text.split(" / ").count() == 2;
+        let (explorers, surveyors) = legacy_people(text);
+        for shot in &mut self.shots {
+            let mut credit = shot.credit().clone();
+            credit.surveyors.clone_from(&surveyors);
+            if has_explorer_half {
+                credit.explorers.clone_from(&explorers);
+            }
+            shot.set_credit(credit);
+        }
+    }
+
+    /// Who surveyed and explored this section and when, aggregated over its
+    /// shots: each person with the number of shots that credit them, in
+    /// first-appearance order, and the earliest and latest shot date.
+    pub fn credit_summary(&self) -> SectionCreditSummary {
+        SectionCreditSummary::from_credits(self.shots.iter().map(Shot::credit))
+    }
+
+    /// The distinct surveyor names of every shot, in first-appearance order,
+    /// joined with `", "`; `None` when no shot names one. What the legacy
+    /// `sections.surveyor` column and the plain-text consumers carry.
+    pub fn surveyor_names(&self) -> Option<String> {
+        super::join_names(&self.credit_summary().surveyor_people())
+    }
+
+    /// The earliest shot date; what the legacy `sections.date` column carries.
+    pub fn first_survey_date(&self) -> Option<NaiveDate> {
+        self.shots.iter().filter_map(|s| s.credit().date).min()
+    }
+
+    /// Move a legacy section-level surveyor/date (read from an old snapshot
+    /// or undo payload into [`Self::legacy_surveyor`]/[`Self::legacy_date`])
+    /// onto every shot whose credit is empty, then clear the legacy fields.
+    /// Returns whether any shot changed. Idempotent.
+    pub fn absorb_legacy_credit(&mut self) -> bool {
+        let surveyor = self.legacy_surveyor.take();
+        let date = self.legacy_date.take();
+        let template = SurveyCredit::from_legacy(surveyor.as_deref(), date);
+        if template.is_empty() {
+            return false;
+        }
+        let mut changed = false;
+        for shot in &mut self.shots {
+            if shot.credit().is_empty() {
+                shot.set_credit(template.clone());
+                changed = true;
+            }
+        }
+        changed
     }
 
     /// Split shots at the given shot ID, excluding the target shot.
@@ -869,8 +972,9 @@ mod tests {
 
         assert_eq!(section.id, 1);
         assert!(section.name.is_none());
-        assert!(section.surveyor.is_none());
-        assert!(section.date.is_none());
+        assert!(section.legacy_surveyor.is_none());
+        assert!(section.legacy_date.is_none());
+        assert_eq!(section.credit_summary().shot_count, 0);
         assert_eq!(section.color, "#4ecdc4");
         assert_eq!(section.direction, SurveyDirection::In);
         assert!(section.shots.is_empty());
@@ -887,15 +991,23 @@ mod tests {
             color: "#ff5733".to_string(),
             direction: Some(SurveyDirection::Out),
             quality: 1.0,
-            shots: vec![],
+            shots: vec![test_shot_data(3.0), test_shot_data(4.0)],
         };
 
         let section = Section::new(42, data);
 
         assert_eq!(section.id, 42);
         assert_eq!(section.name, Some("Test Section".to_string()));
-        assert_eq!(section.surveyor, Some("John Doe".to_string()));
-        assert_eq!(section.date, Some(date));
+        // The legacy template lands on the shots; the section keeps none.
+        assert!(section.legacy_surveyor.is_none());
+        for shot in &section.shots {
+            assert_eq!(shot.credit().surveyor_names().as_deref(), Some("John Doe"));
+            assert_eq!(shot.credit().date, Some(date));
+        }
+        let summary = section.credit_summary();
+        assert_eq!(summary.surveyors.len(), 1);
+        assert_eq!(summary.surveyors[0].shots, 2);
+        assert_eq!(summary.date_min, Some(date));
         assert_eq!(section.color, "#ff5733");
         assert_eq!(section.direction, SurveyDirection::Out);
     }
@@ -1127,7 +1239,13 @@ mod tests {
 
     #[test]
     fn test_apply_updates_all_fields() {
-        let mut section = Section::new(0, SectionData::default());
+        let mut section = Section::new(
+            0,
+            SectionData {
+                shots: vec![test_shot_data(2.0)],
+                ..Default::default()
+            },
+        );
         let new_date = NaiveDate::from_ymd_opt(2024, 12, 25).unwrap();
 
         section.apply_updates(&SectionUpdates {
@@ -1140,8 +1258,11 @@ mod tests {
         });
 
         assert_eq!(section.name, Some("Updated".to_string()));
-        assert_eq!(section.surveyor, Some("Jane".to_string()));
-        assert_eq!(section.date, Some(new_date));
+        assert_eq!(
+            section.shots[0].credit().surveyor_names().as_deref(),
+            Some("Jane")
+        );
+        assert_eq!(section.shots[0].credit().date, Some(new_date));
         assert_eq!(section.color, "#abc123");
         assert_eq!(section.direction, SurveyDirection::Out);
         assert_eq!(section.quality, 1.5);
@@ -1155,6 +1276,7 @@ mod tests {
                 name: Some("Original".to_string()),
                 surveyor: Some("Original Surveyor".to_string()),
                 color: "#000000".to_string(),
+                shots: vec![test_shot_data(2.0)],
                 ..Default::default()
             },
         );
@@ -1166,7 +1288,10 @@ mod tests {
         });
 
         assert_eq!(section.name, Some("Original".to_string())); // Unchanged
-        assert_eq!(section.surveyor, Some("Original Surveyor".to_string())); // Unchanged
+        assert_eq!(
+            section.shots[0].credit().surveyor_names().as_deref(),
+            Some("Original Surveyor")
+        ); // Unchanged
         assert_eq!(section.color, "#ffffff"); // Changed
     }
 
@@ -1288,8 +1413,14 @@ mod tests {
         let converted = section.to_section_data();
 
         assert_eq!(converted.name, Some("Test".to_string()));
-        assert_eq!(converted.surveyor, Some("John".to_string()));
-        assert_eq!(converted.date, Some(date));
+        // The template went onto the shots, so the data carries it there.
+        assert_eq!(converted.surveyor, None);
+        assert_eq!(converted.date, None);
+        assert_eq!(
+            converted.shots[0].credit().surveyor_names().as_deref(),
+            Some("John")
+        );
+        assert_eq!(converted.shots[1].credit().date, Some(date));
         assert_eq!(converted.color, "#ff0000");
         assert_eq!(converted.direction, Some(SurveyDirection::Out));
         assert_eq!(converted.shots.len(), 2);
@@ -1327,8 +1458,8 @@ mod tests {
         let restored = Section::new(0, converted);
 
         assert_eq!(restored.name, section.name);
-        assert_eq!(restored.surveyor, section.surveyor);
-        assert_eq!(restored.date, section.date);
+        assert_eq!(restored.shots[0].credit(), section.shots[0].credit());
+        assert_eq!(restored.shots[0].credit().date, Some(date));
         assert_eq!(restored.color, section.color);
         assert_eq!(restored.direction, section.direction);
         assert_eq!(restored.shots.len(), section.shots.len());
@@ -1511,5 +1642,101 @@ mod tests {
         assert_eq!(after.len(), 1);
         assert_eq!(before[0].length, 5.0);
         assert_eq!(after[0].length, 3.0);
+    }
+
+    // === Survey credit ===
+
+    fn credit(surveyors: &[&str], explorers: &[&str]) -> SurveyCredit {
+        SurveyCredit {
+            surveyors: surveyors.iter().filter_map(|n| Person::named(n)).collect(),
+            explorers: explorers.iter().filter_map(|n| Person::named(n)).collect(),
+            date: None,
+        }
+    }
+
+    #[test]
+    fn the_template_only_fills_shots_with_no_credit() {
+        let own = credit(&["Own"], &[]);
+        let section = Section::new(
+            1,
+            SectionData {
+                surveyor: Some("nh / ds".to_string()),
+                shots: vec![
+                    ShotData {
+                        credit: Some(own.clone()),
+                        ..test_shot_data(1.0)
+                    },
+                    test_shot_data(2.0),
+                ],
+                ..Default::default()
+            },
+        );
+        assert_eq!(section.shots[0].credit(), &own);
+        assert_eq!(section.shots[1].credit(), &credit(&["ds"], &["nh"]));
+    }
+
+    #[test]
+    fn legacy_surveyor_update_keeps_explorers_unless_the_text_names_them() {
+        let mut section = Section::new(
+            1,
+            SectionData {
+                shots: vec![ShotData {
+                    credit: Some(credit(&["Old"], &["Ex"])),
+                    ..test_shot_data(1.0)
+                }],
+                ..Default::default()
+            },
+        );
+        section.apply_updates(&SectionUpdates {
+            surveyor: Some(Some("New".to_string())),
+            ..Default::default()
+        });
+        assert_eq!(section.shots[0].credit(), &credit(&["New"], &["Ex"]));
+        section.apply_updates(&SectionUpdates {
+            surveyor: Some(Some("E2 / S2".to_string())),
+            ..Default::default()
+        });
+        assert_eq!(section.shots[0].credit(), &credit(&["S2"], &["E2"]));
+        section.apply_updates(&SectionUpdates {
+            surveyor: Some(None),
+            ..Default::default()
+        });
+        assert_eq!(section.shots[0].credit(), &credit(&[], &["E2"]));
+    }
+
+    #[test]
+    fn an_old_section_json_with_a_surveyor_is_absorbed_onto_its_shots() {
+        let mut section = Section::new(
+            3,
+            SectionData {
+                shots: vec![test_shot_data(1.0), test_shot_data(2.0)],
+                ..Default::default()
+            },
+        );
+        section.shots[1].set_credit(credit(&["Kept"], &[]));
+        let mut json = serde_json::to_value(&section).unwrap();
+        assert!(json.get("surveyor").is_none(), "never serialized: {json}");
+        assert!(json.get("date").is_none(), "never serialized: {json}");
+        json["surveyor"] = serde_json::json!("nh / ds");
+        json["date"] = serde_json::json!("2021-04-05");
+
+        let mut old: Section = serde_json::from_value(json).unwrap();
+        assert_eq!(old.legacy_surveyor.as_deref(), Some("nh / ds"));
+        assert!(old.absorb_legacy_credit());
+        assert!(old.legacy_surveyor.is_none() && old.legacy_date.is_none());
+        let mut expected = credit(&["ds"], &["nh"]);
+        expected.date = NaiveDate::from_ymd_opt(2021, 4, 5);
+        assert_eq!(old.shots[0].credit(), &expected);
+        assert_eq!(old.shots[1].credit(), &credit(&["Kept"], &[]));
+        // Idempotent.
+        assert!(!old.absorb_legacy_credit());
+    }
+
+    #[test]
+    fn section_ts_shape_has_no_surveyor_or_date() {
+        use ts_rs::TS;
+        let decl = Section::decl();
+        assert!(!decl.contains("surveyor"), "{decl}");
+        assert!(!decl.contains(" date"), "{decl}");
     }
 }

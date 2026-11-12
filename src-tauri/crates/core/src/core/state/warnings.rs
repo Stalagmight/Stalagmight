@@ -158,6 +158,7 @@ impl AppState {
                     kind: shot.kind,
                     marker_index: shot.marker_index,
                     temperature: shot.temperature,
+                    credit: None,
                 };
 
                 let warnings = Validator::validate_shot(

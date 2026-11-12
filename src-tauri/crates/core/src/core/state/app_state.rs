@@ -800,6 +800,11 @@ impl AppState {
                     }
                 }
                 restored.file_path = current_file_path;
+                // A snapshot written before the survey credit moved onto the
+                // shots carries each section's surveyor/date at section level;
+                // give it to the shots that have none (a no-op for a current
+                // snapshot, which never serializes those keys).
+                restored.absorb_legacy_section_credit();
                 restored.rebuild_section_index();
                 restored.rebuild_shot_uuid_index();
                 // A snapshot blob persisted by a PRE-ANCHOR build can carry

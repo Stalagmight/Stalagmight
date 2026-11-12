@@ -841,6 +841,19 @@ impl Project {
         }
     }
 
+    /// Move every section's LEGACY surveyor/date onto its uncredited shots
+    /// ([`Section::absorb_legacy_credit`]). Run wherever a `Project` or
+    /// `Section` comes back from JSON written before the credit moved onto
+    /// the shots - an undo snapshot, an older history entry - so the people it
+    /// named are not silently lost. Returns how many sections changed.
+    pub fn absorb_legacy_section_credit(&mut self) -> usize {
+        self.sections
+            .iter_mut()
+            .map(Section::absorb_legacy_credit)
+            .filter(|changed| *changed)
+            .count()
+    }
+
     /// Mint a UUID for every shot of ONE section that lacks one.
     ///
     /// Section-scoped twin of [`Self::ensure_shot_uuids`], for callers that only

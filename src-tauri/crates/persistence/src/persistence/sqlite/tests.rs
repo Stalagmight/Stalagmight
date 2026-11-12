@@ -1095,8 +1095,12 @@ fn test_save_load_multiple_sections() {
     // Verify section 1
     let s1 = &loaded.sections[0];
     assert_eq!(s1.name, Some("Main Passage".to_string()));
-    assert_eq!(s1.surveyor, Some("John Doe".to_string()));
-    assert_eq!(s1.date, NaiveDate::from_ymd_opt(2024, 6, 15));
+    let c1 = s1.credit_summary();
+    assert_eq!(
+        crate::models::join_names(&c1.surveyor_people()).as_deref(),
+        Some("John Doe")
+    );
+    assert_eq!(c1.date_min, NaiveDate::from_ymd_opt(2024, 6, 15));
     assert_eq!(s1.color, "#ff5733");
     assert_eq!(s1.direction, SurveyDirection::In);
     assert_eq!(s1.shots.len(), 2);
@@ -1128,8 +1132,8 @@ fn test_save_load_multiple_sections() {
     // Verify section 3 (None values)
     let s3 = &loaded.sections[2];
     assert!(s3.name.is_none());
-    assert!(s3.surveyor.is_none());
-    assert!(s3.date.is_none());
+    assert!(s3.credit_summary().surveyors.is_empty());
+    assert!(s3.credit_summary().date_min.is_none());
     assert!(s3.shots.is_empty());
 }
 
@@ -3808,6 +3812,7 @@ fn test_save_load_round_trip_zero_values() {
             kind: ShotKind::Normal,
             marker_index: None,
             temperature: None,
+            credit: None,
         }],
         ..Default::default()
     });
@@ -3894,7 +3899,13 @@ fn test_save_load_round_trip_all_metadata() {
     assert_eq!(loaded.name, "FullMeta");
     assert_eq!(loaded.location.as_deref(), Some("Underwater Cave"));
     assert_eq!(loaded.sections.len(), 2);
-    assert_eq!(loaded.sections[0].surveyor.as_deref(), Some("Diver One"));
+    assert_eq!(
+        loaded.sections[0].shots[0]
+            .credit()
+            .surveyor_names()
+            .as_deref(),
+        Some("Diver One")
+    );
     assert_eq!(loaded.sections[0].direction.to_string(), "out");
     assert!((loaded.sections[0].quality - 0.75).abs() < 1e-6);
     assert_eq!(loaded.sections[0].shots[0].kind, ShotKind::Reference);

@@ -1502,6 +1502,9 @@ pub fn convert_tml_with_options(
             station_comments,
             station_names: Vec::new(),
             azimuth_reference: Some(azimuth_reference),
+            explorers: None,
+            override_date: None,
+            surveyors: None,
         });
     }
 
@@ -1949,6 +1952,7 @@ pub fn normalize_tml_shot(shot: &TmlShot, depth_in: f64) -> ShotData {
         },
         marker_index: None,
         temperature: None,
+        credit: None,
     }
 }
 

@@ -325,7 +325,14 @@ impl AddedContent {
                 taken.id
             ));
         }
-        project.sections.extend(self.sections.iter().cloned());
+        // An entry recorded before the survey credit moved onto the shots
+        // carries it at section level; hand it to the shots on the way in.
+        project
+            .sections
+            .extend(self.sections.iter().cloned().map(|mut section| {
+                section.absorb_legacy_credit();
+                section
+            }));
         if let Some(max) = ids.iter().max() {
             project.next_section_id = project.next_section_id.max(max.saturating_add(1));
         }

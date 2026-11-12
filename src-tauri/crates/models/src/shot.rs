@@ -4,7 +4,9 @@ use ts_rs::TS;
 /// Unique identifier for a shot within a section
 pub type ShotId = u32;
 
-use super::{normalize_azimuth, AzimuthReference, SectionId, FEATURE_ID_STRIDE};
+use super::{
+    normalize_azimuth, AzimuthReference, SectionId, SurveyCredit, EMPTY_CREDIT, FEATURE_ID_STRIDE,
+};
 
 /// Convert a raw ShotId to a 1-indexed display position.
 ///
@@ -273,6 +275,33 @@ pub struct Shot {
     pub marker_index: Option<u32>,
     /// Water temperature in celsius
     pub temperature: Option<f64>,
+    /// Who surveyed and explored this shot, and when. Read it through
+    /// [`Shot::credit`] and write it through [`Shot::set_credit`].
+    ///
+    /// `None` and an empty credit mean the same thing, and
+    /// [`credit_absent_or_empty`] keeps BOTH off the wire: `get_project_state`
+    /// serializes every shot, so an uncredited project pays nothing for the
+    /// field. `#[ts(optional)]` is explicit because ts-rs only infers it from
+    /// the literal `Option::is_none` predicate.
+    #[serde(default, skip_serializing_if = "credit_absent_or_empty")]
+    #[ts(optional)]
+    pub credit: Option<SurveyCredit>,
+}
+
+/// `skip_serializing_if` for [`Shot::credit`] and [`ShotData::credit`]: absent
+/// and empty are the same fact, so both leave the key off the wire.
+#[expect(
+    clippy::ref_option,
+    reason = "serde calls skip_serializing_if with &FieldType; Option<&SurveyCredit> does not typecheck there"
+)]
+fn credit_absent_or_empty(credit: &Option<SurveyCredit>) -> bool {
+    credit.as_ref().is_none_or(SurveyCredit::is_empty)
+}
+
+/// `Some` for a credit worth storing, `None` for an empty one - the one
+/// spelling of "no credit" every writer stores.
+fn stored_credit(credit: SurveyCredit) -> Option<SurveyCredit> {
+    (!credit.is_empty()).then_some(credit)
 }
 
 /// Data for creating or updating a shot
@@ -323,6 +352,12 @@ pub struct ShotData {
     pub marker_index: Option<u32>,
     #[serde(default)]
     pub temperature: Option<f64>,
+    /// The shot's survey credit (see [`Shot::credit`]). `None` and empty are the
+    /// same; a create with no credit inherits its neighbour's
+    /// (`AppState::create_shot`).
+    #[serde(default, skip_serializing_if = "credit_absent_or_empty")]
+    #[ts(optional)]
+    pub credit: Option<SurveyCredit>,
 }
 
 /// Accepts either the modern [`ShotKind`] string or a legacy `is_reference` /
@@ -644,7 +679,18 @@ impl Shot {
             kind: data.kind,
             marker_index: data.marker_index,
             temperature: data.temperature,
+            credit: data.credit.and_then(stored_credit),
         }
+    }
+
+    /// This shot's survey credit; the empty credit when it has none.
+    pub fn credit(&self) -> &SurveyCredit {
+        self.credit.as_ref().unwrap_or(&EMPTY_CREDIT)
+    }
+
+    /// Replace this shot's survey credit (an empty one is stored as `None`).
+    pub fn set_credit(&mut self, credit: SurveyCredit) {
+        self.credit = stored_credit(credit);
     }
 
     /// Apply partial updates to this shot
@@ -766,11 +812,17 @@ impl Shot {
             kind: self.kind,
             marker_index: self.marker_index,
             temperature: self.temperature,
+            credit: self.credit.clone().and_then(stored_credit),
         }
     }
 }
 
 impl ShotData {
+    /// The credit this data carries; the empty credit when it has none.
+    pub fn credit(&self) -> &SurveyCredit {
+        self.credit.as_ref().unwrap_or(&EMPTY_CREDIT)
+    }
+
     /// False if any numeric field is non-finite (NaN/±inf). Used to reject
     /// corrupt geometry at ingest before it poisons coordinate computation
     /// (NaN passes the existing zero/negative-length checks).
@@ -840,6 +892,7 @@ impl From<Shot> for ShotData {
             kind: shot.kind,
             marker_index: shot.marker_index,
             temperature: shot.temperature,
+            credit: shot.credit.and_then(stored_credit),
         }
     }
 }
@@ -867,6 +920,7 @@ mod tests {
             kind: ShotKind::Normal,
             marker_index: Some(3),
             temperature: Some(21.5),
+            credit: None,
         }
     }
 
@@ -1350,5 +1404,75 @@ mod tests {
     fn pitch_from_components_pure_horizontal() {
         let p = pitch_from_components(1.0, 0.0);
         assert!(p.abs() < 1e-6);
+    }
+
+    fn credited() -> SurveyCredit {
+        SurveyCredit {
+            surveyors: vec![crate::Person::named("A").unwrap()],
+            explorers: Vec::new(),
+            date: None,
+        }
+    }
+
+    #[test]
+    fn credit_is_omitted_when_empty_and_declared_optional() {
+        use ts_rs::TS;
+
+        let mut shot = Shot::new(1, base_shot_data());
+        let wire = serde_json::to_value(&shot).unwrap();
+        assert!(
+            !wire.as_object().unwrap().contains_key("credit"),
+            "an uncredited shot must omit the key: {wire}"
+        );
+        // An empty Some is reachable through a hand-built value; it must leave
+        // the wire exactly like None does.
+        shot.credit = Some(SurveyCredit::default());
+        let wire = serde_json::to_value(&shot).unwrap();
+        assert!(!wire.as_object().unwrap().contains_key("credit"), "{wire}");
+
+        shot.set_credit(credited());
+        let wire = serde_json::to_value(&shot).unwrap();
+        assert_eq!(wire["credit"]["surveyors"][0]["name"], "A");
+
+        let data = serde_json::to_value(ShotData::default()).unwrap();
+        assert!(!data.as_object().unwrap().contains_key("credit"), "{data}");
+
+        assert!(
+            Shot::decl().contains("credit?: SurveyCredit"),
+            "{}",
+            Shot::decl()
+        );
+        assert!(
+            ShotData::decl().contains("credit?: SurveyCredit"),
+            "{}",
+            ShotData::decl()
+        );
+    }
+
+    #[test]
+    fn credit_travels_through_shot_data_and_empty_is_stored_as_none() {
+        let data = ShotData {
+            credit: Some(credited()),
+            ..base_shot_data()
+        };
+        let shot = Shot::new(1, data);
+        assert_eq!(shot.credit(), &credited());
+        assert_eq!(shot.to_shot_data().credit, Some(credited()));
+        assert_eq!(ShotData::from(shot.clone()).credit, Some(credited()));
+
+        let mut shot = shot;
+        shot.set_credit(SurveyCredit::default());
+        assert!(shot.credit.is_none());
+        assert!(shot.credit().is_empty());
+
+        let shot = Shot::new(
+            2,
+            ShotData {
+                credit: Some(SurveyCredit::default()),
+                ..base_shot_data()
+            },
+        );
+        assert!(shot.credit.is_none());
+        assert!(shot.to_shot_data().credit.is_none());
     }
 }

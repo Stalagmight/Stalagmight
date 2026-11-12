@@ -522,6 +522,8 @@ impl Project {
             kind: shot.kind,
             marker_index: None,
             temperature: shot.temperature,
+            // Both pieces were surveyed together, by the same people.
+            credit: shot.credit.clone(),
         };
         let tail_updates = ShotUpdates {
             length: Some(tail_length),

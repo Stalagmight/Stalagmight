@@ -1,0 +1,172 @@
+use super::*;
+
+fn names(people: &[Person]) -> Vec<&str> {
+    people.iter().map(|p| p.name.as_str()).collect()
+}
+
+fn person(name: &str, email: Option<&str>) -> Person {
+    Person::new(name, email).unwrap()
+}
+
+#[test]
+fn legacy_splitter_table() {
+    // (input, explorers, surveyors)
+    let cases: &[(&str, &[&str], &[&str])] = &[
+        // The Ariane importer's "explorers / surveyors" join.
+        ("nh / ds", &["nh"], &["ds"]),
+        ("A, B, C / D; E", &["A", "B", "C"], &["D", "E"]),
+        // Two one-word comma parts read as `Last, First` in either half.
+        ("Doe, John / C", &["Doe, John"], &["C"]),
+        // One half empty, as the importer wrote it for a missing role.
+        (" / ds", &[], &["ds"]),
+        ("nh / ", &["nh"], &[]),
+        // A placeholder half names nobody.
+        ("unknown / ds", &[], &["ds"]),
+        ("nh / ?", &["nh"], &[]),
+        // Anything else is surveyors only.
+        ("John Doe", &[], &["John Doe"]),
+        ("a / b / c", &[], &["a / b / c"]),
+        ("a/b", &[], &["a/b"]),
+        // `Last, First` is one person...
+        ("Doe, John", &[], &["Doe, John"]),
+        ("Doe,John", &[], &["Doe,John"]),
+        // ...but not when either part is more than one word, or there is a `;`.
+        ("John Doe, Jane Roe", &[], &["John Doe", "Jane Roe"]),
+        ("A, B; C", &[], &["A", "B", "C"]),
+        ("A, B, C", &[], &["A", "B", "C"]),
+        ("A; B", &[], &["A", "B"]),
+        // Pieces are trimmed; empty pieces and placeholders are dropped.
+        ("  A ;; , B  ", &[], &["A", "B"]),
+        ("unknown", &[], &[]),
+        ("None", &[], &[]),
+        ("?", &[], &[]),
+        ("UNKNOWN; A", &[], &["A"]),
+        ("", &[], &[]),
+        ("   ", &[], &[]),
+        // Duplicates go, by identity (casefold + whitespace collapse).
+        ("A, a, B", &[], &["A", "B"]),
+        ("John  Doe; john doe", &[], &["John  Doe"]),
+    ];
+    for (input, explorers, surveyors) in cases {
+        let (e, s) = legacy_people(input);
+        assert_eq!(names(&e), *explorers, "explorers of {input:?}");
+        assert_eq!(names(&s), *surveyors, "surveyors of {input:?}");
+    }
+}
+
+#[test]
+fn split_names_splits_on_both_separators_without_the_last_first_rule() {
+    assert_eq!(names(&split_names("Doe, John")), ["Doe", "John"]);
+    assert_eq!(names(&split_names("A;B, c ; a")), ["A", "B", "c"]);
+    assert!(split_names(" ; , ").is_empty());
+}
+
+#[test]
+fn identity_is_casefolded_name_and_lowercased_email() {
+    let a = person("John  Doe", None);
+    assert!(a.same_as(&person(" john doe ", None)));
+    assert!(!a.same_as(&person("John Doe", Some("j@x.org"))));
+    let b = person("John Doe", Some("J@X.org"));
+    assert!(b.same_as(&person("john doe", Some("j@x.ORG"))));
+    assert!(!b.same_as(&person("John Doe", Some("k@x.org"))));
+    // An empty email is no email.
+    assert_eq!(person("A", Some("  ")).email, None);
+    assert!(Person::named("   ").is_none());
+}
+
+#[test]
+fn add_remove_and_dedupe_use_identity() {
+    let mut list = vec![person("A", None)];
+    assert!(!add_person(&mut list, person("a", None)));
+    assert!(add_person(&mut list, person("A", Some("a@x.org"))));
+    assert!(add_person(&mut list, person("B", None)));
+    assert_eq!(list.len(), 3);
+    assert!(remove_person(&mut list, &person(" a ", None)));
+    assert_eq!(names(&list), ["A", "B"]);
+    assert_eq!(list[0].email.as_deref(), Some("a@x.org"));
+    assert!(!remove_person(&mut list, &person("C", None)));
+
+    let deduped = dedupe_people(vec![
+        person("B", None),
+        person("b", None),
+        Person {
+            name: "  ".to_string(),
+            email: None,
+        },
+        person("A", None),
+    ]);
+    assert_eq!(names(&deduped), ["B", "A"]);
+}
+
+#[test]
+fn from_legacy_and_names() {
+    let date = NaiveDate::from_ymd_opt(2024, 3, 9);
+    let credit = SurveyCredit::from_legacy(Some("nh / ds; kb"), date);
+    assert_eq!(names(&credit.explorers), ["nh"]);
+    assert_eq!(names(&credit.surveyors), ["ds", "kb"]);
+    assert_eq!(credit.date, date);
+    assert_eq!(credit.surveyor_names().as_deref(), Some("ds, kb"));
+    assert_eq!(credit.explorer_names().as_deref(), Some("nh"));
+    assert!(SurveyCredit::from_legacy(None, None).is_empty());
+    assert!(SurveyCredit::from_legacy(Some("unknown"), None).is_empty());
+    assert!(EMPTY_CREDIT.is_empty());
+}
+
+#[test]
+fn summary_counts_people_per_shot_in_first_appearance_order() {
+    let d1 = NaiveDate::from_ymd_opt(2024, 1, 5);
+    let d2 = NaiveDate::from_ymd_opt(2023, 12, 30);
+    let credits = [
+        SurveyCredit {
+            surveyors: vec![person("B", None), person("A", None), person("b", None)],
+            explorers: vec![],
+            date: d1,
+        },
+        SurveyCredit {
+            surveyors: vec![person("a", None)],
+            explorers: vec![person("E", None)],
+            date: d2,
+        },
+        SurveyCredit::default(),
+    ];
+    let summary = SectionCreditSummary::from_credits(credits.iter());
+    assert_eq!(summary.shot_count, 3);
+    let counted: Vec<(&str, u32)> = summary
+        .surveyors
+        .iter()
+        .map(|c| (c.person.name.as_str(), c.shots))
+        .collect();
+    assert_eq!(counted, [("B", 1), ("A", 2)]);
+    assert_eq!(summary.explorers.len(), 1);
+    assert_eq!(summary.date_min, d2);
+    assert_eq!(summary.date_max, d1);
+    assert_eq!(names(&summary.surveyor_people()), ["B", "A"]);
+
+    let empty = SectionCreditSummary::from_credits(std::iter::empty());
+    assert_eq!(empty, SectionCreditSummary::default());
+}
+
+#[test]
+fn person_email_leaves_the_wire_when_absent_and_is_declared_optional() {
+    let json = serde_json::to_value(person("A", None)).unwrap();
+    assert!(!json.as_object().unwrap().contains_key("email"), "{json}");
+    let json = serde_json::to_value(person("A", Some("a@x.org"))).unwrap();
+    assert_eq!(json["email"], "a@x.org");
+    assert!(Person::decl().contains("email?:"), "{}", Person::decl());
+}
+
+#[test]
+fn credit_round_trips_and_tolerates_missing_keys() {
+    let credit = SurveyCredit {
+        surveyors: vec![person("A", Some("a@x.org"))],
+        explorers: vec![person("B", None)],
+        date: NaiveDate::from_ymd_opt(2020, 2, 29),
+    };
+    let json = serde_json::to_string(&credit).unwrap();
+    assert!(json.contains("\"date\":\"2020-02-29\""), "{json}");
+    let back: SurveyCredit = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, credit);
+    let partial: SurveyCredit = serde_json::from_str(r#"{"surveyors":[{"name":"X"}]}"#).unwrap();
+    assert_eq!(names(&partial.surveyors), ["X"]);
+    assert!(partial.explorers.is_empty() && partial.date.is_none());
+}

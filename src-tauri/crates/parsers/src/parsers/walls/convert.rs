@@ -530,6 +530,7 @@ pub fn convert_walls_to_import_configs(
                     },
                     marker_index: None,
                     temperature: None,
+                    credit: None,
                 });
             }
             let mut station_comments = Vec::new();
@@ -675,6 +676,9 @@ pub fn convert_walls_to_import_configs(
             station_comments: chain.station_comments.clone(),
             station_names: Vec::new(),
             azimuth_reference: Some(chain.azimuth_reference),
+            explorers: None,
+            override_date: None,
+            surveyors: None,
         });
     }
     topological_sort_configs(&mut configs);
