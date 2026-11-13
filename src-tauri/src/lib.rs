@@ -1476,7 +1476,6 @@ pub(crate) fn tile_fetch_impl(
     })
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
 /// How long the app-exit handler waits for a best-effort SpeleoDB lock release
 /// before exiting anyway (fix M2). Long enough for a healthy round trip, short
 /// enough that a hung / unreachable server can't noticeably freeze quit. It
@@ -1486,6 +1485,7 @@ pub(crate) fn tile_fetch_impl(
 /// held until the next sign-in's held-lock prompt (or the website) releases it.
 pub(crate) const EXIT_LOCK_RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
 
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Export the WebKit memory-pressure environment as the FIRST thing `run()`
     // does, while the process is still genuinely single-threaded: the `set_var`
