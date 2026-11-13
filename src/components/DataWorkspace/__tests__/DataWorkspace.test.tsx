@@ -340,6 +340,36 @@ describe('DataWorkspace context menu and shortcuts', () => {
   });
 });
 
+describe('Header menu on a search-revealed column', () => {
+  const openFindRevealingComment = (columnScope: 'all' | 'custom', columns: ('comment' | 'length')[] = []) =>
+    useDataWorkspaceStore.setState({
+      hiddenColumns: ['comment'],
+      search: { ...useDataWorkspaceStore.getState().search, open: true, query: 'squeeze', columnScope, columns },
+    });
+
+  it('offers "Hide search-revealed columns" (scope back to visible) instead of a no-op Hide', () => {
+    openFindRevealingComment('all');
+    render(<DataWorkspace />);
+    fireEvent.contextMenu(screen.getByTestId('data-grid-header-comment'));
+    expect(screen.queryByTestId('data-header-menu-hide')).toBeNull();
+    const item = screen.getByTestId('data-header-menu-hide-revealed');
+    expect(item).toHaveTextContent('Hide search-revealed columns');
+    expect(item.getAttribute('title')).toMatch(/searches all columns/);
+    fireEvent.click(item);
+    expect(useDataWorkspaceStore.getState().search.columnScope).toBe('visible');
+    expect(screen.queryByTestId('data-grid-header-comment')).toBeNull();
+  });
+
+  it('takes the column out of a custom search scope', () => {
+    openFindRevealingComment('custom', ['comment', 'length']);
+    render(<DataWorkspace />);
+    fireEvent.contextMenu(screen.getByTestId('data-grid-header-comment'));
+    fireEvent.click(screen.getByTestId('data-header-menu-hide-revealed'));
+    expect(useDataWorkspaceStore.getState().search).toMatchObject({ columnScope: 'custom', columns: ['length'] });
+    expect(screen.queryByTestId('data-grid-header-comment')).toBeNull();
+  });
+});
+
 describe('Focus requests', () => {
   it('a pending focus request beats the remembered active row on entry', () => {
     useDataWorkspaceStore.setState({ activeRowKey: 'st:1:1' });

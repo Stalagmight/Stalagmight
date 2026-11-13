@@ -395,6 +395,7 @@ export function DataGrid({ model, view, height, nav, editing, tint, partners, on
         <DataHeaderMenu
           menu={headerMenu}
           def={model.columnByKey.get(headerMenu.colKey)}
+          revealed={view.revealedColumns.has(headerMenu.colKey)}
           onClose={closeHeaderMenu}
           anchorScope={containerRef}
         />

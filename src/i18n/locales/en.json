@@ -2059,6 +2059,10 @@
       "sortDesc": "Sort descending",
       "clearSort": "Back to survey order",
       "hide": "Hide {{name}}",
+      "hideRevealed": "Hide search-revealed columns",
+      "hideRevealedTitle": "{{name}} is hidden: it shows only because the find searches all columns. This searches the visible columns only again.",
+      "hideRevealedCustom": "Stop searching {{name}}",
+      "hideRevealedCustomTitle": "{{name}} is hidden: it shows only because the find searches it. This takes it out of the searched columns.",
       "filterBy": "Filter by this column…",
       "resetWidth": "Reset width"
     },

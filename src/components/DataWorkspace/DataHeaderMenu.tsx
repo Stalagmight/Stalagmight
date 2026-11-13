@@ -3,6 +3,10 @@
  * back to survey order, hide the column, filter by it (adds a condition the
  * toolbar then shows for editing), reset its width. Same look and dismissal as
  * the DataTable's header menu.
+ *
+ * A column shown only because the find revealed it (hidden, but holding a
+ * match under the 'all' / 'custom' column scope) is already hidden, so "Hide"
+ * would do nothing; it offers to narrow the search scope instead.
  */
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -30,17 +34,21 @@ export function DataHeaderMenu({
   def,
   onClose,
   anchorScope,
+  revealed = false,
 }: {
   menu: HeaderMenuState;
   def: DataColumnDef | undefined;
   onClose: () => void;
   anchorScope: RefObject<HTMLElement | null>;
+  /** The column is hidden and shown only because the find revealed it. */
+  revealed?: boolean;
 }) {
   const { t } = useTranslation();
   const ref = useRef<HTMLDivElement | null>(null);
   const [pos, setPos] = useState({ x: menu.x, y: menu.y });
   const sort = useDataWorkspaceStore((s) => s.sort);
   const widths = useDataWorkspaceStore((s) => s.columnWidths);
+  const scope = useDataWorkspaceStore((s) => s.search.columnScope);
 
   useLayoutEffect(() => {
     const el = ref.current;
@@ -63,7 +71,7 @@ export function DataHeaderMenu({
   const key = menu.colKey;
   const name = t(`dataWorkspace.columns.${key}`);
   const store = useDataWorkspaceStore.getState;
-  const items: { id: string; label: string; onClick: () => void; disabled?: boolean; separatorBefore?: boolean }[] = [];
+  const items: { id: string; label: string; onClick: () => void; disabled?: boolean; separatorBefore?: boolean; title?: string }[] = [];
   if (def?.sortable) {
     items.push(
       { id: 'sort-asc', label: t('dataWorkspace.headerMenu.sortAsc'), onClick: () => store().setSort({ colKey: key, dir: 'asc' }) },
@@ -71,15 +79,37 @@ export function DataHeaderMenu({
       { id: 'sort-clear', label: t('dataWorkspace.headerMenu.clearSort'), onClick: () => store().setSort(null), disabled: sort === null },
     );
   }
-  items.push({
-    id: 'hide',
-    label: t('dataWorkspace.headerMenu.hide', { name }),
-    separatorBefore: items.length > 0,
-    onClick: () => {
-      const hidden = store().hiddenColumns;
-      if (!hidden.includes(key)) store().setHiddenColumns([...hidden, key]);
-    },
-  });
+  if (revealed && scope === 'custom') {
+    items.push({
+      id: 'hide-revealed',
+      label: t('dataWorkspace.headerMenu.hideRevealedCustom', { name }),
+      title: t('dataWorkspace.headerMenu.hideRevealedCustomTitle', { name }),
+      separatorBefore: items.length > 0,
+      onClick: () => {
+        const columns = store().search.columns.filter((k) => k !== key);
+        // An empty custom scope searches nothing: back to the visible columns.
+        store().setSearch(columns.length > 0 ? { columns } : { columns, columnScope: 'visible' });
+      },
+    });
+  } else if (revealed) {
+    items.push({
+      id: 'hide-revealed',
+      label: t('dataWorkspace.headerMenu.hideRevealed'),
+      title: t('dataWorkspace.headerMenu.hideRevealedTitle', { name }),
+      separatorBefore: items.length > 0,
+      onClick: () => store().setSearch({ columnScope: 'visible' }),
+    });
+  } else {
+    items.push({
+      id: 'hide',
+      label: t('dataWorkspace.headerMenu.hide', { name }),
+      separatorBefore: items.length > 0,
+      onClick: () => {
+        const hidden = store().hiddenColumns;
+        if (!hidden.includes(key)) store().setHiddenColumns([...hidden, key]);
+      },
+    });
+  }
   if (def) {
     items.push({
       id: 'filter',
@@ -115,6 +145,7 @@ export function DataHeaderMenu({
             type="button"
             role="menuitem"
             disabled={item.disabled}
+            title={item.title}
             className="block w-full rounded px-2 py-0.5 text-left hover:bg-accent-10 disabled:opacity-50 disabled:hover:bg-transparent"
             onClick={() => {
               item.onClick();
