@@ -565,11 +565,19 @@ pub fn parse_dmp(path: &Path) -> Result<DmpFile> {
         );
     }
 
-    // Read and parse file content
-    let content = read_utf8(path)?;
+    tracing::info!(
+        path = ?path,
+        purpose = "prepare import preview",
+        "Parsing DMP file for import preview"
+    );
 
-    // Parse semicolon-separated integers
-    let data: Vec<u8> = content
+    let data = parse_dmp_text(&read_utf8(path)?)?;
+    parse_dmp_bytes(&data).map(|(file, _)| file)
+}
+
+/// Decode the `.dmp` text form: one signed or unsigned byte per `;`-separated integer.
+pub fn parse_dmp_text(content: &str) -> Result<Vec<u8>> {
+    content
         .trim()
         .split(';')
         .filter(|s| !s.is_empty())
@@ -579,30 +587,56 @@ pub fn parse_dmp(path: &Path) -> Result<DmpFile> {
                 .map(|v| v as u8)
                 .with_context(|| format!("Invalid integer in DMP file: '{s}'"))
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect()
+}
 
-    if data.is_empty() {
-        bail!("DMP file is empty");
+/// Encode bytes in the `.dmp` text form the device's own tools write: each byte as a
+/// signed decimal followed by `;`. [`parse_dmp_text`] reads it back unchanged.
+pub fn to_dmp_text(data: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let mut text = String::with_capacity(data.len() * 4);
+    for &byte in data {
+        // Writing to a String cannot fail.
+        let _ = write!(text, "{};", byte as i8);
     }
+    text
+}
 
-    // Get version from first byte
-    let version = data[0];
+/// What [`parse_dmp_bytes`] read past without importing, so a caller can tell the user
+/// instead of silently showing fewer sections.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DmpReadLoss {
+    /// Sections found between end markers that failed to parse (a bad date, bad magic,
+    /// or no shots).
+    pub skipped_sections: usize,
+    /// Bytes after the last complete section, other than zero padding and the device's
+    /// `MN2Over` reply trailer. Non-zero means a final section with no end marker.
+    pub unread_trailing_bytes: usize,
+}
+
+/// The `MN2Over` text the device appends to every serial and file reply.
+const REPLY_TRAILER: &[u8] = b"MN2Over";
+
+/// Parse DMP data already decoded to bytes.
+pub fn parse_dmp_bytes(data: &[u8]) -> Result<(DmpFile, DmpReadLoss)> {
+    let Some(&version) = data.first() else {
+        bail!("DMP file is empty");
+    };
     if !SUPPORTED_VERSIONS.contains(&version) {
         bail!("Unsupported DMP version: {version}. Supported: {SUPPORTED_VERSIONS:?}");
     }
 
-    tracing::info!(
-        path = ?path,
-        version = version,
-        purpose = "prepare import preview",
-        "Parsing DMP file for import preview"
-    );
-
     // Split into sections
-    let section_data = split_into_sections(&data, version);
+    let section_data = split_into_sections(data, version);
     if section_data.is_empty() {
         bail!("No sections found in DMP file");
     }
+
+    let consumed: usize = section_data.iter().map(Vec::len).sum();
+    let mut loss = DmpReadLoss {
+        skipped_sections: 0,
+        unread_trailing_bytes: unread_tail_len(&data[consumed..]),
+    };
 
     // Parse each section
     let mut sections = Vec::new();
@@ -619,6 +653,7 @@ pub fn parse_dmp(path: &Path) -> Result<DmpFile> {
                 sections.push(section);
             }
             Err(e) => {
+                loss.skipped_sections += 1;
                 tracing::warn!(
                     section_index = i,
                     purpose = "build import preview",
@@ -634,13 +669,30 @@ pub fn parse_dmp(path: &Path) -> Result<DmpFile> {
     }
 
     tracing::info!(
+        version = version,
         section_count = sections.len(),
         total_shots = sections.iter().map(|s| s.shots.len()).sum::<usize>(),
+        skipped_sections = loss.skipped_sections,
+        unread_trailing_bytes = loss.unread_trailing_bytes,
         purpose = "complete import preview",
         "DMP file parsed for import preview"
     );
 
-    Ok(DmpFile { version, sections })
+    Ok((DmpFile { version, sections }, loss))
+}
+
+/// Length of `tail` once zero padding and a `MN2Over` trailer are dropped from its end.
+fn unread_tail_len(tail: &[u8]) -> usize {
+    fn trim_zeros(bytes: &[u8]) -> &[u8] {
+        let end = bytes
+            .iter()
+            .rposition(|&b| b != 0)
+            .map_or(0, |last| last + 1);
+        &bytes[..end]
+    }
+    let tail = trim_zeros(tail);
+    let tail = tail.strip_suffix(REPLY_TRAILER).unwrap_or(tail);
+    trim_zeros(tail).len()
 }
 
 // ============================================================================
@@ -3192,5 +3244,92 @@ mod tests {
         shot.heading_in = f64::INFINITY;
         shot.heading_out = 0.0;
         assert!(shot.to_shot_data().azimuth_in.is_infinite());
+    }
+
+    // ------------------------------------------------------------------------
+    // parse_dmp_bytes, the text form, and DmpReadLoss (#725)
+    // ------------------------------------------------------------------------
+
+    /// One synthetic v3 section (with its end-of-section shot) as bytes.
+    fn v3_section_bytes() -> Vec<u8> {
+        parse_dmp_text(&build_v3_section_data()).unwrap()
+    }
+
+    #[test]
+    fn dmp_text_round_trips_every_byte_value() {
+        let all: Vec<u8> = (0..=255).collect();
+        let text = to_dmp_text(&all);
+        assert!(text.starts_with("0;1;"), "{text}");
+        assert!(
+            text.contains(";127;-128;"),
+            "bytes above 127 are written signed: {text}"
+        );
+        assert!(text.ends_with(";-1;"), "{text}");
+        assert_eq!(parse_dmp_text(&text).unwrap(), all);
+    }
+
+    #[test]
+    fn bytes_and_file_parse_to_the_same_sections() {
+        let mut data = v3_section_bytes();
+        data.extend(v3_section_bytes());
+        let (from_bytes, loss) = parse_dmp_bytes(&data).unwrap();
+        assert_eq!(loss, DmpReadLoss::default());
+
+        let (_keep, path) = create_dmp_file(&to_dmp_text(&data));
+        let from_file = parse_dmp(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+
+        let hashes = |f: &DmpFile| -> Vec<String> {
+            f.sections.iter().map(|s| s.content_hash.clone()).collect()
+        };
+        assert_eq!(from_bytes.sections.len(), 2);
+        assert_eq!(hashes(&from_bytes), hashes(&from_file));
+    }
+
+    #[test]
+    fn loss_counts_a_section_that_fails_to_parse() {
+        let mut bad_date = v3_section_bytes();
+        bad_date[5] = 13; // month byte: version(1) + magic(3) + year(1), then month
+        let mut data = v3_section_bytes();
+        data.extend(bad_date);
+
+        let (file, loss) = parse_dmp_bytes(&data).unwrap();
+        assert_eq!(file.sections.len(), 1);
+        assert_eq!(loss.skipped_sections, 1);
+        assert_eq!(loss.unread_trailing_bytes, 0);
+    }
+
+    #[test]
+    fn loss_ignores_zero_padding_and_the_reply_trailer() {
+        for tail in [
+            &[0u8][..],
+            REPLY_TRAILER,
+            &[0, 0, 77, 78, 50, 79, 118, 101, 114, 0][..],
+        ] {
+            let mut data = v3_section_bytes();
+            data.extend_from_slice(tail);
+            let (_, loss) = parse_dmp_bytes(&data).unwrap();
+            assert_eq!(loss.unread_trailing_bytes, 0, "tail {tail:?}");
+        }
+    }
+
+    #[test]
+    fn loss_counts_a_final_section_with_no_end_marker() {
+        let section = v3_section_bytes();
+        let unterminated = &section[..section.len() - shot_size(3)];
+        let mut data = section.clone();
+        data.extend_from_slice(unterminated);
+
+        let (file, loss) = parse_dmp_bytes(&data).unwrap();
+        assert_eq!(file.sections.len(), 1);
+        assert_eq!(loss.unread_trailing_bytes, unterminated.len());
+    }
+
+    #[test]
+    fn parse_dmp_bytes_refuses_empty_and_unknown_versions() {
+        assert!(parse_dmp_bytes(&[]).is_err());
+        let mut data = v3_section_bytes();
+        data[0] = 9;
+        assert!(parse_dmp_bytes(&data).is_err());
     }
 }
