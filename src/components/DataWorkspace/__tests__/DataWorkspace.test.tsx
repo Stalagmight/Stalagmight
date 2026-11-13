@@ -297,6 +297,27 @@ describe('DataWorkspace context menu and shortcuts', () => {
     expect(useUIStore.getState().selection).toEqual({ type: 'shot', sectionId: 1, shotId: 102 });
   });
 
+  it('offers Collapse section only where it works (survey order, headers on)', () => {
+    const { unmount } = render(<DataWorkspace />);
+    fireEvent.contextMenu(screen.getByTestId('data-cell-sh-1-2-length'));
+    expect(screen.getByTestId('data-ctx-toggle-section')).toHaveTextContent('Collapse section');
+    unmount();
+
+    useDataWorkspaceStore.setState({ sort: { colKey: 'length', dir: 'asc' } });
+    const sorted = render(<DataWorkspace />);
+    fireEvent.contextMenu(screen.getByTestId('data-cell-sh-1-2-length'));
+    expect(screen.getByTestId('data-ctx-show-on-map')).toBeInTheDocument();
+    expect(screen.queryByTestId('data-ctx-toggle-section')).toBeNull();
+    sorted.unmount();
+
+    useDataWorkspaceStore.setState({ sort: null, showSectionHeaders: false });
+    render(<DataWorkspace />);
+    fireEvent.contextMenu(screen.getByTestId('data-cell-sh-1-2-length'));
+    expect(screen.getByTestId('data-ctx-show-on-map')).toBeInTheDocument();
+    expect(screen.queryByTestId('data-ctx-toggle-section')).toBeNull();
+    expect(useDataWorkspaceStore.getState().collapsedSections).toEqual([]);
+  });
+
   it('Alt+M shows the active row on the map', () => {
     render(<DataWorkspace />);
     fireEvent.mouseDown(screen.getByTestId('data-cell-sh-1-3-length'));

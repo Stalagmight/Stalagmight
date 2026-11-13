@@ -20,7 +20,7 @@ import type { DataNav } from './useDataNavigation';
 import type { DataTint } from './useDataTint';
 import { buildGridColumns } from './dataGridColumns';
 import { buildRail } from './model/links';
-import { isEntityRow, parseRowKey } from './model/rows';
+import { isEntityRow, parseRowKey, sectionRowKey } from './model/rows';
 import { DataRowLabel, DATA_GUTTER_WIDTH, type RevealReason } from './DataRowLabel';
 import { DataSectionHeader } from './DataSectionHeader';
 import { DataHeaderMenu, type HeaderMenuState } from './DataHeaderMenu';
@@ -304,7 +304,11 @@ export function DataGrid({ model, view, height, nav, editing, tint, partners, on
       if (!row) return [];
       const range = view.rows.slice(fromRow, toRow + 1);
       const isCollapsed = collapsed.has(row.sectionId);
-      return [
+      // Collapse works only in survey order with the section's header in the
+      // model (model/view.ts); anywhere else the toggle would do nothing now
+      // and surprise later, so it is not offered.
+      const canCollapse = view.surveyOrder && model.rowByKey.has(sectionRowKey(row.sectionId));
+      const items: GridExtraMenuItem[] = [
         { label: t('dataWorkspace.menu.showOnMap'), onClick: () => nav.showOnMap(row), testId: 'data-ctx-show-on-map', separatorBefore: true },
         { label: t('dataWorkspace.menu.openInSurvey'), onClick: () => nav.openInSurvey(row), testId: 'data-ctx-open-in-survey' },
         { label: t('dataWorkspace.menu.copyRowName'), onClick: () => nav.copyRowNames(range), testId: 'data-ctx-copy-row-name' },
@@ -314,14 +318,17 @@ export function DataGrid({ model, view, height, nav, editing, tint, partners, on
           testId: 'data-ctx-filter-section',
           separatorBefore: true,
         },
-        {
+      ];
+      if (canCollapse) {
+        items.push({
           label: t(isCollapsed ? 'dataWorkspace.menu.expandSection' : 'dataWorkspace.menu.collapseSection'),
           onClick: () => useDataWorkspaceStore.getState().toggleSectionCollapsed(row.sectionId),
           testId: 'data-ctx-toggle-section',
-        },
-      ];
+        });
+      }
+      return items;
     },
-    [view.rows, collapsed, nav, t],
+    [view.rows, view.surveyOrder, model.rowByKey, collapsed, nav, t],
   );
 
   const [headerMenu, setHeaderMenu] = useState<HeaderMenuState | null>(null);
