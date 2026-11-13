@@ -406,4 +406,14 @@ describe('CombineSectionsDialog', () => {
     );
     expect(screen.getByTestId('combine-note-passing')).toHaveTextContent('Main-B passes through the join');
   });
+
+  it('says the bearings keep their values only when the backend leaves them alone', () => {
+    dialogData = { candidate: candidate({ plan_keeping_a: quietPlan(2, { azimuth_rotation_deg: 0 }) }) };
+    const { unmount } = render(<CombineSectionsDialog />);
+    expect(screen.getByTestId('combine-note-rotation')).toHaveTextContent('keep their values');
+    unmount();
+    dialogData = { candidate: candidate({ plan_keeping_a: quietPlan(2, { azimuth_rotation_deg: 0.04 }) }) };
+    render(<CombineSectionsDialog />);
+    expect(screen.getByTestId('combine-note-rotation')).toHaveTextContent('turn by +0.040°');
+  });
 });

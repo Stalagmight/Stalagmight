@@ -69,6 +69,8 @@ describe('formatRotation', () => {
   it('signs the angle and keeps one decimal', () => {
     expect(formatRotation(5)).toBe('+5.0°');
     expect(formatRotation(-0.34)).toBe('-0.3°');
-    expect(formatRotation(0)).toBe('0.0°');
+    expect(formatRotation(0)).toBe('0.000°');
+    expect(formatRotation(0.04)).toBe('+0.040°');
+    expect(formatRotation(-0.04)).toBe('-0.040°');
   });
 });

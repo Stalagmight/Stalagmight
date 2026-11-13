@@ -72,7 +72,11 @@ export function combinePlanFor(candidate: CombineCandidate, kept: SectionId): Co
   return kept === candidate.section_b ? candidate.plan_keeping_b : candidate.plan_keeping_a;
 }
 
-/** A signed angle for the dialog: "+5.0°", "-0.3°". */
+/**
+ * A signed angle for the dialog: "+5.0°", "-0.3°", and a small one to three
+ * decimals ("+0.040°") so a real rotation never reads as zero.
+ */
 export function formatRotation(degrees: number): string {
-  return `${degrees > 0 ? '+' : degrees < 0 ? '-' : ''}${Math.abs(degrees).toFixed(1)}°`;
+  const digits = Math.abs(degrees) < 0.05 ? 3 : 1;
+  return `${degrees > 0 ? '+' : degrees < 0 ? '-' : ''}${Math.abs(degrees).toFixed(digits)}°`;
 }

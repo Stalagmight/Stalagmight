@@ -7,7 +7,8 @@
 //! - the other section's stored bearings turn to read against the kept
 //!   section's north reference, when the two differ;
 //! - the other section's shots that share an identity (uuid) with the kept
-//!   section's get new ones;
+//!   section's get new ones (`renew_shared_shot_uuids`, a heal the command
+//!   runs before it records the undo step);
 //! - rigid ties that would tie the combined section to itself, or hold the
 //!   moving side, become ordinary loop closures;
 //! - the moving side (the other section and what is still merged to it, or
@@ -66,7 +67,6 @@ struct CombineSetup {
     join: JoinPoint,
     ties: TiePlan,
     rotation: Option<f64>,
-    shared_uuids: Vec<String>,
     /// Closures across the join point: they would tie the joined station to
     /// itself.
     join_closures: HashSet<u64>,
@@ -153,16 +153,52 @@ impl Project {
             kept_end,
             other_end,
             rotation: self.azimuth_rotation(k, o),
-            shared_uuids: Self::shared_shot_uuids(k, o),
             join,
             ties,
             join_closures,
         })
     }
 
+    /// Give `other`'s shots that share an identity (uuid) with a shot of
+    /// `kept` new ones, derived as the load-time heal derives them
+    /// (`reminted_shot_uuid`), so a row stored against the old id in `other`
+    /// is still recognised. Returns how many it renamed.
+    ///
+    /// A heal, not part of the combine's undo step: `execute_combine_sections`
+    /// runs it before it pins position-keyed ignores and records the "before"
+    /// snapshot, so the pins, the held component gauge and the snapshot all
+    /// name each shot by the identity it keeps. Two sections sharing a shot
+    /// identity is a state a reload heals the same way.
+    pub fn renew_shared_shot_uuids(&mut self, kept: SectionId, other: SectionId) -> usize {
+        let (Some(k), Some(o)) = (self.get_section(kept), self.get_section(other)) else {
+            return 0;
+        };
+        let shared = Self::shared_shot_uuids(k, o);
+        if shared.is_empty() {
+            return 0;
+        }
+        let mut taken: HashSet<String> = self
+            .sections
+            .iter()
+            .flat_map(|s| s.shots.iter().filter_map(|shot| shot.uuid.clone()))
+            .collect();
+        let mut remap = ShotUuidRemap::default();
+        for old in &shared {
+            let new = reminted_shot_uuid_avoiding(other, old, |c| taken.contains(c));
+            taken.insert(new.clone());
+            remap.insert(other, old.clone(), new);
+        }
+        self.apply_shot_uuid_remap(&remap);
+        self.follow_counter_parity(&remap);
+        shared.len()
+    }
+
     /// Combine `other` into `kept` at `options.join` (or the join the
-    /// two-section query prefers). Re-runs the candidate check first, so an
-    /// `Err` (the blocked reason) leaves the project exactly as it was.
+    /// two-section query prefers). Re-runs the candidate check first, so a
+    /// refusal leaves the project exactly as it was. Past the check, the
+    /// failures left (a section vanishing mid-way) are unreachable, but this
+    /// does not roll back: `execute_combine_sections` restores its snapshot
+    /// on any `Err`.
     pub fn combine_sections(
         &mut self,
         kept: SectionId,
@@ -170,6 +206,10 @@ impl Project {
         options: &CombineSectionsOptions,
     ) -> Result<(), String> {
         let setup = self.combine_setup(kept, other, options.join)?;
+        // Shared shot identities first (a no-op when the command already
+        // renewed them), so the held gauge below names shots by the identity
+        // they keep.
+        self.renew_shared_shot_uuids(kept, other);
         // Before anything moves, including the reverse below.
         let component_gauges = self.hold_component_gauges(&[kept, other]);
         let remeasure = self.prepare_combine(&setup);
@@ -199,22 +239,6 @@ impl Project {
                 }
                 section.azimuth_reference = reference;
             }
-        }
-        if !setup.shared_uuids.is_empty() {
-            let in_use: HashSet<String> = self
-                .sections
-                .iter()
-                .flat_map(|s| s.shots.iter().filter_map(|shot| shot.uuid.clone()))
-                .collect();
-            let mut remap = ShotUuidRemap::default();
-            let mut taken = in_use;
-            for old in &setup.shared_uuids {
-                let new = reminted_shot_uuid_avoiding(other, old, |c| taken.contains(c));
-                taken.insert(new.clone());
-                remap.insert(other, old.clone(), new);
-            }
-            self.apply_shot_uuid_remap(&remap);
-            self.follow_counter_parity(&remap);
         }
         self.loop_closures
             .retain(|c| !setup.join_closures.contains(&c.id));

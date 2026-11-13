@@ -185,7 +185,7 @@ impl Project {
             .filter(|t| matches!(t.id, TieId::Merge(_)))
             .filter(|t| t.a.section_id != t.b.section_id && !join.is_join_tie(t.a, t.b))
             .collect();
-        let adjacency_without = |torn: &[TieId]| -> Adjacency {
+        let adjacency_without = |torn: &HashSet<TieId>| -> Adjacency {
             let mut adjacency: Adjacency = HashMap::new();
             for tie in merges.iter().filter(|t| !torn.contains(&t.id)) {
                 let (x, y) = (tie.a.section_id, tie.b.section_id);
@@ -195,8 +195,8 @@ impl Project {
             adjacency
         };
         // The merges from M into a section that still reaches F without M.
-        let loop_ties = |m: SectionId, f: SectionId| -> Vec<TieId> {
-            let adjacency = adjacency_without(&[]);
+        let loop_ties = |m: SectionId, f: SectionId| -> HashSet<TieId> {
+            let adjacency = adjacency_without(&HashSet::new());
             let fixed = reach(&adjacency, f, m);
             adjacency
                 .get(&m)
@@ -206,13 +206,29 @@ impl Project {
                 .map(|(_, id)| *id)
                 .collect()
         };
+        // The sections that carry a zero datum on a station of their own, read
+        // once: every anchored-side question below is a lookup in it.
+        let datum_sections: HashSet<SectionId> = self
+            .zero_datums
+            .iter()
+            .filter_map(|datum| self.resolve_key(&datum.station_ref))
+            .map(|at| at.section_id)
+            .collect();
         let anchored =
-            |sections: &HashSet<SectionId>| sections.iter().any(|s| self.carries_zero_datum(*s));
+            |sections: &HashSet<SectionId>| sections.iter().any(|s| datum_sections.contains(s));
 
-        // False for a non-finite gap too: nothing moves then.
-        let shifting = gap.0.hypot(gap.1) > COMBINE_TOLERANCE_M;
+        // A non-finite gap never reaches here (`pairing_touch` refuses
+        // non-finite ends); checked again so a shift can never write one.
+        let shifting =
+            gap.0.is_finite() && gap.1.is_finite() && gap.0.hypot(gap.1) > COMBINE_TOLERANCE_M;
         let (moving, fixed, mut torn, held_by_datum) = if shifting {
-            self.pick_moving_side(join, &loop_ties, &adjacency_without, &anchored)?
+            Self::pick_moving_side(
+                join,
+                &loop_ties,
+                &adjacency_without,
+                &anchored,
+                &datum_sections,
+            )?
         } else {
             // Nothing moves (beyond the tolerance the join already allows):
             // only the loops the combine would close inside one section tear.
@@ -239,7 +255,7 @@ impl Project {
             let crosses = (in_a && fixed_side.contains(&tie.b.section_id))
                 || (in_b && fixed_side.contains(&tie.a.section_id));
             if crosses || (shifting && in_a != in_b) {
-                torn.push(tie.id);
+                torn.insert(tie.id);
             }
         }
 
@@ -274,12 +290,12 @@ impl Project {
     /// it and the kept side is free. With both sides held, the merges from the
     /// moving section to its datum sides tear too.
     fn pick_moving_side(
-        &self,
         join: &JoinPoint,
-        loop_ties: &dyn Fn(SectionId, SectionId) -> Vec<TieId>,
-        adjacency_without: &dyn Fn(&[TieId]) -> Adjacency,
+        loop_ties: &dyn Fn(SectionId, SectionId) -> HashSet<TieId>,
+        adjacency_without: &dyn Fn(&HashSet<TieId>) -> Adjacency,
         anchored: &dyn Fn(&HashSet<SectionId>) -> bool,
-    ) -> Result<(SectionId, SectionId, Vec<TieId>, Vec<TieId>), String> {
+        datum_sections: &HashSet<SectionId>,
+    ) -> Result<(SectionId, SectionId, HashSet<TieId>, Vec<TieId>), String> {
         let sides = [(join.other, join.kept), (join.kept, join.other)];
         for (m, f) in sides {
             let torn = loop_ties(m, f);
@@ -288,18 +304,28 @@ impl Project {
             }
         }
         for (m, f) in sides {
-            if self.carries_zero_datum(m) {
+            if datum_sections.contains(&m) {
                 continue;
             }
             let mut torn = loop_ties(m, f);
             let adjacency = adjacency_without(&torn);
-            let datum_ties: Vec<TieId> = adjacency
-                .get(&m)
-                .into_iter()
-                .flatten()
-                .filter(|(n, _)| anchored(&reach(&adjacency, *n, m)))
-                .map(|(_, id)| *id)
-                .collect();
+            // Each part of the graph that hangs off M is walked once, however
+            // many of M's merges lead into it.
+            let mut anchored_part: HashMap<SectionId, bool> = HashMap::new();
+            let mut datum_ties: Vec<TieId> = Vec::new();
+            for (n, id) in adjacency.get(&m).into_iter().flatten() {
+                let held = if let Some(held) = anchored_part.get(n) {
+                    *held
+                } else {
+                    let part = reach(&adjacency, *n, m);
+                    let held = anchored(&part);
+                    anchored_part.extend(part.into_iter().map(|s| (s, held)));
+                    held
+                };
+                if held {
+                    datum_ties.push(*id);
+                }
+            }
             torn.extend(datum_ties.iter().copied());
             return Ok((m, f, torn, datum_ties));
         }

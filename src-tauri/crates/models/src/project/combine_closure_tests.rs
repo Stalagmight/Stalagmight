@@ -642,12 +642,26 @@ fn check_combined(
     } else {
         1e-6
     };
+    let other_end = if kept == candidate.section_a {
+        candidate.end_b
+    } else {
+        candidate.end_a
+    };
+    // Where the other section's station i lands: after the kept stations on
+    // an append, before them on a prepend, counted backwards when reversed.
+    let reversed = kept_end == other_end;
     for i in 0..=no {
         let was = old[&StationRef::new(other, i)];
         let want = (was.0 + o_shift.0, was.1 + o_shift.1);
+        let along = if reversed { no - i } else { i };
+        let index = if kept_end == SectionEnd::End {
+            nk + along
+        } else {
+            along
+        };
         assert!(
-            combined.iter().any(|now| dist(*now, want) < tolerance),
-            "{what}: other station {i} lost"
+            dist(combined[index as usize], want) < tolerance,
+            "{what}: other station {i} is not at combined station {index}"
         );
     }
     // No moved section carries a zero datum.

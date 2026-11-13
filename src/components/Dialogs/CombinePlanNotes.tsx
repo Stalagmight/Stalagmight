@@ -68,7 +68,8 @@ export function CombinePlanNotes({
     notes.push({
       key: 'rotation',
       text:
-        Math.abs(plan.azimuth_rotation_deg) < 0.05
+        // Exactly 0 is the one case the backend leaves the readings alone.
+        plan.azimuth_rotation_deg === 0
           ? t('dialogs.combineSections.rotationZero', { kept: keptName, other: otherName })
           : t('dialogs.combineSections.rotation', {
               kept: keptName,

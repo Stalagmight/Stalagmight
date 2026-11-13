@@ -580,6 +580,27 @@ fn sections_sharing_a_shot_identity_get_fresh_ids() {
     assert_eq!(far, Some(Some(StationRef::new(k, 5))));
 }
 
+/// The component's gauge sits on the lower-id section, whose gauge shot
+/// shares its identity with a shot of the section kept. The identity is
+/// renewed before the gauge is held, so the gauge stays on its own physical
+/// station, not on the kept section's copy of the shared shot.
+#[test]
+fn a_shared_identity_on_the_gauge_shot_does_not_move_the_gauge() {
+    let (mut project, k, o) = pair(SectionEnd::End, SectionEnd::Start, true, 0.0);
+    let shared = project.get_section(k).unwrap().shots[0].uuid.clone();
+    project.get_section_mut(o).unwrap().shots[1].uuid = shared;
+    project.rebuild_shot_uuid_index();
+    let before = xy(&project, project.adjustment_anchor_for_tests(k).unwrap());
+
+    // Keep the higher id: K, which held the gauge, is the one retired.
+    project.combine_sections(o, k, &options()).unwrap();
+    let anchor = project.adjustment_anchor_for_tests(o).unwrap();
+    assert!(
+        dist(xy(&project, anchor), before) < 0.001,
+        "the gauge moved to {anchor:?}"
+    );
+}
+
 /// An aligned closure from the merged join into either section is a second
 /// rigid tie (from #713): it becomes an ordinary closure inside the combined
 /// section, and the plan says so.

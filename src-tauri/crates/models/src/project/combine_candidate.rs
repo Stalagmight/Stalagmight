@@ -261,6 +261,11 @@ impl Project {
             ends.at(pairing.a, pairing.end_a)?,
             ends.at(pairing.b, pairing.end_b)?,
         );
+        // An end the walk cannot place (an overflowing or non-finite shot)
+        // meets nothing: joining there would shift a side by a non-finite gap.
+        if ![pa.0, pa.1, pb.0, pb.1].iter().all(|v| v.is_finite()) {
+            return None;
+        }
         let group_a = self.get_merge_group(at_a);
         let merged = group_a.contains(&at_b);
         let group_b = if merged {

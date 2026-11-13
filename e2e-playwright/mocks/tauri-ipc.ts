@@ -5427,7 +5427,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             type MockSection = { id: number; shots: unknown[] };
             const sections = (currentProject?.sections ?? []) as MockSection[];
             const merges = (currentProject?.station_merges ?? []) as Array<{ station_a: Ref; station_b: Ref }>;
-            const closures = (currentProject?.loop_closures ?? []) as Array<{ station_a: Ref; station_b: Ref; misclosure_distance?: number }>;
+            const closures = (currentProject?.loop_closures ?? []) as Array<{
+              station_a: Ref;
+              station_b: Ref;
+              misclosure_distance?: number;
+              horizontal_misclosure?: number;
+            }>;
             const same = (x: Ref, y: Ref) => x.section_id === y.section_id && x.station_index === y.station_index;
             const closureBetween = (x: Ref, y: Ref) =>
               closures.find((c) => (same(c.station_a, x) && same(c.station_b, y)) || (same(c.station_a, y) && same(c.station_b, x)));
@@ -5456,7 +5461,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 .filter((m) => !((same(m.station_a, a) && same(m.station_b, b)) || (same(m.station_a, b) && same(m.station_b, a))))
                 .map((m) => ({ station_a: m.station_a, station_b: m.station_b, kind: 'merge', reason: 'loop' }));
               // Nothing moves within the backend's 1 mm tolerance.
-              const shift = closure ? (closure.misclosure_distance ?? 0) : 0;
+              // Horizontal, as the backend's chain gap is.
+              const shift = closure ? (closure.horizontal_misclosure ?? closure.misclosure_distance ?? 0) : 0;
               const plan = (kept: number, other: number) => ({
                 kept,
                 moving_section: shift > 0.001 ? other : null,
@@ -5621,7 +5627,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   .filter((c) => !isJoin(c.station_a, c.station_b))
                   .map((c) => ({ ...c, station_a: home(c.station_a), station_b: home(c.station_b) })),
                 ...tornMerges.map((m, i) => ({
-                  id: nextClosureId + i,
+                  id: BigInt(nextClosureId + i),
                   station_a: home(m.station_a),
                   station_b: home(m.station_b),
                   path_length: 0,
