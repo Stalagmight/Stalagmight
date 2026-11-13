@@ -21,6 +21,10 @@
  *   offset. Hidden columns holding a match under the 'all' / 'custom' column
  *   scopes are listed in `revealedColumns` and sit at their place in the
  *   column order.
+ * - The row name (`ROW_NAME_KEY`: the gutter's "<label>:<id>" + the section's
+ *   full name) is searched like an always-shown first column under the
+ *   'visible' and 'all' column scopes (not 'custom', which lists real
+ *   columns): at most one read-only match per row, before its cell matches.
  */
 import type {
   DataColumnDef,
@@ -29,11 +33,13 @@ import type {
   DataModelCtx,
   DataRow,
   DataView,
+  SearchColKey,
   SearchMatch,
 } from '../types';
+import { ROW_NAME_KEY } from '../types';
 import type { DataWorkspaceState } from '../store';
 import { applyFilters } from './filter';
-import { compileSearch, findInText, MAX_SEARCH_MATCHES, orderColumns, searchColumnsInScope } from './search';
+import { compileSearch, findInText, MAX_SEARCH_MATCHES, orderColumns, rowNameMatch, searchColumnsInScope } from './search';
 import { sortRows } from './sort';
 
 export type DataViewInput = Pick<
@@ -100,10 +106,22 @@ export function buildDataView(
   let matchLimitReached = false;
   if (searching) {
     const spans: number[] = [];
+    const searchRowName = search.columnScope !== 'custom';
+    const sectionHit = new Map<number, [number, number] | null>();
     outer: for (let i = 0; i < n; i++) {
       const row = rows[i]!;
       if (row.kind === 'section') continue;
       if (search.rowScope === 'visible' && !shown[i] && !navReveal[i]) continue;
+      if (searchRowName) {
+        const hit = rowNameMatch(ctx, row, compiled, sectionHit);
+        if (hit) {
+          rowMatches[i] = [{ rowKey: row.key, colKey: ROW_NAME_KEY, start: hit[0], end: hit[1], lockReason: 'computed' }];
+          if (++matchTotal >= MAX_SEARCH_MATCHES) {
+            matchLimitReached = true;
+            break outer;
+          }
+        }
+      }
       for (const col of scopeCols) {
         if (!appliesTo(col, row)) continue;
         spans.length = 0;
@@ -165,14 +183,14 @@ export function buildDataView(
 
   // 7. Matches in display order + index.
   const matches: SearchMatch[] = [];
-  const matchIndex = new Map<string, Map<DataColumnKey, number[]>>();
+  const matchIndex = new Map<string, Map<SearchColKey, number[]>>();
   if (matchTotal > 0) {
     const indexOfRow = new Map<string, number>();
     for (let i = 0; i < n; i++) if (rowMatches[i]) indexOfRow.set(rows[i]!.key, i);
     for (const row of viewRows) {
       const i = indexOfRow.get(row.key);
       if (i === undefined) continue;
-      const byCol = new Map<DataColumnKey, number[]>();
+      const byCol = new Map<SearchColKey, number[]>();
       for (const m of rowMatches[i]!) {
         let list = byCol.get(m.colKey);
         if (!list) byCol.set(m.colKey, (list = []));

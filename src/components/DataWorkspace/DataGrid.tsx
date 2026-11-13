@@ -13,7 +13,7 @@ import type { CellMarks, GridExtraMenuItem, GridScrollRequest } from '../common/
 import { useGridLabels } from '../../hooks/useGridLabels';
 import { useUIStore } from '../../store/uiStore';
 import { useDataWorkspaceStore } from './store';
-import type { DataColumnDef, DataColumnKey, DataRow, DataView } from './types';
+import { ROW_NAME_KEY, type DataColumnDef, type DataColumnKey, type DataRow, type DataView, type SearchColKey } from './types';
 import type { DataWorkspaceModel } from './useDataWorkspaceModel';
 import type { DataEditing } from './useDataEditing';
 import type { DataNav } from './useDataNavigation';
@@ -257,7 +257,7 @@ export function DataGrid({ model, view, height, nav, editing, tint, partners, on
   // ── Find highlights ────────────────────────────────────────────────────
   const cellMarks = useCallback(
     (row: DataRow, _i: number, colKey: string): CellMarks | undefined => {
-      const ids = view.matchIndex.get(row.key)?.get(colKey as DataColumnKey);
+      const ids = view.matchIndex.get(row.key)?.get(colKey as SearchColKey);
       if (!ids || ids.length === 0) return undefined;
       const ranges = ids.map((i) => [view.matches[i]!.start, view.matches[i]!.end] as const);
       const cur = ids.includes(currentMatch) ? view.matches[currentMatch] : undefined;
@@ -289,9 +289,17 @@ export function DataGrid({ model, view, height, nav, editing, tint, partners, on
   );
   const rowLabel = useCallback(
     (row: DataRow, i: number) => (
-      <DataRowLabel row={row} ctx={ctx} rail={rail?.[i] ?? null} tint={tint.colorOf(row)} revealed={revealReason(row)} nav={nav} />
+      <DataRowLabel
+        row={row}
+        ctx={ctx}
+        rail={rail?.[i] ?? null}
+        tint={tint.colorOf(row)}
+        revealed={revealReason(row)}
+        nav={nav}
+        nameMarks={cellMarks(row, i, ROW_NAME_KEY)}
+      />
     ),
-    [ctx, rail, tint, revealReason, nav],
+    [ctx, rail, tint, revealReason, nav, cellMarks],
   );
   const groupRowContent = useCallback(
     (row: DataRow) =>

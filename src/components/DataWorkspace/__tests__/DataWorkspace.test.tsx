@@ -152,6 +152,32 @@ describe('DataWorkspace rows and gutter', () => {
   });
 });
 
+describe('Find in row names', () => {
+  const nameOf = (part: string) => screen.getByTestId(['data', 'row', 'name', part].join('-'));
+  const find = (query: string) =>
+    useDataWorkspaceStore.setState({ search: { ...useDataWorkspaceStore.getState().search, open: true, query } });
+
+  it('marks a match inside the shown name like a cell match', () => {
+    find('sump');
+    render(<DataWorkspace />);
+    // "Downstre…sump 1A:1": the label holds the match.
+    const marks = nameOf('st-3-1').querySelectorAll('mark.sg-mark');
+    expect([...marks].map((m) => m.textContent)).toEqual(['sump']);
+    expect(nameOf('st-1-1').querySelector('mark, .dw-name-match')).toBeNull();
+  });
+
+  it('highlights the whole shortened name when the match is in the full section name', () => {
+    find('downstream');
+    render(<DataWorkspace />);
+    const hit = nameOf('sh-3-2').querySelector('.dw-name-match');
+    expect(hit).not.toBeNull();
+    expect(hit).toHaveTextContent('Downstre…sump 1A:2');
+    // The first match is the current one: the strong look.
+    expect(nameOf('st-3-0').querySelector('.dw-name-match-current')).not.toBeNull();
+    expect(nameOf('sh-3-2').querySelector('.dw-name-match-current')).toBeNull();
+  });
+});
+
 describe('DataWorkspace empty state', () => {
   const narrowTo = (query: string, rowScope: 'visible' | 'all' = 'visible') =>
     useDataWorkspaceStore.setState({

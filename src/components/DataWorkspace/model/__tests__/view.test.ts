@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { buildDataView } from '../view';
 import { sortRows } from '../sort';
 import { EMPTY_FILTERS, EMPTY_QUICK_FILTERS, EMPTY_SEARCH } from '../../store';
-import type { DataColumnDef, DataEntityRow, SearchState } from '../../types';
+import { ROW_NAME_KEY, type DataColumnDef, type DataEntityRow, type SearchState } from '../../types';
+import { rowNameSearchText } from '../search';
 import { keys, makeColumns, makeCtx, makeData, makeRows, viewState, type SectionSeed } from './fixtures';
 
 const SECTIONS: SectionSeed[] = [
@@ -108,6 +109,69 @@ describe('buildDataView - filters and collapse', () => {
       'st:2:2',
     ]);
     expect([...v.revealedRowKeys]).toEqual(['st:1:1']);
+  });
+});
+
+describe('buildDataView - row name search', () => {
+  const nameMatches = (v: ReturnType<typeof buildDataView>) =>
+    v.matches.filter((m) => m.colKey === ROW_NAME_KEY).map((m) => [m.rowKey, m.start, m.end]);
+
+  it('finds a section by name through its rows, read-only, with the Section column hidden', () => {
+    const { rows, ctx, columns } = setup();
+    const v = buildDataView(rows, columns, ctx, viewState({ search: search('side'), hiddenColumns: ['section'] }));
+    expect(nameMatches(v)).toEqual([
+      ['st:2:0', 0, 4],
+      ['sh:2:200001', 0, 4],
+      ['st:2:1', 0, 4],
+      ['sh:2:200002', 0, 4],
+      ['st:2:2', 0, 4],
+    ]);
+    expect(v.matches.every((m) => m.colKey !== ROW_NAME_KEY || m.lockReason === 'computed')).toBe(true);
+    expect(v.matchIndex.get('st:2:1')!.get(ROW_NAME_KEY)).toHaveLength(1);
+    // Never a revealed column: the gutter is always shown.
+    expect(v.revealedColumns.size).toBe(0);
+  });
+
+  it('matches the full section name a shortened label leaves out, once per row', () => {
+    const { rows, ctx, columns } = setup();
+    ctx.sectionLabels.set(2, 'Si…ge');
+    ctx.sectionNames.set(2, 'Side passage');
+    const row = rows.find((r) => r.key === 'st:2:1') as DataEntityRow;
+    expect(rowNameSearchText(ctx, row)).toBe('Si…ge:1\nSide passage');
+    const v = buildDataView(rows, columns, ctx, viewState({ search: search('passage'), hiddenColumns: ['section'] }));
+    expect(nameMatches(v).find(([k]) => k === 'st:2:1')).toEqual(['st:2:1', 13, 20]);
+    // "Si" is in both the label and the full name: one match, in the label.
+    const both = buildDataView(rows, columns, ctx, viewState({ search: search('si'), hiddenColumns: ['section'] }));
+    expect(nameMatches(both).filter(([k]) => k === 'st:2:1')).toEqual([['st:2:1', 0, 2]]);
+  });
+
+  it('comes first in its row, before the cell matches', () => {
+    const { rows, ctx, columns } = setup();
+    const v = buildDataView(rows, columns, ctx, viewState({ search: search('side') }));
+    expect(v.matches.filter((m) => m.rowKey === 'st:2:0').map((m) => m.colKey)).toEqual([ROW_NAME_KEY, 'section']);
+  });
+
+  it("is searched under the 'visible' and 'all' column scopes, not 'custom'", () => {
+    const { rows, ctx, columns } = setup();
+    const scoped = (patch: Partial<SearchState>) =>
+      nameMatches(buildDataView(rows, columns, ctx, viewState({ search: search('main', patch), hiddenColumns: ['section'] })));
+    expect(scoped({ columnScope: 'all' }).length).toBeGreaterThan(0);
+    expect(scoped({ columnScope: 'custom', columns: ['comment'] })).toEqual([]);
+  });
+
+  it('respects the row scope: a hidden row is searched only under "all rows"', () => {
+    const { rows, ctx, columns } = setup();
+    const filters = { ...EMPTY_FILTERS, sectionIds: [1] };
+    const visible = buildDataView(rows, columns, ctx, viewState({ filters, search: search('side'), hiddenColumns: ['section'] }));
+    expect(nameMatches(visible)).toEqual([]);
+    const all = buildDataView(
+      rows,
+      columns,
+      ctx,
+      viewState({ filters, search: search('side', { rowScope: 'all' }), hiddenColumns: ['section'] }),
+    );
+    expect(nameMatches(all)).toHaveLength(5);
+    expect(all.revealedRowKeys.has('st:2:1')).toBe(true);
   });
 });
 

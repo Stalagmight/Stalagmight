@@ -20,6 +20,7 @@ import type {
   DataRow,
   SearchMatch,
 } from '../types';
+import { ROW_NAME_KEY } from '../types';
 import { compileSearch, execAll, type CompiledSearch, type SearchPattern } from './search';
 
 export interface ReplaceSpec extends SearchPattern {
@@ -185,6 +186,12 @@ export function planReplace(
   }
   for (const list of cells.values()) {
     const first = list[0]!;
+    // The row name is read-only: counted as locked, never planned.
+    if (first.colKey === ROW_NAME_KEY) {
+      plan.lockedMatches += list.length;
+      plan.lockedCells++;
+      continue;
+    }
     const row = model.rowByKey.get(first.rowKey);
     const col = model.columnByKey.get(first.colKey);
     if (!row || row.kind === 'section' || !col) continue;

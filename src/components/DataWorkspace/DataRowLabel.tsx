@@ -11,6 +11,8 @@ import { memo, useEffect, useRef, useState, type ReactNode, type RefObject } fro
 import { useTranslation } from 'react-i18next';
 import { Tooltip } from '../common/Tooltip';
 import { EyeIcon, PinIcon } from '../common/icons';
+import type { CellMarks } from '../common/SpreadsheetGrid/types';
+import { MarkedText } from '../common/SpreadsheetGrid/gridMarks';
 import type { DataModelCtx, DataRow } from './types';
 import type { RailCell } from './model/links';
 import { linkedRowKeys, stationLinks } from './model/links';
@@ -33,6 +35,24 @@ interface Props {
   tint: string | null;
   revealed: RevealReason;
   nav: DataNav;
+  /** Find matches on the row name (ROW_NAME_KEY): offsets into
+   *  `rowNameSearchText`, i.e. the shown name, a line break, the section's
+   *  full name. */
+  nameMarks?: CellMarks | undefined;
+}
+
+/**
+ * The gutter name with its find highlight: a match inside the shown name is
+ * marked like a cell's (`sg-mark`); a match in the section's full name (not
+ * shown, the label is shortened) highlights the whole name (`dw-name-match`).
+ */
+function NameText({ text, marks }: { text: string; marks: CellMarks | undefined }) {
+  if (!marks) return <>{text}</>;
+  const inName = (r: readonly [number, number]) => r[0] < text.length;
+  const ranges = marks.ranges.filter(inName);
+  const current = marks.current && inName(marks.current) ? marks.current : undefined;
+  if (ranges.length > 0 || current) return <MarkedText text={text} marks={current ? { ranges, current } : { ranges }} />;
+  return <span className={marks.current ? 'dw-name-match dw-name-match-current' : 'dw-name-match'}>{text}</span>;
 }
 
 /** Hover card trigger. The card closes (until the pointer leaves the name)
@@ -100,7 +120,7 @@ function HoverName({
   );
 }
 
-function DataRowLabelImpl({ row, ctx, rail, tint, revealed, nav }: Props) {
+function DataRowLabelImpl({ row, ctx, rail, tint, revealed, nav, nameMarks }: Props) {
   const { t } = useTranslation();
   const gutterRef = useRef<HTMLDivElement>(null);
   const part = dataRowPart(row);
@@ -110,14 +130,18 @@ function DataRowLabelImpl({ row, ctx, rail, tint, revealed, nav }: Props) {
     const stationName = stationDisplayName(ctx, row.g);
     name = (
       <span className="dw-row-name flex min-w-0 items-baseline gap-1.5 truncate" data-testid={`data-row-name-${part}`}>
-        <span className="truncate">{`${label}:${row.stationIndex}`}</span>
+        <span className="truncate">
+          <NameText text={`${label}:${row.stationIndex}`} marks={nameMarks} />
+        </span>
         {stationName && <span className="truncate text-[11px] font-normal text-text-secondary">{stationName}</span>}
       </span>
     );
   } else if (row.kind === 'shot') {
     name = (
       <span className="dw-row-name flex min-w-0 items-baseline gap-1.5 truncate pl-3" data-testid={`data-row-name-${part}`}>
-        <span className="truncate">{`${label}:${row.position}`}</span>
+        <span className="truncate">
+          <NameText text={`${label}:${row.position}`} marks={nameMarks} />
+        </span>
         <span className="shrink-0 text-[11px] opacity-70">{`${row.shotIndex}→${row.shotIndex + 1}`}</span>
       </span>
     );

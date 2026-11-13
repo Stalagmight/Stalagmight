@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, type RefObject } from 'react';
 import { useDataWorkspaceStore } from '../store';
 import { orderColumns } from '../model/search';
 import type { DataModel } from '../DataModelContext';
-import type { DataColumnKey, DataView, SearchMatch, SearchState } from '../types';
+import { ROW_NAME_KEY, type SearchColKey, type DataView, type SearchMatch, type SearchState } from '../types';
 import {
   firstFromRow,
   reconcileCurrent,
@@ -45,7 +45,8 @@ export function useFindNavigation(
   keepRef.current = keepFocus;
 
   const colPos = useMemo(() => {
-    const map = new Map<DataColumnKey, number>();
+    // The row name sits in the gutter, before every column.
+    const map = new Map<SearchColKey, number>([[ROW_NAME_KEY, -1]]);
     orderColumns(model.columns, columnOrder).forEach((c, i) => map.set(c.key, i));
     return map;
   }, [model.columns, columnOrder]);
@@ -66,7 +67,8 @@ export function useFindNavigation(
     // a cell edit).
     useDataWorkspaceStore.getState().requestFocus({
       rowKey: m.rowKey,
-      colKey: m.colKey,
+      // A row-name match keeps the active column (the name is in the gutter).
+      ...(m.colKey !== ROW_NAME_KEY ? { colKey: m.colKey } : {}),
       align: 'center',
       ...(focused ? { takeFocus: false } : {}),
     });

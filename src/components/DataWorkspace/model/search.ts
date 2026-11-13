@@ -15,7 +15,8 @@
  * - Zero-length regex matches (`^`, `a*` between letters) are skipped, never
  *   looped on.
  */
-import type { DataColumnDef, DataColumnKey, SearchState } from '../types';
+import type { DataColumnDef, DataColumnKey, DataEntityRow, DataModelCtx, SearchState } from '../types';
+import { sectionLabelOf } from './ctx';
 
 /** Hard cap on the matches one search collects (memory and highlight cost). */
 export const MAX_SEARCH_MATCHES = 100_000;
@@ -194,4 +195,40 @@ export function searchColumnsInScope(
     if (search.columnScope === 'custom') return chosen.has(c.key);
     return true;
   });
+}
+
+/** The gutter's row name: "<label>:<station index>" / "<label>:<shot position>". */
+export function rowNameText(ctx: DataModelCtx, row: DataEntityRow): string {
+  return `${sectionLabelOf(ctx, row.sectionId)}:${row.kind === 'station' ? row.stationIndex : row.position}`;
+}
+
+/** The row-name pseudo-column's text (`ROW_NAME_KEY`): the row name, a line
+ *  break (no literal query spans it), then the section's full name. */
+export function rowNameSearchText(ctx: DataModelCtx, row: DataEntityRow): string {
+  return `${rowNameText(ctx, row)}\n${ctx.sectionNames.get(row.sectionId) ?? sectionLabelOf(ctx, row.sectionId)}`;
+}
+
+/**
+ * The row-name match of a row, or null: the first match in its row name, else
+ * in its section's full name (offsets into `rowNameSearchText`). One per row,
+ * so next / previous never step twice through the same gutter name.
+ * `sectionHit` caches the full-name test per section (it is the same for every
+ * row of the section).
+ */
+export function rowNameMatch(
+  ctx: DataModelCtx,
+  row: DataEntityRow,
+  compiled: CompiledSearch,
+  sectionHit: Map<number, [number, number] | null>,
+): [number, number] | null {
+  const spans: number[] = [];
+  const name = rowNameText(ctx, row);
+  if (findInText(name, compiled, spans, 1) > 0) return [spans[0]!, spans[1]!];
+  let hit = sectionHit.get(row.sectionId);
+  if (hit === undefined) {
+    const full = ctx.sectionNames.get(row.sectionId) ?? sectionLabelOf(ctx, row.sectionId);
+    hit = findInText(full, compiled, spans, 1) > 0 ? [spans[0]!, spans[1]!] : null;
+    sectionHit.set(row.sectionId, hit);
+  }
+  return hit ? [name.length + 1 + hit[0], name.length + 1 + hit[1]] : null;
 }

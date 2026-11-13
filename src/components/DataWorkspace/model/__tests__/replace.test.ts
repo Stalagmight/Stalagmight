@@ -3,7 +3,7 @@ import { compileSearch, execAll } from '../search';
 import { expandReplacement, planReplace, replaceInText, type ReplaceSpec } from '../replace';
 import { buildDataView } from '../view';
 import { EMPTY_SEARCH } from '../../store';
-import type { DataColumnKey, DataRow, SearchMatch } from '../../types';
+import { ROW_NAME_KEY, type DataColumnKey, type DataRow, type SearchMatch } from '../../types';
 import { makeColumns, makeCtx, makeData, makeRows, viewState, type SectionSeed } from './fixtures';
 
 const spec = (query: string, replacement: string, o: Partial<ReplaceSpec> = {}): ReplaceSpec => ({
@@ -132,6 +132,19 @@ describe('planReplace', () => {
       ['sh:1:100002', 22],
       ['sh:1:100003', 22],
     ]);
+  });
+
+  it('counts a row-name match as read-only and never edits it', () => {
+    const { ctx, model, matchesFor } = setup();
+    // "Main" is only in the row names (Main:0 ...): one read-only match per row.
+    // (The Section column, shown in this setup, also holds "Main": leave it out.)
+    const matches = matchesFor('main').filter((m) => m.colKey !== 'section');
+    expect(matches.length).toBe(7);
+    expect(matches.every((m) => m.colKey === ROW_NAME_KEY && m.lockReason === 'computed')).toBe(true);
+    const plan = planReplace(matches, model, ctx, spec('main', 'x'));
+    expect(plan.edits).toEqual([]);
+    expect(plan.lockedMatches).toBe(matches.length);
+    expect(plan.lockedCells).toBe(matches.length);
   });
 
   it('skips every match in a read-only workspace', () => {

@@ -3,20 +3,20 @@
  * view, and which match to select after the matches change (an edit, a filter,
  * a replace) so the current match stays put or moves to the nearest one after.
  */
-import type { DataColumnKey, DataRow, SearchMatch } from '../types';
+import type { DataRow, SearchColKey, SearchMatch } from '../types';
 
 /** A spot in a cell's text: the identity of a match. */
 export interface MatchSpot {
   rowKey: string;
-  colKey: DataColumnKey;
+  colKey: SearchColKey;
   start: number;
 }
 
 export interface MatchOrder {
   /** Display index of a row in the current view (undefined = not shown). */
   rowPos: (rowKey: string) => number | undefined;
-  /** Display index of a column. */
-  colPos: (colKey: DataColumnKey) => number;
+  /** Display index of a column (the row name, ROW_NAME_KEY, comes first). */
+  colPos: (colKey: SearchColKey) => number;
   /** Survey-order position of any row (shown or not), for a spot whose row left the view. */
   surveyOrder: (rowKey: string) => number | undefined;
 }

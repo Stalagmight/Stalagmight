@@ -254,10 +254,24 @@ export interface SearchState {
   onlyMatchingRows: boolean;
 }
 
-/** One match: a substring of one cell's display text. */
+/**
+ * The find's row-name pseudo-column: the name the gutter shows
+ * ("<label>:<id>") followed by the section's full name, so a search for a
+ * section's name finds its rows although no column holds it. Searched under the
+ * 'visible' and 'all' column scopes (the gutter is always shown), not under
+ * 'custom'; read-only (`lockReason: 'computed'`); never a grid column - a match
+ * highlights the row name in the gutter. At most one match per row.
+ */
+export const ROW_NAME_KEY = 'row-name' as const;
+
+/** Where a find match can sit: a column, or the row name. */
+export type SearchColKey = DataColumnKey | typeof ROW_NAME_KEY;
+
+/** One match: a substring of one cell's display text (or of the row name,
+ *  `colKey === ROW_NAME_KEY`, offsets into `rowNameSearchText`). */
 export interface SearchMatch {
   rowKey: string;
-  colKey: DataColumnKey;
+  colKey: SearchColKey;
   /** [start, end) into `DataColumnDef.text(row)`. */
   start: number;
   end: number;
@@ -285,8 +299,9 @@ export interface DataView {
   rows: DataRow[];
   /** All matches in display order (row order, then column order, then offset). */
   matches: SearchMatch[];
-  /** rowKey -> colKey -> indexes into `matches` (for cell highlighting). */
-  matchIndex: Map<string, Map<DataColumnKey, number[]>>;
+  /** rowKey -> colKey -> indexes into `matches` (for cell highlighting; the
+   *  row name under `ROW_NAME_KEY`). */
+  matchIndex: Map<string, Map<SearchColKey, number[]>>;
   /** Rows shown only because they hold a match (filtered out / collapsed). */
   revealedRowKeys: Set<string>;
   /** Hidden columns shown only because they hold a match. */
