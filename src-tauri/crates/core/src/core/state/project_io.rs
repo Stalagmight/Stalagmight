@@ -2,7 +2,6 @@ use super::AppState;
 use crate::core::{CommandResult, PersistStack, UndoStack};
 use crate::models::{Project, SectionId};
 use crate::persistence::Database;
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// What a failed save actually was, once the error chain and the destination
@@ -271,6 +270,38 @@ fn apply_save_heals(project: &mut Project) {
     }
 }
 
+/// The gauge pairs a recorded snapshot holds, by section id (sections with a
+/// pair only): what the EDIT on the other side of a snapshot pair wrote, as
+/// opposed to a pair a save captured after the entry was recorded.
+pub(crate) type RecordedGauges = std::collections::HashMap<SectionId, (String, Option<String>)>;
+
+/// Read just the gauge pairs out of a project snapshot. serde skips every
+/// other field, so this costs one scan of the text, not a project. `None` when
+/// the snapshot does not parse.
+pub(super) fn recorded_gauge_pairs(snapshot: &str) -> Option<RecordedGauges> {
+    #[derive(serde::Deserialize)]
+    struct GaugeOf {
+        id: SectionId,
+        #[serde(default)]
+        gauge_shot_uuid: Option<String>,
+        #[serde(default)]
+        gauge_neighbour_uuid: Option<String>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Gauges {
+        #[serde(default)]
+        sections: Vec<GaugeOf>,
+    }
+    let gauges: Gauges = serde_json::from_str(snapshot).ok()?;
+    Some(
+        gauges
+            .sections
+            .into_iter()
+            .filter_map(|s| Some((s.id, (s.gauge_shot_uuid?, s.gauge_neighbour_uuid))))
+            .collect(),
+    )
+}
+
 /// Bring a project restored from an undo/redo snapshot up to the standard a
 /// saved project is held to, so a history move cannot revert a save's heal
 /// (issue #413, finding 11).
@@ -334,38 +365,7 @@ fn apply_save_heals(project: &mut Project) {
 ///   the save runs it only after the save gate and why a refused save
 ///   deliberately leaves it undone. An undo must not rewrite the user's values;
 ///   the load and save boundaries neutralize them where it matters.
-/// The gauge pairs a recorded snapshot holds, by section id (sections with a
-/// pair only): what the EDIT on the other side of a snapshot pair wrote, as
-/// opposed to a pair a save captured after the entry was recorded.
-pub(crate) type RecordedGauges = std::collections::HashMap<SectionId, (String, Option<String>)>;
-
-/// Read just the gauge pairs out of a project snapshot. serde skips every
-/// other field, so this costs one scan of the text, not a project. `None` when
-/// the snapshot does not parse.
-pub(super) fn recorded_gauge_pairs(snapshot: &str) -> Option<RecordedGauges> {
-    #[derive(serde::Deserialize)]
-    struct GaugeOf {
-        id: SectionId,
-        #[serde(default)]
-        gauge_shot_uuid: Option<String>,
-        #[serde(default)]
-        gauge_neighbour_uuid: Option<String>,
-    }
-    #[derive(serde::Deserialize)]
-    struct Gauges {
-        #[serde(default)]
-        sections: Vec<GaugeOf>,
-    }
-    let gauges: Gauges = serde_json::from_str(snapshot).ok()?;
-    Some(
-        gauges
-            .sections
-            .into_iter()
-            .filter_map(|s| Some((s.id, (s.gauge_shot_uuid?, s.gauge_neighbour_uuid))))
-            .collect(),
-    )
-}
-
+///
 /// `edited`: for a step through a snapshot pair, the gauge pairs the half
 /// being LEFT BEHIND held when it was recorded. A live pair equal to one of
 /// them is the edit's own (a combine that pins its kept section's gauge on the
