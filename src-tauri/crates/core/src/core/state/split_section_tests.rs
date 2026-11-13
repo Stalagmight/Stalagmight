@@ -1255,3 +1255,227 @@ fn the_preview_refuses_exactly_what_the_split_refuses() {
     assert!(!result.success, "read-only");
     assert_eq!(preview.err(), result.error, "read-only");
 }
+
+/// What sits on `at`: its comment, name and manual offset, through every
+/// stored key that resolves to it.
+fn texts_at(
+    project: &crate::models::Project,
+    at: StationRef,
+) -> (Option<String>, Option<String>, Option<(f64, f64, f64)>) {
+    let find = |map: &std::collections::HashMap<crate::models::StationKey, String>| {
+        map.iter()
+            .find(|(key, _)| project.resolve_key(key) == Some(at))
+            .map(|(_, v)| v.clone())
+    };
+    let offset = project
+        .station_offsets
+        .iter()
+        .find(|(key, _)| project.resolve_key(key) == Some(at))
+        .map(|(_, v)| *v);
+    (
+        find(&project.station_comments),
+        find(&project.station_names),
+        offset,
+    )
+}
+
+/// Main (five shots east, lowest id) with everything a station can carry on
+/// station 2: a merge to Side's start, a comment, a name, a manual offset (Side's
+/// start carries the same, so the merge stays aligned), a zero datum and a loop
+/// closure (from Loop, which leaves station 4 and comes back 1 m short of 2);
+/// and references on its neighbours, a comment on 1 and a name and offset on 3.
+fn loaded_station_state() -> (AppState, SectionId, SectionId, SectionId) {
+    use crate::models::{GpsCoordinates, LoopClosure, Project, SectionData};
+    let mut project = Project::new("Loaded".to_string(), None);
+    let add = |project: &mut Project, name: &str, shots: Vec<ShotData>| {
+        project
+            .add_section(SectionData {
+                name: Some(name.to_string()),
+                shots,
+                ..Default::default()
+            })
+            .id
+    };
+    let main = add(
+        &mut project,
+        "Main",
+        (0..5).map(|_| flat(90.0, 10.0)).collect(),
+    );
+    let side = add(&mut project, "Side", vec![flat(0.0, 6.0), flat(0.0, 6.0)]);
+    let lp = add(
+        &mut project,
+        "Loop",
+        vec![flat(0.0, 8.0), flat(270.0, 20.0), flat(180.0, 7.0)],
+    );
+    let raw = |project: &Project, at: StationRef| {
+        let c = project.compute_station_raw_coords(at).unwrap();
+        (c.x, c.y)
+    };
+    for (onto, section) in [
+        (StationRef::new(main, 2), side),
+        (StationRef::new(main, 4), lp),
+    ] {
+        let (to, now) = (
+            raw(&project, onto),
+            raw(&project, StationRef::new(section, 0)),
+        );
+        project.adjust_section_offset(section, to.0 - now.0, to.1 - now.1);
+        project
+            .merge_stations(onto, StationRef::new(section, 0))
+            .unwrap();
+    }
+    let key = |project: &Project, at: StationRef| project.key_for_ref(at).unwrap();
+    let cut = key(&project, StationRef::new(main, 2));
+    project
+        .station_comments
+        .insert(cut.clone(), "the junction".to_string());
+    project.station_names.insert(cut.clone(), "J1".to_string());
+    for at in [StationRef::new(main, 2), StationRef::new(side, 0)] {
+        let k = key(&project, at);
+        project.station_offsets.insert(k, (0.0, 0.0, 0.25));
+    }
+    let before_cut = key(&project, StationRef::new(main, 1));
+    project
+        .station_comments
+        .insert(before_cut, "before the cut".to_string());
+    let after_cut = key(&project, StationRef::new(main, 3));
+    project
+        .station_names
+        .insert(after_cut.clone(), "A3".to_string());
+    project.station_offsets.insert(after_cut, (0.0, 0.0, -0.1));
+    project
+        .store_zero_datum_without_repositioning(
+            StationRef::new(main, 2),
+            GpsCoordinates::new(20.5, -87.4, 0.0).unwrap(),
+        )
+        .unwrap();
+    let (a, b) = (key(&project, StationRef::new(lp, 3)), cut);
+    project.loop_closures.push(LoopClosure {
+        id: 1,
+        station_a: a,
+        station_b: b,
+        path_length: 35.0,
+        misclosure_distance: 1.0,
+        error_percentage: 3.0,
+        horizontal_misclosure: 1.0,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::LeastSquaresWeighted,
+        is_aligned: false,
+    });
+    project.next_closure_id = 2;
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Loaded".to_string(),
+        location: None,
+    });
+    state.set_project_for_tests(project);
+    (state, main, side, lp)
+}
+
+fn full_snapshot(state: &AppState) -> String {
+    AppState::serialize_project_snapshot(&state.get_project_state().unwrap()).unwrap()
+}
+
+/// A split at the loaded station hands each half what the rules say (the
+/// comment to both, as asked; the name and offset to both; the merge to both
+/// copies; the datum to the second half; the closure to the first), the
+/// neighbours' references stay on their stations, and one undo and one redo
+/// put back exactly the project before and after: compared whole, not shot
+/// lengths. Then the same through a cut inside the next shot, which inserts a
+/// station first.
+#[test]
+fn a_split_at_a_loaded_station_undoes_and_redoes_exactly() {
+    for inside_shot in [false, true] {
+        let (state, main, side, _) = loaded_station_state();
+        let before = full_snapshot(&state);
+        let at = if inside_shot {
+            SplitAt::Shot {
+                shot_id: shot_id(&state, main, 2),
+                distance: 4.0,
+            }
+        } else {
+            SplitAt::Station { station_index: 2 }
+        };
+        let options = SplitSectionOptions {
+            comment_side: SplitSide::Both,
+            datum_side: SplitSide::B,
+            ..options()
+        };
+        let result = state.execute_split_section(main, at, options);
+        assert!(result.success, "inside {inside_shot}: {:?}", result.error);
+        let second = result.section_id.unwrap();
+        let after = full_snapshot(&state);
+        assert_ne!(after, before);
+
+        let project = state.get_project_state().unwrap();
+        let what = format!("inside a shot {inside_shot}");
+        let junction = (
+            Some("the junction".to_string()),
+            Some("J1".to_string()),
+            Some((0.0, 0.0, 0.25)),
+        );
+        if inside_shot {
+            // The new station at the cut carries nothing; the loaded station
+            // stays the first half's station 2.
+            assert_eq!(
+                texts_at(&project, StationRef::new(main, 2)),
+                junction,
+                "{what}"
+            );
+            assert_eq!(
+                texts_at(&project, StationRef::new(second, 0)),
+                (None, None, None),
+                "{what}"
+            );
+            assert_eq!(
+                texts_at(&project, StationRef::new(second, 1)).1.as_deref(),
+                Some("A3"),
+                "{what}"
+            );
+        } else {
+            let (end, start) = (StationRef::new(main, 2), StationRef::new(second, 0));
+            assert_eq!(texts_at(&project, end), junction, "{what}");
+            assert_eq!(texts_at(&project, start), junction, "{what}: B's copy");
+            let side_start = StationRef::new(side, 0);
+            for copy in [end, start] {
+                assert!(
+                    project.station_merges.iter().any(|m| {
+                        let pair = [
+                            project.resolve_key(&m.station_a),
+                            project.resolve_key(&m.station_b),
+                        ];
+                        pair.contains(&Some(copy)) && pair.contains(&Some(side_start))
+                    }),
+                    "{what}: {copy:?} is merged to Side's start"
+                );
+            }
+            let datum = project.resolve_key(&project.zero_datums[0].station_ref);
+            assert_eq!(datum, Some(start), "{what}: the datum");
+            let closure = &project.loop_closures[0];
+            let ends = [
+                project.resolve_key(&closure.station_a),
+                project.resolve_key(&closure.station_b),
+            ];
+            assert!(ends.contains(&Some(end)), "{what}: the closure {ends:?}");
+            assert_eq!(
+                texts_at(&project, StationRef::new(second, 1)),
+                (None, Some("A3".to_string()), Some((0.0, 0.0, -0.1))),
+                "{what}"
+            );
+        }
+        assert_eq!(
+            texts_at(&project, StationRef::new(main, 1)).0.as_deref(),
+            Some("before the cut"),
+            "{what}"
+        );
+
+        assert!(state.undo().success, "{what}");
+        assert_eq!(
+            full_snapshot(&state),
+            before,
+            "{what}: one undo restores it all"
+        );
+        assert!(state.redo().success, "{what}");
+        assert_eq!(full_snapshot(&state), after, "{what}: the redo");
+    }
+}
