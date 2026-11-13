@@ -107,6 +107,8 @@ export function SubmenuFlyout({
             disabled={item.disabled}
             title={item.hint}
             hint={item.hint}
+            // A flyout's rows render with their answer, so a hint may wrap.
+            hintWraps
             label={item.label}
             showIcons={false}
             className={`${item.disabled ? 'text-text-secondary cursor-not-allowed' : 'hover:bg-accent-10'} ${

@@ -134,7 +134,7 @@ describe('ContextMenu merge row', () => {
     expect(combineRow()).toHaveAccessibleName('Merge Sections...');
     expect(combineRow()).toBeDisabled();
     expect(combineRow()).toHaveAttribute('title', expect.stringContaining('Checking'));
-    expect(hintLine()).toHaveTextContent('Checking whether the sections can be merged...');
+    expect(hintLine()).toHaveTextContent('Checking which sections meet here...');
 
     await act(async () => resolveCandidate([candidate(null)]));
 
@@ -158,6 +158,17 @@ describe('ContextMenu merge row', () => {
     expect(hintLine()).toHaveTextContent('Across a loop closure');
   });
 
+  it('gives a hint one line in the menu, and lets a flyout row wrap', async () => {
+    openOn(3);
+    expect(hintLine().className).toContain('h-4');
+    expect(hintLine().className).toContain('truncate');
+    await act(async () => resolveCandidate([candidate(null, 2), candidate('A long reason', 4), candidate(null, 4, 2)]));
+    fireEvent.mouseEnter(combineRow());
+    const flyoutHint = screen.getByTestId('context-menu-subitem-1-hint');
+    expect(flyoutHint.className).toContain('line-clamp-3');
+    expect(flyoutHint.className).not.toContain('h-4');
+  });
+
   it('shows the reason as a visible line under the label, not only as a tooltip', async () => {
     const reason = 'Section 1 and Section 2 each carry a zero datum: a section can hold only one';
     openOn(3);
@@ -176,8 +187,9 @@ describe('ContextMenu merge row', () => {
     };
     render(<ContextMenu />);
     const menu = screen.getByTestId('context-menu');
-    // One child per item (row or separator), 36 px each, plus the hint's 32.
-    const height = menu.children.length * 36 + 32;
+    // One child per item (row or separator), 36 px each, plus the hint's one
+    // 16 px line (it used to be two, which left a blank line under a short hint).
+    const height = menu.children.length * 36 + 16;
     expect(menu.style.top).toBe(`${window.innerHeight - height - 20}px`);
   });
 

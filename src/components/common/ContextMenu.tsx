@@ -254,7 +254,7 @@ export default function ContextMenu() {
     if (!combineKey) return [];
     const disabled = (hint: string): ContextMenuItem[] => [{ label, action: () => {}, disabled: true, hint }];
     if (combineCandidates === undefined) {
-      return disabled('Checking whether the sections can be merged...');
+      return disabled('Checking which sections meet here...');
     }
     const [combineCandidate] = combineCandidates;
     if (combineCandidate === undefined) {
@@ -1019,7 +1019,7 @@ export default function ContextMenu() {
   }
 
   // Adjust position to stay within viewport. A row with a hint is taller (its
-  // hint is a fixed two lines, so the height is known before it renders), and
+  // hint is a fixed single line, so the height is known before it renders), and
   // a menu with hints may be as wide as its max width.
   const menuHeight = items.reduce(
     (height, item) => height + MENU_ROW_HEIGHT_PX + (item.hint !== undefined ? MENU_ROW_HINT_HEIGHT_PX : 0),
