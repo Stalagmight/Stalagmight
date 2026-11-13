@@ -30,11 +30,41 @@ Both formats use the same XML schema. TML files use long element names (`Azimut`
   Otherwise the legacy `Explorer` element is read, which is ONE field holding
   two roles in two encodings: an entity-escaped element pair
   (`<Explorer>nh</Explorer><Surveyor>ds</Surveyor>`), each half to its role; or
-  plain text, where `a / b` is explorer `a` and surveyor `b` and a single value
-  is explorers. Names inside a role are split on `,` and `;`; `unknown`, `None`,
-  `?` and empty names are dropped one by one, so an unfilled explorer never takes
-  the surveyor with it (#427). The import preview shows them as one line,
-  `"explorers / surveyors"`.
+  plain text, read by the same splitter as a `.stalx` file's legacy
+  `sections.surveyor` column: `a / b` is explorer `a` and surveyor `b`, `a /`
+  is explorer `a` alone, and **a single value with no `" / "` (`Tester`) is a
+  SURVEYOR** - the role every saved file and SpeleoDB's reader have always
+  given that text, so one Ariane file credits the same person the same way
+  whichever build imported it (#719). Every Ariane field is a NAME LIST: names
+  inside a role are split on `,` and `;` and nothing else, so `ds, kb` is two
+  people (#427); the `Last, First` rule is only for free text a person typed
+  into an older build (below). `unknown`, `None`, `?` and empty names are
+  dropped one by one, so an unfilled explorer never takes the surveyor with it
+  (#427). The import preview shows them as one line in the legacy column's
+  form (`"explorers / surveyors"`, `"explorers /"`, or the surveyors alone).
+
+  One splitter (`credit::split_roles`, mirrored by `splitRoles` in
+  `src/utils/sectionCredit.ts`) reads every path; where the text comes from
+  decides only how ONE role is cut:
+
+  | Text | Source | Explorers | Surveyors |
+  |---|---|---|---|
+  | `Tester` | any | - | Tester |
+  | `nh / ds` | any (the Ariane form) | nh | ds |
+  | `nh /` or `nh / ` | any (the Ariane form) | nh | - |
+  | `ds, kb / ab` | any (the Ariane form: name lists) | ds, kb | ab |
+  | `ds, kb` | Ariane file (name list) | - | ds, kb |
+  | `ds, kb` | legacy column, free text | - | one person `ds, kb` |
+  | `Doe, John` | legacy column, free text | - | one person `Doe, John` |
+  | `Ann; Bo`, `A, B, C` | any | - | each name |
+  | `<Explorer>e</Explorer><Surveyor>s</Surveyor>` | Ariane file | e | s |
+  | `XMLExplorer` / `XMLSurveyor` | Ariane 26.3+ file | its names | its names |
+
+  Free text is a legacy `sections.surveyor` value NOT in the Ariane form,
+  which an older build let a person type: exactly two comma parts of one word
+  each are one `Last, First` person there. This build writes two one-word
+  surveyors alone as `Ann; Bo`, so they stay two people even after an older
+  build's save.
 - Survey date, per shot (part of the credit above)
 - Section color (converted from Ariane's integer RGB format), taken from the section's first shot
 

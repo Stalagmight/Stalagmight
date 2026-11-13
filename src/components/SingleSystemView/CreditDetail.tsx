@@ -38,11 +38,17 @@ export interface CreditDetailProps {
   scope: 'shot' | 'shots' | 'section';
 }
 
-/** The editable Surveyors / Explorers / date block. */
+/**
+ * The editable Surveyors / Explorers / date block. Credit lives on shots, so
+ * when the targets cover none (a section with no shots yet) there is nothing
+ * to record it on: the fields are disabled with a hint instead of taking
+ * input that would be dropped.
+ */
 export function CreditDetail({ targets, credits, scope }: CreditDetailProps) {
   const { t } = useTranslation();
   const editShotCredit = useProjectStore((s) => s.editShotCredit);
-  const editingBlocked = useEditingBlocked();
+  const noShots = credits.length === 0;
+  const editingBlocked = useEditingBlocked() || noShots;
   // Edits sent but not refreshed yet, valid only for the credits they were made on.
   const [overlay, setOverlay] = useState<{ on: readonly SurveyCredit[]; edits: CreditEdit[] } | null>(null);
   const edits = overlay && overlay.on === credits ? overlay.edits : [];
@@ -72,6 +78,11 @@ export function CreditDetail({ targets, credits, scope }: CreditDetailProps) {
 
   return (
     <div className="space-y-3" data-testid="detail-credit" data-scope={scope}>
+      {noShots && (
+        <p className="text-sm text-text-tertiary" data-testid="detail-credit-no-shots">
+          {t('credit.noShotsHint')}
+        </p>
+      )}
       <CreditPeopleFields
         surveyors={surveyors}
         explorers={explorers}

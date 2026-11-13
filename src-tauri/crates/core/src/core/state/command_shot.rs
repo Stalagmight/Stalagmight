@@ -108,13 +108,14 @@ impl AppState {
                         section.legacy_surveyor.as_deref(),
                         section.legacy_date,
                     )
-                    .stored();
+                    .stored()
+                    .map(std::sync::Arc::new);
                 } else {
                     let neighbour = match shot_index.checked_sub(1) {
                         Some(previous) => section.shots.get(previous),
                         None => section.shots.first(),
                     };
-                    data.credit = neighbour.and_then(|shot| shot.credit.as_deref().cloned());
+                    data.credit = neighbour.and_then(|shot| shot.credit.clone());
                 }
             }
         }

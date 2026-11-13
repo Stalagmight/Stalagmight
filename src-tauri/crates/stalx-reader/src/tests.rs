@@ -1124,9 +1124,11 @@ fn shots_carry_their_survey_credit() {
 #[test]
 fn credit_rows_are_counted_against_their_own_caps() {
     let mut project = full_project();
+    // An email: the legacy column cannot carry it, so every shot needs a row.
+    let explorer = stalagmight_models::Person::new("Ex", Some("ex@example.org")).unwrap();
     for shot in &mut project.sections[0].shots {
         shot.set_credit(stalagmight_models::SurveyCredit {
-            explorers: vec![stalagmight_models::Person::named("Ex").unwrap()],
+            explorers: vec![explorer.clone()],
             ..Default::default()
         });
     }

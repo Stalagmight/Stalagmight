@@ -524,6 +524,7 @@ export default function EditSectionDialog() {
           // value is preserved on save; it is just not exposed.
           showQuality={false}
           disabled={isLoading || editingBlocked}
+          creditUnavailable={!credit.available}
         />
         </div>
 

@@ -77,16 +77,42 @@ ignores tables it does not know): `credit_people (id, name, email)` and
 `shot_credits (section_id, shot_uuid, date, surveyors, explorers)`, keyed by
 `(section_id, shot_uuid)`, the people columns
 comma-joined `credit_people` ids. The legacy `sections.surveyor` and
-`sections.date` are still written, as the section aggregate (the distinct
-surveyor names joined with `", "`, the earliest shot date). A shot WITHOUT a
-row reads its credit from those two columns through the legacy splitter, which
-is the migration for older files and for shots an older build added; the
-writer therefore writes a row only where that fallback would read back
-something else. A third table, `credit_sections (section_id, surveyor, date)`,
-records the legacy pair this build wrote; an older build keeps the rows but may
-retype `sections.surveyor`/`date`, and a section whose pair no longer matches
-the record ignores its rows (the retyped text wins). All three tables are
-project data and ride in SpeleoDB pushes. See `persistence/sqlite/shot_credits.rs`.
+`sections.date` are still written, as the section aggregate: the earliest shot
+date, and the distinct surveyor names joined with `", "` (`"; "` for exactly
+two one-word names, which the free-text `Last, First` rule would otherwise
+read as one person) - or, when anyone explored the section, the Ariane
+`"explorers / surveyors"` form, both halves name lists joined with `", "`
+(`"Ida Ice /"` when nobody surveyed, which survives the trim an older build's
+Edit Section does on save), with a `" / "` inside a name written `" - "`. A
+`,` or `;` inside one name cannot come back as one person after an older
+build's save; this build's per-shot rows keep it exact. A stored text
+this build would not write the same way (a list longer than a role keeps, a
+name past the length clamp, another spelling) is written back verbatim while
+nobody's credit in the section has changed since the file was opened. A shot
+WITHOUT a row reads its credit from those two columns through the legacy
+splitter, which is the migration for older files; the writer therefore writes
+a row only where that fallback would read back something else.
+
+A released build (0.5.3 and older) saves by writing a fresh file and renaming
+it over the project, so it drops the three credit tables: after such a save
+every shot reads the legacy columns. That is why the surveyor column carries
+both roles (#718): each section still lists its explorers and surveyors. What
+collapses: per-shot differences, later dates and emails go to the section
+aggregate; same-named people become one name; names come back as the legacy
+text spells them (a `/` next to a space as `-`, a name with `,` or `;` as
+several people, a placeholder-only name such as `?` or `unknown` as nobody);
+and a 0.5.3 Ariane
+TML export and re-import collapses identical halves (`"Jo Diver / Jo Diver"`
+becomes the surveyor `Jo Diver` alone). Older Ariane imports stored only the
+two-halves form, and only with two distinct, non-empty halves. A third table, `credit_sections (section_id, surveyor, date)`,
+records the legacy pair this build wrote; when the tables survive next to a
+pair retyped in place (a hand edit, another tool), a section whose pair no
+longer matches the record ignores its rows (the retyped text wins). A credit
+table of another shape gives no rows, with a warning, never a failed open; SQLite
+failing for a reason of its own (busy, I/O, corrupt) still fails the open, so a
+save cannot then drop the rows for good (#717). All three
+tables are project data and ride in SpeleoDB pushes. See
+`persistence/sqlite/shot_credits.rs`.
 
 ## Save Pipeline
 

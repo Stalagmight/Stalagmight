@@ -484,7 +484,7 @@ fn a_new_shot_inherits_its_neighbours_credit() {
             .execute(Command::CreateShot {
                 section_id: sid,
                 shot: ShotData {
-                    credit: Some(own.clone()),
+                    credit: Some(own.clone().into()),
                     ..shot(6.0)
                 },
                 after_shot_id: None,
@@ -582,7 +582,7 @@ fn an_old_created_section_entry_with_a_surveyor_restores_people_onto_shots() {
 fn import_overrides_replace_every_shots_credit() {
     let state = state_with_project();
     let mut file_shot = shot(1.0);
-    file_shot.credit = Some(credit(&["From File"], &["Ex"], day(1)));
+    file_shot.credit = Some(credit(&["From File"], &["Ex"], day(1)).into());
     let config = ImportSectionConfig {
         section_index: 0,
         name: Some("Imported".to_string()),
@@ -754,4 +754,115 @@ fn a_legacy_surveyor_edit_of_uuidless_shots_undoes_exactly() {
         .all(|c| c == &credit(&["Everyone"], &[], None)));
     assert!(state.undo().success);
     assert_eq!(credits(&state, sid), before);
+}
+
+/// Review of #719, item 2: an undo or redo replays credits recorded in the
+/// undo stack, which is read back from the file. A recorded credit with a
+/// control character, an over-long name or more than the role cap is stored
+/// normalized, like every other way into a shot.
+#[test]
+fn a_replayed_undo_credit_is_normalized() {
+    use crate::core::ShotCreditChange;
+    use crate::models::{MAX_PEOPLE_PER_ROLE, MAX_PERSON_TEXT_CHARS};
+
+    let state = state_with_project();
+    let id = create_section(&state, None, vec![shot(3.0)]);
+    let uuid = state
+        .get_project_state()
+        .unwrap()
+        .get_section(id)
+        .unwrap()
+        .shots[0]
+        .uuid
+        .clone()
+        .unwrap();
+    let raw = |name: &str| Person {
+        name: name.to_string(),
+        email: Some("x\u{1}@y.org".to_string()),
+    };
+    let recorded = SurveyCredit {
+        surveyors: (0..MAX_PEOPLE_PER_ROLE + 20)
+            .map(|i| raw(&format!("P{i}")))
+            .collect(),
+        explorers: vec![
+            raw("Bell\u{7}Ringer"),
+            raw(&"z".repeat(MAX_PERSON_TEXT_CHARS * 2)),
+        ],
+        date: day(9),
+    };
+    let change = ShotCreditChange {
+        section_id: id,
+        shot_uuid: uuid,
+        before: SurveyCredit::default(),
+        after: recorded,
+        shot_id: 0,
+    };
+    assert!(state.write_recorded_credits(&[change], true).success);
+    let stored = &credits(&state, id)[0];
+    assert_eq!(stored.surveyors.len(), MAX_PEOPLE_PER_ROLE);
+    assert_eq!(stored.explorers[0].name, "BellRinger");
+    assert_eq!(stored.explorers[0].email.as_deref(), Some("x@y.org"));
+    assert_eq!(
+        stored.explorers[1].name.chars().count(),
+        MAX_PERSON_TEXT_CHARS
+    );
+    assert!(stored.is_storable());
+}
+
+/// #719 review, item 5a: an import that gives every shot of a survey ONE
+/// credit (a Compass or Walls team line) costs one allocation: the imported
+/// shots share it, with or without the dialog's overrides, instead of a copy
+/// each.
+#[test]
+fn an_imported_team_credit_stays_one_shared_allocation() {
+    for overrides in [false, true] {
+        let state = state_with_project();
+        let team = std::sync::Arc::new(credit(&["Ann Smith", "Bo"], &[], day(3)));
+        let shots: Vec<ShotData> = (1..=4)
+            .map(|i| ShotData {
+                credit: Some(std::sync::Arc::clone(&team)),
+                ..shot(f64::from(i))
+            })
+            .collect();
+        let config = ImportSectionConfig {
+            section_index: 0,
+            name: Some("Team".to_string()),
+            surveyor: None,
+            date: None,
+            surveyors: overrides.then(|| vec![person("Dialog")]),
+            explorers: None,
+            override_date: None,
+            color: "#ffffff".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots,
+            placement: ImportPlacement::Origin,
+            station_comments: Vec::new(),
+            station_names: Vec::new(),
+            reverse: false,
+            azimuth_reference: None,
+        };
+        let r = state.execute_import_sections(
+            vec![config],
+            Vec::new(),
+            None,
+            Vec::new(),
+            Vec::new(),
+            crate::core::VirtualShotMode::Auto,
+        );
+        assert!(r.success, "{:?}", r.error);
+        let project = state.get_project_state().unwrap();
+        let section = project.get_section(r.section_ids[0]).unwrap();
+        let first = section.shots[0].credit.as_ref().unwrap();
+        assert!(
+            section.shots.iter().all(|s| s
+                .credit
+                .as_ref()
+                .is_some_and(|c| std::sync::Arc::ptr_eq(c, first))),
+            "overrides: {overrides}"
+        );
+        if !overrides {
+            assert!(std::sync::Arc::ptr_eq(first, &team));
+        }
+    }
 }

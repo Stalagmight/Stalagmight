@@ -10,6 +10,7 @@ const invokeIpcMock = vi.hoisted(() => vi.fn());
 vi.mock('../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
 
 import {
+  RETRY_AFTER_MS,
   collaboratorPerson,
   useCollaboratorsSync,
   useLinkedCollaborators,
@@ -88,10 +89,54 @@ describe('collaborator suggestions', () => {
     const { result, rerender } = renderHook(() => useBoth());
     await waitFor(() => expect(useSpeleoCollaboratorsStore.getState().entries).not.toEqual({}));
     await waitFor(() =>
-      expect(Object.values(useSpeleoCollaboratorsStore.getState().entries)[0]).toEqual({ status: 'failed' }),
+      expect(Object.values(useSpeleoCollaboratorsStore.getState().entries)[0]).toMatchObject({ status: 'failed' }),
     );
     rerender();
     expect(result.current).toEqual([]);
     expect(calls()).toHaveLength(1);
+  });
+
+  it('tries a failed fetch again after the back-off, not before', async () => {
+    vi.useFakeTimers();
+    try {
+      invokeIpcMock.mockRejectedValueOnce(new Error('offline'));
+      linked('p-9');
+      const { result } = renderHook(() => useBoth());
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(Object.values(useSpeleoCollaboratorsStore.getState().entries)[0]).toMatchObject({ status: 'failed' });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(RETRY_AFTER_MS - 1_000);
+      });
+      expect(calls()).toHaveLength(1);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+      expect(calls()).toHaveLength(2);
+      expect(result.current).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('drops a reply to a request made before a reset (a sign-out)', async () => {
+    let answer: (list: unknown) => void = () => {};
+    invokeIpcMock.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
+    useSpeleoCollaboratorsStore.getState().ensure('k', 'p-1');
+    expect(useSpeleoCollaboratorsStore.getState().entries).toEqual({ k: { status: 'loading' } });
+    useSpeleoCollaboratorsStore.getState().reset();
+    await act(async () => {
+      answer([{ name: 'Late', email: 'late@caves.example', level: 'ADMIN' }]);
+    });
+    expect(useSpeleoCollaboratorsStore.getState().entries).toEqual({});
+  });
+
+  it('signing out forgets the collaborators', async () => {
+    linked('p-1');
+    const { result } = renderHook(() => useBoth());
+    await waitFor(() => expect(result.current).toHaveLength(2));
+    act(() => linked('p-1', false));
+    expect(useSpeleoCollaboratorsStore.getState().entries).toEqual({});
   });
 });

@@ -1882,7 +1882,7 @@ pub fn normalize_tml_shot(shot: &TmlShot, depth_in: f64) -> ShotData {
         },
         marker_index: None,
         temperature: None,
-        credit: shot.credit.clone(),
+        credit: shot.credit.clone().map(std::sync::Arc::new),
     }
 }
 
@@ -5566,13 +5566,13 @@ mod tests {
         let (configs, _, _) = convert_tml_to_import_configs(&tml, false, false).expect("cvt");
         let last = configs[0].shots.last().expect("shots").credit();
         assert_eq!(
-            crate::models::join_names(&last.explorers).as_deref(),
+            crate::models::join_names(&last.surveyors).as_deref(),
             Some("Somebody Else")
         );
         assert_eq!(last.date, NaiveDate::from_ymd_opt(2025, 2, 2));
         let first = configs[0].shots[0].credit();
         assert_eq!(
-            crate::models::join_names(&first.explorers).as_deref(),
+            crate::models::join_names(&first.surveyors).as_deref(),
             Some("Tester")
         );
     }
@@ -5737,9 +5737,10 @@ mod tests {
         let (configs, _, included) = convert_tml_to_import_configs(&tml, true, false).expect("cvt");
         // The credit is per shot, so the uncut shot keeps its own people and
         // date - nothing of it is lost.
+        // A single unseparated name is a surveyor, as in a .stalx file.
         let kept = configs[0].shots[1].credit();
         assert_eq!(
-            crate::models::join_names(&kept.explorers).as_deref(),
+            crate::models::join_names(&kept.surveyors).as_deref(),
             Some("Ada Lovelace")
         );
         assert_eq!(kept.date, NaiveDate::from_ymd_opt(2025, 3, 4));
@@ -5805,7 +5806,7 @@ mod tests {
             .iter()
             .map(|s| {
                 let credit = s.credit();
-                (crate::models::join_names(&credit.explorers), credit.date)
+                (crate::models::join_names(&credit.surveyors), credit.date)
             })
             .collect();
         let expected: Vec<(Option<String>, Option<NaiveDate>)> = (1..=6)
@@ -6473,8 +6474,8 @@ mod tests {
             configs.iter().all(|c| c.surveyor.is_none()),
             "the credit rides on the shots"
         );
-        assert_eq!(imported[0].credit.as_ref(), shots[0].credit.as_ref());
-        assert_eq!(imported[1].credit.as_ref(), shots[1].credit.as_ref());
+        assert_eq!(imported[0].credit.as_deref(), shots[0].credit.as_ref());
+        assert_eq!(imported[1].credit.as_deref(), shots[1].credit.as_ref());
         assert_eq!(
             imported[0].credit().date,
             NaiveDate::from_ymd_opt(2024, 6, 15),
@@ -6511,9 +6512,11 @@ mod tests {
             Some("ds"),
             "an unfilled explorer half must not take the surveyor with it"
         );
+        // Explorers alone, in the legacy text's explorers-only form, so the
+        // section template keeps the role.
         assert_eq!(
             surveyor_of(&elements("nh", "unknown")).as_deref(),
-            Some("nh")
+            Some("nh /")
         );
         assert_eq!(surveyor_of(&elements("unknown", "unknown")), None);
         assert_eq!(
@@ -6554,11 +6557,13 @@ mod tests {
             "a compound with no placeholder half is unchanged"
         );
         assert_eq!(surveyor_of("unknown / ds").as_deref(), Some("ds"));
-        assert_eq!(surveyor_of("ds / unknown").as_deref(), Some("ds"));
+        // An explorer whose surveyor half is the placeholder stays an
+        // explorer, in the explorers-only form.
+        assert_eq!(surveyor_of("ds / unknown").as_deref(), Some("ds /"));
         assert_eq!(surveyor_of("Unknown / None").as_deref(), None);
         // Idempotence, on the value this app itself writes back out: whatever
         // survives the filter must survive it again.
-        for once in ["nh / ds", "unknown / ds", "ds / unknown", "nh"] {
+        for once in ["nh / ds", "unknown / ds", "ds / unknown", "nh", "nh /"] {
             let first = surveyor_of(once);
             let second = first.as_deref().and_then(surveyor_of);
             assert_eq!(second, first, "re-reading {once:?} must not change it");

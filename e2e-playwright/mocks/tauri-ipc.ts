@@ -246,11 +246,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           return true;
         });
       };
-      /** The backend's `credit::split_people`, for the mock's legacy text. */
-      const mockSplitPeople = (half: string): MockPerson[] => {
+      /** The backend's `credit::split_role`, for the mock's legacy text. */
+      const mockSplitRole = (half: string, source: 'nameList' | 'freeText'): MockPerson[] => {
         const text = half.trim();
         const parts = text.split(',').map((p) => p.trim());
-        const lastFirst = !text.includes(';') && parts.length === 2
+        const lastFirst = source === 'freeText' && !text.includes(';') && parts.length === 2
           && parts.every((p) => p !== '' && !/\s/.test(p));
         const pieces = lastFirst ? [text] : text.split(';').flatMap((piece) => piece.split(','));
         return mockDedupe(
@@ -260,12 +260,19 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             .map((name) => ({ name })),
         );
       };
-      /** `(explorers, surveyors)` of legacy text, as `credit::legacy_people`. */
+      /** `(explorers, surveyors)` of legacy text, as `credit::legacy_people` (`split_roles`, free text). */
       const mockLegacyPeople = (text: string): { explorers: MockPerson[]; surveyors: MockPerson[]; halves: boolean } => {
-        const halves = text.split(' / ');
+        // `credit::legacy_halves`: two " / " halves, or explorers only - no
+        // " / " and a text ending in " /" once trimmed ("Ida Ice /").
+        let halves = text.split(' / ');
+        if (halves.length === 1 && text.trimEnd().endsWith(' /')) halves = [text.trimEnd().slice(0, -2), ''];
         return halves.length === 2
-          ? { explorers: mockSplitPeople(halves[0] ?? ''), surveyors: mockSplitPeople(halves[1] ?? ''), halves: true }
-          : { explorers: [], surveyors: mockSplitPeople(text), halves: false };
+          ? {
+            explorers: mockSplitRole(halves[0] ?? '', 'nameList'),
+            surveyors: mockSplitRole(halves[1] ?? '', 'nameList'),
+            halves: true,
+          }
+          : { explorers: [], surveyors: mockSplitRole(text, 'freeText'), halves: false };
       };
       const mockLegacyCredit = (surveyor: unknown, date: unknown): MockCredit | null => {
         const people = typeof surveyor === 'string' ? mockLegacyPeople(surveyor) : { explorers: [], surveyors: [] };

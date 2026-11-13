@@ -35,17 +35,19 @@ pub struct Person {
 }
 
 impl Person {
-    /// A person from user or file text: the name trimmed, the email trimmed and
-    /// dropped when empty. `None` when the name is empty after trimming.
+    /// A person from user or file text: the name and email cleaned of control
+    /// characters ([`clean_text`]) and trimmed, an empty email dropped. `None`
+    /// when the name is empty after that.
     pub fn new(name: &str, email: Option<&str>) -> Option<Self> {
+        let name = clean_text(name);
         let name = name.trim();
         if name.is_empty() {
             return None;
         }
         let email = email
-            .map(str::trim)
-            .filter(|e| !e.is_empty())
-            .map(str::to_string);
+            .map(clean_text)
+            .map(|e| e.trim().to_string())
+            .filter(|e| !e.is_empty());
         Some(Self {
             name: name.to_string(),
             email,
@@ -138,10 +140,13 @@ impl SurveyCredit {
 
     /// A survey team as the cave-survey text formats write it (Compass
     /// `SURVEY TEAM:`, a Walls `team:` comment): surveyors, split on `,` and
-    /// `;` ([`split_names`]), with the survey's date.
+    /// `;` ([`split_role`] as a [`NameSource::NameList`]), with the survey's
+    /// date.
     pub fn from_team(team: Option<&str>, date: Option<NaiveDate>) -> Self {
         Self {
-            surveyors: team.map(split_names).unwrap_or_default(),
+            surveyors: team
+                .map(|team| split_role(team, NameSource::NameList))
+                .unwrap_or_default(),
             explorers: Vec::new(),
             date,
         }
@@ -150,6 +155,31 @@ impl SurveyCredit {
     /// `ShotData::credit` of a whole imported run: `None` for an empty credit.
     pub fn stored(self) -> Option<Self> {
         (!self.is_empty()).then_some(self)
+    }
+
+    /// Whether the credit is already as a shot stores it: every person
+    /// sanitized ([`Person::is_sanitized`]) and no role longer than
+    /// [`MAX_PEOPLE_PER_ROLE`]. Allocation-free.
+    pub fn is_storable(&self) -> bool {
+        [&self.surveyors, &self.explorers]
+            .iter()
+            .all(|role| role.len() <= MAX_PEOPLE_PER_ROLE && role.iter().all(Person::is_sanitized))
+    }
+
+    /// The credit as a shot stores it (`Shot::set_credit`, the one way in):
+    /// every person sanitized - control characters out, trimmed, clamped -
+    /// each role deduplicated and cut to [`MAX_PEOPLE_PER_ROLE`]. Returned as
+    /// it is, with no allocation, when it already is that ([`Self::is_storable`]).
+    #[must_use]
+    pub fn into_storable(self) -> Self {
+        if self.is_storable() {
+            return self;
+        }
+        Self {
+            surveyors: merge_people([self.surveyors]),
+            explorers: merge_people([self.explorers]),
+            date: self.date,
+        }
     }
 
     /// The same credit with every list deduplicated and invalid people dropped.
@@ -161,8 +191,8 @@ impl SurveyCredit {
     }
 
     /// The surveyors' names joined with `", "`, or `None` when there are none.
-    /// What the legacy `sections.surveyor` column and the plain-text exports
-    /// carry.
+    /// What the plain-text exports carry (the legacy `sections.surveyor`
+    /// column is [`legacy_credit_text`]).
     pub fn surveyor_names(&self) -> Option<String> {
         join_names(&self.surveyors)
     }
@@ -191,10 +221,10 @@ pub fn join_names(people: &[Person]) -> Option<String> {
 /// as [`Person::name_key`] compares them, the first spelling kept), or `None`
 /// for an empty list.
 ///
-/// For the legacy `sections.surveyor` text only, which older builds and
-/// SpeleoDB show as-is: two different people sharing a name (different
-/// emails) are one name there, not "Jo Diver, Jo Diver". The per-shot tables
-/// still keep both people.
+/// For the legacy `sections.surveyor` text ([`legacy_credit_text`]), which
+/// older builds and SpeleoDB show as-is: two different people sharing a name
+/// (different emails) are one name there, not "Jo Diver, Jo Diver". The
+/// per-shot tables still keep both people.
 pub fn join_distinct_names(people: &[Person]) -> Option<String> {
     let mut seen = HashSet::new();
     let names: Vec<&str> = people
@@ -205,19 +235,117 @@ pub fn join_distinct_names(people: &[Person]) -> Option<String> {
     (!names.is_empty()).then(|| names.join(", "))
 }
 
-/// Whether `list` holds someone who is [`Person::same_as`] `person`.
-pub fn contains_person(list: &[Person], person: &Person) -> bool {
-    list.iter().any(|p| p.same_as(person))
+/// The legacy `sections.surveyor` text of a section's people: the only credit
+/// SpeleoDB reads, and all an older build keeps, since a released build saves
+/// by writing a fresh file and drops the per-shot tables (#718).
+///
+/// - No explorers: the surveyors as free text, their names joined with
+///   `", "` (the text every build before #718 wrote), or `None` when there are
+///   none either. The one exception is a role of exactly two one-word names,
+///   joined with `"; "` (`"Ann; Bo"`): `"Ann, Bo"` would read back as one
+///   `Last, First` person ([`NameSource::FreeText`]), also after an older
+///   build's save.
+/// - Explorers and surveyors: the Ariane importer's `"explorers / surveyors"`
+///   form, each half joined with `", "` - read back as name lists
+///   ([`NameSource::NameList`]), which have no `Last, First` rule.
+/// - Explorers only: `"Ida Ice /"`, with no space after the `/`, so the text
+///   survives trimming: an older build's Edit Section trims the surveyor on
+///   every save, and [`legacy_halves`] reads both `"Ida Ice /"` and
+///   `"Ida Ice / "` as explorers only.
+///
+/// Each half names each display name once, compared like
+/// [`Person::name_key`]. A `/` with a space or a name edge on both sides is
+/// written `-` in this text only (`"A / B"` becomes `"A - B"`), so no name can
+/// hold or complete the `" / "` that splits the roles. A `,` or `;` inside one
+/// name cannot come back as one person once an older build has saved the file
+/// (it splits there); the per-shot tables keep every real name in this build.
+pub fn legacy_credit_text(explorers: &[Person], surveyors: &[Person]) -> Option<String> {
+    let explorers = legacy_names(explorers);
+    let surveyors = legacy_names(surveyors);
+    match (explorers.is_empty(), surveyors.is_empty()) {
+        (true, true) => None,
+        (true, false) => {
+            let commas = surveyors.join(", ");
+            Some(if looks_like_last_first(&commas) {
+                surveyors.join("; ")
+            } else {
+                commas
+            })
+        }
+        (false, true) => Some(format!("{} /", explorers.join(", "))),
+        (false, false) => Some(format!(
+            "{} / {}",
+            explorers.join(", "),
+            surveyors.join(", ")
+        )),
+    }
 }
 
-/// Append `person` to `list` unless it is already there or invalid. Returns
-/// whether the list changed.
+/// One role of [`legacy_credit_text`]: each written name once.
+fn legacy_names(people: &[Person]) -> Vec<String> {
+    let mut seen = HashSet::new();
+    people
+        .iter()
+        // Trimmed first: a name's edge is where it meets the separator, and
+        // a raw name ("A /\t") may still carry whitespace there.
+        .filter_map(|p| Person::named(&legacy_name(p.name.trim())))
+        .filter(|p| seen.insert(p.name_key()))
+        .map(|p| p.name)
+        .collect()
+}
+
+/// A name as [`legacy_credit_text`] writes it: every `/` whose neighbours are
+/// both a space or the edge of the name becomes `-`. In the joined text a name
+/// edge meets `", "`, `" / "` or the end, so this is exactly the set of `/`
+/// that could form a `" / "` with what surrounds them.
+fn legacy_name(name: &str) -> String {
+    let chars: Vec<char> = name.chars().collect();
+    let open = |at: Option<usize>| at.and_then(|i| chars.get(i)).is_none_or(|c| *c == ' ');
+    chars
+        .iter()
+        .enumerate()
+        .map(|(i, &c)| {
+            if c == '/' && open(i.checked_sub(1)) && open(i.checked_add(1)) {
+                '-'
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
+/// Whether `list` holds someone who is [`Person::same_as`] `person`. The
+/// needle's identity is built once; to merge whole lists use [`merge_people`],
+/// which keys a hash set instead of scanning.
+pub fn contains_person(list: &[Person], person: &Person) -> bool {
+    let identity = person.identity();
+    list.iter().any(|p| p.identity() == identity)
+}
+
+/// Append `person` to `list` unless it is already there, invalid, or the list
+/// already holds [`MAX_PEOPLE_PER_ROLE`] people. Returns whether the list
+/// changed.
 pub fn add_person(list: &mut Vec<Person>, person: Person) -> bool {
-    if !person.is_valid() || contains_person(list, &person) {
+    if list.len() >= MAX_PEOPLE_PER_ROLE || !person.is_valid() || contains_person(list, &person) {
         return false;
     }
     list.push(person);
     true
+}
+
+/// The people of `lists`, in order, each once (by identity, the first
+/// spelling kept), sanitized ([`Person::sanitized`]) and never more than
+/// [`MAX_PEOPLE_PER_ROLE`]. Linear: one hash set of identities, and it stops
+/// reading once the role is full.
+pub fn merge_people(lists: impl IntoIterator<Item = Vec<Person>>) -> Vec<Person> {
+    let mut role = RoleBuilder::new();
+    for person in lists.into_iter().flatten() {
+        if role.is_full() {
+            break;
+        }
+        role.push_person(&person);
+    }
+    role.people
 }
 
 /// Drop every entry of `list` that is [`Person::same_as`] `person`. Returns
@@ -265,6 +393,14 @@ impl RoleBuilder {
         self.people.len() >= MAX_PEOPLE_PER_ROLE
     }
 
+    fn push_person(&mut self, person: &Person) {
+        if let Some(person) = person.sanitized() {
+            if self.seen.insert(person.identity()) {
+                self.people.push(person);
+            }
+        }
+    }
+
     fn push_piece(&mut self, piece: &str) {
         let piece = piece.trim();
         if self.is_full()
@@ -294,49 +430,90 @@ impl RoleBuilder {
 /// Placeholder texts that name nobody, compared ignoring ASCII case.
 const PLACEHOLDERS: [&str; 3] = ["unknown", "none", "?"];
 
-/// Split a legacy free-text surveyor into `(explorers, surveyors)`.
+/// Where a text naming people comes from, which decides how one role of it is
+/// split ([`split_role`], [`split_roles`]): only text a person typed freely
+/// gets the `Last, First` rule (#719 review).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NameSource {
+    /// A field known to list names: anything parsed from an Ariane file (the
+    /// plain `Explorer` field, the element form's halves, `XMLExplorer` /
+    /// `XMLSurveyor`), either half of a legacy text in the Ariane `" / "`
+    /// form, and a Compass or Walls team line. Split on `,` and `;` only:
+    /// `ds, kb` is two people.
+    NameList,
+    /// Free text a person typed: a legacy `sections.surveyor` text that is NOT
+    /// in the Ariane form. Split on `;` and `,`, except that exactly two comma
+    /// parts, each one word, are one `Last, First` person (`Doe, John`).
+    FreeText,
+}
+
+/// Split a text naming people into `(explorers, surveyors)`: the one splitter
+/// every path shares - the TML import (`source` [`NameSource::NameList`]), a
+/// `.stalx` legacy column ([`legacy_people`], [`NameSource::FreeText`]), and
+/// the frontend's copies (`legacyPeople` in `src/utils/sectionCredit.ts`, the
+/// Playwright mock).
 ///
-/// * Text with exactly two `" / "` halves came from the Ariane importer, which
-///   joined the file's explorer and surveyor halves that way: the first half is
-///   the explorers, the second the surveyors. Any other text is surveyors only.
-/// * Each half is split on `;`. Each piece is then split on `,`, unless the
-///   whole half looks like `Last, First` (exactly two comma parts, each one
-///   word), which is one person.
+/// * Text in the Ariane form ([`legacy_halves`]) gives the explorers from its
+///   first half and the surveyors from its second, each split as a
+///   [`NameSource::NameList`], whatever `source`: that form is the Ariane
+///   importer's own join.
+/// * Any other text names SURVEYORS only, split by `source`'s rule: a single
+///   unseparated name is a surveyor on every path.
 /// * Pieces are trimmed. Empty pieces and the placeholders `unknown`, `none`
 ///   and `?` are dropped, and duplicates are removed.
+pub fn split_roles(text: &str, source: NameSource) -> (Vec<Person>, Vec<Person>) {
+    match legacy_halves(text) {
+        Some((explorers, surveyors)) => (
+            split_role(explorers, NameSource::NameList),
+            split_role(surveyors, NameSource::NameList),
+        ),
+        None => (Vec::new(), split_role(text, source)),
+    }
+}
+
+/// A `.stalx` legacy `sections.surveyor` text as `(explorers, surveyors)`:
+/// [`split_roles`] with text outside the Ariane form read as
+/// [`NameSource::FreeText`].
 pub fn legacy_people(text: &str) -> (Vec<Person>, Vec<Person>) {
+    split_roles(text, NameSource::FreeText)
+}
+
+/// The `(explorers, surveyors)` halves of legacy text in the Ariane form, or
+/// `None` for text that names surveyors only:
+///
+/// * exactly two `" / "` halves: the Ariane importer's join of a file's
+///   explorer and surveyor halves, and what [`legacy_credit_text`] writes for
+///   a section with both roles;
+/// * no `" / "` at all, and the text ends in `" /"` once trimmed: explorers
+///   only, the second half empty. [`legacy_credit_text`] writes `"Ida Ice /"`;
+///   `"Ida Ice / "` (what it wrote before) reads the same, as does either
+///   after an older build's Edit Section trimmed it on save. A written name
+///   never ends in `" /"` ([`legacy_credit_text`] writes that `/` as `-`).
+pub fn legacy_halves(text: &str) -> Option<(&str, &str)> {
     // Lazily: a crafted text can hold a million separators.
     let mut halves = text.split(" / ");
     match (halves.next(), halves.next(), halves.next()) {
-        (Some(explorers), Some(surveyors), None) => {
-            (split_people(explorers), split_people(surveyors))
-        }
-        _ => (Vec::new(), split_people(text)),
+        (Some(explorers), Some(surveyors), None) => Some((explorers, surveyors)),
+        (Some(_), None, _) => text
+            .trim_end()
+            .strip_suffix(" /")
+            .map(|explorers| (explorers, "")),
+        _ => None,
     }
 }
 
-/// Split one role's free text into people (the per-half rule of
-/// [`legacy_people`]).
+/// Split one role's text into people by its source's rule ([`NameSource`]).
 ///
 /// Bounded like every splitter here (see [`RoleBuilder`]): at most
 /// [`MAX_PEOPLE_PER_ROLE`] people, each clamped to [`MAX_PERSON_TEXT_CHARS`].
-pub fn split_people(half: &str) -> Vec<Person> {
-    let half = half.trim();
+pub fn split_role(text: &str, source: NameSource) -> Vec<Person> {
+    let text = text.trim();
     let mut role = RoleBuilder::new();
-    if looks_like_last_first(half) {
-        role.push_piece(half);
+    if source == NameSource::FreeText && looks_like_last_first(text) {
+        role.push_piece(text);
     } else {
-        role.extend(half.split(';').flat_map(|piece| piece.split(',')));
+        role.extend(text.split([',', ';']));
     }
-    role.people
-}
-
-/// Split free text on `,` and `;` alone (no `Last, First` rule): the importers'
-/// rule for a field that holds only names, such as an Ariane explorer list.
-/// Bounded like [`split_people`].
-pub fn split_names(text: &str) -> Vec<Person> {
-    let mut role = RoleBuilder::new();
-    role.extend(text.split([',', ';']));
     role.people
 }
 
@@ -371,15 +548,55 @@ fn clamp_chars(text: &str) -> &str {
 }
 
 impl Person {
-    /// The person as a credit edit stores it: trimmed, clamped to
+    /// The person as every stored credit holds it: cleaned of control
+    /// characters ([`clean_text`]), trimmed, clamped to
     /// [`MAX_PERSON_TEXT_CHARS`], an empty email dropped. `None` for an empty
     /// name.
     pub fn sanitized(&self) -> Option<Person> {
+        let name = clean_text(&self.name);
+        let email = self.email.as_deref().map(clean_text);
         Person::new(
-            clamp_chars(self.name.trim()),
-            self.email.as_deref().map(|e| clamp_chars(e.trim())),
+            clamp_chars(name.trim()),
+            email.as_deref().map(|e| clamp_chars(e.trim())),
         )
     }
+
+    /// Whether the person is already as [`Person::sanitized`] would make it.
+    /// Allocation-free: the check every stored credit passes on its way in.
+    pub fn is_sanitized(&self) -> bool {
+        let clean = |text: &str| {
+            !text.is_empty()
+                && text.trim() == text
+                && !text.chars().any(needs_cleaning)
+                && text.chars().nth(MAX_PERSON_TEXT_CHARS).is_none()
+        };
+        clean(&self.name) && self.email.as_deref().is_none_or(clean)
+    }
+}
+
+/// Whether `c` cannot stay in stored text: a control character (it would
+/// make an exported XML document invalid, or a label unreadable) or one of
+/// the two noncharacters XML 1.0 forbids.
+fn needs_cleaning(c: char) -> bool {
+    c.is_control() || c == '\u{fffe}' || c == '\u{ffff}'
+}
+
+/// `text` with every control character a space if it is whitespace (tab,
+/// newline) and dropped otherwise, and the XML-forbidden noncharacters
+/// dropped. Borrowed when there is nothing to change.
+pub fn clean_text(text: &str) -> std::borrow::Cow<'_, str> {
+    if !text.chars().any(needs_cleaning) {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    std::borrow::Cow::Owned(
+        text.chars()
+            .filter_map(|c| match c {
+                c if !needs_cleaning(c) => Some(c),
+                c if c.is_whitespace() => Some(' '),
+                _ => None,
+            })
+            .collect(),
+    )
 }
 
 /// Which shots a [`CreditEdit`] applies to.
@@ -577,14 +794,28 @@ pub struct SectionCreditSummary {
 
 impl SectionCreditSummary {
     /// Aggregate a run of shot credits.
+    ///
+    /// Shots that share ONE credit (every shot a section's legacy text
+    /// credits shares one allocation) are keyed once, by address, and only
+    /// counted after that: a long legacy list over many shots costs one pass
+    /// over its people, not one per shot.
     pub fn from_credits<'a>(credits: impl IntoIterator<Item = &'a SurveyCredit>) -> Self {
         let mut surveyors = Tally::default();
         let mut explorers = Tally::default();
         let mut summary = Self::default();
+        let mut keyed: std::collections::HashMap<*const SurveyCredit, (Vec<usize>, Vec<usize>)> =
+            std::collections::HashMap::new();
         for credit in credits {
             summary.shot_count = summary.shot_count.saturating_add(1);
-            surveyors.add_shot(&credit.surveyors);
-            explorers.add_shot(&credit.explorers);
+            let (surveyed, explored) =
+                keyed.entry(std::ptr::from_ref(credit)).or_insert_with(|| {
+                    (
+                        surveyors.index_shot(&credit.surveyors),
+                        explorers.index_shot(&credit.explorers),
+                    )
+                });
+            surveyors.count(surveyed);
+            explorers.count(explored);
             if let Some(date) = credit.date {
                 summary.date_min = Some(summary.date_min.map_or(date, |d| d.min(date)));
                 summary.date_max = Some(summary.date_max.map_or(date, |d| d.max(date)));
@@ -615,8 +846,10 @@ struct Tally {
 }
 
 impl Tally {
-    fn add_shot(&mut self, people: &[Person]) {
-        // A person listed twice on one shot counts once for it.
+    /// The indices of one shot's people, each once (a person listed twice on
+    /// one shot counts once for it), adding the people not seen yet at the
+    /// end with no shots counted.
+    fn index_shot(&mut self, people: &[Person]) -> Vec<usize> {
         let mut seen_here: Vec<usize> = Vec::with_capacity(people.len());
         for person in people {
             if !person.is_valid() {
@@ -631,9 +864,17 @@ impl Tally {
             if index == next {
                 self.people.push(CreditedPerson {
                     person: person.clone(),
-                    shots: 1,
+                    shots: 0,
                 });
-            } else if let Some(entry) = self.people.get_mut(index) {
+            }
+        }
+        seen_here
+    }
+
+    /// Count one more shot for each of `indices` ([`Self::index_shot`]).
+    fn count(&mut self, indices: &[usize]) {
+        for &index in indices {
+            if let Some(entry) = self.people.get_mut(index) {
                 entry.shots = entry.shots.saturating_add(1);
             }
         }
