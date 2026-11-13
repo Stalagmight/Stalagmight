@@ -1,7 +1,7 @@
 /**
  * Shared form component for editing section metadata (name, surveyors,
  * explorers, date, color, direction). Used by EditSectionDialog and the import
- * flows (zero-datum config, the mNemo wizard's sections).
+ * flows (zero-datum config, the MNemo wizard's sections).
  *
  * The people fields are pill fields ({@link CreditPeopleFields}); the host
  * decides what an edit means. An import dialog holds plain lists (see

@@ -148,7 +148,7 @@ export function openOrImportFilters() {
       extensions: [PROJECT_EXTENSION, ...IMPORTABLE_EXTENSIONS],
     },
     { name: 'Stalagmight Project', extensions: [PROJECT_EXTENSION] },
-    { name: 'mNemo DMP', extensions: [DMP_EXTENSION] },
+    { name: 'MNemo DMP', extensions: [DMP_EXTENSION] },
     { name: 'Ariane Survey', extensions: TML_EXTENSIONS },
     { name: 'Compass Survey', extensions: COMPASS_EXTENSIONS },
     { name: 'Walls Survey', extensions: WALLS_EXTENSIONS },
@@ -160,7 +160,7 @@ export function openOrImportFilters() {
 /**
  * Filters for the IN-PROJECT "Import" picker (#508): `.dmp` only.
  *
- * With a project open, "import" means one thing - add mNemo data to THIS
+ * With a project open, "import" means one thing - add MNemo data to THIS
  * project. Every other importable format is new-project-only: picking one only
  * ever leads to the "close this project and import as a new one?" prompt, which
  * is the Open row's job, not Import's. So the in-project Import doors (hamburger
@@ -176,7 +176,7 @@ export function openOrImportFilters() {
  * #407, `routeOpenedFile`'s final `else`.)
  */
 export function dmpImportFilters() {
-  return [{ name: 'mNemo DMP', extensions: [DMP_EXTENSION] }];
+  return [{ name: 'MNemo DMP', extensions: [DMP_EXTENSION] }];
 }
 
 /**
@@ -186,7 +186,7 @@ export function dmpImportFilters() {
  */
 export function inProjectImportFilters() {
   return [
-    { name: 'mNemo DMP & Stalagmight Project', extensions: [DMP_EXTENSION, PROJECT_EXTENSION] },
+    { name: 'MNemo DMP & Stalagmight Project', extensions: [DMP_EXTENSION, PROJECT_EXTENSION] },
     ...dmpImportFilters(),
     { name: 'Stalagmight Project', extensions: [PROJECT_EXTENSION] },
   ];

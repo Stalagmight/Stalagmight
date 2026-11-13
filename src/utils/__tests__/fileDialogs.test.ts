@@ -91,7 +91,7 @@ describe('filter functions', () => {
 
   it('openOrImportFilters offers a per-format narrowing entry for each import family, plus "All Files"', () => {
     const filters = openOrImportFilters();
-    for (const name of ['Stalagmight Project', 'mNemo DMP', 'Ariane Survey', 'Compass Survey', 'Walls Survey', 'GPX Files']) {
+    for (const name of ['Stalagmight Project', 'MNemo DMP', 'Ariane Survey', 'Compass Survey', 'Walls Survey', 'GPX Files']) {
       expect(filters.some((f) => f.name === name)).toBe(true);
     }
     // "All Files" stays: the router rejects unsupported extensions with an

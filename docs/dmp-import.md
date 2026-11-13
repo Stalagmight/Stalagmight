@@ -1,6 +1,6 @@
 # DMP Import Wizard
 
-The DMP import wizard (`DmpNewImportDialog`) is the primary UI for importing cave survey data from mNemo DMP files. It uses a connection-wizard pattern: the backend pre-computes placement suggestions, the user confirms or adjusts each one, and a batch import executes at the end.
+The DMP import wizard (`DmpNewImportDialog`) is the primary UI for importing cave survey data from MNemo DMP files. It uses a connection-wizard pattern: the backend pre-computes placement suggestions, the user confirms or adjusts each one, and a batch import executes at the end.
 
 ## Reading the device over USB (#725)
 
@@ -396,11 +396,11 @@ Sections unreachable after all passes remain in the wizard's manual segment-plac
 
 ## Station Names
 
-mNemo numbers a section's start station 0 and the end of its N-th shot N, and
+MNemo numbers a section's start station 0 and the end of its N-th shot N, and
 divers key their notes to those numbers. The `.dmp` file carries no station
 numbers, and every later edit - the shots the importer skips, an overlap trim,
 a deleted or added row, any edit after import - shifts the positional
-`S:I` station IDs, so the import records each station's mNemo number as its
+`S:I` station IDs, so the import records each station's MNemo number as its
 **name** (`Project.station_names`).
 
 - **Counting.** ASSUMED, not yet confirmed against a device: only the shots the
@@ -454,7 +454,7 @@ a deleted or added row, any edit after import - shifts the positional
 |----------|----------|---------|
 | `applyAllOverlapTreatments` | `src/utils/overlapTreatment.ts` | Single-pass overlap mutation for all suggestions |
 | `buildBatchImport` | `src/components/Dialogs/DmpNewImportDialog.tsx` | Construct ordered `ImportSectionConfig[]` for backend |
-| `stationNamesForEmittedShots` | `src/utils/importSectionConfig.ts` | A section's station names (mNemo numbers) from its emitted rows |
+| `stationNamesForEmittedShots` | `src/utils/importSectionConfig.ts` | A section's station names (MNemo numbers) from its emitted rows |
 | `buildAdjacency` | `src/utils/segmentContext.ts` | Adjacency map from `importing`-type connections |
 | `computeDmpBfsContext` | `src/utils/segmentContext.ts` | BFS collecting DMP neighbor geometry + existing anchors |
 | `stationPositionFromShotLines` | `src/utils/segmentContext.ts` | Extract XY from backend `shot_lines` (station 0 = `[0][0]`, station N = `[N-1][1]`) |

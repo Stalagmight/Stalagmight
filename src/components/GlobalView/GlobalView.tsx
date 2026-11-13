@@ -806,7 +806,7 @@ export default function GlobalView() {
   // and Open would be two rows for one behavior - "Open / Import" above already
   // accepts every importable format and routes it by extension. Import earns
   // its own row only in-project, where it means the one thing Open does not do
-  // (add mNemo data to the open project). Import from MNemo is the exception
+  // (add MNemo data to the open project). Import from MNemo is the exception
   // (#725): Open cannot reach a device, so it is here too. Memoized so
   // AppMenu's items-dependent callbacks don't churn on every keystroke-driven
   // re-render.

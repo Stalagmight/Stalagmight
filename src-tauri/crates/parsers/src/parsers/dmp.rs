@@ -1,4 +1,4 @@
-//! DMP file parser for mNemo device data
+//! DMP file parser for MNemo device data
 //!
 //! Ported from pytool_mnemo_lib Python implementation.
 //! Supports DMP versions 2-5.
@@ -178,7 +178,7 @@ impl TryFrom<u8> for DmpDirection {
     }
 }
 
-/// Shot type from mNemo
+/// Shot type from MNemo
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, TS)]
 pub enum DmpShotType {
     /// Cross-section A
@@ -207,7 +207,7 @@ impl TryFrom<u8> for DmpShotType {
 
 /// A shot from a DMP file.
 ///
-/// Every field is what the mNemo wrote, decoded, with one deliberate
+/// Every field is what the MNemo wrote, decoded, with one deliberate
 /// reinterpretation: `pitch_in` / `pitch_out` are flipped from the device's
 /// positive-UP frame to the model's positive-DOWN one by `parse_section`, so a
 /// `DmpShot` that has left the parser is already in the same frame as
@@ -509,7 +509,7 @@ fn parse_section(data: Vec<u8>) -> Result<DmpSection> {
 
     let content_hash = compute_section_hash(&name, direction, &shots);
 
-    // The mNemo records pitch positive-UP; every other frame in the codebase
+    // The MNemo records pitch positive-UP; every other frame in the codebase
     // (and the `depth_in` / `depth_out` carried beside it) is positive-DOWN.
     // Normalise here, once, so that every consumer of a `DmpShot` sees the
     // model frame: the import preview table, the overlap merge against existing
@@ -720,7 +720,7 @@ impl DmpShot {
     /// `ShotData::all_finite` plus the integrity banner are what surface those.
     pub fn to_shot_data(&self) -> crate::models::ShotData {
         crate::models::ShotData {
-            // mNemo dumps carry no shot identity; every shot gets a fresh mint.
+            // MNemo dumps carry no shot identity; every shot gets a fresh mint.
             uuid: None,
             azimuth_in: crate::models::normalize_azimuth(self.heading_in),
             azimuth_out: crate::models::normalize_azimuth(self.heading_out),
@@ -1710,7 +1710,7 @@ mod tests {
         );
     }
 
-    /// The mNemo records inclination positive-UP, but `depth_in` / `depth_out`
+    /// The MNemo records inclination positive-UP, but `depth_in` / `depth_out`
     /// are positive-DOWN.  Left unreconciled the two disagree, and every
     /// downstream consumer has to guess which frame a pitch is in.
     /// `parse_section` normalises the device frame once, so a `DmpShot` that has
@@ -2339,7 +2339,7 @@ mod tests {
                     .filter(|sh| sh.shot_type == DmpShotType::Standard)
                     .map(DmpShot::to_shot_data)
                     .collect(),
-                // The mNemo measures magnetic and declares no declination.
+                // The MNemo measures magnetic and declares no declination.
                 azimuth_reference: Some(stalagmight_models::AzimuthReference::magnetic(
                     0.0,
                     stalagmight_models::CorrectionSource::Unknown,
@@ -2562,7 +2562,7 @@ mod tests {
                     .filter(|sh| sh.shot_type == DmpShotType::Standard)
                     .map(DmpShot::to_shot_data)
                     .collect(),
-                // The mNemo measures magnetic and declares no declination.
+                // The MNemo measures magnetic and declares no declination.
                 azimuth_reference: Some(stalagmight_models::AzimuthReference::magnetic(
                     0.0,
                     stalagmight_models::CorrectionSource::Unknown,

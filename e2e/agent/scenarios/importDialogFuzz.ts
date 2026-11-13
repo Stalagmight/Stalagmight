@@ -1,7 +1,7 @@
 /**
  * import-dialog-fuzz: a seeded random walk over EVERY import flow.
  *
- * It generates survey files in the five formats the app imports - mNemo `.dmp`,
+ * It generates survey files in the five formats the app imports - MNemo `.dmp`,
  * Ariane `.tml`/`.tmlu`, Compass `.dat`/`.mak`, Walls `.srv`/`.wpj`, GPX - hands
  * them to the real app through the real entry points, and then clicks the import
  * UI at random - selection dialog, zero-datum pair, the placement wizard, the

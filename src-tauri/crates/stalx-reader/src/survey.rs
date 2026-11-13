@@ -59,8 +59,8 @@ pub struct Survey {
     pub zero_datums: Vec<ZeroDatum>,
     pub loop_closures: Vec<LoopClosure>,
     pub station_comments: Vec<StationComment>,
-    /// Station names, e.g. the mNemo station number a DMP import recorded. Not
-    /// unique: mNemo numbers restart at 0 in every section.
+    /// Station names, e.g. the MNemo station number a DMP import recorded. Not
+    /// unique: MNemo numbers restart at 0 in every section.
     pub station_names: Vec<StationName>,
     /// The zero datum whose station is the georeference origin of the local frame
     /// (the project's first resolvable datum, as the app defines it). `None` when

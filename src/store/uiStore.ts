@@ -705,7 +705,7 @@ export interface UIStore {
 
   // Session memory of the last surveyors / explorers a section was created or
   // imported with (not persisted; the cross-project autocomplete is
-  // `store/recentPeople`). New Section and the mNemo wizard prefill from it.
+  // `store/recentPeople`). New Section and the MNemo wizard prefill from it.
   lastUsedCredit: LastUsedCredit;
   setLastUsedCredit: (credit: LastUsedCredit) => void;
 

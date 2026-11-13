@@ -198,7 +198,7 @@ Results are cached in memory per project. The command is
   collaborators share is never guessed.
 - **Where it appears:** Surveyors and Explorers fields everywhere Surveyor could be entered: New
   Section (prefilled with the session's last used people; the pills and date go on every shot
-  entered), Edit Section, the mNemo wizard and its defaults, Zero Datum config, Suggestion
+  entered), Edit Section, the MNemo wizard and its defaults, Zero Datum config, Suggestion
   settings. The Ariane preview shows each section's people read-only.
 - **Edit Section:** the union of the shots' people with partial pills; adding, removing and
   promoting are a pending edit sent on Save as ONE `editShotCredit` on the section. A date that

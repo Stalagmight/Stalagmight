@@ -11,7 +11,7 @@ order: 1
    and click **Create Project**.
 3. In the [survey view](../screens/survey-view.md), add data:
    [import a file](importing-from-mnemo.md) (for example a `.dmp` from an
-   mNemo), or click **+** next to **Sections** to enter it by hand.
+   MNemo), or click **+** next to **Sections** to enter it by hand.
 4. Entering by hand: in the
    [Import / Create Section dialog](../screens/create-section-dialog.md), name
    the section and set the surveyor, date and color.
@@ -51,7 +51,7 @@ for the project details.
 ![Survey view](../images/survey-view.png)
 
 - **Import** (2) or **Import data** (13): read data from a file, for example a
-  `.dmp` from an mNemo.
+  `.dmp` from an MNemo.
 - **Add section** (12): start an empty section and enter shots by hand. See
   [Sections, shots and stations](../concepts/sections-shots-stations.md).
 

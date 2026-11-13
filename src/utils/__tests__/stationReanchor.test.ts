@@ -2,7 +2,7 @@
  * The index maths that keeps a committed station pick on the same physical
  * station when the shots under it change.
  *
- * Both hosts (zero-datum config, the mNemo wizard) drive placement off the pick,
+ * Both hosts (zero-datum config, the MNemo wizard) drive placement off the pick,
  * so an off-by-one here lands a GPS anchor or a segment merge on the wrong
  * station - silently, because the number itself stays in range.
  */

@@ -771,7 +771,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // threaded back in from here or an edit would vanish on the next refresh.
       const mockStationComments: Record<string, string> = {};
 
-      // Station names (the mNemo numbers a DMP import sends as `station_names`),
+      // Station names (the MNemo numbers a DMP import sends as `station_names`),
       // keyed "sectionId:stationIndex" and threaded into get_project_state's
       // derived stations like the comments above. Filled by import_sections;
       // tests can also seed one through __MOCK_SET_STATION_NAME__. The mock
@@ -2795,7 +2795,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               ...(sectionIds[0] != null ? { section_id: sectionIds[0] } : {}),
               sections: importedSections,
               import_receipt: {
-                source_format: sourceLabel ?? 'mNemo DMP',
+                source_format: sourceLabel ?? 'MNemo DMP',
                 file_name: sourceFileName ?? '',
                 sections_found: sectionsFoundArg ?? sectionIds.length,
                 sections_imported: sectionIds.length,

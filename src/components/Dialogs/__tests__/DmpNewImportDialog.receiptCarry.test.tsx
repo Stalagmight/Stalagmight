@@ -51,7 +51,7 @@ import { convertToEditableShots } from '../../../hooks/useImportState';
 import { useUIStore } from '../../../store/uiStore';
 
 const receipt = (overrides: Partial<ImportReceipt> = {}): ImportReceipt => ({
-  source_format: 'mNemo DMP',
+  source_format: 'MNemo DMP',
   file_name: 'dive.dmp',
   sections_found: 2,
   sections_imported: 1,
@@ -240,7 +240,7 @@ describe('DMP wizard receipt carry across manual placement', () => {
     const delivered = onComplete.mock.calls[0]![1] as ImportReceipt | undefined;
     expect(delivered).toBeDefined();
     expect(delivered).toMatchObject({
-      source_format: 'mNemo DMP',
+      source_format: 'MNemo DMP',
       file_name: 'dive.dmp',
       sections_found: 2,
       sections_imported: 2,
@@ -272,7 +272,7 @@ describe('DMP wizard receipt carry across manual placement', () => {
     await waitFor(() => expect(onComplete).toHaveBeenCalled());
     expect(invokeIpcMock.mock.calls.map((c) => c[0])).toContain('import_sections');
     expect(onComplete.mock.calls[0]![1]).toMatchObject({
-      source_format: 'mNemo DMP',
+      source_format: 'MNemo DMP',
       sections_imported: SEGMENT_RECEIPT.sections_imported,
       shot_count: SEGMENT_RECEIPT.shot_count,
     });

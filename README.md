@@ -10,7 +10,7 @@
 ![A surveyed underwater cave in Stalagmight: depth-coloured survey lines on the map, the section list, the data table, and project statistics](docs/screenshot.png)
 
 Stalagmight is an intuitive, modern, open underwater cave survey application.
-It takes other surveys, hand surveys, or `.dmp` files from an mNemo device
+It takes other surveys, hand surveys, or `.dmp` files from an MNemo device
 and guides the user into creating a clean, editable, georeferenced
 map you can reason about and plan future exploration with. It
 imports the formats divers already use (Ariane, Compass), adjusts
@@ -38,7 +38,7 @@ replacement for, cave survey training.
 
 ## What it does
 
-- **Import** - mNemo `.dmp` (raw survey, versions 2-5), Ariane `.tml`/`.tmlu`,
+- **Import** - MNemo `.dmp` (raw survey, versions 2-5), Ariane `.tml`/`.tmlu`,
   Compass `.mak`/`.dat` projects, Walls (experimental), and GPX (waypoints,
   tracks, routes).
 - **Export** - map images (`.svg`, `.png`, `.pdf`) plus Ariane `.tml`/`.tmlu`,

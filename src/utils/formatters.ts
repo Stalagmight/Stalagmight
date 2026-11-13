@@ -66,8 +66,8 @@ export function displayStationName(name: string | null | undefined): string {
 }
 
 /**
- * A station ID with its name, when it has one (e.g. the mNemo station number
- * a DMP import recorded). The name is not unique - mNemo restarts at 0 in
+ * A station ID with its name, when it has one (e.g. the MNemo station number
+ * a DMP import recorded). The name is not unique - MNemo restarts at 0 in
  * every section - so here it is shown beside the positional ID. Only the
  * opt-in Station names map label (exclusive with the Station IDs label) shows
  * a name instead of the ID.

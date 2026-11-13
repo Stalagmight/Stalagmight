@@ -118,7 +118,7 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
         onClick: () => { void saveAndClose(); },
       },
       { id: 'project-menu-sep-2', label: '', separator: true },
-      // Import means "add mNemo data to THIS project" (#508), so it offers a
+      // Import means "add MNemo data to THIS project" (#508), so it offers a
       // .dmp-only picker - the one format that is additive to an open project.
       // Switching projects stays on the Open row above, which keeps the full
       // unified picker and its replacement guards. No editingBlocked disable:

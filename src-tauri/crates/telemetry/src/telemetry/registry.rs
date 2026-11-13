@@ -1081,7 +1081,7 @@ mod tests {
         //       how we learn whether column shaping is something people do while
         //       entering a survey, while correcting one, or both:
         //       command.update_edit_section_view = 721.
-        //   + 1 the same write for the import-time shot grids (the mNemo wizard
+        //   + 1 the same write for the import-time shot grids (the MNemo wizard
         //       and zero-datum config), kept apart from the edit-section one so
         //       reshaping columns mid-import cannot overwrite the layout used to
         //       review a saved section:

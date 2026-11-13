@@ -1,4 +1,4 @@
-//! Survey-file importers (Ariane TML/TMLU, mNemo DMP, Compass, Walls, GPX)
+//! Survey-file importers (Ariane TML/TMLU, MNemo DMP, Compass, Walls, GPX)
 //! extracted from the root crate. The root re-exports [`parsers`] under its old
 //! `crate::parsers` path, so dependents keep compiling unchanged.
 

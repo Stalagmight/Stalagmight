@@ -125,7 +125,7 @@ fn imported_names_land_on_their_stations_and_undo_redo_with_the_import() {
 }
 
 /// Indexes are given in the FILE's order; the backend mirrors them for a
-/// reversed import, so the file's station 0 - mNemo "0" - ends up on the
+/// reversed import, so the file's station 0 - MNemo "0" - ends up on the
 /// station now numbered 3, still the same physical point.
 #[test]
 fn a_reversed_import_mirrors_names_onto_the_same_physical_stations() {

@@ -188,7 +188,7 @@ the default import does not keep, and every shot it did keep then read as a
 collapsed colour change that never happened.
 
 Duplicate-import detection is unaffected: an Ariane import tracks the whole
-FILE's hash, not per-section hashes (those are the mNemo path's), so how a file
+FILE's hash, not per-section hashes (those are the MNemo path's), so how a file
 is cut into sections does not change whether a re-import is recognised.
 
 Three rules bound it, the first two mirroring the join:
@@ -240,7 +240,7 @@ spent:
 
 - **`core/state/command_import.rs` `execute_import_sections_inner`** - the batch
   door every importer funnels through (Ariane TML/TMLU, Compass, Walls, GPX, the
-  mNemo DMP wizard). Before any mutation it compares the configs it was handed
+  MNemo DMP wizard). Before any mutation it compares the configs it was handed
   against `Project::next_section_id` and refuses the WHOLE import if the sum
   crosses the limit, naming the file's section count, the ids already spent and
   the limit. Nothing is created, so there is no partial import to roll back.

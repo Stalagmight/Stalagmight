@@ -1,5 +1,5 @@
 /**
- * The mNemo wizard's people reach the backend: every section config the batch
+ * The MNemo wizard's people reach the backend: every section config the batch
  * builds carries the section's Surveyors / Explorers pills (or the step-1
  * defaults when the section never got lists of its own) and its date as the
  * `ImportSectionConfig` overrides of every imported shot. The legacy

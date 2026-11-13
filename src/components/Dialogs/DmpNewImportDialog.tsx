@@ -495,7 +495,7 @@ export function buildBatchImport(
       const edits = sectionEdits?.get(idx);
 
       // Use edited shots if available, otherwise fall back to DMP data. The
-      // emitted rows are kept as well as converted: their mNemo station numbers
+      // emitted rows are kept as well as converted: their MNemo station numbers
       // become the section's station names.
       let emittedShots: EditableShot[];
       let backendShots: ShotData[];
@@ -728,7 +728,7 @@ export function buildBatchImport(
         station_comments: [],
         station_names: stationNamesForEmittedShots(emittedShots),
         reverse: reverseValue,
-        // The mNemo measures magnetic; nothing in the file declares a
+        // The MNemo measures magnetic; nothing in the file declares a
         // declination (#438).
         azimuth_reference: DMP_AZIMUTH_REFERENCE,
       };
@@ -1108,7 +1108,7 @@ export default function DmpNewImportDialog({
   const importedReceiptsRef = useRef<ImportReceipt[]>([...(saved?.importedReceipts ?? [])]);
   const dmpFilePath = (useUIStore.getState().dialogData as Record<string, unknown>).filePath as string | undefined;
   const dmpProvenance = {
-    sourceLabel: 'mNemo DMP',
+    sourceLabel: 'MNemo DMP',
     sourceFileName: extractFilename(dmpFilePath ?? ''),
     sectionsFound: dmpFile.sections.length,
   };

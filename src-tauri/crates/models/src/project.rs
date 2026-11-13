@@ -317,8 +317,8 @@ pub struct Project {
     #[ts(skip)]
     pub station_comments: HashMap<StationKey, String>,
     /// Station names: a short free-text identifier per station, such as the
-    /// station number an mNemo dump gave it (a DMP import records it here).
-    /// Not unique - mNemo numbers restart at 0 in every section - so it is
+    /// station number an MNemo dump gave it (a DMP import records it here).
+    /// Not unique - MNemo numbers restart at 0 in every section - so it is
     /// always shown next to the positional `S:I` id, never instead of it.
     /// Stored in its own `station_names` table so readers that know only the
     /// v18 tables (OpenSpeleo's Python `stalagmight_lib`, which SpeleoDB maps

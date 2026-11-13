@@ -27,7 +27,7 @@ import type { AppMenuItem } from './AppMenu';
 const ICON_SIZE = 18;
 
 /**
- * The IN-PROJECT hamburger's "Import" row (#508) - adds mNemo data or a `.stalx`
+ * The IN-PROJECT hamburger's "Import" row (#508) - adds MNemo data or a `.stalx`
  * (#674) to the open project, and nothing else.
  *
  * Two shapes died here on purpose. The pre-#407 version was five per-format
