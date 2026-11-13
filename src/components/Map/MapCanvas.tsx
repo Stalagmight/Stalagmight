@@ -7,6 +7,7 @@ import type { BatchCommand } from '../../types/commands';
 import { useProjectStore } from '../../store/projectStore';
 import {
   useUIStore,
+  isEditableMode,
   isMapReadOnly,
   showsClosureAdjustedNotice,
 } from '../../store/uiStore';
@@ -4103,12 +4104,13 @@ function MapCanvas() {
 
       {/* Fit-to-view / exit-focus (#50) plus the read-only notices, laid out as
           one flex row so they can never overlap. Both rules for the closure notice
-          - Survey only, and only when nothing else already explains the read-only
-          state - live in `showsClosureAdjustedNotice`, next to `isMapReadOnly`. */}
+          - editable modes only (Survey, Data's map pane), and only when nothing else
+          already explains the read-only state - live in `showsClosureAdjustedNotice`,
+          next to `isMapReadOnly`. */}
       <MapTopLeftOverlay
         focused={focusedSectionId !== null}
         onFitOrExitFocus={() => (focusedSectionId !== null ? exitSectionFocus() : fitToBounds())}
-        showSpeleoReadOnly={speleoReadOnly && !placementMode && appMode === 'survey'}
+        showSpeleoReadOnly={speleoReadOnly && !placementMode && isEditableMode(appMode)}
         showClosureReadOnly={showsClosureAdjustedNotice({
           geometryMode,
           appMode,
