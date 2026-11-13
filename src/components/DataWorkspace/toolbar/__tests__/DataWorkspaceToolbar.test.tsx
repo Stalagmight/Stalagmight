@@ -205,7 +205,7 @@ describe('replace', () => {
     expect(screen.getByTestId('data-find-locked')).toHaveTextContent('1 read-only');
     fireEvent.click(screen.getByTestId('data-replace-all'));
     expect(screen.getByTestId('data-replace-confirm-text')).toHaveTextContent(
-      'Replace 1 match in 1 cell? 1 match in a read-only cell will be skipped.',
+      'Replace 1 match in 1 cell? 1 match in a row name or read-only cell will be skipped.',
     );
     fireEvent.click(screen.getByTestId('data-replace-confirm-cancel'));
     expect(screen.queryByTestId('data-replace-confirm')).toBeNull();

@@ -148,7 +148,8 @@ describe('DataWorkspace rows and gutter', () => {
     render(<DataWorkspace />);
     act(() => useDataWorkspaceStore.getState().toggleSectionCollapsed(2));
     expect(screen.queryByTestId('data-row-st-2-1')).toBeNull();
-    expect(screen.getByTestId('data-status-filtered')).toHaveTextContent('Showing 16 of 21');
+    expect(screen.getByTestId('data-status-collapsed')).toHaveTextContent('1 section collapsed');
+    expect(screen.queryByTestId('data-status-filtered')).toBeNull();
   });
 });
 
@@ -649,6 +650,34 @@ describe('Map follow and map selection', () => {
     });
     expect(useUIStore.getState().selection).toEqual({ type: 'shot', sectionId: 1, shotId: 102 });
     expect(useUIStore.getState().requestPanToShot).toEqual({ sectionId: 1, shotId: 102 });
+  });
+
+  it('opening the map pane pans to the row the user is already on', () => {
+    vi.useFakeTimers();
+    useDataWorkspaceStore.setState({ mapPaneOpen: false, mapFollow: true });
+    useUIStore.setState({ requestPanToShot: null });
+    render(<DataWorkspace />);
+    fireEvent.mouseDown(screen.getByTestId('data-cell-sh-1-2-length'));
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    // Pane closed: nothing followed yet.
+    expect(useUIStore.getState().requestPanToShot).toBeNull();
+    act(() => useDataWorkspaceStore.getState().setMapPaneOpen(true));
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(useUIStore.getState().requestPanToShot).toEqual({ sectionId: 1, shotId: 102 });
+  });
+
+  it('the status bar names collapsed sections instead of reporting "Showing 0"', () => {
+    render(<DataWorkspace />);
+    expect(screen.queryByTestId('data-status-collapsed')).toBeNull();
+    const ids = useDataWorkspaceStore.getState();
+    act(() => ids.setCollapsedSections([1, 2, 3]));
+    expect(screen.getByTestId('data-status-collapsed')).toHaveTextContent('3 sections collapsed');
+    // Collapse is not a filter: no "Showing X of Y".
+    expect(screen.queryByTestId('data-status-filtered')).toBeNull();
   });
 
   it('Open in Survey leaves no focus request behind (hover card and map pane header)', () => {

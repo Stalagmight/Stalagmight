@@ -5,6 +5,7 @@
  */
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useDataWorkspaceStore } from './store';
 import { formatFixed, formatNumber } from '../../i18n/format';
 import type { DataModelCtx, DataRow, DataView } from './types';
 import { countRows } from './model/rows';
@@ -36,8 +37,15 @@ export function DataStatusBar({
   const { t } = useTranslation();
   const all = useMemo(() => countRows(rows), [rows]);
   const total = all.stations + all.shots;
-  const shownRows = useMemo(() => countRows(view.rows), [view.rows]);
-  const shown = shownRows.stations + shownRows.shots;
+  // "Showing X of Y" is about the filters only; collapsed sections are a view
+  // choice and get their own note (all-collapsed used to read "Showing 0 of 64").
+  const shown = view.filteredCount;
+  const collapsedIds = useDataWorkspaceStore((st) => st.collapsedSections);
+  const collapsedShown = useMemo(() => {
+    if (collapsedIds.length === 0 || !view.surveyOrder) return 0;
+    const set = new Set(collapsedIds);
+    return view.rows.reduce((k, r) => k + (r.kind === 'section' && set.has(r.sectionId) ? 1 : 0), 0);
+  }, [collapsedIds, view.rows, view.surveyOrder]);
   const n = (key: string, count: number) => t(key, { count, countFormatted: formatNumber(count) });
 
   let selectionText: string | null = null;
@@ -74,6 +82,11 @@ export function DataStatusBar({
       {shown !== total && (
         <span className="shrink-0 font-medium text-accent" data-testid="data-status-filtered">
           {t('dataWorkspace.status.showing', { shown: formatNumber(shown), total: formatNumber(total) })}
+        </span>
+      )}
+      {collapsedShown > 0 && (
+        <span className="shrink-0" data-testid="data-status-collapsed">
+          {n('dataWorkspace.status.collapsed', collapsedShown)}
         </span>
       )}
       {selectionText && (

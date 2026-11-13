@@ -190,10 +190,21 @@ export function useDataNavigation(
 
   useEffect(() => {
     let prevKey = useDataWorkspaceStore.getState().activeRowKey;
+    let prevOpen = useDataWorkspaceStore.getState().mapPaneOpen;
+    let prevFollow = useDataWorkspaceStore.getState().mapFollow;
     const unsub = useDataWorkspaceStore.subscribe((s) => {
-      if (s.activeRowKey === prevKey) return;
+      // Follow fires when the active row changes, and also when the map pane
+      // opens or Follow is switched on: the map then shows the row the user is
+      // on instead of wherever it was last left.
+      const opened = s.mapPaneOpen && !prevOpen;
+      const followOn = s.mapFollow && !prevFollow;
+      prevOpen = s.mapPaneOpen;
+      prevFollow = s.mapFollow;
+      if (s.activeRowKey === prevKey && !opened && !followOn) return;
       prevKey = s.activeRowKey;
       if (!s.mapPaneOpen || !s.mapFollow || !s.activeRowKey) return;
+      // A just-opened pane is still resizing: pan once it has settled.
+      if (opened) lastFollowAt.current = Date.now();
       pendingFollow.current = s.activeRowKey;
       if (followTimer.current) return;
       const wait = Math.max(0, FOLLOW_THROTTLE_MS - (Date.now() - lastFollowAt.current));
