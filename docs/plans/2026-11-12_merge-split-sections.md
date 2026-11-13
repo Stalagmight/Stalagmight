@@ -54,7 +54,8 @@ station menu, the Sections panel and the command always agree.
 | A merged join more than 1 mm apart | The merge is torn, and the combine would move the other section |
 | The two sections share a shot identity (one shot uuid in both) | The combined section would hold one shot twice, and every anchor names the first (from #713) |
 | More than 99,999 shots, sections that do not meet or meet at both ends, a section with no shots | Shot-id budget; nothing or something ambiguous to combine |
-| Read-only (closure view, Plan, Export, SpeleoDB lock) | `guard_mutation`, like every edit |
+| A SpeleoDB project open without its edit lock | `guard_mutation`, like every edit (it checks only that lock) |
+| The closure-adjusted view, Plan and Export | The frontend: Plan and Export show no survey menu, the closure view disables its edit items, and both dialogs re-check `isEditingBlockedNow` on confirm |
 
 **Mutation** (`project/combine_sections.rs`):
 

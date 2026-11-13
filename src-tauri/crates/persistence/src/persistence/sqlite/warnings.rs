@@ -337,16 +337,6 @@ impl Database {
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
-    /// Whether `uuid` is already stored in the on-disk `shots` table FOR `section_id`. A pre-v6
-    /// shot's UUID is minted only in memory until the project is saved, so keying a new ignore
-    /// by such an unpersisted UUID would orphan the row on the next open (different UUIDs are
-    /// minted) - the resolve path keeps those ignores position-keyed instead (issue #57 / Codex).
-    ///
-    /// Scoped by section for the same reason `delete_matching_resolved` scopes its UUID branch:
-    /// a file saved before shot UUIDs were project-wide unique can hold the same id in two
-    /// sections, and the load renames one copy. An unscoped `EXISTS` would answer "persisted"
-    /// because the OTHER section's copy is on disk, and the caller would then key an ignore by
-    /// a UUID that is in-memory-only for the section it actually belongs to.
     /// Whether the file holds a shot with no uuid: a pre-v6 file not saved
     /// since, whose shots get a fresh uuid on every load until a save writes
     /// them. In any other file a shot's uuid, once minted, is the one the next
@@ -360,6 +350,16 @@ impl Database {
         Ok(exists)
     }
 
+    /// Whether `uuid` is already stored in the on-disk `shots` table FOR `section_id`. A pre-v6
+    /// shot's UUID is minted only in memory until the project is saved, so keying a new ignore
+    /// by such an unpersisted UUID would orphan the row on the next open (different UUIDs are
+    /// minted) - the resolve path keeps those ignores position-keyed instead (issue #57 / Codex).
+    ///
+    /// Scoped by section for the same reason `delete_matching_resolved` scopes its UUID branch:
+    /// a file saved before shot UUIDs were project-wide unique can hold the same id in two
+    /// sections, and the load renames one copy. An unscoped `EXISTS` would answer "persisted"
+    /// because the OTHER section's copy is on disk, and the caller would then key an ignore by
+    /// a UUID that is in-memory-only for the section it actually belongs to.
     pub fn shot_uuid_is_persisted(&self, section_id: u32, uuid: &str) -> Result<bool> {
         let exists: bool = self.conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM shots WHERE uuid = ?1 AND section_id = ?2)",
