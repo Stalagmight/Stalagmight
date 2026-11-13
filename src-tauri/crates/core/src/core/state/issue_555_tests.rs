@@ -83,6 +83,9 @@ fn import_config(index: u32) -> ImportSectionConfig {
         station_names: Vec::new(),
         placement: ImportPlacement::Origin,
         azimuth_reference: None,
+        explorers: None,
+        override_date: None,
+        surveyors: None,
     }
 }
 

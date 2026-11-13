@@ -18,6 +18,7 @@ export interface CommentTarget {
 }
 import type { AppearanceConfig, PanelsConfig, SyntacticHighlightingConfig, SyntacticHighlightLevel } from '../types/config';
 import type { DisplaySettings } from '../types/loading';
+import type { Person } from '../types/ipc.generated';
 import {
   DISPLAY_DEFAULTS,
   isWarningsVisitActive,
@@ -341,6 +342,12 @@ export const TOAST_DEDUP_WINDOW_MS = 1000;
 
 /** Source of `ToastItem.id`. Module-scoped so ids never repeat within a session. */
 let nextToastId = 1;
+
+/** The people a section was last created or imported with, this session. */
+export interface LastUsedCredit {
+  surveyors: Person[];
+  explorers: Person[];
+}
 
 export interface UIStore {
   // View state
@@ -696,9 +703,11 @@ export interface UIStore {
   importContext: 'new-project' | 'existing-project' | null;
   setImportContext: (context: 'new-project' | 'existing-project' | null) => void;
 
-  // Session surveyor memory (not persisted to config)
-  lastUsedSurveyor: string;
-  setLastUsedSurveyor: (surveyor: string) => void;
+  // Session memory of the last surveyors / explorers a section was created or
+  // imported with (not persisted; the cross-project autocomplete is
+  // `store/recentPeople`). New Section and the mNemo wizard prefill from it.
+  lastUsedCredit: LastUsedCredit;
+  setLastUsedCredit: (credit: LastUsedCredit) => void;
 
   // Placement mode state (for manual map placement of imported sections)
   placementMode: PlacementModeState | null;
@@ -2142,9 +2151,9 @@ export const useUIStore = create<UIStore>((set) => ({
   importContext: null,
   setImportContext: (importContext) => set({ importContext }),
 
-  // Session surveyor memory (not persisted to config)
-  lastUsedSurveyor: '',
-  setLastUsedSurveyor: (lastUsedSurveyor) => set({ lastUsedSurveyor }),
+  // Session surveyors / explorers memory (not persisted to config)
+  lastUsedCredit: { surveyors: [], explorers: [] },
+  setLastUsedCredit: (lastUsedCredit) => set({ lastUsedCredit }),
 
   // Placement mode state
   placementMode: null,

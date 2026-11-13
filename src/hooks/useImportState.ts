@@ -11,6 +11,7 @@ import {
   hasPitchDiscrepancy,
 } from '../utils/validation';
 import type { ValidationConfig } from '../types/config';
+import type { Person } from '../types/ipc.generated';
 import { sectionColorPalette } from '../utils/colors';
 
 /**
@@ -18,7 +19,8 @@ import { sectionColorPalette } from '../utils/colors';
  */
 export interface DmpSelectionConfig {
   selectedIndices: Set<number>;
-  defaultSurveyor: string | null;
+  defaultSurveyors?: Person[];
+  defaultExplorers?: Person[];
   defaultDate: string | null;
 }
 
@@ -38,7 +40,8 @@ export type PlacementConfig =
 export interface SectionConfig {
   sectionIndex: number;
   name: string;
-  surveyor: string | null;
+  surveyors: Person[];
+  explorers: Person[];
   date: string | null;
   color: string;
   direction: 'in' | 'out';
@@ -683,7 +686,9 @@ function initializeState(
     originalValues.set(sectionIdx, {
       sectionIndex: sectionIdx,
       name: section.name,
-      surveyor: null, // DMP sections don't have surveyor - use defaultSurveyor from Step 1
+      // DMP sections name nobody - the people come from the Step 1 defaults
+      surveyors: [],
+      explorers: [],
       date: dateStr,
       color: palette[arrayIdx % palette.length] ?? '#4ecdc4',
       direction: section.direction,
@@ -720,14 +725,16 @@ function initializeState(
     if (!section) return;
 
     const direction = section.direction;
-    // Use default surveyor from step 1, or null if not provided (don't fall back to section name)
-    const surveyor = selectionConfig.defaultSurveyor || null;
+    // The people from step 1 (never anything derived from the section name)
+    const surveyors = selectionConfig.defaultSurveyors ?? [];
+    const explorers = selectionConfig.defaultExplorers ?? [];
     const dateStr = selectionConfig.defaultDate ?? section.date?.split(/[T ]/)[0] ?? null;
 
     sectionConfigs.set(sectionIdx, {
       sectionIndex: sectionIdx,
       name: section.name,
-      surveyor,
+      surveyors,
+      explorers,
       date: dateStr,
       color: palette[arrayIdx % palette.length] ?? '#4ecdc4',
       direction,

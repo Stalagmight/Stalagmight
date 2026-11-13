@@ -1584,3 +1584,157 @@ fn a_refused_reply_without_a_commit_date_is_not_decoded_again() {
     let body = pre_iso_project().to_string().into_bytes();
     assert!(matches!(decode_reply::<types::Project>(&body), Some(Ok(_))));
 }
+
+/// The collaborator listing: one permission list, then one exact-email name
+/// lookup per user; a lookup that fails or finds no exact match leaves the
+/// name unknown without failing the list.
+#[test]
+fn collaborators_are_listed_then_named_by_exact_email() {
+    let token = "<your_token_here>";
+    let permissions = json!({
+        "permissions": [
+            {"user": "ann@example.org", "level": "ADMIN",
+             "creation_date": "2026-01-01T00:00:00Z", "modified_date": "2026-01-01T00:00:00Z"},
+            {"user": "bo@example.org", "level": "READ_ONLY",
+             "creation_date": "2026-01-01T00:00:00Z", "modified_date": "2026-01-01T00:00:00Z"},
+            {"user": "cy@example.org", "level": "SOMETHING_NEW",
+             "creation_date": "2026-01-01T00:00:00Z", "modified_date": "2026-01-01T00:00:00Z"},
+        ],
+        "project": project_json(),
+    });
+    let s = Server::replies(vec![
+        (200, permissions.to_string().into_bytes()),
+        (
+            200,
+            json!([
+                {"email": "ann.other@example.org", "name": "Wrong", "label": "x"},
+                {"email": "ann@example.org", "name": "Ann Smith", "label": "Ann Smith"},
+            ])
+            .to_string()
+            .into_bytes(),
+        ),
+        (404, br#"{"detail":"Not found"}"#.to_vec()),
+    ]);
+    let got = list_project_collaborators(&s.base, token, false, ID).unwrap();
+    let requests = s.finish();
+    assert_eq!(
+        got,
+        vec![
+            ProjectCollaborator {
+                email: "ann@example.org".into(),
+                level: "ADMIN".into(),
+                name: Some("Ann Smith".into()),
+            },
+            ProjectCollaborator {
+                email: "bo@example.org".into(),
+                level: "READ_ONLY".into(),
+                name: None,
+            },
+            ProjectCollaborator {
+                email: "cy@example.org".into(),
+                level: "SOMETHING_NEW".into(),
+                name: None,
+            },
+        ],
+        "an unknown level is kept verbatim, not a parse failure"
+    );
+    assert_eq!(
+        requests.len(),
+        3,
+        "a failed lookup is not retried, and it stops the remaining lookups"
+    );
+    assert!(requests[0].starts_with(&format!("GET /api/v2/projects/{ID}/permissions/user/ ")));
+    assert!(requests[1].starts_with("GET /api/v2/user/autocomplete/?query=ann%40example.org "));
+    assert!(requests[2].starts_with("GET /api/v2/user/autocomplete/?query=bo%40example.org "));
+    for request in &requests {
+        assert!(request
+            .to_lowercase()
+            .contains(&format!("authorization: bearer {token}")));
+    }
+}
+
+/// A failed permission list fails the call; a malformed one is a contract
+/// mismatch, not an empty list.
+#[test]
+fn a_failed_permission_list_fails_the_collaborator_listing() {
+    let s = Server::replies(vec![(403, br#"{"detail":"Forbidden"}"#.to_vec())]);
+    let err = list_project_collaborators(&s.base, "<your_token_here>", false, ID).unwrap_err();
+    assert!(
+        matches!(err, SpeleoDbError::Status { status: 403, .. }),
+        "{err}"
+    );
+    assert_eq!(s.finish().len(), 1);
+    let s = Server::json(json!({"unexpected": true}));
+    let err = list_project_collaborators(&s.base, "<your_token_here>", false, ID).unwrap_err();
+    assert!(matches!(err, SpeleoDbError::Parse(_)), "{err}");
+    assert_eq!(s.finish().len(), 1);
+}
+
+/// The name lookups share one time budget: with it spent, the listing comes
+/// back at once with the names unresolved, and a lookup the server never
+/// answers is abandoned when the budget runs out instead of holding the call
+/// for the read timeout (a listing of 50 users used to risk ~25 minutes).
+#[test]
+fn collaborator_name_lookups_stop_at_their_time_budget() {
+    let permissions = json!({
+        "permissions": [
+            {"user": "ann@example.org", "level": "ADMIN",
+             "creation_date": "2026-01-01T00:00:00Z", "modified_date": "2026-01-01T00:00:00Z"},
+            {"user": "bo@example.org", "level": "READ_ONLY",
+             "creation_date": "2026-01-01T00:00:00Z", "modified_date": "2026-01-01T00:00:00Z"},
+        ],
+        "project": project_json(),
+    })
+    .to_string();
+
+    // A spent budget: no lookup is even sent.
+    {
+        let _settings = TestSettings::install(Settings {
+            lookup_budget: Duration::ZERO,
+            ..Settings::default()
+        });
+        let s = Server::replies(vec![(200, permissions.clone().into_bytes())]);
+        let got = list_project_collaborators(&s.base, "<your_token_here>", false, ID).unwrap();
+        assert_eq!(s.finish().len(), 1);
+        assert!(got.iter().all(|c| c.name.is_none()));
+        assert_eq!(got.len(), 2);
+    }
+
+    // A server that never answers the lookup: abandoned at the budget.
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listen");
+    let base = format!("http://{}", listener.local_addr().expect("address"));
+    let worker = std::thread::spawn(move || {
+        let mut held = Vec::new();
+        for (i, stream) in listener.incoming().take(2).enumerate() {
+            let mut stream = stream.expect("accept");
+            let mut buf = [0_u8; 4096];
+            let _ = stream.read(&mut buf);
+            if i == 0 {
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n",
+                    permissions.len()
+                );
+                let _ = stream.write_all(header.as_bytes());
+                let _ = stream.write_all(permissions.as_bytes());
+            } else {
+                // Never answer; keep the connection open past the budget.
+                held.push(stream);
+                std::thread::sleep(Duration::from_secs(3));
+            }
+        }
+    });
+    let _settings = TestSettings::install(Settings {
+        lookup_budget: Duration::from_millis(300),
+        ..Settings::default()
+    });
+    let started = Instant::now();
+    let got = list_project_collaborators(&base, "<your_token_here>", false, ID).unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "took {:?}",
+        started.elapsed()
+    );
+    assert_eq!(got.len(), 2);
+    assert!(got.iter().all(|c| c.name.is_none()));
+    worker.join().expect("server");
+}

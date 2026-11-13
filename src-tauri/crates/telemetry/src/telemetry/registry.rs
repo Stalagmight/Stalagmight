@@ -70,6 +70,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.disarm_forced_exit",
     "command.discard_app_update_download",
     "command.download_app_update",
+    "command.edit_shot_credit",
     "command.execute_batch",
     "command.execute_gpx_import",
     "command.execute_tml_import",
@@ -152,6 +153,8 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.speleodb_open_project",
     "command.speleodb_open_project_discarding_local",
     "command.speleodb_project_access_at",
+    // The open SpeleoDB project's collaborators, as survey-credit suggestions.
+    "command.speleodb_project_collaborators",
     "command.speleodb_publish",
     "command.speleodb_push",
     "command.speleodb_release_current_lock",
@@ -375,6 +378,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "undo-after.delete_section",
     "undo-after.delete_shot",
     "undo-after.delete_shot_and_split",
+    "undo-after.edit_shot_credit",
     "undo-after.execute_batch",
     "undo-after.execute_compass_import",
     "undo-after.execute_gpx_import",
@@ -511,6 +515,9 @@ pub const EVENT_NAMES: &[&str] = &[
     // Depth / distance colour palette + pins, written from the map legend cog
     // and the export panel (partial `[map_palette]` write).
     "command.update_map_palette",
+    // Surveyors / explorers added to a shot's credit, remembered as suggestions
+    // for every project (partial `[people]` write).
+    "command.remember_people",
     // Export panel Levels slider: histogram of the depths / distances the
     // image export colours.
     "command.export_value_histogram",
@@ -775,6 +782,28 @@ pub const EVENT_NAMES: &[&str] = &[
     "speleodb-api.create-project.latency.le-5000",
     "speleodb-api.create-project.latency.le-15000",
     "speleodb-api.create-project.latency.gt-15000",
+    "speleodb-api.list-permissions.ok",
+    "speleodb-api.list-permissions.client-error",
+    "speleodb-api.list-permissions.server-error",
+    "speleodb-api.list-permissions.parse-error",
+    "speleodb-api.list-permissions.network-error",
+    "speleodb-api.list-permissions.latency.le-100",
+    "speleodb-api.list-permissions.latency.le-500",
+    "speleodb-api.list-permissions.latency.le-1000",
+    "speleodb-api.list-permissions.latency.le-5000",
+    "speleodb-api.list-permissions.latency.le-15000",
+    "speleodb-api.list-permissions.latency.gt-15000",
+    "speleodb-api.user-autocomplete.ok",
+    "speleodb-api.user-autocomplete.client-error",
+    "speleodb-api.user-autocomplete.server-error",
+    "speleodb-api.user-autocomplete.parse-error",
+    "speleodb-api.user-autocomplete.network-error",
+    "speleodb-api.user-autocomplete.latency.le-100",
+    "speleodb-api.user-autocomplete.latency.le-500",
+    "speleodb-api.user-autocomplete.latency.le-1000",
+    "speleodb-api.user-autocomplete.latency.le-5000",
+    "speleodb-api.user-autocomplete.latency.le-15000",
+    "speleodb-api.user-autocomplete.latency.gt-15000",
     // Post-import receipt dialog (#391): summarises a foreign-format import
     // (source, sections/shots/loops, unit conversion, warnings) so the user
     // sees what landed without having to open the data table.
@@ -1101,7 +1130,17 @@ mod tests {
         //       distance over the export's own range):
         //       command.export_value_histogram = 680.
         //   + 1 the "Errors" display toggle: action.toggle.showShotErrors = 681.
-        assert_eq!(EVENT_NAMES.len(), 681);
+        //   + 2 per-shot survey credit (surveyors / explorers / date as people):
+        //       the one-step credit edit and how often it is undone straight
+        //       after: command.edit_shot_credit, undo-after.edit_shot_credit = 683.
+        //   + 23 SpeleoDB collaborators as survey-credit suggestions: the
+        //       command.speleodb_project_collaborators command, and the 11
+        //       per-endpoint traffic events of each of its two reads
+        //       (list-permissions, user-autocomplete) = 706.
+        //   + 1 the recent-people list behind the surveyor / explorer
+        //       suggestions (partial `[people]` write, every project):
+        //       command.remember_people = 707.
+        assert_eq!(EVENT_NAMES.len(), 707);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

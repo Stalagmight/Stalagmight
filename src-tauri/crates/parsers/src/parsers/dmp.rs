@@ -686,6 +686,7 @@ impl DmpShot {
             kind: crate::models::ShotKind::Normal,
             marker_index: Some(u32::from(self.marker_index)),
             temperature: Some(self.temperature),
+            credit: None,
         }
     }
 }
@@ -2261,6 +2262,7 @@ mod tests {
                 marker_index: Some(u32::from(s.marker_index)),
                 temperature: Some(s.temperature),
                 uuid: None,
+                credit: None,
             })
             .collect();
 
@@ -2486,6 +2488,7 @@ mod tests {
                 marker_index: Some(u32::from(s.marker_index)),
                 temperature: Some(s.temperature),
                 uuid: None,
+                credit: None,
             })
             .collect();
         let existing_sections = vec![ExistingSection {

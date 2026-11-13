@@ -45,14 +45,13 @@ function makeEnvelope(nSections: number, shotsPer: number): BinaryEnvelope {
     sections.push({
       id: sectionId,
       name: `S${sectionId}`,
-      surveyor: null,
-      date: null,
       color: '#ffffff',
       direction: 'AtoB',
       quality: 0,
       shot_offset: shotCursor,
       shot_count: shotsPer,
       next_shot_id: shotsPer + 1,
+      credits: [],
     });
     shotCursor += shotsPer;
     // Stations 0..=shotsPer for this section.
@@ -97,7 +96,7 @@ function makeEnvelope(nSections: number, shotsPer: number): BinaryEnvelope {
     // Keep in sync with BINARY_FORMAT_VERSION / EXPECTED_VERSION. This fixture
     // feeds buildResult() directly, bypassing the envelope-version gate, so a
     // stale value here rots silently rather than failing.
-    version: 6,
+    version: 7,
     loading_id: 1,
     is_remote: false,
     project_header: {
@@ -119,12 +118,14 @@ function makeEnvelope(nSections: number, shotsPer: number): BinaryEnvelope {
       imported_section_hashes: [],
       validation: {} as BinaryEnvelope['project_header']['validation'],
       surface_elevation: null,
+      credit_people: [],
     },
     shot_count: shotCount,
     shots_floats: u8(shotsF32),
     shots_uints: u8(shotsU32),
     shots_flags: shotsFlags,
     shot_comments: [],
+    shots_credit: new Uint8Array(0),
     station_count: stationCount,
     stations_floats: u8(stationsF64),
     stations_uints: u8(stationsU32),

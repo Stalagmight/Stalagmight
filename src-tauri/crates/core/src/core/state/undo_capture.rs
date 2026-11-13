@@ -38,6 +38,14 @@ impl AppState {
                 before_shot_uuid: None,
                 uuid: None,
                 previous_offsets: project.capture_rigid_connected_section_offsets(*section_id),
+                // Read BEFORE the insert: a first shot takes the section's
+                // legacy pair (`AppState::create_shot`), and only the stub can
+                // still see it.
+                consumed_legacy: project
+                    .get_section(*section_id)
+                    .filter(|s| s.shots.is_empty())
+                    .filter(|s| s.legacy_surveyor.is_some() || s.legacy_date.is_some())
+                    .map(|s| (s.legacy_surveyor.clone(), s.legacy_date)),
             },
 
             // For DeleteSection, capture full project snapshot (before/after pair)
@@ -170,16 +178,26 @@ impl AppState {
                 }
             }
 
+            // The legacy surveyor/date land on every shot, so the undo has to
+            // record each shot's credit rather than one section value.
+            Command::UpdateSectionMetadata { updates, .. }
+                if updates.surveyor.is_some() || updates.date.is_some() =>
+            {
+                Self::credit_undo_stub(project, cmd)
+            }
+            Command::EditShotCredit { .. } => Self::credit_undo_stub(project, cmd),
+
             Command::UpdateSectionMetadata {
                 section_id,
                 updates,
             } => {
                 if let Some(section) = project.get_section(*section_id) {
                     // Capture previous section metadata
+                    // surveyor/date are unset here: the arm above takes them.
                     let prev_updates = SectionUpdates {
                         name: updates.name.as_ref().map(|_| section.name.clone()),
-                        surveyor: updates.surveyor.as_ref().map(|_| section.surveyor.clone()),
-                        date: updates.date.as_ref().map(|_| section.date),
+                        surveyor: None,
+                        date: None,
                         color: updates.color.as_ref().map(|_| section.color.clone()),
                         direction: updates.direction.map(|_| section.direction),
                         quality: updates.quality.map(|_| section.quality),
@@ -564,11 +582,13 @@ impl AppState {
                 // The one field that had to be read BEFORE the insert, carried
                 // across from the stub `generate_undo_data` built (#413, finding
                 // 27's second arm).
-                let previous_offsets = match &undo_data {
+                let (previous_offsets, consumed_legacy) = match &undo_data {
                     UndoData::CreatedShotSnapshot {
-                        previous_offsets, ..
-                    } => previous_offsets.clone(),
-                    _ => std::collections::HashMap::new(),
+                        previous_offsets,
+                        consumed_legacy,
+                        ..
+                    } => (previous_offsets.clone(), consumed_legacy.clone()),
+                    _ => (std::collections::HashMap::new(), None),
                 };
                 // Capture full snapshot of the just-created shot so that redo can
                 // restore it with its original ID instead of re-executing CreateShot
@@ -622,6 +642,7 @@ impl AppState {
                             before_shot_uuid: anchor_uuid(*before_shot_id),
                             uuid: shot.uuid.clone(),
                             previous_offsets,
+                            consumed_legacy,
                         }
                     } else {
                         // The stub could not be completed, so it must not be
@@ -692,6 +713,11 @@ impl AppState {
                 } else {
                     undo_data
                 }
+            }
+
+            // Read each shot's credit back after the edit, keep what changed.
+            Command::EditShotCredit { .. } | Command::UpdateSectionMetadata { .. } => {
+                Self::finalize_credit_undo(project, undo_data)
             }
 
             // MoveComment: finalize is a no-op; execute_move_comment handles its own snapshots.

@@ -9,6 +9,7 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SuggestionSectionSettings } from '../SuggestionSectionSettings';
 import type { SectionEditState } from '../../../utils/batchImportHelpers';
+import { listPeopleProps } from '../../common/SectionMetadataForm';
 
 vi.mock('react-i18next', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-i18next')>()),
@@ -17,7 +18,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
 
 const editState = (overrides: Partial<SectionEditState> = {}): SectionEditState => ({
   name: 'Section A',
-  surveyor: 'Alice',
+  surveyors: [{ name: 'Alice' }],
   date: '2026-01-01',
   color: '#ffffff',
   direction: 'in',
@@ -27,13 +28,16 @@ const editState = (overrides: Partial<SectionEditState> = {}): SectionEditState 
   ...overrides,
 });
 
+/** The host resolves the people (its own lists, else the wizard defaults) and hands them in. */
+const people = (update = vi.fn()) => listPeopleProps({ surveyors: [{ name: 'Alice' }], explorers: [] }, update);
+
 describe('SuggestionSectionSettings', () => {
   it('opens on a keyboard Enter, not just a mouse click', async () => {
     // Injection: revert Panel's collapsible header to a div[role=button] with
     // no keyboard handling (the pre-fix shape) -> Tab focuses it but Enter
     // dispatches no click, section-name-input never appears, and this goes red.
     const user = userEvent.setup();
-    render(<SuggestionSectionSettings editState={editState()} onMetadataChange={vi.fn()} />);
+    render(<SuggestionSectionSettings editState={editState()} people={people()} onMetadataChange={vi.fn()} />);
 
     expect(screen.queryByTestId('section-name-input')).not.toBeInTheDocument();
 
@@ -49,7 +53,7 @@ describe('SuggestionSectionSettings', () => {
   it('exposes aria-expanded on the header, tracking open state', () => {
     // Injection: drop `aria-expanded={isOpen}` from the header button ->
     // getByTestId(...).getAttribute('aria-expanded') is null and this goes red.
-    render(<SuggestionSectionSettings editState={editState()} onMetadataChange={vi.fn()} />);
+    render(<SuggestionSectionSettings editState={editState()} people={people()} onMetadataChange={vi.fn()} />);
     const header = screen.getByTestId('wizard-suggestion-section-settings-header');
 
     expect(header).toHaveAttribute('aria-expanded', 'false');
@@ -60,7 +64,7 @@ describe('SuggestionSectionSettings', () => {
   it('starts collapsed, hiding the section-name input', () => {
     // Injection: drop `defaultOpen={false}` (or flip it) on the wrapping
     // Panel -> the input renders on first paint and this goes red.
-    render(<SuggestionSectionSettings editState={editState()} onMetadataChange={vi.fn()} />);
+    render(<SuggestionSectionSettings editState={editState()} people={people()} onMetadataChange={vi.fn()} />);
 
     expect(screen.queryByTestId('section-name-input')).not.toBeInTheDocument();
   });
@@ -69,7 +73,7 @@ describe('SuggestionSectionSettings', () => {
     // Injection: render the form unconditionally regardless of open state,
     // or wire the header click to something other than toggling open -> the
     // header click stops revealing the input and this goes red.
-    render(<SuggestionSectionSettings editState={editState({ name: 'Section B' })} onMetadataChange={vi.fn()} />);
+    render(<SuggestionSectionSettings editState={editState({ name: 'Section B' })} people={people()} onMetadataChange={vi.fn()} />);
 
     fireEvent.click(screen.getByTestId('wizard-suggestion-section-settings-header'));
 
@@ -85,7 +89,7 @@ describe('SuggestionSectionSettings', () => {
     // expand (e.g. hard-coding a value on remount) this test goes red.
     const onMetadataChange = vi.fn();
     const { rerender } = render(
-      <SuggestionSectionSettings editState={editState({ name: 'Section C' })} onMetadataChange={onMetadataChange} />,
+      <SuggestionSectionSettings editState={editState({ name: 'Section C' })} people={people()} onMetadataChange={onMetadataChange} />,
     );
 
     fireEvent.click(screen.getByTestId('wizard-suggestion-section-settings-header'));
@@ -94,7 +98,7 @@ describe('SuggestionSectionSettings', () => {
 
     // Simulate the parent committing the edit into editState, then collapse.
     rerender(
-      <SuggestionSectionSettings editState={editState({ name: 'Section C edited' })} onMetadataChange={onMetadataChange} />,
+      <SuggestionSectionSettings editState={editState({ name: 'Section C edited' })} people={people()} onMetadataChange={onMetadataChange} />,
     );
     fireEvent.click(screen.getByTestId('wizard-suggestion-section-settings-header'));
     expect(screen.queryByTestId('section-name-input')).not.toBeInTheDocument();
@@ -116,7 +120,7 @@ describe('SuggestionSectionSettings', () => {
     // and this goes red.
     const onMetadataChange = vi.fn();
     const { rerender } = render(
-      <SuggestionSectionSettings editState={editState({ name: 'Section C' })} onMetadataChange={onMetadataChange} />,
+      <SuggestionSectionSettings editState={editState({ name: 'Section C' })} people={people()} onMetadataChange={onMetadataChange} />,
     );
 
     fireEvent.click(screen.getByTestId('wizard-suggestion-section-settings-header'));
@@ -126,10 +130,25 @@ describe('SuggestionSectionSettings', () => {
     // through this component's own input).
     fireEvent.click(screen.getByTestId('wizard-suggestion-section-settings-header'));
     rerender(
-      <SuggestionSectionSettings editState={editState({ name: 'Section D' })} onMetadataChange={onMetadataChange} />,
+      <SuggestionSectionSettings editState={editState({ name: 'Section D' })} people={people()} onMetadataChange={onMetadataChange} />,
     );
 
     fireEvent.click(screen.getByTestId('wizard-suggestion-section-settings-header'));
     expect((screen.getByTestId('section-name-input') as HTMLInputElement).value).toBe('Section D');
+  });
+
+  it('shows the section people as pills and hands an added name to the host', async () => {
+    // Injection: drop `people={people}` from the SectionMetadataForm inside ->
+    // no pill renders and the update is never called, and this goes red.
+    const user = userEvent.setup();
+    const update = vi.fn();
+    render(<SuggestionSectionSettings editState={editState()} people={people(update)} onMetadataChange={vi.fn()} />);
+    fireEvent.click(screen.getByTestId('wizard-suggestion-section-settings-header'));
+
+    expect(screen.getByTestId('section-surveyors-pill-0-label')).toHaveTextContent('Alice');
+    await user.type(screen.getByTestId('section-explorers-input'), 'Bob{Enter}');
+    expect(update).toHaveBeenCalledWith('explorers', expect.any(Function));
+    const reducer = update.mock.calls[0]![1] as (prev: Array<{ name: string }>) => Array<{ name: string }>;
+    expect(reducer([])).toEqual([{ name: 'Bob' }]);
   });
 });

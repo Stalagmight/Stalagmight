@@ -93,7 +93,7 @@ function editableShot(id: number): EditableShot {
 function edits(name: string, shotCount: number): SectionEditState {
   return {
     name,
-    surveyor: 'S',
+    surveyors: [{ name: 'S' }],
     date: '2026-01-01',
     color: '#ffffff',
     direction: 'in',
@@ -117,7 +117,8 @@ function build(alreadyImported: Map<number, number> | undefined) {
   };
   const selectionConfig: DmpSelectionConfig = {
     selectedIndices: new Set([0, 1]),
-    defaultSurveyor: 'S',
+    defaultSurveyors: [{ name: 'S' }],
+    defaultExplorers: [],
     defaultDate: null,
     fileHash: null,
     sectionHashes: [],
@@ -179,7 +180,8 @@ describe('buildBatchImport unemitted-reachable warning', () => {
     const dmpFile: DmpFile = { version: 1, sections: [dmpSection('Segment', 3)] };
     const selectionConfig: DmpSelectionConfig = {
       selectedIndices: new Set([0]),
-      defaultSurveyor: 'S',
+      defaultSurveyors: [{ name: 'S' }],
+      defaultExplorers: [],
       defaultDate: null,
       fileHash: null,
       sectionHashes: [],
@@ -222,7 +224,8 @@ describe('buildBatchImport unemitted-reachable warning', () => {
     const dmpFile: DmpFile = { version: 1, sections: [dmpSection('Segment', 3)] };
     const selectionConfig: DmpSelectionConfig = {
       selectedIndices: new Set([0]),
-      defaultSurveyor: 'S',
+      defaultSurveyors: [{ name: 'S' }],
+      defaultExplorers: [],
       defaultDate: null,
       fileHash: null,
       sectionHashes: [],

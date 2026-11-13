@@ -24,7 +24,8 @@ const baseShot: EditableShot = {
 const baseConfig: SectionConfig = {
   sectionIndex: 0,
   name: 'Test Section',
-  surveyor: null,
+  surveyors: [],
+  explorers: [],
   date: null,
   color: '#ffffff',
   direction: 'in',
@@ -44,7 +45,8 @@ const secondShot: EditableShot = {
 const secondConfig: SectionConfig = {
   sectionIndex: 1,
   name: 'Second Section',
-  surveyor: null,
+  surveyors: [],
+  explorers: [],
   date: null,
   color: '#ff0000',
   direction: 'out',

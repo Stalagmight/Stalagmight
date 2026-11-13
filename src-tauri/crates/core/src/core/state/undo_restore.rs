@@ -162,6 +162,10 @@ impl AppState {
                 file_hashes,
                 section_hashes,
             } => self.untrack_import(file_hashes, section_hashes),
+            // Batchable (`is_batch_allowed`): a data-table paste of credit cells
+            // and Edit Section's Save run it here. Without this arm the
+            // catch-all failed the sub-command and rolled the whole batch back.
+            Command::EditShotCredit { targets, edit } => self.edit_shot_credit(targets, edit),
             _ => CommandResult::failure("Command cannot be executed in undo context".to_string()),
         }
     }

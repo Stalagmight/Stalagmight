@@ -220,7 +220,6 @@ export function applyAllOverlapTreatments(
       if (section) {
         importEdits = {
           name: section.name,
-          surveyor: '',
           date: section.date?.split(/[T ]/)[0] ?? '',
           color: '',
           direction: section.direction === 'out' ? 'out' : 'in',
@@ -458,7 +457,6 @@ export function applyAllOverlapTreatments(
         if (section) {
           targetEdits = {
             name: section.name,
-            surveyor: '',
             date: section.date?.split(/[T ]/)[0] ?? '',
             color: '',
             direction: section.direction === 'out' ? 'out' : 'in',

@@ -265,6 +265,47 @@ test.describe('Ariane TML import journey', () => {
     }
   });
 
+  // A section credited to five surveyors and two explorers over a date range:
+  // at every window size the preview shows each name whole (pills wrap rather
+  // than truncate to "Cy...") and the Date column is fully inside the panel -
+  // no horizontal scrollbar hiding it.
+  for (const [width, height] of [
+    [1440, 960],
+    [1280, 720],
+    [1024, 768],
+    [1920, 1080],
+  ] as const) {
+    test(`the preview table fits five people and a date range at ${width}x${height}`, async ({ page }) => {
+      await page.setViewportSize({ width, height });
+      await openTmlImportDialog(page, '/mock/synthetic-crowded-cavern.tml', `Crowded ${width}`);
+
+      const surveyors = page.getByTestId('tml-section-0-surveyors');
+      await expect(surveyors.getByTestId(/^tml-section-0-surveyors-pill-\d+-label$/)).toHaveText([
+        'Ann Diver',
+        'Bo Lead',
+        'Cy Cave',
+        'Dee Deep',
+        'Eve Echo',
+      ]);
+      const layout = await page.getByTestId('tml-section-row-0').evaluate((row) => {
+        const table = row.closest('table')!;
+        const scroller = table.parentElement!;
+        const box = scroller.getBoundingClientRect();
+        const date = row.querySelector('[data-testid="tml-section-0-date"]')!.getBoundingClientRect();
+        const labels = [...table.querySelectorAll<HTMLElement>('[data-testid$="-label"]')];
+        return {
+          overflowX: scroller.scrollWidth - scroller.clientWidth,
+          dateInside: date.left >= box.left - 0.5 && date.right <= box.right + 0.5,
+          truncated: labels.filter((el) => el.scrollWidth > el.clientWidth + 1).map((el) => el.textContent),
+        };
+      });
+      expect(layout.overflowX, 'no horizontal scrollbar').toBeLessThanOrEqual(1);
+      expect(layout.dateInside, 'the Date column is fully inside the panel').toBe(true);
+      expect(layout.truncated, 'no name is cut short').toEqual([]);
+      await expect(page.getByTestId('tml-section-0-date')).toHaveText('2026-03-02 - 2026-04-11');
+    });
+  }
+
   // #425: the per-section filter. Side Passage hangs off Main Line, so
   // unticking Main Line also exercises the re-anchor path end to end.
   test('unticking a section imports only the rest, and says so on the wire', async ({ page }) => {

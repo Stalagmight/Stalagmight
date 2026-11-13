@@ -17,7 +17,11 @@ use super::models::{
 use super::native::NativeFile;
 use super::{SpeleoDbError, TransportCause};
 
+mod collaborators;
 mod commit_dates;
+pub use collaborators::{
+    list_project_collaborators, lookup_user_name, ProjectCollaborator, MAX_COLLABORATORS,
+};
 
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
 const TRANSFER_TIMEOUT: Duration = Duration::from_secs(120);
@@ -95,6 +99,9 @@ struct Settings {
     download_grace: Duration,
     download_min_rate: u64,
     download_ceiling: Duration,
+    /// The total time the collaborator NAME lookups of one listing may take
+    /// (`collaborators`): a suggestion is not worth a long wait.
+    lookup_budget: Duration,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -106,6 +113,7 @@ impl Default for Settings {
             download_grace: TRANSFER_TIMEOUT,
             download_min_rate: DOWNLOAD_MIN_RATE,
             download_ceiling: DOWNLOAD_CEILING,
+            lookup_budget: collaborators::LOOKUP_BUDGET,
         }
     }
 }

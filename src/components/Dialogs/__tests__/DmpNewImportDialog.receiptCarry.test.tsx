@@ -104,7 +104,8 @@ const dmpFile = { version: 1, sections: [dmpSection('A'), dmpSection('B')] } as 
 
 const selectionConfig = (selected: number[]): DmpSelectionConfig => ({
   selectedIndices: new Set(selected),
-  defaultSurveyor: 'S',
+  defaultSurveyors: [{ name: 'S' }],
+  defaultExplorers: [],
   defaultDate: null,
   fileHash: null,
   sectionHashes: [],
@@ -153,7 +154,8 @@ const zeroDatumOnly = (): ZeroDatumConfigResult => ({
   gps: { latitude: 20, longitude: -87, depth_reference: 0 },
   metadata: {
     name: 'A',
-    surveyor: 'S',
+    surveyors: [{ name: 'S' }],
+    explorers: [],
     date: '2026-01-01',
     color: '#ffffff',
     direction: 'in',

@@ -225,6 +225,89 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       const mockShotId = (sectionId: number, seq: number): number =>
         sectionId * MOCK_FEATURE_ID_STRIDE + seq;
 
+      // Per-shot survey credit, the shape the backend serves since surveyors,
+      // explorers and the date moved onto every shot (a section keeps none).
+      // Mock sections still carry the legacy section-level `surveyor`/`date`
+      // (every fixture builds them that way); exactly like the backend's
+      // migration, that is the credit of each shot that has none of its own.
+      // `withShotCredit` applies it to every project this mock hands out, so the
+      // app only ever sees the per-shot shape (`Shot.credit`, absent when empty).
+      type MockPerson = { name: string; email?: string };
+      type MockCredit = { surveyors: MockPerson[]; explorers: MockPerson[]; date: string | null };
+      const mockPersonKey = (p: MockPerson): string =>
+        `${p.name.trim().split(/\s+/).join(' ').toLowerCase()}\u0000${p.email?.trim().toLowerCase() ?? ''}`;
+      const mockDedupe = (people: MockPerson[]): MockPerson[] => {
+        const seen = new Set<string>();
+        return people.filter((p) => {
+          if (!p.name.trim()) return false;
+          const key = mockPersonKey(p);
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+      };
+      /** The backend's `credit::split_people`, for the mock's legacy text. */
+      const mockSplitPeople = (half: string): MockPerson[] => {
+        const text = half.trim();
+        const parts = text.split(',').map((p) => p.trim());
+        const lastFirst = !text.includes(';') && parts.length === 2
+          && parts.every((p) => p !== '' && !/\s/.test(p));
+        const pieces = lastFirst ? [text] : text.split(';').flatMap((piece) => piece.split(','));
+        return mockDedupe(
+          pieces
+            .map((piece) => piece.trim())
+            .filter((piece) => piece !== '' && !['unknown', 'none', '?'].includes(piece.toLowerCase()))
+            .map((name) => ({ name })),
+        );
+      };
+      /** `(explorers, surveyors)` of legacy text, as `credit::legacy_people`. */
+      const mockLegacyPeople = (text: string): { explorers: MockPerson[]; surveyors: MockPerson[]; halves: boolean } => {
+        const halves = text.split(' / ');
+        return halves.length === 2
+          ? { explorers: mockSplitPeople(halves[0] ?? ''), surveyors: mockSplitPeople(halves[1] ?? ''), halves: true }
+          : { explorers: [], surveyors: mockSplitPeople(text), halves: false };
+      };
+      const mockLegacyCredit = (surveyor: unknown, date: unknown): MockCredit | null => {
+        const people = typeof surveyor === 'string' ? mockLegacyPeople(surveyor) : { explorers: [], surveyors: [] };
+        const day = typeof date === 'string' && date !== '' ? date : null;
+        if (people.surveyors.length === 0 && people.explorers.length === 0 && day === null) return null;
+        return { surveyors: people.surveyors, explorers: people.explorers, date: day };
+      };
+      const mockShotCredit = (
+        section: Record<string, unknown>,
+        shot: Record<string, unknown>,
+      ): MockCredit => (shot.credit as MockCredit | undefined)
+        ?? mockLegacyCredit(section.surveyor, section.date)
+        ?? { surveyors: [], explorers: [], date: null };
+      const mockStoreCredit = (shot: Record<string, unknown>, credit: MockCredit): void => {
+        // An explicit empty credit stays EXPLICIT (it must not fall back to the
+        // legacy section template); `withShotCredit` leaves it off the wire, as
+        // the backend's `Shot::set_credit` does.
+        if (credit.surveyors.length === 0 && credit.explorers.length === 0 && credit.date === null) {
+          shot.credit = { surveyors: [], explorers: [], date: null };
+        } else {
+          shot.credit = credit;
+        }
+      };
+      const withShotCredit = <P extends { sections: unknown[] } | null>(project: P): P => {
+        if (!project) return project;
+        const sections = (project.sections as Array<Record<string, unknown>>).map((section) => {
+          const { surveyor, date, ...rest } = section;
+          const template = mockLegacyCredit(surveyor, date);
+          const shots = ((rest.shots as Array<Record<string, unknown>> | undefined) ?? []).map((shot) => {
+            const own = shot.credit as MockCredit | undefined;
+            const credit = own ?? template;
+            const { credit: _dropped, ...bare } = shot;
+            void _dropped;
+            const empty = !credit
+              || (credit.surveyors.length === 0 && credit.explorers.length === 0 && credit.date === null);
+            return empty ? bare : { ...bare, credit: structuredClone(credit) };
+          });
+          return { ...rest, shots };
+        });
+        return { ...project, sections };
+      };
+
       // #310: live plan pins are kept as opaque ANCHORS beside their positional refs, so a
       // survey edit that renumbers stations doesn't silently retarget them. The real backend
       // names a station by the shots on either side of it (core/state/dive_plan.rs's
@@ -533,6 +616,19 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       (window as unknown as Record<string, unknown>).__MOCK_RESET_UNDO_REDO_CALLS__ = () => {
         undoRedoCalls = [];
       };
+      // Survey-credit edits are undoable for real here (the backend's
+      // EditShotCredit keeps each touched shot's before-credit): one step per
+      // edit_shot_credit, or per execute_batch that carries any. Other commands
+      // stay untracked, so `undo` with an empty credit stack is the old no-op.
+      type MockCreditStep = Array<{ shot: Record<string, unknown>; before: unknown; after: unknown }>;
+      const mockCreditUndo: MockCreditStep[] = [];
+      const mockCreditRedo: MockCreditStep[] = [];
+      // Set while execute_batch runs, so its credit sub-commands share one step.
+      let mockCreditBatchStep: MockCreditStep | null = null;
+      const mockRestoreCredit = (shot: Record<string, unknown>, credit: unknown): void => {
+        if (credit === undefined) delete shot.credit;
+        else shot.credit = structuredClone(credit);
+      };
       // Counts native file-picker opens so a spec can prove the read-only-map guard
       // blocks Import (Ctrl+I) in Plan/Export before the picker even opens (#243).
       // Incremented inside the dialog `open` mock below (same init-script closure).
@@ -637,6 +733,22 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // distance colour palettes and pins), overlaid onto get_config / reload_config
       // exactly like mockGasConfig.
       let mockMapPalette: Record<string, unknown> | null = null;
+
+      // `[people].recent` persisted via remember_people: the people last added to
+      // a shot's credit, most recent first, deduped by identity, capped at 200
+      // (Rust `PeopleConfig::remember`). Overlaid onto get_config / reload_config
+      // like mockMapPalette. Specs may seed it with window.__MOCK_RECENT_PEOPLE__
+      // (read until the first remember_people write, so an init script that runs
+      // after this one still seeds it).
+      const MOCK_MAX_RECENT_PEOPLE = 200;
+      let mockRecentPeopleWritten: Array<{ name: string; email?: string }> | null = null;
+      const mockRecentPeople = (): Array<{ name: string; email?: string }> => {
+        if (mockRecentPeopleWritten) return [...mockRecentPeopleWritten];
+        const seeded = (window as unknown as Record<string, unknown>).__MOCK_RECENT_PEOPLE__;
+        return Array.isArray(seeded)
+          ? (seeded as Array<{ name: string; email?: string }>).slice(0, MOCK_MAX_RECENT_PEOPLE)
+          : [];
+      };
 
       // Station comments set via set_station_comment, keyed
       // "sectionId:stationIndex". get_project_state derives its station array
@@ -873,13 +985,26 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           up: shot.up * scale,
           down: shot.down * scale,
         });
+        // `.../crowded...` gives every shot a full credit - five surveyors, two
+        // explorers, dates spanning a range - for the preview table's layout.
+        const crowded = (path ?? '').toLowerCase().includes('crowded');
+        const crowd = (date: string): Partial<TmlWire<TmlShot>> =>
+          crowded
+            ? {
+                credit: {
+                  surveyors: ['Ann Diver', 'Bo Lead', 'Cy Cave', 'Dee Deep', 'Eve Echo'].map((name) => ({ name })),
+                  explorers: ['Fay Fathom', 'Gus Grotto'].map((name) => ({ name })),
+                  date,
+                },
+              }
+            : {};
         const sections: TmlWire<TmlFile>['sections'] = [
           {
             name: 'Main Line',
             shots: [
-              buildMockTmlShot(1, 0, 'Main Line', 2),
-              buildMockTmlShot(2, 1, 'Main Line', 4, { comment: 'Restriction at the T' }),
-              buildMockTmlShot(3, 2, 'Main Line', 6, { excluded: true }),
+              buildMockTmlShot(1, 0, 'Main Line', 2, crowd('2026-03-02')),
+              buildMockTmlShot(2, 1, 'Main Line', 4, { comment: 'Restriction at the T', ...crowd('2026-04-11') }),
+              buildMockTmlShot(3, 2, 'Main Line', 6, { excluded: true, ...crowd('2026-04-11') }),
             ].map(scaleShot),
             surveyor: 'Synthetic Surveyor',
             date: '2026-01-02',
@@ -892,8 +1017,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           {
             name: 'Side Passage',
             shots: [
-              buildMockTmlShot(4, 1, 'Side Passage', 3),
-              buildMockTmlShot(5, 4, 'Side Passage', 5, { shot_type: 'Virtual' }),
+              buildMockTmlShot(4, 1, 'Side Passage', 3, crowd('2026-03-02')),
+              buildMockTmlShot(5, 4, 'Side Passage', 5, { shot_type: 'Virtual', ...crowd('2026-04-11') }),
               // The loop closure, as the real format stores it: a Closure-type
               // ROW near the end of the file. from_id=1 (Main Line station 1)
               // and closure_to_id=4 (Side Passage station 1) keep the previous
@@ -1323,7 +1448,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // Return LoadProjectFullResult format
             return {
               loadingId,
-              project: currentProject,
+              project: withShotCredit(currentProject),
               stations: mockStations,
               stats: {
                 section_count: currentProject.sections.length,
@@ -1389,6 +1514,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     comment?: string | null;
                     kind?: string;
                     marker_index?: number | null;
+                    credit?: MockCredit;
                   }>;
                 }>;
                 station_merges?: unknown[]; zero_datums?: unknown[];
@@ -1430,12 +1556,46 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const shotsUintsView = new DataView(shotsUints.buffer);
             const sectionsMeta: Array<Record<string, unknown>> = [];
             const shotComments: Array<[number, string]> = [];
+            // Binary wire v7: one project-wide people table, each section's
+            // distinct credits as indices into it, one u32 per shot (empty
+            // buffer when no shot is credited) - `load_binary.rs::encode`.
+            const creditPeople: MockPerson[] = [];
+            const personIndex = new Map<string, number>();
+            const internPerson = (p: MockPerson): number => {
+              const key = JSON.stringify([p.name, p.email ?? null]);
+              let idx = personIndex.get(key);
+              if (idx === undefined) {
+                idx = creditPeople.length;
+                creditPeople.push(p);
+                personIndex.set(key, idx);
+              }
+              return idx;
+            };
+            const shotsCreditIdx = new Uint32Array(totalShots).fill(0xffffffff);
+            let anyCredit = false;
             let shotCursor = 0;
 
             for (const section of jsonResult.project.sections) {
               const shot_offset = shotCursor;
               const shot_count = section.shots?.length ?? 0;
+              const sectionCredits: Array<{ surveyors: number[]; explorers: number[]; date: string | null }> = [];
+              const creditKey = new Map<string, number>();
               for (const shot of section.shots ?? []) {
+                if (shot.credit) {
+                  const key = JSON.stringify(shot.credit);
+                  let ci = creditKey.get(key);
+                  if (ci === undefined) {
+                    ci = sectionCredits.length;
+                    sectionCredits.push({
+                      surveyors: shot.credit.surveyors.map(internPerson),
+                      explorers: shot.credit.explorers.map(internPerson),
+                      date: shot.credit.date,
+                    });
+                    creditKey.set(key, ci);
+                  }
+                  shotsCreditIdx[shotCursor] = ci;
+                  anyCredit = true;
+                }
                 const fOff = shotCursor * SHOT_FLOAT_STRIDE;
                 const nullToNaN = (v: number | null | undefined): number =>
                   v === null || v === undefined ? NaN : v;
@@ -1470,8 +1630,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               sectionsMeta.push({
                 id: section.id,
                 name: section.name ?? null,
-                surveyor: section.surveyor ?? null,
-                date: section.date ?? null,
                 color: section.color ?? '#888888',
                 direction: section.direction ?? 'Forward',
                 quality: section.quality ?? 1.0,
@@ -1484,8 +1642,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 // project default above, which is what a section that declares
                 // nothing carries on disk.
                 azimuth_reference: section.azimuth_reference ?? null,
+                credits: sectionCredits,
               });
             }
+            const shotsCredit = anyCredit
+              ? new Uint8Array(shotsCreditIdx.buffer)
+              : new Uint8Array(0);
 
             const STATION_FLOAT_STRIDE = 24;
             const STATION_UINT_STRIDE = 8;
@@ -1524,8 +1686,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               // Bumped from 3 to 4 when Ariane collaboration mode was removed:
               // the header no longer carries a `collab` field; 4 to 5 for the
               // #438 north references (a project-level default plus one per
-              // section header).
-              version: 6,
+              // section header); 6 to 7 for per-shot survey credit.
+              version: 7,
               loading_id: jsonResult.loadingId,
               // Added to the envelope at v3 alongside the ShotKind bits
               // (`load_binary.rs`): the decoder reads it unvalidated, so omitting
@@ -1584,12 +1746,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 // section that declares none inherits.
                 default_azimuth_reference:
                   jsonResult.project.default_azimuth_reference ?? null,
+                // Every distinct person any shot credits, once (v7).
+                credit_people: creditPeople,
               },
               shot_count: totalShots,
               shots_floats: shotsFloats,
               shots_uints: shotsUints,
               shots_flags: shotsFlags,
               shot_comments: shotComments,
+              shots_credit: shotsCredit,
               station_count: totalStations,
               stations_floats: stationsFloats,
               stations_uints: stationsUints,
@@ -1812,7 +1977,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               // showed the populated count. A deep clone keeps every consumer's
               // ref-identity check honest, not just the sections one. (Caused ~50
               // full-suite failures; smoke seeds once, so it never hit this.)
-              project: currentProject ? structuredClone(currentProject) : currentProject,
+              project: currentProject ? withShotCredit(structuredClone(currentProject)) : currentProject,
               stations: mockStations,
               stats: {
                 section_count: currentProject?.sections.length ?? 0,
@@ -2492,12 +2657,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               kind: (shot.kind as string | undefined) ?? 'Normal',
               marker_index: (shot.marker_index as number | null | undefined) ?? null,
               temperature: (shot.temperature as number | null | undefined) ?? null,
+              // Per-shot credit (New Section puts its pills on every shot).
+              ...(shot.credit ? { credit: structuredClone(shot.credit) } : {}),
             }));
+            // `SectionData.surveyor/date` are the backend's legacy TEMPLATE for
+            // shots with no credit of their own; honour what the caller sent
+            // (New Section sends null), defaulting only when the key is absent.
             const section = {
               id: sectionCounter,
               name: (args?.name as string) ?? `Section ${sectionCounter}`,
-              surveyor: 'Test Surveyor',
-              date: new Date().toISOString().split('T')[0],
+              surveyor: args && 'surveyor' in args ? ((args.surveyor as string | null) ?? null) : 'Test Surveyor',
+              date: args && 'date' in args ? ((args.date as string | null) ?? null) : new Date().toISOString().split('T')[0],
               color: '#3b82f6',
               shots,
             };
@@ -2534,7 +2704,28 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const importedSections = rawSections.map((sectionData) => {
               sectionCounter++;
               const rawShots = Array.isArray(sectionData.shots) ? (sectionData.shots as Array<Record<string, unknown>>) : [];
+              // The backend's import overrides (`command_import.rs`): the dialog's
+              // Surveyors / Explorers / date, when sent, REPLACE what each shot's
+              // own credit said; otherwise the shot keeps the credit it arrived with.
+              const setSurveyors = Array.isArray(sectionData.surveyors)
+                ? mockDedupe(sectionData.surveyors as MockPerson[])
+                : undefined;
+              const setExplorers = Array.isArray(sectionData.explorers)
+                ? mockDedupe(sectionData.explorers as MockPerson[])
+                : undefined;
+              const overrideDate = typeof sectionData.override_date === 'string' ? sectionData.override_date : undefined;
+              const importedCredit = (shot: Record<string, unknown>): { credit?: MockCredit } => {
+                const own = (shot.credit as MockCredit | undefined) ?? { surveyors: [], explorers: [], date: null };
+                const credit: MockCredit = {
+                  surveyors: setSurveyors ?? own.surveyors,
+                  explorers: setExplorers ?? own.explorers,
+                  date: overrideDate ?? own.date,
+                };
+                const empty = credit.surveyors.length === 0 && credit.explorers.length === 0 && credit.date === null;
+                return empty ? {} : { credit: structuredClone(credit) };
+              };
               const shots = rawShots.map((shot, index) => ({
+                ...importedCredit(shot),
                 id: mockShotId(sectionCounter, index),
                 azimuth_in: (shot.azimuth_in as number) ?? 0,
                 azimuth_out: (shot.azimuth_out as number) ?? 0,
@@ -2555,7 +2746,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               const section = {
                 id: sectionCounter,
                 name: (sectionData.name as string) ?? `Section ${sectionCounter}`,
-                surveyor: (sectionData.surveyor as string) ?? 'Test Surveyor',
+                // The legacy template for uncredited shots. An explicit null (every
+                // import dialog now sends one) means none; only a config built
+                // without the key gets the fixture default.
+                surveyor: sectionData.surveyor === undefined ? 'Test Surveyor' : (sectionData.surveyor as string | null),
                 date: (sectionData.date as string) ?? new Date().toISOString().split('T')[0],
                 color: (sectionData.color as string) ?? '#3b82f6',
                 direction: (sectionData.direction as string) ?? 'in',
@@ -3481,6 +3675,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // frontend compose rather than replay. A batch reversing the same section twice
             // must therefore emit two entries, not one.
             const reversedSections: Array<{ section_id: number; shot_count: number }> = [];
+            const creditStep: MockCreditStep = [];
+            mockCreditBatchStep = creditStep;
             for (const command of commands) {
               let result:
                 | {
@@ -3515,6 +3711,18 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 result = mockHandler('delete_section', {
                   sectionId: command.section_id,
                 }) as typeof result;
+              } else if (command?.type === 'update_section_metadata') {
+                // Edit Section's Save: a rename beside the credit edit, one step.
+                result = mockHandler('update_section', {
+                  sectionId: command.section_id,
+                  updates: command.updates,
+                }) as typeof result;
+              } else if (command?.type === 'edit_shot_credit') {
+                // Data-table paste / fill of the credit columns (one per shot).
+                result = mockHandler('edit_shot_credit', {
+                  targets: command.targets,
+                  edit: command.edit,
+                }) as typeof result;
               } else if (command?.type === 'reverse_section') {
                 // Multi-section reverse (#24) is batched so it is atomic and
                 // costs one undo, so the batch has to replay it too.
@@ -3527,6 +3735,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 }
               }
               if (result && result.success === false) {
+                mockCreditBatchStep = null;
                 if (currentProject && projectBefore) {
                   Object.assign(currentProject, projectBefore);
                 }
@@ -3536,6 +3745,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 Object.assign(mockStationComments, commentsBefore);
                 return result;
               }
+            }
+            mockCreditBatchStep = null;
+            if (creditStep.length > 0) {
+              mockCreditUndo.push(creditStep);
+              mockCreditRedo.length = 0;
             }
             return {
               success: true,
@@ -3918,15 +4132,23 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             };
 
           case 'undo':
-          case 'redo':
+          case 'redo': {
             undoRedoCalls.push(cmd);
+            const from = cmd === 'undo' ? mockCreditUndo : mockCreditRedo;
+            const to = cmd === 'undo' ? mockCreditRedo : mockCreditUndo;
+            const step = from.pop();
+            if (step) {
+              for (const entry of step) mockRestoreCredit(entry.shot, cmd === 'undo' ? entry.before : entry.after);
+              to.push(step);
+            }
             return { success: true, section_ids: [] };
+          }
 
           case 'can_undo':
-            return false;
+            return mockCreditUndo.length > 0;
 
           case 'can_redo':
-            return false;
+            return mockCreditRedo.length > 0;
 
           case 'get_undo_state':
             return { can_undo: false, can_redo: false };
@@ -3948,6 +4170,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 },
                 ...(mockGasConfig ? { gas: mockGasConfig } : {}),
                 ...(mockMapPalette ? { map_palette: mockMapPalette } : {}),
+                people: { recent: mockRecentPeople() },
               };
             }
             return {
@@ -4111,7 +4334,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 data_table_height: 200,
                 wizard_map_panel_width: 480,
                 data_table_shot_column_order: [],
-                data_table_shot_hidden_columns: ['section_id', 'shot_id'],
+                data_table_shot_hidden_columns: ['section_id', 'shot_id', 'surveyors', 'explorers', 'survey_date'],
+                data_table_shot_columns_seen: ['surveyors', 'explorers', 'survey_date'],
                 data_table_shot_column_widths: {},
                 data_table_azimuth_mode: 'avg',
                 data_table_inclination_mode: 'off',
@@ -4235,6 +4459,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               // Spread LAST so a stored `[gas]` block wins over the literal's own.
               ...(mockGasConfig ? { gas: mockGasConfig } : {}),
               ...(mockMapPalette ? { map_palette: mockMapPalette } : {}),
+              people: { recent: mockRecentPeople() },
             };
 
           case 'update_config':
@@ -4254,6 +4479,36 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const gas = args?.gas as Record<string, unknown> | undefined;
             if (gas) mockGasConfig = gas;
             return null;
+          }
+
+          case 'remember_people': {
+            // Partial `[people].recent` write, mirroring `PeopleConfig::remember`:
+            // the given people move to the front in order (a known identity takes
+            // the new spelling), then dedupe + cap. Empty input writes nothing.
+            console.log('[Mock IPC] remember_people called with:', args);
+            const rawPeople = args?.people;
+            const given = Array.isArray(rawPeople) ? (rawPeople as MockPerson[]) : [];
+            const fresh = mockDedupe(
+              given
+                .filter((p) => typeof p?.name === 'string')
+                .map((p) => {
+                  const email = typeof p.email === 'string' ? p.email.trim() : '';
+                  return email ? { name: p.name.trim(), email } : { name: p.name.trim() };
+                })
+                .filter((p) => p.name !== ''),
+            );
+            if (fresh.length > 0) {
+              const freshKeys = new Set(fresh.map(mockPersonKey));
+              mockRecentPeopleWritten = mockDedupe([
+                ...fresh,
+                ...mockRecentPeople().filter((p) => !freshKeys.has(mockPersonKey(p))),
+              ]).slice(0, MOCK_MAX_RECENT_PEOPLE);
+            }
+            const win = window as unknown as Record<string, unknown>;
+            const calls = (win.__MOCK_REMEMBER_PEOPLE_CALLS__ as unknown[] | undefined) ?? [];
+            calls.push(given);
+            win.__MOCK_REMEMBER_PEOPLE_CALLS__ = calls;
+            return mockRecentPeople();
           }
 
           case 'update_map_palette': {
@@ -4397,6 +4652,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 },
                 ...(mockGasConfig ? { gas: mockGasConfig } : {}),
                 ...(mockMapPalette ? { map_palette: mockMapPalette } : {}),
+                people: { recent: mockRecentPeople() },
               }, false];
             }
             // Return mock config with any test overrides applied
@@ -4562,7 +4818,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 data_table_height: 200,
                 wizard_map_panel_width: 480,
                 data_table_shot_column_order: [],
-                data_table_shot_hidden_columns: ['section_id', 'shot_id'],
+                data_table_shot_hidden_columns: ['section_id', 'shot_id', 'surveyors', 'explorers', 'survey_date'],
+                data_table_shot_columns_seen: ['surveyors', 'explorers', 'survey_date'],
                 data_table_shot_column_widths: {},
                 data_table_azimuth_mode: 'avg',
                 data_table_inclination_mode: 'off',
@@ -4654,6 +4911,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               // mockDataTableView above.)
               ...(mockGasConfig ? { gas: mockGasConfig } : {}),
               ...(mockMapPalette ? { map_palette: mockMapPalette } : {}),
+              people: { recent: mockRecentPeople() },
             };
             return [baseConfig, false];
           }
@@ -5102,6 +5360,20 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               const section = (currentProject.sections as Array<{ id: number } & Record<string, unknown>>)
                 .find(s => s.id === sectionId);
               if (section && updates) {
+                // The legacy surveyor/date land on EVERY shot, as the backend's
+                // `SectionUpdates` does: the surveyors (and, for the Ariane
+                // "explorers / surveyors" form, the explorers) from the text.
+                const shots = (section.shots as Array<Record<string, unknown>> | undefined) ?? [];
+                for (const shot of shots) {
+                  const credit = structuredClone(mockShotCredit(section, shot));
+                  if ('surveyor' in updates) {
+                    const people = mockLegacyPeople((updates.surveyor as string | null) ?? '');
+                    credit.surveyors = people.surveyors;
+                    if (people.halves) credit.explorers = people.explorers;
+                  }
+                  if ('date' in updates) credit.date = (updates.date as string | null) ?? null;
+                  if ('surveyor' in updates || 'date' in updates) mockStoreCredit(shot, credit);
+                }
                 Object.assign(section, updates);
                 console.log('[Mock IPC] update_section: applied updates to section', sectionId, updates);
               }
@@ -5274,6 +5546,68 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             };
           }
 
+          case 'edit_shot_credit': {
+            console.log('[Mock IPC] edit_shot_credit called with:', args);
+            // The backend's `CreditEdit::apply` per targeted shot: per role, set,
+            // then remove, then add (by identity); `set_date` sets or clears.
+            const win = window as unknown as Record<string, unknown>;
+            const existing = win.__MOCK_EDIT_SHOT_CREDIT_CALLS__ as unknown[] | undefined;
+            const calls = Array.isArray(existing) ? existing : [];
+            calls.push(args ?? null);
+            win.__MOCK_EDIT_SHOT_CREDIT_CALLS__ = calls;
+            const targets = (args?.targets ?? null) as
+              | { type: 'section'; section_id: number }
+              | { type: 'shots'; shots: Array<[number, number]> }
+              | null;
+            const edit = (args?.edit ?? {}) as Record<string, unknown>;
+            const sections = (currentProject?.sections ?? []) as Array<Record<string, unknown> & { id: number }>;
+            const picked: Array<[Record<string, unknown>, Record<string, unknown>]> = [];
+            if (targets?.type === 'section') {
+              const section = sections.find((s) => s.id === targets.section_id);
+              if (!section) return { success: false, error: `Section ${targets.section_id} not found` };
+              for (const shot of (section.shots as Array<Record<string, unknown>>) ?? []) picked.push([section, shot]);
+            } else if (targets?.type === 'shots') {
+              for (const [sid, shid] of targets.shots) {
+                const section = sections.find((s) => s.id === sid);
+                const shot = ((section?.shots as Array<Record<string, unknown>> | undefined) ?? []).find((x) => x.id === shid);
+                if (!section || !shot) return { success: false, error: `Shot ${shid} not found in section ${sid}` };
+                picked.push([section, shot]);
+              }
+            } else {
+              return { success: false, error: 'edit_shot_credit: missing targets' };
+            }
+            const editRole = (current: MockPerson[], role: 'surveyors' | 'explorers'): MockPerson[] => {
+              const set = edit[`set_${role}`] as MockPerson[] | undefined;
+              const remove = (edit[`remove_${role}`] as MockPerson[] | undefined) ?? [];
+              const add = (edit[`add_${role}`] as MockPerson[] | undefined) ?? [];
+              let list = set ? mockDedupe(set) : [...current];
+              const removed = new Set(remove.map(mockPersonKey));
+              list = list.filter((p) => !removed.has(mockPersonKey(p)));
+              return mockDedupe([...list, ...add]);
+            };
+            const touched: number[] = [];
+            const step: MockCreditStep = [];
+            for (const [section, shot] of picked) {
+              const stored = shot.credit === undefined ? undefined : structuredClone(shot.credit);
+              const before = mockShotCredit(section, shot);
+              const after: MockCredit = {
+                surveyors: editRole(before.surveyors, 'surveyors'),
+                explorers: editRole(before.explorers, 'explorers'),
+                date: 'set_date' in edit ? ((edit.set_date as string | null) ?? null) : before.date,
+              };
+              mockStoreCredit(shot, after);
+              step.push({ shot, before: stored, after: structuredClone(shot.credit) });
+              const sid = section.id as number;
+              if (!touched.includes(sid)) touched.push(sid);
+            }
+            if (mockCreditBatchStep) mockCreditBatchStep.push(...step);
+            else if (step.length > 0) {
+              mockCreditUndo.push(step);
+              mockCreditRedo.length = 0;
+            }
+            return { success: true, section_ids: touched };
+          }
+
           case 'create_shot': {
             console.log('[Mock IPC] create_shot called with:', args);
             // Record calls for assertions (anchor args), mirroring execute_batch.
@@ -5327,6 +5661,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             } else if (beforeShotId !== null) {
               const i = section.shots.findIndex((s) => s.id === beforeShotId);
               if (i >= 0) insertAt = i;
+            }
+            // A new shot with no credit of its own takes its neighbour's - the
+            // one before it, or the next when inserting at the start - as the
+            // backend's `create_shot` does.
+            if (shotData.credit !== undefined) {
+              (newShot as Record<string, unknown>).credit = shotData.credit;
+            } else {
+              const neighbour = insertAt > 0 ? section.shots[insertAt - 1] : section.shots[0];
+              if (neighbour?.credit !== undefined) {
+                (newShot as Record<string, unknown>).credit = structuredClone(neighbour.credit);
+              }
             }
             section.shots.splice(insertAt, 0, newShot);
             return { success: true, section_ids: [], shot_id: nextId };
@@ -5877,6 +6222,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return { removed: 0, kept_unpushed: [], kept_open: [], failed: [], locks_released: [], locks_unchecked: [] };
           case 'speleodb_get_project_metadata':
             return { name: 'Mock Cave', description: '', country: 'US', visibility: 'PRIVATE', latitude: null, longitude: null, exclude_geojson: false };
+          case 'speleodb_project_collaborators': {
+            // The linked project's collaborators as survey-credit suggestions;
+            // specs override via __MOCK_SPELEODB_COLLABORATORS__.
+            const override = (window as unknown as Record<string, unknown>).__MOCK_SPELEODB_COLLABORATORS__;
+            if (Array.isArray(override)) return override;
+            return [
+              { name: 'Mock Collaborator', email: 'collaborator@example.org', level: 'READ_AND_WRITE' },
+              { name: null, email: 'test@example.com', level: 'ADMIN' },
+            ];
+          }
           case 'speleodb_publish':
             // #207 publish result: the reloaded (now-remote) local .stalx path.
             return {

@@ -5,6 +5,7 @@ use rusqlite::{params, Connection, MAIN_DB};
 
 use crate::models::FEATURE_ID_STRIDE;
 
+use super::shot_credits::CREATE_CREDIT_TABLES;
 use super::station_texts::CREATE_STATION_NAMES;
 use super::{Database, SCHEMA_VERSION, UNDO_FORMAT_SAFE_VERSION};
 
@@ -1650,6 +1651,8 @@ impl Database {
         // Station names - see `station_texts` for why this table carries no
         // schema bump.
         self.conn.execute(CREATE_STATION_NAMES, [])?;
+        // Per-shot survey credit - no bump either, see `shot_credits`.
+        self.conn.execute_batch(CREATE_CREDIT_TABLES)?;
 
         Ok(())
     }

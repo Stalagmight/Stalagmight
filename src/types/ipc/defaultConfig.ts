@@ -225,7 +225,15 @@ export const defaultConfig: Config = {
     "data_table_shot_column_order": [],
     "data_table_shot_hidden_columns": [
       "section_id",
-      "shot_id"
+      "shot_id",
+      "surveyors",
+      "explorers",
+      "survey_date"
+    ],
+    "data_table_shot_columns_seen": [
+      "surveyors",
+      "explorers",
+      "survey_date"
     ],
     "data_table_shot_column_widths": {},
     "data_table_azimuth_mode": "avg",
@@ -372,5 +380,8 @@ export const defaultConfig: Config = {
     "issues_combine": "worst",
     "issues_hidden": [],
     "pinned": []
+  },
+  "people": {
+    "recent": []
   }
 };

@@ -1092,3 +1092,115 @@ fn schema_rows_retyped_in_another_case_are_refused() {
         );
     }
 }
+
+/// Per-shot survey credit is read back per shot, emails included, and the
+/// section keeps the legacy aggregate.
+#[test]
+fn shots_carry_their_survey_credit() {
+    let mut project = full_project();
+    let person = |n: &str, e: Option<&str>| stalagmight_models::Person::new(n, e).unwrap();
+    project.sections[0].shots[0].set_credit(stalagmight_models::SurveyCredit {
+        surveyors: vec![person("Ann", Some("ann@example.org")), person("Bo", None)],
+        explorers: vec![person("Ex", None)],
+        date: "2024-04-05".parse().ok(),
+    });
+    let dir = TempDir::new().unwrap();
+    let survey = read_file_with(&save(&dir, &project), &ReadOptions::default()).unwrap();
+    let main = &survey.sections[0];
+    let shot = &main.shots[0];
+    let names: Vec<&str> = shot.surveyors.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(names, ["Ann", "Bo"]);
+    assert_eq!(shot.surveyors[0].email.as_deref(), Some("ann@example.org"));
+    assert_eq!(shot.explorers[0].name, "Ex");
+    assert_eq!(shot.date.as_deref(), Some("2024-04-05"));
+    // The fixture's section template credits every other shot to `user1`.
+    assert_eq!(main.shots[1].surveyors[0].name, "user1");
+    assert!(main.shots[1].date.is_none());
+    assert_eq!(main.surveyor.as_deref(), Some("Ann, Bo, user1"));
+    assert_eq!(main.date.as_deref(), Some("2024-04-05"));
+}
+
+/// The credit tables are capped before the load builds them, like the others.
+#[test]
+fn credit_rows_are_counted_against_their_own_caps() {
+    let mut project = full_project();
+    for shot in &mut project.sections[0].shots {
+        shot.set_credit(stalagmight_models::SurveyCredit {
+            explorers: vec![stalagmight_models::Person::named("Ex").unwrap()],
+            ..Default::default()
+        });
+    }
+    let dir = TempDir::new().unwrap();
+    let path = save(&dir, &project);
+    let err = read_file_with(
+        &path,
+        &ReadOptions::default().count_limits(CountLimits::default().shot_credits(1)),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            ReadError::TooComplex {
+                what: Limit::ShotCredits,
+                count: 4,
+                max: 1
+            }
+        ),
+        "{err}"
+    );
+    let err = read_file_with(
+        &path,
+        &ReadOptions::default().count_limits(CountLimits::default().credit_people(0)),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            ReadError::TooComplex {
+                what: Limit::CreditPeople,
+                count: 1,
+                max: 0
+            }
+        ),
+        "{err}"
+    );
+}
+
+/// A crafted `sections.surveyor` with a hundred thousand names: read within the
+/// deadline, at most `MAX_PEOPLE_PER_ROLE` people per role, and every shot of
+/// the section shares one converted list.
+#[test]
+fn a_huge_legacy_surveyor_is_read_bounded_and_shared() {
+    let project = full_project();
+    let dir = TempDir::new().unwrap();
+    let path = save(&dir, &project);
+    let names: String = (0..100_000)
+        .map(|i| format!("Person {i}"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute(
+        "UPDATE sections SET surveyor = ?1",
+        rusqlite::params![names],
+    )
+    .unwrap();
+    conn.execute("DELETE FROM shot_credits", []).unwrap();
+    drop(conn);
+
+    let started = std::time::Instant::now();
+    let survey = read_file_with(&path, &ReadOptions::default()).unwrap();
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "took {:?}",
+        started.elapsed()
+    );
+    let main = &survey.sections[0];
+    assert_eq!(
+        main.shots[0].surveyors.len(),
+        stalagmight_models::MAX_PEOPLE_PER_ROLE
+    );
+    assert!(main
+        .shots
+        .iter()
+        .all(|s| std::sync::Arc::ptr_eq(&s.surveyors, &main.shots[0].surveyors)));
+}

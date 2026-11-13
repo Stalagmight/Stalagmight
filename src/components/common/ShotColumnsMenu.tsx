@@ -49,7 +49,7 @@ export interface ShotColumnsMenuProps {
   /** Segmented avg / in-out / off controls, per family. */
   angleModes?: Partial<Record<'azimuth' | 'inclination', AngleModeControl>>;
   /** Rows for columns not every shot table has. */
-  extraRows?: { warnings?: boolean; sectionId?: boolean; shotId?: boolean };
+  extraRows?: { warnings?: boolean; sectionId?: boolean; shotId?: boolean; credit?: boolean };
   /** Row identities whose label goes red and which tint the eye button: a
    *  required value is missing in a column that is currently HIDDEN, so there is
    *  no cell on screen to point at. Values are the row identities below
@@ -222,6 +222,13 @@ export function ShotColumnsMenu({
               {checkRow(['left', 'right', 'up', 'down'], t('dataTable.columnsMenu.lrud'))}
               {checkRow(['kind'], t('dataTable.columnsMenu.reference'))}
               {checkRow(['comment'], t('dataTable.columnsMenu.comment'))}
+              {extraRows?.credit && (
+                <div className="mt-1 border-t border-border pt-1">
+                  {checkRow(['surveyors'], t('credit.surveyors'))}
+                  {checkRow(['explorers'], t('credit.explorers'))}
+                  {checkRow(['survey_date'], t('credit.dateLabel'))}
+                </div>
+              )}
             </>
           )}
         </div>

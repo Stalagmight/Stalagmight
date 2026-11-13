@@ -109,7 +109,7 @@ describe('DataTable view save across a close/reopen inside the flush window (#35
     await flushMicrotasks();
     expect(updateViewCalls()).toHaveLength(1);
     expect(updateViewCalls()[0]?.[1]).toMatchObject({
-      hiddenColumns: ['comment', 'section_id', 'shot_id'],
+      hiddenColumns: ['comment', 'explorers', 'section_id', 'shot_id', 'survey_date', 'surveyors'],
     });
 
     // The IPC has NOT settled yet, so its `loadConfig` re-sync has not run.
@@ -136,7 +136,7 @@ describe('DataTable view save across a close/reopen inside the flush window (#35
     // `comment` must still be hidden. Without the optimistic publish the second
     // payload drops it, silently undoing the write the unmount flush just made.
     expect(calls[1]?.[1]).toMatchObject({
-      hiddenColumns: ['_warnings', 'comment', 'section_id', 'shot_id'],
+      hiddenColumns: ['_warnings', 'comment', 'explorers', 'section_id', 'shot_id', 'survey_date', 'surveyors'],
     });
   });
 });

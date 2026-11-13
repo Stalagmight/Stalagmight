@@ -54,7 +54,6 @@ const editable = (overrides: Partial<EditableShot> = {}): EditableShot =>
 
 const edits = (name: string, shots: EditableShot[]): SectionEditState => ({
   name,
-  surveyor: '',
   date: '',
   color: '',
   direction: 'in',

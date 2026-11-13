@@ -6,6 +6,7 @@
 //! added in a minor release.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use stalagmight_models::station::{StationKey, StationRef};
 use stalagmight_models::{NorthReference, Project, ShotKind as ModelShotKind, SurveyDirection};
@@ -87,8 +88,10 @@ pub struct StationId {
 pub struct Section {
     pub id: u32,
     pub name: Option<String>,
+    /// The distinct surveyor names of its shots joined with `", "` (each shot
+    /// carries its own credit: [`Shot::surveyors`]).
     pub surveyor: Option<String>,
-    /// ISO 8601 date (`YYYY-MM-DD`).
+    /// The earliest shot date, ISO 8601 (`YYYY-MM-DD`).
     pub date: Option<String>,
     pub direction: Direction,
     pub quality: f64,
@@ -147,6 +150,33 @@ pub struct Shot {
     pub temperature: Option<f64>,
     pub marker_index: Option<u32>,
     pub comment: Option<String>,
+    /// Who surveyed this shot, in order. Shared (`Arc`) between the shots that
+    /// carry the same credit - typically a whole section's.
+    pub surveyors: Arc<[Person]>,
+    /// Who explored (first laid line through) this shot, in order. Shared like
+    /// [`Shot::surveyors`].
+    pub explorers: Arc<[Person]>,
+    /// The day this shot was surveyed, ISO 8601 (`YYYY-MM-DD`).
+    pub date: Option<String>,
+}
+
+/// One person credited on a shot. Names are compared lowercased with
+/// whitespace collapsed, emails lowercased; a person without an email is a
+/// different person from one with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Person {
+    pub name: String,
+    pub email: Option<String>,
+}
+
+impl Person {
+    fn from_model(person: &stalagmight_models::Person) -> Self {
+        Self {
+            name: person.name.clone(),
+            email: person.email.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -377,6 +407,7 @@ impl Survey {
             positions
         });
 
+        let mut people = PeopleCache::new();
         let mut sections: Vec<&stalagmight_models::Section> = project.sections.iter().collect();
         sections.sort_by_key(|s| s.id);
         Self {
@@ -392,8 +423,10 @@ impl Survey {
                     Section {
                         id: section.id,
                         name: section.name.clone(),
-                        surveyor: section.surveyor.clone(),
-                        date: section.date.map(|d| d.format("%Y-%m-%d").to_string()),
+                        surveyor: section.surveyor_names(),
+                        date: section
+                            .first_survey_date()
+                            .map(|d| d.format("%Y-%m-%d").to_string()),
                         direction: match section.direction {
                             SurveyDirection::In => Direction::In,
                             SurveyDirection::Out => Direction::Out,
@@ -414,7 +447,7 @@ impl Survey {
                                 let derived = shot.uuid.as_ref().is_some_and(|uuid| {
                                     derived_uuids.contains(&(section.id, uuid.clone()))
                                 });
-                                Shot::from_model(shot, derived)
+                                Shot::from_model(shot, derived, &mut people)
                             })
                             .collect(),
                     }
@@ -596,8 +629,37 @@ impl UnionFind {
     }
 }
 
+/// The converted people of each model credit, by the credit's allocation: the
+/// shots that share one model credit (a section's legacy fallback) share one
+/// converted list instead of a copy each.
+type PeopleCache = HashMap<usize, (Arc<[Person]>, Arc<[Person]>)>;
+
+fn people_of(
+    shot: &stalagmight_models::Shot,
+    cache: &mut PeopleCache,
+) -> (Arc<[Person]>, Arc<[Person]>) {
+    let convert = |list: &[stalagmight_models::Person]| -> Arc<[Person]> {
+        list.iter().map(Person::from_model).collect()
+    };
+    match &shot.credit {
+        None => (Arc::from([]), Arc::from([])),
+        Some(credit) => {
+            let key = Arc::as_ptr(credit) as usize;
+            let (surveyors, explorers) = cache
+                .entry(key)
+                .or_insert_with(|| (convert(&credit.surveyors), convert(&credit.explorers)));
+            (Arc::clone(surveyors), Arc::clone(explorers))
+        }
+    }
+}
+
 impl Shot {
-    fn from_model(shot: &stalagmight_models::Shot, uuid_derived: bool) -> Self {
+    fn from_model(
+        shot: &stalagmight_models::Shot,
+        uuid_derived: bool,
+        people: &mut PeopleCache,
+    ) -> Self {
+        let (surveyors, explorers) = people_of(shot, people);
         Self {
             // The reader fills every missing UUID before converting.
             uuid: shot.uuid.clone().unwrap_or_default(),
@@ -621,6 +683,9 @@ impl Shot {
             temperature: shot.temperature,
             marker_index: shot.marker_index,
             comment: shot.comment.clone(),
+            surveyors,
+            explorers,
+            date: shot.credit().date.map(|d| d.format("%Y-%m-%d").to_string()),
         }
     }
 }

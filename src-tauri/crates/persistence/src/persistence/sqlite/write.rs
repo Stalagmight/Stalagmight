@@ -4,6 +4,9 @@ use rusqlite::params;
 
 use crate::models::Project;
 
+use super::shot_credits::{
+    write_credit_rows, write_recorded_legacy, CREATE_CREDIT_TABLES, RECREATE_CREDIT_TABLES,
+};
 use super::station_texts::{StationTextTable, CREATE_STATION_NAMES};
 use super::{Database, SCHEMA_VERSION};
 
@@ -30,6 +33,10 @@ impl Database {
         // have it yet. Create it here, inside the transaction, the way the
         // `closure_id` column is ensured below, so the DELETE cannot fail.
         tx.execute(CREATE_STATION_NAMES, [])?;
+        // The per-shot credit tables carry no bump either (see `shot_credits`);
+        // rewritten whole by every save, so recreated rather than emptied.
+        tx.execute_batch(RECREATE_CREDIT_TABLES)?;
+        tx.execute_batch(CREATE_CREDIT_TABLES)?;
 
         // Clear existing data (delete children before parents for foreign key compliance)
         // NOTE: speleo_link is intentionally NOT cleared here (see save_speleo_link
@@ -73,15 +80,37 @@ impl Database {
             ],
         )?;
 
+        // Credit rows are keyed by (section, shot uuid): see `shot_credits`. A
+        // uuid repeated INSIDE one section (a corrupt file the save heals
+        // elsewhere) keeps its first shot's row.
+        let mut credit_rows: Vec<((u32, String), crate::models::SurveyCredit)> = Vec::new();
+        let mut credit_keys: std::collections::HashSet<(u32, String)> =
+            std::collections::HashSet::new();
+
         // Save sections and shots
         for section in &project.sections {
+            // The legacy columns keep their meaning for every older reader: the
+            // distinct surveyor NAMES joined with ", " (two people sharing a name
+            // appear once) and the earliest date. A shot-less section writes
+            // back the legacy pair it keeps.
+            let (legacy_surveyor, first_date) = if section.shots.is_empty() {
+                (section.legacy_surveyor.clone(), section.legacy_date)
+            } else {
+                (section.legacy_surveyor_text(), section.first_survey_date())
+            };
+            let legacy_date = first_date.map(|d| d.to_string());
+            // What a shot with no credit row reads back as (`shot_credits`),
+            // computed from the text actually written: a shot whose credit it
+            // does not reproduce (both same-named people, an email) gets a row.
+            let fallback =
+                crate::models::SurveyCredit::from_legacy(legacy_surveyor.as_deref(), first_date);
             tx.execute(
                 "INSERT INTO sections (id, name, surveyor, date, color, direction, quality, reverse_parity, gauge_shot_uuid, gauge_neighbour_uuid, azimuth_north, azimuth_correction, azimuth_source, azimuth_epoch_year, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                 params![
                     section.id,
                     section.name,
-                    section.surveyor,
-                    section.date.map(|d| d.to_string()),
+                    legacy_surveyor,
+                    legacy_date,
                     section.color,
                     section.direction.to_string(),
                     section.quality,
@@ -104,6 +133,13 @@ impl Database {
                     Utc::now().to_rfc3339()
                 ],
             )?;
+            // What this build wrote, so a later open can tell an older build's
+            // retyped surveyor/date from ours (`shot_credits`).
+            write_recorded_legacy(
+                &tx,
+                section.id,
+                (legacy_surveyor.as_deref(), legacy_date.as_deref()),
+            )?;
 
             for (seq, shot) in section.shots.iter().enumerate() {
                 // Note: We don't store shot.id - it's regenerated on load based on sequence_order
@@ -115,10 +151,15 @@ impl Database {
                 // `<UUID>`.  Mint one lazily here for any shot that arrived
                 // without (e.g. loaded from a pre-v6 .stalx) so we never
                 // write NULL twice.
-                let uuid = shot
-                    .uuid
-                    .clone()
-                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                let recorded = shot.uuid.as_deref().filter(|u| !u.is_empty());
+                let uuid =
+                    recorded.map_or_else(|| uuid::Uuid::new_v4().to_string(), str::to_string);
+                // A row only where the legacy fallback would read back something
+                // else - so an uncredited shot, or one that agrees with its
+                // section's columns, costs nothing.
+                if shot.credit() != &fallback && credit_keys.insert((section.id, uuid.clone())) {
+                    credit_rows.push(((section.id, uuid.clone()), shot.credit().clone()));
+                }
                 tx.execute(
                     r"INSERT INTO shots (
                         section_id, sequence_order,
@@ -149,6 +190,8 @@ impl Database {
                 )?;
             }
         }
+
+        write_credit_rows(&tx, &credit_rows)?;
 
         // Save station merges. Cross-references are stored as stable
         // `StationKey` anchors in memory but persisted positionally (resolved

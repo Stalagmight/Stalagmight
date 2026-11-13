@@ -137,7 +137,7 @@ export type SourceName =
 /** Commands that push to the undo stack. */
 const UNDOABLE_COMMANDS: ReadonlySet<string> = new Set([
   'create_section', 'update_section', 'delete_section', 'reverse_section', 'move_section', 'move_segment',
-  'create_shot', 'update_shot', 'delete_shot', 'set_shot_kind', 'split_shot_at_distance',
+  'create_shot', 'update_shot', 'delete_shot', 'set_shot_kind', 'split_shot_at_distance', 'edit_shot_credit',
   'merge_stations', 'unmerge_stations', 'unmerge_station_pair',
   'set_zero_datum', 'remove_zero_datum', 'set_station_comment', 'move_comment', 'move_station',
   'create_loop_closure', 'remove_loop_closure',

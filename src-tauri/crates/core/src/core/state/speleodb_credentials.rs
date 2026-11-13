@@ -22,6 +22,7 @@ impl AppState {
         if let Ok(mut session) = self.speleodb_session_lock() {
             session.forget();
         }
+        self.clear_collaborator_cache();
         if let Err(error) = self.speleodb_clear_saved_token() {
             tracing::warn!(error = %error.message, "Failed to remove rejected SpeleoDB token");
         }

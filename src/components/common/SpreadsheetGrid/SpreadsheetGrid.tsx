@@ -31,7 +31,7 @@ import {
 import { DEFAULT_GRID_LABELS, type GridLabels } from './gridLabels';
 import { GridContextMenu } from './GridContextMenu';
 import { GridHeaderRow } from './GridHeaderRow';
-import { activateCellIn, directTypedValue } from './gridActivate';
+import { activateCellIn, directTypedValue, openEditorIn } from './gridActivate';
 import { measureColumnWidth, fillExtent } from './gridAutoFit';
 import { planClear } from './gridClear';
 import {
@@ -647,14 +647,23 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     },
     [colAt, rows, cellEditable],
   );
+  const openCellEditor = useCallback(
+    (rowIdx: number, colIdx: number, seed: string): boolean => {
+      const col = colAt(colIdx);
+      return openEditorIn(col, rows[rowIdx], rowIdx, seed, col ? cellEditable(rowIdx, col) : false);
+    },
+    [colAt, rows, cellEditable],
+  );
 
   // --- Editing --------------------------------------------------------------
   const beginEdit = useCallback(
     (rowIdx: number, colIdx: number, seed: string | null) => {
+      // A popover-edited cell opens the host's editor from every way in.
+      if (openCellEditor(rowIdx, colIdx, seed ?? '')) return;
       const col = colAt(colIdx);
       // `noInlineEdit` blocks every way in (double-click, F2, type-to-edit)
       // without touching cellEditable, so paste/fill/clear still write it.
-      if (!col || col.noInlineEdit || !cellEditable(rowIdx, col)) return;
+      if (!col || col.noInlineEdit || col.openEditor || !cellEditable(rowIdx, col)) return;
       const row = rows[rowIdx];
       // Seed with the FULL-PRECISION value (not the rounded display string), so
       // open+commit can never silently rewrite stored data at display precision.
@@ -669,7 +678,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       suppressBlurCommitRef.current = false; // a stale flag must not eat this session's blur-commit
       setEditing({ row: rowIdx, colKey: col.key, draft: seed ?? initial, initial });
     },
-    [colAt, cellEditable, rows, locale, isMissing],
+    [colAt, cellEditable, rows, locale, isMissing, openCellEditor],
   );
 
   // Commit the editor's draft. Side effects run OUTSIDE setEditing (a state
@@ -1257,6 +1266,12 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         if (!col || !cellEditable(row, col)) return;
         // Consumed by the grid, so it must not ALSO fire a host shortcut bound
         // to that character (a reserved `?` overlay), as Delete / Ctrl+A do.
+        if (col.openEditor) {
+          e.preventDefault();
+          e.stopPropagation();
+          openCellEditor(row, colIdx, e.key === ' ' ? '' : e.key);
+          return;
+        }
         const typed = directTypedValue(col, rows[row], e.key);
         if (col.noInlineEdit === true) {
           if (typed === undefined) return;
@@ -1289,6 +1304,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         case 'Enter': {
           e.preventDefault();
           if (!rectIsSingleCell(rect)) { cycle(false); return; }
+          if (!e.shiftKey && openCellEditor(row, colIdx, '')) return;
           // GS: Enter on a single cell moves down (Shift+Enter up); F2/typing edits.
           const t = arrowTarget(row, colIdx, e.shiftKey ? -1 : 1, 0, rowCount, colCount);
           moveFocusTo(t.row, t.colIdx, false);
@@ -1339,7 +1355,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       editing, selection.focus.row, focusColIdx, colKeys, colCount, rowCount, height,
       writableColIdxs, colIndexOf, moveFocusTo, dataEdgeTarget, beginEdit, commitEdit, cancelEdit,
       doCopy, doCut, schedulePasteFallback, doFill, doClear, onDeleteRows, deleteRowsCollapsing, colAt, cellEditable,
-      rect, selection.active, onActiveCellChange, virtualizer, scrollColIntoView, copiedRect, cutRect,
+      rect, selection.active, onActiveCellChange, virtualizer, scrollColIntoView, copiedRect, cutRect, openCellEditor,
     ],
   );
 

@@ -823,14 +823,14 @@ fn depth_only_shots_closed_into_a_loop_do_not_fabricate_a_mismatch() {
     );
 }
 
-/// #427 end to end: a chain that changes trip mid-run imports as one section
-/// per trip, and a full export/re-import round trip returns the SAME section
+/// #427 end to end: a chain that changes COLOUR mid-run imports as one section
+/// per colour, and a full export/re-import round trip returns the SAME section
 /// names and trips - no second cut, no second suffix.
 ///
 /// The export writes each section's name into every one of its shot rows, so a
 /// re-import sees two DECLARED names rather than one run to cut; the join then
-/// has to refuse to sew them back together, which it does on the same trip
-/// metadata. Anything that broke either half would show up here as a name like
+/// has to refuse to sew them back together, which it does on the colour.
+/// Anything that broke either half would show up here as a name like
 /// "A (trip 2) (trip 2)", a re-merged "A", or a lost surveyor.
 #[test]
 fn per_trip_sections_survive_an_export_and_re_import_unchanged() {
@@ -902,7 +902,13 @@ fn per_trip_sections_survive_an_export_and_re_import_unchanged() {
         project
             .sections
             .iter()
-            .map(|s| (s.name.clone().unwrap_or_default(), s.surveyor.clone()))
+            .map(|s| {
+                // A plain Ariane value is the shot's EXPLORERS (#329).
+                (
+                    s.name.clone().unwrap_or_default(),
+                    crate::models::join_names(&s.credit_summary().explorer_people()),
+                )
+            })
             .collect()
     };
 
@@ -932,6 +938,109 @@ fn per_trip_sections_survive_an_export_and_re_import_unchanged() {
     assert_eq!(
         trips(&round_tripped),
         expected,
-        "and both trips come back with their own surveyor"
+        "and both trips come back with their own explorer"
+    );
+}
+
+/// The round trip the trip cut broke (#329): ONE section whose shots carry
+/// different people and dates - entered per shot in the app, one colour -
+/// exported to Ariane and imported again. Credit is per shot, so it comes back
+/// as one section with every shot's credit exactly as it left, instead of one
+/// "(trip N)" section per credit change.
+#[test]
+fn a_section_with_mixed_per_shot_credit_round_trips_through_ariane_as_one_section() {
+    use crate::core::state::{AppState, VirtualShotMode};
+    use crate::core::Command;
+    use crate::models::{CreditEdit, CreditTargets, Person, SurveyCredit};
+    use crate::parsers::tml::test_helpers::TripShot;
+
+    let shots: Vec<String> = (1..=4)
+        .map(|id| {
+            TripShot {
+                id,
+                from_id: id - 1,
+                section: "A",
+                depth: 5.0 + id as f64,
+                ..TripShot::default()
+            }
+            .xml()
+        })
+        .collect();
+    let import_into = |name: &str, tml: &crate::parsers::tml::TmlFile| {
+        let (sections, closures, _) = convert_tml_to_import_configs(tml, false, false).unwrap();
+        let state = AppState::new().unwrap();
+        state.execute(Command::CreateProject {
+            name: name.to_string(),
+            location: None,
+        });
+        let result = state.execute_tml_import_sections(
+            sections,
+            closures,
+            None,
+            Vec::new(),
+            Vec::new(),
+            VirtualShotMode::Auto,
+            None,
+        );
+        assert!(result.success, "import failed: {:?}", result.error);
+        state
+    };
+    let state = import_into(
+        "Mixed",
+        &parse_synthetic_tmlu(&wrap_xml_with("m", 0.0, &shots.join("\n"))),
+    );
+    let section = state.get_project_state().unwrap().sections[0].clone();
+    assert_eq!(section.shots.len(), 4);
+
+    // Three teams on three days over the one section, as the Detail panel does it.
+    let person = |name: &str| Person::named(name).unwrap();
+    let teams = [
+        (person("Ann Diver"), "2026-03-02"),
+        (person("Bo Lead"), "2026-04-11"),
+        (person("Cy Cave"), "2026-05-20"),
+    ];
+    for (index, shot) in section.shots.iter().enumerate().skip(1) {
+        let (who, day) = &teams[(index - 1).min(2)];
+        let result = state.execute(Command::EditShotCredit {
+            targets: CreditTargets::Shots {
+                shots: vec![(section.id, shot.id)],
+            },
+            edit: CreditEdit {
+                set_surveyors: Some(vec![who.clone()]),
+                set_date: Some(day.parse().ok()),
+                ..CreditEdit::default()
+            },
+        });
+        assert!(result.success, "{:?}", result.error);
+    }
+    let credits = |project: &crate::models::Project| -> Vec<Vec<SurveyCredit>> {
+        project
+            .sections
+            .iter()
+            .map(|s| s.shots.iter().map(|shot| shot.credit().clone()).collect())
+            .collect()
+    };
+    let before = credits(&state.get_project_state().unwrap());
+    assert_eq!(before.len(), 1);
+
+    let out_dir = tempfile::tempdir().unwrap();
+    let out_path = out_dir.path().join("mixed.tmlu");
+    crate::export::tml::export_tml(&state.get_project_state().unwrap(), &out_path).unwrap();
+    let reparsed = parse_tml(&out_path).unwrap();
+    assert_eq!(
+        reparsed
+            .sections
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["A"],
+        "credit changes must not cut the section"
+    );
+
+    let again = import_into("Mixed Again", &reparsed);
+    assert_eq!(
+        credits(&again.get_project_state().unwrap()),
+        before,
+        "one section, every shot with exactly the credit it left with"
     );
 }

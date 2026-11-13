@@ -519,6 +519,16 @@ pub struct ProjectStats {
     pub loop_count: usize,
     /// Maximum straight-line distance from zero datum to any station
     pub penetration_distance: f64,
+    /// The earliest survey date of any shot; absent when no shot has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    #[ts(type = "string")]
+    pub first_survey_date: Option<chrono::NaiveDate>,
+    /// The latest survey date of any shot; absent when no shot has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    #[ts(type = "string")]
+    pub last_survey_date: Option<chrono::NaiveDate>,
 }
 
 /// # THE DETERMINISTIC-SERIALIZATION RULE FOR THE HASHMAPS
@@ -806,6 +816,13 @@ impl Project {
         section_id: SectionId,
         updates: &SectionUpdates,
     ) -> Option<&Section> {
+        if updates.surveyor.is_some() || updates.date.is_some() {
+            // The legacy surveyor/date land on every shot; give each an
+            // identity first so an undo can address it after a reload.
+            self.get_section(section_id)?;
+            self.ensure_section_shot_uuids(section_id);
+            self.reindex_section_shot_uuids(section_id);
+        }
         let section = self.get_section_mut(section_id)?;
         section.apply_updates(updates);
         self.touch();
@@ -850,6 +867,19 @@ impl Project {
         }
     }
 
+    /// Move every section's LEGACY surveyor/date onto its uncredited shots
+    /// ([`Section::absorb_legacy_credit`]). Run wherever a `Project` or
+    /// `Section` comes back from JSON written before the credit moved onto
+    /// the shots - an undo snapshot, an older history entry - so the people it
+    /// named are not silently lost. Returns how many sections changed.
+    pub fn absorb_legacy_section_credit(&mut self) -> usize {
+        self.sections
+            .iter_mut()
+            .map(Section::absorb_legacy_credit)
+            .filter(|changed| *changed)
+            .count()
+    }
+
     /// Mint a UUID for every shot of ONE section that lacks one.
     ///
     /// Section-scoped twin of [`Self::ensure_shot_uuids`], for callers that only
@@ -861,7 +891,7 @@ impl Project {
     ///
     /// Does NOT update [`Self::shot_uuid_index`]; pair it with
     /// [`Self::reindex_section_shot_uuids`] when the section's shots also move.
-    pub(crate) fn ensure_section_shot_uuids(&mut self, section_id: SectionId) {
+    pub fn ensure_section_shot_uuids(&mut self, section_id: SectionId) {
         let Some(section) = self.get_section_mut(section_id) else {
             return;
         };

@@ -429,6 +429,13 @@ fn visit_entry(
                 changed |= f(station_ref.section_id, &mut shot_data.uuid);
             }
         }
+        UndoData::ShotCredits { changes, .. } => {
+            for change in changes {
+                let mut uuid = Some(std::mem::take(&mut change.shot_uuid));
+                changed |= f(change.section_id, &mut uuid);
+                change.shot_uuid = uuid.unwrap_or_default();
+            }
+        }
         UndoData::AddedProjectContent(content) => {
             for section in &mut content.sections {
                 let id = section.id;

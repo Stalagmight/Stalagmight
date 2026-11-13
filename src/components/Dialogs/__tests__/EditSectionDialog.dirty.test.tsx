@@ -56,8 +56,6 @@ const filledNew = (tempId: number): EditableShot => ({
 const section = (shots: Shot[], over: Partial<Section> = {}): Section => ({
   id: 1,
   name: null,
-  surveyor: null,
-  date: null,
   color: '#ffffff',
   direction: 'in',
   quality: 1,
@@ -75,8 +73,7 @@ const cleanState = (
   over: Partial<EditSectionDirtyState> = {},
 ): EditSectionDirtyState => ({
   name: '',
-  surveyor: '',
-  date: '',
+  creditChanged: false,
   color: '#ffffff',
   direction: 'in',
   quality: 1,
@@ -113,6 +110,11 @@ describe('isEditSectionDirty', () => {
     const sec = section([savedShot(0)]);
     const state = cleanState([{ ...editableSaved(0), length: 999 }]);
     expect(isEditSectionDirty(state, sec)).toBe(true);
+  });
+
+  it('is dirty when the survey credit changed (or a name is still being typed)', () => {
+    const sec = section([savedShot(0)]);
+    expect(isEditSectionDirty(cleanState([editableSaved(0)], { creditChanged: true }), sec)).toBe(true);
   });
 
   it('is dirty when metadata changed, even over a blank new row', () => {

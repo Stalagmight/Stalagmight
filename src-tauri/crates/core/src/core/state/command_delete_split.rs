@@ -122,9 +122,8 @@ impl AppState {
             // Capture deleted shot data for offset calculation
             let deleted_shot_data = section.shots[pos].to_shot_data();
 
-            // Capture metadata from original section (surveyor, date, color, direction -- NOT comment)
-            let surveyor = section.surveyor.clone();
-            let date = section.date;
+            // Capture metadata from original section (color, direction -- NOT
+            // comment). The survey credit needs no copy: it rides on the shots.
             let color = section.color.clone();
             let direction = section.direction;
             let quality = section.quality;
@@ -191,8 +190,8 @@ impl AppState {
             // Step 5: Create section B with inherited metadata
             let section_b_data = SectionData {
                 name: Some(name_b),
-                surveyor,
-                date,
+                surveyor: None,
+                date: None,
                 color,
                 direction: Some(direction),
                 quality,
@@ -399,8 +398,7 @@ impl AppState {
                 .iter()
                 .map(|s| s.id)
                 .collect();
-            let surveyor = section.surveyor.clone();
-            let date = section.date;
+            // The survey credit rides on the shots; nothing to copy.
             let color = section.color.clone();
             let direction = section.direction;
             let quality = section.quality;
@@ -476,8 +474,8 @@ impl AppState {
 
             let section_b_data = SectionData {
                 name: Some(name_b),
-                surveyor,
-                date,
+                surveyor: None,
+                date: None,
                 color,
                 direction: Some(direction),
                 quality,

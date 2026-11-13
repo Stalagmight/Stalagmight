@@ -8,7 +8,7 @@ import { DialogWrapper } from './DialogWrapper';
 import SectionPreview from './SectionPreview';
 import { Button } from '../common/Button';
 import { Select } from '../common/Select';
-import { SectionMetadataForm } from '../common/SectionMetadataForm';
+import { SectionMetadataForm, listPeopleProps, type CreditLists } from '../common/SectionMetadataForm';
 import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
 import { parseGps, detectFormat, looksTransposed, looksTransposedRawDD, type GpsFormat } from '../../utils/gps';
 import { MAX_DEPTH_REFERENCE_M } from '../../utils/gpsBounds';
@@ -19,9 +19,18 @@ import { editableShotsToDmpSection } from '../../utils/shotConversion';
 import type { DmpFile, DmpSection } from '../../types/commands';
 import type { DmpSelectionConfig } from './DmpSelectionDialog';
 import type { GpsCoordinates } from '../../types/project';
+import type { Person } from '../../types/ipc.generated';
+import { personKey } from '../../utils/people';
 import { sectionColorPalette } from '../../utils/colors';
 import { useUIStore } from '../../store/uiStore';
 import { TOAST_KEYS } from '../../utils/toastKeys';
+
+/** Same people in the same order, per role (the dirty guard's comparison). */
+function samePeopleLists(a: CreditLists, b: CreditLists): boolean {
+  const same = (x: readonly Person[], y: readonly Person[]) =>
+    x.length === y.length && x.every((p, i) => personKey(p) === personKey(y[i]!));
+  return same(a.surveyors, b.surveyors) && same(a.explorers, b.explorers);
+}
 
 export interface ZeroDatumConfigResult {
   sectionIndex: number;
@@ -29,7 +38,9 @@ export interface ZeroDatumConfigResult {
   gps: GpsCoordinates;
   metadata: {
     name: string;
-    surveyor: string | null;
+    /** Every shot of the section is credited to these (none = no override). */
+    surveyors: Person[];
+    explorers: Person[];
     date: string | null;
     color: string;
     // Carried through the #394/#534 re-entry paths like every other field,
@@ -417,10 +428,19 @@ export default function ZeroDatumConfigDialog({
   // resurrect the file/selection default under an emptied one.
   const initialNameRef = useRef(initialConfig?.metadata.name ?? section?.name ?? '');
   const [name, setName] = useState(initialNameRef.current);
-  const initialSurveyorRef = useRef(
-    initialConfig ? (initialConfig.metadata.surveyor ?? '') : (selectionConfig.defaultSurveyor || '')
+  const initialPeopleRef = useRef<CreditLists>(
+    initialConfig
+      ? { surveyors: initialConfig.metadata.surveyors ?? [], explorers: initialConfig.metadata.explorers ?? [] }
+      : { surveyors: selectionConfig.defaultSurveyors ?? [], explorers: selectionConfig.defaultExplorers ?? [] }
   );
-  const [surveyor, setSurveyor] = useState(initialSurveyorRef.current);
+  const [people, setPeople] = useState<CreditLists>(initialPeopleRef.current);
+  // Typed into a people field but not added yet: unsaved, like any other edit.
+  const [peopleTextPending, setPeopleTextPending] = useState(false);
+  const peopleProps = listPeopleProps(
+    people,
+    (role, next) => setPeople((prev) => ({ ...prev, [role]: next(prev[role]) })),
+    setPeopleTextPending,
+  );
   const initialDateRef = useRef(
     initialConfig
       ? (initialConfig.metadata.date ?? '')
@@ -501,7 +521,8 @@ export default function ZeroDatumConfigDialog({
     gpsInput.trim() !== initialGpsInputRef.current.trim() ||
     depthReferenceInput.trim() !== initialDepthReferenceRef.current.trim() ||
     name !== initialNameRef.current ||
-    surveyor !== initialSurveyorRef.current ||
+    peopleTextPending ||
+    !samePeopleLists(people, initialPeopleRef.current) ||
     date !== initialDateRef.current ||
     color !== initialColorRef.current ||
     direction !== initialDirectionRef.current ||
@@ -531,7 +552,8 @@ export default function ZeroDatumConfigDialog({
       depthReferenceText: depthReferenceInput,
       metadata: {
         name,
-        surveyor: surveyor || null,
+        surveyors: people.surveyors,
+        explorers: people.explorers,
         date: date || null,
         color,
         direction,
@@ -540,7 +562,7 @@ export default function ZeroDatumConfigDialog({
       },
       shots,
     }),
-    [sectionIndex, stationIndex, gpsCoords, gpsInput, depthReferenceInput, name, surveyor, date, color, direction, reverse, shots]
+    [sectionIndex, stationIndex, gpsCoords, gpsInput, depthReferenceInput, name, people, date, color, direction, reverse, shots]
   );
 
   const [backConfirmPending, setBackConfirmPending] = useState(false);
@@ -682,7 +704,8 @@ export default function ZeroDatumConfigDialog({
       gps: gpsCoords,
       metadata: {
         name,
-        surveyor: surveyor || null,
+        surveyors: people.surveyors,
+        explorers: people.explorers,
         date: date || null,
         color,
         direction,
@@ -691,7 +714,7 @@ export default function ZeroDatumConfigDialog({
       },
       shots,
     });
-  }, [gpsCoords, depthReferenceValid, onConfirm, sectionIndex, stationIndex, name, surveyor, date, color, direction, reverse, shots, incompleteShots, showToast, t]);
+  }, [gpsCoords, depthReferenceValid, onConfirm, sectionIndex, stationIndex, name, people, date, color, direction, reverse, shots, incompleteShots, showToast, t]);
 
   if (!section) return null;
 
@@ -867,12 +890,12 @@ export default function ZeroDatumConfigDialog({
           >
             <SectionMetadataForm
               name={name}
-              surveyor={surveyor}
+              people={peopleProps}
+              peopleColumns
               date={date}
               color={color}
               direction={direction}
               onNameChange={setName}
-              onSurveyorChange={setSurveyor}
               onDateChange={setDate}
               onColorChange={setColor}
               onDirectionChange={setDirection}

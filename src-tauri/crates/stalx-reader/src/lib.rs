@@ -56,8 +56,8 @@ use stalagmight_models::ClassifyScope;
 use stalagmight_persistence::persistence::{refused_schema_object, Database, SCHEMA_VERSION};
 
 pub use survey::{
-    CorrectionSource, Direction, LoopClosure, North, Section, Shot, ShotKind, StationComment,
-    StationId, StationMerge, StationName, StationPosition, Survey, ZeroDatum,
+    CorrectionSource, Direction, LoopClosure, North, Person, Section, Shot, ShotKind,
+    StationComment, StationId, StationMerge, StationName, StationPosition, Survey, ZeroDatum,
 };
 
 /// Default cap on the input size, in bytes.
@@ -119,6 +119,11 @@ pub struct CountLimits {
     /// row may name no station at all, so the table is capped on its own rather
     /// than through the shots it would resolve against.
     pub station_names: usize,
+    /// Per-shot survey credit rows (`shot_credits`, at most one per shot). Keyed
+    /// by shot uuid, so a row may name no shot: capped on its own.
+    pub shot_credits: usize,
+    /// Distinct credited people (`credit_people`).
+    pub credit_people: usize,
 }
 
 impl Default for CountLimits {
@@ -130,6 +135,8 @@ impl Default for CountLimits {
             loop_closures: 50_000,
             // One per station: at most every shot's end plus every section start.
             station_names: 2_100_000,
+            shot_credits: 2_000_000,
+            credit_people: 2_000_000,
         }
     }
 }
@@ -164,6 +171,18 @@ impl CountLimits {
         self.station_names = max;
         self
     }
+
+    #[must_use]
+    pub fn shot_credits(mut self, max: usize) -> Self {
+        self.shot_credits = max;
+        self
+    }
+
+    #[must_use]
+    pub fn credit_people(mut self, max: usize) -> Self {
+        self.credit_people = max;
+        self
+    }
 }
 
 /// Which [`CountLimits`] cap a file exceeded.
@@ -180,6 +199,10 @@ pub enum Limit {
     LoopClosures,
     /// [`CountLimits::station_names`].
     StationNames,
+    /// [`CountLimits::shot_credits`].
+    ShotCredits,
+    /// [`CountLimits::credit_people`].
+    CreditPeople,
 }
 
 impl std::fmt::Display for Limit {
@@ -190,6 +213,8 @@ impl std::fmt::Display for Limit {
             Self::StationMerges => "station merges",
             Self::LoopClosures => "loop closures",
             Self::StationNames => "station names",
+            Self::ShotCredits => "shot credits",
+            Self::CreditPeople => "credited people",
         })
     }
 }
@@ -444,6 +469,8 @@ fn check_row_counts(conn: &rusqlite::Connection, limits: CountLimits) -> Result<
         ),
         ("loop_closures", Limit::LoopClosures, limits.loop_closures),
         ("station_names", Limit::StationNames, limits.station_names),
+        ("shot_credits", Limit::ShotCredits, limits.shot_credits),
+        ("credit_people", Limit::CreditPeople, limits.credit_people),
     ] {
         let exists: i64 = conn
             .query_row(

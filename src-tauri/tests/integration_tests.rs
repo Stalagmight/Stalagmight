@@ -722,10 +722,14 @@ fn test_shot_deletion() {
 fn test_section_metadata_update() {
     let mut project = create_test_project();
 
-    project.add_section(create_section_with_shots("Original", vec![]));
+    project.add_section(create_section_with_shots(
+        "Original",
+        vec![create_shot_data(0.0, 10.0, 5.0, 6.0)],
+    ));
 
     let updates = SectionUpdates {
         name: Some(Some("Updated Name".to_string())),
+        // Legacy text: set on every shot.
         surveyor: Some(Some("New Surveyor".to_string())),
         color: Some("#ff0000".to_string()),
         date: None,
@@ -737,7 +741,7 @@ fn test_section_metadata_update() {
 
     let section = project.get_section(0).unwrap();
     assert_eq!(section.name, Some("Updated Name".to_string()));
-    assert_eq!(section.surveyor, Some("New Surveyor".to_string()));
+    assert_eq!(section.surveyor_names(), Some("New Surveyor".to_string()));
     assert_eq!(section.color, "#ff0000");
     assert_eq!(section.quality, 1.2);
 }
@@ -781,11 +785,13 @@ fn test_section_date_storage() {
         color: "#4ecdc4".to_string(),
         direction: None,
         quality: 1.0,
-        shots: vec![],
+        // The legacy date is a template for the shots, so it needs one.
+        shots: vec![create_shot_data(0.0, 10.0, 5.0, 6.0)],
     });
 
     let section = project.get_section(0).unwrap();
-    assert_eq!(section.date, Some(date));
+    assert_eq!(section.first_survey_date(), Some(date));
+    assert_eq!(section.shots[0].credit().date, Some(date));
 }
 
 // ============================================================================
@@ -1981,7 +1987,12 @@ fn test_section_to_section_data() {
     let data = section.to_section_data();
 
     assert_eq!(data.name, Some("Original".to_string()));
-    assert_eq!(data.surveyor, Some("John".to_string()));
+    // The template went onto the shot; the data carries it there.
+    assert_eq!(data.surveyor, None);
+    assert_eq!(
+        data.shots[0].credit().surveyor_names().as_deref(),
+        Some("John")
+    );
     assert_eq!(data.color, "#ff0000");
     assert_eq!(data.shots.len(), 1);
     assert!((data.shots[0].length - 10.0).abs() < 0.001);

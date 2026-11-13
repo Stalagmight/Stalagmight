@@ -69,6 +69,25 @@ migration path is provided for them.** Migrations exist for the shapes that ship
 a pre-release file that a bump cannot read is expected to be re-imported from its
 source survey, not repaired.
 
+## Per-shot survey credit
+
+Surveyors, explorers and the survey date are stored per shot, in two side
+tables that carry no schema bump (SpeleoDB's reader accepts exactly v18 and
+ignores tables it does not know): `credit_people (id, name, email)` and
+`shot_credits (section_id, shot_uuid, date, surveyors, explorers)`, keyed by
+`(section_id, shot_uuid)`, the people columns
+comma-joined `credit_people` ids. The legacy `sections.surveyor` and
+`sections.date` are still written, as the section aggregate (the distinct
+surveyor names joined with `", "`, the earliest shot date). A shot WITHOUT a
+row reads its credit from those two columns through the legacy splitter, which
+is the migration for older files and for shots an older build added; the
+writer therefore writes a row only where that fallback would read back
+something else. A third table, `credit_sections (section_id, surveyor, date)`,
+records the legacy pair this build wrote; an older build keeps the rows but may
+retype `sections.surveyor`/`date`, and a section whose pair no longer matches
+the record ignores its rows (the retyped text wins). All three tables are
+project data and ride in SpeleoDB pushes. See `persistence/sqlite/shot_credits.rs`.
+
 ## Save Pipeline
 
 ### Backend (`save_project` in `project_io.rs`)

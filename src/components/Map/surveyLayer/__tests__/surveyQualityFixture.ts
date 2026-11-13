@@ -34,8 +34,6 @@ export function buildSurveyData(spec: {
     data.sections.push({
       id: s.id,
       name: null,
-      surveyor: null,
-      date: null,
       color: '#ffffff',
       direction: 'in',
       quality: 1,

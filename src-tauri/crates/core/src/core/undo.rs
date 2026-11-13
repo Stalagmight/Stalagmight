@@ -6,11 +6,12 @@ use serde::{Deserialize, Serialize};
 use super::Command;
 use crate::models::{
     GpsCoordinates, LoopClosure, SectionData, SectionId, SectionIdentity, ShotData, ShotId,
-    StationRef,
+    StationRef, SurveyCredit,
 };
 
 mod added_content;
 mod budget;
+mod history_credit;
 pub mod history_view;
 mod persistence;
 mod uuid_remap;
@@ -134,6 +135,23 @@ pub struct UndoEntry {
     /// to read; the command is still structured, so it has to be measured deliberately.
     #[serde(default, skip_serializing)]
     pub command_bytes: Option<usize>,
+}
+
+/// One shot's survey credit across a credit edit, addressed by the uuid that
+/// survives a save (see [`UndoData::ShotCredits`]).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ShotCreditChange {
+    pub section_id: SectionId,
+    /// The shot's persistent uuid; the executor mints one for a shot that had
+    /// none, so every recorded change is addressable after a reload.
+    pub shot_uuid: String,
+    pub before: SurveyCredit,
+    pub after: SurveyCredit,
+    /// The IN-SESSION id, only meaningful between `generate_undo_data` and
+    /// `finalize_undo_data` of the one `execute()` that recorded it. Never
+    /// persisted: the loader renumbers ids.
+    #[serde(skip)]
+    pub shot_id: ShotId,
 }
 
 /// Data needed to undo a command
@@ -308,6 +326,15 @@ pub enum UndoData {
         #[serde(skip_serializing_if = "HashMap::is_empty")]
         #[serde(serialize_with = "ordered_section_offsets")]
         previous_offsets: HashMap<SectionId, Option<(f64, f64)>>,
+        /// The legacy surveyor/date the section held when this shot was the
+        /// first one appended into it (`Section::legacy_surveyor`): the shot
+        /// took it as its credit and the section let it go. The undo, which
+        /// leaves the section shot-less again, gives it back.
+        ///
+        /// FORMAT EVOLUTION (additive, no schema bump): absent in entries
+        /// written before it existed and for every other insert.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        consumed_legacy: Option<(Option<String>, Option<chrono::NaiveDate>)>,
     },
 
     /// Merge info for unmerging stations
@@ -416,6 +443,24 @@ pub enum UndoData {
     /// - after: Snapshot after the operation (used for redo)
     ProjectSnapshotPair { before: String, after: String },
 
+    /// Per-shot survey credit before and after an `EditShotCredit`, or an
+    /// `UpdateSectionMetadata` that set the legacy surveyor/date on every shot.
+    ///
+    /// Undo writes `before` back onto each shot, resolved by uuid; redo writes
+    /// `after` (an `EditShotCredit`) or re-executes the command (an
+    /// `UpdateSectionMetadata`, which addresses its section by its stable id).
+    /// A shot that no longer resolves is skipped with a warning rather than
+    /// failing the step: a credit edit is metadata, and a failed undo would wedge
+    /// every entry beneath it.
+    ShotCredits {
+        changes: Vec<ShotCreditChange>,
+        /// `UpdateSectionMetadata` only: the section and its OTHER previous
+        /// values (a `SectionUpdates` JSON with no surveyor/date), put back by
+        /// the undo exactly as `PreviousValues` does.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        section_values: Option<(SectionId, String)>,
+    },
+
     /// What one "Add .stalx to current project" brought (#674): undo removes
     /// exactly it, redo reinstalls it with the same ids. See [`AddedContent`].
     /// Boxed: the payload is far larger than every other variant.
@@ -517,6 +562,7 @@ impl UndoData {
             UndoData::ProjectSnapshot(_) => "ProjectSnapshot",
             UndoData::ProjectSnapshotPair { .. } => "ProjectSnapshotPair",
             UndoData::AddedProjectContent(_) => "AddedProjectContent",
+            UndoData::ShotCredits { .. } => "ShotCredits",
             UndoData::None => "None",
         }
     }
@@ -1715,6 +1761,7 @@ mod tests {
                 before_shot_uuid: None,
                 uuid: uuid.map(str::to_string),
                 previous_offsets: HashMap::new(),
+                consumed_legacy: None,
             },
             timestamp: None,
         }
@@ -2178,6 +2225,7 @@ mod tests {
                     before_shot_uuid: None,
                     uuid: None,
                     previous_offsets: HashMap::new(),
+                    consumed_legacy: None,
                 },
                 timestamp: None,
             },

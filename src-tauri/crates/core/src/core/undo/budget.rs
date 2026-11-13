@@ -83,6 +83,11 @@ impl UndoStack {
                     + (content.section_offsets.len() + content.moved_offsets.len())
                         * BYTES_PER_OFFSET
             }
+            // Two credits per touched shot, each a handful of names.
+            UndoData::ShotCredits {
+                changes,
+                section_values,
+            } => changes.len() * 256 + section_values.as_ref().map_or(0, |(_, json)| json.len()),
             UndoData::InverseCommand(_) | UndoData::None => 0,
         };
         // Restored rows deliberately do not reserialize their command just to rebuild

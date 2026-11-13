@@ -143,6 +143,11 @@ impl AppState {
                 }
             }
 
+            UndoData::ShotCredits {
+                changes,
+                section_values,
+            } => self.undo_shot_credits(changes, section_values.as_ref()),
+
             UndoData::SectionSnapshot {
                 section_id,
                 section_data,
@@ -193,6 +198,7 @@ impl AppState {
                 before_shot_id,
                 uuid,
                 previous_offsets,
+                consumed_legacy,
                 ..
             } => {
                 // Undo a CreateShot by removing the shot it created - resolved
@@ -223,6 +229,11 @@ impl AppState {
                             // recorded map instead of trusting that re-derivation
                             // (#413, finding 27's second arm).
                             self.restore_captured_section_offsets(previous_offsets);
+                            // Shot-less again: the section keeps the legacy
+                            // pair its first shot took.
+                            if let Some(pair) = consumed_legacy {
+                                self.restore_consumed_legacy(*section_id, pair);
+                            }
                         }
                         removed
                     }
@@ -886,6 +897,12 @@ impl AppState {
                                 }
                             };
                             if ok {
+                                // The re-created first shot carries the pair as
+                                // its credit again; the section lets it go.
+                                if let Some(section) = project.get_section_mut(*section_id) {
+                                    section.legacy_surveyor = None;
+                                    section.legacy_date = None;
+                                }
                                 CommandResult::success()
                             } else {
                                 CommandResult::failure("Failed to redo shot creation".to_string())
@@ -979,6 +996,15 @@ impl AppState {
                     }
                     _ => CommandResult::failure("Unsupported closure redo command".to_string()),
                 }
+            }
+            // An `EditShotCredit` names explicit shots by in-session id, which a
+            // reload renumbers - so its redo writes the recorded `after` credits
+            // by uuid instead of re-executing. (A section-metadata edit re-executes
+            // below: it names its section by the id that survives a save.)
+            UndoData::ShotCredits { changes, .. }
+                if matches!(entry.command, Command::EditShotCredit { .. }) =>
+            {
+                self.write_recorded_credits(changes, true)
             }
             _ => {
                 // Re-execute the original command for other undo data types.

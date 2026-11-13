@@ -181,6 +181,7 @@ fn hostile_shot(rng: &mut Rng) -> ShotData {
         kind: *rng.pick(&[ShotKind::Normal, ShotKind::Jump, ShotKind::Reference]),
         marker_index: rng.chance(50).then(|| rng.range(0, 9) as u32),
         temperature: rng.chance(50).then(|| hostile_float(rng)),
+        credit: None,
     }
 }
 

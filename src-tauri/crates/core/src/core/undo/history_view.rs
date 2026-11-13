@@ -62,6 +62,7 @@ fn get_command_type(command: &Command) -> String {
         Command::UpdateShot { .. } => "update_shot".to_string(),
         Command::DeleteShot { .. } => "delete_shot".to_string(),
         Command::SetShotKind { .. } => "set_shot_kind".to_string(),
+        Command::EditShotCredit { .. } => "edit_shot_credit".to_string(),
         Command::MergeStations { .. } => "merge_stations".to_string(),
         Command::UnmergeStations { .. } => "unmerge_stations".to_string(),
         Command::UnmergeStationPair { .. } => "unmerge_station_pair".to_string(),
@@ -449,14 +450,23 @@ fn derive_preview_data(
             }
         }
 
-        // UpdateSectionMetadata - show changed fields from PreviousValues
+        // UpdateSectionMetadata - show changed fields from PreviousValues, or
+        // from the per-shot record a legacy surveyor/date edit leaves.
         (
             Command::UpdateSectionMetadata { updates, .. },
-            UndoData::PreviousValues { values_json, .. },
+            undo @ (UndoData::PreviousValues { .. } | UndoData::ShotCredits { .. }),
         ) => {
             let mut changes = Vec::new();
+            let values_json = match undo {
+                UndoData::PreviousValues { values_json, .. } => values_json.clone(),
+                UndoData::ShotCredits {
+                    changes,
+                    section_values,
+                } => super::history_credit::legacy_section_values(changes, section_values.as_ref()),
+                _ => String::new(),
+            };
 
-            if let Ok(prev) = serde_json::from_str::<serde_json::Value>(values_json) {
+            if let Ok(prev) = serde_json::from_str::<serde_json::Value>(&values_json) {
                 if let Some(new_name_opt) = &updates.name {
                     let new_name = new_name_opt.as_deref().unwrap_or("");
                     let old_name = prev.get("name").and_then(|v| v.as_str()).unwrap_or("");
@@ -919,6 +929,11 @@ fn derive_preview_data(
             })
         }
 
+        // A credit edit: the names and dates before and after, over its shots.
+        (Command::EditShotCredit { edit, .. }, UndoData::ShotCredits { changes, .. }) => {
+            Some(super::history_credit::credit_preview(edit, changes))
+        }
+
         // Add .stalx (#674): what the add brought, counted off its own record.
         (Command::AddProjectFile { file_name, .. }, UndoData::AddedProjectContent(content)) => {
             let shots: usize = content.sections.iter().map(|s| s.shots.len()).sum();
@@ -957,7 +972,8 @@ pub fn entry_to_history_item(
 ) -> UndoHistoryItem {
     UndoHistoryItem {
         index,
-        description: entry.command.description(),
+        description: super::history_credit::description(entry)
+            .unwrap_or_else(|| entry.command.description()),
         timestamp: entry.timestamp.map(|t| t.to_rfc3339()),
         command_type: get_command_type(&entry.command),
         preview_data: derive_preview_data(entry, section_names),

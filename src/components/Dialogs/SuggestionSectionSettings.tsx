@@ -13,15 +13,17 @@
  */
 import { useTranslation } from 'react-i18next';
 import { Panel } from '../common/Panel';
-import { SectionMetadataForm } from '../common/SectionMetadataForm';
+import { SectionMetadataForm, type SectionPeopleProps } from '../common/SectionMetadataForm';
 import type { SectionEditState } from '../../utils/batchImportHelpers';
 
 export interface SuggestionSectionSettingsProps {
   editState: SectionEditState;
+  /** The section's Surveyors / Explorers (the host resolves the wizard defaults in). */
+  people: SectionPeopleProps;
   onMetadataChange: (field: keyof SectionEditState, value: string | number | boolean) => void;
 }
 
-export function SuggestionSectionSettings({ editState, onMetadataChange }: SuggestionSectionSettingsProps) {
+export function SuggestionSectionSettings({ editState, people, onMetadataChange }: SuggestionSectionSettingsProps) {
   const { t } = useTranslation();
 
   return (
@@ -48,13 +50,12 @@ export function SuggestionSectionSettings({ editState, onMetadataChange }: Sugge
       <div className="space-y-4 mt-4" data-testid="wizard-editable-rest">
         <SectionMetadataForm
           name={editState.name}
-          surveyor={editState.surveyor}
+          people={people}
           date={editState.date}
           color={editState.color}
           direction={editState.direction}
           quality={editState.quality}
           onNameChange={(v) => onMetadataChange('name', v)}
-          onSurveyorChange={(v) => onMetadataChange('surveyor', v)}
           onDateChange={(v) => onMetadataChange('date', v)}
           onColorChange={(v) => onMetadataChange('color', v)}
           onDirectionChange={(v) => onMetadataChange('direction', v)}

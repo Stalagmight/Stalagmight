@@ -61,6 +61,7 @@ impl AppState {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .forget();
+        self.clear_collaborator_cache();
         // Attempt both cleanups even when credential persistence fails.
         let token_result = self.speleodb_clear_saved_token();
         let recent_result = self

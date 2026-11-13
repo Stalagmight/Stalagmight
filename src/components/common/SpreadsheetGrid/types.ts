@@ -76,6 +76,13 @@ export interface GridColumn<Row> {
    *  while every other column in the grid stays editable. `dir` mirrors the
    *  click's Shift modifier, so Shift+Space cycles backwards. */
   activate?: (row: Row, rowIdx: number, dir: 1 | -1) => void;
+  /** The cell's editor is the host's own popover (a people list, a date): every
+   *  way into an edit - Enter, F2, Space, a double click anywhere in the cell,
+   *  a typed character - calls this instead, with the typed character as
+   *  `seed` ('' for the others). The grid then never opens its text editor over
+   *  the cell and never commits a typed character through {@link parse}, which
+   *  stays for paste, fill and clear. Implies {@link noInlineEdit}. */
+  openEditor?: (row: Row, rowIdx: number, seed: string) => void;
   /** Parse a raw typed/pasted string into the value to commit. Return
    *  `undefined` to SKIP the write (e.g. a non-finite number, or an empty string
    *  into a non-nullable numeric - never silently write 0). Defaults to a

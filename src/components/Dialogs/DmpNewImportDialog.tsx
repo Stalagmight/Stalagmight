@@ -7,6 +7,7 @@ import { CheckCircleIcon } from '../common/icons';
 import type { DmpFile, CrossSectionSuggestion, ImportSectionForSuggestion, CommandResult, SegmentGeometry } from '../../types/commands';
 import type { DmpSelectionConfig } from './DmpSelectionDialog';
 import type { DistanceField, Project, Station, ShotData } from '../../types/project';
+import type { Person } from '../../types/ipc.generated';
 import type { ImportSectionConfig as BackendImportSectionConfig, ImportPlacement } from '../../types/commands';
 import type { ZeroDatumConfigResult } from './ZeroDatumConfigDialog';
 import type { DmpSection } from '../../types/commands';
@@ -21,7 +22,7 @@ import SectionPreview, { type MergePreviewConfig, type DmpMergePreviewConfig, ty
 import { Select } from '../common/Select';
 import { DialogWrapper } from './DialogWrapper';
 import { AlertDialog } from './AlertDialog';
-import { SectionMetadataForm } from '../common/SectionMetadataForm';
+import { SectionMetadataForm, listPeopleProps } from '../common/SectionMetadataForm';
 import { SuggestionSectionSettings } from './SuggestionSectionSettings';
 import { SegmentPlacementModes, type SegmentPlacementMode } from './SegmentPlacementModes';
 import {
@@ -64,7 +65,9 @@ import {
   adjustStationForDeletedShots,
   buildPlacementSectionData,
   findReverseImportConnection,
+  importCreditFields,
   redirectDeletedTargets,
+  resolveImportPeople,
   resolveImportSectionDate,
   type SectionEditState,
   type ConfirmedOverlapInfo,
@@ -695,7 +698,7 @@ export function buildBatchImport(
 
       // Use edits for metadata if available, otherwise fall back to DMP data + selectionConfig
       const sectionName = edits?.name ?? section.name;
-      const surveyorValue = edits?.surveyor ?? selectionConfig.defaultSurveyor ?? null;
+      const people = resolveImportPeople(edits, selectionConfig);
       // `resolveImportSectionDate`, not the raw `??` chain plus a trailing
       // `|| null`: a cleared date has to leave as null on EVERY emitter, and
       // the rule is stated once (#478 - see the helper).
@@ -715,8 +718,8 @@ export function buildBatchImport(
       const config: BackendImportSectionConfig = {
         section_index: configs.length,
         name: sectionName,
-        surveyor: surveyorValue || null,
-        date: dateStr,
+        // The section's people and date override every imported shot.
+        ...importCreditFields(people, dateStr),
         color: colorValue,
         direction: directionValue,
         quality: qualityValue,
@@ -1497,7 +1500,7 @@ export default function DmpNewImportDialog({
     const selectedPos = selectedIndices.indexOf(idx);
     const newState: SectionEditState = {
       name: section.name,
-      surveyor: selectionConfig.defaultSurveyor || '',
+      ...resolveImportPeople(undefined, selectionConfig),
       date: selectionConfig.defaultDate ?? section.date?.split(/[T ]/)[0] ?? '',
       color: sectionPalette[(selectedPos >= 0 ? selectedPos : 0) % sectionPalette.length] ?? '#4ecdc4',
       direction: section.direction === 'out' ? 'out' : 'in',
@@ -1673,6 +1676,22 @@ export default function DmpNewImportDialog({
   const handleMetadataChange = useCallback((field: keyof SectionEditState, value: string | number | boolean) => {
     setEditState((prev) => prev ? { ...prev, [field]: value } : prev);
   }, []);
+
+  // A section without its own lists (one overlap treatment created) shows,
+  // and starts editing from, the step-1 defaults.
+  const handlePeopleChange = useCallback(
+    (role: 'surveyors' | 'explorers', next: (prev: Person[]) => Person[]) => {
+      setEditState((prev) => {
+        if (!prev) return prev;
+        return { ...prev, [role]: next(resolveImportPeople(prev, selectionConfig)[role]) };
+      });
+    },
+    [selectionConfig],
+  );
+  const sectionPeopleProps = useMemo(
+    () => (editState ? listPeopleProps(resolveImportPeople(editState, selectionConfig), handlePeopleChange) : null),
+    [editState, selectionConfig, handlePeopleChange],
+  );
 
   const handleShotChange = useCallback(
     (index: number, field: keyof EditableShot, value: number | string | boolean | null) => {
@@ -3057,7 +3076,6 @@ export default function DmpNewImportDialog({
       const sectionData = buildPlacementSectionData({
         dmpSection: anchorDmpSection,
         edits,
-        defaultSurveyor: selectionConfig.defaultSurveyor,
         defaultDate: selectionConfig.defaultDate,
         palette: sectionPalette,
         paletteIndex: selectedIndices.indexOf(anchor.sectionIndex),
@@ -3110,7 +3128,7 @@ export default function DmpNewImportDialog({
 
       return { sectionData, additionalSections, emittedStationIndex };
     },
-    [dmpFile.sections, emittedAnchorStation, selectionConfig.defaultDate, selectionConfig.defaultSurveyor, selectedIndices, sectionPalette],
+    [dmpFile.sections, emittedAnchorStation, selectionConfig.defaultDate, selectedIndices, sectionPalette],
   );
 
   const importPlacedSegmentNow = useCallback(
@@ -3952,7 +3970,13 @@ export default function DmpNewImportDialog({
                   the wrapped content itself is unchanged. */}
               {editState && (
                 <div className="border-t border-border pt-3">
-                  <SuggestionSectionSettings editState={editState} onMetadataChange={handleMetadataChange} />
+                  {sectionPeopleProps && (
+                    <SuggestionSectionSettings
+                      editState={editState}
+                      people={sectionPeopleProps}
+                      onMetadataChange={handleMetadataChange}
+                    />
+                  )}
                 </div>
               )}
             </div>
@@ -4057,13 +4081,12 @@ export default function DmpNewImportDialog({
                   <div className="space-y-4" data-testid="wizard-manual-editable-rest">
                     <SectionMetadataForm
                       name={editState.name}
-                      surveyor={editState.surveyor}
+                      people={sectionPeopleProps ?? listPeopleProps(resolveImportPeople(editState, selectionConfig), handlePeopleChange)}
                       date={editState.date}
                       color={editState.color}
                       direction={editState.direction}
                       quality={editState.quality}
                       onNameChange={(v) => handleMetadataChange('name', v)}
-                      onSurveyorChange={(v) => handleMetadataChange('surveyor', v)}
                       onDateChange={(v) => handleMetadataChange('date', v)}
                       onColorChange={(v) => handleMetadataChange('color', v)}
                       onDirectionChange={(v) => handleMetadataChange('direction', v)}

@@ -169,7 +169,8 @@ async function openDmpWizard(page: Page, dmpFile = buildMockDmpFile()): Promise<
 
     const selectionConfig = {
       selectedIndices: new Set([0, 1]),
-      defaultSurveyor: 'Session Diver',
+      defaultSurveyors: [{ name: 'Session Diver' }],
+      defaultExplorers: [],
       defaultDate: null,
       fileHash: 'mock_dmp_hash_flow',
       sectionHashes: ['hash-anchor-candidate', 'hash-unanchored-segment'],

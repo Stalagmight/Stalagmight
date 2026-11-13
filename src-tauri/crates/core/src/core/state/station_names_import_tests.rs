@@ -41,6 +41,9 @@ fn config(reverse: bool, names: &[(u32, &str)], comments: &[(u32, &str)]) -> Imp
         station_names: pairs(names),
         reverse,
         azimuth_reference: None,
+        explorers: None,
+        override_date: None,
+        surveyors: None,
     }
 }
 

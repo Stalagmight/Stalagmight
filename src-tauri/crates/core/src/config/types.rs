@@ -7,6 +7,7 @@ use ts_rs::TS;
 
 use super::map_palette::MapPaletteConfig;
 use super::panels::PanelsConfig;
+use super::people::PeopleConfig;
 use super::webkit::WebkitMemoryConfig;
 use crate::models::config::{
     ClosureAdjustmentConfig, GasConfig, PlacementSuggestionConfig, ValidationConfig,
@@ -64,6 +65,10 @@ pub struct Config {
     /// Depth / distance colour palettes and pins (`config/map_palette.rs`).
     #[serde(default)]
     pub map_palette: MapPaletteConfig,
+    /// People recently credited on a shot, suggested in every project
+    /// (`config/people.rs`).
+    #[serde(default)]
+    pub people: PeopleConfig,
 
     // Legacy fields for backwards compatibility (deserialize only, never serialize)
     // Uses alias to match old TOML key name while keeping internal field name distinct
@@ -1605,6 +1610,7 @@ impl Config {
         self.syntactic_highlighting.normalize();
         self.gas.normalize();
         self.map_palette.normalize();
+        self.people.normalize();
         self.webkit_memory.normalize();
         self.units.decimal_precision.normalize();
         super::general::normalize_general(&mut self.general);
@@ -1643,6 +1649,7 @@ impl Config {
 
         self.map.controls.zoom_speed = migrate_zoom_speed(self.map.controls.zoom_speed);
         self.panels.hide_newly_arrived_station_columns();
+        self.panels.hide_newly_arrived_shot_columns();
     }
 }
 

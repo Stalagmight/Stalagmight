@@ -60,7 +60,26 @@
       "meters": "m",
       "percent": "%"
     },
-    "offline": "Offline"
+    "offline": "Offline",
+    "peopleInput": {
+      "addNew": "Add \"{{name}}\"",
+      "remove": "Remove {{name}}",
+      "promote": "Add {{name}} to all shots",
+      "promoteHint": "Click to add to all shots",
+      "onShots": "On {{carrying}} of {{total}} shots",
+      "noEmail": "no email",
+      "speleodbBadge": "SpeleoDB",
+      "speleodbCollaborator": "SpeleoDB collaborator",
+      "announce": {
+        "added": "Added {{name}}",
+        "removed": "Removed {{name}}",
+        "armed": "Press Backspace again to remove {{name}}",
+        "duplicate": "{{name}} is already listed",
+        "ambiguous": "Several people are called {{name}}: pick one from the list"
+      },
+      "onAllShots_one": "On {{count}} shot",
+      "onAllShots_other": "On all {{count}} shots"
+    }
   },
   "app": {
     "dropOverlay": {
@@ -1294,11 +1313,12 @@
       "table": {
         "section": "Section",
         "shots": "Shots",
-        "surveyor": "Surveyor",
         "date": "Date",
         "color": "Color",
         "branch": "(branch)",
-        "reanchored": "(moved to origin)"
+        "reanchored": "(moved to origin)",
+        "surveyorsOf": "Surveyors of {{name}}",
+        "explorersOf": "Explorers of {{name}}"
       },
       "sectionsToImport": "Sections to import",
       "selectedCount": "{{selected}} of {{total}} selected",
@@ -1549,8 +1569,6 @@
       "duplicateHashWarning": "File may have been imported before (same hash detected)",
       "duplicateSectionsWarning": "{{duplicates}} of {{total}} sections already imported (auto-deselected)",
       "defaultValues": "Default Values (apply to all sections)",
-      "surveyorLabel": "Surveyor",
-      "surveyorPlaceholder": "Enter surveyor name...",
       "dateOverrideLabel": "Date Override",
       "selectAll": "Select All",
       "selectNone": "Select None",
@@ -1977,8 +1995,7 @@
       "comment": "Comment",
       "color": "Color",
       "latitude": "Latitude",
-      "longitude": "Longitude",
-      "surveyor": "Surveyor"
+      "longitude": "Longitude"
     },
     "placeholder": {
       "none": "None"
@@ -2060,6 +2077,12 @@
       "viaSuffix": ")",
       "metrics": "Path {{path}} | Error {{error}} | {{percent}}",
       "unavailable": "Closure metrics unavailable"
+    },
+    "multiShot": {
+      "title_one": "{{count}} shot selected",
+      "title_other": "{{count}} shots selected",
+      "summary_one": "{{shots}} shots in 1 section. Changes apply to every selected shot.",
+      "summary_other": "{{shots}} shots in {{count}} sections. Changes apply to every selected shot."
     }
   },
   "displayMenu": {
@@ -2710,9 +2733,7 @@
     "incomplete_other": "Rows {{rows}} are missing required values. Fill them in or delete the rows to continue.",
     "labels": {
       "color": "Color",
-      "date": "Date",
-      "name": "Section Name",
-      "surveyor": "Surveyor"
+      "name": "Section Name"
     },
     "pasteCapped_one": "{{count}} pasted cell was dropped: the table cannot grow any further.",
     "pasteCapped_other": "{{count}} pasted cells were dropped: the table cannot grow any further.",
@@ -2736,13 +2757,11 @@
       "color": "Color",
       "directionShort": "Dir",
       "quality": "Closure Adj. Weight",
-      "reverse": "Reverse numbering",
-      "surveyor": "Surveyor"
+      "reverse": "Reverse numbering"
     },
     "placeholders": {
       "color": "#RRGGBB",
-      "name": "Section name",
-      "surveyor": "Surveyor"
+      "name": "Section name"
     }
   },
   "sections": {
@@ -4005,5 +4024,28 @@
   "projectClose": {
     "failedTitle": "Close Project failed",
     "failedMessage": "The project is still open. Try again."
+  },
+  "credit": {
+    "surveyors": "Surveyors",
+    "explorers": "Explorers",
+    "dateLabel": "Survey date",
+    "placeholders": {
+      "surveyors": "Type a name, Enter to add",
+      "explorers": "Type a name, Enter to add"
+    },
+    "date": {
+      "pickForAll": "Pick a date",
+      "mixed": "{{range}}, differs per shot",
+      "mixedUndated_one": "{{range}}, {{count}} shot undated",
+      "mixedUndated_other": "{{range}}, {{count}} shots undated",
+      "setForAll": "Set for all shots",
+      "keepPerShot": "Keep per-shot dates",
+      "empty": "No date",
+      "clear": "Clear date"
+    },
+    "cellEditor": {
+      "hint": "Enter to save, Esc to cancel",
+      "done": "Done"
+    }
   }
 }

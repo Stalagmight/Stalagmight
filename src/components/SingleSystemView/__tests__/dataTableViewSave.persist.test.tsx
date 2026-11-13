@@ -101,9 +101,9 @@ describe('DataTable debounced view-save guards (#357 items 4 & 5)', () => {
 
     const calls = updateViewCalls();
     expect(calls).toHaveLength(1);
-    // Seeded default hidden columns (section_id, shot_id) plus the just-hidden
+    // Seeded default hidden columns (section_id, shot_id, the credit columns) plus the just-hidden
     // 'comment', sorted (see `stableWidths`'s sibling sort in the component).
-    expect(calls[0]?.[1]).toMatchObject({ hiddenColumns: ['comment', 'section_id', 'shot_id'] });
+    expect(calls[0]?.[1]).toMatchObject({ hiddenColumns: ['comment', 'explorers', 'section_id', 'shot_id', 'survey_date', 'surveyors'] });
   });
 
   it('does NOT flush a stale value when a change is undone back to the last-saved state before unmount (item 4, the subtle half)', async () => {
@@ -168,6 +168,6 @@ describe('DataTable debounced view-save guards (#357 items 4 & 5)', () => {
     // exactly the regression #357 item 5 fixes.
     const callsAfterRetry = updateViewCalls();
     expect(callsAfterRetry).toHaveLength(2);
-    expect(callsAfterRetry[1]?.[1]).toMatchObject({ hiddenColumns: ['comment', 'section_id', 'shot_id'] });
+    expect(callsAfterRetry[1]?.[1]).toMatchObject({ hiddenColumns: ['comment', 'explorers', 'section_id', 'shot_id', 'survey_date', 'surveyors'] });
   });
 });

@@ -83,8 +83,8 @@ These are written per-shot since Ariane stores section metadata on every shot ro
 | Internal field | TML element | Notes |
 |----------------|-------------|-------|
 | `section.name` | `Section` / `SC` | Falls back to `"Section {id}"` if unnamed |
-| `section.surveyor` | `Explorer` / `EX` | `"unknown"` if unset. Written VERBATIM, so a compound value the import built from Ariane's two-role field (`"nh / ds"` - see [Ariane import](ariane-import.md#per-section)) goes back out in the plain compound form real files use, and re-imports unchanged. A file that arrived in the entity-escaped `<Explorer>…</Explorer><Surveyor>…</Surveyor>` encoding is normalised to that plain form, not restored to the escaped one. |
-| `section.date` | `Date` / `DT` | `"2000-01-01"` if unset |
+| shot credit (#329) | `Explorer` / `EX` | Per ROW, from the shot's own surveyors and explorers. The entity-escaped element form `<Explorer>e1, e2</Explorer><Surveyor>s1, s2</Surveyor>` when anyone surveyed it or an explorer's name holds `" / "`; otherwise the explorers as plain text joined with `", "`; `"unknown"` when nobody is credited. `<` and `>` are dropped from exported names so no name can move people between roles. A `,` or `;` inside one name cannot round-trip (Ariane separates people with commas). The import reads both forms back to the same people on the same shot. A START row takes the credit of the shot it leads into. |
+| shot credit date | `Date` / `DT` | Per row, the shot's own survey date; `"2000-01-01"` if unset |
 | `section.color` (`#RRGGBB`) | `Color` / `CL` | Converted to Ariane format `0xRRGGBBff` |
 
 ### Shot-level fields

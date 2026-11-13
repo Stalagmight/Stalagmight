@@ -119,7 +119,8 @@ function dmpFile(): DmpFile {
  *  silently fell back to them is visible rather than coincidentally equal. */
 const selectionConfig = {
   selectedIndices: new Set([0]),
-  defaultSurveyor: 'DefaultSurveyor',
+  defaultSurveyors: [{ name: 'DefaultSurveyor' }],
+  defaultExplorers: [{ name: 'DefaultExplorer' }],
   defaultDate: '2026-01-01',
 } as unknown as DmpSelectionConfig;
 
@@ -130,7 +131,8 @@ const carried = (): ZeroDatumConfigResult => ({
   gps: { latitude: 20.25, longitude: -87.5, depth_reference: 0 },
   metadata: {
     name: 'Typed Name',
-    surveyor: 'Typed Surveyor',
+    surveyors: [{ name: 'Typed Surveyor' }],
+    explorers: [{ name: 'Typed Explorer', email: 'te@example.org' }],
     date: '2025-12-24',
     color: '#123456',
     direction: 'out',
@@ -190,7 +192,8 @@ describe('ZeroDatumConfigDialog prefill after Back (#394 F10)', () => {
     expect(screen.queryByTestId('zero-datum-gps-error')).not.toBeInTheDocument();
 
     expect(screen.getByTestId('section-name-input')).toHaveValue('Typed Name');
-    expect(screen.getByTestId('section-surveyor-input')).toHaveValue('Typed Surveyor');
+    expect(screen.getByTestId('section-surveyors-pill-0-label')).toHaveTextContent('Typed Surveyor');
+    expect(screen.getByTestId('section-explorers-pill-0-label')).toHaveTextContent('Typed Explorer');
     expect(screen.getByTestId('section-reverse-checkbox')).toBeChecked();
   });
 
@@ -211,7 +214,8 @@ describe('ZeroDatumConfigDialog prefill after Back (#394 F10)', () => {
     expect(result.gps).toMatchObject({ latitude: 20.25, longitude: -87.5 });
     expect(result.metadata).toMatchObject({
       name: 'Typed Name',
-      surveyor: 'Typed Surveyor',
+      surveyors: [{ name: 'Typed Surveyor' }],
+      explorers: [{ name: 'Typed Explorer', email: 'te@example.org' }],
       date: '2025-12-24',
       color: '#123456',
       direction: 'out',
@@ -230,7 +234,8 @@ describe('ZeroDatumConfigDialog prefill after Back (#394 F10)', () => {
 
     expect(screen.getByTestId('zero-datum-gps-input')).toHaveValue('');
     expect(screen.getByTestId('section-name-input')).toHaveValue('FileName');
-    expect(screen.getByTestId('section-surveyor-input')).toHaveValue('DefaultSurveyor');
+    expect(screen.getByTestId('section-surveyors-pill-0-label')).toHaveTextContent('DefaultSurveyor');
+    expect(screen.getByTestId('section-explorers-pill-0-label')).toHaveTextContent('DefaultExplorer');
     expect(screen.getByTestId('section-reverse-checkbox')).not.toBeChecked();
   });
 
@@ -268,13 +273,15 @@ describe('ZeroDatumConfigDialog prefill after Back (#394 F10)', () => {
    * file/selection default underneath an emptied one, which reads to the user as
    * the dialog undoing their deletion.
    *
-   * Injection: write `initialConfig?.metadata.surveyor ?? selectionConfig.defaultSurveyor`
-   * and the emptied surveyor comes back as "DefaultSurveyor".
+   * Injection: seed each role with `initialConfig?.metadata.surveyors ||
+   * selectionConfig.defaultSurveyors`-style fallbacks and the emptied people
+   * come back as "DefaultSurveyor" / "DefaultExplorer".
    */
   it('keeps a field the user cleared cleared', () => {
-    renderDialog({ ...carried(), metadata: { ...carried().metadata, surveyor: null, date: null } });
+    renderDialog({ ...carried(), metadata: { ...carried().metadata, surveyors: [], explorers: [], date: null } });
 
-    expect(screen.getByTestId('section-surveyor-input')).toHaveValue('');
+    expect(screen.queryByTestId('section-surveyors-pill-0')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('section-explorers-pill-0')).not.toBeInTheDocument();
     expect(screen.getByTestId('section-date-input')).toHaveValue('');
   });
 
@@ -372,7 +379,8 @@ describe('ZeroDatumConfigDialog prefill after Back (#394 F10)', () => {
       const onBack = vi.fn();
       renderDialog(carried(), onBack);
 
-      fireEvent.change(screen.getByTestId('section-surveyor-input'), {
+      // A name typed but not added yet is an edit too (PeopleInput's onCommitPending).
+      fireEvent.change(screen.getByTestId('section-surveyors-input'), {
         target: { value: 'Someone Else' },
       });
       fireEvent.click(screen.getByTestId('zero-datum-config-back'));

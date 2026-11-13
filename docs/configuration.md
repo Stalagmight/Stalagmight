@@ -329,6 +329,12 @@ depth = { id = "theme", reversed = false }
 distance = { id = "theme", reversed = false }
 pinned = []                         # Palette ids pinned to the top of the picker (at most 64)
 
+[people]
+# People recently credited as surveyors or explorers, offered as suggestions in
+# every project (most recent first, at most 200). Entries can hold the EMAIL of a
+# SpeleoDB collaborator picked from the suggestions; this file stays on this machine.
+recent = [{ name = "Ann Smith", email = "ann@example.org" }]
+
 [debug.map]
 show_hitboxes = false               # Show red overlay for interaction hitbox areas
 log_hit_detection = false           # Log hit detection events to browser console

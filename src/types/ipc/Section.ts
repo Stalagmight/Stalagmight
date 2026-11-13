@@ -3,4 +3,4 @@ import type { AzimuthReference } from "./AzimuthReference";
 import type { Shot } from "./Shot";
 import type { SurveyDirection } from "./SurveyDirection";
 
-export interface Section { id: number, name: string | null, surveyor: string | null, date: string | null, color: string, direction: SurveyDirection, quality: number, shots: Array<Shot>, next_shot_id: number, reverse_parity: boolean, gauge_shot_uuid: string | null, gauge_neighbour_uuid: string | null, azimuth_reference?: AzimuthReference, }
+export interface Section { id: number, name: string | null, color: string, direction: SurveyDirection, quality: number, shots: Array<Shot>, next_shot_id: number, reverse_parity: boolean, gauge_shot_uuid: string | null, gauge_neighbour_uuid: string | null, azimuth_reference?: AzimuthReference, }

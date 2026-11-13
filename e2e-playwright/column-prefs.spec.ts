@@ -172,7 +172,7 @@ test.describe('Data table column preferences', () => {
     expect(await getViewCalls(page)).toHaveLength(0);
 
     const call = await waitForSingleViewCall(page);
-    expect(call.hiddenColumns).toEqual(['comment', 'section_id']);
+    expect(call.hiddenColumns).toEqual(['comment', 'explorers', 'section_id', 'survey_date', 'surveyors']);
     expect(call).toMatchObject({ azimuthMode: 'avg', inclinationMode: 'off' });
 
     // Round trip: the post-save loadConfig() re-reads get_config, whose panels
@@ -186,7 +186,7 @@ test.describe('Data table column preferences', () => {
       undefined,
       { timeout: 5000 },
     );
-    expect((await getPanelsConfig(page)).data_table_shot_hidden_columns).toEqual(['comment', 'section_id']);
+    expect((await getPanelsConfig(page)).data_table_shot_hidden_columns).toEqual(['comment', 'explorers', 'section_id', 'survey_date', 'surveyors']);
   });
 
   test('dragging a header reorders the columns and persists the new order', async ({ page }) => {
@@ -370,7 +370,7 @@ test.describe('Data table column preferences', () => {
     await expect(page.getByTestId('grid-header-comment')).toHaveCount(0);
 
     // The debounced view-save can emit an interim snapshot (e.g. the pre-hide
-    // [section_id, shot_id] state from the table settling) before the Hide save
+    // [section_id, shot_id, credit columns] state from the table settling) before the Hide save
     // lands, so grabbing the *first* recorded call races. Poll the latest call
     // until it settles on the expected hidden set. #171.
     await expect
@@ -381,7 +381,7 @@ test.describe('Data table column preferences', () => {
         },
         { timeout: 5000 },
       )
-      .toEqual(['comment', 'section_id', 'shot_id']);
+      .toEqual(['comment', 'explorers', 'section_id', 'shot_id', 'survey_date', 'surveyors']);
 
     await page.waitForFunction(
       () => {
@@ -394,8 +394,11 @@ test.describe('Data table column preferences', () => {
     );
     expect((await getPanelsConfig(page)).data_table_shot_hidden_columns).toEqual([
       'comment',
+      'explorers',
       'section_id',
       'shot_id',
+      'survey_date',
+      'surveyors',
     ]);
   });
 });

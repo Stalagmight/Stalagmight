@@ -1,5 +1,6 @@
 mod app_state;
 mod command_comment;
+mod command_credit;
 mod command_delete_split;
 mod command_import;
 mod command_move;
@@ -27,6 +28,7 @@ mod speleodb_admin;
 mod speleodb_cache;
 mod speleodb_cache_install;
 mod speleodb_cached;
+mod speleodb_collaborators;
 mod speleodb_credentials;
 mod speleodb_edit_gate;
 mod speleodb_foreign;
@@ -63,6 +65,14 @@ mod azimuth_reference_tests;
 mod concurrency_tests;
 #[cfg(test)]
 mod crash_property_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod credit_tests;
 #[cfg(test)]
 #[expect(
     clippy::expect_used,

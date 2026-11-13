@@ -254,15 +254,21 @@ test.describe('Dialog Coverage - Edit Section', () => {
     await expect(dialog).toBeVisible();
 
     const nameInput = dialog.getByTestId('section-name-input');
-    const surveyorInput = dialog.getByTestId('section-surveyor-input');
+    const surveyorInput = dialog.getByTestId('section-surveyors-input');
     const colorHexInput = dialog.getByTestId('section-color-hex-input');
     const dateInput = dialog.getByTestId('section-date-input');
 
     await nameInput.fill('Updated Section');
+    // Replace the surveyor: x the seeded one, add the new one (every shot).
+    await expect(dialog.getByTestId('section-surveyors-pill-0-label')).toHaveText('Test Surveyor');
+    await dialog.getByTestId('section-surveyors-pill-0-remove').click();
     await surveyorInput.fill('New Surveyor');
+    await surveyorInput.press('Enter');
+    await expect(dialog.getByTestId('section-surveyors-pill-0-label')).toHaveText('New Surveyor');
     await colorHexInput.fill('#123456');
     await dateInput.fill('2026-02-01');
-    await page.keyboard.press('Escape');
+    // The date commits on Enter (or when the field is left), never per keystroke.
+    await dateInput.press('Enter');
 
     // The shot table is a SpreadsheetGrid: one editor overlays the active cell.
     await dialog.getByTestId('shot-editor-cell-0-length').dblclick();
@@ -288,12 +294,18 @@ test.describe('Dialog Coverage - Edit Section', () => {
     }, sectionId);
 
     expect(updatedSection.name).toBe('Updated Section');
-    expect(updatedSection.surveyor).toBe('New Surveyor');
+    // The section's surveyor is per-shot now: one credit edit sets every shot.
+    expect(updatedSection.surveyor).toBeUndefined();
+    expect(
+      updatedSection.shots.every(
+        (shot: any) => shot.credit?.surveyors?.map((p: any) => p.name).join(';') === 'New Surveyor',
+      ),
+    ).toBe(true);
     // Closure-adjustment weight is no longer exposed in this dialog; the stored
     // value must survive a save untouched.
     expect(updatedSection.quality).toBe(1);
     expect(updatedSection.color).toBe('#123456');
-    expect(updatedSection.date).toBe('2026-02-01');
+    expect(updatedSection.shots.every((shot: any) => shot.credit?.date === '2026-02-01')).toBe(true);
     expect(updatedSection.shots[0]?.length).toBe(9.5);
   });
 

@@ -35,11 +35,10 @@ async function injectId0Fixture(page: Page) {
   }, { timeout: 5000 });
 
   await page.evaluate(() => {
+    // The survey credit rides on each shot (a section keeps none of its own).
     const testSection = {
       id: 0,
       name: 'Zero Section',
-      surveyor: 'Test Surveyor',
-      date: '2026-01-20',
       color: '#4ecdc4',
       direction: 'in' as const,
       shots: [{
@@ -59,6 +58,7 @@ async function injectId0Fixture(page: Page) {
         kind: 'Normal',
         marker_index: 0,
         temperature: null,
+        credit: { surveyors: [{ name: 'Test Surveyor' }], explorers: [], date: '2026-01-20' },
       }]
     };
 
@@ -303,8 +303,6 @@ test.describe('ID=0 Bug Fixes', () => {
       const otherSection = {
         id: 1,
         name: 'One Section',
-        surveyor: 'Test Surveyor',
-        date: '2026-01-20',
         color: '#ff6b6b',
         direction: 'in' as const,
         shots: [],
@@ -347,13 +345,16 @@ test.describe('ID=0 Edge Cases', () => {
     const dialog = page.getByTestId('edit-section-dialog');
     await expect(dialog).toBeVisible({ timeout: 3000 });
 
-    // Verify dialog loaded correct data
-    const surveyorInput = page.getByTestId('section-surveyor-input');
-    await expect(surveyorInput).toHaveValue('Test Surveyor');
+    // Verify dialog loaded correct data: the shot's surveyor as a pill
+    const firstPill = page.getByTestId('section-surveyors-pill-0-label');
+    await expect(firstPill).toHaveText('Test Surveyor');
 
-    // Change the surveyor
-    await surveyorInput.clear();
+    // Change the surveyor: x the old pill, add the new one
+    await page.getByTestId('section-surveyors-pill-0-remove').click();
+    const surveyorInput = page.getByTestId('section-surveyors-input');
     await surveyorInput.fill('New Surveyor');
+    await surveyorInput.press('Enter');
+    await expect(firstPill).toHaveText('New Surveyor');
 
     // Save within the dialog
     await dialog.getByRole('button', { name: 'Save' }).click();
@@ -366,7 +367,8 @@ test.describe('ID=0 Edge Cases', () => {
       (window as any).__E2E_TEST__.uiStore.getState().openDialog('edit-section', { sectionId: 0 });
     });
     await expect(dialog).toBeVisible({ timeout: 3000 });
-    await expect(surveyorInput).toHaveValue('New Surveyor');
+    await expect(firstPill).toHaveText('New Surveyor');
+    await expect(page.getByTestId('section-surveyors-pill-1')).toHaveCount(0);
   });
 
   test('Edit Section dialog handles save with color change for id=0', async ({ page }) => {

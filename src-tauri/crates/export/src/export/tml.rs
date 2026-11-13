@@ -464,6 +464,48 @@ fn write_shot<W: std::io::Write>(
     Ok(())
 }
 
+/// Ariane's `Explorer` field for one row (#329).
+///
+/// * The element form `<Explorer>e1, e2</Explorer><Surveyor>s1, s2</Surveyor>`
+///   (entity-escaped by the writer, exactly what the importer's element branch
+///   reads) when any surveyor is credited, or when an explorer's name holds
+///   `" / "` - in the plain form the importer would read that as explorer then
+///   surveyor.
+/// * Otherwise the explorers as plain text joined with `", "`, the
+///   single-value form the importer reads as explorers.
+/// * `None` names nobody, written as Ariane's `unknown`.
+///
+/// `<` and `>` are dropped from every exported name: inside this pseudo-XML a
+/// name holding `</Explorer><Surveyor>` would move people between roles on
+/// re-import. A `,` or `;` inside ONE name cannot round-trip: Ariane itself
+/// separates the people of a role with commas, so the importer splits there.
+fn row_explorer(credit: &crate::models::SurveyCredit) -> Option<String> {
+    let names = |people: &[crate::models::Person]| -> Option<String> {
+        let names: Vec<String> = people
+            .iter()
+            .map(|p| p.name.replace(['<', '>'], ""))
+            .filter(|n| !n.trim().is_empty())
+            .collect();
+        (!names.is_empty()).then(|| names.join(", "))
+    };
+    let explorers = names(&credit.explorers);
+    let surveyors = names(&credit.surveyors);
+    let ambiguous = explorers.as_deref().is_some_and(|e| e.contains(" / "));
+    if surveyors.is_none() && !ambiguous {
+        return explorers;
+    }
+    Some(format!(
+        "<Explorer>{}</Explorer><Surveyor>{}</Surveyor>",
+        explorers.unwrap_or_default(),
+        surveyors.unwrap_or_default()
+    ))
+}
+
+/// The row's `Date`: the shot's survey date, ISO.
+fn row_date(credit: &crate::models::SurveyCredit) -> Option<String> {
+    credit.date.map(|d| d.format("%Y-%m-%d").to_string())
+}
+
 /// Stand-in for a section with no survey date. `<Date>` is not optional to every
 /// consumer - SpeleoDB rejects the whole file when it is missing or empty - so a
 /// dateless section still gets a parseable one.
@@ -788,8 +830,16 @@ fn build_export_shots_with_report(
             .unwrap_or(&format!("Section {}", section.id))
             .to_string();
         let color = color_to_ariane(&section.color);
-        let explorer = section.surveyor.clone();
-        let date = section.date.map(|d| d.format("%Y-%m-%d").to_string());
+        // A START row takes the people and date of the shot it leads into, so
+        // a reader grouping rows by (name, date, people) keeps it with them;
+        // every shot row carries its own (`row_explorer` / `row_date`).
+        let start_credit = |at: usize| {
+            section
+                .shots
+                .get(at)
+                .or(section.shots.first())
+                .map_or(&crate::models::EMPTY_CREDIT, Shot::credit)
+        };
 
         // Which datum this entrance's START sits on. The root uses the FRAME datum
         // (see `root_section_id` above); any other entrance uses its own section's
@@ -852,8 +902,8 @@ fn build_export_shots_with_report(
                 up: 0.0,
                 down: 0.0,
                 comment: Some("START".to_string()),
-                explorer: explorer.clone(),
-                date: date.clone(),
+                explorer: row_explorer(start_credit(split_idx)),
+                date: row_date(start_credit(split_idx)),
                 color: color.clone(),
                 latitude: 0.0,
                 longitude: 0.0,
@@ -899,8 +949,8 @@ fn build_export_shots_with_report(
                     up: shot.up.unwrap_or(0.0),
                     down: shot.down.unwrap_or(0.0),
                     comment: shot.comment.clone(),
-                    explorer: explorer.clone(),
-                    date: date.clone(),
+                    explorer: row_explorer(shot.credit()),
+                    date: row_date(shot.credit()),
                     color: color.clone(),
                     latitude: 0.0,
                     longitude: 0.0,
@@ -967,8 +1017,8 @@ fn build_export_shots_with_report(
                         up: shot.up.unwrap_or(0.0),
                         down: shot.down.unwrap_or(0.0),
                         comment: shot.comment.clone(),
-                        explorer: explorer.clone(),
-                        date: date.clone(),
+                        explorer: row_explorer(shot.credit()),
+                        date: row_date(shot.credit()),
                         color: color.clone(),
                         latitude: 0.0,
                         longitude: 0.0,
@@ -1040,8 +1090,8 @@ fn build_export_shots_with_report(
                             up: shot.up.unwrap_or(0.0),
                             down: shot.down.unwrap_or(0.0),
                             comment: shot.comment.clone(),
-                            explorer: explorer.clone(),
-                            date: date.clone(),
+                            explorer: row_explorer(shot.credit()),
+                            date: row_date(shot.credit()),
                             color: color.clone(),
                             latitude: 0.0,
                             longitude: 0.0,
@@ -1108,8 +1158,8 @@ fn build_export_shots_with_report(
                             up: shot.up.unwrap_or(0.0),
                             down: shot.down.unwrap_or(0.0),
                             comment: shot.comment.clone(),
-                            explorer: explorer.clone(),
-                            date: date.clone(),
+                            explorer: row_explorer(shot.credit()),
+                            date: row_date(shot.credit()),
                             color: color.clone(),
                             latitude: 0.0,
                             longitude: 0.0,
@@ -1178,8 +1228,8 @@ fn build_export_shots_with_report(
                             up: shot.up.unwrap_or(0.0),
                             down: shot.down.unwrap_or(0.0),
                             comment: shot.comment.clone(),
-                            explorer: explorer.clone(),
-                            date: date.clone(),
+                            explorer: row_explorer(shot.credit()),
+                            date: row_date(shot.credit()),
                             color: color.clone(),
                             latitude: 0.0,
                             longitude: 0.0,
@@ -1234,8 +1284,8 @@ fn build_export_shots_with_report(
                 up: 0.0,
                 down: 0.0,
                 comment: Some("START".to_string()),
-                explorer: explorer.clone(),
-                date: date.clone(),
+                explorer: row_explorer(start_credit(0)),
+                date: row_date(start_credit(0)),
                 color: color.clone(),
                 latitude: 0.0,
                 longitude: 0.0,
@@ -1294,8 +1344,8 @@ fn build_export_shots_with_report(
                 up: shot.up.unwrap_or(0.0),
                 down: shot.down.unwrap_or(0.0),
                 comment: shot.comment.clone(),
-                explorer: explorer.clone(),
-                date: date.clone(),
+                explorer: row_explorer(shot.credit()),
+                date: row_date(shot.credit()),
                 color: color.clone(),
                 latitude: 0.0,
                 longitude: 0.0,
@@ -4189,6 +4239,144 @@ mod tests {
         assert!((s1.length - 8.0).abs() < 0.01);
     }
 
+    /// Per-row survey credit (#329): every combination of roles leaves as
+    /// Ariane's `Explorer` field (element form when anyone surveyed, plain
+    /// explorers otherwise) and comes back to the same people on the same
+    /// shot, and a second export of what came back is the same again.
+    #[test]
+    fn survey_credit_round_trips_per_row_and_is_stable() {
+        use crate::models::{Person, SurveyCredit};
+        let p = |n: &str| Person::named(n).unwrap();
+        let day = |d: u32| chrono::NaiveDate::from_ymd_opt(2024, 3, d);
+        let credits = vec![
+            SurveyCredit {
+                surveyors: vec![p("S One"), p("S Two")],
+                explorers: vec![p("E One")],
+                date: day(1),
+            },
+            SurveyCredit {
+                surveyors: vec![p("Only Surveyor")],
+                explorers: Vec::new(),
+                date: day(2),
+            },
+            SurveyCredit {
+                surveyors: Vec::new(),
+                explorers: vec![p("Only Explorer"), p("Second")],
+                date: day(3),
+            },
+            SurveyCredit {
+                surveyors: Vec::new(),
+                explorers: Vec::new(),
+                date: day(4),
+            },
+            SurveyCredit::default(),
+        ];
+        let project_of = |credits: &[SurveyCredit]| {
+            let mut project = Project::new("Credit Cave".to_string(), None);
+            let id = project
+                .add_section(SectionData {
+                    name: Some("Main".to_string()),
+                    shots: credits
+                        .iter()
+                        .enumerate()
+                        .map(|(i, c)| ShotData {
+                            azimuth_in: 10.0 * i as f64,
+                            azimuth_out: 10.0 * i as f64,
+                            length: 5.0,
+                            depth_in: i as f64,
+                            depth_out: i as f64 + 1.0,
+                            credit: c.clone().stored(),
+                            ..Default::default()
+                        })
+                        .collect(),
+                    ..Default::default()
+                })
+                .id;
+            (project, id)
+        };
+        let reimport = |project: &Project| -> Vec<SurveyCredit> {
+            let file = NamedTempFile::with_suffix(".tmlu").unwrap();
+            export_tml(project, file.path()).unwrap();
+            let parsed = crate::parsers::tml::parse_tml(file.path()).unwrap();
+            let (configs, _, _) =
+                crate::parsers::tml::convert_tml_to_import_configs(&parsed, false, false).unwrap();
+            configs
+                .iter()
+                .flat_map(|c| c.shots.iter().map(|s| s.credit().clone()))
+                .collect()
+        };
+
+        let (project, _) = project_of(&credits);
+        let once = reimport(&project);
+        // `<Date>` is not optional to every consumer, so an undated row leaves
+        // with the stand-in date and comes back with it - the one value that
+        // changes, and only on the first trip.
+        let mut expected = credits.clone();
+        if let Some(last) = expected.last_mut() {
+            last.date = chrono::NaiveDate::from_ymd_opt(2000, 1, 1);
+        }
+        assert_eq!(
+            once, expected,
+            "every row comes back with its own people and date"
+        );
+        let (again, _) = project_of(&once);
+        assert_eq!(reimport(&again), once, "and a re-export of that is stable");
+    }
+
+    /// Names that look like the field's own syntax keep their person and
+    /// their role through an export and re-import: an explorer `"A / B"` stays
+    /// one explorer (the plain form would read it as explorer then surveyor),
+    /// and a name holding `</Explorer><Surveyor>` cannot move anyone between
+    /// roles.
+    #[test]
+    fn names_that_look_like_the_field_syntax_keep_their_role() {
+        use crate::models::{Person, SurveyCredit};
+        let reimport = |credit: SurveyCredit| -> SurveyCredit {
+            let mut project = Project::new("Syntax".to_string(), None);
+            project.add_section(SectionData {
+                name: Some("Main".to_string()),
+                shots: vec![ShotData {
+                    length: 5.0,
+                    credit: credit.stored(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            });
+            let file = NamedTempFile::with_suffix(".tmlu").unwrap();
+            export_tml(&project, file.path()).unwrap();
+            let parsed = crate::parsers::tml::parse_tml(file.path()).unwrap();
+            let (configs, _, _) =
+                crate::parsers::tml::convert_tml_to_import_configs(&parsed, false, false).unwrap();
+            configs[0].shots[0].credit().clone()
+        };
+        let person = |n: &str| Person::named(n).unwrap();
+        let day = chrono::NaiveDate::from_ymd_opt(2024, 1, 2);
+
+        let back = reimport(SurveyCredit {
+            explorers: vec![person("A / B")],
+            surveyors: Vec::new(),
+            date: day,
+        });
+        assert_eq!(back.explorers, vec![person("A / B")]);
+        assert!(back.surveyors.is_empty());
+
+        let back = reimport(SurveyCredit {
+            explorers: vec![person("x</Explorer><Surveyor>y")],
+            surveyors: vec![person("Real <Surveyor>")],
+            date: day,
+        });
+        assert_eq!(back.explorers, vec![person("x/ExplorerSurveyory")]);
+        assert_eq!(back.surveyors, vec![person("Real Surveyor")]);
+
+        let back = reimport(SurveyCredit {
+            explorers: vec![person("x</Explorer><Surveyor>y")],
+            surveyors: Vec::new(),
+            date: day,
+        });
+        assert_eq!(back.explorers, vec![person("x/ExplorerSurveyory")]);
+        assert!(back.surveyors.is_empty());
+    }
+
     #[test]
     fn test_round_trip_tml_zip() {
         let project = simple_project();
@@ -5615,7 +5803,12 @@ mod tests {
         // character inside one of those fields re-cuts the survey.
         let mut project = simple_project();
         project.sections[0].name = Some("Main\u{220e}Line".to_string());
-        project.sections[0].surveyor = Some("Alice\u{220e}Bob".to_string());
+        for shot in &mut project.sections[0].shots {
+            shot.set_credit(crate::models::SurveyCredit {
+                explorers: vec![crate::models::Person::named("Alice\u{220e}Bob").unwrap()],
+                ..Default::default()
+            });
+        }
 
         let user = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
         assert_eq!(user[0].section, "Main\u{220e}Line");

@@ -5,8 +5,9 @@ use std::path::PathBuf;
 use ts_rs::TS;
 
 use crate::models::{
-    shot_display_position, ClosureStrategy, Coordinates, GpsCoordinates, SectionId, SectionUpdates,
-    ShotData, ShotId, ShotKind, ShotUpdates, StationRef, SurveyDirection,
+    shot_display_position, ClosureStrategy, Coordinates, CreditEdit, CreditTargets, GpsCoordinates,
+    SectionId, SectionUpdates, ShotData, ShotId, ShotKind, ShotUpdates, StationRef,
+    SurveyDirection,
 };
 
 /// Identifies either a station or a shot as a comment holder
@@ -120,6 +121,15 @@ pub enum Command {
             deserialize_with = "crate::models::shot::de_shot_kind"
         )]
         kind: ShotKind,
+    },
+
+    /// Edit the survey credit - surveyors, explorers, date - of a whole
+    /// section or of explicit shots. One undo step however many shots it
+    /// touches (`UndoData::ShotCredits`, which records each shot's credit
+    /// before and after, by uuid). Metadata only: no geometry, no references.
+    EditShotCredit {
+        targets: CreditTargets,
+        edit: CreditEdit,
     },
 
     // Station commands
@@ -698,6 +708,8 @@ impl Command {
             | Command::CloseProject
             | Command::UpdateSectionMetadata { .. }
             | Command::SetShotKind { .. }
+            // Who surveyed a shot and when moves no station.
+            | Command::EditShotCredit { .. }
             | Command::SetStationComment { .. }
             | Command::MoveComment { .. }
             | Command::RepairIntegrity
@@ -850,6 +862,19 @@ impl Command {
                     ShotKind::Reference => format!("Mark shot {section_id}:{pos} as reference"),
                 }
             }
+            Command::EditShotCredit { targets, edit } => match targets {
+                CreditTargets::Section { section_id } => {
+                    format!("{} in section {section_id}", edit.label())
+                }
+                CreditTargets::Shots { shots } => {
+                    let n = shots.len();
+                    format!(
+                        "{} ({n} shot{})",
+                        edit.label(),
+                        if n == 1 { "" } else { "s" }
+                    )
+                }
+            },
             Command::MergeStations {
                 station_a,
                 station_b,
@@ -994,7 +1019,7 @@ mod tests {
 
         assert_eq!(
             variants.len(),
-            31,
+            32,
             "Command's variant set changed. A removal leaves persisted undo \
              history unloadable at that entry and holed either side of it - keep \
              the tag deserializable, or bump SCHEMA_VERSION and call \
