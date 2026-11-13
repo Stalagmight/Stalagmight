@@ -2,6 +2,68 @@
 
 The DMP import wizard (`DmpNewImportDialog`) is the primary UI for importing cave survey data from mNemo DMP files. It uses a connection-wizard pattern: the backend pre-computes placement suggestions, the user confirms or adjusts each one, and a batch import executes at the end.
 
+## Reading the device over USB (#725)
+
+**Import from MNemo...** (both hamburger menus, hidden on Android) reads a
+USB-connected MNemo v2 instead of a file. It does not import anything itself: it
+saves what it read as a `.dmp` and hands that path to `routeOpenedFile`, the same
+route as a `.dmp` picked from disk. The read-only guard, the no-project path
+(`new-project-for-import`), duplicate-section detection and this wizard therefore
+apply unchanged; pulling the device again after each dive brings the earlier
+sections back already unticked, because their content hashes match.
+
+**The serial exchange** (`src-tauri/src/commands/mnemo/protocol.rs`, written from
+the device's public serial CLI documentation):
+
+| Step | Sent | Reply |
+|------|------|-------|
+| 1 | `getfirmwareversion\n` | text, then `MN2Over` |
+| 2 | `getdata\n` | the survey memory (the bytes a `.dmp` holds as text), then `MN2Over` |
+
+- **57600 baud, 8N1, raw, never 1200.** Opening an RP2040 board at 1200 baud
+  reboots it into its bootloader. No IPC argument carries a baud rate or a
+  command: the two commands are private constants.
+- **`getdata` only after a good firmware reply.** If step 1 does not end with
+  `MN2Over`, the pull stops (`not_mnemo`), so another USB serial device never
+  receives `getdata`.
+- **The end of a reply** is `MN2Over` followed by 250 ms of quiet. Survey bytes can
+  contain `MN2Over` by chance; the device goes quiet after the real one.
+- **Limits:** 10 s to the first byte; 2 s (firmware) or 8 s (data, the device
+  pauses while reading its memory) without a byte; 10 s or 10 min in all; 8 MiB of
+  data. Cancel is checked between reads (200 ms read timeout).
+
+**The port** (`port.rs`, the `serialport` crate with default features off):
+
+- Only ports the OS lists as USB serial are offered, and `pull_mnemo` refuses any
+  name not in that list at the moment it runs, so the IPC cannot open an arbitrary
+  device or file. On macOS only `/dev/cu.*` (`/dev/tty.*` waits for carrier detect).
+- Opened exclusively; a port already open elsewhere (often the MNemo desktop app)
+  is `port_busy`.
+- A port whose USB name mentions "mnemo", or whose vendor ID is the RP2040's
+  `0x2E8A`, is marked `likely_mnemo`. The dialog preselects only when exactly one
+  port is; anything else needs an explicit pick.
+- **Linux:** without `libudev` the crate scans `/sys/class/tty` (and reports
+  nothing when that is missing). Opening `/dev/ttyACM*` needs the `dialout` group
+  (`uucp` on Arch); a refusal is `permission_denied` with that advice. ModemManager
+  may briefly probe a newly plugged `ttyACM` device.
+- **Windows:** the built-in CDC driver gives a `COMn` port; an in-use port reports
+  "access denied", which is classified as `port_busy`.
+- **macOS:** no entitlement is needed for a USB serial port under the hardened
+  runtime without App Sandbox.
+
+**The saved file:** `<app local data>/MNemo downloads/MNemo-YYYY-MM-DD_HHMMSS.dmp`,
+written with `create_new` (a clash gets `-2`, `-3`, ...), fsynced, and removed if
+the write fails. It is saved before anything is parsed, and kept even when nothing
+in it parses, so it can go in a bug report; the dialog then offers Show file but
+not Import.
+
+**What the parser skipped:** `parse_dmp_bytes` returns a `DmpReadLoss` with the
+sections that failed to parse (for example a corrupted date) and the bytes after
+the last complete section, ignoring zero padding and a `MN2Over` trailer. A non-zero
+tail is usually a survey that was not closed on the device. The dialog shows both;
+the wizard still drops them, as it does for a file. Recovering such sections is a
+separate follow-up.
+
 ## Wizard Phases
 
 | Phase | What happens |
@@ -403,6 +465,9 @@ a deleted or added row, any edit after import - shifts the positional
 | `suggest_all_import_placements` | `ImportSectionForSuggestion[]` | `CrossSectionSuggestion[]` | Compares against existing + other imports |
 | `get_segment_geometry` | `sectionId` | `SegmentGeometry` | All connected sections' shot-lines, centered on queried section |
 | `import_sections` | `sections, fileHash, existingShotUpdates` | `CommandResult` | Batch import with atomic existing shot updates and undo support |
+| `list_mnemo_ports` | none | `MnemoPort[]` | USB serial ports now present, likely MNemos first |
+| `pull_mnemo` | `port` | `MnemoPullResult` or `MnemoError` | Reads the device, saves the `.dmp`; emits `mnemo-pull-progress`; one at a time |
+| `cancel_mnemo_pull` | none | none | Stops a running pull within one read |
 
 ## Backend Safety Guards
 

@@ -10,6 +10,7 @@ Update this file every time a new version is tagged.
 ### Added
 
 - **Change a section's color from the Sections panel** - click the color dot next to a section to open the color picker. The new color applies to the whole section, and Undo reverts it in one step. In a read-only view, clicking the dot tells you the color cannot be changed there ([#654](https://github.com/Stalagmight/Stalagmight/issues/654))
+- **Import from MNemo over USB** - connect an MNemo v2 with its USB cable and choose Import from MNemo in the menu: Stalagmight reads the device's survey memory directly, without the MNemo desktop app. It only reads; nothing on the device changes. What it reads is saved as a `.dmp` in the app's data folder before anything is imported (Show file opens it, and an earlier download is never overwritten), then imported like any `.dmp`, so sections already in the project come up unticked. The dialog says when a section could not be read, or when data after the last complete section, usually a survey that was not closed, is left out. Works on macOS, Windows and Linux; on Linux your account may need to be in the `dialout` group. Not in the Android build ([#725](https://github.com/Stalagmight/Stalagmight/issues/725))
 
 ## [0.5.4] - 2026-11-13
 

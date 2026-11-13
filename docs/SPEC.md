@@ -116,6 +116,7 @@ Stalagmight is a desktop application for processing underwater cave survey data.
 
 **Shipped:**
 - Import: DMP (mNemo devices), Walls (experimental), Compass, Ariane `.tml`/`.tmlu`, GPX - see `src-tauri/crates/parsers/src/parsers/`
+- Reading an MNemo v2 directly over USB into the DMP import (desktop only, read-only on the device) - see [dmp-import.md](dmp-import.md#reading-the-device-over-usb-725)
 - Manual data entry via a spreadsheet interface
 - 2D plan-view map with satellite imagery
 - Section management (create, edit, delete, merge)
@@ -132,7 +133,7 @@ Stalagmight is a desktop application for processing underwater cave survey data.
 **Not built:**
 - 3D visualization
 - Web version
-- Direct mNemo device communication
+- mNemo device communication over WiFi, and writing to the device
 - LRUD passage-wall rendering on the map
 
 In-flight work lives in the GitHub issue tracker rather than a list here
@@ -2684,7 +2685,7 @@ historical record of the v1.0 phases, all of which shipped (one caveat: GPS
 entry validates but does not convert MGRS and What3words - see 2.7).
 
 Regularly asked about, and not currently being worked on: 3D visualization, a web
-version, direct mNemo device communication, LRUD passage-wall rendering,
+version, mNemo device communication beyond reading over USB, LRUD passage-wall rendering,
 real-time collaborative editing (SpeleoDB's flow is single-writer file hand-off,
 not live co-editing), and floating/dockable panels.
 
