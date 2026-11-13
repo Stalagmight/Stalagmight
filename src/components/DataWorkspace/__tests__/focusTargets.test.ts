@@ -55,19 +55,22 @@ describe('rowKeyForSelection (section)', () => {
 });
 
 describe('initialActiveCell', () => {
-  it('starts on the first entity row, in an editable column that applies to it', () => {
+  it('starts on the first entity row, in the first shown column that applies to it', () => {
     const start = initialActiveCell(all, DATA_COLUMNS, DATA_DEFAULT_HIDDEN);
     expect(start).not.toBeNull();
     const row = all[start!.row]!;
     expect(row.kind).toBe('station');
-    // A station row: Length (the first editable column) is blank there, so the
-    // start cell is the first editable column that applies to stations.
-    expect(start!.colKey).toBe('comment');
+    // Issues applies to both kinds and comes first, so the table opens at its
+    // left edge with the measurements in view.
+    expect(start!.colKey).toBe('issues');
+    // With Issues hidden, a station row skips the shot-only Length and lands on
+    // the first station column (Depth), never a blank cell.
+    expect(initialActiveCell(all, DATA_COLUMNS, [...DATA_DEFAULT_HIDDEN, 'issues'])!.colKey).toBe('depth');
   });
 
-  it('a shots-only view starts on the first editable shot column', () => {
+  it('a shots-only view with Issues hidden starts on Length', () => {
     const shots = all.filter((r) => r.kind === 'shot');
-    expect(initialActiveCell(shots, DATA_COLUMNS, DATA_DEFAULT_HIDDEN)?.colKey).toBe('length');
+    expect(initialActiveCell(shots, DATA_COLUMNS, [...DATA_DEFAULT_HIDDEN, 'issues'])?.colKey).toBe('length');
   });
 
   it('null when there is no entity row', () => {

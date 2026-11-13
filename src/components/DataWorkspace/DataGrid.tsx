@@ -37,7 +37,7 @@ export const DATA_GRID_PREFIX = 'data-grid';
  */
 export function initialActiveCell(
   rows: readonly DataRow[],
-  orderedColumns: readonly Pick<DataColumnDef, 'key' | 'editable' | 'appliesTo'>[],
+  orderedColumns: readonly Pick<DataColumnDef, 'key' | 'appliesTo'>[],
   hidden: readonly DataColumnKey[],
 ): { row: number; colKey: DataColumnKey | undefined } | null {
   const row = rows.findIndex(isEntityRow);
@@ -45,10 +45,12 @@ export function initialActiveCell(
   const kind = rows[row]!.kind;
   const hiddenSet = new Set(hidden);
   const shown = orderedColumns.filter((c) => !hiddenSet.has(c.key));
-  // Land on a cell that means something for that row: an editable column that
-  // applies to its kind (a station row's Comment, not a blank Length cell).
+  // Land on the first shown column that applies to that row's kind, so the
+  // cell means something (never a blank Length cell on a station row) AND the
+  // table opens scrolled to its left edge - picking the first *editable*
+  // applicable column (a station's Comment) scrolled the measurements away.
   const applies = (c: Pick<DataColumnDef, 'appliesTo'>) => c.appliesTo === 'both' || c.appliesTo === kind;
-  const pick = shown.find((c) => c.editable && applies(c)) ?? shown.find((c) => c.editable) ?? shown[0];
+  const pick = shown.find(applies) ?? shown[0];
   return { row, colKey: pick?.key };
 }
 
