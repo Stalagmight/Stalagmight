@@ -240,7 +240,9 @@ pub fn legacy_credit_text(explorers: &[Person], surveyors: &[Person]) -> Option<
 fn legacy_half(people: &[Person]) -> Option<String> {
     let written: Vec<Person> = people
         .iter()
-        .filter_map(|p| Person::named(&legacy_name(&p.name)))
+        // Trimmed first: a name's edge is where it meets the separator, and
+        // a raw name ("A /\t") may still carry whitespace there.
+        .filter_map(|p| Person::named(&legacy_name(p.name.trim())))
         .collect();
     join_distinct_names(&written)
 }

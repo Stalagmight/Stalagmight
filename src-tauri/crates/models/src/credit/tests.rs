@@ -214,6 +214,23 @@ fn legacy_credit_text_table() {
             assert_eq!(names(&s), *read_surveyors, "surveyors of {read:?}");
         }
     }
+    // A raw name (a hand-built payload) is trimmed before its edges are
+    // judged: "A /\t" keeps no `/` that could join the separator.
+    let raw = |name: &str| Person {
+        name: name.to_string(),
+        email: None,
+    };
+    for (explorers, surveyors, text) in [
+        (vec![raw("A /\t")], vec![raw("S")], "A - / S"),
+        (vec![raw("A /\t")], vec![], "A - /"),
+        (vec![raw("E")], vec![raw("\t/ B")], "E / - B"),
+    ] {
+        let written = legacy_credit_text(&explorers, &surveyors).unwrap();
+        assert_eq!(written, text);
+        let (e, s) = legacy_people(&written);
+        assert_eq!(names(&e).len(), explorers.len(), "{written:?}");
+        assert_eq!(names(&s).len(), surveyors.len(), "{written:?}");
+    }
     // Same-named people (different emails) are one name in the text.
     let jo = [
         person("Jo Diver", Some("jo@caves.example")),
