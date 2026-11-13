@@ -12,17 +12,16 @@ import {
  * Data workspace find / replace, filters, chips, sort bar and columns menu
  * (the toolbar above the Data workspace's grid).
  *
- * Integration assumptions (the grid and the shell are separate work):
  * - Data mode is entered with the mode switcher's `mode-data` button.
- * - The grid inside `data-workspace` keeps SpreadsheetGrid's default `grid`
- *   test-id prefix (`grid-header-<colKey>`); adjust GRID if the shell sets one.
+ * - The grid inside `data-workspace` uses the `data-grid` test-id prefix
+ *   (`data-grid-header-<colKey>`, DATA_GRID_PREFIX).
  * - Cell highlights render as `<mark>` inside the cell (MATCH_MARK).
  * The toolbar's own test ids are stable: `data-find-*`, `data-replace-*`,
  * `data-filter-*`, `data-sections-*`, `data-columns-*`, `data-chip-*`,
  * `data-sort-*`.
  */
 
-const GRID = 'grid';
+const GRID = 'data-grid';
 const MATCH_MARK = '[data-testid="data-workspace"] mark';
 
 const shot = (length: number, comment: string | null = null) => ({
@@ -95,14 +94,17 @@ test.describe('Data workspace - find / replace', () => {
     await find(page, 'deep sump');
     await expect(page.getByTestId('data-find-count')).toHaveText('1 of 1');
     await expect(page.getByTestId('data-workspace').getByText('deep sump')).toBeInViewport();
+    // A new query starts from the active row (the "deep sump" one): the last of four.
     await find(page, 'sump');
-    await expect(page.getByTestId('data-find-count')).toHaveText('1 of 4');
-    await page.getByTestId('data-find-input').press('Shift+Enter');
     await expect(page.getByTestId('data-find-count')).toHaveText('4 of 4');
-    await expect(page.getByTestId('data-workspace').getByText('deep sump')).toBeInViewport();
+    // Next wraps to the first match and scrolls back up to it...
     await page.keyboard.press('F3');
     await expect(page.getByTestId('data-find-count')).toHaveText('1 of 4');
     await expect(page.getByTestId('data-workspace').getByText('sump entrance')).toBeInViewport();
+    // ...and previous wraps back down to the last one.
+    await page.getByTestId('data-find-input').press('Shift+Enter');
+    await expect(page.getByTestId('data-find-count')).toHaveText('4 of 4');
+    await expect(page.getByTestId('data-workspace').getByText('deep sump')).toBeInViewport();
   });
 
   test('Replace changes only the current match, then moves on', async ({ page }) => {
@@ -185,7 +187,7 @@ test.describe('Data workspace - filters, sort, columns', () => {
     await expect(page.getByTestId('data-filter-button')).toHaveAccessibleName(/Filter \(2\)/);
     await expect(page.getByTestId('data-chip-quick-comments')).toBeVisible();
     // only "Sump pool" (Side, 40 m) has a comment and is longer than 30
-    await expect(page.locator('[data-testid^="data-chip-condition-"]').first()).toHaveText(/Length > 30/);
+    await expect(page.locator('[data-testid^="data-chip-condition-"]').first()).toHaveText(/Length \(m\) > 30/);
     await expect(page.getByTestId('data-workspace').getByText('Sump pool')).toBeVisible();
     await expect(page.getByTestId('data-workspace').getByText('sump entrance')).toHaveCount(0);
     await page.getByTestId('data-chip-quick-comments-remove').click();
@@ -196,7 +198,9 @@ test.describe('Data workspace - filters, sort, columns', () => {
   });
 
   test('sorting shows the sort bar; Back to survey order resets it', async ({ page }) => {
-    await page.getByTestId(`${GRID}-header-length`).click();
+    // The header's sort button (shown on hover) sorts; a plain header click selects the column.
+    await page.getByTestId(`${GRID}-header-length`).hover();
+    await page.getByTestId(`${GRID}-sort-length`).click();
     await expect(page.getByTestId('data-sort-bar')).toBeVisible();
     await expect(page.getByTestId('data-sort-bar-text')).toHaveText(/Sorted by Length/);
     await page.getByTestId('data-sort-reset').click();

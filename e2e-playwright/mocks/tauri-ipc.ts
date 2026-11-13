@@ -624,6 +624,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // one Undo puts the sections back. Only these two commands record one:
       // every other mocked mutation stays a no-op under undo, as before.
       const structuralUndo: Array<Record<string, unknown>> = [];
+      // Opt-in (`window.__E2E_MOCK_UNDO_EDITS__ = true` from a spec's own init
+      // script, before setupMockedPage): `update_shot` and `set_station_comment`
+      // also record a snapshot here - the station comment map included - so a
+      // spec can prove a cell edit is one Undo step. Off by default, so every
+      // other spec keeps its "edits are a no-op under undo" world.
+      const mockUndoEdits = (window as unknown as Record<string, unknown>).__E2E_MOCK_UNDO_EDITS__ === true;
       // Joins a split left co-located but unmerged, `[first half end, second
       // half start]`: what the real backend finds by position.
       let colocatedJoins: Array<[{ section_id: number; station_index: number }, { section_id: number; station_index: number }]> = [];
@@ -4175,6 +4181,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           case 'set_station_comment': {
             console.log('[Mock IPC] set_station_comment called with:', args);
+            if (mockUndoEdits) {
+              // structuredClone, not JSON: loop closure ids are BigInts.
+              structuralUndo.push(structuredClone({ project: currentProject, joins: colocatedJoins, comments: mockStationComments }));
+            }
             const stationRef = args?.stationRef as { section_id: number; station_index: number };
             const comment = (args?.comment as string | null | undefined) ?? null;
             const key = `${stationRef.section_id}:${stationRef.station_index}`;
@@ -4234,9 +4244,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // structural step is undone first.
             const snapshot = cmd === 'undo' ? structuralUndo.pop() : undefined;
             if (snapshot && currentProject) {
-              const restored = JSON.parse(JSON.stringify(snapshot)) as { project: typeof currentProject; joins: typeof colocatedJoins };
+              const restored = structuredClone(snapshot) as {
+                project: typeof currentProject;
+                joins: typeof colocatedJoins;
+                comments?: Record<string, string>;
+              };
               currentProject = restored.project;
               colocatedJoins = restored.joins;
+              if (restored.comments) {
+                for (const key of Object.keys(mockStationComments)) delete mockStationComments[key];
+                Object.assign(mockStationComments, restored.comments);
+              }
               return { success: true, section_ids: [] };
             }
             const from = cmd === 'undo' ? mockCreditUndo : mockCreditRedo;
@@ -5383,6 +5401,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           // Section and shot editing commands
           case 'update_shot': {
             console.log('[Mock IPC] update_shot called with:', args);
+            if (mockUndoEdits) {
+              // structuredClone, not JSON: loop closure ids are BigInts.
+              structuralUndo.push(structuredClone({ project: currentProject, joins: colocatedJoins, comments: mockStationComments }));
+            }
             // Mutate currentProject to support persistence testing
             // Note: Tauri invoke passes camelCase from JS side
             if (currentProject && args) {

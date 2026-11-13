@@ -113,6 +113,10 @@ test.describe('Data workspace', () => {
   });
 
   test('edits a shot length and a station comment, and undoes both', async ({ page }) => {
+    // The mock records cell edits as undo steps only on request.
+    await page.addInitScript(() => {
+      (window as unknown as Record<string, unknown>).__E2E_MOCK_UNDO_EDITS__ = true;
+    });
     const [main] = await seed(page);
     await enterData(page);
     const length = () =>
