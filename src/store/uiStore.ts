@@ -616,7 +616,8 @@ export interface UIStore {
   exportReturnMode: Exclude<AppMode, 'export'> | null;
   /** Enter the Export workspace, remembering the current mode to return to. No-op in Export. */
   enterExport: () => void;
-  /** Leave the Export workspace for the recorded mode (Survey when none). No-op outside Export. */
+  /** Leave the Export workspace for the recorded mode (Survey when none). No-op outside
+   *  Export, and while an export is being written (`exportStore.exporting`). */
   closeExport: () => void;
 
   // Issue-severity coloring overlay (#22). Runtime-only - like
@@ -1872,6 +1873,10 @@ export const useUIStore = create<UIStore>((set) => ({
     if (useUIStore.getState().appMode !== 'export') set({ exportReturnMode: null });
   },
   closeExport: () => {
+    // Never mid-export: the progress and the result toast live in the Export
+    // panel. Every close control is disabled meanwhile; Escape and Ctrl+E land
+    // here and so are inert.
+    if (useExportStore.getState().exporting) return;
     const { appMode, exportReturnMode } = useUIStore.getState();
     if (appMode === 'export') useUIStore.getState().setAppMode(exportReturnMode ?? 'survey');
     set({ exportReturnMode: null });

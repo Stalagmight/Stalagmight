@@ -3646,7 +3646,8 @@
   "exportPanel": {
     "title": "Export",
     "close": "Close export",
-    "closeHint": "Close export and go back to where you were"
+    "closeHint": "Close export and go back to where you were",
+    "inProgress": "Export in progress"
   },
   "toolbar": {
     "groupAria": "{{group}} tools",

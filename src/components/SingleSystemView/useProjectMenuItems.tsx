@@ -12,6 +12,7 @@ import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useProject } from '../../hooks/useProject';
 import { useUIStore } from '../../store/uiStore';
+import { useExportStore } from '../../store/exportStore';
 import { setSource } from '../../utils/telemetry';
 import { MENU_ICON_COLORS } from '../common/menuColors';
 import { leadingMenuItems, serviceMenuItems, quitMenuItem, importMenuItem } from '../common/appMenuItems';
@@ -47,6 +48,8 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
   const inExport = useUIStore((s) => s.appMode === 'export');
   const enterExport = useUIStore((s) => s.enterExport);
   const closeExport = useUIStore((s) => s.closeExport);
+  // An export being written keeps the Export workspace open (closeExport refuses).
+  const exportRunning = useExportStore((s) => s.exporting);
   const showDevStats = useUIStore((s) => s.showDevStats);
   const showMemoryStats = useUIStore((s) => s.showMemoryStats);
   const showMapStats = useUIStore((s) => s.showMapStats);
@@ -132,6 +135,7 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
         icon: inExport ? <ChevronLeftIcon size={sz} /> : <ExportIcon size={sz} />,
         iconColor: MENU_ICON_COLORS.export,
         action: 'export',
+        ...(inExport && exportRunning ? { disabled: true, title: t('exportPanel.inProgress') } : {}),
         onClick: () => {
           setSource('toolbar');
           if (inExport) closeExport();
@@ -200,5 +204,5 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
       },
       quitMenuItem(t),
     ];
-  }, [t, openDialog, inExport, enterExport, closeExport, showDevStats, showMemoryStats, showMapStats, showZoomStats, toggleDisplay, onSave, saveFailed, handleNewProject, handleSaveProjectAs, handleCloseProject, speleoLink]);
+  }, [t, openDialog, inExport, exportRunning, enterExport, closeExport, showDevStats, showMemoryStats, showMapStats, showZoomStats, toggleDisplay, onSave, saveFailed, handleNewProject, handleSaveProjectAs, handleCloseProject, speleoLink]);
 }

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useUIStore, type AppMode } from '../uiStore';
+import { useExportStore } from '../exportStore';
 import type { DisplaySettings } from '../../types/loading';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
@@ -36,6 +37,21 @@ describe('Export workspace entry and exit', () => {
       expect(useUIStore.getState().exportReturnMode).toBeNull();
     },
   );
+
+  it('closeExport refuses while an export is being written', () => {
+    useUIStore.getState().setAppMode('data');
+    useUIStore.getState().enterExport();
+    useExportStore.getState().setExporting(true);
+    try {
+      useUIStore.getState().closeExport();
+      expect(useUIStore.getState().appMode).toBe('export');
+      expect(useUIStore.getState().exportReturnMode).toBe('data');
+    } finally {
+      useExportStore.getState().setExporting(false);
+    }
+    useUIStore.getState().closeExport();
+    expect(useUIStore.getState().appMode).toBe('data');
+  });
 
   it('closes to Survey when no mode is recorded', () => {
     useUIStore.getState().setAppMode('plan');

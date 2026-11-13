@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo } fr
 import { useTranslation } from 'react-i18next';
 import { isEditableMode, useUIStore, type ToolType } from '../../store/uiStore';
 import { useDataWorkspaceStore } from '../DataWorkspace/store';
+import { useExportStore } from '../../store/exportStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button, IconButton } from '../common/Button';
 import {
@@ -243,6 +244,8 @@ export default function Toolbar({
   const exitDataTableFullScreen = useUIStore((s) => s.exitDataTableFullScreen);
   const closeExport = useUIStore((s) => s.closeExport);
   const appMode = useUIStore((s) => s.appMode);
+  // An export being written keeps the Export workspace open (closeExport refuses).
+  const exportRunning = useExportStore((s) => s.exporting);
   // Survey and Data both edit the survey: Import, Undo/Redo and the full tool set.
   const editableMode = isEditableMode(appMode);
   // Data's map is a pane the user opens beside the table. While it is closed there is
@@ -558,11 +561,12 @@ export default function Toolbar({
               </span>
             }
             onClick={() => { setSource('toolbar'); closeExport(); }}
+            disabled={exportRunning}
             size="sm"
             className={`sh-tool ${tight ? '!px-1' : 'ml-1'}`}
             style={{ '--o': toolAccentVar('pan') } as CSSProperties}
             aria-label={importCondensed ? t('exportPanel.close') : undefined}
-            title={t('exportPanel.closeHint')}
+            title={exportRunning ? t('exportPanel.inProgress') : t('exportPanel.closeHint')}
             data-testid="export-close-button"
           >
             {importCondensed ? null : t('exportPanel.close')}

@@ -60,9 +60,18 @@ interface ExportState {
   exportType: ExportType;
   dataFormat: DataFormat;
   imageOptions: ExportImageOptions;
+  /**
+   * An export is being written (set by `ExportControls` around the export
+   * call, cleared when it settles - success or failure). While it is on, the
+   * Export workspace can't be closed: `closeExport` refuses, and every close
+   * control is disabled with "Export in progress". Not a per-project option,
+   * so `reset` leaves it alone: only the run that set it clears it.
+   */
+  exporting: boolean;
   setExportType: (t: ExportType) => void;
   setDataFormat: (f: DataFormat) => void;
   setImageOptions: (o: ExportImageOptions) => void;
+  setExporting: (on: boolean) => void;
   /** Back to the defaults above. Called on every project transition - see below. */
   reset: () => void;
 }
@@ -84,6 +93,8 @@ const initialState = (): Pick<ExportState, 'exportType' | 'dataFormat' | 'imageO
 
 export const useExportStore = create<ExportState>((set) => ({
   ...initialState(),
+  exporting: false,
+  setExporting: (exporting) => set({ exporting }),
   setExportType: (exportType) => set({ exportType }),
   setDataFormat: (dataFormat) => set({ dataFormat }),
   setImageOptions: (imageOptions) => set({ imageOptions }),

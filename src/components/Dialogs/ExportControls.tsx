@@ -12,7 +12,7 @@ import { AlertDialog } from './AlertDialog';
 import { LoadingProgress } from '../LoadingProgress/LoadingProgress';
 import type { ExportImageOptions, ImageFormat, ColorMode } from '../../types/commands';
 import type { LoadingProgressPayload } from '../../types/loading';
-import type { ExportType, DataFormat } from '../../store/exportStore';
+import { useExportStore, type ExportType, type DataFormat } from '../../store/exportStore';
 import { ensureExtension, exportSaveFilters } from '../../utils/fileDialogs';
 import { ChevronRightIcon } from '../common/icons';
 import { setStationLabelOption } from '../../utils/exportOptions';
@@ -98,6 +98,12 @@ export default function ExportControls({
     [t],
   );
 
+  // The workspace-wide "an export is being written" flag (exportStore): it keeps
+  // the Export workspace from being closed under a running export. Set beside
+  // `isExporting`, but cleared unconditionally - even after an unmount - so a
+  // settled export can never leave the workspace stuck open.
+  const setExportRunning = (on: boolean) => useExportStore.getState().setExporting(on);
+
   const handleExport = async (options?: { skipTmlAnchorCheck?: boolean }) => {
     // A cancelled OS save picker writes nothing and leaves the panel and its
     // options exactly as they were.
@@ -171,6 +177,7 @@ export default function ExportControls({
           }
           // Disable button during data export (no progress events for CSV/JSON/TML)
           setIsExporting(true);
+          setExportRunning(true);
           try {
             if (dataFormat === 'csv') {
               await exportCsv(finalPath);
@@ -180,6 +187,7 @@ export default function ExportControls({
               await exportTml(finalPath);
             }
           } finally {
+            setExportRunning(false);
             if (isMountedRef.current) {
               setIsExporting(false);
             }
@@ -219,6 +227,7 @@ export default function ExportControls({
           });
 
           setIsExporting(true);
+          setExportRunning(true);
           setExportProgress(null);
           exportLoadingIdRef.current = null;
 
@@ -227,6 +236,7 @@ export default function ExportControls({
           } finally {
             // Clean up listener and reset state only if still mounted
             unlisten();
+            setExportRunning(false);
             exportLoadingIdRef.current = null;
             if (isMountedRef.current) {
               setIsExporting(false);
@@ -250,6 +260,7 @@ export default function ExportControls({
       // preferred over the generic string for the same reason ProfileChart
       // prefers it - it names which of those refusals happened.
       showToast(getErrorMessage(e, t('dialogs.export.failed')), TOAST_KEYS.EXPORT_FAILED, 'error');
+      setExportRunning(false);
       if (isMountedRef.current) {
         setIsExporting(false);
         setExportProgress(null);

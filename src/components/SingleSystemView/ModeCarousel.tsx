@@ -1,5 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { useUIStore, type AppMode } from '../../store/uiStore';
+import { useExportStore } from '../../store/exportStore';
 import { ListIcon, MapIcon, SlidersIcon, type IconProps } from '../common/icons';
 import type { ComponentType } from 'react';
 
@@ -20,7 +21,8 @@ const MODE_ICONS: Record<CarouselMode, ComponentType<IconProps>> = {
  * Top-middle workspace switcher (#38, the workspace-mode reframe). Selects the top-level mode
  * for an open project: Survey (the editable map workspace), Data (the editable full-project
  * table) or Plan (the gas planner over a read-only closure map). While Export is open no
- * button is pressed, and clicking one leaves Export for that mode.
+ * button is pressed, and clicking one leaves Export for that mode - except while an
+ * export is being written: then the buttons are disabled ("Export in progress").
  * Lives in the Toolbar's center slot - the active *tool* is already shown by the
  * highlighted toolbar button, so the center is free for the mode switch.
  *
@@ -43,6 +45,9 @@ export function ModeCarousel({
   const { t } = useTranslation();
   const appMode = useUIStore((s) => s.appMode);
   const setAppMode = useUIStore((s) => s.setAppMode);
+  const exportRunning = useExportStore((s) => s.exporting) && appMode === 'export';
+  const off = disabled || exportRunning;
+  const busyTitle = exportRunning ? t('exportPanel.inProgress') : undefined;
 
   return (
     // `max-w-full` is load-bearing, not cosmetic (#260): in the Toolbar's final
@@ -59,7 +64,7 @@ export function ModeCarousel({
     // scrollbar can never introduce a vertical one.
     <div
       className={`inline-flex max-w-full overflow-x-auto overflow-y-hidden rounded border border-border ${
-        disabled ? 'opacity-45 grayscale' : ''
+        off ? 'opacity-45 grayscale' : ''
       }`}
       role="group"
       aria-label={t('modeCarousel.aria')}
@@ -77,12 +82,13 @@ export function ModeCarousel({
             // Disabled while a survey placement is in progress: switching to the
             // read-only Plan map, or to Data's table over the map, would otherwise
             // leave that mutation live.
-            disabled={disabled}
+            // ... and while an export is being written, which must not lose its panel.
+            disabled={off}
             data-testid={`mode-${mode}`}
             onClick={() => setAppMode(mode)}
             // Compact drops the visible text, so the label has to come back as the
             // accessible name (and a tooltip) or the button becomes unnamed.
-            {...(compact ? { 'aria-label': label, title: label } : {})}
+            {...(compact ? { 'aria-label': label, title: busyTitle ?? label } : busyTitle ? { title: busyTitle } : {})}
             // `shrink-0`: the group is a scroll container now, so a too-narrow slot
             // must scroll the buttons, never squash them into unreadable slivers.
             className={`shrink-0 ${compact ? 'px-2 py-1.5 flex items-center justify-center' : 'px-3 py-1.5'} text-sm font-medium transition-colors disabled:cursor-not-allowed ${

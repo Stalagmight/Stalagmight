@@ -21,6 +21,8 @@ export function ExportPanel() {
   const imageOptions = useExportStore((s) => s.imageOptions);
   const setImageOptions = useExportStore((s) => s.setImageOptions);
   const closeExport = useUIStore((s) => s.closeExport);
+  // No way out while an export is being written (closeExport refuses too).
+  const exporting = useExportStore((s) => s.exporting);
 
   return (
     <div
@@ -35,8 +37,9 @@ export function ExportPanel() {
           variant="ghost"
           icon={<CloseIcon size={14} />}
           onClick={closeExport}
+          disabled={exporting}
           aria-label={t('exportPanel.close')}
-          tooltip={t('exportPanel.closeHint')}
+          tooltip={exporting ? t('exportPanel.inProgress') : t('exportPanel.closeHint')}
           className="text-text-secondary hover:text-text-primary"
           data-testid="export-panel-close"
         />
