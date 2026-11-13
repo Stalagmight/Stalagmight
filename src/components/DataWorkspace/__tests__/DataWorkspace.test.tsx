@@ -5,7 +5,7 @@
  * actions, the Back to Data chip and Open in Data.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, renderHook, screen, within } from '@testing-library/react';
 
 vi.mock('@tanstack/react-virtual', () => ({
   useVirtualizer: ({ count }: { count: number }) => ({
@@ -35,8 +35,8 @@ import { useUIStore } from '../../../store/uiStore';
 import { defaultConfig, type Config } from '../../../types/config';
 import { makeCtx, makeData, makeProject, WARNINGS } from './dataFixtures';
 import { DataSectionHeader } from '../DataSectionHeader';
-import { sectionStatsOf } from '../useDataWorkspaceModel';
-import { openRowInSurvey, type DataNav } from '../useDataNavigation';
+import { sectionStatsOf, useDataWorkspaceModel } from '../useDataWorkspaceModel';
+import { openRowInSurvey, useDataNavigation, type DataNav } from '../useDataNavigation';
 
 class NoopResizeObserver {
   observe() {}
@@ -707,6 +707,62 @@ describe('Map follow and map selection', () => {
       vi.advanceTimersByTime(500);
     });
     expect(useUIStore.getState().requestPanToShot).toEqual({ sectionId: 1, shotId: 102 });
+  });
+
+  const armFollow = () => {
+    vi.useFakeTimers();
+    useDataWorkspaceStore.setState({ mapPaneOpen: false, mapFollow: true });
+    useUIStore.setState({ requestPanToShot: null });
+    render(<DataWorkspace />);
+    fireEvent.mouseDown(screen.getByTestId('data-cell-sh-1-2-length'));
+    // Opening the pane arms the follow for once it has settled.
+    act(() => useDataWorkspaceStore.getState().setMapPaneOpen(true));
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
+  };
+  const settle = () =>
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+
+  it('leaving Data inside the settle window selects and pans nothing', () => {
+    armFollow();
+    act(() => useUIStore.setState({ appMode: 'survey' }));
+    settle();
+    expect(useUIStore.getState().selection).toBeNull();
+    expect(useUIStore.getState().requestPanToShot).toBeNull();
+  });
+
+  it('a project reset inside the settle window drops the pending follow', () => {
+    // The hook alone: in the shell the grid at once re-picks the new project's
+    // first row (a fresh, legitimate follow). What must not survive is the OLD
+    // row's follow, which a next project with the same ids would also match.
+    vi.useFakeTimers();
+    useDataWorkspaceStore.setState({ mapPaneOpen: false, mapFollow: true, activeRowKey: 'sh:1:102' });
+    useUIStore.setState({ requestPanToShot: null });
+    renderHook(() => useDataNavigation(useDataWorkspaceModel(), null, () => undefined));
+    act(() => useDataWorkspaceStore.getState().setMapPaneOpen(true));
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
+    act(() => useDataWorkspaceStore.getState().resetForProject());
+    settle();
+    expect(useUIStore.getState().selection).toBeNull();
+    expect(useUIStore.getState().requestPanToShot).toBeNull();
+  });
+
+  it('closing the pane, or unmounting, inside the settle window drops it too', () => {
+    armFollow();
+    act(() => useDataWorkspaceStore.getState().setMapPaneOpen(false));
+    settle();
+    expect(useUIStore.getState().requestPanToShot).toBeNull();
+    cleanup();
+    armFollow();
+    cleanup();
+    settle();
+    expect(useUIStore.getState().selection).toBeNull();
+    expect(useUIStore.getState().requestPanToShot).toBeNull();
   });
 
   it('"Show on map" on another row keeps that row selected once the pane settles', () => {

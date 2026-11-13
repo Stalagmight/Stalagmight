@@ -178,10 +178,18 @@ export function useDataNavigation(
    *  selection back (collapsing a multi-selection, turning a section into its
    *  station 0) and pan a map the user is already looking at. */
   const fromMap = useRef<string | null>(null);
+  const cancelFollow = useCallback(() => {
+    if (followTimer.current) clearTimeout(followTimer.current);
+    followTimer.current = null;
+    pendingFollow.current = null;
+  }, []);
   const runFollow = useCallback(() => {
     followTimer.current = null;
     const key = pendingFollow.current;
     pendingFollow.current = null;
+    // Data was left inside the throttle / settle window: the map now belongs
+    // to another mode, and selecting or panning it would act there.
+    if (useUIStore.getState().appMode !== 'data') return;
     const m = modelRef.current;
     const row = key ? m?.rowByKey.get(key) : undefined;
     if (!row || !m) return;
@@ -213,9 +221,17 @@ export function useDataNavigation(
       const followOn = s.mapFollow && !prevFollow;
       prevOpen = s.mapPaneOpen;
       prevFollow = s.mapFollow;
+      // Nothing left to follow - the pane closed, Follow went off, or the
+      // active row was cleared (a project reset does that, see projectReset):
+      // a follow still waiting would pan to a row that is no longer the user's,
+      // possibly one with the same key in the NEXT project.
+      if (!s.mapPaneOpen || !s.mapFollow || !s.activeRowKey) {
+        prevKey = s.activeRowKey;
+        cancelFollow();
+        return;
+      }
       if (s.activeRowKey === prevKey && !opened && !followOn) return;
       prevKey = s.activeRowKey;
-      if (!s.mapPaneOpen || !s.mapFollow || !s.activeRowKey) return;
       pendingFollow.current = s.activeRowKey;
       // A just-opened pane is still resizing: pan once it has settled.
       if (opened) {
@@ -229,9 +245,9 @@ export function useDataNavigation(
     });
     return () => {
       unsub();
-      if (followTimer.current) clearTimeout(followTimer.current);
+      cancelFollow();
     };
-  }, [runFollow]);
+  }, [runFollow, cancelFollow]);
 
   // ── Map selection -> focus its row ──────────────────────────────────────
   useEffect(() => {
