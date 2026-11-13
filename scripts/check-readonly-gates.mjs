@@ -2,7 +2,7 @@
 //
 // The correct "is the survey map read-only right now" predicate is
 // `useEditingBlocked()` / `isEditingBlockedNow()` (src/hooks/useEditingBlocked.ts):
-// `isMapReadOnly(state)` (geometryMode === 'closureAdjusted' || appMode !== 'survey')
+// `isMapReadOnly(state)` (geometryMode === 'closureAdjusted' || !isEditableMode(appMode))
 // composed with `selectSpeleoReadOnly` for a locked remote SpeleoDB project. Two
 // recurring bug classes keep re-appearing at individual call sites:
 //
@@ -26,7 +26,7 @@
 //       impossible to reintroduce.
 //
 // Note: Toolbar/keyboard Undo-Redo history controls are DELIBERATELY gated on
-// `appMode` alone, not the full editing-blocked predicate - the backend toast
+// `isEditableMode(appMode)` alone, not the full editing-blocked predicate - the backend toast
 // already handles a locked/read-only project rejecting an undo/redo write (see the
 // #243 comment at useKeyboardShortcuts.ts:571-574). That's out of this lint's scope
 // by design; it is not a raw closureAdjusted comparison and doesn't reference
@@ -72,9 +72,9 @@ export const CLOSURE_ADJUSTED_ALLOWLIST = {
   // very mechanism the appMode trap above exists because of), and the read-only
   // banner display - none are mutation gates.
   'src/components/Map/MapCanvas.tsx': 4,
-  // Guarded by an outer `appMode !== 'survey'` branch a few lines up, so the raw
-  // geometryMode check is already scoped to appMode === 'survey' - equivalent to
-  // isMapReadOnly there.
+  // Guarded by an outer branch a few lines up that scopes it to an editable mode with
+  // a map (Survey, or Data with its map pane open), so the raw geometryMode check is
+  // equivalent to isMapReadOnly there.
   'src/components/common/ContextMenu.tsx': 1,
   // Coordinate-set selection (which station/survey-data array to render), not a
   // mutation gate.

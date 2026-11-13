@@ -23,3 +23,4 @@ What each screen shows and what its controls do.
 - [Merge Stations dialog](merge-stations-dialog.md)
 - [Create Loop Closure dialog](closure-dialog.md)
 - [Display menu](display-menu.md)
+- [Data view](data-view.md)
