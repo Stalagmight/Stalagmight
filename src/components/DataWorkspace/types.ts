@@ -269,6 +269,10 @@ export interface FocusRequest {
   rowKey: string;
   colKey?: DataColumnKey;
   align?: 'auto' | 'center';
+  /** false: scroll to and activate the cell WITHOUT moving DOM focus into the
+   *  grid (the find box keeps the keyboard while the user types). Default true.
+   *  Optional, so older requests keep their meaning. */
+  takeFocus?: boolean;
   nonce: number;
 }
 
@@ -291,4 +295,7 @@ export interface DataView {
   totalCount: number;
   /** True when the order is survey order (no sort) - the link rail is drawn only then. */
   surveyOrder: boolean;
+  /** The search stopped at `MAX_SEARCH_MATCHES` (model/search.ts): `matches` is
+   *  the first that many in survey order. Optional for older producers. */
+  matchLimitReached?: boolean;
 }
