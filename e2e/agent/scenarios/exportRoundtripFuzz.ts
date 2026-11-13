@@ -9,23 +9,42 @@
  * that a survey which leaves as a `.tml` and comes back is still the same
  * survey.
  *
- * ## Three routes, and why all three
+ * ## Two routes, and why both
  *
- * `ExportControls` is ONE component rendered twice: the modal Export dialog
- * (local `useState`) and the Export-mode panel (`exportStore`). The third route
- * is the raw store action, which is what the IPC boundary looks like. They are
- * not interchangeable and the differences are the point:
+ * Export is a WORKSPACE: `ExportControls` rendered inside `ExportPanel` over
+ * `exportStore`, entered from Survey, Data or Plan and left back to wherever
+ * the user came from. That panel is the one UI route. The other is the raw
+ * store action, which is what the IPC boundary looks like. They are not
+ * interchangeable and the differences are the point:
  *
- *   - the UI routes push the answered path through `ensureExtension`, so a
+ *   - the panel pushes the answered path through `ensureExtension`, so a
  *     destination the user typed is REWRITTEN before the command sees it;
  *   - the store route hands the path over verbatim, which is the only way the
  *     backend's own guards are ever reached;
- *   - only the UI routes can raise a toast, so only they can tell the user
- *     anything.
+ *   - only the panel can raise a toast, so only it can tell the user anything.
  *
  * Each route is asserted against ITS OWN contract rather than forced to agree
- * move-for-move with the others - the header of `checkProjectFileSurvived` in
+ * move-for-move with the other - the header of `checkProjectFileSurvived` in
  * `lib/exportOracles.ts` states where that matters most.
+ *
+ * A third route, the modal Export dialog, existed until the dialog was retired
+ * in favour of the workspace. Its oracle (X8, modal and panel option sets do
+ * not leak into each other) went with it; a trace step that names the `modal`
+ * route is refused on replay with a message saying so.
+ *
+ * ## Every panel move is a round trip through the workspace
+ *
+ * A panel move draws WHERE it starts (`survey`, `data` or `plan`), HOW it
+ * enters (the hamburger row, Ctrl+E, or `enterExport`) and HOW it leaves (the
+ * toolbar's `export-close-button`, the panel's `export-panel-close`, the menu
+ * row, Ctrl+E, or Escape), all carried in the trace step. After the export it
+ * leaves and X10 asserts it landed back where it started with nothing left
+ * recorded. A drawn control that is not there falls back to the store action
+ * (`enterExport` / `closeExport`) and is counted, never asserted - the claim is
+ * about where an exit LANDS, and the fallback still lands somewhere.
+ *
+ * Every structural oracle starts from Survey (`runOracle` puts it there), as
+ * they all did before a panel move could end in Plan or Data.
  *
  * ## The shape of a run
  *
@@ -58,10 +77,13 @@
  *       surviving duplicate uuid after importing the same file twice.
  *   X7  hostile comments survive a CSV export neutralised, and a TML export
  *       intact.
- *   X8  the modal's options and the panel's do not leak into each other, and
- *       the panel's reset on a project switch.
+ *   X8b the panel's options reset on a project switch. (X8 proper - modal vs
+ *       panel independence - retired with the modal; the number is not reused.)
  *   X9  Export mode forces closure-adjusted, read-only geometry and gives the
  *       previous state back.
+ *   X10 every way out of the Export workspace returns to the mode it was
+ *       entered from, and clears `exportReturnMode`. Judged on every panel
+ *       move, not on the rotation.
  *
  * Per EPISODE: `check_project_integrity` after every oracle that imported, and
  * a teardown that ASSERTS rather than merely performs - `fuzz-shrink` reuses
@@ -165,7 +187,7 @@
  * NO export path reads any of them: `DEFAULT_IMAGE_OPTIONS`
  * (`src/store/exportStore.ts`) hardcodes its own literals and says it mirrors
  * the backend's `ExportImageOptions::default`, which is a different struct, and
- * `ExportDialog.tsx` never touches `config`. Two of the five have no analogue
+ * neither `ExportControls` nor `ExportPanel` reads `config`. Two of the five have no analogue
  * in `ExportImageOptions` at all (`_include_satellite`, `_include_grid`), and
  * one DISAGREES with the shipped default: the config says
  * `default_include_labels: true` while `show_station_labels` and
@@ -389,11 +411,13 @@
  *
  * ## Observations that are NOT findings
  *
- * A SUCCESSFUL export from the PANEL says nothing at all. The modal closes,
- * which is its report; the panel just stays there. `docs/notifications.md`
- * lists "export results" as a toast case, and the decision-tree question -
- * "outcome already visible where the user is looking?" - has different answers
- * for the two surfaces. This scenario does not report it, because the wave-4
+ * A SUCCESSFUL export from the PANEL says nothing at all: the panel just stays
+ * there. (The retired modal at least closed, which was its report; with the
+ * workspace the only UI surface, that silence is now the whole story.)
+ * `docs/notifications.md` lists "export results" as a toast case, and the
+ * decision-tree question - "outcome already visible where the user is
+ * looking?" - is answered "no" by an unchanged panel. This scenario does not
+ * report it, because the wave-4
  * brief scoped the notification work to FAILURES and a success toast is a
  * product decision about how chatty the panel should be, not a defect. It is
  * written down here so the asymmetry is a decision rather than an oversight.
@@ -448,12 +472,12 @@ import {
   canonicalizeUuids,
   checkByteIdentity,
   checkConvergence,
+  checkExportCloseReturn,
   checkExportModeInvariants,
   checkExportStoreReset,
   checkFileResult,
   checkFormatDifferential,
   checkNoDuplicateUuids,
-  checkOptionIndependence,
   checkProjectFileSurvived,
   checkShotMultiset,
   commentMultisetDelta,
@@ -461,12 +485,14 @@ import {
   exportBaseName,
   ExportOracleError,
   finalizeExportPath,
+  isReturnableMode,
   multisetDelta,
   newToastKeys,
   strictShotKey,
   naturalExtension,
   PROJECT_OWNED_SHAPES,
   type ExportAttempt,
+  type ExportExit,
   type ExportFormat,
   type ExportRoute,
   type ModeSnapshot,
@@ -478,18 +504,19 @@ import {
   callProjectAction,
   clickAndAnswerSave,
   clickControl,
-  closeModal,
   dataFormatValue,
   diveProfileRequest,
   drawExport,
   drawImageOptions,
   enabledFormats,
+  enterExportVia,
   hasDiveRoute,
   isDataFormat,
   isImageFormat,
-  modalIsOpen,
-  openModal,
-  readModalOptions,
+  LEGACY_PANEL_PATH,
+  leaveExportVia,
+  panelPathFromTrace,
+  readExportReturn,
   readModeSnapshot,
   readPanelOptions,
   readPreview,
@@ -757,9 +784,10 @@ interface Integrity {
 export const exportRoundtripFuzz: Scenario = {
   name: SCENARIO,
   description:
-    'Exports CSV/JSON/TML/TMLU/PNG/SVG/PDF/preview through the modal, the Export-mode panel and the ' +
-    'raw store action at hostile destination paths, asserting file/result agreement, refusal parity, ' +
-    'a svg/png/pdf differential, byte identity, round-trip convergence and shot survival.',
+    'Exports CSV/JSON/TML/TMLU/PNG/SVG/PDF/preview through the Export workspace panel and the raw ' +
+    'store action at hostile destination paths, asserting file/result agreement, refusal parity, ' +
+    'a svg/png/pdf differential, byte identity, round-trip convergence, shot survival, and that every ' +
+    'way out of the workspace returns to the mode it was entered from.',
   defaultIterations: 30,
 
   async run(ctx: ScenarioContext, { iterations }): Promise<void> {
@@ -1016,6 +1044,8 @@ export const exportRoundtripFuzz: Scenario = {
             shape: draw.shape,
             seq: draw.seq,
             imageOptions: draw.imageOptions,
+            // The workspace round trip X10 judges. Absent on a store step.
+            ...(draw.panel === null ? {} : { panel: draw.panel }),
           },
           rel: path.relative(sessionDir, requested).split(path.sep).join('/'),
           label,
@@ -1075,8 +1105,8 @@ export const exportRoundtripFuzz: Scenario = {
         // `withThemeDepthRamp` without hand-rolling the ramp.
         //
         // The form has to be driven FIRST: `ExportPreview` only mounts on the
-        // image type (the dialog opens on data/CSV), so reading before setting
-        // it would measure "absent" every time and call it coverage.
+        // image type, and an earlier move may have left the panel on data, so
+        // reading before setting it would measure "absent" and call it coverage.
         await applyFormControls(draw);
         await settleOnce(ctx);
         const preview = await readPreview(ctx);
@@ -1178,6 +1208,108 @@ export const exportRoundtripFuzz: Scenario = {
       };
       guarded(() => checkFileResult(attempt, reproduce));
       rmrf(moveDir);
+    };
+
+    /**
+     * One PANEL move: enter the Export workspace from the drawn mode through the
+     * drawn entry, export, leave through the drawn exit, and judge where the
+     * exit landed (X10).
+     *
+     * Shared by generation and replay, like `performExport`, so the round trip
+     * a trace step describes is the round trip its replay drives.
+     */
+    const runPanelMove = async (
+      draw: ExportDraw,
+      episodeDir: string,
+      projectFile: string | null,
+      record: boolean,
+    ): Promise<void> => {
+      // The same early-out `resolveDestination` takes, checked BEFORE entering:
+      // a move that records no step must not drive a round trip either, or an
+      // X10 red would point at a trace that cannot reproduce it.
+      if (PROJECT_OWNED_SHAPES.has(draw.shape) && projectFile === null) {
+        ctx.metric('skip:no-saved-project-to-aim-at');
+        return;
+      }
+      const trip = draw.panel ?? LEGACY_PANEL_PATH;
+      const start = await readExportReturn(ctx);
+      if (!start.hasReturnField) {
+        throw new Error(
+          `${SCENARIO} needs uiStore.exportReturnMode, and this build has none - it predates the ` +
+            `Export workspace's recorded way back, so X10 has nothing to judge`,
+        );
+      }
+      if (start.appMode === 'export') {
+        // Only a shrunk trace gets here (every recorded move leaves). Leaving
+        // through the store keeps the next entry's recorded mode honest.
+        ctx.metric('panel:startedInsideExport');
+        await leaveExportVia(ctx, 'closeExport');
+      }
+      // WHERE the trip starts is set through the store: X10 is about the way
+      // back, and how the user reached Plan or Data is not its question.
+      if (!(await setAppMode(ctx, trip.from))) {
+        ctx.metric('skip:setAppMode-refused');
+        return;
+      }
+      const before = await readExportReturn(ctx);
+      if (!isReturnableMode(before.appMode)) {
+        ctx.metric(`skip:start-mode:${before.appMode}`);
+        return;
+      }
+
+      const entered = await enterExportVia(ctx, trip.entry);
+      if (entered.blurred) ctx.metric('x10:entryBlurredField');
+      if (entered.appMode === 'export') {
+        ctx.metric(`x10:entry:${trip.entry}`);
+      } else {
+        // Counted, never asserted: the claim here is about the EXIT. A miss is
+        // still made visible, per affordance, and the move goes on through the
+        // store so its export and its exit are not lost with it.
+        ctx.metric(`x10:entryMissed:${trip.entry}:${entered.performed ? 'pressed' : entered.reason ?? 'unknown'}`);
+        const fallback = await enterExportVia(ctx, 'enterExport');
+        if (fallback.appMode !== 'export') {
+          ctx.metric('skip:export-would-not-open');
+          return;
+        }
+      }
+
+      await performExport(draw, episodeDir, projectFile, record);
+
+      // A dialog the move left up - the TML notice whose Continue found no
+      // consumer - makes Ctrl+E inert and puts every control behind a
+      // backdrop, both by design. Close it first, so the exit is judged at
+      // idle, which is the state X10 is about.
+      const mid = await readExportReturn(ctx);
+      if (mid.activeDialog !== null) {
+        ctx.metric('x10:closedDialogFirst');
+        await ctx.callAction('ui', 'closeDialog', []);
+        await settleOnce(ctx);
+      }
+      if (mid.appMode !== 'export') {
+        // An export does not switch workspaces; there is no exit left to judge.
+        ctx.metric(`x10:leftDuringExport:${mid.appMode}`);
+        note(`Export was already left (appMode ${mid.appMode}) before the drawn exit`);
+        return;
+      }
+
+      let exit: ExportExit = trip.exit;
+      let left = await leaveExportVia(ctx, exit);
+      if (!left.performed) {
+        ctx.metric(`x10:exitFallback:${exit}:${left.reason ?? 'unknown'}`);
+        exit = 'closeExport';
+        left = await leaveExportVia(ctx, exit);
+      }
+      if (left.blurred) ctx.metric('x10:exitBlurredField');
+      if (exit === 'escape') ctx.metric(`x10:escapePresses:${left.presses}`);
+      const after = await readExportReturn(ctx);
+      note(`left Export via ${exit}: ${before.appMode} -> ${after.appMode}`);
+      guarded(() =>
+        checkExportCloseReturn(
+          { before: before.appMode, exit, after: after.appMode, returnModeAfter: after.exportReturnMode },
+          reproduce,
+        ),
+      );
+      ctx.metric(`x10:returned:${exit}:${before.appMode}`);
     };
 
     // -----------------------------------------------------------------------
@@ -1667,8 +1799,13 @@ export const exportRoundtripFuzz: Scenario = {
       `);
     };
 
-    /** X8: the two option sets, and the store's reset on a project switch. */
-    const runOptionIndependence = async (): Promise<void> => {
+    /**
+     * X8b: the panel's option set resets on a project switch.
+     *
+     * X8 proper - the modal's local options and the panel's store never leak
+     * into each other - retired with the modal: there is one surface left.
+     */
+    const runStoreReset = async (): Promise<void> => {
       // The DECLARED defaults, not a read of the live store. Reading would make
       // X8b vacuous the moment it mattered: if a previous move had dirtied the
       // store and nothing reset it, the "defaults" would BE the dirty values
@@ -1691,21 +1828,6 @@ export const exportRoundtripFuzz: Scenario = {
       await ctx.callAction('export', 'setExportType', ['data']);
       await ctx.callAction('export', 'setDataFormat', ['tml']);
       await ctx.callAction('export', 'setImageOptions', [dirtyImage]);
-      const panelBefore = await readPanelOptions(ctx);
-
-      // Now open the modal and change ITS options.
-      if (!(await openModal(ctx))) {
-        ctx.metric('skip:modal-would-not-open');
-      } else {
-        await clickControl(ctx, 'export-type-image');
-        await selectValue(ctx, 'image-format-select', 'svg');
-        await setThreshold(ctx, 7);
-        const modalChangedTo = (await readModalOptions(ctx)) ?? panelBefore;
-        const panelAfter = await readPanelOptions(ctx);
-        guarded(() => checkOptionIndependence({ panelBefore, panelAfter, modalChangedTo }, reproduce));
-        ctx.metric('x8:independent');
-        await closeModal(ctx);
-      }
 
       // X8b: a project switch drops the panel's set.
       const dirty = await readPanelOptions(ctx);
@@ -1729,6 +1851,9 @@ export const exportRoundtripFuzz: Scenario = {
 
     /** X9: export mode forces the adjusted, read-only map and gives it back. */
     const runModeInvariants = async (): Promise<void> => {
+      // `runOracle` already put the app in Survey; X9's claim is about the
+      // survey -> export -> survey trip, so it does not depend on that.
+      await setAppMode(ctx, 'survey');
       const before = await readModeSnapshot(ctx);
       if (!(await setAppMode(ctx, 'export'))) {
         ctx.metric('skip:setAppMode-refused');
@@ -1797,10 +1922,8 @@ export const exportRoundtripFuzz: Scenario = {
     // -----------------------------------------------------------------------
 
     const teardown = async (episodeDir: string): Promise<void> => {
-      if (await modalIsOpen(ctx)) {
-        await closeModal(ctx);
-        ctx.metric('teardown:modalWasOpen');
-      }
+      // Every recorded move leaves Export; a shrunk trace may not.
+      if ((await readExportReturn(ctx)).appMode === 'export') ctx.metric('teardown:exportWasOpen');
       await setAppMode(ctx, 'survey');
       await ctx.callAction('project', 'closeProject', []).catch(() => undefined);
       await settleOnce(ctx);
@@ -1853,7 +1976,7 @@ export const exportRoundtripFuzz: Scenario = {
       | 'x4-byte-identity'
       | 'x5x6-roundtrip'
       | 'x7-hostile-comments'
-      | 'x8-option-independence'
+      | 'x8b-store-reset'
       | 'x9-mode-invariants'
       | 'x9b-pre-plan-leak';
 
@@ -1862,10 +1985,22 @@ export const exportRoundtripFuzz: Scenario = {
       'x4-byte-identity',
       'x5x6-roundtrip',
       'x7-hostile-comments',
-      'x8-option-independence',
+      'x8b-store-reset',
       'x9-mode-invariants',
       'x9b-pre-plan-leak',
     ];
+
+    /**
+     * Oracle names an older trace may carry, and what they replay as.
+     *
+     * `x8-option-independence` ran X8 (retired with the modal) and then X8b;
+     * the X8b half is all that is left of it, so that is what it replays. An
+     * alias rather than a refusal, because the step carries no inputs the
+     * retirement could have changed the meaning of.
+     */
+    const LEGACY_ORACLE_NAMES: Readonly<Record<string, OracleName>> = {
+      'x8-option-independence': 'x8b-store-reset',
+    };
 
     /** The resolved draw an oracle needs. `{}` for the ones that draw nothing. */
     interface OracleInputs {
@@ -1906,6 +2041,10 @@ export const exportRoundtripFuzz: Scenario = {
       episodeDir: string,
       digest: ProjectDigest,
     ): Promise<void> => {
+      // Every structural oracle starts from Survey, as all of them did before a
+      // panel move could end in Plan or Data: X7's `createSection` and X8b's
+      // project switch are survey-workspace operations.
+      await setAppMode(ctx, 'survey');
       switch (name) {
         case 'x3-differential':
           await runDifferential(episodeDir, readImageOptions(inputs, name));
@@ -1919,8 +2058,8 @@ export const exportRoundtripFuzz: Scenario = {
         case 'x7-hostile-comments':
           await runNeutralisation(episodeDir);
           return;
-        case 'x8-option-independence':
-          await runOptionIndependence();
+        case 'x8b-store-reset':
+          await runStoreReset();
           return;
         case 'x9-mode-invariants':
           await runModeInvariants();
@@ -1948,7 +2087,7 @@ export const exportRoundtripFuzz: Scenario = {
     };
 
     const oracleFromStep = (step: TraceStep & { kind: 'oracle' }): OracleName => {
-      const found = ORACLE_NAMES.find((name) => name === step.oracle);
+      const found = ORACLE_NAMES.find((name) => name === step.oracle) ?? LEGACY_ORACLE_NAMES[step.oracle];
       if (found === undefined) {
         throw new Error(
           `refusing to replay oracle "${step.oracle}": ${SCENARIO} runs ${ORACLE_NAMES.join(', ')}`,
@@ -1968,10 +2107,18 @@ export const exportRoundtripFuzz: Scenario = {
         shape?: unknown;
         seq?: unknown;
         imageOptions?: unknown;
+        panel?: unknown;
       };
       const route = options.route;
       const shape = options.shape;
-      if (route !== 'modal' && route !== 'panel' && route !== 'store') {
+      if (route === 'modal') {
+        throw new Error(
+          'trace step names route "modal": the modal Export dialog is retired (Export is a workspace ' +
+            'now), so this trace drives a surface the app no longer has. Re-record it; the panel route ' +
+            'is the one UI route left.',
+        );
+      }
+      if (route !== 'panel' && route !== 'store') {
         throw new Error(`trace step names route ${JSON.stringify(route)}, which this build does not run`);
       }
       if (typeof shape !== 'string' || !PATH_SHAPE_NAMES.has(shape)) {
@@ -1987,6 +2134,9 @@ export const exportRoundtripFuzz: Scenario = {
         shape: shape as PathShape,
         imageOptions,
         seq: typeof options.seq === 'number' ? options.seq : 0,
+        // A panel step recorded before the workspace had a way back carries no
+        // path, and replays with LEGACY_PANEL_PATH - see its header.
+        panel: route === 'panel' ? panelPathFromTrace(options.panel) : null,
       };
     };
 
@@ -2062,14 +2212,9 @@ export const exportRoundtripFuzz: Scenario = {
         if (step.kind === 'export') {
           const draw = drawFromStep(step);
           if (draw === null) continue;
-          if (draw.route !== 'store' && !(await modalIsOpen(ctx))) {
-            if (draw.route === 'modal') await openModal(ctx);
-            else await setAppMode(ctx, 'export');
-          }
-          await performExport(draw, episodeDir, current.filePath, false);
+          if (draw.route === 'panel') await runPanelMove(draw, episodeDir, current.filePath, false);
+          else await performExport(draw, episodeDir, current.filePath, false);
           moves += 1;
-          if (draw.route === 'modal' && (await modalIsOpen(ctx))) await closeModal(ctx);
-          if (draw.route === 'panel') await setAppMode(ctx, 'survey');
           continue;
         }
         if (step.kind === 'oracle') {
@@ -2115,20 +2260,8 @@ export const exportRoundtripFuzz: Scenario = {
       for (let move = 0; move < moves; move += 1) {
         seq += 1;
         const draw = drawExport(ctx, seq);
-        if (draw.route === 'modal') {
-          if (!(await openModal(ctx))) {
-            ctx.metric('skip:modal-would-not-open');
-            continue;
-          }
-        } else if (draw.route === 'panel') {
-          if (!(await setAppMode(ctx, 'export'))) {
-            ctx.metric('skip:setAppMode-refused');
-            continue;
-          }
-        }
-        await performExport(draw, episodeDir, digest.filePath, true);
-        if (draw.route === 'modal' && (await modalIsOpen(ctx))) await closeModal(ctx);
-        if (draw.route === 'panel') await setAppMode(ctx, 'survey');
+        if (draw.route === 'panel') await runPanelMove(draw, episodeDir, digest.filePath, true);
+        else await performExport(draw, episodeDir, digest.filePath, true);
       }
 
       // ---- the structural rotation ---------------------------------------
@@ -2154,7 +2287,7 @@ export const exportRoundtripFuzz: Scenario = {
       if (episode % 2 === 1 && roundtripEnabled()) {
         await stageOracle('x5x6-roundtrip', {}, episodeDir, digest);
       }
-      await stageOracle('x8-option-independence', {}, episodeDir, digest);
+      await stageOracle('x8b-store-reset', {}, episodeDir, digest);
       await stageOracle('x9-mode-invariants', {}, episodeDir, digest);
       if (episode % 4 === 0) await stageOracle('x9b-pre-plan-leak', {}, episodeDir, digest);
 

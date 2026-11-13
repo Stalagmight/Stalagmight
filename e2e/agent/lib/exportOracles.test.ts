@@ -14,30 +14,35 @@ import {
   canonicalizeUuids,
   checkByteIdentity,
   checkConvergence,
+  checkExportCloseReturn,
   checkExportModeInvariants,
   checkExportStoreReset,
   checkFileResult,
   checkFormatDifferential,
   checkNoDuplicateUuids,
-  checkOptionIndependence,
   checkProjectFileSurvived,
   checkShotMultiset,
   commentMultisetDelta,
   csvTextViolations,
+  DRAWN_EXPORT_EXITS,
   ensureExtensionMirror,
   escapeCsvMirror,
   exportBaseName,
   ExportOracleError,
   finalizeExportPath,
+  isReturnableMode,
   multisetDelta,
   naturalExtension,
   newToastKeys,
   neutralisedForm,
   parseCsvRows,
   PATH_SHAPES,
+  RETURNABLE_MODES,
   shotKey,
   strictShotKey,
   type ExportAttempt,
+  type ExportCloseObservation,
+  type ExportExit,
   type ModeSnapshot,
   type OptionSnapshot,
   type PathShape,
@@ -132,7 +137,7 @@ describe('ensureExtensionMirror (src/utils/fileDialogs.ts:49-65)', () => {
     ['/x/out', '.png', '/x/out.png'],
     // Windows separator.
     ['C:\\x\\out.txt', 'svg', 'C:\\x\\out.svg'],
-    // The open project's own path, which is why the modal route never reaches
+    // The open project's own path, which is why the panel route never reaches
     // the backend guard.
     ['/x/cave.stalx', 'csv', '/x/cave.csv'],
   ];
@@ -182,7 +187,7 @@ describe('finalizeExportPath (ExportControls.handleExport)', () => {
     expect(finalizeExportPath('/x/cave.stalx', 'csv')).toBe('/x/cave.csv');
     expect(finalizeExportPath('/x/cave.plnx', 'png')).toBe('/x/cave.png');
     // ... except for TML, where `.stalx` is neither .tml nor .tmlu, so it is
-    // still rewritten. There is no shape where the modal hands the raw path on.
+    // still rewritten. There is no shape where the panel hands the raw path on.
     expect(finalizeExportPath('/x/cave.stalx', 'tml')).toBe('/x/cave.tml');
   });
 });
@@ -365,7 +370,7 @@ describe('canonicalizeUuids', () => {
 
 const attempt = (over: Partial<ExportAttempt> = {}): ExportAttempt => ({
   format: 'csv',
-  route: 'modal',
+  route: 'panel',
   shape: 'normal',
   requested: '/s/fuzz-exports/export-1.csv',
   effective: '/s/fuzz-exports/export-1.csv',
@@ -517,7 +522,7 @@ describe('X2 the open project survives', () => {
   it('does NOT require a refusal on a UI route - ensureExtension redirects there', () => {
     expect(() =>
       checkProjectFileSurvived(
-        { ...base, route: 'modal', ok: true, error: null, expectRefusal: false },
+        { ...base, route: 'panel', ok: true, error: null, expectRefusal: false },
         REPRO,
       ),
     ).not.toThrow();
@@ -855,7 +860,7 @@ describe('X6 shot multiset', () => {
   });
 });
 
-describe('X8 option independence', () => {
+describe('X8b export store reset', () => {
   const options = (over: Partial<OptionSnapshot> = {}): OptionSnapshot => ({
     exportType: 'image',
     dataFormat: 'csv',
@@ -863,28 +868,6 @@ describe('X8 option independence', () => {
     dpi: 300,
     branchingThreshold: 2,
     ...over,
-  });
-
-  it('passes when the panel is untouched by the modal', () => {
-    expect(() =>
-      checkOptionIndependence(
-        { panelBefore: options(), panelAfter: options(), modalChangedTo: options({ dpi: 600 }) },
-        REPRO,
-      ),
-    ).not.toThrow();
-  });
-
-  it('fails when the modal wrote through to the panel', () => {
-    expect(() =>
-      checkOptionIndependence(
-        {
-          panelBefore: options(),
-          panelAfter: options({ dpi: 600 }),
-          modalChangedTo: options({ dpi: 600 }),
-        },
-        REPRO,
-      ),
-    ).toThrow(/changed the PANEL/);
   });
 
   it('fails when export options survive a project switch', () => {
@@ -989,5 +972,88 @@ describe('X9 export-mode invariants', () => {
         REPRO,
       ),
     ).toThrow(/did not restore/);
+  });
+});
+
+describe('X10 close export returns to the recorded mode', () => {
+  const trip = (over: Partial<ExportCloseObservation> = {}): ExportCloseObservation => ({
+    before: 'survey',
+    exit: 'closeButton',
+    after: 'survey',
+    returnModeAfter: null,
+    ...over,
+  });
+
+  const everyExit: readonly ExportExit[] = [...DRAWN_EXPORT_EXITS, 'closeExport'];
+
+  it('passes every exit back to every mode Export can be entered from', () => {
+    for (const mode of RETURNABLE_MODES) {
+      for (const exit of everyExit) {
+        expect(() => checkExportCloseReturn(trip({ before: mode, exit, after: mode }), REPRO)).not.toThrow();
+      }
+    }
+  });
+
+  it('draws five exits and keeps the store fallback out of the draw', () => {
+    // `closeExport` is what a move falls back to when its drawn control is
+    // absent; drawing it would spend budget on the one exit that exercises no
+    // affordance at all.
+    expect([...DRAWN_EXPORT_EXITS].sort()).toEqual(['closeButton', 'escape', 'menu', 'panelClose', 'shortcut']);
+  });
+
+  it('fails an exit that landed in SURVEY when the trip started in Plan', () => {
+    // The defect the oracle is for: one affordance wired to setAppMode('survey')
+    // instead of closeExport().
+    expect(() =>
+      checkExportCloseReturn(trip({ before: 'plan', exit: 'panelClose', after: 'survey' }), REPRO),
+    ).toThrow(/returned to "survey", not to the mode it was entered from \("plan"\)/);
+  });
+
+  it('fails an exit that landed in SURVEY when the trip started in Data', () => {
+    expect(() =>
+      checkExportCloseReturn(trip({ before: 'data', exit: 'menu', after: 'survey' }), REPRO),
+    ).toThrow(/X10 leaving Export via menu returned to "survey"/);
+  });
+
+  it('fails an exit that never left', () => {
+    expect(() => checkExportCloseReturn(trip({ exit: 'escape', after: 'export' }), REPRO)).toThrow(
+      /via escape did not leave it/,
+    );
+  });
+
+  it('fails a correct return that left exportReturnMode set', () => {
+    expect(() =>
+      checkExportCloseReturn(trip({ before: 'plan', after: 'plan', returnModeAfter: 'plan' }), REPRO),
+    ).toThrow(/left exportReturnMode = "plan"/);
+  });
+
+  it('carries the reproduce line and is an ExportOracleError', () => {
+    try {
+      checkExportCloseReturn(trip({ before: 'plan', after: 'survey' }), REPRO);
+      expect.unreachable('the oracle should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ExportOracleError);
+      expect((err as Error).message).toContain(REPRO);
+    }
+  });
+
+  it('calls an entry from inside Export a HARNESS error, not a finding', () => {
+    // Entering "from export" means the scenario never left the last trip; the
+    // app cannot be blamed for what it hands back then.
+    let caught: unknown = null;
+    try {
+      checkExportCloseReturn(trip({ before: 'export', after: 'export' }), REPRO);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect(caught).not.toBeInstanceOf(ExportOracleError);
+    expect((caught as Error).message).toMatch(/X10 precondition/);
+  });
+
+  it('knows exactly which modes are returnable', () => {
+    expect(RETURNABLE_MODES).toEqual(['survey', 'data', 'plan']);
+    expect(isReturnableMode('export')).toBe(false);
+    expect(isReturnableMode('data')).toBe(true);
   });
 });
