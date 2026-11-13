@@ -732,3 +732,134 @@ fn an_ignore_on_an_unsaved_shot_survives_an_undone_combine() {
         "{rows:?}"
     );
 }
+
+/// A crafted `.stalx` whose `held_gauges` setting holds 100,000 copies of one
+/// entry, 100,000 entries naming shots that do not exist and two valid
+/// entries for one component: it opens fast, and keeps one entry per
+/// component (the first valid one).
+#[test]
+fn a_huge_held_gauge_list_opens_fast_and_keeps_one_per_component() {
+    use crate::models::{HeldGauge, Project, SectionData};
+    let temp = tempfile::TempDir::new().unwrap();
+    let path = temp.path().join("crafted.stalx");
+    let mut project = Project::new("Crafted".to_string(), None);
+    let ids: Vec<SectionId> = (0..3)
+        .map(|_| {
+            project
+                .add_section(SectionData {
+                    shots: vec![shot(90.0, 10.0), shot(0.0, 10.0)],
+                    ..Default::default()
+                })
+                .id
+        })
+        .collect();
+    // Sections 0 and 1 are one component; 2 is its own.
+    project
+        .merge_stations(StationRef::new(ids[0], 2), StationRef::new(ids[1], 0))
+        .unwrap_or_else(|_| {
+            let to = project
+                .compute_station_raw_coords(StationRef::new(ids[0], 2))
+                .unwrap();
+            let now = project
+                .compute_station_raw_coords(StationRef::new(ids[1], 0))
+                .unwrap();
+            project.adjust_section_offset(ids[1], to.x - now.x, to.y - now.y);
+            project
+                .merge_stations(StationRef::new(ids[0], 2), StationRef::new(ids[1], 0))
+                .unwrap()
+        });
+    let held = |project: &Project, section: SectionId, index: u32| {
+        project
+            .held_gauge_at(StationRef::new(section, index))
+            .unwrap()
+    };
+    let first = held(&project, ids[1], 1);
+    let same_component = held(&project, ids[0], 1);
+    let other_component = held(&project, ids[2], 2);
+    let mut entries: Vec<HeldGauge> = std::iter::repeat_n(first.clone(), 100_000).collect();
+    entries.extend((0..100_000).map(|i| HeldGauge {
+        shot: format!("00000000-0000-4000-8000-{i:012}"),
+        ..first.clone()
+    }));
+    entries.push(same_component);
+    entries.push(other_component.clone());
+    {
+        let mut db = crate::persistence::Database::open(&path).unwrap();
+        db.save_project(&project).unwrap();
+    }
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute(
+        "INSERT OR REPLACE INTO project_settings (key, value) VALUES ('held_gauges', ?1)",
+        [serde_json::to_string(&entries).unwrap()],
+    )
+    .unwrap();
+    drop(conn);
+
+    let state = AppState::new().unwrap();
+    let started = std::time::Instant::now();
+    assert!(state.open_project(path).success);
+    let took = started.elapsed();
+    assert!(
+        took < std::time::Duration::from_secs(5),
+        "open took {took:?}"
+    );
+    assert_eq!(
+        state.get_project_state().unwrap().held_gauges,
+        vec![first, other_component]
+    );
+}
+
+/// A file saved before shot uuids were unique across the project holds one
+/// uuid in two sections; the load renames the higher section's copy. A held
+/// gauge on that copy names its section, so it follows the rename and holds
+/// the station there, not the lower section's copy of the same uuid.
+#[test]
+fn a_held_gauge_on_the_renamed_copy_of_a_repeated_uuid_holds_its_station() {
+    use crate::models::{Project, SectionData};
+    let temp = tempfile::TempDir::new().unwrap();
+    let path = temp.path().join("repeats.stalx");
+    let ids = [
+        "59508181-468f-429e-9dac-7c8e82fe53a1",
+        "473a69ed-22ac-449f-8fa1-11308801104a",
+        "45fcbcd1-6d49-45fb-8504-7c5734fa7c9d",
+    ];
+    let copy = || SectionData {
+        shots: ids
+            .iter()
+            .map(|id| ShotData {
+                uuid: Some((*id).to_string()),
+                ..shot(90.0, 10.0)
+            })
+            .collect(),
+        ..Default::default()
+    };
+    let mut project = Project::new("Repeats".to_string(), None);
+    let low = project.add_section(copy()).id;
+    let high = project.add_section(copy()).id;
+    project.adjust_section_offset(high, 0.0, 50.0);
+    let held = project.held_gauge_at(StationRef::new(high, 2)).unwrap();
+    assert_eq!(held.section_id, high, "setup");
+    project.held_gauges = vec![held];
+    {
+        let mut db = crate::persistence::Database::open(&path).unwrap();
+        db.save_project(&project).unwrap();
+    }
+
+    let state = AppState::new().unwrap();
+    assert!(state.open_project(path).success);
+    let project = state.get_project_state().unwrap();
+    assert_ne!(
+        project.get_section(high).unwrap().shots[2].uuid.as_deref(),
+        Some(ids[2]),
+        "setup: the load renamed the higher copy"
+    );
+    assert_eq!(
+        project.adjustment_anchor_for_tests(high),
+        Some(StationRef::new(high, 2))
+    );
+    assert_eq!(
+        project.adjustment_anchor_for_tests(low),
+        Some(StationRef::new(low, 0)),
+        "the lower copy keeps its own gauge"
+    );
+}

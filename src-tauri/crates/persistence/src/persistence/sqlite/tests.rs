@@ -8958,6 +8958,7 @@ fn held_gauges_round_trip_and_a_stale_or_malformed_setting_reads_as_none() {
         .id;
     let shots = &project.get_section(id).unwrap().shots;
     let held = crate::models::HeldGauge {
+        section_id: id,
         shot: shots[1].uuid.clone().unwrap(),
         neighbour: shots[0].uuid.clone(),
         end: true,

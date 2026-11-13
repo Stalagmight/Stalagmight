@@ -286,8 +286,8 @@ impl Project {
         self.counter_parity_shots.extend(renamed);
     }
 
-    /// Apply `remap` to the live project: shot ids, gauge anchors and every
-    /// `AfterShot` station key in a renamed section, then refresh the uuid index
+    /// Apply `remap` to the live project: shot ids, gauge anchors, held gauges
+    /// and every `AfterShot` station key in a renamed section, then refresh the uuid index
     /// of those sections. Positional (`Index`) keys need nothing: a rename does
     /// not move a shot. Never calls [`Self::touch`]. The counter-parity set is
     /// left to the caller ([`Self::follow_counter_parity`]).
@@ -297,6 +297,19 @@ impl Project {
         }
         for section in &mut self.sections {
             remap.rewrite_section(section);
+        }
+        // A held gauge names its shots in its section, like a station key.
+        for held in &mut self.held_gauges {
+            if let Some(new) = remap.get(held.section_id, &held.shot) {
+                held.shot = new.to_string();
+            }
+            if let Some(new) = held
+                .neighbour
+                .as_deref()
+                .and_then(|n| remap.get(held.section_id, n))
+            {
+                held.neighbour = Some(new.to_string());
+            }
         }
         self.map_station_refs(|mut key| {
             remap.rewrite_key(&mut key);

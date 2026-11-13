@@ -358,8 +358,8 @@ impl Project {
         if let Some(at) = self
             .held_gauges
             .iter()
-            .filter_map(|held| self.resolve_held_gauge(held))
-            .find(|at| component.contains(&at.section_id))
+            .filter(|held| component.contains(&held.section_id))
+            .find_map(|held| self.resolve_held_gauge(held))
         {
             return Some(at);
         }

@@ -172,12 +172,21 @@ lowest-id rule.
 Why a record, and not ids: the alternatives were to give the combined section
 the lower of the two ids, and to let the split half that holds the station keep
 the section's id. Both change station labels (`5:3`) the user reads, depending
-on a gauge they cannot see. A held gauge names its station by shot uuids, so it
-follows the station through later reverses, splits and combines; it is part of
-the project (undo snapshots carry it), persisted in `project_settings` (no
-schema bump), pruned to entries that still name a station on save and load,
-and carried with renamed uuids by Add .stalx and Merge projects. An older build
-ignores it and uses the lowest-id rule, which only moves the adjusted view.
+on a gauge they cannot see. A held gauge names its station by its section and
+shot uuids, like a station key: one probe of the shot uuid index finds it, and
+the load's rename of a repeated uuid follows it (`apply_shot_uuid_remap`) to
+the copy it meant. Every edit that moves shots to another section re-records
+the held gauge of each component it touches, so it follows the station through
+later reverses, splits and combines. It is part of the project (undo snapshots
+carry it), persisted in `project_settings` (no schema bump), and carried with
+renamed uuids by Add .stalx and Merge projects. An older build ignores it and
+uses the lowest-id rule, which only moves the adjusted view.
+
+A file is untrusted, so the load bounds the list before anything reads it:
+entries whose section does not hold their shot and duplicates are dropped, the
+rest is cut to the section count, and after the uuid heal one entry per
+component is kept (`normalize_held_gauges`, a union-find over merges and
+closures). Add and Merge projects normalise the same way.
 
 Recorded whether or not the component has a closure or a datum today, so a
 later adjustment holds the same station either way.

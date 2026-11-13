@@ -791,6 +791,7 @@ impl Database {
                 }
             }
         }
+        let section_count = sections.len();
         let mut project = Project {
             name,
             location,
@@ -813,7 +814,7 @@ impl Database {
             surface_elevation,
             default_azimuth_reference,
             counter_parity_shots,
-            held_gauges: self.load_project_held_gauges(),
+            held_gauges: self.load_project_held_gauges(&shot_uuid_index, section_count),
             cascade_deferred: false,
             section_index_cache,
             shot_uuid_index,
@@ -1402,7 +1403,18 @@ impl Database {
     /// as none; an unparseable value too, with a warning: the gauge then falls
     /// back to the lowest-id rule, which moves the adjusted view, never the
     /// survey.
-    pub fn load_project_held_gauges(&self) -> Vec<crate::models::HeldGauge> {
+    ///
+    /// The file is untrusted, so the work is bounded before anything else
+    /// reads the list: entries whose section does not hold their shot (one
+    /// probe of `shot_uuid_index`, the index the load just built) and
+    /// duplicates are dropped, and what is left is cut to `section_count`
+    /// entries (the edits keep at most one per component). The load's heal
+    /// then keeps one per component (`Project::normalize_held_gauges`).
+    pub fn load_project_held_gauges(
+        &self,
+        shot_uuid_index: &HashMap<(u32, String), u32>,
+        section_count: usize,
+    ) -> Vec<crate::models::HeldGauge> {
         let json: Option<String> = self
             .conn
             .query_row(
@@ -1412,16 +1424,32 @@ impl Database {
             )
             .optional()
             .unwrap_or(None);
-        json.map(|s| {
-            serde_json::from_str(&s).unwrap_or_else(|e| {
-                tracing::warn!(
-                    error = %e,
-                    "stored held_gauges is present but unparseable; reading as none"
-                );
-                Vec::new()
+        let parsed: Vec<crate::models::HeldGauge> = json
+            .map(|s| {
+                serde_json::from_str(&s).unwrap_or_else(|e| {
+                    tracing::warn!(
+                        error = %e,
+                        "stored held_gauges is present but unparseable; reading as none"
+                    );
+                    Vec::new()
+                })
             })
-        })
-        .unwrap_or_default()
+            .unwrap_or_default();
+        let mut seen = HashSet::new();
+        let mut held: Vec<crate::models::HeldGauge> = parsed
+            .into_iter()
+            .filter(|g| shot_uuid_index.contains_key(&(g.section_id, g.shot.clone())))
+            .filter(|g| seen.insert(g.clone()))
+            .collect();
+        if held.len() > section_count {
+            tracing::warn!(
+                stored = held.len(),
+                section_count,
+                "stored held_gauges has more entries than sections; keeping the first"
+            );
+            held.truncate(section_count);
+        }
+        held
     }
 
     /// Load the shots whose record orientation runs against their section's

@@ -233,14 +233,7 @@ fn carry_shot_identity(
     // The source's held gauges (`Project::held_gauges`) keep its components'
     // adjustment on the same stations in the copy, through the copy's uuids.
     for held in &source.held_gauges {
-        let Some(from) = source.sections.iter().find(|s| {
-            s.shots
-                .iter()
-                .any(|shot| shot.uuid.as_deref() == Some(&held.shot))
-        }) else {
-            continue;
-        };
-        let Some(&to) = section_id_map.get(&from.id) else {
+        let Some(&to) = section_id_map.get(&held.section_id) else {
             continue;
         };
         let carry = |uuid: &str| {
@@ -249,11 +242,14 @@ fn carry_shot_identity(
                 .map_or_else(|| uuid.to_string(), str::to_string)
         };
         target.held_gauges.push(HeldGauge {
+            section_id: to,
             shot: carry(&held.shot),
             neighbour: held.neighbour.as_deref().map(carry),
             ..held.clone()
         });
     }
+    // One per component, whatever the source file held.
+    target.normalize_held_gauges();
     renamed
 }
 

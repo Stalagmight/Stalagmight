@@ -30,19 +30,26 @@ use crate::{Section, SectionId, StationRef};
 
 use super::Project;
 
-/// A station named by the shots it touches, in whichever section holds them
-/// (shot uuids are project-unique): the least-squares gauge an edit kept for a
-/// component whose anchoring section does not hold it (see the module doc and
-/// [`Project::held_gauges`]).
+/// A station named by the shots it touches in `section_id`: the
+/// least-squares gauge an edit kept for a component whose anchoring section
+/// does not hold it (see the module doc and [`Project::held_gauges`]).
 ///
-/// The same naming as a section's gauge pair, made section-free: with
-/// `neighbour` in the same section the station is the end of `shot` facing
-/// away from it, which a reverse carries intact; without it, `end` says which
-/// end of `shot` (its start or its end) as the record stood when `parity` (the
-/// shot's record parity, [`Project::shot_record_parity`]) was read, and a
-/// reverse of the record since flips it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// The same naming as a section's gauge pair: with `neighbour` in the section
+/// the station is the end of `shot` facing away from it, which a reverse
+/// carries intact; without it, `end` says which end of `shot` (its start or
+/// its end) as the record stood when `parity` (the shot's record parity,
+/// [`Project::shot_record_parity`]) was read, and a reverse of the record since
+/// flips it.
+///
+/// Scoped by section, like a station key: a file saved before shot uuids were
+/// unique across the project can hold one uuid in two sections, and only the
+/// section says which copy is meant (the load's rename follows it through
+/// `apply_shot_uuid_remap`). It also makes a lookup one probe of the shot uuid
+/// index. Every edit that moves shots to another section re-records the held
+/// gauge of each component it touches.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct HeldGauge {
+    pub section_id: SectionId,
     pub shot: String,
     #[serde(default)]
     pub neighbour: Option<String>,
@@ -135,7 +142,7 @@ pub struct CutOrientation {
 impl Project {
     /// Name station `at` by its shots ([`HeldGauge`]); `None` when it has no
     /// shot, or a shot without a uuid.
-    pub(crate) fn held_gauge_at(&self, at: StationRef) -> Option<HeldGauge> {
+    pub fn held_gauge_at(&self, at: StationRef) -> Option<HeldGauge> {
         let section = self.get_section(at.section_id)?;
         let (n, i) = (section.shots.len(), at.station_index as usize);
         if n == 0 || i > n {
@@ -154,6 +161,7 @@ impl Project {
         };
         let parity = self.shot_record_parity(section, Some(&shot));
         Some(HeldGauge {
+            section_id: at.section_id,
             shot,
             neighbour,
             end,
@@ -161,19 +169,59 @@ impl Project {
         })
     }
 
-    /// Where `held` names a station now; `None` when its shot is gone.
-    pub(crate) fn resolve_held_gauge(&self, held: &HeldGauge) -> Option<StationRef> {
-        let position = |section: &Section, uuid: &str| {
-            section
+    /// Where shot `uuid` sits in `section`: one probe of the shot uuid index,
+    /// checked against the section (a stale or missing entry falls back to a
+    /// scan of that section only, as `resolve_key` does).
+    fn shot_position(&self, section: &Section, uuid: &str) -> Option<usize> {
+        if let Some(&i) = self.shot_uuid_index.get(&(section.id, uuid.to_string())) {
+            if section
                 .shots
-                .iter()
-                .position(|s| s.uuid.as_deref() == Some(uuid))
-        };
-        let (section, px) = self
-            .sections
+                .get(i as usize)
+                .and_then(|s| s.uuid.as_deref())
+                == Some(uuid)
+            {
+                return Some(i as usize);
+            }
+        }
+        section
+            .shots
             .iter()
-            .find_map(|s| position(s, &held.shot).map(|px| (s, px)))?;
-        let index = match held.neighbour.as_deref().and_then(|n| position(section, n)) {
+            .position(|s| s.uuid.as_deref() == Some(uuid))
+    }
+
+    /// Where `held` names a station now, in its own section; `None` when that
+    /// section no longer holds its shot.
+    pub(crate) fn resolve_held_gauge(&self, held: &HeldGauge) -> Option<StationRef> {
+        let section = self.get_section(held.section_id)?;
+        self.place_held_gauge(held, section)
+    }
+
+    /// Where `held` names a station now, in whichever section holds its shot:
+    /// its own section first, else the first that does. For the stations an
+    /// edit records before it moves shots between sections
+    /// ([`Self::hold_component_gauges`]); at most one per touched component,
+    /// once per edit.
+    fn resolve_held_gauge_anywhere(&self, held: &HeldGauge) -> Option<StationRef> {
+        self.resolve_held_gauge(held).or_else(|| {
+            self.sections.iter().find_map(|section| {
+                section
+                    .shots
+                    .iter()
+                    .any(|s| s.uuid.as_deref() == Some(held.shot.as_str()))
+                    .then(|| self.place_held_gauge(held, section))
+                    .flatten()
+            })
+        })
+    }
+
+    /// The station `held` names in `section`, if `section` holds its shot.
+    fn place_held_gauge(&self, held: &HeldGauge, section: &Section) -> Option<StationRef> {
+        let px = self.shot_position(section, &held.shot)?;
+        let neighbour = held
+            .neighbour
+            .as_deref()
+            .and_then(|n| self.shot_position(section, n));
+        let index = match neighbour {
             Some(py) if py < px => px + 1,
             Some(_) => px,
             None => {
@@ -194,14 +242,84 @@ impl Project {
         self.resolve_held_gauge(held).is_some()
     }
 
-    /// Drop every held gauge that no longer names a station (its shot is
-    /// gone). Run on load (the save writes only the ones that resolve): a
-    /// dangling entry anchors nothing.
+    /// Drop every held gauge that no longer names a station (its section no
+    /// longer holds its shot). The save writes only the ones that resolve: a
+    /// dangling entry anchors nothing. One index probe per entry.
     pub fn prune_held_gauges(&mut self) {
         let keep: Vec<bool> = self
             .held_gauges
             .iter()
             .map(|held| self.resolve_held_gauge(held).is_some())
+            .collect();
+        let mut keep = keep.into_iter();
+        self.held_gauges.retain(|_| keep.next().unwrap_or(false));
+    }
+
+    /// Bring `held_gauges` to what the edits keep it at: entries that name a
+    /// station, at most ONE per connected component (the first; the anchor
+    /// lookup reads only the first anyway), so never more than there are
+    /// sections. Run by the load after its uuid heals, and by Add and Merge
+    /// projects after they append a project's entries: a file is untrusted, and
+    /// a crafted list would otherwise cost every adjustment and every edit.
+    ///
+    /// Linear: one index probe per entry, and the components labelled once
+    /// with a union-find over the same edges `get_connected_section_ids` walks
+    /// (every merge and every loop closure).
+    pub fn normalize_held_gauges(&mut self) {
+        if self.held_gauges.is_empty() {
+            return;
+        }
+        let mut parent: std::collections::HashMap<SectionId, SectionId> =
+            self.sections.iter().map(|s| (s.id, s.id)).collect();
+        fn root(
+            parent: &mut std::collections::HashMap<SectionId, SectionId>,
+            id: SectionId,
+        ) -> SectionId {
+            let mut at = id;
+            while let Some(&up) = parent.get(&at) {
+                if up == at {
+                    break;
+                }
+                at = up;
+            }
+            let top = at;
+            let mut at = id;
+            while let Some(&up) = parent.get(&at) {
+                if up == top {
+                    break;
+                }
+                parent.insert(at, top);
+                at = up;
+            }
+            top
+        }
+        let edges: Vec<(SectionId, SectionId)> = self
+            .station_merges
+            .iter()
+            .map(|m| (m.station_a.section_id, m.station_b.section_id))
+            .chain(
+                self.loop_closures
+                    .iter()
+                    .map(|c| (c.station_a.section_id, c.station_b.section_id)),
+            )
+            .collect();
+        for (a, b) in edges {
+            if !(parent.contains_key(&a) && parent.contains_key(&b)) {
+                continue;
+            }
+            let (ra, rb) = (root(&mut parent, a), root(&mut parent, b));
+            if ra != rb {
+                parent.insert(ra.max(rb), ra.min(rb));
+            }
+        }
+        let mut seen: HashSet<SectionId> = HashSet::new();
+        let keep: Vec<bool> = self
+            .held_gauges
+            .iter()
+            .map(|held| {
+                self.resolve_held_gauge(held).is_some()
+                    && seen.insert(root(&mut parent, held.section_id))
+            })
             .collect();
         let mut keep = keep.into_iter();
         self.held_gauges.retain(|_| keep.next().unwrap_or(false));
@@ -266,7 +384,7 @@ impl Project {
         let mut claimed: Vec<HashSet<SectionId>> = Vec::new();
         for held in &before.held {
             let at = match held {
-                HeldStation::Shots(held) => self.resolve_held_gauge(held),
+                HeldStation::Shots(held) => self.resolve_held_gauge_anywhere(held),
                 HeldStation::Untouched(at) => Some(*at),
             };
             let Some(at) = at else {
@@ -280,16 +398,8 @@ impl Project {
                 continue;
             }
             let component = self.get_connected_section_ids(at.section_id);
-            let stale: Vec<bool> = self
-                .held_gauges
-                .iter()
-                .map(|g| {
-                    self.resolve_held_gauge(g)
-                        .is_some_and(|r| component.contains(&r.section_id))
-                })
-                .collect();
-            let mut stale = stale.into_iter();
-            self.held_gauges.retain(|_| !stale.next().unwrap_or(false));
+            self.held_gauges
+                .retain(|g| !component.contains(&g.section_id));
             let lowest = component.iter().copied().min().unwrap_or(at.section_id);
             if at.section_id == lowest {
                 self.keep_gauge_on_station(lowest, at.station_index as usize, None);
@@ -307,6 +417,9 @@ impl Project {
             }
             claimed.push(component);
         }
+        // An entry whose shots this edit moved to another section names
+        // nothing now (its component was re-recorded above).
+        self.prune_held_gauges();
     }
 
     /// See [`CutOrientation`]; `None` when the section does not exist.
