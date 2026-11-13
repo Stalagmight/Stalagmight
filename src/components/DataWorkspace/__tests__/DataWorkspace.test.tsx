@@ -46,7 +46,7 @@ class NoopResizeObserver {
 const actions = {
   updateShot: vi.fn(() => Promise.resolve({})),
   updateStationComment: vi.fn(() => Promise.resolve({})),
-  executeBatch: vi.fn(() => Promise.resolve({})),
+  executeBatch: vi.fn((_commands: unknown[]) => Promise.resolve({})),
   setShotKind: vi.fn(() => Promise.resolve({})),
 };
 
@@ -302,6 +302,15 @@ describe('DataWorkspace context menu and shortcuts', () => {
     fireEvent.contextMenu(screen.getByTestId('data-grid-header-length'));
     fireEvent.click(screen.getByTestId('data-header-menu-hide'));
     expect(useDataWorkspaceStore.getState().hiddenColumns).toContain('length');
+  });
+});
+
+describe('Focus requests', () => {
+  it('a pending focus request beats the remembered active row on entry', () => {
+    useDataWorkspaceStore.setState({ activeRowKey: 'st:1:1' });
+    useDataWorkspaceStore.getState().requestFocus({ rowKey: 'st:3:2', align: 'center' });
+    render(<DataWorkspace />);
+    expect(useDataWorkspaceStore.getState().activeRowKey).toBe('st:3:2');
   });
 });
 

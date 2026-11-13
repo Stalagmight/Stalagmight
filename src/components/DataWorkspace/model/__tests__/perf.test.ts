@@ -52,7 +52,7 @@ function bigData(): SurveyData {
       id,
       name: `Long synthetic passage number ${id} towards the sump`,
       color: '#336699',
-      direction: 'Out',
+      direction: 'out',
       quality: 0,
       next_shot_id: 0,
       shotOffset: g,

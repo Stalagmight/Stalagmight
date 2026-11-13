@@ -44,7 +44,7 @@ function section(id: number, name: string | null, shots: Shot[]): Section {
     id,
     name,
     color: COLORS[id as 1 | 2 | 3],
-    direction: 'Out',
+    direction: 'out',
     quality: 0,
     next_shot_id: id * 100 + shots.length + 1,
     shots,

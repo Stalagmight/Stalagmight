@@ -135,24 +135,31 @@ export function DataGrid({ model, view, height, nav, editing, tint, partners, on
   const handledNonce = useRef<number | null>(null);
   const [scrollReq, setScrollReq] = useState<GridScrollRequest | null>(null);
 
+  // One effect, so a pending focus request always beats the re-anchoring of the
+  // previous active row (entering Data from "Open in Data" / "Back to Data").
   useEffect(() => {
-    if (!focusRequest || handledNonce.current === focusRequest.nonce) return;
-    const idx = rowIndexByKey.get(focusRequest.rowKey);
-    if (idx === undefined) return; // not in the view yet (a reveal is on its way)
-    handledNonce.current = focusRequest.nonce;
-    const colKey = focusRequest.colKey ?? lastActive.current?.colKey;
-    setScrollReq({ row: idx, ...(colKey ? { colKey } : {}), align: focusRequest.align ?? 'auto', nonce: ++scrollNonce });
-  }, [focusRequest, rowIndexByKey]);
-
-  useEffect(() => {
+    if (focusRequest && handledNonce.current !== focusRequest.nonce) {
+      const idx = rowIndexByKey.get(focusRequest.rowKey);
+      // Not in the view yet (a reveal is on its way): wait, and don't re-anchor.
+      if (idx === undefined) return;
+      handledNonce.current = focusRequest.nonce;
+      const colKey = focusRequest.colKey ?? lastActive.current?.colKey;
+      lastActive.current = { key: focusRequest.rowKey, idx, colKey: colKey ?? '' };
+      setActiveRowKey(focusRequest.rowKey);
+      setScrollReq({ row: idx, ...(colKey ? { colKey } : {}), align: focusRequest.align ?? 'auto', nonce: ++scrollNonce });
+      return;
+    }
+    // Keep the active row across rebuilds (filters, sort, data refresh) by key.
     const key = useDataWorkspaceStore.getState().activeRowKey;
     if (!key) return;
     const idx = rowIndexByKey.get(key);
     if (idx === undefined || idx === lastActive.current?.idx) return;
-    const colKey = lastActive.current?.colKey;
+    const colKey = lastActive.current?.colKey || undefined;
     // First mount (entering Data): bring the remembered row to the middle.
-    setScrollReq({ row: idx, ...(colKey ? { colKey } : {}), align: lastActive.current ? 'auto' : 'center', nonce: ++scrollNonce });
-  }, [rowIndexByKey]);
+    const align = lastActive.current ? 'auto' : 'center';
+    lastActive.current = { key, idx, colKey: colKey ?? '' };
+    setScrollReq({ row: idx, ...(colKey ? { colKey } : {}), align, nonce: ++scrollNonce });
+  }, [focusRequest, rowIndexByKey, setActiveRowKey]);
 
   const onActiveCellChange = useCallback(
     (rowIndex: number, colKey: string) => {

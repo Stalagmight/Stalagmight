@@ -73,7 +73,6 @@ export function openRowInSurvey(rowKey: string): Selection | null {
   const parsed = parseRowKey(rowKey);
   if (!parsed) return null;
   useDataWorkspaceStore.getState().setReturnToData({ rowKey });
-  setSource('data-table');
   const ui = useUIStore.getState();
   ui.setAppMode('survey');
   const sel = selectionForRow(parsed);
