@@ -36,13 +36,15 @@ export default function MnemoImportDialog() {
   const [received, setReceived] = useState(0);
   const [result, setResult] = useState<MnemoPullResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Set in the effect, not only at init: StrictMode runs mount, cleanup, mount,
+  // and a ref left false by that first cleanup would drop every reply.
   const mounted = useRef(true);
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
       mounted.current = false;
-    },
-    []
-  );
+    };
+  }, []);
 
   const refresh = useCallback(async () => {
     setPhase('listing');

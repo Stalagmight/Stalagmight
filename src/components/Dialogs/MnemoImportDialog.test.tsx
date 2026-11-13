@@ -2,6 +2,7 @@
  * Import from MNemo (#725): what the dialog preselects, how it reports each
  * outcome, and that a finished pull continues into the normal import route.
  */
+import { StrictMode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -18,8 +19,10 @@ const progress = vi.hoisted(() => ({ handler: null as null | ((e: { payload: { r
 vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn(async (_event: string, handler: (e: { payload: { received: number } }) => void) => {
     progress.handler = handler;
+    // Only its own listener: StrictMode's first, discarded listener unlistens
+    // after the second has registered.
     return () => {
-      progress.handler = null;
+      if (progress.handler === handler) progress.handler = null;
     };
   }),
 }));
@@ -87,7 +90,13 @@ beforeEach(() => {
 });
 
 async function renderReady() {
-  render(<MnemoImportDialog />);
+  // StrictMode as in the app: its mount, cleanup, mount once left the dialog
+  // ignoring every reply, and only the e2e run (which uses it) caught that.
+  render(
+    <StrictMode>
+      <MnemoImportDialog />
+    </StrictMode>
+  );
   await waitFor(() => expect(screen.getByTestId('mnemo-refresh')).not.toBeDisabled());
 }
 
