@@ -585,8 +585,8 @@ impl Database {
                 for section in sections.iter_mut() {
                     let section_id = section.id;
                     // The rows hold only while the legacy pair is the one this
-                    // build wrote beside them. An older build keeps the rows but
-                    // rewrites the pair; its edit is then the newer truth.
+                    // build wrote beside them. A pair retyped by something else
+                    // (a hand edit, another tool) is then the newer truth.
                     let rows_hold = recorded.get(&section_id) == stored_legacy.get(&section_id);
                     // A section with no shots keeps its legacy pair: nothing
                     // can carry it (`Section::legacy_surveyor`).

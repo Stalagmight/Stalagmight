@@ -76,21 +76,38 @@ How this feature fits:
     `(section_id, shot_uuid)`, where the people columns are comma-joined ids from `credit_people`.
 
   - `credit_sections (section_id, surveyor, date)`: the legacy pair this build wrote. A section
-    whose `sections.surveyor`/`date` no longer match it (an older build retyped them) ignores its
-    rows, so the retyped text wins.
+    whose `sections.surveyor`/`date` no longer match it (retyped in place: a hand edit, another
+    tool) ignores its rows, so the retyped text wins.
 
   A shot's row says that its credit is explicit, even when the lists are empty. A shot with no row
-  falls back to the legacy section columns through the splitter. That makes old files and shots
+  falls back to the legacy section columns through the splitter. That makes old files and files
   saved by older builds work unchanged.
 - The uuid is the one `write.rs` already mints at save time. Unreadable or dangling rows are
   skipped, never fatal. A credit table that cannot be read as a whole (a missing column, a view,
   a read failing part way, or `credit_people` missing beside `shot_credits`) gives no rows at all:
   every shot falls back to the legacy columns, with a warning that holds counts, never names
   (#717).
-- The legacy columns are still written. `sections.surveyor` gets the distinct surveyor names
-  joined with `", "`, or NULL. `sections.date` gets the earliest shot date, or NULL.
+- The legacy columns are still written. `sections.date` gets the earliest shot date, or NULL.
+  `sections.surveyor` (`credit::legacy_credit_text`) is one plain string, or NULL:
+
+  | Section | `sections.surveyor` |
+  |---|---|
+  | Nobody credited | NULL |
+  | Surveyors only | `Sue Diver, Tom Tank` (unchanged from before #718) |
+  | Explorers only | `Ida Ice / ` (an empty second half) |
+  | Both | `Ex Plorer, Ida Ice / Sue Diver, Tom Tank` |
+
+  Each half names each display name once, compared case-insensitively. A `/` that could join the
+  `" / "` separator (inside a name between spaces, or at its edge: `A / B`, `A /`, `/ B`) is
+  written `-` in this column only; the per-shot tables keep the real name.
+- Why both roles (#718): a released build (0.5.3 and older) saves by writing a fresh database and
+  renaming it over the project, so it drops these tables, and every shot then reads the legacy
+  columns. With both roles there, each section still lists who explored and who surveyed it. Per-shot
+  differences, later dates and emails collapse to the section aggregate, and two one-word names in
+  one role read back as one `Last, First` person (the splitter's rule for older files). The same
+  text is what SpeleoDB shows; older Ariane imports already stored this form there.
 - A contract test pins that every table and column the Python reader reads is unchanged, apart
-  from those two values. A live check runs against the internal SpeleoDB.
+  from those two values, and pins their text. A live check runs against the internal SpeleoDB.
 
 ## Binary load envelope v7
 

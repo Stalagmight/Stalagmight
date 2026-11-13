@@ -161,8 +161,8 @@ impl SurveyCredit {
     }
 
     /// The surveyors' names joined with `", "`, or `None` when there are none.
-    /// What the legacy `sections.surveyor` column and the plain-text exports
-    /// carry.
+    /// What the plain-text exports carry (the legacy `sections.surveyor`
+    /// column is [`legacy_credit_text`]).
     pub fn surveyor_names(&self) -> Option<String> {
         join_names(&self.surveyors)
     }
@@ -191,10 +191,10 @@ pub fn join_names(people: &[Person]) -> Option<String> {
 /// as [`Person::name_key`] compares them, the first spelling kept), or `None`
 /// for an empty list.
 ///
-/// For the legacy `sections.surveyor` text only, which older builds and
-/// SpeleoDB show as-is: two different people sharing a name (different
-/// emails) are one name there, not "Jo Diver, Jo Diver". The per-shot tables
-/// still keep both people.
+/// For the legacy `sections.surveyor` text ([`legacy_credit_text`]), which
+/// older builds and SpeleoDB show as-is: two different people sharing a name
+/// (different emails) are one name there, not "Jo Diver, Jo Diver". The
+/// per-shot tables still keep both people.
 pub fn join_distinct_names(people: &[Person]) -> Option<String> {
     let mut seen = HashSet::new();
     let names: Vec<&str> = people
@@ -203,6 +203,60 @@ pub fn join_distinct_names(people: &[Person]) -> Option<String> {
         .map(|p| p.name.as_str())
         .collect();
     (!names.is_empty()).then(|| names.join(", "))
+}
+
+/// The legacy `sections.surveyor` text of a section's people: the only credit
+/// SpeleoDB reads, and all an older build keeps, since a released build saves
+/// by writing a fresh file and drops the per-shot tables (#718).
+///
+/// - No explorers: the surveyors' names joined with `", "`, or `None` when
+///   there are none either (the text every build before #718 wrote).
+/// - Explorers: the Ariane importer's `"explorers / surveyors"` form, which
+///   [`legacy_people`] reads back into both roles - exactly two `" / "`
+///   halves, the second empty when nobody surveyed (`"Ida Ice / "`).
+///
+/// Each half names each display name once ([`join_distinct_names`]). A `/`
+/// with a space or a name edge on both sides is written `-` in this text only
+/// (`"A / B"` becomes `"A - B"`), so no name can hold or complete the `" / "`
+/// that splits the roles; the per-shot tables keep the real name. The halves
+/// are read back by [`split_people`], so a half of exactly two one-word names
+/// reads as one `Last, First` person: this build writes a row for such a shot.
+pub fn legacy_credit_text(explorers: &[Person], surveyors: &[Person]) -> Option<String> {
+    let surveyors = legacy_half(surveyors);
+    match legacy_half(explorers) {
+        None => surveyors,
+        Some(explorers) => Some(format!("{explorers} / {}", surveyors.unwrap_or_default())),
+    }
+}
+
+/// One role of [`legacy_credit_text`]: each written name once, joined with
+/// `", "`; `None` when nobody is named.
+fn legacy_half(people: &[Person]) -> Option<String> {
+    let written: Vec<Person> = people
+        .iter()
+        .filter_map(|p| Person::named(&legacy_name(&p.name)))
+        .collect();
+    join_distinct_names(&written)
+}
+
+/// A name as [`legacy_credit_text`] writes it: every `/` whose neighbours are
+/// both a space or the edge of the name becomes `-`. In the joined text a name
+/// edge meets `", "`, `" / "` or the end, so this is exactly the set of `/`
+/// that could form a `" / "` with what surrounds them.
+fn legacy_name(name: &str) -> String {
+    let chars: Vec<char> = name.chars().collect();
+    let open = |at: Option<usize>| at.and_then(|i| chars.get(i)).is_none_or(|c| *c == ' ');
+    chars
+        .iter()
+        .enumerate()
+        .map(|(i, &c)| {
+            if c == '/' && open(i.checked_sub(1)) && open(i.checked_add(1)) {
+                '-'
+            } else {
+                c
+            }
+        })
+        .collect()
 }
 
 /// Whether `list` holds someone who is [`Person::same_as`] `person`.

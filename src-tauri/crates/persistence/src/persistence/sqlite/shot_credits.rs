@@ -9,24 +9,36 @@
 //! Python reader (see `station_texts`) accepts exactly v18, ignores tables it
 //! does not know, and validates `sections.surveyor` as one string and
 //! `sections.date` as one ISO date. Those two legacy columns are still written,
-//! as the section aggregate (the distinct surveyor names joined with `", "`,
-//! and the earliest shot date), so that reader - and any older build of this
-//! app - sees what it always saw.
+//! as the section aggregate: `sections.date` is the earliest shot date, and
+//! `sections.surveyor` is [`crate::models::legacy_credit_text`] - the distinct
+//! surveyor names joined with `", "` (the text it always held), or, when anyone
+//! explored the section, the Ariane `"explorers / surveyors"` form that older
+//! Ariane imports already stored there. A `" / "` inside a name is written
+//! `" - "` there, so the two halves stay unambiguous.
 //!
 //! Rows are keyed by `(section_id, shot_uuid)`: `sections.id` is persisted,
 //! and a file written before shot uuids were project-unique can hold one uuid
 //! in several sections, each with its own credit.
 //!
-//! An older build keeps both tables (it does not know them) and keeps the shot
-//! uuids, but it edits the section's surveyor and date in those legacy
-//! columns. So `credit_sections (section_id, surveyor, date)` records the pair
-//! THIS build wrote, and a section's rows apply only while its `sections` pair
-//! still matches that record: once an older build has retyped it, the typed
-//! text is the newer truth and every shot of the section falls back to it.
+//! A released build (0.5.3 and older) does NOT keep these tables: it saves by
+//! writing a fresh database beside the project and renaming it over the file,
+//! so after one save there only the legacy columns are left, and every shot
+//! falls back to them. That is why the surveyor column carries both roles
+//! (#718): each section still lists who explored and who surveyed it. What
+//! collapses is expected: per-shot differences become the section aggregate,
+//! the date becomes the earliest one, emails are gone, and two one-word names
+//! in one role read back as one `Last, First` person (the splitter's rule).
+//!
+//! The tables can still end up next to a legacy pair this build did not write
+//! (a hand edit, another tool editing the file in place). So
+//! `credit_sections (section_id, surveyor, date)` records the pair THIS build
+//! wrote, and a section's rows apply only while its `sections` pair still
+//! matches that record: once something else has retyped it, the typed text is
+//! the newer truth and every shot of the section falls back to it.
 //!
 //! A shot WITHOUT a row takes its credit from those legacy columns through
 //! [`crate::models::SurveyCredit::from_legacy`]. That is the migration for every
-//! file written before this feature, and for shots an older build added. The
+//! file written before this feature or saved since by an older build. The
 //! writer relies on it in the other direction too: it writes a row only for a
 //! shot whose credit the fallback would NOT reproduce, so an uncredited project
 //! (and a section whose shots all agree with its legacy columns) costs nothing.

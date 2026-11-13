@@ -768,18 +768,21 @@ impl Section {
     }
 
     /// The distinct surveyor names of every shot, in first-appearance order,
-    /// joined with `", "`; `None` when no shot names one. What the legacy
-    /// `sections.surveyor` column and the plain-text consumers carry.
+    /// joined with `", "`; `None` when no shot names one. What the plain-text
+    /// consumers carry.
     pub fn surveyor_names(&self) -> Option<String> {
         super::join_names(&self.credit_summary().surveyor_people())
     }
 
-    /// The legacy `sections.surveyor` text: [`Self::surveyor_names`] with each
-    /// display name once ([`super::join_distinct_names`]), so two same-named
-    /// people with different emails do not read as a duplicate in older
-    /// builds and SpeleoDB. The people themselves live in the per-shot tables.
+    /// The legacy `sections.surveyor` text ([`super::legacy_credit_text`]):
+    /// the section's explorers and surveyors in first-appearance order, in the
+    /// `"explorers / surveyors"` form when anyone explored it and as the plain
+    /// surveyor list otherwise, each display name once. Older builds keep only
+    /// this when they save, and SpeleoDB reads only this (#718); the people
+    /// themselves live in the per-shot tables.
     pub fn legacy_surveyor_text(&self) -> Option<String> {
-        super::join_distinct_names(&self.credit_summary().surveyor_people())
+        let summary = self.credit_summary();
+        super::legacy_credit_text(&summary.explorer_people(), &summary.surveyor_people())
     }
 
     /// The earliest shot date; what the legacy `sections.date` column carries.

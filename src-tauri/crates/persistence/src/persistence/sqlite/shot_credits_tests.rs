@@ -86,6 +86,24 @@ fn sql(path: &Path, statements: &str) {
     conn.execute_batch(statements).unwrap();
 }
 
+/// A section's stored `sections.surveyor`.
+fn legacy_surveyor(db: &Database, id: SectionId) -> Option<String> {
+    db.conn
+        .query_row("SELECT surveyor FROM sections WHERE id = ?1", [id], |r| {
+            r.get(0)
+        })
+        .unwrap()
+}
+
+/// Kept (with an email, which the legacy text cannot carry, so the shot needs
+/// a row) surveyed, Ex explored, on day 1.
+fn kept_with_email() -> SurveyCredit {
+    let mut kept = credit(&[], &["Ex"], day(1));
+    kept.surveyors
+        .push(person("Kept", Some("kept@example.org")));
+    kept
+}
+
 /// A project exercising every shape: emails, explorers, dates, an explicit
 /// empty credit among credited shots, a section that agrees with its legacy
 /// columns, and an uncredited section.
@@ -170,10 +188,12 @@ fn the_legacy_columns_carry_the_section_aggregate() {
             )
             .unwrap()
     };
+    // The mixed section has explorers: the Ariane "explorers / surveyors"
+    // form, so an older build's save keeps both roles (#718).
     assert_eq!(
         row(ids[0]),
         (
-            Some("Ann, Bo, Doe, John".to_string()),
+            Some("Ex One, Ex Two / Ann, Bo, Doe, John".to_string()),
             Some("2023-08-01".to_string())
         )
     );
@@ -225,6 +245,231 @@ fn same_named_people_are_one_name_in_the_legacy_column_and_both_on_reopen() {
     assert_eq!(credits_of(&reload(&path), id), vec![both, only_one]);
 }
 
+/// One section per legacy-text case (#718): surveyors only, explorers only,
+/// both roles with mixed per-shot credit, nobody, names holding `/`, and
+/// same-named people in both roles.
+fn roles_project() -> (Project, [SectionId; 6]) {
+    let mut project = Project::new("Roles".to_string(), None);
+    let surveyors_only = section_with(
+        &mut project,
+        vec![
+            credit(&["Sue Diver", "Tom Tank"], &[], day(1)),
+            credit(&["Tom Tank"], &[], day(2)),
+        ],
+    );
+    let explorers_only = section_with(
+        &mut project,
+        vec![
+            credit(&[], &["Ida Ice"], day(2)),
+            credit(&[], &["Ida Ice", "Ex Plorer"], None),
+        ],
+    );
+    let mixed = section_with(
+        &mut project,
+        vec![
+            credit(&["Sue Diver"], &["Ex Plorer"], day(4)),
+            credit(&["Sue Diver", "Tom Tank"], &[], day(3)),
+            credit(&[], &["Ex Plorer", "Ida Ice"], None),
+            SurveyCredit::default(),
+        ],
+    );
+    let nobody = section_with(&mut project, vec![SurveyCredit::default(); 2]);
+    let slashes = section_with(
+        &mut project,
+        vec![
+            credit(&["Smith / Jones", "Lee /"], &["North / South"], day(5)),
+            credit(&["/ Kim", "A/B"], &[], day(5)),
+        ],
+    );
+    let same_named = section_with(
+        &mut project,
+        vec![SurveyCredit {
+            surveyors: vec![person("Jo Diver", Some("jo@caves.example"))],
+            explorers: vec![
+                person("Jo Diver", Some("jo@caves.example")),
+                person("jo  diver", Some("jo.diver@divers.example")),
+            ],
+            date: day(6),
+        }],
+    );
+    project.ensure_shot_uuids();
+    (
+        project,
+        [
+            surveyors_only,
+            explorers_only,
+            mixed,
+            nobody,
+            slashes,
+            same_named,
+        ],
+    )
+}
+
+/// A section's explorer and surveyor names, as its summary lists them.
+fn role_names(project: &Project, id: SectionId) -> (Vec<String>, Vec<String>) {
+    let summary = project.get_section(id).unwrap().credit_summary();
+    let names = |people: Vec<Person>| people.into_iter().map(|p| p.name).collect();
+    (
+        names(summary.explorer_people()),
+        names(summary.surveyor_people()),
+    )
+}
+
+/// #718: the exact `sections.surveyor` per case. The plain surveyor list
+/// (today's text) when nobody explored; the Ariane `"explorers / surveyors"`
+/// form when anyone did, with an empty second half when nobody surveyed;
+/// NULL for nobody. A `/` that could join the separator is written `-`, and
+/// each display name appears once per half.
+#[test]
+fn the_legacy_surveyor_column_per_case() {
+    let dir = TempDir::new().unwrap();
+    let (project, ids) = roles_project();
+    let path = save(&dir, "cases.stalx", &project);
+    let db = Database::open_readonly(&path).unwrap();
+    let texts: Vec<Option<String>> = ids.iter().map(|&id| legacy_surveyor(&db, id)).collect();
+    assert_eq!(
+        texts,
+        [
+            Some("Sue Diver, Tom Tank"),
+            Some("Ida Ice, Ex Plorer / "),
+            Some("Ex Plorer, Ida Ice / Sue Diver, Tom Tank"),
+            None,
+            Some("North - South / Smith - Jones, Lee -, - Kim, A/B"),
+            Some("Jo Diver / Jo Diver"),
+        ]
+        .map(|t| t.map(str::to_string))
+    );
+    // The surveyors-only text is exactly what the writer wrote before #718.
+    let before = crate::models::join_distinct_names(
+        &project
+            .get_section(ids[0])
+            .unwrap()
+            .credit_summary()
+            .surveyor_people(),
+    );
+    assert_eq!(texts[0], before);
+    // `credit_sections` records the new text, so an untouched section is not
+    // mistaken for a pair retyped elsewhere: its rows apply on reopen.
+    let mut stmt = db
+        .conn
+        .prepare(
+            "SELECT count(*) FROM sections s JOIN credit_sections c ON c.section_id = s.id
+             WHERE c.surveyor IS s.surveyor AND c.date IS s.date",
+        )
+        .unwrap();
+    let matching: i64 = stmt.query_row([], |r| r.get(0)).unwrap();
+    assert_eq!(matching, 6);
+}
+
+/// #718: a project saved and reopened by this build is exact, and rows are
+/// written exactly where the new legacy text does not reproduce a shot.
+#[test]
+fn every_legacy_text_case_round_trips_exactly_with_rows_only_where_needed() {
+    let dir = TempDir::new().unwrap();
+    let (project, ids) = roles_project();
+    let path = save(&dir, "round.stalx", &project);
+    let loaded = reload(&path);
+    for id in ids {
+        assert_eq!(
+            credits_of(&loaded, id),
+            credits_of(&project, id),
+            "section {id}"
+        );
+    }
+    let twice = reload(&save(&dir, "twice.stalx", &loaded));
+    for id in ids {
+        assert_eq!(credits_of(&twice, id), credits_of(&project, id));
+    }
+    let db = Database::open_readonly(&path).unwrap();
+    let rows_of = |id: SectionId| -> i64 {
+        db.conn
+            .query_row(
+                "SELECT count(*) FROM shot_credits WHERE section_id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap()
+    };
+    // Surveyors only: the first shot is the aggregate, the second is not.
+    // Explorers only: one explorer short, then no date. Mixed: every shot
+    // differs from the aggregate. Slashes: the real names. Same-named: the
+    // second explorer and the emails.
+    assert_eq!(ids.map(rows_of), [1, 2, 4, 0, 2, 1]);
+}
+
+/// #718: what a save in a released build (0.5.3 and older) leaves - a fresh
+/// file with only the tables it knows, so the three credit tables are gone.
+/// Every section still lists who explored and who surveyed it. What collapses
+/// is expected and pinned here: every shot of a section now reads the section
+/// aggregate (earliest date), names keep their legacy spelling (`" - "` for a
+/// `" / "`), and same-named people with different emails become one name.
+#[test]
+fn an_older_builds_save_keeps_each_sections_roles() {
+    let dir = TempDir::new().unwrap();
+    let (project, ids) = roles_project();
+    let [surveyors_only, explorers_only, mixed, nobody, slashes, same_named] = ids;
+    let path = save(&dir, "older.stalx", &project);
+    sql(
+        &path,
+        "DROP TABLE shot_credits; DROP TABLE credit_people; DROP TABLE credit_sections;",
+    );
+    let older = reload(&path);
+
+    for id in [surveyors_only, explorers_only, mixed, nobody] {
+        assert_eq!(
+            role_names(&older, id),
+            role_names(&project, id),
+            "section {id} keeps its explorers and surveyors"
+        );
+    }
+    assert_eq!(
+        role_names(&older, slashes),
+        (
+            vec!["North - South".to_string()],
+            ["Smith - Jones", "Lee -", "- Kim", "A/B"]
+                .map(str::to_string)
+                .to_vec()
+        )
+    );
+    assert_eq!(
+        role_names(&older, same_named),
+        (vec!["Jo Diver".to_string()], vec!["Jo Diver".to_string()])
+    );
+
+    // Per shot: the section aggregate on every shot.
+    let every_shot = |id: SectionId, expected: SurveyCredit| {
+        let shots = credits_of(&older, id);
+        assert_eq!(shots, vec![expected; shots.len()], "section {id}");
+    };
+    every_shot(
+        surveyors_only,
+        credit(&["Sue Diver", "Tom Tank"], &[], day(1)),
+    );
+    every_shot(
+        explorers_only,
+        credit(&[], &["Ida Ice", "Ex Plorer"], day(2)),
+    );
+    every_shot(
+        mixed,
+        credit(
+            &["Sue Diver", "Tom Tank"],
+            &["Ex Plorer", "Ida Ice"],
+            day(3),
+        ),
+    );
+    every_shot(nobody, SurveyCredit::default());
+    every_shot(same_named, credit(&["Jo Diver"], &["Jo Diver"], day(6)));
+    // Shots that differed now agree: the per-shot detail is what is lost.
+    assert_ne!(credits_of(&older, mixed), credits_of(&project, mixed));
+
+    // And this build saves that state back unchanged.
+    let resaved = reload(&save(&dir, "resaved.stalx", &older));
+    for id in ids {
+        assert_eq!(credits_of(&resaved, id), credits_of(&older, id));
+    }
+}
+
 #[test]
 fn an_old_file_without_the_tables_splits_the_legacy_surveyor() {
     let dir = TempDir::new().unwrap();
@@ -243,17 +488,22 @@ fn an_old_file_without_the_tables_splits_the_legacy_surveyor() {
     let expected = credit(&["ds"], &["nh"], NaiveDate::from_ymd_opt(2020, 3, 4));
     assert_eq!(credits_of(&loaded, id), vec![expected.clone(), expected]);
 
-    // Saving it again keeps the meaning (and now writes the explorer as a row).
+    // Saving it again keeps the meaning, in the same legacy text: the
+    // "explorers / surveyors" form carries the explorer, no row needed (#718).
     let resaved = save(&dir, "resaved.stalx", &loaded);
     assert_eq!(credits_of(&reload(&resaved), id), credits_of(&loaded, id));
+    let db = Database::open_readonly(&resaved).unwrap();
+    assert_eq!(legacy_surveyor(&db, id).as_deref(), Some("nh / ds"));
+    assert_eq!(count(&db, "shot_credits"), 0);
 }
 
-/// An older build keeps the credit tables (it does not know them) and the
-/// shot uuids, but edits the section's surveyor/date in the legacy columns.
-/// Its retyped text is the newer truth: every shot of the section shows it,
-/// rows or not.
+/// Something that edits the legacy columns in place (a hand edit, another
+/// tool) keeps the credit tables and the shot uuids but retypes the section's
+/// surveyor/date. The retyped text is the newer truth: every shot of the
+/// section shows it, rows or not. (A released build does not get here: its
+/// save drops the tables, see `an_older_builds_save_keeps_each_sections_roles`.)
 #[test]
-fn an_older_builds_retyped_surveyor_wins_over_the_rows() {
+fn a_retyped_legacy_surveyor_wins_over_the_rows() {
     let dir = TempDir::new().unwrap();
     let mut project = Project::new("Mixed".to_string(), None);
     let id = section_with(
@@ -268,14 +518,14 @@ fn an_older_builds_retyped_surveyor_wins_over_the_rows() {
     let path = save(&dir, "older.stalx", &project);
     sql(
         &path,
-        &format!("UPDATE sections SET surveyor = 'Typed In Old Build' WHERE id = {id};"),
+        &format!("UPDATE sections SET surveyor = 'Typed Elsewhere' WHERE id = {id};"),
     );
     let loaded = reload(&path);
     assert_eq!(
         credits_of(&loaded, id),
         vec![
-            credit(&["Typed In Old Build"], &[], day(1)),
-            credit(&["Typed In Old Build"], &[], day(1)),
+            credit(&["Typed Elsewhere"], &[], day(1)),
+            credit(&["Typed Elsewhere"], &[], day(1)),
         ]
     );
     assert_eq!(
@@ -294,7 +544,7 @@ fn an_older_builds_retyped_surveyor_wins_over_the_rows() {
     let date = NaiveDate::from_ymd_opt(2001, 2, 3);
     assert!(credits_of(&loaded, id)
         .iter()
-        .all(|c| c == &credit(&["Kept", "Other Person"], &[], date)));
+        .all(|c| c == &credit(&["Kept", "Other Person"], &["Ex"], date)));
 }
 
 /// Rows with no record of the pair they were written beside (the record table
@@ -303,28 +553,24 @@ fn an_older_builds_retyped_surveyor_wins_over_the_rows() {
 fn rows_without_a_recorded_pair_do_not_apply() {
     let dir = TempDir::new().unwrap();
     let mut project = Project::new("Unrecorded".to_string(), None);
-    let id = section_with(&mut project, vec![credit(&["Kept"], &["Ex"], day(1))]);
+    let id = section_with(&mut project, vec![kept_with_email()]);
     let path = save(&dir, "unrecorded.stalx", &project);
     sql(&path, "DROP TABLE credit_sections;");
+    // The row (it alone carries the email) does not apply; the pair does.
     assert_eq!(
         credits_of(&reload(&path), id),
-        vec![credit(&["Kept"], &[], day(1))]
+        vec![credit(&["Kept"], &["Ex"], day(1))]
     );
 }
 
-/// Shots an older build added (new uuids, no row) fall back to the pair it
-/// left untouched, while the shots with rows keep theirs.
+/// Shots added without a row (new uuids, by a tool editing the file in place)
+/// fall back to the pair it left untouched, while the shots with rows keep
+/// theirs.
 #[test]
-fn an_older_builds_new_shots_fall_back_while_rows_hold() {
+fn shots_added_without_rows_fall_back_while_rows_hold() {
     let dir = TempDir::new().unwrap();
     let mut project = Project::new("Added".to_string(), None);
-    let id = section_with(
-        &mut project,
-        vec![
-            credit(&["Kept"], &["Ex"], day(1)),
-            credit(&["Kept"], &["Ex"], day(1)),
-        ],
-    );
+    let id = section_with(&mut project, vec![kept_with_email(), kept_with_email()]);
     project.ensure_shot_uuids();
     let path = save(&dir, "added.stalx", &project);
     let second = project.get_section(id).unwrap().shots[1]
@@ -334,17 +580,14 @@ fn an_older_builds_new_shots_fall_back_while_rows_hold() {
     sql(
         &path,
         &format!(
-            "UPDATE shots SET uuid = 'added-by-old-build' WHERE uuid = '{second}';
+            "UPDATE shots SET uuid = 'added-elsewhere' WHERE uuid = '{second}';
              INSERT INTO shot_credits (section_id, shot_uuid, date, surveyors, explorers)
                  VALUES ({id}, 'no-such-shot', NULL, '1', '');"
         ),
     );
     assert_eq!(
         credits_of(&reload(&path), id),
-        vec![
-            credit(&["Kept"], &["Ex"], day(1)),
-            credit(&["Kept"], &[], day(1)),
-        ]
+        vec![kept_with_email(), credit(&["Kept"], &["Ex"], day(1))]
     );
 }
 
@@ -427,7 +670,7 @@ fn a_uuid_repeated_across_sections_keeps_each_sections_credit() {
 fn a_credit_table_of_another_shape_is_ignored_then_replaced() {
     let dir = TempDir::new().unwrap();
     let mut project = Project::new("Shape".to_string(), None);
-    let id = section_with(&mut project, vec![credit(&["Kept"], &["Ex"], None)]);
+    let id = section_with(&mut project, vec![kept_with_email()]);
     let path = save(&dir, "shape.stalx", &project);
     sql(
         &path,
@@ -436,14 +679,14 @@ fn a_credit_table_of_another_shape_is_ignored_then_replaced() {
              surveyors TEXT NOT NULL DEFAULT '', explorers TEXT NOT NULL DEFAULT '');",
     );
     let loaded = reload(&path);
-    assert_eq!(credits_of(&loaded, id), vec![credit(&["Kept"], &[], None)]);
-    let mut fixed = loaded;
-    fixed.get_section_mut(id).unwrap().shots[0].set_credit(credit(&["Kept"], &["Ex"], None));
-    let resaved = reload(&save(&dir, "resaved.stalx", &fixed));
     assert_eq!(
-        credits_of(&resaved, id),
-        vec![credit(&["Kept"], &["Ex"], None)]
+        credits_of(&loaded, id),
+        vec![credit(&["Kept"], &["Ex"], day(1))]
     );
+    let mut fixed = loaded;
+    fixed.get_section_mut(id).unwrap().shots[0].set_credit(kept_with_email());
+    let resaved = reload(&save(&dir, "resaved.stalx", &fixed));
+    assert_eq!(credits_of(&resaved, id), vec![kept_with_email()]);
 }
 
 /// A saved section of two shots that both need a row (their credits differ
@@ -656,7 +899,9 @@ fn dump(db: &Database, table: &str, skip: &[&str]) -> Vec<Vec<String>> {
 /// reader accepts exactly v18 and reads these seven tables by explicit column
 /// lists. The same project saved with and without per-shot credit must give
 /// identical rows in every one of them, except `sections.surveyor` and
-/// `sections.date` - which hold the aggregate, as one string and one ISO date.
+/// `sections.date` - which hold the aggregate, as one plain TEXT value and one
+/// ISO date. The surveyor text is pinned: the surveyors, or the Ariane
+/// `"explorers / surveyors"` form when the section has explorers (#718).
 #[test]
 fn credit_leaves_every_table_an_outside_reader_reads_unchanged_but_the_legacy_pair() {
     const READ_BY_STALAGMIGHT_LIB: [&str; 7] = [
@@ -718,6 +963,32 @@ fn credit_leaves_every_table_an_outside_reader_reads_unchanged_but_the_legacy_pa
             .collect()
     };
     assert_eq!(pairs.len(), ids.len());
+    assert_eq!(
+        pairs,
+        vec![
+            (
+                Some("Ex One, Ex Two / Ann, Bo, Doe, John".to_string()),
+                Some("2023-08-01".to_string())
+            ),
+            (Some("Cy".to_string()), Some("2023-08-05".to_string())),
+            (None, None),
+        ]
+    );
+    let types: Vec<String> = {
+        let mut stmt = with
+            .conn
+            .prepare("SELECT typeof(surveyor) FROM sections ORDER BY id")
+            .unwrap();
+        stmt.query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    };
+    assert_eq!(
+        types,
+        ["text", "text", "null"],
+        "a str | None, never a blob"
+    );
     for (_, date) in &pairs {
         if let Some(date) = date {
             assert!(

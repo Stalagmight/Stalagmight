@@ -90,9 +90,11 @@ impl Database {
         // Save sections and shots
         for section in &project.sections {
             // The legacy columns keep their meaning for every older reader: the
-            // distinct surveyor NAMES joined with ", " (two people sharing a name
-            // appear once) and the earliest date. A shot-less section writes
-            // back the legacy pair it keeps.
+            // distinct NAMES (two people sharing a name appear once), as the
+            // surveyors joined with ", " or, when anyone explored the section,
+            // "explorers / surveyors" - all an older build keeps after it saves
+            // (#718) - and the earliest date. A shot-less section writes back
+            // the legacy pair it keeps.
             let (legacy_surveyor, first_date) = if section.shots.is_empty() {
                 (section.legacy_surveyor.clone(), section.legacy_date)
             } else {
@@ -101,7 +103,8 @@ impl Database {
             let legacy_date = first_date.map(|d| d.to_string());
             // What a shot with no credit row reads back as (`shot_credits`),
             // computed from the text actually written: a shot whose credit it
-            // does not reproduce (both same-named people, an email) gets a row.
+            // does not reproduce (both same-named people, an email, a name
+            // whose " / " the text spells " - ") gets a row.
             let fallback =
                 crate::models::SurveyCredit::from_legacy(legacy_surveyor.as_deref(), first_date);
             tx.execute(
@@ -133,8 +136,8 @@ impl Database {
                     Utc::now().to_rfc3339()
                 ],
             )?;
-            // What this build wrote, so a later open can tell an older build's
-            // retyped surveyor/date from ours (`shot_credits`).
+            // What this build wrote, so a later open can tell a pair retyped
+            // by something else from ours (`shot_credits`).
             write_recorded_legacy(
                 &tx,
                 section.id,
