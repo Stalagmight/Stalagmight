@@ -27,6 +27,7 @@ import DataTable from './DataTable';
 import MapCanvas from '../Map/MapCanvas';
 import { DataModeLayout } from './DataModeLayout';
 import { BackToDataChip } from '../DataWorkspace/BackToDataChip';
+import { useDataWorkspaceViewPersistence } from '../DataWorkspace/useDataWorkspaceViewPersistence';
 import {
   PANEL_SIZE_BOUNDS,
   DETAIL_REVEAL_AUTOCLOSE_MS,
@@ -77,6 +78,11 @@ export default function SingleSystemView() {
   // The linked SpeleoDB project's collaborators, fetched in the background for
   // the surveyor / explorer suggestions.
   useCollaboratorsSync();
+  // The Data workspace's persisted view (map pane open + width, columns, tint)
+  // is loaded here, for as long as a project view is open - not by the
+  // workspace, which mounts only in Data: there the first frame would lay out
+  // the map pane (and the toolbar decide on its tools) from the defaults.
+  useDataWorkspaceViewPersistence();
 
   const {
     project,

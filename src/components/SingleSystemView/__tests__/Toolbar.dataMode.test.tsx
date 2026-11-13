@@ -50,7 +50,7 @@ beforeEach(() => {
   useProjectStore.setState({ project: null });
   // Confirmed-local project: the editable baseline (#270 fail-closed gate).
   useSpeleoStore.setState({ link: null, projectLinkKind: 'local' });
-  useDataWorkspaceStore.setState({ mapPaneOpen: false });
+  useDataWorkspaceStore.setState({ mapPaneOpen: false, viewLoaded: true });
 });
 
 describe('Toolbar in Data', () => {
@@ -89,6 +89,23 @@ describe('Toolbar in Data', () => {
     renderToolbar();
     act(() => useDataWorkspaceStore.setState({ mapPaneOpen: false }));
     expect(useUIStore.getState().activeTool).toBe('measure');
+  });
+
+  it('waits for the persisted view before dropping a tool (the pane may be configured open)', () => {
+    useUIStore.setState({ appMode: 'data', activeTool: 'merge' });
+    useDataWorkspaceStore.setState({ mapPaneOpen: false, viewLoaded: false });
+    renderToolbar();
+    expect(useUIStore.getState().activeTool).toBe('merge');
+    act(() => useDataWorkspaceStore.getState().applyView({ mapPaneOpen: true }, { fromConfig: true }));
+    expect(useUIStore.getState().activeTool).toBe('merge');
+  });
+
+  it('drops the tool once the persisted view says the pane is closed', () => {
+    useUIStore.setState({ appMode: 'data', activeTool: 'merge' });
+    useDataWorkspaceStore.setState({ mapPaneOpen: false, viewLoaded: false });
+    renderToolbar();
+    act(() => useDataWorkspaceStore.getState().applyView({}, { fromConfig: true }));
+    expect(useUIStore.getState().activeTool).toBe('select');
   });
 
   it('entering Data with the pane closed drops a mutating tool too', () => {

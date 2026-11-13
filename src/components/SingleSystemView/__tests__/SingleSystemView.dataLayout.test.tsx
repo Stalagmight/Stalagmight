@@ -78,6 +78,9 @@ import { useUIStore } from '../../../store/uiStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
 import { useDataWorkspaceStore, MAP_PANE_DEFAULT_WIDTH, MAP_PANE_MIN_WIDTH } from '../../DataWorkspace/store';
 import { DATA_WORKSPACE_MIN_WIDTH, mapPaneMaxWidth } from '../DataModeLayout';
+import { useProjectStore } from '../../../store/projectStore';
+import { defaultConfig, type Config } from '../../../types/config';
+import { resetDataWorkspaceViewPersistenceForTests } from '../../DataWorkspace/useDataWorkspaceViewPersistence';
 
 class NoopResizeObserver {
   observe() {}
@@ -113,6 +116,25 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe('SingleSystemView and the persisted Data view', () => {
+  it('loads it while the project view is open, before Data is ever entered', () => {
+    resetDataWorkspaceViewPersistenceForTests();
+    useDataWorkspaceStore.setState({ viewLoaded: false, mapPaneOpen: false });
+    const config = structuredClone(defaultConfig) as Config;
+    useProjectStore.setState({
+      config: { ...config, panels: { ...config.panels, data_workspace_map_pane_open: true, data_workspace_map_pane_width: 640 } },
+    });
+    try {
+      render(<SingleSystemView />);
+      expect(useUIStore.getState().appMode).toBe('survey');
+      expect(useDataWorkspaceStore.getState()).toMatchObject({ viewLoaded: true, mapPaneOpen: true, mapPaneWidth: 640 });
+    } finally {
+      useProjectStore.setState({ config: null });
+      resetDataWorkspaceViewPersistenceForTests();
+    }
+  });
 });
 
 describe('SingleSystemView in Data', () => {

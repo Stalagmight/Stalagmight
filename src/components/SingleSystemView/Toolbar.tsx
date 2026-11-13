@@ -248,6 +248,9 @@ export default function Toolbar({
   // Data's map is a pane the user opens beside the table. While it is closed there is
   // no map to aim a tool or a Display toggle at, so the map controls are hidden.
   const dataMapPaneOpen = useDataWorkspaceStore((s) => s.mapPaneOpen);
+  // Until the persisted view arrives, `mapPaneOpen` is the default (closed),
+  // not the user's choice: nothing may be decided on it yet.
+  const dataViewLoaded = useDataWorkspaceStore((s) => s.viewLoaded);
   const showMapControls = appMode !== 'data' || dataMapPaneOpen;
   // Toolbar icons appear at the 'toolbar_only' syntactic level and up; the
   // `--sh-*` color vars are the role colors there and a neutral gray at 'off'.
@@ -277,10 +280,11 @@ export default function Toolbar({
   // Closing Data's map pane takes the map away from under a mutating tool (a merge
   // or move half done, a comment target picked): drop back to Select, as the
   // read-only modes do (MapCanvas), so reopening the pane never resumes a stale
-  // gesture. Also covers entering Data with the pane closed.
+  // gesture. Also covers entering Data with the pane closed - once the persisted
+  // view says it is closed, not on the default before config loads.
   useEffect(() => {
-    if (!showMapControls && isMutatingTool(activeTool)) setActiveTool('select');
-  }, [showMapControls, activeTool, setActiveTool]);
+    if (!showMapControls && dataViewLoaded && isMutatingTool(activeTool)) setActiveTool('select');
+  }, [showMapControls, dataViewLoaded, activeTool, setActiveTool]);
 
   // Progressive condensation when the left (file/history) and right (tools/display)
   // clusters can't clear the absolutely-centered mode carousel. Because the carousel

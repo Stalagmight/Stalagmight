@@ -20,7 +20,6 @@ import { buildDataView, type DataViewInput } from './model/view';
 import { filtersActive } from './model/filter';
 import type { DataView } from './types';
 import { useDataWorkspaceModel } from './useDataWorkspaceModel';
-import { useDataWorkspaceViewPersistence } from './useDataWorkspaceViewPersistence';
 import { DataNavContext, useDataNavigation } from './useDataNavigation';
 import { useDataEditing } from './useDataEditing';
 import { DataTintContext, useDataTint } from './useDataTint';
@@ -100,7 +99,8 @@ function emptyViewReason(view: DataView, input: DataViewInput): { search: boolea
 
 export function DataWorkspace() {
   const { t } = useTranslation();
-  useDataWorkspaceViewPersistence();
+  // The persisted view is loaded by SingleSystemView (useDataWorkspaceViewPersistence),
+  // alive in every mode, so it is in the store before Data's first frame.
   const project = useProjectStore((s) => s.project);
   const editingBlocked = useEditingBlocked();
   const model = useDataWorkspaceModel();

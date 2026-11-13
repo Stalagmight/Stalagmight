@@ -9,8 +9,12 @@
  * before the IPC; rollback + toast when the IPC rejects, so a later change
  * retries; and a flush of a still-pending save on unmount.
  *
+ * Mounted ONCE, by SingleSystemView, so the view is in the store whenever a
+ * project view is open - before Data's first frame, which lays out the map
+ * pane from it.
+ *
  * Two differences, because the view lives in a GLOBAL store that outlives this
- * hook (it survives mode switches) rather than in the host's own state:
+ * hook (it survives project switches) rather than in the host's own state:
  *
  *  - The "last known config" baseline is module state, not a ref, so a remount
  *    knows which store values are already saved and which are not.
@@ -288,8 +292,9 @@ export function useDataWorkspaceViewPersistence(): void {
     return () => {
       unsubscribe();
       if (timer !== null) clearTimeout(timer);
-      // Flush instead of dropping: leaving Data mode (or closing the app view)
-      // inside the debounce window must still persist the last change.
+      // Flush instead of dropping: closing the project view (the host,
+      // SingleSystemView, unmounts) inside the debounce window must still
+      // persist the last change.
       pendingSaveRef.current?.();
     };
   }, []);

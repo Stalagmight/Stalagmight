@@ -133,6 +133,11 @@ describe('DataWorkspace rows and gutter', () => {
     expect(document.querySelector('.dw-rail')).toBeNull();
   });
 
+  it('does not load the persisted view itself (SingleSystemView does, in every mode)', () => {
+    render(<DataWorkspace />);
+    expect(useDataWorkspaceStore.getState().viewLoaded).toBe(false);
+  });
+
   it('shows the counts in the status bar', () => {
     render(<DataWorkspace />);
     expect(screen.getByTestId('data-status-counts')).toHaveTextContent('21 rows · 12 stations · 9 shots · 3 sections');
