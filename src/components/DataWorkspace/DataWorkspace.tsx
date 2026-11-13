@@ -29,6 +29,7 @@ import { DataStatusBar } from './DataStatusBar';
 import { DataGrid } from './DataGrid';
 import type { SelectionSummary } from './selectionSummary';
 import './DataWorkspace.css';
+import './projectReset';
 
 const MIN_GRID_HEIGHT = 120;
 

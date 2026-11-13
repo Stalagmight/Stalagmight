@@ -13,6 +13,7 @@ import { useUIStore } from '../../store/uiStore';
 import { ChevronLeftIcon, CloseIcon } from '../common/icons';
 import { useDataWorkspaceStore } from './store';
 import { useRowDisplayName } from './useRowDisplayName';
+import './projectReset';
 
 const SLOT = 'pointer-events-auto absolute left-1/2 top-2 z-20 -translate-x-1/2';
 
