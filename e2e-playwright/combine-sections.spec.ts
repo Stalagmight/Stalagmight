@@ -66,9 +66,9 @@ async function undo(page: Page) {
   await page.evaluate(() => (window as any).__E2E_TEST__.projectStore.getState().undo());
 }
 
-/** The station menu's single merge row, when one other section ends there. */
-async function mergeWith(page: Page, partner: string) {
-  const item = page.getByRole('button', { name: `Merge Section With ${partner}...` });
+/** The station menu's single combine row, when one other section ends there. */
+async function combineWith(page: Page, partner: string) {
+  const item = page.getByRole('button', { name: `Combine Section With ${partner}...` });
   await expect(item).toBeEnabled();
   await item.click();
 }
@@ -95,7 +95,7 @@ test.describe('Combine Sections', () => {
 
     // The first half's end is the join: the item is offered there.
     await openContextMenu(page, { type: 'station', ref: { section_id: main!.id, station_index: 2 } });
-    await mergeWith(page, 'Main-B');
+    await combineWith(page, 'Main-B');
     const dialog = page.getByTestId('combine-sections-dialog');
     await expect(dialog).toBeVisible();
     await expect(page.getByTestId('combine-summary')).toHaveText(/Combining Main-A \(2 shots\) and Main-B \(2 shots\) at station/);
@@ -132,7 +132,7 @@ test.describe('Combine Sections', () => {
     }, [a!.id, b!.id]);
 
     await openContextMenu(page, { type: 'section', sectionId: a!.id });
-    const item = page.getByRole('button', { name: 'Merge 2 Sections...' });
+    const item = page.getByRole('button', { name: 'Combine 2 Sections...' });
     await expect(item).toBeEnabled();
     await item.click();
     await expect(page.getByTestId('combine-sections-dialog')).toBeVisible();
@@ -162,7 +162,7 @@ test.describe('Combine Sections', () => {
     await merge(page, join, { section_id: c!.id, station_index: 0 });
 
     await openContextMenu(page, { type: 'station', ref: join });
-    const item = page.getByRole('button', { name: 'Merge Sections...' });
+    const item = page.getByRole('button', { name: 'Combine Sections...' });
     await expect(item).toBeEnabled();
     await expect(item).toContainText('3 sections end here');
     await expect(page.getByRole('button', { name: 'Split Section Here' })).toHaveCount(0);
@@ -204,10 +204,10 @@ test.describe('Combine Sections', () => {
     expect(closed).toMatchObject({ success: true });
 
     await openContextMenu(page, { type: 'station', ref: { section_id: east!.id, station_index: 2 } });
-    await expect(page.getByRole('button', { name: 'Merge Section With West...' })).toContainText(
+    await expect(page.getByRole('button', { name: 'Combine Section With West...' })).toContainText(
       'Across a loop closure'
     );
-    await mergeWith(page, 'West');
+    await combineWith(page, 'West');
 
     await expect(page.getByTestId('combine-closure-join')).toContainText('East and West meet here across a loop closure');
     await openDetails(page);
@@ -239,7 +239,7 @@ test.describe('Combine Sections', () => {
   test('keeps its row, disabled, where no other section ends; none on a mid station', async ({ page }) => {
     const [main] = await seed(page, [{ name: 'Main', count: 3 }]);
     await openContextMenu(page, { type: 'station', ref: { section_id: main!.id, station_index: 3 } });
-    const item = page.getByRole('button', { name: 'Merge Sections...' });
+    const item = page.getByRole('button', { name: 'Combine Sections...' });
     await expect(item).toBeDisabled();
     await expect(item).toHaveAttribute('title', 'No other section ends at this station');
     await expect(item).toContainText('No other section ends at this station');
@@ -247,6 +247,6 @@ test.describe('Combine Sections', () => {
     await page.keyboard.press('Escape');
     await openContextMenu(page, { type: 'station', ref: { section_id: main!.id, station_index: 1 } });
     await expect(page.getByRole('button', { name: 'Edit Station' })).toBeVisible();
-    await expect(page.getByRole('button', { name: /^Merge Section/ })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /^Combine Section/ })).toHaveCount(0);
   });
 });

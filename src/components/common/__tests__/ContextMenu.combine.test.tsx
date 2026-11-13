@@ -1,5 +1,5 @@
 /**
- * The merge row of the station context menu: reserved from the first render on
+ * The combine row of the station context menu: reserved from the first render on
  * every section END station, so the backend's async answer never shifts the
  * rows under the pointer; absent on a mid-section station. With one other
  * section at the point it is that pair, directly; with two others, a submenu
@@ -71,8 +71,8 @@ vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => k
 import ContextMenu from '../ContextMenu';
 
 const rows = () => screen.getAllByRole('button').filter((b) => b.getAttribute('data-testid')?.startsWith('context-menu-item-'));
-/** The merge row: the 8th row of an end station's menu, whatever its label. */
-const combineRow = () => screen.getByRole('button', { name: /^Merge Section/ });
+/** The combine row: the 8th row of an end station's menu, whatever its label. */
+const combineRow = () => screen.getByRole('button', { name: /^Combine Section/ });
 /** A flyout's rows, as [label, enabled, hint]. */
 const submenuRows = (testId = 'context-menu-submenu') =>
   [...screen.getByTestId(testId).querySelectorAll('button')].map((b) => [
@@ -118,12 +118,12 @@ const candidate = (blocked: string | null, partner = 2, first = 1) => ({
   plan_keeping_b: null,
 });
 
-describe('ContextMenu merge row', () => {
+describe('ContextMenu combine row', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  /** The visible hint line of the merge row. */
+  /** The visible hint line of the combine row. */
   const hintLine = () => screen.getByTestId(`${combineRow().getAttribute('data-testid')}-hint`);
   /** Row positions: the rows never move when the answer arrives. */
   const rowIds = () => rows().map((r) => r.getAttribute('data-testid'));
@@ -131,7 +131,7 @@ describe('ContextMenu merge row', () => {
   it('is reserved, disabled, while the answer is pending, then names the one other section directly', async () => {
     openOn(3);
     const before = rowIds();
-    expect(combineRow()).toHaveAccessibleName('Merge Sections...');
+    expect(combineRow()).toHaveAccessibleName('Combine Sections...');
     expect(combineRow()).toBeDisabled();
     expect(combineRow()).toHaveAttribute('title', expect.stringContaining('Checking'));
     expect(hintLine()).toHaveTextContent('Checking which sections meet here...');
@@ -139,7 +139,7 @@ describe('ContextMenu merge row', () => {
     await act(async () => resolveCandidate([candidate(null)]));
 
     expect(rowIds()).toEqual(before);
-    expect(combineRow()).toHaveAccessibleName('Merge Section With Section 2...');
+    expect(combineRow()).toHaveAccessibleName('Combine Section With Section 2...');
     expect(combineRow()).toBeEnabled();
     expect(hintLine()).toHaveTextContent('Merged here');
     expect(combineRow()).not.toHaveAttribute('aria-haspopup');
@@ -206,7 +206,7 @@ describe('ContextMenu merge row', () => {
     openOn(3);
     const pairs = [candidate(null, 2), candidate('Different quality', 4), candidate(null, 4, 2)];
     await act(async () => resolveCandidate(pairs));
-    expect(combineRow()).toHaveAccessibleName('Merge Sections...');
+    expect(combineRow()).toHaveAccessibleName('Combine Sections...');
     expect(combineRow()).toBeEnabled();
     expect(hintLine()).toHaveTextContent('3 sections end here');
     fireEvent.mouseEnter(combineRow());
@@ -269,7 +269,7 @@ describe('ContextMenu merge row', () => {
 
   it('is absent on a mid-section station, where nothing is asked', () => {
     openOn(1);
-    expect(screen.queryByRole('button', { name: /^Merge Section/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Combine Section/ })).toBeNull();
     expect(queryCombineCandidate).not.toHaveBeenCalled();
   });
 });

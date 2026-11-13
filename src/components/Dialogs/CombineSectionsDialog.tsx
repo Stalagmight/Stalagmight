@@ -65,7 +65,7 @@ function CombinedCreditSummary({ shots }: { shots: Array<Pick<Shot, 'credit'>> }
  * co-located, or across a loop closure) into one. Other sections there stay
  * attached as branches. Opened with the backend's `CombineCandidate` for one
  * pair: a two-section selection, or the pair picked in the station menu
- * ("Merge Section With <name>...", or the "Merge Sections..." submenu at a
+ * ("Combine Section With <name>...", or the "Combine Sections..." submenu at a
  * junction), with `keep` the section the menu named first. What else the
  * combine changes for the kept section shown (a side that moves, ties that
  * become loop closures, converted bearings...) is listed, with everything

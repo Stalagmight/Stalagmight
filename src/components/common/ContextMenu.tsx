@@ -233,7 +233,7 @@ export default function ContextMenu() {
   }, [combineKey]);
   const combineCandidates = combineAnswer?.key === combineKey ? combineAnswer.candidates : undefined;
   /**
-   * The merge row, always with a hint line (visible under the label, and as
+   * The combine row, always with a hint line (visible under the label, and as
    * its tooltip): "Checking...", the reason it is disabled, or what it joins.
    * Whether it is offered is known synchronously (an END station, or exactly
    * two selected sections), so the row is always there from the first render:
@@ -244,9 +244,10 @@ export default function ContextMenu() {
    * count above is frozen against. Its label may change in place.
    *
    * On a station, by how many sections end at the point:
-   * - two: one row, "Merge Section With <the other>...", opening the dialog;
-   * - three: "Merge Sections..." with a submenu of every pair ("A with B");
-   * - four or more: "Merge Sections..." > "A with..." > the others, nested.
+   * - two: one row, "Combine Section With <the other>...", opening the dialog;
+   * - three: "Combine Sections..." with a submenu of every pair ("A with B");
+   * - four or more: "Combine Sections..." > "A with..." > the others, nested.
+   * Sections are "combined", never "merged": merging is what stations do.
    * The first-named section is the one the dialog keeps by default. Each
    * pair is enabled, or disabled with its own reason.
    */
@@ -260,7 +261,7 @@ export default function ContextMenu() {
     if (combineCandidate === undefined) {
       return disabled(
         combineKey.startsWith('sections')
-          ? 'These sections cannot be merged'
+          ? 'These sections cannot be combined'
           : 'No other section ends at this station'
       );
     }
@@ -299,7 +300,7 @@ export default function ContextMenu() {
       const blocked = blockedOf(combineCandidate);
       return [
         {
-          label: `Merge Section With ${name(partner)}...`,
+          label: `Combine Section With ${name(partner)}...`,
           action: open(combineCandidate, clicked),
           disabled: blocked !== null,
           hint: blocked ?? howTheyMeet(combineCandidate),
@@ -322,7 +323,7 @@ export default function ContextMenu() {
         return pairRow(`${name(first)} with ${name(otherOf(c, first))}`, c, first);
       });
     } else {
-      // Each section, then whom it can be merged with.
+      // Each section, then whom it can be combined with.
       submenu = sections.flatMap((first) => {
         const rows = sections.flatMap((second) => {
           const c = second === first ? undefined : pairOf(first, second);
@@ -340,7 +341,7 @@ export default function ContextMenu() {
         action: () => {},
         hint:
           openCount === 0
-            ? `None of the ${sections.length} sections ending here can be merged`
+            ? `None of the ${sections.length} sections ending here can be combined`
             : `${sections.length} sections end here`,
         submenu,
       },
@@ -616,7 +617,7 @@ export default function ContextMenu() {
         },
       });
       items.push({ label: '', action: () => {}, separator: true });
-      items.push(...combineItems('Merge Sections...'));
+      items.push(...combineItems('Combine Sections...'));
       if (!isFirstStation && !isLastStation) {
         items.push({
           label: 'Split Section Here',
@@ -811,7 +812,7 @@ export default function ContextMenu() {
           },
         },
         ...reverseItems(target.sectionId),
-        ...combineItems(`Merge ${selectedSectionIds.length} Sections...`),
+        ...combineItems(`Combine ${selectedSectionIds.length} Sections...`),
         {
           label: 'Adjust Position...',
           action: () => {
@@ -970,8 +971,8 @@ export default function ContextMenu() {
         if (label.startsWith('Reverse ')) {
           return <EntityReverseSymbol entity="section" size={18} />;
         }
-        // "Merge Sections...", "Merge Section With <name>..." and "Merge 2 Sections...".
-        if (label.startsWith('Merge Section') || /^Merge \d+ Sections/.test(label)) {
+        // "Combine Sections...", "Combine Section With <name>..." and "Combine 2 Sections...".
+        if (label.startsWith('Combine ')) {
           return <ToolGlyph tool="merge" size={16} />;
         }
         // Fallback for any unmapped label (every other current menu label is

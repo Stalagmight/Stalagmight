@@ -963,8 +963,8 @@ There is no Draw or Delete tool. Shots are added from the map context menu:
 any shot, which splits it in two (also available from the data table's row
 menu). Deletion is select plus Delete/Backspace, or the context menu. The same
 menu restructures sections without deleting anything: **Split Section Here** on
-a mid-section station or a point along a shot, and **Merge Section With
-<name>...** (or, at a junction, **Merge Sections...**) on an end station where
+a mid-section station or a point along a shot, and **Combine Section With
+<name>...** (or, at a junction, **Combine Sections...**) on an end station where
 another section ends (see 7.11).
 
 Panning is not a tool either. A plain left-click-drag pans the map under every
@@ -1649,7 +1649,7 @@ only tie, which the split turns into a merge (a closure must close a loop),
 moving one half by the loop's misclosure; the dialog says which half moves and
 how far before the user confirms (`split_section_preview`). One undo step.
 
-**Combine Sections** (an end station's context menu, or **Merge 2 Sections...**
+**Combine Sections** (an end station's context menu, or **Combine 2 Sections...**
 in the section menu when exactly two sections are selected): the two chosen
 sections meet end to end and
 become one; other sections there stay attached as branches. They meet when an
@@ -1660,10 +1660,10 @@ the loop's misclosure. Another section's end merged there stays merged to the
 joined station, now a station in the middle of the combined section; a section
 merged there at a station in its middle stays merged too (a crossing); one
 ending there unmerged is left as it is, and the dialog says so. The station
-menu offers, by how many sections end at the point: with one other, **Merge
+menu offers, by how many sections end at the point: with one other, **Combine
 Section With <name>...**, opening the dialog directly; with three in all,
-**Merge Sections...** and a submenu of every pair ("A with B"); with four or
-more, **Merge Sections...** > "A with..." > the sections A can be merged with.
+**Combine Sections...** and a submenu of every pair ("A with B"); with four or
+more, **Combine Sections...** > "A with..." > the sections A can be combined with.
 Each pair says how the two meet (merged, side by side, or across a loop
 closure), or is disabled with its reason; the section named first is the one
 the dialog keeps by default. The dialog shows the name, colour, the kept

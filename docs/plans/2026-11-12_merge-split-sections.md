@@ -17,9 +17,9 @@ the inverse of a split, at a junction too. Both are one undo step.
   name and offset go to both copies, the loop closures stay on the first half,
   and the user picks the half for the comment and the zero datum.
 - **Combine Sections.** Right-click an end station where another section ends
-  and choose **Merge Section With <name>...** (or, at a junction, a pair from
-  **Merge Sections...**), or select exactly two sections in the Sections panel
-  and choose Merge 2 Sections. The dialog shows a summary, a kept-section swap, the name (`X-A` +
+  and choose **Combine Section With <name>...** (or, at a junction, a pair from
+  **Combine Sections...**), or select exactly two sections in the Sections panel
+  and choose Combine 2 Sections. The dialog shows a summary, a kept-section swap, the name (`X-A` +
   `X-B` gives `X`) and the colour. It warns that the other section will be
   reversed, with a swap-L/R checkbox. It asks about the join comment and name
   only when they conflict, notes the direction, and summarises the combined
@@ -64,9 +64,9 @@ at the clicked end. The dialog sends that join (`CombineSectionsOptions::join`)
 and the command re-checks exactly it, so the station menu, the Sections panel
 and the command always agree. The station menu (2026-11-13, at review: the
 picker used to be in the dialog) asks `combine_candidates_at_point`, every pair
-at the point: with one other section it is one row, **Merge Section With
-<name>...**; with three sections in all, **Merge Sections...** lists every pair;
-with four or more it nests "A with..." over the sections A can be merged with.
+at the point: with one other section it is one row, **Combine Section With
+<name>...**; with three sections in all, **Combine Sections...** lists every pair;
+with four or more it nests "A with..." over the sections A can be combined with.
 Each pair says how it meets, or is disabled with its reason; the first-named
 section is kept by default. The dialog folds everything informational under
 **Details**.
