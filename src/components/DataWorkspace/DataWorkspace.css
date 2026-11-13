@@ -71,8 +71,10 @@
   outline-offset: 1px;
 }
 
-/* Hover card: the shared Tooltip bubble, made interactive. */
+/* Hover card: the shared Tooltip bubble, made interactive and opaque (the
+   tooltip's translucent surface let the rows show through the details). */
 .dw-hover-card {
+  background-color: var(--cc-panel) !important;
   pointer-events: auto !important;
   max-width: 26rem !important;
   white-space: normal !important;

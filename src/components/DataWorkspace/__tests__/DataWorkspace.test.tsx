@@ -301,6 +301,70 @@ describe('DataWorkspace hover card', () => {
     expect(useUIStore.getState().requestCenterOnStation).toEqual({ section_id: 1, station_index: 2 });
   });
 
+  const trigger = (part: string) => screen.getByTestId(`data-row-name-${part}`).parentElement!;
+  const wait = (ms = 400) =>
+    act(() => {
+      vi.advanceTimersByTime(ms);
+    });
+
+  it('switches to the next row name the pointer moves to', () => {
+    vi.useFakeTimers();
+    render(<DataWorkspace />);
+    fireEvent.mouseEnter(trigger('st-1-2'));
+    wait();
+    expect(screen.getByTestId('data-hover-card-st-1-2')).toBeInTheDocument();
+    for (const [from, to] of [
+      ['st-1-2', 'sh-1-3'],
+      ['sh-1-3', 'st-1-3'],
+      ['st-1-3', 'st-1-1'],
+    ] as const) {
+      fireEvent.mouseLeave(trigger(from));
+      fireEvent.mouseEnter(trigger(to));
+      wait();
+      expect(screen.queryByTestId(`data-hover-card-${from}`)).toBeNull();
+      expect(screen.getByTestId(`data-hover-card-${to}`)).toBeInTheDocument();
+      expect(document.querySelectorAll('.dw-hover-card')).toHaveLength(1);
+    }
+  });
+
+  it('closes on a press in the grid and when the context menu opens, until hovered again', () => {
+    vi.useFakeTimers();
+    render(<DataWorkspace />);
+    fireEvent.mouseEnter(trigger('st-1-2'));
+    wait();
+    fireEvent.mouseDown(screen.getByTestId('data-cell-sh-1-3-length'));
+    expect(screen.queryByTestId('data-hover-card-st-1-2')).toBeNull();
+
+    fireEvent.mouseLeave(trigger('st-1-2'));
+    wait();
+    fireEvent.mouseEnter(trigger('st-1-2'));
+    wait();
+    expect(screen.getByTestId('data-hover-card-st-1-2')).toBeInTheDocument();
+    fireEvent.contextMenu(screen.getByTestId('data-row-name-st-1-2'));
+    expect(screen.getByTestId('data-grid-context-menu')).toBeInTheDocument();
+    expect(screen.queryByTestId('data-hover-card-st-1-2')).toBeNull();
+  });
+
+  it('a right-click before the open delay ran out cancels the pending card', () => {
+    vi.useFakeTimers();
+    render(<DataWorkspace />);
+    fireEvent.mouseEnter(trigger('st-1-2'));
+    wait(100);
+    fireEvent.contextMenu(screen.getByTestId('data-row-name-st-1-2'));
+    wait();
+    expect(screen.getByTestId('data-grid-context-menu')).toBeInTheDocument();
+    expect(screen.queryByTestId('data-hover-card-st-1-2')).toBeNull();
+  });
+
+  it('keeps the card open for a press inside it', () => {
+    vi.useFakeTimers();
+    render(<DataWorkspace />);
+    fireEvent.mouseEnter(trigger('st-1-2'));
+    wait();
+    fireEvent.mouseDown(screen.getByTestId('data-hover-show-on-map-st-1-2'));
+    expect(screen.getByTestId('data-hover-card-st-1-2')).toBeInTheDocument();
+  });
+
   it('lists a shot warnings, the ignored one marked', () => {
     vi.useFakeTimers();
     render(<DataWorkspace />);

@@ -3,10 +3,11 @@
  * rail, the row name (stations bold "Label:idx"; shots indented "Label:pos"
  * with a muted "i→i+1"), a revealed-row marker, and the "Show on map" button
  * (on row hover / the active row). Hovering the name opens the hover card
- * after a short delay; it closes on scroll. Hovering a linked station
- * highlights its partner rows.
+ * after a short delay, beside the gutter so it never covers the rows being
+ * read; it closes on scroll, on any mouse press outside it and when a context
+ * menu opens. Hovering a linked station highlights its partner rows.
  */
-import { memo, useEffect, useState, type ReactNode } from 'react';
+import { memo, useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Tooltip } from '../common/Tooltip';
 import { EyeIcon, PinIcon } from '../common/icons';
@@ -34,41 +35,74 @@ interface Props {
   nav: DataNav;
 }
 
-/** Hover card trigger that also closes when anything scrolls. */
-function HoverName({ row, ctx, nav, children }: { row: DataRow; ctx: DataModelCtx; nav: DataNav; children: ReactNode }) {
+/** Hover card trigger. The card closes (until the pointer leaves the name)
+ *  when anything scrolls, on a mouse press anywhere but in the card itself,
+ *  and when a context menu opens - also when that happens before the card's
+ *  open delay ran out. */
+function HoverName({
+  row,
+  ctx,
+  nav,
+  anchorRef,
+  children,
+}: {
+  row: DataRow;
+  ctx: DataModelCtx;
+  nav: DataNav;
+  anchorRef: RefObject<HTMLElement | null>;
+  children: ReactNode;
+}) {
   const [hovered, setHovered] = useState(false);
   const [suppressed, setSuppressed] = useState(false);
   useEffect(() => {
     if (!hovered) return undefined;
-    const onScroll = () => setSuppressed(true);
-    window.addEventListener('scroll', onScroll, true);
-    return () => window.removeEventListener('scroll', onScroll, true);
+    const suppress = (e: Event) => {
+      // The card's own links and buttons work as usual.
+      if (e.type === 'mousedown' && e.target instanceof Element && e.target.closest('.dw-hover-card')) return;
+      setSuppressed(true);
+    };
+    window.addEventListener('scroll', suppress, true);
+    window.addEventListener('mousedown', suppress, true);
+    window.addEventListener('contextmenu', suppress, true);
+    return () => {
+      window.removeEventListener('scroll', suppress, true);
+      window.removeEventListener('mousedown', suppress, true);
+      window.removeEventListener('contextmenu', suppress, true);
+    };
   }, [hovered]);
   if (row.kind === 'section') return <>{children}</>;
+  const press = () => setSuppressed(true);
   return (
-    <Tooltip
-      className="min-w-0 flex-1"
-      tooltipClassName="dw-hover-card"
-      tooltipTestId={`data-hover-${dataRowPart(row)}`}
-      openDelayMs={350}
-      closeDelayMs={150}
-      open={suppressed ? false : undefined}
-      onHoverChange={(on) => {
-        setHovered(on);
-        if (!on) setSuppressed(false);
-        if (row.kind !== 'station') return;
-        const keys = on ? linkedRowKeys(stationLinks(ctx, row.sectionId, row.stationIndex, row.g)) : [];
-        nav.setHoveredPartners(keys.length > 0 ? keys : null);
-      }}
-      content={<DataHoverCard row={row} />}
-    >
-      {children}
-    </Tooltip>
+    // A press on the name while the card is still pending (not open yet) must
+    // cancel it too: the window listeners above only run once it is open.
+    <span className="contents" onMouseDown={press} onContextMenu={press}>
+      <Tooltip
+        className="min-w-0 flex-1"
+        tooltipClassName="dw-hover-card"
+        tooltipTestId={`data-hover-${dataRowPart(row)}`}
+        openDelayMs={350}
+        closeDelayMs={250}
+        placement="right"
+        anchorRef={anchorRef}
+        open={suppressed ? false : undefined}
+        onHoverChange={(on) => {
+          setHovered(on);
+          if (!on) setSuppressed(false);
+          if (row.kind !== 'station') return;
+          const keys = on ? linkedRowKeys(stationLinks(ctx, row.sectionId, row.stationIndex, row.g)) : [];
+          nav.setHoveredPartners(keys.length > 0 ? keys : null);
+        }}
+        content={<DataHoverCard row={row} />}
+      >
+        {children}
+      </Tooltip>
+    </span>
   );
 }
 
 function DataRowLabelImpl({ row, ctx, rail, tint, revealed, nav }: Props) {
   const { t } = useTranslation();
+  const gutterRef = useRef<HTMLDivElement>(null);
   const part = dataRowPart(row);
   const label = sectionLabelOf(ctx, row.sectionId);
   let name: ReactNode = null;
@@ -104,11 +138,11 @@ function DataRowLabelImpl({ row, ctx, rail, tint, revealed, nav }: Props) {
   }
 
   return (
-    <div className="relative flex h-full w-full min-w-0 items-center text-left text-xs">
+    <div ref={gutterRef} className="relative flex h-full w-full min-w-0 items-center text-left text-xs">
       {tint && <span className="absolute inset-y-0 left-0 w-[3px]" style={{ backgroundColor: tint }} aria-hidden="true" />}
       {rail && <DataRail cell={rail} />}
       <div className="flex min-w-0 flex-1 items-center" style={{ paddingLeft: NAME_LEFT }}>
-        <HoverName row={row} ctx={ctx} nav={nav}>
+        <HoverName row={row} ctx={ctx} nav={nav} anchorRef={gutterRef}>
           {name}
         </HoverName>
       </div>
