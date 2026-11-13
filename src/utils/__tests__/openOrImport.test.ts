@@ -20,6 +20,7 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
 import { routeOpenedFile, pickAndRoute } from '../openOrImport';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { useExportStore } from '../../store/exportStore';
 import { useSpeleoStore, type SpeleoLinkState } from '../../store/speleoStore';
 import { setProjectActionSource, peekProjectActionSource } from '../telemetry';
 
@@ -702,6 +703,42 @@ describe('pickAndRoute', () => {
     openMock.mockRejectedValue(new Error('picker exploded'));
     await pickAndRoute([{ name: 'Project', extensions: ['stalx'] }], 'Open Failed');
     expect(useUIStore.getState().activeDialog).toBe('error');
+    expect(peekProjectActionSource()).toBeUndefined();
+  });
+});
+
+describe('while an export is being written', () => {
+  beforeEach(() => {
+    useUIStore.setState({ toasts: [] });
+    useExportStore.setState({ exporting: true });
+  });
+  afterEach(() => {
+    useExportStore.setState({ exporting: false });
+  });
+
+  const lastToast = () => useUIStore.getState().toasts.slice(-1)[0];
+
+  it('a dropped file opens nothing and says why', async () => {
+    useProjectStore.setState({ project: { name: 'X' } as never, isDirty: false });
+    for (const path of ['/cave/other.stalx', '/cave/survey.dmp', '/cave/track.gpx']) {
+      await routeOpenedFile(path);
+    }
+    expect(loadProject).not.toHaveBeenCalled();
+    expect(importDmp).not.toHaveBeenCalled();
+    expect(useUIStore.getState().activeDialog).toBeNull();
+    expect(lastToast()).toMatchObject({
+      message: 'Wait for the export to finish before opening or importing a file.',
+      kind: 'warning',
+    });
+    expect(peekProjectActionSource()).toBeUndefined();
+  });
+
+  it('the picker never opens', async () => {
+    openMock.mockResolvedValue('/cave/project.stalx');
+    await pickAndRoute([{ name: 'Project', extensions: ['stalx'] }]);
+    expect(openMock).not.toHaveBeenCalled();
+    expect(loadProject).not.toHaveBeenCalled();
+    expect(lastToast()?.kind).toBe('warning');
     expect(peekProjectActionSource()).toBeUndefined();
   });
 });

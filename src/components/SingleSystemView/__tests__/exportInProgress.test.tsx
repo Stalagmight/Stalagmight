@@ -2,7 +2,10 @@
  * An export being written keeps the Export workspace open: closeExport refuses,
  * Escape and Ctrl+E are inert, and every visible way out (toolbar "Close
  * export", the panel header's close, the menu row, the carousel buttons) is
- * disabled with "Export in progress". ExportControls sets the flag around the
+ * disabled with "Export in progress". No other path leaves Export either
+ * (setAppMode / exitGasPlan refuse, the colour overlays stand down, every
+ * shortcut is inert, the project-lifecycle menu rows are disabled), while a
+ * project load still resets to Survey. ExportControls sets the flag around the
  * export call and clears it when the call settles, success or failure.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -84,6 +87,99 @@ describe('closeExport while an export is being written', () => {
     expect(useUIStore.getState().appMode).toBe('export');
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'e', ctrlKey: true, bubbles: true }));
     expect(useUIStore.getState().appMode).toBe('export');
+  });
+});
+
+describe('no other way out of Export while an export is being written', () => {
+  const ui = () => useUIStore.getState();
+
+  it('setAppMode and exitGasPlan refuse; they work again once it settles', () => {
+    startExporting();
+    for (const mode of ['survey', 'data', 'plan'] as const) {
+      act(() => ui().setAppMode(mode));
+      expect(ui().appMode).toBe('export');
+    }
+    act(() => ui().exitGasPlan());
+    expect(ui().appMode).toBe('export');
+    expect(ui().exportReturnMode).toBe('data');
+    act(() => useExportStore.getState().setExporting(false));
+    act(() => ui().exitGasPlan());
+    expect(ui().appMode).toBe('data');
+  });
+
+  it('the Warnings tab stays where it is instead of reaching for Survey', () => {
+    startExporting();
+    act(() => ui().openWarningsTab());
+    expect(ui().appMode).toBe('export');
+    expect(ui().detailPanelTab).not.toBe('warnings');
+  });
+
+  it('a project load still lands in Survey', () => {
+    startExporting();
+    act(() => ui().applyDisplaySettings({} as never));
+    expect(ui().appMode).toBe('survey');
+    expect(ui().exportReturnMode).toBeNull();
+  });
+
+  it('no colour overlay repaints the preview or leaves Export', () => {
+    startExporting();
+    const flags = () => {
+      const { appMode, showDepthGradient, showDistanceGradient, showIssueSeverity } = ui();
+      return { appMode, showDepthGradient, showDistanceGradient, showIssueSeverity };
+    };
+    const before = flags();
+    expect(before.appMode).toBe('export');
+    act(() => ui().toggleDisplay('showDepthGradient'));
+    act(() => ui().setColorMode('depth'));
+    act(() => ui().toggleDistanceGradient());
+    act(() => ui().toggleIssueSeverity());
+    act(() => ui().setIssueSeverity(true));
+    expect(flags()).toEqual(before);
+  });
+
+  it('every shortcut is inert, Escape included; Escape still closes a dialog', () => {
+    renderHook(() => useKeyboardShortcuts());
+    const selection = { type: 'station' as const, stationRef: { section_id: 0, station_index: 1 } };
+    act(() => ui().setSelection(selection));
+    startExporting();
+    const press = (init: KeyboardEventInit) => act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, ...init }));
+    });
+    press({ key: 'Escape' });
+    expect(ui().selection).toEqual(selection);
+    press({ key: 'D', shiftKey: true });
+    expect(ui().appMode).toBe('export');
+    expect(ui().showDepthGradient).toBe(false);
+    press({ key: ',', ctrlKey: true });
+    expect(ui().activeDialog).toBeNull();
+    const grid = ui().showGrid;
+    press({ key: 'G', shiftKey: true });
+    expect(ui().showGrid).toBe(grid);
+
+    act(() => ui().openDialog('keyboard-shortcuts'));
+    press({ key: 'Escape' });
+    expect(ui().activeDialog).toBeNull();
+    expect(ui().selection).toEqual(selection);
+    expect(ui().appMode).toBe('export');
+  });
+
+  it('the project menu disables New, Open, Save As, Save and Close, Import and Close Project', () => {
+    const lifecycle = [
+      'app-menu-new-project',
+      'global-open-project-button',
+      'project-menu-save-as',
+      'project-menu-save-and-close',
+      'global-import-menu-button',
+      'app-menu-import-from-mnemo',
+      'back-button',
+    ];
+    const { result } = renderHook(() => useProjectMenuItems({ onSave: async () => ({ success: true }) }));
+    const row = (id: string) => result.current.find((it) => it.id === id)!;
+    for (const id of lifecycle) expect(row(id).disabled).toBeFalsy();
+    startExporting();
+    for (const id of lifecycle) expect(row(id)).toMatchObject({ disabled: true, title: 'Export in progress' });
+    // Save writes the same file in place and keeps the project: it stays.
+    expect(row('toolbar-save-button').disabled).toBeFalsy();
   });
 });
 

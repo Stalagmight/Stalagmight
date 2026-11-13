@@ -1,6 +1,7 @@
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { isEditableMode, useUIStore } from '../../store/uiStore';
+import { useExportStore } from '../../store/exportStore';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { routeOpenedFile } from '../../utils/openOrImport';
 import { Button } from '../common/Button';
@@ -26,6 +27,10 @@ export default function ImportBlockedDialog() {
   const setAppMode = useUIStore((s) => s.setAppMode);
   const dialogData = useUIStore((s) => s.dialogData);
   const appMode = useUIStore((s) => s.appMode);
+  // Export cannot be left while an export is being written (setAppMode
+  // refuses), so the switch would only drop the view and then re-route into
+  // the same block. Say why instead.
+  const exportRunning = useExportStore((s) => s.exporting) && appMode === 'export';
 
   const rawPath = dialogData.path;
   const path = typeof rawPath === 'string' ? rawPath : null;
@@ -85,7 +90,13 @@ export default function ImportBlockedDialog() {
           <Button onClick={handleStay} data-testid="import-blocked-stay">
             {stayLabel}
           </Button>
-          <Button variant="primary" onClick={handleSwitch} data-testid="import-blocked-switch">
+          <Button
+            variant="primary"
+            onClick={handleSwitch}
+            disabled={exportRunning}
+            title={exportRunning ? t('exportPanel.inProgress') : undefined}
+            data-testid="import-blocked-switch"
+          >
             {switchLabel}
           </Button>
         </div>

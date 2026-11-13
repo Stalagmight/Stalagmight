@@ -124,6 +124,8 @@ export const TOAST_KEYS = {
 
   // Open / import routing
   IMPORT_IN_PROGRESS: 'import-in-progress',
+  /** A file dropped or picked while an export is being written. */
+  EXPORT_IN_PROGRESS: 'export-in-progress',
 
   // In-app updater (#579)
   APP_UPDATE_DOWNLOAD_FAILED: 'app-update-download-failed',

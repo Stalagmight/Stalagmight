@@ -914,6 +914,17 @@ const PREPLAN_DISPLAY_KEYS = [
 ] as const;
 type PrePlanDisplay = Pick<UIStore, (typeof PREPLAN_DISPLAY_KEYS)[number]>;
 let prePlanDisplay: PrePlanDisplay | null = null;
+/**
+ * An export is being written in the Export workspace (`exportStore.exporting`,
+ * set by ExportControls around the export call). Until it settles nothing may
+ * leave Export (`setAppMode` refuses, so every caller of it and of
+ * `exitGasPlan` is covered at once) or repaint the preview it is exporting from
+ * (the colour-overlay writers stand down). A project load still resets the mode:
+ * `applyDisplaySettings` writes `appMode` directly, not through `setAppMode`.
+ */
+const exportRunning = (): boolean =>
+  useExportStore.getState().exporting && useUIStore.getState().appMode === 'export';
+
 const snapshotDisplay = (s: UIStore): PrePlanDisplay => {
   const snap: Partial<PrePlanDisplay> = {};
   for (const k of PREPLAN_DISPLAY_KEYS) {
@@ -982,6 +993,8 @@ function revealWarningsTab(
   if (s.appMode !== 'survey') {
     s.setAppMode('survey');
     s = useUIStore.getState();
+    // Declined (an export is being written): nothing is mounted to show the tab.
+    if (s.appMode !== 'survey') return;
   }
   if (s.focusedSectionId !== null) s.exitSectionFocus();
   if (s.dataTableFullScreen) s.exitDataTableFullScreen();
@@ -1628,6 +1641,8 @@ export const useUIStore = create<UIStore>((set) => ({
   distanceGradientOrigin: null,
   distanceField: null,
   toggleDistanceGradient: () => {
+    // No colour writer repaints the preview of an export being written.
+    if (exportRunning()) return;
     // Every colour writer honours a Warnings-tab visit (see setColorMode).
     const visit = useUIStore.getState();
     if (isWarningsVisitActive(visit)) {
@@ -1656,6 +1671,7 @@ export const useUIStore = create<UIStore>((set) => ({
   // Issue-severity coloring (#22) - runtime-only, never persisted.
   showIssueSeverity: false,
   toggleIssueSeverity: () => {
+    if (exportRunning()) return;
     const visit = useUIStore.getState();
     if (isWarningsVisitActive(visit)) {
       set(visitToggleColorPatch(visit, 'issues'));
@@ -1670,6 +1686,7 @@ export const useUIStore = create<UIStore>((set) => ({
     set(on ? colorModeFlags('issues') : { showIssueSeverity: false });
   },
   setIssueSeverity: (on) => {
+    if (exportRunning()) return;
     const visit = useUIStore.getState();
     if (isWarningsVisitActive(visit)) {
       if ((selectEffectiveColorMode(visit) === 'issues') !== on) set(visitToggleColorPatch(visit, 'issues'));
@@ -1681,6 +1698,7 @@ export const useUIStore = create<UIStore>((set) => ({
     set(on ? colorModeFlags('issues') : { showIssueSeverity: false });
   },
   setColorMode: (mode) => {
+    if (exportRunning()) return;
     // Selecting any color overlay leaves the gas sub-mode - both own the shots
     // layer paint, so they can't coexist (gas entry is the toolbar toggle,
     // outside this menu). Done FIRST, before the flags are read: picking 'section'
@@ -1741,6 +1759,10 @@ export const useUIStore = create<UIStore>((set) => ({
   setAppMode: (mode) => {
     const s = useUIStore.getState();
     if (s.appMode === mode) return;
+    // Never out of Export under a running export (see exportRunning): this is
+    // the one choke point behind closeExport, exitGasPlan (Shift+D, an overlay
+    // pick, a view switch, a project close), the mode switcher and the dialogs.
+    if (exportRunning()) return;
     const fromEditable = isEditableMode(s.appMode);
     const toEditable = isEditableMode(mode);
     // Left dock: Sections is a Survey-only tab. Leaving Survey remembers whether
@@ -1882,6 +1904,8 @@ export const useUIStore = create<UIStore>((set) => ({
     set({ exportReturnMode: null });
   },
   toggleDisplay: (key) => {
+    // The depth gradient is a colour overlay (and Shift+D would leave Export).
+    if (key === 'showDepthGradient' && exportRunning()) return;
     trackAction(`toggle.${key}`);
     const state = useUIStore.getState();
     // During a Warnings-tab visit the Errors toggle and Shift+D change only the

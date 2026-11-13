@@ -3254,6 +3254,7 @@
   },
   "importGate": {
     "inProgress": "Finish or cancel the current import first.",
+    "exportInProgress": "Wait for the export to finish before opening or importing a file.",
     "alreadyOpen": "{{fileName}} is already the open project."
   },
   "newerSchema": {

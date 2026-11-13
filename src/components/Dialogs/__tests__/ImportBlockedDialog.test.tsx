@@ -63,6 +63,7 @@ vi.mock('../DialogWrapper', () => ({
 }));
 
 import ImportBlockedDialog from '../ImportBlockedDialog';
+import { useExportStore } from '../../../store/exportStore';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -168,5 +169,31 @@ describe('ImportBlockedDialog', () => {
     fireEvent.click(screen.getByTestId('import-blocked-switch'));
     expect(setAppMode).toHaveBeenCalledWith('survey');
     expect(routeOpenedFile).not.toHaveBeenCalled();
+  });
+
+  it('offers no switch out of Export while an export is being written', () => {
+    h.env.appMode = 'export';
+    useExportStore.setState({ exporting: true });
+    try {
+      render(<ImportBlockedDialog />);
+      const button = screen.getByTestId('import-blocked-switch');
+      expect(button).toBeDisabled();
+      expect(button).toHaveAttribute('title', 'exportPanel.inProgress');
+      fireEvent.click(button);
+      expect(setAppMode).not.toHaveBeenCalled();
+      expect(routeOpenedFile).not.toHaveBeenCalled();
+      // Stay still closes it.
+      fireEvent.click(screen.getByTestId('import-blocked-stay'));
+      expect(closeDialog).toHaveBeenCalled();
+    } finally {
+      useExportStore.setState({ exporting: false });
+    }
+  });
+
+  it('keeps the switch live in Export while no export is running', () => {
+    h.env.appMode = 'export';
+    render(<ImportBlockedDialog />);
+    expect(screen.getByTestId('import-blocked-switch')).not.toBeDisabled();
+    expect(screen.getByTestId('import-blocked-switch')).not.toHaveAttribute('title');
   });
 });

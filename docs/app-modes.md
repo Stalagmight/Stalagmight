@@ -16,6 +16,15 @@ the **Close export** button leaves it (`closeExport`, back to that mode). Clicki
 carousel button while Export is open (none is pressed then) also leaves it. Both
 paths end in `setAppMode`, so everything below applies to Export unchanged.
 
+While an export is being written (`exportStore.exporting`) Export cannot be left
+or disturbed. `setAppMode` refuses to leave it, which covers `closeExport`,
+`exitGasPlan` and every caller of either. The colour-overlay writers do nothing,
+and every keyboard shortcut is inert (Escape only closes a dialog that is already
+open). The project menu disables New, Open, Save As, Save and Close, Import,
+Import from MNemo and Close Project. `routeOpenedFile` refuses a dropped or picked
+file with a toast. A project load still lands in Survey: `applyDisplaySettings`
+writes `appMode` itself.
+
 [SPEC.md 6.1](SPEC.md#61-workspace-modes) describes what each mode is for; this page
 is the contract the code has to keep, because getting it wrong is silent: a mutation
 leaks into a read-only workspace and nothing complains until a user edits a project

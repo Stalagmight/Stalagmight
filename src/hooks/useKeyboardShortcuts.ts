@@ -7,6 +7,7 @@ import { isEditableMode, useUIStore } from '../store/uiStore';
 import { useDataWorkspaceStore } from '../components/DataWorkspace/store';
 import { useProjectStore } from '../store/projectStore';
 import { useGasPlanStore } from '../store/gasPlanStore';
+import { useExportStore } from '../store/exportStore';
 import { useShallow } from 'zustand/react/shallow';
 import { isEditingBlockedNow } from './useEditingBlocked';
 import { isNonInteractiveTool, navigationToolsEnabled } from '../utils/toolUtils';
@@ -411,6 +412,18 @@ export function useKeyboardShortcuts() {
         if (!(event.key === '?' && activeDialog === 'keyboard-shortcuts')) {
           return;
         }
+      }
+      // An export being written owns the app until it settles: no shortcut may
+      // leave Export, open or close a project, edit, or repaint the preview it
+      // exports from. Escape too (closeExport refuses anyway, and its other
+      // jobs - clearing the map selection or measurement - would change the
+      // preview); only a dialog already open may still be closed with it.
+      if (useExportStore.getState().exporting) {
+        if (event.key === 'Escape' && activeDialog) {
+          event.preventDefault();
+          if (!requestTopDialogClose()) useUIStore.getState().closeDialog();
+        }
+        return;
       }
 
       setSource('keyboard');

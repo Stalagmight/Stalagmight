@@ -36,6 +36,19 @@ import {
   TargetIcon,
 } from '../common/icons';
 
+/** The rows that open, replace, relocate or close the project, or import into it:
+ *  none may run under an export being written (it exports THIS project's file
+ *  and preview), so they are disabled meanwhile, like the Close export row. */
+const PROJECT_LIFECYCLE_ROWS: ReadonlySet<string> = new Set([
+  'app-menu-new-project',
+  'global-open-project-button',
+  'project-menu-save-as',
+  'project-menu-save-and-close',
+  'global-import-menu-button',
+  'app-menu-import-from-mnemo',
+  'back-button',
+]);
+
 interface UseProjectMenuItemsArgs {
   /** The SingleSystemView-wrapped save (cancels autosave, then saves). */
   onSave: (opts?: { closeAfterSave?: boolean }) => Promise<{ success: boolean } | null | undefined>;
@@ -91,7 +104,7 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
       ui.revealDetailPanel();
     };
 
-    return [
+    const items: AppMenuItem[] = [
       ...leadingMenuItems(t, { onNewProject: handleNewProject }, 'hamburger'),
       { id: 'project-menu-sep-1', label: '', separator: true },
       {
@@ -211,5 +224,8 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
       },
       quitMenuItem(t),
     ];
+    if (!exportRunning) return items;
+    const busy = { disabled: true, title: t('exportPanel.inProgress') };
+    return items.map((item) => (PROJECT_LIFECYCLE_ROWS.has(item.id) ? { ...item, ...busy } : item));
   }, [t, openDialog, inExport, exportRunning, enterExport, closeExport, showDevStats, showMemoryStats, showMapStats, showZoomStats, toggleDisplay, onSave, saveFailed, handleNewProject, handleSaveProjectAs, handleCloseProject, speleoLink]);
 }
