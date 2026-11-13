@@ -791,7 +791,7 @@ impl Database {
                 }
             }
         }
-        Ok(Project {
+        let mut project = Project {
             name,
             location,
             created_at,
@@ -813,13 +813,18 @@ impl Database {
             surface_elevation,
             default_azimuth_reference,
             counter_parity_shots,
+            held_gauges: self.load_project_held_gauges(),
             cascade_deferred: false,
             section_index_cache,
             shot_uuid_index,
             // Nothing loaded from disk is a proven solver fixpoint; the load path
             // re-solves offsets from scratch anyway (`redrive_offsets_after_load`).
             realign_fixpoint: None,
-        })
+        };
+        // Only entries that still name a station: a dangling one (a file
+        // edited by hand) anchors nothing.
+        project.prune_held_gauges();
+        Ok(project)
     }
 
     /// Load loop closures from database
@@ -1388,6 +1393,35 @@ impl Database {
             }
             parsed
         }))
+    }
+
+    /// Load the stations a split, combine or delete-and-split held as their
+    /// component's least-squares gauge (`Project::held_gauges`), kept in
+    /// `project_settings` under `held_gauges` (no schema bump; readers that do
+    /// not know the key fall back to the lowest-id rule). A missing key reads
+    /// as none; an unparseable value too, with a warning: the gauge then falls
+    /// back to the lowest-id rule, which moves the adjusted view, never the
+    /// survey.
+    pub fn load_project_held_gauges(&self) -> Vec<crate::models::HeldGauge> {
+        let json: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM project_settings WHERE key = 'held_gauges'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .unwrap_or(None);
+        json.map(|s| {
+            serde_json::from_str(&s).unwrap_or_else(|e| {
+                tracing::warn!(
+                    error = %e,
+                    "stored held_gauges is present but unparseable; reading as none"
+                );
+                Vec::new()
+            })
+        })
+        .unwrap_or_default()
     }
 
     /// Load the shots whose record orientation runs against their section's

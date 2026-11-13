@@ -875,3 +875,137 @@ fn a_plain_split_previews_no_move() {
         state.split_section_preview(main, SplitAt::Station { station_index: 0 }, &options());
     assert!(refused.unwrap_err().contains("first or last station"));
 }
+
+/// Every station's closure-adjusted position, keyed by its measured position
+/// (rounded to a micrometre), which a delete-and-split keeps for every
+/// station it does not delete.
+fn adjusted_by_position(state: &AppState) -> std::collections::BTreeMap<(i64, i64), (f64, f64)> {
+    let project = state.get_project_state().unwrap();
+    project
+        .compute_adjusted_station_coordinates(&crate::config::ClosureAdjustmentConfig::default())
+        .into_iter()
+        .map(|s| {
+            let raw = project.compute_station_raw_coords(s.station_ref).unwrap();
+            let key = ((raw.x * 1e6).round() as i64, (raw.y * 1e6).round() as i64);
+            (key, (s.coordinates.x, s.coordinates.y))
+        })
+        .collect()
+}
+
+/// Delete-and-split has the same hazard as Split Section Here: the first half
+/// keeps the section's id and anchors the component, the gauge station goes
+/// to the second half, and the halves stay connected. S (five shots east,
+/// lowest id) has its gauge captured on its far end; X bypasses the deleted
+/// shot, merged at S's stations 1 and 4; W closes a loop onto S's station 4,
+/// 1 m short. Deleting S's middle shot and splitting must not move the
+/// closure-adjusted survey, in either delete path.
+#[test]
+fn a_delete_and_split_keeps_the_component_anchor() {
+    use crate::models::{LoopClosure, Project, SectionData, StationMerge};
+    for range in [false, true] {
+        let mut project = Project::new("Bypass".to_string(), None);
+        let add = |project: &mut Project, shots: Vec<ShotData>| {
+            project
+                .add_section(SectionData {
+                    shots,
+                    ..Default::default()
+                })
+                .id
+        };
+        let s = add(&mut project, (0..5).map(|_| flat(90.0, 10.0)).collect());
+        let x = add(
+            &mut project,
+            vec![flat(0.0, 10.0), flat(90.0, 30.0), flat(180.0, 10.0)],
+        );
+        let w = add(
+            &mut project,
+            vec![flat(0.0, 10.0), flat(270.0, 10.0), flat(180.0, 9.0)],
+        );
+        let raw = |project: &Project, at: StationRef| {
+            let c = project.compute_station_raw_coords(at).unwrap();
+            (c.x, c.y)
+        };
+        for (section, onto) in [(x, StationRef::new(s, 1)), (w, StationRef::new(s, 5))] {
+            let (to, now) = (
+                raw(&project, onto),
+                raw(&project, StationRef::new(section, 0)),
+            );
+            project.adjust_section_offset(section, to.0 - now.0, to.1 - now.1);
+            project
+                .merge_stations(onto, StationRef::new(section, 0))
+                .unwrap();
+        }
+        // The bypass closes exactly, so it is a second merge (a rigid loop the
+        // merge command would refuse, but a file can hold).
+        let (a, b) = (
+            project.key_for_ref(StationRef::new(x, 3)).unwrap(),
+            project.key_for_ref(StationRef::new(s, 4)).unwrap(),
+        );
+        project.record_station_merge(StationMerge {
+            station_a: a,
+            station_b: b,
+            merged_at: chrono::Utc::now(),
+        });
+        let (a, b) = (
+            project.key_for_ref(StationRef::new(w, 3)).unwrap(),
+            project.key_for_ref(StationRef::new(s, 4)).unwrap(),
+        );
+        project.loop_closures.push(LoopClosure {
+            id: 1,
+            station_a: a,
+            station_b: b,
+            path_length: 29.0,
+            misclosure_distance: 1.0,
+            error_percentage: 3.0,
+            horizontal_misclosure: 1.0,
+            vertical_misclosure: 0.0,
+            strategy: ClosureStrategy::LeastSquaresWeighted,
+            is_aligned: false,
+        });
+        project.next_closure_id = 2;
+        let section = project.get_section_mut(s).unwrap();
+        // The gauge on S's far end: the end of its last shot, facing away from
+        // the one before it.
+        section.gauge_shot_uuid = section.shots[4].uuid.clone();
+        section.gauge_neighbour_uuid = section.shots[3].uuid.clone();
+        let state = AppState::new().unwrap();
+        state.execute(Command::CreateProject {
+            name: "Bypass".to_string(),
+            location: None,
+        });
+        state.set_project_for_tests(project);
+        let before = adjusted_by_position(&state);
+
+        let result = if range {
+            state.execute_delete_shot_range_split(
+                s,
+                shot_id(&state, s, 2),
+                shot_id(&state, s, 2),
+                "A".to_string(),
+                "B".to_string(),
+            )
+        } else {
+            state.execute_delete_shot_and_split(
+                s,
+                shot_id(&state, s, 2),
+                "A".to_string(),
+                "B".to_string(),
+            )
+        };
+        assert!(result.success, "range {range}: {:?}", result.error);
+        let after = adjusted_by_position(&state);
+        assert_eq!(
+            before.keys().collect::<Vec<_>>(),
+            after.keys().collect::<Vec<_>>(),
+            "range {range}"
+        );
+        for (key, p) in &before {
+            let q = after[key];
+            assert!(
+                (p.0 - q.0).hypot(p.1 - q.1) < 1e-6,
+                "range {range}: the station measured at {key:?} moved {} m",
+                (p.0 - q.0).hypot(p.1 - q.1)
+            );
+        }
+    }
+}

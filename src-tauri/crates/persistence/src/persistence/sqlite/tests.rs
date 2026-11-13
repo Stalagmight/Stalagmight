@@ -8924,3 +8924,68 @@ fn a_counter_parity_entry_for_a_shot_the_file_does_not_hold_is_dropped() {
         std::collections::BTreeSet::from([uuid])
     );
 }
+
+/// Held component gauges (`Project::held_gauges`) round-trip; a stored entry
+/// whose shot the file does not hold is dropped at load, and a missing or
+/// malformed setting reads as none.
+#[test]
+fn held_gauges_round_trip_and_a_stale_or_malformed_setting_reads_as_none() {
+    let temp = TempDir::new().unwrap();
+    let mut db = Database::open(&temp.path().join("held.stalx")).unwrap();
+    let mut project = Project::new("Held".to_string(), None);
+    let id = project
+        .add_section(SectionData {
+            shots: vec![
+                ShotData {
+                    length: 5.0,
+                    ..Default::default()
+                },
+                ShotData {
+                    length: 6.0,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        })
+        .id;
+    let shots = &project.get_section(id).unwrap().shots;
+    let held = crate::models::HeldGauge {
+        shot: shots[1].uuid.clone().unwrap(),
+        neighbour: shots[0].uuid.clone(),
+        end: true,
+        parity: false,
+    };
+    let stale = crate::models::HeldGauge {
+        shot: "00000000-0000-4000-8000-000000000000".to_string(),
+        ..held.clone()
+    };
+    project.held_gauges = vec![held.clone(), stale.clone()];
+    db.save_project(&project).unwrap();
+    assert_eq!(
+        db.load_project().unwrap().held_gauges,
+        vec![held.clone()],
+        "the save writes only entries that name a station"
+    );
+
+    db.conn
+        .execute(
+            "UPDATE project_settings SET value = ?1 WHERE key = 'held_gauges'",
+            [serde_json::to_string(&[&stale, &held]).unwrap()],
+        )
+        .unwrap();
+    assert_eq!(db.load_project().unwrap().held_gauges, vec![held]);
+
+    for raw in ["not json", "{\"a\": 1}", "[1]"] {
+        db.conn
+            .execute(
+                "UPDATE project_settings SET value = ?1 WHERE key = 'held_gauges'",
+                [raw],
+            )
+            .unwrap();
+        assert!(db.load_project().unwrap().held_gauges.is_empty(), "{raw:?}");
+    }
+    db.conn
+        .execute("DELETE FROM project_settings WHERE key = 'held_gauges'", [])
+        .unwrap();
+    assert!(db.load_project().unwrap().held_gauges.is_empty());
+}

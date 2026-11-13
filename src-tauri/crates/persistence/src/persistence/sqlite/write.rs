@@ -453,6 +453,23 @@ impl Database {
             )?;
         }
 
+        // Stations a split, combine or delete-and-split held as their
+        // component's least-squares gauge (`Project::held_gauges`), same
+        // table. Only the ones that still name a station; absent when none.
+        let held_gauges: Vec<&crate::models::HeldGauge> = project
+            .held_gauges
+            .iter()
+            .filter(|held| project.held_gauge_resolves(held))
+            .collect();
+        if held_gauges.is_empty() {
+            tx.execute("DELETE FROM project_settings WHERE key = 'held_gauges'", [])?;
+        } else {
+            tx.execute(
+                "INSERT OR REPLACE INTO project_settings (key, value) VALUES ('held_gauges', ?1)",
+                params![serde_json::to_string(&held_gauges)?],
+            )?;
+        }
+
         tx.commit()?;
         tracing::debug!("Transaction committed");
 

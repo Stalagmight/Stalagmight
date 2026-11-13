@@ -1363,3 +1363,158 @@ fn a_split_at_a_junction_reports_the_branch_not_a_loop() {
         }
     }
 }
+
+/// O (lowest id) -> K (highest id) end to end; a third section T (middle id)
+/// hangs off K's far end and closes a loop back onto K with a real
+/// misclosure. The component's gauge is O's, the lowest id. Keep K: after the
+/// combine O is gone, the lowest id in the component is T, which does not hold
+/// the station the adjustment held, and the adjusted geometry must not move.
+#[test]
+fn combine_keeps_the_component_anchor_with_a_third_section() {
+    let mut project = Project::new("Probe".to_string(), None);
+    let o = add(&mut project, "O", vec![shot(90.0, 10.0)]);
+    let t = add(
+        &mut project,
+        "T",
+        vec![shot(0.0, 10.0), shot(270.0, 10.0), shot(180.0, 9.0)],
+    );
+    let k = add(&mut project, "K", vec![shot(90.0, 10.0), shot(90.0, 10.0)]);
+    assert!(o < t && t < k, "ids {o} {t} {k}");
+    let target = xy(&project, StationRef::new(o, 1));
+    place(&mut project, k, 0, target, 0.0);
+    project
+        .merge_stations(StationRef::new(o, 1), StationRef::new(k, 0))
+        .unwrap();
+    let k_end = xy(&project, StationRef::new(k, 2));
+    place(&mut project, t, 0, k_end, 0.0);
+    project
+        .merge_stations(StationRef::new(k, 2), StationRef::new(t, 0))
+        .unwrap();
+    let (a, b) = (
+        project.key_for_ref(StationRef::new(t, 3)).unwrap(),
+        project.key_for_ref(StationRef::new(k, 1)).unwrap(),
+    );
+    let id = project.next_closure_id;
+    project.next_closure_id += 1;
+    project.loop_closures.push(LoopClosure {
+        id,
+        station_a: a,
+        station_b: b,
+        path_length: 30.0,
+        misclosure_distance: 1.0,
+        error_percentage: 3.0,
+        horizontal_misclosure: 1.0,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::LeastSquaresWeighted,
+        is_aligned: false,
+    });
+    assert_eq!(
+        project
+            .combine_candidate_for_sections(k, o)
+            .unwrap()
+            .blocked_reason,
+        None
+    );
+    let anchor_before = project.adjustment_anchor_for_tests(k).unwrap();
+    let before: Vec<_> = (0..=3)
+        .map(|i| adjusted_xy(&project, StationRef::new(t, i)))
+        .collect();
+
+    project.combine_sections(k, o, &options()).unwrap();
+
+    let anchor_after = project.adjustment_anchor_for_tests(k).unwrap();
+    let after: Vec<_> = (0..=3)
+        .map(|i| adjusted_xy(&project, StationRef::new(t, i)))
+        .collect();
+    let worst = before
+        .iter()
+        .zip(&after)
+        .map(|(p, q)| dist(*p, *q))
+        .fold(0.0, f64::max);
+    assert!(
+        worst < 0.001,
+        "anchor {anchor_before:?} -> {anchor_after:?}: the adjusted geometry moved {worst:.4} m"
+    );
+}
+
+/// S (lowest id, reverse parity, so its gauge is its far end) is split at
+/// station 2; a section X merged at the cut station keeps the halves in one
+/// component and closes a loop onto S's far end. The first half keeps S's id
+/// and anchors the component, while the station the adjustment held went to
+/// the second half. The adjusted geometry must not move.
+#[test]
+fn split_keeps_the_component_anchor() {
+    let mut project = Project::new("Probe".to_string(), None);
+    let s = add(
+        &mut project,
+        "S",
+        vec![
+            shot(90.0, 10.0),
+            shot(90.0, 10.0),
+            shot(90.0, 10.0),
+            shot(90.0, 10.0),
+        ],
+    );
+    let x = add(
+        &mut project,
+        "X",
+        vec![shot(0.0, 10.0), shot(90.0, 20.0), shot(180.0, 9.0)],
+    );
+    project
+        .sections
+        .iter_mut()
+        .find(|sec| sec.id == s)
+        .unwrap()
+        .reverse_parity = true;
+    let cut = xy(&project, StationRef::new(s, 2));
+    place(&mut project, x, 0, cut, 0.0);
+    project
+        .merge_stations(StationRef::new(s, 2), StationRef::new(x, 0))
+        .unwrap();
+    let (a, b) = (
+        project.key_for_ref(StationRef::new(x, 3)).unwrap(),
+        project.key_for_ref(StationRef::new(s, 4)).unwrap(),
+    );
+    let id = project.next_closure_id;
+    project.next_closure_id += 1;
+    project.loop_closures.push(LoopClosure {
+        id,
+        station_a: a,
+        station_b: b,
+        path_length: 39.0,
+        misclosure_distance: 1.0,
+        error_percentage: 2.5,
+        horizontal_misclosure: 1.0,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::LeastSquaresWeighted,
+        is_aligned: false,
+    });
+    let anchor_before = project.adjustment_anchor_for_tests(s).unwrap();
+    let before: Vec<_> = (0..=3)
+        .map(|i| adjusted_xy(&project, StationRef::new(x, i)))
+        .collect();
+
+    let opts = SplitSectionOptions {
+        name_a: "S-A".to_string(),
+        name_b: "S-B".to_string(),
+        color_a: "#111111".to_string(),
+        color_b: "#222222".to_string(),
+        comment_side: SplitSide::A,
+        datum_side: SplitSide::A,
+    };
+    project.split_section_at_station(s, 2, &opts).unwrap();
+
+    let anchor_after = project.adjustment_anchor_for_tests(s).unwrap();
+    let after: Vec<_> = (0..=3)
+        .map(|i| adjusted_xy(&project, StationRef::new(x, i)))
+        .collect();
+    let worst = before
+        .iter()
+        .zip(&after)
+        .map(|(p, q)| dist(*p, *q))
+        .fold(0.0, f64::max);
+    assert!(
+        worst < 0.001,
+        "anchor {anchor_before:?} -> {anchor_after:?}: the adjusted geometry moved {worst:.4} m"
+    );
+}

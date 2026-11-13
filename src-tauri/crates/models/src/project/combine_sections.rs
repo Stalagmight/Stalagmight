@@ -86,6 +86,8 @@ impl Project {
         let candidate = self
             .combine_candidate_for_sections(kept, other)
             .ok_or_else(|| format!("Sections {kept} and {other} cannot be combined"))?;
+        // Before anything moves, including the reverse below.
+        let component_gauges = self.hold_component_gauges(&[kept, other]);
         let (kept_end, other_end) = if candidate.section_a == kept {
             (candidate.end_a, candidate.end_b)
         } else {
@@ -106,8 +108,9 @@ impl Project {
         let other_shots: Vec<ShotData> = o.shots.iter().map(Shot::to_shot_data).collect();
         let parity_flip = k.reverse_parity != o.reverse_parity;
         let reference = self.azimuth_reference_for(k);
-        // The gauge the component used is the lower section id's (the rule in
-        // `default_anchor_for_component`); keep that physical station.
+        // The kept section's own gauge: the lower section id's, which is the
+        // one the pair's component used when neither is held elsewhere.
+        // `restore_component_gauges` below settles the component's anchor.
         let source = if kept < other { k } else { o };
         let gauge = Self::gauge_index(source) as u32;
         let gauge = match (source.id == kept, append) {
@@ -181,6 +184,11 @@ impl Project {
                 }
             }
         }
+        // The component's lowest id may now be a third section's (the other
+        // section's id is retired): hold the component at the station the
+        // adjustment held before. After the parity toggle, which a held
+        // station named by one shot reads.
+        self.restore_component_gauges(&component_gauges);
         if cfg!(debug_assertions) {
             self.for_each_station_ref(|label, key| {
                 debug_assert!(

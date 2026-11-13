@@ -140,6 +140,8 @@ impl AppState {
             // section's single-neighbour plan pins and gauge fallback land one
             // station off in it.
             let orientation = project.cut_orientation(section_id);
+            // The component's least-squares anchor, kept on its station below.
+            let component_gauges = project.hold_component_gauges(&[section_id]);
             let resolved_reference = project.azimuth_reference_for_id(section_id);
 
             // Stable-identity remap snapshot: resolve every stored cross-reference
@@ -266,6 +268,11 @@ impl AppState {
             // The split can strand a section so its only attachment is a loop
             // closure - that is a merge, not a loop. Convert it now (issue #8)
             // so it's fixed immediately, not only on the next reload.
+            // Once every cross-reference names its new section (components are
+            // read off them), hold each component at the station the
+            // adjustment held before; before the orphan sweep, which only
+            // turns a closure edge into a merge edge.
+            project.restore_component_gauges(&component_gauges);
             project.convert_orphan_closures_to_merges();
 
             project.touch();
@@ -419,6 +426,8 @@ impl AppState {
             let azimuth_reference = section.azimuth_reference;
             // And the same reverse parity and gauge station; see the single-shot path.
             let orientation = project.cut_orientation(section_id);
+            // The component's least-squares anchor, kept on its station below.
+            let component_gauges = project.hold_component_gauges(&[section_id]);
 
             // Frozen-geometry guard (mirrors delete_shot).
             for &sid in &range_shot_ids {
@@ -540,6 +549,11 @@ impl AppState {
                  than were captured in old_refs - traversal order diverged"
             );
 
+            // Once every cross-reference names its new section (components are
+            // read off them), hold each component at the station the
+            // adjustment held before; before the orphan sweep, which only
+            // turns a closure edge into a merge edge.
+            project.restore_component_gauges(&component_gauges);
             project.convert_orphan_closures_to_merges();
             project.touch();
             new_id

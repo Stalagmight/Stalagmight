@@ -7,8 +7,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::models::{
-    gps_to_local, GpsCoordinates, LoopClosure, Project, SectionId, ShotUuidRemap, StationKey,
-    StationMerge, StationRef,
+    gps_to_local, GpsCoordinates, HeldGauge, LoopClosure, Project, SectionId, ShotUuidRemap,
+    StationKey, StationMerge, StationRef,
 };
 
 /// What [`append_project`] did beyond the copy itself.
@@ -229,6 +229,30 @@ fn carry_shot_identity(
         } else {
             target.counter_parity_shots.remove(&uuid);
         }
+    }
+    // The source's held gauges (`Project::held_gauges`) keep its components'
+    // adjustment on the same stations in the copy, through the copy's uuids.
+    for held in &source.held_gauges {
+        let Some(from) = source.sections.iter().find(|s| {
+            s.shots
+                .iter()
+                .any(|shot| shot.uuid.as_deref() == Some(&held.shot))
+        }) else {
+            continue;
+        };
+        let Some(&to) = section_id_map.get(&from.id) else {
+            continue;
+        };
+        let carry = |uuid: &str| {
+            renamed
+                .get(to, uuid)
+                .map_or_else(|| uuid.to_string(), str::to_string)
+        };
+        target.held_gauges.push(HeldGauge {
+            shot: carry(&held.shot),
+            neighbour: held.neighbour.as_deref().map(carry),
+            ..held.clone()
+        });
     }
     renamed
 }

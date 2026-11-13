@@ -7,10 +7,67 @@
 //! that names a different station, or none, and the adjusted component would
 //! translate by the adjustment residual. [`gauge_pair_for_station`] is the
 //! inverse of `gauge_index`: the pair that names a given station.
+//!
+//! A section's own gauge is not the whole story. A datum-less component is
+//! held fixed at the gauge station of its LOWEST-ID section
+//! (`default_anchor_for_component`), and these edits change which sections a
+//! component holds: a combine retires a section id, a split or a
+//! delete-and-split mints one. So every such edit brackets itself with
+//! [`Project::hold_component_gauges`] and [`Project::restore_component_gauges`],
+//! which record the physical station each touched component was held at and
+//! put it back on the section that anchors the component afterwards. When
+//! that section does not hold the station (a third section with an id
+//! between the two combined ones, or a split whose anchor station went to the
+//! new half while the halves stay connected), the station is recorded in
+//! [`Project::held_gauges`] instead, which `default_anchor_for_component`
+//! reads before the lowest-id rule.
 
-use crate::{Section, SectionId};
+use std::collections::HashSet;
+
+use serde::{Deserialize, Serialize};
+
+use crate::{Section, SectionId, StationRef};
 
 use super::Project;
+
+/// A station named by the shots it touches, in whichever section holds them
+/// (shot uuids are project-unique): the least-squares gauge an edit kept for a
+/// component whose anchoring section does not hold it (see the module doc and
+/// [`Project::held_gauges`]).
+///
+/// The same naming as a section's gauge pair, made section-free: with
+/// `neighbour` in the same section the station is the end of `shot` facing
+/// away from it, which a reverse carries intact; without it, `end` says which
+/// end of `shot` (its start or its end) as the record stood when `parity` (the
+/// shot's record parity, [`Project::shot_record_parity`]) was read, and a
+/// reverse of the record since flips it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeldGauge {
+    pub shot: String,
+    #[serde(default)]
+    pub neighbour: Option<String>,
+    pub end: bool,
+    pub parity: bool,
+}
+
+/// The stations an edit's touched components were held at, recorded before
+/// the edit by [`Project::hold_component_gauges`].
+#[derive(Debug, Clone, Default)]
+pub struct ComponentGauges {
+    /// One per touched component, in the order of the component's lowest
+    /// section id (so when an edit joins two, the one the lowest-id rule would
+    /// have picked is restored first and keeps the joined component).
+    held: Vec<HeldStation>,
+}
+
+#[derive(Debug, Clone)]
+enum HeldStation {
+    /// Named by its shots: the station may move to another section or index.
+    Shots(HeldGauge),
+    /// A shot-less section's single station, in a section the edit does not
+    /// change: its reference survives as is.
+    Untouched(StationRef),
+}
 
 /// A section's recorded gauge pair: `(gauge_shot_uuid, gauge_neighbour_uuid)`.
 pub(super) type GaugePair = (Option<String>, Option<String>);
@@ -76,6 +133,182 @@ pub struct CutOrientation {
 }
 
 impl Project {
+    /// Name station `at` by its shots ([`HeldGauge`]); `None` when it has no
+    /// shot, or a shot without a uuid.
+    pub(crate) fn held_gauge_at(&self, at: StationRef) -> Option<HeldGauge> {
+        let section = self.get_section(at.section_id)?;
+        let (n, i) = (section.shots.len(), at.station_index as usize);
+        if n == 0 || i > n {
+            return None;
+        }
+        let uuid = |i: usize| section.shots.get(i).and_then(|s| s.uuid.clone());
+        // The station is the start of `shots[i]`, or the end of `shots[i - 1]`.
+        let (shot, end, neighbour) = if i + 1 < n {
+            (uuid(i)?, false, uuid(i + 1))
+        } else if i >= 2 {
+            (uuid(i - 1)?, true, uuid(i - 2))
+        } else if i < n {
+            (uuid(i)?, false, None)
+        } else {
+            (uuid(i - 1)?, true, None)
+        };
+        let parity = self.shot_record_parity(section, Some(&shot));
+        Some(HeldGauge {
+            shot,
+            neighbour,
+            end,
+            parity,
+        })
+    }
+
+    /// Where `held` names a station now; `None` when its shot is gone.
+    pub(crate) fn resolve_held_gauge(&self, held: &HeldGauge) -> Option<StationRef> {
+        let position = |section: &Section, uuid: &str| {
+            section
+                .shots
+                .iter()
+                .position(|s| s.uuid.as_deref() == Some(uuid))
+        };
+        let (section, px) = self
+            .sections
+            .iter()
+            .find_map(|s| position(s, &held.shot).map(|px| (s, px)))?;
+        let index = match held.neighbour.as_deref().and_then(|n| position(section, n)) {
+            Some(py) if py < px => px + 1,
+            Some(_) => px,
+            None => {
+                // A reverse of the record since flips which end `end` names.
+                let flipped = held.parity != self.shot_record_parity(section, Some(&held.shot));
+                if held.end ^ flipped {
+                    px + 1
+                } else {
+                    px
+                }
+            }
+        };
+        Some(StationRef::new(section.id, index as u32))
+    }
+
+    /// Whether `held` still names a station (its shot is in the project).
+    pub fn held_gauge_resolves(&self, held: &HeldGauge) -> bool {
+        self.resolve_held_gauge(held).is_some()
+    }
+
+    /// Drop every held gauge that no longer names a station (its shot is
+    /// gone). Run on load (the save writes only the ones that resolve): a
+    /// dangling entry anchors nothing.
+    pub fn prune_held_gauges(&mut self) {
+        let keep: Vec<bool> = self
+            .held_gauges
+            .iter()
+            .map(|held| self.resolve_held_gauge(held).is_some())
+            .collect();
+        let mut keep = keep.into_iter();
+        self.held_gauges.retain(|_| keep.next().unwrap_or(false));
+    }
+
+    /// Record, before an edit that changes `sections`, the station each of
+    /// their components is held at by the least-squares adjustment when it
+    /// has no zero datum (`default_anchor_for_component`). Pair it with
+    /// [`Self::restore_component_gauges`] once the edit is done.
+    ///
+    /// Recorded whether or not the component has a datum or a closure today:
+    /// the edit should not change which station a later adjustment holds
+    /// either. A station that cannot be named by its shots (a shot without a
+    /// uuid) in a section the edit changes is not recorded, and its component
+    /// falls back to the lowest-id rule.
+    pub fn hold_component_gauges(&self, sections: &[SectionId]) -> ComponentGauges {
+        let mut components: Vec<(SectionId, HashSet<SectionId>)> = Vec::new();
+        for &id in sections {
+            if self.get_section(id).is_none() || components.iter().any(|(_, c)| c.contains(&id)) {
+                continue;
+            }
+            let component = self.get_connected_section_ids(id);
+            let lowest = component.iter().copied().min().unwrap_or(id);
+            components.push((lowest, component));
+        }
+        components.sort_by_key(|(lowest, _)| *lowest);
+        let held = components
+            .iter()
+            .filter_map(|(_, component)| {
+                let at = self.default_anchor_for_component(component)?;
+                match self.held_gauge_at(at) {
+                    Some(held) => Some(HeldStation::Shots(held)),
+                    None if !sections.contains(&at.section_id) => Some(HeldStation::Untouched(at)),
+                    None => {
+                        tracing::warn!(
+                            ?at,
+                            "the gauge station cannot be named by its shots; its component \
+                             falls back to the lowest-id rule after this edit"
+                        );
+                        None
+                    }
+                }
+            })
+            .collect();
+        ComponentGauges { held }
+    }
+
+    /// After the edit [`Self::hold_component_gauges`] recorded `before` for:
+    /// hold every component that still contains one of the recorded stations
+    /// at that station. The section that now anchors the component (its
+    /// lowest id) gets its gauge put on the station when it holds it;
+    /// otherwise, or when no gauge pair can name the station there, the
+    /// station is recorded in [`Self::held_gauges`]. Any held gauge the
+    /// component had before is replaced.
+    ///
+    /// A recorded station the edit deleted (a delete-and-split of the shots
+    /// around it) holds nothing: its component falls back to the lowest-id
+    /// rule. When an edit joined two recorded components into one, the first
+    /// (the one with the lower lowest id, which the lowest-id rule would have
+    /// picked had they been joined all along) keeps the joined component.
+    pub fn restore_component_gauges(&mut self, before: &ComponentGauges) {
+        let mut claimed: Vec<HashSet<SectionId>> = Vec::new();
+        for held in &before.held {
+            let at = match held {
+                HeldStation::Shots(held) => self.resolve_held_gauge(held),
+                HeldStation::Untouched(at) => Some(*at),
+            };
+            let Some(at) = at else {
+                tracing::warn!(
+                    "the edit removed its component's gauge station; the component falls back \
+                     to the lowest-id rule"
+                );
+                continue;
+            };
+            if claimed.iter().any(|c| c.contains(&at.section_id)) {
+                continue;
+            }
+            let component = self.get_connected_section_ids(at.section_id);
+            let stale: Vec<bool> = self
+                .held_gauges
+                .iter()
+                .map(|g| {
+                    self.resolve_held_gauge(g)
+                        .is_some_and(|r| component.contains(&r.section_id))
+                })
+                .collect();
+            let mut stale = stale.into_iter();
+            self.held_gauges.retain(|_| !stale.next().unwrap_or(false));
+            let lowest = component.iter().copied().min().unwrap_or(at.section_id);
+            if at.section_id == lowest {
+                self.keep_gauge_on_station(lowest, at.station_index as usize, None);
+            }
+            if self.default_anchor_for_component(&component) != Some(at) {
+                if let Some(held) = self.held_gauge_at(at) {
+                    self.held_gauges.push(held);
+                } else {
+                    tracing::warn!(
+                        ?at,
+                        "the gauge station cannot be named by its shots; its component falls \
+                         back to the lowest-id rule"
+                    );
+                }
+            }
+            claimed.push(component);
+        }
+    }
+
     /// See [`CutOrientation`]; `None` when the section does not exist.
     pub fn cut_orientation(&self, section_id: SectionId) -> Option<CutOrientation> {
         let section = self.get_section(section_id)?;

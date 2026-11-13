@@ -496,3 +496,101 @@ fn the_record_parity_of_the_other_sections_shots_survives_a_save() {
         "the undo puts the orientation back with the shots"
     );
 }
+
+/// Every station's closure-adjusted position, keyed by its measured position
+/// (rounded to a micrometre), which a combine keeps for every station.
+fn adjusted_by_position(state: &AppState) -> std::collections::BTreeMap<(i64, i64), (f64, f64)> {
+    let project = state.get_project_state().unwrap();
+    project
+        .compute_adjusted_station_coordinates(&crate::config::ClosureAdjustmentConfig::default())
+        .into_iter()
+        .map(|s| {
+            let raw = project.compute_station_raw_coords(s.station_ref).unwrap();
+            let key = ((raw.x * 1e6).round() as i64, (raw.y * 1e6).round() as i64);
+            (key, (s.coordinates.x, s.coordinates.y))
+        })
+        .collect()
+}
+
+fn assert_same_adjusted(
+    a: &std::collections::BTreeMap<(i64, i64), (f64, f64)>,
+    b: &std::collections::BTreeMap<(i64, i64), (f64, f64)>,
+    what: &str,
+) {
+    assert_eq!(
+        a.keys().collect::<Vec<_>>(),
+        b.keys().collect::<Vec<_>>(),
+        "{what}"
+    );
+    for (key, p) in a {
+        let q = b[key];
+        assert!(
+            (p.0 - q.0).hypot(p.1 - q.1) < 1e-6,
+            "{what}: the station measured at {key:?} moved"
+        );
+    }
+}
+
+/// The station the adjustment holds a component at, kept by a combine whose
+/// component is anchored afterwards by a third section that does not hold it
+/// (O lowest, T between, keep K): recorded as a held gauge, it holds through
+/// the undo and redo, a save and a reopen.
+#[test]
+fn a_held_component_gauge_survives_undo_redo_and_a_reopen() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let path = temp.path().join("held.stalx");
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Held".to_string(),
+        location: None,
+    });
+    let o = create(&state, "O", vec![shot(90.0, 10.0)]);
+    let t = create(
+        &state,
+        "T",
+        vec![shot(0.0, 10.0), shot(270.0, 10.0), shot(180.0, 9.0)],
+    );
+    let k = create(&state, "K", vec![shot(90.0, 10.0), shot(90.0, 10.0)]);
+    assert!(o < t && t < k);
+    for (a, b) in [
+        (StationRef::new(o, 1), StationRef::new(k, 0)),
+        (StationRef::new(k, 2), StationRef::new(t, 0)),
+    ] {
+        let merged = state.execute(Command::MergeStations {
+            station_a: a,
+            station_b: b,
+        });
+        assert!(merged.success, "{:?}", merged.error);
+    }
+    let closed = state.execute(Command::CreateLoopClosure {
+        station_a: StationRef::new(t, 3),
+        station_b: StationRef::new(k, 1),
+        closure_strategy: crate::models::ClosureStrategy::LeastSquaresWeighted,
+    });
+    assert!(closed.success, "{:?}", closed.error);
+    assert!(
+        state
+            .execute(Command::SaveProject {
+                path: Some(path.clone())
+            })
+            .success
+    );
+    let before = adjusted_by_position(&state);
+
+    assert!(state.execute_combine_sections(k, o, options()).success);
+    let after = adjusted_by_position(&state);
+    assert_same_adjusted(&before, &after, "combine");
+    assert_eq!(state.get_project_state().unwrap().held_gauges.len(), 1);
+
+    assert!(state.undo().success);
+    assert_same_adjusted(&before, &adjusted_by_position(&state), "undo");
+    assert!(state.get_project_state().unwrap().held_gauges.is_empty());
+    assert!(state.redo().success);
+    assert_same_adjusted(&after, &adjusted_by_position(&state), "redo");
+
+    assert!(state.execute(Command::SaveProject { path: None }).success);
+    assert!(state.execute(Command::CloseProject).success);
+    assert!(state.open_project(path).success, "reopen");
+    assert_eq!(state.get_project_state().unwrap().held_gauges.len(), 1);
+    assert_same_adjusted(&after, &adjusted_by_position(&state), "reopen");
+}

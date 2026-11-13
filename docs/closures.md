@@ -132,6 +132,12 @@ moving a group onto it would invent geometry.
 
 ## Closures across a Split Section Here or a Combine Sections
 
+None of these edits moves the closure-adjusted survey of a component they keep
+in one piece: the station the adjustment held the component at stays the one it
+holds, even when the section that anchors the component afterwards (its lowest
+id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-sections.md,
+"The component's anchor").
+
 - **Split Section Here** leaves a closure on the split station with the FIRST
   half only; it is not copied to the second half's co-located start. A copy
   would count the same physical loop twice, and when it is the second half's

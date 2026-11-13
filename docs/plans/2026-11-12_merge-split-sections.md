@@ -72,8 +72,10 @@ station menu, the Sections panel and the command always agree.
 4. Re-key every stored reference by its STORED key (`project/station_rekey.rs`,
    shared with split), with a per-collection injectivity check. Drop closures
    the combine made identical.
-5. Keep the gauge on the physical station of the lower section id, which is the
-   gauge the component used (`project/gauge.rs::gauge_pair_for_station`).
+5. Keep the kept section's own gauge on the physical station of the lower
+   section id's (`project/gauge.rs::gauge_pair_for_station`), and the
+   component's least-squares anchor on the station it was held at (see "The
+   component's anchor" below).
 6. Retire the other id (see dive plans below).
 
 ## Deviations from #710 / #709, and why
@@ -93,10 +95,9 @@ station menu, the Sections panel and the command always agree.
   separates, which moved the gauge to the index fallback. Now the half that
   holds the gauge station keeps or re-captures a pair naming it. A captured
   gauge stays captured; an uncaptured one is captured only when the fallback
-  would name a different station. One case stays: if the gauge station lands
-  in the higher-id half and both halves stay in one component, the component
-  uses the first half's gauge, because the gauge is defined by the lowest
-  section id.
+  would name a different station. The component's anchor is kept too, even
+  when the gauge station lands in the higher-id half while both halves stay in
+  one component (see "The component's anchor" below).
 - **`section_budget_refusal` is shared.** Split reuses it instead of a copy, and
   its message now reads for any split path. Combine mints no section, so its
   budget check is the per-section SHOT budget instead.
@@ -142,6 +143,61 @@ Kept on purpose:
   tolerance as the co-location test.
 - **A torn merged join (more than 1 mm apart) is blocked.** #713 joins merged
   ends however far apart they are drawn, which moves the other section by the gap.
+
+## The component's anchor
+
+A datum-less component is held fixed in the least-squares adjustment at the
+gauge station of its LOWEST-ID section (`default_anchor_for_component`). These
+edits change the component's sections: a combine retires the other section's
+id, a split or delete-and-split mints one. Keeping each section's own gauge on
+its station is not enough. Two shapes moved the closure-adjusted survey:
+
+- Combine with a third section whose id lies between the two (O lowest, T,
+  then K; keep K, or K lowest and keep O): O's id is retired, T anchors, and T
+  does not hold the station O did.
+- Split or delete-and-split whose gauge station goes to the new (higher-id)
+  half while the halves stay one component: the first half keeps the id and
+  anchors, and it no longer holds the station.
+
+Each edit brackets itself with `Project::hold_component_gauges` (before: the
+physical station each touched component is held at, named by its shots) and
+`restore_component_gauges` (after). For every component that still holds one
+of those stations, the station goes back on the gauge of the section that
+anchors it (its lowest id), when that section holds it. When it does not, or
+no gauge pair can name the station there, the station is recorded in
+`Project::held_gauges`, which `default_anchor_for_component` reads before the
+lowest-id rule.
+
+Why a record, and not ids: the alternatives were to give the combined section
+the lower of the two ids, and to let the split half that holds the station keep
+the section's id. Both change station labels (`5:3`) the user reads, depending
+on a gauge they cannot see. A held gauge names its station by shot uuids, so it
+follows the station through later reverses, splits and combines; it is part of
+the project (undo snapshots carry it), persisted in `project_settings` (no
+schema bump), pruned to entries that still name a station on save and load,
+and carried with renamed uuids by Add .stalx and Merge projects. An older build
+ignores it and uses the lowest-id rule, which only moves the adjusted view.
+
+Recorded whether or not the component has a closure or a datum today, so a
+later adjustment holds the same station either way.
+
+Residuals:
+- A delete-and-split that deletes the anchor station itself (it was between
+  the two halves) has nothing to hold: the component falls back to the
+  lowest-id rule.
+- When an edit joins two components (a combine at co-located, unmerged ends),
+  the joined one keeps the station of the one whose lowest id was lower; the
+  other's adjustment was a separate solve and changes with the join anyway.
+- A station whose shots have no uuid (a pre-v6 file before its first save)
+  cannot be named and falls back to the lowest-id rule.
+
+Tests: the two shapes from the #716 review, a matrix over every pairing,
+parity, creation order (so every section can be the anchor), kept side and
+captured or uncaptured gauge for combine (384 cases), every cut, gauge station,
+orientation and creation order for split (72 cases), the delete-and-split
+analogue in both paths, and undo, redo and a reopen through `AppState`. All
+compare the closure-adjusted position of every station, matched by measured
+position, before and after.
 
 ## Dive-plan pins
 

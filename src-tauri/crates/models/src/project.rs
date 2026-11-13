@@ -65,6 +65,13 @@ mod combine_sections_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    clippy::panic,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod component_gauge_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
     clippy::float_cmp,
     reason = "test module: panics on a failed assumption are the point"
 )]
@@ -76,6 +83,7 @@ pub use gas::{
     CylRole, Cylinder, Diver, GasReachField, PlanMode, PlanSegment, RouteLeg, RouteProfilePoint,
     TankMaterial, Team,
 };
+pub use gauge::HeldGauge;
 pub use integrity::{IntegrityViolation, ViolationSeverity};
 pub use merge_topology::MergeTopology;
 pub use reverse::{reverse_shots, shot_run_displacement};
@@ -383,6 +391,22 @@ pub struct Project {
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     #[ts(skip)]
     pub counter_parity_shots: BTreeSet<String>,
+
+    /// Stations that hold their component fixed in the least-squares
+    /// adjustment in place of the lowest-id section's gauge station
+    /// (`default_anchor_for_component` reads them first, in order): a Split
+    /// Section Here, Combine Sections or delete-and-split kept a component's
+    /// gauge on its physical station, and the section that anchors the
+    /// component afterwards does not hold that station (see `project/gauge.rs`).
+    /// Named by shot uuids, so they follow their shots through later edits.
+    ///
+    /// Part of the project, so every undo snapshot carries it. Persisted in
+    /// `project_settings` (no schema bump), pruned to the entries that still
+    /// name a station on save and on load; omitted from serde when empty. An
+    /// older build ignores it and falls back to the lowest-id rule.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(skip)]
+    pub held_gauges: Vec<HeldGauge>,
 
     /// Transient flag (NOT persisted) - when true,
     /// [`Self::cascade_connection_offsets`] returns immediately. Used by
@@ -753,6 +777,7 @@ impl Project {
             surface_elevation: None,
             default_azimuth_reference: None,
             counter_parity_shots: BTreeSet::new(),
+            held_gauges: Vec::new(),
             cascade_deferred: false,
             section_index_cache: HashMap::new(),
             shot_uuid_index: HashMap::new(),

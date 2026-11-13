@@ -29,7 +29,9 @@
 //! least-squares gauge stays on the same physical station: the half that holds
 //! it gets a pair naming it (`keep_gauge_on_station`), re-captured when the
 //! cut took the old pair's neighbour shot. A split ON the gauge station pins
-//! both copies.
+//! both copies. The component's anchor (its lowest id's gauge) is kept on its
+//! station too, even when it went to the second half while the halves stay
+//! connected (`hold_component_gauges`, `project/gauge.rs`).
 //!
 //! Credit: survey credit (surveyors, explorers, date) lives on every shot, so
 //! each shot keeps its own exactly; the second half is built with no legacy
@@ -74,6 +76,7 @@ impl Project {
         let quality = section.quality;
         let azimuth_reference = section.azimuth_reference;
         let orientation = self.cut_orientation(section_id);
+        let component_gauges = self.hold_component_gauges(&[section_id]);
         let tail: Vec<ShotData> = section.shots[k..].iter().map(Shot::to_shot_data).collect();
 
         // The second half starts where the first ends: walk the first k shots
@@ -140,6 +143,10 @@ impl Project {
         if let Some(orientation) = &orientation {
             self.settle_cut_halves(section_id, second_id, orientation, k, k);
         }
+        // The halves may stay one component (merges on the split station go
+        // to both), anchored by the first half, while the station the
+        // adjustment held went to the second: hold it there.
+        self.restore_component_gauges(&component_gauges);
         Ok(second_id)
     }
 

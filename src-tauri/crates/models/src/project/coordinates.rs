@@ -346,7 +346,23 @@ impl Project {
     ///
     /// The captured pair and the parity flag both persist, so the choice is reproducible
     /// across reloads.
-    fn default_anchor_for_component(&self, component: &HashSet<SectionId>) -> Option<StationRef> {
+    ///
+    /// A station an edit held for the component ([`Self::held_gauges`]) comes
+    /// first: a split, combine or delete-and-split that left the component's
+    /// station outside its lowest-id section records it there, so the edit
+    /// does not move the adjusted component (`project/gauge.rs`).
+    pub(super) fn default_anchor_for_component(
+        &self,
+        component: &HashSet<SectionId>,
+    ) -> Option<StationRef> {
+        if let Some(at) = self
+            .held_gauges
+            .iter()
+            .filter_map(|held| self.resolve_held_gauge(held))
+            .find(|at| component.contains(&at.section_id))
+        {
+            return Some(at);
+        }
         let section = self
             .sections
             .iter()
