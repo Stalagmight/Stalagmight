@@ -3,6 +3,7 @@
  * · H shots · K sections"), how much of it the filters show, and a summary of
  * the selected cells (count, and Σ / avg / min / max for one numeric column).
  */
+import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { formatFixed, formatNumber } from '../../i18n/format';
 import type { DataModelCtx, DataRow, DataView } from './types';
@@ -33,9 +34,9 @@ export function DataStatusBar({
   selection: SelectionSummary | null;
 }) {
   const { t } = useTranslation();
-  const all = countRows(rows);
+  const all = useMemo(() => countRows(rows), [rows]);
   const total = all.stations + all.shots;
-  const shownRows = countRows(view.rows);
+  const shownRows = useMemo(() => countRows(view.rows), [view.rows]);
   const shown = shownRows.stations + shownRows.shots;
   const n = (key: string, count: number) => t(key, { count, countFormatted: formatNumber(count) });
 

@@ -140,6 +140,10 @@ export function useDataNavigation(
   const followTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingFollow = useRef<string | null>(null);
   const lastFollowAt = useRef(0);
+  /** The row a map selection just focused: following it would echo the
+   *  selection back (collapsing a multi-selection, turning a section into its
+   *  station 0) and pan a map the user is already looking at. */
+  const fromMap = useRef<string | null>(null);
   const runFollow = useCallback(() => {
     followTimer.current = null;
     const key = pendingFollow.current;
@@ -147,9 +151,12 @@ export function useDataNavigation(
     const m = modelRef.current;
     const row = key ? m?.rowByKey.get(key) : undefined;
     if (!row || !m) return;
+    const echo = fromMap.current === key;
+    fromMap.current = null;
+    const ui = useUIStore.getState();
+    if (echo || ui.multiSelection.length > 1 || rowKeyForSelection(ui.selection, m) === key) return;
     lastFollowAt.current = Date.now();
     select(row);
-    const ui = useUIStore.getState();
     // Pan, never zoom: the user keeps the zoom they chose. A station pans to
     // the shot that leaves it (or arrives, at a section end).
     if (row.kind === 'shot') ui.triggerPanToShot(row.sectionId, row.shotId);
@@ -185,6 +192,7 @@ export function useDataNavigation(
       const key = rowKeyForSelection(s.selection, modelRef.current);
       if (!key || !modelRef.current?.rowByKey.has(key)) return;
       if (useDataWorkspaceStore.getState().activeRowKey === key) return;
+      fromMap.current = key;
       goToRow(key);
     });
   }, [goToRow]);

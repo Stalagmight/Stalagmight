@@ -83,15 +83,35 @@ export function rowWarnings(ctx: DataModelCtx, row: DataEntityRow): ProjectWarni
   return row.kind === 'shot' ? shotWarnings(ctx, row) : stationWarnings(ctx, row);
 }
 
-/** Pitch legs of a shot as the IPC types them (NaN = null). */
+/**
+ * A Float32Array slot as the number the user typed: the shortest decimal that
+ * is the same float32 (8.300000190734863 -> 8.3). The SoA stores shots as
+ * float32, so without this the editor would seed, and a fill / move would
+ * write, float32 noise. NaN stays NaN.
+ */
+export function f32(v: number): number {
+  if (!Number.isFinite(v)) return v;
+  for (let p = 1; p <= 9; p++) {
+    const n = Number(v.toPrecision(p));
+    if (Math.fround(n) === v) return n;
+  }
+  return v;
+}
+
+/** The angle legs of a shot as the IPC types them (NaN pitch = null). */
 export function shotLegs(ctx: DataModelCtx, row: ShotRow) {
   const d = ctx.data;
   return {
-    azimuth_in: d.shotAzimuthIn[row.g]!,
-    azimuth_out: d.shotAzimuthOut[row.g]!,
-    pitch_in: nanToNull(d.shotPitchIn[row.g]!),
-    pitch_out: nanToNull(d.shotPitchOut[row.g]!),
+    azimuth_in: f32(d.shotAzimuthIn[row.g]!),
+    azimuth_out: f32(d.shotAzimuthOut[row.g]!),
+    pitch_in: nanToNull(f32(d.shotPitchIn[row.g]!)),
+    pitch_out: nanToNull(f32(d.shotPitchOut[row.g]!)),
   };
+}
+
+function meanAzimuth(ctx: DataModelCtx, row: ShotRow): number {
+  const { azimuth_in: a, azimuth_out: b } = shotLegs(ctx, row);
+  return meanOrLoneLeg(a, b);
 }
 
 function meanPitch(ctx: DataModelCtx, row: ShotRow): number | null {
@@ -268,7 +288,7 @@ function shotNumber(
     const s = asShot(row);
     if (!s) return null;
     const v = ctx.data[field][s.g]!;
-    return Number.isFinite(v) ? v : null;
+    return Number.isFinite(v) ? f32(v) : null;
   };
   return {
     value: read,
@@ -361,13 +381,13 @@ const LOGIC: Record<DataColumnKey, Logic> = {
     value: (row, ctx) => {
       const s = asShot(row);
       if (!s) return null;
-      const v = meanOrLoneLeg(ctx.data.shotAzimuthIn[s.g]!, ctx.data.shotAzimuthOut[s.g]!);
+      const v = meanAzimuth(ctx, s);
       return Number.isFinite(v) ? v : null;
     },
     text: (row, ctx) => {
       const s = asShot(row);
       if (!s) return '';
-      return fmt(ctx, meanOrLoneLeg(ctx.data.shotAzimuthIn[s.g]!, ctx.data.shotAzimuthOut[s.g]!), decimalsOf(ctx).azimuth);
+      return fmt(ctx, meanAzimuth(ctx, s), decimalsOf(ctx).azimuth);
     },
     coerce: (raw, _row, ctx) => parseRequired(raw, ctx),
     frozenLocks: true,

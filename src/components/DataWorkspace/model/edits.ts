@@ -15,6 +15,7 @@ import { AZIMUTH_AVG_KEY, PITCH_AVG_KEY, buildShotUpdates, creditEditForCells } 
 import { DATA_COLUMN_BY_KEY } from '../columnsMeta';
 import type { DataCellEdit, DataColumnDef, DataColumnKey, DataEditPlan, DataModelCtx, ShotRow, StationRow } from '../types';
 import { buildColumnDefs, shotKindOf, shotLegs } from './columns';
+import { parsePeopleCell } from '../../SingleSystemView/dataTableCreditColumns';
 import { shotCredit } from './ctx';
 
 let defsByKey: Map<DataColumnKey, DataColumnDef> | null = null;
@@ -82,7 +83,11 @@ function shotCommands(row: ShotRow, cells: DataCellEdit[], ctx: DataModelCtx): B
   const out: BatchCommand[] = [];
   const creditCells = cells.flatMap((e) => {
     const field = CREDIT_FIELD[e.colKey];
-    return field ? [{ colKey: field, value: e.value }] : [];
+    if (!field) return [];
+    // People arrive as a list; a cell's text (a move of the display value)
+    // is parsed rather than read as "nobody".
+    const value = field !== 'survey_date' && typeof e.value === 'string' ? parsePeopleCell(e.value) : e.value;
+    return [{ colKey: field, value }];
   });
   if (creditCells.length > 0) {
     const credit = shotCredit(ctx, row);

@@ -65,7 +65,9 @@ const sameRef = (a: StationRef, sectionId: number, stationIndex: number) =>
   a.section_id === sectionId && a.station_index === stationIndex;
 
 /** The parent a branch section continues from: an earlier-declared section
- *  first, then the lowest section order, then the lowest station index. */
+ *  first, then the lowest section order, then the lowest station index. Two
+ *  sections starting at the same point: the later one continues from the
+ *  earlier, never both from each other. */
 function pickParent(ctx: DataModelCtx, own: number, refs: readonly StationRef[]): StationRef | null {
   const order = sectionOrderOf(ctx.data);
   const ownOrder = order.get(own) ?? 0;
@@ -74,6 +76,7 @@ function pickParent(ctx: DataModelCtx, own: number, refs: readonly StationRef[])
   for (const r of refs) {
     if (r.section_id === own) continue;
     const o = order.get(r.section_id) ?? Number.MAX_SAFE_INTEGER;
+    if (o > ownOrder && r.station_index === 0) continue;
     const key: [number, number, number] = [o < ownOrder ? 0 : 1, o, r.station_index];
     if (!bestKey || key[0] < bestKey[0] || (key[0] === bestKey[0] && (key[1] < bestKey[1] || (key[1] === bestKey[1] && key[2] < bestKey[2])))) {
       best = r;

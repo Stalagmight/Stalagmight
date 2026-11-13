@@ -42,6 +42,20 @@ describe('stationLinks', () => {
   });
 });
 
+describe('branch parentage', () => {
+  it('two sections starting at one point: only the later continues from the earlier', () => {
+    const data = makeCtx().data;
+    const g10 = g(1, 0);
+    const g20 = g(2, 0);
+    const merged = new Map(data.stationMergedWith);
+    merged.set(g10, [ref(2, 0)]);
+    merged.set(g20, [ref(1, 2), ref(1, 0)]);
+    const c = makeCtx({ data: { ...data, stationMergedWith: merged } });
+    expect(stationLinks(c, 1, 0, g10).branchFrom).toBeNull();
+    expect(stationLinks(c, 2, 0, g20).branchFrom).toEqual(ref(1, 0));
+  });
+});
+
 describe('buildRail', () => {
   const all = buildDataRows(ctx.data, { showSectionHeaders: true });
   const byKey = (rail: ReturnType<typeof buildRail>, rows: DataRow[], key: string) => rail![rows.findIndex((r) => r.key === key)]!;

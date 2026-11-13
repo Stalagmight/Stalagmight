@@ -18,7 +18,7 @@ import { SHOT_KIND_CLASS, SHOT_KIND_LABEL_KEY, nextShotKind } from '../../utils/
 import { testIdPart } from '../../utils/testId';
 import type { DataColumnDef, DataColumnKey, DataModelCtx, DataRow, DataView, ShotRow } from './types';
 import { coerceCell, isShotFrozen, misclosureText, rowWarnings, shotKindOf, validationError } from './model/columns';
-import { decimalsOf, fmt, stationName } from './model/ctx';
+import { decimalsOf, fmt, shotCredit, stationName } from './model/ctx';
 import { stationLinks, stationRefKey } from './model/links';
 import { isEntityRow } from './model/rows';
 import { dataRowPart } from './dataTestIds';
@@ -260,6 +260,11 @@ export function buildGridColumns(defs: readonly DataColumnDef[], deps: GridColum
       col.activate = (row, _i, dir) => {
         if (row.kind === 'shot' && !ctx.editingBlocked) deps.onCycleKind(row, dir);
       };
+    }
+    if (key === 'surveyors' || key === 'explorers') {
+      // The value is the people list (what a fill / move transfers), the text
+      // its "Name <email>; Name" form.
+      col.getValue = (row) => (row.kind === 'shot' ? (shotCredit(ctx, row)?.[key] ?? []) : null);
     }
     if (CREDIT.has(key)) {
       col.noInlineEdit = true;

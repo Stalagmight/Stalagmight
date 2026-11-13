@@ -130,4 +130,15 @@ describe('buildSectionLabels', () => {
     const names = Array.from({ length: 60 }, (_, i) => `Underwater passage number ${i} towards the sump`);
     expectUniqueAndShort(labelsOf(names));
   });
+
+  it('untangles chains of literal names that look like id tags', () => {
+    expectUniqueAndShort(labelsOf(['A', 'A', 'A #1', 'A #1 #3', 'A #1 #3 #4']));
+  });
+
+  it('stays fast for thousands of names sharing a long prefix and suffix', () => {
+    const names = Array.from({ length: 4000 }, (_, i) => `Shared long prefix of the passage ${i} shared long suffix`);
+    const t0 = performance.now();
+    expectUniqueAndShort(labelsOf(names));
+    expect(performance.now() - t0).toBeLessThan(5000);
+  });
 });

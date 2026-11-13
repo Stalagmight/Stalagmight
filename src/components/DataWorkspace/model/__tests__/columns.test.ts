@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DATA_COLUMNS } from '../../columnsMeta';
 import { buildDataRows } from '../rows';
-import { coerceCell, parseShotKind, validationError } from '../columns';
+import { coerceCell, f32, parseShotKind, validationError } from '../columns';
 import { COLUMNS, col, makeCtx } from '../../__tests__/dataFixtures';
 import type { DataEntityRow, DataRow } from '../../types';
 
@@ -168,5 +168,19 @@ describe('buildColumnDefs', () => {
     expect(col('date').text(row('sh:1:101'), credited)).toBe('2026-03-01');
     expect(col('explorers').text(row('sh:1:102'), credited)).toBe('');
     delete credited.project.sections[0]!.shots[0]!.credit;
+  });
+
+  it('reads float32 slots back as the decimals that were stored', () => {
+    expect(f32(Math.fround(8.3))).toBe(8.3);
+    expect(f32(Math.fround(120.1))).toBe(120.1);
+    expect(f32(Math.fround(-0.25))).toBe(-0.25);
+    expect(Number.isNaN(f32(NaN))).toBe(true);
+    // 8.25 is exact in float32; 8.3 is not, and still reads back as 8.3.
+    const c = makeCtx();
+    const shot = row('sh:1:102');
+    if (shot.kind !== 'shot') throw new Error('shot');
+    c.data.shotLength[shot.g] = 8.3;
+    expect(c.data.shotLength[shot.g]).not.toBe(8.3);
+    expect(col('length').value(shot, c)).toBe(8.3);
   });
 });

@@ -65,7 +65,7 @@ beforeEach(() => {
     frozenShots: [{ section_id: 3, shot_index: 0 }],
     ...actions,
   } as never);
-  useUIStore.setState({ toasts: [], geometryMode: 'measured', selection: null, appMode: 'data' });
+  useUIStore.setState({ toasts: [], geometryMode: 'measured', selection: null, multiSelection: [], appMode: 'data', requestPanToShot: null });
   useDataWorkspaceStore.setState({
     ...useDataWorkspaceStore.getInitialState(),
     tintMode: 'section',
@@ -313,6 +313,16 @@ describe('Focus requests', () => {
     expect(useDataWorkspaceStore.getState().activeRowKey).toBe('st:3:2');
   });
 
+  it('does not replay an old request when Data is entered again', () => {
+    useDataWorkspaceStore.getState().requestFocus({ rowKey: 'st:3:2' });
+    const first = render(<DataWorkspace />);
+    expect(useDataWorkspaceStore.getState().activeRowKey).toBe('st:3:2');
+    act(() => useDataWorkspaceStore.getState().setActiveRowKey('st:1:1'));
+    first.unmount();
+    render(<DataWorkspace />);
+    expect(useDataWorkspaceStore.getState().activeRowKey).toBe('st:1:1');
+  });
+
   it('reveals a requested row the filters hide, and drops a request for a gone row', () => {
     useDataWorkspaceStore.setState({ collapsedSections: [3] });
     useDataWorkspaceStore.getState().requestFocus({ rowKey: 'sh:3:302' });
@@ -324,6 +334,34 @@ describe('Focus requests', () => {
 });
 
 describe('Map follow and map selection', () => {
+  it('never echoes a map selection back (multi-selection survives, no pan)', () => {
+    vi.useFakeTimers();
+    useDataWorkspaceStore.setState({ mapPaneOpen: true, mapFollow: true });
+    render(<DataWorkspace />);
+    const a = { type: 'shot' as const, sectionId: 1, shotId: 103 };
+    const b = { type: 'shot' as const, sectionId: 1, shotId: 104 };
+    act(() => useUIStore.setState({ selection: a, multiSelection: [a, b] }));
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(useDataWorkspaceStore.getState().activeRowKey).toBe('sh:1:103');
+    expect(useUIStore.getState().multiSelection).toHaveLength(2);
+    expect(useUIStore.getState().requestPanToShot).toBeNull();
+  });
+
+  it('follows the active row: selects it on the map and pans, after a short throttle', () => {
+    vi.useFakeTimers();
+    useDataWorkspaceStore.setState({ mapPaneOpen: true, mapFollow: true });
+    useUIStore.setState({ requestPanToShot: null });
+    render(<DataWorkspace />);
+    fireEvent.mouseDown(screen.getByTestId('data-cell-sh-1-2-length'));
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(useUIStore.getState().selection).toEqual({ type: 'shot', sectionId: 1, shotId: 102 });
+    expect(useUIStore.getState().requestPanToShot).toEqual({ sectionId: 1, shotId: 102 });
+  });
+
   it('focuses the row of a selection made on the map', () => {
     render(<DataWorkspace />);
     act(() => useUIStore.getState().setSelection({ type: 'station', stationRef: { section_id: 3, station_index: 2 } }));

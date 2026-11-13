@@ -172,12 +172,13 @@ export function buildSectionLabels(
       }
     }
     if (!chosen && group.length > 1) {
+      // The smallest common prefix over all pairs is the smallest over
+      // neighbours in sorted order: O(k log k), not O(k^2).
+      const sorted = group
+        .map((m) => ({ g: m.g, s: m.g.join('') }))
+        .sort((a, b) => (a.s < b.s ? -1 : a.s > b.s ? 1 : 0));
       let firstDiff = Infinity;
-      for (let i = 0; i < group.length; i++) {
-        for (let j = i + 1; j < group.length; j++) {
-          firstDiff = Math.min(firstDiff, commonPrefixLength(group[i]!.g, group[j]!.g));
-        }
-      }
+      for (let i = 1; i < sorted.length; i++) firstDiff = Math.min(firstDiff, commonPrefixLength(sorted[i - 1]!.g, sorted[i]!.g));
       const candidate = group.map((m) => windowLabel(m.g, firstDiff));
       if (allDistinct(candidate, taken)) chosen = candidate;
     }
@@ -192,7 +193,9 @@ export function buildSectionLabels(
   // Last pass: a label still shared by several sections (a literal name equal
   // to a derived one) is tagged with the id on every untagged holder.
   const nameById = new Map(names.map((n) => [n.id, n.name]));
-  for (let pass = 0; pass < 2; pass++) {
+  // Each pass tags at least one more section, and id-tagged labels are unique,
+  // so this ends within one pass per section.
+  for (let pass = 0; pass <= labels.size; pass++) {
     const holders = new Map<string, number[]>();
     for (const [id, label] of labels) {
       const list = holders.get(label);

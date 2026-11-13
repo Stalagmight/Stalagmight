@@ -99,4 +99,28 @@ describe('buildEditCommands', () => {
     const plan = buildEditCommands([edit('sh:2:202', 'kind', 'Jump'), edit('sh:2:201', 'kind', 'Reference')], ctx);
     expect(plan.commands).toEqual([{ type: 'update_shot', section_id: 2, shot_id: 201, updates: { kind: 'Reference' } }]);
   });
+
+  it('reads people given as text (a moved display value) instead of clearing them', () => {
+    const plan = buildEditCommands([edit('sh:1:102', 'surveyors', 'Ann <ann@example.com>; Bob')], ctx);
+    expect(plan.commands).toEqual([
+      {
+        type: 'edit_shot_credit',
+        targets: { type: 'shots', shots: [[1, 102]] },
+        edit: { set_surveyors: [{ name: 'Ann', email: 'ann@example.com' }, { name: 'Bob' }] },
+      },
+    ]);
+  });
+
+  it('rotates float32 legs from their stored decimals, without float32 noise', () => {
+    const c = makeCtx();
+    const shot = rows.find((r) => r.key === 'sh:1:102');
+    if (shot?.kind !== 'shot') throw new Error('shot');
+    c.data.shotAzimuthIn[shot.g] = 120.1;
+    c.data.shotAzimuthOut[shot.g] = 120.3;
+    const plan = buildEditCommands([{ row: shot, colKey: 'azimuth', value: 130 }], c);
+    const cmd = plan.commands[0];
+    if (cmd?.type !== 'update_shot') throw new Error('update_shot');
+    expect(cmd.updates.azimuth_in).toBeCloseTo(129.9, 9);
+    expect(cmd.updates.azimuth_out).toBeCloseTo(130.1, 9);
+  });
 });

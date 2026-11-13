@@ -24,7 +24,12 @@ export interface SelectionRect {
   colKeys: string[];
 }
 
-export function selectionRectFromDom(container: HTMLElement | null, prefix: string, sel: GridSelectionInfo): SelectionRect {
+export function selectionRectFromDom(
+  container: HTMLElement | null,
+  prefix: string,
+  sel: GridSelectionInfo,
+  totalRows: number,
+): SelectionRect {
   const fallback: SelectionRect = { r0: sel.activeRow, r1: sel.activeRow + sel.rows - 1, colKeys: [sel.activeColKey] };
   if (!container) return fallback;
   const cellRe = new RegExp(`^${prefix}-cell-(\\d+)-(.+)$`);
@@ -41,6 +46,7 @@ export function selectionRectFromDom(container: HTMLElement | null, prefix: stri
   }
   if (!Number.isFinite(rMin)) return fallback;
   const colKeys = [...cols];
+  if (sel.rows >= totalRows) return { r0: 0, r1: totalRows - 1, colKeys };
   if (rMax - rMin + 1 >= sel.rows) return { r0: rMin, r1: rMax, colKeys };
   // Part of the selection is scrolled away: grow it from the visible end that
   // is NOT at the edge of the rendered rows.
@@ -55,6 +61,10 @@ export function selectionRectFromDom(container: HTMLElement | null, prefix: stri
   }
   if (rMin > first) return { r0: rMin, r1: rMin + sel.rows - 1, colKeys };
   if (rMax < last) return { r0: rMax - sel.rows + 1, r1: rMax, colKeys };
+  // Both ends are scrolled away: the active cell anchors a drag or a
+  // shift-extension, so the selection runs from it.
+  if (sel.activeRow < first) return { r0: sel.activeRow, r1: sel.activeRow + sel.rows - 1, colKeys };
+  if (sel.activeRow > last) return { r0: sel.activeRow - sel.rows + 1, r1: sel.activeRow, colKeys };
   return { r0: rMin, r1: rMin + sel.rows - 1, colKeys };
 }
 

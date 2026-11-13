@@ -44,6 +44,10 @@ export function rowsVersionOf(rows: readonly DataRow[]): string {
 }
 
 let scrollNonce = 0;
+/** The last store focus request acted on. Module-level, not per mount: the
+ *  request stays in the store, and a remount (leaving and re-entering Data)
+ *  must not replay it. */
+let handledFocusNonce: number | null = null;
 
 interface Props {
   model: DataWorkspaceModel;
@@ -132,18 +136,17 @@ export function DataGrid({ model, view, height, nav, editing, tint, partners, on
 
   // ── Focus requests + keeping the active row across rebuilds ─────────────
   const lastActive = useRef<{ key: string; idx: number; colKey: string } | null>(null);
-  const handledNonce = useRef<number | null>(null);
   const [scrollReq, setScrollReq] = useState<GridScrollRequest | null>(null);
 
   // One effect, so a pending focus request always beats the re-anchoring of the
   // previous active row (entering Data from "Open in Data" / "Back to Data").
   useEffect(() => {
-    if (focusRequest && handledNonce.current !== focusRequest.nonce) {
+    if (focusRequest && handledFocusNonce !== focusRequest.nonce) {
       const idx = rowIndexByKey.get(focusRequest.rowKey);
       if (idx === undefined) {
         // A row that no longer exists: drop the request.
         if (!model.rowByKey.has(focusRequest.rowKey)) {
-          handledNonce.current = focusRequest.nonce;
+          handledFocusNonce = focusRequest.nonce;
           return;
         }
         // Hidden by the filters / collapse: reveal it (once), then this effect
@@ -155,7 +158,7 @@ export function DataGrid({ model, view, height, nav, editing, tint, partners, on
         }
         return;
       }
-      handledNonce.current = focusRequest.nonce;
+      handledFocusNonce = focusRequest.nonce;
       const colKey = focusRequest.colKey ?? lastActive.current?.colKey;
       lastActive.current = { key: focusRequest.rowKey, idx, colKey: colKey ?? '' };
       setActiveRowKey(focusRequest.rowKey);
@@ -298,7 +301,7 @@ export function DataGrid({ model, view, height, nav, editing, tint, partners, on
       // Read the marks after the grid has painted them.
       requestAnimationFrame(() => {
         if (selRef.current !== sel) return;
-        const rect = selectionRectFromDom(containerRef.current, DATA_GRID_PREFIX, sel);
+        const rect = selectionRectFromDom(containerRef.current, DATA_GRID_PREFIX, sel, view.rows.length);
         onSelectionSummary(summarizeSelection(view.rows, rect, model.columnByKey, ctx, cells));
       });
     },
