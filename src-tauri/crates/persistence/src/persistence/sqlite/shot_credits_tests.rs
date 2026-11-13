@@ -1077,6 +1077,11 @@ fn warnings_during(run: impl FnOnce()) -> Vec<String> {
     }
 
     let lines = Arc::new(Mutex::new(Vec::new()));
+    // With a single dispatcher registered, tracing works out a callsite's
+    // interest from whichever thread hits it first - another test's, with no
+    // subscriber - and caches "never". A second one, kept alive throughout,
+    // makes it ask every registered dispatcher, this one included.
+    let _second = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
     tracing::subscriber::with_default(Capture(Arc::clone(&lines)), run);
     let lines = lines.lock().unwrap().clone();
     lines
