@@ -12,7 +12,12 @@ use crate::telemetry::registry::{EVENT_NAMES, SOURCE_NAMES};
 /// Bare names of commands removed from the app but kept in the vocabulary.
 /// They intentionally have no live handler and no frontend tracking, so the
 /// `command.*` and `undo-after.*` coverage checks skip them.
-const REMOVED_COMMANDS: &[&str] = &["adjust_loop_closures", "resolve_all_warnings"];
+const REMOVED_COMMANDS: &[&str] = &[
+    "adjust_loop_closures",
+    "resolve_all_warnings",
+    // SpeleoDB commands with no caller, removed in the dead-code cleanup (#670, #671).
+    "speleodb_get_project_metadata",
+];
 
 /// Dialog keys removed from `App.tsx` whose registry slots are likewise
 /// retained. The `action.dialog.*` / `dialog-cancel.*` / `dwell.dialog.*`

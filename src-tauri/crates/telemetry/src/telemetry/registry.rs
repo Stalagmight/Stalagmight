@@ -151,6 +151,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.set_station_comment",
     "command.set_zero_datum",
     "command.speleodb_done",
+    // Retained for telemetry-ID stability; the command was removed (#670). See REMOVED_COMMANDS.
     "command.speleodb_get_project_metadata",
     "command.speleodb_get_revisions",
     "command.speleodb_link_status",

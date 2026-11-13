@@ -25,9 +25,9 @@ use crate::core::AppState;
 // the call site where the endpoint is known.
 use crate::speleodb::{
     DoneResult, PushResult, SpeleoDbAction, SpeleoErrorDto, SpeleoLinkStatus,
-    SpeleoLocalProjectState, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata,
-    SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult, SpeleoRevision,
-    SpeleoRewindTarget, SpeleoSessionStatus, SpeleoUnwindTarget, StartEditingResult, UpdateResult,
+    SpeleoLocalProjectState, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectSummary,
+    SpeleoPublishParams, SpeleoPublishResult, SpeleoRevision, SpeleoRewindTarget,
+    SpeleoSessionStatus, SpeleoUnwindTarget, StartEditingResult, UpdateResult,
 };
 
 /// Run a blocking SpeleoDB orchestration call off the main thread. The
@@ -505,15 +505,6 @@ pub async fn speleodb_project_collaborators(
     project_id: String,
 ) -> Result<Vec<stalagmight_core::speleodb::SpeleoCollaborator>, SpeleoErrorDto> {
     run_blocking(app, move |s| s.speleodb_project_collaborators(project_id)).await
-}
-
-/// GET the open remote project's editable metadata so the Project Settings tab can
-/// prefill the current server truth (#206). No lock; permission-free read.
-#[tauri::command]
-pub async fn speleodb_get_project_metadata(
-    app: AppHandle,
-) -> Result<SpeleoProjectMetadata, SpeleoErrorDto> {
-    run_blocking(app, AppState::speleodb_get_project_metadata).await
 }
 
 /// Create the open local project on SpeleoDB and push its first revision (#207):

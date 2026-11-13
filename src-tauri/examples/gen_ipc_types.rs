@@ -80,11 +80,10 @@ use stalagmight_lib::persistence::{BackupInfo, RawTableData, RepairResult, Salva
 use stalagmight_lib::speleodb::{
     DoneResult, EndpointRefusal, Permission, PushResult, RemoteState, SpeleoAccessVerification,
     SpeleoCollaborator, SpeleoDbAction, SpeleoErrorDto, SpeleoFileAccess, SpeleoLinkStatus,
-    SpeleoLocalProjectState, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata,
-    SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult, SpeleoReadOnlyOpen,
-    SpeleoReleaseContext, SpeleoRevision, SpeleoRewindTarget, SpeleoSessionStatus,
-    SpeleoUnwindTarget, StartEditingResult, TransportCause, UnpushedLocalEdits, UpdateResult,
-    Visibility,
+    SpeleoLocalProjectState, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectSummary,
+    SpeleoPublishParams, SpeleoPublishResult, SpeleoReadOnlyOpen, SpeleoReleaseContext,
+    SpeleoRevision, SpeleoRewindTarget, SpeleoSessionStatus, SpeleoUnwindTarget,
+    StartEditingResult, TransportCause, UnpushedLocalEdits, UpdateResult, Visibility,
 };
 use stalagmight_lib::tile_attribution::TileAttribution;
 use stalagmight_lib::tile_providers::TileProviderInfo;
@@ -149,6 +148,7 @@ fn main() {
     // Remove generated files whose source types were retired with native transfer.
     for name in [
         "SpeleoProjectMetadataPatch",
+        "SpeleoProjectMetadata",
         "KeychainReport",
         "TokenFallback",
         "TokenStorage",
@@ -484,7 +484,6 @@ fn main() {
     export::<PushResult>(&out_dir);
     // SpeleoDB Project Settings metadata (#206) + create-on-SDB publish (#207)
     export::<Visibility>(&out_dir);
-    export::<SpeleoProjectMetadata>(&out_dir);
     export::<SpeleoCollaborator>(&out_dir);
     export::<SpeleoPublishParams>(&out_dir);
     export::<SpeleoPublishResult>(&out_dir);
@@ -729,7 +728,6 @@ fn main() {
         "UpdateResult",
         "PushResult",
         "Visibility",
-        "SpeleoProjectMetadata",
         "SpeleoCollaborator",
         "SpeleoPublishParams",
         "SpeleoPublishResult",

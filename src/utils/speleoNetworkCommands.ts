@@ -29,7 +29,6 @@ const KINDS: Readonly<Record<string, SpeleoNetworkKind>> = {
   speleodb_get_revisions: 'read',
   speleodb_unwind_target: 'read',
   speleodb_rewind_target: 'read',
-  speleodb_get_project_metadata: 'read',
   speleodb_project_collaborators: 'read',
   speleodb_project_access_at: 'read',
   speleodb_login: 'exclusive',

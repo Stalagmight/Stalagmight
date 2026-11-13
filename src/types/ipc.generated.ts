@@ -237,7 +237,6 @@ export * from './ipc/DoneResult';
 export * from './ipc/UpdateResult';
 export * from './ipc/PushResult';
 export * from './ipc/Visibility';
-export * from './ipc/SpeleoProjectMetadata';
 export * from './ipc/SpeleoCollaborator';
 export * from './ipc/SpeleoPublishParams';
 export * from './ipc/SpeleoPublishResult';

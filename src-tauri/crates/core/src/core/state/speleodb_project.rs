@@ -1,5 +1,6 @@
-//! [#206]/[#207]/[#200] The SpeleoDB project RECORD: read its authoritative
-//! metadata, PATCH it, and create it (publish a local project onto the server).
+//! [#206]/[#207]/[#200] The SpeleoDB project RECORD: fold the server's project
+//! name into the local file, and create the record (publish a local project onto
+//! the server).
 //!
 //! Split out of `core/state/speleodb.rs` (which is frozen at the file-size ratchet
 //! warn line) into a sibling `impl AppState` block, alongside the #215 admin split.
@@ -17,8 +18,7 @@ use super::AppState;
 use crate::speleodb::client;
 use crate::speleodb::contract::{dto_for_error, Endpoint};
 use crate::speleodb::{
-    SpeleoDbError, SpeleoErrorDto, SpeleoProjectMetadata, SpeleoPublishParams, SpeleoPublishResult,
-    Visibility,
+    SpeleoDbError, SpeleoErrorDto, SpeleoPublishParams, SpeleoPublishResult, Visibility,
 };
 
 /// [sdk#3] What the publish result reports about the first upload's undo history:
@@ -85,23 +85,6 @@ fn build_create_body(params: &SpeleoPublishParams) -> serde_json::Value {
 }
 
 impl AppState {
-    /// [#206] GET the open remote project's authoritative metadata so the Project
-    /// Settings tab can prefill the current server truth. No lock required (reading
-    /// metadata is permission-free); routed through the auth handler so a dead token
-    /// here forces re-login (mirrors the other project-scoped reads).
-    pub fn speleodb_get_project_metadata(&self) -> Result<SpeleoProjectMetadata, SpeleoErrorDto> {
-        let link = self.speleodb_validated_link()?;
-        let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
-        let insecure_http = self.speleodb_insecure_http();
-        let project = self
-            .speleodb_handle_auth(
-                Endpoint::GetProject,
-                client::get_project(&endpoint, &token, insecure_http, &link.project_id),
-            )
-            .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
-        Ok(SpeleoProjectMetadata::from_project(&project))
-    }
-
     /// Fold an SDB-authoritative project name into the OPEN local `.stalx` WITHOUT
     /// setting the dirty bit ([#206]/[#216]): update the in-memory project, persist it
     /// directly (`db.save_project` bypasses the command/undo/dirty path and never
