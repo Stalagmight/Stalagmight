@@ -68,9 +68,14 @@ function Toolbar({ model, view }: { model: DataModel; view: DataView }) {
         data-compact={compact ? 'true' : undefined}
         data-testid="data-toolbar"
       >
-        {/* One line, never wrapped: the find box gives way first (its own
-            minimum is its controls + a short input), then the labels go. */}
-        <div ref={rowRef} className="flex flex-nowrap items-start gap-x-2 px-3 py-1.5" data-testid="data-toolbar-row">
+        {/* One line: the find box gives way first (its own minimum is its
+            controls + a short input), then the labels go; only a toolbar too
+            narrow even for the icons wraps. */}
+        <div
+          ref={rowRef}
+          className={`flex items-start gap-x-2 gap-y-1 px-3 py-1.5 ${compact ? 'flex-wrap' : 'flex-nowrap'}`}
+          data-testid="data-toolbar-row"
+        >
           <div className="flex max-w-[360px] flex-[1_1_260px] flex-col gap-1">
             <FindBar
               view={view}
