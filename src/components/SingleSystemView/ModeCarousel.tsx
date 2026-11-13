@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { useUIStore, type AppMode } from '../../store/uiStore';
-import { ExportIcon, MapIcon, SlidersIcon, type IconProps } from '../common/icons';
+import { ExportIcon, ListIcon, MapIcon, SlidersIcon, type IconProps } from '../common/icons';
 import type { ComponentType } from 'react';
 
 const MODES: readonly AppMode[] = ['survey', 'plan', 'export'];
@@ -8,6 +8,7 @@ const MODES: readonly AppMode[] = ['survey', 'plan', 'export'];
 /** Icon stand-ins for the mode labels in the compact (icon-only) variant. */
 const MODE_ICONS: Record<AppMode, ComponentType<IconProps>> = {
   survey: MapIcon,
+  data: ListIcon,
   plan: SlidersIcon,
   export: ExportIcon,
 };

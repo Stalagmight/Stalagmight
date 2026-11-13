@@ -18,6 +18,9 @@ import {
   type GridSelection,
   type CellCoord,
   type CellEdit,
+  type CellMarks,
+  type GridExtraMenuItem,
+  type GridScrollRequest,
   ROW_HEIGHT,
 } from './types';
 import { parseLocaleNumber, parseTSV, serializeRangeToTSV } from './gridClipboard';
@@ -187,7 +190,22 @@ export interface SpreadsheetGridProps<Row> {
   /** Host-provided context-menu entries appended after the built-in ones
    *  (e.g. "Remove draft row"). Called with the selection's row range when the
    *  menu opens; return [] to add nothing for that selection. */
-  extraContextMenuItems?: (sel: { fromRow: number; toRow: number }) => { label: string; onClick: () => void }[];
+  extraContextMenuItems?: (sel: { fromRow: number; toRow: number }) => GridExtraMenuItem[];
+  /** Bring a row (+ column) into view and make it active (see GridScrollRequest). */
+  scrollTo?: GridScrollRequest | null;
+  /** Current sort (drawn as a header indicator + aria-sort). Host-owned. */
+  sort?: { colKey: string; dir: 'asc' | 'desc' } | null;
+  /** Header sort affordance clicked: next direction, or null to clear. */
+  onSortChange?: (colKey: string, dir: 'asc' | 'desc' | null) => void;
+  /** Substring highlights per cell (find matches). Must be O(1) per call. */
+  cellMarks?: (row: Row, rowIndex: number, colKey: string) => CellMarks | undefined;
+  /** Inline style per row, e.g. `{ '--sg-row-tint': '#hex' }` for a row tint
+   *  that composes under selection / hover. */
+  rowStyle?: (row: Row, rowIndex: number) => CSSProperties | undefined;
+  /** Change this when the rows are re-ordered / re-filtered with the same count:
+   *  index-based transient state (copy/cut marquee, open editor, range
+   *  selection) is reset so it can't land on a different row. */
+  rowsVersion?: string | number;
 
   className?: string;
   /** Notified when the user moves the focus (active cell) - wire to app

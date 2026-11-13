@@ -57,7 +57,7 @@ export type GeometryMode = 'measured' | 'closureAdjusted';
  * Plan/Export force the read-only closure-adjusted map; only Survey edits. Runtime
  * only (never persisted) and meaningful only in single-project view.
  */
-export type AppMode = 'survey' | 'plan' | 'export';
+export type AppMode = 'survey' | 'data' | 'plan' | 'export';
 export const APP_MODE_DEFAULT: AppMode = 'survey';
 
 /** Geometry mode used before any saved preference exists (first run). */
