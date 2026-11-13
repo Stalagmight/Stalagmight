@@ -548,8 +548,9 @@ describe('Focus requests', () => {
   it('a first entry starts on station 0 of the first section, never on its header band', () => {
     render(<DataWorkspace />);
     expect(useDataWorkspaceStore.getState().activeRowKey).toBe('st:1:0');
-    // In the first shown editable column (Length; Issues comes first but is read-only).
-    expect(document.querySelector('[data-active-cell="true"]')).toHaveAttribute('data-testid', 'data-grid-cell-1-length');
+    // In the first shown editable column that applies to a station row (Comment:
+    // Length comes first but is blank on a station row).
+    expect(document.querySelector('[data-active-cell="true"]')).toHaveAttribute('data-testid', 'data-grid-cell-1-comment');
     expect(screen.getByTestId('data-grid-selection-overlay')).not.toHaveAttribute('data-band-focus');
   });
 

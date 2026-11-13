@@ -37,14 +37,19 @@ export const DATA_GRID_PREFIX = 'data-grid';
  */
 export function initialActiveCell(
   rows: readonly DataRow[],
-  orderedColumns: readonly Pick<DataColumnDef, 'key' | 'editable'>[],
+  orderedColumns: readonly Pick<DataColumnDef, 'key' | 'editable' | 'appliesTo'>[],
   hidden: readonly DataColumnKey[],
 ): { row: number; colKey: DataColumnKey | undefined } | null {
   const row = rows.findIndex(isEntityRow);
   if (row < 0) return null;
+  const kind = rows[row]!.kind;
   const hiddenSet = new Set(hidden);
   const shown = orderedColumns.filter((c) => !hiddenSet.has(c.key));
-  return { row, colKey: (shown.find((c) => c.editable) ?? shown[0])?.key };
+  // Land on a cell that means something for that row: an editable column that
+  // applies to its kind (a station row's Comment, not a blank Length cell).
+  const applies = (c: Pick<DataColumnDef, 'appliesTo'>) => c.appliesTo === 'both' || c.appliesTo === kind;
+  const pick = shown.find((c) => c.editable && applies(c)) ?? shown.find((c) => c.editable) ?? shown[0];
+  return { row, colKey: pick?.key };
 }
 
 /** FNV-1a over the row keys: changes whenever the rows or their order do. */

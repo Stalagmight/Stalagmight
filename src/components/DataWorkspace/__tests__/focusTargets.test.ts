@@ -5,7 +5,8 @@
  */
 import { describe, expect, it } from 'vitest';
 import { buildDataRows } from '../model/rows';
-import { focusTargetKey } from '../DataGrid';
+import { focusTargetKey, initialActiveCell } from '../DataGrid';
+import { DATA_COLUMNS, DATA_DEFAULT_HIDDEN } from '../columnsMeta';
 import { rowKeyForSelection } from '../useDataNavigation';
 import type { DataModel } from '../DataModelContext';
 import type { DataRow, DataView } from '../types';
@@ -50,5 +51,26 @@ describe('rowKeyForSelection (section)', () => {
   it('without a view keeps the model rule', () => {
     expect(rowKeyForSelection(section, model)).toBe('sec:2');
     expect(rowKeyForSelection(section, { rowByKey: new Map() } as unknown as DataModel)).toBe('st:2:0');
+  });
+});
+
+describe('initialActiveCell', () => {
+  it('starts on the first entity row, in an editable column that applies to it', () => {
+    const start = initialActiveCell(all, DATA_COLUMNS, DATA_DEFAULT_HIDDEN);
+    expect(start).not.toBeNull();
+    const row = all[start!.row]!;
+    expect(row.kind).toBe('station');
+    // A station row: Length (the first editable column) is blank there, so the
+    // start cell is the first editable column that applies to stations.
+    expect(start!.colKey).toBe('comment');
+  });
+
+  it('a shots-only view starts on the first editable shot column', () => {
+    const shots = all.filter((r) => r.kind === 'shot');
+    expect(initialActiveCell(shots, DATA_COLUMNS, DATA_DEFAULT_HIDDEN)?.colKey).toBe('length');
+  });
+
+  it('null when there is no entity row', () => {
+    expect(initialActiveCell(all.filter((r) => r.kind === 'section'), DATA_COLUMNS, [])).toBeNull();
   });
 });
