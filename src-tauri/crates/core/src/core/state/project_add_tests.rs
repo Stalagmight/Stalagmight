@@ -1988,3 +1988,300 @@ fn a_long_merge_source_path_keeps_its_file_name() {
     );
     assert!(label.chars().count() <= 480, "{}", label.chars().count());
 }
+
+// ===========================================================================
+// Shot identity through the Add / Merge door (#693 follow-up)
+// ===========================================================================
+//
+// The copy renames a shot whose uuid the target already holds
+// (`reassign_repeated_shot_uuids`); everything that names a copied shot by
+// its SOURCE uuid has to follow it. These pin the follower no other test
+// reaches - the section gauge pair, which `carry_shot_identity` carries by
+// position - and that two copies of one survey still describe it station for
+// station. (An Add's carried ignores are pinned by
+// `a_carried_ignore_follows_its_shot_when_the_add_renames_it`.)
+
+/// Every shot uuid in `project`, in section then shot order.
+fn every_shot_uuid(project: &Project) -> Vec<String> {
+    project
+        .sections
+        .iter()
+        .flat_map(|s| s.shots.iter())
+        .map(|shot| shot.uuid.clone().unwrap_or_default())
+        .collect()
+}
+
+fn assert_no_repeated_shot_uuid(project: &Project, what: &str) {
+    let all = every_shot_uuid(project);
+    let distinct: std::collections::HashSet<&String> = all.iter().collect();
+    assert_eq!(
+        distinct.len(),
+        all.len(),
+        "{what}: a shot uuid appears twice: {all:?}"
+    );
+}
+
+/// The uuids of the shots of `ids`, section by section.
+fn uuids_of(project: &Project, ids: &[SectionId]) -> Vec<Vec<String>> {
+    ids.iter()
+        .map(|id| {
+            project
+                .get_section(*id)
+                .unwrap()
+                .shots
+                .iter()
+                .map(|shot| shot.uuid.clone().unwrap_or_default())
+                .collect()
+        })
+        .collect()
+}
+
+/// Everything hanging off the sections `ids`, with each section named by its
+/// POSITION in `ids` and each station by its resolved index: two copies of
+/// one source describe the same survey exactly when these lists are equal,
+/// whatever ids and uuids each copy was given. A reference that no longer
+/// resolves shows up as `?`.
+fn references_of(project: &Project, ids: &[SectionId]) -> Vec<String> {
+    let at = |key: &crate::models::StationKey| -> Option<String> {
+        let position = ids.iter().position(|id| *id == key.section_id)?;
+        Some(match project.resolve_key(key) {
+            Some(sr) => format!("{position}:{}", sr.station_index),
+            None => format!("{position}:?"),
+        })
+    };
+    let mut refs = Vec::new();
+    for merge in &*project.station_merges {
+        if let (Some(a), Some(b)) = (at(&merge.station_a), at(&merge.station_b)) {
+            refs.push(format!("merge {a} {b}"));
+        }
+    }
+    for closure in &project.loop_closures {
+        if let (Some(a), Some(b)) = (at(&closure.station_a), at(&closure.station_b)) {
+            refs.push(format!("closure {a} {b} {:?}", closure.strategy));
+        }
+    }
+    for (key, text) in &project.station_comments {
+        if let Some(a) = at(key) {
+            refs.push(format!("comment {a} {text}"));
+        }
+    }
+    for (key, name) in &project.station_names {
+        if let Some(a) = at(key) {
+            refs.push(format!("name {a} {name}"));
+        }
+    }
+    for (key, (x, y, z)) in &project.station_offsets {
+        if let Some(a) = at(key) {
+            refs.push(format!("offset {a} {x} {y} {z}"));
+        }
+    }
+    for datum in &project.zero_datums {
+        if let Some(a) = at(&datum.station_ref) {
+            refs.push(format!(
+                "datum {a} {} {}",
+                datum.gps.latitude, datum.gps.longitude
+            ));
+        }
+    }
+    for (position, id) in ids.iter().enumerate() {
+        let s = project.get_section(*id).unwrap();
+        let index_of = |uuid: &Option<String>| {
+            uuid.as_ref().map(|u| {
+                s.shots
+                    .iter()
+                    .position(|shot| shot.uuid.as_deref() == Some(u.as_str()))
+                    .map_or_else(|| "?".to_string(), |i| i.to_string())
+            })
+        };
+        refs.push(format!(
+            "gauge {position} {} {:?} {:?}",
+            s.reverse_parity,
+            index_of(&s.gauge_shot_uuid),
+            index_of(&s.gauge_neighbour_uuid)
+        ));
+    }
+    refs.sort();
+    refs
+}
+
+/// Adding the same project twice: the first copy keeps the source's ids (the
+/// open project does not hold them), the second is renamed, and both copies
+/// describe the same survey station for station. The gauge pair is the part
+/// the rename can break - it names shots by uuid and is carried by
+/// `carry_shot_identity` - so it is compared exactly; the merges, closures,
+/// comments, names, offsets and datums are copied by position and compared as
+/// a guard. The open project's own shots keep their ids.
+/// INJECTION: copying the gauge pair verbatim in `carry_shot_identity` (not
+/// through the rename) leaves the second copy's gauge naming ids its section
+/// no longer has (`?`) and fails the comparison.
+#[test]
+fn adding_the_same_project_twice_remints_only_the_second_copy() {
+    let temp = TempDir::new().unwrap();
+    let (state, _) = open_target(temp.path(), true);
+    let host_ids: Vec<SectionId> = state
+        .get_project_state()
+        .unwrap()
+        .sections
+        .iter()
+        .map(|s| s.id)
+        .collect();
+    let host_before = uuids_of(&state.get_project_state().unwrap(), &host_ids);
+    // A gauge anchor pair on one section, so the re-mint has one to follow.
+    let mut gauged = source_alpha_named();
+    if let Some(s) = gauged.sections.first_mut() {
+        s.reverse_parity = true;
+        s.gauge_shot_uuid = Some("a0-1".to_string());
+        s.gauge_neighbour_uuid = Some("a0-0".to_string());
+    }
+    let alpha = save_to(temp.path(), "alpha.stalx", &gauged);
+
+    let first = add(&state, &alpha);
+    assert!(first.success, "{:?}", first.error);
+    let second = add(&state, &alpha);
+    assert!(second.success, "{:?}", second.error);
+
+    let project = state.get_project_state().unwrap();
+    assert_no_repeated_shot_uuid(&project, "after two adds");
+    assert_eq!(
+        uuids_of(&project, &host_ids),
+        host_before,
+        "the open project's own shots keep their ids"
+    );
+    let source_ids: Vec<Vec<String>> = source_alpha_named()
+        .sections
+        .iter()
+        .map(|s| {
+            s.shots
+                .iter()
+                .map(|shot| shot.uuid.clone().unwrap())
+                .collect()
+        })
+        .collect();
+    assert_eq!(
+        uuids_of(&project, &first.section_ids),
+        source_ids,
+        "the first copy collides with nothing, so it keeps every id"
+    );
+
+    let first_refs = references_of(&project, &first.section_ids);
+    assert_eq!(
+        first_refs,
+        references_of(&project, &second.section_ids),
+        "the re-minted copy hangs everything off the same stations"
+    );
+    for kind in [
+        "merge ", "closure ", "comment ", "name ", "offset ", "datum ",
+    ] {
+        assert!(
+            first_refs.iter().any(|r| r.starts_with(kind)),
+            "the source exercises {kind:?}: {first_refs:?}"
+        );
+    }
+    assert!(
+        !first_refs.iter().any(|r| r.contains('?')),
+        "every reference resolves: {first_refs:?}"
+    );
+    assert!(
+        first_refs.contains(&"gauge 0 true Some(\"1\") Some(\"0\")".to_string()),
+        "the gauge pair survived the read, so the comparison above covers it: {first_refs:?}"
+    );
+    assert!(!project.has_critical_integrity_violations());
+}
+
+/// `append_project` handed a source that repeats one id INSIDE a section. The
+/// source read (`read_source_project`) dedupes that first, but the copy must
+/// not depend on it. Two things rename here: `Section::new` re-mints the later
+/// occurrence while the section is built, and `reassign_repeated_shot_uuids`
+/// renames the first because the target already holds the id. Whatever names
+/// the id - the gauge anchor and the translation an ignore would use - must
+/// follow the FIRST occurrence: the shot a reference to it resolves to in the
+/// source (`resolve_key` takes the first match).
+/// INJECTION: letting the LAST occurrence win in `carry_shot_identity`
+/// (`by_source.insert` instead of `entry().or_insert_with`) moves the gauge
+/// onto shot 2; dropping its `renamed.get(..).is_none()` guard points the
+/// translation at shot 2. Both fail.
+#[test]
+fn an_in_section_repeat_is_followed_to_its_first_occurrence() {
+    let mut target = Project::new("Target".to_string(), None);
+    target.add_section(section("T0", vec![shot("U", 0.0, 10.0, 1.0)]));
+    let mut source = Project::new("Crafted".to_string(), None);
+    let s0 = source
+        .add_section(section(
+            "S0",
+            vec![
+                shot("U", 10.0, 5.0, 1.0),
+                shot("x", 20.0, 4.0, 1.5),
+                shot("y", 30.0, 3.0, 2.0),
+            ],
+        ))
+        .id;
+    if let Some(s) = source.get_section_mut(s0) {
+        // The repeat `Section::new` would have removed, put back by hand.
+        s.shots[2].uuid = Some("U".to_string());
+        s.gauge_shot_uuid = Some("U".to_string());
+        s.gauge_neighbour_uuid = Some("x".to_string());
+    }
+
+    let outcome = super::project_append::append_project(&mut target, &source).unwrap();
+    let id = outcome.new_section_ids[0];
+    let copied = target.get_section(id).unwrap();
+    let ids: Vec<String> = copied
+        .shots
+        .iter()
+        .map(|shot| shot.uuid.clone().unwrap())
+        .collect();
+    assert_ne!(ids[0], "U", "the first occurrence collides with the target");
+    assert_ne!(ids[2], "U", "the repeat collides too");
+    assert_ne!(ids[0], ids[2], "and they do not share the fresh id");
+    assert_eq!(ids[1], "x", "a non-colliding id is kept");
+    assert_eq!(
+        copied.gauge_shot_uuid.as_deref(),
+        Some(ids[0].as_str()),
+        "the gauge follows the first occurrence"
+    );
+    assert_eq!(copied.gauge_neighbour_uuid.as_deref(), Some("x"));
+    assert_eq!(
+        outcome.shot_uuid_map.get(id, "U"),
+        Some(ids[0].as_str()),
+        "the translation an ignore would use names the first occurrence"
+    );
+    assert_no_repeated_shot_uuid(&target, "an in-section repeat");
+}
+
+/// The same through "Merge projects": two copies of one gauged project merged
+/// into a new file. The merge also re-solves offsets and settles ids project
+/// wide after the copies (`redrive_offsets_after_load`); after all of that, and
+/// a read back from disk, the second copy's gauge pair still names the shots
+/// the first copy's does.
+/// INJECTION: copying the gauge pair verbatim in `carry_shot_identity` fails
+/// the comparison.
+#[test]
+fn merging_two_copies_carries_the_gauge_pair_through_the_rename() {
+    let temp = TempDir::new().unwrap();
+    let mut gauged = source_alpha_named();
+    if let Some(s) = gauged.sections.first_mut() {
+        s.reverse_parity = true;
+        s.gauge_shot_uuid = Some("a0-1".to_string());
+        s.gauge_neighbour_uuid = Some("a0-0".to_string());
+    }
+    let first = save_to(temp.path(), "alpha.stalx", &gauged);
+    let second = temp.path().join("alpha-copy.stalx");
+    std::fs::copy(&first, &second).unwrap();
+
+    let mut merged = merge_files(temp.path(), vec![first, second]);
+    merged.redrive_offsets_after_load();
+    assert_no_repeated_shot_uuid(&merged, "the merged project");
+    let per_copy = gauged.sections.len();
+    let ids: Vec<SectionId> = merged.sections.iter().map(|s| s.id).collect();
+    let (one, two) = ids.split_at(per_copy);
+    let first_refs = references_of(&merged, one);
+    assert!(
+        first_refs.contains(&"gauge 0 true Some(\"1\") Some(\"0\")".to_string()),
+        "the gauge pair survived the merge: {first_refs:?}"
+    );
+    assert_eq!(
+        first_refs,
+        references_of(&merged, two),
+        "the renamed copy's gauge pair names the same shots"
+    );
+}
