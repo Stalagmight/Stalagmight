@@ -6,6 +6,7 @@ import { isEditingBlockedNow } from '../../hooks/useEditingBlocked';
 import { getErrorMessage } from '../../utils/ipc';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { formatLength } from '../../utils/formatStats';
+import { getNextSectionColor } from '../../utils/colors';
 import { MIN_SPLIT_CHILD_LENGTH_M } from '../../utils/shotSplit';
 import { previewSplitSection } from '../../utils/splitSection';
 import { defaultConfig } from '../../types/config';
@@ -21,7 +22,7 @@ import { DialogWrapper } from './DialogWrapper';
  */
 export default function SplitSectionHereDialog() {
   const { t } = useTranslation();
-  const { closeDialog, dialogData, clearSelection } = useUIStore();
+  const { closeDialog, dialogData, clearSelection, resolvedTheme } = useUIStore();
   const { splitSection, project, stations, config } = useProjectStore();
   const lengthUnit = config?.units?.length ?? defaultConfig.units.length;
 
@@ -59,7 +60,15 @@ export default function SplitSectionHereDialog() {
   const [nameA, setNameA] = useState(`${sectionName}-A`);
   const [nameB, setNameB] = useState(`${sectionName}-B`);
   const [colorA, setColorA] = useState(sectionColor);
-  const [colorB, setColorB] = useState(sectionColor);
+  // Half B is a new section, so it defaults to the colour a new section gets
+  // (the next palette colour no section uses), which is never half A's.
+  // Compared lowercase: the palette is, a stored colour may not be.
+  const [colorB, setColorB] = useState(() =>
+    getNextSectionColor(
+      (project?.sections ?? []).map((s) => s.color.toLowerCase()).concat(sectionColor.toLowerCase()),
+      resolvedTheme
+    )
+  );
   const [commentSide, setCommentSide] = useState<SplitSide>('a');
   const [datumSide, setDatumSide] = useState<SplitSide>('a');
   const [isSubmitting, setIsSubmitting] = useState(false);

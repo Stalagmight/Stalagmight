@@ -9,20 +9,26 @@ const clearSelection = vi.fn();
 const splitSection = vi.fn();
 
 let dialogData: Record<string, unknown> = {};
-const uiState = () => ({ closeDialog, clearSelection, dialogData });
+let resolvedTheme = 'dark';
+const uiState = () => ({ closeDialog, clearSelection, dialogData, resolvedTheme });
 vi.mock('../../../store/uiStore', () => ({
   useUIStore: Object.assign(() => uiState(), { getState: () => uiState() }),
 }));
 
 const shot = (id: number) => ({ id, length: 10 });
 let stations: Array<Record<string, unknown>> = [];
+let mainColor = '#123456';
+let otherSections: Array<Record<string, unknown>> = [];
 vi.mock('../../../store/projectStore', () => ({
   useProjectStore: () => ({
     splitSection,
     config: null,
     stations,
     project: {
-      sections: [{ id: 3, name: 'Main', color: '#123456', shots: [shot(31), shot(32), shot(33), shot(34)] }],
+      sections: [
+        { id: 3, name: 'Main', color: mainColor, shots: [shot(31), shot(32), shot(33), shot(34)] },
+        ...otherSections,
+      ],
     },
   }),
 }));
@@ -46,6 +52,7 @@ vi.mock('../DialogWrapper', () => ({
 
 import '../../../i18n';
 import SplitSectionHereDialog from '../SplitSectionHereDialog';
+import { LIGHT_SECTION_COLORS, SECTION_COLORS } from '../../../utils/colors';
 
 const station = (index: number, extra: Record<string, unknown>) => ({
   station_ref: { section_id: 3, station_index: index },
@@ -58,6 +65,9 @@ describe('SplitSectionHereDialog', () => {
     vi.clearAllMocks();
     blocked = false;
     stations = [];
+    mainColor = '#123456';
+    otherSections = [];
+    resolvedTheme = 'dark';
     splitSection.mockResolvedValue({ success: true });
     previewSplitSection.mockResolvedValue(NO_MOVE);
     dialogData = { sectionId: 3, at: { type: 'station', station_index: 2 }, label: '3:2' };
@@ -68,6 +78,8 @@ describe('SplitSectionHereDialog', () => {
     expect(screen.getByTestId('split-here-name-a')).toHaveValue('Main-A');
     expect(screen.getByTestId('split-here-name-b')).toHaveValue('Main-B');
     expect(screen.getByTestId('split-here-color-a')).toHaveValue('#123456');
+    // B is a new section: the colour a new section gets, not A's.
+    expect(screen.getByTestId('split-here-color-b')).toHaveValue(SECTION_COLORS[0]);
     expect(screen.getByTestId('split-here-summary')).toHaveTextContent('Splitting Main at station 3:2');
     expect(screen.getByTestId('split-here-credit-note')).toHaveTextContent(
       'Each shot keeps its own surveyors, explorers and survey date.'
@@ -75,6 +87,30 @@ describe('SplitSectionHereDialog', () => {
     expect(screen.getByTestId('split-here-unconnected-hint')).toHaveTextContent(
       'The halves are not connected: merge the two cut stations if routes and gas planning should continue across them.'
     );
+  });
+
+  it("defaults B to the next palette colour no section uses, never A's", () => {
+    // A's colour IS the first palette colour (stored uppercase), and another
+    // section has the second: B takes the third.
+    mainColor = SECTION_COLORS[0]!.toUpperCase();
+    otherSections = [{ id: 4, name: 'Other', color: SECTION_COLORS[1], shots: [] }];
+    render(<SplitSectionHereDialog />);
+    expect(screen.getByTestId('split-here-color-a')).toHaveValue(SECTION_COLORS[0]);
+    expect(screen.getByTestId('split-here-color-b')).toHaveValue(SECTION_COLORS[2]);
+  });
+
+  it('draws B from the light palette on a light canvas', () => {
+    resolvedTheme = 'light';
+    render(<SplitSectionHereDialog />);
+    expect(screen.getByTestId('split-here-color-b')).toHaveValue(LIGHT_SECTION_COLORS[0]);
+  });
+
+  it("still lets B take A's colour from the picker", async () => {
+    render(<SplitSectionHereDialog />);
+    fireEvent.change(screen.getByTestId('split-here-color-b'), { target: { value: '#123456' } });
+    fireEvent.click(screen.getByTestId('split-here-confirm'));
+    await waitFor(() => expect(splitSection).toHaveBeenCalled());
+    expect(splitSection.mock.calls[0]?.[2]).toMatchObject({ color_a: '#123456', color_b: '#123456' });
   });
 
   it('sends a station split and clears the selection', async () => {
@@ -85,7 +121,7 @@ describe('SplitSectionHereDialog', () => {
       name_a: 'Main-A',
       name_b: 'Main-B',
       color_a: '#123456',
-      color_b: '#123456',
+      color_b: SECTION_COLORS[0],
       comment_side: 'a',
       datum_side: 'a',
     });
