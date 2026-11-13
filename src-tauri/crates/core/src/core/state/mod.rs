@@ -22,6 +22,7 @@ mod project_create;
 mod project_io;
 mod project_load;
 mod project_merge;
+mod project_restore;
 mod project_source;
 mod raw_data;
 mod recent_projects;
@@ -146,6 +147,12 @@ mod open_undo_bugs_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod project_add_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod project_restore_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
