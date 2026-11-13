@@ -14,7 +14,13 @@ import { useProject } from '../../hooks/useProject';
 import { useUIStore } from '../../store/uiStore';
 import { setSource } from '../../utils/telemetry';
 import { MENU_ICON_COLORS } from '../common/menuColors';
-import { leadingMenuItems, serviceMenuItems, quitMenuItem, importMenuItem } from '../common/appMenuItems';
+import {
+  leadingMenuItems,
+  serviceMenuItems,
+  quitMenuItem,
+  importMenuItem,
+  mnemoImportMenuItem,
+} from '../common/appMenuItems';
 import type { AppMenuItem } from '../common/AppMenu';
 import {
   SaveIcon,
@@ -119,6 +125,7 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
       // the router rejects exactly the additive DMP case, with a tailored
       // message naming the read-only cause.
       importMenuItem(t),
+      ...mnemoImportMenuItem(t, { onOpen: () => openDialog('mnemo-import') }),
       {
         id: 'toolbar-export-button',
         label: t('common.actions.export'),

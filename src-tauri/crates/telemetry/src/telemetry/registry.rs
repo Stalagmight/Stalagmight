@@ -274,6 +274,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "action.dialog.keyboard-shortcuts",
     "action.dialog.merge",
     "action.dialog.merge-projects",
+    "action.dialog.mnemo-import",
     "action.dialog.new-project",
     "action.dialog.new-project-for-import",
     "action.dialog.orphan-placement",
@@ -349,6 +350,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.keyboard-shortcuts",
     "dialog-cancel.merge",
     "dialog-cancel.merge-projects",
+    "dialog-cancel.mnemo-import",
     "dialog-cancel.new-project",
     "dialog-cancel.new-project-for-import",
     "dialog-cancel.orphan-placement",
@@ -455,6 +457,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.keyboard-shortcuts",
     "dwell.dialog.merge",
     "dwell.dialog.merge-projects",
+    "dwell.dialog.mnemo-import",
     "dwell.dialog.new-project",
     "dwell.dialog.new-project-for-import",
     "dwell.dialog.orphan-placement",
@@ -619,6 +622,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.keyboard-shortcuts",
     "active-dwell.dialog.merge",
     "active-dwell.dialog.merge-projects",
+    "active-dwell.dialog.mnemo-import",
     "active-dwell.dialog.new-project",
     "active-dwell.dialog.new-project-for-import",
     "active-dwell.dialog.orphan-placement",
@@ -1170,7 +1174,8 @@ mod tests {
         //       = 722.
         //   + 3 Import from MNemo over USB (#725): command.list_mnemo_ports,
         //       command.pull_mnemo, command.cancel_mnemo_pull = 725.
-        assert_eq!(EVENT_NAMES.len(), 725);
+        //   + 4 the full per-dialog set for mnemo-import = 729.
+        assert_eq!(EVENT_NAMES.len(), 729);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

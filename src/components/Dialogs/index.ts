@@ -7,6 +7,7 @@ export { default as DmpNewImportDialog } from './DmpNewImportDialog';
 export { default as ConfirmDialog } from './ConfirmDialog';
 export { default as ReverseSectionDialog } from './ReverseSectionDialog';
 export { default as SplitSectionHereDialog } from './SplitSectionHereDialog';
+export { default as MnemoImportDialog } from './MnemoImportDialog';
 export { default as CombineSectionsDialog } from './CombineSectionsDialog';
 export { default as DeleteShotChoiceDialog } from './DeleteShotChoiceDialog';
 export { default as BulkDeleteDialog } from './BulkDeleteDialog';

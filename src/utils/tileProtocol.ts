@@ -11,6 +11,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import * as maplibregl from 'maplibre-gl';
+import { isAndroid } from './platform';
 
 /**
  * Tile fetch statistics from the Rust native protocol handler.
@@ -48,8 +49,6 @@ export async function getTileFetchStats(): Promise<TileFetchStats> {
     totalErrors: stats.total_errors,
   };
 }
-
-const isAndroid = navigator.userAgent.includes('Android');
 
 /**
  * Register the tile protocol for MapLibre.

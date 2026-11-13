@@ -2172,6 +2172,7 @@
   "globalView": {
     "actions": {
       "import": "Import",
+      "importFromMnemo": "Import from MNemo...",
       "mergeProjects": "Merge {{countFormatted}} projects",
       "mergeProjectsAria": "Merge {{countFormatted}} selected projects",
       "newProject": "New project",
