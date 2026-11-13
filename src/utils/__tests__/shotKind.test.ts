@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 import type { ShotKind } from '../../types/ipc/ShotKind';
 import {
   SHOT_KIND_CYCLE,
+  countsTowardLength,
   isVirtualShotKind,
   nextShotKind,
   shotKindGlyph,
+  surveyedLength,
 } from '../shotKind';
 import { shotKindFromFlags, shotKindToFlags } from '../../types/survey-data';
 
@@ -74,5 +76,30 @@ describe('shot kind binary flag encoding (#27)', () => {
     // would enter gas, penetration and the ruler at normal cost; `Reference`
     // can only shrink a route, which is the safe direction (#27).
     expect(shotKindFromFlags(0b11)).toBe('Reference');
+  });
+});
+
+describe('survey length leaves out Reference shots (#689)', () => {
+  it('counts Normal and Jump, never Reference', () => {
+    expect(countsTowardLength('Normal')).toBe(true);
+    expect(countsTowardLength('Jump')).toBe(true);
+    expect(countsTowardLength('Reference')).toBe(false);
+  });
+
+  it('sums and counts only the shots that count toward length', () => {
+    const shots: { kind: ShotKind; length: number }[] = [
+      { kind: 'Normal', length: 10 },
+      { kind: 'Reference', length: 4 },
+      { kind: 'Jump', length: 3 },
+      { kind: 'Reference', length: 6 },
+    ];
+    expect(surveyedLength(shots)).toEqual({ length: 13, shotCount: 2 });
+  });
+
+  it('is zero for a run made only of Reference shots', () => {
+    expect(surveyedLength([{ kind: 'Reference', length: 9 }])).toEqual({
+      length: 0,
+      shotCount: 0,
+    });
   });
 });

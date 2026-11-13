@@ -24,29 +24,12 @@ import { formatFixed, formatPercent, formatNumber, formatDate } from '../../i18n
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { useActiveStations } from '../../hooks/useActiveStations';
 import { setSource, trackContextMenuAction } from '../../utils/telemetry';
-import { SHOT_KIND_LABEL_KEY, nextShotKind } from '../../utils/shotKind';
+import { SHOT_KIND_LABEL_KEY, nextShotKind, surveyedLength } from '../../utils/shotKind';
 import { countUnresolvedErrors } from '../../utils/validation';
 import { shotCredit } from '../../utils/sectionCredit';
 import { CreditDetail, MultiShotDetail, sectionCredits, useSelectedShots } from './CreditDetail';
+import { CenterLocateIcon, DetailRow, StatCard } from './DetailPanelParts';
 import { warningKey, warningMessageTestId, warningOpenShotTestId, warningResolveTestId, warningUndoResolveTestId } from '../../utils/testId';
-
-/** Center/locate glyph (small ring + edge spokes), filled so it stays crisp
- *  under the page-zoom UI scale. Shared by the per-entity "center on map"
- *  buttons (station/shot/section) below. */
-function CenterLocateIcon() {
-  return (
-    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-      <path
-        fillRule="evenodd"
-        d="M9 12a3 3 0 1 0 6 0a3 3 0 1 0 -6 0ZM11.2 12a0.8 0.8 0 1 0 1.6 0a0.8 0.8 0 1 0 -1.6 0Z"
-      />
-      <rect x="10.9" y="2" width="2.2" height="4" rx="1.1" />
-      <rect x="10.9" y="18" width="2.2" height="4" rx="1.1" />
-      <rect x="2" y="10.9" width="4" height="2.2" rx="1.1" />
-      <rect x="18" y="10.9" width="4" height="2.2" rx="1.1" />
-    </svg>
-  );
-}
 
 export default function DetailPanel() {
   const { t } = useTranslation();
@@ -1186,10 +1169,15 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
   const credits = useMemo(() => sectionCredits(section), [section]);
 
   // Calculate section statistics
-  const sectionLength = section.shots.reduce((sum, s) => sum + s.length, 0);
+  // Length leaves out Reference shots, matching the project total it is a
+  // share of (#689); the average is over the same shots.
+  const { length: sectionLength, shotCount: lengthShotCount } = surveyedLength(section.shots);
   const shotCount = section.shots.length;
   const referenceCount = section.shots.filter((s) => s.kind !== 'Normal').length;
-  const avgShotLength = shotCount > 0 ? sectionLength / shotCount : 0;
+  const avgShotLength = lengthShotCount > 0 ? sectionLength / lengthShotCount : null;
+  // Reference length is left out of the section length; say so, or a section of
+  // Reference shots reads "0.0 m" with no reason next to a table of real lengths.
+  const referenceLength = section.shots.reduce((sum, s) => (s.kind === 'Reference' ? sum + s.length : sum), 0);
   const contributionPercent = totalProjectLength > 0
     ? (sectionLength / totalProjectLength) * 100
     : 0;
@@ -1288,11 +1276,18 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
             <div className="grid grid-cols-2 gap-x-4 gap-y-1">
               <StatCard label={t('detailPanel.section.totalLength')} value={`${formatFixed(sectionLength, undefined, precision.length)} ${t('common.units.meters')}`} />
               <StatCard label={t('detailPanel.section.shotCount')} value={formatNumber(shotCount)} />
-              <StatCard label={t('detailPanel.section.avgShot')} value={`${formatFixed(avgShotLength, undefined, precision.length)} ${t('common.units.meters')}`} />
+              <StatCard label={t('detailPanel.section.avgShot')} value={avgShotLength === null ? '-' : `${formatFixed(avgShotLength, undefined, precision.length)} ${t('common.units.meters')}`} />
               {referenceCount > 0 && (
                 <StatCard label={t('detailPanel.section.referenceShots')} value={formatNumber(referenceCount)} />
               )}
             </div>
+            {referenceLength > 0 && (
+              <p className="text-xs text-text-secondary" data-testid="section-reference-length-note">
+                {t('detailPanel.section.referenceLengthNote', {
+                  length: `${formatFixed(referenceLength, undefined, precision.length)} ${t('common.units.meters')}`,
+                })}
+              </p>
+            )}
           </div>
 
           {/* Depth range */}
@@ -1733,20 +1728,3 @@ function ClosuresSection({
   );
 }
 
-function StatCard({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="text-sm">
-      <div className="text-text-secondary text-xs">{label}</div>
-      <div className="font-medium">{value}</div>
-    </div>
-  );
-}
-
-function DetailRow({ label, value, testId }: { label: string; value: React.ReactNode; testId?: string }) {
-  return (
-    <div className="flex justify-between text-sm" data-testid={testId}>
-      <span className="text-text-secondary">{label}:</span>
-      <span>{value}</span>
-    </div>
-  );
-}

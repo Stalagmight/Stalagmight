@@ -275,14 +275,12 @@ pub struct SectionUpdates {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct SectionStats {
     pub shot_count: usize,
-    /// Sum of **every** shot's length, including both virtual kinds. Deliberately
-    /// unchanged by #27 so the length users already read does not silently shift
-    /// on upgrade; use [`swum_length`](Self::swum_length) for the divable figure.
+    /// Surveyed length: the sum of every shot's length except
+    /// [`ShotKind::Reference`]. A Reference shot is a survey tie duplicating
+    /// passage already surveyed, so counting it would double-count length
+    /// (#689). [`ShotKind::Jump`] counts: it is a swum, surveyed shortcut
+    /// (#27 q7). This is the one length every readout shows.
     pub total_length: f64,
-    /// Sum of the lengths a diver actually swims: excludes
-    /// [`ShotKind::Reference`] (a non-swimmable survey tie) but keeps
-    /// [`ShotKind::Jump`] (a swum shortcut). Issue #27 q13.
-    pub swum_length: f64,
     /// Count of [`ShotKind::Jump`] shots.
     pub jump_shot_count: usize,
     /// Count of [`ShotKind::Reference`] shots. Before #27 this counted every
@@ -859,21 +857,19 @@ impl Section {
     /// section's shots, so it lives on `ProjectStats` alone (#481).
     pub fn stats(&self) -> SectionStats {
         let mut total_length = 0.0;
-        let mut swum_length = 0.0;
         let mut jump_count = 0;
         let mut reference_count = 0;
 
         for shot in &self.shots {
-            total_length += shot.length;
             match shot.kind {
-                ShotKind::Normal => swum_length += shot.length,
+                ShotKind::Normal => total_length += shot.length,
                 ShotKind::Jump => {
                     jump_count += 1;
-                    // A jump IS swum, just at a higher RMV (#27 q7).
-                    swum_length += shot.length;
+                    // A jump IS surveyed passage, swum at a higher RMV (#27 q7).
+                    total_length += shot.length;
                 }
-                // A reference tie is not swimmable, so it never counts toward
-                // the divable length (#27 q13).
+                // A reference tie repeats passage already surveyed, so its
+                // length is never counted again (#689).
                 ShotKind::Reference => reference_count += 1,
             }
         }
@@ -881,7 +877,6 @@ impl Section {
         SectionStats {
             shot_count: self.shots.len(),
             total_length,
-            swum_length,
             jump_shot_count: jump_count,
             reference_shot_count: reference_count,
         }
@@ -1413,16 +1408,32 @@ mod tests {
         let stats = section.stats();
 
         assert_eq!(stats.shot_count, 4);
-        // total_length still counts everything (#27 keeps this figure raw).
-        assert_eq!(stats.total_length, 17.0); // 5 + 3 + 7 + 2
-                                              // References are not swimmable, so they drop out of the swum figure.
-        assert_eq!(stats.swum_length, 12.0); // 5 + 7
+        // A Reference repeats passage already surveyed, so its length drops
+        // out of the total (#689) while it still counts as a shot.
+        assert_eq!(stats.total_length, 12.0); // 5 + 7
         assert_eq!(stats.reference_shot_count, 2);
         assert_eq!(stats.jump_shot_count, 0);
     }
 
     #[test]
-    fn test_stats_counts_jumps_separately_and_as_swum() {
+    fn test_stats_only_reference_shots_has_zero_length() {
+        let section = Section::new(
+            0,
+            SectionData {
+                shots: vec![test_reference_shot_data(4.0), test_reference_shot_data(6.0)],
+                ..Default::default()
+            },
+        );
+
+        let stats = section.stats();
+
+        assert_eq!(stats.shot_count, 2);
+        assert_eq!(stats.total_length, 0.0);
+        assert_eq!(stats.reference_shot_count, 2);
+    }
+
+    #[test]
+    fn test_stats_counts_jumps_separately_and_in_length() {
         let section = Section::new(
             0,
             SectionData {
@@ -1438,9 +1449,8 @@ mod tests {
         let stats = section.stats();
 
         assert_eq!(stats.shot_count, 3);
-        assert_eq!(stats.total_length, 10.0);
-        // A jump IS swum (#27 q7), so only the Reference is excluded.
-        assert_eq!(stats.swum_length, 8.0); // 5 + 3
+        // A jump IS surveyed passage (#27 q7), so only the Reference is excluded.
+        assert_eq!(stats.total_length, 8.0); // 5 + 3
         assert_eq!(stats.jump_shot_count, 1);
         assert_eq!(stats.reference_shot_count, 1);
     }
@@ -1571,7 +1581,6 @@ mod tests {
         let stats = SectionStats {
             shot_count: 5,
             total_length: 42.5,
-            swum_length: 36.5,
             jump_shot_count: 2,
             reference_shot_count: 1,
         };
@@ -1581,7 +1590,6 @@ mod tests {
 
         assert_eq!(deserialized.shot_count, 5);
         assert_eq!(deserialized.total_length, 42.5);
-        assert_eq!(deserialized.swum_length, 36.5);
         assert_eq!(deserialized.jump_shot_count, 2);
         assert_eq!(deserialized.reference_shot_count, 1);
     }

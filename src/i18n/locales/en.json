@@ -2043,6 +2043,7 @@
       "shotCount": "Shots",
       "avgShot": "Average shot",
       "referenceShots": "Jump/Reference shots",
+      "referenceLengthNote": "Reference shots ({{length}}) are not counted in the length.",
       "depthRange": "Depth range",
       "shallowest": "Shallowest",
       "deepest": "Deepest",
