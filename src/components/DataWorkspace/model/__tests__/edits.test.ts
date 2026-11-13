@@ -88,6 +88,22 @@ describe('buildEditCommands', () => {
     expect(plan.skipped).toEqual([]);
   });
 
+  it('compares a station name as the backend stores it: what only differs in stripped text is no edit', () => {
+    // st:1:1 is named "A1". A bidi override, a trailing tab or surrounding
+    // spaces are all dropped by sanitize_station_name, so none changes it.
+    for (const typed of ['\u202eA1', 'A1\t', '  A1 ', 'A\u200e1']) {
+      expect(buildEditCommands([edit('st:1:1', 'name', typed)], ctx).commands).toEqual([]);
+    }
+    // A real change is sent as the backend will store it.
+    expect(buildEditCommands([edit('st:1:1', 'name', 'A\u202e2\n')], ctx).commands).toEqual([
+      { type: 'set_station_name', station_ref: { section_id: 1, station_index: 1 }, name: 'A2' },
+    ]);
+    // Nothing left: the name is removed.
+    expect(buildEditCommands([edit('st:1:1', 'name', '\u202e ')], ctx).commands).toEqual([
+      { type: 'set_station_name', station_ref: { section_id: 1, station_index: 1 }, name: null },
+    ]);
+  });
+
   it('routes credit cells through edit_shot_credit in the same batch', () => {
     const plan = buildEditCommands(
       [edit('sh:1:102', 'surveyors', [{ name: 'Ann' }]), edit('sh:1:102', 'date', '2026-01-02'), edit('sh:1:102', 'length', 7)],

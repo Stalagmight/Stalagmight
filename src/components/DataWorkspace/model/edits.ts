@@ -16,6 +16,7 @@
  */
 import type { BatchCommand } from '../../../types/commands';
 import type { ShotUpdates } from '../../../types/project';
+import { sanitizeStationName } from '../../../utils/formatters';
 import { AZIMUTH_AVG_KEY, PITCH_AVG_KEY, buildShotUpdates, creditEditForCells } from '../../SingleSystemView/dataTableEdits';
 import { DATA_COLUMN_BY_KEY } from '../columnsMeta';
 import type { DataCellEdit, DataColumnDef, DataColumnKey, DataEditPlan, DataModelCtx, ShotRow, StationRow } from '../types';
@@ -145,7 +146,10 @@ function stationCommands(row: StationRow, cells: Map<DataColumnKey, DataCellEdit
   }
   const name = cells.get('name');
   if (name) {
-    const next = typeof name.value === 'string' && name.value.trim() !== '' ? name.value.trim() : null;
+    // Compared as the backend will store it (controls and bidi marks dropped,
+    // trimmed, clamped): an edit that only differs in what gets stripped is no
+    // edit, and must not cost an undo step or mark the project dirty.
+    const next = typeof name.value === 'string' ? sanitizeStationName(name.value) : null;
     if (next !== (ctx.data.stationNames.get(row.g) ?? null)) {
       out.push({ type: 'set_station_name', station_ref, name: next });
     }

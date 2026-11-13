@@ -40,6 +40,9 @@ pub fn is_unsafe_in_station_name(c: char) -> bool {
 ///
 /// Idempotent: a name it returns comes back unchanged, so redoing an edit lands
 /// on exactly what the edit stored.
+///
+/// Mirrored exactly by `sanitizeStationName` (src/utils/formatters.ts), which the
+/// Data workspace uses to tell a no-op edit before sending it: change both.
 pub fn sanitize_station_name(raw: &str) -> Option<String> {
     let cleaned: String = raw
         .chars()

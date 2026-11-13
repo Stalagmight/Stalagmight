@@ -65,6 +65,62 @@ export function displayStationName(name: string | null | undefined): string {
   return out;
 }
 
+/** Longest station name an edit stores, in code points: Rust
+ *  `MAX_STATION_NAME_CHARS` (src-tauri/crates/models/src/station_name.rs). */
+export const MAX_STATION_NAME_CHARS = 256;
+
+/** Rust `char::is_whitespace` (the Unicode White_Space property). Not JS `\s`
+ *  or `String.prototype.trim`, which also take U+FEFF and Rust does not. */
+function isRustWhitespace(codePoint: number): boolean {
+  return (
+    (codePoint >= 0x09 && codePoint <= 0x0d) ||
+    codePoint === 0x20 ||
+    codePoint === 0x85 ||
+    codePoint === 0xa0 ||
+    codePoint === 0x1680 ||
+    (codePoint >= 0x2000 && codePoint <= 0x200a) ||
+    codePoint === 0x2028 ||
+    codePoint === 0x2029 ||
+    codePoint === 0x202f ||
+    codePoint === 0x205f ||
+    codePoint === 0x3000
+  );
+}
+
+/** Drop Rust-whitespace code points from both ends (`str::trim`), or only the
+ *  end (`str::trim_end`). */
+function trimRustWhitespace(cps: readonly string[], start = true): readonly string[] {
+  let lo = 0;
+  let hi = cps.length;
+  const ws = (ch: string | undefined) => ch !== undefined && isRustWhitespace(ch.codePointAt(0) ?? 0);
+  if (start) while (lo < hi && ws(cps[lo])) lo++;
+  while (hi > lo && ws(cps[hi - 1])) hi--;
+  return lo === 0 && hi === cps.length ? cps : cps.slice(lo, hi);
+}
+
+/**
+ * A station name as the backend stores it from an edit - an exact mirror of
+ * Rust `sanitize_station_name`, so the UI can tell a no-op edit before sending
+ * it - or null when nothing is left (the edit removes the name).
+ *
+ * Unsafe code points (`isUnsafeForDisplay`, the set Rust
+ * `is_unsafe_in_station_name` drops) go, except that a whitespace control (a
+ * tab or newline from a pasted cell) becomes a space. Then surrounding
+ * whitespace is trimmed and the result is cut to MAX_STATION_NAME_CHARS code
+ * points, dropping whitespace left at the cut.
+ */
+export function sanitizeStationName(raw: string): string | null {
+  const cleaned: string[] = [];
+  for (const ch of raw) {
+    const cp = ch.codePointAt(0) ?? 0;
+    if (!isUnsafeForDisplay(cp)) cleaned.push(ch);
+    else if (isRustWhitespace(cp)) cleaned.push(' ');
+  }
+  let name = trimRustWhitespace(cleaned);
+  if (name.length > MAX_STATION_NAME_CHARS) name = trimRustWhitespace(name.slice(0, MAX_STATION_NAME_CHARS), false);
+  return name.length > 0 ? name.join('') : null;
+}
+
 /**
  * A station ID with its name, when it has one (e.g. the MNemo station number
  * a DMP import recorded). The name is not unique - MNemo restarts at 0 in
