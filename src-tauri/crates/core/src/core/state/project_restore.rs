@@ -122,13 +122,7 @@ fn restore(project: &Path, backup: &Path, open: Option<&Path>) -> Result<String,
 
     // 1. The backup's bytes, staged before anything else is written.
     let staged = stage_copy(backup, dir, &project)?;
-    drop(Database::open_readonly(&staged).map_err(|e| {
-        format!(
-            "Not restored: {} does not open as a Stalagmight project ({e:#}). \
-             Nothing was changed.",
-            name(backup)
-        )
-    })?);
+    drop(Database::open_readonly(&staged).map_err(|e| unopenable_backup(backup, &staged, &e))?);
 
     // 2. The safety copy of the project, when there is a project to copy.
     let kept = match std::fs::symlink_metadata(&project) {
@@ -166,6 +160,13 @@ fn restore(project: &Path, backup: &Path, open: Option<&Path>) -> Result<String,
         )
     })?;
 
+    if is_same_file(backup, &safety) {
+        return Ok(format!(
+            "Restored {0}, the copy the last restore kept. The two files swapped places: \
+             {0} now holds the file it replaced, so restoring it again switches back.",
+            name(&safety)
+        ));
+    }
     let mut message = format!("Restored from {}.", backup.display());
     if kept {
         message.push_str(&format!(
@@ -174,6 +175,29 @@ fn restore(project: &Path, backup: &Path, open: Option<&Path>) -> Result<String,
         ));
     }
     Ok(message)
+}
+
+/// Why the backup cannot be restored, in the dialog's words. The full reason
+/// goes to the log; the dialog says what it means for the user.
+fn unopenable_backup(backup: &Path, staged: &Path, error: &anyhow::Error) -> String {
+    let reason = format!("{error:#}");
+    tracing::warn!(backup = %backup.display(), %reason, "The backup does not open as a project");
+    let empty = std::fs::metadata(staged).is_ok_and(|m| m.len() == 0);
+    let what = if empty {
+        "is empty".to_string()
+    } else if reason.contains("may be corrupted") {
+        "is damaged too: it fails the same integrity check".to_string()
+    } else if reason.contains("not a database")
+        || reason.contains("does not contain a valid Stalagmight project")
+    {
+        "is not a Stalagmight project".to_string()
+    } else {
+        format!("cannot be opened as a Stalagmight project ({reason})")
+    };
+    format!(
+        "Not restored: {} {what}. Nothing was changed. Pick another backup.",
+        name(backup)
+    )
 }
 
 /// A project path that is a symbolic link is restored into the file it names,
