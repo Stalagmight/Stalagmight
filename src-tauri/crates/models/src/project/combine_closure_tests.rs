@@ -402,7 +402,7 @@ impl Rng {
 }
 
 fn random_shots(rng: &mut Rng) -> Vec<ShotData> {
-    (0..1 + rng.below(3))
+    (0..=rng.below(3))
         .map(|_| shot(rng.range(0.0, 360.0), rng.range(2.0, 15.0)))
         .collect()
 }
@@ -436,7 +436,7 @@ fn network(seed: u64) -> Project {
         place(&mut project, s, index, at);
         let _ = project.merge_stations(host, StationRef::new(s, index));
     }
-    for j in 0..1 + rng.below(2) {
+    for j in 0..=rng.below(2) {
         let all = every_station(&project);
         let (p, q) = (all[rng.below(all.len())], all[rng.below(all.len())]);
         let (pp, qq) = (xy(&project, p), xy(&project, q));
@@ -655,7 +655,7 @@ fn check_combined(
     assert!(violations.is_empty(), "{what}: {violations:?}");
     after.debug_assert_merge_alignment(what);
     let mut forest: HashMap<SectionId, SectionId> = HashMap::new();
-    for merge in after.station_merges.iter() {
+    for merge in &after.station_merges {
         let (a, b) = (
             after.resolve_key(&merge.station_a).unwrap(),
             after.resolve_key(&merge.station_b).unwrap(),

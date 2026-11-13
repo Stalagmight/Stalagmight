@@ -36,7 +36,7 @@ use crate::{
     SectionId, StationKey, StationRef, FEATURE_ID_STRIDE,
 };
 
-use super::combine_plan::{JoinPoint, TiePlan};
+use super::combine_plan::{JoinPoint, Tie, TiePlan};
 use super::station_rekey::value_naming;
 use super::Project;
 
@@ -143,6 +143,10 @@ pub(crate) struct EndTable {
     ends: Vec<(SectionId, SectionEnd, (f64, f64))>,
     by_end: HashMap<(SectionId, SectionEnd), (f64, f64)>,
     cells: HashMap<(i64, i64), Vec<usize>>,
+    /// The project's rigid ties, resolved once per query on first use: a
+    /// junction's station query plans two choices of kept section for every
+    /// partner, and each plan reads all of them.
+    ties: std::cell::OnceCell<Vec<Tie>>,
 }
 
 #[cfg(test)]
@@ -174,6 +178,7 @@ impl EndTable {
             ends,
             by_end,
             cells,
+            ties: std::cell::OnceCell::new(),
         }
     }
 
@@ -529,18 +534,21 @@ impl Project {
         let Some((join, gap)) = self.join_point(pairing, touch, kept, table) else {
             return (empty, None);
         };
-        let Ok(ties) = self.plan_ties(&join, gap) else {
+        let rigid = table.ties.get_or_init(|| self.rigid_ties());
+        let Ok(ties) = self.plan_ties(&join, gap, rigid) else {
             return (empty, None);
         };
         let (Some(k), Some(o)) = (self.get_section(join.kept), self.get_section(join.other)) else {
             return (empty, None);
         };
-        let shown = Self::plan_for_display(
-            &ties,
-            kept,
-            self.azimuth_rotation(k, o),
-            self.join_offset_change(join.join_k, join.join_o),
-        );
+        // A merged join's stations are already one point: offsets that
+        // differ there show up as the shift, not as a moved join station.
+        let offset_change = if join.merged {
+            None
+        } else {
+            self.join_offset_change(join.join_k, join.join_o)
+        };
+        let shown = Self::plan_for_display(&ties, kept, self.azimuth_rotation(k, o), offset_change);
         (shown, Some((join, ties)))
     }
 

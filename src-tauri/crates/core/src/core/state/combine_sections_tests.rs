@@ -1044,3 +1044,45 @@ fn a_combine_at_a_loop_closure_is_one_undo_step() {
     assert!(state.redo().success);
     assert_eq!(snapshot(&state), after);
 }
+
+/// A prepend into a kept section with no gauge pair pins its gauge on its
+/// old station 0 with a new pair (the index rule would move it to the
+/// prepended start). Undo gives the section back exactly as it was, without
+/// that pair: the restore's save-heal carry-forward must not copy an edit's
+/// own pair onto the half it restores. Redo puts the pair back.
+#[test]
+fn undoing_a_prepend_does_not_keep_the_gauge_pair_it_made() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Prepend".to_string(),
+        location: None,
+    });
+    let k = create(&state, "K", vec![shot(90.0, 10.0), shot(90.0, 5.0)]);
+    let o = create(&state, "O", vec![shot(0.0, 5.0), shot(0.0, 5.0)]);
+    let merged = state.execute(Command::MergeStations {
+        station_a: StationRef::new(k, 0),
+        station_b: StationRef::new(o, 2),
+    });
+    assert!(merged.success, "{:?}", merged.error);
+    let gauge = |state: &AppState| {
+        state
+            .get_project_state()
+            .unwrap()
+            .get_section(k)
+            .unwrap()
+            .gauge_shot_uuid
+            .clone()
+    };
+    assert_eq!(gauge(&state), None);
+    let before = snapshot(&state);
+
+    let result = state.execute_combine_sections(k, o, options());
+    assert!(result.success, "{:?}", result.error);
+    assert!(gauge(&state).is_some(), "the prepend pins K's gauge");
+    let after = snapshot(&state);
+
+    assert!(state.undo().success);
+    assert_eq!(snapshot(&state), before);
+    assert!(state.redo().success);
+    assert_eq!(snapshot(&state), after);
+}

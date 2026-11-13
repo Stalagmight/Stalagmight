@@ -168,9 +168,14 @@ impl Project {
     /// Plan the shift and the torn ties for joining `join`, whose join stations'
     /// chain positions are `gap` apart (the kept one minus the other one: the
     /// translation that brings the other section's join station onto the kept
-    /// one's). `Err` is the refusal: both sections carry a zero datum.
-    pub(crate) fn plan_ties(&self, join: &JoinPoint, gap: (f64, f64)) -> Result<TiePlan, String> {
-        let ties = self.rigid_ties();
+    /// one's), against `ties` ([`Self::rigid_ties`]). `Err` is the refusal:
+    /// both sections carry a zero datum.
+    pub(crate) fn plan_ties(
+        &self,
+        join: &JoinPoint,
+        gap: (f64, f64),
+        ties: &[Tie],
+    ) -> Result<TiePlan, String> {
         let merges: Vec<&Tie> = ties
             .iter()
             .filter(|t| matches!(t.id, TieId::Merge(_)))
@@ -200,18 +205,18 @@ impl Project {
         let anchored =
             |sections: &HashSet<SectionId>| sections.iter().any(|s| self.carries_zero_datum(*s));
 
-        let shift_len = gap.0.hypot(gap.1);
-        let (moving, fixed, mut torn) = if !(shift_len > COMBINE_TOLERANCE_M) {
+        // False for a non-finite gap too: nothing moves then.
+        let shifting = gap.0.hypot(gap.1) > COMBINE_TOLERANCE_M;
+        let (moving, fixed, mut torn) = if shifting {
+            self.pick_moving_side(join, &loop_ties, &adjacency_without, &anchored)?
+        } else {
             // Nothing moves (beyond the tolerance the join already allows):
             // only the loops the combine would close inside one section tear.
             (join.other, join.kept, loop_ties(join.other, join.kept))
-        } else {
-            self.pick_moving_side(join, &loop_ties, &adjacency_without, &anchored)?
         };
         let adjacency = adjacency_without(&torn);
         let side = reach(&adjacency, moving, fixed);
         let fixed_side = reach(&adjacency, fixed, moving);
-        let shifting = shift_len > COMBINE_TOLERANCE_M;
         // Snapped closures: one across the two sides closes a loop through the
         // combined section, and any from a side that moves stops being snapped.
         for tie in ties.iter().filter(|t| matches!(t.id, TieId::Closure(_))) {
@@ -393,15 +398,16 @@ impl Project {
             return;
         }
         let mut taken: Vec<(usize, LoopClosure)> = Vec::new();
-        let mut index = 0;
         let mut kept: Vec<LoopClosure> = Vec::with_capacity(self.loop_closures.len());
-        for closure in std::mem::take(&mut self.loop_closures) {
+        for (index, closure) in std::mem::take(&mut self.loop_closures)
+            .into_iter()
+            .enumerate()
+        {
             if ids.contains(&closure.id) {
                 taken.push((index, closure));
             } else {
                 kept.push(closure);
             }
-            index += 1;
         }
         self.loop_closures = kept;
         for (_, closure) in &mut taken {
