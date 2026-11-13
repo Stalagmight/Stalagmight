@@ -23,7 +23,10 @@
 //! - **The shift.** Two ends tied by a loop closure are apart by its
 //!   misclosure; M's side (M and everything still merged to it) moves by it.
 //!   M is the other section, unless its side is held by a zero datum and the
-//!   kept section's is not. When both sides are held, the merges from M to the
+//!   kept section's is not, or (no datum deciding) M's side holds the station
+//!   the closure-adjusted view holds the survey at
+//!   (`Project::adjustment_anchor_of`) and the kept side does not: moving it
+//!   would shift the whole adjusted survey by the gap. When both sides are held, the merges from M to the
 //!   datum sides also become closures (a closure between two anchored groups
 //!   is legitimate; a merge is not). Only when BOTH sections carry a zero datum
 //!   on one of their own stations is the combine refused: the combined section
@@ -236,9 +239,25 @@ impl Project {
         let (moving, fixed, mut torn, held_by_datum, kept_moves_because) = if shifting {
             // What the closure-adjusted view holds the survey at: the side that
             // holds it must stay, or the whole cave shifts there by the gap.
-            let anchor = self
-                .adjustment_anchor_of(&self.get_connected_section_ids(join.kept))
-                .map(|at| at.section_id);
+            // Only when that view adjusts the joined survey: it holds a closure
+            // the solve takes (the join's own included), or a tie this combine
+            // turns into one (a loop it closes, a snapped closure that stops
+            // being snapped). A survey the view shows as measured keeps the
+            // plain rule, and the other section moves.
+            let component = self.get_connected_section_ids(join.kept);
+            let adjusted = self.component_has_eligible_closure(&component)
+                || !loop_ties(join.other, join.kept).is_empty()
+                || ties.iter().any(|t| {
+                    matches!(t.id, TieId::Closure(_))
+                        && !join.is_join_tie(t.a, t.b)
+                        && component.contains(&t.a.section_id)
+                });
+            let anchor = if adjusted {
+                self.adjustment_anchor_of(&component)
+                    .map(|at| at.section_id)
+            } else {
+                None
+            };
             Self::pick_moving_side(
                 join,
                 &loop_ties,

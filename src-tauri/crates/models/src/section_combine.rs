@@ -132,7 +132,7 @@ pub struct CombinePlan {
     /// The kept section this plan is for.
     pub kept: SectionId,
     /// The section whose side moves to close the join (the other section,
-    /// or the kept one when the other is held by a zero datum); `None` when
+    /// or the kept one for the reason in `kept_moves_because`); `None` when
     /// the two ends already coincide (within 1 mm).
     pub moving_section: Option<SectionId>,
     /// Why the kept section's side moves, when it is the one that does.

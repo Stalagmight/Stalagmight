@@ -137,10 +137,14 @@ loop is closed by a closure (snapped ones are rigid, the rest are soft).
   stations other merges already make one point (a junction's branches merged
   pairwise).
 
-The station menu offers each pair of sections once, joined the way the
-two-section query prefers (a section can end at the point with both ends, one
-side by side and one across a closure), and a pair of two other sections only
-when one of them ends at this point.
+The station menu offers each pair of sections once, by its best join at this
+point (ranked as the two-section query ranks joins: merged, then side by side,
+then across a closure; a section can end at the point with both ends, one side
+by side and one across a closure), and a pair of two other sections only when
+one of them ends at this point. The side that moves follows the
+closure-adjusted view's anchor only where that view solves the joined survey
+(an eligible closure, or a tie the combine turns into one); a survey it shows as
+measured keeps the plain rule.
 
 `combine_closure_tests.rs` checks the shapes one by one and then sweeps random
 small networks (merged branches, snapped and recorded loops, zero datums, a

@@ -460,7 +460,7 @@ impl Project {
     #[cfg(any(test, feature = "test-support"))]
     pub fn adjustment_anchor_for_tests(&self, section_id: SectionId) -> Option<StationRef> {
         let component = self.get_connected_section_ids(section_id);
-        self.default_anchor_for_component(&component)
+        self.adjustment_anchor_of(&component)
     }
 
     /// Whether a loop closure participates in the least-squares adjustment.
@@ -474,13 +474,17 @@ impl Project {
         )
     }
 
-    /// Plan which component anchors to feed the closure-adjustment solve.
-    ///
-    /// Returns one anchor per connected component that contains an eligible
-    /// closure: a zero datum in the component when present, otherwise a
-    /// deterministic default anchor (see [`Self::default_anchor_for_component`]).
-    /// Computed from the *measured* topology so it can run once up front, before
-    /// any adjustment mutates the working copy.
+    /// Whether the least-squares adjustment solves `component`: it holds a
+    /// closure the solve takes ([`Self::closure_is_eligible`]). A component
+    /// without one is shown as measured in the closure-adjusted view.
+    pub(crate) fn component_has_eligible_closure(&self, component: &HashSet<SectionId>) -> bool {
+        self.loop_closures.iter().any(|lc| {
+            Self::closure_is_eligible(lc.strategy)
+                && component.contains(&lc.station_a.section_id)
+                && component.contains(&lc.station_b.section_id)
+        })
+    }
+
     /// The station the closure-adjusted view holds `component` at: a zero
     /// datum in it when present, otherwise a deterministic default (the
     /// component's held gauge, or the lowest section id's gauge station) so
@@ -498,6 +502,13 @@ impl Project {
             .or_else(|| self.default_anchor_for_component(component))
     }
 
+    /// Plan which component anchors to feed the closure-adjustment solve.
+    ///
+    /// Returns one anchor per connected component that contains an eligible
+    /// closure: a zero datum in the component when present, otherwise a
+    /// deterministic default anchor (see [`Self::default_anchor_for_component`]).
+    /// Computed from the *measured* topology so it can run once up front, before
+    /// any adjustment mutates the working copy.
     fn plan_adjustment_anchors(&self) -> Vec<StationRef> {
         let mut anchors = Vec::new();
         let mut visited: HashSet<SectionId> = HashSet::new();
@@ -510,12 +521,7 @@ impl Project {
                 visited.insert(*sid);
             }
 
-            let has_eligible = self.loop_closures.iter().any(|lc| {
-                Self::closure_is_eligible(lc.strategy)
-                    && component.contains(&lc.station_a.section_id)
-                    && component.contains(&lc.station_b.section_id)
-            });
-            if !has_eligible {
+            if !self.component_has_eligible_closure(&component) {
                 continue;
             }
 

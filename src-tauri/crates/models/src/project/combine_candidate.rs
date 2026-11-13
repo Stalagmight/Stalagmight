@@ -928,8 +928,10 @@ impl Project {
         }
         // One candidate per pair of sections: a section can end at this point
         // with both ends (one merged or side by side, the other across a
-        // closure), and the menu offers the pair once, joined the way the
-        // two-section query prefers.
+        // closure), and the menu offers the pair once, by its best join at
+        // this point, ranked as the two-section query ranks the joins it
+        // compares (merged, then side by side, then across a closure; then
+        // the smaller gap; then no reverse).
         let gap = |p: &Pairing| match (table.at(p.a, p.end_a), table.at(p.b, p.end_b)) {
             (Some(x), Some(y)) => distance(x, y),
             _ => f64::INFINITY,

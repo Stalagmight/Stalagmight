@@ -215,6 +215,53 @@ fn a_closure_join_moves_the_side_without_the_adjustment_anchor() {
     }
 }
 
+/// Which side moves follows the closure-adjusted view's anchor only where
+/// that view solves the joined survey. Two sections tied only by a closure
+/// the solve does not take (a legacy proportional one; merge, close the loop,
+/// unmerge) are shown as measured: the other section moves, whichever is
+/// kept. Tied by a Batch closure, or by a legacy one in a loop whose merge
+/// the combine turns into a Batch closure, the kept side moves when the
+/// other holds the anchor.
+#[test]
+fn the_anchor_counts_only_where_the_closure_adjusted_view_solves() {
+    let plans = |strategy: ClosureStrategy, unmerge: bool| {
+        let (mut project, k, o) = two_section_loop();
+        project.loop_closures[0].strategy = strategy;
+        if unmerge {
+            let (done, removed) =
+                project.unmerge_stations(StationRef::new(k, 0), StationRef::new(o, 1));
+            assert!(done && removed.is_empty(), "setup: the closure stays");
+        }
+        let candidate = project.combine_candidates(StationRef::new(k, 1)).remove(0);
+        assert_eq!(candidate.join_kind, CombineJoinKind::Closure);
+        assert!(
+            candidate.plan_keeping_b.shift_m > 0.001,
+            "setup: the ends are apart"
+        );
+        assert_eq!(candidate.plan_keeping_a.moving_section, Some(o));
+        (candidate.plan_keeping_b, k, o)
+    };
+    let (legacy_alone, k, _) = plans(ClosureStrategy::ProportionalByLength, true);
+    assert_eq!(legacy_alone.moving_section, Some(k));
+    assert_eq!(legacy_alone.kept_moves_because, None);
+    for (strategy, unmerge) in [
+        (ClosureStrategy::Batch, true),
+        (ClosureStrategy::ProportionalByLength, false),
+    ] {
+        let (plan, _, o) = plans(strategy, unmerge);
+        assert_eq!(
+            plan.moving_section,
+            Some(o),
+            "{strategy:?} unmerged {unmerge}"
+        );
+        assert_eq!(
+            plan.kept_moves_because,
+            Some(KeptMovesReason::AdjustmentAnchor),
+            "{strategy:?} unmerged {unmerge}"
+        );
+    }
+}
+
 /// A section that ends at the point with both ends: its end snapped there
 /// (side by side), its start across a loop closure 1.4 m away. The station
 /// menu offers the pair once, joined side by side (the way the two-section
@@ -354,7 +401,12 @@ fn a_zero_datum_on_the_other_section_moves_the_kept_side() {
     let candidate = project.combine_candidates(StationRef::new(k, 1)).remove(0);
     assert_eq!(candidate.blocked_reason, None);
     assert_eq!(candidate.plan_keeping_a.moving_section, Some(k));
+    assert_eq!(
+        candidate.plan_keeping_a.kept_moves_because,
+        Some(KeptMovesReason::ZeroDatum)
+    );
     assert_eq!(candidate.plan_keeping_b.moving_section, Some(k));
+    assert_eq!(candidate.plan_keeping_b.kept_moves_because, None);
 
     project
         .combine_sections(
@@ -726,6 +778,7 @@ fn check_combined(
     candidate: &CombineCandidate,
     kept: SectionId,
     what: &str,
+    mute: &[String],
 ) {
     let other = if kept == candidate.section_a {
         candidate.section_b
@@ -742,6 +795,14 @@ fn check_combined(
     } else {
         candidate.end_b
     };
+    // The plan says why exactly when the kept side is the one that moves.
+    assert_eq!(
+        plan.kept_moves_because.is_some(),
+        plan.moving_section == Some(kept),
+        "{what}: kept_moves_because {:?} with moving section {:?}",
+        plan.kept_moves_because,
+        plan.moving_section
+    );
     let old = positions(before);
     let moved: HashSet<SectionId> = plan.moved_sections.iter().copied().collect();
     // The shift, read off the moving section's own station 0.
@@ -923,7 +984,7 @@ fn check_combined(
         }
     }
 
-    check_structure(after, what);
+    check_structure_muting(after, what, mute);
 }
 
 /// What every edit leaves, whatever it was: a clean integrity report, merges
@@ -1084,7 +1145,7 @@ fn every_offered_combine_in_random_networks_keeps_the_invariants() {
                     shifted += usize::from(plan.shift_m > 0.1);
                     kept_moved += usize::from(plan.moving_section == Some(kept));
                     with_branches += usize::from(plan.moved_sections.len() > 1);
-                    check_combined(&project, &after, &candidate, kept, &what);
+                    check_combined(&project, &after, &candidate, kept, &what, &[]);
                     combined += 1;
                 }
             }
@@ -1104,7 +1165,7 @@ fn every_offered_combine_in_random_networks_keeps_the_invariants() {
     assert!(combined > seeds as usize, "only {combined} combines");
     assert!(torn > 0, "no tie was ever torn");
     assert!(shifted > 0, "no side ever moved");
-    assert!(kept_moved > 0, "a zero datum never held the other side");
+    assert!(kept_moved > 0, "the kept side never moved");
     assert!(
         with_branches > 0,
         "nothing ever moved with the moving section"
@@ -1205,7 +1266,7 @@ fn chains_of_combines_splits_and_reverses_keep_the_invariants() {
                             })),
                         )
                         .unwrap_or_else(|e| panic!("{what}: {e}"));
-                    check_combined(&project, &after, &candidate, kept, &what);
+                    check_combined(&project, &after, &candidate, kept, &what, &mute);
                     project = after;
                     trail.push(op);
                     combines += 1;
@@ -1265,7 +1326,7 @@ fn chains_of_combines_splits_and_reverses_keep_the_invariants() {
                         };
                         assert!(dist(p, was[&before_at]) < 1e-6, "{what}: {at:?} moved");
                     }
-                    check_structure(&after, &what);
+                    check_structure_muting(&after, &what, &mute);
                     project = after;
                     trail.push(op);
                     reverses += 1;
@@ -1354,7 +1415,7 @@ fn replay_a_combine_chain() {
             eprintln!("  held {:?}", project.held_gauges);
             let mut after = project.clone();
             after.combine_sections(k, o, &options(Some(join))).unwrap();
-            check_combined(&project, &after, &c, k, op);
+            check_combined(&project, &after, &c, k, op, &[]);
             project = after;
         } else if let Some(rest) = op.strip_prefix("split(") {
             let (id, at) = rest.trim_end_matches(')').split_once(" at ").unwrap();
