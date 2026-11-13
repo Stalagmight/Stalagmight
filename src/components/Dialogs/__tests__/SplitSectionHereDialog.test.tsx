@@ -44,6 +44,7 @@ vi.mock('../DialogWrapper', () => ({
   DialogWrapper: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 
+import '../../../i18n';
 import SplitSectionHereDialog from '../SplitSectionHereDialog';
 
 const station = (index: number, extra: Record<string, unknown>) => ({
@@ -70,6 +71,9 @@ describe('SplitSectionHereDialog', () => {
     expect(screen.getByTestId('split-here-summary')).toHaveTextContent('Splitting Main at station 3:2');
     expect(screen.getByTestId('split-here-credit-note')).toHaveTextContent(
       'Each shot keeps its own surveyors, explorers and survey date.'
+    );
+    expect(screen.getByTestId('split-here-unconnected-hint')).toHaveTextContent(
+      'The halves are not connected: merge the two cut stations if routes and gas planning should continue across them.'
     );
   });
 

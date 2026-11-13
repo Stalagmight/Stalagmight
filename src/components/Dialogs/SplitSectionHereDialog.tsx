@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { isEditingBlockedNow } from '../../hooks/useEditingBlocked';
@@ -19,6 +20,7 @@ import { DialogWrapper } from './DialogWrapper';
  * point along a shot, without deleting anything.
  */
 export default function SplitSectionHereDialog() {
+  const { t } = useTranslation();
   const { closeDialog, dialogData, clearSelection } = useUIStore();
   const { splitSection, project, stations, config } = useProjectStore();
   const lengthUnit = config?.units?.length ?? defaultConfig.units.length;
@@ -203,6 +205,9 @@ export default function SplitSectionHereDialog() {
         <p className="text-text-secondary" data-testid="split-here-summary">{summary}</p>
         <p className="text-sm text-text-secondary" data-testid="split-here-credit-note">
           Each shot keeps its own surveyors, explorers and survey date.
+        </p>
+        <p className="text-sm text-text-tertiary" data-testid="split-here-unconnected-hint">
+          {t('dialogs.splitSectionHere.halvesNotConnected')}
         </p>
 
         <div className="space-y-3">
