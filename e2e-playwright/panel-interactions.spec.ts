@@ -460,4 +460,58 @@ test.describe('Panel Interactions', () => {
     // App should remain functional
     await expect(page.getByTestId('map-canvas')).toBeVisible();
   });
+
+  // A Reference shot repeats passage already surveyed, so a section's length
+  // leaves it out (#689): 10 m Normal + 3 m Jump = 13 m, not the 17 m of tape.
+  // Both readouts compute client-side from the shots, so this drives the real
+  // components, not the mock's stats.
+  test('section length leaves out Reference shots (#689)', async ({ page }) => {
+    await createProject(page, 'Reference Length Project');
+    await seedProjectWithSections(page, [
+      {
+        name: 'Tie Run',
+        direction: 'in',
+        shots: [
+          { azimuth_in: 0, azimuth_out: 180, length: 10, depth_in: -1, depth_out: -2 },
+          { azimuth_in: 90, azimuth_out: 270, length: 4, depth_in: -2, depth_out: -2, kind: 'Reference' },
+          { azimuth_in: 45, azimuth_out: 225, length: 3, depth_in: -2, depth_out: -3, kind: 'Jump' },
+        ],
+      },
+      {
+        name: 'Repeat Only',
+        direction: 'in',
+        shots: [
+          { azimuth_in: 0, azimuth_out: 180, length: 10, depth_in: -1, depth_out: -2, kind: 'Reference' },
+          { azimuth_in: 0, azimuth_out: 180, length: 10, depth_in: -2, depth_out: -3, kind: 'Reference' },
+        ],
+      },
+    ]);
+    await waitForNoDialogs(page);
+
+    const sectionRow = page.locator('[data-testid^="section-row-"]').filter({ hasText: 'Tie Run' });
+    await expect(sectionRow).toContainText(/Shots: 3 \| 13(\.0+)?m/);
+
+    await sectionRow.click();
+    const sectionDetail = page.getByTestId('section-detail');
+    await expect(sectionDetail).toBeVisible();
+    const statValue = (label: string) =>
+      sectionDetail.getByText(label, { exact: true }).locator('xpath=following-sibling::div[1]');
+    await expect(statValue('Total length')).toHaveText(/^13(\.0+)? m$/);
+    // Averaged over the two shots that count toward the length.
+    await expect(statValue('Average shot')).toHaveText(/^6\.50* m$/);
+    // The card says how much Reference length it leaves out.
+    await expect(sectionDetail.getByTestId('section-reference-length-note')).toHaveText(
+      /^Reference shots \(4(\.0+)? m\) are not counted in the length\.$/
+    );
+
+    // A section of Reference shots only: 0 m long, and no shot to average, so
+    // the average reads "-" rather than a 0 m shot.
+    await page.locator('[data-testid^="section-row-"]').filter({ hasText: 'Repeat Only' }).click();
+    await expect(sectionDetail).toContainText('Repeat Only');
+    await expect(statValue('Total length')).toHaveText(/^0(\.0+)? m$/);
+    await expect(statValue('Average shot')).toHaveText('-');
+    await expect(sectionDetail.getByTestId('section-reference-length-note')).toHaveText(
+      /^Reference shots \(20(\.0+)? m\) are not counted in the length\.$/
+    );
+  });
 });

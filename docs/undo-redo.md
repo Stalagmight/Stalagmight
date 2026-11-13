@@ -45,7 +45,8 @@ Commands go through a two-phase capture during execution:
 | `ClosureInfo` | Create/RemoveLoopClosure | Remove the closure, or put it back at its recorded index | Push closure back (preserves ID) |
 | `ZeroDatumInfo` | SetZeroDatum (and legacy persisted RemoveZeroDatum entries) | Restore GPS + offsets directly, at the datum's recorded index | Execute the original command |
 | `SegmentMoveInfo` | MoveSegment | Restore section offsets directly | Reapply offset to affected sections |
-| `ProjectSnapshotPair` | Batch, DeleteSection, DeleteShot, ReverseSection, MergeStations, UnmergeStations, UnmergeStationPair, MoveStation, MoveComment, RemoveZeroDatum, CreateLoopClosure (distributing strategies only), and the label-only RepairIntegrity / UpdateProjectSettings / SetSurfaceElevation (see below) | Re-record "after" from the live project, then restore "before" JSON (see below) | Re-record "before" from the live project, then restore "after" JSON |
+| `ProjectSnapshotPair` | Batch, DeleteSection, DeleteShot, ReverseSection, MergeStations, UnmergeStations, UnmergeStationPair, MoveStation, MoveComment, RemoveZeroDatum, CreateLoopClosure (distributing strategies only), the delete/split entry points, Split Section Here and Combine Sections (label-only `Batch`es, see below), and the label-only RepairIntegrity / UpdateProjectSettings / SetSurfaceElevation (see below) | Re-record "after" from the live project, then restore "before" JSON (see below) | Re-record "before" from the live project, then restore "after" JSON |
+| `ShotCredits` | EditShotCredit, and an UpdateSectionMetadata that sets the legacy surveyor/date | Write each recorded shot's `before` credit back, by uuid (a shot that is gone is skipped with a warning, never a wedge); for a section edit, then put its other previous values back | EditShotCredit: write each `after` credit, by uuid. UpdateSectionMetadata: execute the original command |
 | `AddedProjectContent` | AddProjectFile (#674) | Re-record what the add brought from the live project, then remove exactly that and put back the two project fields it changed (see below) | Reinstall the recorded content verbatim - same section, shot and closure ids |
 | `None` | Non-undoable commands | N/A | N/A |
 
@@ -184,8 +185,9 @@ The map (`history_remap`):
 5. leaves everything else alone.
 
 Rule 4 asks about one recorded state at a time on purpose. A split moves shots,
-ids and all, from one section to a new one, so the history holds each moved id
-in two sections - but never at the same time. Across the whole history that
+ids and all, from one section to a new one (and Combine Sections moves them back
+into another), so the history holds each moved id in two sections - but never at
+the same time. Across the whole history that
 looks like a repeat; within any one state it is not, and renaming it would hand
 the shots new ids every time a project with a split in its history is opened.
 
@@ -379,8 +381,9 @@ origin the first one does not sit on. It is idempotent (the delta is MEASURED), 
 the gate below is a no-op on top of it.
 
 Otherwise the renormalisation runs only in the FORWARD epilogue (`execute()`,
-`execute_batch`, `repair_open_project_integrity`, and the four delete/split entry
-points that bypass `execute()`), never in `reconcile_geometry` - which
+`execute_batch`, `repair_open_project_integrity`, and the delete/split, Split
+Section Here and Combine Sections entry points that bypass `execute()`), never in
+`reconcile_geometry` - which
 `undo()`/`redo()` share - and never in the loader. Every command that can reach it
 records either a `ProjectSnapshotPair` or this widened map, so no inverse
 re-derives a frame; and `resolve_offsets`' cascade never re-derives a seed's
@@ -464,6 +467,24 @@ is not the inverse of one of them:
 ### Why Some Undos Restore Directly Instead of Re-Executing
 
 `ZeroDatumInfo` and `SegmentMoveInfo` store exact previous offsets and restore them directly rather than re-computing. This is critical: re-execution could produce different results if the connectivity graph changed between the original execution and the undo.
+
+## Structural edits outside `execute()` (split, combine)
+
+Delete-and-split, Split Section Here (`command_split_section.rs`) and Combine
+Sections (`command_combine_sections.rs`) are `AppState` methods, not `Command`
+variants, because one user action is several model steps (Split may insert a
+station first; Combine may reverse the other section first). Each follows the
+same recipe: take the command lock, call `guard_mutation`, check everything that
+can refuse BEFORE the before-snapshot (so a refusal pushes no entry and changes
+nothing), take the frame-datum key, mutate, roll back to the snapshot on an
+error, `renormalize_frame_if_changed`, `reconcile_geometry`, and push ONE
+`ProjectSnapshotPair`.
+
+The pushed `Command` is only a label: a `Batch` that names the operation in the
+history dropdown. It must never contain a `ReverseSection`, even when Combine
+reversed the other section: undo/redo derive `reversed_sections` (the frontend's
+pin mirroring) from the command, and the reversed section no longer exists after
+a combine.
 
 ## Batch Commands
 

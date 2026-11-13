@@ -11,7 +11,13 @@
 /** What a colour scale colours by. */
 export type ColorScaleKind = 'depth' | 'distance';
 
-/** The palette id every kind defaults to: the active theme's own ramp. */
+/** Everything a palette can be chosen for: the depth / distance scales, and the
+ *  Survey Issues colouring (whose own per-error levels live in
+ *  `components/Map/surveyLayer/issueScale.ts`). */
+export type PaletteKind = ColorScaleKind | 'issues';
+
+/** The palette id every kind defaults to: the active theme's own ramp (for
+ *  Survey Issues, the original green -> yellow -> red). */
 export const THEME_PALETTE_ID = 'theme';
 
 /** A palette selection as persisted in `[map_palette]`. */

@@ -112,7 +112,10 @@ vi.mock('../DialogWrapper', () => ({
 }));
 
 // Date picker and colour swatches are irrelevant here and pull in more DOM.
-vi.mock('../../common/SectionMetadataForm', () => ({ SectionMetadataForm: () => null }));
+vi.mock('../../common/SectionMetadataForm', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../common/SectionMetadataForm')>()),
+  SectionMetadataForm: () => null,
+}));
 
 import ZeroDatumConfigDialog, { type ZeroDatumConfigResult } from '../ZeroDatumConfigDialog';
 import { buildZeroDatumSectionConfig } from '../../../utils/importSectionConfig';
@@ -165,7 +168,8 @@ function dmpFile(): DmpFile {
 
 const selectionConfig = {
   selectedIndices: new Set([0]),
-  defaultSurveyor: 'S',
+  defaultSurveyors: [{ name: 'S' }],
+  defaultExplorers: [],
   defaultDate: '2026-01-01',
 } as unknown as DmpSelectionConfig;
 

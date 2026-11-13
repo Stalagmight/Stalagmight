@@ -370,7 +370,7 @@ test.describe('Section and Shot Editing', () => {
     await expect(dialog).toBeVisible();
 
     await expect(dialog.getByTestId('section-name-input')).toHaveValue('Main Passage');
-    await expect(dialog.getByTestId('section-surveyor-input')).toHaveValue('Test Surveyor');
+    await expect(dialog.getByTestId('section-surveyors-pill-0-label')).toHaveText('Test Surveyor');
     await expect(dialog.getByTestId('section-date-input')).toBeVisible();
     await expect(dialog.getByTestId('section-color-hex-input')).toHaveValue('#3b82f6');
     await expect(dialog.getByTestId('section-direction-select')).toContainText('In');

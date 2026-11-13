@@ -1,3 +1,4 @@
+import { useCollaboratorsSync } from '../../store/speleoCollaboratorsStore';
 import { LeftWorkspace } from './LeftWorkspace';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -71,6 +72,9 @@ export default function SingleSystemView() {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
   useKeyboardShortcuts();
+  // The linked SpeleoDB project's collaborators, fetched in the background for
+  // the surveyor / explorer suggestions.
+  useCollaboratorsSync();
 
   const {
     project,

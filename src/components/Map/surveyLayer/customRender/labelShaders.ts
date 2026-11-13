@@ -19,7 +19,7 @@
  *  - Integer attributes `a_kind` / `a_flags` (bound with `vertexAttribIPointer`,
  *    UNSIGNED_BYTE) so the fragment can index per-kind uniform arrays and the
  *    vertex can test flag bits - the design's `(a_flags & HIDE) != 0` sketch.
- *  - Per-kind uniform arrays (size 5, one slot per {@link LABEL_KIND}) so zoom
+ *  - Per-kind uniform arrays (one slot per {@link LABEL_KIND}) so zoom
  *    size / opacity / visibility / halo are CPU-recomputed each frame WITHOUT any
  *    buffer rebuild (§3 of the design: the load-bearing "no rebuild for zoom /
  *    toggle / theme" property).
@@ -44,19 +44,22 @@
  * inside headroom at `radius 8`) is the right asymmetry for outward halos.
  */
 
-/** Per-label KIND, indexing every per-kind uniform array. Mirrors the 5 stock
- *  symbol layers. The numeric values are the shader's `a_kind` contract - keep
- *  in lock-step with the `int(a_kind)` switch below and the uniform-array order. */
+/** Per-label KIND, indexing every per-kind uniform array. The first five mirror
+ *  the stock symbol layers; SHOT_ERROR / CLOSURE_ERROR are the Errors labels (a
+ *  shot's reading deltas, a loop closure's error). The numeric values are the
+ *  shader's `a_kind` contract - keep in lock-step with the uniform-array order. */
 export const LABEL_KIND = {
   SHOT_LABEL: 0,
   STATION_LABEL: 1,
   SECTION_NAME: 2,
   STATION_COMMENT: 3,
   SHOT_COMMENT: 4,
+  SHOT_ERROR: 5,
+  CLOSURE_ERROR: 6,
 } as const;
 export type LabelKind = (typeof LABEL_KIND)[keyof typeof LABEL_KIND];
 /** Number of label kinds == length of every per-kind uniform array. */
-export const LABEL_KIND_COUNT = 5;
+export const LABEL_KIND_COUNT = 7;
 
 /**
  * `a_flags` bitfield (a UNSIGNED_BYTE integer attribute). Kept here because the
@@ -132,11 +135,11 @@ export const LABEL_UNIFORMS = {
   fontSize: 'u_font_size',
   sdfRadius: 'u_sdf_radius',
   zoom: 'u_zoom', // live map zoom, compared against a_reveal_zoom
-  textSizePx: 'u_text_size_px', // float[5]
-  opacity: 'u_opacity', // float[5]
-  kindVisible: 'u_kind_visible', // float[5]
-  haloColor: 'u_halo_color', // vec4[5]
-  haloWidthPx: 'u_halo_width_px', // float[5]
+  textSizePx: 'u_text_size_px', // float[LABEL_KIND_COUNT]
+  opacity: 'u_opacity', // float[LABEL_KIND_COUNT]
+  kindVisible: 'u_kind_visible', // float[LABEL_KIND_COUNT]
+  haloColor: 'u_halo_color', // vec4[LABEL_KIND_COUNT]
+  haloWidthPx: 'u_halo_width_px', // float[LABEL_KIND_COUNT]
   hideReference: 'u_hide_reference',
   hideJump: 'u_hide_jump',
 } as const;

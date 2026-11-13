@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from 'react-i18next';
+import { selectDistanceOverlayActive } from '../../store/displaySelectors';
 import { useUIStore, type Selection } from '../../store/uiStore';
 import { useEditingBlocked } from '../../hooks/useEditingBlocked';
 import { useShallow } from 'zustand/react/shallow';
@@ -23,27 +24,12 @@ import { formatFixed, formatPercent, formatNumber, formatDate } from '../../i18n
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { useActiveStations } from '../../hooks/useActiveStations';
 import { setSource, trackContextMenuAction } from '../../utils/telemetry';
-import { SHOT_KIND_LABEL_KEY, nextShotKind } from '../../utils/shotKind';
+import { SHOT_KIND_LABEL_KEY, nextShotKind, surveyedLength } from '../../utils/shotKind';
 import { countUnresolvedErrors } from '../../utils/validation';
+import { shotCredit } from '../../utils/sectionCredit';
+import { CreditDetail, MultiShotDetail, sectionCredits, useSelectedShots } from './CreditDetail';
+import { CenterLocateIcon, DetailRow, StatCard } from './DetailPanelParts';
 import { warningKey, warningMessageTestId, warningOpenShotTestId, warningResolveTestId, warningUndoResolveTestId } from '../../utils/testId';
-
-/** Center/locate glyph (small ring + edge spokes), filled so it stays crisp
- *  under the page-zoom UI scale. Shared by the per-entity "center on map"
- *  buttons (station/shot/section) below. */
-function CenterLocateIcon() {
-  return (
-    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-      <path
-        fillRule="evenodd"
-        d="M9 12a3 3 0 1 0 6 0a3 3 0 1 0 -6 0ZM11.2 12a0.8 0.8 0 1 0 1.6 0a0.8 0.8 0 1 0 -1.6 0Z"
-      />
-      <rect x="10.9" y="2" width="2.2" height="4" rx="1.1" />
-      <rect x="10.9" y="18" width="2.2" height="4" rx="1.1" />
-      <rect x="2" y="10.9" width="4" height="2.2" rx="1.1" />
-      <rect x="18" y="10.9" width="4" height="2.2" rx="1.1" />
-    </svg>
-  );
-}
 
 export default function DetailPanel() {
   const { t } = useTranslation();
@@ -154,6 +140,9 @@ interface DetailsContentProps {
 function DetailsContent({ selection, project, stations }: DetailsContentProps) {
   const { t } = useTranslation();
   const { stats } = useProjectStore();
+  // Several shots selected (and nothing else): edit their survey credit together.
+  const multiShots = useSelectedShots(project);
+  if (multiShots) return <MultiShotDetail picks={multiShots} />;
 
   if (!selection) {
     // Show project stats when nothing is selected
@@ -624,7 +613,7 @@ function StationDetail({ station }: { station: Station }) {
   // all read-only: disable mutation controls (edits happen in the measured survey view).
   const editingBlocked = useEditingBlocked();
   const distanceGradientOrigin = useUIStore((s) => s.distanceGradientOrigin);
-  const showDistanceGradient = useUIStore((s) => s.showDistanceGradient);
+  const showDistanceGradient = useUIStore(selectDistanceOverlayActive);
   // Show the active geometry's coordinates so inspection matches the map; falls
   // back to the passed (measured) station before the adjusted set is fetched.
   const activeStations = useActiveStations();
@@ -969,6 +958,8 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
   const endStationExists = endStation !== undefined;
 
   const kindBadge = t('detailPanel.shot.kindBadge', { kind: t(SHOT_KIND_LABEL_KEY[shot.kind]) });
+  const shotTargets = useMemo(() => ({ type: 'shots' as const, shots: [[section.id, shot.id] as [number, number]] }), [section.id, shot.id]);
+  const shotCredits = useMemo(() => [shotCredit(shot)], [shot]);
 
   const handleCycleShotKind = async () => {
     trackContextMenuAction('cycle-shot-kind', 'detail-panel');
@@ -1135,6 +1126,10 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
               <p className="text-sm mt-1">{shot.comment}</p>
             </div>
           )}
+
+          <div className="pt-2 border-t border-border">
+            <CreditDetail targets={shotTargets} credits={shotCredits} scope="shot" />
+          </div>
         </div>
       </Panel>
 
@@ -1170,11 +1165,19 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
   );
   const precision = useDecimalPrecision();
 
+  // Who surveyed the section and when: the aggregate over its shots, editable.
+  const credits = useMemo(() => sectionCredits(section), [section]);
+
   // Calculate section statistics
-  const sectionLength = section.shots.reduce((sum, s) => sum + s.length, 0);
+  // Length leaves out Reference shots, matching the project total it is a
+  // share of (#689); the average is over the same shots.
+  const { length: sectionLength, shotCount: lengthShotCount } = surveyedLength(section.shots);
   const shotCount = section.shots.length;
   const referenceCount = section.shots.filter((s) => s.kind !== 'Normal').length;
-  const avgShotLength = shotCount > 0 ? sectionLength / shotCount : 0;
+  const avgShotLength = lengthShotCount > 0 ? sectionLength / lengthShotCount : null;
+  // Reference length is left out of the section length; say so, or a section of
+  // Reference shots reads "0.0 m" with no reason next to a table of real lengths.
+  const referenceLength = section.shots.reduce((sum, s) => (s.kind === 'Reference' ? sum + s.length : sum), 0);
   const contributionPercent = totalProjectLength > 0
     ? (sectionLength / totalProjectLength) * 100
     : 0;
@@ -1249,8 +1252,6 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
           {/* Section info */}
           <div className="space-y-2">
             <DetailRow label={t('common.labels.name')} value={section.name ?? t('detailPanel.section.unnamed')} />
-            <DetailRow label={t('detailPanel.labels.surveyor')} value={section.surveyor ?? t('detailPanel.placeholder.none')} />
-            <DetailRow label={t('common.labels.date')} value={section.date ?? t('detailPanel.placeholder.none')} />
             <DetailRow label={t('detailPanel.labels.color')} value={
               <div className="flex items-center gap-2">
                 <span
@@ -1262,6 +1263,11 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
             } />
           </div>
 
+          {/* Survey credit of every shot of the section */}
+          <div className="pt-2 border-t border-border">
+            <CreditDetail targets={{ type: 'section', section_id: section.id }} credits={credits} scope="section" />
+          </div>
+
           {/* Survey statistics */}
           <div className="space-y-2 pt-2 border-t border-border">
             <h4 className="text-xs font-medium text-text-secondary uppercase tracking-wide">
@@ -1270,11 +1276,18 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
             <div className="grid grid-cols-2 gap-x-4 gap-y-1">
               <StatCard label={t('detailPanel.section.totalLength')} value={`${formatFixed(sectionLength, undefined, precision.length)} ${t('common.units.meters')}`} />
               <StatCard label={t('detailPanel.section.shotCount')} value={formatNumber(shotCount)} />
-              <StatCard label={t('detailPanel.section.avgShot')} value={`${formatFixed(avgShotLength, undefined, precision.length)} ${t('common.units.meters')}`} />
+              <StatCard label={t('detailPanel.section.avgShot')} value={avgShotLength === null ? '-' : `${formatFixed(avgShotLength, undefined, precision.length)} ${t('common.units.meters')}`} />
               {referenceCount > 0 && (
                 <StatCard label={t('detailPanel.section.referenceShots')} value={formatNumber(referenceCount)} />
               )}
             </div>
+            {referenceLength > 0 && (
+              <p className="text-xs text-text-secondary" data-testid="section-reference-length-note">
+                {t('detailPanel.section.referenceLengthNote', {
+                  length: `${formatFixed(referenceLength, undefined, precision.length)} ${t('common.units.meters')}`,
+                })}
+              </p>
+            )}
           </div>
 
           {/* Depth range */}
@@ -1398,13 +1411,10 @@ function ProjectStats({ project, stats, stations }: ProjectStatsProps) {
   const minDepth = depths.length > 0 ? Math.min(...depths) : 0;
   const maxDepth = depths.length > 0 ? Math.max(...depths) : 0;
 
-  // Calculate date range from sections
-  const dates = project.sections
-    .map((s) => s.date)
-    .filter((d): d is string => d !== null && d !== undefined)
-    .sort();
-  const earliestDate = dates.length > 0 ? dates[0] : null;
-  const latestDate = dates.length > 0 ? dates[dates.length - 1] : null;
+  // The survey date range over every shot, computed by the backend so a
+  // binary-loaded project's lazy sections are not materialized for it.
+  const earliestDate = stats.first_survey_date ?? null;
+  const latestDate = stats.last_survey_date ?? null;
 
     return (
       <div className="h-full bg-panel overflow-auto">
@@ -1718,20 +1728,3 @@ function ClosuresSection({
   );
 }
 
-function StatCard({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="text-sm">
-      <div className="text-text-secondary text-xs">{label}</div>
-      <div className="font-medium">{value}</div>
-    </div>
-  );
-}
-
-function DetailRow({ label, value, testId }: { label: string; value: React.ReactNode; testId?: string }) {
-  return (
-    <div className="flex justify-between text-sm" data-testid={testId}>
-      <span className="text-text-secondary">{label}:</span>
-      <span>{value}</span>
-    </div>
-  );
-}

@@ -146,6 +146,7 @@ Emitted once at project load for each display toggle that differs from
 ```
 display-state.showGrid:true          - user has grid on (default: off)
 display-state.showStationLabels:true - user has labels on (default: off)
+display-state.showShotErrors:true    - user has the Errors labels on (default: off)
 display-state.gridSpacing:5          - user changed spacing from default 10
 ```
 

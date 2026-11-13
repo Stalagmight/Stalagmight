@@ -21,13 +21,13 @@ use stalagmight_lib::commands::survey_geometry::{
 use stalagmight_lib::config::{
     AngleUnit, AppearanceConfig, CacheConfig, ClosureAdjustmentConfig, ColorTheme, Config,
     DebugConfig, DecimalPrecision, DisplayConfig, DpvRig, DpvUnit, ExportConfig, GasConfig,
-    GasUnits, GeneralConfig, GlobalViewConfig, GpsOrigin, ImportConfig, LengthUnit, LoggingConfig,
-    MapAnimationConfig, MapConfig, MapControlsConfig, MapDebugConfig, MapPaletteConfig,
-    MapSnapConfig, OverlapMode, PaletteChoiceConfig, PanelsConfig, PlacementSuggestionConfig,
-    ProviderCacheConfig, ReservePreset, ReserveProfile, SectionColorsConfig, ShortcutFeedback,
-    ShortcutsConfig, ShotConfig, SpeleoDbConfig, StationConfig, SyntacticHighlightLevel,
-    SyntacticHighlightPreset, SyntacticHighlightingConfig, ThemeMode, UnitsConfig, UpdateTrack,
-    ValidationConfig,
+    GasUnits, GeneralConfig, GlobalViewConfig, GpsOrigin, ImportConfig, IssueCombine, LengthUnit,
+    LoggingConfig, MapAnimationConfig, MapConfig, MapControlsConfig, MapDebugConfig,
+    MapPaletteConfig, MapSnapConfig, OverlapMode, PaletteChoiceConfig, PanelsConfig, PeopleConfig,
+    PlacementSuggestionConfig, ProviderCacheConfig, ReservePreset, ReserveProfile,
+    SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig, SpeleoDbConfig,
+    StationConfig, SyntacticHighlightLevel, SyntacticHighlightPreset, SyntacticHighlightingConfig,
+    ThemeMode, UnitsConfig, UpdateTrack, ValidationConfig,
 };
 use stalagmight_lib::core::command::{
     CommandResult, CommentHolder, ImportReceipt, IntegrityCheckResult, IntegrityRepairResult,
@@ -51,15 +51,18 @@ use stalagmight_lib::models::placement_suggest::{
 };
 use stalagmight_lib::models::{
     AlongLineResult, AzimuthReference, ClosurePair, ClosurePreview, ClosureRef, ClosureStrategy,
-    ClosureUpdate, ConnectivityResult, Coordinates, CorrectionSource, CylRole, Cylinder,
+    ClosureUpdate, CombineCandidate, CombinePick, CombineSectionsOptions, ConnectivityResult,
+    Coordinates, CorrectionSource, CreditEdit, CreditTargets, CreditedPerson, CylRole, Cylinder,
     DeleteShotImpact, DeleteShotRangeImpact, DistanceField, DivePlan, DivePlanMeta,
     DivePlanSnapshot, Diver, ExistingShotUpdate, FrozenShotRef, GasReachField, GpsBounds,
     GpsCoordinates, ImportPlacement, ImportSectionConfig, LoopClosureWire, MarkedPoint,
-    NorthReference, PathShot, PlanAnchorSet, PlanMode, PlanSegment, Project, ProjectMetadata,
-    ProjectStats, ProjectWarning, RangeDeleteKind, RouteLeg, RouteProfilePoint, RulerEndpoint,
-    Section, SectionData, SectionRelationships, SectionStats, SectionUpdates, Shot, ShotData,
-    ShotKind, ShotUpdates, SpeleoLink, Station, StationMergeWire, StationPair, StationRef,
-    SurveyDirection, TankMaterial, Team, UnrecognisedShotKind, ZeroDatumWire,
+    NorthReference, PathShot, Person, PlanAnchorSet, PlanMode, PlanSegment, Project,
+    ProjectMetadata, ProjectStats, ProjectWarning, RangeDeleteKind, RouteLeg, RouteProfilePoint,
+    RulerEndpoint, Section, SectionCreditSummary, SectionData, SectionEnd, SectionRelationships,
+    SectionStats, SectionUpdates, Shot, ShotData, ShotKind, ShotUpdates, SpeleoLink, SplitAt,
+    SplitPreview, SplitSectionOptions, SplitSide, Station, StationMergeWire, StationPair,
+    StationRef, SurveyCredit, SurveyDirection, TankMaterial, Team, UnrecognisedShotKind,
+    ZeroDatumWire,
 };
 use stalagmight_lib::parsers::compass::{CompassFile, CompassSurveySummary, InvalidShotCounts};
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};
@@ -75,11 +78,12 @@ use stalagmight_lib::parsers::walls::{WallsFile, WallsSurveySummary};
 use stalagmight_lib::persistence::{BackupInfo, RawTableData, RepairResult, SalvagedData};
 use stalagmight_lib::speleodb::{
     DoneResult, EndpointRefusal, Permission, PushResult, RemoteState, SpeleoAccessVerification,
-    SpeleoDbAction, SpeleoErrorDto, SpeleoFileAccess, SpeleoLinkStatus, SpeleoLocalProjectState,
-    SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectSummary,
-    SpeleoPublishParams, SpeleoPublishResult, SpeleoReadOnlyOpen, SpeleoReleaseContext,
-    SpeleoRevision, SpeleoRewindTarget, SpeleoSessionStatus, SpeleoUnwindTarget,
-    StartEditingResult, TransportCause, UnpushedLocalEdits, UpdateResult, Visibility,
+    SpeleoCollaborator, SpeleoDbAction, SpeleoErrorDto, SpeleoFileAccess, SpeleoLinkStatus,
+    SpeleoLocalProjectState, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata,
+    SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult, SpeleoReadOnlyOpen,
+    SpeleoReleaseContext, SpeleoRevision, SpeleoRewindTarget, SpeleoSessionStatus,
+    SpeleoUnwindTarget, StartEditingResult, TransportCause, UnpushedLocalEdits, UpdateResult,
+    Visibility,
 };
 use stalagmight_lib::tile_attribution::TileAttribution;
 use stalagmight_lib::tile_providers::TileProviderInfo;
@@ -224,6 +228,13 @@ fn main() {
     export::<CorrectionSource>(&out_dir);
     export::<NorthReference>(&out_dir);
     export::<Section>(&out_dir);
+    // Per-shot survey credit (surveyors, explorers, date as people)
+    export::<Person>(&out_dir);
+    export::<SurveyCredit>(&out_dir);
+    export::<CreditTargets>(&out_dir);
+    export::<CreditEdit>(&out_dir);
+    export::<CreditedPerson>(&out_dir);
+    export::<SectionCreditSummary>(&out_dir);
     export::<SectionData>(&out_dir);
     export::<SectionUpdates>(&out_dir);
     export::<SectionStats>(&out_dir);
@@ -232,6 +243,14 @@ fn main() {
     export::<ImportPlacement>(&out_dir);
     export::<ExistingShotUpdate>(&out_dir);
     export::<Shot>(&out_dir);
+    export::<CombineCandidate>(&out_dir);
+    export::<CombinePick>(&out_dir);
+    export::<CombineSectionsOptions>(&out_dir);
+    export::<SectionEnd>(&out_dir);
+    export::<SplitAt>(&out_dir);
+    export::<SplitPreview>(&out_dir);
+    export::<SplitSectionOptions>(&out_dir);
+    export::<SplitSide>(&out_dir);
     export::<ShotData>(&out_dir);
     export::<ShotKind>(&out_dir);
     export::<UnrecognisedShotKind>(&out_dir);
@@ -359,6 +378,8 @@ fn main() {
     export::<GasConfig>(&out_dir);
     export::<MapPaletteConfig>(&out_dir);
     export::<PaletteChoiceConfig>(&out_dir);
+    export::<IssueCombine>(&out_dir);
+    export::<PeopleConfig>(&out_dir);
     export::<GasUnits>(&out_dir);
     export::<ReservePreset>(&out_dir);
     export::<ReserveProfile>(&out_dir);
@@ -458,6 +479,7 @@ fn main() {
     // SpeleoDB Project Settings metadata (#206) + create-on-SDB publish (#207)
     export::<Visibility>(&out_dir);
     export::<SpeleoProjectMetadata>(&out_dir);
+    export::<SpeleoCollaborator>(&out_dir);
     export::<SpeleoPublishParams>(&out_dir);
     export::<SpeleoPublishResult>(&out_dir);
     // #215 full Project Settings: collaborator roster (users + teams) + team picker
@@ -506,6 +528,12 @@ fn main() {
         "CorrectionSource",
         "NorthReference",
         "Section",
+        "Person",
+        "SurveyCredit",
+        "CreditTargets",
+        "CreditEdit",
+        "CreditedPerson",
+        "SectionCreditSummary",
         "SectionData",
         "SectionUpdates",
         "SectionStats",
@@ -518,6 +546,14 @@ fn main() {
         "UnrecognisedShotKind",
         "VirtualShotMode",
         "ShotUpdates",
+        "SplitAt",
+        "SplitPreview",
+        "SplitSectionOptions",
+        "SplitSide",
+        "CombineCandidate",
+        "CombinePick",
+        "CombineSectionsOptions",
+        "SectionEnd",
         "Station",
         "StationRef",
         "StationMerge",
@@ -638,6 +674,8 @@ fn main() {
         "GasConfig",
         "MapPaletteConfig",
         "PaletteChoiceConfig",
+        "IssueCombine",
+        "PeopleConfig",
         "GasUnits",
         "ReservePreset",
         "ReserveProfile",
@@ -682,6 +720,7 @@ fn main() {
         "PushResult",
         "Visibility",
         "SpeleoProjectMetadata",
+        "SpeleoCollaborator",
         "SpeleoPublishParams",
         "SpeleoPublishResult",
     ];

@@ -20,6 +20,7 @@ import { setSource } from '../../utils/telemetry';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 import { useLongPress } from '../../hooks';
 import { DATA_TABLE_MIN_HEIGHT, DATA_TABLE_MAX_HEIGHT } from './layoutConstants';
+import { countsTowardLength } from '../../utils/shotKind';
 
 interface SectionsPanelProps {
   sections: Section[];
@@ -637,7 +638,8 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
 }
 
 /**
- * Compute total length + reference-shot count for the section row.
+ * Compute total length + reference-shot count for the section row. The length
+ * leaves out Reference shots, like the backend's `total_length` (#689).
  * Called once per *visible* (virtualized) section row by `SectionRow`.
  *
  * `meta` is resolved by the panel from a `Map<sectionId, SectionMetadata>`
@@ -651,7 +653,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
  * `surveyData` isn't populated yet (e.g. legacy JSON refresh in-flight). That
  * branch stays cold in the common path because `meta` is present.
  */
-function calculateSectionStats(
+export function calculateSectionStats(
   section: Section,
   meta: SectionMetadata | undefined,
   surveyData: SurveyData | null,
@@ -665,10 +667,11 @@ function calculateSectionStats(
     let referenceCount = 0;
     const end = meta.shotOffset + meta.shotCount;
     for (let g = meta.shotOffset; g < end; g++) {
-      length += surveyData.shotLength[g]!;
+      const kind = shotKindFromFlags(surveyData.shotFlags[g]!);
+      if (countsTowardLength(kind)) length += surveyData.shotLength[g]!;
       // Counts both virtual kinds: the panel shows a single "virtual shots"
       // tally, and #27's Jump/Reference split is surfaced in the table, not here.
-      if (isVirtualKind(shotKindFromFlags(surveyData.shotFlags[g]!))) {
+      if (isVirtualKind(kind)) {
         referenceCount++;
       }
     }
@@ -680,7 +683,7 @@ function calculateSectionStats(
   let length = 0;
   let referenceCount = 0;
   for (const shot of section.shots) {
-    length += shot.length;
+    if (countsTowardLength(shot.kind)) length += shot.length;
     if (isVirtualKind(shot.kind)) referenceCount++;
   }
   return {

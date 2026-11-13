@@ -5,18 +5,22 @@ use crate::models::{
     MAX_SECTIONS_IN_ID_SPACE, MAX_SECTION_ID,
 };
 
-/// Both split paths turn one section into two, so both MINT a section id
-/// (#555) through the same `Project::add_section` door `create_section` guards,
-/// while going nowhere near `create_section` itself. Refused before either path
-/// mutates anything: a split that ran out of ids half-way would leave section A
-/// truncated with nowhere to put its tail.
-fn section_budget_refusal(project: &Project, section_id: SectionId) -> Option<CommandResult> {
+/// Every split path (both delete-and-split paths and Split Section Here) turns
+/// one section into two, so each MINTS a section id (#555) through the same
+/// `Project::add_section` door `create_section` guards, while going nowhere
+/// near `create_section` itself. Refused before any path mutates anything: a
+/// split that ran out of ids half-way would leave section A truncated with
+/// nowhere to put its tail.
+pub(super) fn section_budget_refusal(
+    project: &Project,
+    section_id: SectionId,
+) -> Option<CommandResult> {
     if project.next_section_id <= MAX_SECTION_ID {
         return None;
     }
     Some(CommandResult::failure(format!(
-        "Cannot split section {section_id}: the delete would split it into two \
-         sections, but the project has reached the maximum number of sections \
+        "Cannot split section {section_id}: to split it into two sections needs \
+         a new section id, but the project has reached the maximum number of sections \
          (limit = {MAX_SECTIONS_IN_ID_SPACE}); shot ids encode as \
          section_id * {FEATURE_ID_STRIDE} + position in 32 bits, so section ids \
          past {MAX_SECTION_ID} cannot hold shots"
@@ -122,9 +126,8 @@ impl AppState {
             // Capture deleted shot data for offset calculation
             let deleted_shot_data = section.shots[pos].to_shot_data();
 
-            // Capture metadata from original section (surveyor, date, color, direction -- NOT comment)
-            let surveyor = section.surveyor.clone();
-            let date = section.date;
+            // Capture metadata from original section (color, direction -- NOT
+            // comment). The survey credit needs no copy: it rides on the shots.
             let color = section.color.clone();
             let direction = section.direction;
             let quality = section.quality;
@@ -132,6 +135,13 @@ impl AppState {
             // (#438) - `SectionData` cannot carry it, so it is copied explicitly
             // below, exactly like the metadata above.
             let azimuth_reference = section.azimuth_reference;
+            // Section B must also keep the reverse parity and the gauge's
+            // physical station (`settle_cut_halves` below), or a reversed
+            // section's single-neighbour plan pins and gauge fallback land one
+            // station off in it.
+            let orientation = project.cut_orientation(section_id);
+            // The component's least-squares anchor, kept on its station below.
+            let component_gauges = project.hold_component_gauges(&[section_id]);
             let resolved_reference = project.azimuth_reference_for_id(section_id);
 
             // Stable-identity remap snapshot: resolve every stored cross-reference
@@ -191,8 +201,8 @@ impl AppState {
             // Step 5: Create section B with inherited metadata
             let section_b_data = SectionData {
                 name: Some(name_b),
-                surveyor,
-                date,
+                surveyor: None,
+                date: None,
                 color,
                 direction: Some(direction),
                 quality,
@@ -203,6 +213,10 @@ impl AppState {
             let new_id = section_b.id;
             if let Some(section_b) = project.get_section_mut(new_id) {
                 section_b.azimuth_reference = azimuth_reference;
+            }
+            // A keeps the original stations 0..=pos, B starts at pos + 1.
+            if let Some(orientation) = &orientation {
+                project.settle_cut_halves(section_id, new_id, orientation, pos, pos + 1);
             }
 
             // Set section B offset
@@ -254,6 +268,11 @@ impl AppState {
             // The split can strand a section so its only attachment is a loop
             // closure - that is a merge, not a loop. Convert it now (issue #8)
             // so it's fixed immediately, not only on the next reload.
+            // Once every cross-reference names its new section (components are
+            // read off them), hold each component at the station the
+            // adjustment held before; before the orphan sweep, which only
+            // turns a closure edge into a merge edge.
+            project.restore_component_gauges(&component_gauges);
             project.convert_orphan_closures_to_merges();
 
             project.touch();
@@ -399,13 +418,16 @@ impl AppState {
                 .iter()
                 .map(|s| s.id)
                 .collect();
-            let surveyor = section.surveyor.clone();
-            let date = section.date;
+            // The survey credit rides on the shots; nothing to copy.
             let color = section.color.clone();
             let direction = section.direction;
             let quality = section.quality;
             // Same survey, same north reference (#438); see the single-shot path.
             let azimuth_reference = section.azimuth_reference;
+            // And the same reverse parity and gauge station; see the single-shot path.
+            let orientation = project.cut_orientation(section_id);
+            // The component's least-squares anchor, kept on its station below.
+            let component_gauges = project.hold_component_gauges(&[section_id]);
 
             // Frozen-geometry guard (mirrors delete_shot).
             for &sid in &range_shot_ids {
@@ -476,8 +498,8 @@ impl AppState {
 
             let section_b_data = SectionData {
                 name: Some(name_b),
-                surveyor,
-                date,
+                surveyor: None,
+                date: None,
                 color,
                 direction: Some(direction),
                 quality,
@@ -487,6 +509,11 @@ impl AppState {
             let new_id = section_b.id;
             if let Some(section_b) = project.get_section_mut(new_id) {
                 section_b.azimuth_reference = azimuth_reference;
+            }
+            // A keeps the original stations 0..=start_pos, B starts after
+            // the deleted range, at end_pos + 1.
+            if let Some(orientation) = &orientation {
+                project.settle_cut_halves(section_id, new_id, orientation, start_pos, end_pos + 1);
             }
             project.set_section_offset(new_id, (section_ox + bx, section_oy + by));
 
@@ -522,6 +549,11 @@ impl AppState {
                  than were captured in old_refs - traversal order diverged"
             );
 
+            // Once every cross-reference names its new section (components are
+            // read off them), hold each component at the station the
+            // adjustment held before; before the orphan sweep, which only
+            // turns a closure edge into a merge edge.
+            project.restore_component_gauges(&component_gauges);
             project.convert_orphan_closures_to_merges();
             project.touch();
             new_id

@@ -137,11 +137,11 @@ export type SourceName =
 /** Commands that push to the undo stack. */
 const UNDOABLE_COMMANDS: ReadonlySet<string> = new Set([
   'create_section', 'update_section', 'delete_section', 'reverse_section', 'move_section', 'move_segment',
-  'create_shot', 'update_shot', 'delete_shot', 'set_shot_kind', 'split_shot_at_distance',
+  'create_shot', 'update_shot', 'delete_shot', 'set_shot_kind', 'split_shot_at_distance', 'edit_shot_credit',
   'merge_stations', 'unmerge_stations', 'unmerge_station_pair',
   'set_zero_datum', 'remove_zero_datum', 'set_station_comment', 'move_comment', 'move_station',
   'create_loop_closure', 'remove_loop_closure',
-  'create_section_and_merge', 'delete_shot_and_split', 'delete_last_shot_and_section',
+  'create_section_and_merge', 'delete_shot_and_split', 'split_section', 'combine_sections', 'delete_last_shot_and_section',
   'delete_shot_range_split', 'delete_shot_range_shift',
   'import_sections', 'execute_tml_import', 'execute_compass_import', 'execute_walls_import',
   'execute_gpx_import', 'add_project_file', 'execute_batch',

@@ -1,7 +1,7 @@
 /**
  * The dirty guard (#F9) originally checked only GPS text, the name field and
  * shot edits - three of the eight fields the confirm payload actually sends
- * (surveyor, date, color, direction and reverse are the other five, all live
+ * (surveyors/explorers, date, color, direction and reverse are the other five, all live
  * in `SectionMetadataForm`). A stub that always reports "clean" on those five
  * would pass the main dirty-guard suite (it never touches them) but silently
  * drop a surveyor/date/color/direction/reverse edit on Cancel or Back - this
@@ -52,32 +52,37 @@ vi.mock('../DialogWrapper', () => ({
 
 // Minimal stand-in: only the one control each test needs, wired to the real
 // callback props - everything else in the real form is irrelevant here.
-vi.mock('../../common/SectionMetadataForm', () => ({
+vi.mock('../../common/SectionMetadataForm', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../common/SectionMetadataForm')>()),
   SectionMetadataForm: ({
-    surveyor,
+    people,
     date,
     color,
     direction,
     reverse,
-    onSurveyorChange,
     onDateChange,
     onColorChange,
     onDirectionChange,
     onReverseChange,
   }: {
-    surveyor: string;
+    people: import('../../common/SectionMetadataForm').SectionPeopleProps;
     date: string;
     color: string;
     direction?: string;
     reverse?: boolean;
-    onSurveyorChange: (v: string) => void;
     onDateChange: (v: string) => void;
     onColorChange: (v: string) => void;
     onDirectionChange?: (v: 'in' | 'out') => void;
     onReverseChange?: (v: boolean) => void;
   }) => (
     <div>
-      <input data-testid="stub-surveyor" value={surveyor} onChange={(e) => onSurveyorChange(e.target.value)} />
+      <span data-testid="stub-surveyors">{people.surveyors.map((v) => v.person.name).join('|')}</span>
+      <span data-testid="stub-explorers">{people.explorers.map((v) => v.person.name).join('|')}</span>
+      <button type="button" data-testid="stub-add-surveyor" onClick={() => people.onAdd('surveyors', { name: 'New Surveyor' })} />
+      <button type="button" data-testid="stub-remove-surveyor" onClick={() => people.onRemove('surveyors', { name: 'New Surveyor' })} />
+      <button type="button" data-testid="stub-add-explorer" onClick={() => people.onAdd('explorers', { name: 'New Explorer' })} />
+      <button type="button" data-testid="stub-pending-on" onClick={() => people.onCommitPending?.(true)} />
+      <button type="button" data-testid="stub-pending-off" onClick={() => people.onCommitPending?.(false)} />
       <input data-testid="stub-date" value={date} onChange={(e) => onDateChange(e.target.value)} />
       <input data-testid="stub-color" value={color} onChange={(e) => onColorChange(e.target.value)} />
       <button type="button" data-testid="stub-direction-toggle" onClick={() => onDirectionChange?.(direction === 'in' ? 'out' : 'in')} />
@@ -131,7 +136,8 @@ function dmpFile(): DmpFile {
 
 const selectionConfig = {
   selectedIndices: new Set([0]),
-  defaultSurveyor: 'S',
+  defaultSurveyors: [{ name: 'S' }],
+  defaultExplorers: [],
   defaultDate: '2026-01-01',
 } as unknown as DmpSelectionConfig;
 
@@ -164,10 +170,34 @@ describe('ZeroDatumConfigDialog dirty guard - metadata fields', () => {
     vi.clearAllMocks();
   });
 
-  it('goes dirty when surveyor alone is changed', () => {
+  it('opens holding the step-1 default people', () => {
     renderDialog();
-    fireEvent.change(screen.getByTestId('stub-surveyor'), { target: { value: 'New Surveyor' } });
+    expect(screen.getByTestId('stub-surveyors')).toHaveTextContent('S');
+    expect(screen.getByTestId('stub-explorers')).toHaveTextContent('');
+    expect(lastIsDirty()).toBe(false);
+  });
+
+  it('goes dirty when a surveyor alone is added, and clean again when removed', () => {
+    renderDialog();
+    fireEvent.click(screen.getByTestId('stub-add-surveyor'));
+    expect(screen.getByTestId('stub-surveyors')).toHaveTextContent('S|New Surveyor');
     expect(lastIsDirty()).toBe(true);
+    fireEvent.click(screen.getByTestId('stub-remove-surveyor'));
+    expect(lastIsDirty()).toBe(false);
+  });
+
+  it('goes dirty when an explorer alone is added', () => {
+    renderDialog();
+    fireEvent.click(screen.getByTestId('stub-add-explorer'));
+    expect(lastIsDirty()).toBe(true);
+  });
+
+  it('goes dirty while a name is typed but not added yet', () => {
+    renderDialog();
+    fireEvent.click(screen.getByTestId('stub-pending-on'));
+    expect(lastIsDirty()).toBe(true);
+    fireEvent.click(screen.getByTestId('stub-pending-off'));
+    expect(lastIsDirty()).toBe(false);
   });
 
   it('goes dirty when date alone is changed', () => {

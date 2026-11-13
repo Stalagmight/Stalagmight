@@ -47,7 +47,7 @@ function shot(id: number, kind: 'Normal' | 'Reference') {
 function fixture() {
   const sections: Section[] = [
     {
-      id: 1, name: 'A', surveyor: null, date: null, color: '#ff0000',
+      id: 1, name: 'A', color: '#ff0000',
       direction: 'in', quality: 1, next_shot_id: 10, reverse_parity: false, gauge_shot_uuid: null, gauge_neighbour_uuid: null,
       shots: [shot(101, 'Normal'), shot(102, 'Reference')],
     },

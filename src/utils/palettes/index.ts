@@ -6,7 +6,7 @@
 import { CURATED_PALETTES } from './catalog.curated';
 import { GENERATED_PALETTES } from './catalog.generated';
 import { resolvePalette, type ResolvedPalette, type ThemeRampEndpoints } from './sample';
-import { THEME_PALETTE_ID, type ColorScaleKind, type Palette, type PaletteChoice } from './types';
+import { THEME_PALETTE_ID, type Palette, type PaletteChoice, type PaletteKind } from './types';
 
 export * from './types';
 export * from './levels';
@@ -84,7 +84,7 @@ const resolved = new Map<string, ResolvedPalette>();
 
 export function resolveChoice(
   choice: PaletteChoice,
-  kind: ColorScaleKind,
+  kind: PaletteKind,
   endpoints: ThemeRampEndpoints,
 ): ResolvedPalette {
   const palette = getPalette(choice.id);

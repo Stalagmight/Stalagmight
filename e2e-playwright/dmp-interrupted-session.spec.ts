@@ -81,7 +81,8 @@ async function openDmpNewImportDialog(page: Page): Promise<void> {
 
     const selectionConfig = {
       selectedIndices: new Set([0, 1]),
-      defaultSurveyor: 'Session Diver',
+      defaultSurveyors: [{ name: 'Session Diver' }],
+      defaultExplorers: [],
       defaultDate: null,
       fileHash: 'mock_dmp_hash',
       sectionHashes: ['hash-unanchored', 'hash-anchor'],

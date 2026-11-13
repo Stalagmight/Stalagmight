@@ -13,16 +13,18 @@
 //! so that the run that continues is the mainline rather than whichever
 //! successor happened to be written first.
 //!
-//! This module also owns the TRIP rule - the (surveyor, date, colour) triple a
-//! `models::Section` can carry one of. Ariane records it per shot, so the same
-//! triple decides where runs may merge (`join_contiguous_chains`) and where a
-//! run has to be cut (`split_runs_at_trip_boundaries`).
+//! This module also owns the TRIP rule. Ariane records people, date and colour
+//! on every shot row; since #329 the people and date are per-shot credit, so
+//! the only value a `models::Section` still holds once is the COLOUR. A "trip"
+//! here is therefore a colour: it decides where runs may merge
+//! (`join_contiguous_chains`) and where a run has to be cut
+//! (`split_runs_at_trip_boundaries`). Credit changes neither, so a section with
+//! mixed per-shot people and dates round-trips through Ariane as one section.
 
 use std::collections::HashMap;
 
-use chrono::NaiveDate;
-
 use super::{RawShot, TmlSection, TmlShot, TmlShotType};
+use crate::models::SurveyCredit;
 // Sections whose shot ids all fit the `section_id * FEATURE_ID_STRIDE + seq`
 // encode, as a COUNT (42_949). Shared with the import/merge boundary checks
 // (#555) so the cut budget below and the mint-time refusals cannot drift apart.
@@ -95,10 +97,11 @@ struct JoinRefusals {
 ///   an excluded shot never joins. The alternative - seam on the last
 ///   surviving shot - would re-introduce toggle dependence, because which shot
 ///   that is changes with the toggle.
-/// * **Mismatched trip metadata.** A config carries one surveyor, one date and
-///   one colour, and a run takes its FIRST shot's (see `linearize_section`), so
-///   absorbing a chain surveyed by someone else on another day would silently
-///   reattribute it. Only chains that agree on all three merge.
+/// * **A different colour.** A config carries one colour, the run's FIRST
+///   station shot's (see `trip_head`), so absorbing a chain drawn in another
+///   colour would silently recolour it. People and dates do not matter: they
+///   ride on each shot (#329), so a chain surveyed by someone else on another
+///   day merges and keeps its own credit.
 /// * **A shot UUID already in the run.** Ariane shot ids are unique per
 ///   SECTION, so two sections may legally repeat a `<UUID>` (#423); merging
 ///   them would turn that into an intra-section duplicate that
@@ -144,9 +147,7 @@ pub(super) fn join_contiguous_chains(
     let survives_import = |shot: &TmlShot| shot.shot_type != TmlShotType::Closure && !shot.excluded;
     let joinable_end = |s: &TmlSection| s.shots.last().is_some_and(survives_import);
     let joinable_start = |s: &TmlSection| s.shots.first().is_some_and(survives_import);
-    let same_trip = |a: &TmlSection, b: &TmlSection| {
-        a.surveyor == b.surveyor && a.date == b.date && a.color == b.color
-    };
+    let same_trip = |a: &TmlSection, b: &TmlSection| section_trip(a) == section_trip(b);
 
     // Which chain ends at a given shot id. Ids are unique here (duplicates bail
     // out above), so a shot ends at most one chain.
@@ -345,13 +346,20 @@ pub(super) fn first_linearity_violation(sections: &[TmlSection]) -> Option<Strin
     None
 }
 
-/// The trip a run is attributed to: one surveyor, one date, one colour, which
-/// is all a `models::Section` can hold. Ariane writes all three on EVERY shot
-/// row, so a run can change trip halfway down.
-type Trip<'a> = (Option<&'a str>, Option<NaiveDate>, &'a str);
+/// The trip a run is attributed to, for sectioning: its COLOUR. Ariane writes
+/// people, date and colour on EVERY shot row, so a run can change any of them
+/// halfway down. The people and date are the shot's own credit and survive per
+/// shot wherever they change; the colour is the one value a `models::Section`
+/// holds once, so it alone cuts a run (and refuses a join).
+type Trip<'a> = &'a str;
 
 fn trip_of(shot: &TmlShot) -> Trip<'_> {
-    (shot.explorer.as_deref(), shot.date, shot.color.as_str())
+    shot.color.as_str()
+}
+
+/// The trip a section was named after: its head shot's (see [`trip_head`]).
+fn section_trip(section: &TmlSection) -> Option<Trip<'_>> {
+    trip_head(&section.shots).map(trip_of)
 }
 
 /// Whether this shot can be the station on one side of a cut.
@@ -386,9 +394,9 @@ fn trip_head(shots: &[TmlShot]) -> Option<&TmlShot> {
 
 /// Most cuts one run may be given.
 ///
-/// Ariane writes the trip on every shot row, so a file whose rows carry a
-/// per-ROW date (a data-entry timestamp, or a crafted file) would otherwise
-/// mint one section per shot from a single declared name - unbounded
+/// Ariane writes the colour on every shot row, so a file whose rows carry a
+/// per-ROW colour (a crafted file) would otherwise mint one section per shot
+/// from a single declared name - unbounded
 /// amplification of file-controlled input into project objects, each with its
 /// own name, placement and undo entry.
 ///
@@ -444,18 +452,17 @@ pub(super) fn cut_budget(existing_runs: usize) -> usize {
     MAX_TRIP_CUTS_PER_FILE.min(MAX_SECTIONS_IN_ID_SPACE.saturating_sub(existing_runs))
 }
 
-/// Cut each run where the trip changes between two ADJACENT stations (#427).
+/// Cut each run where the COLOUR changes between two ADJACENT stations (#427).
 ///
-/// A run takes its metadata from its first shot (see `linearize_section`), so
-/// before this a chain surveyed by two teams over three days imported entirely
-/// under the first team and the first date, and the other values were dropped
-/// on the floor with nothing said. Cutting gives each trip its own run, which
-/// is the only place the model has to put them - `Section` carries one of each
-/// and `Shot` carries none.
+/// A run takes its colour from its first station shot (see `trip_head`), and a
+/// `Section` holds one, so a chain drawn in two colours would otherwise import
+/// entirely in the first. Cutting gives each colour its own run. People and
+/// dates never cut (#329): they are per-shot credit, and cutting on them broke
+/// the round trip of a section with mixed credit through Ariane into one
+/// section per credit change.
 ///
 /// This is the SAME rule `join_contiguous_chains` applies from the other side
-/// ("only chains that agree on all three merge"), so the two cannot fight over
-/// a seam. It runs AFTER the join all the same: see the call site for what
+/// ("only chains of one colour merge"), so the two cannot fight over a seam. It runs AFTER the join all the same: see the call site for what
 /// offering a cut end to the join costs.
 ///
 /// **Adjacency is the whole rule.** A trip change across a non-station shot is
@@ -595,8 +602,9 @@ fn cut_run(section: TmlSection, cuts: &[usize]) -> Vec<TmlSection> {
 ///
 /// After [`split_runs_at_trip_boundaries`] the only shots left disagreeing with
 /// their own section are the ones whose trip changed where there was no seam to
-/// cut. They still import - under the section's trip, not their own - so this
-/// is the receipt's record of what was collapsed.
+/// cut. Their surveyors, explorers and date import with them - the credit is
+/// per shot - so the one value that collapses is the COLOUR, which a section
+/// holds once. This is the receipt's record of that.
 ///
 /// Counts against the toggle the import will actually run with: a shot the
 /// filter drops takes its metadata out of the project with it, and reporting
@@ -608,33 +616,26 @@ pub(super) fn collapsed_trip_report(
     let mut shots = 0usize;
     let mut changes = 0usize;
     let mut sections_hit = 0usize;
-    let (mut any_surveyor, mut any_date, mut any_color) = (false, false, false);
 
     for section in sections {
         let mut hit = false;
-        // The trip of the previous IMPORTABLE shot, while it was one this
-        // section could not carry. A thousand shots on one collapsed trip are
+        // The colour of the previous IMPORTABLE shot, while it was one this
+        // section could not carry. A thousand shots on one collapsed colour are
         // one place the file lost a value, not a thousand.
-        let mut collapsed_run: Option<Trip<'_>> = None;
+        let mut collapsed_run: Option<&str> = None;
         for shot in &section.shots {
             if shot.shot_type == TmlShotType::Closure || (!include_excluded && shot.excluded) {
                 continue;
             }
-            let surveyor = shot.explorer != section.surveyor;
-            let date = shot.date != section.date;
-            let color = shot.color != section.color;
-            if !(surveyor || date || color) {
+            if shot.color == section.color {
                 collapsed_run = None;
                 continue;
             }
-            any_surveyor |= surveyor;
-            any_date |= date;
-            any_color |= color;
             shots += 1;
             hit = true;
-            if collapsed_run != Some(trip_of(shot)) {
+            if collapsed_run != Some(shot.color.as_str()) {
                 changes += 1;
-                collapsed_run = Some(trip_of(shot));
+                collapsed_run = Some(shot.color.as_str());
             }
         }
         sections_hit += usize::from(hit);
@@ -644,26 +645,10 @@ pub(super) fn collapsed_trip_report(
         return None;
     }
 
-    let mut fields: Vec<&str> = Vec::with_capacity(3);
-    if any_surveyor {
-        fields.push("surveyor");
-    }
-    if any_date {
-        fields.push("date");
-    }
-    if any_color {
-        fields.push("colour");
-    }
-    let fields = match fields.as_slice() {
-        [one] => (*one).to_string(),
-        [first, second] => format!("{first} or {second}"),
-        _ => "surveyor, date or colour".to_string(),
-    };
-
     Some(format!(
-        "{shots} shot{} at {changes} trip change{} in {sections_hit} section{} recorded a \
-         different {fields} from the section importing them; Ariane records those per shot, a \
-         section holds one of each, and there was no station boundary to split on",
+        "{shots} shot{} at {changes} colour change{} in {sections_hit} section{} recorded a \
+         different colour from the section importing them; Ariane records it per shot, a \
+         section holds one, and there was no station boundary to split on",
         if shots == 1 { "" } else { "s" },
         if changes == 1 { "" } else { "s" },
         if sections_hit == 1 { "" } else { "s" },
@@ -915,8 +900,14 @@ pub(super) fn linearize_section(
                 up: s.up,
                 down: s.down,
                 comment: s.comment.clone(),
-                explorer: s.explorer.clone(),
+                explorer: super::people::people_line(&s.explorers, &s.surveyors),
                 date: s.date,
+                credit: Some(SurveyCredit {
+                    surveyors: s.surveyors.clone(),
+                    explorers: s.explorers.clone(),
+                    date: s.date,
+                })
+                .filter(|c| !c.is_empty()),
                 color: s.color.clone(),
                 excluded: s.excluded,
                 latitude: s.latitude,

@@ -17,6 +17,7 @@ import {
   lengthFixableFromInclination,
   exceedsSlopeLength,
 } from '../../utils/resolutionPreview';
+import { recordedPitch as recordedPitchOf, impliedPitchDeg } from '../../utils/shotGeometry';
 import { setSource } from '../../utils/telemetry';
 import type { Section, Shot, ShotUpdates } from '../../types/project';
 import type { GeometryPreview } from '../../store/uiStore';
@@ -28,8 +29,7 @@ const PREVIEW_COLOR = '#38bdf8';
 
 /** Average of the recorded pitch legs (degrees), or null if none recorded. */
 function recordedPitch(shot: Shot): number | null {
-  if (shot.pitch_in != null && shot.pitch_out != null) return (shot.pitch_in + shot.pitch_out) / 2;
-  return shot.pitch_in ?? shot.pitch_out ?? null;
+  return recordedPitchOf(shot.pitch_in, shot.pitch_out);
 }
 
 /** Signed inclination implied by the depth change and slope length, in the +down
@@ -40,9 +40,19 @@ function recordedPitch(shot: Shot): number | null {
  *  cross-check, with nothing negated in between (issue #57 finding #7, issue #296).
  *  Returns 0 for length<=0. */
 function impliedInclination(shot: Shot): number {
-  if (!(shot.length > 0)) return 0;
-  const ratio = (shot.depth_out - shot.depth_in) / shot.length;
-  return (Math.asin(Math.max(-1, Math.min(1, ratio))) * 180) / Math.PI;
+  return impliedPitchDeg(shot.length, shot.depth_in, shot.depth_out);
+}
+
+/**
+ * The pre-selected fix for an inclination in/out warning. Normally the average
+ * of the two readings. But when exactly one leg is exactly 0° the other one is
+ * kept instead: older Compass imports stored a back-sight's MISSING inclination
+ * as 0°, and averaging a real 30° with that would write 15° to both legs.
+ */
+export function pitchDeviationDefault(shot: Shot): 'pitch-use-in' | 'pitch-use-out' | 'pitch-average' {
+  if (shot.pitch_out === 0 && shot.pitch_in != null && shot.pitch_in !== 0) return 'pitch-use-in';
+  if (shot.pitch_in === 0 && shot.pitch_out != null && shot.pitch_out !== 0) return 'pitch-use-out';
+  return 'pitch-average';
 }
 
 /** What a manual option needs to render as an inline editable field. */
@@ -169,6 +179,20 @@ export function computeProposedRaw(
     }
     case 'normalize':
       return { azimuthIn: normalizeAzimuth(shot.azimuth_in), azimuthOut: normalizeAzimuth(shot.azimuth_out) };
+    // PITCH_DEVIATION: make the two inclination readings agree. Only offered
+    // when both legs are recorded, so the non-null fallbacks never apply.
+    case 'pitch-use-in': {
+      const p = shot.pitch_in ?? shot.pitch_out;
+      return p == null ? { invalid: 'invalid' } : { pitchIn: p, pitchOut: p };
+    }
+    case 'pitch-use-out': {
+      const p = shot.pitch_out ?? shot.pitch_in;
+      return p == null ? { invalid: 'invalid' } : { pitchIn: p, pitchOut: p };
+    }
+    case 'pitch-average': {
+      const p = recordedPitch(shot);
+      return p === null ? { invalid: 'invalid' } : { pitchIn: p, pitchOut: p };
+    }
     case 'incl-from-depth': {
       const p = impliedInclination(shot);
       return { pitchIn: p, pitchOut: p };
@@ -338,6 +362,22 @@ export function WarningResolution({
           { id: 'manual', label: t('detailPanel.warnings.resolveOptions.manual'), manual: 'azimuthInOut', disabled: geometryDisabled },
           ...maybeIgnore,
         ];
+      case 'PITCH_DEVIATION': {
+        // Two forward inclination readings that disagree (like AZIMUTH_DEVIATION
+        // for azimuth): keep one, average them, or type the right value.
+        const pitchOf = (v: number | null | undefined) => `${formatFixed(v ?? 0, undefined, precision.inclination)}°`;
+        const avg = recordedPitch(shot);
+        const zeroLegDefault = pitchDeviationDefault(shot);
+        const zeroLegNote = (id: string) =>
+          zeroLegDefault === id ? t('detailPanel.warnings.zeroInclinationLegNote') : undefined;
+        return [
+          { id: 'pitch-use-in', label: t('detailPanel.warnings.resolveOptions.useInclinationIn'), detail: pitchOf(shot.pitch_in), selectedNote: zeroLegNote('pitch-use-in'), disabled: geometryDisabled },
+          { id: 'pitch-use-out', label: t('detailPanel.warnings.resolveOptions.useInclinationOut'), detail: pitchOf(shot.pitch_out), selectedNote: zeroLegNote('pitch-use-out'), disabled: geometryDisabled },
+          { id: 'pitch-average', label: t('detailPanel.warnings.resolveOptions.average'), detail: pitchOf(avg), disabled: geometryDisabled },
+          { id: 'manual', label: t('detailPanel.warnings.resolveOptions.manualPitch'), manual: 'pitch', disabled: geometryDisabled },
+          ...maybeIgnore,
+        ];
+      }
       case 'INVALID_PITCH':
         // An out-of-range inclination is an error (not ignorable). Correct it
         // with a manual in-range pitch (issue #57, finding #9).
@@ -457,12 +497,14 @@ export function WarningResolution({
     }
   }, [warning.code, warning.severity, warning.datumStationIndex, warning.datumRefs, shot, geometryDisabled, editingBlocked, projectSaved, t, precision]);
 
-  // Default selection: prefer "Average" (the safe azimuth fix) when offered,
-  // else the first enabled option (falls back to Ignore when every fix is
-  // locked, e.g. a frozen shot in the closure-adjusted view).
+  // Default selection: prefer "Average" (the safe azimuth fix) when offered, and
+  // for an inclination in/out warning `pitchDeviationDefault` (average, unless
+  // one leg is a stored 0°), else the first enabled option (falls back to Ignore
+  // when every fix is locked, e.g. a frozen shot in the closure-adjusted view).
   useEffect(() => {
     const enabled = options.filter((o) => !o.disabled);
-    const preferred = enabled.find((o) => o.id === 'average') ?? enabled[0] ?? options[options.length - 1];
+    const wanted = shot && warning.code === 'PITCH_DEVIATION' ? pitchDeviationDefault(shot) : 'average';
+    const preferred = enabled.find((o) => o.id === wanted) ?? enabled[0] ?? options[options.length - 1];
     setSelected(preferred?.id ?? '');
     if (shot) {
       const rp = recordedPitch(shot);
@@ -766,6 +808,11 @@ export function WarningResolution({
         {shot && (warning.code === 'AZIMUTH_DEVIATION' || warning.code === 'INVALID_AZIMUTH') && (
           <div className="text-xs text-text-secondary mt-1">
             {t('detailPanel.labels.azimuthIn')} {az(shot.azimuth_in)} · {t('detailPanel.labels.azimuthOut')} {az(shot.azimuth_out)}
+          </div>
+        )}
+        {shot && warning.code === 'PITCH_DEVIATION' && (
+          <div className="text-xs text-text-secondary mt-1">
+            {t('detailPanel.labels.pitchIn')} {formatFixed(shot.pitch_in ?? 0, undefined, precision.inclination)}° · {t('detailPanel.labels.pitchOut')} {formatFixed(shot.pitch_out ?? 0, undefined, precision.inclination)}°
           </div>
         )}
         {shot && warning.code === 'LARGE_DEPTH_CHANGE' && (

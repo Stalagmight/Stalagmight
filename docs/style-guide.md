@@ -65,6 +65,7 @@ This guide captures the current UI conventions and design tokens for Stalagmight
 ## Forms
 - Inputs should use themed backgrounds and borders (`bg-panel`, `border-border`) and a visible focus ring (`focus:ring-1 focus:ring-accent`).
 - Prefer shared components like `Select` and `DatePicker` for consistent behavior.
+- A list of people (surveyors, explorers) is a `PeopleInput` (`src/components/common/PeopleInput.tsx`): one pill per person on `bg-accent-10`, a partial one (on some of the selected shots) dashed on `bg-accent-5`, `compact` in a table cell. Identity and labels come from `src/utils/people.ts`.
 - A `Select` embedded in a `SpreadsheetGrid` cell takes `variant="cell"`: it drops its box and fills the cell, so only the right-edge chevron marks it as a control (see the Plan Cylinders grid's Role column).
 
 ## Accessibility

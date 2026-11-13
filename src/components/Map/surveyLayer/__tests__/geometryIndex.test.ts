@@ -55,12 +55,12 @@ function fixture(): { sections: Section[]; stations: Station[] } {
   // points have competing candidates from different sections.
   const sections: Section[] = [
     {
-      id: 1, name: 'A', surveyor: null, date: null, color: '#ff0000',
+      id: 1, name: 'A', color: '#ff0000',
       direction: 'in', quality: 1, next_shot_id: 10, reverse_parity: false, gauge_shot_uuid: null, gauge_neighbour_uuid: null,
       shots: [shot(101), shot(102), shot(103, true)],
     },
     {
-      id: 2, name: 'B', surveyor: null, date: null, color: '#00ff00',
+      id: 2, name: 'B', color: '#00ff00',
       direction: 'in', quality: 1, next_shot_id: 10, reverse_parity: false, gauge_shot_uuid: null, gauge_neighbour_uuid: null,
       shots: [shot(201), shot(202)],
     },
@@ -420,11 +420,11 @@ describe('SurveyGeometryIndex.measuredShotSegments (global shot ids)', () => {
   // production global form (100000, 100001), which is where the old decode broke.
   const sections: Section[] = [
     {
-      id: 0, name: 'A', surveyor: null, date: null, color: '#f00',
+      id: 0, name: 'A', color: '#f00',
       direction: 'in', quality: 1, next_shot_id: 2, reverse_parity: false, gauge_shot_uuid: null, gauge_neighbour_uuid: null, shots: [mkShot(0), mkShot(1)],
     },
     {
-      id: 1, name: 'B', surveyor: null, date: null, color: '#0f0',
+      id: 1, name: 'B', color: '#0f0',
       direction: 'in', quality: 1, next_shot_id: 100002, reverse_parity: false, gauge_shot_uuid: null, gauge_neighbour_uuid: null,
       shots: [mkShot(100000), mkShot(100001, true)],
     },
@@ -603,7 +603,7 @@ describe('SurveyGeometryIndex.nearestStation rank priority', () => {
     comment: null, kind, marker_index: null, temperature: null,
   });
   const sec = (id: number, kind: 'Normal' | 'Jump' | 'Reference'): Section => ({
-    id, name: `S${id}`, surveyor: null, date: null, color: '#ffffff', direction: 'in', quality: 1,
+    id, name: `S${id}`, color: '#ffffff', direction: 'in', quality: 1,
     next_shot_id: 2, reverse_parity: false, gauge_shot_uuid: null, gauge_neighbour_uuid: null,
     shots: [kindShot(id * 10, kind)],
   });
@@ -825,7 +825,7 @@ describe('SurveyGeometryIndex.nearestShot rank priority', () => {
   // (reference-only) and station 2 (real) coincide, both listed reference first.
   it('inside the raised section, its real line still beats its own virtual one', () => {
     const section: Section = {
-      id: 5, name: 'S5', surveyor: null, date: null, color: '#ffffff', direction: 'in', quality: 1,
+      id: 5, name: 'S5', color: '#ffffff', direction: 'in', quality: 1,
       next_shot_id: 2, reverse_parity: false, gauge_shot_uuid: null, gauge_neighbour_uuid: null,
       shots: [kindShot(50, 'Reference'), kindShot(51, 'Normal')],
     };

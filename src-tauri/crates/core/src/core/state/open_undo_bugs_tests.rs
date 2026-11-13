@@ -266,7 +266,7 @@ fn undo_restores_a_previously_null_surveyor() {
             .iter()
             .find(|s| s.id == section_id)
             .expect("section missing")
-            .surveyor
+            .surveyor_names()
             .clone()
     };
     assert_eq!(
@@ -292,7 +292,7 @@ fn undo_restores_a_previously_null_surveyor() {
             .iter()
             .find(|s| s.id == section_id)
             .expect("section missing")
-            .surveyor
+            .surveyor_names()
             .clone()
     };
     assert_eq!(
@@ -3891,7 +3891,7 @@ fn surveyor_of(state: &AppState, section_id: SectionId) -> String {
         .find(|section| section.id == section_id)
         .expect("section missing");
     section
-        .surveyor
+        .surveyor_names()
         .clone()
         .unwrap_or_else(|| CLEARED.to_string())
 }

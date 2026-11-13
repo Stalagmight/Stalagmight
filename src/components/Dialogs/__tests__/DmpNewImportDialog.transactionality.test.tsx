@@ -114,7 +114,8 @@ const dmpFile = { version: 1, sections: [dmpSection('A'), dmpSection('B')] } as 
 // sent to `import_sections` and therefore what it caused to be tracked.
 const selectionConfig = (selected: number[]): DmpSelectionConfig => ({
   selectedIndices: new Set(selected),
-  defaultSurveyor: 'S',
+  defaultSurveyors: [{ name: 'S' }],
+  defaultExplorers: [],
   defaultDate: null,
   fileHash: 'file-hash',
   sectionHashes: ['hash_A', 'hash_B'],
@@ -140,7 +141,8 @@ const zeroDatumOnly = (): ZeroDatumConfigResult => ({
   gps: { latitude: 20, longitude: -87, depth_reference: 0 },
   metadata: {
     name: 'A',
-    surveyor: 'S',
+    surveyors: [{ name: 'S' }],
+    explorers: [],
     date: '2026-01-01',
     color: '#ffffff',
     direction: 'in',
@@ -719,7 +721,7 @@ describe('DMP wizard: what Back and Cancel do with sections already imported (#3
    */
   it('refuses to withdraw into a project that is not the one it imported to', async () => {
     projectSectionIds = [7];
-    useProjectStore.setState({ project: { created_at: 'project-B' } as Project });
+    useProjectStore.setState({ project: { created_at: 'project-B', sections: [] } as unknown as Project });
     const onCancel = vi.fn();
     renderWizard(
       savedState({

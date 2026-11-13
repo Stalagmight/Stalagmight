@@ -242,7 +242,7 @@ See [TESTING.md](TESTING.md) for the tiers and which one a test belongs in, and
 | **Section** | A group of consecutive shots collected during a single survey session. Has metadata (name, surveyor, date). |
 | **Virtual Shot** | A shot that is not a permanent surveyed leg. Since #27 it is one of two kinds, and the distinction drives gas and penetration. |
 | **Jump** | A virtual shot a diver **swims**: a shortcut between two mainlines. Counts toward gas (at `jump_rmv_multiplier`) and penetration. Drawn faded. |
-| **Reference Shot** | A virtual shot that is **not swimmable**: a tape tie or backsight used to connect sections that aren't physically connected yet. Excluded from gas, penetration and route distance unless `gas.include_reference_legs` is on. Drawn fainter than a jump. |
+| **Reference Shot** | A virtual shot that is **not swimmable**: a tape tie or backsight used to connect sections that aren't physically connected yet. Excluded from gas, penetration and route distance unless `gas.include_reference_legs` is on. Always excluded from survey length, since it repeats passage already surveyed (#689). Drawn fainter than a jump. |
 | **Zero Datum** | A station with GPS coordinates assigned. The fixed reference point for the coordinate system. |
 | **LRUD** | Left, Right, Up, Down - passage dimension measurements at a station. |
 | **Loop Closure** | When two survey paths meet at the same physical point, creating a loop. |
@@ -310,6 +310,7 @@ Project (Cave System)
     ├── validation: ValidationConfig
     ├── surface_elevation: Option<f64>
     ├── default_azimuth_reference: Option<AzimuthReference>
+    ├── counter_parity_shots: {shot_uuid} (shots whose record orientation runs against their section's parity after a Combine; dive-plan pins only)
     └── display toggles (show_stations, show_shots, grid_spacing, geometry_mode, ...)
 ```
 
@@ -423,7 +424,10 @@ The transformation is implemented in `src-tauri/crates/models/src/geo.rs` with:
 These are derived from shot data, not stored:
 
 - Station coordinates (from azimuth, length, depth chain)
-- Section statistics (total length, depth range, shot count)
+- Section statistics (total length, depth range, shot count). Total length
+  sums permanent and jump shots only: a reference shot repeats passage already
+  surveyed, so counting it would double-count (#689). Shot count includes every
+  shot.
 - Loop closure errors
 - Penetration distance (maximum line distance from zero datum)
 
@@ -913,7 +917,10 @@ defaults from `src-tauri/crates/core/src/config/defaults.rs` and are all rebinda
 There is no Draw or Delete tool. Shots are added from the map context menu:
 **Add Shot Before/After** at the ends of a section, or **Insert Station...** on
 any shot, which splits it in two (also available from the data table's row
-menu). Deletion is select plus Delete/Backspace, or the context menu.
+menu). Deletion is select plus Delete/Backspace, or the context menu. The same
+menu restructures sections without deleting anything: **Split Section Here** on
+a mid-section station or a point along a shot, and **Combine Sections...** on an
+end station where another section ends (see 7.11).
 
 Panning is not a tool either. A plain left-click-drag pans the map under every
 tool in the table except **Zoom**, whose drag draws its zoom box, and in
@@ -941,12 +948,27 @@ The three move tools are documented in detail in [move-tools.md](move-tools.md).
   stations unlabelled; the pill is disabled while the project has no names.
 - Station comments, shot comments
 - Shot data (azimuth, length, depth)
+- Errors: one label per shot with how far its readings disagree (Δaz azimuth in
+  vs out, Δinc inclination in vs out, Δi/d recorded inclination vs the one the
+  length and depth change imply, ΔL recorded length vs the one the depth change
+  and inclination imply - only on shots steeper than 15°), and one per loop
+  closure ("Loop 2.1% 0.84m"). A part that rounds to zero or whose warning was
+  ignored is left out. Where labels collide the worst error is shown. Saved per
+  project; off by default
 - Reference shots (faded, semi-transparent lines)
 - Zero datum (enlarged golden station dot)
 - Grid overlay (theme-aware; spacing chosen by the user from 1, 5, 10, 25, 50, 100 m - default 10 m)
 - Scale bar (always shown; not a toggle)
 - Satellite imagery
 - Depth color gradient, and the distance gradient: palette and Levels range from the legend cog (docs/color-palettes.md)
+- Survey Issues coloring: each shot graded by its worst disagreement, green
+  (agree) -> yellow (at the warning threshold) -> red (3x the threshold, or an
+  error); unresolved errors are red, other unresolved warnings at least yellow.
+  The legend cog sets the palette, worst or average, the errors that count and
+  per-error Min / Warn / Max levels (map only; never the validation thresholds)
+- While the Warnings tab is open (setting "Highlight warnings on tab switch"),
+  Survey Issues and Errors are on. Changes made then last until the tab is left
+  and are never saved; leaving restores the saved display settings
 - LRUD passage walls (future)
 
 #### Map Interactions
@@ -970,7 +992,7 @@ The three move tools are documented in detail in [move-tools.md](move-tools.md).
 | Station | Filled circle |
 | Selected station | Highlighted ring |
 | Zero datum | Golden station circle at 2x radius |
-| Validation warning | Red highlight, ⚠ icon |
+| Validation warning | Survey Issues mode: green -> yellow -> red by how far the readings disagree; ⚠ icon in the table and Warnings panel |
 | Marked as resolved | No map highlight; dimmed and struck through in the Detail Panel |
 | Loop closure line | Dashed line with error percentage |
 
@@ -1559,6 +1581,53 @@ built anywhere in this flow; it is tracked as an enhancement in #524.
 4. Undo restores the GPS coordinates
 
 ---
+
+### 7.11 Splitting and Combining Sections
+
+**Split Section Here** (station or shot context menu, Survey mode): cuts a
+section in two at a mid-section station, or at a point along a shot (a station
+is inserted there first; within 1 cm of a shot end the cut snaps to that end).
+Nothing is deleted. The first half keeps the section id and ends on the split
+station; the second half starts on a co-located copy and copies the section's
+direction, quality and north reference (every shot keeps its own surveyors,
+explorers and date). The two copies are NOT
+merged. Merges on the split station, its name and its manual offset go to both
+copies; its loop closures stay on the first half; the dialog picks the half for
+its comment (A, B or both) and its zero datum (A or B). Names default to
+`<name>-A` / `<name>-B`, each half has a colour picker: A keeps the section's
+colour, B defaults to the colour a new section gets (the next palette colour no
+section uses, never A's). The dialog notes that the halves are not connected
+(merge the two cut stations for routes and gas planning to continue across
+them). A loop closure from
+before the cut to past it, with nothing else tying the halves, is left as their
+only tie, which the split turns into a merge (a closure must close a loop),
+moving one half by the loop's misclosure; the dialog says which half moves and
+how far before the user confirms (`split_section_preview`). One undo step.
+
+**Combine Sections** (an end station's context menu, or the section menu when
+exactly two sections are selected): the two chosen sections meet end to end at
+exactly one point and become one; other sections there stay attached as
+branches. They meet when an end station of each is the same point: in one merge
+group, or unmerged and co-located within 1 mm horizontally (the state a split
+leaves). Another section's end merged there stays merged to the joined station,
+now a station in the middle of the combined section; one ending there unmerged
+is left as it is, and the dialog says so. At a junction the station menu opens
+the dialog on a picker listing every partner (name and shot count), each
+enabled or disabled with its own reason. The kept section (the lower id by default; the
+dialog can swap) keeps its id, shot numbers, direction and position; the other
+section is reversed first when the two meet end to end or start to start. Every
+per-shot field travels, and every station reference follows its station; the
+join station keeps one comment and one name (the dialog asks when they differ)
+and the kept station's offset. Blocked, with the reason in the menu tooltip,
+for co-located, unmerged ends more than 1 m apart in depth (the joined station
+takes their average; between 5 cm and 1 m the dialog says how far each end
+moves), for a section merged there at a station in its middle (it passes
+through), different north references or quality, a second rigid tie between
+the two, two zero datums, join stations moved by different amounts, or more
+than 99,999 shots, or two sections that share a shot identity. Every shot keeps
+its own surveyors, explorers and date; the dialog summarises the combined credit.
+Combining the two halves of a split gives the section back, with whatever was
+merged at the split station still attached there. One undo step. Rules and edge cases: [plans/2026-11-12_merge-split-sections.md](plans/2026-11-12_merge-split-sections.md).
 
 ## 8. Command System
 
@@ -2661,6 +2730,7 @@ The dropdown also closes when pressing Ctrl+Z or Ctrl+Y (global undo/redo shortc
 | Shot length > 50m | Warning | "Shot {section_id}:{position} length {length}m above maximum threshold {threshold}m" |
 | Depth change > 10m per shot | Warning | "Shot {section_id}:{position} depth change {change}m exceeds threshold {threshold}m" |
 | Azimuth in/out difference > 20 degrees (default `azimuth_diff_threshold`; configurable) | Warning | "Shot {section_id}:{position} azimuth in/out difference {dev}° exceeds threshold {threshold}°" |
+| Inclination in/out difference > 10 degrees (default `pitch_diff_threshold`; configurable; only when both are recorded and in range) | Warning | "Shot {section_id}:{position} inclination in/out difference {dev}° exceeds threshold {threshold}°" |
 | Zero length shot | Error | "Shot {section_id}:{position} has zero length" |
 | Negative length | Error | "Shot {section_id}:{position} has negative length: {length}m" |
 | Negative LRUD | Error | "Shot {section_id}:{position} has negative {direction} distance: {value}m" |

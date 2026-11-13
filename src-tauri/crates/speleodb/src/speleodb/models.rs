@@ -343,6 +343,18 @@ pub struct SpeleoLoginResult {
     pub endpoint: String,
 }
 
+/// One person with access to the linked SpeleoDB project, offered as a
+/// survey-credit suggestion (`speleodb_project_collaborators`). `name` is the
+/// account's display name when the server's name lookup found it; `level` is
+/// the permission level verbatim, empty for the signed-in user when the
+/// permission list did not name them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+pub struct SpeleoCollaborator {
+    pub name: Option<String>,
+    pub email: String,
+    pub level: String,
+}
+
 /// [#206] The editable SpeleoDB project metadata, returned to the webview by
 /// `speleodb_get_project_metadata` for read-only project details. `description`/`country`
 /// are required server-side; `latitude`/`longitude` are the optional both-or-neither

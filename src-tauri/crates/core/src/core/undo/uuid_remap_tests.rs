@@ -126,6 +126,7 @@ fn shot_field_entries_follow_both_copies_of_a_renamed_id() {
             before_shot_uuid: Some(X[2].to_string()),
             uuid: Some(X[1].to_string()),
             previous_offsets: HashMap::new(),
+            consumed_legacy: None,
         },
         UndoData::ShotSnapshot {
             section_id: 1,
@@ -503,6 +504,7 @@ fn reconciling_keeps_an_entry_the_drop_pass_would_otherwise_remove() {
         before_shot_uuid: None,
         uuid: Some(X[0].to_string()),
         previous_offsets: HashMap::new(),
+        consumed_legacy: None,
     };
 
     // Without the translation the entry names (1, old id), which the healed

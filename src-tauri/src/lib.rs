@@ -1880,6 +1880,7 @@ pub fn run() {
             // SpeleoDB Enable-rendering PATCH (#200)
             // SpeleoDB Project Settings metadata (#206) + create-on-SDB publish (#207)
             commands::speleodb::speleodb_get_project_metadata,
+            commands::speleodb::speleodb_project_collaborators,
             commands::speleodb::speleodb_publish,
             // SpeleoDB project settings: release the open project lock
             commands::speleodb::speleodb_release_current_lock,
@@ -1898,6 +1899,9 @@ pub fn run() {
             commands::section::get_anchored_section_ids,
             commands::section::create_section_and_merge,
             commands::section::get_section_relationships,
+            commands::section::combine_candidate,
+            commands::section::combine_candidate_for_sections,
+            commands::section::combine_sections,
             commands::section::get_segment_geometry,
             // Shot commands
             commands::shot::create_shot,
@@ -1905,8 +1909,11 @@ pub fn run() {
             commands::shot::preview_delete_shot,
             commands::shot::delete_shot,
             commands::shot::set_shot_kind,
+            commands::shot::edit_shot_credit,
             commands::shot::split_shot_at_distance,
             commands::shot::delete_shot_and_split,
+            commands::shot::split_section,
+            commands::shot::split_section_preview,
             commands::shot::delete_last_shot_and_section,
             commands::shot::preview_delete_shot_range,
             commands::shot::delete_shot_range_split,
@@ -1972,6 +1979,7 @@ pub fn run() {
             commands::config::update_import_shots_view,
             commands::config::update_gas_config,
             commands::config::update_map_palette,
+            commands::config::remember_people,
             // Display settings (per-project)
             commands::config::load_display_settings,
             commands::config::save_display_setting,

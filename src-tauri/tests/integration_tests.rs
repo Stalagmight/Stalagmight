@@ -722,10 +722,14 @@ fn test_shot_deletion() {
 fn test_section_metadata_update() {
     let mut project = create_test_project();
 
-    project.add_section(create_section_with_shots("Original", vec![]));
+    project.add_section(create_section_with_shots(
+        "Original",
+        vec![create_shot_data(0.0, 10.0, 5.0, 6.0)],
+    ));
 
     let updates = SectionUpdates {
         name: Some(Some("Updated Name".to_string())),
+        // Legacy text: set on every shot.
         surveyor: Some(Some("New Surveyor".to_string())),
         color: Some("#ff0000".to_string()),
         date: None,
@@ -737,7 +741,7 @@ fn test_section_metadata_update() {
 
     let section = project.get_section(0).unwrap();
     assert_eq!(section.name, Some("Updated Name".to_string()));
-    assert_eq!(section.surveyor, Some("New Surveyor".to_string()));
+    assert_eq!(section.surveyor_names(), Some("New Surveyor".to_string()));
     assert_eq!(section.color, "#ff0000");
     assert_eq!(section.quality, 1.2);
 }
@@ -781,11 +785,13 @@ fn test_section_date_storage() {
         color: "#4ecdc4".to_string(),
         direction: None,
         quality: 1.0,
-        shots: vec![],
+        // The legacy date is a template for the shots, so it needs one.
+        shots: vec![create_shot_data(0.0, 10.0, 5.0, 6.0)],
     });
 
     let section = project.get_section(0).unwrap();
-    assert_eq!(section.date, Some(date));
+    assert_eq!(section.first_survey_date(), Some(date));
+    assert_eq!(section.shots[0].credit().date, Some(date));
 }
 
 // ============================================================================
@@ -1554,17 +1560,15 @@ fn test_section_stats() {
     let stats = section.stats();
 
     assert_eq!(stats.shot_count, 2);
-    // total_length still counts every shot; #27 deliberately left it raw so no
-    // number users already read shifts on upgrade.
-    assert!((stats.total_length - 25.0).abs() < 0.001);
-    // The reference leg is not swimmable, so it drops out of the swum figure.
-    assert!((stats.swum_length - 10.0).abs() < 0.001);
+    // A Reference repeats passage already surveyed, so its length is left out
+    // of the total (#689) while it still counts as a shot.
+    assert!((stats.total_length - 10.0).abs() < 0.001);
     assert_eq!(stats.reference_shot_count, 1);
     assert_eq!(stats.jump_shot_count, 0);
 }
 
-/// A jump counts separately from a reference, and unlike a reference it still
-/// counts as swum (#27 q7/q13).
+/// A jump counts separately from a reference, and unlike a reference its length
+/// counts toward the total: it is surveyed passage (#27 q7, #689).
 #[test]
 fn test_section_stats_splits_jumps_from_references() {
     let mut project = create_test_project();
@@ -1579,8 +1583,7 @@ fn test_section_stats_splits_jumps_from_references() {
 
     let stats = project.get_section(0).unwrap().stats();
 
-    assert_eq!(stats.total_length, 25.0);
-    assert_eq!(stats.swum_length, 25.0, "a jump IS swum");
+    assert_eq!(stats.total_length, 25.0, "a jump's length counts");
     assert_eq!(stats.jump_shot_count, 1);
     assert_eq!(stats.reference_shot_count, 0);
 }
@@ -1984,7 +1987,12 @@ fn test_section_to_section_data() {
     let data = section.to_section_data();
 
     assert_eq!(data.name, Some("Original".to_string()));
-    assert_eq!(data.surveyor, Some("John".to_string()));
+    // The template went onto the shot; the data carries it there.
+    assert_eq!(data.surveyor, None);
+    assert_eq!(
+        data.shots[0].credit().surveyor_names().as_deref(),
+        Some("John")
+    );
     assert_eq!(data.color, "#ff0000");
     assert_eq!(data.shots.len(), 1);
     assert!((data.shots[0].length - 10.0).abs() < 0.001);

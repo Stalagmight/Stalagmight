@@ -801,6 +801,14 @@ fn shot_uuid_is_persisted_reflects_the_shots_table() {
         .unwrap();
     assert!(db.shot_uuid_is_persisted(0, "persisted-uuid").unwrap());
     assert!(!db.shot_uuid_is_persisted(0, "transient-uuid").unwrap());
+    // The uuid-less shot is what makes every load mint uuids afresh.
+    assert!(db.holds_shots_without_uuid().unwrap());
+    db.conn
+        .execute("UPDATE shots SET uuid = 'saved-uuid' WHERE id = 2", [])
+        .unwrap();
+    assert!(!db.holds_shots_without_uuid().unwrap());
+    db.conn.execute("DELETE FROM shots", []).unwrap();
+    assert!(!db.holds_shots_without_uuid().unwrap(), "no shots at all");
 }
 
 /// The check is SECTION-SCOPED, because a file saved before shot UUIDs were project-wide
@@ -1095,8 +1103,12 @@ fn test_save_load_multiple_sections() {
     // Verify section 1
     let s1 = &loaded.sections[0];
     assert_eq!(s1.name, Some("Main Passage".to_string()));
-    assert_eq!(s1.surveyor, Some("John Doe".to_string()));
-    assert_eq!(s1.date, NaiveDate::from_ymd_opt(2024, 6, 15));
+    let c1 = s1.credit_summary();
+    assert_eq!(
+        crate::models::join_names(&c1.surveyor_people()).as_deref(),
+        Some("John Doe")
+    );
+    assert_eq!(c1.date_min, NaiveDate::from_ymd_opt(2024, 6, 15));
     assert_eq!(s1.color, "#ff5733");
     assert_eq!(s1.direction, SurveyDirection::In);
     assert_eq!(s1.shots.len(), 2);
@@ -1128,8 +1140,8 @@ fn test_save_load_multiple_sections() {
     // Verify section 3 (None values)
     let s3 = &loaded.sections[2];
     assert!(s3.name.is_none());
-    assert!(s3.surveyor.is_none());
-    assert!(s3.date.is_none());
+    assert!(s3.credit_summary().surveyors.is_empty());
+    assert!(s3.credit_summary().date_min.is_none());
     assert!(s3.shots.is_empty());
 }
 
@@ -3808,6 +3820,7 @@ fn test_save_load_round_trip_zero_values() {
             kind: ShotKind::Normal,
             marker_index: None,
             temperature: None,
+            credit: None,
         }],
         ..Default::default()
     });
@@ -3894,7 +3907,13 @@ fn test_save_load_round_trip_all_metadata() {
     assert_eq!(loaded.name, "FullMeta");
     assert_eq!(loaded.location.as_deref(), Some("Underwater Cave"));
     assert_eq!(loaded.sections.len(), 2);
-    assert_eq!(loaded.sections[0].surveyor.as_deref(), Some("Diver One"));
+    assert_eq!(
+        loaded.sections[0].shots[0]
+            .credit()
+            .surveyor_names()
+            .as_deref(),
+        Some("Diver One")
+    );
     assert_eq!(loaded.sections[0].direction.to_string(), "out");
     assert!((loaded.sections[0].quality - 0.75).abs() < 1e-6);
     assert_eq!(loaded.sections[0].shots[0].kind, ShotKind::Reference);
@@ -5161,6 +5180,155 @@ fn is_remote_false_on_metadata_open_of_pre_v9_file() {
     let db = Database::open_for_metadata(&path).unwrap();
     let meta = db.load_metadata(path).unwrap();
     assert!(!meta.is_remote, "missing table → is_remote false, no error");
+}
+
+/// A project whose shots are 10 m Normal, 3 m Jump, 4 m Reference and 6 m
+/// Reference: 13 m surveyed, 23 m of tape.
+fn project_with_reference_shots() -> Project {
+    let shot = |length: f64, kind: ShotKind| ShotData {
+        length,
+        kind,
+        ..Default::default()
+    };
+    let mut project = Project::new("Refs".to_string(), None);
+    project.add_section(SectionData {
+        shots: vec![
+            shot(10.0, ShotKind::Normal),
+            shot(4.0, ShotKind::Reference),
+            shot(3.0, ShotKind::Jump),
+        ],
+        ..Default::default()
+    });
+    project.add_section(SectionData {
+        shots: vec![shot(6.0, ShotKind::Reference)],
+        ..Default::default()
+    });
+    project
+}
+
+/// The recent-projects listing (Global View, system table, merge dialog) reads
+/// the length through SQL, not `Project::stats`, so it must apply the same rule:
+/// Reference shots are left out (#689), and both routes report one figure.
+#[test]
+fn metadata_total_length_excludes_reference_shots() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("refs.stalx");
+    let project = project_with_reference_shots();
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&project).unwrap();
+    }
+    let db = Database::open_for_metadata(&path).unwrap();
+    let meta = db.load_metadata(path).unwrap();
+    assert!(
+        (meta.total_length - 13.0).abs() < 1e-9,
+        "got {}",
+        meta.total_length
+    );
+    assert!((meta.total_length - project.stats().total_length).abs() < 1e-9);
+}
+
+/// A stored `kind` this build does not recognise loads as Reference
+/// (`ShotKind::from_u8`), so the SQL length must leave it out too.
+#[test]
+fn metadata_total_length_excludes_unrecognised_kinds_like_the_loader() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("unknown_kind.stalx");
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&project_with_reference_shots()).unwrap();
+        db.conn
+            .execute("UPDATE shots SET kind = 7 WHERE length = 10.0", [])
+            .unwrap();
+    }
+    let db = Database::open_for_metadata(&path).unwrap();
+    let meta = db.load_metadata(path).unwrap();
+    assert!(
+        (meta.total_length - 3.0).abs() < 1e-9,
+        "got {}",
+        meta.total_length
+    );
+}
+
+/// Rewrite `shots.kind` as a column declared `declared_type`, keeping each
+/// row's value. The table is not STRICT, so the declared type's affinity
+/// decides the storage class: `TEXT` stores `'1'`, `REAL` stores `1.0`.
+fn retype_kind_column(path: &Path, declared_type: &str) {
+    let db = Database::open(path).unwrap();
+    db.conn
+        .execute_batch(&format!(
+            "ALTER TABLE shots ADD COLUMN kind_retyped {declared_type};
+             UPDATE shots SET kind_retyped = kind;
+             ALTER TABLE shots DROP COLUMN kind;
+             ALTER TABLE shots RENAME COLUMN kind_retyped TO kind;"
+        ))
+        .unwrap();
+}
+
+/// A crafted file can store `kind` as TEXT `'1'` or REAL `1.0`. SQLite's
+/// column affinity lets `IN (0, 1)` match those, but the loader reads any
+/// non-INTEGER cell as Reference, so the listing must leave them out too and
+/// agree with the length the opened project shows.
+#[test]
+fn metadata_total_length_matches_the_loader_on_non_integer_kinds() {
+    for (declared_type, storage_class) in [("TEXT", "text"), ("REAL", "real")] {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("retyped_kind.stalx");
+        {
+            let mut db = Database::open(&path).unwrap();
+            db.save_project(&project_with_reference_shots()).unwrap();
+        }
+        retype_kind_column(&path, declared_type);
+
+        let meta = Database::open_for_metadata(&path)
+            .unwrap()
+            .load_metadata(path.clone())
+            .unwrap();
+        let db = Database::open(&path).unwrap();
+        let stored: String = db
+            .conn
+            .query_row("SELECT typeof(kind) FROM shots LIMIT 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(stored, storage_class, "{declared_type}: fixture storage");
+        let loaded = db.load_project().unwrap().stats().total_length;
+        assert!(
+            (meta.total_length - loaded).abs() < 1e-9,
+            "{declared_type}: listing {} != opened {loaded}",
+            meta.total_length
+        );
+    }
+}
+
+/// `open_for_metadata` runs no migration, so a pre-v13 file has no `kind`
+/// column, only the boolean `is_reference`. The v13 migration seeds every
+/// virtual shot as Jump, which counts, so the listing sums every shot rather
+/// than failing to 0. That is an upper bound, not the opened figure: the first
+/// open runs the classifier, which may demote some of them to Reference, and
+/// re-saves the result.
+#[test]
+fn metadata_total_length_on_a_pre_v13_file_without_kind_column() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("pre_v13.stalx");
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&project_with_reference_shots()).unwrap();
+        // The pre-v13 shape: a boolean "virtual" flag, 1 for both kinds.
+        db.conn
+            .execute_batch(
+                "ALTER TABLE shots RENAME COLUMN kind TO is_reference;
+                 UPDATE shots SET is_reference = is_reference != 0;",
+            )
+            .unwrap();
+    }
+    let db = Database::open_for_metadata(&path).unwrap();
+    let meta = db.load_metadata(path).unwrap();
+    assert!(
+        (meta.total_length - 23.0).abs() < 1e-9,
+        "got {}",
+        meta.total_length
+    );
 }
 
 #[test]
@@ -8677,4 +8845,156 @@ fn bundled_sqlite_omits_virtual_table_modules_and_extension_loading() {
             "{module}: {err}"
         );
     }
+}
+
+/// A one-shot project whose only shot is `counter_parity_shots`' entry, with
+/// the setting then overwritten by `raw` (or deleted, for `None`).
+fn counter_parity_file(raw: Option<&str>) -> (TempDir, Database, String) {
+    let temp = TempDir::new().unwrap();
+    let mut db = Database::open(&temp.path().join("parity.stalx")).unwrap();
+    let mut project = Project::new("Parity".to_string(), None);
+    let id = project
+        .add_section(SectionData {
+            shots: vec![ShotData {
+                length: 5.0,
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .id;
+    let uuid = project.get_section(id).unwrap().shots[0]
+        .uuid
+        .clone()
+        .unwrap();
+    project.counter_parity_shots.insert(uuid.clone());
+    db.save_project(&project).unwrap();
+    assert_eq!(
+        db.load_project().unwrap().counter_parity_shots,
+        std::collections::BTreeSet::from([uuid.clone()]),
+        "precondition: the entry round-trips"
+    );
+    match raw {
+        Some(raw) => {
+            db.conn
+                .execute(
+                    "UPDATE project_settings SET value = ?1 WHERE key = 'counter_parity_shots'",
+                    [raw],
+                )
+                .unwrap();
+        }
+        None => {
+            db.conn
+                .execute(
+                    "DELETE FROM project_settings WHERE key = 'counter_parity_shots'",
+                    [],
+                )
+                .unwrap();
+        }
+    }
+    (temp, db, uuid)
+}
+
+/// The counter-parity set only refines single-neighbour dive-plan pins, so a
+/// missing or malformed setting reads as none rather than failing the load.
+#[test]
+fn a_missing_or_malformed_counter_parity_setting_reads_as_none() {
+    for raw in [
+        None,
+        Some("not json"),
+        Some("{\"a\": 1}"),
+        Some("[1, 2]"),
+        Some("null"),
+    ] {
+        let (_temp, db, _) = counter_parity_file(raw);
+        let loaded = db.load_project();
+        assert!(loaded.is_ok(), "{raw:?} must not error the load");
+        assert!(
+            loaded.unwrap().counter_parity_shots.is_empty(),
+            "{raw:?} must read as none"
+        );
+    }
+}
+
+/// An entry for a shot the file does not hold is dropped at load, so it cannot
+/// later attach to a shot that takes that uuid.
+#[test]
+fn a_counter_parity_entry_for_a_shot_the_file_does_not_hold_is_dropped() {
+    let stale = "00000000-0000-4000-8000-000000000000";
+    let (_temp, db, uuid) = counter_parity_file(None);
+    db.conn
+        .execute(
+            "INSERT INTO project_settings (key, value) VALUES ('counter_parity_shots', ?1)",
+            [serde_json::to_string(&[stale, uuid.as_str()]).unwrap()],
+        )
+        .unwrap();
+    assert_eq!(
+        db.load_project().unwrap().counter_parity_shots,
+        std::collections::BTreeSet::from([uuid])
+    );
+}
+
+/// Held component gauges (`Project::held_gauges`) round-trip; a stored entry
+/// whose shot the file does not hold is dropped at load, and a missing or
+/// malformed setting reads as none.
+#[test]
+fn held_gauges_round_trip_and_a_stale_or_malformed_setting_reads_as_none() {
+    let temp = TempDir::new().unwrap();
+    let mut db = Database::open(&temp.path().join("held.stalx")).unwrap();
+    let mut project = Project::new("Held".to_string(), None);
+    let id = project
+        .add_section(SectionData {
+            shots: vec![
+                ShotData {
+                    length: 5.0,
+                    ..Default::default()
+                },
+                ShotData {
+                    length: 6.0,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        })
+        .id;
+    let shots = &project.get_section(id).unwrap().shots;
+    let held = crate::models::HeldGauge {
+        section_id: id,
+        shot: shots[1].uuid.clone().unwrap(),
+        neighbour: shots[0].uuid.clone(),
+        end: true,
+        parity: false,
+    };
+    let stale = crate::models::HeldGauge {
+        shot: "00000000-0000-4000-8000-000000000000".to_string(),
+        ..held.clone()
+    };
+    project.held_gauges = vec![held.clone(), stale.clone()];
+    db.save_project(&project).unwrap();
+    assert_eq!(
+        db.load_project().unwrap().held_gauges,
+        vec![held.clone()],
+        "the save writes only entries that name a station"
+    );
+
+    db.conn
+        .execute(
+            "UPDATE project_settings SET value = ?1 WHERE key = 'held_gauges'",
+            [serde_json::to_string(&[&stale, &held]).unwrap()],
+        )
+        .unwrap();
+    assert_eq!(db.load_project().unwrap().held_gauges, vec![held]);
+
+    for raw in ["not json", "{\"a\": 1}", "[1]"] {
+        db.conn
+            .execute(
+                "UPDATE project_settings SET value = ?1 WHERE key = 'held_gauges'",
+                [raw],
+            )
+            .unwrap();
+        assert!(db.load_project().unwrap().held_gauges.is_empty(), "{raw:?}");
+    }
+    db.conn
+        .execute("DELETE FROM project_settings WHERE key = 'held_gauges'", [])
+        .unwrap();
+    assert!(db.load_project().unwrap().held_gauges.is_empty());
 }

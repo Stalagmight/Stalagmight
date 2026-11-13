@@ -1,6 +1,7 @@
 /**
- * The persisted half of the colour scale: which palette depth and distance use,
- * and which palettes are pinned. Stored in config.toml `[map_palette]` through
+ * The persisted half of the colour scale: which palette depth, distance and
+ * the Survey Issues colouring use, how Survey Issues combines a shot's errors
+ * and which errors it leaves out, and which palettes are pinned. Stored in config.toml `[map_palette]` through
  * the partial `update_map_palette` command, so it follows the user across
  * projects and never touches the .stalx or SpeleoDB. The session half (Levels
  * ranges, preview) is `colorScaleStore.ts`.
@@ -11,12 +12,15 @@ import { invokeIpc } from '../utils/ipc';
 import { useUIStore } from './uiStore';
 import { TOAST_KEYS } from '../utils/toastKeys';
 import i18n from '../i18n';
-import { DEFAULT_PALETTE_CHOICE, type ColorScaleKind, type PaletteChoice } from '../utils/palettes/types';
-import type { MapPaletteConfig } from '../types/ipc.generated';
+import { DEFAULT_PALETTE_CHOICE, type PaletteChoice, type PaletteKind } from '../utils/palettes/types';
+import type { IssueCombine, MapPaletteConfig } from '../types/ipc.generated';
 
 const DEFAULT_MAP_PALETTE: MapPaletteConfig = {
   depth: { ...DEFAULT_PALETTE_CHOICE },
   distance: { ...DEFAULT_PALETTE_CHOICE },
+  issues: { ...DEFAULT_PALETTE_CHOICE },
+  issues_combine: 'worst',
+  issues_hidden: [],
   pinned: [],
 };
 
@@ -26,13 +30,13 @@ export function currentMapPalette(): MapPaletteConfig {
 }
 
 /** The persisted palette choice for a kind (hook). */
-export function usePersistedPalette(kind: ColorScaleKind): PaletteChoice {
+export function usePersistedPalette(kind: PaletteKind): PaletteChoice {
   return useProjectStore((s) => s.config?.map_palette?.[kind]) ?? DEFAULT_PALETTE_CHOICE;
 }
 
 /** The palette to draw for a kind: the picker's live preview when there is
  *  one for this kind, else the persisted choice (hook). */
-export function useEffectivePalette(kind: ColorScaleKind): PaletteChoice {
+export function useEffectivePalette(kind: PaletteKind): PaletteChoice {
   const persisted = usePersistedPalette(kind);
   const preview = useColorScaleStore((s) => s.palettePreview);
   return preview && preview.kind === kind ? preview.choice : persisted;
@@ -67,7 +71,7 @@ async function writeMapPalette(next: MapPaletteConfig): Promise<void> {
   }
 }
 
-export function setPalette(kind: ColorScaleKind, choice: PaletteChoice): Promise<void> {
+export function setPalette(kind: PaletteKind, choice: PaletteChoice): Promise<void> {
   const current = currentMapPalette();
   const prev = current[kind];
   if (prev.id === choice.id && prev.reversed === choice.reversed) return Promise.resolve();
@@ -91,4 +95,29 @@ export function togglePinnedPalette(id: string): Promise<void> {
     return Promise.resolve();
   }
   return writeMapPalette({ ...current, pinned: [...current.pinned, id] });
+}
+
+/** How Survey Issues combines a shot's errors (hook). */
+export function useIssueCombine(): IssueCombine {
+  return useProjectStore((s) => s.config?.map_palette?.issues_combine) ?? DEFAULT_MAP_PALETTE.issues_combine;
+}
+
+/** The Survey Issues errors the user switched off (hook). */
+export function useHiddenIssues(): readonly string[] {
+  return useProjectStore((s) => s.config?.map_palette?.issues_hidden) ?? DEFAULT_MAP_PALETTE.issues_hidden;
+}
+
+export function setIssueCombine(combine: IssueCombine): Promise<void> {
+  const current = currentMapPalette();
+  if (current.issues_combine === combine) return Promise.resolve();
+  return writeMapPalette({ ...current, issues_combine: combine });
+}
+
+/** Switch one Survey Issues error off (`hidden`) or back on. */
+export function setIssueHidden(id: string, hidden: boolean): Promise<void> {
+  const current = currentMapPalette();
+  const isHidden = current.issues_hidden.includes(id);
+  if (isHidden === hidden) return Promise.resolve();
+  const issues_hidden = hidden ? [...current.issues_hidden, id] : current.issues_hidden.filter((h) => h !== id);
+  return writeMapPalette({ ...current, issues_hidden });
 }

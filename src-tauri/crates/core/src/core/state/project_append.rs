@@ -7,8 +7,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::models::{
-    gps_to_local, GpsCoordinates, LoopClosure, Project, SectionId, ShotUuidRemap, StationKey,
-    StationMerge, StationRef,
+    gps_to_local, GpsCoordinates, HeldGauge, LoopClosure, Project, SectionId, ShotUuidRemap,
+    StationKey, StationMerge, StationRef,
 };
 
 /// What [`append_project`] did beyond the copy itself.
@@ -182,12 +182,18 @@ fn place_by_datum(
 /// renamed because the target already held them, and in-section repeats
 /// `Section::new` re-minted. Then carry each section's gauge pair over through
 /// that map, so it names the same two shots in the copy as in the source.
+///
+/// Each copy's record parity comes from the source too: its entry in the
+/// source's `counter_parity_shots`, set or cleared on the copy's own uuid.
+/// Never from the target's set, whose entry for a shared old id belongs to the
+/// target's shot (`reassign_repeated_shot_uuids` does not follow it).
 fn carry_shot_identity(
     target: &mut Project,
     source: &Project,
     section_id_map: &HashMap<SectionId, SectionId>,
 ) -> ShotUuidRemap {
     let mut renamed = ShotUuidRemap::default();
+    let mut counter_parity: Vec<(String, bool)> = Vec::new();
     for section in &source.sections {
         let Some(&new_section_id) = section_id_map.get(&section.id) else {
             continue;
@@ -201,6 +207,7 @@ fn carry_shot_identity(
                 continue;
             };
             by_source.entry(from).or_insert_with(|| to.to_string());
+            counter_parity.push((to.to_string(), source.counter_parity_shots.contains(from)));
             if from != to && renamed.get(new_section_id, from).is_none() {
                 renamed.insert(new_section_id, from.to_string(), to.to_string());
             }
@@ -216,6 +223,33 @@ fn carry_shot_identity(
         copied.gauge_shot_uuid = carry(&section.gauge_shot_uuid);
         copied.gauge_neighbour_uuid = carry(&section.gauge_neighbour_uuid);
     }
+    for (uuid, counter) in counter_parity {
+        if counter {
+            target.counter_parity_shots.insert(uuid);
+        } else {
+            target.counter_parity_shots.remove(&uuid);
+        }
+    }
+    // The source's held gauges (`Project::held_gauges`) keep its components'
+    // adjustment on the same stations in the copy, through the copy's uuids.
+    for held in &source.held_gauges {
+        let Some(&to) = section_id_map.get(&held.section_id) else {
+            continue;
+        };
+        let carry = |uuid: &str| {
+            renamed
+                .get(to, uuid)
+                .map_or_else(|| uuid.to_string(), str::to_string)
+        };
+        target.held_gauges.push(HeldGauge {
+            section_id: to,
+            shot: carry(&held.shot),
+            neighbour: held.neighbour.as_deref().map(carry),
+            ..held.clone()
+        });
+    }
+    // One per component, whatever the source file held.
+    target.normalize_held_gauges();
     renamed
 }
 

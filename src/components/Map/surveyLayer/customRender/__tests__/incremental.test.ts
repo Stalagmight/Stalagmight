@@ -71,7 +71,7 @@ function buildSurvey(specs: SecSpec[]): SurveyData {
   for (const s of specs) {
     const shotCount = Math.max(0, s.stations.length - 1);
     d.sections.push({
-      id: s.id, name: null, surveyor: null, date: null, color: s.color,
+      id: s.id, name: null, color: s.color,
       direction: 'in' as never, quality: 0, next_shot_id: shotCount + 1, shotOffset, shotCount,
     });
     for (let i = 0; i < shotCount; i++) {
@@ -172,12 +172,17 @@ describe('sameColorGlobals', () => {
     expect(sameColorGlobals(ctx(), ctx({ themeColors: { ...THEME } as never }))).toBe(false);
     expect(sameColorGlobals(ctx(), ctx({ showDepthGradient: true }))).toBe(false);
     expect(sameColorGlobals(ctx(), ctx({ depthRange: { min: 0, max: 60 } }))).toBe(false);
-    // Severity on: the arrays are rebuilt per flush (new ref) -> never same.
-    const sev = { shotSeverity: new Uint8Array(0), stationSeverity: new Uint8Array(0) };
+    // Survey Issues on: new scores (an edit / a warnings refresh) -> not same;
+    // the memoized SAME scores object (nothing they depend on changed) -> same.
+    const sev = { shotScore: new Float32Array(0), stationScore: new Float32Array(0) };
     expect(sameColorGlobals(
-      ctx({ showIssueSeverity: true, issueSeverity: sev }),
-      ctx({ showIssueSeverity: true, issueSeverity: { ...sev } }),
+      ctx({ showIssueSeverity: true, issueScores: sev }),
+      ctx({ showIssueSeverity: true, issueScores: { ...sev } }),
     )).toBe(false);
+    expect(sameColorGlobals(
+      ctx({ showIssueSeverity: true, issueScores: sev }),
+      ctx({ showIssueSeverity: true, issueScores: sev }),
+    )).toBe(true);
   });
 
   it('treats analytical-overlay changes as color-global (forces a rebuild)', () => {

@@ -5,7 +5,7 @@ use std::io::Write as _;
 use std::path::Path;
 
 use super::atomic_write::write_atomic;
-use crate::models::{Project, ShotKind};
+use crate::models::{Person, Project, ShotKind};
 
 /// Export project data to JSON format
 pub fn export_json(project: &Project, path: &Path) -> Result<()> {
@@ -34,12 +34,23 @@ pub struct JsonProjectMeta {
     pub exported_at: String,
 }
 
+/// A section. Its survey credit is the aggregate of its shots' (each shot
+/// carries its own): people by NAME only - emails never leave in an export.
 #[derive(Debug, Serialize)]
 pub struct JsonSection {
     pub id: u32,
     pub name: Option<String>,
+    /// The distinct surveyor names joined with `", "` - the legacy field.
     pub surveyor: Option<String>,
+    /// The earliest shot date.
     pub date: Option<String>,
+    /// Every surveyor of any shot, first-appearance order.
+    pub surveyors: Vec<String>,
+    /// Every explorer of any shot, first-appearance order.
+    pub explorers: Vec<String>,
+    /// The latest shot date (`date` is the earliest).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub date_last: Option<String>,
     pub color: String,
     pub shots: Vec<JsonShot>,
 }
@@ -57,6 +68,19 @@ pub struct JsonShot {
     pub kind: ShotKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
+    /// The shot's surveyors, by name.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub surveyors: Vec<String>,
+    /// The shot's explorers, by name.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub explorers: Vec<String>,
+    /// The shot's survey date.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub date: Option<String>,
+}
+
+fn names(people: &[Person]) -> Vec<String> {
+    people.iter().map(|p| p.name.clone()).collect()
 }
 
 impl JsonExport {
@@ -73,8 +97,15 @@ impl JsonExport {
                 .map(|s| JsonSection {
                     id: s.id,
                     name: s.name.clone(),
-                    surveyor: s.surveyor.clone(),
-                    date: s.date.map(|d| d.to_string()),
+                    surveyor: s.surveyor_names(),
+                    date: s.first_survey_date().map(|d| d.to_string()),
+                    surveyors: names(&s.credit_summary().surveyor_people()),
+                    explorers: names(&s.credit_summary().explorer_people()),
+                    date_last: s
+                        .credit_summary()
+                        .date_max
+                        .filter(|last| Some(*last) != s.first_survey_date())
+                        .map(|d| d.to_string()),
                     color: s.color.clone(),
                     shots: s
                         .shots
@@ -102,6 +133,9 @@ impl JsonExport {
                             },
                             kind: shot.kind,
                             comment: shot.comment.clone(),
+                            surveyors: names(&shot.credit().surveyors),
+                            explorers: names(&shot.credit().explorers),
+                            date: shot.credit().date.map(|d| d.to_string()),
                         })
                         .collect(),
                 })
@@ -149,6 +183,56 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
         assert_eq!(parsed["project"]["name"], "Test");
         assert_eq!(parsed["sections"][0]["name"], "Main");
+        assert_eq!(parsed["sections"][0]["surveyor"], "Tester");
+        assert_eq!(parsed["sections"][0]["surveyors"][0], "Tester");
+        assert_eq!(parsed["sections"][0]["shots"][0]["surveyors"][0], "Tester");
+    }
+
+    #[test]
+    fn credit_is_per_shot_with_section_aggregates_and_never_emails() {
+        use crate::models::{Person, SurveyCredit};
+        let mut project = Project::new("Credit".to_string(), None);
+        let shot = |credit: SurveyCredit| ShotData {
+            length: 3.0,
+            credit: credit.stored().map(Into::into),
+            ..Default::default()
+        };
+        let ann = Person::new("Ann", Some("ann@example.org")).unwrap();
+        let bo = Person::named("Bo").unwrap();
+        project.add_section(SectionData {
+            shots: vec![
+                shot(SurveyCredit {
+                    surveyors: vec![ann],
+                    explorers: vec![bo.clone()],
+                    date: chrono::NaiveDate::from_ymd_opt(2024, 5, 2),
+                }),
+                shot(SurveyCredit {
+                    surveyors: vec![bo],
+                    explorers: Vec::new(),
+                    date: chrono::NaiveDate::from_ymd_opt(2024, 5, 9),
+                }),
+                shot(SurveyCredit::default()),
+            ],
+            ..Default::default()
+        });
+        let file = NamedTempFile::new().unwrap();
+        export_json(&project, file.path()).unwrap();
+        let contents = std::fs::read_to_string(file.path()).unwrap();
+        assert!(
+            !contents.contains("example.org"),
+            "no email leaves: {contents}"
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
+        let section = &parsed["sections"][0];
+        assert_eq!(section["surveyors"], serde_json::json!(["Ann", "Bo"]));
+        assert_eq!(section["explorers"], serde_json::json!(["Bo"]));
+        assert_eq!(section["surveyor"], "Ann, Bo");
+        assert_eq!(section["date"], "2024-05-02");
+        assert_eq!(section["date_last"], "2024-05-09");
+        assert_eq!(section["shots"][0]["surveyors"], serde_json::json!(["Ann"]));
+        assert_eq!(section["shots"][1]["date"], "2024-05-09");
+        let bare = section["shots"][2].as_object().unwrap();
+        assert!(!bare.contains_key("surveyors") && !bare.contains_key("date"));
     }
 
     #[test]

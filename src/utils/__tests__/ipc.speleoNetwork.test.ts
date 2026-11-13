@@ -86,7 +86,7 @@ describe('speleoNetworkKind', () => {
     for (const command of [
       'speleodb_list_projects', 'speleodb_link_status', 'speleodb_get_revisions',
       'speleodb_unwind_target', 'speleodb_rewind_target', 'speleodb_get_project_metadata',
-      'speleodb_project_access_at',
+      'speleodb_project_access_at', 'speleodb_project_collaborators',
     ]) {
       expect(speleoNetworkKind(command), command).toBe('read');
     }

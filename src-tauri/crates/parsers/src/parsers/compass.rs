@@ -824,20 +824,21 @@ fn finite_or_zero(v: f64) -> f64 {
 ///     the unit conversion, Grads / DDD.MM / Percent surveys with
 ///     back-sights store `pitch_out` in the wrong units.
 ///
-/// Returns `(azimuth_out_grid_deg, pitch_out_deg_positive_down)` if both
-/// back-sight readings are present and non-sentinel, else `None`.
-fn shot_backsight_geometry(shot: &Shot, ctx: &SurveyCtx) -> Option<(f64, f64)> {
+/// Returns `(azimuth_out_grid_deg, pitch_out_deg_positive_down)` when the
+/// back-sight has a (non-sentinel) bearing, else `None`. The inclination is
+/// `None` when the back-inclination is the missing-value sentinel: a bearing
+/// taken without an inclination is still a real back-sight, but storing the
+/// missing inclination as a level 0° made the two inclination readings of
+/// every such shot disagree by the whole fore-sight inclination.
+fn shot_backsight_geometry(shot: &Shot, ctx: &SurveyCtx) -> Option<(f64, Option<f64>)> {
     let back_az_raw = shot.back_azimuth?;
     let back_inc_raw = shot.back_inclination?;
     if angle_missing(back_az_raw) {
         return None;
     }
+    let back_inc_present = !angle_missing(back_inc_raw);
     let mut back_az = back_az_raw;
-    let mut back_inc = if angle_missing(back_inc_raw) {
-        0.0
-    } else {
-        back_inc_raw
-    };
+    let mut back_inc = if back_inc_present { back_inc_raw } else { 0.0 };
     // Same raw-length-with-fore-sight-corrections that `shot_geometry`
     // computes; needed by `inclination_to_degrees` for the DepthGauge
     // depth/length ratio.  Survey-level CORRECTIONS apply to the
@@ -876,7 +877,10 @@ fn shot_backsight_geometry(shot: &Shot, ctx: &SurveyCtx) -> Option<(f64, f64)> {
     if !azimuth_out_fore_direction.is_finite() || !pitch_out_down_positive.is_finite() {
         return None;
     }
-    Some((azimuth_out_fore_direction, pitch_out_down_positive))
+    Some((
+        azimuth_out_fore_direction,
+        back_inc_present.then_some(pitch_out_down_positive),
+    ))
 }
 
 fn elevation_gain(length_m: f64, inclination_deg: f64) -> f64 {
@@ -899,7 +903,7 @@ fn shot_to_shot_data(
     // and warnings.  When no back-sight is present, mirror the fore-sight
     // into the `_out` slot - matching the TML importer's convention.
     let (azimuth_out, pitch_out) = match shot_backsight_geometry(shot, ctx) {
-        Some((back_az, back_pitch)) => (back_az, Some(back_pitch)),
+        Some((back_az, back_pitch)) => (back_az, back_pitch),
         None => (azimuth, None),
     };
     ShotData {
@@ -928,6 +932,7 @@ fn shot_to_shot_data(
         },
         marker_index: None,
         temperature: None,
+        credit: None,
     }
 }
 
@@ -1711,20 +1716,40 @@ pub fn convert_compass_to_import_configs(
     for ci in creation_order {
         let chain = &chains[ci];
         let p = placement[ci].clone().unwrap_or(ImportPlacement::Origin);
+        // The team are the surveyors of every shot of the survey, on its date;
+        // the credit rides on the shots, so the section template stays empty.
+        // One allocation for the whole survey: every shot shares it
+        // (`ShotData::credit`), however long the team line and the survey.
+        let credit =
+            crate::models::SurveyCredit::from_team(chain.surveyor.as_deref(), Some(chain.date))
+                .stored()
+                .map(std::sync::Arc::new);
+        let shots = chain
+            .shots
+            .iter()
+            .cloned()
+            .map(|mut shot| {
+                shot.credit.clone_from(&credit);
+                shot
+            })
+            .collect();
         configs.push(ImportSectionConfig {
             reverse: false,
             section_index: chain.section_index,
             name: Some(chain.label.clone()),
-            surveyor: chain.surveyor.clone(),
-            date: Some(chain.date),
+            surveyor: None,
+            date: None,
             color: SECTION_COLORS[chain.section_index as usize % SECTION_COLORS.len()].to_string(),
             direction: None,
             quality: 1.0,
-            shots: chain.shots.clone(),
+            shots,
             placement: p,
             station_comments: chain.station_comments.clone(),
             station_names: Vec::new(),
             azimuth_reference: Some(chain.azimuth_reference),
+            explorers: None,
+            override_date: None,
+            surveyors: None,
         });
     }
 
@@ -1832,6 +1857,43 @@ fn topological_sort_configs(configs: &mut Vec<ImportSectionConfig>) {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn the_survey_team_is_every_shots_surveyors_on_the_survey_date() {
+        let dir = tempfile::tempdir().unwrap();
+        let dat = "Synthetic Cave\r\n\
+             SURVEY NAME: T\r\n\
+             SURVEY DATE: 7 10 1979\r\n\
+             SURVEY TEAM:\r\n\
+             Ann Smith, Bo; Cy\r\n\
+             DECLINATION: 0.00  FORMAT: DMMDLRUDLADN  CORRECTIONS: 0.00 0.00 0.00\r\n\
+             \r\n\
+             FROM TO LENGTH BEARING INC LEFT UP DOWN RIGHT FLAGS COMMENTS\r\n\
+             \r\n\
+             T1 T2 10.00 90.00 0.00 1.00 2.00 3.00 4.00\r\n\
+             T2 T3 10.00 90.00 0.00 1.00 2.00 3.00 4.00\r\n\x0c\r\n";
+        let path = dir.path().join("team.dat");
+        std::fs::write(&path, dat).unwrap();
+        let parsed = parse_compass(&path).unwrap();
+        let (configs, _, _) =
+            convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
+        assert_eq!(configs.len(), 1);
+        assert_eq!(configs[0].surveyor, None, "the credit rides on the shots");
+        assert_eq!(configs[0].shots.len(), 2);
+        for shot in &configs[0].shots {
+            let credit = shot.credit();
+            let names: Vec<&str> = credit.surveyors.iter().map(|p| p.name.as_str()).collect();
+            assert_eq!(names, ["Ann Smith", "Bo", "Cy"]);
+            assert_eq!(credit.date, chrono::NaiveDate::from_ymd_opt(1979, 7, 10));
+        }
+        // #719 review: one allocation for the survey, shared by every shot,
+        // not a copy of the team per shot.
+        let first = configs[0].shots[0].credit.as_ref().unwrap();
+        assert!(configs[0].shots.iter().all(|s| s
+            .credit
+            .as_ref()
+            .is_some_and(|c| std::sync::Arc::ptr_eq(c, first))));
+    }
 
     fn fixture(name: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -2595,6 +2657,41 @@ mod tests {
             (pitch_in + 90.0).abs() < 0.01,
             "pitch_in should be -90° after Grads→degrees + +down; got {pitch_in}"
         );
+    }
+
+    /// A back-sight with a bearing but the missing-value sentinel for its
+    /// inclination keeps the bearing and leaves `pitch_out` empty. It used to
+    /// store a level 0°, so the two inclination readings of a 30° shot
+    /// disagreed by 30° (a PITCH_DEVIATION warning, and a wrong mean in the
+    /// inclination-vs-depth check). Synthetic - no fixture data.
+    #[test]
+    fn backsight_without_inclination_leaves_pitch_out_empty() {
+        let dat = "SYNTHETIC CAVE\r\n\
+             SURVEY NAME: S\r\n\
+             SURVEY DATE: 1 1 2024\r\n\
+             SURVEY TEAM:\r\n\
+             Nobody\r\n\
+             DECLINATION: 0.00  FORMAT: DDDDLRUDADLBF  CORRECTIONS: 0.00 0.00 0.00\r\n\
+             \r\n\
+             FROM TO LENGTH BEARING INC LEFT UP DOWN RIGHT AZM2 INC2 COMMENTS\r\n\
+             \r\n\
+             S1 S2 10.00 90.00 -30.00 0.00 0.00 0.00 0.00 270.00 -999.00\r\n\
+             S2 S3 10.00 90.00 -30.00 0.00 0.00 0.00 0.00 270.00 30.00\r\n";
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("synthetic.dat");
+        std::fs::write(&path, dat).unwrap();
+        let parsed = parse_compass(&path).unwrap();
+        let (configs, _, _) =
+            convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
+        let shots: Vec<_> = configs.iter().flat_map(|c| c.shots.iter()).collect();
+        assert_eq!(shots.len(), 2);
+        // Missing back-inclination: the bearing is still a back-sight, the
+        // inclination slot is empty rather than a fabricated 0°.
+        assert!((shots[0].azimuth_out - 90.0).abs() < 1e-9);
+        assert_eq!(shots[0].pitch_out, None);
+        assert!((shots[0].pitch_in.unwrap() - 30.0).abs() < 1e-9);
+        // A real back-inclination is still carried (+down, same as pitch_in).
+        assert!((shots[1].pitch_out.unwrap() - 30.0).abs() < 1e-9);
     }
 
     /// One survey record - cave name first line - in the smallest shape the

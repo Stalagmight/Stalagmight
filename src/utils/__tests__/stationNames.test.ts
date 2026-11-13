@@ -142,7 +142,8 @@ describe('buildZeroDatumSectionConfig station names', () => {
       gps: { latitude: 20.2, longitude: -87.4, depth_reference: 0 },
       metadata: {
         name: 'A01',
-        surveyor: null,
+        surveyors: [],
+        explorers: [],
         date: null,
         color: '#ffffff',
         direction: 'in',

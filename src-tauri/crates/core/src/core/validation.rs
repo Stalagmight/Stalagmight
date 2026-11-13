@@ -260,6 +260,29 @@ impl Validator {
             }
         }
 
+        // The two inclination readings are two forward readings of the same
+        // line, like azimuth in/out, so they should agree. Compare them only
+        // when both were recorded and both are physically valid (an
+        // out-of-range leg is already an INVALID_PITCH error).
+        if let (Some(pitch_in), Some(pitch_out)) = (shot.pitch_in, shot.pitch_out) {
+            let pitch_diff = (pitch_out - pitch_in).abs();
+            if leg_in_range(Some(pitch_in))
+                && leg_in_range(Some(pitch_out))
+                && pitch_diff > config.pitch_diff_threshold
+            {
+                warnings.push(warn(
+                    "PITCH_DEVIATION",
+                    format!(
+                        "Shot {}:{} inclination in/out difference {:.1}° exceeds threshold {:.1}°",
+                        section_id,
+                        shot_index + 1,
+                        pitch_diff,
+                        config.pitch_diff_threshold
+                    ),
+                ));
+            }
+        }
+
         // Length / depth-change / inclination geometry. The slope length, the
         // vertical change (dz = depth_out - depth_in), and the inclination form a
         // right triangle: dz = length * sin(pitch). Two checks fall out of it.
@@ -1241,6 +1264,69 @@ mod tests {
         assert!(Validator::validate_shot(&bad_out, &config, 0, 0)
             .iter()
             .any(|w| w.code == "INVALID_PITCH"));
+    }
+
+    /// The two inclination readings must agree within `pitch_diff_threshold`
+    /// (5° in the test config). Exactly at the threshold is not a warning, the
+    /// same as AZIMUTH_DEVIATION; a single recorded leg has nothing to compare
+    /// against; an out-of-range leg is only the INVALID_PITCH error.
+    #[test]
+    fn test_pitch_deviation() {
+        let config = default_config();
+        let base = ShotData {
+            azimuth_in: 90.0,
+            azimuth_out: 90.0,
+            length: 10.0,
+            depth_in: 0.0,
+            depth_out: 0.0,
+            ..Default::default()
+        };
+        let pitch_deviation = |pitch_in: Option<f64>, pitch_out: Option<f64>| {
+            let shot = ShotData {
+                pitch_in,
+                pitch_out,
+                ..base.clone()
+            };
+            Validator::validate_shot(&shot, &config, 2, 4)
+                .into_iter()
+                .find(|w| w.code == "PITCH_DEVIATION")
+        };
+
+        assert!(pitch_deviation(Some(2.0), Some(2.0)).is_none());
+        assert!(
+            pitch_deviation(Some(2.0), Some(7.0)).is_none(),
+            "exactly at the threshold is not a warning"
+        );
+        let w = pitch_deviation(Some(2.0), Some(8.0)).expect("6° exceeds the 5° threshold");
+        assert_eq!(w.severity, WarningSeverity::Warning);
+        assert!(
+            w.message.starts_with("Shot 2:5 ") && w.message.contains("6.0°"),
+            "unexpected message: {}",
+            w.message
+        );
+        assert!(
+            pitch_deviation(Some(-3.0), Some(3.0)).is_some(),
+            "legs on opposite sides of level differ by their sum"
+        );
+        assert!(pitch_deviation(Some(2.0), None).is_none());
+        assert!(pitch_deviation(None, Some(8.0)).is_none());
+        assert!(
+            pitch_deviation(Some(0.0), Some(120.0)).is_none(),
+            "an out-of-range leg is INVALID_PITCH only"
+        );
+
+        let lenient = ValidationConfig {
+            pitch_diff_threshold: 20.0,
+            ..default_config()
+        };
+        let shot = ShotData {
+            pitch_in: Some(2.0),
+            pitch_out: Some(8.0),
+            ..base.clone()
+        };
+        assert!(Validator::validate_shot(&shot, &lenient, 0, 0)
+            .iter()
+            .all(|w| w.code != "PITCH_DEVIATION"));
     }
 
     /// `severity_for_code` is the single source of truth, so every warning the

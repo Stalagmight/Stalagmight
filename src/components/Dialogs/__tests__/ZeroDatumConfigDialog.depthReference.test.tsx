@@ -47,7 +47,10 @@ vi.mock('../DialogWrapper', () => ({
   }) => <div>{typeof children === 'function' ? children({ requestClose: () => {} }) : children}</div>,
 }));
 
-vi.mock('../../common/SectionMetadataForm', () => ({ SectionMetadataForm: () => null }));
+vi.mock('../../common/SectionMetadataForm', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../common/SectionMetadataForm')>()),
+  SectionMetadataForm: () => null,
+}));
 
 import ZeroDatumConfigDialog, {
   type ZeroDatumConfigResult,
@@ -92,7 +95,8 @@ function dmpFile(): DmpFile {
 
 const selectionConfig = {
   selectedIndices: new Set([0]),
-  defaultSurveyor: 'S',
+  defaultSurveyors: [{ name: 'S' }],
+  defaultExplorers: [],
   defaultDate: '2026-01-01',
 } as unknown as DmpSelectionConfig;
 

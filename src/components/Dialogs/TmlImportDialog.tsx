@@ -272,8 +272,8 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
   // exactly as unticking "include excluded shots" would (same rule as the Walls
   // dialog's selected counts).
   const stats = useMemo(
-    () => computeTmlImportStats(tmlFile, includeExcluded, selectedSections),
-    [tmlFile, includeExcluded, selectedSections]
+    () => computeTmlImportStats(tmlFile, includeExcluded, selectedSections, virtualShotMode),
+    [tmlFile, includeExcluded, selectedSections, virtualShotMode]
   );
   const fileStats = useMemo(
     () => computeTmlImportStats(tmlFile, includeExcluded),

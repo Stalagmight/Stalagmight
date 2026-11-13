@@ -60,7 +60,26 @@
       "meters": "m",
       "percent": "%"
     },
-    "offline": "Offline"
+    "offline": "Offline",
+    "peopleInput": {
+      "addNew": "Add \"{{name}}\"",
+      "remove": "Remove {{name}}",
+      "promote": "Add {{name}} to all shots",
+      "promoteHint": "Click to add to all shots",
+      "onShots": "On {{carrying}} of {{total}} shots",
+      "noEmail": "no email",
+      "speleodbBadge": "SpeleoDB",
+      "speleodbCollaborator": "SpeleoDB collaborator",
+      "announce": {
+        "added": "Added {{name}}",
+        "removed": "Removed {{name}}",
+        "armed": "Press Backspace again to remove {{name}}",
+        "duplicate": "{{name}} is already listed",
+        "ambiguous": "Several people are called {{name}}: pick one from the list"
+      },
+      "onAllShots_one": "On {{count}} shot",
+      "onAllShots_other": "On all {{count}} shots"
+    }
   },
   "app": {
     "dropOverlay": {
@@ -1294,11 +1313,12 @@
       "table": {
         "section": "Section",
         "shots": "Shots",
-        "surveyor": "Surveyor",
         "date": "Date",
         "color": "Color",
         "branch": "(branch)",
-        "reanchored": "(moved to origin)"
+        "reanchored": "(moved to origin)",
+        "surveyorsOf": "Surveyors of {{name}}",
+        "explorersOf": "Explorers of {{name}}"
       },
       "sectionsToImport": "Sections to import",
       "selectedCount": "{{selected}} of {{total}} selected",
@@ -1549,8 +1569,6 @@
       "duplicateHashWarning": "File may have been imported before (same hash detected)",
       "duplicateSectionsWarning": "{{duplicates}} of {{total}} sections already imported (auto-deselected)",
       "defaultValues": "Default Values (apply to all sections)",
-      "surveyorLabel": "Surveyor",
-      "surveyorPlaceholder": "Enter surveyor name...",
       "dateOverrideLabel": "Date Override",
       "selectAll": "Select All",
       "selectNone": "Select None",
@@ -1692,6 +1710,22 @@
       "mapImagery": {
         "title": "Map imagery"
       }
+    },
+    "splitSectionHere": {
+      "halvesNotConnected": "The halves are not connected: merge the two cut stations if routes and gas planning should continue across them."
+    },
+    "combineSections": {
+      "pickPartner": "{{count}} sections end here. Combine {{section}} with:",
+      "branchesNote_one": "{{names}} stays attached at the join, which becomes a station in the middle of the combined section.",
+      "branchesNote_other": "{{names}} stay attached at the join, which becomes a station in the middle of the combined section.",
+      "looseEndsNote_one": "{{names}} also ends here but is not merged to the join, so it stays as it is.",
+      "looseEndsNote_other": "{{names}} also end here but are not merged to the join, so they stay as they are.",
+      "depthNote": "The two ends are recorded {{gap}} apart in depth. The joined station takes the average, so each end moves {{half}} in depth.",
+      "summary": "Combining {{kept}} ({{keptShots}}) and {{other}} ({{otherShots}}) at station {{station}}",
+      "shots_one": "{{count}} shot",
+      "shots_other": "{{count}} shots",
+      "creditTitle": "Survey credit of the combined section ({{shots}})",
+      "personShots": "{{name}} ({{shots}})"
     }
   },
   "undo": {
@@ -1930,9 +1964,12 @@
       "fromInclinationNote": "From recorded inclination {{value}}°",
       "proposedImpossibleGeometry": "These values make the shot shorter than its depth change, so applying will raise an error.",
       "zoomToShot": "Zoom to the shot",
+      "zeroInclinationLegNote": "The other reading is exactly 0°. Projects imported from Compass before this version stored a missing back-sight inclination as 0°, so this keeps the real reading.",
       "resolveOptions": {
         "useIn": "Use azimuth in",
         "useOut": "Use azimuth out",
+        "useInclinationIn": "Use inclination in",
+        "useInclinationOut": "Use inclination out",
         "average": "Average",
         "manual": "Manual correction",
         "manualLength": "Set length",
@@ -1974,8 +2011,7 @@
       "comment": "Comment",
       "color": "Color",
       "latitude": "Latitude",
-      "longitude": "Longitude",
-      "surveyor": "Surveyor"
+      "longitude": "Longitude"
     },
     "placeholder": {
       "none": "None"
@@ -2013,6 +2049,7 @@
       "shotCount": "Shots",
       "avgShot": "Average shot",
       "referenceShots": "Jump/Reference shots",
+      "referenceLengthNote": "Reference shots ({{length}}) are not counted in the length.",
       "depthRange": "Depth range",
       "shallowest": "Shallowest",
       "deepest": "Deepest",
@@ -2056,6 +2093,12 @@
       "viaSuffix": ")",
       "metrics": "Path {{path}} | Error {{error}} | {{percent}}",
       "unavailable": "Closure metrics unavailable"
+    },
+    "multiShot": {
+      "title_one": "{{count}} shot selected",
+      "title_other": "{{count}} shots selected",
+      "summary_one": "{{shots}} shots in 1 section. Changes apply to every selected shot.",
+      "summary_other": "{{shots}} shots in {{count}} sections. Changes apply to every selected shot."
     }
   },
   "displayMenu": {
@@ -2090,6 +2133,7 @@
       "referenceShots": "References",
       "stationComments": "Station comments",
       "shotData": "Shot data",
+      "shotErrors": "Errors",
       "shotComments": "Shot comments",
       "zeroDatum": "Zero datum",
       "grid": "Grid",
@@ -2098,6 +2142,10 @@
       "distanceGradient": "Distance",
       "issueSeverity": "Survey Issues",
       "devStats": "Dev stats"
+    },
+    "warningsVisit": {
+      "note": "Survey Issues and Errors are on while the Warnings tab is open. Changes here last until you leave the tab.",
+      "pillHint": "On while the Warnings tab is open"
     },
     "descriptions": {
       "stations": "Show station markers",
@@ -2110,13 +2158,14 @@
       "referenceShots": "Show reference shots (survey ties)",
       "stationComments": "Show station comments on map",
       "shotData": "Show shot data labels",
+      "shotErrors": "Label each shot with how far its readings disagree, and each loop closure with its error",
       "shotComments": "Show shot comments on map",
       "zeroDatum": "Show zero datum stations",
       "grid": "Show grid overlay",
       "satellite": "Show satellite imagery",
       "depthGradient": "Color by depth",
       "distanceGradient": "Color by along-cave distance from the entrance (click a station to re-root)",
-      "issueSeverity": "Color shots and stations by validation issues (red = error, yellow = warning, green = clear)",
+      "issueSeverity": "Color shots and stations by how far their readings disagree: green agrees, yellow is at a warning threshold, red is an error or 3x the threshold",
       "devStats": "Show developer stats overlay"
     }
   },
@@ -2361,7 +2410,8 @@
       "mergeChecking": "Checking merge compatibility...",
       "mergeNotPossible": "Merge not possible.",
       "anchoredSegmentsError": "Failed to load anchored segments. Move Segment is temporarily blocked.",
-      "noCommentToMove": "No comment to move"
+      "noCommentToMove": "No comment to move",
+      "distanceOriginReset": "The station the distance colors started from is gone, so they start from the entrance again"
     },
     "depthLegend": {
       "aria": "Depth scale from {{min}} (shallow) to {{max}} (deep)",
@@ -2374,11 +2424,37 @@
       "fromStation": "from {{id}}",
       "computing": "Distance: computing…"
     },
+    "issueLegend": {
+      "title": "Survey Issues",
+      "aria": "Survey Issues color scale: the start of the palette where the readings agree, its middle at an error's warn level, its end at the max level or for an error",
+      "error": "Max level, or an error",
+      "warning": "Warn level",
+      "clear": "Min level: readings agree",
+      "keyTitle": "Errors labels",
+      "key": {
+        "azimuth": "azimuth in vs out",
+        "inclination": "inclination in vs out",
+        "inclinationDepth": "inclination vs depth change",
+        "length": "length vs depth change and inclination, on shots over {{degrees}}°",
+        "closure": "loop closure error and misclosure"
+      },
+      "allOff": "All errors are switched off in the color settings."
+    },
+    "errorLabels": {
+      "abbrev": {
+        "azimuth": "Δaz",
+        "inclination": "Δinc",
+        "inclinationDepth": "Δi/d",
+        "length": "ΔL",
+        "closure": "Loop"
+      }
+    },
     "colorScale": {
       "settingsButton": "Color scale settings",
       "title": {
         "depth": "Depth colors",
-        "distance": "Distance colors"
+        "distance": "Distance colors",
+        "issues": "Survey Issues colors"
       },
       "palette": "Palette",
       "themePalette": "Theme",
@@ -2429,7 +2505,9 @@
       "noValues": {
         "depth": "This survey has no depths to color.",
         "distance": "No station is reachable from an entrance, so nothing is colored by distance. Set a zero datum to use this."
-      }
+      },
+      "issuesDefaultPalette": "Default",
+      "resetIssuesPalette": "Reset palette to the default green, yellow, red"
     },
     "gasLegend": {
       "title": "Gas reach",
@@ -2534,6 +2612,40 @@
       "zoom": "Zoom",
       "zoomLevels": "{{countFormatted}} levels",
       "zooming": "Zooming"
+    },
+    "issueScale": {
+      "title": "Survey Issues colors",
+      "combine": "Color a shot by",
+      "combineMode": {
+        "worst": "Worst error",
+        "average": "Average"
+      },
+      "combineHelp": {
+        "worst": "A shot takes the color of its worst error.",
+        "average": "A shot takes the average color of its errors: one error at Max and one at Min give the warn color."
+      },
+      "errors": "Errors",
+      "metric": {
+        "azimuth": "Azimuth in vs out",
+        "inclination": "Inclination in vs out",
+        "inclinationDepth": "Inclination vs depth change",
+        "length": "Length vs depth change",
+        "closure": "Loop closure"
+      },
+      "enableAria": "Use {{name}} in the colors and labels",
+      "summary": "warn {{warn}}, max {{max}}",
+      "off": "Off",
+      "offHint": "Off: left out of the colors and the Errors labels",
+      "noValues": "No values to show in this survey",
+      "resetLevels": "Reset levels to the default",
+      "histogram": "Histogram of {{name}} values (log scale)",
+      "min": "Min",
+      "warn": "Warn",
+      "max": "Max",
+      "minHandle": "Min level: at or below it the readings agree",
+      "warnHandle": "Warn level: the palette's middle",
+      "maxHandle": "Max level: the palette's end, as for an error",
+      "note": "Only the map's colors and Errors labels change here. Which shots get a warning stays set by the thresholds in Project Settings."
     }
   },
   "editSection": {
@@ -2638,9 +2750,7 @@
     "incomplete_other": "Rows {{rows}} are missing required values. Fill them in or delete the rows to continue.",
     "labels": {
       "color": "Color",
-      "date": "Date",
-      "name": "Section Name",
-      "surveyor": "Surveyor"
+      "name": "Section Name"
     },
     "pasteCapped_one": "{{count}} pasted cell was dropped: the table cannot grow any further.",
     "pasteCapped_other": "{{count}} pasted cells were dropped: the table cannot grow any further.",
@@ -2664,13 +2774,11 @@
       "color": "Color",
       "directionShort": "Dir",
       "quality": "Closure Adj. Weight",
-      "reverse": "Reverse numbering",
-      "surveyor": "Surveyor"
+      "reverse": "Reverse numbering"
     },
     "placeholders": {
       "color": "#RRGGBB",
-      "name": "Section name",
-      "surveyor": "Surveyor"
+      "name": "Section name"
     }
   },
   "sections": {
@@ -3935,5 +4043,29 @@
   "projectClose": {
     "failedTitle": "Close Project failed",
     "failedMessage": "The project is still open. Try again."
+  },
+  "credit": {
+    "surveyors": "Surveyors",
+    "explorers": "Explorers",
+    "dateLabel": "Survey date",
+    "noShotsHint": "Add a shot to record who surveyed it.",
+    "placeholders": {
+      "surveyors": "Type a name, Enter to add",
+      "explorers": "Type a name, Enter to add"
+    },
+    "date": {
+      "pickForAll": "Pick a date",
+      "mixed": "{{range}}, differs per shot",
+      "mixedUndated_one": "{{range}}, {{count}} shot undated",
+      "mixedUndated_other": "{{range}}, {{count}} shots undated",
+      "setForAll": "Set for all shots",
+      "keepPerShot": "Keep per-shot dates",
+      "empty": "No date",
+      "clear": "Clear date"
+    },
+    "cellEditor": {
+      "hint": "Enter to save, Esc to cancel",
+      "done": "Done"
+    }
   }
 }

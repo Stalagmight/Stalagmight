@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { useUIStore } from '../../store/uiStore';
@@ -10,9 +10,20 @@ import { useSpeleoStore, selectSpeleoReadOnly } from '../../store/speleoStore';
 import type { StationRef, SectionId, ShotId, ShotKind } from '../../types/project';
 import { getDeleteShotDialog } from '../../utils/contextMenuHelpers';
 import { canSplitShot } from '../../utils/shotSplit';
+import {
+  combinePreview,
+  combinePreviewAll,
+  queryCombineCandidates,
+  queryCombineCandidateForSections,
+} from '../../utils/combineSections';
+import type { CombineCandidate } from '../../types/ipc/CombineCandidate';
+import { formatShotId, formatStationIdWithName } from '../../utils/formatters';
 import { setSource, trackContextMenuAction, trackDialogComplete } from '../../utils/telemetry';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
-import { MenuRow, MenuSeparator } from './MenuRow';
+import { MENU_ROW_HEIGHT_PX, MENU_ROW_HINT_HEIGHT_PX, MenuRow, MenuSeparator } from './MenuRow';
+
+/** The widest the menu grows; a hint line wraps within it. */
+const MENU_MAX_WIDTH_PX = 288;
 import {
   ArrowUpRightIcon,
   BookmarkIcon,
@@ -43,6 +54,8 @@ interface ContextMenuItem {
   /** Leading action icon, shown at the Icons+ highlighting level. */
   icon?: ReactNode;
   disabled?: boolean;
+  /** Why the item is disabled, shown as its tooltip. */
+  hint?: string | undefined;
   danger?: boolean;
   separator?: boolean;
 }
@@ -160,6 +173,126 @@ export default function ContextMenu() {
 
   const menuRef = useRef<HTMLDivElement>(null);
 
+  // Combine Sections (Survey only): offered on a section END station, and on a
+  // section when exactly two sections are selected. Whether the two can be
+  // combined, and why not, is the backend's answer, asked once when the menu
+  // opens; `undefined` while it is in flight.
+  const selectedSectionIds = [
+    ...new Set(
+      multiSelection
+        .filter((s) => s.type === 'section' && s.sectionId !== undefined)
+        .map((s) => s.sectionId as SectionId)
+    ),
+  ];
+  const combineKey = ((): string | null => {
+    const menuTarget = dialogData.target as { type?: string; ref?: StationRef; sectionId?: SectionId } | undefined;
+    if (appMode !== 'survey' || !menuTarget) return null;
+    if (menuTarget.type === 'station' && menuTarget.ref) {
+      const { section_id, station_index } = menuTarget.ref;
+      const shots = project?.sections.find((s) => s.id === section_id)?.shots.length;
+      return shots !== undefined && (station_index === 0 || station_index === shots)
+        ? `station:${section_id}:${station_index}`
+        : null;
+    }
+    if (menuTarget.type === 'section' && menuTarget.sectionId !== undefined) {
+      const [a, b] = selectedSectionIds;
+      return selectedSectionIds.length === 2 && selectedSectionIds.includes(menuTarget.sectionId)
+        ? `sections:${a}:${b}`
+        : null;
+    }
+    return null;
+  })();
+  const [combineAnswer, setCombineAnswer] = useState<{ key: string; candidates: CombineCandidate[] } | null>(null);
+  useEffect(() => {
+    if (!combineKey) return;
+    let live = true;
+    const [kind, x, y] = combineKey.split(':').slice(0, 3);
+    const query: Promise<CombineCandidate[]> =
+      kind === 'station'
+        ? queryCombineCandidates({ section_id: Number(x), station_index: Number(y) })
+        : queryCombineCandidateForSections(Number(x), Number(y)).then((c) => (c ? [c] : []));
+    query.then(
+      (candidates) => {
+        if (live) setCombineAnswer({ key: combineKey, candidates });
+      },
+      () => {
+        if (live) setCombineAnswer({ key: combineKey, candidates: [] });
+      }
+    );
+    return () => {
+      live = false;
+    };
+  }, [combineKey]);
+  const combineCandidates = combineAnswer?.key === combineKey ? combineAnswer.candidates : undefined;
+  /**
+   * The Combine row, always with a hint line (visible under the label, and as
+   * its tooltip): "Checking...", the reason it is disabled, or what it joins.
+   * Whether it is offered is known synchronously (an END
+   * station, or exactly two selected sections), so the row is always there
+   * from the first render: disabled with "Checking..." while the backend's
+   * answer is in flight, then enabled, or disabled with the reason. Inserting
+   * it only once the answer arrived shifted every row below it under the
+   * pointer (and moved the whole menu, whose `top` follows `items.length`),
+   * the same hazard the stage-drop count above is frozen against.
+   */
+  const combineItems = (label: string): ContextMenuItem[] => {
+    if (!combineKey) return [];
+    const disabled = (hint: string): ContextMenuItem[] => [{ label, action: () => {}, disabled: true, hint }];
+    if (combineCandidates === undefined) {
+      return disabled('Checking whether the sections can be combined...');
+    }
+    const [combineCandidate] = combineCandidates;
+    if (combineCandidate === undefined) {
+      return disabled(
+        combineKey.startsWith('sections')
+          ? 'These sections cannot be combined'
+          : 'No other section ends at this station'
+      );
+    }
+    // Refused outright, or neither section can be the kept one.
+    const blockedOf = (c: CombineCandidate) =>
+      c.blocked_reason ?? (c.blocked_keeping_a && c.blocked_keeping_b ? c.blocked_keeping_a : null);
+    if (combineCandidates.length > 1) {
+      // A junction: the dialog opens on a picker listing every partner, each
+      // with its own reason when it cannot be combined.
+      const open = combineCandidates.filter((c) => blockedOf(c) === null).length;
+      const count = combineCandidates.length;
+      return [
+        {
+          label,
+          action: () => {
+            openDialog('combine-sections', {
+              candidates: combineCandidates,
+              preview: combinePreviewAll(combineCandidates),
+            });
+          },
+          disabled: open === 0,
+          hint:
+            open === 0
+              ? `None of the ${count} sections ending here can be combined`
+              : `${count} sections end here: choose which one`,
+        },
+      ];
+    }
+    const blocked = blockedOf(combineCandidate);
+    const name = (id: SectionId) => project?.sections.find((s) => s.id === id)?.name?.trim() || `Section ${id}`;
+    const { section_a: a, section_b: b } = combineCandidate;
+    const clicked = combineKey.startsWith('station') ? Number(combineKey.split(':')[1]) : null;
+    // The enabled row says what it joins, so the row's height never depends on
+    // the answer.
+    const joins = clicked === null ? `${name(a)} and ${name(b)} meet end to end` : `With ${name(clicked === a ? b : a)}`;
+    return [
+      {
+        label,
+        action: () => {
+          openDialog('combine-sections', { candidate: combineCandidate, preview: combinePreview(combineCandidate) });
+        },
+        disabled: blocked !== null,
+        hint: blocked ?? joins,
+      },
+    ];
+  };
+
   const target = dialogData.target as
     | { type: 'station'; ref: StationRef }
     // `alongT` (0..1 from the from-station) is present only for a map
@@ -251,13 +384,6 @@ export default function ContextMenu() {
     // reverses the section twice, and the backend parity-reduces such a pair out
     // of `reversed_sections` (see `Command::reversed_section_ids`) precisely
     // because the second reverse is a real renumbering that cancels the first.
-    const selectedSectionIds = [
-      ...new Set(
-        multiSelection
-          .filter((s) => s.type === 'section' && s.sectionId !== undefined)
-          .map((s) => s.sectionId as SectionId)
-      ),
-    ];
     const items: ContextMenuItem[] = [
       {
         label: 'Reverse Section',
@@ -436,6 +562,19 @@ export default function ContextMenu() {
         },
       });
       items.push({ label: '', action: () => {}, separator: true });
+      items.push(...combineItems('Combine Sections...'));
+      if (!isFirstStation && !isLastStation) {
+        items.push({
+          label: 'Split Section Here',
+          action: () => {
+            openDialog('split-section-here', {
+              sectionId,
+              at: { type: 'station', station_index: target.ref.station_index },
+              label: formatStationIdWithName(sectionId, target.ref.station_index, currentStation?.name),
+            });
+          },
+        });
+      }
       items.push({
         label: 'Edit Section',
         action: () => {
@@ -499,6 +638,18 @@ export default function ContextMenu() {
             });
           },
           disabled: !sourceShot || !canSplitShot(sourceShot.length),
+        },
+        {
+          label: 'Split Section Here',
+          action: () => {
+            if (!sourceShot || target.alongT === undefined) return;
+            openDialog('split-section-here', {
+              sectionId: target.sectionId,
+              at: { type: 'shot', shot_id: target.shotId, distance: target.alongT * sourceShot.length },
+              label: formatShotId(target.sectionId, shotIndex + 1),
+            });
+          },
+          disabled: !sourceShot || target.alongT === undefined,
         },
         // A context menu has room to offer both other kinds outright, which is
         // clearer than the table cell's cycle (#27). Only the kinds the shot is
@@ -606,6 +757,7 @@ export default function ContextMenu() {
           },
         },
         ...reverseItems(target.sectionId),
+        ...combineItems(`Combine ${selectedSectionIds.length} Sections...`),
         {
           label: 'Adjust Position...',
           action: () => {
@@ -725,6 +877,8 @@ export default function ContextMenu() {
         return <EntityReverseSymbol entity="section" size={18} />;
       case 'Insert Station...':
         return <EntityAddSymbol entity="station" size={18} />;
+      case 'Split Section Here':
+        return <EntityUnlinkSymbol entity="section" size={18} />;
       case 'Merge With...':
         return <ToolGlyph tool="merge" size={16} />;
       case 'Unmerge Stations':
@@ -761,6 +915,10 @@ export default function ContextMenu() {
         // literal case.
         if (label.startsWith('Reverse ')) {
           return <EntityReverseSymbol entity="section" size={18} />;
+        }
+        // "Combine Sections..." and "Combine 2 Sections...".
+        if (label.startsWith('Combine ')) {
+          return <ToolGlyph tool="merge" size={16} />;
         }
         // Fallback for any unmapped label (every other current menu label is
         // handled by an explicit case above).
@@ -802,10 +960,17 @@ export default function ContextMenu() {
     return null;
   }
 
-  // Adjust position to stay within viewport
+  // Adjust position to stay within viewport. A row with a hint is taller (its
+  // hint is a fixed two lines, so the height is known before it renders), and
+  // a menu with hints may be as wide as its max width.
+  const menuHeight = items.reduce(
+    (height, item) => height + MENU_ROW_HEIGHT_PX + (item.hint !== undefined ? MENU_ROW_HINT_HEIGHT_PX : 0),
+    0
+  );
+  const menuWidth = items.some((item) => item.hint !== undefined) ? MENU_MAX_WIDTH_PX : 200;
   const adjustedPosition = {
-    x: Math.min(position.x, window.innerWidth - 200),
-    y: Math.min(position.y, window.innerHeight - items.length * 36 - 20),
+    x: Math.min(position.x, window.innerWidth - menuWidth),
+    y: Math.min(position.y, window.innerHeight - menuHeight - 20),
   };
 
   return (
@@ -815,7 +980,7 @@ export default function ContextMenu() {
         ref={menuRef}
         className="absolute bg-panel border border-border rounded-lg shadow-xl py-1 min-w-[180px]"
         data-testid="context-menu"
-        style={{ left: adjustedPosition.x, top: adjustedPosition.y }}
+        style={{ left: adjustedPosition.x, top: adjustedPosition.y, maxWidth: MENU_MAX_WIDTH_PX }}
       >
         {items.map((item, index) => {
           if (item.separator) {
@@ -828,6 +993,8 @@ export default function ContextMenu() {
               data-testid={`context-menu-item-${index}`}
               onClick={() => { setSource('context-menu'); item.action(); }}
               disabled={item.disabled}
+              title={item.hint}
+              hint={item.hint}
               label={item.label}
               icon={item.icon}
               showIcons={showIcons}

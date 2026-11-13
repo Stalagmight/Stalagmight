@@ -269,8 +269,11 @@ fn canonical_merge_output(merged: &Project, result: &CommandResult) -> String {
 /// to the origin): with that placement call disabled, the merge still produces
 /// the previous value `9_039_697_118_154_861_914`, so placement is the only
 /// change - the #680 source read (private copy, normalized like an open) moves
-/// nothing for these sources.
-const MERGE_PARITY_DIGEST: u64 = 17_078_245_016_113_985_025;
+/// nothing for these sources. Re-pinned for per-shot survey credit: each
+/// section's `surveyor` left the section and rides on every shot as `credit`
+/// (the same person, `user1`, on each of the source's shots); nothing else in
+/// the canonical form moved.
+const MERGE_PARITY_DIGEST: u64 = 7_905_845_170_930_071_176;
 
 /// #674 parity: "Merge projects" must produce exactly what it produced before
 /// its per-source loop became the append that "Add .stalx" shares. Rich on
@@ -313,6 +316,7 @@ fn merge_output_is_unchanged_by_the_append_extraction() {
         "squeeze",
         "junction",
         "sump",
+        "user1",
     ] {
         assert!(canonical.contains(needle), "canonical form lacks {needle}");
     }
@@ -1983,4 +1987,207 @@ fn a_long_merge_source_path_keeps_its_file_name() {
         "{label}"
     );
     assert!(label.chars().count() <= 480, "{}", label.chars().count());
+}
+
+// ===========================================================================
+// Record parity (`counter_parity_shots`) rides with each copied shot
+// ===========================================================================
+
+/// Every shot's record parity in section `id`, in shot order.
+fn record_parities(project: &Project, id: SectionId) -> Vec<bool> {
+    let section = project.get_section(id).unwrap();
+    section
+        .shots
+        .iter()
+        .map(|shot| project.shot_record_parity(section, shot.uuid.as_deref()))
+        .collect()
+}
+
+/// Add copies each shot's record parity from its SOURCE's counter-parity set,
+/// onto whatever uuid the copy ends with. The target's entry for an id the copy
+/// had to yield belongs to the target's shot: the copy must not take it.
+#[test]
+fn add_carries_each_shots_record_parity_from_its_source() {
+    let temp = TempDir::new().unwrap();
+    let mut target = Project::new("Target".to_string(), None);
+    let t0 = target
+        .add_section(section(
+            "T0",
+            vec![shot("t0-0", 0.0, 10.0, 1.0), shot("t0-1", 90.0, 8.0, 1.5)],
+        ))
+        .id;
+    target.counter_parity_shots.insert("t0-0".to_string());
+    let target_path = save_to(temp.path(), "target.stalx", &target);
+
+    let mut source = Project::new("Source".to_string(), None);
+    source.add_section(section(
+        "S",
+        vec![
+            shot("t0-0", 0.0, 10.0, 1.0),
+            shot("t0-1", 90.0, 8.0, 1.5),
+            shot("s-2", 180.0, 6.0, 2.0),
+        ],
+    ));
+    source.counter_parity_shots.insert("t0-1".to_string());
+    source.counter_parity_shots.insert("s-2".to_string());
+    let source_path = save_to(temp.path(), "source.stalx", &source);
+
+    let state = AppState::new().unwrap();
+    assert!(state.open_project(target_path.clone()).success);
+    let added = add(&state, &source_path);
+    assert!(added.success, "{:?}", added.error);
+    let copy = added.section_ids[0];
+
+    let check = |project: &Project, what: &str| {
+        assert_eq!(record_parities(project, t0), vec![true, false], "{what}");
+        assert_eq!(
+            record_parities(project, copy),
+            vec![false, true, true],
+            "{what}"
+        );
+    };
+    check(&state.get_project_state().unwrap(), "after the add");
+    save(&state);
+    reopen(&state, &target_path);
+    check(&state.get_project_state().unwrap(), "after a reopen");
+}
+
+// ===========================================================================
+// A held component gauge (`Project::held_gauges`) rides with the copy
+// ===========================================================================
+
+/// O (lowest id) -> K end to end, T (between) merged at K's far end closing a
+/// loop onto K, combined keeping K: T anchors the component, the station O
+/// held is now in K, so it is held in `held_gauges`.
+fn held_gauge_source() -> Project {
+    use crate::models::{ClosureStrategy, CombinePick, CombineSectionsOptions};
+    let mut p = Project::new("Held".to_string(), None);
+    let o = p
+        .add_section(section("O", vec![shot("o-0", 90.0, 10.0, 1.0)]))
+        .id;
+    let t = p
+        .add_section(section(
+            "T",
+            vec![
+                shot("t-0", 0.0, 10.0, 1.0),
+                shot("t-1", 270.0, 10.0, 1.0),
+                shot("t-2", 180.0, 9.0, 1.0),
+            ],
+        ))
+        .id;
+    let k = p
+        .add_section(section(
+            "K",
+            vec![shot("k-0", 90.0, 10.0, 1.0), shot("k-1", 90.0, 10.0, 1.0)],
+        ))
+        .id;
+    let raw = |p: &Project, at: StationRef| {
+        let c = p.compute_station_raw_coords(at).unwrap();
+        (c.x, c.y)
+    };
+    for ((a, b), moved) in [
+        ((StationRef::new(o, 1), StationRef::new(k, 0)), k),
+        ((StationRef::new(k, 2), StationRef::new(t, 0)), t),
+    ] {
+        let (to, now) = (raw(&p, a), raw(&p, b));
+        p.adjust_section_offset(moved, to.0 - now.0, to.1 - now.1);
+        p.merge_stations(a, b).unwrap();
+    }
+    let (a, b) = (
+        p.key_for_ref(StationRef::new(t, 3)).unwrap(),
+        p.key_for_ref(StationRef::new(k, 1)).unwrap(),
+    );
+    p.loop_closures.push(LoopClosure {
+        id: 1,
+        station_a: a,
+        station_b: b,
+        path_length: 30.0,
+        misclosure_distance: 1.0,
+        error_percentage: 3.0,
+        horizontal_misclosure: 1.0,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::LeastSquaresWeighted,
+        is_aligned: false,
+    });
+    p.next_closure_id = 2;
+    p.combine_sections(
+        k,
+        o,
+        &CombineSectionsOptions {
+            name: "K".to_string(),
+            color: "#123456".to_string(),
+            swap_lr: false,
+            comment_pick: CombinePick::Kept,
+            name_pick: CombinePick::Kept,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        p.held_gauges.len(),
+        1,
+        "setup: T anchors, K holds the station"
+    );
+    p
+}
+
+/// Every station's closure-adjusted xy, section by section in id order.
+fn adjusted_by_section(project: &Project, sections: &[SectionId]) -> Vec<Vec<(f64, f64)>> {
+    let adjusted = project
+        .compute_adjusted_station_coordinates(&crate::config::ClosureAdjustmentConfig::default());
+    sections
+        .iter()
+        .map(|id| {
+            let n = project.get_section(*id).unwrap().shots.len() as u32;
+            (0..=n)
+                .map(|i| {
+                    let s = adjusted
+                        .iter()
+                        .find(|s| s.station_ref == StationRef::new(*id, i))
+                        .unwrap();
+                    (s.coordinates.x, s.coordinates.y)
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// Add a file whose component is held by a held gauge into a project that is a
+/// copy of it, so every one of the newcomer's uuids is renamed: the copy's
+/// component is held at the same station, through its renamed uuids, and its
+/// closure-adjusted geometry is the source's.
+#[test]
+fn add_carries_a_held_component_gauge_through_renamed_uuids() {
+    let temp = TempDir::new().unwrap();
+    let source = held_gauge_source();
+    let source_ids: Vec<SectionId> = source.sections.iter().map(|s| s.id).collect();
+    let expected = adjusted_by_section(&source, &source_ids);
+    let source_path = save_to(temp.path(), "source.stalx", &source);
+    let target_path = save_to(temp.path(), "target.stalx", &source);
+
+    let state = AppState::new().unwrap();
+    assert!(state.open_project(target_path).success);
+    let added = add(&state, &source_path);
+    assert!(added.success, "{:?}", added.error);
+
+    let project = state.get_project_state().unwrap();
+    let copy_shots: std::collections::HashSet<&str> = added
+        .section_ids
+        .iter()
+        .flat_map(|id| project.get_section(*id).unwrap().shots.iter())
+        .filter_map(|s| s.uuid.as_deref())
+        .collect();
+    assert!(
+        project
+            .held_gauges
+            .iter()
+            .any(|held| copy_shots.contains(held.shot.as_str())),
+        "the copy's held gauge names its renamed shot"
+    );
+    let got = adjusted_by_section(&project, &added.section_ids);
+    for (want, got) in expected.iter().flatten().zip(got.iter().flatten()) {
+        assert!(
+            (want.0 - got.0).hypot(want.1 - got.1) < 1e-6,
+            "the copy's adjusted geometry moved: {want:?} -> {got:?}"
+        );
+    }
 }

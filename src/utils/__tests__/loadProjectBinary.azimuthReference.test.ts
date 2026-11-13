@@ -34,19 +34,18 @@ function envelope(overrides: {
   const section = (id: number, name: string, reference?: AzimuthReference) => ({
     id,
     name,
-    surveyor: null,
-    date: null,
     color: '#ff0000',
     direction: 'in' as const,
     quality: 1.0,
     shot_offset: 0,
     shot_count: 0,
     next_shot_id: 0,
+    credits: [],
     ...(reference ? { azimuth_reference: reference } : {}),
   });
 
   return {
-    version: 6,
+    version: 7,
     loading_id: 1,
     is_remote: false,
     project_header: {
@@ -73,6 +72,7 @@ function envelope(overrides: {
       imported_section_hashes: [],
       validation: {} as never,
       surface_elevation: null,
+      credit_people: [],
       ...(overrides.projectDefault
         ? { default_azimuth_reference: overrides.projectDefault }
         : {}),
@@ -82,6 +82,7 @@ function envelope(overrides: {
     shots_uints: new Uint8Array(0),
     shots_flags: new Uint8Array(0),
     shot_comments: [],
+    shots_credit: new Uint8Array(0),
     station_count: 0,
     stations_floats: new Uint8Array(0),
     stations_uints: new Uint8Array(0),

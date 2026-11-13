@@ -83,8 +83,8 @@ These are written per-shot since Ariane stores section metadata on every shot ro
 | Internal field | TML element | Notes |
 |----------------|-------------|-------|
 | `section.name` | `Section` / `SC` | Falls back to `"Section {id}"` if unnamed |
-| `section.surveyor` | `Explorer` / `EX` | `"unknown"` if unset. Written VERBATIM, so a compound value the import built from Ariane's two-role field (`"nh / ds"` - see [Ariane import](ariane-import.md#per-section)) goes back out in the plain compound form real files use, and re-imports unchanged. A file that arrived in the entity-escaped `<Explorer>…</Explorer><Surveyor>…</Surveyor>` encoding is normalised to that plain form, not restored to the escaped one. |
-| `section.date` | `Date` / `DT` | `"2000-01-01"` if unset |
+| shot credit (#329) | `Explorer` / `EX` | Per ROW, from the shot's own surveyors and explorers. Always the entity-escaped element form `<Explorer>e1, e2</Explorer><Surveyor>s1, s2</Surveyor>` when anyone is credited, a role with nobody left empty (#719): a plain single value is read as a surveyor by this importer but shown as the explorer by Ariane and read as explorers by openspeleo-lib, so only the element form names the role for every reader. `"unknown"` when nobody is credited. Within a role names are joined with `", "`: the import reads every Ariane field as a name list, with no `Last, First` rule. `<` and `>` are dropped from exported names so no name can move people between roles. A `,` or `;` inside one name cannot round-trip (Ariane separates people with commas). The import reads every row back to the same people on the same shot. A START row takes the credit of the shot it leads into. |
+| shot credit date | `Date` / `DT` | Per row, the shot's own survey date; `"2000-01-01"` if unset |
 | `section.color` (`#RRGGBB`) | `Color` / `CL` | Converted to Ariane format `0xRRGGBBff` |
 
 ### Shot-level fields

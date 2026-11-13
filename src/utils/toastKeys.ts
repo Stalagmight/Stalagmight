@@ -28,6 +28,8 @@ export const TOAST_KEYS = {
   GEOMETRY_COMPUTE_FAILED: 'geometry-compute-failed',
   ANCHORED_IDS_ERROR: 'anchored-ids-error',
   MOVE_COMMENT_EMPTY: 'move-comment-empty',
+  /** The distance-gradient origin's station is gone after an edit; the ramp starts at the entrance. */
+  DISTANCE_ORIGIN_RESET: 'distance-origin-reset',
 
   // Global view
   SPELEODB_OPEN_REMOTE_ERROR: 'speleodb-open-remote-error',

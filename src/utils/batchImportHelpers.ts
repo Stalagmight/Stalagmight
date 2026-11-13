@@ -8,15 +8,23 @@
 import { isEmittedShot } from '../components/common/emittedShots';
 import type { EditableShot } from '../components/common/ShotTableEditor';
 import type { VirtualConnection } from './segmentContext';
-import type { CrossSectionSuggestion, DmpSection } from '../types/commands';
+import type { CrossSectionSuggestion, DmpSection, ImportSectionConfig } from '../types/commands';
 import type { SectionData, ShotData } from '../types/project';
+import type { Person } from '../types/ipc.generated';
 import { computeOverlapIds } from './overlapHelpers';
 
 // ─── Shared types ────────────────────────────────────────────────────────────
 
 export interface SectionEditState {
   name: string;
-  surveyor: string;
+  /**
+   * The section's surveyors and explorers. Absent means "not set for this
+   * section": the wizard's step-1 defaults apply ({@link resolveImportPeople}).
+   * Overlap treatment creates edit states of its own without them, and must
+   * not wipe the defaults by doing so.
+   */
+  surveyors?: Person[];
+  explorers?: Person[];
   date: string;
   color: string;
   direction: 'in' | 'out';
@@ -45,6 +53,57 @@ export interface ConfirmedOverlapInfo {
   targetImportIndex: number | null;
   /** User-selected merge station (determines which overlap shots are actionable). */
   mergeImportStation: number;
+}
+
+// ─── resolveImportPeople / importCreditFields ────────────────────────────────
+
+/** The surveyors and explorers an imported section is credited with. */
+export interface ImportPeople {
+  surveyors: Person[];
+  explorers: Person[];
+}
+
+/** The wizard's step-1 defaults, as `DmpSelectionConfig` carries them. */
+export interface ImportPeopleDefaults {
+  /** Optional on read: a selection config built elsewhere (a test, a spec seed) may lack them. */
+  defaultSurveyors?: Person[] | null;
+  defaultExplorers?: Person[] | null;
+}
+
+/**
+ * The people a section leaves the wizard with: the section's own lists where
+ * it has them, else the step-1 defaults, per role. An empty own list is a
+ * choice (the user removed everyone) and is kept.
+ */
+export function resolveImportPeople(
+  edits: Pick<SectionEditState, 'surveyors' | 'explorers'> | undefined,
+  defaults: ImportPeopleDefaults,
+): ImportPeople {
+  return {
+    surveyors: edits?.surveyors ?? defaults.defaultSurveyors ?? [],
+    explorers: edits?.explorers ?? defaults.defaultExplorers ?? [],
+  };
+}
+
+/**
+ * The credit half of a backend `ImportSectionConfig`. The dialog's people and
+ * date OVERRIDE every imported shot (`surveyors` / `explorers` /
+ * `override_date`), and are sent only when set: an empty list would replace
+ * what the file said with nobody. The legacy free-text `surveyor` is never
+ * sent; the legacy `date` keeps carrying the same day as the per-section
+ * template the backend gives uncredited shots, which is what it always meant.
+ */
+export function importCreditFields(
+  people: ImportPeople,
+  date: string | null,
+): Pick<ImportSectionConfig, 'surveyor' | 'date' | 'surveyors' | 'explorers' | 'override_date'> {
+  return {
+    surveyor: null,
+    date,
+    ...(people.surveyors.length > 0 ? { surveyors: people.surveyors } : {}),
+    ...(people.explorers.length > 0 ? { explorers: people.explorers } : {}),
+    ...(date !== null ? { override_date: date } : {}),
+  };
 }
 
 // ─── resolveImportSectionDate ────────────────────────────────────────────────
@@ -91,11 +150,14 @@ export function resolveImportSectionDate(
  * a `>= 0 ? pos : 0` floor and also carries `reverse`; this one indexes the
  * palette raw, so an anchor outside the selection falls through to the default
  * colour. Unifying them would change a colour, which is not what this is for.
+ *
+ * The section data only drives the placement overlay: the segment is then
+ * imported through `buildBatchImport`, which carries the people. So no people
+ * ride along here (`surveyor` stays null).
  */
 export function buildPlacementSectionData(params: {
   dmpSection: Pick<DmpSection, 'name' | 'date' | 'direction'>;
   edits: SectionEditState | undefined;
-  defaultSurveyor: string | null;
   defaultDate: string | null;
   /** Section colours, in selection order. */
   palette: readonly string[];
@@ -103,10 +165,10 @@ export function buildPlacementSectionData(params: {
   paletteIndex: number;
   shots: ShotData[];
 }): SectionData {
-  const { dmpSection, edits, defaultSurveyor, defaultDate, palette, paletteIndex, shots } = params;
+  const { dmpSection, edits, defaultDate, palette, paletteIndex, shots } = params;
   return {
     name: edits?.name ?? dmpSection.name,
-    surveyor: edits?.surveyor ?? defaultSurveyor ?? null,
+    surveyor: null,
     date: resolveImportSectionDate(edits?.date, defaultDate, dmpSection.date),
     color: (edits?.color || null) ?? palette[paletteIndex % palette.length] ?? '#4ecdc4',
     direction: edits?.direction ?? dmpSection.direction,

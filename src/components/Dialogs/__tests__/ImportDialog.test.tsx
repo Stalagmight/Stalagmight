@@ -67,7 +67,7 @@ function renderWithDrafts(drafts: ShotDraft[]) {
     dialogData: {
       savedFormState: {
         name: '',
-        surveyor: '',
+        people: { surveyors: [], explorers: [] },
         date: '',
         color: SECTION_COLORS[0]!,
         drafts,
@@ -109,7 +109,7 @@ describe('ImportDialog color seeding (#357 item 9)', () => {
       dialogData: {
         savedFormState: {
           name: '',
-          surveyor: '',
+          people: { surveyors: [], explorers: [] },
           date: '',
           color: persistedColor,
           drafts: [],

@@ -1,6 +1,7 @@
 //! The `[map_palette]` config table: which colour palette the map and the image
-//! export use for depth and for distance colouring, and the palettes the user
-//! pinned to the top of the picker.
+//! export use for depth and for distance colouring, the palette and options of
+//! the Survey Issues colouring, and the palettes the user pinned to the top of
+//! the picker.
 //!
 //! Global on purpose. The palette follows the user across projects, so it lives
 //! here in `config.toml` and never in a survey's `.stalx` (whose
@@ -22,6 +23,8 @@ pub const THEME_PALETTE_ID: &str = "theme";
 pub const MAX_PALETTE_ID_LEN: usize = 64;
 /// Most palettes that can be pinned.
 pub const MAX_PINNED_PALETTES: usize = 64;
+/// Most entries kept in `issues_hidden` (the frontend has five errors today).
+pub const MAX_HIDDEN_ISSUES: usize = 16;
 
 /// One palette selection.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -47,6 +50,17 @@ fn default_palette_id() -> String {
     THEME_PALETTE_ID.to_string()
 }
 
+/// How the Survey Issues colouring combines a shot's errors into one colour.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "lowercase")]
+pub enum IssueCombine {
+    /// The worst of the shot's errors decides its colour.
+    #[default]
+    Worst,
+    /// The average of the shot's errors (their palette positions) decides it.
+    Average,
+}
+
 /// The `[map_palette]` table.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 pub struct MapPaletteConfig {
@@ -56,6 +70,18 @@ pub struct MapPaletteConfig {
     /// Palette for colouring by along-cave (penetration) distance.
     #[serde(default, deserialize_with = "lenient_choice")]
     pub distance: PaletteChoiceConfig,
+    /// Palette for the Survey Issues colouring and the Errors labels. The
+    /// default id (`"theme"`) here is the original green -> yellow -> red.
+    #[serde(default, deserialize_with = "lenient_choice")]
+    pub issues: PaletteChoiceConfig,
+    /// How a shot's errors combine into its Survey Issues colour.
+    #[serde(default, deserialize_with = "lenient_combine")]
+    pub issues_combine: IssueCombine,
+    /// The errors left out of the Survey Issues colouring and the Errors labels
+    /// (frontend ids such as `"azimuth"`). Listing what is off, not what is on,
+    /// keeps an error added by a newer build on by default.
+    #[serde(default, deserialize_with = "lenient_pinned")]
+    pub issues_hidden: Vec<String>,
     /// Palette ids pinned to the top of the picker, in pin order.
     #[serde(default, deserialize_with = "lenient_pinned")]
     pub pinned: Vec<String>,
@@ -82,6 +108,17 @@ where
             .get("reversed")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false),
+    })
+}
+
+fn lenient_combine<'de, D>(deserializer: D) -> Result<IssueCombine, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(match value.as_str() {
+        Some("average") => IssueCombine::Average,
+        _ => IssueCombine::Worst,
     })
 }
 
@@ -122,10 +159,17 @@ impl MapPaletteConfig {
     pub fn normalize(&mut self) {
         self.depth.normalize();
         self.distance.normalize();
+        self.issues.normalize();
         let mut seen = std::collections::HashSet::new();
         self.pinned
             .retain(|id| is_valid_palette_id(id) && seen.insert(id.clone()));
         self.pinned.truncate(MAX_PINNED_PALETTES);
+        // Error ids share the palette-id alphabet; an unknown one (from a newer
+        // build) is kept so that build still finds it hidden.
+        let mut seen_hidden = std::collections::HashSet::new();
+        self.issues_hidden
+            .retain(|id| is_valid_palette_id(id) && seen_hidden.insert(id.clone()));
+        self.issues_hidden.truncate(MAX_HIDDEN_ISSUES);
     }
 }
 
@@ -152,6 +196,7 @@ mod tests {
                 "x".repeat(65),
                 "grad.cenote".into(),
             ],
+            ..MapPaletteConfig::default()
         };
         cfg.normalize();
         assert_eq!(cfg.depth.id, THEME_PALETTE_ID);
@@ -184,6 +229,60 @@ mod tests {
     }
 
     #[test]
+    fn issue_options_default_and_normalize() {
+        let cfg = MapPaletteConfig::default();
+        assert_eq!(cfg.issues, PaletteChoiceConfig::default());
+        assert_eq!(cfg.issues_combine, IssueCombine::Worst);
+        assert!(cfg.issues_hidden.is_empty());
+
+        let mut cfg = MapPaletteConfig {
+            issues: PaletteChoiceConfig {
+                id: "Bad Id".into(),
+                reversed: true,
+            },
+            issues_hidden: vec![
+                "length".into(),
+                "length".into(),
+                "Not ok".into(),
+                "future_error".into(),
+            ],
+            ..MapPaletteConfig::default()
+        };
+        cfg.normalize();
+        assert_eq!(cfg.issues.id, THEME_PALETTE_ID);
+        assert!(cfg.issues.reversed);
+        assert_eq!(cfg.issues_hidden, vec!["length", "future_error"]);
+    }
+
+    #[test]
+    fn issues_hidden_is_capped() {
+        let mut cfg = MapPaletteConfig {
+            issues_hidden: (0..40).map(|i| format!("error{i}")).collect(),
+            ..MapPaletteConfig::default()
+        };
+        cfg.normalize();
+        assert_eq!(cfg.issues_hidden.len(), MAX_HIDDEN_ISSUES);
+        assert_eq!(cfg.issues_hidden[0], "error0");
+    }
+
+    #[test]
+    fn issue_options_parse_leniently() {
+        let cfg: MapPaletteConfig =
+            toml::from_str("issues_combine = \"average\"\nissues_hidden = [\"closure\"]\n")
+                .expect("parse");
+        assert_eq!(cfg.issues_combine, IssueCombine::Average);
+        assert_eq!(cfg.issues_hidden, vec!["closure"]);
+        let bad: MapPaletteConfig =
+            toml::from_str("issues_combine = 3\nissues_hidden = \"x\"\n").expect("lenient");
+        assert_eq!(bad.issues_combine, IssueCombine::Worst);
+        assert!(bad.issues_hidden.is_empty());
+        // An old config without the keys loads with the defaults.
+        let old: MapPaletteConfig = toml::from_str("[depth]\nid = \"mpl.magma\"\n").expect("old");
+        assert_eq!(old.issues, PaletteChoiceConfig::default());
+        assert_eq!(old.issues_combine, IssueCombine::Worst);
+    }
+
+    #[test]
     fn json_round_trip() {
         let cfg = MapPaletteConfig {
             depth: PaletteChoiceConfig {
@@ -191,6 +290,12 @@ mod tests {
                 reversed: true,
             },
             distance: PaletteChoiceConfig::default(),
+            issues: PaletteChoiceConfig {
+                id: "mpl.plasma".into(),
+                reversed: false,
+            },
+            issues_combine: IssueCombine::Average,
+            issues_hidden: vec!["length".into()],
             pinned: vec!["mpl.cividis".into()],
         };
         let json = serde_json::to_string(&cfg).unwrap();

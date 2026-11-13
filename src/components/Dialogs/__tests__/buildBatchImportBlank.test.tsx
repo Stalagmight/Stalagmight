@@ -76,7 +76,8 @@ function build(shots: EditableShot[]) {
   const dmpFile = { version: 1, sections: [dmpSection('S', 2)] } as unknown as DmpFile;
   const selectionConfig: DmpSelectionConfig = {
     selectedIndices: new Set([0]),
-    defaultSurveyor: 'S',
+    defaultSurveyors: [{ name: 'S' }],
+    defaultExplorers: [],
     defaultDate: null,
     fileHash: null,
     sectionHashes: [],
@@ -95,7 +96,7 @@ function build(shots: EditableShot[]) {
       0,
       {
         name: 'S',
-        surveyor: 'S',
+        surveyors: [{ name: 'S' }],
         date: '2026-01-01',
         color: '#ffffff',
         direction: 'in',

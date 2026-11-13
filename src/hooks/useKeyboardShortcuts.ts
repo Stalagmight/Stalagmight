@@ -2,6 +2,7 @@ import { dispatchProjectSave } from '../utils/dispatchProjectSave';
 import { requestTopDialogClose } from '../utils/dialogStack';
 import { useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
+import { selectEffectiveColorMode } from '../store/displaySelectors';
 import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
 import { useGasPlanStore } from '../store/gasPlanStore';
@@ -639,8 +640,11 @@ export function useKeyboardShortcuts() {
           const toggleKey = DISPLAY_TOGGLE_ACTIONS[action];
           if (toggleKey) {
             event.preventDefault();
-            // Get current state before toggle to report new state
-            const currentState = useUIStore.getState()[toggleKey];
+            // Get current state before toggle to report new state. Depth reads
+            // the painted mode, which a Warnings-tab visit can differ from.
+            const st = useUIStore.getState();
+            const currentState =
+              toggleKey === 'showDepthGradient' ? selectEffectiveColorMode(st) === 'depth' : st[toggleKey];
             toggleDisplay(toggleKey);
             maybeShowToast(action, currentState ? 'Off' : 'On');
           }

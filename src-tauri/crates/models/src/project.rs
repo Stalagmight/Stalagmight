@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use ts_rs::TS;
 
@@ -35,9 +35,14 @@ use super::{Coordinates, GpsCoordinates, Shot, ShotUpdates, Station};
 use crate::config::ClosureAdjustmentConfig;
 
 mod classify;
+mod combine_candidate;
+mod combine_sections;
 mod connectivity;
+mod gauge;
 mod mutations;
 mod shots;
+mod split_section;
+mod station_rekey;
 
 mod integrity;
 mod merge_topology;
@@ -50,12 +55,37 @@ mod uuid_unique;
 
 #[cfg(test)]
 mod anchor_fuzz;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::float_cmp,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod combine_sections_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::panic,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod component_gauge_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::float_cmp,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod split_section_tests;
 
 pub use classify::ClassifyScope;
+pub use combine_candidate::{
+    COMBINE_DEPTH_LIMIT_M, COMBINE_DEPTH_NOTICE_M, COMBINE_TOLERANCE_M, MAX_COMBINE_PARTNERS,
+};
 pub use gas::{
     CylRole, Cylinder, Diver, GasReachField, PlanMode, PlanSegment, RouteLeg, RouteProfilePoint,
     TankMaterial, Team,
 };
+pub use gauge::HeldGauge;
 pub use integrity::{IntegrityViolation, ViolationSeverity};
 pub use merge_topology::MergeTopology;
 pub use reverse::{reverse_shots, shot_run_displacement};
@@ -344,6 +374,42 @@ pub struct Project {
     #[ts(optional)]
     pub default_azimuth_reference: Option<AzimuthReference>,
 
+    /// Shots whose RECORD orientation runs against their section's
+    /// [`Section::reverse_parity`], by uuid: a shot's record parity is its
+    /// section's parity, flipped when its uuid is here
+    /// ([`Self::shot_record_parity`]).
+    ///
+    /// A parity flips with every reverse of the record, which is what a
+    /// single-neighbour dive-plan pin reads to know which end of its shot it
+    /// sits on. While every shot of a section shares the section's parity, the
+    /// section's flag says it all. Combine Sections breaks that: the other
+    /// section's shots join a section whose parity can differ from theirs, and
+    /// they are recorded here (toggled) so every shot keeps its own. Because
+    /// this lives on the project, every undo snapshot carries it with the
+    /// shots, so an undo puts the shots and their orientation back together.
+    ///
+    /// Persisted in `project_settings` (no schema bump); omitted from serde
+    /// when empty, so a project that never combined serializes as before.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    #[ts(skip)]
+    pub counter_parity_shots: BTreeSet<String>,
+
+    /// Stations that hold their component fixed in the least-squares
+    /// adjustment in place of the lowest-id section's gauge station
+    /// (`default_anchor_for_component` reads them first, in order): a Split
+    /// Section Here, Combine Sections or delete-and-split kept a component's
+    /// gauge on its physical station, and the section that anchors the
+    /// component afterwards does not hold that station (see `project/gauge.rs`).
+    /// Named by shot uuids, so they follow their shots through later edits.
+    ///
+    /// Part of the project, so every undo snapshot carries it. Persisted in
+    /// `project_settings` (no schema bump), pruned to the entries that still
+    /// name a station on save and on load; omitted from serde when empty. An
+    /// older build ignores it and falls back to the lowest-id rule.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(skip)]
+    pub held_gauges: Vec<HeldGauge>,
+
     /// Transient flag (NOT persisted) - when true,
     /// [`Self::cascade_connection_offsets`] returns immediately. Used by
     /// batch importers to skip the per-call O(N) cascade and run a
@@ -421,6 +487,12 @@ pub struct ProjectMetadata {
     #[ts(type = "string")]
     pub modified_at: DateTime<Utc>,
     pub section_count: usize,
+    /// Surveyed length, Reference shots excluded (#689). The on-disk listing
+    /// computes it in SQL (`Database::load_metadata`) with the same rule as
+    /// [`ProjectStats::total_length`], so an opened project reports the same
+    /// figure. For a file not yet opened since the shot-kind backfill (#27) it
+    /// is an upper bound until its first open, which classifies the migrated
+    /// virtual shots and re-saves them.
     pub total_length: f64,
     /// Number of stations in the project (shots + 1 per section)
     pub station_count: usize,
@@ -498,7 +570,10 @@ pub struct AlongLineResult {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct ProjectStats {
     pub section_count: usize,
+    /// Every shot, Reference shots included.
     pub shot_count: usize,
+    /// Surveyed length: the sum of [`crate::SectionStats::total_length`], which leaves
+    /// out Reference shots (#689).
     pub total_length: f64,
     /// Shallowest absolute station z. Filled by the caller from
     /// [`Project::depth_range`], never by [`Project::stats`] (#481).
@@ -510,6 +585,16 @@ pub struct ProjectStats {
     pub loop_count: usize,
     /// Maximum straight-line distance from zero datum to any station
     pub penetration_distance: f64,
+    /// The earliest survey date of any shot; absent when no shot has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    #[ts(type = "string")]
+    pub first_survey_date: Option<chrono::NaiveDate>,
+    /// The latest survey date of any shot; absent when no shot has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    #[ts(type = "string")]
+    pub last_survey_date: Option<chrono::NaiveDate>,
 }
 
 /// # THE DETERMINISTIC-SERIALIZATION RULE FOR THE HASHMAPS
@@ -693,6 +778,8 @@ impl Project {
             validation: crate::config::ValidationConfig::default(),
             surface_elevation: None,
             default_azimuth_reference: None,
+            counter_parity_shots: BTreeSet::new(),
+            held_gauges: Vec::new(),
             cascade_deferred: false,
             section_index_cache: HashMap::new(),
             shot_uuid_index: HashMap::new(),
@@ -797,6 +884,13 @@ impl Project {
         section_id: SectionId,
         updates: &SectionUpdates,
     ) -> Option<&Section> {
+        if updates.surveyor.is_some() || updates.date.is_some() {
+            // The legacy surveyor/date land on every shot; give each an
+            // identity first so an undo can address it after a reload.
+            self.get_section(section_id)?;
+            self.ensure_section_shot_uuids(section_id);
+            self.reindex_section_shot_uuids(section_id);
+        }
         let section = self.get_section_mut(section_id)?;
         section.apply_updates(updates);
         self.touch();
@@ -841,6 +935,19 @@ impl Project {
         }
     }
 
+    /// Move every section's LEGACY surveyor/date onto its uncredited shots
+    /// ([`Section::absorb_legacy_credit`]). Run wherever a `Project` or
+    /// `Section` comes back from JSON written before the credit moved onto
+    /// the shots - an undo snapshot, an older history entry - so the people it
+    /// named are not silently lost. Returns how many sections changed.
+    pub fn absorb_legacy_section_credit(&mut self) -> usize {
+        self.sections
+            .iter_mut()
+            .map(Section::absorb_legacy_credit)
+            .filter(|changed| *changed)
+            .count()
+    }
+
     /// Mint a UUID for every shot of ONE section that lacks one.
     ///
     /// Section-scoped twin of [`Self::ensure_shot_uuids`], for callers that only
@@ -852,7 +959,7 @@ impl Project {
     ///
     /// Does NOT update [`Self::shot_uuid_index`]; pair it with
     /// [`Self::reindex_section_shot_uuids`] when the section's shots also move.
-    pub(crate) fn ensure_section_shot_uuids(&mut self, section_id: SectionId) {
+    pub fn ensure_section_shot_uuids(&mut self, section_id: SectionId) {
         let Some(section) = self.get_section_mut(section_id) else {
             return;
         };

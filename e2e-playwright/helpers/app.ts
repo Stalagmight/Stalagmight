@@ -752,3 +752,25 @@ export async function waitForDrawnShots(
     .toBeGreaterThanOrEqual(minShots);
   return getShotScreenPositions(page);
 }
+
+/** One emitted map label, as `__stalagmight_labels__` reports it. `kind` is the
+ *  renderer's LABEL_KIND (5 = shot Errors label, 6 = loop-closure Errors label).
+ *  A label is drawn while `kindVisible` and the live zoom is at least
+ *  `revealZoom`. */
+export interface MapLabel {
+  kind: number;
+  text: string;
+  revealZoom: number;
+  kindVisible: boolean;
+  score?: number;
+}
+
+export const LABEL_KIND_SHOT_ERROR = 5;
+export const LABEL_KIND_CLOSURE_ERROR = 6;
+
+/** The labels the custom label layer last emitted (viewport-scoped, zoom >= 13.5). */
+export async function getMapLabels(page: Page): Promise<MapLabel[]> {
+  return page.evaluate(
+    () => ((window as { __stalagmight_labels__?: () => MapLabel[] }).__stalagmight_labels__?.() ?? []),
+  );
+}

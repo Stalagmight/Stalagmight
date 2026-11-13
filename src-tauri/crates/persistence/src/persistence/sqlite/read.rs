@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use chrono::{NaiveDate, Utc};
 use rusqlite::{params, OptionalExtension};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::models::{
     AzimuthReference, ClosureStrategy, CorrectionSource, GpsCoordinates, LoopClosure,
@@ -57,12 +57,32 @@ impl Database {
             .query_row("SELECT COUNT(*) FROM shots", [], |row| row.get(0))
             .unwrap_or(0);
         let t_shot_count = start.elapsed();
+        // Surveyed length, the same rule as `Section::stats`: Reference shots
+        // (kind 2) repeat passage already surveyed and are left out (#689).
+        // Only an INTEGER-stored 0 or 1 counts, because the loader reads every
+        // other stored value as Reference (`ShotKind::from_u8`), including a
+        // non-INTEGER cell: the table is not STRICT, so a crafted file can
+        // store `'1'` or `1.0`, which `IN (0, 1)` alone would match through
+        // column affinity while the loader rejects it.
+        //
+        // A file not yet opened since the shot-kind backfill (#27) shows an
+        // upper bound, not the opened figure: a pre-v13 file has no `kind`
+        // column (`open_for_metadata` runs no migration), and a v13+ file can
+        // still carry `pending_kind_classification`. Either way the migration
+        // seeds every virtual shot as Jump, which counts, and the first open
+        // runs the classifier, which may demote some to Reference and re-saves
+        // the result. Until then summing every seeded shot is the best figure.
         // COALESCE so an empty shots table returns 0.0 instead of NULL.
+        let has_kind = self.conn.prepare("SELECT kind FROM shots LIMIT 0").is_ok();
+        let length_sql = if has_kind {
+            "SELECT COALESCE(SUM(length), 0.0) FROM shots \
+             WHERE typeof(kind) = 'integer' AND kind IN (0, 1)"
+        } else {
+            "SELECT COALESCE(SUM(length), 0.0) FROM shots"
+        };
         let total_length: f64 = self
             .conn
-            .query_row("SELECT COALESCE(SUM(length), 0.0) FROM shots", [], |row| {
-                row.get(0)
-            })
+            .query_row(length_sql, [], |row| row.get(0))
             .unwrap_or(0.0);
         let t_sum_length = start.elapsed();
 
@@ -355,6 +375,10 @@ impl Database {
             // Build the empty sections first so we can address them by
             // ID when partitioning the bulk shot stream below.
             let mut section_by_id: HashMap<u32, usize> = HashMap::with_capacity(section_rows.len());
+            // Each section's legacy surveyor/date exactly as stored, to compare
+            // with what this build recorded writing (`shot_credits`).
+            let mut stored_legacy: HashMap<u32, super::shot_credits::LegacyPair> =
+                HashMap::with_capacity(section_rows.len());
             for section_row in section_rows {
                 let (
                     id,
@@ -372,6 +396,7 @@ impl Database {
                     azimuth_source,
                     azimuth_epoch_year,
                 ) = section_row;
+                stored_legacy.insert(id, (surveyor.clone(), date_str.clone()));
                 let date = date_str.and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok());
                 let direction = direction_str
                     .and_then(|s| s.parse::<SurveyDirection>().ok())
@@ -384,8 +409,11 @@ impl Database {
 
                 let section_data = SectionData {
                     name,
-                    surveyor,
-                    date,
+                    // Carried below as the section's LEGACY credit instead: the
+                    // shots are not loaded yet, so a template here would land
+                    // on none of them.
+                    surveyor: None,
+                    date: None,
                     color,
                     direction: Some(direction),
                     quality,
@@ -422,6 +450,8 @@ impl Database {
                      The file was written by an incompatible tool or is corrupted."
                 );
                 let mut section = Section::new(id, section_data);
+                section.legacy_surveyor = surveyor;
+                section.legacy_date = date;
                 section.reverse_parity = reverse_parity;
                 section.gauge_shot_uuid = gauge_shot_uuid;
                 section.gauge_neighbour_uuid = gauge_neighbour_uuid;
@@ -508,6 +538,7 @@ impl Database {
                             // string the same - the next save mints a
                             // fresh UUID and persists it.
                             uuid: row.get::<_, Option<String>>(17)?.filter(|s| !s.is_empty()),
+                            credit: None,
                         },
                     ))
                 })?;
@@ -538,6 +569,52 @@ impl Database {
                         purpose = "block corruption at the source",
                         "Replaced non-finite (NaN/inf) shot geometry with finite defaults on load"
                     );
+                }
+
+                // Per-shot survey credit: a shot's own row, keyed by its
+                // section and uuid, else its section's legacy surveyor/date
+                // (`shot_credits`). A uuid repeated inside one section reads
+                // its row once, for its first shot, as the writer wrote it.
+                // A credit table of another shape gives no rows (with a
+                // warning), and every shot falls back (#717); SQLite failing
+                // for a reason of its own (busy, I/O, corrupt) fails the open.
+                let credit_rows = super::shot_credits::load_credit_rows(&self.conn)?;
+                let recorded =
+                    super::shot_credits::load_recorded_legacy(&self.conn, &stored_legacy)?;
+                let mut claimed: HashSet<(u32, &str)> = HashSet::new();
+                for section in sections.iter_mut() {
+                    let section_id = section.id;
+                    // The rows hold only while the legacy pair is the one this
+                    // build wrote beside them. A pair retyped by something else
+                    // (a hand edit, another tool) is then the newer truth.
+                    let rows_hold = recorded.get(&section_id) == stored_legacy.get(&section_id);
+                    // A section with no shots keeps its legacy pair: nothing
+                    // can carry it (`Section::legacy_surveyor`).
+                    if section.shots.is_empty() {
+                        continue;
+                    }
+                    // Computed once per section and SHARED by every shot that
+                    // falls back to it - one allocation, not one per shot.
+                    let fallback = crate::models::SharedCredit::new(section.take_legacy_template());
+                    for shot in &mut section.shots {
+                        let row = shot
+                            .uuid
+                            .as_deref()
+                            .filter(|_| rows_hold)
+                            .and_then(|u| credit_rows.get_key_value(&(section_id, u.to_owned())))
+                            .filter(|((_, u), _)| claimed.insert((section_id, u.as_str())));
+                        match row {
+                            Some((_, credit)) => shot.set_credit(credit.clone()),
+                            None => shot.set_shared_credit(&fallback),
+                        }
+                    }
+                    // A stored text this build would not write the same way
+                    // (longer than a role keeps, a clamped name, another
+                    // spelling) is written back as it is while nobody's
+                    // credit in the section changes (#719 review).
+                    if let Some((Some(raw), _)) = stored_legacy.get(&section_id) {
+                        section.remember_loaded_legacy_surveyor(raw);
+                    }
                 }
 
                 // Advance each section's next_shot_id past its loaded
@@ -689,6 +766,18 @@ impl Database {
         // legacy-seeding fallback - `None` genuinely means "unknown".
         let surface_elevation = self.load_project_surface_elevation()?;
         let default_azimuth_reference = self.load_project_default_azimuth_reference()?;
+        // Only shots this file holds: an entry for any other uuid is stale (a
+        // file edited by hand, or by a build that did not prune it), and
+        // would otherwise wait in the set for a shot that later takes that
+        // uuid, an Add of a copy of the same survey for one.
+        let mut counter_parity_shots = self.load_project_counter_parity_shots();
+        if !counter_parity_shots.is_empty() {
+            let held: HashSet<&str> = sections
+                .iter()
+                .flat_map(|s| s.shots.iter().filter_map(|shot| shot.uuid.as_deref()))
+                .collect();
+            counter_parity_shots.retain(|uuid| held.contains(uuid.as_str()));
+        }
 
         // Pre-populate the section_id → index lookup so callers get
         // O(1) get_section without needing rebuild_section_index().
@@ -712,7 +801,8 @@ impl Database {
                 }
             }
         }
-        Ok(Project {
+        let section_count = sections.len();
+        let mut project = Project {
             name,
             location,
             created_at,
@@ -733,13 +823,19 @@ impl Database {
             validation,
             surface_elevation,
             default_azimuth_reference,
+            counter_parity_shots,
+            held_gauges: self.load_project_held_gauges(&shot_uuid_index, section_count),
             cascade_deferred: false,
             section_index_cache,
             shot_uuid_index,
             // Nothing loaded from disk is a proven solver fixpoint; the load path
             // re-solves offsets from scratch anyway (`redrive_offsets_after_load`).
             realign_fixpoint: None,
-        })
+        };
+        // Only entries that still name a station: a dangling one (a file
+        // edited by hand) anchors nothing.
+        project.prune_held_gauges();
+        Ok(project)
     }
 
     /// Load loop closures from database
@@ -989,7 +1085,7 @@ impl Database {
         let mut columns = self
             .conn
             .prepare("SELECT name FROM pragma_table_info('speleo_link')")?;
-        let columns: std::collections::HashSet<String> = columns
+        let columns: HashSet<String> = columns
             .query_map([], |row| row.get::<_, String>(0))?
             .collect::<std::result::Result<_, _>>()?;
         // Named as expressions rather than as a dynamic column list so the SELECT
@@ -1308,6 +1404,91 @@ impl Database {
             }
             parsed
         }))
+    }
+
+    /// Load the stations a split, combine or delete-and-split held as their
+    /// component's least-squares gauge (`Project::held_gauges`), kept in
+    /// `project_settings` under `held_gauges` (no schema bump; readers that do
+    /// not know the key fall back to the lowest-id rule). A missing key reads
+    /// as none; an unparseable value too, with a warning: the gauge then falls
+    /// back to the lowest-id rule, which moves the adjusted view, never the
+    /// survey.
+    ///
+    /// The file is untrusted, so the work is bounded before anything else
+    /// reads the list: entries whose section does not hold their shot (one
+    /// probe of `shot_uuid_index`, the index the load just built) and
+    /// duplicates are dropped, and what is left is cut to `section_count`
+    /// entries (the edits keep at most one per component). The load's heal
+    /// then keeps one per component (`Project::normalize_held_gauges`).
+    pub fn load_project_held_gauges(
+        &self,
+        shot_uuid_index: &HashMap<(u32, String), u32>,
+        section_count: usize,
+    ) -> Vec<crate::models::HeldGauge> {
+        let json: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM project_settings WHERE key = 'held_gauges'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .unwrap_or(None);
+        let parsed: Vec<crate::models::HeldGauge> = json
+            .map(|s| {
+                serde_json::from_str(&s).unwrap_or_else(|e| {
+                    tracing::warn!(
+                        error = %e,
+                        "stored held_gauges is present but unparseable; reading as none"
+                    );
+                    Vec::new()
+                })
+            })
+            .unwrap_or_default();
+        let mut seen = HashSet::new();
+        let mut held: Vec<crate::models::HeldGauge> = parsed
+            .into_iter()
+            .filter(|g| shot_uuid_index.contains_key(&(g.section_id, g.shot.clone())))
+            .filter(|g| seen.insert(g.clone()))
+            .collect();
+        if held.len() > section_count {
+            tracing::warn!(
+                stored = held.len(),
+                section_count,
+                "stored held_gauges has more entries than sections; keeping the first"
+            );
+            held.truncate(section_count);
+        }
+        held
+    }
+
+    /// Load the shots whose record orientation runs against their section's
+    /// parity (`Project::counter_parity_shots`), kept in `project_settings`
+    /// under `counter_parity_shots` like the other project-level values (no
+    /// schema bump; readers that do not know the key skip it). A missing key
+    /// reads as none; an unparseable value too, with a warning: the set only
+    /// refines single-neighbour dive-plan pins, so a lost entry costs a pin
+    /// that may need re-placing, never the survey.
+    pub fn load_project_counter_parity_shots(&self) -> std::collections::BTreeSet<String> {
+        let json: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM project_settings WHERE key = 'counter_parity_shots'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .unwrap_or(None);
+        json.map(|s| {
+            serde_json::from_str(&s).unwrap_or_else(|e| {
+                tracing::warn!(
+                    error = %e,
+                    "stored counter_parity_shots is present but unparseable; reading as none"
+                );
+                std::collections::BTreeSet::new()
+            })
+        })
+        .unwrap_or_default()
     }
 
     /// Load the project-level default north reference (#438). A missing key -

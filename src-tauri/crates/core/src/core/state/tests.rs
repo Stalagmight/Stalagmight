@@ -2423,6 +2423,7 @@ fn redo_legacy_prepend_createshot_reanchors_section_start() {
             before_shot_uuid: None,
             uuid: Some("prep-uuid".to_string()),
             previous_offsets: HashMap::new(),
+            consumed_legacy: None,
         },
         timestamp: None,
     };
@@ -4583,6 +4584,7 @@ fn test_split_shot_at_distance_happy_path() {
                     kind: ShotKind::Normal,
                     marker_index: Some(3),
                     temperature: Some(15.0),
+                    credit: None,
                 },
                 test_shot_data(5.0),
             ],
@@ -7555,8 +7557,8 @@ fn test_execute_create_section_command() {
         .expect("Section should exist");
 
     assert_eq!(section.name, Some("Main Passage".to_string()));
-    assert_eq!(section.surveyor, Some("Alice".to_string()));
-    assert_eq!(section.date, Some(test_date));
+    assert_eq!(section.surveyor_names(), Some("Alice".to_string()));
+    assert_eq!(section.first_survey_date(), Some(test_date));
     assert_eq!(section.color, "#00ff00");
     assert_eq!(section.direction, SurveyDirection::Out);
     assert_eq!(section.shots.len(), 3);
@@ -7991,6 +7993,9 @@ fn test_import_shot_updates_reject_atomically_when_one_is_poisoned() {
         station_names: Vec::new(),
         placement: ImportPlacement::Origin,
         azimuth_reference: None,
+        explorers: None,
+        override_date: None,
+        surveyors: None,
     };
     let r = state.execute_import_sections(
         vec![seed],
@@ -8022,6 +8027,9 @@ fn test_import_shot_updates_reject_atomically_when_one_is_poisoned() {
         station_names: Vec::new(),
         placement: ImportPlacement::Origin,
         azimuth_reference: None,
+        explorers: None,
+        override_date: None,
+        surveyors: None,
     };
     let r = state.execute_import_sections(
         vec![incoming],
@@ -8134,6 +8142,9 @@ fn doubly_anchored_guard_reports_receipt_warning_and_skips_the_shot() {
         station_names: Vec::new(),
         placement: ImportPlacement::Origin,
         azimuth_reference: None,
+        explorers: None,
+        override_date: None,
+        surveyors: None,
     };
 
     let r = state.execute_import_sections(
@@ -8202,6 +8213,9 @@ fn zero_datum_import_placement_sets_receipt_zero_datum_created() {
             station_index: 0,
         },
         azimuth_reference: None,
+        explorers: None,
+        override_date: None,
+        surveyors: None,
     };
 
     let r = state.execute_import_sections(
@@ -8249,6 +8263,9 @@ fn multiple_zero_datum_placements_name_the_first_and_count_the_rest() {
             station_index,
         },
         azimuth_reference: None,
+        explorers: None,
+        override_date: None,
+        surveyors: None,
     };
 
     let r = state.execute_import_sections(
@@ -8293,6 +8310,9 @@ fn import_with_no_zero_datum_placement_leaves_receipt_field_none() {
         station_names: Vec::new(),
         placement: ImportPlacement::Origin,
         azimuth_reference: None,
+        explorers: None,
+        override_date: None,
+        surveyors: None,
     };
 
     let r = state.execute_import_sections(
@@ -8517,8 +8537,8 @@ fn test_execute_update_section_metadata_command() {
     let section = project.get_section(section_id).unwrap();
 
     assert_eq!(section.name, Some("Updated Name".to_string()));
-    assert_eq!(section.surveyor, Some("Carol".to_string()));
-    assert_eq!(section.date, Some(updated_date));
+    assert_eq!(section.surveyor_names(), Some("Carol".to_string()));
+    assert_eq!(section.first_survey_date(), Some(updated_date));
     assert_eq!(section.color, "#0000ff");
     assert_eq!(section.direction, SurveyDirection::Out);
     assert_eq!(section.quality, 1.25);
@@ -12790,13 +12810,13 @@ fn test_split_preserves_metadata() {
     let section_b = proj.get_section(new_id).unwrap();
 
     // Both sections inherit metadata
-    assert_eq!(section_a.surveyor, Some("Jane".to_string()));
-    assert_eq!(section_a.date, Some(date));
+    assert_eq!(section_a.surveyor_names(), Some("Jane".to_string()));
+    assert_eq!(section_a.first_survey_date(), Some(date));
     assert_eq!(section_a.color, "#aabbcc");
     assert_eq!(section_a.direction, SurveyDirection::Out);
 
-    assert_eq!(section_b.surveyor, Some("Jane".to_string()));
-    assert_eq!(section_b.date, Some(date));
+    assert_eq!(section_b.surveyor_names(), Some("Jane".to_string()));
+    assert_eq!(section_b.first_survey_date(), Some(date));
     assert_eq!(section_b.color, "#aabbcc");
     assert_eq!(section_b.direction, SurveyDirection::Out);
 }
@@ -13073,7 +13093,7 @@ fn test_delete_range_split_interior() {
         vec![6.0, 8.0]
     );
     // Metadata is inherited by both halves.
-    assert_eq!(b.surveyor, Some("Surv".to_string()));
+    assert_eq!(b.surveyor_names(), Some("Surv".to_string()));
     assert_eq!(b.direction, SurveyDirection::Out);
 }
 
@@ -15313,7 +15333,7 @@ fn test_delete_last_shot_undo_restores() {
         .get_section(section_id)
         .expect("Section should be restored");
     assert_eq!(section.name, Some("WillDelete".to_string()));
-    assert_eq!(section.surveyor, Some("UndoTester".to_string()));
+    assert_eq!(section.surveyor_names(), Some("UndoTester".to_string()));
     assert_eq!(section.shots.len(), 1);
     assert_eq!(section.shots[0].id, shot_id);
     assert_eq!(section.shots[0].length, 5.0);
@@ -17963,6 +17983,9 @@ fn test_execute_import_sections_origin_placement() {
             station_names: Vec::new(),
             placement: ImportPlacement::Origin,
             azimuth_reference: None,
+            explorers: None,
+            override_date: None,
+            surveyors: None,
         },
         ImportSectionConfig {
             reverse: false,
@@ -17978,6 +18001,9 @@ fn test_execute_import_sections_origin_placement() {
             station_names: Vec::new(),
             placement: ImportPlacement::Origin,
             azimuth_reference: None,
+            explorers: None,
+            override_date: None,
+            surveyors: None,
         },
     ];
 
@@ -18035,6 +18061,9 @@ fn test_execute_import_sections_unresolvable_closure_is_skipped_on_receipt() {
         station_names: Vec::new(),
         placement: ImportPlacement::Origin,
         azimuth_reference: None,
+        explorers: None,
+        override_date: None,
+        surveyors: None,
     }];
 
     // section_index 99 never appears in `sections`, so `created_ids` never
@@ -18104,6 +18133,9 @@ fn imported_shot_kinds_survive_an_undo_redo_round_trip() {
         placement: ImportPlacement::Origin,
         reverse: false,
         azimuth_reference: None,
+        explorers: None,
+        override_date: None,
+        surveyors: None,
     }];
 
     let result = state.execute_import_sections(
@@ -18160,6 +18192,9 @@ fn importing_a_second_file_leaves_existing_shot_kinds_alone() {
         placement: ImportPlacement::Origin,
         reverse: false,
         azimuth_reference: None,
+        explorers: None,
+        override_date: None,
+        surveyors: None,
     };
     let reference_shot = ShotData {
         kind: ShotKind::Reference,
@@ -18254,6 +18289,9 @@ fn test_execute_import_sections_rejects_non_finite_shot_update() {
         station_names: Vec::new(),
         placement: ImportPlacement::Origin,
         azimuth_reference: None,
+        explorers: None,
+        override_date: None,
+        surveyors: None,
     };
     let result = state.execute_import_sections(
         vec![seed],
@@ -18283,6 +18321,9 @@ fn test_execute_import_sections_rejects_non_finite_shot_update() {
         station_names: Vec::new(),
         placement: ImportPlacement::Origin,
         azimuth_reference: None,
+        explorers: None,
+        override_date: None,
+        surveyors: None,
     };
     let result = state.execute_import_sections(
         vec![poisoned],
@@ -18346,6 +18387,9 @@ fn test_execute_import_sections_from_importing_placement() {
             station_names: Vec::new(),
             placement: ImportPlacement::Origin,
             azimuth_reference: None,
+            explorers: None,
+            override_date: None,
+            surveyors: None,
         },
         ImportSectionConfig {
             reverse: false,
@@ -18365,6 +18409,9 @@ fn test_execute_import_sections_from_importing_placement() {
                 target_station_index: 1,
             },
             azimuth_reference: None,
+            explorers: None,
+            override_date: None,
+            surveyors: None,
         },
     ];
 
@@ -18421,6 +18468,9 @@ fn test_execute_import_sections_from_existing_placement() {
             existing_station: StationRef::new(existing_id, 2),
         },
         azimuth_reference: None,
+        explorers: None,
+        override_date: None,
+        surveyors: None,
     }];
 
     let result = state.execute_import_sections(
@@ -18469,6 +18519,9 @@ fn test_execute_import_sections_manual_with_offset() {
             }),
         },
         azimuth_reference: None,
+        explorers: None,
+        override_date: None,
+        surveyors: None,
     }];
 
     let result = state.execute_import_sections(
@@ -18522,6 +18575,9 @@ fn test_execute_import_sections_zero_datum_placement() {
             station_index: 0,
         },
         azimuth_reference: None,
+        explorers: None,
+        override_date: None,
+        surveyors: None,
     }];
 
     let result = state.execute_import_sections(
@@ -18580,6 +18636,9 @@ fn test_execute_import_sections_zero_datum_placement_at_non_origin_station() {
             station_index: 1,
         },
         azimuth_reference: None,
+        explorers: None,
+        override_date: None,
+        surveyors: None,
     }];
 
     let result = state.execute_import_sections(
@@ -18647,6 +18706,9 @@ fn test_execute_import_sections_rollback_on_failure() {
             station_names: Vec::new(),
             placement: ImportPlacement::Origin,
             azimuth_reference: None,
+            explorers: None,
+            override_date: None,
+            surveyors: None,
         },
         ImportSectionConfig {
             reverse: false,
@@ -18665,6 +18727,9 @@ fn test_execute_import_sections_rollback_on_failure() {
                 existing_station: StationRef::new(9999, 0), // nonexistent
             },
             azimuth_reference: None,
+            explorers: None,
+            override_date: None,
+            surveyors: None,
         },
     ];
 
@@ -18729,6 +18794,9 @@ fn test_execute_import_sections_no_project() {
         station_names: Vec::new(),
         placement: ImportPlacement::Origin,
         azimuth_reference: None,
+        explorers: None,
+        override_date: None,
+        surveyors: None,
     }];
 
     let result = state.execute_import_sections(
@@ -18780,6 +18848,9 @@ fn test_execute_import_sections_manual_snap_placement() {
             snapped_to_station: StationRef::new(existing_id, 1),
         },
         azimuth_reference: None,
+        explorers: None,
+        override_date: None,
+        surveyors: None,
     }];
 
     let result = state.execute_import_sections(
@@ -19956,6 +20027,9 @@ fn kb5_import_overlap_interpolation_integration() {
             station_names: Vec::new(),
             placement: ImportPlacement::Origin,
             azimuth_reference: None,
+            explorers: None,
+            override_date: None,
+            surveyors: None,
         }],
         Vec::new(),
         None,
@@ -20074,6 +20148,9 @@ fn kb5_import_overlap_interpolation_integration() {
                 existing_station: StationRef::new(section_002_id, 182),
             },
             azimuth_reference: None,
+            explorers: None,
+            override_date: None,
+            surveyors: None,
         }],
         Vec::new(),
         None,
@@ -23664,6 +23741,8 @@ const MUTATION_ENTRYPOINTS: &[&str] = &[
     "execute_delete_shot_range_shift",
     "execute_delete_last_shot_and_section",
     "execute_split_shot_at_distance",
+    "execute_split_section",
+    "execute_combine_sections",
     "execute_create_and_merge",
     "execute_import_sections",
     // by-path / metadata methods (gated only when path == the OPEN project)
@@ -23680,7 +23759,7 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
     // guard_mutation AND add its name to MUTATION_ENTRYPOINTS + a call below.
     assert_eq!(
         MUTATION_ENTRYPOINTS.len(),
-        26,
+        28,
         "update both the routing and this list when adding a mutation entry"
     );
 
@@ -23714,6 +23793,17 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
             &state.execute(Command::MoveStation {
                 station_ref: StationRef::new(sid, 1),
                 offset: Coordinates::new(1.0, 2.0, 0.0),
+            }),
+        );
+        // A per-shot credit edit is metadata, but still an edit of the project.
+        assert_disabled(
+            "execute:EditShotCredit",
+            &state.execute(Command::EditShotCredit {
+                targets: crate::models::CreditTargets::Section { section_id: sid },
+                edit: crate::models::CreditEdit {
+                    set_date: Some(None),
+                    ..Default::default()
+                },
             }),
         );
         assert_disabled(
@@ -23808,6 +23898,35 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
             &state.execute_delete_shot_and_split(sid, shid, "A".to_string(), "B".to_string()),
         );
         assert_disabled(
+            "execute_split_section",
+            &state.execute_split_section(
+                sid,
+                crate::models::SplitAt::Station { station_index: 1 },
+                crate::models::SplitSectionOptions {
+                    name_a: "A".to_string(),
+                    name_b: "B".to_string(),
+                    color_a: "#111111".to_string(),
+                    color_b: "#222222".to_string(),
+                    comment_side: crate::models::SplitSide::A,
+                    datum_side: crate::models::SplitSide::A,
+                },
+            ),
+        );
+        assert_disabled(
+            "execute_combine_sections",
+            &state.execute_combine_sections(
+                sid,
+                sid + 1,
+                crate::models::CombineSectionsOptions {
+                    name: "A".to_string(),
+                    color: "#111111".to_string(),
+                    swap_lr: false,
+                    comment_pick: crate::models::CombinePick::Kept,
+                    name_pick: crate::models::CombinePick::Kept,
+                },
+            ),
+        );
+        assert_disabled(
             "execute_delete_shot_range_split",
             &state.execute_delete_shot_range_split(
                 sid,
@@ -23860,6 +23979,9 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
                     station_names: Vec::new(),
                     placement: ImportPlacement::Origin,
                     azimuth_reference: None,
+                    explorers: None,
+                    override_date: None,
+                    surveyors: None,
                 }],
                 Vec::new(),
                 None,
@@ -25201,6 +25323,7 @@ fn redo_of_a_created_shot_with_the_maximum_id_saturates_instead_of_overflowing()
                 before_shot_uuid: None,
                 uuid: Some("11111111-1111-4111-8111-111111111111".to_string()),
                 previous_offsets: HashMap::new(),
+                consumed_legacy: None,
             },
             timestamp: None,
         });
@@ -25325,6 +25448,7 @@ fn an_anchored_redo_forcing_the_maximum_shot_id_saturates_instead_of_overflowing
                 before_shot_uuid: None,
                 uuid: Some("44444444-4444-4444-8444-444444444444".to_string()),
                 previous_offsets: HashMap::new(),
+                consumed_legacy: None,
             },
             timestamp: None,
         });

@@ -831,6 +831,9 @@ impl Project {
         // Still before the re-anchor, so positional refs canonicalize straight to
         // the new ids.
         let renamed = self.make_shot_uuids_project_unique();
+        // Held gauges after the rename (it follows them to the renamed copy):
+        // the ones that name a station, one per component.
+        self.normalize_held_gauges();
         // Upgrade any positional (Index) ref from an older file to the stable
         // shot-UUID anchor now that shots (with UUIDs) are loaded.
         self.reanchor_station_refs();

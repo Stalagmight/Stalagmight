@@ -116,8 +116,11 @@ describe('data-table view save vs cached adjusted geometry (#357 item 4)', () =>
     // The panels did reach the in-memory config: the publish still does its job.
     expect(useProjectStore.getState().config?.panels.data_table_shot_hidden_columns).toEqual([
       'comment',
+      'explorers',
       'section_id',
       'shot_id',
+      'survey_date',
+      'surveyors',
     ]);
     // But the solved geometry is untouched. Identity, not just non-null: a
     // re-solve would hand back a different object and still re-run the MapCanvas

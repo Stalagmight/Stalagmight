@@ -166,7 +166,10 @@ function warningsFor(
       })
     );
   }
-  if (hasPitchDiscrepancy(shot.pitch_in, shot.pitch_out, config.pitch_diff_threshold)) {
+  if (
+    !covered.has('PITCH_DEVIATION') &&
+    hasPitchDiscrepancy(shot.pitch_in, shot.pitch_out, config.pitch_diff_threshold)
+  ) {
     out.push(
       t('shotTable.warnings.pitchDiff', {
         threshold: `${formatFixed(config.pitch_diff_threshold, undefined, 0)}°`,

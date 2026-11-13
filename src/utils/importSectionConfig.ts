@@ -15,7 +15,7 @@ import { isEmittedShot } from '../components/common/emittedShots';
 import type { ShotData } from '../types/project';
 import type { ZeroDatumConfigResult } from '../components/Dialogs/ZeroDatumConfigDialog';
 import type { VirtualConnection } from './segmentContext';
-import type { SectionEditState } from './batchImportHelpers';
+import { importCreditFields, type SectionEditState } from './batchImportHelpers';
 import { editableShotToShotData } from './shotConversion';
 import { mirrorPlacementForReverse, targetShotCountForMirror } from './reversePlacement';
 
@@ -144,8 +144,10 @@ export function buildZeroDatumSectionConfig(config: ZeroDatumConfigResult): Impo
   return {
     section_index: sectionIndex,
     name: metadata.name,
-    surveyor: metadata.surveyor,
-    date: metadata.date,
+    ...importCreditFields(
+      { surveyors: metadata.surveyors ?? [], explorers: metadata.explorers ?? [] },
+      metadata.date,
+    ),
     color: metadata.color,
     direction: metadata.direction,
     quality: metadata.quality,

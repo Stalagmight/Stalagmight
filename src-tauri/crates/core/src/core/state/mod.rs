@@ -1,11 +1,14 @@
 mod app_state;
+mod command_combine_sections;
 mod command_comment;
+mod command_credit;
 mod command_delete_split;
 mod command_import;
 mod command_move;
 mod command_query;
 mod command_section;
 mod command_shot;
+mod command_split_section;
 mod command_split_shot;
 mod command_station;
 mod commands;
@@ -27,6 +30,7 @@ mod speleodb_admin;
 mod speleodb_cache;
 mod speleodb_cache_install;
 mod speleodb_cached;
+mod speleodb_collaborators;
 mod speleodb_credentials;
 mod speleodb_edit_gate;
 mod speleodb_foreign;
@@ -60,9 +64,24 @@ mod adversarial_tests;
 )]
 mod azimuth_reference_tests;
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::float_cmp,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod combine_sections_tests;
+#[cfg(test)]
 mod concurrency_tests;
 #[cfg(test)]
 mod crash_property_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod credit_tests;
 #[cfg(test)]
 #[expect(
     clippy::expect_used,
@@ -201,6 +220,13 @@ mod speleodb_nonblocking_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod speleodb_upload_limit_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::float_cmp,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod split_section_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,

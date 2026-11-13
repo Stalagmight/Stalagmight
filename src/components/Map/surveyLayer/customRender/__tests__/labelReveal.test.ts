@@ -40,7 +40,7 @@ function input(over: Partial<RevealInput> = {}): RevealInput {
   return {
     buildZoom: 18,
     worldPixelScale: 1e6,
-    kindVisible: [true, true, true, true, true],
+    kindVisible: [true, true, true, true, true, true, true],
     hideReference: false,
     hideJump: false,
     ...over,
@@ -61,13 +61,16 @@ function desc(kind: LabelKind, over: Partial<LabelDescriptor> = {}): LabelDescri
 }
 
 describe('labelPriority', () => {
-  it('orders section > first-in-section station > station > shot > comments', () => {
+  it('orders section > errors past a threshold > first station > station > minor errors > shot > comments', () => {
     expect(labelPriority(LABEL_KIND.SECTION_NAME, false)).toBe(0);
-    expect(labelPriority(LABEL_KIND.STATION_LABEL, true)).toBe(1);
-    expect(labelPriority(LABEL_KIND.STATION_LABEL, false)).toBe(2);
-    expect(labelPriority(LABEL_KIND.SHOT_LABEL, false)).toBe(3);
-    expect(labelPriority(LABEL_KIND.STATION_COMMENT, false)).toBe(4);
-    expect(labelPriority(LABEL_KIND.SHOT_COMMENT, false)).toBe(4);
+    expect(labelPriority(LABEL_KIND.SHOT_ERROR, false, 1)).toBe(1);
+    expect(labelPriority(LABEL_KIND.CLOSURE_ERROR, false, 2.5)).toBe(1);
+    expect(labelPriority(LABEL_KIND.STATION_LABEL, true)).toBe(2);
+    expect(labelPriority(LABEL_KIND.STATION_LABEL, false)).toBe(3);
+    expect(labelPriority(LABEL_KIND.SHOT_ERROR, false, 0.99)).toBe(4);
+    expect(labelPriority(LABEL_KIND.SHOT_LABEL, false)).toBe(5);
+    expect(labelPriority(LABEL_KIND.STATION_COMMENT, false)).toBe(6);
+    expect(labelPriority(LABEL_KIND.SHOT_COMMENT, false)).toBe(6);
   });
 });
 
@@ -906,5 +909,153 @@ describe('computeRevealZooms held-back names (section-only build)', () => {
     expect(without[1]).toBeGreaterThan(10); // really held back by the real name
     expect(without[1]).toBeLessThan(13.5);
     expect(run([farStation])[1]).toBe(without[1]);
+  });
+});
+
+// ─── Errors labels: the worst error wins ──────────────────────────────────────
+
+describe('computeRevealZooms Errors labels', () => {
+  const err = (score: number, over: Partial<LabelDescriptor> = {}) =>
+    desc(LABEL_KIND.SHOT_ERROR, { score, ...over });
+
+  it('of two coincident error labels the higher score is shown, whatever the input order or ids', () => {
+    const orders: LabelDescriptor[][] = [
+      [err(0.4, { shotGlobal: 1 }), err(2.5, { shotGlobal: 2 })],
+      [err(2.5, { shotGlobal: 2 }), err(0.4, { shotGlobal: 1 })],
+      [err(0.4, { shotGlobal: 9 }), err(2.5, { shotGlobal: 0 })],
+      [err(2.5, { shotGlobal: 9, ordinal: 7 }), err(0.4, { shotGlobal: 0 })],
+    ];
+    for (const descs of orders) {
+      const reveal = computeRevealZooms(descs, [UNIT_EXT, UNIT_EXT], input({ slack: 2 }));
+      const strong = descs.findIndex((d) => d.score === 2.5);
+      const weak = 1 - strong;
+      expect(reveal[strong]).toBe(LABEL_KIND_STYLE[LABEL_KIND.SHOT_ERROR].minzoom);
+      expect(reveal[weak]).toBe(REVEAL_NEVER);
+    }
+  });
+
+  it('shot and closure error labels compete on score', () => {
+    const descs = [err(0.5), desc(LABEL_KIND.CLOSURE_ERROR, { score: 3 })];
+    const reveal = computeRevealZooms(descs, [UNIT_EXT, UNIT_EXT], input());
+    expect(reveal[1]).toBe(14);
+    expect(reveal[0]).toBe(REVEAL_NEVER);
+  });
+
+  it('an error label is not ordinal-decimated (odd ordinals still show at its minzoom)', () => {
+    const reveal = computeRevealZooms([err(0.2, { ordinal: 3 })], [UNIT_EXT], input());
+    expect(reveal[0]).toBe(14);
+  });
+
+  it('past a threshold it beats a coincident station label; a minor one yields; section names beat both', () => {
+    const vsStation = computeRevealZooms(
+      [desc(LABEL_KIND.STATION_LABEL, { flags: LABEL_FLAG.FIRST_IN_SECTION }), err(1.2)],
+      [UNIT_EXT, UNIT_EXT],
+      input(),
+    );
+    expect(vsStation[1]).toBe(14);
+    expect(vsStation[0]).toBe(REVEAL_NEVER);
+    const minor = computeRevealZooms(
+      [desc(LABEL_KIND.STATION_LABEL, { flags: LABEL_FLAG.FIRST_IN_SECTION }), err(0.1)],
+      [UNIT_EXT, UNIT_EXT],
+      input(),
+    );
+    expect(minor[0]).toBe(14);
+    expect(minor[1]).toBe(REVEAL_NEVER);
+    // A minor error still beats a shot data label.
+    const vsShot = computeRevealZooms([desc(LABEL_KIND.SHOT_LABEL, { ordinal: 0 }), err(0.1)], [UNIT_EXT, UNIT_EXT], input());
+    expect(vsShot[1]).toBe(14);
+    expect(vsShot[0]).toBe(REVEAL_NEVER);
+    const vsSection = computeRevealZooms([desc(LABEL_KIND.SECTION_NAME), err(3)], [UNIT_EXT, UNIT_EXT], input());
+    expect(vsSection[0]).toBe(10);
+    expect(vsSection[1]).toBe(REVEAL_NEVER);
+  });
+
+  it('a blocked error label keeps a weaker error and a station label out of its spot', () => {
+    // At z18 (wps 1e6, so anchorX 1e-6 = 1 px): the name spans [-1.5, 15.5] px.
+    // A (score 3) at 10 px overlaps the name and never shows. B (score 1) and a
+    // station label at 20 px overlap A but clear the name: neither may take A's
+    // spot. The ladder ends at z18 (slack 0), the only step where B clears.
+    const px = (v: number) => v / 1e6;
+    const name = desc(LABEL_KIND.SECTION_NAME, { anchorX: 0 });
+    const a = err(3, { anchorX: px(10), shotGlobal: 1 });
+    const b = err(1.5, { anchorX: px(20), shotGlobal: 2 });
+    const station = desc(LABEL_KIND.STATION_LABEL, { anchorX: px(20), stationGlobal: 3, flags: LABEL_FLAG.FIRST_IN_SECTION });
+    const exts = [UNIT_EXT, UNIT_EXT, UNIT_EXT, UNIT_EXT];
+    const reveal = computeRevealZooms([name, a, b, station], exts, input({ slack: 0 }));
+    expect(reveal[0]).toBe(10);
+    expect(reveal[1]).toBe(REVEAL_NEVER);
+    expect(reveal[2]).toBe(REVEAL_NEVER);
+    expect(reveal[3]).toBe(REVEAL_NEVER);
+    // Control: without A in the set, B does show at z18.
+    const control = computeRevealZooms([name, b], [UNIT_EXT, UNIT_EXT], input({ slack: 0 }));
+    expect(control[1]).toBe(18);
+  });
+
+  it('a toggled-off Errors kind reserves nothing', () => {
+    const a = err(3, { anchorX: 0 });
+    const station = desc(LABEL_KIND.STATION_LABEL, { anchorX: 0, flags: LABEL_FLAG.FIRST_IN_SECTION });
+    const off = [true, true, true, true, true, false, true];
+    const reveal = computeRevealZooms([a, station], [UNIT_EXT, UNIT_EXT], input({ kindVisible: off }));
+    expect(reveal[1]).toBe(14);
+  });
+
+  it('PROPERTY: a weaker overlapping error is never visible while a stronger one is hidden; still monotone, no overlap', () => {
+    const rnd = lcg(0xe5505);
+    const kinds: LabelKind[] = [
+      LABEL_KIND.SHOT_ERROR,
+      LABEL_KIND.SHOT_ERROR,
+      LABEL_KIND.CLOSURE_ERROR,
+      LABEL_KIND.STATION_LABEL,
+      LABEL_KIND.SHOT_LABEL,
+      LABEL_KIND.SECTION_NAME,
+    ];
+    const descs: LabelDescriptor[] = [];
+    const exts: ExtentEm[] = [];
+    for (let i = 0; i < 150; i++) {
+      const kind = kinds[Math.floor(rnd() * kinds.length)]!;
+      const over: Partial<LabelDescriptor> = {
+        anchorX: rnd() * 0.0008,
+        anchorY: rnd() * 0.0008,
+        ordinal: Math.floor(rnd() * 40),
+        sectionId: i,
+      };
+      if (kind === LABEL_KIND.SHOT_ERROR || kind === LABEL_KIND.CLOSURE_ERROR) {
+        over.score = Math.round(rnd() * 300) / 100;
+        over.shotGlobal = i;
+      } else if (kind === LABEL_KIND.SHOT_LABEL) over.shotGlobal = i;
+      else if (kind === LABEL_KIND.STATION_LABEL) over.stationGlobal = i;
+      descs.push(desc(kind, over));
+      // Errors labels are wide, one line.
+      exts.push(kind === LABEL_KIND.SHOT_ERROR ? { minX: -3, maxX: 3, minY: 0, maxY: 1 } : UNIT_EXT);
+    }
+    const buildZoom = 22;
+    const wps = 4e6;
+    const reveal = computeRevealZooms(descs, exts, input({ buildZoom, worldPixelScale: wps, slack: 2 }));
+    const isErr = (d: LabelDescriptor) => d.kind === LABEL_KIND.SHOT_ERROR || d.kind === LABEL_KIND.CLOSURE_ERROR;
+
+    let prevVisible = new Set<number>();
+    for (let z = 10; z <= 22 + 1e-9; z += 0.5) {
+      const shown = (i: number) => reveal[i]! !== REVEAL_NEVER && reveal[i]! <= z + 1e-9;
+      const visible = descs.map((_, i) => i).filter(shown);
+      for (const i of prevVisible) expect(visible).toContain(i);
+      const boxes = descs.map((d, i) => boxAt(d, exts[i]!, z, buildZoom, wps));
+      for (let a = 0; a < visible.length; a++) {
+        for (let b = a + 1; b < visible.length; b++) {
+          expect(boxesOverlap(boxes[visible[a]!]!, boxes[visible[b]!]!)).toBe(false);
+        }
+      }
+      // The ranking guarantee, at every zoom of the sweep the ladder visits.
+      if (z >= 14) {
+        for (let w = 0; w < descs.length; w++) {
+          if (!isErr(descs[w]!) || !shown(w)) continue;
+          for (let st = 0; st < descs.length; st++) {
+            if (st === w || !isErr(descs[st]!) || (descs[st]!.score ?? 0) <= (descs[w]!.score ?? 0)) continue;
+            if (boxesOverlap(boxes[w]!, boxes[st]!)) expect(shown(st)).toBe(true);
+          }
+        }
+      }
+      prevVisible = new Set(visible);
+    }
+    expect(prevVisible.size).toBeGreaterThan(0);
   });
 });

@@ -1,23 +1,93 @@
 /**
- * Shared form component for editing section metadata (name, surveyor, date, color, direction).
- * Used by EditSectionDialog and DMP import flows.
+ * Shared form component for editing section metadata (name, surveyors,
+ * explorers, date, color, direction). Used by EditSectionDialog and the import
+ * flows (zero-datum config, the mNemo wizard's sections).
+ *
+ * The people fields are pill fields ({@link CreditPeopleFields}); the host
+ * decides what an edit means. An import dialog holds plain lists (see
+ * {@link listPeopleProps}); Edit Section holds a pending edit of every shot and
+ * passes each person with their shot count, plus `dateAggregate` for a date
+ * that may differ per shot.
  */
 import { DatePicker } from './DatePicker';
 import { HelpTooltip } from './HelpTooltip';
 import { Select } from './Select';
+import { CreditDateInput, CreditPeopleFields, type CreditPeopleFieldsProps } from './CreditFields';
+import type { PeopleInputValue } from './PeopleInput';
 import { useTranslation } from 'react-i18next';
+import type { Person } from '../../types/ipc.generated';
+import type { CreditDateAggregate, CreditRole } from '../../utils/creditEdit';
+import { dedupePeople, personKey, type PersonLike } from '../../utils/people';
+import { toPerson } from '../../store/recentPeople';
+
+/** The people half of the form: values plus what an add / remove / promote does. */
+export type SectionPeopleProps = Pick<
+  CreditPeopleFieldsProps,
+  'surveyors' | 'explorers' | 'onAdd' | 'onRemove' | 'onPromote' | 'onCommitPending'
+>;
+
+/** Plain surveyor / explorer lists, as an import dialog keeps them. */
+export interface CreditLists {
+  surveyors: Person[];
+  explorers: Person[];
+}
+
+export const EMPTY_CREDIT_LISTS: CreditLists = Object.freeze({ surveyors: [], explorers: [] }) as unknown as CreditLists;
+
+/** People as pills with no shot counts. */
+export function peopleValues(people: readonly Person[]): PeopleInputValue[] {
+  return people.map((person) => ({ person }));
+}
+
+/** `list` with `person` appended (once, by identity). */
+export function withPerson(list: readonly Person[], person: PersonLike): Person[] {
+  return dedupePeople([...list, toPerson(person)]);
+}
+
+/** `list` without `person` (by identity). */
+export function withoutPerson(list: readonly Person[], person: PersonLike): Person[] {
+  const key = personKey(person);
+  return list.filter((p) => personKey(p) !== key);
+}
+
+/**
+ * The people props of a form backed by plain lists. `onChange` gets the next
+ * list of one role; a pasted list calls it once per name in one event, so the
+ * host should update functionally (`setLists((prev) => ...)`) - `update`
+ * receives the role and a reducer for exactly that.
+ */
+export function listPeopleProps(
+  lists: CreditLists,
+  update: (role: CreditRole, next: (prev: Person[]) => Person[]) => void,
+  onCommitPending?: (hasPending: boolean) => void,
+): SectionPeopleProps {
+  return {
+    surveyors: peopleValues(lists.surveyors),
+    explorers: peopleValues(lists.explorers),
+    onAdd: (role, person) => update(role, (prev) => withPerson(prev, person)),
+    onRemove: (role, person) => update(role, (prev) => withoutPerson(prev, person)),
+    ...(onCommitPending ? { onCommitPending } : {}),
+  };
+}
 
 export interface SectionMetadataFormProps {
   name: string;
-  surveyor: string;
+  people: SectionPeopleProps;
+  /** Lay the two people fields side by side (a wide dialog). */
+  peopleColumns?: boolean;
+  /** The date as one value (an import dialog). Ignored when `dateAggregate` is set. */
   date: string;
+  /** The date across the section's shots (Edit Section): one value, or a per-shot range. */
+  dateAggregate?: CreditDateAggregate;
+  /** With `dateAggregate`: back to per-shot dates after a date was set over a range. */
+  onDateReset?: () => void;
   color: string;
   direction?: 'in' | 'out';
   quality?: number;
   /** Import-time reverse toggle (#24). Only meaningful when `showReverse`. */
   reverse?: boolean;
   onNameChange: (value: string) => void;
-  onSurveyorChange: (value: string) => void;
+  /** The new date ('' when cleared). */
   onDateChange: (value: string) => void;
   onColorChange: (value: string) => void;
   onQualityChange?: (value: number) => void;
@@ -33,18 +103,26 @@ export interface SectionMetadataFormProps {
    */
   showReverse?: boolean;
   disabled?: boolean;
+  /**
+   * The credit has nowhere to go (Edit Section on a section with no shots:
+   * credit lives on shots). Disables the people and date fields and says
+   * why, instead of taking input Save would drop.
+   */
+  creditUnavailable?: boolean;
 }
 
 export function SectionMetadataForm({
   name,
-  surveyor,
+  people,
+  peopleColumns = false,
   date,
+  dateAggregate,
+  onDateReset,
   color,
   direction = 'in',
   quality = 1.0,
   reverse = false,
   onNameChange,
-  onSurveyorChange,
   onDateChange,
   onColorChange,
   onQualityChange,
@@ -55,8 +133,10 @@ export function SectionMetadataForm({
   showQuality = false,
   showReverse = false,
   disabled = false,
+  creditUnavailable = false,
 }: SectionMetadataFormProps) {
   const { t } = useTranslation();
+  const creditDisabled = disabled || creditUnavailable;
   return (
     <div className="space-y-3" data-testid="section-metadata-form">
       {showName && (
@@ -74,19 +154,17 @@ export function SectionMetadataForm({
         </div>
       )}
 
-      {/* Surveyor field - full width */}
-      <div>
-        <label className="block text-sm text-text-secondary mb-1">{t('sectionMetadata.labels.surveyor')}</label>
-        <input
-          type="text"
-          value={surveyor}
-          onChange={(e) => onSurveyorChange(e.target.value)}
-          className="w-full px-3 py-2 bg-background border border-border rounded"
-          placeholder={t('sectionMetadata.placeholders.surveyor')}
-          disabled={disabled}
-          data-testid="section-surveyor-input"
-        />
-      </div>
+      {creditUnavailable && (
+        <p className="text-sm text-text-tertiary" data-testid="section-credit-no-shots">
+          {t('credit.noShotsHint')}
+        </p>
+      )}
+      <CreditPeopleFields
+        {...people}
+        layout={peopleColumns ? 'columns' : 'stacked'}
+        disabled={creditDisabled}
+        testIdPrefix="section"
+      />
 
       {showQuality && (
         <div>
@@ -140,14 +218,24 @@ export function SectionMetadataForm({
       <div className="flex gap-3 items-end justify-between">
         {/* Date and Direction - left aligned */}
         <div className="flex gap-3 items-end">
-          <div className="w-32">
-            <label className="block text-sm text-text-secondary mb-1">{t('common.labels.date')}</label>
-            <DatePicker
-              value={date}
-              onChange={onDateChange}
-              disabled={disabled}
-              data-testid="section-date-input"
-            />
+          <div className={dateAggregate ? 'min-w-32' : 'w-32'}>
+            <label className="block text-sm text-text-secondary mb-1">{t('credit.dateLabel')}</label>
+            {dateAggregate ? (
+              <CreditDateInput
+                value={dateAggregate}
+                onChange={(next) => onDateChange(next ?? '')}
+                {...(onDateReset ? { onReset: onDateReset } : {})}
+                disabled={creditDisabled}
+                testId="section-date-input"
+              />
+            ) : (
+              <DatePicker
+                value={date}
+                onChange={onDateChange}
+                disabled={creditDisabled}
+                data-testid="section-date-input"
+              />
+            )}
           </div>
 
           {showDirection && (

@@ -415,6 +415,8 @@ pub struct DisplaySettings {
     /// `applyDisplaySettings` lets the ID labels win if both read `true`.
     pub show_station_names: bool,
     pub show_shot_data: bool,
+    /// The "Errors" labels: per-shot reading deltas and loop-closure errors.
+    pub show_shot_errors: bool,
     pub show_reference_shots: bool,
     /// #27: jump shots hide independently of reference shots. Defaults to the
     /// stored `showReferenceShots` value so an existing project keeps showing
@@ -443,6 +445,7 @@ impl Default for DisplaySettings {
             show_station_labels: false,
             show_station_names: false,
             show_shot_data: false,
+            show_shot_errors: false,
             show_reference_shots: true,
             show_jumps: true,
             show_zero_datum: true,
@@ -469,6 +472,7 @@ impl DisplaySettings {
             show_station_labels: map.get("showStationLabels").is_some_and(|s| s == "true"),
             show_station_names: map.get("showStationNames").is_some_and(|s| s == "true"),
             show_shot_data: map.get("showShotData").is_some_and(|s| s == "true"),
+            show_shot_errors: map.get("showShotErrors").is_some_and(|s| s == "true"),
             show_reference_shots: map
                 .get("showReferenceShots")
                 .or_else(|| map.get("showVirtualShots"))
@@ -1044,6 +1048,7 @@ mod tests {
         assert!(!defaults.show_station_labels); // false
         assert!(!defaults.show_station_names); // false
         assert!(!defaults.show_shot_data); // false
+        assert!(!defaults.show_shot_errors); // false
         assert!(defaults.show_reference_shots); // true
         assert!(defaults.show_zero_datum); // true
         assert!(!defaults.show_grid); // false
@@ -1065,6 +1070,7 @@ mod tests {
         assert!(!settings.show_station_labels); // false
         assert!(!settings.show_station_names); // false
         assert!(!settings.show_shot_data); // false
+        assert!(!settings.show_shot_errors); // false
         assert!(settings.show_reference_shots); // true
         assert!(settings.show_zero_datum); // true
         assert!(!settings.show_grid); // false
@@ -1098,6 +1104,7 @@ mod tests {
         stored.insert("showStationLabels".to_string(), "true".to_string());
         stored.insert("showStationNames".to_string(), "true".to_string());
         stored.insert("showShotData".to_string(), "true".to_string());
+        stored.insert("showShotErrors".to_string(), "true".to_string());
         stored.insert("showReferenceShots".to_string(), "false".to_string());
         stored.insert("showZeroDatum".to_string(), "false".to_string());
         stored.insert("showGrid".to_string(), "true".to_string());
@@ -1128,6 +1135,7 @@ mod tests {
             "showStationNames should be true"
         );
         assert!(settings.show_shot_data, "showShotData should be true");
+        assert!(settings.show_shot_errors, "showShotErrors should be true");
         assert!(
             !settings.show_reference_shots,
             "showReferenceShots should be false"
@@ -1300,6 +1308,8 @@ mod tests {
             station_count: 4,
             loop_count: 0,
             penetration_distance: 0.0,
+            first_survey_date: None,
+            last_survey_date: None,
         };
 
         // The merge endpoint must serialize as positional wire form

@@ -14,11 +14,19 @@ impl Project {
     pub fn stats(&self) -> ProjectStats {
         let mut shot_count = 0;
         let mut total_length = 0.0;
+        let mut first_survey_date = None;
+        let mut last_survey_date = None;
 
         for section in &self.sections {
             let section_stats = section.stats();
             shot_count += section_stats.shot_count;
             total_length += section_stats.total_length;
+            for date in section.shots.iter().filter_map(|s| s.credit().date) {
+                first_survey_date =
+                    Some(first_survey_date.map_or(date, |d: chrono::NaiveDate| d.min(date)));
+                last_survey_date =
+                    Some(last_survey_date.map_or(date, |d: chrono::NaiveDate| d.max(date)));
+            }
         }
 
         // Station count = shots + 1 per section (first station)
@@ -36,6 +44,8 @@ impl Project {
             station_count,
             loop_count,
             penetration_distance: 0.0, // Calculated separately with stations
+            first_survey_date,
+            last_survey_date,
         }
     }
 

@@ -2,10 +2,10 @@ use super::{
     AngleUnit, AppearanceConfig, CacheConfig, ClosureAdjustmentConfig, Config, DebugConfig,
     DecimalPrecision, DisplayConfig, ExportConfig, GasConfig, GeneralConfig, GlobalViewConfig,
     GpsOrigin, ImportConfig, LengthUnit, LoggingConfig, MapAnimationConfig, MapConfig,
-    MapControlsConfig, MapPaletteConfig, MapSnapConfig, PanelsConfig, PlacementSuggestionConfig,
-    SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig, SpeleoDbConfig,
-    StationConfig, SyntacticHighlightingConfig, UnitsConfig, UpdateTrack, ValidationConfig,
-    WebkitMemoryConfig,
+    MapControlsConfig, MapPaletteConfig, MapSnapConfig, PanelsConfig, PeopleConfig,
+    PlacementSuggestionConfig, SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig,
+    SpeleoDbConfig, StationConfig, SyntacticHighlightingConfig, UnitsConfig, UpdateTrack,
+    ValidationConfig, WebkitMemoryConfig,
 };
 
 #[expect(clippy::derivable_impls)]
@@ -34,6 +34,7 @@ impl Default for Config {
             gas: GasConfig::default(),
             speleodb: SpeleoDbConfig::default(),
             map_palette: MapPaletteConfig::default(),
+            people: PeopleConfig::default(),
             legacy_snap: None,
         }
     }
@@ -230,7 +231,8 @@ impl Default for PanelsConfig {
             data_table_height: 200,
             wizard_map_panel_width: 480,
             data_table_shot_column_order: Vec::new(),
-            data_table_shot_hidden_columns: vec!["section_id".to_string(), "shot_id".to_string()],
+            data_table_shot_hidden_columns: super::panels::default_data_table_hidden_columns(),
+            data_table_shot_columns_seen: super::panels::default_shot_columns_seen(),
             data_table_shot_column_widths: std::collections::BTreeMap::new(),
             data_table_azimuth_mode: "avg".to_string(),
             data_table_inclination_mode: "off".to_string(),
