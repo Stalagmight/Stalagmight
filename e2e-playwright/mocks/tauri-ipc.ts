@@ -5517,7 +5517,18 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               );
             };
             if (cmd === 'combine_candidate') {
-              return forStation(args?.station as Ref);
+              // The station menu asks for every pair at the point: the clicked
+              // section's first, then each pair of the others ending there.
+              const at = args?.station as Ref;
+              const own = forStation(at);
+              const ends = isEnd(at) ? partnersOf(at).filter((p) => isEnd(p)) : [];
+              const others = ends.flatMap((x, i) =>
+                ends
+                  .slice(i + 1)
+                  .filter((y) => y.section_id !== x.section_id)
+                  .map((y) => candidate(x, y, null, [at.section_id])),
+              );
+              return [...own, ...others];
             }
             const [first, second] = [args?.a as number, args?.b as number];
             const ends = (id: number): Ref[] => {

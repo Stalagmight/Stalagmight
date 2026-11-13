@@ -8,14 +8,15 @@ use crate::models::{
 };
 
 impl AppState {
-    /// Read-only: what the section ending at `station` can be combined with,
-    /// one candidate per other section ending there (a junction lists them
-    /// all, each with its own reason when blocked). Empty when `station` is not
-    /// a section end or nothing else touches it. Answered under the project
+    /// Read-only: what can be combined at the point `station` ends at: the
+    /// clicked section with each other section ending there first, then (at a
+    /// junction) every pair of the others, each with its own reason when
+    /// blocked (`Project::combine_candidates_at_point`). Empty when `station`
+    /// is not a section end or nothing else touches it. Answered under the project
     /// lock without cloning the project: the context menu asks on every
     /// right-click of an end station.
     pub fn combine_candidates(&self, station: StationRef) -> Result<Vec<CombineCandidate>, String> {
-        self.with_project(|project| Ok(project.combine_candidates(station)))
+        self.with_project(|project| Ok(project.combine_candidates_at_point(station)))
     }
 
     /// Read-only: can sections `a` and `b` be combined (the Sections panel's

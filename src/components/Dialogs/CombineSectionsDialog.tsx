@@ -64,11 +64,12 @@ function CombinedCreditSummary({ shots }: { shots: Array<Pick<Shot, 'credit'>> }
  * Combine Sections: join two sections that meet end to end (merged,
  * co-located, or across a loop closure) into one. Other sections there stay
  * attached as branches. Opened with the backend's `CombineCandidate` for one
- * pair: a two-section selection, or the partner picked in the station menu's
- * "Combine Section With..." submenu (which lists every section ending at a
- * junction, each with its own reason when refused). What else the combine changes for
- * the kept section shown (a side that moves, ties that become loop closures,
- * converted bearings...) is listed before the user confirms.
+ * pair: a two-section selection, or the pair picked in the station menu
+ * ("Merge Section With <name>...", or the "Merge Sections..." submenu at a
+ * junction), with `keep` the section the menu named first. What else the
+ * combine changes for the kept section shown (a side that moves, ties that
+ * become loop closures, converted bearings...) is listed, with everything
+ * else informational, under a folded "Details".
  */
 export default function CombineSectionsDialog() {
   const { t } = useTranslation();
@@ -84,9 +85,15 @@ export default function CombineSectionsDialog() {
   // `a` (the lower id) is kept unless the user swaps.
   // Start on `b` only when `a` cannot be kept but `b` can (its shot numbers
   // are used up for the session).
-  const [keepB, setKeepB] = useState(
-    () => Boolean(candidate?.blocked_keeping_a) && !candidate?.blocked_keeping_b
-  );
+  // The section the menu named first (`keep`) is kept, as long as it can be:
+  // otherwise `a`, the lower id, unless `a` cannot be kept but `b` can (its
+  // shot numbers are used up for the session).
+  const [keepB, setKeepB] = useState(() => {
+    const keep = dialogData.keep as SectionId | undefined;
+    if (keep === candidate?.section_b && !candidate?.blocked_keeping_b) return true;
+    if (keep === candidate?.section_a && !candidate?.blocked_keeping_a) return false;
+    return Boolean(candidate?.blocked_keeping_a) && !candidate?.blocked_keeping_b;
+  });
   const kept = keepB ? sectionB : sectionA;
   const other = keepB ? sectionA : sectionB;
   const keptId = (keepB ? candidate?.section_b : candidate?.section_a) ?? 0;
@@ -268,11 +275,7 @@ export default function CombineSectionsDialog() {
         </div>
 
         {candidate?.reverses && (
-          <div className="space-y-2 text-sm" data-testid="combine-reverse-notice">
-            <p>
-              Reversing {otherName} reciprocates its bearings and swaps its depths, so every station stays where
-              it is.
-            </p>
+          <div className="text-sm" data-testid="combine-reverse-notice">
             <label className="flex items-center gap-2 cursor-pointer">
               <input
                 type="checkbox"
@@ -286,50 +289,6 @@ export default function CombineSectionsDialog() {
           </div>
         )}
 
-        {candidate && candidate.branches.length > 0 && (
-          <p className="text-sm text-text-secondary" data-testid="combine-branches-note">
-            {t('dialogs.combineSections.branchesNote', {
-              names: listNames(candidate.branches),
-              count: candidate.branches.length,
-            })}
-          </p>
-        )}
-        {candidate && candidate.loose_ends.length > 0 && (
-          <p className="text-sm text-text-secondary" data-testid="combine-loose-ends-note">
-            {t('dialogs.combineSections.looseEndsNote', {
-              names: listNames(candidate.loose_ends),
-              count: candidate.loose_ends.length,
-            })}
-          </p>
-        )}
-        {candidate?.depth_difference_m != null && (
-          <p className="text-sm text-warning" data-testid="combine-depth-note">
-            {t('dialogs.combineSections.depthNote', {
-              gap: formatLength(candidate.depth_difference_m, lengthUnit, 2),
-              half: formatLength(candidate.depth_difference_m / 2, lengthUnit, 2),
-            })}
-          </p>
-        )}
-
-        {!isStale && candidate && plan && (
-          <CombinePlanNotes
-            candidate={candidate}
-            plan={plan}
-            keptId={keptId}
-            keptName={keptName}
-            otherName={otherName}
-            keptQuality={kept?.quality}
-            otherQuality={other?.quality}
-            lengthUnit={lengthUnit}
-            sectionName={sectionName}
-            stationLabel={stationLabel}
-          />
-        )}
-
-        <p className="text-sm text-text-secondary" data-testid="combine-direction-note">
-          The combined section keeps {keptName}'s survey direction ({kept?.direction === 'out' ? 'Out' : 'In'}).
-        </p>
-
         {commentConflict &&
           pickChoice('comment', 'The join station has two comments. Keep:', commentPick, setCommentPick, [
             ['kept', keptText(candidate?.comment_a, candidate?.comment_b)],
@@ -342,14 +301,74 @@ export default function CombineSectionsDialog() {
             ['other', otherText(candidate?.station_name_a, candidate?.station_name_b)],
           ])}
 
-        {!isStale && kept && other && (
-          <CombinedCreditSummary
-            shots={(() => {
-              const moved = candidate?.reverses ? [...other.shots].reverse() : other.shots;
-              return keptEnd === 'start' ? [...moved, ...kept.shots] : [...kept.shots, ...moved];
-            })()}
-          />
-        )}
+        {/* Everything informational, folded: what moves, what becomes a loop
+            closure, branches, depth, direction and credit. */}
+        <details className="text-sm" data-testid="combine-details">
+          <summary className="cursor-pointer text-text-secondary hover:text-text-primary" data-testid="combine-details-toggle">
+            Details
+          </summary>
+          <div className="mt-3 space-y-4">
+            {candidate?.reverses && (
+              <p data-testid="combine-reverse-explain">
+                Reversing {otherName} reciprocates its bearings and swaps its depths, so every station stays where
+                it is.
+              </p>
+            )}
+
+            {candidate && candidate.branches.length > 0 && (
+              <p className="text-text-secondary" data-testid="combine-branches-note">
+                {t('dialogs.combineSections.branchesNote', {
+                  names: listNames(candidate.branches),
+                  count: candidate.branches.length,
+                })}
+              </p>
+            )}
+            {candidate && candidate.loose_ends.length > 0 && (
+              <p className="text-text-secondary" data-testid="combine-loose-ends-note">
+                {t('dialogs.combineSections.looseEndsNote', {
+                  names: listNames(candidate.loose_ends),
+                  count: candidate.loose_ends.length,
+                })}
+              </p>
+            )}
+            {candidate?.depth_difference_m != null && (
+              <p className="text-warning" data-testid="combine-depth-note">
+                {t('dialogs.combineSections.depthNote', {
+                  gap: formatLength(candidate.depth_difference_m, lengthUnit, 2),
+                  half: formatLength(candidate.depth_difference_m / 2, lengthUnit, 2),
+                })}
+              </p>
+            )}
+
+            {!isStale && candidate && plan && (
+              <CombinePlanNotes
+                candidate={candidate}
+                plan={plan}
+                keptId={keptId}
+                keptName={keptName}
+                otherName={otherName}
+                keptQuality={kept?.quality}
+                otherQuality={other?.quality}
+                lengthUnit={lengthUnit}
+                sectionName={sectionName}
+                stationLabel={stationLabel}
+              />
+            )}
+
+            <p className="text-text-secondary" data-testid="combine-direction-note">
+              The combined section keeps {keptName}'s survey direction ({kept?.direction === 'out' ? 'Out' : 'In'}).
+            </p>
+
+            {!isStale && kept && other && (
+              <CombinedCreditSummary
+                shots={(() => {
+                  const moved = candidate?.reverses ? [...other.shots].reverse() : other.shots;
+                  return keptEnd === 'start' ? [...moved, ...kept.shots] : [...kept.shots, ...moved];
+                })()}
+              />
+            )}
+          </div>
+        </details>
 
         {blocked && (
           <div className="p-3 bg-error-10 border border-error-20 rounded text-error text-sm" data-testid="combine-blocked">

@@ -798,6 +798,20 @@ impl Project {
     /// candidate saying so; a pile of more than [`MAX_COMBINE_PARTNERS`] other
     /// ends gets one blocked candidate pointing at the Sections panel.
     pub fn combine_candidates(&self, station: StationRef) -> Vec<CombineCandidate> {
+        self.station_candidates(station, false)
+    }
+
+    /// Every pair of sections that can be combined at the point `station`
+    /// ends at, for the station menu: first [`Self::combine_candidates`] (the
+    /// clicked section with each partner), then, at a junction, every pair of
+    /// the other sections ending there, each joined at this point. A pair
+    /// that meets here only through the clicked station (two ends that are
+    /// neither merged, nor side by side, nor tied by a closure) is left out.
+    pub fn combine_candidates_at_point(&self, station: StationRef) -> Vec<CombineCandidate> {
+        self.station_candidates(station, true)
+    }
+
+    fn station_candidates(&self, station: StationRef, all_pairs: bool) -> Vec<CombineCandidate> {
         let Some(section) = self.get_section(station.section_id) else {
             return Vec::new();
         };
@@ -880,14 +894,37 @@ impl Project {
                 .into_iter()
                 .collect();
         }
-        other_ends
-            .into_iter()
+        let mut candidates: Vec<CombineCandidate> = other_ends
+            .iter()
             .filter_map(|other| {
-                let pairing = pairing_with(other);
+                let pairing = pairing_with(*other);
                 let touch = self.pairing_touch(pairing, &table)?;
                 self.candidate_for(pairing, touch, &table)
             })
-            .collect()
+            .collect();
+        if all_pairs {
+            for (i, x) in other_ends.iter().enumerate() {
+                for y in &other_ends[i + 1..] {
+                    if x.0 == y.0
+                        || candidates
+                            .iter()
+                            .any(|c| (c.section_a, c.section_b) == (x.0.min(y.0), x.0.max(y.0)))
+                    {
+                        continue;
+                    }
+                    let pairing = Pairing {
+                        a: x.0,
+                        end_a: x.1,
+                        b: y.0,
+                        end_b: y.1,
+                    };
+                    if let Some(touch) = self.pairing_touch(pairing, &table) {
+                        candidates.extend(self.candidate_for(pairing, touch, &table));
+                    }
+                }
+            }
+        }
+        candidates
     }
 }
 

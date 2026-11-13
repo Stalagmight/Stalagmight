@@ -180,7 +180,10 @@ describe('CombineSectionsDialog', () => {
     dialogData = { candidate: candidate({ reverses: true, end_b: 'end' }) };
     render(<CombineSectionsDialog />);
     expect(screen.getByTestId('combine-plan')).toHaveTextContent('Main-B will be reversed and added after Main-A.');
-    expect(screen.getByTestId('combine-reverse-notice')).toHaveTextContent('Reversing Main-B');
+    expect(screen.getByTestId('combine-reverse-notice')).toHaveTextContent("Swap Main-B's left and right walls");
+    // The why sits in the folded Details.
+    expect(screen.getByTestId('combine-details')).not.toHaveAttribute('open');
+    expect(screen.getByTestId('combine-reverse-explain')).toHaveTextContent('Reversing Main-B');
     fireEvent.click(screen.getByTestId('combine-swap-lr'));
     fireEvent.click(screen.getByTestId('combine-confirm'));
     await waitFor(() => expect(combineSections).toHaveBeenCalled());
@@ -384,6 +387,27 @@ describe('CombineSectionsDialog', () => {
       "2 of Main-B's shots have the same identity as shots of Main-A, and get new ones."
     );
     expect(screen.getByTestId('combine-note-passing')).toHaveTextContent('Main-B passes through the join');
+  });
+
+  it('folds everything informational under Details, closed until opened', () => {
+    dialogData = { candidate: candidate({ branches: [7], depth_difference_m: 0.3 }) };
+    sections = [...creditedSections(), { id: 7, name: 'Side', color: '#333333', direction: 'in', shots: shots(1) }];
+    render(<CombineSectionsDialog />);
+    const details = screen.getByTestId('combine-details');
+    expect(details).not.toHaveAttribute('open');
+    for (const id of ['combine-branches-note', 'combine-depth-note', 'combine-direction-note', 'combine-credit']) {
+      expect(details).toContainElement(screen.getByTestId(id));
+    }
+    // What the user decides stays out of the fold.
+    expect(details).not.toContainElement(screen.getByTestId('combine-name'));
+    fireEvent.click(screen.getByTestId('combine-details-toggle'));
+    expect(details).toHaveAttribute('open');
+  });
+
+  it('keeps the section the menu named first', () => {
+    dialogData = { candidate: candidate(), keep: 5 };
+    render(<CombineSectionsDialog />);
+    expect(screen.getByTestId('combine-kept-label')).toHaveTextContent('Keep Main-B');
   });
 
   it('says the bearings keep their values only when the backend leaves them alone', () => {

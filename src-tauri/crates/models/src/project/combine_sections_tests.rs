@@ -934,6 +934,49 @@ fn the_station_query_lists_every_partner_at_a_junction() {
     );
 }
 
+/// The station menu's query lists every pair at a junction: the clicked
+/// section with each partner first, then the pairs of the others, each joined
+/// at this point. With K's end, O's start, C's start and D's start merged
+/// there: 3 + 3 pairs, every one combinable.
+#[test]
+fn the_point_query_lists_every_pair_at_a_junction() {
+    let (mut project, k, o) = pair(SectionEnd::End, SectionEnd::Start, true, 0.0);
+    let target = xy(&project, StationRef::new(k, 2));
+    let mut others = vec![o];
+    for name in ["C", "D"] {
+        let id = add(&mut project, name, vec![shot(180.0, 5.0)]);
+        place(&mut project, id, 0, target, 0.0);
+        project
+            .merge_stations(StationRef::new(id, 0), StationRef::new(k, 2))
+            .unwrap();
+        others.push(id);
+    }
+    let (c, d) = (others[1], others[2]);
+    let pairs: Vec<(SectionId, SectionId, bool)> = project
+        .combine_candidates_at_point(StationRef::new(k, 2))
+        .iter()
+        .map(|x| (x.section_a, x.section_b, x.blocked_reason.is_none()))
+        .collect();
+    assert_eq!(
+        pairs,
+        vec![
+            (k, o, true),
+            (k, c, true),
+            (k, d, true),
+            (o, c, true),
+            (o, d, true),
+            (c, d, true),
+        ]
+    );
+    // The clicked section's own list is unchanged.
+    assert_eq!(project.combine_candidates(StationRef::new(k, 2)).len(), 3);
+    // A pair of the others combines at this point, and K stays attached.
+    project.combine_sections(c, d, &options()).unwrap();
+    assert!(merged_to(&project, StationRef::new(k, 2))
+        .iter()
+        .any(|at| at.section_id == c));
+}
+
 /// A section merged at the join at a station in its MIDDLE passes through:
 /// the combine goes ahead and it stays merged to the joined station (a
 /// crossing). What still offers nothing to join: an end merged only to the
