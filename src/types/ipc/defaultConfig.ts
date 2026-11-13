@@ -302,7 +302,7 @@ export const defaultConfig: Config = {
       "date"
     ],
     "data_workspace_column_widths": {},
-    "data_workspace_tint_mode": "section",
+    "data_workspace_tint_mode": "none",
     "data_workspace_map_pane_open": false,
     "data_workspace_map_pane_width": 480,
     "data_workspace_section_headers": true,

@@ -3183,8 +3183,8 @@ fn test_data_workspace_view_fields_default_on_a_legacy_table_like_a_fresh_instal
         legacy.data_workspace_column_widths,
         fresh.data_workspace_column_widths
     );
-    assert_eq!(legacy.data_workspace_tint_mode, "section");
-    assert_eq!(fresh.data_workspace_tint_mode, "section");
+    assert_eq!(legacy.data_workspace_tint_mode, "none");
+    assert_eq!(fresh.data_workspace_tint_mode, "none");
     assert!(!legacy.data_workspace_map_pane_open && !fresh.data_workspace_map_pane_open);
     assert_eq!(legacy.data_workspace_map_pane_width, 480);
     assert_eq!(fresh.data_workspace_map_pane_width, 480);
@@ -3222,7 +3222,7 @@ textual = "wide"
     let mut panels: PanelsConfig =
         toml::from_str(&toml_str).expect("a hostile Data workspace view must not fail the parse");
     panels.normalize();
-    assert_eq!(panels.data_workspace_tint_mode, "section");
+    assert_eq!(panels.data_workspace_tint_mode, "none");
     assert_eq!(panels.data_workspace_map_pane_width, 360);
     assert!(!panels.data_workspace_section_headers);
     assert_eq!(panels.data_workspace_column_order, vec!["length"]);

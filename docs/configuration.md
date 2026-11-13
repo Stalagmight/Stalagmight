@@ -300,7 +300,7 @@ data_table_mode = "pin"
 data_workspace_column_order = []    # Column keys; empty = the default order
 data_workspace_hidden_columns = ["type", "section", "name", "fromTo", "azimuth_in", "azimuth_out", "inclination", "pitch_in", "pitch_out", "x", "y", "lat", "long", "temperature", "surveyors", "explorers", "date"]
                                     # Default shown above; [] = show every column
-data_workspace_tint_mode = "section" # Row tint: "none" | "section" | "issues" | "depth" | "distance" | "type"
+data_workspace_tint_mode = "none"   # Row tint: "none" | "section" | "issues" | "depth" | "distance" | "type"
 data_workspace_map_pane_open = false # Map pane beside the table
 data_workspace_map_pane_width = 480 # Pixels (clamped to 360-4000)
 data_workspace_section_headers = true # A header row before each section
@@ -308,7 +308,7 @@ data_workspace_section_headers = true # A header row before each section
 #   [panels.data_workspace_column_widths]   # Same rules as the data-table widths
 #   comment = 320
 #
-# An unknown tint mode is refused by the command and repaired to "section" on
+# An unknown tint mode is refused by the command and repaired to "none" on
 # load; the key lists and widths get the same bounds as the data table's.
 
 [export]

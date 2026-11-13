@@ -66,7 +66,9 @@ export const DEFAULT_VIEW: DataWorkspaceViewState = {
   columnOrder: [],
   hiddenColumns: [...DATA_DEFAULT_HIDDEN],
   columnWidths: {},
-  tintMode: 'section',
+  // No tint by default: the table keeps the plain SpreadsheetGrid look, and
+  // the link rail + gutter already carry each section's colour.
+  tintMode: 'none',
   mapPaneOpen: false,
   mapPaneWidth: MAP_PANE_DEFAULT_WIDTH,
   showSectionHeaders: true,

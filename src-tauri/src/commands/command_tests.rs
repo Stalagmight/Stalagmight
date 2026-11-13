@@ -505,7 +505,7 @@ fn test_update_data_workspace_view_roundtrip() {
     with_config_lock(|| {
         let app = app_with_state();
         let defaults = config::get_config(state(&app)).panels;
-        assert_eq!(defaults.data_workspace_tint_mode, "section");
+        assert_eq!(defaults.data_workspace_tint_mode, "none");
         assert_eq!(defaults.data_workspace_map_pane_width, 480);
         assert!(!defaults.data_workspace_map_pane_open);
         assert!(defaults.data_workspace_section_headers);
@@ -606,7 +606,7 @@ fn test_update_data_workspace_view_rejects_unknown_tint_and_repairs_the_rest() {
             "a refused call writes none of its other fields"
         );
         assert!(!panels.data_workspace_map_pane_open);
-        assert_eq!(panels.data_workspace_tint_mode, "section");
+        assert_eq!(panels.data_workspace_tint_mode, "none");
 
         let mut hostile_order: Vec<String> = (0..300).map(|i| format!("col{i}")).collect();
         hostile_order.push(String::new());
@@ -680,7 +680,7 @@ fn test_update_config_repairs_the_data_workspace_view() {
             cfg.panels.data_workspace_map_pane_width = 9;
             config::update_config_impl(state(&app).inner(), cfg).expect("update config");
             let panels = config::get_config(state(&app)).panels;
-            assert_eq!(panels.data_workspace_tint_mode, "section");
+            assert_eq!(panels.data_workspace_tint_mode, "none");
             assert_eq!(panels.data_workspace_map_pane_width, 360);
 
             let mut cfg = config::get_config(state(&app));

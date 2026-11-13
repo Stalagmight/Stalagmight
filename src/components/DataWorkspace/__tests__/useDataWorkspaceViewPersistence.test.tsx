@@ -133,7 +133,7 @@ describe('useDataWorkspaceViewPersistence', () => {
     useProjectStore.setState({ config: legacy });
     renderHook(() => useDataWorkspaceViewPersistence());
 
-    expect(view().tintMode).toBe('section');
+    expect(view().tintMode).toBe('none');
     expect(view().mapPaneWidth).toBe(MAP_PANE_MAX_WIDTH);
     expect(view().columnOrder).toEqual(['length']);
     expect(view().columnWidths).toEqual({ comment: 250, runaway: 2000, sliver: 40 });
@@ -207,7 +207,7 @@ describe('useDataWorkspaceViewPersistence', () => {
       kind: 'error',
     });
     // The optimistic publish is undone from disk, but the user's choice stays.
-    expect(useProjectStore.getState().config!.panels.data_workspace_tint_mode).toBe('section');
+    expect(useProjectStore.getState().config!.panels.data_workspace_tint_mode).toBe('none');
     expect(view().tintMode).toBe('distance');
 
     // The next change saves the whole view again, the failed tint included.

@@ -278,7 +278,7 @@ pub const DATA_WORKSPACE_TINT_MODES: [&str; 6] =
     ["none", "section", "issues", "depth", "distance", "type"];
 
 pub(super) fn default_data_workspace_tint_mode() -> String {
-    "section".to_string()
+    "none".to_string()
 }
 
 pub(super) fn default_data_workspace_map_pane_width() -> u32 {
