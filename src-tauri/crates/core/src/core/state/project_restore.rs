@@ -168,14 +168,15 @@ fn restore(project: &Path, backup: &Path, open: Option<&Path>) -> Result<String,
             name(&safety)
         ));
     }
-    let mut message = format!("Restored from {}.", backup.display());
-    if kept {
-        message.push_str(&format!(
-            " The file it replaced is kept as {}.",
+    Ok(if kept {
+        format!(
+            "Restored from {}. The file it replaced is kept as {}.",
+            backup.display(),
             name(&safety)
-        ));
-    }
-    Ok(message)
+        )
+    } else {
+        format!("Restored from {}.", backup.display())
+    })
 }
 
 /// Why the backup cannot be restored, in the dialog's words. The full reason
