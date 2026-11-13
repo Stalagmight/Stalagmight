@@ -525,7 +525,8 @@ impl Database {
     /// contains `.backup` (`cave.backup.stalx`) is never offered as a backup of
     /// itself, and neither is its safety copy `cave.backup.stalx.pre-restore`
     /// (#720). SQLite's `-journal`, `-wal` and `-shm` files are not databases
-    /// and are never offered.
+    /// and are never offered, and neither is a file that is empty or does not
+    /// start with SQLite's header: a restore would only refuse it.
     pub fn list_backups(path: &Path) -> Vec<BackupInfo> {
         let mut backups = Vec::new();
         let Some(parent) = path.parent() else {
@@ -545,12 +546,16 @@ impl Database {
                     .any(|sidecar| suffix.ends_with(sidecar));
                 let is_backup = !suffix.is_empty()
                     && !is_sidecar
-                    && (suffix.contains(".backup") || suffix.ends_with(".tmp"))
+                    && (suffix.contains(".backup")
+                        || suffix
+                            .rsplit_once('.')
+                            .is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("tmp")))
                     && !is_same_file(&entry.path(), path);
                 if is_backup {
                     let file_meta = std::fs::metadata(entry.path())
                         .ok()
-                        .filter(std::fs::Metadata::is_file);
+                        .filter(std::fs::Metadata::is_file)
+                        .filter(|_| starts_like_a_database(&entry.path()));
                     if let Some(meta) = file_meta {
                         backups.push(BackupInfo {
                             path: entry.path().display().to_string(),
@@ -653,6 +658,19 @@ impl Database {
     }
 }
 
+/// The first 16 bytes of every SQLite database file.
+const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
+
+/// Whether the file at `path` starts with SQLite's header. A cheap filter for
+/// the backup list, not a check that the file opens.
+fn starts_like_a_database(path: &Path) -> bool {
+    use std::io::Read as _;
+    let mut header = [0u8; 16];
+    std::fs::File::open(path)
+        .and_then(|mut file| file.read_exact(&mut header))
+        .is_ok_and(|()| &header == SQLITE_HEADER)
+}
+
 /// The same file on disk: the same canonical path, or (on Unix) the same inode,
 /// which also catches a hard link under another name.
 fn is_same_file(a: &Path, b: &Path) -> bool {
@@ -699,10 +717,26 @@ mod tests {
         names
     }
 
+    /// Files that start like a SQLite database, which is all `list_backups`
+    /// looks at besides the name.
     fn touch(dir: &Path, names: &[&str]) {
         for name in names {
-            std::fs::write(dir.join(name), b"x").expect("write a test file");
+            std::fs::write(dir.join(name), b"SQLite format 3\0 and the rest")
+                .expect("write a test file");
         }
+    }
+
+    /// [#720] An empty file, or one that is not a SQLite database, is never
+    /// offered: a restore would only refuse it.
+    #[test]
+    fn a_backup_that_is_not_a_database_is_not_offered() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        touch(dir.path(), &["cave.stalx", "cave.stalx.backup.2"]);
+        std::fs::write(dir.path().join("cave.stalx.backup"), b"").expect("empty file");
+        std::fs::write(dir.path().join("cave.stalx.backup.1"), b"a text file").expect("text file");
+        std::fs::write(dir.path().join("cave.stalx.tmp"), b"SQLite format").expect("short file");
+
+        assert_eq!(offered(dir.path(), "cave.stalx"), ["cave.stalx.backup.2"]);
     }
 
     /// [#720 F3] Backups are named after the project plus a suffix; the
