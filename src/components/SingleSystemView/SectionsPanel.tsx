@@ -17,6 +17,7 @@ import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { IconButton } from '../common/Button';
 import { ExternalLinkIcon, PlusIcon } from '../common/icons';
 import { setSource } from '../../utils/telemetry';
+import { getErrorMessage } from '../../utils/ipc';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 import { useLongPress } from '../../hooks';
 import { DATA_TABLE_MIN_HEIGHT, DATA_TABLE_MAX_HEIGHT } from './layoutConstants';
@@ -453,8 +454,9 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
   // The row's color dot commits through the same update_section command as the
   // Edit Section dialog. Re-checked at commit time: the mode can change while the
   // system picker is open, and the closure-adjusted view and Plan/Export have no
-  // server-side backstop. A transport rejection is surfaced by executeCommand
-  // (which refreshes and re-throws); here it only means "not applied".
+  // server-side backstop. A rejected CommandResult is already toasted by
+  // executeCommand; a transport rejection is only refreshed and re-thrown, and
+  // the caller owns telling the user (docs/notifications.md).
   // A click on the dot while editing is blocked, or a pick confirmed after it
   // became blocked, says why instead of doing nothing.
   const handleSectionColorBlocked = useCallback(() => {
@@ -469,10 +471,11 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     setSource('sections-panel');
     try {
       return (await updateSection(sectionId, { color })).success;
-    } catch {
+    } catch (e) {
+      showToast(getErrorMessage(e, t('editGate.commandFailed')), TOAST_KEYS.COMMAND_FAILED, 'error');
       return false;
     }
-  }, [updateSection, handleSectionColorBlocked]);
+  }, [updateSection, showToast, t, handleSectionColorBlocked]);
 
   const handleFocusButtonMouseDown = useCallback((e: React.MouseEvent) => {
     // Stop propagation so the row's own mouse-down handling doesn't double-fire.

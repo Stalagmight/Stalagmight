@@ -415,6 +415,30 @@ test.describe('Panel Interactions', () => {
     expect(updateCalls).toBe(2);
   });
 
+  test('section color dot reports a failed update and reverts (#654)', async ({ page }) => {
+    await createProjectWithSections(page);
+    const sectionRow = page.locator('[data-testid^="section-row-"]').filter({ hasText: 'Main Passage' });
+    const sectionId = Number((await sectionRow.getAttribute('data-testid'))!.replace('section-row-', ''));
+    const dot = page.getByTestId(`section-color-${sectionId}`);
+    const before = await dot.inputValue();
+
+    // A transport rejection: executeCommand refreshes and re-throws without a
+    // toast, so the dot's caller has to surface it (docs/notifications.md).
+    await page.evaluate(() =>
+      (window as any).__E2E_TEST__.projectStore.setState({
+        updateSection: () => Promise.reject(new Error('transport closed')),
+      }),
+    );
+    await dot.evaluate((el) => {
+      (el as HTMLInputElement).value = '#00ff00';
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await expect(page.locator('[data-testid="toast"][data-toast-key="command-failed"]')).toContainText(
+      'transport closed',
+    );
+    await expect(dot).toHaveValue(before);
+  });
+
   test('section picker in the data-table sub-header switches sections', async ({ page }) => {
     await createProjectWithSections(page);
     await page.keyboard.press('Control+3');
