@@ -9,7 +9,7 @@
  * Issues (the DataTable warning / lock icons) and Kind (the J/R glyph that
  * cycles on click, like the DataTable).
  */
-import type { CSSProperties, ReactNode } from 'react';
+import type { CSSProperties } from 'react';
 import type { TFunction } from 'i18next';
 import type { GridColumn } from '../common/SpreadsheetGrid/types';
 import { AlertCircleIcon, AlertTriangleIcon, LockIcon } from '../common/icons';
@@ -22,6 +22,7 @@ import { decimalsOf, fmt, shotCredit, stationName } from './model/ctx';
 import { stationLinks, stationRefKey } from './model/links';
 import { isEntityRow } from './model/rows';
 import { dataRowPart } from './dataTestIds';
+import { LinkChipRow, type LinkChip } from './LinkChipRow';
 import type { DataNav } from './useDataNavigation';
 
 const NULLABLE_NUMBERS = new Set<DataColumnKey>(['inclination', 'pitch_in', 'pitch_out', 'left', 'right', 'up', 'down', 'temperature']);
@@ -51,19 +52,23 @@ function LinksCell({ row, deps }: { row: DataRow; deps: GridColumnDeps }) {
   const { ctx, nav, t } = deps;
   const links = stationLinks(ctx, row.sectionId, row.stationIndex, row.g);
   const part = dataRowPart(row);
-  const chips: ReactNode[] = [];
+  const chips: LinkChip[] = [];
   if (links.zeroDatum) {
-    chips.push(
-      <span
-        key="zd"
-        className={`${CHIP_CLS} cursor-default`}
-        style={chipStyle('var(--cc-zero-datum)')}
-        title={t('dataWorkspace.links.zeroDatumTitle')}
-        data-testid={`data-chip-zero-${part}`}
-      >
-        {t('dataWorkspace.links.zeroDatum')}
-      </span>,
-    );
+    const label = t('dataWorkspace.links.zeroDatum');
+    chips.push({
+      key: 'zd',
+      label,
+      node: (
+        <span
+          className={`${CHIP_CLS} cursor-default`}
+          style={chipStyle('var(--cc-zero-datum)')}
+          title={t('dataWorkspace.links.zeroDatumTitle')}
+          data-testid={`data-chip-zero-${part}`}
+        >
+          {label}
+        </span>
+      ),
+    });
   }
   const go = (key: string) => (e: { stopPropagation(): void }) => {
     e.stopPropagation();
@@ -72,80 +77,93 @@ function LinksCell({ row, deps }: { row: DataRow; deps: GridColumnDeps }) {
   if (links.branchFrom) {
     const name = stationName(ctx, links.branchFrom.section_id, links.branchFrom.station_index);
     const target = `${links.branchFrom.section_id}-${links.branchFrom.station_index}`;
-    chips.push(
-      <button
-        key="from"
-        type="button"
-        className={CHIP_CLS}
-        style={chipStyle('var(--sh-section)')}
-        title={t('dataWorkspace.links.continuesFromTitle', { name })}
-        onMouseDown={stop}
-        onClick={go(stationRefKey(links.branchFrom))}
-        data-testid={`data-chip-branch-${part}-${target}`}
-      >
-        <span className="truncate">{t('dataWorkspace.links.continuesFrom', { name })}</span>
-      </button>,
-    );
+    const label = t('dataWorkspace.links.continuesFrom', { name });
+    chips.push({
+      key: 'from',
+      label,
+      node: (
+        <button
+          type="button"
+          className={CHIP_CLS}
+          style={chipStyle('var(--sh-section)')}
+          title={t('dataWorkspace.links.continuesFromTitle', { name })}
+          onMouseDown={stop}
+          onClick={go(stationRefKey(links.branchFrom))}
+          data-testid={`data-chip-branch-${part}-${target}`}
+        >
+          <span className="truncate">{label}</span>
+        </button>
+      ),
+    });
   }
   for (const m of links.merges) {
     if (links.branchFrom && m.section_id === links.branchFrom.section_id && m.station_index === links.branchFrom.station_index) continue;
     const name = stationName(ctx, m.section_id, m.station_index);
-    chips.push(
-      <button
-        key={`m-${m.section_id}-${m.station_index}`}
-        type="button"
-        className={CHIP_CLS}
-        style={chipStyle('var(--sh-merge)')}
-        title={t('dataWorkspace.links.mergeTitle', { name })}
-        onMouseDown={stop}
-        onClick={go(stationRefKey(m))}
-        data-testid={`data-chip-merge-${part}-${m.section_id}-${m.station_index}`}
-      >
-        <span className="truncate">{`⇄ ${name}`}</span>
-      </button>,
-    );
+    const label = `⇄ ${name}`;
+    chips.push({
+      key: `m-${m.section_id}-${m.station_index}`,
+      label,
+      node: (
+        <button
+          type="button"
+          className={CHIP_CLS}
+          style={chipStyle('var(--sh-merge)')}
+          title={t('dataWorkspace.links.mergeTitle', { name })}
+          onMouseDown={stop}
+          onClick={go(stationRefKey(m))}
+          data-testid={`data-chip-merge-${part}-${m.section_id}-${m.station_index}`}
+        >
+          <span className="truncate">{label}</span>
+        </button>
+      ),
+    });
   }
   for (const c of links.closures) {
     const name = stationName(ctx, c.partner.section_id, c.partner.station_index);
     const target = `${c.partner.section_id}-${c.partner.station_index}`;
-    chips.push(
-      <button
-        key={`c-${c.closureId}-${target}`}
-        type="button"
-        className={CHIP_CLS}
-        style={chipStyle('var(--sh-station)')}
-        title={t('dataWorkspace.links.closureTitle', { name })}
-        onMouseDown={stop}
-        onClick={go(stationRefKey(c.partner))}
-        data-testid={`data-chip-closure-${part}-${testIdPart(c.closureId)}-${target}`}
-      >
-        <span className="truncate">{t('dataWorkspace.links.closesTo', { name })}</span>
-      </button>,
-    );
+    const closes = t('dataWorkspace.links.closesTo', { name });
+    // One chip per closure, its misclosure inside, tinted by the error level
+    // (the station colour while the closure is not computed).
     const mis = misclosureText(ctx, c.misclosure, c.errorPct);
-    if (mis && c.errorPct !== null && c.misclosure !== null) {
-      chips.push(
-        <span
-          key={`d-${c.closureId}-${target}`}
-          className={`${CHIP_CLS} cursor-default tabular-nums`}
-          style={chipStyle(getErrorColor(c.errorPct))}
-          title={t('dataWorkspace.links.misclosureTitle', {
-            distance: fmt(ctx, c.misclosure, decimalsOf(ctx).length),
-            percent: fmt(ctx, c.errorPct, 1),
-          })}
-          data-testid={`data-chip-misclosure-${part}-${testIdPart(c.closureId)}`}
+    const known = mis !== '' && c.errorPct !== null && c.misclosure !== null;
+    const title = t('dataWorkspace.links.closureTitle', { name });
+    chips.push({
+      key: `c-${c.closureId}-${target}`,
+      label: known ? `${closes} · ${mis}` : closes,
+      node: (
+        <button
+          type="button"
+          className={CHIP_CLS}
+          style={chipStyle(known ? getErrorColor(c.errorPct!) : 'var(--sh-station)')}
+          title={
+            known
+              ? `${title}\n${t('dataWorkspace.links.misclosureTitle', {
+                  distance: fmt(ctx, c.misclosure!, decimalsOf(ctx).length),
+                  percent: fmt(ctx, c.errorPct!, 1),
+                })}`
+              : title
+          }
+          onMouseDown={stop}
+          onClick={go(stationRefKey(c.partner))}
+          data-testid={`data-chip-closure-${part}-${testIdPart(c.closureId)}-${target}`}
         >
-          {mis}
-        </span>,
-      );
-    }
+          <span className="truncate">{closes}</span>
+          {known && (
+            <>
+              <span className="shrink-0 opacity-60" aria-hidden="true">
+                ·
+              </span>
+              <span className="shrink-0 tabular-nums" data-testid={`data-chip-misclosure-${part}-${testIdPart(c.closureId)}`}>
+                {mis}
+              </span>
+            </>
+          )}
+        </button>
+      ),
+    });
   }
   if (chips.length === 0) return null;
-  return (
-    <span className="flex min-w-0 items-center gap-1 overflow-hidden" data-testid={`data-links-${part}`}>
-      {chips}
-    </span>
-  );
+  return <LinkChipRow chips={chips} testId={`data-links-${part}`} moreTestId={`data-links-more-${part}`} />;
 }
 
 function IssuesCell({ row, deps }: { row: DataRow; deps: GridColumnDeps }) {

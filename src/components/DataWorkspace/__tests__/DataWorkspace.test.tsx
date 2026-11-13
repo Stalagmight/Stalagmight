@@ -248,7 +248,11 @@ describe('DataWorkspace cells', () => {
     render(<DataWorkspace />);
     const links = screen.getByTestId('data-links-st-1-4');
     expect(within(links).getByText('Closes to Downstre…sump 1A:3')).toBeInTheDocument();
-    expect(screen.getByTestId('data-chip-misclosure-st-1-4-7')).toHaveTextContent('Δ 0.7 m · 1.3 %');
+    // One chip per closure, the misclosure inside it.
+    const closure = screen.getByTestId('data-chip-closure-st-1-4-7-3-3');
+    expect(closure).toHaveTextContent('Closes to Downstre…sump 1A:3·Δ 0.7 m · 1.3 %');
+    expect(within(closure).getByTestId('data-chip-misclosure-st-1-4-7')).toHaveTextContent('Δ 0.7 m · 1.3 %');
+    expect(within(links).getAllByRole('button')).toHaveLength(1);
     expect(screen.getByTestId('data-chip-zero-st-1-0')).toHaveTextContent('Zero datum');
     expect(screen.getByTestId('data-chip-branch-st-2-0-1-2')).toHaveTextContent('Continues from Main:2');
 

@@ -1999,7 +1999,9 @@
       "continuesFromTitle": "This section starts at {{name}} - click to go there",
       "joinsTitle": "This section ends at {{name}} - click to go there",
       "misclosureTitle": "Misclosure {{distance}} m, {{percent}} % of the loop",
-      "zeroDatumTitle": "Zero datum: the survey's fixed GPS anchor"
+      "zeroDatumTitle": "Zero datum: the survey's fixed GPS anchor",
+      "moreAria_one": "{{count}} more link",
+      "moreAria_other": "{{count}} more links"
     },
     "gutter": {
       "showOnMap": "Show on map ({{shortcut}})",

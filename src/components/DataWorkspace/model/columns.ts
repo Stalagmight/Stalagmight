@@ -175,7 +175,8 @@ export function linksText(ctx: DataModelCtx, links: StationLinks): string {
       name: stationName(ctx, c.partner.section_id, c.partner.station_index),
     });
     const mis = misclosureText(ctx, c.misclosure, c.errorPct);
-    parts.push(mis ? `${closes} (${mis})` : closes);
+    // As the closure chip reads: "Closes to X · Δ 0.7 m · 1.2 %".
+    parts.push(mis ? `${closes} · ${mis}` : closes);
   }
   return parts.join(', ');
 }

@@ -80,7 +80,7 @@ describe('buildColumnDefs', () => {
     expect(col('links').text(row('st:1:2'), ctx)).toBe('⇄ Branch B:0');
     expect(col('links').text(row('st:2:0'), ctx)).toBe('Continues from Main:2');
     expect(col('links').text(row('st:1:4'), ctx)).toBe(
-      'Closes to Downstre…sump 1A:3 (Δ 0.70 m · 1.3 %)',
+      'Closes to Downstre…sump 1A:3 · Δ 0.70 m · 1.3 %',
     );
     expect(col('links').text(row('st:1:3'), ctx)).toBe('');
   });
