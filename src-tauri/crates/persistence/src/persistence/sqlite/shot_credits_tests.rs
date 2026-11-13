@@ -481,6 +481,29 @@ fn an_older_builds_save_keeps_each_sections_roles() {
     }
 }
 
+/// #718 docs: a name that is only a placeholder (`?`, `unknown`, `none`) is
+/// read from the legacy text as nobody, so an older build's save loses it;
+/// this build keeps it in a row.
+#[test]
+fn a_placeholder_only_name_is_lost_on_an_older_save_but_kept_here() {
+    let dir = TempDir::new().unwrap();
+    let mut project = Project::new("Placeholder".to_string(), None);
+    let id = section_with(
+        &mut project,
+        vec![credit(&["?", "Ann Lee"], &["unknown"], day(1))],
+    );
+    let path = save(&dir, "placeholder.stalx", &project);
+    assert_eq!(credits_of(&reload(&path), id), credits_of(&project, id));
+    sql(
+        &path,
+        "DROP TABLE shot_credits; DROP TABLE credit_people; DROP TABLE credit_sections;",
+    );
+    assert_eq!(
+        credits_of(&reload(&path), id),
+        vec![credit(&["Ann Lee"], &[], day(1))]
+    );
+}
+
 /// #718: the explorers-only text this build wrote before it became trim-proof
 /// (`"x / "`), trimmed by an older build's Edit Section to `"x /"`, still reads
 /// as explorers - not as one surveyor named `"x /"`.

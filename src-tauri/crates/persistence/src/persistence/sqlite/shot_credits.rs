@@ -12,9 +12,12 @@
 //! as the section aggregate: `sections.date` is the earliest shot date, and
 //! `sections.surveyor` is [`crate::models::legacy_credit_text`] - the distinct
 //! surveyor names joined with `", "` (the text it always held), or, when anyone
-//! explored the section, the Ariane `"explorers / surveyors"` form that older
-//! Ariane imports already stored there. A `" / "` inside a name is written
-//! `" - "` there, so the two halves stay unambiguous.
+//! explored the section, the Ariane `"explorers / surveyors"` form, and
+//! `"explorers /"` when nobody surveyed. Older Ariane imports stored only the
+//! first of those, and only with two distinct, non-empty halves: that importer
+//! dropped empty and placeholder halves and collapsed identical ones. A `/`
+//! next to a space inside a name is written `-` there, so the halves stay
+//! unambiguous.
 //!
 //! Rows are keyed by `(section_id, shot_uuid)`: `sections.id` is persisted,
 //! and a file written before shot uuids were project-unique can hold one uuid
@@ -25,9 +28,18 @@
 //! so after one save there only the legacy columns are left, and every shot
 //! falls back to them. That is why the surveyor column carries both roles
 //! (#718): each section still lists who explored and who surveyed it. What
-//! collapses is expected: per-shot differences become the section aggregate,
-//! the date becomes the earliest one, emails are gone, and two one-word names
-//! in one role read back as one `Last, First` person (the splitter's rule).
+//! collapses is expected:
+//! - per-shot differences become the section aggregate, and the date the
+//!   earliest one;
+//! - emails are gone, and same-named people become one name;
+//! - names come back as the legacy text spells them: a `/` next to a space as
+//!   `-`, a name holding `,` or `;` as several people, two one-word names in
+//!   one role as one `Last, First` person, and a name that is only a
+//!   placeholder (`?`, `unknown`, `none`) as nobody;
+//! - a 0.5.3 Ariane TML export and re-import collapses identical halves
+//!   (`"Jo Diver / Jo Diver"` comes back as the surveyor `Jo Diver` alone);
+//!   `"explorers /"` survives that round trip, but importing such a TML in
+//!   this build keeps the `/` in the last explorer's name.
 //!
 //! The tables can still end up next to a legacy pair this build did not write
 //! (a hand edit, another tool editing the file in place). So

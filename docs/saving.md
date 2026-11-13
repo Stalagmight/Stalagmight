@@ -89,9 +89,15 @@ a row only where that fallback would read back something else.
 A released build (0.5.3 and older) saves by writing a fresh file and renaming
 it over the project, so it drops the three credit tables: after such a save
 every shot reads the legacy columns. That is why the surveyor column carries
-both roles (#718): each section still lists its explorers and surveyors, while
-per-shot differences, later dates and emails collapse to the section
-aggregate. A third table, `credit_sections (section_id, surveyor, date)`,
+both roles (#718): each section still lists its explorers and surveyors. What
+collapses: per-shot differences, later dates and emails go to the section
+aggregate; same-named people become one name; names come back as the legacy
+text spells them (a `/` next to a space as `-`, a name with `,` or `;` as
+several people, two one-word names in one role as one `Last, First` person, a
+placeholder-only name such as `?` or `unknown` as nobody); and a 0.5.3 Ariane
+TML export and re-import collapses identical halves (`"Jo Diver / Jo Diver"`
+becomes the surveyor `Jo Diver` alone). Older Ariane imports stored only the
+two-halves form, and only with two distinct, non-empty halves. A third table, `credit_sections (section_id, surveyor, date)`,
 records the legacy pair this build wrote; when the tables survive next to a
 pair retyped in place (a hand edit, another tool), a section whose pair no
 longer matches the record ignores its rows (the retyped text wins). A credit

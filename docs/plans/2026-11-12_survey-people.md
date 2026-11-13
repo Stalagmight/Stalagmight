@@ -109,10 +109,21 @@ How this feature fits:
   written `-` in this column only; the per-shot tables keep the real name.
 - Why both roles (#718): a released build (0.5.3 and older) saves by writing a fresh database and
   renaming it over the project, so it drops these tables, and every shot then reads the legacy
-  columns. With both roles there, each section still lists who explored and who surveyed it. Per-shot
-  differences, later dates and emails collapse to the section aggregate, and two one-word names in
-  one role read back as one `Last, First` person (the splitter's rule for older files). The same
-  text is what SpeleoDB shows; older Ariane imports already stored this form there.
+  columns. With both roles there, each section still lists who explored and who surveyed it. What
+  collapses after such a save:
+  - per-shot differences, later dates and emails go to the section aggregate;
+  - same-named people become one name;
+  - names come back as the legacy text spells them: a `/` next to a space as `-`, a name with `,`
+    or `;` as several people, two one-word names in one role as one `Last, First` person (the
+    splitter's rule for older files), and a placeholder-only name (`?`, `unknown`, `none`) as
+    nobody;
+  - a 0.5.3 Ariane TML export and re-import collapses identical halves (`Jo Diver / Jo Diver`
+    comes back as the surveyor `Jo Diver` alone). `Ida Ice /` survives that round trip, but
+    importing such a TML in this build keeps the `/` in the last explorer's name.
+
+  The same text is what SpeleoDB shows. Older Ariane imports stored only the two-halves form, and
+  only with two distinct, non-empty halves (that importer dropped empty and placeholder halves and
+  collapsed identical ones); the explorers-only form and identical halves are new there.
 - A contract test pins that every table and column the Python reader reads is unchanged, apart
   from those two values, and pins their text. A live check runs against the internal SpeleoDB.
 
