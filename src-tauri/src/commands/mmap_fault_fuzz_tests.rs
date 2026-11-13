@@ -18,9 +18,13 @@
 //! kills the test binary with SIGBUS, and the last `FZ706-STEP` line printed
 //! names the seed and the step. Ordinary `Err` results from commands are
 //! expected and only traced. A probe that fails, or that sees a corrupt live
-//! view right after an APP step, is a finding: `FZ706-FINDING kind=torn`. A
-//! restore that reports success but leaves the target without the backup's
-//! bytes is a finding too (`new-restore-mismatch` until it has a name).
+//! view right after an APP step, is a finding: `FZ706-FINDING kind=torn`.
+//!
+//! Every restore is checked against the files as they were just before it:
+//! - one that reports success must leave the backup's bytes in the target and
+//!   the target's old bytes in `<target>.stalx.pre-restore`;
+//! - one that is refused must leave the target, the backup and the safety copy
+//!   exactly as they were.
 //!
 //! Knobs:
 //! - `FZ706_FIRST`: first seed, default 0.
@@ -31,28 +35,27 @@
 //!   is the design hazard and is EXPECTED to SIGBUS (SQLite reads the header
 //!   through the mapping; a shorter but non-empty file only reads as malformed).
 //!   It exists to prove the probe really reads through the mapping.
-//! - `FZ706_MUTE=<id>,...`: skip the step shapes of known findings (counted as
-//!   `FZ706-MUTED <id>` lines) so a campaign keeps looking for new ones.
+//! - `FZ706_FOCUS=restore`: make half of all steps restores, aimed at the open
+//!   file, backups, safety copies and the project itself.
+//! - `FZ706_MUTE=<id>,...`: skip the step shapes of the ids below (counted as
+//!   `FZ706-MUTED <id>` lines). Nothing is muted by default: all five are
+//!   fixed (#720), and a step that hits one again is a regression.
 //!
-//! Known findings (ids used by the mute list and the `FZ706-FINDING` lines):
-//! - `F1-restore-over-open`: `restore_from_backup` copies onto the OPEN
-//!   project's file in place. The live mapping then reads a torn file, or
-//!   SIGBUS when the copy shrank it. "Open" means the inode the live
+//! Finding ids, for restores that used to break (#720):
+//! - `F1-restore-over-open`: `restore_from_backup` aimed at the OPEN project's
+//!   file. It used to copy onto it in place, so the live mapping read a torn
+//!   file, or SIGBUS when the copy shrank it. "Open" means the inode the live
 //!   connection holds, so it also covers the open file after another process
 //!   renamed it, which a guard that compares paths would miss.
-//! - `F2-restore-self-empties`: `restore_from_backup` with the project as its
-//!   own backup truncates the project to 0 bytes (`std::fs::copy` opens the
-//!   destination with O_TRUNC before it reads the source).
-//! - `F3-backup-lists-itself`: `list_backups` lists a project whose name
-//!   contains `.backup` as a backup of itself, which is how F2 is reachable
-//!   from the recovery dialog.
-//! - `F4-pre-restore-over-open`: the safety copy `restore_from_backup` makes
-//!   first (`<project>.stalx.pre-restore`) is also an in-place copy. When that
-//!   path is the open project, the open file is rewritten under its live
-//!   connection.
-//! - `F5-restore-destroys-its-backup`: restoring from `<project>.stalx.pre-restore`
-//!   first overwrites that backup with the project, then copies it back. The
-//!   project is unchanged, the backup is gone, and the command reports success.
+//! - `F2-restore-self-empties`: the project restored from itself. It used to
+//!   come out as 0 bytes (`std::fs::copy` opens the destination with O_TRUNC
+//!   before it reads the source).
+//! - `F3-backup-lists-itself`: `list_backups` offering a project whose name
+//!   contains `.backup` as a backup of itself.
+//! - `F4-pre-restore-over-open`: the safety copy (`<project>.stalx.pre-restore`)
+//!   aimed at the open project. It used to be written in place too.
+//! - `F5-restore-destroys-its-backup`: restoring from `<project>.stalx.pre-restore`.
+//!   It used to overwrite that backup with the project before reading it.
 //!
 //! Every `FZ706-STEP` line carries a `shape=` token (paths classified as open /
 //! self / backup / other / fresh / missing), which is what a farm signature
@@ -207,6 +210,8 @@ struct World {
     /// The inode the live connection was opened on. Another process may have
     /// renamed it since, so the open project's path no longer names it.
     open_ino: Option<(u64, u64)>,
+    /// `FZ706_FOCUS=restore` (set by `run_seed`): half of all steps are restores.
+    focus_restore: bool,
 }
 
 /// What one step was, and which known finding (if any) its shape belongs to.
@@ -215,10 +220,39 @@ struct Step {
     what: String,
     shape: String,
     known: Option<&'static str>,
-    /// A restore's target and the backup's bytes just before it ran.
-    restore_expect: Option<(PathBuf, Vec<u8>)>,
+    /// For a restore: the files it may touch, as they were just before it ran.
+    restore_expect: Option<RestoreExpect>,
     /// The traced outcome (`ok`, `err ...`).
     outcome: String,
+}
+
+/// The files a restore may touch, with their bytes just before it ran (`None`:
+/// the file was not there).
+struct RestoreExpect {
+    target: PathBuf,
+    target_before: Option<Vec<u8>>,
+    backup: PathBuf,
+    backup_before: Option<Vec<u8>>,
+    safety: PathBuf,
+    safety_before: Option<Vec<u8>>,
+}
+
+impl RestoreExpect {
+    fn capture(target: PathBuf, backup: PathBuf) -> Self {
+        let safety = safety_copy_of(&target);
+        Self {
+            target_before: std::fs::read(&target).ok(),
+            backup_before: std::fs::read(&backup).ok(),
+            safety_before: std::fs::read(&safety).ok(),
+            target,
+            backup,
+            safety,
+        }
+    }
+}
+
+fn size_of(bytes: Option<&Vec<u8>>) -> String {
+    bytes.map_or_else(|| "nothing".to_string(), |b| format!("{} bytes", b.len()))
 }
 
 impl World {
@@ -246,6 +280,7 @@ impl World {
             mapped_probes: 0,
             tainted: false,
             open_ino: None,
+            focus_restore: false,
         }
     }
 
@@ -296,12 +331,8 @@ impl World {
                 }
             }
             4 => {
-                let backups: Vec<PathBuf> = self
-                    .pool
-                    .iter()
-                    .flat_map(|p| recovery::list_backups(p.clone()))
-                    .map(|b| PathBuf::from(b.path))
-                    .collect();
+                let backups: Vec<PathBuf> =
+                    self.pool.iter().flat_map(|p| Self::backups_of(p)).collect();
                 if !backups.is_empty() {
                     return backups[rng.below(backups.len())].clone();
                 }
@@ -356,7 +387,11 @@ impl World {
     /// Generate one random step (nothing is done yet).
     fn next_step(&mut self, rng: &mut Rng) -> Step {
         let ops = if self.hazard { 18 } else { 17 };
-        let op = rng.below(ops);
+        let op = if self.focus_restore && rng.chance(50) {
+            9
+        } else {
+            rng.below(ops)
+        };
         let app = |what: String, shape: String| Step {
             actor: Actor::App,
             what,
@@ -458,10 +493,24 @@ impl World {
         }
     }
 
-    /// One of the files the recovery dialog would offer as `target`'s backups.
+    /// What `target` can be restored from: the backups the recovery dialog
+    /// offers, and the safety copy an earlier restore left (undoing it).
+    fn backups_of(target: &Path) -> Vec<PathBuf> {
+        let mut backups: Vec<PathBuf> = recovery::list_backups(target.to_path_buf())
+            .into_iter()
+            .map(|b| PathBuf::from(b.path))
+            .collect();
+        let safety = safety_copy_of(target);
+        if safety.exists() {
+            backups.push(safety);
+        }
+        backups
+    }
+
+    /// One of the files `target` can be restored from.
     fn pick_backup_of(&self, rng: &mut Rng, target: &Path) -> Option<PathBuf> {
-        let offered = recovery::list_backups(target.to_path_buf());
-        (!offered.is_empty()).then(|| PathBuf::from(&offered[rng.below(offered.len())].path))
+        let backups = Self::backups_of(target);
+        (!backups.is_empty()).then(|| backups[rng.below(backups.len())].clone())
     }
 
     /// Run one random step; returns it, or None when it was muted.
@@ -483,10 +532,8 @@ impl World {
         if words.next() == Some("restore") {
             let target = words.next().map(|n| self.path(n));
             let source = words.nth(1).map(|n| self.path(n));
-            if let (Some(target), Some(bytes)) =
-                (target, source.and_then(|s| std::fs::read(s).ok()))
-            {
-                step.restore_expect = Some((target, bytes));
+            if let (Some(target), Some(source)) = (target, source) {
+                step.restore_expect = Some(RestoreExpect::capture(target, source));
             }
         }
         step.outcome = self.apply_tracked(&step.what);
@@ -503,28 +550,60 @@ impl World {
         let verb = words.next().unwrap_or_default();
         let target = words.next().map(|n| self.path(n));
         match (verb, target) {
-            ("restore", Some(t)) => {
-                let len = std::fs::metadata(&t).map(|m| m.len()).ok();
-                if len == Some(0) {
-                    return Some((
-                        "F2-restore-self-empties",
-                        format!("{} is 0 bytes after the restore", self.name(&t)),
-                    ));
+            ("restore", Some(_)) => {
+                let e = step.restore_expect.as_ref()?;
+                let id = step.known.unwrap_or("new-restore-mismatch");
+                let now = |path: &Path| std::fs::read(path).ok();
+                if step.outcome == "ok" {
+                    // The backup's bytes in the target, the target's old bytes
+                    // in the safety copy.
+                    let target_now = now(&e.target);
+                    if target_now != e.backup_before {
+                        return Some((
+                            id,
+                            format!(
+                                "restore said ok, {} holds {}, the backup held {}",
+                                self.name(&e.target),
+                                size_of(target_now.as_ref()),
+                                size_of(e.backup_before.as_ref())
+                            ),
+                        ));
+                    }
+                    let safety_now = now(&e.safety);
+                    if e.target_before.is_some() && safety_now != e.target_before {
+                        return Some((
+                            id,
+                            format!(
+                                "restore said ok, the safety copy {} holds {}, the project held {}",
+                                self.name(&e.safety),
+                                size_of(safety_now.as_ref()),
+                                size_of(e.target_before.as_ref())
+                            ),
+                        ));
+                    }
+                    return None;
                 }
-                // A restore that says it worked must leave the backup's bytes
-                // in the target.
-                let (target, expected) = step.restore_expect.as_ref()?;
-                let now = std::fs::read(target).ok();
-                (step.outcome == "ok" && now.as_ref() != Some(expected)).then(|| {
-                    (
-                        step.known.unwrap_or("new-restore-mismatch"),
-                        format!(
-                            "restore said ok, {} holds {} bytes, the backup held {}",
-                            self.name(target),
-                            now.map_or(0, |b| b.len()),
-                            expected.len()
-                        ),
-                    )
+                // Refused or failed: nothing it could touch has changed.
+                [
+                    ("project", &e.target, &e.target_before),
+                    ("backup", &e.backup, &e.backup_before),
+                    ("safety copy", &e.safety, &e.safety_before),
+                ]
+                .into_iter()
+                .find_map(|(role, path, before)| {
+                    let after = now(path);
+                    (after != *before).then(|| {
+                        (
+                            id,
+                            format!(
+                                "restore said `{}`, but the {role} {} went from {} to {}",
+                                step.outcome,
+                                self.name(path),
+                                size_of(before.as_ref()),
+                                size_of(after.as_ref())
+                            ),
+                        )
+                    })
                 })
             }
             ("list-backups", Some(t)) => {
@@ -588,7 +667,7 @@ impl World {
                 brief_string(export::export_tml_impl(state, p).map(|_| ()))
             }
             ("restore", Some(target), Some(source)) => {
-                brief_string(recovery::restore_from_backup(target, source).map(|_| ()))
+                brief_string(recovery::restore_from_backup_impl(state, target, source).map(|_| ()))
             }
             ("repair", Some(p), _) => brief_string(recovery::attempt_repair(p).map(|_| ())),
             ("salvage", Some(p), _) => {
@@ -709,11 +788,12 @@ fn brief_io<T>(result: std::io::Result<T>) -> String {
 }
 
 /// Run one seed; returns the first finding line, if any.
-fn run_seed(seed: u64, steps: u32, hazard: bool, mutes: &[&str]) -> Option<String> {
+fn run_seed(seed: u64, steps: u32, hazard: bool, focus: bool, mutes: &[&str]) -> Option<String> {
     crate::test_helpers::with_isolated_config(|| {
         let mut rng = Rng::new(seed);
         let mutes = mutes.iter().map(ToString::to_string).collect();
         let mut world = World::new(&mut rng, hazard, mutes);
+        world.focus_restore = focus;
         trace(&format!("FZ706-SEED seed={seed} begin"));
         let first = world.pool[0].clone();
         let opened = world.apply_tracked(&format!("reopen {}", world.name(&first)));
@@ -750,15 +830,6 @@ fn run_seed(seed: u64, steps: u32, hazard: bool, mutes: &[&str]) -> Option<Strin
     })
 }
 
-/// Every known finding: what the smoke test steers around.
-const KNOWN: [&str; 5] = [
-    "F1-restore-over-open",
-    "F2-restore-self-empties",
-    "F3-backup-lists-itself",
-    "F4-pre-restore-over-open",
-    "F5-restore-destroys-its-backup",
-];
-
 /// What the live connection reads now, or `None` with no project open.
 fn live_digest(state: &AppState) -> Option<Result<u64, String>> {
     state
@@ -774,6 +845,7 @@ fn fz706_campaign() {
     let seeds = knob("FZ706_SEEDS", 64);
     let steps = u32::try_from(knob("FZ706_STEPS", 40)).unwrap_or(40);
     let hazard = std::env::var("FZ706_HAZARD").is_ok_and(|v| v == "1");
+    let focus = std::env::var("FZ706_FOCUS").is_ok_and(|v| v == "restore");
     let mute_env = std::env::var("FZ706_MUTE").unwrap_or_default();
     let mutes: Vec<&str> = mute_env
         .split(',')
@@ -781,30 +853,38 @@ fn fz706_campaign() {
         .filter(|m| !m.is_empty())
         .collect();
     let findings: Vec<String> = (first..first.saturating_add(seeds))
-        .filter_map(|seed| run_seed(seed, steps, hazard, &mutes))
+        .filter_map(|seed| run_seed(seed, steps, hazard, focus, &mutes))
         .collect();
     trace(&format!(
-        "FZ706-SUMMARY first={first} seeds={seeds} steps={steps} hazard={hazard} mutes={} findings={}",
+        "FZ706-SUMMARY first={first} seeds={seeds} steps={steps} hazard={hazard} focus={focus} mutes={} findings={}",
         mutes.join(","),
         findings.len()
     ));
     assert!(findings.is_empty(), "{}", findings.join("\n"));
 }
 
-/// A few seeds on every test run, so the harness itself cannot rot.
+/// A few seeds on every test run, so the harness itself cannot rot. Nothing is
+/// muted: every finding it knows is fixed (#720).
 #[test]
 fn fz706_smoke() {
     for seed in 0..3 {
-        assert_eq!(run_seed(seed, 15, false, &KNOWN), None, "seed {seed}");
+        assert_eq!(run_seed(seed, 15, false, false, &[]), None, "seed {seed}");
     }
 }
 
-/// F1: restoring over the project that is open rewrites the mapped file in
-/// place under the live connection. With a valid backup the live connection
-/// reads clean but silently switches to the backup's content under the
-/// in-memory project; with a short or empty source it faults (SIGBUS).
+/// The same with half of the steps restores (`FZ706_FOCUS=restore`).
 #[test]
-#[ignore = "#706 F1-restore-over-open: restore_from_backup copies over the open, memory-mapped project in place"]
+fn fz706_restore_smoke() {
+    for seed in 100..103 {
+        assert_eq!(run_seed(seed, 20, false, true, &[]), None, "seed {seed}");
+    }
+}
+
+/// F1 (#720): a restore aimed at the open project is refused, and the live
+/// connection reads what it read before. It used to copy over the mapped file
+/// in place: the app went on showing the old project, and an empty backup
+/// crashed the next read with SIGBUS.
+#[test]
 fn f1_a_restore_never_rewrites_the_open_project_under_its_live_connection() {
     crate::test_helpers::with_isolated_config(|| {
         let mut rng = Rng::new(7);
@@ -814,24 +894,24 @@ fn f1_a_restore_never_rewrites_the_open_project_under_its_live_connection() {
             .state
             .do_load_project_full(open.clone())
             .expect("open the project");
-        let before = live_digest(&world.state);
-        let _ = recovery::restore_from_backup(open, backup);
-        let after = live_digest(&world.state);
-        // Either the restore closed the project first, or the live connection
-        // still reads what it read before.
-        assert!(
-            after.is_none() || after == before,
-            "the live connection now reads {after:?}, before the restore it read {before:?}"
+        let before = (live_digest(&world.state), std::fs::read(&open).ok());
+        let result = recovery::restore_from_backup_impl(&world.state, open.clone(), backup);
+        let after = (live_digest(&world.state), std::fs::read(&open).ok());
+        assert_eq!(
+            result,
+            Err(
+                "Not restored: a.stalx is open in Stalagmight. Close it, then restore.".to_string()
+            )
         );
+        assert_eq!(after, before);
     });
 }
 
-/// F1 under another name: another process renamed the open file, and the
-/// restore targets the new name. The app's open-project path no longer names
-/// that file, so a guard that compares paths lets the in-place copy through;
-/// only a temp file + rename leaves the live inode alone.
+/// F1 under another name (#720): another process renamed the open file, and
+/// the restore targets the new name. The app's open-project path no longer
+/// names it, so the restore goes ahead; it renames the backup into place, and
+/// the live connection keeps the inode it maps.
 #[test]
-#[ignore = "#706 F1-restore-over-open: restore_from_backup rewrites the open project's inode in place under a new name"]
 fn f1_b_a_restore_never_rewrites_the_open_file_after_it_was_renamed() {
     crate::test_helpers::with_isolated_config(|| {
         let mut rng = Rng::new(7);
@@ -844,87 +924,102 @@ fn f1_b_a_restore_never_rewrites_the_open_file_after_it_was_renamed() {
         let before = live_digest(&world.state);
         let renamed = open.with_extension("moved");
         std::fs::rename(&open, &renamed).expect("another process renames the open file");
-        let _ = recovery::restore_from_backup(renamed, backup);
-        let after = live_digest(&world.state);
-        assert!(
-            after.is_none() || after == before,
-            "the live connection now reads {after:?}, before the restore it read {before:?}"
+        let backup_bytes = std::fs::read(&backup).expect("backup");
+        recovery::restore_from_backup_impl(&world.state, renamed.clone(), backup)
+            .expect("the renamed file is not the open project's path");
+        assert_eq!(
+            live_digest(&world.state),
+            before,
+            "the live inode is untouched"
         );
+        assert_eq!(std::fs::read(&renamed).expect("restored"), backup_bytes);
     });
 }
 
-/// F4: the safety copy is an in-place copy too. An earlier restore left
-/// `a.stalx.pre-restore`; with that file open, the next restore of `a.stalx`
-/// rewrites it under its live connection.
+/// F4 (#720): with the safety copy an earlier restore left open, the next
+/// restore of its project is refused. It used to rewrite the open file in
+/// place with the new safety copy.
 #[test]
-#[ignore = "#706 F4-pre-restore-over-open: the pre-restore safety copy is written in place over the open project"]
 fn f4_the_safety_copy_never_rewrites_the_open_project() {
     crate::test_helpers::with_isolated_config(|| {
         let mut rng = Rng::new(11);
         let world = World::new(&mut rng, false, Vec::new());
         let project = world.pool[0].clone();
-        recovery::restore_from_backup(project.clone(), world.pool[1].clone())
+        recovery::restore_from_backup_impl(&world.state, project.clone(), world.pool[1].clone())
             .expect("the first restore");
+        let safety = safety_copy_of(&project);
         world
             .state
-            .do_load_project_full(safety_copy_of(&project))
+            .do_load_project_full(safety.clone())
             .expect("open the safety copy the first restore left");
-        let before = live_digest(&world.state);
-        let _ = recovery::restore_from_backup(project, world.pool[2].clone());
-        let after = live_digest(&world.state);
+        let before = (live_digest(&world.state), std::fs::read(&safety).ok());
+        let result =
+            recovery::restore_from_backup_impl(&world.state, project, world.pool[2].clone());
         assert!(
-            after.is_none() || after == before,
-            "the live connection now reads {after:?}, before the restore it read {before:?}"
+            result
+                .as_ref()
+                .is_err_and(|e| e.contains("a.stalx.pre-restore is open")),
+            "{result:?}"
+        );
+        assert_eq!(
+            (live_digest(&world.state), std::fs::read(&safety).ok()),
+            before
         );
     });
 }
 
-/// F5: undoing a restore by restoring its safety copy loses the original. The
-/// second restore first copies the project over the safety copy, which is the
-/// backup it was asked to restore, then copies that back.
+/// F5 (#720): restoring the safety copy undoes the restore. It used to copy the
+/// project over the safety copy first, which lost the original and reported
+/// success.
 #[test]
-#[ignore = "#706 F5-restore-destroys-its-backup: restoring <project>.stalx.pre-restore overwrites it first"]
 fn f5_restoring_the_safety_copy_brings_the_original_back() {
-    let dir = TempDir::new().expect("temp dir");
-    let project = dir.path().join("cave.stalx");
-    let backup = dir.path().join("cave.stalx.backup");
-    write_project(&project, &synthetic_project(&mut Rng::new(3), "cave"));
-    write_project(&backup, &synthetic_project(&mut Rng::new(4), "older"));
-    let original = std::fs::read(&project).expect("saved project");
-    recovery::restore_from_backup(project.clone(), backup).expect("restore the backup");
-    let safety = safety_copy_of(&project);
-    assert_eq!(
-        std::fs::read(&safety).ok().as_ref(),
-        Some(&original),
-        "the safety copy holds the original"
-    );
-    let undo = recovery::restore_from_backup(project.clone(), safety.clone());
-    // Either the undo worked, or it was refused and left the safety copy alone.
-    let kept = if undo.is_ok() { &project } else { &safety };
-    assert!(
-        std::fs::read(kept).ok().as_ref() == Some(&original),
-        "after {undo:?} the original is not in {}",
-        kept.display()
-    );
+    crate::test_helpers::with_isolated_config(|| {
+        let state = AppState::new().expect("app state");
+        let dir = TempDir::new().expect("temp dir");
+        let project = dir.path().join("cave.stalx");
+        let backup = dir.path().join("cave.stalx.backup");
+        write_project(&project, &synthetic_project(&mut Rng::new(3), "cave"));
+        write_project(&backup, &synthetic_project(&mut Rng::new(4), "older"));
+        let original = std::fs::read(&project).expect("saved project");
+        let older = std::fs::read(&backup).expect("saved backup");
+        recovery::restore_from_backup_impl(&state, project.clone(), backup)
+            .expect("restore the backup");
+        let safety = safety_copy_of(&project);
+
+        recovery::restore_from_backup_impl(&state, project.clone(), safety.clone())
+            .expect("undo the restore");
+
+        assert_eq!(std::fs::read(&project).ok(), Some(original));
+        assert_eq!(std::fs::read(&safety).ok(), Some(older));
+    });
 }
 
-/// F2: the project picked as its own backup ends up empty.
+/// F2 (#720): the project picked as its own backup is refused. It used to come
+/// out as 0 bytes.
 #[test]
-#[ignore = "#706 F2-restore-self-empties: restore_from_backup(p, p) truncates p to 0 bytes"]
 fn f2_restoring_a_project_from_itself_leaves_it_intact() {
-    let dir = TempDir::new().expect("temp dir");
-    let path = dir.path().join("cave.stalx");
-    write_project(&path, &synthetic_project(&mut Rng::new(1), "cave"));
-    let before = std::fs::read(&path).expect("saved project");
-    let _ = recovery::restore_from_backup(path.clone(), path.clone());
-    let after = std::fs::read(&path).expect("project still there");
-    assert_eq!((after.len(), after == before), (before.len(), true));
+    crate::test_helpers::with_isolated_config(|| {
+        let state = AppState::new().expect("app state");
+        let dir = TempDir::new().expect("temp dir");
+        let path = dir.path().join("cave.stalx");
+        write_project(&path, &synthetic_project(&mut Rng::new(1), "cave"));
+        let before = std::fs::read(&path).expect("saved project");
+        let result = recovery::restore_from_backup_impl(&state, path.clone(), path.clone());
+        assert_eq!(
+            result,
+            Err("Not restored: the backup you picked is cave.stalx itself.".to_string())
+        );
+        assert_eq!(std::fs::read(&path).ok(), Some(before));
+        assert!(
+            !safety_copy_of(&path).exists(),
+            "refused before the safety copy"
+        );
+    });
 }
 
-/// F3: a project whose name contains `.backup` is offered as its own backup,
-/// which is how F2 is reachable from the recovery dialog.
+/// F3 (#720): a project whose name contains `.backup` is not offered as its
+/// own backup (which is how F2 was reachable from the recovery dialog).
 #[test]
-#[ignore = "#706 F3-backup-lists-itself: list_backups offers cave.backup.stalx as a backup of itself"]
 fn f3_a_project_is_never_offered_as_its_own_backup() {
     let dir = TempDir::new().expect("temp dir");
     let path = dir.path().join("cave.backup.stalx");
