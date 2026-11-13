@@ -65,6 +65,7 @@ const digest = (over: Partial<ImportScreenDigest> = {}): ImportScreenDigest => (
   screen: 'idle',
   dialog: null,
   placement: false,
+  appMode: 'survey',
   ctx: null,
   phase: null,
   hasProject: true,

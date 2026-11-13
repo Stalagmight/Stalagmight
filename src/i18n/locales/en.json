@@ -3156,7 +3156,9 @@
     }
   },
   "exportPanel": {
-    "title": "Export"
+    "title": "Export",
+    "close": "Close export",
+    "closeHint": "Close export and go back to where you were"
   },
   "toolbar": {
     "groupAria": "{{group}} tools",

@@ -447,6 +447,15 @@ corresponding type union that is parsed by Rust exhaustiveness tests.
 5. Tests `registry_covers_all_dialogs`, `active_dwell_mirrors_dwell` and
    `dialog_complete_calls_match_dialogs` will fail if anything is missing.
 
+### Removed dialog
+
+Keep its four registry entries (event numbering stays stable) and add its key
+to `REMOVED_DIALOGS` in `src-tauri/src/commands/telemetry_coverage_tests.rs`,
+which excludes those slots from the stale check. Example: `export`, whose modal
+dialog became the Export workspace (entered from the project menu or Ctrl+E,
+not a dialog), so `action.dialog.export`, `dialog-cancel.export` and the two
+dwell slots are no longer emitted.
+
 ### New IPC command
 
 Automatic - `invokeIpc` calls `trackCommand` for all non-telemetry commands.

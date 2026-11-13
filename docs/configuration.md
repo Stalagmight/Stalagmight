@@ -438,7 +438,7 @@ toggle_data_table = ["Ctrl+3"]
 | | `save` | `Ctrl+S` | Save project |
 | | `save_as` | `Ctrl+Shift+S` | Save project as |
 | | `import_dmp` | `Ctrl+I` | Import mNemo `.dmp` into the open project (the unified Open picker when none is open) |
-| | `export` | `Ctrl+E` | Export project |
+| | `export` | `Ctrl+E` | Enter the Export workspace; inside it, close it again (back to the mode it was entered from) |
 | | `quit` | `Ctrl+Q` | Quit the application |
 | **Tools** | `select` | `S` | Select tool |
 | | `pan` | `P` | Pan/hand tool (acts only when `map.controls.show_navigation_tools` is on) |

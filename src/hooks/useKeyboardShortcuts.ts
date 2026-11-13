@@ -333,6 +333,20 @@ function handleZoomOut(zoomStep: number, zoomMin: number): void {
   }
 }
 
+/** Transient map state an Escape clears before it may close the Export workspace. */
+function hasEscapableMapState(s: ReturnType<typeof useUIStore.getState>): boolean {
+  return (
+    s.selection !== null ||
+    s.multiSelection.length > 0 ||
+    s.measureStart !== null ||
+    s.measureEnd !== null ||
+    s.mergeStationA !== null ||
+    s.mergeStationB !== null ||
+    s.commentTarget !== null ||
+    s.moveCommentSource !== null
+  );
+}
+
 export function useKeyboardShortcuts() {
   const { t } = useTranslation();
   const {
@@ -457,6 +471,14 @@ export function useKeyboardShortcuts() {
           // mode (grid-internal Escape already won via its preventDefault).
           event.preventDefault();
           useUIStore.getState().exitDataTableFullScreen();
+          return;
+        } else if (useUIStore.getState().appMode === 'export' && !hasEscapableMapState(useUIStore.getState())) {
+          // The Export workspace is the last layer Escape peels: with no dialog,
+          // dropdown or map selection/measurement left to clear, it closes the
+          // workspace back to the mode it was entered from (as Escape closed the
+          // retired Export dialog).
+          event.preventDefault();
+          useUIStore.getState().closeExport();
           return;
         }
 
@@ -793,11 +815,15 @@ export function useKeyboardShortcuts() {
           break;
 
         case 'export': {
+          // Export is a workspace, not a dialog: Ctrl+E enters it, and inside it
+          // closes it again, back to the mode it was entered from. The dialog,
+          // overlay, placement and fullscreen-table gates above keep it inert
+          // behind any of those.
           event.preventDefault();
-          const currentProject = useProjectStore.getState().project;
-          if (currentProject) {
-            openDialog('export');
-          }
+          if (!useProjectStore.getState().project) break;
+          const ui = useUIStore.getState();
+          if (ui.appMode === 'export') ui.closeExport();
+          else ui.enterExport();
           break;
         }
       }

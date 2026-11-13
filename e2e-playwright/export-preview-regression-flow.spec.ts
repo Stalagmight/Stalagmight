@@ -27,10 +27,12 @@ test.describe('Export Preview Regression Flow', () => {
       },
     ]);
 
+    // Ctrl+E enters the Export workspace, which opens on the image export and
+    // its live preview.
     await page.keyboard.press('Control+e');
-    await expect(page.getByTestId('export-dialog')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId('export-panel')).toBeVisible({ timeout: 5000 });
 
-    await page.getByTestId('export-type-image').click();
+    await expect(page.getByTestId('export-type-image')).toBeChecked();
     await expect(page.getByTestId('export-preview')).toBeVisible({ timeout: 10000 });
 
     // Drag the threshold slider. The mock preview encodes the threshold in a

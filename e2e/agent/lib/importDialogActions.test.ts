@@ -30,11 +30,15 @@ import {
 import {
   ADVANCE_MOVE,
   ESCAPE_PATH,
+  exportChordGates,
+  exportChordVerdict,
   IN_FLOW_SCREENS,
   NON_FLOW_SCREENS,
   SELECT_TESTIDS,
   TESTID_INVENTORY,
+  type ExportChordStep,
 } from '../scenarios/importDialogModel';
+import { EXPORT_TESTIDS } from '../scenarios/exportFuzzActions';
 import {
   CORPUS_DRAW_P,
   corpusDrawProbability,
@@ -566,5 +570,132 @@ describe('import fuzzer testid allowlists', () => {
     }
     const names = GENERATORS.map((generator) => generator.name);
     expect(new Set(names).size, 'generator names must be unique').toBe(names.length);
+  });
+});
+
+/**
+ * Ctrl+E toggles the Export WORKSPACE now; it no longer opens a modal.
+ *
+ * Both fuzzers used to lean on the modal (`export-dialog-close`) or on the
+ * carousel's `mode-export`, and neither exists on the product side any more:
+ * Export is entered from the hamburger row or Ctrl+E and left by its own close
+ * affordances. These pin that the harness no longer depends on either, and pin
+ * the EXPORT CHORD judgement itself, which is a pure function of what the
+ * bridge read on the dispatch tick.
+ */
+describe('the Export workspace and EXPORT CHORD', () => {
+  it('depends on neither the retired modal nor the carousel export button', () => {
+    for (const id of ['mode-export', 'export-dialog', 'export-dialog-close', 'export-cancel']) {
+      expect(CLICKABLE_TESTIDS.has(id), `import fuzz must not click ${id}`).toBe(false);
+      expect(TESTID_INVENTORY.includes(id), `import fuzz must not observe ${id}`).toBe(false);
+      expect(EXPORT_TESTIDS.has(id), `export fuzz must not drive ${id}`).toBe(false);
+    }
+    expect(Object.keys(ESCAPE_PATH)).not.toContain('export-modal');
+    expect(Object.keys(ADVANCE_MOVE)).not.toContain('export-modal');
+    // The workspace is `idle`, not a screen, so nothing is non-flow today.
+    expect([...NON_FLOW_SCREENS]).toEqual([]);
+  });
+
+  it('lets each fuzzer reach the workspace affordances it drives', () => {
+    // Import fuzz: leave the workspace at idle by its toolbar close, and observe
+    // the panel root for EXPORT CHORD.
+    expect(CLICKABLE_TESTIDS.has('export-close-button')).toBe(true);
+    expect(TESTID_INVENTORY).toContain('export-panel');
+    // Export fuzz: every entry and exit affordance it draws.
+    for (const id of ['app-menu-trigger', 'toolbar-export-button', 'export-close-button', 'export-panel-close']) {
+      expect(EXPORT_TESTIDS.has(id), `export fuzz must drive ${id}`).toBe(true);
+    }
+  });
+
+  const step = (over: Partial<ExportChordStep> = {}): ExportChordStep => ({
+    dialog: null,
+    placement: false,
+    fullscreen: false,
+    occupants: false,
+    project: true,
+    appModeBefore: 'survey',
+    appModeAfter: 'survey',
+    exportPanelAfter: false,
+    projectSwitched: false,
+    ...over,
+  });
+
+  it('counts an ungated chord by what it did, and never asserts it', () => {
+    expect(exportChordVerdict(step({ appModeAfter: 'export', exportPanelAfter: true }))).toEqual({
+      kind: 'ungated',
+      effect: 'entered',
+    });
+    expect(exportChordVerdict(step({ appModeBefore: 'export', appModeAfter: 'plan' }))).toEqual({
+      kind: 'ungated',
+      effect: 'left',
+    });
+    // Focus in a text field swallows it legitimately: counted as `none`.
+    expect(exportChordVerdict(step())).toEqual({ kind: 'ungated', effect: 'none' });
+  });
+
+  it('names every gate the keydown handler consults, including no project', () => {
+    expect(
+      exportChordGates(
+        step({ dialog: 'tml-import', occupants: true, placement: true, fullscreen: true, project: false }),
+      ),
+    ).toEqual([
+      'activeDialog="tml-import"',
+      'screenOccupants > 0',
+      'placementMode active',
+      'dataTableFullScreen',
+      'no project open',
+    ]);
+    expect(exportChordGates(step())).toEqual([]);
+  });
+
+  it('fails a gated chord that ENTERED the workspace', () => {
+    const verdict = exportChordVerdict(
+      step({ dialog: 'tml-import', appModeAfter: 'export', exportPanelAfter: true }),
+    );
+    expect(verdict.kind).toBe('breach');
+    expect(verdict.kind === 'breach' && verdict.headline).toMatch(
+      /switched the app mode behind activeDialog="tml-import"/,
+    );
+  });
+
+  it('fails a gated chord that LEFT the workspace', () => {
+    const verdict = exportChordVerdict(step({ placement: true, appModeBefore: 'export', appModeAfter: 'survey' }));
+    expect(verdict.kind).toBe('breach');
+    expect(verdict.kind === 'breach' && verdict.detail).toMatch(/export -> survey, same project open/);
+  });
+
+  it('fails a chord with no project open that switched anything', () => {
+    const verdict = exportChordVerdict(step({ project: false, appModeAfter: 'export' }));
+    expect(verdict.kind === 'breach' && verdict.headline).toMatch(/behind no project open/);
+  });
+
+  it('fails an Export panel that appeared behind a gate even with appMode unmoved', () => {
+    const verdict = exportChordVerdict(step({ fullscreen: true, exportPanelAfter: true }));
+    expect(verdict.kind === 'breach' && verdict.headline).toMatch(/Export panel appeared behind dataTableFullScreen/);
+  });
+
+  it('passes a gated chord that changed nothing - including a panel that was already up', () => {
+    expect(exportChordVerdict(step({ occupants: true }))).toEqual({ kind: 'inert' });
+    expect(
+      exportChordVerdict(
+        step({ dialog: 'import-blocked', appModeBefore: 'export', appModeAfter: 'export', exportPanelAfter: true }),
+      ),
+    ).toEqual({ kind: 'inert' });
+  });
+
+  it('excuses a mode change only when the project itself switched', () => {
+    // A project load forces Survey on its own (applyDisplaySettings), so an
+    // in-flight create landing inside the settle window is not the chord.
+    expect(
+      exportChordVerdict(
+        step({ dialog: 'new-project-for-import', appModeBefore: 'export', appModeAfter: 'survey', projectSwitched: true }),
+      ).kind,
+    ).toBe('excused');
+  });
+
+  it('has nothing to compare on a build without appMode', () => {
+    expect(exportChordVerdict(step({ dialog: 'x', appModeBefore: null, appModeAfter: null }))).toEqual({
+      kind: 'inert',
+    });
   });
 });

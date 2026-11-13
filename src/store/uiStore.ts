@@ -609,6 +609,15 @@ export interface UIStore {
    *  read-only one was entered from (Survey or Data); a no-op in any editable mode, so
    *  picking a colour in Data's map pane stays in Data. */
   exitGasPlan: () => void;
+  // Export workspace entry/exit. Export is not in the mode switcher: it is entered
+  // from the project menu / Ctrl+E and left with "Close export", which returns to
+  // the mode it was entered from. Runtime-only, like `appMode`.
+  /** The mode "Close export" returns to; null when none is recorded. */
+  exportReturnMode: Exclude<AppMode, 'export'> | null;
+  /** Enter the Export workspace, remembering the current mode to return to. No-op in Export. */
+  enterExport: () => void;
+  /** Leave the Export workspace for the recorded mode (Survey when none). No-op outside Export. */
+  closeExport: () => void;
 
   // Issue-severity coloring overlay (#22). Runtime-only - like
   // showDistanceGradient it is NOT a DisplayToggleKey and is never persisted
@@ -1849,6 +1858,24 @@ export const useUIStore = create<UIStore>((set) => ({
     // Back to the editable mode the read-only one was entered from.
     ui.setAppMode(preReadOnlyMode ?? 'survey');
   },
+  // Export workspace entry/exit. `setAppMode` stays the one mode writer; these
+  // only add the return trip. The appMode subscription at the bottom of this file
+  // keeps `exportReturnMode` honest for direct `setAppMode` calls too (the agent
+  // harness, a mode-switcher click while in Export).
+  exportReturnMode: null,
+  enterExport: () => {
+    const { appMode } = useUIStore.getState();
+    if (appMode === 'export') return;
+    set({ exportReturnMode: appMode });
+    useUIStore.getState().setAppMode('export');
+    // Never leave a record behind if setAppMode declined the switch.
+    if (useUIStore.getState().appMode !== 'export') set({ exportReturnMode: null });
+  },
+  closeExport: () => {
+    const { appMode, exportReturnMode } = useUIStore.getState();
+    if (appMode === 'export') useUIStore.getState().setAppMode(exportReturnMode ?? 'survey');
+    set({ exportReturnMode: null });
+  },
   toggleDisplay: (key) => {
     trackAction(`toggle.${key}`);
     const state = useUIStore.getState();
@@ -1972,6 +1999,8 @@ export const useUIStore = create<UIStore>((set) => ({
     // intentionally DROPS the snapshot rather than applying it: dock state is app-global
     // (not per-project), so the forced-open docks simply stay live for the new project.
     prePlanDocks = null;
+    // A load lands in Survey, so "Close export" has nothing to return to.
+    set({ exportReturnMode: null });
     // The gas/Plan store is per-dive, runtime-only state (origin, diver, cylinders, the
     // staged-reserve `pushyAck` safety acknowledgment). It is normally cleared on sub-mode
     // exit, but a DIRECT project switch sets appMode='survey' here, so the later
@@ -1984,8 +2013,7 @@ export const useUIStore = create<UIStore>((set) => ({
     // project that was open, and nothing else cleared it - `setAppMode` says so
     // explicitly. A 600-DPI PNG framed for one survey would otherwise stay
     // selected when the next opened, with the Export-mode preview rendering a
-    // different cave at settings nobody chose for it. The modal Export dialog is
-    // unaffected by design: it owns local state and always opens on data/CSV.
+    // different cave at settings nobody chose for it.
     useExportStore.getState().reset();
     // The depth / distance Levels ranges are per-project too (session-only; the
     // palette CHOICE persists in config and is untouched).
@@ -2346,4 +2374,18 @@ export const useUIStore = create<UIStore>((set) => ({
 useUIStore.subscribe((s) => {
   const patch = visitEndPatch(s);
   if (patch) useUIStore.setState(patch);
+});
+
+// Keep "Close export" pointed at the mode Export was entered from, whatever wrote
+// `appMode`. Leaving Export by any path (closeExport, a mode-switcher click, a
+// project load) drops the record; entering it by a direct `setAppMode('export')`
+// (the agent harness does) records the mode it came from, so closeExport still
+// returns there. enterExport records first, so this never overwrites it.
+useUIStore.subscribe((s, prev) => {
+  if (s.appMode === prev.appMode) return;
+  if (s.appMode !== 'export') {
+    if (s.exportReturnMode !== null) useUIStore.setState({ exportReturnMode: null });
+  } else if (s.exportReturnMode === null && prev.appMode !== 'export') {
+    useUIStore.setState({ exportReturnMode: prev.appMode });
+  }
 });

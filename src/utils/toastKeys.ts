@@ -58,11 +58,10 @@ export const TOAST_KEYS = {
   /**
    * A CSV/JSON/TML/image export the user asked for did not produce a file.
    *
-   * One key for all six formats and both surfaces (the modal Export dialog and
-   * the Export-mode panel): they are one event class - "the export you asked
-   * for failed" - and `ExportControls` is literally one component rendered
-   * twice, so a per-format key would only ever split the dedup window without
-   * telling the user anything the message does not.
+   * One key for all six formats: they are one event class - "the export you
+   * asked for failed" - raised from one component (`ExportControls`, in the
+   * Export workspace panel), so a per-format key would only ever split the
+   * dedup window without telling the user anything the message does not.
    *
    * Distinct from `COMMAND_FAILED`: the four export actions in `projectStore`
    * do NOT go through `executeCommand`, so the catch-all never fires for them.

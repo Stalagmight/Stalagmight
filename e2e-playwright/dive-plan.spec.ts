@@ -1,6 +1,13 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
-import { seedProjectWithSections, deleteShotAt, selectDropdownOption, type SectionSeed } from './helpers/app';
+import {
+  seedProjectWithSections,
+  deleteShotAt,
+  selectDropdownOption,
+  enterExportWorkspace,
+  closeExportWorkspace,
+  type SectionSeed,
+} from './helpers/app';
 import { gasWaypointUnresolvedIndicators } from './helpers/testIds';
 
 /**
@@ -342,10 +349,11 @@ test.describe('Dive-plan persistence (#244)', () => {
     expect(await loadedPlanId(page)).toBe(id);
     expect(await diverRmv(page)).toBe(17);
 
-    // Plan -> Export -> Plan: same.
-    await page.locator('[data-testid="mode-export"]').click();
+    // Plan -> Export -> Plan: same. Close export returns to Plan by itself.
+    await enterExportWorkspace(page);
     await expect(page.locator('[data-testid="gas-panel"]')).toHaveCount(0);
-    await enterPlan(page);
+    await closeExportWorkspace(page);
+    await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible();
     expect(await loadedPlanId(page)).toBe(id);
     expect(await diverRmv(page)).toBe(17);
     await expect(page.locator('[data-testid="dive-plan-select"]')).toHaveText('Persist me');
