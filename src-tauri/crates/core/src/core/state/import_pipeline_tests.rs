@@ -1140,3 +1140,55 @@ fn a_single_ariane_name_is_a_surveyor_in_the_app_and_in_the_saved_file() {
     assert!(resaved.success, "{:?}", resaved.error);
     assert_eq!(column(&path).as_deref(), Some("Tester"));
 }
+
+/// Review of #719, item 5c: the TML import preview's length leaves out the
+/// virtual shots the import makes References, using the import's own chain
+/// rule (`src/utils/tmlImportStats.ts` `jumpShots`). This pins the backend
+/// side of the case its vitest pins: a virtual shot between two real shots of
+/// a run is a Jump, one dangling off the end a Reference.
+#[test]
+fn a_bounded_virtual_shot_imports_as_a_jump_and_a_dangling_one_as_a_reference() {
+    use crate::core::state::{AppState, VirtualShotMode};
+    use crate::core::Command;
+    use crate::models::ShotKind;
+
+    let shots = [
+        tml_shot_xml_depth(1, 0, "REAL", "A", 1.0, -1.0),
+        tml_shot_xml_depth(2, 1, "VIRTUAL", "A", 1.0, -1.0),
+        tml_shot_xml_depth(3, 2, "REAL", "A", 1.0, -1.0),
+        tml_shot_xml_depth(4, 3, "VIRTUAL", "A", 1.0, -1.0),
+    ]
+    .join("\n");
+    let tml = parse_synthetic_tmlu(&wrap_xml_with("m", 0.0, &shots));
+    let (sections, closures, _) = convert_tml_to_import_configs(&tml, false, false).unwrap();
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Kinds".to_string(),
+        location: None,
+    });
+    let result = state.execute_tml_import_sections(
+        sections,
+        closures,
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+        None,
+    );
+    assert!(result.success, "import failed: {:?}", result.error);
+    let project = state.get_project_state().unwrap();
+    let kinds: Vec<ShotKind> = project
+        .sections
+        .iter()
+        .flat_map(|s| s.shots.iter().map(|shot| shot.kind))
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            ShotKind::Normal,
+            ShotKind::Jump,
+            ShotKind::Normal,
+            ShotKind::Reference
+        ]
+    );
+}
