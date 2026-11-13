@@ -134,9 +134,16 @@ fn restoring_the_safety_copy_undoes_the_restore() {
     let restored = std::fs::read(&project).unwrap();
     let safety = pre_restore_path(&project);
 
-    state
+    let message = state
         .restore_project_from_backup(&project, &safety)
         .unwrap();
+
+    assert_eq!(
+        message,
+        "Restored cave.stalx.pre-restore, the copy the last restore kept. The two files \
+         swapped places: cave.stalx.pre-restore now holds the file it replaced, so restoring \
+         it again switches back."
+    );
 
     assert_eq!(
         std::fs::read(&project).unwrap(),
@@ -225,9 +232,30 @@ fn a_restore_never_touches_the_open_project() {
     }
 }
 
+/// Give the root page of the `project` table an invalid page type: `PRAGMA
+/// quick_check` fails, so a load reports the file as corrupt.
+fn damage_a_page(path: &Path) {
+    let conn = rusqlite::Connection::open(path).unwrap();
+    let page_size: i64 = conn
+        .query_row("PRAGMA page_size", [], |r| r.get(0))
+        .unwrap();
+    let root: i64 = conn
+        .query_row(
+            "SELECT rootpage FROM sqlite_master WHERE name = 'project'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    drop(conn);
+    let mut bytes = std::fs::read(path).unwrap();
+    let at = usize::try_from((root - 1) * page_size).unwrap();
+    bytes.splice(at..=at, [0]);
+    std::fs::write(path, bytes).unwrap();
+}
+
 /// A backup that would not open as a project is refused before anything is
 /// written: restoring it would only bring the recovery dialog back (F2's
-/// empty file, a torn `.tmp`, anything else).
+/// empty file, a torn `.tmp`, a damaged copy, anything else).
 #[test]
 fn a_backup_that_does_not_open_is_refused() {
     let dir = TempDir::new().unwrap();
@@ -239,10 +267,27 @@ fn a_backup_that_does_not_open_is_refused() {
             .unwrap()
             .execute_batch("CREATE TABLE notes(text TEXT); INSERT INTO notes VALUES ('hello');")
             .unwrap();
-        std::fs::read(&path).unwrap()
+        let bytes = std::fs::read(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        bytes
     };
-    std::fs::remove_file(dir.path().join("other.db")).unwrap();
-    for contents in [Vec::new(), b"not a database at all".to_vec(), not_a_project] {
+    let damaged = {
+        let path = project_file(dir.path(), "damaged.stalx", "Damaged");
+        damage_a_page(&path);
+        let bytes = std::fs::read(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        bytes
+    };
+    let cases = [
+        (Vec::new(), "is empty"),
+        (
+            b"not a database at all".to_vec(),
+            "is not a Stalagmight project",
+        ),
+        (not_a_project, "is not a Stalagmight project"),
+        (damaged, "is damaged too: it fails the same integrity check"),
+    ];
+    for (contents, what) in cases {
         std::fs::write(&backup, &contents).unwrap();
         let before = snapshot(dir.path());
 
@@ -250,13 +295,13 @@ fn a_backup_that_does_not_open_is_refused() {
             .restore_project_from_backup(&project, &backup)
             .unwrap_err();
 
-        assert!(
-            err.starts_with(
-                "Not restored: cave.stalx.backup does not open as a Stalagmight project ("
-            ) && err.ends_with("). Nothing was changed."),
-            "{err}"
+        assert_eq!(
+            err,
+            format!(
+                "Not restored: cave.stalx.backup {what}. Nothing was changed. Pick another backup."
+            )
         );
-        assert_eq!(snapshot(dir.path()), before, "{} bytes", contents.len());
+        assert_eq!(snapshot(dir.path()), before, "{what}");
     }
 }
 
