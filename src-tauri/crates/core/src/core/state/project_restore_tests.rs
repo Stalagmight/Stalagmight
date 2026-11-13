@@ -306,11 +306,13 @@ fn a_backup_that_does_not_open_is_refused() {
 }
 
 /// An armed journal or a WAL with frames holds committed changes the file
-/// alone does not, beside the backup or the project: refused, nothing changed.
+/// alone does not, beside the backup, the project or the safety copy a restore
+/// would replace (and might have to put back): refused, nothing changed.
 #[test]
-fn unfinished_changes_beside_the_backup_or_the_project_are_refused() {
+fn unfinished_changes_beside_any_of_the_files_are_refused() {
     let dir = TempDir::new().unwrap();
     let (project, backup) = cave(&dir);
+    project_file(dir.path(), "cave.stalx.pre-restore", "Kept");
     let mut armed = JOURNAL_MAGIC.to_vec();
     armed.resize(512, 0);
     let cases = [
@@ -318,20 +320,31 @@ fn unfinished_changes_beside_the_backup_or_the_project_are_refused() {
             "cave.stalx.backup-journal",
             armed.clone(),
             "Not restored: the backup cave.stalx.backup has changes that were never finished, \
-             in cave.stalx.backup-journal beside it. Pick another backup.",
+             in cave.stalx.backup-journal beside it, and a copy of the file alone would lose \
+             them. Pick another backup.",
         ),
         (
             "cave.stalx.backup-wal",
             vec![1; 32],
             "Not restored: the backup cave.stalx.backup has changes that were never finished, \
-             in cave.stalx.backup-wal beside it. Pick another backup.",
+             in cave.stalx.backup-wal beside it, and a copy of the file alone would lose them. \
+             Pick another backup.",
         ),
         (
             "cave.stalx-journal",
-            armed,
+            armed.clone(),
             "Not restored: the project cave.stalx has changes that were never finished, in \
-             cave.stalx-journal beside it. Open the project once so Stalagmight can finish \
-             them, then restore.",
+             cave.stalx-journal beside it, and replacing the file would lose them. Open the \
+             project again so Stalagmight can finish them, or move that file away to restore \
+             without them.",
+        ),
+        (
+            "cave.stalx.pre-restore-journal",
+            armed,
+            "Not restored: cave.stalx.pre-restore, where a restore keeps its copy of \
+             cave.stalx, has changes that were never finished, in \
+             cave.stalx.pre-restore-journal beside it, and replacing the file would lose them. \
+             Move those files away, then restore.",
         ),
     ];
     for (sidecar, contents, expected) in cases {
@@ -347,6 +360,66 @@ fn unfinished_changes_beside_the_backup_or_the_project_are_refused() {
         assert_eq!(snapshot(dir.path()), before);
         std::fs::remove_file(sidecar).unwrap();
     }
+}
+
+/// A backup reached through a link has its sidecars beside the file the link
+/// names, and that is where an unfinished journal is looked for.
+#[cfg(unix)]
+#[test]
+fn a_linked_backup_is_checked_beside_the_file_it_names() {
+    let dir = TempDir::new().unwrap();
+    let project = project_file(dir.path(), "cave.stalx", "Current");
+    std::fs::create_dir(dir.path().join("elsewhere")).unwrap();
+    let real = project_file(&dir.path().join("elsewhere"), "old.stalx", "Older");
+    let mut armed = JOURNAL_MAGIC.to_vec();
+    armed.resize(512, 0);
+    std::fs::write(dir.path().join("elsewhere/old.stalx-journal"), armed).unwrap();
+    let link = dir.path().join("cave.stalx.backup");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let before = snapshot(dir.path());
+
+    let err = state()
+        .restore_project_from_backup(&project, &link)
+        .unwrap_err();
+
+    assert!(
+        err.starts_with(
+            "Not restored: the backup cave.stalx.backup has changes that were never finished, \
+             in old.stalx-journal beside it"
+        ),
+        "{err}"
+    );
+    assert_eq!(snapshot(dir.path()), before);
+}
+
+/// A sidecar that is not a regular file (a FIFO would block any open of it)
+/// is refused without being opened, and promptly.
+#[cfg(unix)]
+#[test]
+fn a_sidecar_that_is_not_a_file_is_never_opened() {
+    let dir = TempDir::new().unwrap();
+    let (project, backup) = cave(&dir);
+    let fifo = dir.path().join("cave.stalx-journal");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .unwrap();
+    assert!(made.success(), "mkfifo");
+    let (done, result) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = done.send(state().restore_project_from_backup(&project, &backup));
+    });
+
+    let err = result
+        .recv_timeout(std::time::Duration::from_secs(20))
+        .expect("the restore must not block on a FIFO")
+        .unwrap_err();
+
+    assert_eq!(
+        err,
+        "Not restored: cave.stalx-journal beside cave.stalx is not a file. Move it away, then \
+         restore."
+    );
 }
 
 /// Copy the journal of a write transaction on `db` that has already written
@@ -379,8 +452,9 @@ fn armed_journal_of(db: &Path) -> Vec<u8> {
 }
 
 /// SQLite finds a sidecar by name, so a stale journal beside a name the restore
-/// replaces would replay into the new file. The ones beside the project and
-/// beside the old safety copy are moved away, and the new files open intact.
+/// replaces would replay into the new file. An armed one (here a genuine one,
+/// which the control shows does replay) is refused; debris beside the project
+/// and the safety copy is moved away, and the new files open intact.
 #[test]
 fn stale_sidecars_never_reach_the_restored_files() {
     let dir = TempDir::new().unwrap();
@@ -403,10 +477,24 @@ fn stale_sidecars_never_reach_the_restored_files() {
         let _ = std::fs::remove_file(dir.path().join(leftover));
     }
 
-    // An armed journal beside the old safety copy, debris beside the project.
-    std::fs::write(dir.path().join("cave.stalx.pre-restore-journal"), &journal).unwrap();
+    // Armed beside the old safety copy: refused, nothing changed.
+    let armed = dir.path().join("cave.stalx.pre-restore-journal");
+    std::fs::write(&armed, &journal).unwrap();
+    let before = snapshot(dir.path());
+    let err = state()
+        .restore_project_from_backup(&project, &backup)
+        .unwrap_err();
+    assert!(
+        err.contains("has changes that were never finished"),
+        "{err}"
+    );
+    assert_eq!(snapshot(dir.path()), before);
+    std::fs::remove_file(&armed).unwrap();
+
+    // Debris: an unarmed journal and WAL indexes.
     std::fs::write(dir.path().join("cave.stalx-journal"), [0u8; 512]).unwrap();
     std::fs::write(dir.path().join("cave.stalx-shm"), [0u8; 64]).unwrap();
+    std::fs::write(dir.path().join("cave.stalx.pre-restore-shm"), [0u8; 64]).unwrap();
 
     state()
         .restore_project_from_backup(&project, &backup)
@@ -422,19 +510,28 @@ fn stale_sidecars_never_reach_the_restored_files() {
     assert_eq!(label(&safety), "Current");
 }
 
+/// Make the rename onto `db` fail: its `-shm` is a folder, and the name it
+/// would be set aside under is a folder that is not empty.
+fn block_the_rename_onto(db: &Path) {
+    let mut shm = db.file_name().unwrap().to_os_string();
+    shm.push("-shm");
+    let shm = db.with_file_name(shm);
+    std::fs::create_dir(&shm).unwrap();
+    let mut aside = shm.file_name().unwrap().to_os_string();
+    aside.push(".set-aside");
+    let aside = shm.with_file_name(aside);
+    std::fs::create_dir(&aside).unwrap();
+    std::fs::write(aside.join("keep"), b"in the way").unwrap();
+}
+
 /// The safety copy comes first: when it cannot be written, the project is not
-/// replaced, and nothing staged is left behind.
+/// replaced, the previous safety copy is back, and nothing staged is left.
 #[test]
 fn no_safety_copy_no_restore() {
     let dir = TempDir::new().unwrap();
     let (project, backup) = cave(&dir);
-    let blocker = pre_restore_path(&project);
-    std::fs::create_dir(&blocker).unwrap();
-    std::fs::write(
-        blocker.join("keep"),
-        b"a folder where the safety copy would go",
-    )
-    .unwrap();
+    let safety = project_file(dir.path(), "cave.stalx.pre-restore", "Kept");
+    block_the_rename_onto(&safety);
     let before = snapshot(dir.path());
 
     let err = state()
@@ -448,6 +545,58 @@ fn no_safety_copy_no_restore() {
         "{err}"
     );
     assert_eq!(snapshot(dir.path()), before);
+}
+
+/// When the backup cannot take the project's name, the safety copy the restore
+/// just replaced goes back: a failed restore changes nothing. That includes an
+/// undo, where the safety copy IS the file being restored.
+#[test]
+fn a_restore_that_fails_at_the_last_step_changes_nothing() {
+    for undo in [false, true] {
+        let dir = TempDir::new().unwrap();
+        let (project, backup) = cave(&dir);
+        let safety = project_file(dir.path(), "cave.stalx.pre-restore", "Kept");
+        block_the_rename_onto(&project);
+        let before = snapshot(dir.path());
+        let source = if undo { &safety } else { &backup };
+
+        let err = state()
+            .restore_project_from_backup(&project, source)
+            .unwrap_err();
+
+        assert!(
+            err.starts_with("Not restored: could not replace cave.stalx (")
+                && err.ends_with("). Nothing was changed."),
+            "undo={undo}: {err}"
+        );
+        assert_eq!(snapshot(dir.path()), before, "undo={undo}");
+        assert_eq!(label(&safety), "Kept", "undo={undo}");
+    }
+}
+
+/// A load opens its file before it takes the project slot, so a restore while
+/// one is in flight could be saved over later: refused, nothing changed.
+#[test]
+fn no_restore_while_a_project_is_being_opened() {
+    let dir = TempDir::new().unwrap();
+    let (project, backup) = cave(&dir);
+    let state = state();
+    let loading = state.start_new_load();
+    let before = snapshot(dir.path());
+
+    let err = state
+        .restore_project_from_backup(&project, &backup)
+        .unwrap_err();
+
+    assert_eq!(
+        err,
+        "Not restored: a project is being opened. Try again once it has opened."
+    );
+    assert_eq!(snapshot(dir.path()), before);
+    state.clear_active_load(&loading);
+    state
+        .restore_project_from_backup(&project, &backup)
+        .unwrap();
 }
 
 #[test]
@@ -519,22 +668,45 @@ fn a_linked_project_is_restored_into_the_file_it_names() {
     assert_eq!(label(&pre_restore_path(&real)), "Current");
 }
 
-/// The staged copies are created owner-only; `std::fs::copy` then gives each
-/// the permissions of the file it copies, as the in-place copy did.
+/// The restored file takes the project's place, permissions included, and
+/// the safety copy keeps them too. A read-only backup is copied, not opened
+/// for writing.
 #[cfg(unix)]
 #[test]
-fn the_restored_files_keep_the_permissions_they_were_copied_from() {
+fn the_restored_files_keep_the_projects_permissions() {
+    use std::os::unix::fs::PermissionsExt as _;
+    for backup_mode in [0o644, 0o444] {
+        let dir = TempDir::new().unwrap();
+        let (project, backup) = cave(&dir);
+        std::fs::set_permissions(&project, std::fs::Permissions::from_mode(0o640)).unwrap();
+        std::fs::set_permissions(&backup, std::fs::Permissions::from_mode(backup_mode)).unwrap();
+
+        state()
+            .restore_project_from_backup(&project, &backup)
+            .unwrap();
+
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&project), 0o640, "backup {backup_mode:o}");
+        assert_eq!(mode(&pre_restore_path(&project)), 0o640);
+        assert_eq!(mode(&backup), backup_mode, "the backup is only read");
+        assert_eq!(label(&project), "Older");
+    }
+}
+
+/// A project that does not exist yet takes the backup's permissions.
+#[cfg(unix)]
+#[test]
+fn a_missing_project_takes_the_backups_permissions() {
     use std::os::unix::fs::PermissionsExt as _;
     let dir = TempDir::new().unwrap();
-    let (project, backup) = cave(&dir);
-    std::fs::set_permissions(&project, std::fs::Permissions::from_mode(0o640)).unwrap();
-    std::fs::set_permissions(&backup, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let backup = project_file(dir.path(), "cave.stalx.backup", "Older");
+    std::fs::set_permissions(&backup, std::fs::Permissions::from_mode(0o604)).unwrap();
+    let project = dir.path().join("cave.stalx");
 
     state()
         .restore_project_from_backup(&project, &backup)
         .unwrap();
 
-    let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
-    assert_eq!(mode(&project), 0o644);
-    assert_eq!(mode(&pre_restore_path(&project)), 0o640);
+    let mode = std::fs::metadata(&project).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o604);
 }

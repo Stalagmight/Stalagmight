@@ -58,8 +58,8 @@
 //!   It used to overwrite that backup with the project before reading it.
 //!
 //! Every `FZ706-STEP` line carries a `shape=` token (paths classified as open /
-//! self / backup / other / fresh / missing), which is what a farm signature
-//! keys on, since a SIGBUS leaves only the last step line behind.
+//! self / backup / other / fresh / missing), so a failure can be grouped by
+//! shape even when a SIGBUS leaves only the last step line behind.
 //!
 //! All data is synthetic. No fixture is read or written.
 
@@ -837,7 +837,8 @@ fn live_digest(state: &AppState) -> Option<Result<u64, String>> {
         .map(|scan| scan.map(|s| s.digest).map_err(|e| e.to_string()))
 }
 
-/// On-demand campaign; the fuzz farm runs it with rolling seed windows.
+/// On-demand campaign: run with `--ignored`, seed windows via `FZ706_FIRST` /
+/// `FZ706_SEEDS`.
 #[test]
 #[ignore = "fuzz campaign (#706): run with --ignored, seeds via FZ706_FIRST/FZ706_SEEDS"]
 fn fz706_campaign() {
