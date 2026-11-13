@@ -409,7 +409,9 @@ it('retired SpeleoDB commands are absent from IPC and browser mocks', () => {
     'speleodb_unwind_target',
     'speleodb_rewind_target',
   ]) {
-    expect(libRsSource).not.toContain(`commands::speleodb::${command},`);
+    // Word-bounded, so it also catches a registration without a trailing comma (the
+    // last entry in the list).
+    expect(libRsSource).not.toMatch(new RegExp(`commands::speleodb::${command}\\b`));
     expect(mockTsSource).not.toContain(`case '${command}':`);
   }
   const barrel = fs.readFileSync(path.join(REPO_ROOT, 'src/types/ipc.generated.ts'), 'utf8');

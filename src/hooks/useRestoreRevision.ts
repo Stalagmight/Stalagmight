@@ -37,32 +37,6 @@ export interface RestoreRevisionArgs {
    * Everything else about the call is unchanged.
    */
   quiet?: boolean;
-  /**
-   * [#303] The "Unwind to previous SpeleoDB version" flavour: KEEP the downloaded
-   * copy's undo history instead of dropping it, because that history is what the
-   * action came for. No current caller sets it (the Unwind dialog was removed, #671);
-   * the backend still accepts it and enforces its extra preconditions (an empty undo
-   * stack, and any dirt being a previous Unwind's own doing) rather than trusting it.
-   */
-  keepUndoHistory?: boolean;
-  /**
-   * [#303] The user was shown, and accepted, that this Unwind throws away un-pushed work -
-   * the copy is dirty with no Unwind chain pointer to account for it, so the swap replaces
-   * edits that were never pushed (typically ones the user undid, now on the redo stack).
-   *
-   * An acknowledgement, not a decision: the backend re-derives the same predicate that put
-   * `discards_unpushed` on the unwind target, and without this flag it refuses exactly as
-   * before. A caller may set it only when it actually showed the user that warning.
-   */
-  discardUnpushed?: boolean;
-  /**
-   * [#303] This chain step walks FORWARD (toward BASE) rather than back. It selects which
-   * stack the backend requires empty before the swap: going back, the undo stack, so the
-   * tree sits at the parent's state; going forward, the redo stack, so every operation of
-   * the commit being sat on has been re-applied and the child's history stacks on cleanly.
-   * Only meaningful alongside `keepUndoHistory`, and clamped to it below.
-   */
-  chainForward?: boolean;
 }
 
 /**
@@ -97,9 +71,6 @@ export function useRestoreRevision() {
       restore,
       discardLocal = false,
       quiet = false,
-      keepUndoHistory = false,
-      discardUnpushed = false,
-      chainForward = false,
     }: RestoreRevisionArgs) => {
       const issuedFor = speleoProjectSessionIssuedFor(projectId);
       try {
@@ -110,15 +81,9 @@ export function useRestoreRevision() {
           restore,
           // Never waived for a View, whatever the caller passed.
           discardLocal: restore && discardLocal,
-          // [#303] Likewise only meaningful for a Restore: a View leaves the project
-          // read-only, so there would be nothing to undo with the history it kept.
-          keepUndoHistory: restore && keepUndoHistory,
-          // ...and the acknowledgement only means anything alongside that history-keeping
-          // Restore, which is the only shape the backend consults it for.
-          discardUnpushed: restore && keepUndoHistory && discardUnpushed,
-          // ...and likewise the direction, which only selects a guard that a
-          // history-keeping Restore is the one caller to reach.
-          chainForward: restore && keepUndoHistory && chainForward,
+          // The history-keeping Unwind flags (`keepUndoHistory`, `discardUnpushed`,
+          // `chainForward`) are left out: no surface offers that step since the Unwind
+          // UI was removed (#668, #671), and the backend defaults each to false.
         });
       } catch (e) {
         // The download is unbounded and nothing blocks the workspace while it runs,

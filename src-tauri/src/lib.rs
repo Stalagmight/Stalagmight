@@ -1877,7 +1877,6 @@ pub fn run() {
             commands::speleodb::speleodb_restore_revision,
             // SpeleoDB hybrid undo stack: discard the local copy (#303)
             commands::speleodb::speleodb_discard_changes,
-            // SpeleoDB Enable-rendering PATCH (#200)
             // SpeleoDB create-on-SDB publish (#207)
             commands::speleodb::speleodb_project_collaborators,
             commands::speleodb::speleodb_publish,

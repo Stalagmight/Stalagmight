@@ -3,8 +3,9 @@ import { SpeleoDbLogo } from './SpeleoDbLogo';
 
 /**
  * The SpeleoDB mark with a small state/action badge composited onto its corner
- * (shared by the Home screen's SpeleoDB buttons and the project cards' lock badge,
- * so they speak the same visual language). The badge is a dark disc holding a
+ * (shared by every SpeleoDB mark: the Home screen's buttons, the project cards'
+ * lock badge, the SpeleoDB tab and the menu rows, so they speak the same visual
+ * language). The badge is a dark disc holding a
  * `currentColor` glyph, coloured by `badgeColor`.
  */
 export function SpeleoBadgedIcon({

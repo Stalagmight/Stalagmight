@@ -142,9 +142,10 @@ pub(super) enum LocalEditsPolicy {
 /// its prior-state payload, against a tree you have not looked at yet.
 ///
 /// So the default is [`Self::Drop`] on every path that replaces the cache file, and the
-/// history is only ever handed back through the ONE explicit, confirmed, lock-held route
-/// that exists to ask for it: the Unwind. `undo_history_keep_is_unwind_only` pins that
-/// there is exactly one `Keep` site.
+/// history is only ever handed back through the ONE explicit, lock-held route that exists
+/// to ask for it: the Unwind (`speleodb_restore_revision` with `keep_undo_history`, which
+/// no UI offers since #668 and whose preconditions the backend enforces itself).
+/// `undo_history_keep_is_unwind_only` pins that there is exactly one `Keep` site.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum InheritedUndo {
     /// Empty the downloaded file's undo/redo tables. Every implicit adopt path.
@@ -227,7 +228,7 @@ mod tests {
     /// enum rather than a bool: KEEPING a downloaded copy's undo history is a waiver of
     /// the #194 b3 guard, so there must be exactly ONE place in the whole orchestration
     /// that asks for it - the Unwind, which exists to fetch that history back under an
-    /// explicit, confirmed, lock-held action.
+    /// explicit, lock-held action whose preconditions the backend checks.
     ///
     /// A diff that adds a second `Keep` site fails here and has to justify itself.
     #[test]

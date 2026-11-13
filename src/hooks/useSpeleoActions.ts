@@ -422,8 +422,9 @@ export function useSpeleoActions(): SpeleoActions {
       // not what "finish editing" means to the person pressing it.
       //
       // Guarded HERE rather than in each caller because every route to a push comes
-      // through this hook - the SpeleoDB tab, the close prompt and the quit prompt - and
-      // the trap was that one of them made pushing the primary action.
+      // through this hook - the upload dialog (from the SpeleoDB tab, Save or a banner),
+      // the close prompt and the quit prompt - and the trap was that one of them made
+      // pushing the primary action.
       // `acceptOlderVersion` is the confirmation reporting that the user was shown what it
       // does and chose it anyway.
       if (!opts?.acceptOlderVersion && isUnwoundNotEdited(useSpeleoStore.getState().link)) {

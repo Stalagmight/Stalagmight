@@ -105,7 +105,8 @@ function App() {
     // `activeDialog`. Re-running on every active-dialog change let an unresolved
     // divergence re-open ON TOP of an unrelated dialog the user had since navigated
     // to (e.g. Settings), trapping them (N1). If they leave it unresolved, the SpeleoDB
-    // tab's conflict button routes them back. No re-open loop: `openDialog` doesn't
+    // tab offers "Resolve synchronization conflict" whenever the status reports the
+    // conflict (`remoteState === 'conflict'`). No re-open loop: `openDialog` doesn't
     // touch `divergence`, so this only runs when the divergence itself changes.
     if (speleoDivergence !== null) {
       openDialog('speleodb-divergence');
@@ -806,8 +807,6 @@ function App() {
       {activeDialog === 'speleodb-done' && <SpeleoDoneDialog />}
       {activeDialog === 'speleodb-divergence' && <SpeleoDivergenceDialog />}
       {activeDialog === 'speleodb-restore' && <SpeleoRestoreDialog />}
-      {/* [#303] The Unwind confirmation, raised from the undo history dropdown's
-          pinned entry - the only trigger for it. */}
       {activeDialog === 'speleodb-unwound-push' && <SpeleoUnwoundPushDialog />}
       {activeDialog === 'speleodb-discard-changes' && <SpeleoDiscardChangesDialog />}
       {activeDialog === 'speleodb-revert' && <SpeleoRevertDialog />}

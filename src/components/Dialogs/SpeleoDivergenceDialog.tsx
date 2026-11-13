@@ -8,9 +8,10 @@ import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 
 /**
- * SpeleoDB conflict / divergence resolution (#198). Reached from the SpeleoDB
- * tab's "Resolve synchronization conflict" button (or any hand-off verb that
- * reported `divergence_needed`) when the local copy and the server have diverged.
+ * SpeleoDB conflict / divergence resolution (#198). Reached from any hand-off verb
+ * that reported `divergence_needed`, and from the SpeleoDB tab's "Resolve
+ * synchronization conflict" button while the status reports the conflict, when the
+ * local copy and the server have diverged.
  *
  * Three peer resolutions - the framing biases toward preserving local work, the
  * only non-recoverable artifact (the server side is always recoverable from SDB

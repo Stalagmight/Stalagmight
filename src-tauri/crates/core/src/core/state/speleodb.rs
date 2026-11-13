@@ -2141,8 +2141,9 @@ mod tests {
     fn replacing_the_open_project_closes_it() {
         // The download-replace must not leave a live mmap-enabled SQLite connection
         // on a file it renamed over (SIGBUS / torn reads on Unix, a denied rename on
-        // Windows), so the install drops the handle before the rename and closes the
-        // project once the new bytes are in place.
+        // Windows), so the install drops the handle before the rename (pinned by
+        // `the_open_projects_handle_is_dropped_before_the_rename_under_a_poisoned_lock`)
+        // and closes the project once the new bytes are in place.
         let temp = TempDir::new().expect("temp dir");
         let dest = temp.path().join("cache.stalx");
         seed_linked_stalx(&dest, GUARD_ID, false);
@@ -2205,13 +2206,15 @@ mod tests {
     }
 
     #[test]
-    fn replacing_the_open_project_drops_the_handle_when_a_lock_is_poisoned() {
-        // A close written as `if let Ok(..)` per lock drops NOTHING on a poisoned
-        // mutex, and the install would then rename a new file over a live SQLite
-        // handle and its 256 MB mmap. Poisoning only means an earlier call panicked
-        // while holding the lock; the guarded value is an `Option`, and emptying it
-        // is exactly the recovery. The policy is beside the point here, so the
-        // confirmed discard keeps the guard out of the way.
+    fn replacing_the_open_project_under_a_poisoned_lock_still_closes_it() {
+        // The end state of a successful replace under a poisoned mutex: project and
+        // handle both gone. Poisoning only means an earlier call panicked while
+        // holding the lock; the guarded value is an `Option`, and emptying it is
+        // exactly the recovery. Whether the handle went BEFORE the rename cannot be
+        // seen from here (Linux renames over an open file); that is pinned by
+        // `the_open_projects_handle_is_dropped_before_the_rename_under_a_poisoned_lock`.
+        // The policy is beside the point, so the confirmed discard keeps the guard
+        // out of the way.
         let temp = TempDir::new().expect("temp dir");
         let dest = temp.path().join("cache.stalx");
         seed_stalx(&dest, "Cache");
@@ -2517,12 +2520,13 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_install_leaves_the_open_project_open() {
+    fn a_failed_staging_leaves_the_open_project_open() {
         // A failed install must not leave the project closed backend-side while the
         // frontend still displays it - every later command, auto-save included, would
         // then fail with "no project open". The install stages to a temp before it
-        // touches the open project, so on failure `dest` is untouched and the project
-        // was never closed.
+        // touches the open project, so a staging failure leaves `dest` untouched and
+        // never closes the project. A failure AFTER the handle is dropped is pinned by
+        // `a_failed_sidecar_move_reopens_the_open_projects_database`.
         let temp = TempDir::new().expect("temp dir");
         let dest = temp.path().join("project.stalx");
         seed_linked_stalx(&dest, GUARD_ID, false);
@@ -2553,6 +2557,113 @@ mod tests {
             project_is_open(&state),
             "and the open project stays open, so the shell is not left showing a \
              project the backend does not have open"
+        );
+    }
+
+    /// Make the install's sidecar step fail: an inert `-shm` beside `dest`, and a
+    /// non-empty directory where it would be parked, so moving it aside cannot succeed.
+    /// That step runs after the open project's database handle has been dropped and
+    /// before the rename, which is exactly the window the tests below need to observe.
+    fn block_the_sidecar_move(dest: &Path) {
+        let shm = std::path::PathBuf::from(format!("{}-shm", dest.display()));
+        std::fs::write(&shm, b"").expect("inert shm sidecar");
+        let parked = std::path::PathBuf::from(format!("{}-shm.set-aside", dest.display()));
+        std::fs::create_dir(&parked).expect("obstacle where the sidecar would be parked");
+        std::fs::write(parked.join("keep"), b"x").expect("non-empty obstacle");
+    }
+
+    #[test]
+    fn a_failed_sidecar_move_reopens_the_open_projects_database() {
+        // The install drops the open project's database handle before it moves the
+        // sidecars and renames (a live handle must not survive into the rename). A
+        // failure in between must reopen the ORIGINAL file, or the project stays open
+        // in memory with no database behind it.
+        let temp = TempDir::new().expect("temp dir");
+        let dest = temp.path().join("project.stalx");
+        seed_linked_stalx(&dest, GUARD_ID, false);
+        let native = server_stalx();
+
+        let state = AppState::new().expect("state");
+        assert!(state.open_project(dest.clone()).success, "open the cache");
+        let before = std::fs::read(&dest).expect("read cache");
+        block_the_sidecar_move(&dest);
+
+        let err = install_over(&state, native.path(), &dest, LocalEditsPolicy::Discard)
+            .expect_err("a sidecar that cannot be moved aside fails the install");
+        assert!(
+            err.to_string().contains("could not move"),
+            "the failure is the sidecar move, got {err:?}"
+        );
+        assert_eq!(
+            std::fs::read(&dest).expect("read cache after the failure"),
+            before,
+            "the original bytes are still in place"
+        );
+        assert!(
+            project_is_open(&state),
+            "the project AND its reopened database are both there again"
+        );
+        assert!(
+            std::path::PathBuf::from(format!("{}-shm", dest.display())).exists(),
+            "and the sidecar is back beside the original"
+        );
+    }
+
+    /// Unix only: it makes the original unreadable to observe the handle, and only unix
+    /// permissions make a file unopenable to its owner.
+    #[cfg(unix)]
+    #[test]
+    #[expect(
+        clippy::print_stderr,
+        reason = "say so when a privileged run has to skip the check"
+    )]
+    fn the_open_projects_handle_is_dropped_before_the_rename_under_a_poisoned_lock() {
+        // A drop written as `if let Ok(..)` does nothing on a poisoned mutex, and the
+        // install then renames a new file over a live SQLite handle and its 256 MB mmap
+        // (SIGBUS / torn reads on Unix, a denied rename on Windows). Linux renames over
+        // an open file anyway, so the end state of a successful install cannot show
+        // whether the handle went first. This stops the install between the drop and
+        // the rename instead, with the original made unreopenable: the slot can only
+        // be empty afterwards if the drop really happened.
+        use std::os::unix::fs::PermissionsExt;
+        let temp = TempDir::new().expect("temp dir");
+        let dest = temp.path().join("project.stalx");
+        seed_stalx(&dest, "Cache");
+        let native = server_stalx();
+
+        let state = AppState::new().expect("state");
+        assert!(state.open_project(dest.clone()).success, "open the cache");
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = state.database.lock().expect("database lock");
+            panic!("simulated panic while holding the database lock");
+        }));
+        assert!(poisoned.is_err() && state.database.is_poisoned());
+
+        block_the_sidecar_move(&dest);
+        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o000))
+            .expect("make the original unreadable");
+        if std::fs::File::open(&dest).is_ok() {
+            // Privileged runs (root in a container) ignore the mode, so the reopen
+            // would succeed and nothing could be observed.
+            eprintln!("skipped: this user can open a mode-000 file");
+            return;
+        }
+
+        let err = install_over(&state, native.path(), &dest, LocalEditsPolicy::Discard)
+            .expect_err("the sidecar move fails, and so does the reopen");
+        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o644))
+            .expect("restore the mode for cleanup");
+        assert!(
+            err.to_string().contains("could not be reopened"),
+            "the reopen of the original was attempted and refused, got {err:?}"
+        );
+        assert!(
+            state
+                .database
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_none(),
+            "the live handle was dropped before the rename, poisoned lock or not"
         );
     }
 

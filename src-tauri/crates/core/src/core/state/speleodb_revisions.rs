@@ -16,7 +16,7 @@ use super::speleodb_cache::{InheritedUndo, LocalEditsPolicy};
 use super::AppState;
 use crate::models::UndoMode;
 use crate::speleodb::contract::{dto_for_error, Endpoint};
-use crate::speleodb::models::{SpeleoRevision, SpeleoUnwindTarget};
+use crate::speleodb::models::SpeleoRevision;
 use crate::speleodb::{client, sync};
 use crate::speleodb::{SpeleoDbError, SpeleoErrorDto, SpeleoOpenResult};
 
@@ -156,10 +156,10 @@ fn revision_swap_base(
 /// the undo stack no longer covers (edits the user undid, so they sit on the redo stack; a
 /// byte-budget trim; a legacy file), and the swap replaces all of it.
 ///
-/// One predicate, two readers - `speleodb_unwind_target` puts the answer on the DTO, and
-/// `speleodb_guard_unwind` decides with it. Keeping them on the same function is what stops
-/// the warning flag and the refusal from drifting apart, which is how this surfaced: the
-/// (since removed) Unwind entry offered an action that only ever failed.
+/// `speleodb_guard_unwind` decides with this predicate. It used to have a second reader, the (since
+/// removed) Unwind confirmation's warning, and keeping both on one function is what stopped
+/// the warning and the refusal from drifting apart - which is how this surfaced: the entry
+/// offered an action that only ever failed.
 fn unwind_discards_unpushed(has_unpushed_edits: bool, unwound_from: Option<&str>) -> bool {
     has_unpushed_edits && unwound_from.is_none()
 }
@@ -184,11 +184,10 @@ impl AppState {
     ///    refusal, on the grounds that un-pushed work "must not be discarded on the
     ///    strength of a waiver the user was never shown" - but the affordance is offered
     ///    exactly when the undo stack is empty, which is also what undoing everything
-    ///    produces, so the button existed only to fail. The waiver has to be SHOWN: the
-    ///    target DTO carries the same predicate, and `discard_unpushed` is the caller
-    ///    reporting that it warned the user. Absent the acknowledgement this still
-    ///    refuses, so no caller can discard un-pushed work by passing `keep_undo_history`
-    ///    alone.
+    ///    produces, so the button existed only to fail. The waiver has to be acknowledged:
+    ///    `discard_unpushed` is the caller reporting that it warned the user. Absent the
+    ///    acknowledgement this still refuses, so no caller can discard un-pushed work by
+    ///    passing `keep_undo_history` alone.
     /// [#303] Is the revision being asked for actually the step the claimed direction
     /// leads to?
     ///
@@ -214,7 +213,7 @@ impl AppState {
         let expected = if chain_forward {
             self.speleodb_rewind_candidate()?
         } else {
-            self.speleodb_unwind_target()?.map(|t| t.hexsha)
+            self.speleodb_unwind_target()?
         };
         if expected
             .as_deref()
@@ -379,15 +378,15 @@ impl AppState {
         }
     }
 
-    /// [#303] Which revision the next Unwind would load, and whether it is the commit the
-    /// working copy already equals.
+    /// [#303] Which revision the next Unwind would load: the commit the working copy already
+    /// equals on the first step after a push, an ancestor after that.
     ///
     /// `None` when there is nothing to reach: no link, an empty repo, the root of the
     /// history, or a chain pointer naming a commit outside the fetched range.
     ///
     /// Needs the revision topology, so it costs one `GET /revisions/`. Called only by
     /// `speleodb_verify_chain_target`, for a history-keeping restore going back.
-    pub fn speleodb_unwind_target(&self) -> Result<Option<SpeleoUnwindTarget>, SpeleoErrorDto> {
+    pub fn speleodb_unwind_target(&self) -> Result<Option<String>, SpeleoErrorDto> {
         let link = self.speleodb_validated_link()?;
         // Disabled mode never SHIPPED history, so there is nothing in those commits to
         // come back for. Older commits pushed while the project was Full still have it,
@@ -401,22 +400,12 @@ impl AppState {
             .speleodb_server_head(&endpoint, &token, insecure_http, &link.project_id)
             .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
 
-        let unwound_from = self.speleodb_unwound_from();
-        // The same predicate the guard decides with, so the warning flag and the
-        // backend's refusal can never disagree about this copy.
-        let discards_unpushed =
-            unwind_discards_unpushed(link.has_unpushed_edits, unwound_from.as_deref());
-
         Ok(sync::unwind_target(
-            unwound_from.as_deref(),
+            self.speleodb_unwound_from().as_deref(),
             link.base_commit_sha.as_deref(),
             &commits,
         )
-        .map(|(hexsha, is_current)| SpeleoUnwindTarget {
-            hexsha,
-            is_current,
-            discards_unpushed,
-        }))
+        .map(|(hexsha, _is_current)| hexsha))
     }
 
     /// [#303] Which revision a FORWARD chain step would check out, walking back up toward
@@ -885,8 +874,7 @@ mod tests {
         );
         assert!(
             body.contains("unwind_discards_unpushed("),
-            "the guard must decide with the SAME predicate the DTO reports, or the warning \
-             flag and the refusal can drift apart"
+            "the guard must decide with the shared `unwind_discards_unpushed` predicate"
         );
         // The acknowledgement gates that refusal and nothing else: dropping the `!` would
         // let any `keep_undo_history` caller discard un-pushed work silently, which is the

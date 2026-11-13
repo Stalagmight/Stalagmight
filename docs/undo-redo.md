@@ -817,13 +817,13 @@ Dirt with **no** pointer is real un-pushed work, and it is not refused outright 
 **warned about**. That state is ordinary, not exotic: the entry is offered exactly when the
 undo stack is empty, which is also what undoing everything produces, and that leaves the
 copy dirty with the undone steps on the redo stack. A flat refusal there meant the app
-offered a button whose only outcome was an error. So `unwind_discards_unpushed` (one
-predicate, two readers) both fills `SpeleoUnwindTarget.discards_unpushed` and decides the
-guard: the (since removed) confirmation raised a red warning on the flag when it OPENED,
-naming the survey changes as well as the history (a copy can be dirty for reasons no undo
-explains - a byte-budget trim, a legacy file - and there content really is replaced), and
-confirming sent `discard_unpushed` back. Without that acknowledgement the guard refuses
-exactly as before, so no `keep_undo_history` caller can discard un-pushed work by accident.
+offered a button whose only outcome was an error. So the guard decides with
+`unwind_discards_unpushed`, the same predicate the (since removed) confirmation used to
+raise a red warning when it OPENED, naming the survey changes as well as the history (a copy
+can be dirty for reasons no undo explains - a byte-budget trim, a legacy file - and there
+content really is replaced); confirming sent `discard_unpushed` back. Without that
+acknowledgement the guard refuses exactly as before, so no `keep_undo_history` caller can
+discard un-pushed work by accident.
 
 Until #668 the frontend offered it as one entry pinned below the undo history list, and
 clicking it opened a confirmation rather than acting. Undo / Ctrl+Z on an empty stack still
@@ -944,8 +944,8 @@ its edit session by carrying the claim through the swap; a View carries none.
 
 ## History UI
 
-SpeleoDB revision inspection, restore/revert, and Unwind/Rewind live in the left
-workspace History section. They are separate from the local undo/redo dropdown,
+SpeleoDB revision inspection and restore/revert live in the left workspace History
+section; Unwind/Rewind has no UI (see above). They are separate from the local undo/redo dropdown,
 which closes when its stack becomes empty. Revision editing requires Survey mode
 and the editing lock.
 

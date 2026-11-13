@@ -95,32 +95,6 @@ pub struct RevisionHistory {
     pub commits: Vec<RevisionCommit>,
 }
 
-/// [#303] Which revision the next "Unwind to previous SpeleoDB version" would load.
-///
-/// Backend-only since the Unwind UI was removed: a history-keeping restore checks the
-/// requested revision against it. `is_current` distinguishes the two shapes of the same
-/// step:
-///
-/// - `true` - the target is the commit the working copy ALREADY equals (the first step
-///   after a push). Nothing moves; what comes back is the undo history that produced this
-///   state, so the user can keep stepping backwards through their own pushed operations.
-/// - `false` - the target is an ancestor, so the working copy DOES move back, and any
-///   later push lands that older content as a new forward commit.
-#[derive(Debug, Clone)]
-pub struct SpeleoUnwindTarget {
-    /// 40-hex commit SHA to check out.
-    pub hexsha: String,
-    /// The target is the working copy's own commit rather than an ancestor.
-    pub is_current: bool,
-    /// [#303] Going ahead would throw away un-pushed work: the copy is dirty and no
-    /// Unwind chain pointer accounts for it, so the swap replaces edits the user never
-    /// pushed (and the redo steps that would have replayed them).
-    ///
-    /// Only a caller that passes the matching acknowledgement gets past the backend
-    /// guard - a caller is told what will happen, it is not trusted to decide it.
-    pub discards_unpushed: bool,
-}
-
 /// [#218] One commit projected for the frontend revision-history view. A read-only
 /// slice of [`RevisionCommit`] carrying only what the UI renders (no token, no
 /// server-internal fields). The list is server-ordered (newest first).

@@ -756,9 +756,9 @@ describe('useSpeleoActions - startEditing falls to the REFUSING answer (#270)', 
  * [#303] The guard that makes every push route safe at once.
  *
  * Placed in the hook rather than in each caller because there are three ways to reach a
- * push - the SpeleoDB tab, the close prompt and the quit prompt - and
- * the trap was that one of them made it the primary action. A guard per caller would have
- * fixed that one and left the others.
+ * push - the upload dialog (from the SpeleoDB tab, Save or a banner), the close prompt
+ * and the quit prompt - and the trap was that one of them made it the primary action.
+ * A guard per caller would have fixed that one and left the others.
  */
 describe('useSpeleoActions - pushing an unwound copy is confirmed first (#303)', () => {
   const seedUnwound = (unwoundNotEdited: boolean) =>
