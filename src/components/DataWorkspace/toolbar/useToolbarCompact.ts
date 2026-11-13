@@ -4,58 +4,90 @@
  * icon-only (label kept as the accessible name and tooltip) only once the
  * labelled row, with the find box at its narrowest, no longer fits.
  *
- * While labelled, the row's need is measured from its children (the last
- * child's right edge plus the row's end padding), so the find box first shrinks
- * to its minimum; past that the row overflows and goes compact, remembering
- * the width the labelled row needed. While compact, labels come back once the
- * row is that wide again. A content change (a filter count in a label) is seen
- * through the observed children: if the labels come back and no longer fit,
- * the row goes compact again with the new need, so it never oscillates.
+ * The row's need is the sum of its children's widths, the shrinkable find
+ * column (`data-toolbar-shrink`) counted at its narrowest, plus the gaps and
+ * the padding. When the labelled row overflows, the buttons go compact and the
+ * width the labels take is learnt (labelled need - compact need, measured
+ * across the flip); labels come back once the compact need plus that fits.
+ * Every child is observed, and so are the find column's inputs (the column
+ * itself keeps its width while its content changes), so a change of content
+ * - the find box's match count, a filter count in a label - is re-measured
+ * too, in either state.
  */
 import { useLayoutEffect, useRef, useState, type RefObject } from 'react';
 
-/** Width the row's content needs: its last child's right edge + end padding. */
-export function labelledNeed(row: HTMLElement): number {
-  const last = row.lastElementChild as HTMLElement | null;
-  if (!last) return 0;
-  const box = row.getBoundingClientRect();
-  const padEnd = parseFloat(getComputedStyle(row).paddingRight) || 0;
-  let right = 0;
-  for (const child of row.children) right = Math.max(right, child.getBoundingClientRect().right);
-  return right - box.left + padEnd;
+/** The text inputs of the shrinkable column: the only parts of it that grow. */
+const shrinkInputs = (row: HTMLElement) => row.querySelectorAll<HTMLInputElement>('[data-toolbar-shrink] input[type="text"]');
+
+/** The narrowest the shrinkable column can get: its width less the room its
+ *  tightest text input has above that input's own minimum width. */
+function shrinkableMin(col: HTMLElement): number {
+  const width = col.getBoundingClientRect().width;
+  let slack = Infinity;
+  for (const input of col.querySelectorAll<HTMLInputElement>('input[type="text"]')) {
+    const min = parseFloat(getComputedStyle(input).minWidth) || 0;
+    slack = Math.min(slack, input.getBoundingClientRect().width - min);
+  }
+  return Number.isFinite(slack) ? width - Math.max(0, slack) : width;
 }
 
-/** The next compact state: labelled until the measured need exceeds the room,
- *  compact until the room reaches the remembered need. */
-export function nextCompact(compact: boolean, avail: number, need: number): boolean {
-  if (avail <= 0) return compact; // not laid out (hidden, a test DOM)
-  return need > avail + 0.5;
+/** Width the row's content needs at the least: children (the shrinkable one
+ *  at its narrowest) + gaps + padding. Margins (the Map toggle's `ml-auto`)
+ *  are spare room, not need. */
+export function rowNeed(row: HTMLElement): number {
+  const cs = getComputedStyle(row);
+  const kids = [...row.children] as HTMLElement[];
+  let need =
+    (parseFloat(cs.paddingLeft) || 0) +
+    (parseFloat(cs.paddingRight) || 0) +
+    (parseFloat(cs.columnGap) || 0) * Math.max(0, kids.length - 1);
+  for (const k of kids) need += k.dataset.toolbarShrink !== undefined ? shrinkableMin(k) : k.getBoundingClientRect().width;
+  return need;
 }
+
+/** Sub-pixel slack, so a row that fits exactly does not flip. */
+const EPS = 0.5;
 
 export function useToolbarCompact(rowRef: RefObject<HTMLElement>): boolean {
   const [compact, setCompact] = useState(false);
-  const state = useRef({ compact: false, need: 0 });
+  const state = useRef({ compact: false, labelExtra: 0, labelledNeed: null as number | null });
 
   useLayoutEffect(() => {
     const row = rowRef.current;
     if (!row || typeof ResizeObserver === 'undefined') return undefined;
     const measure = () => {
       const avail = row.getBoundingClientRect().width;
+      if (avail <= 0) return; // not laid out (hidden, a test DOM)
       const s = state.current;
-      // Labelled: measure what it needs now. Compact: compare with what the
-      // labelled row needed when it last overflowed.
-      if (!s.compact) s.need = labelledNeed(row);
-      const next = nextCompact(s.compact, avail, s.need);
-      if (next === s.compact) return;
-      s.compact = next;
-      setCompact(next);
+      const need = rowNeed(row);
+      if (!s.compact) {
+        if (need <= avail + EPS) return;
+        s.compact = true;
+        s.labelledNeed = need;
+        setCompact(true);
+        return;
+      }
+      // First measure after going compact: learn what the labels take.
+      if (s.labelledNeed !== null) {
+        s.labelExtra = Math.max(0, s.labelledNeed - need);
+        s.labelledNeed = null;
+      }
+      if (need + s.labelExtra <= avail + EPS) {
+        s.compact = false;
+        setCompact(false);
+      }
     };
-    const ro = new ResizeObserver(measure);
+    const ro = new ResizeObserver(() => {
+      // Inputs come and go (the replace row): observing again is a no-op.
+      for (const input of shrinkInputs(row)) ro.observe(input);
+      measure();
+    });
     ro.observe(row);
     for (const child of row.children) ro.observe(child);
+    for (const input of shrinkInputs(row)) ro.observe(input);
     measure();
     return () => ro.disconnect();
-    // Re-observe after a flip: the children re-render (labels on / off).
+    // Re-observe and re-measure after a flip: the children re-rendered.
   }, [rowRef, compact]);
 
   return compact;

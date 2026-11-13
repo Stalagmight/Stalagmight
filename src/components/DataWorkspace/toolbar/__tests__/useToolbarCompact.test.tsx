@@ -1,7 +1,7 @@
 /**
- * The toolbar drops its menu labels only when the labelled row overflows (as
- * measured), and brings them back once the row is as wide as the labelled row
- * needed - not at a fixed breakpoint.
+ * The toolbar drops its menu labels only when the labelled row, with the find
+ * box at its narrowest, does not fit (as measured), and brings them back once
+ * it would - also when the find box's own content shrinks while compact.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen } from '@testing-library/react';
@@ -13,7 +13,6 @@ vi.mock('../../../../hooks/useEditingBlocked', () => ({
 }));
 
 import { Harness, makeModel, resetStore } from './harness';
-import { nextCompact } from '../useToolbarCompact';
 
 const observers: FakeResizeObserver[] = [];
 class FakeResizeObserver {
@@ -37,20 +36,29 @@ const resize = () =>
 
 const rect = (width: number) => ({ left: 0, top: 0, right: width, bottom: 28, width, height: 28, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
 
-/** The row is `rowWidth` wide; its content ends at 950 px with labels, 700 px without. */
+/**
+ * Geometry: the find column is `findWidth` wide and its input 140 px (no CSS in
+ * jsdom, so no min-width: all 140 px are slack) - at its narrowest it is
+ * `findWidth - 140`. Every other child (row type, five menus, map) is 100 px
+ * labelled and 40 px compact. With findWidth 300: labelled need 160 + 700 =
+ * 860, compact need 160 + 280 = 440 (the labels take 420).
+ */
 let rowWidth = 1200;
-const LABELLED = 950;
-const ICONS = 700;
+let findWidth = 300;
 
 beforeEach(() => {
   resetStore();
   observers.length = 0;
+  rowWidth = 1200;
+  findWidth = 300;
   vi.stubGlobal('ResizeObserver', FakeResizeObserver);
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
     if (this.dataset.testid === 'data-toolbar-row') return rect(rowWidth);
+    if (this.dataset.testid === 'data-find-input') return rect(140);
     if (this.parentElement?.dataset.testid === 'data-toolbar-row') {
+      if (this.dataset.toolbarShrink !== undefined) return rect(findWidth);
       const compact = screen.getByTestId('data-toolbar').getAttribute('data-compact') === 'true';
-      return rect(compact ? ICONS : LABELLED);
+      return rect(compact ? 40 : 100);
     }
     return rect(0);
   });
@@ -63,18 +71,17 @@ afterEach(() => {
 const labelled = () => screen.getByTestId('data-toolbar').getAttribute('data-compact') !== 'true';
 
 describe('Data toolbar labels', () => {
-  it('keep their labels while the labelled row fits, at any width', () => {
-    rowWidth = 960;
+  it('keep their labels while the labelled row fits with the find box at its narrowest', () => {
+    rowWidth = 860;
     render(<Harness model={makeModel()} />);
     expect(labelled()).toBe(true);
     expect(screen.getByTestId('data-sections-button')).toHaveTextContent('Sections');
   });
 
-  it('drop to icons once the row overflows, keeping the label as the accessible name and tooltip', () => {
-    rowWidth = 1200;
+  it('drop to icons once it does not, keeping the label as the accessible name and tooltip', () => {
     render(<Harness model={makeModel()} />);
     expect(labelled()).toBe(true);
-    rowWidth = 900;
+    rowWidth = 850;
     resize();
     expect(labelled()).toBe(false);
     const sections = screen.getByTestId('data-sections-button');
@@ -84,22 +91,36 @@ describe('Data toolbar labels', () => {
     expect(screen.getByTestId('data-map-toggle')).toHaveAttribute('aria-label', 'Map');
   });
 
-  it('come back only once the row is as wide as the labelled row needed', () => {
-    rowWidth = 900;
+  it('come back only once the row is as wide as the labelled row needs', () => {
+    rowWidth = 850;
     render(<Harness model={makeModel()} />);
     expect(labelled()).toBe(false);
-    rowWidth = 940;
+    rowWidth = 855;
     resize();
     expect(labelled()).toBe(false);
-    rowWidth = LABELLED;
+    rowWidth = 860;
     resize();
     expect(labelled()).toBe(true);
   });
 
-  it('nextCompact ignores an unlaid-out row', () => {
-    expect(nextCompact(false, 0, 999)).toBe(false);
-    expect(nextCompact(true, 0, 1)).toBe(true);
-    expect(nextCompact(false, 900, 950)).toBe(true);
-    expect(nextCompact(true, 950, 950)).toBe(false);
+  it('come back when the find box content shrinks (a match count goes away)', () => {
+    rowWidth = 850;
+    render(<Harness model={makeModel()} />);
+    expect(labelled()).toBe(false);
+    findWidth = 290; // narrowest 150: 150 + 280 + 420 = 850
+    resize();
+    expect(labelled()).toBe(true);
+  });
+
+  it('learn the labels from the flip, not from a find box that changed since', () => {
+    // A wide count makes the labelled row overflow at 900...
+    rowWidth = 900;
+    findWidth = 380; // narrowest 240: 240 + 700 = 940 > 900
+    render(<Harness model={makeModel()} />);
+    expect(labelled()).toBe(false);
+    // ...then it goes away while compact: 160 + 280 + 420 = 860 fits.
+    findWidth = 300;
+    resize();
+    expect(labelled()).toBe(true);
   });
 });

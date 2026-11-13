@@ -76,7 +76,7 @@ function Toolbar({ model, view }: { model: DataModel; view: DataView }) {
           className={`flex items-start gap-x-2 gap-y-1 px-3 py-1.5 ${compact ? 'flex-wrap' : 'flex-nowrap'}`}
           data-testid="data-toolbar-row"
         >
-          <div className="flex max-w-[360px] flex-[1_1_260px] flex-col gap-1">
+          <div className="flex max-w-[360px] flex-[1_1_260px] flex-col gap-1" data-toolbar-shrink>
             <FindBar
               view={view}
               nav={nav}
