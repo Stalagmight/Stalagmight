@@ -8,6 +8,11 @@
  * workspace); a dropped edit is reported in `skipped`, never silently lost.
  * An edit that would not change anything (the same comment, the same kind)
  * emits no command. Find / replace calls this too.
+ *
+ * An averaged column (azimuth, inclination) and its own legs edited for the
+ * same shot in one batch would give an order-dependent result (the average
+ * rotates the legs, the leg edit overwrites one of them). Explicit legs win:
+ * the average edit of that shot is dropped and reported as a 'conflict'.
  */
 import type { BatchCommand } from '../../../types/commands';
 import type { ShotUpdates } from '../../../types/project';
@@ -51,6 +56,12 @@ const CREDIT_FIELD: Partial<Record<DataColumnKey, string>> = {
   date: 'survey_date',
 };
 
+/** Averaged columns and the leg columns they expand into. */
+const AVERAGED_LEGS: readonly (readonly [DataColumnKey, readonly DataColumnKey[]])[] = [
+  ['azimuth', ['azimuth_in', 'azimuth_out']],
+  ['inclination', ['pitch_in', 'pitch_out']],
+];
+
 export function buildEditCommands(edits: readonly DataCellEdit[], ctx: DataModelCtx): DataEditPlan {
   const skipped: DataEditPlan['skipped'] = [];
   // Group by row, keeping first-seen row order; a later edit of the same cell wins.
@@ -69,6 +80,17 @@ export function buildEditCommands(edits: readonly DataCellEdit[], ctx: DataModel
     let entry = byRow.get(edit.row.key);
     if (!entry) byRow.set(edit.row.key, (entry = { row: edit.row, cells: new Map() }));
     entry.cells.set(edit.colKey, edit);
+  }
+
+  for (const { row, cells } of byRow.values()) {
+    if (row.kind !== 'shot') continue;
+    for (const [avg, legs] of AVERAGED_LEGS) {
+      const avgEdit = cells.get(avg);
+      if (avgEdit && legs.some((leg) => cells.has(leg))) {
+        cells.delete(avg);
+        skipped.push({ edit: avgEdit, reason: 'conflict' });
+      }
+    }
   }
 
   const commands: BatchCommand[] = [];

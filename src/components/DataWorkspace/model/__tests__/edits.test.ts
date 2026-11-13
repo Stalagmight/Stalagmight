@@ -38,6 +38,37 @@ describe('buildEditCommands', () => {
     expect(inc).toMatchObject({ type: 'update_shot', shot_id: 103, updates: { pitch_in: 4, pitch_out: 6 } });
   });
 
+  it('lets explicit in/out legs win over the averaged angle of the same shot, in any order', () => {
+    const avgAz = edit('sh:1:101', 'azimuth', 50);
+    const legAz = edit('sh:1:101', 'azimuth_out', 200);
+    const avgInc = edit('sh:1:103', 'inclination', 5);
+    const legInc = edit('sh:1:103', 'pitch_in', -10);
+    for (const order of [
+      [avgAz, legAz, avgInc, legInc],
+      [legInc, legAz, avgInc, avgAz],
+    ]) {
+      const plan = buildEditCommands(order, ctx);
+      expect(plan.commands).toHaveLength(2);
+      const byShot = new Map(plan.commands.map((c) => [c.type === 'update_shot' ? c.shot_id : -1, c]));
+      // Only the leg edits survive; the untouched leg keeps its value.
+      expect(byShot.get(101)).toEqual({ type: 'update_shot', section_id: 1, shot_id: 101, updates: { azimuth_out: 200 } });
+      expect(byShot.get(103)).toEqual({ type: 'update_shot', section_id: 1, shot_id: 103, updates: { pitch_in: -10 } });
+      expect(plan.skipped).toEqual(
+        expect.arrayContaining([
+          { edit: avgAz, reason: 'conflict' },
+          { edit: avgInc, reason: 'conflict' },
+        ]),
+      );
+      expect(plan.skipped).toHaveLength(2);
+    }
+  });
+
+  it('keeps an averaged edit when only another shot has its legs edited', () => {
+    const plan = buildEditCommands([edit('sh:1:101', 'azimuth', 50), edit('sh:1:102', 'azimuth_in', 10)], ctx);
+    expect(plan.skipped).toEqual([]);
+    expect(plan.commands).toHaveLength(2);
+  });
+
   it('emits station comment and name commands', () => {
     const plan = buildEditCommands([edit('st:1:3', 'comment', 'Dome'), edit('st:1:3', 'name', 'B7')], ctx);
     expect(plan.commands).toEqual([

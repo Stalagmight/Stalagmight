@@ -137,11 +137,19 @@ describe('settleOutcome', () => {
       unchangedCells: 0,
       roundedCells: 0,
     };
-    expect(settleOutcome(plan, [])).toEqual({ replaced: 6, locked: 4, invalid: 1 });
+    expect(settleOutcome(plan, [])).toEqual({ replaced: 6, locked: 4, invalid: 1, conflict: 0 });
     expect(settleOutcome(plan, [{ edit: e2, reason: 'frozen' }, { edit: e3, reason: 'invalid' }])).toEqual({
       replaced: 2,
       locked: 5,
       invalid: 2,
+      conflict: 0,
+    });
+    // An averaged angle dropped because its legs were replaced too.
+    expect(settleOutcome(plan, [{ edit: e1, reason: 'conflict' }])).toEqual({
+      replaced: 4,
+      locked: 4,
+      invalid: 1,
+      conflict: 2,
     });
   });
 });

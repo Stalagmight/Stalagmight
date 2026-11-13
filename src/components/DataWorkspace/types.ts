@@ -183,8 +183,10 @@ export interface DataCellEdit {
 export interface DataEditPlan {
   /** Commands for one `executeBatch` call (one undo step). */
   commands: BatchCommand[];
-  /** Edits dropped, with why (frozen, invalid, not applicable...). */
-  skipped: { edit: DataCellEdit; reason: DataLockReason | 'invalid' }[];
+  /** Edits dropped, with why (frozen, invalid, not applicable...).
+   *  'conflict': an averaged-angle edit (azimuth / inclination) whose shot also
+   *  had an in or out leg edited in the same batch - the explicit leg wins. */
+  skipped: { edit: DataCellEdit; reason: DataLockReason | 'invalid' | 'conflict' }[];
 }
 
 // ─── View state (store) ────────────────────────────────────────────────────

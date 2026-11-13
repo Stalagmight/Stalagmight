@@ -34,6 +34,9 @@ export interface ReplaceOutcome {
   replaced: number;
   locked: number;
   invalid: number;
+  /** Matches in an averaged angle whose in/out legs were replaced in the same
+   *  run: the legs win, the average is skipped (see buildEditCommands). */
+  conflict: number;
 }
 
 /** Fold `buildEditCommands`' own skips back into match counts. */
@@ -42,13 +45,15 @@ export function settleOutcome(plan: ReplacePlan, skipped: readonly { edit: DataC
   let replaced = plan.replacedMatches;
   let locked = plan.lockedMatches;
   let invalid = plan.invalid.length;
+  let conflict = 0;
   for (const s of skipped) {
     const n = plan.editMatches[idx.get(s.edit) ?? -1] ?? 0;
     replaced -= n;
     if (s.reason === 'invalid') invalid += 1;
+    else if (s.reason === 'conflict') conflict += n;
     else locked += n;
   }
-  return { replaced, locked, invalid };
+  return { replaced, locked, invalid, conflict };
 }
 
 export function useReplace(view: DataView, model: DataModel, nav: FindNavigation) {
@@ -145,7 +150,7 @@ export function useReplace(view: DataView, model: DataModel, nav: FindNavigation
     if (done.outcome.replaced === 0) {
       nav.setAnchor(null);
       const reason = done.skipReason;
-      if (reason && reason !== 'invalid') {
+      if (reason && reason !== 'invalid' && reason !== 'conflict') {
         toast(t('dataToolbar.replace.lockedOne', { reason: lockReasonText(t, reason as DataLockReason) }), 'info');
       }
       nav.next();
@@ -187,7 +192,9 @@ export function useReplace(view: DataView, model: DataModel, nav: FindNavigation
     );
     if (outcome.locked > 0) parts.push(t('dataToolbar.replace.summaryLocked', { n: formatNumber(outcome.locked) }));
     if (outcome.invalid > 0) parts.push(t('dataToolbar.replace.summaryInvalid', { n: formatNumber(outcome.invalid) }));
-    const kind = outcome.replaced > 0 && outcome.locked === 0 && outcome.invalid === 0 ? 'success' : 'warning';
+    if (outcome.conflict > 0) parts.push(t('dataToolbar.replace.summaryConflict', { n: formatNumber(outcome.conflict) }));
+    const clean = outcome.locked === 0 && outcome.invalid === 0 && outcome.conflict === 0;
+    const kind = outcome.replaced > 0 && clean ? 'success' : 'warning';
     toast(parts.join(' · '), kind);
   }, [busy, blocked, run, t, toast]);
 

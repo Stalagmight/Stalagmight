@@ -2115,7 +2115,8 @@
       "computed": "computed column",
       "na": "does not apply",
       "blocked": "read-only",
-      "invalid": "invalid value"
+      "invalid": "invalid value",
+      "conflict": "an average edited together with its in/out legs (the legs were kept)"
     },
     "tint": {
       "legend": {
@@ -2224,6 +2225,7 @@
       "summaryReplaced": "Replaced {{n}}",
       "summaryLocked": "skipped {{n}} (read-only)",
       "summaryInvalid": "{{n}} invalid",
+      "summaryConflict": "skipped {{n}} in an averaged angle whose in/out legs were replaced too (the legs were kept)",
       "summaryNone": "Nothing replaced",
       "failed": "Replace failed: {{error}}",
       "invalidOne": "\"{{text}}\" is not a valid {{column}} value.",
