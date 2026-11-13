@@ -611,25 +611,6 @@ describe('speleoStore', () => {
     });
   });
 
-  describe('setUndoMode', () => {
-    it('invalidates chain targets after the backend accepts the policy change', async () => {
-      useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true }));
-      invokeIpcMock.mockImplementation((command: string) => {
-        if (command === 'speleodb_set_undo_mode') return Promise.resolve(null);
-        if (command === 'speleodb_link_status') {
-          return Promise.resolve(status({ edit_enabled: true, undo_mode: 'disabled' }));
-        }
-        return Promise.resolve(null);
-      });
-      const generation = useSpeleoStore.getState().chainTargetGeneration;
-
-      await useSpeleoStore.getState().setUndoMode('disabled');
-
-      expect(useSpeleoStore.getState().chainTargetGeneration).toBe(generation + 1);
-      expect(useSpeleoStore.getState().link?.undoMode).toBe('disabled');
-    });
-  });
-
   /**
    * [#270] `busy` is one shared boolean with three writers - the verb's own
    * release, `clearLink` (close/switch) and `restoreLink` (a rolled-back remote

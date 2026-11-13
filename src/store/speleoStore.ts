@@ -576,11 +576,6 @@ interface SpeleoStore {
       a successful push/release clears the whole slot anyway). No-op for other kinds,
       so it never wipes an unrelated banner. */
   clearPushFailedBanner: () => void;
-  /** [#303] Set the open project's explicit undo-history policy. LOCK-REQUIRED: the value
-      lands in the `.stalx` and rides to the server on the next push, so it becomes
-      every collaborator's. Throws on refusal (no lock, or a local project) so the
-      control can surface it, and re-seeds link status on success. */
-  setUndoMode: (mode: UndoMode) => Promise<void>;
   /** Invalidate any cached Unwind/Rewind target after a successful tree replacement. */
   invalidateChainTargets: () => void;
   dismissBanner: () => void;
@@ -1396,20 +1391,6 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
 
   clearPushFailedBanner: () =>
     set((state) => (state.banner?.kind === 'push_failed' ? { banner: null } : {})),
-
-
-
-  setUndoMode: async (mode) => {
-    // [#303] Throws on failure so the caller (the settings control) renders the
-    // refusal - most usefully the lock one, since this writes the `.stalx` and so
-    // becomes every collaborator's policy on the next push.
-    await invokeIpc<null>('speleodb_set_undo_mode', { mode });
-    // The backend policy changed even if the best-effort status refresh below cannot
-    // reach the server, so a target resolved under the old policy is already stale.
-    get().invalidateChainTargets();
-    // Re-read so the store reflects the committed backend value.
-    await get().refreshLinkStatus();
-  },
 
   invalidateChainTargets: () =>
     set((state) => ({ chainTargetGeneration: state.chainTargetGeneration + 1 })),
