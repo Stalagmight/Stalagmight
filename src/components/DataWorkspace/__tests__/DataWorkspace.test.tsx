@@ -47,6 +47,8 @@ class NoopResizeObserver {
 const actions = {
   updateShot: vi.fn(() => Promise.resolve({})),
   updateStationComment: vi.fn(() => Promise.resolve({})),
+  updateStationName: vi.fn(() => Promise.resolve({})),
+  editShotCredit: vi.fn(() => Promise.resolve({})),
   executeBatch: vi.fn((_commands: unknown[]) => Promise.resolve({})),
   setShotKind: vi.fn(() => Promise.resolve({})),
 };
@@ -250,6 +252,14 @@ describe('DataWorkspace editing', () => {
     render(<DataWorkspace />);
     typeInto('data-cell-st-1-3-comment', 'Dome');
     expect(actions.updateStationComment).toHaveBeenCalledWith({ section_id: 1, station_index: 3 }, 'Dome');
+  });
+
+  it('commits a single station name through updateStationName, not a batch', () => {
+    useDataWorkspaceStore.setState({ hiddenColumns: [] });
+    render(<DataWorkspace />);
+    typeInto('data-cell-st-1-3-name', 'B7');
+    expect(actions.updateStationName).toHaveBeenCalledWith({ section_id: 1, station_index: 3 }, 'B7');
+    expect(actions.executeBatch).not.toHaveBeenCalled();
   });
 
   it('pastes into many cells as ONE batch', () => {

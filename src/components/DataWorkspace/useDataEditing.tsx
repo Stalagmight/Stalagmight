@@ -3,7 +3,9 @@
  * `buildEditCommands` (locks, the averaged-angle expansion, credit, station
  * comment / name), then:
  *   - a single cell edit -> its own command (`updateShot`,
- *     `updateStationComment`) or a one-command batch, one undo step;
+ *     `updateStationComment`, `updateStationName`, `editShotCredit`), so the
+ *     undo history names it ("Set station name ...") instead of "Batch of 1
+ *     commands";
  *   - a paste / fill / clear -> ONE `executeBatch`, one undo step;
  *   - the J/R cell's click / Space -> `setShotKind`, as the DataTable does;
  *   - a credit cell -> the shared credit popover (`CreditCellEditor`).
@@ -77,11 +79,15 @@ export function useDataEditing(model: DataModel | null, view: DataView | null): 
       if (plan.commands.length === 0) return;
       setSource('data-table');
       const store = useProjectStore.getState();
-      const only = plan.commands.length === 1 ? plan.commands[0]! : null;
-      if (single && only?.type === 'update_shot') {
+      const only = single && plan.commands.length === 1 ? plan.commands[0]! : null;
+      if (only?.type === 'update_shot') {
         void store.updateShot(only.section_id, only.shot_id, only.updates);
-      } else if (single && only?.type === 'set_station_comment') {
+      } else if (only?.type === 'set_station_comment') {
         void store.updateStationComment(only.station_ref, only.comment);
+      } else if (only?.type === 'set_station_name') {
+        void store.updateStationName(only.station_ref, only.name);
+      } else if (only?.type === 'edit_shot_credit') {
+        void store.editShotCredit(only.targets, only.edit);
       } else {
         void store.executeBatch(plan.commands);
       }
