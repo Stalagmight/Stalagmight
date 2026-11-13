@@ -1123,6 +1123,39 @@ fn the_credit_read_logs_codes_and_counts_never_text() {
     );
 }
 
+/// A trigger can share a table's name. Every open path refuses a trigger
+/// (#608); a credit read reached past that check still finds the table (and
+/// its rows apply) instead of reading two objects as "not a table".
+#[test]
+fn a_trigger_named_like_a_credit_table_does_not_hide_it() {
+    for table in ["credit_people", "shot_credits", "credit_sections"] {
+        let dir = TempDir::new().unwrap();
+        let (path, id, _) = rows_needed(&dir, "trigger.stalx");
+        sql(
+            &path,
+            &format!("CREATE TRIGGER {table} AFTER INSERT ON zero_datums BEGIN SELECT 1; END;"),
+        );
+        let refused = Database::open_existing(&path).err().unwrap();
+        assert!(
+            refused
+                .chain()
+                .any(|c| c.downcast_ref::<RefusedSchemaObject>().is_some()),
+            "{table}: {refused:#}"
+        );
+        let db = Database {
+            conn: Connection::open(&path).unwrap(),
+        };
+        assert_eq!(
+            credits_of(&db.load_project().unwrap(), id),
+            vec![
+                credit(&["Ann Lee"], &[], day(1)),
+                credit(&["Bo Ray"], &[], day(2))
+            ],
+            "{table}"
+        );
+    }
+}
+
 /// #717: values of the wrong type inside readable tables are skipped, never
 /// fatal, and only where they are: a row whose key or value cannot be read
 /// is no row (its shot falls back, the other shot keeps its own row); a

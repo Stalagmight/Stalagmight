@@ -490,11 +490,15 @@ fn extended_code(error: &rusqlite::Error) -> Option<i32> {
 }
 
 /// Whether `name` is a table of the file. `Ok(false)` when nothing has that
-/// name; an error when the schema cannot be read or the name is another kind
-/// of object (a view), which no build writes.
+/// name; an error when the schema cannot be read or the name is a view, which
+/// no build writes. A trigger may share a table's name (SQLite keeps triggers
+/// apart from tables and views), so only those two kinds are looked at.
 fn is_table(conn: &Connection, name: &'static str) -> Result<bool, Unreadable> {
     let kinds: Vec<Option<String>> = conn
-        .prepare("SELECT type FROM sqlite_master WHERE name = ?1")
+        .prepare(
+            "SELECT type FROM sqlite_master \
+             WHERE name = ?1 AND lower(type) IN ('table', 'view')",
+        )
         .and_then(|mut stmt| {
             stmt.query_map([name], |row| {
                 Ok(row.get_ref(0)?.as_str().ok().map(str::to_owned))
