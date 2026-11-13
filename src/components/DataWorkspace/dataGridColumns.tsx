@@ -141,9 +141,8 @@ function LinksCell({ row, deps }: { row: DataRow; deps: GridColumnDeps }) {
     }
   }
   if (chips.length === 0) return null;
-  const marked = deps.view.matchIndex.get(row.key)?.has('links');
   return (
-    <span className={`flex min-w-0 items-center gap-1 overflow-hidden ${marked ? 'dw-cell-match' : ''}`} data-testid={`data-links-${part}`}>
+    <span className="flex min-w-0 items-center gap-1 overflow-hidden" data-testid={`data-links-${part}`}>
       {chips}
     </span>
   );

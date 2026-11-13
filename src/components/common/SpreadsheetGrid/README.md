@@ -116,7 +116,9 @@ applicability ones also once per cell in bulk paths), so keep them O(1).
   column draws `<mark class="sg-mark">` segments, the `current` range as
   `sg-mark sg-mark-current`. The cell gets `sg-cell-match` (+
   `sg-cell-match-current` when `current` is set); custom-`render` columns get
-  only those classes.
+  those classes plus `sg-cell-match-outline`, a 2px inset outline in the mark
+  colour (the solid current-mark colour when focused), since no `<mark>` can
+  show the match inside their content.
 - **`rowStyle(row, i)`**: inline style on the row element (the grid's own
   `top` / `height` / `width` win). Set `--sg-row-tint: <css colour>` to tint the
   row (the row then gets `sg-row-tinted`); `--sg-row-tint-strength` (default

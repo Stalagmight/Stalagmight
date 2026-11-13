@@ -161,7 +161,7 @@ function GridRowInner<Row>(props: GridRowProps<Row>) {
             const locked = gridHasWritableColumns && !editable;
             const extraCellClass = cellClassName?.(row, rowIdx, col.key);
             const marks = cellMarks?.(row, rowIdx, col.key);
-            cls = `${missing ? ' sg-cell-missing' : ''}${locked ? ' sg-cell-locked' : ''}${markCellClass(marks)}${
+            cls = `${missing ? ' sg-cell-missing' : ''}${locked ? ' sg-cell-locked' : ''}${markCellClass(marks, !!col.render)}${
               extraCellClass ? ` ${extraCellClass}` : ''
             }`;
             if (editingColKey !== col.key) {

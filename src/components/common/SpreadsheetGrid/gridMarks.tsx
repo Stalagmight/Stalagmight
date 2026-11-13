@@ -79,9 +79,12 @@ export function MarkedText({ text, marks }: { text: string; marks: CellMarks }) 
   );
 }
 
-/** Cell classes for a cell holding marks (also for custom-render columns, which
- *  get only these). '' when there is nothing to mark. */
-export function markCellClass(marks: CellMarks | undefined): string {
+/** Cell classes for a cell holding marks. '' when there is nothing to mark.
+ *  A custom-render cell (`custom`) cannot draw <mark>s inside its content, so
+ *  it also gets `sg-cell-match-outline`: the whole cell is outlined in the
+ *  mark colour instead. */
+export function markCellClass(marks: CellMarks | undefined, custom = false): string {
   if (!marks || (marks.ranges.length === 0 && !marks.current)) return '';
-  return marks.current ? ' sg-cell-match sg-cell-match-current' : ' sg-cell-match';
+  const cls = marks.current ? ' sg-cell-match sg-cell-match-current' : ' sg-cell-match';
+  return custom ? `${cls} sg-cell-match-outline` : cls;
 }

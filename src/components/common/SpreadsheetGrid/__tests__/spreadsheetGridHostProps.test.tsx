@@ -138,10 +138,12 @@ describe('cellMarks', () => {
     expect(cell(4, 'comment')).not.toHaveClass('sg-cell-match-current');
   });
 
-  it('gives a custom-render cell only the classes', () => {
+  it('outlines a custom-render cell instead of drawing marks in it', () => {
     render(<SpreadsheetGrid<Row> {...base({ cellMarks: marks })} />);
-    expect(cell(3, 'tag')).toHaveClass('sg-cell-match');
+    expect(cell(3, 'tag')).toHaveClass('sg-cell-match', 'sg-cell-match-outline');
     expect(cell(3, 'tag').querySelector('mark')).toBeNull();
+    // A plain-text cell draws its marks and is not outlined.
+    expect(cell(4, 'comment')).not.toHaveClass('sg-cell-match-outline');
     expect(cell(3, 'tag')).toHaveTextContent('#3');
   });
 

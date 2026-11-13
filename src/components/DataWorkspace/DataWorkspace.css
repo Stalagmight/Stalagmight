@@ -60,12 +60,6 @@
   outline-offset: 1px;
 }
 
-/* A cell whose custom content holds a find match. */
-.dw-cell-match {
-  box-shadow: inset 0 0 0 1px var(--cc-warning);
-  border-radius: 3px;
-}
-
 /* Hover card: the shared Tooltip bubble, made interactive. */
 .dw-hover-card {
   pointer-events: auto !important;

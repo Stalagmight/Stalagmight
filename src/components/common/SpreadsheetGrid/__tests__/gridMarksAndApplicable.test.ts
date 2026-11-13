@@ -51,6 +51,12 @@ describe('splitMarks', () => {
     expect(markCellClass({ ranges: [] })).toBe('');
     expect(markCellClass({ ranges: [[0, 1]] })).toBe(' sg-cell-match');
     expect(markCellClass({ ranges: [[0, 1]], current: [0, 1] })).toBe(' sg-cell-match sg-cell-match-current');
+    // A custom-render cell can't hold <mark>s: it is outlined instead.
+    expect(markCellClass({ ranges: [[0, 1]] }, true)).toBe(' sg-cell-match sg-cell-match-outline');
+    expect(markCellClass({ ranges: [[0, 1]], current: [0, 1] }, true)).toBe(
+      ' sg-cell-match sg-cell-match-current sg-cell-match-outline',
+    );
+    expect(markCellClass({ ranges: [] }, true)).toBe('');
   });
 });
 

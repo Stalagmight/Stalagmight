@@ -116,6 +116,15 @@
   --sg-l-match: var(--cc-warning-20);
   box-shadow: inset 0 0 0 1px var(--cc-warning);
 }
+/* A custom-render cell holds its match where no <mark> can show it (inside a
+   chip, an icon): outline the whole cell in the mark colour, 2px so it reads
+   at a glance, and the focused one in the solid current-mark colour. */
+.sg-grid .sg-cell.sg-cell-match-outline {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--cc-warning) 60%, transparent);
+}
+.sg-grid .sg-cell.sg-cell-match-outline.sg-cell-match-current {
+  box-shadow: inset 0 0 0 2px var(--cc-warning-text);
+}
 /* -20, not -30: on the darker themes (one_dark, nord) -30 drops the text
    contrast under 4:1. The focused match is solid, in the AA text tone. */
 .sg-grid mark.sg-mark {
