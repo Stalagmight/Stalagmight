@@ -1298,11 +1298,10 @@ impl AppState {
     /// mutex means some earlier call panicked while holding it; the guarded values
     /// are `Option<Project>` / `Option<Database>` / the undo stack, and setting
     /// them to `None`/empty is precisely the recovery - there is no half-written
-    /// state to protect. Skipping the drop, by contrast, is never safe: this
-    /// function is the pre-rename close that `close_project_if_open_at` relies on,
-    /// and it used to report `true` while still holding the live SQLite handle and
-    /// its 256 MB mmap, so the caller went on to rename a new file over it - the
-    /// exact SIGBUS / `MoveFileEx`-denied hazard the guard exists to prevent.
+    /// state to protect. Skipping the drop, by contrast, is never safe: a caller
+    /// that renames a new file over the project (a cache replace, a delete) relies
+    /// on the live SQLite handle and its 256 MB mmap being gone, and a skipped drop
+    /// is the exact SIGBUS / `MoveFileEx`-denied hazard that close exists to prevent.
     pub(super) fn close_project(&self) -> CommandResult {
         tracing::debug!("close_project: acquiring project lock");
         let mut proj = self.project.lock().unwrap_or_else(|e| e.into_inner());
@@ -1391,40 +1390,6 @@ impl AppState {
     pub(super) fn open_project_path(&self) -> Option<PathBuf> {
         let guard = self.project.lock().unwrap_or_else(|e| e.into_inner());
         guard.as_ref().and_then(|p| p.file_path.clone())
-    }
-
-    /// Close the open project IF AND ONLY IF it is the file at `dest`; returns
-    /// whether it was closed.
-    ///
-    /// Guards every path that REPLACES a `.stalx` on disk out from under the app
-    /// (the SpeleoDB cache download-replace: pull / fast-forward / revision swap).
-    /// Two reasons the live handle has to go first:
-    ///
-    /// - `Database::open_existing` enables a 256 MB mmap over the file. Truncating
-    ///   or replacing a file that SQLite has mmap'd can fault the mapped pages
-    ///   (SIGBUS) and hands the connection a torn view of a different database.
-    /// - On Windows, SQLite opens the file WITHOUT `FILE_SHARE_DELETE`, so
-    ///   `MoveFileEx(REPLACE_EXISTING)` over a live handle fails with "Access is
-    ///   denied" - the same hazard the save pipeline's pre-rename close covers.
-    ///
-    /// Closing is deliberately conditional: these callers replace a file that is
-    /// USUALLY, but not always, the open project (a pull can target a cached
-    /// project the user does not currently have open), and dropping an unrelated
-    /// open project would throw away its undo/redo history for nothing.
-    pub(super) fn close_project_if_open_at(&self, dest: &Path) -> bool {
-        let Some(open_path) = self.open_project_path() else {
-            return false;
-        };
-        if !same_file(&open_path, dest) {
-            return false;
-        }
-        tracing::info!(
-            path = ?dest,
-            purpose = "release the live handle before replacing the file",
-            "Closing the open project because its .stalx is about to be replaced"
-        );
-        self.close_project();
-        true
     }
 }
 

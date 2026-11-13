@@ -14,27 +14,25 @@
 //!
 //! Every flow stages through `stage_download`; the pull then renames through
 //! `replace_cache_for_session`, the fast-forward and the revision swap through
-//! the prepared reload (`install_prepared_database`), and
-//! [`AppState::replace_cache_stalx`] here is the unbound form of the same steps.
-//! Each of those renames handles all three, so no call site can forget one.
+//! the prepared reload (`install_prepared_database`). Each of those renames
+//! handles all three, so no call site can forget one. Both run under the
+//! session's locks and refuse once a newer open or login has moved it, so a
+//! late download can never replace a copy the user has since reopened.
 //!
 //! It also carries the DATA-SAFETY half: the copy being replaced may hold edits
 //! the server has never seen, and those exist in no git anywhere - overwriting
-//! them is unrecoverable. So the plain verb REFUSES that replace
+//! them is unrecoverable. So a [`LocalEditsPolicy::Protect`] replace REFUSES
 //! ([`SpeleoDbError::WouldDiscardLocalEdits`], which crosses IPC as a typed
 //! routing signal for the cancel / take-remote choice), and a caller that
-//! genuinely means to discard has to say so by name through
-//! [`AppState::replace_cache_stalx_abandoning`]. Same shape as the lock release
-//! (`speleodb_release_held_lock_best_effort` vs `_abandoning`): the safe verb is
-//! the one you reach for by default, and abandoning is spelled out at the call
-//! site. Every caller entitled to it arrives from a frontend that has already had
+//! genuinely means to discard has to say so by name with
+//! [`LocalEditsPolicy::Discard`], so the waiver shows up in a diff as that word.
+//! Every caller entitled to it arrives from a frontend that has already had
 //! the loss confirmed by name: `speleodb_take_remote` (the divergence prompt's
 //! destroy-confirmed "Take remote"), `speleodb_open_project_discarding_local` (the
 //! same confirmed choice on a refused open), and `speleodb_restore_revision` under
 //! its `discard_local` waiver (a Restore only, never a View - a restore stamps the
 //! copy un-pushed itself, so without the waiver Restore was single-use). Anything
-//! else passes [`LocalEditsPolicy::Protect`], or calls
-//! [`AppState::replace_cache_stalx`], and refuses instead.
+//! else passes [`LocalEditsPolicy::Protect`] and refuses instead.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -146,8 +144,7 @@ pub(super) enum LocalEditsPolicy {
 /// So the default is [`Self::Drop`] on every path that replaces the cache file, and the
 /// history is only ever handed back through the ONE explicit, confirmed, lock-held route
 /// that exists to ask for it: the Unwind. `undo_history_keep_is_unwind_only` pins that
-/// there is exactly one `Keep` site, the same way the `LocalEditsPolicy::Discard`
-/// tripwire pins the waivers above.
+/// there is exactly one `Keep` site.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum InheritedUndo {
     /// Empty the downloaded file's undo/redo tables. Every implicit adopt path.
@@ -210,98 +207,6 @@ impl AppState {
             last_edit_at: local.last_edit_at,
         })
     }
-
-    /// Replace the cache `.stalx` at `dest` with the downloaded SQLite `source`,
-    /// returning the local view toggles the caller must re-apply to the fresh file
-    /// (see [`restore_display_settings`]).
-    ///
-    /// REFUSES (without touching `dest`) when the local copy of `project_id` holds
-    /// un-pushed edits - see [`AppState::guard_local_edits`]. A caller that means
-    /// to discard them calls [`AppState::replace_cache_stalx_abandoning`] instead.
-    ///
-    /// Order matters:
-    ///
-    /// 1. read the outgoing file's `display_settings` while it still exists;
-    /// 2. close the open project IF it is this very file, so no live SQLite handle
-    ///    (and no 256 MB mmap) survives into the replace - see
-    ///    [`AppState::close_project_if_open_at`] for why that is required on
-    ///    Windows and why it is conditional;
-    /// 3. copy and sanitize a sibling temp file, then rename over `dest`, so an
-    ///    interrupted copy leaves the old project intact rather than a stub.
-    ///
-    /// Steps 2 and 3 cover different failure modes and neither replaces the other.
-    pub(super) fn replace_cache_stalx(
-        &self,
-        source: &Path,
-        dest: &Path,
-        project_id: &str,
-        undo: InheritedUndo,
-    ) -> Result<HashMap<String, String>, SpeleoDbError> {
-        self.guard_local_edits(project_id, dest)?;
-        self.replace_cache_stalx_abandoning(source, dest, undo)
-    }
-
-    /// [`AppState::replace_cache_stalx`] or its abandoning sibling, chosen by an
-    /// explicit [`LocalEditsPolicy`]. For the orchestration verbs that serve both a
-    /// protected and a confirmed-discard caller and therefore cannot pick one verb
-    /// statically; their own callers name the policy.
-    pub(super) fn replace_cache_stalx_with(
-        &self,
-        source: &Path,
-        dest: &Path,
-        project_id: &str,
-        policy: LocalEditsPolicy,
-        undo: InheritedUndo,
-    ) -> Result<HashMap<String, String>, SpeleoDbError> {
-        match policy {
-            LocalEditsPolicy::Protect => self.replace_cache_stalx(source, dest, project_id, undo),
-            LocalEditsPolicy::Discard => self.replace_cache_stalx_abandoning(source, dest, undo),
-        }
-    }
-
-    /// [`AppState::replace_cache_stalx`] WITHOUT the un-pushed-edits guard, for a
-    /// caller that is deliberately throwing the local edits away - today only
-    /// `speleodb_take_remote` (and the open-project prompt's "take remote and
-    /// discard local" branch, which routes through the same policy). Named so the
-    /// destruction is visible at the call site rather than implied by a flag.
-    pub(super) fn replace_cache_stalx_abandoning(
-        &self,
-        source: &Path,
-        dest: &Path,
-        undo: InheritedUndo,
-    ) -> Result<HashMap<String, String>, SpeleoDbError> {
-        let staged = super::speleodb_cache_install::stage_download(
-            source,
-            dest,
-            undo,
-            super::speleodb_cache_install::sync_staged_file,
-        )?;
-        let preserved_view = preserved_display_settings(dest);
-        let closed = self.close_project_if_open_at(dest);
-        // Our handle on `dest` is gone (or never existed), so any sidecar beside it
-        // belongs to the outgoing file - see `speleodb_sidecars`.
-        let sidecars = match super::speleodb_sidecars::SetAsideSidecars::take(dest) {
-            Ok(sidecars) => sidecars,
-            Err(error) => {
-                if closed {
-                    let _ = self.open_project(dest.to_path_buf());
-                }
-                return Err(error);
-            }
-        };
-        if let Err(error) = std::fs::rename(&staged, dest) {
-            sidecars.restore();
-            if closed {
-                let _ = self.open_project(dest.to_path_buf());
-            }
-            return Err(SpeleoDbError::Io(format!(
-                "could not install sanitized download: {error}"
-            )));
-        }
-        sidecars.discard();
-        super::speleodb_cache_install::sync_cache_directory(dest);
-        Ok(preserved_view)
-    }
 }
 
 #[cfg(test)]
@@ -318,48 +223,13 @@ mod tests {
 
     const ID: &str = "11111111-1111-1111-1111-111111111111";
 
-    /// Tripwire: the orchestration never names the abandoning replace directly, so
-    /// every waiver of the un-pushed-edits guard is spelled out as a
-    /// [`LocalEditsPolicy`] at its call site and shows up in a diff as the word
-    /// `Discard`. Everything that pulls the server copy over the local one funnels
-    /// through this module, and the whole point of splitting the verb in two is that
-    /// opting out of the guard is a deliberate, reviewable act.
-    ///
-    /// The orchestration's source is scanned from HERE rather than from its own test
-    /// module so the needle does not match the test that looks for it.
-    ///
-    /// This test used to ALSO pin the number of `LocalEditsPolicy::Discard` sites at
-    /// a literal count. That was not a safety property - it was an assertion about a
-    /// source string - and it distorted the code it guarded: `speleodb_adopt_ariane`
-    /// rebuilds its destination itself rather than going through
-    /// [`AppState::replace_cache_stalx_with`], so it has no policy to pass, and the
-    /// enum value was constructed there and immediately compared away purely to keep
-    /// the count at four. What holds the line instead is the shape of this module -
-    /// the guard is the DEFAULT (`replace_cache_stalx`), the opt-out is a separate
-    /// `pub(super)` verb no production code outside this file names (the assertion
-    /// this test kept), and the behaviour of both is pinned by the test below.
-    #[test]
-    fn the_orchestration_never_calls_the_abandoning_replace_directly() {
-        // Production code only, across EVERY speleodb module except this one - the
-        // definition site legitimately names the verb, and the orchestration's own
-        // test module drives both verbs on purpose. Scanning a single sibling would
-        // pass vacuously as soon as the call sites move out of it (#275).
-        assert_eq!(
-            speleodb_prod_matches("replace_cache_stalx_abandoning", &["speleodb_cache.rs"]),
-            0,
-            "the orchestration reaches the abandoning replace only through the \
-             named LocalEditsPolicy, so every waiver is spelled out at its call site"
-        );
-    }
-
     /// [#303] Spec item 15's structural half, and the reason `InheritedUndo` is a named
     /// enum rather than a bool: KEEPING a downloaded copy's undo history is a waiver of
     /// the #194 b3 guard, so there must be exactly ONE place in the whole orchestration
     /// that asks for it - the Unwind, which exists to fetch that history back under an
     /// explicit, confirmed, lock-held action.
     ///
-    /// Same shape as `the_orchestration_never_calls_the_abandoning_replace_directly`
-    /// above: a diff that adds a second `Keep` site fails here and has to justify itself.
+    /// A diff that adds a second `Keep` site fails here and has to justify itself.
     #[test]
     fn undo_history_keep_is_unwind_only() {
         let keeps = speleodb_prod_matches("InheritedUndo::Keep", &["speleodb_cache.rs"]);
@@ -402,6 +272,24 @@ mod tests {
         std::fs::copy(&project, native.path()).expect("copy native file");
         native
     }
+    /// Install `source` over `dest` through the session-bound replace, under the
+    /// generation that is current right now (nothing moves it in these tests).
+    fn install(
+        state: &AppState,
+        source: &Path,
+        dest: &Path,
+        policy: LocalEditsPolicy,
+        undo: InheritedUndo,
+    ) -> Result<HashMap<String, String>, SpeleoDbError> {
+        state.replace_cache_for_session(
+            source,
+            dest,
+            ID,
+            policy,
+            undo,
+            state.speleodb_session_generation(),
+        )
+    }
     fn replaced_project_name(path: &Path) -> String {
         Database::open_existing(path)
             .expect("open replaced project")
@@ -412,10 +300,10 @@ mod tests {
 
     #[test]
     fn only_a_named_discard_gets_a_replace_past_un_pushed_edits() {
-        // The behaviour the split verb exists for, pinned from all three sides: the
-        // default replace refuses over un-pushed work and leaves the file alone, the
-        // policy-driven form agrees under `Protect`, and `Discard` is the ONLY thing
-        // that gets through. A caller that wants the destruction has to name it.
+        // The behaviour the policy exists for, pinned from both sides: `Protect`
+        // refuses over un-pushed work and leaves the file alone, and `Discard` is the
+        // ONLY thing that gets through. A caller that wants the destruction has to
+        // name it.
         let temp = tempfile::TempDir::new().expect("temp");
         let dest = temp.path().join("project.stalx");
         seed_linked_stalx(&dest, true);
@@ -423,9 +311,14 @@ mod tests {
         let state = AppState::new().expect("state");
         let native = server_stalx();
 
-        let err = state
-            .replace_cache_stalx(native.path(), &dest, ID, InheritedUndo::Drop)
-            .expect_err("un-pushed edits must refuse the plain replace");
+        let err = install(
+            &state,
+            native.path(),
+            &dest,
+            LocalEditsPolicy::Protect,
+            InheritedUndo::Drop,
+        )
+        .expect_err("un-pushed edits must refuse the protected replace");
         assert!(
             matches!(err, SpeleoDbError::WouldDiscardLocalEdits { .. }),
             "and refuse it with the typed routing signal, got {err:?}"
@@ -436,31 +329,14 @@ mod tests {
             "a refusal must leave the local copy byte-identical"
         );
 
-        let err = state
-            .replace_cache_stalx_with(
-                native.path(),
-                &dest,
-                ID,
-                LocalEditsPolicy::Protect,
-                InheritedUndo::Drop,
-            )
-            .expect_err("Protect is the same refusal");
-        assert!(matches!(err, SpeleoDbError::WouldDiscardLocalEdits { .. }));
-        assert_eq!(
-            std::fs::read(&dest).expect("read dest"),
-            before,
-            "still untouched"
-        );
-
-        state
-            .replace_cache_stalx_with(
-                native.path(),
-                &dest,
-                ID,
-                LocalEditsPolicy::Discard,
-                InheritedUndo::Drop,
-            )
-            .expect("the confirmed-discard waiver replaces the copy");
+        install(
+            &state,
+            native.path(),
+            &dest,
+            LocalEditsPolicy::Discard,
+            InheritedUndo::Drop,
+        )
+        .expect("the confirmed-discard waiver replaces the copy");
         assert_eq!(
             replaced_project_name(&dest),
             "Server Copy",
@@ -527,9 +403,14 @@ mod tests {
         // passing vacuously.
         let temp = tempfile::TempDir::new().expect("temp");
         let kept = temp.path().join("kept.stalx");
-        state
-            .replace_cache_stalx_abandoning(native.path(), &kept, InheritedUndo::Keep)
-            .expect("replace with Keep");
+        install(
+            &state,
+            native.path(),
+            &kept,
+            LocalEditsPolicy::Discard,
+            InheritedUndo::Keep,
+        )
+        .expect("replace with Keep");
         assert_eq!(
             history(&kept),
             (
@@ -542,9 +423,14 @@ mod tests {
         );
 
         let dropped = temp.path().join("dropped.stalx");
-        state
-            .replace_cache_stalx_abandoning(native.path(), &dropped, InheritedUndo::Drop)
-            .expect("replace with Drop");
+        install(
+            &state,
+            native.path(),
+            &dropped,
+            LocalEditsPolicy::Discard,
+            InheritedUndo::Drop,
+        )
+        .expect("replace with Drop");
         assert_eq!(
             history(&dropped),
             (0, 0, None, None),
@@ -576,9 +462,14 @@ mod tests {
         let before = std::fs::read(&dest).expect("read destination");
         let state = AppState::new().expect("state");
 
-        let err = state
-            .replace_cache_stalx_abandoning(&seeded, &dest, InheritedUndo::Drop)
-            .expect_err("a downloaded file carrying a trigger must not be adopted");
+        let err = install(
+            &state,
+            &seeded,
+            &dest,
+            LocalEditsPolicy::Discard,
+            InheritedUndo::Drop,
+        )
+        .expect_err("a downloaded file carrying a trigger must not be adopted");
         // Refused by the schema check before the cleanup could fire the trigger.
         assert!(
             err.to_string()
@@ -607,9 +498,14 @@ mod tests {
         let state = AppState::new().expect("state");
         let native = server_stalx();
 
-        state
-            .replace_cache_stalx(native.path(), &dest, ID, InheritedUndo::Drop)
-            .expect("a clean local copy needs no waiver");
+        install(
+            &state,
+            native.path(),
+            &dest,
+            LocalEditsPolicy::Protect,
+            InheritedUndo::Drop,
+        )
+        .expect("a clean local copy needs no waiver");
         assert_eq!(
             replaced_project_name(&dest),
             "Server Copy",
@@ -637,15 +533,14 @@ mod tests {
         seed_linked_stalx(&dest, false);
         let before = std::fs::read(&dest).expect("destination");
         let state = AppState::new().expect("state");
-        let err = state
-            .replace_cache_stalx_with(
-                &source,
-                &dest,
-                ID,
-                LocalEditsPolicy::Protect,
-                InheritedUndo::Drop,
-            )
-            .expect_err("newer schema refused");
+        let err = install(
+            &state,
+            &source,
+            &dest,
+            LocalEditsPolicy::Protect,
+            InheritedUndo::Drop,
+        )
+        .expect_err("newer schema refused");
         let SpeleoDbError::NewerSchema(newer) = &err else {
             panic!("wrong refusal: {err:?}");
         };

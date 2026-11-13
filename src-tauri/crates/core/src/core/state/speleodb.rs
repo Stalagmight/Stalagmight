@@ -1785,7 +1785,7 @@ mod tests {
     // [#275] The push half now lives in `speleodb_push`; these tests still exercise it
     // from here (they share this module's fixtures), so they reach it by its new path.
     use crate::core::state::speleodb_cache::{
-        preserved_display_settings, restore_display_settings, InheritedUndo,
+        preserved_display_settings, restore_display_settings, InheritedUndo, LocalEditsPolicy,
     };
     use crate::core::state::speleodb_push::{
         clear_snapshot_dirty, head_with_empty_retry, type_still_says_ariane,
@@ -2091,7 +2091,7 @@ mod tests {
         );
     }
 
-    // --- guarded close before a cache download-replace ---
+    // --- closing the open project around a cache download-replace ---
 
     /// Write a minimal openable `.stalx` at `path` and return it.
     fn seed_stalx(path: &Path, name: &str) {
@@ -2111,31 +2111,58 @@ mod tests {
         project
     }
 
+    /// Install `source` over `dest` through the session-bound replace, under the
+    /// session generation that is current right now (nothing moves it here).
+    fn install_over(
+        state: &AppState,
+        source: &Path,
+        dest: &Path,
+        policy: LocalEditsPolicy,
+    ) -> Result<std::collections::HashMap<String, String>, SpeleoDbError> {
+        state.replace_cache_for_session(
+            source,
+            dest,
+            GUARD_ID,
+            policy,
+            InheritedUndo::Drop,
+            state.speleodb_session_generation(),
+        )
+    }
+
+    fn project_name_at(path: &Path) -> String {
+        Database::open_existing(path)
+            .expect("open replaced file")
+            .load_project()
+            .expect("load replaced project")
+            .name
+    }
+
     #[test]
-    fn guarded_close_fires_when_dest_is_the_open_project() {
-        // The download-replace must not truncate a file this process still has an
-        // mmap-enabled SQLite connection to (SIGBUS / torn reads on Unix, a denied
-        // rename on Windows), so the live handle is dropped first.
+    fn replacing_the_open_project_closes_it() {
+        // The download-replace must not leave a live mmap-enabled SQLite connection
+        // on a file it renamed over (SIGBUS / torn reads on Unix, a denied rename on
+        // Windows), so the install drops the handle before the rename and closes the
+        // project once the new bytes are in place.
         let temp = TempDir::new().expect("temp dir");
         let dest = temp.path().join("cache.stalx");
-        seed_stalx(&dest, "Cache");
+        seed_linked_stalx(&dest, GUARD_ID, false);
+        let native = server_stalx();
 
         let state = AppState::new().expect("state");
         assert!(state.open_project(dest.clone()).success, "open the cache");
         assert!(project_is_open(&state));
 
-        assert!(
-            state.close_project_if_open_at(&dest),
-            "the open project IS this file, so it must be closed"
-        );
+        install_over(&state, native.path(), &dest, LocalEditsPolicy::Protect)
+            .expect("a clean open copy is replaced");
         assert!(
             !project_is_open(&state),
-            "the live handle must be gone before the replace"
+            "the open project IS this file, so it must be closed"
         );
+        assert_eq!(project_name_at(&dest), "Server Copy");
     }
 
     #[test]
-    fn guarded_close_ignores_a_different_path() {
+    fn replacing_a_different_path_leaves_the_open_project_alone() {
         // Conditional on purpose: a pull can target a cached project the user does
         // not have open, and dropping THAT project would throw away its undo history
         // for nothing.
@@ -2144,51 +2171,51 @@ mod tests {
         let other = temp.path().join("other.stalx");
         seed_stalx(&open_path, "Open");
         seed_stalx(&other, "Other");
+        let native = server_stalx();
 
         let state = AppState::new().expect("state");
         assert!(state.open_project(open_path).success, "open a project");
 
-        assert!(
-            !state.close_project_if_open_at(&other),
-            "a different file must not close the open project"
-        );
+        install_over(&state, native.path(), &other, LocalEditsPolicy::Protect)
+            .expect("the other copy is replaced");
         assert!(
             project_is_open(&state),
             "the unrelated open project must stay open"
         );
+        assert_eq!(project_name_at(&other), "Server Copy");
     }
 
     #[test]
-    fn guarded_close_ignores_a_dest_that_does_not_exist_yet() {
+    fn a_first_install_leaves_the_open_project_alone() {
         // A first pull writes into an empty cache: `dest` cannot be canonicalized
         // and cannot be the file a live connection holds.
         let temp = TempDir::new().expect("temp dir");
         let open_path = temp.path().join("open.stalx");
         seed_stalx(&open_path, "Open");
         let missing = temp.path().join("not-downloaded-yet.stalx");
+        let native = server_stalx();
 
         let state = AppState::new().expect("state");
         assert!(state.open_project(open_path).success, "open a project");
 
-        assert!(
-            !state.close_project_if_open_at(&missing),
-            "a not-yet-existing dest is never the open project"
-        );
+        install_over(&state, native.path(), &missing, LocalEditsPolicy::Protect)
+            .expect("a first install needs nothing to replace");
         assert!(project_is_open(&state), "open project untouched");
+        assert_eq!(project_name_at(&missing), "Server Copy");
     }
 
     #[test]
-    fn guarded_close_still_drops_the_handle_when_a_lock_is_poisoned() {
-        // The guard recovers a poisoned lock for the path READ, but the close it
-        // then performs used to be written as `if let Ok(..)` per lock - so on a
-        // poisoned mutex it dropped NOTHING and still reported `true`, and the
-        // caller went on to rename a new file over a live SQLite handle and its
-        // 256 MB mmap. Poisoning only means an earlier call panicked while
-        // holding the lock; the guarded value is an `Option`, and emptying it is
-        // exactly the recovery.
+    fn replacing_the_open_project_drops_the_handle_when_a_lock_is_poisoned() {
+        // A close written as `if let Ok(..)` per lock drops NOTHING on a poisoned
+        // mutex, and the install would then rename a new file over a live SQLite
+        // handle and its 256 MB mmap. Poisoning only means an earlier call panicked
+        // while holding the lock; the guarded value is an `Option`, and emptying it
+        // is exactly the recovery. The policy is beside the point here, so the
+        // confirmed discard keeps the guard out of the way.
         let temp = TempDir::new().expect("temp dir");
         let dest = temp.path().join("cache.stalx");
         seed_stalx(&dest, "Cache");
+        let native = server_stalx();
 
         let state = AppState::new().expect("state");
         assert!(state.open_project(dest.clone()).success, "open the cache");
@@ -2206,17 +2233,15 @@ mod tests {
             "the database lock must now be poisoned"
         );
 
-        assert!(
-            state.close_project_if_open_at(&dest),
-            "the open project IS this file, so it must be closed"
-        );
+        install_over(&state, native.path(), &dest, LocalEditsPolicy::Discard)
+            .expect("the open copy is replaced, poisoned lock or not");
         assert!(
             state
                 .database
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .is_none(),
-            "the live database handle must be gone before the replace, poisoned or not"
+            "the live database handle must be gone, poisoned or not"
         );
         assert!(
             state
@@ -2226,48 +2251,55 @@ mod tests {
                 .is_none(),
             "the project must be dropped too"
         );
+        assert_eq!(project_name_at(&dest), "Server Copy");
     }
 
     #[test]
-    fn guarded_close_matches_through_a_non_canonical_spelling() {
+    fn replacing_the_open_project_matches_through_a_non_canonical_spelling() {
         // The open path and `dest` are frequently derived differently (cache-path
         // join vs. the FE's opened path), so the comparison canonicalizes.
         let temp = TempDir::new().expect("temp dir");
         let dest = temp.path().join("cache.stalx");
-        seed_stalx(&dest, "Cache");
+        seed_linked_stalx(&dest, GUARD_ID, false);
         let round_about = temp.path().join("sub").join("..").join("cache.stalx");
         std::fs::create_dir(temp.path().join("sub")).expect("mkdir sub");
+        let native = server_stalx();
 
         let state = AppState::new().expect("state");
-        assert!(state.open_project(dest).success, "open the cache");
+        assert!(state.open_project(dest.clone()).success, "open the cache");
+        install_over(
+            &state,
+            native.path(),
+            &round_about,
+            LocalEditsPolicy::Protect,
+        )
+        .expect("the same file spelled differently is replaced");
         assert!(
-            state.close_project_if_open_at(&round_about),
+            !project_is_open(&state),
             "the same file spelled differently must still match"
         );
-        assert!(!project_is_open(&state));
+        assert_eq!(project_name_at(&dest), "Server Copy");
     }
 
     #[test]
-    fn replace_cache_stalx_closes_preserves_and_swaps_atomically() {
-        // The chokepoint every download-replace goes through: preserve the local
-        // view toggles, drop the live handle to the destination, then swap in the
-        // downloaded copy via temp+rename.
+    fn the_session_replace_closes_preserves_and_swaps_atomically() {
+        // The chokepoint the pull goes through: preserve the local view toggles,
+        // drop the live handle to the destination, then swap in the downloaded copy
+        // via temp+rename.
         let temp = TempDir::new().expect("temp dir");
         let dest = temp.path().join("cache.stalx");
-        {
-            let mut db = Database::open(&dest).expect("open local cache");
-            db.save_project(&Project::new("Cache".to_owned(), None))
-                .expect("save project");
-            db.save_display_setting("grid", "off").expect("save grid");
-        }
+        seed_linked_stalx(&dest, GUARD_ID, false);
+        Database::open(&dest)
+            .expect("open local cache")
+            .save_display_setting("grid", "off")
+            .expect("save grid");
 
         let native = server_stalx();
 
         let state = AppState::new().expect("state");
         assert!(state.open_project(dest.clone()).success, "open the cache");
 
-        let preserved = state
-            .replace_cache_stalx(native.path(), &dest, GUARD_ID, InheritedUndo::Drop)
+        let preserved = install_over(&state, native.path(), &dest, LocalEditsPolicy::Protect)
             .expect("replace the cache file");
 
         assert_eq!(
@@ -2277,11 +2309,10 @@ mod tests {
         );
         assert!(
             !project_is_open(&state),
-            "the live handle is dropped before the file is replaced"
+            "the live handle is dropped when the file is replaced"
         );
-        let replaced = Database::open_existing(&dest).expect("open replaced file");
         assert_eq!(
-            replaced.load_project().expect("load replaced project").name,
+            project_name_at(&dest),
             "Server Copy",
             "the destination now holds the downloaded copy"
         );
@@ -2486,13 +2517,12 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_extract_reopens_the_project_it_closed() {
-        // The close has to come BEFORE the extract (a live mmap must not survive into
-        // the rename), so a failed extract left the project closed backend-side while
-        // the frontend still displayed it - and every later command, auto-save
-        // included, then failed with "no project open". The extract stages to a temp
-        // and renames, so on failure `dest` is untouched and re-opening restores the
-        // pre-call state.
+    fn a_failed_install_leaves_the_open_project_open() {
+        // A failed install must not leave the project closed backend-side while the
+        // frontend still displays it - every later command, auto-save included, would
+        // then fail with "no project open". The install stages to a temp before it
+        // touches the open project, so on failure `dest` is untouched and the project
+        // was never closed.
         let temp = TempDir::new().expect("temp dir");
         let dest = temp.path().join("project.stalx");
         seed_linked_stalx(&dest, GUARD_ID, false);
@@ -2502,27 +2532,27 @@ mod tests {
         assert!(state.open_project(dest.clone()).success, "open the cache");
         assert!(project_is_open(&state));
 
-        let err = state
-            .replace_cache_stalx_abandoning(
-                &temp.path().join("missing.stalx"),
-                &dest,
-                InheritedUndo::Drop,
-            )
-            .expect_err("extracting a missing entry must fail");
+        let err = install_over(
+            &state,
+            &temp.path().join("missing.stalx"),
+            &dest,
+            LocalEditsPolicy::Discard,
+        )
+        .expect_err("staging a missing download must fail");
         assert!(
             !matches!(err, SpeleoDbError::WouldDiscardLocalEdits { .. }),
-            "the failure here is the extract, not the guard: {err:?}"
+            "the failure here is the staging, not the guard: {err:?}"
         );
 
         assert_eq!(
             std::fs::read(&dest).expect("read cache after the failure"),
             before,
-            "a failed extract leaves the old copy intact"
+            "a failed install leaves the old copy intact"
         );
         assert!(
             project_is_open(&state),
-            "and the project it closed to make room is re-opened, so the shell is \
-             not left showing a project the backend does not have open"
+            "and the open project stays open, so the shell is not left showing a \
+             project the backend does not have open"
         );
     }
 
@@ -2572,10 +2602,10 @@ mod tests {
     }
 
     #[test]
-    fn protected_replace_refuses_and_abandoning_replace_still_overwrites() {
-        // The two chokepoint verbs, on the same dirty destination: the plain one
-        // leaves the file byte-identical, and the explicitly-named abandoning one
-        // (take-remote, behind the frontend's destroy-confirmation) still works.
+    fn protected_replace_refuses_and_discarding_replace_still_overwrites() {
+        // The two policies, on the same dirty destination: `Protect` leaves the file
+        // byte-identical, and the explicitly-named `Discard` (take-remote, behind the
+        // frontend's destroy-confirmation) still works.
         let temp = TempDir::new().expect("temp dir");
         let dest = temp.path().join("project.stalx");
         seed_linked_stalx(&dest, GUARD_ID, true);
@@ -2583,9 +2613,8 @@ mod tests {
         let native = server_stalx();
         let state = AppState::new().expect("state");
 
-        let refused = state
-            .replace_cache_stalx(native.path(), &dest, GUARD_ID, InheritedUndo::Drop)
-            .expect_err("the guarded verb must refuse");
+        let refused = install_over(&state, native.path(), &dest, LocalEditsPolicy::Protect)
+            .expect_err("the protected replace must refuse");
         assert!(matches!(
             refused,
             SpeleoDbError::WouldDiscardLocalEdits { .. }
@@ -2596,9 +2625,8 @@ mod tests {
             "a refused replace must not touch the file at all"
         );
 
-        state
-            .replace_cache_stalx_abandoning(native.path(), &dest, InheritedUndo::Drop)
-            .expect("the abandoning verb still discards on purpose");
+        install_over(&state, native.path(), &dest, LocalEditsPolicy::Discard)
+            .expect("the confirmed discard still overwrites on purpose");
         let replaced = Database::open_existing(&dest).expect("open replaced file");
         assert_eq!(
             replaced.load_project().expect("load replaced project").name,
