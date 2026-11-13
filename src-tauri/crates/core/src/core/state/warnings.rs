@@ -408,12 +408,21 @@ impl AppState {
     /// move changes both, so the ignore would lapse - or, once a later
     /// renumber lands another shot on that id, suppress the wrong warning. A
     /// uuid-keyed row then follows its shot through [`ShotHomes`], in the
-    /// session and through the save.
+    /// session and through the save, and an undo before the save puts the shot
+    /// back where the row's section says.
     ///
-    /// The same rule as [`Self::pin_position_keyed_warnings_after_reverse`]
-    /// (which see for why): only onto a uuid the FILE already holds. A shot
-    /// whose uuid is not on disk yet keeps its position-keyed row, which the
-    /// move then strands - the same residual the reverse documents.
+    /// Pinned onto the shot's LIVE uuid, whether or not the file holds it yet:
+    /// a shot added since the last save (the common case, since the resolve
+    /// command keys such a shot's ignore by position), or one an earlier
+    /// unsaved split or combine already moved. In a file that stores shot
+    /// uuids, a uuid minted in this session is the one the next save writes;
+    /// if the session is discarded instead, the shot never reaches the file and
+    /// a row keyed by its uuid matches nothing, where a position-keyed one
+    /// could suppress whatever shot holds that position on disk. The one
+    /// exception is a pre-v6 file not saved since (its shots have no uuid on
+    /// disk, so every load mints new ones): there only a uuid the file holds
+    /// is pinned, as [`Self::pin_position_keyed_warnings_after_reverse`] does,
+    /// and the rest keep their position-keyed rows (the residual it documents).
     pub(super) fn pin_position_keyed_ignores_before_move(&self, section_ids: &[SectionId]) {
         let live: std::collections::HashMap<(u32, u32), String> = {
             let guard = match self.project.lock() {
@@ -444,11 +453,16 @@ impl AppState {
         let Some(db) = db_guard.as_ref() else {
             return;
         };
+        // A failed lookup is read as "the file has uuid-less shots": skipping a
+        // pin costs an ignore, writing a transient uuid costs it on a discard.
+        let file_stores_uuids = !db.holds_shots_without_uuid().unwrap_or(true);
         let live: std::collections::HashMap<(u32, u32), String> = live
             .into_iter()
             .filter(|((section_id, _), uuid)| {
-                db.shot_uuid_is_persisted(*section_id, uuid)
-                    .unwrap_or(false)
+                file_stores_uuids
+                    || db
+                        .shot_uuid_is_persisted(*section_id, uuid)
+                        .unwrap_or(false)
             })
             .collect();
         if live.is_empty() {

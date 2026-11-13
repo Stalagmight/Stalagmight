@@ -347,6 +347,19 @@ impl Database {
     /// sections, and the load renames one copy. An unscoped `EXISTS` would answer "persisted"
     /// because the OTHER section's copy is on disk, and the caller would then key an ignore by
     /// a UUID that is in-memory-only for the section it actually belongs to.
+    /// Whether the file holds a shot with no uuid: a pre-v6 file not saved
+    /// since, whose shots get a fresh uuid on every load until a save writes
+    /// them. In any other file a shot's uuid, once minted, is the one the next
+    /// save writes.
+    pub fn holds_shots_without_uuid(&self) -> Result<bool> {
+        let exists: bool = self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM shots WHERE uuid IS NULL OR uuid = '')",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(exists)
+    }
+
     pub fn shot_uuid_is_persisted(&self, section_id: u32, uuid: &str) -> Result<bool> {
         let exists: bool = self.conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM shots WHERE uuid = ?1 AND section_id = ?2)",

@@ -594,3 +594,141 @@ fn a_held_component_gauge_survives_undo_redo_and_a_reopen() {
     assert_eq!(state.get_project_state().unwrap().held_gauges.len(), 1);
     assert_same_adjusted(&after, &adjusted_by_position(&state), "reopen");
 }
+
+/// `SHORT_SHOT` verdicts (is it ignored?) by shot uuid.
+fn short_shot_verdicts_by_uuid(state: &AppState) -> std::collections::BTreeMap<String, bool> {
+    let project = state.get_project_state().unwrap();
+    let uuid_of = |section: SectionId, index: usize| {
+        project.get_section(section).unwrap().shots[index]
+            .uuid
+            .clone()
+            .unwrap()
+    };
+    state
+        .compute_project_warnings(&project, None)
+        .into_iter()
+        .filter(|w| w.code == "SHORT_SHOT")
+        .map(|w| (uuid_of(w.section_id, w.shot_index), w.is_resolved))
+        .collect()
+}
+
+/// A short shot added to O since the last save, its `SHORT_SHOT` ignored the
+/// way the resolve command stores it (by position, since its uuid is not on
+/// disk yet). Returns the state, both sections, the save path and the new
+/// shot's uuid.
+fn unsaved_ignored_shot(
+    temp: &tempfile::TempDir,
+) -> (AppState, SectionId, SectionId, std::path::PathBuf, String) {
+    let path = temp.path().join("unsaved.stalx");
+    let (state, k, o) = state();
+    assert!(
+        state
+            .execute(Command::SaveProject {
+                path: Some(path.clone())
+            })
+            .success
+    );
+    let last = state
+        .get_project_state()
+        .unwrap()
+        .get_section(o)
+        .unwrap()
+        .shots[2]
+        .id;
+    let created = state.execute(Command::CreateShot {
+        section_id: o,
+        shot: shot(0.0, 0.2),
+        after_shot_id: Some(last),
+        before_shot_id: None,
+    });
+    assert!(created.success, "{:?}", created.error);
+    let (id, uuid) = {
+        let project = state.get_project_state().unwrap();
+        let shot = &project.get_section(o).unwrap().shots[3];
+        (shot.id, shot.uuid.clone().unwrap())
+    };
+    let keyed = state.shot_uuid_is_persisted(o, &uuid).then(|| uuid.clone());
+    assert_eq!(keyed, None, "setup: the new shot's uuid is not on disk");
+    state
+        .save_resolved_warning(&crate::persistence::ResolvedWarning {
+            section_id: o,
+            shot_id: id,
+            warning_code: "SHORT_SHOT".to_string(),
+            resolved_at: chrono::Utc::now(),
+            resolved_comment: None,
+            shot_uuid: keyed,
+        })
+        .unwrap();
+    assert_eq!(short_shot_verdicts_by_uuid(&state).get(&uuid), Some(&true));
+    (state, k, o, path, uuid)
+}
+
+/// An ignore on a shot added since the last save follows the shot through a
+/// combine (as the other section's, which renumbers every one of its shots)
+/// and a split past it, in the session and through a save and a reopen.
+#[test]
+fn an_ignore_on_an_unsaved_shot_follows_it_through_a_combine_and_a_split() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let (state, k, o, path, uuid) = unsaved_ignored_shot(&temp);
+    let ignored = |state: &AppState| short_shot_verdicts_by_uuid(state).get(&uuid).copied();
+
+    assert!(state.execute_combine_sections(k, o, options()).success);
+    assert_eq!(ignored(&state), Some(true), "after the combine");
+    let split = state.execute_split_section(
+        k,
+        crate::models::SplitAt::Station { station_index: 3 },
+        crate::models::SplitSectionOptions {
+            name_a: "K-A".to_string(),
+            name_b: "K-B".to_string(),
+            color_a: "#111111".to_string(),
+            color_b: "#222222".to_string(),
+            comment_side: crate::models::SplitSide::A,
+            datum_side: crate::models::SplitSide::A,
+        },
+    );
+    assert!(split.success, "{:?}", split.error);
+    let second = split.section_id.unwrap();
+    let holder = state
+        .get_project_state()
+        .unwrap()
+        .sections
+        .iter()
+        .find(|s| {
+            s.shots
+                .iter()
+                .any(|shot| shot.uuid.as_deref() == Some(&uuid))
+        })
+        .unwrap()
+        .id;
+    assert_eq!(holder, second, "setup: the split moved the shot");
+    assert_eq!(ignored(&state), Some(true), "after the split");
+
+    assert!(state.execute(Command::SaveProject { path: None }).success);
+    assert!(state.execute(Command::CloseProject).success);
+    assert!(state.open_project(path).success, "reopen");
+    assert_eq!(ignored(&state), Some(true), "after a reopen");
+}
+
+/// Undone before any save, the combine leaves no dangling row: the ignore is
+/// on its shot again in O, and stays there through a save and a reopen.
+#[test]
+fn an_ignore_on_an_unsaved_shot_survives_an_undone_combine() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let (state, k, o, path, uuid) = unsaved_ignored_shot(&temp);
+    let ignored = |state: &AppState| short_shot_verdicts_by_uuid(state).get(&uuid).copied();
+
+    assert!(state.execute_combine_sections(k, o, options()).success);
+    assert!(state.undo().success);
+    assert_eq!(ignored(&state), Some(true), "after the undo");
+
+    assert!(state.execute(Command::SaveProject { path: None }).success);
+    assert!(state.execute(Command::CloseProject).success);
+    assert!(state.open_project(path).success, "reopen");
+    assert_eq!(ignored(&state), Some(true), "after a reopen");
+    let rows = state.load_resolved_warnings().unwrap();
+    assert!(
+        rows.iter()
+            .all(|row| row.shot_uuid.as_deref() == Some(uuid.as_str()) || row.shot_uuid.is_none()),
+        "{rows:?}"
+    );
+}

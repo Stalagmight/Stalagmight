@@ -801,6 +801,14 @@ fn shot_uuid_is_persisted_reflects_the_shots_table() {
         .unwrap();
     assert!(db.shot_uuid_is_persisted(0, "persisted-uuid").unwrap());
     assert!(!db.shot_uuid_is_persisted(0, "transient-uuid").unwrap());
+    // The uuid-less shot is what makes every load mint uuids afresh.
+    assert!(db.holds_shots_without_uuid().unwrap());
+    db.conn
+        .execute("UPDATE shots SET uuid = 'saved-uuid' WHERE id = 2", [])
+        .unwrap();
+    assert!(!db.holds_shots_without_uuid().unwrap());
+    db.conn.execute("DELETE FROM shots", []).unwrap();
+    assert!(!db.holds_shots_without_uuid().unwrap(), "no shots at all");
 }
 
 /// The check is SECTION-SCOPED, because a file saved before shot UUIDs were project-wide
