@@ -65,7 +65,7 @@ in determines how you write it, and picking wrong is the most common rework.
 
 | Doc | Contents |
 |-----|----------|
-| [dmp-import.md](dmp-import.md) | The mNemo `.dmp` import wizard: phases, virtual connections, suggestion scoring, overlap handling, batch import. |
+| [dmp-import.md](dmp-import.md) | The MNemo `.dmp` import wizard: phases, virtual connections, suggestion scoring, overlap handling, batch import. |
 | [ariane-import.md](ariane-import.md) | Reading `.tml` / `.tmlu`: the shared schema, topology reconstruction, unit conversion, azimuth semantics, limitations. |
 | [ariane-export.md](ariane-export.md) | Writing `.tml` / `.tmlu`: data mapping, topology, color conversion, station-comment co-encoding, limitations. |
 

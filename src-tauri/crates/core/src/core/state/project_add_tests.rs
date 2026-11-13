@@ -2119,6 +2119,7 @@ fn held_gauge_source() -> Project {
             swap_lr: false,
             comment_pick: CombinePick::Kept,
             name_pick: CombinePick::Kept,
+            join: None,
         },
     )
     .unwrap();

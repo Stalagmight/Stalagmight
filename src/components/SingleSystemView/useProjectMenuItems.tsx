@@ -15,7 +15,13 @@ import { useUIStore } from '../../store/uiStore';
 import { useExportStore } from '../../store/exportStore';
 import { setSource } from '../../utils/telemetry';
 import { MENU_ICON_COLORS } from '../common/menuColors';
-import { leadingMenuItems, serviceMenuItems, quitMenuItem, importMenuItem } from '../common/appMenuItems';
+import {
+  leadingMenuItems,
+  serviceMenuItems,
+  quitMenuItem,
+  importMenuItem,
+  mnemoImportMenuItem,
+} from '../common/appMenuItems';
 import type { AppMenuItem } from '../common/AppMenu';
 import {
   SaveIcon,
@@ -119,13 +125,14 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
         onClick: () => { void saveAndClose(); },
       },
       { id: 'project-menu-sep-2', label: '', separator: true },
-      // Import means "add mNemo data to THIS project" (#508), so it offers a
+      // Import means "add MNemo data to THIS project" (#508), so it offers a
       // .dmp-only picker - the one format that is additive to an open project.
       // Switching projects stays on the Open row above, which keeps the full
       // unified picker and its replacement guards. No editingBlocked disable:
       // the router rejects exactly the additive DMP case, with a tailored
       // message naming the read-only cause.
       importMenuItem(t),
+      ...mnemoImportMenuItem(t, { onOpen: () => openDialog('mnemo-import') }),
       // Export is a workspace, not a dialog: this row enters it, and inside it
       // the same row (and its Ctrl+E hint) closes it again, back to the mode it
       // was entered from - so the menu never offers an action that does nothing.

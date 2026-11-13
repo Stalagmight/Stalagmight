@@ -1757,7 +1757,7 @@ fn resolve_tml_depth_in(shot: &TmlShot, prev_depth: Option<f64>, start_depth: f6
 /// Convert Ariane's `<Inclination>` into a model pitch.
 ///
 /// Ariane is taken to be +up, like every other survey format we read: Walls and
-/// Compass both store +up in-file, and the mNemo device reports +up. The model
+/// Compass both store +up in-file, and the MNemo device reports +up. The model
 /// is +down (positive descends, matching `depth_in` / `depth_out`), so the sign
 /// flips here.
 ///

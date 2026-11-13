@@ -14,7 +14,7 @@ The main window of an open project: the map, with **Sections** on the left,
 **Top bar**
 
 1. **Menu**
-2. **Import**: add data from a file, for example a `.dmp` from an mNemo. See
+2. **Import**: add data from a file, for example a `.dmp` from an MNemo. See
    [DMP import](dmp-import.md).
 3. **Undo**
 4. **Redo**

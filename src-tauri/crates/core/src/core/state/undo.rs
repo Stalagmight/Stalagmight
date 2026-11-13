@@ -72,7 +72,9 @@ impl AppState {
         // side. Re-record it before stepping through, so the redo puts back what
         // this undo is about to destroy rather than a payload that predates every
         // undo-less heal since (#413, finding 11's re-creation residue). A no-op
-        // for every other variant.
+        // for every other variant. What that side recorded is read first: a
+        // gauge pair it already held is the edit's own, not a later save's.
+        let edited = Self::recorded_counterpart_gauges(&entry, HistoryMove::Undo);
         self.refresh_snapshot_pair_counterpart(&mut entry, HistoryMove::Undo);
         // The same self-refresh for an add (#674): re-read what it brought off
         // the live project, so the redo reinstalls what this undo removes.
@@ -553,7 +555,11 @@ impl AppState {
                 // Restore the "before" snapshot for undo.
                 match self.project.lock() {
                     Ok(mut proj) => {
-                        if Self::restore_snapshot_into(&mut proj, before.as_str()) {
+                        if Self::restore_snapshot_into_with(
+                            &mut proj,
+                            before.as_str(),
+                            edited.as_ref(),
+                        ) {
                             CommandResult::success()
                         } else {
                             CommandResult::failure("Failed to parse project snapshot".to_string())
@@ -649,6 +655,7 @@ impl AppState {
         // side, so re-record it before stepping through and the undo that follows
         // puts back what this redo destroys (#413, finding 11's re-creation
         // residue). A no-op for every other variant.
+        let edited = Self::recorded_counterpart_gauges(&entry, HistoryMove::Redo);
         self.refresh_snapshot_pair_counterpart(&mut entry, HistoryMove::Redo);
 
         // For snapshot-based undo data, restore from snapshot instead of re-executing.
@@ -657,7 +664,8 @@ impl AppState {
         let mut result = match &entry.undo_data {
             UndoData::ProjectSnapshotPair { before: _, after } => match self.project.lock() {
                 Ok(mut proj) => {
-                    if Self::restore_snapshot_into(&mut proj, after.as_str()) {
+                    if Self::restore_snapshot_into_with(&mut proj, after.as_str(), edited.as_ref())
+                    {
                         CommandResult::success()
                     } else {
                         CommandResult::failure("Failed to parse project snapshot".to_string())
@@ -1161,6 +1169,25 @@ impl AppState {
             return;
         };
         project.restore_section_offsets(offsets);
+    }
+
+    /// The gauge pairs the half of a snapshot pair this step LEAVES BEHIND
+    /// recorded (`after` when undoing, `before` when redoing), read before
+    /// [`Self::refresh_snapshot_pair_counterpart`] overwrites it with the live
+    /// project. A live pair that is one of these is the edit's own, which the
+    /// restore's save-heal carry-forward must not copy onto the other half
+    /// (`reapply_heals_after_restore`). `None` for every other variant.
+    fn recorded_counterpart_gauges(
+        entry: &UndoEntry,
+        direction: HistoryMove,
+    ) -> Option<super::project_io::RecordedGauges> {
+        let UndoData::ProjectSnapshotPair { before, after } = &entry.undo_data else {
+            return None;
+        };
+        super::project_io::recorded_gauge_pairs(match direction {
+            HistoryMove::Undo => after,
+            HistoryMove::Redo => before,
+        })
     }
 
     /// Re-record the half of a `ProjectSnapshotPair` the caller is NOT about to

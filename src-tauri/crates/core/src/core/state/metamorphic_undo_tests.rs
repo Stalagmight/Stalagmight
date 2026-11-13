@@ -1625,6 +1625,7 @@ fn combine_options(
         swap_lr,
         comment_pick: crate::models::CombinePick::Kept,
         name_pick: crate::models::CombinePick::Kept,
+        join: None,
     }
 }
 

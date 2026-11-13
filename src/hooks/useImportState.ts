@@ -118,7 +118,7 @@ const DEFAULT_EXCLUDED_DMP_SHOT_LENGTH = 1;
 /**
  * DMP imports skip length-1 standard shots by default.
  *
- * This is also the mNemo station-numbering rule: only the shots that pass it
+ * This is also the MNemo station-numbering rule: only the shots that pass it
  * advance the station number (see `mnemoStationNumber`).
  */
 export function isImportableDmpShot(shot: DmpShot): boolean {
@@ -129,8 +129,8 @@ export function isImportableDmpShot(shot: DmpShot): boolean {
 }
 
 /**
- * The mNemo station number at the END of the importable shot at `index` (its
- * position among the shots `isImportableDmpShot` keeps). mNemo numbers a
+ * The MNemo station number at the END of the importable shot at `index` (its
+ * position among the shots `isImportableDmpShot` keeps). MNemo numbers a
  * section's start 0 and the end of its N-th shot N, so this is `index + 1`.
  * ASSUMED, not confirmed against a device: that only the shots the importer
  * keeps advance the device's counter. This is the one place the rule lives: if a

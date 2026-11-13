@@ -220,7 +220,7 @@ pub(crate) fn update_new_section_view_impl(
 }
 
 /// Update the edit-section dialog's shot-grid view state (column order,
-/// Update the IMPORT-time shot grids' view (the mNemo wizard and zero-datum
+/// Update the IMPORT-time shot grids' view (the MNemo wizard and zero-datum
 /// config) in configuration.
 ///
 /// Its own command for the same reason the other three are: separate `panels`

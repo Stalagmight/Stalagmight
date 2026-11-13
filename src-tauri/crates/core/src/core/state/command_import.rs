@@ -923,7 +923,7 @@ impl AppState {
             }
 
             // Apply station comments (promoted from shot comments during TML
-            // import) and station names (the mNemo numbers of a DMP import).
+            // import) and station names (the MNemo numbers of a DMP import).
             if !config.station_comments.is_empty() || !config.station_names.is_empty() {
                 let mut proj_guard = match self.project.lock() {
                     Ok(g) => g,

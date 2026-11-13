@@ -473,7 +473,7 @@ export async function routeOpenedFile(
       });
       handedOff = true;
     } else if (isDmp) {
-      // mNemo DMP: import into the current project, or seed a new one.
+      // MNemo DMP: import into the current project, or seed a new one.
       const dmpFile = await parseForImport(store.importDmp(path), errorTitle);
       if (!dmpFile) return;
       // Re-read project state fresh after the parse - the existing/new-project

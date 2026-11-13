@@ -2,7 +2,7 @@
  * Pure text emitters for the three line-oriented survey formats the app imports:
  * Compass `.dat` / `.mak`, Walls `.srv` / `.wpj`, and GPX.
  *
- * Wave 2 of `surveyFileWriters.ts` (mNemo `.dmp` + Ariane `.tml`/`.tmlu`), and it
+ * Wave 2 of `surveyFileWriters.ts` (MNemo `.dmp` + Ariane `.tml`/`.tmlu`), and it
  * carries the same three promises, for the same reasons:
  *
  * ## Every function is a total, deterministic function of its spec

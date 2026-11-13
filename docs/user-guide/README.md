@@ -6,7 +6,7 @@ How to use Stalagmight. Pages link to each other.
 - [Creating a new survey](workflows/creating-a-new-survey.md)
 - [Setting a zero datum](workflows/setting-a-zero-datum.md)
 - [Fixing warnings](workflows/fixing-warnings.md)
-- [Importing from an mNemo](workflows/importing-from-mnemo.md)
+- [Importing from an MNemo](workflows/importing-from-mnemo.md)
 - [Importing an Ariane survey](workflows/importing-from-ariane.md)
 - [Merging stations](workflows/merging-stations.md)
 - [Closing a loop](workflows/closing-a-loop.md)
@@ -58,7 +58,7 @@ Every page here except this README is published at
 
   ```yaml
   ---
-  title: Importing from an mNemo
+  title: Importing from an MNemo
   description: One sentence for search results and link cards, 120-160 characters.
   order: 4
   ---

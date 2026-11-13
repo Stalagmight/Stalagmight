@@ -337,7 +337,7 @@ pub struct ExportImageOptions {
     /// regardless of `color_mode`.
     #[serde(default)]
     pub show_station_labels: bool,
-    /// Whether to draw each station's name (e.g. the mNemo station number a
+    /// Whether to draw each station's name (e.g. the MNemo station number a
     /// DMP import recorded) instead of its index, with the same points and
     /// placement as `show_station_labels`. A point with no named station gets
     /// no label - there is no fallback to the index. Opt-in (default `false`).

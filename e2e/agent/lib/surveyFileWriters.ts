@@ -1,5 +1,5 @@
 /**
- * Pure byte emitters for the survey formats the app imports: mNemo `.dmp`, and
+ * Pure byte emitters for the survey formats the app imports: MNemo `.dmp`, and
  * Ariane `.tmlu` (plain XML) / `.tml` (a ZIP holding `Data.xml`).
  *
  * ## Why the fuzzer records specs, not bytes
@@ -144,7 +144,7 @@ export interface DmpSpec {
   /**
    * Render each byte as the signed value a device writes (-128..127) rather than
    * 0..255. `parse_dmp` does `parse::<i32>() as u8`, so both round-trip; real
-   * mNemo exports are signed, which makes this the higher-fidelity shape.
+   * MNemo exports are signed, which makes this the higher-fidelity shape.
    */
   signedTokens?: boolean;
   tokens?: DmpTokenTweaks;

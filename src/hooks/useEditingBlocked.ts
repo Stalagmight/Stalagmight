@@ -47,3 +47,28 @@ export function useEditingBlocked(): boolean {
 export function isEditingBlockedNow(): boolean {
   return isMapReadOnly(useUIStore.getState()) || selectSpeleoReadOnly(useSpeleoStore.getState());
 }
+
+/**
+ * Which of the two terms blocks editing, for copy that says why: `'project'`
+ * for a remote SpeleoDB project open without the write lock, `'view'` for the
+ * closure-adjusted view or Plan/Export, `null` when editing is open. The
+ * project wins when both hold, since leaving the view would not unblock it.
+ */
+export type EditingBlockedReason = 'project' | 'view' | null;
+
+function blockedReason(mapReadOnly: boolean, speleoReadOnly: boolean): EditingBlockedReason {
+  if (speleoReadOnly) return 'project';
+  return mapReadOnly ? 'view' : null;
+}
+
+/** React-hook form of the reason; calls both store hooks unconditionally. */
+export function useEditingBlockedReason(): EditingBlockedReason {
+  const mapReadOnly = useUIStore(isMapReadOnly);
+  const speleoReadOnly = useSpeleoStore(selectSpeleoReadOnly);
+  return blockedReason(mapReadOnly, speleoReadOnly);
+}
+
+/** Imperative twin of `useEditingBlockedReason`, read via `getState()`. */
+export function editingBlockedReasonNow(): EditingBlockedReason {
+  return blockedReason(isMapReadOnly(useUIStore.getState()), selectSpeleoReadOnly(useSpeleoStore.getState()));
+}

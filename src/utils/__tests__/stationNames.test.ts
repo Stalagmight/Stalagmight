@@ -1,7 +1,7 @@
 /**
- * mNemo station numbers -> station names, from the DMP rows the wizard sends.
+ * MNemo station numbers -> station names, from the DMP rows the wizard sends.
  *
- * mNemo numbers a section's start 0 and the end of its N-th shot N. Only the
+ * MNemo numbers a section's start 0 and the end of its N-th shot N. Only the
  * shots the importer keeps (`isImportableDmpShot`: Standard, not 1 m) advance
  * the number, so the numbers are fixed when the file is read and every later
  * wizard edit - a deleted row, an overlap trim, an added row - must leave each
@@ -52,7 +52,7 @@ function added(tempId: number): EditableShot {
   return { ...blankEditableShot(tempId), azimuth_in: 0, azimuth_out: 0, length: 3, depth_in: 0, depth_out: 0 };
 }
 
-describe('mNemo station numbering', () => {
+describe('MNemo station numbering', () => {
   it('counts only the shots the importer keeps', () => {
     const shots = convertToEditableShots([
       dmpShot(4),
@@ -77,7 +77,7 @@ describe('mNemo station numbering', () => {
 
   it('a deleted interior row takes only its end station with it', () => {
     const shots = rows(4);
-    shots[1] = deleted(shots[1]!); // mNemo 1 -> 2
+    shots[1] = deleted(shots[1]!); // MNemo 1 -> 2
     expect(names(shots)).toEqual([
       [0, '0'],
       [1, '1'],
@@ -102,7 +102,7 @@ describe('mNemo station numbering', () => {
     expect(names([a!, added(-1), b!])).toEqual([
       [0, '0'],
       [1, '1'],
-      // station 2 is the end of the added row: no mNemo number
+      // station 2 is the end of the added row: no MNemo number
       [3, '2'],
     ]);
     // Prepended: the new start is unnamed, the old start keeps 0.

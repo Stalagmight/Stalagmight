@@ -13,6 +13,7 @@ use stalagmight_lib::commands::cache::{CacheStats, ProviderStats, TileFetchStats
 use stalagmight_lib::commands::export::DiveProfileRequest;
 use stalagmight_lib::commands::history::{FieldChange, PreviewData, UndoHistoryItem};
 use stalagmight_lib::commands::memory::{MemoryStats, ProcessMemory};
+use stalagmight_lib::commands::mnemo::{MnemoError, MnemoPort, MnemoPullProgress, MnemoPullResult};
 use stalagmight_lib::commands::project::ProjectState;
 use stalagmight_lib::commands::section::{SegmentGeometry, SegmentSectionGeometry};
 use stalagmight_lib::commands::survey_geometry::{
@@ -51,18 +52,18 @@ use stalagmight_lib::models::placement_suggest::{
 };
 use stalagmight_lib::models::{
     AlongLineResult, AzimuthReference, ClosurePair, ClosurePreview, ClosureRef, ClosureStrategy,
-    ClosureUpdate, CombineCandidate, CombinePick, CombineSectionsOptions, ConnectivityResult,
-    Coordinates, CorrectionSource, CreditEdit, CreditTargets, CreditedPerson, CylRole, Cylinder,
-    DeleteShotImpact, DeleteShotRangeImpact, DistanceField, DivePlan, DivePlanMeta,
-    DivePlanSnapshot, Diver, ExistingShotUpdate, FrozenShotRef, GasReachField, GpsBounds,
-    GpsCoordinates, ImportPlacement, ImportSectionConfig, LoopClosureWire, MarkedPoint,
-    NorthReference, PathShot, Person, PlanAnchorSet, PlanMode, PlanSegment, Project,
-    ProjectMetadata, ProjectStats, ProjectWarning, RangeDeleteKind, RouteLeg, RouteProfilePoint,
-    RulerEndpoint, Section, SectionCreditSummary, SectionData, SectionEnd, SectionRelationships,
-    SectionStats, SectionUpdates, Shot, ShotData, ShotKind, ShotUpdates, SpeleoLink, SplitAt,
-    SplitPreview, SplitSectionOptions, SplitSide, Station, StationMergeWire, StationPair,
-    StationRef, SurveyCredit, SurveyDirection, TankMaterial, Team, UnrecognisedShotKind,
-    ZeroDatumWire,
+    ClosureUpdate, CombineCandidate, CombineJoinEnds, CombineJoinKind, CombinePick, CombinePlan,
+    CombineSectionsOptions, ConnectivityResult, Coordinates, CorrectionSource, CreditEdit,
+    CreditTargets, CreditedPerson, CylRole, Cylinder, DeleteShotImpact, DeleteShotRangeImpact,
+    DistanceField, DivePlan, DivePlanMeta, DivePlanSnapshot, Diver, ExistingShotUpdate,
+    FrozenShotRef, GasReachField, GpsBounds, GpsCoordinates, ImportPlacement, ImportSectionConfig,
+    LoopClosureWire, MarkedPoint, NorthReference, PathShot, Person, PlanAnchorSet, PlanMode,
+    PlanSegment, Project, ProjectMetadata, ProjectStats, ProjectWarning, RangeDeleteKind, RouteLeg,
+    RouteProfilePoint, RulerEndpoint, Section, SectionCreditSummary, SectionData, SectionEnd,
+    SectionRelationships, SectionStats, SectionUpdates, Shot, ShotData, ShotKind, ShotUpdates,
+    SpeleoLink, SplitAt, SplitPreview, SplitSectionOptions, SplitSide, Station, StationMergeWire,
+    StationPair, StationRef, SurveyCredit, SurveyDirection, TankMaterial, Team, TornTie,
+    TornTieKind, TornTieReason, UnrecognisedShotKind, ZeroDatumWire,
 };
 use stalagmight_lib::parsers::compass::{CompassFile, CompassSurveySummary, InvalidShotCounts};
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};
@@ -246,6 +247,12 @@ fn main() {
     export::<CombineCandidate>(&out_dir);
     export::<CombinePick>(&out_dir);
     export::<CombineSectionsOptions>(&out_dir);
+    export::<CombineJoinEnds>(&out_dir);
+    export::<CombineJoinKind>(&out_dir);
+    export::<CombinePlan>(&out_dir);
+    export::<TornTie>(&out_dir);
+    export::<TornTieKind>(&out_dir);
+    export::<TornTieReason>(&out_dir);
     export::<SectionEnd>(&out_dir);
     export::<SplitAt>(&out_dir);
     export::<SplitPreview>(&out_dir);
@@ -426,6 +433,11 @@ fn main() {
     export::<AppUpdateStatus>(&out_dir);
     export::<AppUpdateProgress>(&out_dir);
     export::<AppUpdateInstallError>(&out_dir);
+    // Import from MNemo over USB (#725).
+    export::<MnemoPort>(&out_dir);
+    export::<MnemoPullProgress>(&out_dir);
+    export::<MnemoPullResult>(&out_dir);
+    export::<MnemoError>(&out_dir);
     // SpeleoDB IPC DTOs (#183; #186/D-B2 added SpeleoDbAction + SpeleoErrorDto)
     export::<Permission>(&out_dir);
     export::<SpeleoProjectSummary>(&out_dir);
@@ -553,6 +565,12 @@ fn main() {
         "CombineCandidate",
         "CombinePick",
         "CombineSectionsOptions",
+        "CombineJoinEnds",
+        "CombineJoinKind",
+        "CombinePlan",
+        "TornTie",
+        "TornTieKind",
+        "TornTieReason",
         "SectionEnd",
         "Station",
         "StationRef",
@@ -690,6 +708,10 @@ fn main() {
         "AppUpdateStatus",
         "AppUpdateProgress",
         "AppUpdateInstallError",
+        "MnemoPort",
+        "MnemoPullProgress",
+        "MnemoPullResult",
+        "MnemoError",
         "Permission",
         "SpeleoProjectSummary",
         "SpeleoFileAccess",

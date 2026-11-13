@@ -194,7 +194,7 @@ describe('ShotTableEditor row menu over a selection that swept the blank row', (
 });
 
 /**
- * `tempId ?? id` drew two identities out of one numeric space. The mNemo wizard
+ * `tempId ?? id` drew two identities out of one numeric space. The MNemo wizard
  * hands the editor both kinds at once, so a fresh row's tempId could equal an
  * imported row's id - and the grid keys its missing-cell marks off this value,
  * so clearing a cell on one row blanked the same cell on its twin.

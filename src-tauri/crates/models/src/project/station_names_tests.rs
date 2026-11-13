@@ -1,6 +1,6 @@
 //! Station names (`Project::station_names`) stay on their PHYSICAL station.
 //!
-//! The field exists so an imported mNemo station number survives every edit
+//! The field exists so an imported MNemo station number survives every edit
 //! that shifts positional station indexes. Each test names every station of a
 //! straight section after its original index, makes one edit, and checks which
 //! name each surviving station carries.

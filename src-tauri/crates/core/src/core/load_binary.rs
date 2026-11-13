@@ -91,7 +91,7 @@ pub const STATION_UINT_STRIDE: usize = STATION_UINT_FIELDS * 4;
 ///
 /// Bumped 5 → 6 for station names: the envelope gained the sparse
 /// `station_names` list. A map field a stale frontend would ignore, but it
-/// would then show every imported mNemo station number as missing - the same
+/// would then show every imported MNemo station number as missing - the same
 /// "believes it has the whole project" case as 4 → 5.
 ///
 /// Bumped 6 → 7 for per-shot survey credit: the section header lost its
@@ -148,7 +148,7 @@ pub struct LoadProjectFullBinaryResult {
     pub station_closures_with: Vec<(u32, Vec<ClosureRef>)>,
     /// Sparse: stations with non-empty `comment`.
     pub station_comments: Vec<(u32, String)>,
-    /// Sparse: stations with a non-empty `name` (e.g. an mNemo station number).
+    /// Sparse: stations with a non-empty `name` (e.g. an MNemo station number).
     /// Dense on a DMP-imported project, but still keyed by station so the
     /// common unnamed station costs nothing.
     pub station_names: Vec<(u32, String)>,

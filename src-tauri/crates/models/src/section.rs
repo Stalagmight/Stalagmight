@@ -369,7 +369,7 @@ pub struct ImportSectionConfig {
     #[serde(default)]
     pub station_comments: Vec<(u32, String)>,
     /// Station names to apply after section creation, as (station_index, name),
-    /// such as the mNemo station numbers of a DMP import. Same index convention
+    /// such as the MNemo station numbers of a DMP import. Same index convention
     /// as `station_comments` (see `reverse` below).
     #[serde(default)]
     pub station_names: Vec<(u32, String)>,

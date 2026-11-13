@@ -788,7 +788,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // threaded back in from here or an edit would vanish on the next refresh.
       const mockStationComments: Record<string, string> = {};
 
-      // Station names (the mNemo numbers a DMP import sends as `station_names`),
+      // Station names (the MNemo numbers a DMP import sends as `station_names`),
       // keyed "sectionId:stationIndex" and threaded into get_project_state's
       // derived stations like the comments above. Filled by import_sections;
       // tests can also seed one through __MOCK_SET_STATION_NAME__. The mock
@@ -2847,7 +2847,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               ...(sectionIds[0] != null ? { section_id: sectionIds[0] } : {}),
               sections: importedSections,
               import_receipt: {
-                source_format: sourceLabel ?? 'mNemo DMP',
+                source_format: sourceLabel ?? 'MNemo DMP',
                 file_name: sourceFileName ?? '',
                 sections_found: sectionsFoundArg ?? sectionIds.length,
                 sections_imported: sectionIds.length,
@@ -4244,6 +4244,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // structural step is undone first.
             const snapshot = cmd === 'undo' ? structuralUndo.pop() : undefined;
             if (snapshot && currentProject) {
+              // structuredClone, not JSON: loop closure ids are BigInts.
               const restored = structuredClone(snapshot) as {
                 project: typeof currentProject;
                 joins: typeof colocatedJoins;
@@ -5530,7 +5531,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             if (k <= 0 || k >= section.shots.length) {
               return { success: false, error: 'Cannot split a section at its first or last station', section_ids: [], warnings: [] };
             }
-            structuralUndo.push(JSON.parse(JSON.stringify({ project: currentProject, joins: colocatedJoins })));
+            structuralUndo.push(structuredClone({ project: currentProject, joins: colocatedJoins }));
             sectionCounter = Math.max(sectionCounter, ...sections.map((s) => s.id)) + 1;
             const newSection: MockSection = {
               ...section,
@@ -5556,15 +5557,26 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'combine_candidate':
           case 'combine_candidate_for_sections': {
             // A small model of the real query (`combine_candidate.rs`): two
-            // section ends touch when they are station-merged or a split left
-            // them co-located. At a junction the station query lists every
-            // partner; the others at the point stay as branches. A station in
-            // the MIDDLE of a section at the point blocks.
+            // section ends touch when they are station-merged, a split left
+            // them co-located, or a loop closure ties them. At a junction the
+            // station query lists every partner; the others at the point stay
+            // as branches. A station in the MIDDLE of a section at the point
+            // passes through. Across a closure the other section moves by the
+            // misclosure, and any other merge between the two becomes a
+            // closure (the real plan also tears ties through third sections).
             type Ref = { section_id: number; station_index: number };
             type MockSection = { id: number; shots: unknown[] };
             const sections = (currentProject?.sections ?? []) as MockSection[];
             const merges = (currentProject?.station_merges ?? []) as Array<{ station_a: Ref; station_b: Ref }>;
+            const closures = (currentProject?.loop_closures ?? []) as Array<{
+              station_a: Ref;
+              station_b: Ref;
+              misclosure_distance?: number;
+              horizontal_misclosure?: number;
+            }>;
             const same = (x: Ref, y: Ref) => x.section_id === y.section_id && x.station_index === y.station_index;
+            const closureBetween = (x: Ref, y: Ref) =>
+              closures.find((c) => (same(c.station_a, x) && same(c.station_b, y)) || (same(c.station_a, y) && same(c.station_b, x)));
             const isEnd = (r: Ref) => {
               const section = sections.find((s) => s.id === r.section_id);
               return !!section && (r.station_index === 0 || r.station_index === section.shots.length);
@@ -5572,6 +5584,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const partnersOf = (r: Ref): Ref[] => [
               ...merges.flatMap((m) => (same(m.station_a, r) ? [m.station_b] : same(m.station_b, r) ? [m.station_a] : [])),
               ...colocatedJoins.flatMap(([x, y]) => (same(x, r) ? [y] : same(y, r) ? [x] : [])),
+              ...closures.flatMap((c) => (same(c.station_a, r) ? [c.station_b] : same(c.station_b, r) ? [c.station_a] : [])),
             ];
             const candidate = (at: Ref, partner: Ref, blocked: string | null, branches: number[] = []) => {
               const [a, b] = at.section_id < partner.section_id ? [at, partner] : [partner, at];
@@ -5580,6 +5593,26 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               const end = (r: Ref, s?: MockSection) => (r.station_index === 0 && (s?.shots.length ?? 0) > 0 ? 'start' : 'end');
               const endA = end(a, sa);
               const endB = end(b, sb);
+              const isMerged = merges.some((m) => (same(m.station_a, a) && same(m.station_b, b)) || (same(m.station_a, b) && same(m.station_b, a)));
+              const isColocated = colocatedJoins.some(([x, y]) => (same(x, a) && same(y, b)) || (same(x, b) && same(y, a)));
+              const closure = !isMerged && !isColocated ? closureBetween(a, b) : undefined;
+              const pair = new Set([a.section_id, b.section_id]);
+              const torn = merges
+                .filter((m) => pair.has(m.station_a.section_id) && pair.has(m.station_b.section_id) && m.station_a.section_id !== m.station_b.section_id)
+                .filter((m) => !((same(m.station_a, a) && same(m.station_b, b)) || (same(m.station_a, b) && same(m.station_b, a))))
+                .map((m) => ({ station_a: m.station_a, station_b: m.station_b, kind: 'merge', reason: 'loop' }));
+              // Nothing moves within the backend's 1 mm tolerance.
+              // Horizontal, as the backend's chain gap is.
+              const shift = closure ? (closure.horizontal_misclosure ?? closure.misclosure_distance ?? 0) : 0;
+              const plan = (kept: number, other: number) => ({
+                kept,
+                moving_section: shift > 0.001 ? other : null,
+                moved_sections: shift > 0.001 ? [other] : [],
+                shift_m: shift > 0.001 ? shift : 0,
+                torn_ties: torn,
+                azimuth_rotation_deg: null,
+                join_offset_change_m: null,
+              });
               return {
                 section_a: a.section_id,
                 section_b: b.section_id,
@@ -5587,7 +5620,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 end_b: endB,
                 station_a: a,
                 station_b: b,
-                merged: merges.some((m) => (same(m.station_a, a) && same(m.station_b, b)) || (same(m.station_a, b) && same(m.station_b, a))),
+                merged: isMerged,
+                join_kind: isMerged ? 'merged' : closure ? 'closure' : 'co_located',
                 reverses: endA === endB,
                 blocked_reason: blocked,
                 blocked_keeping_a: null,
@@ -5601,12 +5635,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 depth_difference_m: null,
                 branches,
                 loose_ends: [],
+                passing_through: [],
+                repeated_shot_ids: 0,
+                plan_keeping_a: plan(a.section_id, b.section_id),
+                plan_keeping_b: plan(b.section_id, a.section_id),
               };
             };
             const forStation = (at: Ref) => {
               if (!isEnd(at)) return [];
               const partners = partnersOf(at);
-              const through = partners.find((p) => !isEnd(p));
               const ends = partners.filter((p) => isEnd(p));
               if (ends.length === 0) {
                 return partners.length === 0 ? [] : [candidate(at, partners[0]!, 'Merged to the middle of another section')];
@@ -5615,13 +5652,24 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 candidate(
                   at,
                   partner,
-                  through ? `Section ${through.section_id} is merged here at a station in its middle` : null,
+                  null,
                   ends.filter((p) => p !== partner).map((p) => p.section_id)
                 )
               );
             };
             if (cmd === 'combine_candidate') {
-              return forStation(args?.station as Ref);
+              // The station menu asks for every pair at the point: the clicked
+              // section's first, then each pair of the others ending there.
+              const at = args?.station as Ref;
+              const own = forStation(at);
+              const ends = isEnd(at) ? partnersOf(at).filter((p) => isEnd(p)) : [];
+              const others = ends.flatMap((x, i) =>
+                ends
+                  .slice(i + 1)
+                  .filter((y) => y.section_id !== x.section_id)
+                  .map((y) => candidate(x, y, null, [at.section_id])),
+              );
+              return [...own, ...others];
             }
             const [first, second] = [args?.a as number, args?.b as number];
             const ends = (id: number): Ref[] => {
@@ -5633,7 +5681,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               const found = forStation(at).find((c) => c.section_a === second || c.section_b === second);
               if (found) return found;
             }
-            return candidate(ends(first)[1]!, ends(second)[0]!, 'These sections do not meet at an end station');
+            return candidate(
+              ends(first)[1]!,
+              ends(second)[0]!,
+              'These sections do not meet at an end station: merge two of their ends, or create a loop closure between them, first'
+            );
           }
 
           case 'combine_sections': {
@@ -5648,12 +5700,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const sections = (currentProject?.sections ?? []) as MockSection[];
             const kept = sections.find((s) => s.id === (args?.kept as number));
             const other = sections.find((s) => s.id === (args?.other as number));
-            const options = args?.options as { name: string; color: string } | undefined;
+            const options = args?.options as { name: string; color: string; join?: { kept: string; other: string } } | undefined;
             if (!kept || !other || !options || kept === other) {
               return { success: false, error: 'Sections not found', section_ids: [], warnings: [] };
             }
             const merges = (currentProject?.station_merges ?? []) as Array<{ station_a: Ref; station_b: Ref }>;
+            const loopClosures = (currentProject?.loop_closures ?? []) as Array<{ station_a: Ref; station_b: Ref } & Record<string, unknown>>;
+            const sameRef = (x: Ref, y: Ref) => x.section_id === y.section_id && x.station_index === y.station_index;
+            const closureOf = (x: Ref, y: Ref) =>
+              loopClosures.find((c) => (sameRef(c.station_a, x) && sameRef(c.station_b, y)) || (sameRef(c.station_a, y) && sameRef(c.station_b, x)));
             const touching = (x: Ref, y: Ref) =>
+              Boolean(closureOf(x, y)) ||
               merges.some((m) => (m.station_a.section_id === x.section_id && m.station_a.station_index === x.station_index && m.station_b.section_id === y.section_id && m.station_b.station_index === y.station_index) ||
                 (m.station_b.section_id === x.section_id && m.station_b.station_index === x.station_index && m.station_a.section_id === y.section_id && m.station_a.station_index === y.station_index)) ||
               colocatedJoins.some(([a, b]) => (a.section_id === x.section_id && a.station_index === x.station_index && b.section_id === y.section_id && b.station_index === y.station_index) ||
@@ -5663,14 +5720,23 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const otherStart = { section_id: other.id, station_index: 0 };
             const otherEnd = { section_id: other.id, station_index: other.shots.length };
             let pairing: 'append' | 'append-reversed' | 'prepend' | 'prepend-reversed' | null = null;
-            if (touching(keptEnd, otherStart)) pairing = 'append';
+            if (options.join) {
+              // The join the dialog showed: two sections in a loop meet twice.
+              const k = options.join.kept === 'end' ? keptEnd : keptStart;
+              const o = options.join.other === 'end' ? otherEnd : otherStart;
+              if (touching(k, o)) {
+                const reversed = options.join.kept === options.join.other;
+                if (options.join.kept === 'end') pairing = reversed ? 'append-reversed' : 'append';
+                else pairing = reversed ? 'prepend-reversed' : 'prepend';
+              }
+            } else if (touching(keptEnd, otherStart)) pairing = 'append';
             else if (touching(keptEnd, otherEnd)) pairing = 'append-reversed';
             else if (touching(keptStart, otherEnd)) pairing = 'prepend';
             else if (touching(keptStart, otherStart)) pairing = 'prepend-reversed';
             if (!pairing) {
               return { success: false, error: 'These sections do not meet at an end station', section_ids: [], warnings: [] };
             }
-            structuralUndo.push(JSON.parse(JSON.stringify({ project: currentProject, joins: colocatedJoins })));
+            structuralUndo.push(structuredClone({ project: currentProject, joins: colocatedJoins }));
             const mod360 = (a: number) => ((a % 360) + 360) % 360;
             let moved = other.shots.map((shot) => ({ ...shot }));
             if (pairing.endsWith('reversed')) {
@@ -5684,12 +5750,56 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             }
             let nextId = kept.shots.reduce((max, s) => Math.max(max, s.id), kept.id * 100000) + 1;
             moved = moved.map((shot) => ({ ...shot, id: nextId++ }));
-            kept.shots = pairing.startsWith('append') ? [...kept.shots, ...moved] : [...moved, ...kept.shots];
+            const nk = kept.shots.length;
+            const no = other.shots.length;
+            const joined = pairing;
+            // Where a station of either section lands in the combined one.
+            const home = (r: Ref): Ref => {
+              if (r.section_id === kept.id) return { section_id: kept.id, station_index: joined.startsWith('append') ? r.station_index : r.station_index + no };
+              if (r.section_id !== other.id) return r;
+              const i = joined.endsWith('reversed') ? no - r.station_index : r.station_index;
+              return { section_id: kept.id, station_index: joined.startsWith('append') ? nk + i : i };
+            };
+            const joinStations = joined.startsWith('append')
+              ? [keptEnd, joined.endsWith('reversed') ? otherEnd : otherStart]
+              : [keptStart, joined.endsWith('reversed') ? otherStart : otherEnd];
+            const isJoin = (x: Ref, y: Ref) =>
+              (sameRef(x, joinStations[0]!) && sameRef(y, joinStations[1]!)) || (sameRef(x, joinStations[1]!) && sameRef(y, joinStations[0]!));
+            // Any other merge between the two becomes a loop closure inside the
+            // combined section; the closure at the join goes.
+            const between = (m: { station_a: Ref; station_b: Ref }) => {
+              const ids = new Set([m.station_a.section_id, m.station_b.section_id]);
+              return ids.has(kept.id) && ids.has(other.id) && ids.size === 2 && !isJoin(m.station_a, m.station_b);
+            };
+            const tornMerges = merges.filter(between);
+            if (currentProject) {
+              const nextClosureId = loopClosures.reduce((max, c) => Math.max(max, Number(c.id ?? 0)), 0) + 1;
+              currentProject.loop_closures = [
+                ...loopClosures
+                  .filter((c) => !isJoin(c.station_a, c.station_b))
+                  .map((c) => ({ ...c, station_a: home(c.station_a), station_b: home(c.station_b) })),
+                ...tornMerges.map((m, i) => ({
+                  id: BigInt(nextClosureId + i),
+                  station_a: home(m.station_a),
+                  station_b: home(m.station_b),
+                  path_length: 0,
+                  misclosure_distance: 0,
+                  error_percentage: 0,
+                  horizontal_misclosure: 0,
+                  vertical_misclosure: 0,
+                  strategy: 'Batch',
+                  is_aligned: false,
+                })),
+              ] as typeof currentProject.loop_closures;
+            }
+            kept.shots = joined.startsWith('append') ? [...kept.shots, ...moved] : [...moved, ...kept.shots];
             kept.name = options.name;
             kept.color = options.color;
             sections.splice(sections.indexOf(other), 1);
             if (currentProject) {
-              currentProject.station_merges = merges.filter((m) => m.station_a.section_id !== other.id && m.station_b.section_id !== other.id) as typeof currentProject.station_merges;
+              currentProject.station_merges = merges.filter(
+                (m) => !between(m) && m.station_a.section_id !== other.id && m.station_b.section_id !== other.id
+              ) as typeof currentProject.station_merges;
             }
             colocatedJoins = colocatedJoins.filter(([a, b]) => a.section_id !== other.id && b.section_id !== other.id);
             // The backend touches the project, as every edit does (the ruler and the reach
@@ -6506,6 +6616,42 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // Present so the contract holds and an accidental call is visible as
             // a failed assertion rather than an unhandled null.
             throw new Error(`${cmd} is not driven by the default mock state`);
+
+          // Import from MNemo over USB (#725). One connected MNemo by default; a
+          // spec swaps the port list or the pull reply via __MOCK_IPC_OVERRIDES__.
+          // The pull answers a path the rest of the mock already treats as a
+          // DMP, so Continue lands in the normal DMP import.
+          case 'list_mnemo_ports':
+            return [
+              {
+                name: '/dev/cu.usbmodem101',
+                // What a real MNemo v2 reports: its board, no MNemo name.
+                vid: 0x2341,
+                pid: 0x005e,
+                manufacturer: 'Arduino',
+                product: 'Nano RP2040 Connect',
+                likely_mnemo: true,
+              },
+            ];
+          case 'pull_mnemo': {
+            const win = window as unknown as Record<string, unknown>;
+            const calls = (win.__MOCK_PULL_MNEMO_CALLS__ as unknown[] | undefined) ?? [];
+            calls.push(args ?? null);
+            win.__MOCK_PULL_MNEMO_CALLS__ = calls;
+            return {
+              path: '/mock/MNemo-2026-11-13_143005.dmp',
+              file_name: 'MNemo-2026-11-13_143005.dmp',
+              firmware: 'MNemo mock firmware',
+              bytes: 4096,
+              sections: 2,
+              shots: 14,
+              skipped_sections: 0,
+              unread_trailing_bytes: 0,
+              unreadable_reason: null,
+            };
+          }
+          case 'cancel_mnemo_pull':
+            return null;
 
           // Silent no-ops: commands that should succeed without side-effects
           case 'push_frontend_log':

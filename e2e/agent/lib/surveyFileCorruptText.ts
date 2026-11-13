@@ -2,7 +2,7 @@
  * The corruption catalogs for the five text formats: Compass `.dat`/`.mak`,
  * Walls `.srv`/`.wpj`, and GPX.
  *
- * Wave 2 of `surveyFileCorrupt.ts` (mNemo `.dmp` + Ariane `.tml`/`.tmlu`), same
+ * Wave 2 of `surveyFileCorrupt.ts` (MNemo `.dmp` + Ariane `.tml`/`.tmlu`), same
  * `{ id, applies?, apply }` shape, same reason for existing: a random bit flip
  * in a whitespace-separated number file almost always lands on a digit and
  * produces "a slightly different survey", which is not a rejection path at all.

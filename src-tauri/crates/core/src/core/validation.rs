@@ -989,7 +989,7 @@ mod tests {
             .all(|w| w.code != "LENGTH_BELOW_DEPTH_CHANGE"));
     }
 
-    /// Real mNemo shots must survive the cross-check. This is the regression
+    /// Real MNemo shots must survive the cross-check. This is the regression
     /// for issue #296: the device reports inclination +up, so before the import
     /// was normalised every non-horizontal DMP shot arrived with a pitch that
     /// contradicted its own depth change, and validation carried a compensating
@@ -1000,7 +1000,7 @@ mod tests {
     fn dmp_shots_do_not_trip_the_inclination_cross_check() {
         let config = default_config();
 
-        // (length, depth_in, depth_out, device pitch as written by the mNemo)
+        // (length, depth_in, depth_out, device pitch as written by the MNemo)
         let device_shots = [
             (12.50, 14.51, 18.15, -16.9),
             (9.09, 13.55, 14.71, -6.0),

@@ -3,7 +3,7 @@
  *
  * Mirrors the previous EditableTable columns (order, widths, formatting) as
  * SpreadsheetGrid column configs. Stations are derived from shots, so X/Y/Depth
- * are read-only, and so is the name (an imported mNemo station number, for
+ * are read-only, and so is the name (an imported MNemo station number, for
  * now); only the comment is editable (and never in the read-only
  * closure-adjusted geometry mode). The index pill moved to the row gutter. The
  * GPS (zero-datum) cell is a click target that opens the Edit Station dialog.

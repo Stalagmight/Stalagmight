@@ -46,6 +46,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.can_redo",
     "command.can_undo",
     "command.cancel_loading",
+    "command.cancel_mnemo_pull",
     "command.check_duplicate_import",
     "command.check_for_app_update",
     "command.check_merge_connectivity",
@@ -110,6 +111,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.install_app_update_and_restart",
     "command.list_backups",
     "command.list_dive_plans",
+    "command.list_mnemo_ports",
     "command.list_recent_projects",
     "command.load_display_settings",
     "command.load_dive_plan",
@@ -125,6 +127,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.plan_anchors_for_refs",
     "command.plan_refs_for_anchors",
     "command.preview_delete_shot",
+    "command.pull_mnemo",
     "command.push_frontend_log",
     "command.redo",
     "command.redo_to",
@@ -272,6 +275,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "action.dialog.keyboard-shortcuts",
     "action.dialog.merge",
     "action.dialog.merge-projects",
+    "action.dialog.mnemo-import",
     "action.dialog.new-project",
     "action.dialog.new-project-for-import",
     "action.dialog.orphan-placement",
@@ -347,6 +351,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.keyboard-shortcuts",
     "dialog-cancel.merge",
     "dialog-cancel.merge-projects",
+    "dialog-cancel.mnemo-import",
     "dialog-cancel.new-project",
     "dialog-cancel.new-project-for-import",
     "dialog-cancel.orphan-placement",
@@ -454,6 +459,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.keyboard-shortcuts",
     "dwell.dialog.merge",
     "dwell.dialog.merge-projects",
+    "dwell.dialog.mnemo-import",
     "dwell.dialog.new-project",
     "dwell.dialog.new-project-for-import",
     "dwell.dialog.orphan-placement",
@@ -620,6 +626,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.keyboard-shortcuts",
     "active-dwell.dialog.merge",
     "active-dwell.dialog.merge-projects",
+    "active-dwell.dialog.mnemo-import",
     "active-dwell.dialog.new-project",
     "active-dwell.dialog.new-project-for-import",
     "active-dwell.dialog.orphan-placement",
@@ -1078,7 +1085,7 @@ mod tests {
         //       how we learn whether column shaping is something people do while
         //       entering a survey, while correcting one, or both:
         //       command.update_edit_section_view = 721.
-        //   + 1 the same write for the import-time shot grids (the mNemo wizard
+        //   + 1 the same write for the import-time shot grids (the MNemo wizard
         //       and zero-datum config), kept apart from the edit-section one so
         //       reshaping columns mid-import cannot overwrite the layout used to
         //       review a saved section:
@@ -1169,13 +1176,16 @@ mod tests {
         //   + 1 the Split dialog's read-only preview of a loop closure the
         //       split would turn into a merge: command.split_section_preview
         //       = 722.
+        //   + 3 Import from MNemo over USB (#725): command.list_mnemo_ports,
+        //       command.pull_mnemo, command.cancel_mnemo_pull = 725.
+        //   + 4 the full per-dialog set for mnemo-import = 729.
         //   + 2 station names edited in place (the Data workspace's name
         //       column): command.set_station_name and how often it is undone
-        //       straight after, undo-after.set_station_name = 724.
+        //       straight after, undo-after.set_station_name = 731.
         //   + 1 the Data workspace's persisted view (columns, tint, map pane,
         //       section headers; partial `[panels]` write):
-        //       command.update_data_workspace_view = 725.
-        assert_eq!(EVENT_NAMES.len(), 725);
+        //       command.update_data_workspace_view = 732.
+        assert_eq!(EVENT_NAMES.len(), 732);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

@@ -20,7 +20,7 @@ import { editableShotToShotData } from './shotConversion';
 import { mirrorPlacementForReverse, targetShotCountForMirror } from './reversePlacement';
 
 /**
- * The north reference every mNemo section gets (#438).
+ * The north reference every MNemo section gets (#438).
  *
  * The device is a compass: its headings are MAGNETIC, and the `.dmp` format
  * carries neither a declination nor a georeference, so there is no number to
@@ -43,7 +43,7 @@ export const DMP_AZIMUTH_REFERENCE: AzimuthReference = {
 };
 
 /**
- * The station names (mNemo station numbers) of a section, from the rows that
+ * The station names (MNemo station numbers) of a section, from the rows that
  * will actually be sent, in that order.
  *
  * Station `k + 1` is the end of emitted row `k`, so it takes that row's
@@ -53,7 +53,7 @@ export const DMP_AZIMUTH_REFERENCE: AzimuthReference = {
  * station and an inserted shot adds an unnamed one. The one station no earlier
  * DMP row can name is the start of the FIRST one (the section start, or the
  * station after rows the user prepended); it is `mnemoStation - 1`. So a
- * section whose first m shots an overlap trim removed starts at mNemo `m`, not
+ * section whose first m shots an overlap trim removed starts at MNemo `m`, not
  * 0, and the trimmed numbers are gone with their stations.
  *
  * Indices are in the emitted (pre-reverse) order: the backend mirrors them for

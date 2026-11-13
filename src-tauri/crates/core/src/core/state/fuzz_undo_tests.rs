@@ -5063,6 +5063,7 @@ impl Fuzzer {
                     swap_lr: *swap_lr,
                     comment_pick: pick,
                     name_pick: pick,
+                    join: None,
                 };
                 Some(Drawn::new(
                     format!("combineSections(kept={kept},other={other})"),

@@ -123,7 +123,7 @@ export interface SurveyData {
   stationMergedWith: Map<number, StationRef[]>;
   stationClosuresWith: Map<number, ClosureRef[]>;
   stationComments: Map<number, string>;
-  /** Station names (e.g. the mNemo station number of a DMP import). */
+  /** Station names (e.g. the MNemo station number of a DMP import). */
   stationNames: Map<number, string>;
 }
 
@@ -310,7 +310,7 @@ export function getStation(data: SurveyData, globalIndex: number): Station {
 const showableNamesCache = new WeakMap<Map<number, string>, boolean>();
 
 /**
- * Whether any station has a name that would be drawn as a label (e.g. the mNemo
+ * Whether any station has a name that would be drawn as a label (e.g. the MNemo
  * station numbers a DMP import records): non-empty once control and bidi
  * characters are stripped and it is trimmed - the rule the map label and the
  * image export apply. The Display menu and the export offer the "Station names"

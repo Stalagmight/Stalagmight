@@ -36,6 +36,7 @@ use crate::config::ClosureAdjustmentConfig;
 
 mod classify;
 mod combine_candidate;
+mod combine_plan;
 mod combine_sections;
 mod connectivity;
 mod gauge;
@@ -55,6 +56,13 @@ mod uuid_unique;
 
 #[cfg(test)]
 mod anchor_fuzz;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::panic,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod combine_closure_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
@@ -78,9 +86,7 @@ mod component_gauge_tests;
 mod split_section_tests;
 
 pub use classify::ClassifyScope;
-pub use combine_candidate::{
-    COMBINE_DEPTH_LIMIT_M, COMBINE_DEPTH_NOTICE_M, COMBINE_TOLERANCE_M, MAX_COMBINE_PARTNERS,
-};
+pub use combine_candidate::{COMBINE_DEPTH_NOTICE_M, COMBINE_TOLERANCE_M, MAX_COMBINE_PARTNERS};
 pub use gas::{
     CylRole, Cylinder, Diver, GasReachField, PlanMode, PlanSegment, RouteLeg, RouteProfilePoint,
     TankMaterial, Team,
@@ -317,8 +323,8 @@ pub struct Project {
     #[ts(skip)]
     pub station_comments: HashMap<StationKey, String>,
     /// Station names: a short free-text identifier per station, such as the
-    /// station number an mNemo dump gave it (a DMP import records it here).
-    /// Not unique - mNemo numbers restart at 0 in every section - so it is
+    /// station number an MNemo dump gave it (a DMP import records it here).
+    /// Not unique - MNemo numbers restart at 0 in every section - so it is
     /// always shown next to the positional `S:I` id, never instead of it.
     /// Stored in its own `station_names` table so readers that know only the
     /// v18 tables (OpenSpeleo's Python `stalagmight_lib`, which SpeleoDB maps

@@ -32,6 +32,7 @@ fn options() -> CombineSectionsOptions {
         swap_lr: true,
         comment_pick: CombinePick::Kept,
         name_pick: CombinePick::Kept,
+        join: None,
     }
 }
 
@@ -103,24 +104,33 @@ fn a_combine_is_one_undo_step_and_redoes() {
 }
 
 /// A blocked combine is refused before anything happens: nothing changes and
-/// no undo entry is pushed, so the next undo reverts the merge before it.
+/// no undo entry is pushed, so the next undo reverts the edit before it.
+/// Both sections carrying a zero datum is the one refusal left besides
+/// sections that do not meet (a section can hold only one datum).
 #[test]
 fn a_refused_combine_changes_nothing_and_leaves_no_undo_entry() {
     let (state, k, o) = state();
-    // A third section passing through the join (merged there at a station
-    // in its middle) would cross the combined section.
-    let c = create(&state, "C", vec![shot(180.0, 3.0), shot(180.0, 3.0)]);
-    let merged = state.execute(Command::MergeStations {
-        station_a: StationRef::new(c, 1),
-        station_b: StationRef::new(k, 2),
-    });
-    assert!(merged.success, "{:?}", merged.error);
+    {
+        let mut guard = state.project.lock().unwrap();
+        let project = guard.as_mut().unwrap();
+        for at in [StationRef::new(k, 0), StationRef::new(o, 3)] {
+            let station_ref = project.key_for_ref(at).unwrap();
+            project.zero_datums.push(crate::models::ZeroDatum {
+                station_ref,
+                gps: GpsCoordinates {
+                    latitude: 20.0,
+                    longitude: -87.0,
+                    depth_reference: 0.0,
+                },
+            });
+        }
+    }
     let before = snapshot(&state);
     let depth = state.get_undo_stack().len();
 
     let result = state.execute_combine_sections(k, o, options());
     assert!(!result.success);
-    assert!(result.error.unwrap().contains("in its middle"));
+    assert!(result.error.unwrap().contains("zero datum"));
     assert_eq!(snapshot(&state), before);
     assert_eq!(state.get_undo_stack().len(), depth);
 
@@ -963,4 +973,116 @@ fn a_combine_at_a_junction_keeps_the_branch_and_undoes_exactly() {
         assert_eq!(merged_to(&state, joined), vec![StationRef::new(c, 0)]);
         all_ignored(&state, "after a reopen");
     }
+}
+
+/// Two sections closing a loop on each other, combined at the loop closure:
+/// the other section moves by the misclosure, the merge at the far end
+/// becomes the loop's closure, the epilogue's re-solve keeps all of it, and
+/// one undo restores the two sections, the merge and the closure exactly.
+#[test]
+fn a_combine_at_a_loop_closure_is_one_undo_step() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Loop".to_string(),
+        location: None,
+    });
+    let k = create(&state, "K", vec![shot(90.0, 10.0)]);
+    let o = create(&state, "O", vec![shot(270.0, 9.6)]);
+    for command in [
+        Command::MergeStations {
+            station_a: StationRef::new(k, 0),
+            station_b: StationRef::new(o, 1),
+        },
+        Command::CreateLoopClosure {
+            station_a: StationRef::new(k, 1),
+            station_b: StationRef::new(o, 0),
+            closure_strategy: crate::models::ClosureStrategy::Batch,
+        },
+    ] {
+        let result = state.execute(command);
+        assert!(result.success, "{:?}", result.error);
+    }
+    let xy = |at: StationRef| {
+        let c = state
+            .get_project_state()
+            .unwrap()
+            .compute_station_raw_coords(at)
+            .unwrap();
+        (c.x, c.y)
+    };
+    let (k0, k1, o1) = (
+        xy(StationRef::new(k, 0)),
+        xy(StationRef::new(k, 1)),
+        xy(StationRef::new(o, 1)),
+    );
+    let before = snapshot(&state);
+
+    let result = state.execute_combine_sections(
+        k,
+        o,
+        CombineSectionsOptions {
+            join: Some(crate::models::CombineJoinEnds {
+                kept: crate::models::SectionEnd::End,
+                other: crate::models::SectionEnd::Start,
+            }),
+            ..options()
+        },
+    );
+    assert!(result.success, "{:?}", result.error);
+    let close = |a: (f64, f64), b: (f64, f64)| (a.0 - b.0).hypot(a.1 - b.1) < 1e-9;
+    assert!(close(xy(StationRef::new(k, 0)), k0));
+    assert!(close(xy(StationRef::new(k, 1)), k1));
+    assert!(close(xy(StationRef::new(k, 2)), (o1.0 + 0.4, o1.1)));
+    let project = state.get_project_state().unwrap();
+    assert!(project.station_merges.is_empty());
+    assert_eq!(project.loop_closures.len(), 1);
+    assert!((project.loop_closures[0].misclosure_distance - 0.4).abs() < 1e-9);
+    let after = snapshot(&state);
+
+    assert!(state.undo().success);
+    assert_eq!(snapshot(&state), before, "one undo restores it all");
+    assert!(state.redo().success);
+    assert_eq!(snapshot(&state), after);
+}
+
+/// A prepend into a kept section with no gauge pair pins its gauge on its
+/// old station 0 with a new pair (the index rule would move it to the
+/// prepended start). Undo gives the section back exactly as it was, without
+/// that pair: the restore's save-heal carry-forward must not copy an edit's
+/// own pair onto the half it restores. Redo puts the pair back.
+#[test]
+fn undoing_a_prepend_does_not_keep_the_gauge_pair_it_made() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Prepend".to_string(),
+        location: None,
+    });
+    let k = create(&state, "K", vec![shot(90.0, 10.0), shot(90.0, 5.0)]);
+    let o = create(&state, "O", vec![shot(0.0, 5.0), shot(0.0, 5.0)]);
+    let merged = state.execute(Command::MergeStations {
+        station_a: StationRef::new(k, 0),
+        station_b: StationRef::new(o, 2),
+    });
+    assert!(merged.success, "{:?}", merged.error);
+    let gauge = |state: &AppState| {
+        state
+            .get_project_state()
+            .unwrap()
+            .get_section(k)
+            .unwrap()
+            .gauge_shot_uuid
+            .clone()
+    };
+    assert_eq!(gauge(&state), None);
+    let before = snapshot(&state);
+
+    let result = state.execute_combine_sections(k, o, options());
+    assert!(result.success, "{:?}", result.error);
+    assert!(gauge(&state).is_some(), "the prepend pins K's gauge");
+    let after = snapshot(&state);
+
+    assert!(state.undo().success);
+    assert_eq!(snapshot(&state), before);
+    assert!(state.redo().success);
+    assert_eq!(snapshot(&state), after);
 }

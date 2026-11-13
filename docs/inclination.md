@@ -15,7 +15,7 @@ which fixed a DMP import that skipped the conversion.
 
 | Source | In-file convention | Where it is normalised |
 |---|---|---|
-| mNemo DMP | +up (device: `-90` = straight down) | `parse_section` (`src-tauri/crates/parsers/src/parsers/dmp.rs`) |
+| MNemo DMP | +up (device: `-90` = straight down) | `parse_section` (`src-tauri/crates/parsers/src/parsers/dmp.rs`) |
 | Walls `.srv` | +up | `walls/srv.rs`, negates `inc_up` into `pitch_in`/`pitch_out` |
 | Compass | +up | `compass.rs`, `pitch_in: Some(-inclination)` |
 | Ariane `.tml` / `.tmlu` | +up (inferred, see below) | `parsers::tml::inclination_to_pitch`, inverse `export::tml::pitch_to_inclination` |
@@ -62,7 +62,7 @@ never computes with the field, and across every Ariane file available all 5,686
 shots carry `Inclination` 0, because these are depth-gauge surveys and Ariane
 does not populate it. Stalagmight treats it as +up because every format around
 it is:
-Walls and Compass both store +up in-file, and the mNemo reports +up.
+Walls and Compass both store +up in-file, and the MNemo reports +up.
 
 On real files the flip is a no-op, so it only affects what we export. If a
 counter-example ever turns up, an Ariane file with a non-zero inclination

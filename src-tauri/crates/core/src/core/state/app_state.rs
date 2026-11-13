@@ -16,7 +16,7 @@ use crate::tilemap_cache::TilemapCache;
 
 use crate::core::{CommandResult, UndoStack};
 
-use super::project_io::reapply_heals_after_restore;
+use super::project_io::{reapply_heals_after_restore, RecordedGauges};
 
 /// Trait for types that can represent project lock errors.
 /// Enables `with_project_mut` and `with_project` to work with different return types.
@@ -727,6 +727,18 @@ impl AppState {
     /// Returns false and leaves `slot` untouched if the snapshot can't be parsed.
     #[must_use]
     pub(super) fn restore_snapshot_into(slot: &mut Option<Project>, snapshot: &str) -> bool {
+        Self::restore_snapshot_into_with(slot, snapshot, None)
+    }
+
+    /// [`Self::restore_snapshot_into`] for one step through a snapshot pair:
+    /// `edited` holds the gauge pairs the half being left behind recorded (see
+    /// [`reapply_heals_after_restore`]).
+    #[must_use]
+    pub(super) fn restore_snapshot_into_with(
+        slot: &mut Option<Project>,
+        snapshot: &str,
+        edited: Option<&RecordedGauges>,
+    ) -> bool {
         // A snapshot persisted by a build predating the per-project `validation`
         // field (#57) has no "validation" key, so serde (the field is
         // #[serde(default)]) fills ValidationConfig::default() - silently changing
@@ -855,7 +867,7 @@ impl AppState {
                 // up to the standard the live one is already held to; the
                 // heal-by-heal reasoning for what that includes (and what it
                 // deliberately does not) is on the function.
-                reapply_heals_after_restore(&mut restored, slot.as_ref());
+                reapply_heals_after_restore(&mut restored, slot.as_ref(), edited);
                 // The `section_offsets` invariant (`Project::write_section_offset`)
                 // has to hold for a map this app did not write, and a snapshot
                 // payload is exactly that case: undo/redo history is persisted to

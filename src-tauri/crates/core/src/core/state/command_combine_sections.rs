@@ -8,14 +8,15 @@ use crate::models::{
 };
 
 impl AppState {
-    /// Read-only: what the section ending at `station` can be combined with,
-    /// one candidate per other section ending there (a junction lists them
-    /// all, each with its own reason when blocked). Empty when `station` is not
-    /// a section end or nothing else touches it. Answered under the project
+    /// Read-only: what can be combined at the point `station` ends at: the
+    /// clicked section with each other section ending there first, then (at a
+    /// junction) every pair of the others, each with its own reason when
+    /// blocked (`Project::combine_candidates_at_point`). Empty when `station`
+    /// is not a section end or nothing else touches it. Answered under the project
     /// lock without cloning the project: the context menu asks on every
     /// right-click of an end station.
     pub fn combine_candidates(&self, station: StationRef) -> Result<Vec<CombineCandidate>, String> {
-        self.with_project(|project| Ok(project.combine_candidates(station)))
+        self.with_project(|project| Ok(project.combine_candidates_at_point(station)))
     }
 
     /// Read-only: can sections `a` and `b` be combined (the Sections panel's
@@ -55,14 +56,22 @@ impl AppState {
         // Refuse before the snapshot: the check is read-only, so a blocked
         // combine costs no serialization and cannot touch the project.
         {
-            let Ok(proj_guard) = self.project.lock() else {
+            let Ok(mut proj_guard) = self.project.lock() else {
                 return CommandResult::failure("Failed to lock project".to_string());
             };
-            let Some(project) = proj_guard.as_ref() else {
+            let Some(project) = proj_guard.as_mut() else {
                 return CommandResult::failure("No project open".to_string());
             };
-            if let Some(reason) = project.combine_refusal(kept, other) {
+            if let Some(reason) = project.combine_refusal(kept, other, options.join) {
                 return CommandResult::failure(reason);
+            }
+            // A heal, before the pins and the snapshot below: shots the two
+            // sections both claim get their own identity first, so every pin,
+            // the held component gauge and the undo step name each shot by the
+            // identity it keeps (see `Project::renew_shared_shot_uuids`).
+            let renewed = project.renew_shared_shot_uuids(kept, other);
+            if renewed > 0 {
+                tracing::info!(kept, other, renewed, "Renewed shared shot identities");
             }
         }
 

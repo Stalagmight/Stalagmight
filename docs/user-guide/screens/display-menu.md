@@ -40,7 +40,7 @@ What the map shows. Opened by **Display** in the top right of the
 - **Grid** adds a **Grid spacing** setting.
 - **Station IDs** and **Station names** label the stations in two ways, and
   only one can be on: turning one on turns the other off. **Station names**
-  shows each station's name, such as the mNemo station number from a `.dmp`
+  shows each station's name, such as the MNemo station number from a `.dmp`
   import, and stations without a name get no label. It is unavailable when
   the project has no station names.
 - **Closures Computed View** is unavailable when there are no loop closures to

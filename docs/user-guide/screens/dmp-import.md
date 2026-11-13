@@ -1,12 +1,12 @@
 ---
 title: DMP import
-description: "Every step of importing an mNemo DMP file: section selection, zero datum, suggested connections from reference shots, and placing the rest by hand."
+description: "Every step of importing an MNemo DMP file: section selection, zero datum, suggested connections from reference shots, and placing the rest by hand."
 order: 9
 ---
 
 # DMP import
 
-Imports an mNemo `.dmp` file into the open project, in steps. Opened by
+Imports an MNemo `.dmp` file into the open project, in steps. Opened by
 **Import** in the [survey view](survey-view.md).
 
 ## Step 1: pick sections

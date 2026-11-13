@@ -10,10 +10,12 @@ import {
   FilePlusIcon,
   FolderOpenIcon,
   DownloadIcon,
+  DeviceCableIcon,
   SettingsIcon,
   BugIcon,
   QuitIcon,
 } from './icons';
+import { isAndroid } from '../../utils/platform';
 import { SpeleoBadgedIcon } from './SpeleoBadgedIcon';
 import { MENU_ICON_COLORS } from './menuColors';
 import { setProjectActionSource, type SourceName } from '../../utils/telemetry';
@@ -25,7 +27,7 @@ import type { AppMenuItem } from './AppMenu';
 const ICON_SIZE = 18;
 
 /**
- * The IN-PROJECT hamburger's "Import" row (#508) - adds mNemo data or a `.stalx`
+ * The IN-PROJECT hamburger's "Import" row (#508) - adds MNemo data or a `.stalx`
  * (#674) to the open project, and nothing else.
  *
  * Two shapes died here on purpose. The pre-#407 version was five per-format
@@ -56,6 +58,29 @@ export function importMenuItem(t: TFunction): AppMenuItem {
       void pickAndRoute(inProjectImportFilters(), 'Import Failed', { importDoor: true });
     },
   };
+}
+
+/**
+ * "Import from MNemo..." (#725): read a USB-connected MNemo instead of picking a
+ * `.dmp` from disk. In BOTH hamburgers, unlike Import above: Open cannot reach
+ * the device, and with no project open the router takes the saved `.dmp` down
+ * the new-project path. Hidden on Android, which has no serial access. No
+ * `editingBlocked` disable, for the same reason as Import: the router decides.
+ */
+export function mnemoImportMenuItem(t: TFunction, actions: { onOpen: () => void }): AppMenuItem[] {
+  if (isAndroid) return [];
+  return [
+    {
+      id: 'app-menu-import-from-mnemo',
+      label: t('globalView.actions.importFromMnemo'),
+      icon: <DeviceCableIcon size={ICON_SIZE} />,
+      iconColor: MENU_ICON_COLORS.import,
+      onClick: () => {
+        setProjectActionSource('hamburger');
+        actions.onOpen();
+      },
+    },
+  ];
 }
 
 /** New + Open rows. `source` is the telemetry entry-point tag (e.g. 'hamburger'). */

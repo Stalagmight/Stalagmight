@@ -127,7 +127,7 @@ test.describe('Stations grid', () => {
 
   test('the name column shows each station name and is read-only', async ({ page }) => {
     const sectionId = await getSectionId(page);
-    // Names as a DMP import records them (mNemo station numbers); station 2 has none.
+    // Names as a DMP import records them (MNemo station numbers); station 2 has none.
     await page.evaluate(async (sectionId) => {
       const setName = (window as any).__MOCK_SET_STATION_NAME__;
       setName(sectionId, 0, '7');

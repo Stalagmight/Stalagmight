@@ -4,10 +4,11 @@
 use chrono::Utc;
 
 use crate::{
-    AzimuthReference, ClosureStrategy, CombinePick, CombineSectionsOptions, CorrectionSource,
-    GpsCoordinates, LoopClosure, NorthReference, Person, Project, SectionData, SectionEnd,
-    SectionId, ShotData, SplitSectionOptions, SplitSide, StationKey, StationMerge, StationRef,
-    SurveyCredit, ZeroDatum,
+    AzimuthReference, ClosureStrategy, CombineJoinEnds, CombineJoinKind, CombinePick,
+    CombineSectionsOptions, CorrectionSource, GpsCoordinates, LoopClosure, NorthReference, Person,
+    Project, SectionData, SectionEnd, SectionId, ShotData, SplitSectionOptions, SplitSide,
+    StationKey, StationMerge, StationRef, SurveyCredit, TornTie, TornTieKind, TornTieReason,
+    ZeroDatum,
 };
 
 fn shot(azimuth: f64, length: f64) -> ShotData {
@@ -39,6 +40,7 @@ fn options() -> CombineSectionsOptions {
         swap_lr: true,
         comment_pick: CombinePick::Kept,
         name_pick: CombinePick::Kept,
+        join: None,
     }
 }
 
@@ -544,54 +546,138 @@ fn assert_refused_without_a_change(project: &Project, k: SectionId, o: SectionId
 }
 
 /// The same shot uuid in both sections would put one shot in the combined
-/// section twice (from #713).
+/// section twice (from #713): the other section's copy gets a new one, and a
+/// station key on it follows.
 #[test]
-fn sections_sharing_a_shot_identity_are_refused() {
+fn sections_sharing_a_shot_identity_get_fresh_ids() {
     let (mut project, k, o) = pair(SectionEnd::End, SectionEnd::Start, true, 0.0);
     let shared = project.get_section(k).unwrap().shots[1].uuid.clone();
-    project.get_section_mut(o).unwrap().shots[2].uuid = shared;
+    project.get_section_mut(o).unwrap().shots[2].uuid = shared.clone();
     project.rebuild_shot_uuid_index();
-    assert!(blocked(&project, k, o).contains("share a shot identity"));
+    let comment = StationRef::new(o, 3);
+    let key = project.key_for_ref(comment).unwrap();
+    project.station_comments.insert(key, "far end".to_string());
+    let candidate = project.combine_candidate_for_sections(k, o).unwrap();
+    assert_eq!(candidate.blocked_reason, None);
+    assert_eq!(candidate.repeated_shot_ids, 1);
+
+    project.combine_sections(k, o, &options()).unwrap();
+    let uuids: Vec<String> = project
+        .get_section(k)
+        .unwrap()
+        .shots
+        .iter()
+        .filter_map(|s| s.uuid.clone())
+        .collect();
+    let unique: std::collections::HashSet<&String> = uuids.iter().collect();
+    assert_eq!(unique.len(), uuids.len(), "{uuids:?}");
+    assert_eq!(uuids[1], shared.unwrap(), "the kept copy keeps its id");
+    let far = project
+        .station_comments
+        .iter()
+        .find(|(_, text)| text.as_str() == "far end")
+        .map(|(key, _)| project.resolve_key(key));
+    assert_eq!(far, Some(Some(StationRef::new(k, 5))));
+}
+
+/// The component's gauge sits on the lower-id section, whose gauge shot
+/// shares its identity with a shot of the section kept. The identity is
+/// renewed before the gauge is held, so the gauge stays on its own physical
+/// station, not on the kept section's copy of the shared shot.
+#[test]
+fn a_shared_identity_on_the_gauge_shot_does_not_move_the_gauge() {
+    let (mut project, k, o) = pair(SectionEnd::End, SectionEnd::Start, true, 0.0);
+    let shared = project.get_section(k).unwrap().shots[0].uuid.clone();
+    project.get_section_mut(o).unwrap().shots[1].uuid = shared;
+    project.rebuild_shot_uuid_index();
+    let before = xy(&project, project.adjustment_anchor_for_tests(k).unwrap());
+
+    // Keep the higher id: K, which held the gauge, is the one retired.
+    project.combine_sections(o, k, &options()).unwrap();
+    let anchor = project.adjustment_anchor_for_tests(o).unwrap();
+    assert!(
+        dist(xy(&project, anchor), before) < 0.001,
+        "the gauge moved to {anchor:?}"
+    );
 }
 
 /// An aligned closure from the merged join into either section is a second
-/// rigid tie (from #713).
+/// rigid tie (from #713): it becomes an ordinary closure inside the combined
+/// section, and the plan says so.
 #[test]
-fn an_aligned_closure_from_the_join_into_either_section_blocks() {
+fn an_aligned_closure_from_the_join_into_either_section_becomes_an_ordinary_one() {
     for (from, to) in [((true, 2), (false, 1)), ((false, 0), (true, 1))] {
         let (mut project, k, o) = pair(SectionEnd::End, SectionEnd::Start, true, 0.0);
         let at = |(is_k, index): (bool, u32)| StationRef::new(if is_k { k } else { o }, index);
         push_closure(&mut project, at(from), at(to), true);
-        assert!(
-            blocked(&project, k, o).contains("connected elsewhere"),
-            "{from:?} -> {to:?}"
-        );
+        let candidate = project.combine_candidate_for_sections(k, o).unwrap();
+        assert_eq!(candidate.blocked_reason, None, "{from:?} -> {to:?}");
+        let torn = &candidate.plan_keeping_a.torn_ties;
+        assert_eq!(torn.len(), 1, "{from:?} -> {to:?}");
+        assert_eq!(torn[0].kind, TornTieKind::SnappedClosure);
+        assert_eq!(candidate.plan_keeping_a.moving_section, None);
+
+        project.combine_sections(k, o, &options()).unwrap();
+        let closure = &project.loop_closures[0];
+        assert!(!closure.is_aligned, "{from:?} -> {to:?}");
+        assert_eq!(closure.strategy, ClosureStrategy::Batch);
     }
 }
 
+/// A different north reference no longer blocks: the other section's
+/// bearings turn to read against the kept section's reference, so every
+/// station stays where it is, whichever section is kept. A different quality
+/// takes the kept section's.
 #[test]
-fn different_north_references_or_qualities_block() {
-    let (mut project, k, o) = pair(SectionEnd::End, SectionEnd::Start, true, 0.0);
-    project.get_section_mut(o).unwrap().azimuth_reference = Some(AzimuthReference::from_parts(
-        NorthReference::Magnetic,
-        5.0,
-        CorrectionSource::Manual,
-    ));
-    assert!(blocked(&project, k, o).contains("north reference"));
-    let mut clone = project.clone();
-    assert!(clone.combine_sections(k, o, &options()).is_err());
+fn different_north_references_convert_and_qualities_take_the_kept_ones() {
+    for keep_k in [true, false] {
+        let (mut project, k, o) = pair(SectionEnd::End, SectionEnd::Start, true, 0.0);
+        let declared =
+            AzimuthReference::from_parts(NorthReference::Magnetic, 5.0, CorrectionSource::Manual);
+        project.get_section_mut(o).unwrap().azimuth_reference = Some(declared);
+        project.adjust_section_offset(o, 0.0, 0.0);
+        // Re-place O on K's end after the rotation the declination applied.
+        let target = xy(&project, StationRef::new(k, 2));
+        let now = xy(&project, StationRef::new(o, 0));
+        project.adjust_section_offset(o, target.0 - now.0, target.1 - now.1);
+        project.get_section_mut(o).unwrap().quality = 2.0;
+        let candidate = project.combine_candidate_for_sections(k, o).unwrap();
+        assert_eq!(candidate.blocked_reason, None, "keep K {keep_k}");
+        let rotation = if keep_k {
+            candidate.plan_keeping_a.azimuth_rotation_deg
+        } else {
+            candidate.plan_keeping_b.azimuth_rotation_deg
+        };
+        assert_eq!(rotation, Some(if keep_k { 5.0 } else { -5.0 }));
+        let mut before: Vec<(f64, f64)> = stations(&project, k);
+        before.extend(stations(&project, o).into_iter().skip(1));
+        let quality = if keep_k { 1.0 } else { 2.0 };
 
-    let (mut project, k, o) = pair(SectionEnd::End, SectionEnd::Start, true, 0.0);
-    project.get_section_mut(o).unwrap().quality = 2.0;
-    assert!(blocked(&project, k, o).contains("quality"));
+        let (kept, other) = if keep_k { (k, o) } else { (o, k) };
+        project.combine_sections(kept, other, &options()).unwrap();
+        let section = project.get_section(kept).unwrap();
+        assert_eq!(section.azimuth_reference, (!keep_k).then_some(declared));
+        assert!((section.quality - quality).abs() < 1e-12, "keep K {keep_k}");
+        let mut after = stations(&project, kept);
+        if !keep_k {
+            // O kept: K was prepended, so the order is the same.
+            assert_eq!(after.len(), before.len());
+        }
+        for (want, got) in before.iter().zip(after.drain(..)) {
+            assert!(
+                dist(*want, got) < 1e-6,
+                "keep K {keep_k}: {want:?} vs {got:?}"
+            );
+        }
+    }
 }
 
 /// The stored references are compared, not the resolved ones: O declares the
-/// very reference the project default resolves K to, and the combined section
-/// would keep only K's `None`, so a later default change would rotate O's
-/// shots.
+/// very reference the project default resolves K to. The combined section
+/// keeps only K's `None`, so the plan reports a conversion (by 0 degrees: O's
+/// readings stay, and follow the project default from now on).
 #[test]
-fn a_declared_reference_and_the_project_default_block_even_when_equal() {
+fn a_declared_reference_and_the_project_default_combine_and_the_default_wins() {
     let declared =
         AzimuthReference::from_parts(NorthReference::Magnetic, 5.0, CorrectionSource::Manual);
     let (mut project, k, o) = pair(SectionEnd::End, SectionEnd::Start, true, 0.0);
@@ -602,36 +688,96 @@ fn a_declared_reference_and_the_project_default_block_even_when_equal() {
         project.azimuth_reference_for_id(o),
         "setup: both resolve alike"
     );
-    assert!(blocked(&project, k, o).contains("follows the project's default north reference"));
+    let candidate = project.combine_candidate_for_sections(k, o).unwrap();
+    assert_eq!(candidate.blocked_reason, None);
+    assert_eq!(
+        candidate.plan_keeping_a.azimuth_rotation_deg,
+        Some(0.0),
+        "the values stay; the reference O follows changes"
+    );
+    let readings: Vec<f64> = project
+        .get_section(o)
+        .unwrap()
+        .shots
+        .iter()
+        .map(|s| s.azimuth_in)
+        .collect();
+    project.combine_sections(k, o, &options()).unwrap();
+    let section = project.get_section(k).unwrap();
+    assert_eq!(section.azimuth_reference, None);
+    let after: Vec<f64> = section.shots[2..].iter().map(|s| s.azimuth_in).collect();
+    assert_eq!(after, readings);
 
-    // Both declaring the same one is fine as far as north goes (the default
-    // rotated K under the merge, so the join itself is now torn).
-    project.get_section_mut(k).unwrap().azimuth_reference = Some(declared);
-    assert!(!blocked(&project, k, o).contains("north reference"));
+    // Both declaring the same one: nothing to convert.
+    let (mut project, k, o) = pair(SectionEnd::End, SectionEnd::Start, true, 0.0);
+    for id in [k, o] {
+        project.get_section_mut(id).unwrap().azimuth_reference = Some(declared);
+    }
+    let candidate = project.combine_candidate_for_sections(k, o).unwrap();
+    assert_eq!(candidate.plan_keeping_a.azimuth_rotation_deg, None);
 }
 
 /// A second rigid tie between the two (directly, through a third section, or
-/// an aligned closure) would close a loop inside the combined section.
+/// an aligned closure) would close a loop inside the combined section: it
+/// becomes an ordinary loop closure, the one nearest the other section.
 #[test]
-fn a_second_rigid_tie_blocks() {
-    // Directly: K start merged to O end as well.
+fn a_second_rigid_tie_becomes_a_loop_closure() {
+    // Directly: K start merged to O end as well (a file from before the
+    // merge check). The combined section is not merged to itself.
     let (mut project, k, o) = pair(SectionEnd::End, SectionEnd::Start, true, 0.0);
-    push_merge(&mut project, StationRef::new(k, 0), StationRef::new(o, 2));
+    push_merge(&mut project, StationRef::new(k, 0), StationRef::new(o, 3));
+    let candidate = project.combine_candidate_for_sections(k, o).unwrap();
+    assert_eq!(candidate.blocked_reason, None);
+    assert_eq!(candidate.join_kind, CombineJoinKind::Merged);
+    let torn = &candidate.plan_keeping_a.torn_ties;
+    assert_eq!(torn.len(), 1);
+    assert_eq!(torn[0].kind, TornTieKind::Merge);
+    project.combine_sections(k, o, &options()).unwrap();
     assert!(
-        blocked(&project, k, o).contains("connected elsewhere"),
-        "{}",
-        blocked(&project, k, o)
+        project.station_merges.is_empty(),
+        "{:?}",
+        project.station_merges
     );
+    let closure = &project.loop_closures[0];
+    let mut ends = [
+        project.resolve_key(&closure.station_a).unwrap(),
+        project.resolve_key(&closure.station_b).unwrap(),
+    ];
+    ends.sort_by_key(|r| r.station_index);
+    assert_eq!(ends, [StationRef::new(k, 0), StationRef::new(k, 5)]);
+    assert_eq!(closure.strategy, ClosureStrategy::Batch);
 
-    // Through C: K's start and O's end are both merged to C.
+    // Through C: K's start and O's end are both merged to C. The merge into
+    // O tears; C stays merged to K.
     let (mut project, k, o) = pair(SectionEnd::End, SectionEnd::Start, true, 0.0);
     let c = add(&mut project, "C", vec![shot(0.0, 1.0)]);
     push_merge(&mut project, StationRef::new(k, 0), StationRef::new(c, 0));
     push_merge(&mut project, StationRef::new(o, 3), StationRef::new(c, 1));
-    assert!(blocked(&project, k, o).contains("connected elsewhere"));
+    let candidate = project.combine_candidate_for_sections(k, o).unwrap();
+    assert_eq!(candidate.blocked_reason, None);
+    assert_eq!(
+        candidate.plan_keeping_a.torn_ties,
+        vec![TornTie {
+            station_a: StationRef::new(o, 3),
+            station_b: StationRef::new(c, 1),
+            kind: TornTieKind::Merge,
+            reason: TornTieReason::Loop,
+        }]
+    );
+    project.combine_sections(k, o, &options()).unwrap();
+    assert_eq!(
+        merged_to(&project, StationRef::new(k, 0)),
+        vec![StationRef::new(c, 0)]
+    );
+    let closure = &project.loop_closures[0];
+    let ends = [
+        project.resolve_key(&closure.station_a).unwrap(),
+        project.resolve_key(&closure.station_b).unwrap(),
+    ];
+    assert_eq!(ends, [StationRef::new(k, 5), StationRef::new(c, 1)]);
 
-    // An aligned closure blocks; an unaligned one stays a loop to adjust.
-    for (aligned, blocks) in [(true, true), (false, false)] {
+    // An aligned closure becomes an ordinary one; an unaligned one stays.
+    for aligned in [true, false] {
         let (mut project, k, o) = pair(SectionEnd::End, SectionEnd::Start, true, 0.0);
         push_closure(
             &mut project,
@@ -639,11 +785,15 @@ fn a_second_rigid_tie_blocks() {
             StationRef::new(o, 3),
             aligned,
         );
+        let candidate = project.combine_candidate_for_sections(k, o).unwrap();
+        assert_eq!(candidate.blocked_reason, None, "aligned {aligned}");
         assert_eq!(
-            !blocked(&project, k, o).is_empty(),
-            blocks,
+            candidate.plan_keeping_a.torn_ties.len(),
+            usize::from(aligned),
             "aligned {aligned}"
         );
+        project.combine_sections(k, o, &options()).unwrap();
+        assert!(!project.loop_closures[0].is_aligned);
     }
 }
 
@@ -759,7 +909,8 @@ fn the_station_query_lists_every_partner_at_a_junction() {
     project
         .merge_stations(StationRef::new(c, 0), StationRef::new(k, 2))
         .unwrap();
-    // A fourth, D, whose north reference differs: listed, but blocked.
+    // A fourth, D, whose quality differs: it combines too (taking the kept
+    // section's quality).
     let d = add(&mut project, "D", vec![shot(270.0, 4.0)]);
     place(&mut project, d, 0, target, 0.0);
     project
@@ -772,12 +923,7 @@ fn the_station_query_lists_every_partner_at_a_junction() {
         .iter()
         .map(|c| (c.section_b, c.blocked_reason.is_none()))
         .collect();
-    assert_eq!(partners, vec![(o, true), (c, true), (d, false)]);
-    assert!(candidates[2]
-        .blocked_reason
-        .as_deref()
-        .unwrap()
-        .contains("quality"));
+    assert_eq!(partners, vec![(o, true), (c, true), (d, true)]);
     // Each candidate names the others at the point as branches.
     assert_eq!(candidates[1].branches, vec![o, d]);
 
@@ -788,12 +934,56 @@ fn the_station_query_lists_every_partner_at_a_junction() {
     );
 }
 
-/// What still blocks: a station merged to the MIDDLE of another section at
-/// the join (it would cross the combined section there), and an end merged
-/// only to the middle of another section (nothing to join). A station that
-/// is not an end offers nothing, nor does an end nothing touches.
+/// The station menu's query lists every pair at a junction: the clicked
+/// section with each partner first, then the pairs of the others, each joined
+/// at this point. With K's end, O's start, C's start and D's start merged
+/// there: 3 + 3 pairs, every one combinable.
 #[test]
-fn a_section_through_the_join_blocks() {
+fn the_point_query_lists_every_pair_at_a_junction() {
+    let (mut project, k, o) = pair(SectionEnd::End, SectionEnd::Start, true, 0.0);
+    let target = xy(&project, StationRef::new(k, 2));
+    let mut others = vec![o];
+    for name in ["C", "D"] {
+        let id = add(&mut project, name, vec![shot(180.0, 5.0)]);
+        place(&mut project, id, 0, target, 0.0);
+        project
+            .merge_stations(StationRef::new(id, 0), StationRef::new(k, 2))
+            .unwrap();
+        others.push(id);
+    }
+    let (c, d) = (others[1], others[2]);
+    let pairs: Vec<(SectionId, SectionId, bool)> = project
+        .combine_candidates_at_point(StationRef::new(k, 2))
+        .iter()
+        .map(|x| (x.section_a, x.section_b, x.blocked_reason.is_none()))
+        .collect();
+    assert_eq!(
+        pairs,
+        vec![
+            (k, o, true),
+            (k, c, true),
+            (k, d, true),
+            (o, c, true),
+            (o, d, true),
+            (c, d, true),
+        ]
+    );
+    // The clicked section's own list is unchanged.
+    assert_eq!(project.combine_candidates(StationRef::new(k, 2)).len(), 3);
+    // A pair of the others combines at this point, and K stays attached.
+    project.combine_sections(c, d, &options()).unwrap();
+    assert!(merged_to(&project, StationRef::new(k, 2))
+        .iter()
+        .any(|at| at.section_id == c));
+}
+
+/// A section merged at the join at a station in its MIDDLE passes through:
+/// the combine goes ahead and it stays merged to the joined station (a
+/// crossing). What still offers nothing to join: an end merged only to the
+/// middle of another section, a station that is not an end, and an end
+/// nothing touches.
+#[test]
+fn a_section_through_the_join_stays_merged_as_a_crossing() {
     let (mut project, k, o) = pair(SectionEnd::End, SectionEnd::Start, true, 0.0);
     let c = add(&mut project, "C", vec![shot(0.0, 3.0), shot(0.0, 3.0)]);
     let target = xy(&project, StationRef::new(k, 2));
@@ -801,11 +991,16 @@ fn a_section_through_the_join_blocks() {
     project
         .merge_stations(StationRef::new(c, 1), StationRef::new(k, 2))
         .unwrap();
-    let reason = blocked(&project, k, o);
-    assert!(
-        reason.contains("C is merged here at a station in its middle"),
-        "{reason}"
+    let candidate = project.combine_candidate_for_sections(k, o).unwrap();
+    assert_eq!(candidate.blocked_reason, None);
+    assert_eq!(candidate.passing_through, vec![c]);
+    assert!(candidate.branches.is_empty());
+    project.combine_sections(k, o, &options()).unwrap();
+    assert_eq!(
+        merged_to(&project, StationRef::new(k, 2)),
+        vec![StationRef::new(c, 1)]
     );
+    assert!(project.check_structural_integrity().is_empty());
 
     let mut project = Project::new("Through".to_string(), None);
     let k = add(&mut project, "K", vec![shot(90.0, 10.0)]);
@@ -854,12 +1049,20 @@ fn zero_datums_on_both_sides_block() {
     assert!(blocked(&project, k, o).contains("zero datum"));
 }
 
+/// Join stations moved by different manual offsets: the joined station keeps
+/// the kept one's (the fixed side's), and the plan says how far the other
+/// moves.
 #[test]
-fn different_manual_offsets_on_the_join_block() {
+fn different_manual_offsets_on_the_join_keep_the_kept_one() {
     let (mut project, k, o) = pair(SectionEnd::End, SectionEnd::Start, false, 0.0);
     let key = project.key_for_ref(StationRef::new(o, 0)).unwrap();
-    project.station_offsets.insert(key, (0.0, 0.0, 0.002));
-    assert!(blocked(&project, k, o).contains("moved by different amounts"));
+    project.station_offsets.insert(key, (0.0, 0.0, 0.25));
+    let candidate = project.combine_candidate_for_sections(k, o).unwrap();
+    assert_eq!(candidate.blocked_reason, None);
+    let change = candidate.plan_keeping_a.join_offset_change_m.unwrap();
+    assert!((change - 0.25).abs() < 1e-9, "{change}");
+    project.combine_sections(k, o, &options()).unwrap();
+    assert_eq!(project.station_offset_for_ref(StationRef::new(k, 2)), None);
 }
 
 /// Two sections of `k_shots` and `o_shots`, merged end to start.
@@ -892,7 +1095,7 @@ fn the_shot_budget_blocks() {
 #[test]
 fn the_shot_budget_is_exact_at_99_999() {
     let (mut project, k, o) = budget_pair(99_994, 5);
-    assert_eq!(project.combine_refusal(k, o), None);
+    assert_eq!(project.combine_refusal(k, o, None), None);
     project.combine_sections(k, o, &options()).unwrap();
     assert_eq!(project.get_section(k).unwrap().shots.len(), 99_999);
 
@@ -904,23 +1107,54 @@ fn the_shot_budget_is_exact_at_99_999() {
     );
 }
 
+/// Sections that meet nowhere are refused (merge two ends or close a loop
+/// first); sections meeting at both ends join at one (the two-section query
+/// picks one that needs no reverse, the station menu the clicked end); a
+/// section with no shots is absorbed at its one station.
 #[test]
-fn sections_that_do_not_meet_meet_twice_or_are_empty_block() {
+fn sections_that_do_not_meet_meet_twice_or_are_empty() {
     let (mut project, k, o) = pair(SectionEnd::End, SectionEnd::Start, false, 0.5);
-    assert!(blocked(&project, k, o).contains("do not meet"));
+    let reason = blocked(&project, k, o);
+    assert!(reason.contains("do not meet"), "{reason}");
+    assert!(reason.contains("close a loop"), "{reason}");
     assert!(project.combine_sections(k, o, &options()).is_err());
 
-    // Both ends co-located with the other's, untied: ambiguous.
+    // Both ends co-located with the other's, untied: either join works.
     let mut project = Project::new("Twice".to_string(), None);
     let k = add(&mut project, "K", vec![shot(90.0, 10.0)]);
     let o = add(&mut project, "O", vec![shot(270.0, 10.0)]);
     let target = xy(&project, StationRef::new(k, 1));
     place(&mut project, o, 0, target, 0.0);
-    assert!(blocked(&project, k, o).contains("both ends"));
-    let at = project.combine_candidate(StationRef::new(k, 1)).unwrap();
-    assert!(
-        at.blocked_reason.unwrap().contains("both ends"),
-        "the station menu agrees"
+    let candidate = project.combine_candidate_for_sections(k, o).unwrap();
+    assert_eq!(candidate.blocked_reason, None);
+    assert_eq!(
+        (candidate.end_a, candidate.end_b),
+        (SectionEnd::End, SectionEnd::Start)
+    );
+    let at_start = project.combine_candidate(StationRef::new(k, 0)).unwrap();
+    assert_eq!(at_start.blocked_reason, None);
+    assert_eq!(
+        (at_start.end_a, at_start.end_b),
+        (SectionEnd::Start, SectionEnd::End)
+    );
+    let mut clone = project.clone();
+    clone
+        .combine_sections(
+            k,
+            o,
+            &CombineSectionsOptions {
+                join: Some(CombineJoinEnds {
+                    kept: SectionEnd::Start,
+                    other: SectionEnd::End,
+                }),
+                ..options()
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        stations(&clone, k)[1..],
+        stations(&project, k)[..],
+        "joined at K's start: O comes first"
     );
 
     let mut project = Project::new("Empty".to_string(), None);
@@ -928,7 +1162,13 @@ fn sections_that_do_not_meet_meet_twice_or_are_empty_block() {
     let o = add(&mut project, "O", Vec::new());
     let target = xy(&project, StationRef::new(k, 1));
     place(&mut project, o, 0, target, 0.0);
-    assert!(blocked(&project, k, o).contains("no shots"));
+    let before = stations(&project, k);
+    let candidate = project.combine_candidate_for_sections(k, o).unwrap();
+    assert_eq!(candidate.blocked_reason, None);
+    assert!(!candidate.reverses);
+    project.combine_sections(k, o, &options()).unwrap();
+    assert_eq!(stations(&project, k), before);
+    assert!(project.get_section(o).is_none());
 }
 
 /// The join is the same point within 1 mm horizontally; depth never counts.
@@ -946,15 +1186,13 @@ fn the_tolerance_is_one_millimetre_and_only_a_large_depth_gap_blocks() {
     assert!(blocked(&project, k, o).contains("do not meet"));
 
     // The horizontal test ignores depth: the two ends read the depth of
-    // different shots (the state a fresh split leaves). Only a gap that makes
-    // them two points blocks (`COMBINE_DEPTH_LIMIT_M`).
-    for (gap, blocks) in [(0.9, false), (25.0, true)] {
+    // different shots (the state a fresh split leaves). A gap of any size is
+    // reported for the dialog, never refused.
+    for gap in [0.9, 25.0] {
         let (project, k, o) = depth_gap_pair(gap, false);
-        let reason = project
-            .combine_candidate_for_sections(k, o)
-            .unwrap()
-            .blocked_reason;
-        assert_eq!(reason.is_some(), blocks, "{gap} m: {reason:?}");
+        let candidate = project.combine_candidate_for_sections(k, o).unwrap();
+        assert_eq!(candidate.blocked_reason, None, "{gap} m");
+        assert!(candidate.depth_difference_m.is_some(), "{gap} m");
     }
 }
 
@@ -1370,7 +1608,7 @@ fn a_kept_section_without_shot_id_room_is_refused_but_the_other_can_be_kept() {
     let reason = candidate.blocked_keeping_a.clone().unwrap();
     assert!(reason.contains("used up its shot numbers"), "{reason}");
     assert_eq!(candidate.blocked_keeping_b, None);
-    assert_eq!(project.combine_refusal(k, o), Some(reason.clone()));
+    assert_eq!(project.combine_refusal(k, o, None), Some(reason.clone()));
     let before = serde_json::to_string(&project).unwrap();
     assert_eq!(
         project
@@ -1400,7 +1638,7 @@ fn the_shot_id_room_check_is_exact_at_the_edge() {
     let window_end = (k + 1) * crate::FEATURE_ID_STRIDE;
     project.get_section_mut(k).unwrap().next_shot_id = window_end - 3;
     assert_eq!(
-        project.combine_refusal(k, o),
+        project.combine_refusal(k, o, None),
         None,
         "three ids left for three shots"
     );
@@ -1442,13 +1680,13 @@ fn a_renamed_shot_keeps_its_record_parity() {
 
 /// A split at a junction copies the junction's merges to both halves; the
 /// halves combine back, and the side passage stays merged to the joined
-/// station (not "also connected elsewhere (a loop)", which a path through the
-/// junction would otherwise report). Unless the side passage PASSES THROUGH
-/// the junction, which still blocks. Three shapes: a side passage starting at
-/// the junction, one passing through it, and one starting there and looping
-/// back onto the main line past the cut.
+/// station (a path through the junction is not a loop to tear). Three
+/// shapes: a side passage starting at the junction, one passing through it,
+/// and one starting there and looping back onto the main line past the cut
+/// with a snapped closure, which stays snapped: the loop is the one the
+/// survey had before the split.
 #[test]
-fn a_split_at_a_junction_combines_back_unless_a_section_passes_through() {
+fn a_split_at_a_junction_combines_back_whatever_passes_through() {
     for shape in ["starts there", "passes through", "loops back"] {
         let mut project = Project::new("Junction".to_string(), None);
         let main = add(
@@ -1505,15 +1743,6 @@ fn a_split_at_a_junction_combines_back_unless_a_section_passes_through() {
             .unwrap()
             .blocked_reason
             .unwrap_or_default();
-        if shape == "passes through" {
-            for reason in [&pair, &station] {
-                assert!(
-                    reason.contains("Side is merged here at a station in its middle"),
-                    "{shape}: {reason}"
-                );
-            }
-            continue;
-        }
         assert_eq!((pair.as_str(), station.as_str()), ("", ""), "{shape}");
         project
             .combine_sections(
@@ -1528,9 +1757,15 @@ fn a_split_at_a_junction_combines_back_unless_a_section_passes_through() {
         assert_eq!(project.get_section(main).unwrap().shots.len(), 4, "{shape}");
         assert_eq!(
             merged_to(&project, junction),
-            vec![StationRef::new(side, 0)],
+            vec![StationRef::new(side, at)],
             "{shape}: the side passage stays at the junction"
         );
+        if shape == "loops back" {
+            assert!(
+                project.loop_closures[0].is_aligned,
+                "the loop the survey had stays snapped"
+            );
+        }
     }
 }
 
@@ -1704,12 +1939,12 @@ fn depth_gap_pair(gap: f64, merged: bool) -> (Project, SectionId, SectionId) {
 /// Two co-located, unmerged ends each read their own shot's depth; combined,
 /// the joined station reads the average of the shot before and after it, so
 /// each end moves by half the gap. Above 5 cm the candidate reports the gap
-/// for the dialog to show; above 1 m the ends are two points and the combine
-/// is refused. A merged join already averages, so it reports nothing.
+/// for the dialog to show, however large: the user decides. A merged join
+/// already averages, so it reports nothing.
 #[test]
-fn a_depth_gap_at_an_unmerged_join_is_reported_and_a_large_one_refused() {
-    use super::combine_candidate::{COMBINE_DEPTH_LIMIT_M, COMBINE_DEPTH_NOTICE_M};
-    assert!(COMBINE_DEPTH_NOTICE_M < 0.1 && COMBINE_DEPTH_LIMIT_M >= 1.0);
+fn a_depth_gap_at_an_unmerged_join_is_reported_never_refused() {
+    use super::combine_candidate::COMBINE_DEPTH_NOTICE_M;
+    const { assert!(COMBINE_DEPTH_NOTICE_M < 0.1) };
 
     let (mut project, k, o) = depth_gap_pair(0.3, false);
     let candidate = project.combine_candidate_for_sections(k, o).unwrap();
@@ -1724,9 +1959,13 @@ fn a_depth_gap_at_an_unmerged_join_is_reported_and_a_large_one_refused() {
     let candidate = project.combine_candidate_for_sections(k, o).unwrap();
     assert_eq!(candidate.depth_difference_m, None, "below the notice");
 
-    let (project, k, o) = depth_gap_pair(1.5, false);
-    let reason = blocked(&project, k, o);
-    assert!(reason.contains("1.50 m apart in depth"), "{reason}");
+    let (mut project, k, o) = depth_gap_pair(1.5, false);
+    let candidate = project.combine_candidate_for_sections(k, o).unwrap();
+    assert_eq!(candidate.blocked_reason, None);
+    assert!((candidate.depth_difference_m.unwrap() - 1.5).abs() < 1e-9);
+    project.combine_sections(k, o, &options()).unwrap();
+    let joined = project.compute_station_depth(&[StationRef::new(k, 2)]);
+    assert!((joined - 0.75).abs() < 1e-9, "{joined}");
 
     let (project, k, o) = depth_gap_pair(1.5, true);
     let candidate = project.combine_candidate_for_sections(k, o).unwrap();

@@ -749,11 +749,11 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
   });
 
   /**
-   * The wizard records each imported station's mNemo number as its name:
+   * The wizard records each imported station's MNemo number as its name:
    * Main Passage has three importable shots, so its stations are named 0..3,
    * and the project's stations come back carrying them.
    */
-  test('sends each station mNemo number as its name and the stations carry it', async ({ page }) => {
+  test('sends each station MNemo number as its name and the stations carry it', async ({ page }) => {
     await createProject(page, 'Station Names');
     await createSectionViaStore(page, {
       name: 'Anchor Section',

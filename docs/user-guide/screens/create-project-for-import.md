@@ -6,7 +6,7 @@ order: 10
 
 # Create Project for Import dialog
 
-Opening a survey from another program (Ariane, mNemo, Compass, Walls, GPX) on
+Opening a survey from another program (Ariane, MNemo, Compass, Walls, GPX) on
 the [start screen](start-screen.md) first creates a new project to import it
 into.
 

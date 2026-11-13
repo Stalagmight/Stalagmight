@@ -16,7 +16,7 @@ export interface EditableShot extends Omit<Shot, 'marker_index' | 'temperature'>
   /** Identity for a row that has no server id yet. */
   tempId?: number;
   /**
-   * The mNemo station number of this shot's END station, for a row read from a
+   * The MNemo station number of this shot's END station, for a row read from a
    * DMP file (`mnemoStationNumber`). Absent on rows the user added. Carried
    * through every wizard edit (they spread the row) and turned into per-station
    * names by `stationNamesForEmittedShots` when the import is sent.

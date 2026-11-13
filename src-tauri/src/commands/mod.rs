@@ -12,6 +12,7 @@ pub mod import;
 pub mod launch;
 pub mod logging;
 pub mod memory;
+pub mod mnemo;
 pub mod project;
 pub mod raw_data;
 pub mod recovery;

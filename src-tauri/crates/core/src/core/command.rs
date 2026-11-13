@@ -1766,7 +1766,7 @@ mod tests {
 
         decorate_receipt(
             &mut result,
-            "mNemo DMP",
+            "MNemo DMP",
             std::path::Path::new("/tmp/cave.dmp"),
             1,
             None,

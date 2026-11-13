@@ -640,7 +640,7 @@ impl Database {
 
     /// Normalise stored pitch to the +down convention (schema v11→v12, #296).
     ///
-    /// DMP import used to keep the mNemo's +up reading, so shots from a DMP
+    /// DMP import used to keep the MNemo's +up reading, so shots from a DMP
     /// were stored with a pitch that contradicted their own depth change while
     /// Walls- and Compass-sourced shots were already +down. Nothing on a shot
     /// or a section records which importer produced it, so the origin cannot be

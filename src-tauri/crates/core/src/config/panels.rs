@@ -27,7 +27,7 @@ pub struct PanelsConfig {
     pub data_table_height: u32,
     /// Width in pixels of the import wizards' map column (#404).
     ///
-    /// ONE value for every wizard that shows one - the mNemo wizard's two steps
+    /// ONE value for every wizard that shows one - the MNemo wizard's two steps
     /// and the Ariane import dialog - so the map does not change size as the
     /// user moves between them or between formats. It is the panel's only
     /// persisted state: unlike the three above it has no open/hover mode, since
@@ -127,7 +127,7 @@ pub struct PanelsConfig {
     /// tolerant deserializer.
     #[serde(default, deserialize_with = "lenient_column_widths")]
     pub edit_section_column_widths: BTreeMap<String, u32>,
-    /// The IMPORT-time shot grids (the mNemo wizard, both of its steps, and
+    /// The IMPORT-time shot grids (the MNemo wizard, both of its steps, and
     /// zero-datum config): column order. Its own set because those dialogs edit
     /// shots that are not in the project yet - reshaping columns while placing an
     /// import is a different job from reviewing a saved section, and sharing one

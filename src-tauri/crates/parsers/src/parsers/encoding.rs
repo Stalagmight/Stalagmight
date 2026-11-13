@@ -96,7 +96,7 @@ pub(crate) fn read_latin1(path: &Path) -> Result<String> {
     Ok(strip_bom(&bytes)?.iter().map(|&b| char::from(b)).collect())
 }
 
-/// Read a UTF-8 text file (GPX, mNemo `.dmp`).
+/// Read a UTF-8 text file (GPX, MNemo `.dmp`).
 pub(crate) fn read_utf8(path: &Path) -> Result<String> {
     let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
     String::from_utf8(strip_bom_owned(bytes)?)

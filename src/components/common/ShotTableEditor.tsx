@@ -44,7 +44,7 @@ export type { EditableShot };
 /**
  * The shared editable shot table, on the app's spreadsheet grid.
  *
- * Rendered by EditSectionDialog, ZeroDatumConfigDialog and (twice) the mNemo
+ * Rendered by EditSectionDialog, ZeroDatumConfigDialog and (twice) the MNemo
  * import wizard. It used to be a hand-rolled `<table>` of `<input>`s with its
  * own draft/blur/Escape bookkeeping; that predated `SpreadsheetGrid` and carried
  * the defects that came with it - locale-naive `parseFloat` (a comma decimal
@@ -796,7 +796,7 @@ export function ShotTableEditor({
           rows={readOnly ? visibleShots : gridRows}
           // Namespaced like EditSectionDialog's own shot key: temp ids and
           // imported ids are both small integers drawn from separate counters,
-          // so a bare `tempId ?? id` collides the moment the mNemo wizard shows
+          // so a bare `tempId ?? id` collides the moment the MNemo wizard shows
           // a fresh row beside an imported one. React then reuses one row's DOM
           // for the other, and the grid's missing-cell marks - keyed off this
           // very value - paint on the twin.

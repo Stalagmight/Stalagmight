@@ -1,10 +1,10 @@
 ---
-title: Importing from an mNemo
-description: "Import an mNemo DMP file: pick sections, optionally set a zero datum, confirm the suggested connections and place any remaining sections by hand."
+title: Importing from an MNemo
+description: "Import an MNemo DMP file: pick sections, optionally set a zero datum, confirm the suggested connections and place any remaining sections by hand."
 order: 4
 ---
 
-# Importing from an mNemo
+# Importing from an MNemo
 
 1. In the [survey view](../screens/survey-view.md), click **Import** and pick
    the `.dmp` file.

@@ -2226,7 +2226,7 @@ fn test_suggest_orphan_placements_command_offers_the_anchored_host() {
     });
 }
 
-/// #391: `import_sections`' additive provenance params (used by the mNemo DMP
+/// #391: `import_sections`' additive provenance params (used by the MNemo DMP
 /// wizard) decorate the base receipt when passed, and leave it at its
 /// (empty-provenance) defaults when omitted - the shape every other caller
 /// still uses.
@@ -2265,7 +2265,7 @@ fn test_import_sections_provenance_params_decorate_receipt() {
             None,
             None,
             None,
-            Some("mNemo DMP".to_string()),
+            Some("MNemo DMP".to_string()),
             Some("dive.dmp".to_string()),
             Some(1),
         );
@@ -2274,13 +2274,13 @@ fn test_import_sections_provenance_params_decorate_receipt() {
             .import_receipt
             .as_ref()
             .expect("import must attach an import receipt");
-        assert_eq!(receipt.source_format, "mNemo DMP");
+        assert_eq!(receipt.source_format, "MNemo DMP");
         assert_eq!(receipt.file_name, "dive.dmp");
         assert_eq!(receipt.sections_found, 1);
     });
 }
 
-/// PR #529 Codex review: `import_sections` (the mNemo DMP wizard's actual IPC
+/// PR #529 Codex review: `import_sections` (the MNemo DMP wizard's actual IPC
 /// entry point) never calls `decorate_receipt` - it only overwrites
 /// source_format/file_name/sections_found directly (see above and
 /// `import::import_sections`). A `zero_datum_created` sanitized ONLY in
@@ -2328,7 +2328,7 @@ fn test_import_sections_sanitizes_hostile_zero_datum_section_name() {
             None,
             None,
             None,
-            Some("mNemo DMP".to_string()),
+            Some("MNemo DMP".to_string()),
             Some("dive.dmp".to_string()),
             Some(1),
         );
