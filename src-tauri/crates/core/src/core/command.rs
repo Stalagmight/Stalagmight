@@ -5,9 +5,9 @@ use std::path::PathBuf;
 use ts_rs::TS;
 
 use crate::models::{
-    shot_display_position, ClosureStrategy, Coordinates, CreditEdit, CreditTargets, GpsCoordinates,
-    SectionId, SectionUpdates, ShotData, ShotId, ShotKind, ShotUpdates, StationRef,
-    SurveyDirection,
+    sanitize_station_name, shot_display_position, ClosureStrategy, Coordinates, CreditEdit,
+    CreditTargets, GpsCoordinates, SectionId, SectionUpdates, ShotData, ShotId, ShotKind,
+    ShotUpdates, StationRef, SurveyDirection,
 };
 
 /// Identifies either a station or a shot as a comment holder
@@ -924,7 +924,9 @@ impl Command {
                 }
             }
             Command::SetStationName { station_ref, name } => {
-                if name.as_deref().is_some_and(|n| !n.trim().is_empty()) {
+                // What the setter stores, not a plain trim: a name of nothing
+                // but controls or bidi marks removes the name too.
+                if name.as_deref().and_then(sanitize_station_name).is_some() {
                     format!("Set name of station {station_ref}")
                 } else {
                     format!("Remove name from station {station_ref}")
@@ -1677,6 +1679,14 @@ mod tests {
                 Command::SetStationName {
                     station_ref: station_a,
                     name: None,
+                },
+                "Remove name from station 1:0",
+            ),
+            (
+                // Nothing the setter keeps: no plain-trim blank, still a removal.
+                Command::SetStationName {
+                    station_ref: station_a,
+                    name: Some("\u{202e}\u{200f}\u{0007}".to_string()),
                 },
                 "Remove name from station 1:0",
             ),
