@@ -34,8 +34,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    ClosureStrategy, CombinePlan, LoopClosure, SectionId, StationRef, TornTie, TornTieKind,
-    TornTieReason,
+    ClosureStrategy, CombinePlan, KeptMovesReason, LoopClosure, SectionId, StationRef, TornTie,
+    TornTieKind, TornTieReason,
 };
 
 use super::combine_candidate::COMBINE_TOLERANCE_M;
@@ -110,12 +110,24 @@ pub(crate) struct TiePlan {
     /// Which of `torn` tear because a zero datum holds the section on their
     /// far side (the rest close a loop through the combined section).
     pub held_by_datum: Vec<TieId>,
+    /// Why the kept section's side moves, when it does.
+    pub kept_moves_because: Option<KeptMovesReason>,
     /// Whether the joined station keeps the kept section's manual offset
     /// (the fixed side's: false when the kept section is the one that moves).
     pub kept_offset_wins: bool,
 }
 
 type Adjacency = HashMap<SectionId, Vec<(SectionId, TieId)>>;
+
+/// The moving section, the fixed one, the ties to tear, which of those tear
+/// for a zero datum, and why the kept side moves (when it does).
+type MovingSide = (
+    SectionId,
+    SectionId,
+    HashSet<TieId>,
+    Vec<TieId>,
+    Option<KeptMovesReason>,
+);
 
 /// Every section reachable from `start` over `adjacency` without entering
 /// `blocked` (`start` included).
@@ -221,13 +233,19 @@ impl Project {
         // non-finite ends); checked again so a shift can never write one.
         let shifting =
             gap.0.is_finite() && gap.1.is_finite() && gap.0.hypot(gap.1) > COMBINE_TOLERANCE_M;
-        let (moving, fixed, mut torn, held_by_datum) = if shifting {
+        let (moving, fixed, mut torn, held_by_datum, kept_moves_because) = if shifting {
+            // What the closure-adjusted view holds the survey at: the side that
+            // holds it must stay, or the whole cave shifts there by the gap.
+            let anchor = self
+                .adjustment_anchor_of(&self.get_connected_section_ids(join.kept))
+                .map(|at| at.section_id);
             Self::pick_moving_side(
                 join,
                 &loop_ties,
                 &adjacency_without,
                 &anchored,
                 &datum_sections,
+                anchor,
             )?
         } else {
             // Nothing moves (beyond the tolerance the join already allows):
@@ -237,6 +255,7 @@ impl Project {
                 join.kept,
                 loop_ties(join.other, join.kept),
                 Vec::new(),
+                None,
             )
         };
         let adjacency = adjacency_without(&torn);
@@ -281,27 +300,53 @@ impl Project {
             shift: (gap.0 * sign, gap.1 * sign),
             torn: torn_ties,
             held_by_datum,
+            kept_moves_because,
             kept_offset_wins: moving == join.other,
         })
     }
 
     /// Which side moves when the join has to close by a shift, and the merges
-    /// that tear for it: the other section's side, unless a zero datum holds
-    /// it and the kept side is free. With both sides held, the merges from the
-    /// moving section to its datum sides tear too.
+    /// that tear for it:
+    /// - a side a zero datum holds stays;
+    /// - between two free sides, the one holding `anchor` (the section the
+    ///   closure-adjusted view is held at, when no datum is in the survey)
+    ///   stays, or Plan and Export would shift the whole cave by the gap;
+    /// - otherwise the other section's side moves.
+    ///
+    /// With both sides held by datums, the moving section (one that carries
+    /// no datum itself) also tears its merges towards its datum sides.
     fn pick_moving_side(
         join: &JoinPoint,
         loop_ties: &dyn Fn(SectionId, SectionId) -> HashSet<TieId>,
         adjacency_without: &dyn Fn(&HashSet<TieId>) -> Adjacency,
         anchored: &dyn Fn(&HashSet<SectionId>) -> bool,
         datum_sections: &HashSet<SectionId>,
-    ) -> Result<(SectionId, SectionId, HashSet<TieId>, Vec<TieId>), String> {
+        anchor: Option<SectionId>,
+    ) -> Result<MovingSide, String> {
         let sides = [(join.other, join.kept), (join.kept, join.other)];
+        // The sides no zero datum holds, in preference order.
+        let mut free: Vec<(SectionId, SectionId, HashSet<TieId>, bool)> = Vec::new();
         for (m, f) in sides {
             let torn = loop_ties(m, f);
-            if !anchored(&reach(&adjacency_without(&torn), m, f)) {
-                return Ok((m, f, torn, Vec::new()));
+            let side = reach(&adjacency_without(&torn), m, f);
+            if !anchored(&side) {
+                let holds_anchor = anchor.is_some_and(|a| side.contains(&a));
+                free.push((m, f, torn, holds_anchor));
             }
+        }
+        let pick = free
+            .iter()
+            .position(|(_, _, _, holds)| !holds)
+            .or(if free.is_empty() { None } else { Some(0) });
+        if let Some(pick) = pick {
+            let other_free = free.iter().any(|(m, ..)| *m == join.other);
+            let (m, f, torn, _) = free.swap_remove(pick);
+            let because = (m == join.kept).then_some(if other_free {
+                KeptMovesReason::AdjustmentAnchor
+            } else {
+                KeptMovesReason::ZeroDatum
+            });
+            return Ok((m, f, torn, Vec::new(), because));
         }
         for (m, f) in sides {
             if datum_sections.contains(&m) {
@@ -327,7 +372,8 @@ impl Project {
                 }
             }
             torn.extend(datum_ties.iter().copied());
-            return Ok((m, f, torn, datum_ties));
+            let because = (m == join.kept).then_some(KeptMovesReason::ZeroDatum);
+            return Ok((m, f, torn, datum_ties, because));
         }
         Err(
             "Both sections carry a zero datum on one of their stations: a section can hold \
@@ -346,6 +392,7 @@ impl Project {
         CombinePlan {
             kept,
             moving_section: plan.moving,
+            kept_moves_because: plan.kept_moves_because,
             moved_sections: plan.moved.clone(),
             shift_m: plan.shift.0.hypot(plan.shift.1),
             torn_ties: plan

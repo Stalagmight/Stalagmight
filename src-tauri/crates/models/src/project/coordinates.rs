@@ -481,6 +481,23 @@ impl Project {
     /// deterministic default anchor (see [`Self::default_anchor_for_component`]).
     /// Computed from the *measured* topology so it can run once up front, before
     /// any adjustment mutates the working copy.
+    /// The station the closure-adjusted view holds `component` at: a zero
+    /// datum in it when present, otherwise a deterministic default (the
+    /// component's held gauge, or the lowest section id's gauge station) so
+    /// the gauge is reproducible across reloads. The one rule the solve
+    /// ([`Self::plan_adjustment_anchors`]) and the edits that must not move
+    /// it (Combine Sections' choice of the side that moves) share.
+    pub(crate) fn adjustment_anchor_of(
+        &self,
+        component: &HashSet<SectionId>,
+    ) -> Option<StationRef> {
+        self.zero_datums
+            .iter()
+            .find(|zd| component.contains(&zd.station_ref.section_id))
+            .and_then(|zd| self.resolve_key(&zd.station_ref))
+            .or_else(|| self.default_anchor_for_component(component))
+    }
+
     fn plan_adjustment_anchors(&self) -> Vec<StationRef> {
         let mut anchors = Vec::new();
         let mut visited: HashSet<SectionId> = HashSet::new();
@@ -502,16 +519,7 @@ impl Project {
                 continue;
             }
 
-            // Anchor on a zero datum in the component when present, otherwise a
-            // deterministic default so the gauge is reproducible across reloads.
-            let anchor = self
-                .zero_datums
-                .iter()
-                .find(|zd| component.contains(&zd.station_ref.section_id))
-                .and_then(|zd| self.resolve_key(&zd.station_ref))
-                .or_else(|| self.default_anchor_for_component(&component));
-
-            if let Some(anchor) = anchor {
+            if let Some(anchor) = self.adjustment_anchor_of(&component) {
                 anchors.push(anchor);
             }
         }

@@ -73,6 +73,7 @@ export * from './ipc/CombinePlan';
 export * from './ipc/TornTie';
 export * from './ipc/TornTieKind';
 export * from './ipc/TornTieReason';
+export * from './ipc/KeptMovesReason';
 export * from './ipc/SectionEnd';
 export * from './ipc/Station';
 export * from './ipc/StationRef';
