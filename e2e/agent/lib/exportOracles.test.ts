@@ -48,6 +48,13 @@ import {
   type PathShape,
   type ShotIdentity,
 } from './exportOracles';
+import {
+  drawExport,
+  EXPORT_TESTIDS,
+  LEGACY_PANEL_PATH,
+  panelPathFromTrace,
+} from '../scenarios/exportFuzzActions';
+import type { ScenarioContext } from '../scenarios/framework';
 
 const REPRO = 'reproduce: pnpm agent:scenario export-roundtrip-fuzz --seed 1 --iterations 1';
 
@@ -1055,5 +1062,86 @@ describe('X10 close export returns to the recorded mode', () => {
     expect(RETURNABLE_MODES).toEqual(['survey', 'data', 'plan']);
     expect(isReturnableMode('export')).toBe(false);
     expect(isReturnableMode('data')).toBe(true);
+  });
+});
+
+/**
+ * The draw and the trace vocabulary of the panel round trip.
+ *
+ * The draw needs only `rng` and `pick`, so a seeded stand-in drives it here;
+ * nothing below touches a live app.
+ */
+describe('panel round trips: draw, trace vocabulary, allowlist', () => {
+  const fakeCtx = (seed: number): ScenarioContext => {
+    let state = seed >>> 0;
+    const rng = (): number => {
+      // mulberry32, the harness's own PRNG shape; any decent stream will do.
+      state = (state + 0x6d2b79f5) >>> 0;
+      let t = state;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    const pick = <T,>(items: readonly T[]): T => items[Math.floor(rng() * items.length)] as T;
+    return { rng, pick } as unknown as ScenarioContext;
+  };
+
+  it('never draws the retired modal route, and gives every panel draw a full path', () => {
+    const ctx = fakeCtx(7);
+    let panels = 0;
+    for (let seq = 1; seq <= 400; seq += 1) {
+      const draw = drawExport(ctx, seq);
+      expect(['panel', 'store']).toContain(draw.route);
+      if (draw.route === 'store') {
+        expect(draw.panel).toBeNull();
+        continue;
+      }
+      panels += 1;
+      expect(draw.panel).not.toBeNull();
+      expect(RETURNABLE_MODES).toContain(draw.panel?.from);
+      expect(['menu', 'shortcut', 'enterExport']).toContain(draw.panel?.entry);
+      // The store fallback is never drawn.
+      expect(DRAWN_EXPORT_EXITS).toContain(draw.panel?.exit);
+    }
+    expect(panels).toBeGreaterThan(50);
+  });
+
+  it('routes preview through the panel only', () => {
+    const before = process.env.STALAGMIGHT_FUZZ_EXPORT_FORMATS;
+    process.env.STALAGMIGHT_FUZZ_EXPORT_FORMATS = 'preview';
+    try {
+      const ctx = fakeCtx(3);
+      for (let seq = 1; seq <= 40; seq += 1) expect(drawExport(ctx, seq).route).toBe('panel');
+    } finally {
+      if (before === undefined) delete process.env.STALAGMIGHT_FUZZ_EXPORT_FORMATS;
+      else process.env.STALAGMIGHT_FUZZ_EXPORT_FORMATS = before;
+    }
+  });
+
+  it('replays a panel step recorded without a path through the store pair, from Survey', () => {
+    expect(panelPathFromTrace(undefined)).toEqual(LEGACY_PANEL_PATH);
+    expect(LEGACY_PANEL_PATH).toEqual({ from: 'survey', entry: 'enterExport', exit: 'closeExport' });
+  });
+
+  it('reads a recorded path back, and refuses one this build does not run', () => {
+    expect(panelPathFromTrace({ from: 'plan', entry: 'menu', exit: 'escape' })).toEqual({
+      from: 'plan',
+      entry: 'menu',
+      exit: 'escape',
+    });
+    expect(() => panelPathFromTrace({ from: 'export', entry: 'menu', exit: 'escape' })).toThrow(/does not run/);
+    expect(() => panelPathFromTrace({ from: 'survey', entry: 'mode-export', exit: 'escape' })).toThrow(
+      /does not run/,
+    );
+    expect(() => panelPathFromTrace('menu')).toThrow(/of type string/);
+  });
+
+  it('allows the workspace affordances and none of the retired ids', () => {
+    for (const id of ['app-menu-trigger', 'toolbar-export-button', 'export-close-button', 'export-panel-close']) {
+      expect(EXPORT_TESTIDS.has(id), id).toBe(true);
+    }
+    for (const id of ['mode-export', 'export-cancel', 'export-dialog', 'export-dialog-close']) {
+      expect(EXPORT_TESTIDS.has(id), id).toBe(false);
+    }
   });
 });
