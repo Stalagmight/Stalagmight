@@ -596,7 +596,7 @@ impl Database {
                     }
                     // Computed once per section and SHARED by every shot that
                     // falls back to it - one allocation, not one per shot.
-                    let fallback = std::sync::Arc::new(section.take_legacy_template());
+                    let fallback = crate::models::SharedCredit::new(section.take_legacy_template());
                     for shot in &mut section.shots {
                         let row = shot
                             .uuid
@@ -608,6 +608,13 @@ impl Database {
                             Some((_, credit)) => shot.set_credit(credit.clone()),
                             None => shot.set_shared_credit(&fallback),
                         }
+                    }
+                    // A stored text this build would not write the same way
+                    // (longer than a role keeps, a clamped name, another
+                    // spelling) is written back as it is while nobody's
+                    // credit in the section changes (#719 review).
+                    if let Some((Some(raw), _)) = stored_legacy.get(&section_id) {
+                        section.remember_loaded_legacy_surveyor(raw);
                     }
                 }
 

@@ -134,6 +134,30 @@ pub struct Section {
     #[serde(default)]
     #[ts(optional)]
     pub azimuth_reference: Option<AzimuthReference>,
+    /// The legacy `sections.surveyor` text this section was READ with, when it
+    /// differs from what this build would write for the same people
+    /// ([`Self::legacy_surveyor_text`]): a list longer than a role keeps, a
+    /// name past the length clamp, another spelling (`A;B`). While nobody's
+    /// credit in the section has changed since, a save writes that text back
+    /// verbatim ([`Self::legacy_surveyor_to_write`]), so older builds and
+    /// SpeleoDB keep seeing exactly what they wrote; the shots themselves hold
+    /// the clamped people. Session-only: set by the file reader, never
+    /// serialized, so a restored snapshot writes this build's text.
+    #[serde(skip)]
+    #[ts(skip)]
+    pub loaded_legacy_surveyor: Option<LoadedLegacyText>,
+}
+
+/// [`Section::loaded_legacy_surveyor`]: the text as stored, and the text this
+/// build derived for the section right after reading it. While the section
+/// still derives that same text, who is credited in it has not changed, and
+/// the stored text is still its truth.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadedLegacyText {
+    /// `sections.surveyor` as the file held it.
+    pub raw: String,
+    /// [`Section::legacy_surveyor_text`] once the section was read.
+    pub derived: Option<String>,
 }
 
 /// Everything about a section that [`SectionData`] cannot carry: the identity of
@@ -472,7 +496,7 @@ fn default_section_quality() -> f64 {
 impl Section {
     /// Create a new section from section data
     pub fn new(id: SectionId, data: SectionData) -> Self {
-        let template = std::sync::Arc::new(SurveyCredit::from_legacy(
+        let template = crate::SharedCredit::new(SurveyCredit::from_legacy(
             data.surveyor.as_deref(),
             data.date,
         ));
@@ -496,6 +520,7 @@ impl Section {
             gauge_shot_uuid: None,
             gauge_neighbour_uuid: None,
             azimuth_reference: None,
+            loaded_legacy_surveyor: None,
         };
 
         // In-section UUID uniqueness, enforced where a `Vec<ShotData>` becomes
@@ -785,6 +810,32 @@ impl Section {
         super::legacy_credit_text(&summary.explorer_people(), &summary.surveyor_people())
     }
 
+    /// What a save writes to `sections.surveyor` for a section with shots:
+    /// the text the section was read with while its people are unchanged
+    /// since ([`Self::loaded_legacy_surveyor`]), else
+    /// [`Self::legacy_surveyor_text`]. A long or differently spelled legacy
+    /// text is therefore not cut or respelled by a save that changed nobody's
+    /// credit.
+    pub fn legacy_surveyor_to_write(&self) -> Option<String> {
+        let derived = self.legacy_surveyor_text();
+        match &self.loaded_legacy_surveyor {
+            Some(loaded) if loaded.derived == derived => Some(loaded.raw.clone()),
+            _ => derived,
+        }
+    }
+
+    /// Remember `raw`, the `sections.surveyor` text the section was just read
+    /// with, if it is not what this build would write for the section now
+    /// (see [`Self::loaded_legacy_surveyor`]). Call once the shots carry their
+    /// credit.
+    pub fn remember_loaded_legacy_surveyor(&mut self, raw: &str) {
+        let derived = self.legacy_surveyor_text();
+        self.loaded_legacy_surveyor = (derived.as_deref() != Some(raw)).then(|| LoadedLegacyText {
+            raw: raw.to_string(),
+            derived,
+        });
+    }
+
     /// The earliest shot date; what the legacy `sections.date` column carries.
     pub fn first_survey_date(&self) -> Option<NaiveDate> {
         self.shots.iter().filter_map(|s| s.credit().date).min()
@@ -799,7 +850,7 @@ impl Section {
         if self.shots.is_empty() {
             return false;
         }
-        let template = std::sync::Arc::new(self.take_legacy_template());
+        let template = crate::SharedCredit::new(self.take_legacy_template());
         if template.is_empty() {
             return false;
         }

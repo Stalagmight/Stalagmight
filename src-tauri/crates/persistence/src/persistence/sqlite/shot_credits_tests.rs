@@ -1444,24 +1444,73 @@ fn a_huge_legacy_surveyor_loads_bounded_and_shared() {
         .is_some_and(|c| std::sync::Arc::ptr_eq(c, shared))));
 }
 
-/// A legacy or imported name longer than a stored person may be is clamped
-/// when it is read, so a save and reopen gives back exactly what was shown.
+/// #719 review: a legacy text this build would not write the same way - a
+/// name longer than a stored person may be, more names than a role keeps,
+/// another spelling - is written back VERBATIM by a save that changed nobody's
+/// credit in the section, save after save, so older builds and SpeleoDB keep
+/// what they wrote. The shots hold the clamped people, and a reopen shows
+/// exactly what was shown before. Once a credit in the section changes, the
+/// section's own text is written.
 #[test]
-fn a_long_legacy_name_survives_a_save_unchanged() {
+fn a_long_legacy_text_is_written_back_until_a_credit_changes() {
+    use crate::models::{MAX_PEOPLE_PER_ROLE, MAX_PERSON_TEXT_CHARS};
     let dir = TempDir::new().unwrap();
     let mut project = Project::new("Long".to_string(), None);
     let id = section_with(&mut project, vec![SurveyCredit::default(); 2]);
     let path = save(&dir, "long.stalx", &project);
-    let long = "n".repeat(crate::models::MAX_PERSON_TEXT_CHARS + 30);
+    let column = |path: &Path| legacy_surveyor(&Database::open_readonly(path).unwrap(), id);
+    let long = "n".repeat(MAX_PERSON_TEXT_CHARS + 30);
+    let many = (0..MAX_PEOPLE_PER_ROLE + 50)
+        .map(|i| format!("Person {i}"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    for (case, raw) in [long, many, "Ann Lee;Bo Ray".to_string()]
+        .into_iter()
+        .enumerate()
+    {
+        sql(
+            &path,
+            &format!("UPDATE sections SET surveyor = '{raw}' WHERE id = {id};"),
+        );
+        let once = reload(&path);
+        let shown = credits_of(&once, id);
+        assert!(shown[0].surveyors.len() <= MAX_PEOPLE_PER_ROLE);
+        assert!(shown[0]
+            .surveyors
+            .iter()
+            .all(|p| p.name.chars().count() <= MAX_PERSON_TEXT_CHARS));
+        let saved = save(&dir, &format!("saved-{case}.stalx"), &once);
+        assert_eq!(column(&saved).as_deref(), Some(raw.as_str()), "case {case}");
+        let twice = reload(&saved);
+        assert_eq!(credits_of(&twice, id), shown, "case {case}");
+        let resaved = save(&dir, &format!("resaved-{case}.stalx"), &twice);
+        assert_eq!(
+            column(&resaved).as_deref(),
+            Some(raw.as_str()),
+            "case {case}"
+        );
+    }
+    // The clamped long name is what the shots hold.
     sql(
         &path,
-        &format!("UPDATE sections SET surveyor = '{long}' WHERE id = {id};"),
+        &format!(
+            "UPDATE sections SET surveyor = '{}' WHERE id = {id};",
+            "n".repeat(MAX_PERSON_TEXT_CHARS + 30)
+        ),
     );
-    let once = reload(&path);
-    let name = &credits_of(&once, id)[0].surveyors[0].name;
-    assert_eq!(name.chars().count(), crate::models::MAX_PERSON_TEXT_CHARS);
-    let again = reload(&save(&dir, "again.stalx", &once));
-    assert_eq!(credits_of(&again, id), credits_of(&once, id));
+    let name = &credits_of(&reload(&path), id)[0].surveyors[0].name;
+    assert_eq!(name.chars().count(), MAX_PERSON_TEXT_CHARS);
+
+    // A credit changed in the section: its own text is written.
+    sql(
+        &path,
+        &format!("UPDATE sections SET surveyor = 'Ann Lee;Bo Ray' WHERE id = {id};"),
+    );
+    let mut edited = reload(&path);
+    edited.get_section_mut(id).unwrap().shots[0].set_credit(credit(&["Cy Press"], &[], None));
+    let saved = save(&dir, "edited.stalx", &edited);
+    assert_eq!(column(&saved).as_deref(), Some("Cy Press, Ann Lee, Bo Ray"));
+    assert_eq!(credits_of(&reload(&saved), id), credits_of(&edited, id));
 }
 
 /// The credit tables are project data: a SpeleoDB push snapshot keeps all

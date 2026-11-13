@@ -17,7 +17,11 @@
 //! first of those, and only with two distinct, non-empty halves: that importer
 //! dropped empty and placeholder halves and collapsed identical ones. A `/`
 //! next to a space inside a name is written `-` there, so the halves stay
-//! unambiguous.
+//! unambiguous. A stored text this build would not write the same way (longer
+//! than a role keeps, a name past the length clamp, another spelling) is
+//! written back verbatim while nobody's credit in the section has changed
+//! since it was read (`Section::legacy_surveyor_to_write`); the shots hold the
+//! clamped people.
 //!
 //! Rows are keyed by `(section_id, shot_uuid)`: `sections.id` is persisted,
 //! and a file written before shot uuids were project-unique can hold one uuid

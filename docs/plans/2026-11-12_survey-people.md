@@ -110,7 +110,10 @@ How this feature fits:
   The explorers-only form has no trailing space because an older build's Edit Section trims the
   surveyor on every save; the splitter reads `x /` and `x / ` alike as explorers only (a trimmed
   text ending in ` /` with no other ` / `). Each half names each display name once, compared
-  case-insensitively. A `/` that could join the
+  case-insensitively. A stored text this build would not write the same way (more names than a role
+  keeps, a name past the 256-character clamp, another spelling such as `A;B`) is written back
+  verbatim while nobody's credit in the section has changed since the file was opened; the shots
+  hold the clamped people (#719 review). A `/` that could join the
   `" / "` separator (inside a name between spaces, or at its edge: `A / B`, `A /`, `/ B`) is
   written `-` in this column only; the per-shot tables keep the real name.
 - Why both roles (#718): a released build (0.5.3 and older) saves by writing a fresh database and

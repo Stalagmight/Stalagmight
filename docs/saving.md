@@ -81,7 +81,10 @@ comma-joined `credit_people` ids. The legacy `sections.surveyor` and
 date, and the distinct surveyor names joined with `", "` - or, when anyone
 explored the section, the Ariane `"explorers / surveyors"` form (`"Ida Ice /"`
 when nobody surveyed, which survives the trim an older build's Edit Section
-does on save), with a `" / "` inside a name written `" - "`. A shot
+does on save), with a `" / "` inside a name written `" - "`. A stored text
+this build would not write the same way (a list longer than a role keeps, a
+name past the length clamp, another spelling) is written back verbatim while
+nobody's credit in the section has changed since the file was opened. A shot
 WITHOUT a row reads its credit from those two columns through the legacy
 splitter, which is the migration for older files; the writer therefore writes
 a row only where that fallback would read back something else.

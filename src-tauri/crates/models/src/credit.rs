@@ -753,14 +753,28 @@ pub struct SectionCreditSummary {
 
 impl SectionCreditSummary {
     /// Aggregate a run of shot credits.
+    ///
+    /// Shots that share ONE credit (every shot a section's legacy text
+    /// credits shares one allocation) are keyed once, by address, and only
+    /// counted after that: a long legacy list over many shots costs one pass
+    /// over its people, not one per shot.
     pub fn from_credits<'a>(credits: impl IntoIterator<Item = &'a SurveyCredit>) -> Self {
         let mut surveyors = Tally::default();
         let mut explorers = Tally::default();
         let mut summary = Self::default();
+        let mut keyed: std::collections::HashMap<*const SurveyCredit, (Vec<usize>, Vec<usize>)> =
+            std::collections::HashMap::new();
         for credit in credits {
             summary.shot_count = summary.shot_count.saturating_add(1);
-            surveyors.add_shot(&credit.surveyors);
-            explorers.add_shot(&credit.explorers);
+            let (surveyed, explored) =
+                keyed.entry(std::ptr::from_ref(credit)).or_insert_with(|| {
+                    (
+                        surveyors.index_shot(&credit.surveyors),
+                        explorers.index_shot(&credit.explorers),
+                    )
+                });
+            surveyors.count(surveyed);
+            explorers.count(explored);
             if let Some(date) = credit.date {
                 summary.date_min = Some(summary.date_min.map_or(date, |d| d.min(date)));
                 summary.date_max = Some(summary.date_max.map_or(date, |d| d.max(date)));
@@ -791,8 +805,10 @@ struct Tally {
 }
 
 impl Tally {
-    fn add_shot(&mut self, people: &[Person]) {
-        // A person listed twice on one shot counts once for it.
+    /// The indices of one shot's people, each once (a person listed twice on
+    /// one shot counts once for it), adding the people not seen yet at the
+    /// end with no shots counted.
+    fn index_shot(&mut self, people: &[Person]) -> Vec<usize> {
         let mut seen_here: Vec<usize> = Vec::with_capacity(people.len());
         for person in people {
             if !person.is_valid() {
@@ -807,9 +823,17 @@ impl Tally {
             if index == next {
                 self.people.push(CreditedPerson {
                     person: person.clone(),
-                    shots: 1,
+                    shots: 0,
                 });
-            } else if let Some(entry) = self.people.get_mut(index) {
+            }
+        }
+        seen_here
+    }
+
+    /// Count one more shot for each of `indices` ([`Self::index_shot`]).
+    fn count(&mut self, indices: &[usize]) {
+        for &index in indices {
+            if let Some(entry) = self.people.get_mut(index) {
                 entry.shots = entry.shots.saturating_add(1);
             }
         }

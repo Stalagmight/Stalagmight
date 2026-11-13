@@ -98,7 +98,12 @@ impl Database {
             let (legacy_surveyor, first_date) = if section.shots.is_empty() {
                 (section.legacy_surveyor.clone(), section.legacy_date)
             } else {
-                (section.legacy_surveyor_text(), section.first_survey_date())
+                // The text the section was read with while its people are
+                // unchanged, so a save does not cut or respell it.
+                (
+                    section.legacy_surveyor_to_write(),
+                    section.first_survey_date(),
+                )
             };
             let legacy_date = first_date.map(|d| d.to_string());
             // What a shot with no credit row reads back as (`shot_credits`),

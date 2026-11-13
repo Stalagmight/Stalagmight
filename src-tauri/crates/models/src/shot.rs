@@ -300,6 +300,34 @@ pub struct Shot {
     pub credit: Option<Arc<SurveyCredit>>,
 }
 
+/// A credit in the form a shot stores it ([`SurveyCredit::into_storable`])
+/// behind one allocation, for many shots to share ([`Shot::set_shared_credit`]):
+/// a section's legacy template, the fallback of every shot without a row. It
+/// is normalized once when made, so a long list over many shots is checked
+/// once, not once per shot.
+#[derive(Debug, Clone)]
+pub struct SharedCredit(Arc<SurveyCredit>);
+
+impl SharedCredit {
+    /// `credit` made storable, behind one allocation.
+    pub fn new(credit: SurveyCredit) -> Self {
+        Self(Arc::new(credit.into_storable()))
+    }
+
+    /// The shared allocation itself.
+    pub fn arc(&self) -> &Arc<SurveyCredit> {
+        &self.0
+    }
+}
+
+impl std::ops::Deref for SharedCredit {
+    type Target = SurveyCredit;
+
+    fn deref(&self) -> &SurveyCredit {
+        &self.0
+    }
+}
+
 /// `deserialize_with` for [`Shot::credit`]: a shot read back from a snapshot
 /// or an undo payload stores its credit as [`Shot::set_credit`] would.
 fn de_storable_credit<'de, D>(de: D) -> Result<Option<Arc<SurveyCredit>>, D::Error>
@@ -730,22 +758,19 @@ impl Shot {
     ///
     /// Every way a credit reaches a shot goes through here or
     /// [`Self::set_shared_credit`] (an import's `ShotData`, an edit, an undo
-    /// or redo replayed from the file, a deserialized snapshot), and both store
-    /// it [`SurveyCredit::into_storable`]: no control character, no name past
-    /// the length cap, no role past [`crate::MAX_PEOPLE_PER_ROLE`] people.
+    /// or redo replayed from the file, a deserialized snapshot), and each
+    /// stores it [`SurveyCredit::into_storable`]: no control character, no
+    /// name past the length cap, no role past [`crate::MAX_PEOPLE_PER_ROLE`]
+    /// people.
     pub fn set_credit(&mut self, credit: SurveyCredit) {
         self.credit = stored_credit(credit.into_storable()).map(Arc::new);
     }
 
     /// Give this shot a credit SHARED with other shots: one allocation for all
-    /// of them (an empty one is stored as `None`). A credit that is not yet
-    /// storable is stored as its own normalized copy ([`Self::set_credit`]).
-    pub fn set_shared_credit(&mut self, credit: &Arc<SurveyCredit>) {
-        if credit.is_storable() {
-            self.credit = (!credit.is_empty()).then(|| Arc::clone(credit));
-        } else {
-            self.set_credit(SurveyCredit::clone(credit));
-        }
+    /// of them (an empty one is stored as `None`). The credit was made
+    /// storable once, when the [`SharedCredit`] was built, not once per shot.
+    pub fn set_shared_credit(&mut self, credit: &SharedCredit) {
+        self.credit = (!credit.is_empty()).then(|| Arc::clone(&credit.0));
     }
 
     /// Apply partial updates to this shot
@@ -1549,24 +1574,24 @@ mod tests {
         );
         check(imported.credit(), "ShotData");
 
-        let shared = Arc::new(dirty());
+        let shared = SharedCredit::new(dirty());
         let mut shot = Shot::new(3, ShotData::default());
         shot.set_shared_credit(&shared);
-        check(shot.credit(), "set_shared_credit");
+        check(shot.credit(), "SharedCredit");
 
         let mut wire = serde_json::to_value(Shot::new(4, ShotData::default())).unwrap();
         wire["credit"] = serde_json::to_value(dirty()).unwrap();
         let restored: Shot = serde_json::from_value(wire).unwrap();
         check(restored.credit(), "deserialized");
 
-        // A credit that already is storable is shared, not copied.
-        let clean = Arc::new(SurveyCredit {
+        // A shared credit is one allocation for every shot given it.
+        let clean = SharedCredit::new(SurveyCredit {
             surveyors: vec![raw("Ann")],
             ..SurveyCredit::default()
         });
         let mut shot = Shot::new(5, ShotData::default());
         shot.set_shared_credit(&clean);
-        assert!(Arc::ptr_eq(shot.credit.as_ref().unwrap(), &clean));
+        assert!(Arc::ptr_eq(shot.credit.as_ref().unwrap(), clean.arc()));
     }
 
     #[test]
