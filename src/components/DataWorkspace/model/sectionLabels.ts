@@ -58,6 +58,20 @@ function elide(g: readonly string[], prefix: number, suffix: number): string {
   return `${head}${ELLIPSIS}${tail}`;
 }
 
+/**
+ * `name` in at most `max` graphemes, its MIDDLE elided so both ends survive
+ * ("Downstream Su…Passage B"): long names that differ only at the end stay
+ * distinguishable, where an end-truncation would make them identical.
+ * Unchanged when it fits.
+ */
+export function elideMiddle(name: string, max: number): string {
+  const g = graphemes(name);
+  if (g.length <= max) return name;
+  const budget = Math.max(1, max - 1);
+  const prefix = Math.ceil(budget / 2);
+  return elide(g, prefix, budget - prefix);
+}
+
 /** A label that fits in `max` graphemes, eliding the end with an ellipsis. */
 function truncateEnd(g: readonly string[], max: number): string {
   if (g.length <= max) return g.join('');

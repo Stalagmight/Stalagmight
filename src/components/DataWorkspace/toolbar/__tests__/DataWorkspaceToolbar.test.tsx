@@ -21,7 +21,7 @@ import { DATA_DEFAULT_HIDDEN } from '../../columnsMeta';
 import { useUIStore } from '../../../../store/uiStore';
 import { useProjectStore } from '../../../../store/projectStore';
 import { buildEditCommands } from '../../model/edits';
-import { Harness, makeModel, resetStore } from './harness';
+import { Harness, makeModel, resetStore, SECTIONS } from './harness';
 
 const store = () => useDataWorkspaceStore.getState();
 const executeBatch = vi.fn(async () => ({ success: true, warnings: [], error: null, section_ids: [] }));
@@ -352,6 +352,19 @@ describe('filters, chips and menus', () => {
     expect(screen.queryByTestId('data-sections-item-2')).toBeNull();
     fireEvent.click(screen.getByTestId('data-sections-all'));
     expect(store().filters.sectionIds).toBeNull();
+  });
+
+  it('sections picker: long names keep both ends, the full name in the tooltip, and the id', () => {
+    const long = (end: string) => ({ id: 0, name: `Downstream Sump Passage Number One ${end}`, shots: [{ length: 5 }] });
+    render(<Harness model={makeModel({}, [...SECTIONS, { ...long('Alpha'), id: 3 }, { ...long('Bravo'), id: 4 }])} />);
+    fireEvent.click(screen.getByTestId('data-sections-button'));
+    const a = screen.getByTestId('data-sections-name-3');
+    const b = screen.getByTestId('data-sections-name-4');
+    expect(a.textContent).not.toBe(b.textContent);
+    expect(a.textContent).toMatch(/^Downstream.*….*Alpha$/);
+    expect(a).toHaveAttribute('title', 'Downstream Sump Passage Number One Alpha');
+    expect(screen.getByTestId('data-sections-name-1')).toHaveTextContent(/^Main$/);
+    expect(screen.getByTestId('data-sections-item-3').closest('label')).toHaveTextContent('#3');
   });
 
   it('filter menu: quick filters and the condition builder (with validation)', () => {

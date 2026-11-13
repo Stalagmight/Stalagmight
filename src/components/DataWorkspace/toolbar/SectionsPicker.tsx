@@ -1,7 +1,9 @@
 /**
  * Sections filter: a searchable checklist of every section (colour dot, name,
  * id) with "All sections" and a per-row "Only". `filters.sectionIds` is null
- * while every section is shown.
+ * while every section is shown. A name too long for the row is elided in the
+ * middle (two long names differing at the end stay apart), the full name in
+ * its tooltip; the id always shows.
  */
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -9,6 +11,7 @@ import { useDataWorkspaceStore } from '../store';
 import type { DataModelCtx } from '../types';
 import { SectionsIcon } from '../../common/icons';
 import { testIdPart } from '../../../utils/testId';
+import { elideMiddle } from '../model/sectionLabels';
 import { MenuDivider, ToolbarMenu } from './ToolbarMenu';
 
 interface SectionEntry {
@@ -24,6 +27,11 @@ export function sectionEntries(ctx: DataModelCtx): SectionEntry[] {
     color: ctx.sectionsById.get(s.id)?.color ?? s.color,
   }));
 }
+
+/** Graphemes of a section name the picker row shows before eliding its middle
+ *  (what fits beside the checkbox, dot, id and "Only" at the menu width). */
+export const PICKER_NAME_MAX = 30;
+export const SECTIONS_MENU_WIDTH = 340;
 
 /** Toggle one id in a selection where null = all. Back to null when all are on. */
 export function toggleSection(selected: readonly number[] | null, id: number, allIds: readonly number[]): number[] | null {
@@ -78,7 +86,7 @@ export function SectionsPicker({ ctx }: { ctx: DataModelCtx }) {
       compactLabel={active ? <span className="tabular-nums">{`${shownCount}/${entries.length}`}</span> : undefined}
       title={t('dataToolbar.sections.title')}
       active={active}
-      width={280}
+      width={SECTIONS_MENU_WIDTH}
       maxHeightCap={480}
       remeasureKey={visible.length}
     >
@@ -122,8 +130,8 @@ export function SectionsPicker({ ctx }: { ctx: DataModelCtx }) {
               data-testid={`data-sections-item-${testIdPart(e.id)}`}
             />
             <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: e.color }} aria-hidden="true" />
-            <span className="truncate" title={e.name}>
-              {e.name}
+            <span className="truncate" title={e.name} data-testid={`data-sections-name-${testIdPart(e.id)}`}>
+              {elideMiddle(e.name, PICKER_NAME_MAX)}
             </span>
             <span className="shrink-0 text-text-secondary tabular-nums">#{e.id}</span>
           </label>

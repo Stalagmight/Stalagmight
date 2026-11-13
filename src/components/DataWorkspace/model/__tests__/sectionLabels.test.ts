@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildSectionLabels, cleanSectionName, graphemes, SECTION_LABEL_MAX } from '../sectionLabels';
+import { buildSectionLabels, cleanSectionName, elideMiddle, graphemes, SECTION_LABEL_MAX } from '../sectionLabels';
 
 const def = (id: number) => `Section ${id}`;
 const labelsOf = (names: (string | null)[], firstId = 1) =>
@@ -140,5 +140,27 @@ describe('buildSectionLabels', () => {
     const t0 = performance.now();
     expectUniqueAndShort(labelsOf(names));
     expect(performance.now() - t0).toBeLessThan(5000);
+  });
+});
+
+describe('elideMiddle', () => {
+  it('keeps a name that fits', () => {
+    expect(elideMiddle('Downstream Sump Passage A', 30)).toBe('Downstream Sump Passage A');
+  });
+
+  it('elides the middle so names differing at the end stay apart', () => {
+    const a = elideMiddle('Downstream Sump Passage Number One Alpha', 20);
+    const b = elideMiddle('Downstream Sump Passage Number One Bravo', 20);
+    expect(a).not.toBe(b);
+    expect(graphemes(a).length).toBeLessThanOrEqual(20);
+    expect(a.startsWith('Downstream')).toBe(true);
+    expect(a.endsWith('Alpha')).toBe(true);
+    expect(a).toContain('…');
+  });
+
+  it('never cuts a grapheme cluster', () => {
+    const out = elideMiddle('Cueva 👩‍👩‍👧 Sistema 👩‍👩‍👧 Final', 10);
+    expect(graphemes(out).length).toBeLessThanOrEqual(10);
+    expect(out).not.toMatch(/\uFFFD/);
   });
 });
