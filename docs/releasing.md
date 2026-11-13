@@ -456,19 +456,25 @@ from it:
 
 - **Publishing reaches installs without a click.** Once a track's manifest
   points at a build, every install on that track with "Update automatically"
-  on downloads it at its next check (within about 4 hours), and on macOS and
-  Linux installs it at the next quit. A final reaches Stable and Beta
-  installs, a candidate Beta ones. Treat a publish as shipping: a candidate
-  reaches the smaller Beta audience first
-  ([Rehearsing an update from a candidate](#rehearsing-an-update-from-a-candidate)),
-  and repointing does not recall a build already installed
+  on downloads it at its next check (within about 4 hours, or at the next
+  launch), and wherever updates install on quit (macOS and Linux, except a
+  Mac whose app folder the user cannot write to) installs it at the next quit.
+  A final reaches Stable and Beta installs, a candidate Beta ones. Treat a
+  publish as shipping: a candidate reaches the smaller Beta audience first
+  ([Rehearsing an update from a candidate](#rehearsing-an-update-from-a-candidate)).
+  Repointing recalls nothing already downloaded: a running app holding a
+  downloaded update skips its 4-hour check and installs those bytes at the next
+  quit, and an installed build stays installed
   ([Rollback / repoint runbook](#rollback--repoint-runbook)).
 - **Only some packages update themselves.** The updater replaces an
-  AppImage, an NSIS-installed Windows app, or a macOS `.app`. A copy
-  installed from a `.deb`, `.rpm` or `.msi` refuses to self-update with a
-  message saying to install the new version the same way, and a release
-  binary with no bundle marker (a bare `cargo build`) refuses outright
-  (`self_update_refusal` in `app_update.rs`).
+  AppImage, an NSIS-installed Windows app, or a macOS `.app` (the macOS
+  entry is in a manifest only for a Developer ID-signed release, and only for
+  Apple silicon, `darwin-aarch64`). A copy installed from a `.deb`, `.rpm` or
+  `.msi`, and a release binary with no bundle marker (a bare `cargo build`),
+  refuse in `self_update_refusal` (`app_update.rs`) before the manifest is
+  read. The refusal text is not shown to the user: About says "Could not
+  check for updates" and automatic checks stay silent, so such users must be
+  told to update through their package some other way.
 
 ### Keypair custody
 
@@ -851,14 +857,18 @@ pnpm tauri build --config '{"bundle":{"createUpdaterArtifacts":true}}' --debug
 #      "platforms": { "linux-x86_64": { "signature": "<.sig file contents>",
 #        "url": "http://127.0.0.1:8000/<bundle file name>" } } }
 
-# 5. Serve that directory.
+# 5. Serve that directory (it keeps running; use a second terminal for step 6).
 python3 -m http.server 8000
 
-# 6. Run a debug build pointed at it: ./scripts/dev.sh for check + download,
-#    or the packaged build from step 3 (launched from its bundle output) to
-#    prove the install too.
-STALAGMIGHT_UPDATE_URL=http://127.0.0.1:8000/latest.json ./scripts/dev.sh
+# 6. Run the packaged build from step 3, launched from its bundle output,
+#    with the variable set, e.g. on Linux:
+STALAGMIGHT_UPDATE_URL=http://127.0.0.1:8000/latest.json \
+  src-tauri/target/debug/bundle/appimage/<AppImage file name>
 ```
+
+The launch check runs after about 10 seconds, or press About's "Check for
+updates". The packaged build exercises the whole cycle: check, download, signature check,
+and the install (at quit on macOS and Linux, or through "Restart to update").
 
 `STALAGMIGHT_UPDATE_URL` (`UPDATE_URL_ENV` in `app_update.rs`) is honoured
 verbatim only in a debug build, which is what lets a plain
@@ -866,19 +876,15 @@ verbatim only in a debug build, which is what lets a plain
 https `github.com` URL and otherwise ignores it (`is_trusted_manifest_url`).
 Without the variable, a debug build refuses to check, download or install at
 all (#644), so `./scripts/dev.sh` never updates itself from the real
-manifest. Trigger the check with About's "Check for updates" once the server
-is up.
+manifest.
 
-`./scripts/dev.sh` runs `tauri dev`, an unbundled binary, so it proves the
-check, the download, the signature check and the restart and quit guards, but
-not the file replacement a real update performs. That needs the packaged
-build from step 3.
-
-**On macOS and Linux, quitting a debug build that holds a downloaded update
-installs it over wherever that binary runs from**, which for
-`./scripts/dev.sh` is `target/debug`. Turn "Update automatically" off before
-checking from a dev build, so the check stops at the banner's Download, and
-download only from a packaged build.
+**Do not download an update into `./scripts/dev.sh`.** With the variable set,
+a `tauri dev` build updates like any other: "Update automatically" is on by
+default, so the launch check downloads at once, and on macOS and Linux a quit
+or a restart then installs over `target/debug`. To check the manifest and the
+banner from a dev build, turn "Update automatically" off in Settings first and
+start the app with the variable only after that, then stop at the banner's
+Download.
 
 ## Testing the release tooling
 

@@ -229,9 +229,13 @@ See [TESTING.md](TESTING.md) for the tiers and which one a test belongs in, and
   - **When it checks:** about 10 seconds after launch, then every 4 hours while the
     app is open (a 5-minute timer compares wall-clock time, so a machine waking from
     sleep catches up within minutes), when About's "Check for updates" is pressed,
-    and whenever the update track is switched.
+    and whenever the update track is switched. The 4-hour check is skipped while an
+    update is downloading or downloaded, so a download in hand is not re-checked
+    until the app restarts.
   - **"Update automatically"** (Settings > General > Updates, on by default): an
-    update a check finds downloads straight away, with no banner until it is ready.
+    update a check finds downloads straight away. From a launch, 4-hour or
+    track-switch check there is no banner until it is ready (a failed download then
+    shows the banner's Download); from About's check the banner shows progress.
     Turned off, no automatic checks run, and a download a check started that has not
     installed yet is cancelled (#645); one the user started with Download is kept.
     About's check and a track switch still check, and the banner then offers
@@ -244,16 +248,22 @@ See [TESTING.md](TESTING.md) for the tiers and which one a test belongs in, and
     on quit would reopen the window the user just closed) and a Mac whose app folder
     the user cannot write to (the install would raise an administrator prompt after
     the window had closed).
-  - **Restarting** to update goes through the same unsaved-changes and SpeleoDB
-    write-lock guards as any other quit. It is refused while a SpeleoDB transfer is
-    running: a toast says so, and the download is kept for later.
+  - **Restarting** to update goes through the same quit guards as any other quit,
+    with one difference: a SpeleoDB project holding the write lock over work
+    SpeleoDB has not seen is not asked the exit question. It keeps the lock, saves
+    unsaved edits, and restarts. A restart while a SpeleoDB transfer is running
+    waits for it, like a quit: "Keep Stalagmight open" calls the restart off, and
+    "Quit now" cuts the transfer. A transfer that starts after the wait has passed
+    makes the backend refuse the restart with a toast, keeping the download.
   - **"Hide"** on the banner hides it for that version for the rest of the session.
-    About's "Check for updates" brings it back, and a newer version shows again. A
-    hidden, downloaded update still installs on quit.
-  - **Packages that cannot update themselves:** a copy installed from a `.deb`,
-    `.rpm` or `.msi` refuses, with a message to install the new version the same
-    way. The updater replaces an AppImage, an NSIS-installed Windows app, or a
-    macOS `.app`.
+    About's "Check for updates" brings it back, and a newer version shows again.
+    Where updates install on quit, a hidden, downloaded update still does.
+  - **Packages that cannot update themselves:** the updater replaces an AppImage,
+    an NSIS-installed Windows app, or a macOS `.app` (Apple silicon, the only macOS
+    build released). A copy installed from a `.deb`, `.rpm` or `.msi` is never
+    offered an update: its check fails before reading the manifest, automatic
+    checks stay silent, and About says "Could not check for updates" without
+    giving the reason.
   - **Development builds** do not update themselves. A debug build checks,
     downloads and installs only when `STALAGMIGHT_UPDATE_URL` names a manifest
     (#644; see [releasing.md](releasing.md#local-end-to-end-updater-test)).
