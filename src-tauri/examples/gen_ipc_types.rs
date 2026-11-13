@@ -13,6 +13,7 @@ use stalagmight_lib::commands::cache::{CacheStats, ProviderStats, TileFetchStats
 use stalagmight_lib::commands::export::DiveProfileRequest;
 use stalagmight_lib::commands::history::{FieldChange, PreviewData, UndoHistoryItem};
 use stalagmight_lib::commands::memory::{MemoryStats, ProcessMemory};
+use stalagmight_lib::commands::mnemo::{MnemoError, MnemoPort, MnemoPullProgress, MnemoPullResult};
 use stalagmight_lib::commands::project::ProjectState;
 use stalagmight_lib::commands::section::{SegmentGeometry, SegmentSectionGeometry};
 use stalagmight_lib::commands::survey_geometry::{
@@ -426,6 +427,11 @@ fn main() {
     export::<AppUpdateStatus>(&out_dir);
     export::<AppUpdateProgress>(&out_dir);
     export::<AppUpdateInstallError>(&out_dir);
+    // Import from MNemo over USB (#725).
+    export::<MnemoPort>(&out_dir);
+    export::<MnemoPullProgress>(&out_dir);
+    export::<MnemoPullResult>(&out_dir);
+    export::<MnemoError>(&out_dir);
     // SpeleoDB IPC DTOs (#183; #186/D-B2 added SpeleoDbAction + SpeleoErrorDto)
     export::<Permission>(&out_dir);
     export::<SpeleoProjectSummary>(&out_dir);
@@ -690,6 +696,10 @@ fn main() {
         "AppUpdateStatus",
         "AppUpdateProgress",
         "AppUpdateInstallError",
+        "MnemoPort",
+        "MnemoPullProgress",
+        "MnemoPullResult",
+        "MnemoError",
         "Permission",
         "SpeleoProjectSummary",
         "SpeleoFileAccess",

@@ -185,6 +185,13 @@ tauri-plugin-webdriver-automation = { git = "https://github.com/FumblingBarbell/
 [target.'cfg(all(not(target_os = "macos"), not(target_os = "android"), not(target_os = "ios")))'.dependencies]
 tauri-plugin-single-instance = "~2.3.7"
 
+# Import from MNemo over USB (#725): the device is a USB CDC serial port.
+# Default features OFF drops `libudev`, so Linux builds need no libudev-dev;
+# without it the crate enumerates ports from /sys/class/tty and still reports
+# USB vendor/product IDs. Not on Android/iOS: no serial access there.
+[target.'cfg(all(not(target_os = "android"), not(target_os = "ios")))'.dependencies]
+serialport = { version = "4.10.1", default-features = false }
+
 # Minimally-patched wry so the Linux WebKit web process returns freed memory to
 # the OS. The patch adds `WebKitMemoryPressureSettings` (read from
 # `STALAGMIGHT_WEBKIT_MEM_*` env vars set in `lib.rs` `run()`) to the WebContext

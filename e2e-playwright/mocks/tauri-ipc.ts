@@ -6366,6 +6366,41 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // a failed assertion rather than an unhandled null.
             throw new Error(`${cmd} is not driven by the default mock state`);
 
+          // Import from MNemo over USB (#725). One connected MNemo by default; a
+          // spec swaps the port list or the pull reply via __MOCK_IPC_OVERRIDES__.
+          // The pull answers a path the rest of the mock already treats as a
+          // DMP, so Continue lands in the normal DMP import.
+          case 'list_mnemo_ports':
+            return [
+              {
+                name: '/dev/cu.usbmodem101',
+                vid: 0x2e8a,
+                pid: 0x000a,
+                manufacturer: 'Raspberry Pi',
+                product: 'MNemo V2',
+                likely_mnemo: true,
+              },
+            ];
+          case 'pull_mnemo': {
+            const win = window as unknown as Record<string, unknown>;
+            const calls = (win.__MOCK_PULL_MNEMO_CALLS__ as unknown[] | undefined) ?? [];
+            calls.push(args ?? null);
+            win.__MOCK_PULL_MNEMO_CALLS__ = calls;
+            return {
+              path: '/mock/MNemo-2026-11-13_143005.dmp',
+              file_name: 'MNemo-2026-11-13_143005.dmp',
+              firmware: 'MNemo mock firmware',
+              bytes: 4096,
+              sections: 2,
+              shots: 14,
+              skipped_sections: 0,
+              unread_trailing_bytes: 0,
+              unreadable_reason: null,
+            };
+          }
+          case 'cancel_mnemo_pull':
+            return null;
+
           // Silent no-ops: commands that should succeed without side-effects
           case 'push_frontend_log':
             return null;

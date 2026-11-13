@@ -46,6 +46,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.can_redo",
     "command.can_undo",
     "command.cancel_loading",
+    "command.cancel_mnemo_pull",
     "command.check_duplicate_import",
     "command.check_for_app_update",
     "command.check_merge_connectivity",
@@ -110,6 +111,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.install_app_update_and_restart",
     "command.list_backups",
     "command.list_dive_plans",
+    "command.list_mnemo_ports",
     "command.list_recent_projects",
     "command.load_display_settings",
     "command.load_dive_plan",
@@ -125,6 +127,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.plan_anchors_for_refs",
     "command.plan_refs_for_anchors",
     "command.preview_delete_shot",
+    "command.pull_mnemo",
     "command.push_frontend_log",
     "command.redo",
     "command.redo_to",
@@ -1165,7 +1168,9 @@ mod tests {
         //   + 1 the Split dialog's read-only preview of a loop closure the
         //       split would turn into a merge: command.split_section_preview
         //       = 722.
-        assert_eq!(EVENT_NAMES.len(), 722);
+        //   + 3 Import from MNemo over USB (#725): command.list_mnemo_ports,
+        //       command.pull_mnemo, command.cancel_mnemo_pull = 725.
+        assert_eq!(EVENT_NAMES.len(), 725);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there
