@@ -3354,19 +3354,6 @@
     "map": {
       "readOnlyBadge": "SpeleoDB · read-only"
     },
-    "button": {
-      "unlocked": "Read-only - open SpeleoDB menu",
-      "editingUnwound": "Viewing an older survey version - open SpeleoDB menu",
-      "editingDirty": "Editing - changes have not been uploaded. Open SpeleoDB menu.",
-      "editingClean": "Editing - open SpeleoDB menu",
-      "lockedByOther": "Read-only - {{email}} is editing this project. Open SpeleoDB menu.",
-      "remoteAhead": "SpeleoDB has newer changes - open SpeleoDB menu",
-      "conflict": "Local and remote changes need review - open SpeleoDB menu",
-      "viewOnly": "Read-only access - open SpeleoDB menu",
-      "noPermission": "You do not have access to this SpeleoDB project - open SpeleoDB menu",
-      "unknownError": "SpeleoDB reported an unexpected error - open SpeleoDB menu",
-      "loggedOut": "Connect to SpeleoDB to edit this project"
-    },
     "serverError": {
       "title": "SpeleoDB error",
       "fallback": "SpeleoDB returned an unexpected error while checking this project."
@@ -3857,17 +3844,6 @@
       "coordinatesHint": "Enter both latitude and longitude, within their valid ranges.",
       "uploadPending": "The project was created on SpeleoDB. Changes remain on this computer; use Save Changes to finish uploading.",
       "withoutHistory": "The project's first revision was uploaded without undo history: it is over the SpeleoDB size limit."
-    },
-    "lock": {
-      "title": "Write lock",
-      "heldBy": "Write lock held by {{email}}",
-      "heldByYou": "You hold the write lock.",
-      "selfWarning": "Releasing here does not push your changes. Use Done to push and release.",
-      "none": "No write lock is held.",
-      "releaseButton": "Release write lock",
-      "releasing": "Releasing…",
-      "released": "Write lock released.",
-      "releaseFailed": "Could not release the write lock"
     },
     "readOnlyNotice": {
       "title": "Project opened read-only",

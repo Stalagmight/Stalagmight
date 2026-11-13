@@ -106,13 +106,13 @@ export interface SpeleoSession {
 
 /**
  * [#303] "This copy is dirty ONLY because a chain step walked it back" - the question the
- * push routes, the close prompt and the status button all ask.
+ * push routes, the close prompt and the SpeleoDB tab all ask.
  *
  * Derived here rather than reported pre-combined by the backend, because the two halves
  * arrive at different times: a step onto the tip leaves the copy CLEAN, so the composite
  * was false at the moment of the refresh, and the Undo that follows marks `hasUnpushedEdits`
  * optimistically without asking the backend anything. Composing locally is what makes the
- * status button react to that Undo instead of waiting for another status refresh - which is exactly
+ * SpeleoDB tab react to that Undo instead of waiting for another status refresh - which is exactly
  * how it was still offering "Push & release" after an unwind.
  */
 export function isUnwoundNotEdited(link: SpeleoLinkState | null | undefined): boolean {
@@ -349,8 +349,8 @@ interface SpeleoStore {
   statusRefreshCount: number;
   /**
    * True while a hand-off verb (start/update/push/done) is in flight. Shared so
-   * every entry point - the status button AND the hamburger submenu - gates on
-   * the same lock and can't double-issue (fix 12).
+   * every SpeleoDB entry point gates on the same lock and can't double-issue
+   * (fix 12).
    *
    * Consumers only READ it; every production write goes through
    * {@link beginBusy} / {@link endBusy} rather than setting the boolean, so a
@@ -442,7 +442,7 @@ interface SpeleoStore {
    * would stall every remote open behind the network.
    *
    * - remote: seeds a pessimistic read-only link if none is seeded yet, so the
-   *   project is read-only from the first frame AND the status button still
+   *   project is read-only from the first frame AND the SpeleoDB tab still
    *   renders its way out ("Start editing"), even if the status call never
    *   answers. `refreshLinkStatus` refines it.
    * - local: drops any link left over from a previously-open remote project
@@ -477,7 +477,7 @@ interface SpeleoStore {
    * edits - so for it the dirty bit is KNOWN true. Hardcoding false there seeded
    * "nothing outstanding" for the one project we have proof is dirty, which
    * disarmed the quit guard (`guardQuit` reads exactly this flag) and dropped the
-   * status button's unpushed warning until some later refresh happened to correct it.
+   * SpeleoDB tab's un-uploaded marker until some later refresh happened to correct it.
    */
   setLinkOnOpen: (a: {
     permission: Permission | null;
@@ -1188,7 +1188,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   },
 
   // Reset `busy` too: a hand-off verb in flight when the project closes/switches
-  // would otherwise leave a freshly-opened project's status button disabled until
+  // would otherwise leave a freshly-opened project's SpeleoDB actions disabled until
   // that verb's `finally` runs (its `apply*` no-op safely, guarded on `link`). (N2)
   // That reasoning covers the verb's `apply*` but NOT its `finally`, which would
   // clear `busy` for a NEWER verb on a NEWER project - so disown the claim as well
@@ -1301,7 +1301,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
           // was already closed (typically a 401 auto-drop, which runs
           // `speleodb_forget` and deliberately LEAVES the dirty bit alone). Change
           // no link state - above all not `hasUnpushedEdits`, which is the flag
-          // `guardQuit` and the status button's warning both read. The caller
+          // `guardQuit` and the SpeleoDB tab's un-uploaded marker both read. The caller
           // surfaces the honest "reconnect and start editing again" line.
           return {};
         default:

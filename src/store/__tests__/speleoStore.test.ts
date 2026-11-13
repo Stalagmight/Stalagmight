@@ -916,7 +916,7 @@ describe('speleoStore', () => {
   // #270: `speleodb_push_only` / `speleodb_done` answer `not_editing` when the edit
   // gate was already closed - nothing uploaded, nothing released. Folded into
   // Pushed/Released, that cleared `hasUnpushedEdits`, which is exactly the flag
-  // `guardQuit` and the status button's warning read: the app claimed the work had
+  // `guardQuit` and the SpeleoDB tab's un-uploaded marker read: the app claimed the work had
   // landed and stopped protecting it, over edits still only on this computer.
   describe('a no-op push/release must not clear the dirty bit (#270)', () => {
     const dirtyReadOnly = () =>

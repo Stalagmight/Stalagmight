@@ -95,7 +95,7 @@ describe('a remote project without the write lock (#270)', () => {
     expect(readOnly()).toBe(true);
   });
 
-  it('seeds a pessimistic link so the status button still offers the way out', () => {
+  it('seeds a pessimistic link so the SpeleoDB tab still offers the way out', () => {
     useSpeleoStore.getState().syncProjectLink(true);
     const link = useSpeleoStore.getState().link;
     // A null link hides the SpeleoDB workspace's actions entirely (the ones that
@@ -171,7 +171,7 @@ describe('a failed or never-answered status call (#270)', () => {
 
     // Decided behavior: a failure resolves to the SAFE state, not to editable.
     // The project stays exactly as the synchronous open left it - read-only,
-    // known-remote, with a link so the status button can still offer
+    // known-remote, with a link so the SpeleoDB tab can still offer
     // "Start editing" or a manual refresh.
     expect(useSpeleoStore.getState().projectLinkKind).toBe('remote');
     expect(useSpeleoStore.getState().link).not.toBeNull();

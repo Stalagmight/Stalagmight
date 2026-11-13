@@ -95,18 +95,17 @@ function App() {
   })));
 
   // #198/fix 3: whenever a SpeleoDB hand-off verb (start/update/push/done, from the
-  // status button OR a close dialog) reports a divergence, surface the resolution
-  // dialog from ONE place - so no entry point can leave the user on a crimson button
-  // with no next step. App is the only always-mounted host (the status button
-  // unmounts in Plan/Export). SpeleoDivergenceDialog clears `divergence` on
-  // resolve/cancel.
+  // SpeleoDB tab OR a close dialog) reports a divergence, surface the resolution
+  // dialog from ONE place - so no entry point can leave the user with no next step.
+  // App is the only always-mounted host (the SpeleoDB tab is not on screen in
+  // Plan/Export). SpeleoDivergenceDialog clears `divergence` on resolve/cancel.
   const speleoDivergence = useSpeleoStore((s) => s.divergence);
   useEffect(() => {
     // Fire only on the transition to a pending divergence - deps intentionally OMIT
     // `activeDialog`. Re-running on every active-dialog change let an unresolved
     // divergence re-open ON TOP of an unrelated dialog the user had since navigated
-    // to (e.g. Settings), trapping them (N1). If they leave it unresolved the crimson
-    // status button still routes them back. No re-open loop: `openDialog` doesn't
+    // to (e.g. Settings), trapping them (N1). If they leave it unresolved, the SpeleoDB
+    // tab's conflict button routes them back. No re-open loop: `openDialog` doesn't
     // touch `divergence`, so this only runs when the divergence itself changes.
     if (speleoDivergence !== null) {
       openDialog('speleodb-divergence');
