@@ -44,12 +44,15 @@
 //! (and a section whose shots all agree with its legacy columns) costs nothing.
 //! A row is explicit even when its lists are empty.
 //!
-//! Rows are keyed by the shot uuid `write.rs` mints or keeps. Nothing on read
-//! is fatal (#717):
-//! - A credit table that cannot be read as a whole - a view or other non-table
-//!   object, a missing column, a read that fails part way, or a `credit_people`
-//!   missing beside `shot_credits` - gives no rows at all, with a warning: every
-//!   shot falls back to its section's legacy columns.
+//! Rows are keyed by the shot uuid `write.rs` mints or keeps. Nothing the file
+//! holds is fatal on read (#717):
+//! - A credit table of another shape - a view or other non-table object, a
+//!   missing column, an expression of its schema failing part way, or a
+//!   `credit_people` missing beside `shot_credits` - gives no rows at all, with
+//!   a warning: every shot falls back to its section's legacy columns. SQLite
+//!   failing for a reason of its own (busy, locked, I/O, out of memory,
+//!   interrupted, corrupt, full, too big) still fails the open: degrading then
+//!   would let the next save write the file without its rows.
 //! - Inside a readable table, an unreadable entry is skipped (counted in a
 //!   warning, never named). A row is used only when ALL of it reads back as
 //!   this build writes it: one with an unreadable value, or naming a person id
@@ -167,16 +170,14 @@ pub(super) fn write_recorded_legacy(
 
 /// The legacy pair recorded for each section in `stored` (rows naming no
 /// section of the file are not kept). A missing table means "nothing
-/// recorded", so no section's credit rows apply; so does an unreadable one,
-/// with a warning. An unreadable row records nothing for its section.
+/// recorded", so no section's credit rows apply; so does one of another shape,
+/// with a warning ([`degrade`]). An unreadable row records nothing for its
+/// section. SQLite failing for a reason of its own fails the open.
 pub(super) fn load_recorded_legacy(
     conn: &Connection,
     stored: &HashMap<u32, LegacyPair>,
-) -> HashMap<u32, LegacyPair> {
-    read_recorded_legacy(conn, stored).unwrap_or_else(|unreadable| {
-        unreadable.warn();
-        HashMap::new()
-    })
+) -> Result<HashMap<u32, LegacyPair>> {
+    degrade(read_recorded_legacy(conn, stored))
 }
 
 /// [`load_recorded_legacy`] without the fallback: why the table is unusable.
@@ -220,18 +221,34 @@ pub(super) fn read_recorded_legacy(
 
 /// Every readable `shot_credits` row, by `(section, shot uuid)`.
 ///
-/// Missing `shot_credits` reads as no rows. A credit table that cannot be read
-/// as a whole - not a table, a column missing (another tool, a hand repair or
-/// a future build wrote it), a read failing part way - also gives no rows,
-/// with a warning, so every shot falls back to its section's legacy columns.
-/// The rows need their people: a missing or unreadable `credit_people` beside
-/// `shot_credits` voids them the same way. Inside readable tables, an
-/// unreadable row or person is skipped and counted (see the module doc).
-pub(super) fn load_credit_rows(conn: &Connection) -> HashMap<CreditKey, SurveyCredit> {
-    read_credit_rows(conn).unwrap_or_else(|unreadable| {
-        unreadable.warn();
-        HashMap::new()
-    })
+/// Missing `shot_credits` reads as no rows. A credit table of another shape -
+/// not a table, a column missing (another tool, a hand repair or a future
+/// build wrote it), an expression of its schema failing part way - also gives
+/// no rows, with a warning, so every shot falls back to its section's legacy
+/// columns ([`degrade`]). The rows need their people: a missing `credit_people`
+/// beside `shot_credits`, or one of another shape, voids them the same way.
+/// Inside readable tables, an unreadable row or person is skipped and counted
+/// (see the module doc). SQLite failing for a reason of its own (busy, I/O,
+/// corrupt...) fails the open.
+pub(super) fn load_credit_rows(conn: &Connection) -> Result<HashMap<CreditKey, SurveyCredit>> {
+    degrade(read_credit_rows(conn))
+}
+
+/// A credit read's result for the open: the value; or, for a table of another
+/// shape ([`Unreadable::is_shape`]), a warning and nothing (every shot then
+/// reads its section's legacy columns); or, when SQLite failed for a reason
+/// that says nothing about the table, the error, so the open fails as it did
+/// before #717. Degrading on a busy or failing disk would let the next save
+/// write the file without its credit rows and lose them for good.
+fn degrade<T: Default>(read: Result<T, Unreadable>) -> Result<T> {
+    match read {
+        Ok(value) => Ok(value),
+        Err(unreadable) if unreadable.is_shape() => {
+            unreadable.warn();
+            Ok(T::default())
+        }
+        Err(unreadable) => Err(unreadable.into_error()),
+    }
 }
 
 /// [`load_credit_rows`] without the fallback: why a table is unusable.
@@ -376,9 +393,8 @@ fn read_people(conn: &Connection) -> Result<HashMap<i64, Person>, Unreadable> {
     Ok(people)
 }
 
-/// A credit table that cannot be read as a whole, for the warning: which
-/// table, at which step, and SQLite's error, which names the table and its
-/// columns but never a stored value. None of the table's text is kept.
+/// A credit table that cannot be read as a whole: which table, at which step,
+/// and SQLite's error if there was one. None of the table's text is kept.
 #[derive(Debug)]
 pub(super) struct Unreadable {
     pub(super) table: &'static str,
@@ -401,6 +417,27 @@ impl Unreadable {
             table,
             step,
             error: None,
+        }
+    }
+
+    /// Whether the table is of another shape than this build reads: missing,
+    /// not a table, or SQLite's generic SQL error ([`is_schema_error`]: a
+    /// missing column, an expression of the file's schema failing). The read
+    /// may then degrade to no rows. Anything else is SQLite failing for a
+    /// reason of its own and must fail the open ([`degrade`]).
+    pub(super) fn is_shape(&self) -> bool {
+        self.error.as_ref().is_none_or(is_schema_error)
+    }
+
+    /// The error that fails the open.
+    fn into_error(self) -> anyhow::Error {
+        let context = format!(
+            "Failed to read the survey credit table {} ({})",
+            self.table, self.step
+        );
+        match self.error {
+            Some(error) => anyhow::Error::new(error).context(context),
+            None => anyhow::anyhow!(context),
         }
     }
 
@@ -431,20 +468,37 @@ fn warn_skipped(table: &'static str, skipped: usize, unreadable_values: usize) {
     }
 }
 
+/// Whether `error` is SQLite's generic SQL error (`SQLITE_ERROR`): what a
+/// table of another shape produces - a missing table or column at prepare, an
+/// expression of the file's schema failing while rows are read. Every other
+/// code (BUSY, LOCKED, IOERR, NOMEM, INTERRUPT, CORRUPT, NOTADB, FULL, TOOBIG,
+/// AUTH, ...) and every non-SQLite error is not about the table's shape.
+pub(super) fn is_schema_error(error: &rusqlite::Error) -> bool {
+    match error {
+        rusqlite::Error::SqliteFailure(failure, _)
+        | rusqlite::Error::SqlInputError { error: failure, .. } => {
+            failure.extended_code & 0xff == rusqlite::ffi::SQLITE_ERROR
+        }
+        _ => false,
+    }
+}
+
 /// Whether `name` is a table of the file. `Ok(false)` when nothing has that
 /// name; an error when the schema cannot be read or the name is another kind
 /// of object (a view), which no build writes.
 fn is_table(conn: &Connection, name: &'static str) -> Result<bool, Unreadable> {
-    let kinds: Vec<String> = conn
+    let kinds: Vec<Option<String>> = conn
         .prepare("SELECT type FROM sqlite_master WHERE name = ?1")
         .and_then(|mut stmt| {
-            stmt.query_map([name], |row| row.get::<_, String>(0))?
-                .collect::<rusqlite::Result<_>>()
+            stmt.query_map([name], |row| {
+                Ok(row.get_ref(0)?.as_str().ok().map(str::to_owned))
+            })?
+            .collect::<rusqlite::Result<_>>()
         })
         .map_err(|e| Unreadable::new(name, "schema", e))?;
     match kinds.as_slice() {
         [] => Ok(false),
-        [kind] if kind.eq_ignore_ascii_case("table") => Ok(true),
+        [Some(kind)] if kind.eq_ignore_ascii_case("table") => Ok(true),
         _ => Err(Unreadable::shape(name, "not a table")),
     }
 }

@@ -872,6 +872,155 @@ fn a_credit_table_that_is_a_view_is_refused_at_open_and_never_fatal_to_read() {
     }
 }
 
+/// #717 review: only a table of another shape degrades. SQLite failing for a
+/// reason of its own fails the open, as before #717.
+#[test]
+fn only_sqlites_generic_sql_error_counts_as_a_table_shape() {
+    use rusqlite::ffi;
+    let failure = |code| rusqlite::Error::SqliteFailure(ffi::Error::new(code), None);
+    assert!(shot_credits::is_schema_error(&failure(ffi::SQLITE_ERROR)));
+    assert!(shot_credits::is_schema_error(
+        &rusqlite::Error::SqlInputError {
+            error: ffi::Error::new(ffi::SQLITE_ERROR),
+            msg: String::new(),
+            sql: String::new(),
+            offset: 0,
+        }
+    ));
+    for code in [
+        ffi::SQLITE_BUSY,
+        ffi::SQLITE_LOCKED,
+        ffi::SQLITE_IOERR,
+        ffi::SQLITE_IOERR_READ,
+        ffi::SQLITE_IOERR_SHORT_READ,
+        ffi::SQLITE_NOMEM,
+        ffi::SQLITE_INTERRUPT,
+        ffi::SQLITE_CORRUPT,
+        ffi::SQLITE_NOTADB,
+        ffi::SQLITE_FULL,
+        ffi::SQLITE_TOOBIG,
+        ffi::SQLITE_AUTH,
+        ffi::SQLITE_SCHEMA,
+    ] {
+        assert!(!shot_credits::is_schema_error(&failure(code)), "{code}");
+    }
+    assert!(!shot_credits::is_schema_error(
+        &rusqlite::Error::InvalidColumnType(0, "id".to_string(), rusqlite::types::Type::Blob)
+    ));
+}
+
+/// Whether `error` came from SQLite with `code`.
+fn sqlite_code_in(error: &anyhow::Error, code: rusqlite::ErrorCode) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<rusqlite::Error>()
+            .is_some_and(|e| e.sqlite_error_code() == Some(code))
+    })
+}
+
+/// #717 review: a file another connection holds an exclusive lock on cannot
+/// be read right now. That is no reason to drop its credit rows: the read
+/// fails (SQLITE_BUSY), and succeeds once the lock is gone.
+#[test]
+fn a_locked_file_fails_the_credit_read_instead_of_dropping_the_rows() {
+    let dir = TempDir::new().unwrap();
+    let (path, _, _) = rows_needed(&dir, "locked.stalx");
+    let db = Database::open_existing(&path).unwrap();
+    db.conn.busy_timeout(std::time::Duration::ZERO).unwrap();
+    let writer = Connection::open(&path).unwrap();
+    writer.execute_batch("BEGIN EXCLUSIVE;").unwrap();
+    let busy = rusqlite::ErrorCode::DatabaseBusy;
+    let rows = shot_credits::load_credit_rows(&db.conn).unwrap_err();
+    assert!(sqlite_code_in(&rows, busy), "{rows:#}");
+    let recorded = shot_credits::load_recorded_legacy(&db.conn, &HashMap::new()).unwrap_err();
+    assert!(sqlite_code_in(&recorded, busy), "{recorded:#}");
+    writer.execute_batch("ROLLBACK;").unwrap();
+    assert_eq!(shot_credits::load_credit_rows(&db.conn).unwrap().len(), 2);
+}
+
+/// #717 review: SQLite failing in the middle of the credit read (here an
+/// interrupt, injected once the read of `credit_people` is prepared) fails
+/// the whole open, as it did before #717, instead of opening the project
+/// without its per-shot credit for the next save to drop.
+#[test]
+fn sqlite_failing_during_the_credit_read_fails_the_open() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+
+    let dir = TempDir::new().unwrap();
+    let (path, _, _) = rows_needed(&dir, "interrupted.stalx");
+    let mut db = Database::open_existing(&path).unwrap();
+    let reading_people = Arc::new(AtomicBool::new(false));
+    let seen = Arc::clone(&reading_people);
+    db.conn
+        .authorizer(Some(move |ctx: AuthContext<'_>| {
+            // Only while the statement reading `credit_people` runs: the
+            // next statement prepared reads another table and clears it, so
+            // nothing after the credit read is interrupted.
+            if let AuthAction::Read { table_name, .. } = ctx.action {
+                seen.store(table_name == "credit_people", Ordering::SeqCst);
+            }
+            Authorization::Allow
+        }))
+        .unwrap();
+    let interrupt = Arc::clone(&reading_people);
+    db.conn
+        .progress_handler(1, Some(move || interrupt.load(Ordering::SeqCst)))
+        .unwrap();
+    let error = db.load_project().err().unwrap();
+    assert!(
+        reading_people.load(Ordering::SeqCst),
+        "the open failed in the credit read"
+    );
+    assert!(
+        sqlite_code_in(&error, rusqlite::ErrorCode::OperationInterrupted),
+        "{error:#}"
+    );
+}
+
+/// #717 review: a read that fails part way for a reason of the table's own
+/// shape - here a generated column whose expression overflows on the second
+/// person - degrades like a missing column. Every open path refuses a
+/// generated column first (#608), so only a connection that skipped that
+/// check gets here; it still opens, with every shot on the legacy text.
+#[test]
+fn a_schema_expression_failing_part_way_through_the_read_degrades() {
+    let dir = TempDir::new().unwrap();
+    let (path, id, fallback) = rows_needed(&dir, "generated.stalx");
+    sql(
+        &path,
+        "CREATE TABLE kept AS SELECT id, name FROM credit_people;
+         DROP TABLE credit_people;
+         CREATE TABLE credit_people (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+         INSERT INTO credit_people (id, name) SELECT id, name FROM kept;
+         DROP TABLE kept;
+         ALTER TABLE credit_people ADD COLUMN email TEXT GENERATED ALWAYS AS
+             (CASE WHEN id = 2 THEN abs(-9223372036854775807 - 1) END) VIRTUAL;",
+    );
+    let refused = Database::open_existing(&path).err().unwrap();
+    assert!(
+        refused
+            .chain()
+            .any(|c| c.downcast_ref::<RefusedSchemaObject>().is_some()),
+        "{refused:#}"
+    );
+    let db = Database {
+        conn: Connection::open(&path).unwrap(),
+    };
+    let unreadable = shot_credits::read_credit_rows(&db.conn).unwrap_err();
+    assert_eq!(
+        (unreadable.table, unreadable.step),
+        ("credit_people", "read")
+    );
+    assert!(unreadable.is_shape());
+    assert_eq!(
+        credits_of(&db.load_project().unwrap(), id),
+        vec![fallback.clone(), fallback]
+    );
+}
+
 /// #717: values of the wrong type inside readable tables are skipped, never
 /// fatal, and only where they are: a row whose key or value cannot be read
 /// is no row (its shot falls back, the other shot keeps its own row); a

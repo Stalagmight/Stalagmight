@@ -85,10 +85,12 @@ How this feature fits:
 - The uuid is the one `write.rs` already mints at save time. A row is used only when all of it
   reads back as written: one with an unreadable value, or naming a person id that `credit_people`
   does not hold readably (dangling, unreadable, blank), is skipped whole, so its shot reads the
-  legacy columns rather than losing a name the next save would drop for good. Never fatal. A credit table that cannot be read as a whole (a missing column, a view,
-  a read failing part way, or `credit_people` missing beside `shot_credits`) gives no rows at all:
+  legacy columns rather than losing a name the next save would drop for good. Never fatal. A credit table of another shape (a missing column, a view, an expression of its
+  schema failing part way, or `credit_people` missing beside `shot_credits`) gives no rows at all:
   every shot falls back to the legacy columns, with a warning that holds counts, never names
-  (#717).
+  (#717). Only SQLite's generic SQL error counts as a shape; SQLite failing for a reason of its
+  own (busy, locked, I/O, out of memory, interrupted, corrupt, not a database, full, too big)
+  fails the open as before #717, since degrading would let the next save drop the rows for good.
 - The legacy columns are still written. `sections.date` gets the earliest shot date, or NULL.
   `sections.surveyor` (`credit::legacy_credit_text`) is one plain string, or NULL:
 

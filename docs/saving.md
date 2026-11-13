@@ -95,7 +95,9 @@ aggregate. A third table, `credit_sections (section_id, surveyor, date)`,
 records the legacy pair this build wrote; when the tables survive next to a
 pair retyped in place (a hand edit, another tool), a section whose pair no
 longer matches the record ignores its rows (the retyped text wins). A credit
-table that cannot be read gives no rows, never a failed open (#717). All three
+table of another shape gives no rows, with a warning, never a failed open; SQLite
+failing for a reason of its own (busy, I/O, corrupt) still fails the open, so a
+save cannot then drop the rows for good (#717). All three
 tables are project data and ride in SpeleoDB pushes. See
 `persistence/sqlite/shot_credits.rs`.
 

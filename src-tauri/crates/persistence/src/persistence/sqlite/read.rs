@@ -575,11 +575,12 @@ impl Database {
                 // section and uuid, else its section's legacy surveyor/date
                 // (`shot_credits`). A uuid repeated inside one section reads
                 // its row once, for its first shot, as the writer wrote it.
-                // Never fatal: a credit table that cannot be read gives no
-                // rows (with a warning), and every shot falls back (#717).
-                let credit_rows = super::shot_credits::load_credit_rows(&self.conn);
+                // A credit table of another shape gives no rows (with a
+                // warning), and every shot falls back (#717); SQLite failing
+                // for a reason of its own (busy, I/O, corrupt) fails the open.
+                let credit_rows = super::shot_credits::load_credit_rows(&self.conn)?;
                 let recorded =
-                    super::shot_credits::load_recorded_legacy(&self.conn, &stored_legacy);
+                    super::shot_credits::load_recorded_legacy(&self.conn, &stored_legacy)?;
                 let mut claimed: std::collections::HashSet<(u32, &str)> =
                     std::collections::HashSet::new();
                 for section in sections.iter_mut() {
