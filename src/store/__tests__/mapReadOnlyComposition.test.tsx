@@ -28,7 +28,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useUIStore } from '../uiStore';
 import { useSpeleoStore, type SpeleoLinkState } from '../speleoStore';
-import { useEditingBlocked } from '../../hooks/useEditingBlocked';
+import { useEditingBlocked, useEditingBlockedReason, editingBlockedReasonNow } from '../../hooks/useEditingBlocked';
 
 const READ_ONLY_LINK: SpeleoLinkState = {
   permission: 'READ_AND_WRITE',
@@ -115,5 +115,30 @@ describe('useEditingBlocked()', () => {
 
     expect(() => rerender()).not.toThrow();
     expect(result.current).toBe(false);
+  });
+});
+
+describe('useEditingBlockedReason() / editingBlockedReasonNow()', () => {
+  const both = () => {
+    const { result } = renderHook(() => useEditingBlockedReason());
+    return [result.current, editingBlockedReasonNow()];
+  };
+
+  it('is null while editing is open', () => {
+    expect(both()).toEqual([null, null]);
+  });
+
+  it('names the view for the closure-adjusted view and Plan/Export', () => {
+    useUIStore.setState({ geometryMode: 'closureAdjusted' });
+    expect(both()).toEqual(['view', 'view']);
+    useUIStore.setState({ geometryMode: 'measured', appMode: 'export' });
+    expect(both()).toEqual(['view', 'view']);
+  });
+
+  it('names the project for a read-only SpeleoDB copy, even inside a read-only view', () => {
+    useSpeleoStore.setState({ link: READ_ONLY_LINK, projectLinkKind: 'remote' });
+    expect(both()).toEqual(['project', 'project']);
+    useUIStore.setState({ appMode: 'plan' });
+    expect(both()).toEqual(['project', 'project']);
   });
 });

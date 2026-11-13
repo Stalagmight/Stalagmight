@@ -2786,6 +2786,7 @@
       "add": "Add section",
       "color": "Change section color",
       "colorReadOnly": "This view is read-only, so the section color cannot be changed.",
+      "colorReadOnlyProject": "This project is open read-only, so the section color cannot be changed.",
       "delete": "Delete section",
       "focus": "Focus this section",
       "zoom": "Click to select · double-click to zoom to this section"

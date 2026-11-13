@@ -327,22 +327,69 @@ test.describe('Panel Interactions', () => {
       return state.project.sections.find((s: any) => s.id === id).color as string;
     }, sectionId);
 
-    // A remote SpeleoDB project opened without the write lock is read-only
-    // (Plan/Export would also block, but they hide this panel).
+    const readOnlyToast = page.locator('[data-testid="toast"][data-toast-key="edit-disabled"]');
+    const colorDot = page.getByTestId(`section-color-dot-${sectionId}`);
+    const clearToasts = () => page.evaluate(() => (window as any).__E2E_TEST__.uiStore.setState({ toasts: [] }));
+
+    // The closure-adjusted view is read-only (Plan/Export would also block, but
+    // they hide this panel). The view only sticks on a project with an eligible
+    // loop closure, so seed one; without it MapCanvas reverts to measured.
+    await page.evaluate((secId) => {
+      const store = (window as any).__E2E_TEST__.projectStore;
+      const project = store.getState().project;
+      store.setState({
+        project: {
+          ...project,
+          loop_closures: [
+            ...project.loop_closures,
+            {
+              id: 1,
+              station_a: { section_id: secId, station_index: 0 },
+              station_b: { section_id: secId, station_index: 2 },
+              path_length: 25.7,
+              misclosure_distance: 0.3,
+              error_percentage: 1.2,
+              horizontal_misclosure: 0.25,
+              vertical_misclosure: 0.15,
+              strategy: 'Batch',
+              is_aligned: false,
+            },
+          ],
+        },
+      });
+    }, sectionId);
     await page.evaluate(() =>
-      (window as any).__E2E_TEST__.speleoStore.getState().setLinkOnOpen({ permission: 'READ_AND_WRITE' }),
+      (window as any).__E2E_TEST__.uiStore.getState().setGeometryMode('closureAdjusted', 'e2e'),
     );
+    await expect
+      .poll(() => page.evaluate(() => (window as any).__E2E_TEST__.uiStore.getState().geometryMode))
+      .toBe('closureAdjusted');
     await expect(dot).toBeDisabled();
     // The global `input:disabled { opacity: 0.5 }` must not surface the native
     // swatch over the drawn dot.
     await expect(dot).toHaveCSS('opacity', '0');
-
     // Clicking the dot says why nothing opens, and does not select the row.
-    const readOnlyToast = page.locator('[data-testid="toast"][data-toast-key="edit-disabled"]');
-    await page.getByTestId(`section-color-dot-${sectionId}`).click();
-    await expect(readOnlyToast).toContainText('read-only');
+    await expect(colorDot).toHaveAttribute('title', 'This view is read-only, so the section color cannot be changed.');
+    await colorDot.click();
+    await expect(readOnlyToast).toContainText('This view is read-only');
     await expect(sectionRow).toHaveAttribute('aria-selected', 'false');
-    await page.evaluate(() => (window as any).__E2E_TEST__.uiStore.setState({ toasts: [] }));
+    await clearToasts();
+    await page.evaluate(() =>
+      (window as any).__E2E_TEST__.uiStore.getState().setGeometryMode('measured', 'e2e'),
+    );
+    await expect(dot).toBeEnabled();
+
+    // A remote SpeleoDB project opened without the write lock is read-only too,
+    // and the message names the project rather than the view.
+    await page.evaluate(() =>
+      (window as any).__E2E_TEST__.speleoStore.getState().setLinkOnOpen({ permission: 'READ_AND_WRITE' }),
+    );
+    await expect(dot).toBeDisabled();
+    await expect(colorDot).toHaveAttribute('title', 'This project is open read-only, so the section color cannot be changed.');
+    await colorDot.click();
+    await expect(readOnlyToast).toContainText('This project is open read-only');
+    await expect(sectionRow).toHaveAttribute('aria-selected', 'false');
+    await clearToasts();
 
     // A pick confirmed after editing became blocked (the system picker was
     // already open) is refused at commit time, and the dot reverts.
@@ -351,7 +398,7 @@ test.describe('Panel Interactions', () => {
       el.dispatchEvent(new Event('change', { bubbles: true }));
     });
     await expect(dot).toHaveValue(before.toLowerCase());
-    await expect(readOnlyToast).toContainText('read-only');
+    await expect(readOnlyToast).toContainText('This project is open read-only');
     expect(
       await page.evaluate((id) => {
         const state = (window as any).__E2E_TEST__.projectStore.getState();

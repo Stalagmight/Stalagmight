@@ -10,7 +10,12 @@ import {
   type SurveyData,
   type SectionMetadata,
 } from '../../types/survey-data';
-import { useEditingBlocked, isEditingBlockedNow } from '../../hooks/useEditingBlocked';
+import {
+  useEditingBlocked,
+  isEditingBlockedNow,
+  useEditingBlockedReason,
+  editingBlockedReasonNow,
+} from '../../hooks/useEditingBlocked';
 import { useShallow } from 'zustand/react/shallow';
 import { formatFixed, formatNumber } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
@@ -98,6 +103,12 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
   // The closure-adjusted view, Plan/Export mode, and a locked remote SpeleoDB
   // project are all read-only - section add/delete are disabled there.
   const editingBlocked = useEditingBlocked();
+  // Why the color dot is inert: a read-only SpeleoDB copy is the project, the
+  // closure-adjusted view (or Plan/Export) is the view.
+  const editingBlockedReason = useEditingBlockedReason();
+  const colorBlockedText = t(
+    editingBlockedReason === 'project' ? 'sections.actions.colorReadOnlyProject' : 'sections.actions.colorReadOnly',
+  );
 
   // The row to highlight comes from any of: an explicit section hover (panel row /
   // DetailPanel section link), or - for map hovers - the section that owns the
@@ -459,8 +470,13 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
   // the caller owns telling the user (docs/notifications.md).
   // A click on the dot while editing is blocked, or a pick confirmed after it
   // became blocked, says why instead of doing nothing.
+  // Read at call time: the mode can change while the system picker is open.
   const handleSectionColorBlocked = useCallback(() => {
-    showToast(t('sections.actions.colorReadOnly'), TOAST_KEYS.EDIT_DISABLED, 'warning');
+    showToast(
+      t(editingBlockedReasonNow() === 'project' ? 'sections.actions.colorReadOnlyProject' : 'sections.actions.colorReadOnly'),
+      TOAST_KEYS.EDIT_DISABLED,
+      'warning',
+    );
   }, [showToast, t]);
 
   const handleSectionColorChange = useCallback(async (sectionId: SectionId, color: string) => {
@@ -626,6 +642,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
                     colorEditable={!editingBlocked}
                     onColorChange={handleSectionColorChange}
                     onColorBlocked={handleSectionColorBlocked}
+                    colorBlockedText={colorBlockedText}
                     onLongPress={openSectionContextMenu}
                     optionRefs={optionRefs}
                   />
@@ -748,6 +765,8 @@ interface SectionRowProps {
   onColorChange: (sectionId: SectionId, color: string) => Promise<boolean>;
   /** The dot was clicked while editing is blocked. */
   onColorBlocked: () => void;
+  /** The dot's tooltip while editing is blocked: why it cannot be changed. */
+  colorBlockedText: string;
   onLongPress: (sectionId: number, x: number, y: number) => void;
   optionRefs: React.MutableRefObject<(HTMLLIElement | null)[]>;
 }
@@ -778,6 +797,7 @@ const SectionRow = memo(function SectionRow({
   colorEditable,
   onColorChange,
   onColorBlocked,
+  colorBlockedText,
   onLongPress,
   optionRefs,
 }: SectionRowProps) {
@@ -892,7 +912,7 @@ const SectionRow = memo(function SectionRow({
             colorEditable ? 'hover:ring-2 hover:ring-text-secondary hover:ring-offset-1 hover:ring-offset-panel' : ''
           }`}
           style={{ backgroundColor: section.color }}
-          title={colorEditable ? undefined : t('sections.actions.colorReadOnly')}
+          title={colorEditable ? undefined : colorBlockedText}
           onMouseDown={colorEditable ? undefined : onControlMouseDown}
           onDoubleClick={colorEditable ? undefined : onControlDoubleClick}
           onClick={colorEditable ? undefined : (e) => {
