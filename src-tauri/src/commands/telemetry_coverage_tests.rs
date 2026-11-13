@@ -32,6 +32,9 @@ const REMOVED_DIALOGS: &[&str] = &[
     // over whatever dialog raised it instead of evicting it from the slot.
     "speleodb-close",
     "speleodb-quit",
+    // The modal Export dialog was retired: Export is a workspace mode now, entered
+    // from the project menu / Ctrl+E and left with "Close export".
+    "export",
 ];
 
 /// `action.toggle.*` events that are intentionally NOT derived from

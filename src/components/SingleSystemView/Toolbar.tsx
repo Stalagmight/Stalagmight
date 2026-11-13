@@ -5,6 +5,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { Button, IconButton } from '../common/Button';
 import {
   ChevronDownIcon,
+  ChevronLeftIcon,
   DownloadIcon,
   ShrinkIcon,
   UndoIcon,
@@ -239,6 +240,7 @@ export default function Toolbar({
   const activeTool = useUIStore((s) => s.activeTool);
   const setActiveTool = useUIStore((s) => s.setActiveTool);
   const exitDataTableFullScreen = useUIStore((s) => s.exitDataTableFullScreen);
+  const closeExport = useUIStore((s) => s.closeExport);
   const appMode = useUIStore((s) => s.appMode);
   // Toolbar icons appear at the 'toolbar_only' syntactic level and up; the
   // `--sh-*` color vars are the role colors there and a neutral gray at 'off'.
@@ -520,6 +522,29 @@ export default function Toolbar({
               </span>
             </UndoHistoryDropdown>
           </>
+        )}
+        {/* Export is entered from the menu / Ctrl+E and is not in the mode switcher,
+            so its way out is spelled out here, in Import's slot (Import and
+            Undo/Redo are hidden in Export): back to the mode it was entered from.
+            Styled like the fullscreen table's "Back to Map", and condensed to its
+            icon at the same stage as Import. */}
+        {appMode === 'export' && (
+          <Button
+            icon={
+              <span style={{ color: 'var(--o)' } as CSSProperties}>
+                <ChevronLeftIcon size={16} />
+              </span>
+            }
+            onClick={() => { setSource('toolbar'); closeExport(); }}
+            size="sm"
+            className={`sh-tool ${tight ? '!px-1' : 'ml-1'}`}
+            style={{ '--o': toolAccentVar('pan') } as CSSProperties}
+            aria-label={importCondensed ? t('exportPanel.close') : undefined}
+            title={t('exportPanel.closeHint')}
+            data-testid="export-close-button"
+          >
+            {importCondensed ? null : t('exportPanel.close')}
+          </Button>
         )}
       </div>
 

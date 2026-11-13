@@ -29,14 +29,14 @@ export const DEFAULT_IMAGE_OPTIONS: ExportImageOptions = {
 };
 
 /**
- * Shared Export-mode UI state. Lets the inline `ExportControls` in the Export
- * workspace-mode panel and the large WYSIWYG preview in the map area read/write
- * the same options. The modal Export dialog keeps its OWN local state instead
- * (so it always opens on the data/CSV default its e2e suite asserts) - this
- * store is panel + center only.
+ * Shared Export workspace UI state. Lets the `ExportControls` in the Export
+ * workspace panel and the large WYSIWYG preview in the map area read/write the
+ * same options. (The retired modal Export dialog kept its own local state and
+ * opened on data/CSV; the workspace is the only export surface now.)
  *
- * Defaults to the image type because Export mode is map-centric: entering it
- * should immediately show the map preview.
+ * Defaults to the image type because the Export workspace is map-centric:
+ * entering it should immediately show the map preview. A data export is one
+ * click away (the "Survey Data" type, CSV preselected).
  *
  * ## It is per-PROJECT state, and so it resets on a project transition
  *

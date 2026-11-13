@@ -2426,7 +2426,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     // The command returns NOTES (#438): what the single-flag `.tml` format
     // could not carry about this project's north references. Empty for an
     // ordinary project. Raised here rather than in `ExportControls` so every
-    // route reaches the user - the modal, the Export-mode panel and this action
+    // route reaches the user - the Export workspace panel and this action
     // called directly.
     const notes = await invokeIpc<string[]>('export_tml', { path }, {
       purpose: 'export project as Ariane TML',

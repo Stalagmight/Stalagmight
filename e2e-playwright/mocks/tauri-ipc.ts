@@ -5134,6 +5134,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] export_json called with:', args);
             return { success: true, path: args?.path };
 
+          // Ariane TML/TMLU export. The real command returns the #438 notes (codes for
+          // what the single-flag `.tml` could not carry); a mocked project has none.
+          case 'export_tml':
+            console.log('[Mock IPC] export_tml called with:', args);
+            return [];
+
           // Dive-profile export (#299). Records the call so a spec can assert the plan INPUTS
           // reached the backend - the real command recomputes the reach field from them rather
           // than trusting a client-held one, so sending them is the contract under test.

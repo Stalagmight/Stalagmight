@@ -1942,8 +1942,7 @@ export const useUIStore = create<UIStore>((set) => ({
     // project that was open, and nothing else cleared it - `setAppMode` says so
     // explicitly. A 600-DPI PNG framed for one survey would otherwise stay
     // selected when the next opened, with the Export-mode preview rendering a
-    // different cave at settings nobody chose for it. The modal Export dialog is
-    // unaffected by design: it owns local state and always opens on data/CSV.
+    // different cave at settings nobody chose for it.
     useExportStore.getState().reset();
     // The depth / distance Levels ranges are per-project too (session-only; the
     // palette CHOICE persists in config and is untouched).
