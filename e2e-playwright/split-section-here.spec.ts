@@ -94,6 +94,36 @@ test.describe('Split Section Here (#335)', () => {
     expect(call.at).toEqual({ type: 'shot', shot_id: shotId, distance: 4 });
   });
 
+  test('clears a ruler measurement across the split and its undo', async ({ page }) => {
+    // A ruler endpoint names a station by index and carries its coordinates; a split
+    // renumbers the stations past the cut into a new section. The ruler is cleared on
+    // every modified_at change, which the split and its undo both make.
+    const section = await seedFourShotSection(page);
+    const measure = (id: number) =>
+      page.evaluate((id) => {
+        const ui = (window as any).__E2E_TEST__.uiStore.getState();
+        ui.setMeasureStart({ kind: 'station', section_id: id, station_index: 1, coords: { x: 0, y: 0, z: 0 } });
+        ui.setMeasureEnd({ kind: 'station', section_id: id, station_index: 3, coords: { x: 20, y: 0, z: 0 } });
+      }, id);
+    const ruler = () =>
+      page.evaluate(() => {
+        const ui = (window as any).__E2E_TEST__.uiStore.getState();
+        return [ui.measureStart !== null, ui.measureEnd !== null];
+      });
+
+    await measure(section.id);
+    expect(await ruler()).toEqual([true, true]);
+    await openContextMenu(page, { type: 'station', ref: { section_id: section.id, station_index: 2 } });
+    await confirmSplit(page);
+    await expect.poll(ruler).toEqual([false, false]);
+
+    await measure(section.id);
+    expect(await ruler()).toEqual([true, true]);
+    await page.evaluate(() => (window as any).__E2E_TEST__.projectStore.getState().undo());
+    await expect.poll(async () => (await readSections(page)).length).toBe(1);
+    await expect.poll(ruler).toEqual([false, false]);
+  });
+
   test('is absent on an end station', async ({ page }) => {
     const section = await seedFourShotSection(page);
     await openContextMenu(page, { type: 'station', ref: { section_id: section.id, station_index: 4 } });

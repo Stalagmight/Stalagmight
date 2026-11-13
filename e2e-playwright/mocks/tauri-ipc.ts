@@ -5399,6 +5399,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               { section_id: section.id, station_index: section.shots.length },
               { section_id: newSection.id, station_index: 0 },
             ]);
+            // The backend touches the project, as every edit does (the ruler and the reach
+            // field reset on modified_at); the undo snapshot keeps the value from before.
+            if (currentProject) currentProject.modified_at = new Date(Date.now() + 1).toISOString();
             return { success: true, section_id: newSection.id, section_ids: [section.id, newSection.id], warnings: [], error: null };
           }
 
@@ -5530,6 +5533,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               currentProject.station_merges = merges.filter((m) => m.station_a.section_id !== other.id && m.station_b.section_id !== other.id) as typeof currentProject.station_merges;
             }
             colocatedJoins = colocatedJoins.filter(([a, b]) => a.section_id !== other.id && b.section_id !== other.id);
+            // The backend touches the project, as every edit does (the ruler and the reach
+            // field reset on modified_at); the undo snapshot keeps the value from before.
+            if (currentProject) currentProject.modified_at = new Date(Date.now() + 1).toISOString();
             return { success: true, section_id: kept.id, section_ids: [kept.id], warnings: [], error: null };
           }
 

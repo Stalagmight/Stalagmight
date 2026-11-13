@@ -48,8 +48,16 @@
  * could not be anchored and has fallen out of range, is cleared with a notice
  * (the ramp falls back to the entrance) rather than left to re-root silently;
  * and an edit that moved shots between sections clears the selection, the
- * merge staging, the move-comment pickup and the comment popover, as a reverse
- * does (`applyEditAftermath`).
+ * merge staging, the move-comment pickup, the comment popover and the hover,
+ * as a reverse does (`applyEditAftermath`).
+ *
+ * The rest of the frontend's station-keyed state needs nothing here: the plan
+ * pins (route origin, endpoint, way points, marked points, stage drops) are
+ * anchored the same way (`flushPlanAnchors` / `remapPlanPins`); the ruler is
+ * cleared on every `modified_at` change (MapCanvas), which every edit, undo
+ * and redo makes; the reach field and its route are recomputed from the
+ * re-resolved pins on that same change; and section focus exits when its
+ * section disappears (SingleSystemView).
  */
 import i18n from '../i18n';
 import type { Section, SectionId, StationRef } from '../types/project';
@@ -354,6 +362,12 @@ export function applyEditAftermath(
   ui.clearMergeStations();
   ui.clearMoveCommentSource();
   ui.clearCommentTarget();
+  // Display-only, but a hover left on a moved station highlights whatever now
+  // has its index (the data table row, the Sections panel row) until the
+  // pointer moves again.
+  ui.setHoveredStation(null);
+  ui.setHoveredShot(null);
+  ui.setHoveredSectionId(null);
   const origin = ui.distanceGradientOrigin;
   if (origin === null) return;
   const section = sections.find((s) => s.id === origin.section_id);

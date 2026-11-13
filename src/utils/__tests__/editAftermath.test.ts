@@ -45,11 +45,22 @@ function armEverything() {
   ui.setMergeStationA(ref(MAIN, 5));
   ui.setMoveCommentSource({ stationRef: ref(MAIN, 5) } as never);
   ui.setCommentTarget({ stationRef: ref(MAIN, 5) } as never);
+  ui.setHoveredStation(ref(MAIN, 5));
+  ui.setHoveredShot({ sectionId: MAIN, shotId: 4 });
+  ui.setHoveredSectionId(MAIN);
 }
 
 function armed() {
   const ui = useUIStore.getState();
-  return [ui.selection, ui.mergeStationA, ui.moveCommentSource, ui.commentTarget].map((x) => x !== null);
+  return [
+    ui.selection,
+    ui.mergeStationA,
+    ui.moveCommentSource,
+    ui.commentTarget,
+    ui.hoveredStation,
+    ui.hoveredShot,
+    ui.hoveredSectionId,
+  ].map((x) => x !== null);
 }
 
 const resetToasts = () => useUIStore.setState({ toasts: [] });
@@ -177,18 +188,18 @@ describe('the armed tool state across a split or a combine', () => {
       armEverything();
       const edit = await beforeSurveyEdit(before);
       applyEditAftermath(undefined, after, edit);
-      expect(armed()).toEqual([false, false, false, false]);
+      expect(armed()).toEqual(Array(7).fill(false));
     }
   });
 
   it('is kept for an edit that only added a section, or changed none', async () => {
     let edit = await beforeSurveyEdit(BEFORE_SPLIT);
     applyEditAftermath(undefined, [section(MAIN, 6), section(SECOND, 2)], edit);
-    expect(armed()).toEqual([true, true, true, true]);
+    expect(armed()).toEqual(Array(7).fill(true));
 
     edit = await beforeSurveyEdit(BEFORE_SPLIT);
     applyEditAftermath(undefined, [section(MAIN, 7)], edit);
-    expect(armed()).toEqual([true, true, true, true]);
+    expect(armed()).toEqual(Array(7).fill(true));
   });
 });
 
