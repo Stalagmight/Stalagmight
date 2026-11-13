@@ -181,7 +181,8 @@ test.describe('Data workspace - filters, sort, columns', () => {
     await page.getByTestId('data-filter-add-value').fill('30');
     await page.getByTestId('data-filter-add-submit').click();
     await page.keyboard.press('Escape');
-    await expect(page.getByTestId('data-filter-button')).toHaveText(/Filter \(2\)/);
+    // the label may be icon-only on a narrow toolbar; the accessible name keeps it
+    await expect(page.getByTestId('data-filter-button')).toHaveAccessibleName(/Filter \(2\)/);
     await expect(page.getByTestId('data-chip-quick-comments')).toBeVisible();
     // only "Sump pool" (Side, 40 m) has a comment and is longer than 30
     await expect(page.locator('[data-testid^="data-chip-condition-"]').first()).toHaveText(/Length > 30/);

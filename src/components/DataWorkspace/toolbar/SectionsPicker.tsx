@@ -62,6 +62,7 @@ export function SectionsPicker({ ctx }: { ctx: DataModelCtx }) {
           ? t('dataToolbar.sections.buttonCount', { shown: shownCount, total: entries.length })
           : t('dataToolbar.sections.button')
       }
+      compactLabel={active ? <span className="tabular-nums">{`${shownCount}/${entries.length}`}</span> : undefined}
       title={t('dataToolbar.sections.title')}
       active={active}
       width={280}

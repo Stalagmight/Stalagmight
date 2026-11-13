@@ -39,6 +39,7 @@ export function FilterMenu({ model }: { model: DataModel }) {
       menuTestId="data-filter-menu"
       icon={<FilterIcon size={14} />}
       label={count > 0 ? t('dataToolbar.filter.buttonCount', { count }) : t('dataToolbar.filter.button')}
+      compactLabel={count > 0 ? <span className="tabular-nums">{count}</span> : undefined}
       title={t('dataToolbar.filter.title')}
       active={count > 0}
       width={360}

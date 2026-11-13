@@ -72,6 +72,8 @@ interface ToolbarMenuProps {
   ariaLabel?: string;
   /** Render the trigger as a small icon button (no label, no chevron). */
   iconOnly?: boolean;
+  /** Short state shown next to the icon when the toolbar is compact (a count). */
+  compactLabel?: ReactNode;
   children: ReactNode | ((close: () => void) => ReactNode);
 }
 
@@ -88,6 +90,7 @@ export function ToolbarMenu({
   remeasureKey,
   ariaLabel,
   iconOnly = false,
+  compactLabel,
   children,
 }: ToolbarMenuProps) {
   const [open, setOpen] = useState(false);
@@ -139,6 +142,7 @@ export function ToolbarMenu({
       >
         {icon}
         {showLabel && label}
+        {!iconOnly && !showLabel && compactLabel}
         {!iconOnly && <ChevronDownIcon size={10} />}
       </button>
       {open && (
