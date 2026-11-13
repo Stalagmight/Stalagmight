@@ -337,6 +337,32 @@ describe('Focus requests', () => {
     expect(useDataWorkspaceStore.getState().activeRowKey).toBe('st:1:1');
   });
 
+  it('lands a section header request on the section first row while sorted, never reveals a header', () => {
+    useDataWorkspaceStore.setState({ sort: { colKey: 'length', dir: 'asc' } });
+    useDataWorkspaceStore.getState().requestFocus({ rowKey: 'sec:2' });
+    render(<DataWorkspace />);
+    const firstOfSection = rowIds().find((id) => /^data-row-(st|sh)-2-/.test(id));
+    expect(firstOfSection).toBeDefined();
+    expect(useDataWorkspaceStore.getState().activeRowKey).toMatch(/^(st|sh):2:/);
+    expect(useDataWorkspaceStore.getState().revealRowKeys).toEqual([]);
+  });
+
+  it('lands a section header request on station 0 with headers off', () => {
+    useDataWorkspaceStore.setState({ showSectionHeaders: false });
+    useDataWorkspaceStore.getState().requestFocus({ rowKey: 'sec:2' });
+    render(<DataWorkspace />);
+    expect(useDataWorkspaceStore.getState().activeRowKey).toBe('st:2:0');
+  });
+
+  it('drops a section header request when no row of the section passes the filters', () => {
+    useDataWorkspaceStore.setState({ activeRowKey: 'st:1:1' });
+    useDataWorkspaceStore.getState().setFilters({ sectionIds: [1] });
+    useDataWorkspaceStore.getState().requestFocus({ rowKey: 'sec:3' });
+    render(<DataWorkspace />);
+    expect(useDataWorkspaceStore.getState().revealRowKeys).toEqual([]);
+    expect(useDataWorkspaceStore.getState().activeRowKey).toBe('st:1:1');
+  });
+
   it('reveals a requested row the filters hide, and drops a request for a gone row', () => {
     useDataWorkspaceStore.setState({ collapsedSections: [3] });
     useDataWorkspaceStore.getState().requestFocus({ rowKey: 'sh:3:302' });

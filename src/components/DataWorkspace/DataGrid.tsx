@@ -20,7 +20,7 @@ import type { DataNav } from './useDataNavigation';
 import type { DataTint } from './useDataTint';
 import { buildGridColumns } from './dataGridColumns';
 import { buildRail } from './model/links';
-import { isEntityRow } from './model/rows';
+import { isEntityRow, parseRowKey } from './model/rows';
 import { DataRowLabel, DATA_GUTTER_WIDTH, type RevealReason } from './DataRowLabel';
 import { DataSectionHeader } from './DataSectionHeader';
 import { DataHeaderMenu, type HeaderMenuState } from './DataHeaderMenu';
@@ -41,6 +41,24 @@ export function rowsVersionOf(rows: readonly DataRow[]): string {
     h ^= 0x7c;
   }
   return `${rows.length}:${(h >>> 0).toString(36)}`;
+}
+
+/**
+ * Where a focus request for a section header (`sec:N`) lands: the header when
+ * it is displayed, else the section's first displayed row (sorted, headers
+ * off, the header dropped). null when nothing of the section is on screen: a
+ * header is never revealed (model/view.ts), so such a request is dropped
+ * rather than left pending. Other keys are returned as they are.
+ */
+export function focusTargetKey(
+  rowKey: string,
+  rows: readonly DataRow[],
+  rowIndexByKey: ReadonlyMap<string, number>,
+): string | null {
+  if (rowIndexByKey.has(rowKey)) return rowKey;
+  const parsed = parseRowKey(rowKey);
+  if (parsed?.kind !== 'section') return rowKey;
+  return rows.find((r) => r.sectionId === parsed.sectionId)?.key ?? null;
 }
 
 let scrollNonce = 0;
@@ -129,7 +147,8 @@ export function DataGrid({ model, view, height, nav, editing, tint, partners, on
   );
 
   const rail = useMemo(() => buildRail(view.rows, ctx, view.surveyOrder), [view.rows, view.surveyOrder, ctx]);
-  const rowIndexByKey = useMemo(() => new Map(view.rows.map((r, i) => [r.key, i])), [view.rows]);
+  const viewRows = view.rows;
+  const rowIndexByKey = useMemo(() => new Map(viewRows.map((r, i) => [r.key, i])), [viewRows]);
   const rowsVersion = useMemo(() => rowsVersionOf(view.rows), [view.rows]);
   const collapsed = useMemo(() => new Set(collapsedSections), [collapsedSections]);
   const navRevealed = useMemo(() => new Set(revealRowKeys), [revealRowKeys]);
@@ -142,20 +161,26 @@ export function DataGrid({ model, view, height, nav, editing, tint, partners, on
   // previous active row (entering Data from "Open in Data" / "Back to Data").
   useEffect(() => {
     if (focusRequest && handledFocusNonce !== focusRequest.nonce) {
-      const idx = rowIndexByKey.get(focusRequest.rowKey);
+      const targetKey = focusTargetKey(focusRequest.rowKey, viewRows, rowIndexByKey);
+      // A section with nothing on screen: drop the request (see focusTargetKey).
+      if (targetKey === null) {
+        handledFocusNonce = focusRequest.nonce;
+        return;
+      }
+      const idx = rowIndexByKey.get(targetKey);
       if (idx === undefined) {
         // A row that no longer exists: drop the request.
-        if (!model.rowByKey.has(focusRequest.rowKey)) {
+        if (!model.rowByKey.has(targetKey)) {
           handledFocusNonce = focusRequest.nonce;
           return;
         }
         // Hidden by the filters / collapse: reveal it (once), then this effect
         // runs again with the row in the view. Meanwhile, don't re-anchor.
         const store = useDataWorkspaceStore.getState();
-        if (!store.revealRowKeys.includes(focusRequest.rowKey)) {
-          const { rowKey, colKey, align, takeFocus } = focusRequest;
+        if (!store.revealRowKeys.includes(targetKey)) {
+          const { colKey, align, takeFocus } = focusRequest;
           store.revealAndFocus({
-            rowKey,
+            rowKey: targetKey,
             ...(colKey ? { colKey } : {}),
             ...(align ? { align } : {}),
             ...(takeFocus !== undefined ? { takeFocus } : {}),
@@ -165,8 +190,8 @@ export function DataGrid({ model, view, height, nav, editing, tint, partners, on
       }
       handledFocusNonce = focusRequest.nonce;
       const colKey = focusRequest.colKey ?? lastActive.current?.colKey;
-      lastActive.current = { key: focusRequest.rowKey, idx, colKey: colKey ?? '' };
-      setActiveRowKey(focusRequest.rowKey);
+      lastActive.current = { key: targetKey, idx, colKey: colKey ?? '' };
+      setActiveRowKey(targetKey);
       setScrollReq({
         row: idx,
         ...(colKey ? { colKey } : {}),
@@ -189,7 +214,7 @@ export function DataGrid({ model, view, height, nav, editing, tint, partners, on
     const align = lastActive.current ? 'auto' : 'center';
     lastActive.current = { key, idx, colKey: colKey ?? '' };
     setScrollReq({ row: idx, ...(colKey ? { colKey } : {}), align, nonce: ++scrollNonce });
-  }, [focusRequest, rowIndexByKey, setActiveRowKey, model.rowByKey]);
+  }, [focusRequest, viewRows, rowIndexByKey, setActiveRowKey, model.rowByKey]);
 
   const onActiveCellChange = useCallback(
     (rowIndex: number, colKey: string) => {

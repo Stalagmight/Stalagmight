@@ -41,15 +41,28 @@ export function selectionForRow(row: DataRow | ParsedRowKey): Selection {
   return { type: 'section', sectionId: row.sectionId };
 }
 
-/** The row an app selection points at (null for none / multi). */
-export function rowKeyForSelection(sel: Selection | null, model: DataModel | null): string | null {
+/**
+ * The row an app selection points at (null for none / multi). A section maps
+ * to its header when the view shows it, else to the section's first displayed
+ * row (sorted, or the header dropped), else to its station 0 - an entity row,
+ * which a focus request can reveal; a header never is, so returning one that
+ * is not on screen would leave the request pending. Without a view, the header
+ * counts as shown when the model has one.
+ */
+export function rowKeyForSelection(sel: Selection | null, model: DataModel | null, view?: DataView | null): string | null {
   if (!sel) return null;
   if (sel.type === 'station' && sel.stationRef) return stationRowKey(sel.stationRef.section_id, sel.stationRef.station_index);
   if (sel.type === 'shot' && sel.sectionId !== undefined && sel.shotId !== undefined) return shotRowKey(sel.sectionId, sel.shotId);
   if (sel.type === 'section' && sel.sectionId !== undefined) {
-    const header = sectionRowKey(sel.sectionId);
-    if (model?.rowByKey.has(header)) return header;
-    return stationRowKey(sel.sectionId, 0);
+    const sectionId = sel.sectionId;
+    const header = sectionRowKey(sectionId);
+    if (view) {
+      const first = view.rows.find((r) => r.sectionId === sectionId);
+      if (first) return first.key;
+    } else if (model?.rowByKey.has(header)) {
+      return header;
+    }
+    return stationRowKey(sectionId, 0);
   }
   return null;
 }
@@ -162,7 +175,7 @@ export function useDataNavigation(
     const echo = fromMap.current === key;
     fromMap.current = null;
     const ui = useUIStore.getState();
-    if (echo || ui.multiSelection.length > 1 || rowKeyForSelection(ui.selection, m) === key) return;
+    if (echo || ui.multiSelection.length > 1 || rowKeyForSelection(ui.selection, m, viewRef.current) === key) return;
     lastFollowAt.current = Date.now();
     select(row);
     // Pan, never zoom: the user keeps the zoom they chose. A station pans to
@@ -201,7 +214,7 @@ export function useDataNavigation(
       // switch that selects on its way out): a request now would sit in the
       // store and jump the grid when Data is entered again.
       if (s.appMode !== 'data') return;
-      const key = rowKeyForSelection(s.selection, modelRef.current);
+      const key = rowKeyForSelection(s.selection, modelRef.current, viewRef.current);
       if (!key || !modelRef.current?.rowByKey.has(key)) return;
       if (useDataWorkspaceStore.getState().activeRowKey === key) return;
       fromMap.current = key;
