@@ -235,22 +235,23 @@ pub(crate) fn get_section_relationships_impl(
     Ok(project.get_section_relationships(section_id))
 }
 
-/// Can the section ending at `station` combine with another section ending at
-/// the same point? `null` when `station` is not a section end or nothing else
-/// touches it; otherwise the candidate, with the reason when it is blocked.
+/// What the section ending at `station` can be combined with: one candidate
+/// per other section ending at the same point (a junction lists them all, each
+/// with its own reason when it is blocked). Empty when `station` is not a
+/// section end or nothing else touches it.
 #[tauri::command]
 pub fn combine_candidate(
     state: State<AppState>,
     station: StationRef,
-) -> Result<Option<CombineCandidate>, String> {
+) -> Result<Vec<CombineCandidate>, String> {
     combine_candidate_impl(state.inner(), station)
 }
 
 pub(crate) fn combine_candidate_impl(
     state: &AppState,
     station: StationRef,
-) -> Result<Option<CombineCandidate>, String> {
-    state.combine_candidate(station)
+) -> Result<Vec<CombineCandidate>, String> {
+    state.combine_candidates(station)
 }
 
 /// Can sections `a` and `b` be combined? `null` when either is missing or they

@@ -647,34 +647,179 @@ fn a_second_rigid_tie_blocks() {
     }
 }
 
-#[test]
-fn a_branch_blocks() {
-    // A third section merged at the join.
-    let (mut project, k, o) = pair(SectionEnd::End, SectionEnd::Start, true, 0.0);
-    let c = add(&mut project, "C", vec![shot(180.0, 5.0)]);
-    project
-        .merge_stations(StationRef::new(c, 0), StationRef::new(k, 2))
-        .unwrap();
-    assert!(blocked(&project, k, o).contains("branch"));
-    let at_join = project.combine_candidate(StationRef::new(k, 2)).unwrap();
-    assert!(at_join.blocked_reason.unwrap().contains("branch"));
+/// The stations `section_id`'s station `index` is merged to, as refs.
+fn merged_to(project: &Project, at: StationRef) -> Vec<StationRef> {
+    let mut out: Vec<StationRef> = project
+        .station_merges
+        .iter()
+        .filter_map(|m| {
+            let (a, b) = (
+                project.resolve_key(&m.station_a)?,
+                project.resolve_key(&m.station_b)?,
+            );
+            (a == at).then_some(b).or((b == at).then_some(a))
+        })
+        .collect();
+    out.sort_by_key(|r| (r.section_id, r.station_index));
+    out
+}
 
-    // A third section's end co-located with an unmerged join.
+/// A third section C merged at the join (to K's end, the kept join
+/// station): the pair combines, and C stays merged to the joined station, now
+/// in the middle of the combined section, whether O is appended to K or K is
+/// prepended to O.
+#[test]
+fn a_third_section_merged_at_the_join_stays_attached_as_a_branch() {
+    for keep_k in [true, false] {
+        let (mut project, k, o) = pair(SectionEnd::End, SectionEnd::Start, true, 0.0);
+        let c = add(&mut project, "C", vec![shot(180.0, 5.0)]);
+        let target = xy(&project, StationRef::new(k, 2));
+        place(&mut project, c, 0, target, 0.0);
+        project
+            .merge_stations(StationRef::new(c, 0), StationRef::new(k, 2))
+            .unwrap();
+        let candidate = project.combine_candidate_for_sections(k, o).unwrap();
+        assert_eq!(candidate.blocked_reason, None, "keep K {keep_k}");
+        assert_eq!(candidate.branches, vec![c]);
+        assert!(candidate.loose_ends.is_empty());
+        let before = xy(&project, StationRef::new(c, 1));
+
+        let (kept, other) = if keep_k { (k, o) } else { (o, k) };
+        project.combine_sections(kept, other, &options()).unwrap();
+
+        // K has two shots: the joined station is the combined section's
+        // station 2 either way (O appended to K, or K prepended to O).
+        let joined = StationRef::new(kept, 2);
+        assert_eq!(
+            merged_to(&project, joined),
+            vec![StationRef::new(c, 0)],
+            "keep K {keep_k}: C stays merged to the joined station, once"
+        );
+        let combined = project.get_section(kept).unwrap().shots.len();
+        assert!(joined.station_index > 0 && (joined.station_index as usize) < combined);
+        assert!(dist(xy(&project, StationRef::new(c, 1)), before) < 1e-9);
+        assert!(project.check_structural_integrity().is_empty());
+    }
+}
+
+/// K's end and O's start side by side (not merged to each other), C merged
+/// to BOTH: the two join stations are one group through C, and after the
+/// combine both of C's merges name the joined station, so one is dropped.
+#[test]
+fn a_branch_merged_to_both_join_stations_is_merged_once() {
     let (mut project, k, o) = pair(SectionEnd::End, SectionEnd::Start, false, 0.0);
     let c = add(&mut project, "C", vec![shot(180.0, 5.0)]);
     let target = xy(&project, StationRef::new(k, 2));
     place(&mut project, c, 0, target, 0.0);
-    assert!(blocked(&project, k, o).contains("branch"));
+    for join in [StationRef::new(k, 2), StationRef::new(o, 0)] {
+        project.merge_stations(StationRef::new(c, 0), join).unwrap();
+    }
+    let candidate = project.combine_candidate_for_sections(k, o).unwrap();
+    assert!(candidate.merged, "one group, through C");
+    assert_eq!(candidate.blocked_reason, None);
+    assert_eq!(candidate.branches, vec![c]);
+    project.combine_sections(k, o, &options()).unwrap();
+    assert_eq!(
+        merged_to(&project, StationRef::new(k, 2)),
+        vec![StationRef::new(c, 0)]
+    );
+    assert_eq!(project.station_merges.len(), 1);
+}
 
-    // Merged to the middle of another section.
-    let mut project = Project::new("Branch".to_string(), None);
+/// A third section's end co-located with an unmerged join is not merged to
+/// it: the combine goes ahead, reports it, and leaves it as it was.
+#[test]
+fn an_unmerged_third_end_at_the_join_is_left_untouched() {
+    let (mut project, k, o) = pair(SectionEnd::End, SectionEnd::Start, false, 0.0);
+    let c = add(&mut project, "C", vec![shot(180.0, 5.0)]);
+    let target = xy(&project, StationRef::new(k, 2));
+    place(&mut project, c, 0, target, 0.0);
+    let candidate = project.combine_candidate_for_sections(k, o).unwrap();
+    assert_eq!(candidate.blocked_reason, None);
+    assert_eq!(candidate.loose_ends, vec![c]);
+    assert!(candidate.branches.is_empty());
+    let c_before = serde_json::to_string(project.get_section(c).unwrap()).unwrap();
+
+    project.combine_sections(k, o, &options()).unwrap();
+    assert_eq!(
+        serde_json::to_string(project.get_section(c).unwrap()).unwrap(),
+        c_before
+    );
+    assert!(merged_to(&project, StationRef::new(c, 0)).is_empty());
+}
+
+/// At a junction the station menu lists every partner, each answered on its
+/// own; any one pair combines, and the rest stay at the joined station.
+#[test]
+fn the_station_query_lists_every_partner_at_a_junction() {
+    let (mut project, k, o) = pair(SectionEnd::End, SectionEnd::Start, true, 0.0);
+    let c = add(&mut project, "C", vec![shot(180.0, 5.0)]);
+    let target = xy(&project, StationRef::new(k, 2));
+    place(&mut project, c, 0, target, 0.0);
+    project
+        .merge_stations(StationRef::new(c, 0), StationRef::new(k, 2))
+        .unwrap();
+    // A fourth, D, whose north reference differs: listed, but blocked.
+    let d = add(&mut project, "D", vec![shot(270.0, 4.0)]);
+    place(&mut project, d, 0, target, 0.0);
+    project
+        .merge_stations(StationRef::new(d, 0), StationRef::new(k, 2))
+        .unwrap();
+    project.get_section_mut(d).unwrap().quality = 2.0;
+
+    let candidates = project.combine_candidates(StationRef::new(k, 2));
+    let partners: Vec<(SectionId, bool)> = candidates
+        .iter()
+        .map(|c| (c.section_b, c.blocked_reason.is_none()))
+        .collect();
+    assert_eq!(partners, vec![(o, true), (c, true), (d, false)]);
+    assert!(candidates[2]
+        .blocked_reason
+        .as_deref()
+        .unwrap()
+        .contains("quality"));
+    // Each candidate names the others at the point as branches.
+    assert_eq!(candidates[1].branches, vec![o, d]);
+
+    project.combine_sections(k, c, &options()).unwrap();
+    assert_eq!(
+        merged_to(&project, StationRef::new(k, 2)),
+        vec![StationRef::new(o, 0), StationRef::new(d, 0)]
+    );
+}
+
+/// What still blocks: a station merged to the MIDDLE of another section at
+/// the join (it would cross the combined section there), and an end merged
+/// only to the middle of another section (nothing to join). A station that
+/// is not an end offers nothing, nor does an end nothing touches.
+#[test]
+fn a_section_through_the_join_blocks() {
+    let (mut project, k, o) = pair(SectionEnd::End, SectionEnd::Start, true, 0.0);
+    let c = add(&mut project, "C", vec![shot(0.0, 3.0), shot(0.0, 3.0)]);
+    let target = xy(&project, StationRef::new(k, 2));
+    place(&mut project, c, 1, target, 0.0);
+    project
+        .merge_stations(StationRef::new(c, 1), StationRef::new(k, 2))
+        .unwrap();
+    let reason = blocked(&project, k, o);
+    assert!(
+        reason.contains("C is merged here at a station in its middle"),
+        "{reason}"
+    );
+
+    let mut project = Project::new("Through".to_string(), None);
     let k = add(&mut project, "K", vec![shot(90.0, 10.0)]);
     let c = add(&mut project, "C", vec![shot(0.0, 3.0), shot(0.0, 3.0)]);
+    let target = xy(&project, StationRef::new(k, 1));
+    place(&mut project, c, 1, target, 0.0);
     project
         .merge_stations(StationRef::new(k, 1), StationRef::new(c, 1))
         .unwrap();
     let at_end = project.combine_candidate(StationRef::new(k, 1)).unwrap();
-    assert!(at_end.blocked_reason.unwrap().contains("branch"));
+    assert!(at_end
+        .blocked_reason
+        .unwrap()
+        .contains("Merged to the middle of another section"));
     assert!(
         project.combine_candidate(StationRef::new(k, 0)).is_none(),
         "nothing touches"
@@ -1176,8 +1321,9 @@ fn probes() -> usize {
 
 /// The station query at a pile of `K` section ends reads O(K) ends, however
 /// many other sections the project holds: one lookup for the partners, and
-/// one pairing's checks (two or more partners are a branch whatever each
-/// pairing says). It used to scan every end once per partner.
+/// one pairing's touch (which lists the other ends there). Past
+/// `MAX_COMBINE_PARTNERS` the pile is not a junction to pick from, so no
+/// other partner is touched. It used to scan every end once per partner.
 #[test]
 fn the_station_query_at_a_pile_reads_only_the_ends_there() {
     let (project, piled) = spread_then_pile(400, 200);
@@ -1188,9 +1334,9 @@ fn the_station_query_at_a_pile_reads_only_the_ends_there() {
     let read = probes() - before;
     assert_eq!(
         candidate.blocked_reason.as_deref(),
-        Some("200 section ends meet here (a branch)")
+        Some("200 section ends meet here: select the two to combine in the Sections panel")
     );
-    assert!(read <= 200 + 8, "{read} ends read for a pile of 200");
+    assert!(read <= 2 * 200 + 16, "{read} ends read for a pile of 200");
 }
 
 /// The pair query for two sections that meet alone reads a handful of ends,
@@ -1294,15 +1440,15 @@ fn a_renamed_shot_keeps_its_record_parity() {
     assert_eq!(project.shot_record_parity(section, Some("renamed")), parity);
 }
 
-/// Combine undoes a split only at a station with no other connections. Split
-/// at a junction, every connection there is copied to both halves, so the join
-/// is a branch and the combine is refused with that reason (not with "also
-/// connected elsewhere (a loop)", which a path through the junction would
-/// otherwise also report). Three shapes: a side passage starting at the
-/// junction, one passing through it, and one starting there and looping back
-/// onto the main line past the cut.
+/// A split at a junction copies the junction's merges to both halves; the
+/// halves combine back, and the side passage stays merged to the joined
+/// station (not "also connected elsewhere (a loop)", which a path through the
+/// junction would otherwise report). Unless the side passage PASSES THROUGH
+/// the junction, which still blocks. Three shapes: a side passage starting at
+/// the junction, one passing through it, and one starting there and looping
+/// back onto the main line past the cut.
 #[test]
-fn a_split_at_a_junction_reports_the_branch_not_a_loop() {
+fn a_split_at_a_junction_combines_back_unless_a_section_passes_through() {
     for shape in ["starts there", "passes through", "loops back"] {
         let mut project = Project::new("Junction".to_string(), None);
         let main = add(
@@ -1353,13 +1499,38 @@ fn a_split_at_a_junction_reports_the_branch_not_a_loop() {
 
         let pair = blocked(&project, main, second);
         let station = project
-            .combine_candidate(StationRef::new(main, 2))
+            .combine_candidates(StationRef::new(main, 2))
+            .into_iter()
+            .find(|c| c.section_b == second)
             .unwrap()
             .blocked_reason
             .unwrap_or_default();
-        for reason in [&pair, &station] {
-            assert!(reason.ends_with("(a branch)"), "{shape}: {reason}");
+        if shape == "passes through" {
+            for reason in [&pair, &station] {
+                assert!(
+                    reason.contains("Side is merged here at a station in its middle"),
+                    "{shape}: {reason}"
+                );
+            }
+            continue;
         }
+        assert_eq!((pair.as_str(), station.as_str()), ("", ""), "{shape}");
+        project
+            .combine_sections(
+                main,
+                second,
+                &CombineSectionsOptions {
+                    name: "Main".to_string(),
+                    ..options()
+                },
+            )
+            .unwrap();
+        assert_eq!(project.get_section(main).unwrap().shots.len(), 4, "{shape}");
+        assert_eq!(
+            merged_to(&project, junction),
+            vec![StationRef::new(side, 0)],
+            "{shape}: the side passage stays at the junction"
+        );
     }
 }
 

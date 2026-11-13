@@ -5038,9 +5038,12 @@ impl Fuzzer {
                 let Some((section_id, index)) = refs.station(*station, targets) else {
                     return refs.skip(&op.describe());
                 };
-                let Ok(Some(candidate)) = self
+                // At a junction, any partner: the fuzz picks the first.
+                let Some(candidate) = self
                     .state
-                    .combine_candidate(StationRef::new(section_id, index))
+                    .combine_candidates(StationRef::new(section_id, index))
+                    .ok()
+                    .and_then(|candidates| candidates.into_iter().next())
                 else {
                     return refs.skip(&op.describe());
                 };

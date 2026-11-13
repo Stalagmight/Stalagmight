@@ -10,7 +10,12 @@ import { useSpeleoStore, selectSpeleoReadOnly } from '../../store/speleoStore';
 import type { StationRef, SectionId, ShotId, ShotKind } from '../../types/project';
 import { getDeleteShotDialog } from '../../utils/contextMenuHelpers';
 import { canSplitShot } from '../../utils/shotSplit';
-import { combinePreview, queryCombineCandidate, queryCombineCandidateForSections } from '../../utils/combineSections';
+import {
+  combinePreview,
+  combinePreviewAll,
+  queryCombineCandidates,
+  queryCombineCandidateForSections,
+} from '../../utils/combineSections';
 import type { CombineCandidate } from '../../types/ipc/CombineCandidate';
 import { formatShotId, formatStationIdWithName } from '../../utils/formatters';
 import { setSource, trackContextMenuAction, trackDialogComplete } from '../../utils/telemetry';
@@ -197,28 +202,28 @@ export default function ContextMenu() {
     }
     return null;
   })();
-  const [combineAnswer, setCombineAnswer] = useState<{ key: string; candidate: CombineCandidate | null } | null>(null);
+  const [combineAnswer, setCombineAnswer] = useState<{ key: string; candidates: CombineCandidate[] } | null>(null);
   useEffect(() => {
     if (!combineKey) return;
     let live = true;
     const [kind, x, y] = combineKey.split(':').slice(0, 3);
-    const query =
+    const query: Promise<CombineCandidate[]> =
       kind === 'station'
-        ? queryCombineCandidate({ section_id: Number(x), station_index: Number(y) })
-        : queryCombineCandidateForSections(Number(x), Number(y));
+        ? queryCombineCandidates({ section_id: Number(x), station_index: Number(y) })
+        : queryCombineCandidateForSections(Number(x), Number(y)).then((c) => (c ? [c] : []));
     query.then(
-      (candidate) => {
-        if (live) setCombineAnswer({ key: combineKey, candidate });
+      (candidates) => {
+        if (live) setCombineAnswer({ key: combineKey, candidates });
       },
       () => {
-        if (live) setCombineAnswer({ key: combineKey, candidate: null });
+        if (live) setCombineAnswer({ key: combineKey, candidates: [] });
       }
     );
     return () => {
       live = false;
     };
   }, [combineKey]);
-  const combineCandidate = combineAnswer?.key === combineKey ? combineAnswer.candidate : undefined;
+  const combineCandidates = combineAnswer?.key === combineKey ? combineAnswer.candidates : undefined;
   /**
    * The Combine row, always with a hint line (visible under the label, and as
    * its tooltip): "Checking...", the reason it is disabled, or what it joins.
@@ -233,10 +238,11 @@ export default function ContextMenu() {
   const combineItems = (label: string): ContextMenuItem[] => {
     if (!combineKey) return [];
     const disabled = (hint: string): ContextMenuItem[] => [{ label, action: () => {}, disabled: true, hint }];
-    if (combineCandidate === undefined) {
+    if (combineCandidates === undefined) {
       return disabled('Checking whether the sections can be combined...');
     }
-    if (combineCandidate === null) {
+    const [combineCandidate] = combineCandidates;
+    if (combineCandidate === undefined) {
       return disabled(
         combineKey.startsWith('sections')
           ? 'These sections cannot be combined'
@@ -244,11 +250,31 @@ export default function ContextMenu() {
       );
     }
     // Refused outright, or neither section can be the kept one.
-    const blocked =
-      combineCandidate.blocked_reason ??
-      (combineCandidate.blocked_keeping_a && combineCandidate.blocked_keeping_b
-        ? combineCandidate.blocked_keeping_a
-        : null);
+    const blockedOf = (c: CombineCandidate) =>
+      c.blocked_reason ?? (c.blocked_keeping_a && c.blocked_keeping_b ? c.blocked_keeping_a : null);
+    if (combineCandidates.length > 1) {
+      // A junction: the dialog opens on a picker listing every partner, each
+      // with its own reason when it cannot be combined.
+      const open = combineCandidates.filter((c) => blockedOf(c) === null).length;
+      const count = combineCandidates.length;
+      return [
+        {
+          label,
+          action: () => {
+            openDialog('combine-sections', {
+              candidates: combineCandidates,
+              preview: combinePreviewAll(combineCandidates),
+            });
+          },
+          disabled: open === 0,
+          hint:
+            open === 0
+              ? `None of the ${count} sections ending here can be combined`
+              : `${count} sections end here: choose which one`,
+        },
+      ];
+    }
+    const blocked = blockedOf(combineCandidate);
     const name = (id: SectionId) => project?.sections.find((s) => s.id === id)?.name?.trim() || `Section ${id}`;
     const { section_a: a, section_b: b } = combineCandidate;
     const clicked = combineKey.startsWith('station') ? Number(combineKey.split(':')[1]) : null;

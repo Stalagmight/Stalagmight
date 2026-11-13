@@ -4,9 +4,9 @@ Status: implemented on `feat/merge-split-sections` (not yet a PR).
 
 Split Section Here (#335) is ported from #710 without #709's per-shot credit;
 the branch sits on the per-shot people model (`2026-11-12_survey-people.md`).
-Combine Sections is new: two sections that meet end to end become one, the
-inverse of a split at a station with no other connections (a split at a
-junction leaves a branch, which is never combined). Both are one undo step.
+Combine Sections is new: the two chosen sections meet end to end at exactly one
+point and become one; other sections there stay attached as branches. It is
+the inverse of a split, at a junction too. Both are one undo step.
 
 ## What
 
@@ -27,26 +27,44 @@ junction leaves a branch, which is never combined). Both are one undo step.
 
 ## Combine rules
 
-A candidate is an end station (index 0 or `len`) of two different sections,
-both with shots, at the same point. The point is the same in one of two ways:
+The rule: **the two chosen sections meet end to end at exactly one point; other
+sections there stay attached as branches.** A candidate is an end station
+(index 0 or `len`) of two different sections, both with shots, at the same
+point. The point is the same in one of two ways:
 
-- **Merged.** The two stations are merged to each other, and their merge group
-  is exactly those two stations.
-- **Co-located.** The stations are unmerged with no merges at all, and their
-  chain positions are within 1 mm horizontally. A chain position is the
-  section offset plus the shot walk, without manual station offsets. Depth is
-  never compared. No third section end may sit at the point. This is the state
-  a fresh split leaves.
+- **Merged.** The two stations are in one merge group.
+- **Co-located.** The stations are not merged to each other, and their chain
+  positions are within 1 mm horizontally. A chain position is the section
+  offset plus the shot walk, without manual station offsets. Depth is not part
+  of the match (see the depth row below). This is the state a fresh split
+  leaves.
+
+Other sections at the point:
+
+- **An end merged there** (to either join station) stays merged to the joined
+  station, which becomes a station in the middle of the combined section: a
+  branch. Its merges are re-keyed to that station's new index, on an append and
+  on a prepend, and a branch merged to both join stations is merged once.
+- **An end there that is not merged** is left as it is, a separate section end
+  at the same point; the dialog says so (`CombineCandidate::loose_ends`).
+- **A station in the middle of a section, merged there,** blocks: that section
+  passes through the point and would cross the combined one.
 
 `combine_candidate_for_sections` tries all four pairings and needs exactly one
-to be eligible. `combine_candidate(station)` applies the same rule, so the
-station menu, the Sections panel and the command always agree.
+to be eligible. The station query (`combine_candidates(station)`) lists every
+other section with an end at the point, each answered by the same pair rule,
+so the station menu, the Sections panel and the command always agree. At a
+junction (more than one partner) the menu opens the dialog on a picker: each
+partner with its name and shot count, enabled or disabled with its own reason.
+Past `MAX_COMBINE_PARTNERS` (16) other ends the point is a pile (unplaced
+sections all start at the origin), not a junction to pick from; the menu points
+to the Sections panel, which combines any two.
 
 **Blocked**, with the reason shown in the menu tooltip and the dialog:
 
 | Condition | Why |
 |---|---|
-| A third station or section end at the join | A branch, not a linear join |
+| A section merged at the join at a station in its middle, or an end merged only to the middle of another section | That section passes through the point: it would cross the combined section, and there is no other end to join |
 | Different north reference or quality | Bearings would change meaning; quality weights the adjustment |
 | Still rigidly tied once the join is gone (merge or aligned closure, directly or through other sections) | A rigid loop. `merge_stations` refuses the same shape. An unaligned closure stays as a loop to adjust inside the section |
 | Both join stations carry a zero datum, or (co-located) both rigid groups are anchored | Two datums in one rigid group |
@@ -131,9 +149,10 @@ Borrowed:
 - The dialog line "X will be [reversed and] added before/after Y".
 
 Kept on purpose:
-- **Stricter eligibility.** Only a linear join counts: the two end stations,
-  merged to each other and nothing else, or co-located with no merges. #713
-  joins through the joined station's own merges (a third section at the join).
+- **Junctions, with a choice.** Like #713, a join with other sections at the
+  point is allowed and they stay attached; unlike it, the station menu lists
+  every partner for the user to pick, and a section passing through the point
+  still blocks.
 - **The offset block instead of a kept/other choice.** A manual offset moves one
   station, not the chain beyond it. Joining the two chains therefore places
   every other station of the other section from the KEPT end's chain position.

@@ -1384,6 +1384,39 @@ mod tests {
         (project, k, o)
     }
 
+    /// [`combine_fixture`] with a third section B (two shots) merged at the
+    /// join: a junction, where B stays attached to the joined station.
+    fn combine_fixture_with_branch(
+        kept_end: crate::models::SectionEnd,
+        other_end: crate::models::SectionEnd,
+        reverse_k: bool,
+        reverse_o: bool,
+    ) -> (Project, u32, u32, u32) {
+        use crate::models::{SectionData, SectionEnd, ShotData};
+        let (mut project, k, o) = combine_fixture(kept_end, other_end, reverse_k, reverse_o);
+        let shot = |azimuth: f64| ShotData {
+            azimuth_in: azimuth,
+            azimuth_out: azimuth,
+            length: 3.0,
+            ..Default::default()
+        };
+        let b = project
+            .add_section(SectionData {
+                shots: vec![shot(200.0), shot(160.0)],
+                ..Default::default()
+            })
+            .id;
+        let join = StationRef::new(
+            k,
+            match kept_end {
+                SectionEnd::Start => 0,
+                SectionEnd::End => project.get_section(k).unwrap().shots.len() as u32,
+            },
+        );
+        project.merge_stations(join, StationRef::new(b, 0)).unwrap();
+        (project, k, o, b)
+    }
+
     fn combine_options() -> crate::models::CombineSectionsOptions {
         crate::models::CombineSectionsOptions {
             name: "K".to_string(),
@@ -1481,6 +1514,36 @@ mod tests {
             assert_pins_land(&before, &pins, &format!("undo: {what}"));
             // And a redo puts them back.
             assert_pins_land(&project, &pins, &format!("redo: {what}"));
+        }
+    }
+
+    /// The same two directions at a junction: a third section B merged at the
+    /// join stays attached as a branch, and every pin on K, O and B lands on
+    /// its station across the combine, and pins captured after it across the
+    /// undo and the redo, for every pairing and parity.
+    #[test]
+    fn pins_survive_a_combine_at_a_junction_and_its_undo() {
+        for (kept_end, other_end, reverse_k, reverse_o) in every_combine_shape() {
+            let what = format!("{kept_end:?}-{other_end:?} reversed {reverse_k}/{reverse_o}");
+            let (mut project, k, o, b) =
+                combine_fixture_with_branch(kept_end, other_end, reverse_k, reverse_o);
+            let before = project.clone();
+            let pins: Vec<(StoredAnchor, (f64, f64))> = [(k, 2), (o, 3), (b, 2)]
+                .into_iter()
+                .flat_map(|(id, n)| (0..=n).map(move |i| StationRef::new(id, i)))
+                .map(|r| (to_anchor(&project, Some(r)).unwrap(), raw_xy(&project, r)))
+                .collect();
+
+            project.combine_sections(k, o, &combine_options()).unwrap();
+            assert_pins_land(&project, &pins, &format!("combine: {what}"));
+
+            let after: Vec<(StoredAnchor, (f64, f64))> = (0..=5)
+                .map(|i| StationRef::new(k, i))
+                .chain((0..=2).map(|i| StationRef::new(b, i)))
+                .map(|r| (to_anchor(&project, Some(r)).unwrap(), raw_xy(&project, r)))
+                .collect();
+            assert_pins_land(&before, &after, &format!("undo: {what}"));
+            assert_pins_land(&project, &after, &format!("redo: {what}"));
         }
     }
 

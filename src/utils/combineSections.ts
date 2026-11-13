@@ -7,9 +7,13 @@ import type { CombineCandidate } from '../types/ipc/CombineCandidate';
  * panel ask before offering the action, and the dialog's defaults.
  */
 
-/** Can the section ending at `station` combine with another one ending there? `null`: nothing to offer. */
-export function queryCombineCandidate(station: StationRef): Promise<CombineCandidate | null> {
-  return invokeIpc<CombineCandidate | null>('combine_candidate', { station }, {
+/**
+ * What the section ending at `station` can be combined with: one candidate per
+ * other section ending there (a junction lists several, each with its own
+ * reason when blocked). Empty: nothing to offer.
+ */
+export function queryCombineCandidates(station: StationRef): Promise<CombineCandidate[]> {
+  return invokeIpc<CombineCandidate[]>('combine_candidate', { station }, {
     purpose: 'check whether sections can be combined at a station',
     fields: { station },
   });
@@ -39,8 +43,17 @@ export function defaultCombinedName(keptName: string, otherName: string): string
 
 /** What the map previews while the dialog is open: both sections, and the join ringed. */
 export function combinePreview(candidate: CombineCandidate): { sections: SectionId[]; stations: StationRef[] } {
-  return {
-    sections: [candidate.section_a, candidate.section_b],
-    stations: [candidate.station_a, candidate.station_b],
-  };
+  return combinePreviewAll([candidate]);
+}
+
+/** The map preview for a picker of candidates at one junction: every section involved, and the join. */
+export function combinePreviewAll(candidates: CombineCandidate[]): { sections: SectionId[]; stations: StationRef[] } {
+  const sections = new Set<SectionId>();
+  const stations = new Map<string, StationRef>();
+  for (const c of candidates) {
+    sections.add(c.section_a);
+    sections.add(c.section_b);
+    for (const s of [c.station_a, c.station_b]) stations.set(`${s.section_id}:${s.station_index}`, s);
+  }
+  return { sections: [...sections], stations: [...stations.values()] };
 }

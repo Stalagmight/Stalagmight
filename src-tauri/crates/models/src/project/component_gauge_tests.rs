@@ -133,14 +133,25 @@ const ORDERS: [[Role; 3]; 6] = [
 /// One combine shape: K (two shots east from the origin) and O (three shots)
 /// merged end to end, `o_at_k_end` choosing K's physical end or start for the
 /// join and `o_start_joins` O's start or end; a third section T merged at K's
-/// other end closes a loop onto K's middle station 1 m short. Then each of K
-/// and O is reversed when asked, which keeps every station where it is.
+/// other end, or at the join itself (`t_at_join`, a junction), closes a loop
+/// onto K's middle station 1 m short. Then each of K and O is reversed when
+/// asked, which keeps every station where it is.
 fn combine_shape(
     order: [Role; 3],
     o_at_k_end: bool,
     o_start_joins: bool,
     reverse: (bool, bool),
 ) -> (Project, SectionId, SectionId) {
+    combine_shape_with(order, o_at_k_end, o_start_joins, reverse, false).0
+}
+
+fn combine_shape_with(
+    order: [Role; 3],
+    o_at_k_end: bool,
+    o_start_joins: bool,
+    reverse: (bool, bool),
+    t_at_join: bool,
+) -> ((Project, SectionId, SectionId), SectionId) {
     let mut project = Project::new("Matrix".to_string(), None);
     let mut ids = [0; 3];
     for role in order {
@@ -151,7 +162,10 @@ fn combine_shape(
                 vec![shot(200.0, 4.0), shot(300.0, 6.0), shot(250.0, 3.0)],
             ),
             Role::Third => {
-                let across = if o_at_k_end { 90.0 } else { 270.0 };
+                // T heads back over K to 1 m short of its middle station,
+                // from whichever end of K it starts at.
+                let t_starts_east = o_at_k_end == t_at_join;
+                let across = if t_starts_east { 270.0 } else { 90.0 };
                 (
                     "T",
                     vec![shot(0.0, 5.0), shot(across, 10.0), shot(180.0, 4.0)],
@@ -168,10 +182,11 @@ fn combine_shape(
     project
         .merge_stations(StationRef::new(k, k_join), StationRef::new(o, o_join))
         .unwrap();
-    let at = raw(&project, StationRef::new(k, k_free));
+    let t_at = if t_at_join { k_join } else { k_free };
+    let at = raw(&project, StationRef::new(k, t_at));
     place(&mut project, t, 0, at);
     project
-        .merge_stations(StationRef::new(k, k_free), StationRef::new(t, 0))
+        .merge_stations(StationRef::new(k, t_at), StationRef::new(t, 0))
         .unwrap();
     close(&mut project, StationRef::new(t, 3), StationRef::new(k, 1));
     if reverse.0 {
@@ -180,7 +195,7 @@ fn combine_shape(
     if reverse.1 {
         assert!(project.reverse_section(o, false));
     }
-    (project, k, o)
+    ((project, k, o), t)
 }
 
 fn combine_options() -> CombineSectionsOptions {
@@ -196,7 +211,9 @@ fn combine_options() -> CombineSectionsOptions {
 /// Combine never moves the closure-adjusted survey: over every pairing and
 /// parity, every creation order (so the anchor is K's, O's or a third
 /// section's, including a third section with an id between the two), either
-/// section kept, and gauges captured by a save or not.
+/// section kept, gauges captured by a save or not, and the third section
+/// hanging off K's far end or merged at the join itself (a junction, where it
+/// stays as a branch). The third section's record parities never change.
 #[test]
 fn combine_keeps_every_adjusted_station_in_place() {
     let mut cases = 0;
@@ -205,15 +222,22 @@ fn combine_keeps_every_adjusted_station_in_place() {
             for o_start_joins in [false, true] {
                 for reverse in [(false, false), (true, false), (false, true), (true, true)] {
                     for keep_k in [true, false] {
-                        for captured in [false, true] {
-                            let (mut project, k, o) =
-                                combine_shape(order, o_at_k_end, o_start_joins, reverse);
+                        for (captured, t_at_join) in
+                            [(false, false), (true, false), (false, true), (true, true)]
+                        {
+                            let ((mut project, k, o), t) = combine_shape_with(
+                                order,
+                                o_at_k_end,
+                                o_start_joins,
+                                reverse,
+                                t_at_join,
+                            );
                             if captured {
                                 project.capture_missing_gauge_anchors();
                             }
                             let what = format!(
                                 "{order:?} O at K's {}, O's {} joins, reversed {reverse:?}, \
-                                 keep {}, captured {captured}",
+                                 keep {}, captured {captured}, T at the join {t_at_join}",
                                 if o_at_k_end { "end" } else { "start" },
                                 if o_start_joins { "start" } else { "end" },
                                 if keep_k { "K" } else { "O" },
@@ -222,10 +246,12 @@ fn combine_keeps_every_adjusted_station_in_place() {
                             let before = positions(&project);
                             let anchor = project.adjustment_anchor_for_tests(kept).unwrap();
                             let anchored_at = raw(&project, anchor);
+                            let t_parities = record_parities(&project, t);
 
                             project
                                 .combine_sections(kept, other, &combine_options())
                                 .unwrap_or_else(|e| panic!("{what}: {e}"));
+                            assert_eq!(record_parities(&project, t), t_parities, "{what}");
 
                             let (worst, unmatched) = worst_shift(&before, &positions(&project));
                             assert_eq!(unmatched, 0, "{what}");
@@ -243,7 +269,17 @@ fn combine_keeps_every_adjusted_station_in_place() {
             }
         }
     }
-    assert_eq!(cases, 384);
+    assert_eq!(cases, 768);
+}
+
+/// The record parity of every shot of `section`, in order.
+fn record_parities(project: &Project, section: SectionId) -> Vec<bool> {
+    let section = project.get_section(section).unwrap();
+    section
+        .shots
+        .iter()
+        .map(|shot| project.shot_record_parity(section, shot.uuid.as_deref()))
+        .collect()
 }
 
 /// One split shape: S, four shots east from the origin; X merged at S's

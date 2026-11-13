@@ -1,7 +1,8 @@
-//! Combine Sections: join two sections that meet end to end into one, the
-//! inverse of Split Section Here for a split at a station with no other
-//! connections (a split at a junction copies its merges to both halves, which
-//! leaves a branch, never combined).
+//! Combine Sections: join two sections that meet end to end at exactly one
+//! point into one; other sections there stay attached as branches. The inverse
+//! of Split Section Here (a split at a junction copies its merges to both
+//! halves, and combining them back leaves the other sections attached to the
+//! joined station), except across a section that passes through the point.
 //!
 //! The KEPT section keeps its id, its shot ids, its direction, its station 0
 //! orientation and its exact position. The OTHER section is reversed first when
@@ -174,6 +175,7 @@ impl Project {
             .collect();
         let unmoved = self.rekey_station_refs(&homes, "combine sections");
         self.dedupe_closures_in(kept);
+        self.dedupe_merges_in(kept);
         self.keep_gauge_on_station(kept, gauge as usize, gauge_capture.as_ref());
         if parity_flip {
             // The other section's shots now live under the kept section's
@@ -266,6 +268,36 @@ impl Project {
     /// Drop loop closures inside `section_id` that the combine made identical
     /// (same two stations), keeping the first: a duplicate would count the
     /// same loop twice in the adjustment.
+    /// Drop merges inside or onto `section_id` that the combine made
+    /// identical to another one, or that now tie a station to itself. At a
+    /// junction a branch merged to both join stations (directly, or one of
+    /// them through the other) ends up merged twice to the joined station.
+    fn dedupe_merges_in(&mut self, section_id: SectionId) {
+        let mut seen: HashSet<(StationRef, StationRef)> = HashSet::new();
+        let keep: Vec<bool> = self
+            .station_merges
+            .iter()
+            .map(|m| {
+                if m.station_a.section_id != section_id && m.station_b.section_id != section_id {
+                    return true;
+                }
+                let (Some(a), Some(b)) = (
+                    self.resolve_key(&m.station_a),
+                    self.resolve_key(&m.station_b),
+                ) else {
+                    return true;
+                };
+                let pair = if a <= b { (a, b) } else { (b, a) };
+                a != b && seen.insert(pair)
+            })
+            .collect();
+        if keep.iter().all(|k| *k) {
+            return;
+        }
+        let mut keep = keep.into_iter();
+        self.station_merges.retain(|_| keep.next().unwrap_or(true));
+    }
+
     fn dedupe_closures_in(&mut self, section_id: SectionId) {
         let mut seen: HashSet<(StationRef, StationRef)> = HashSet::new();
         let duplicates: HashSet<u64> = self

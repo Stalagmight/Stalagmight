@@ -1605,10 +1605,15 @@ moving one half by the loop's misclosure; the dialog says which half moves and
 how far before the user confirms (`split_section_preview`). One undo step.
 
 **Combine Sections** (an end station's context menu, or the section menu when
-exactly two sections are selected): two sections that meet end to end become
-one. They meet when an end station of each is the same point: merged to each
-other and to nothing else, or unmerged and co-located within 1 mm horizontally
-(the state a split leaves). The kept section (the lower id by default; the
+exactly two sections are selected): the two chosen sections meet end to end at
+exactly one point and become one; other sections there stay attached as
+branches. They meet when an end station of each is the same point: in one merge
+group, or unmerged and co-located within 1 mm horizontally (the state a split
+leaves). Another section's end merged there stays merged to the joined station,
+now a station in the middle of the combined section; one ending there unmerged
+is left as it is, and the dialog says so. At a junction the station menu opens
+the dialog on a picker listing every partner (name and shot count), each
+enabled or disabled with its own reason. The kept section (the lower id by default; the
 dialog can swap) keeps its id, shot numbers, direction and position; the other
 section is reversed first when the two meet end to end or start to start. Every
 per-shot field travels, and every station reference follows its station; the
@@ -1616,13 +1621,13 @@ join station keeps one comment and one name (the dialog asks when they differ)
 and the kept station's offset. Blocked, with the reason in the menu tooltip,
 for co-located, unmerged ends more than 1 m apart in depth (the joined station
 takes their average; between 5 cm and 1 m the dialog says how far each end
-moves), for a branch, different north references or quality, a second rigid tie between
+moves), for a section merged there at a station in its middle (it passes
+through), different north references or quality, a second rigid tie between
 the two, two zero datums, join stations moved by different amounts, or more
 than 99,999 shots, or two sections that share a shot identity. Every shot keeps
 its own surveyors, explorers and date; the dialog summarises the combined credit.
-Combining the two halves of a split gives the section back only when nothing
-else was connected at the split station: a split at a junction ties both halves
-to it, a branch. One undo step. Rules and edge cases: [plans/2026-11-12_merge-split-sections.md](plans/2026-11-12_merge-split-sections.md).
+Combining the two halves of a split gives the section back, with whatever was
+merged at the split station still attached there. One undo step. Rules and edge cases: [plans/2026-11-12_merge-split-sections.md](plans/2026-11-12_merge-split-sections.md).
 
 ## 8. Command System
 

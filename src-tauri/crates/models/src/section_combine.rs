@@ -1,7 +1,6 @@
-//! Arguments and answers for Combine Sections: join two sections that meet at
-//! one end station each into one section. The inverse of Split Section Here
-//! for a split at a station with no other connections (a split at a junction
-//! leaves a branch, which is never combined).
+//! Arguments and answers for Combine Sections: join two sections that meet end
+//! to end at exactly one point into one section; other sections there stay
+//! attached as branches. The inverse of Split Section Here, junctions included.
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -90,4 +89,11 @@ pub struct CombineCandidate {
     /// shot before and the shot after it, so each end moves by half the gap;
     /// the dialog says so. `None` for a merged join, which already averages.
     pub depth_difference_m: Option<f64>,
+    /// Other sections merged at the join point. They stay attached to the
+    /// joined station, which becomes a mid-section station of the combined
+    /// section (a branch).
+    pub branches: Vec<SectionId>,
+    /// Other sections with an end at the join point that is NOT merged to
+    /// it. Combining leaves them as they are: a separate section end there.
+    pub loose_ends: Vec<SectionId>,
 }

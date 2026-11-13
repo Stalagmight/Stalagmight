@@ -15,9 +15,10 @@ const queryCombineCandidate = vi.fn(
     })
 );
 vi.mock('../../../utils/combineSections', () => ({
-  queryCombineCandidate: () => queryCombineCandidate(),
+  queryCombineCandidates: () => queryCombineCandidate(),
   queryCombineCandidateForSections: () => queryCombineCandidate(),
   combinePreview: () => ({ sections: [], stations: [] }),
+  combinePreviewAll: () => ({ sections: [], stations: [] }),
 }));
 
 let dialogData: Record<string, unknown> = {};
@@ -81,13 +82,13 @@ function openOn(stationIndex: number) {
   render(<ContextMenu />);
 }
 
-const candidate = (blocked: string | null) => ({
+const candidate = (blocked: string | null, partner = 2) => ({
   section_a: 1,
-  section_b: 2,
+  section_b: partner,
   end_a: 'end',
   end_b: 'start',
   station_a: { section_id: 1, station_index: 3 },
-  station_b: { section_id: 2, station_index: 0 },
+  station_b: { section_id: partner, station_index: 0 },
   merged: true,
   reverses: false,
   blocked_reason: blocked,
@@ -99,6 +100,9 @@ const candidate = (blocked: string | null) => ({
   comment_b: null,
   station_name_a: null,
   station_name_b: null,
+  depth_difference_m: null,
+  branches: [],
+  loose_ends: [],
 });
 
 describe('ContextMenu Combine Sections row', () => {
@@ -116,7 +120,7 @@ describe('ContextMenu Combine Sections row', () => {
     expect(combineRow()).toHaveAttribute('title', expect.stringContaining('Checking'));
     expect(hintLine()).toHaveTextContent('Checking whether the sections can be combined...');
 
-    await act(async () => resolveCandidate(candidate(null)));
+    await act(async () => resolveCandidate([candidate(null)]));
 
     expect(labels()).toEqual(before);
     expect(combineRow()).toBeEnabled();
@@ -125,10 +129,10 @@ describe('ContextMenu Combine Sections row', () => {
 
   it('shows the reason as a visible line under the label, not only as a tooltip', async () => {
     openOn(3);
-    await act(async () => resolveCandidate(candidate('3 section ends meet here (a branch)')));
-    expect(hintLine()).toHaveTextContent('3 section ends meet here (a branch)');
+    await act(async () => resolveCandidate([candidate('Section 2 is merged here at a station in its middle')]));
+    expect(hintLine()).toHaveTextContent('Section 2 is merged here at a station in its middle');
     expect(hintLine()).toBeVisible();
-    expect(combineRow()).toHaveAttribute('title', '3 section ends meet here (a branch)');
+    expect(combineRow()).toHaveAttribute('title', 'Section 2 is merged here at a station in its middle');
   });
 
   it('positions the menu for the taller hinted row', () => {
@@ -146,8 +150,8 @@ describe('ContextMenu Combine Sections row', () => {
 
   it('stays in place with the reason when the answer is a refusal or nothing to combine', async () => {
     for (const [answer, reason] of [
-      [candidate('This is a branch'), 'This is a branch'],
-      [null, 'No other section ends at this station'],
+      [[candidate('A section passes through here')], 'A section passes through here'],
+      [[], 'No other section ends at this station'],
     ] as const) {
       openOn(0);
       const before = labels();
@@ -157,6 +161,24 @@ describe('ContextMenu Combine Sections row', () => {
       expect(combineRow()).toHaveAttribute('title', reason);
       cleanup();
     }
+  });
+
+  it('at a junction, opens a picker of every partner, or says none can be combined', async () => {
+    openOn(3);
+    const before = labels();
+    const both = [candidate(null, 2), candidate('Different quality', 4)];
+    await act(async () => resolveCandidate(both));
+    expect(labels()).toEqual(before);
+    expect(combineRow()).toBeEnabled();
+    expect(hintLine()).toHaveTextContent('2 sections end here: choose which one');
+    combineRow().click();
+    expect(openDialog).toHaveBeenCalledWith('combine-sections', expect.objectContaining({ candidates: both }));
+    cleanup();
+
+    openOn(3);
+    await act(async () => resolveCandidate([candidate('No', 2), candidate('Neither', 4)]));
+    expect(combineRow()).toBeDisabled();
+    expect(hintLine()).toHaveTextContent('None of the 2 sections ending here can be combined');
   });
 
   it('is absent on a mid-section station, where nothing is asked', () => {

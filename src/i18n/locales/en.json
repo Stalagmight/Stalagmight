@@ -1715,6 +1715,11 @@
       "halvesNotConnected": "The halves are not connected: merge the two cut stations if routes and gas planning should continue across them."
     },
     "combineSections": {
+      "pickPartner": "{{count}} sections end here. Combine {{section}} with:",
+      "branchesNote_one": "{{names}} stays attached at the join, which becomes a station in the middle of the combined section.",
+      "branchesNote_other": "{{names}} stay attached at the join, which becomes a station in the middle of the combined section.",
+      "looseEndsNote_one": "{{names}} also ends here but is not merged to the join, so it stays as it is.",
+      "looseEndsNote_other": "{{names}} also end here but are not merged to the join, so they stay as they are.",
       "depthNote": "The two ends are recorded {{gap}} apart in depth. The joined station takes the average, so each end moves {{half}} in depth.",
       "summary": "Combining {{kept}} ({{keptShots}}) and {{other}} ({{otherShots}}) at station {{station}}",
       "shots_one": "{{count}} shot",

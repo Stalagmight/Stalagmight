@@ -1,6 +1,5 @@
 //! Combine Sections as one atomic undo/redo unit: the inverse of Split Section
-//! Here (`command_split_section.rs`) for a split at a station with no other
-//! connections, and built the same way.
+//! Here (`command_split_section.rs`), and built the same way.
 
 use super::AppState;
 use crate::core::{Command, CommandResult};
@@ -9,15 +8,14 @@ use crate::models::{
 };
 
 impl AppState {
-    /// Read-only: can the section ending at `station` combine with another
-    /// one ending there? `None` when `station` is not a section end or nothing
-    /// else touches it. Answered under the project lock without cloning the
-    /// project: the context menu asks on every right-click of an end station.
-    pub fn combine_candidate(
-        &self,
-        station: StationRef,
-    ) -> Result<Option<CombineCandidate>, String> {
-        self.with_project(|project| Ok(project.combine_candidate(station)))
+    /// Read-only: what the section ending at `station` can be combined with,
+    /// one candidate per other section ending there (a junction lists them
+    /// all, each with its own reason when blocked). Empty when `station` is not
+    /// a section end or nothing else touches it. Answered under the project
+    /// lock without cloning the project: the context menu asks on every
+    /// right-click of an end station.
+    pub fn combine_candidates(&self, station: StationRef) -> Result<Vec<CombineCandidate>, String> {
+        self.with_project(|project| Ok(project.combine_candidates(station)))
     }
 
     /// Read-only: can sections `a` and `b` be combined (the Sections panel's

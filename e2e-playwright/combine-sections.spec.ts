@@ -138,11 +138,11 @@ test.describe('Combine Sections', () => {
     expect(call).toMatchObject({ kept: a!.id, other: b!.id, options: { name: 'East', swap_lr: true } });
   });
 
-  test('shows why a branch join cannot be combined', async ({ page }) => {
+  test('at a junction, picks which section to combine with', async ({ page }) => {
     const [a, b, c] = await seed(page, [
       { name: 'Trunk', count: 2 },
       { name: 'Left', count: 2 },
-      { name: 'Right', count: 2 },
+      { name: 'Right', count: 3 },
     ]);
     const join = { section_id: a!.id, station_index: 2 };
     await merge(page, join, { section_id: b!.id, station_index: 0 });
@@ -150,11 +150,28 @@ test.describe('Combine Sections', () => {
 
     await openContextMenu(page, { type: 'station', ref: join });
     const item = page.getByRole('button', { name: 'Combine Sections...' });
-    await expect(item).toBeDisabled();
-    await expect(item).toHaveAttribute('title', /branch/);
-    // The reason is shown, not only as a tooltip.
-    await expect(item).toContainText('(a branch)');
+    await expect(item).toBeEnabled();
+    await expect(item).toContainText('2 sections end here: choose which one');
     await expect(page.getByRole('button', { name: 'Split Section Here' })).toHaveCount(0);
+    await item.click();
+
+    const picker = page.getByTestId('combine-partner-picker');
+    await expect(picker).toContainText('2 sections end here. Combine Trunk with:');
+    await expect(page.getByTestId(`combine-partner-${b!.id}`)).toBeChecked();
+    await expect(page.getByTestId(`combine-partner-${b!.id}`).locator('..')).toContainText('Left (2 shots)');
+    await expect(page.getByTestId(`combine-partner-${c!.id}`).locator('..')).toContainText('Right (3 shots)');
+    await expect(page.getByTestId('combine-branches-note')).toContainText('Right stays attached at the join');
+
+    await page.getByTestId(`combine-partner-${c!.id}`).check();
+    await expect(page.getByTestId('combine-branches-note')).toContainText('Left stays attached at the join');
+    await expect(page.getByTestId('combine-summary')).toContainText('Combining Trunk (2 shots) and Right (3 shots)');
+    await page.getByTestId('combine-confirm').click();
+    await waitForNoDialogs(page);
+    const call = await page.evaluate(() => {
+      const calls = ((window as any).__MOCK_COMBINE_SECTIONS_CALLS__ ?? []) as Array<any>;
+      return calls[calls.length - 1] ?? null;
+    });
+    expect(call).toMatchObject({ kept: a!.id, other: c!.id });
   });
 
   test('keeps its row, disabled, where no other section ends; none on a mid station', async ({ page }) => {

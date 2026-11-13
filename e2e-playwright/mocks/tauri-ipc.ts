@@ -5409,7 +5409,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'combine_candidate_for_sections': {
             // A small model of the real query (`combine_candidate.rs`): two
             // section ends touch when they are station-merged or a split left
-            // them co-located; a third station at the point is a branch.
+            // them co-located. At a junction the station query lists every
+            // partner; the others at the point stay as branches. A station in
+            // the MIDDLE of a section at the point blocks.
             type Ref = { section_id: number; station_index: number };
             type MockSection = { id: number; shots: unknown[] };
             const sections = (currentProject?.sections ?? []) as MockSection[];
@@ -5423,7 +5425,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               ...merges.flatMap((m) => (same(m.station_a, r) ? [m.station_b] : same(m.station_b, r) ? [m.station_a] : [])),
               ...colocatedJoins.flatMap(([x, y]) => (same(x, r) ? [y] : same(y, r) ? [x] : [])),
             ];
-            const candidate = (at: Ref, partner: Ref, blocked: string | null) => {
+            const candidate = (at: Ref, partner: Ref, blocked: string | null, branches: number[] = []) => {
               const [a, b] = at.section_id < partner.section_id ? [at, partner] : [partner, at];
               const sa = sections.find((s) => s.id === a.section_id);
               const sb = sections.find((s) => s.id === b.section_id);
@@ -5449,18 +5451,26 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 station_name_a: null,
                 station_name_b: null,
                 depth_difference_m: null,
+                branches,
+                loose_ends: [],
               };
             };
-            const BRANCH = 'Another station is merged here (a branch)';
             const forStation = (at: Ref) => {
-              if (!isEnd(at)) return null;
+              if (!isEnd(at)) return [];
               const partners = partnersOf(at);
-              if (partners.length === 0) return null;
-              const partner = partners[0]!;
-              if (partners.length > 1 || !isEnd(partner) || partnersOf(partner).length > 1) {
-                return candidate(at, partner, BRANCH);
+              const through = partners.find((p) => !isEnd(p));
+              const ends = partners.filter((p) => isEnd(p));
+              if (ends.length === 0) {
+                return partners.length === 0 ? [] : [candidate(at, partners[0]!, 'Merged to the middle of another section')];
               }
-              return candidate(at, partner, null);
+              return ends.map((partner) =>
+                candidate(
+                  at,
+                  partner,
+                  through ? `Section ${through.section_id} is merged here at a station in its middle` : null,
+                  ends.filter((p) => p !== partner).map((p) => p.section_id)
+                )
+              );
             };
             if (cmd === 'combine_candidate') {
               return forStation(args?.station as Ref);
@@ -5472,8 +5482,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             };
             if (first === second || ends(first).length === 0 || ends(second).length === 0) return null;
             for (const at of ends(first)) {
-              const found = forStation(at);
-              if (found && (found.section_a === second || found.section_b === second)) return found;
+              const found = forStation(at).find((c) => c.section_a === second || c.section_b === second);
+              if (found) return found;
             }
             return candidate(ends(first)[1]!, ends(second)[0]!, 'These sections do not meet at an end station');
           }

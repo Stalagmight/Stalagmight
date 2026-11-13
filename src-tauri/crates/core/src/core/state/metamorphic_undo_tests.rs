@@ -1048,8 +1048,7 @@ const PAIRS: &[Pair] = &[
     Pair {
         id: "split-then-combine-at-the-join-is-identity",
         promise: "combine_sections.rs module doc - Combine Sections is the inverse of Split \
-                  Section Here for a split at a station with no other connections: combining \
-                  a fresh split at its join, with the original name and \
+                  Section Here: combining a fresh split at its join, with the original name and \
                   colour, gives back the section, every shot's survey credit included (shot ids \
                   and the id allocators aside)",
         run: pair_split_then_combine_at_the_join_is_identity,
@@ -1818,8 +1817,9 @@ fn pair_split_then_combine_at_the_join_is_identity(
         .get_project_state()?
         .combine_candidate_for_sections(first, second)?;
     if candidate.blocked_reason.is_some() {
-        // A third section's end happens to sit on the cut, or the halves are
-        // tied elsewhere: the join is not linear, and Combine refuses it.
+        // A section passes through the cut, the halves are tied elsewhere,
+        // or the cut's two copies sit more than 1 m apart in depth: Combine
+        // refuses it.
         return None;
     }
     let combined =

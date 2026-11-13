@@ -107,10 +107,11 @@ fn a_combine_is_one_undo_step_and_redoes() {
 #[test]
 fn a_refused_combine_changes_nothing_and_leaves_no_undo_entry() {
     let (state, k, o) = state();
-    // A third section at the join makes it a branch.
-    let c = create(&state, "C", vec![shot(180.0, 3.0)]);
+    // A third section passing through the join (merged there at a station
+    // in its middle) would cross the combined section.
+    let c = create(&state, "C", vec![shot(180.0, 3.0), shot(180.0, 3.0)]);
     let merged = state.execute(Command::MergeStations {
-        station_a: StationRef::new(c, 0),
+        station_a: StationRef::new(c, 1),
         station_b: StationRef::new(k, 2),
     });
     assert!(merged.success, "{:?}", merged.error);
@@ -119,7 +120,7 @@ fn a_refused_combine_changes_nothing_and_leaves_no_undo_entry() {
 
     let result = state.execute_combine_sections(k, o, options());
     assert!(!result.success);
-    assert!(result.error.unwrap().contains("branch"));
+    assert!(result.error.unwrap().contains("in its middle"));
     assert_eq!(snapshot(&state), before);
     assert_eq!(state.get_undo_stack().len(), depth);
 
@@ -308,15 +309,18 @@ fn the_station_query_refuses_unknown_and_out_of_range_stations() {
         StationRef::new(o, u32::MAX),
     ] {
         assert_eq!(
-            state.combine_candidate(station).unwrap(),
-            None,
+            state.combine_candidates(station).unwrap(),
+            Vec::new(),
             "{station:?}"
         );
     }
-    assert!(state
-        .combine_candidate(StationRef::new(k, 2))
-        .unwrap()
-        .is_some());
+    assert_eq!(
+        state
+            .combine_candidates(StationRef::new(k, 2))
+            .unwrap()
+            .len(),
+        1
+    );
     assert_eq!(state.combine_candidate_for_sections(k, 999).unwrap(), None);
     assert_eq!(state.combine_candidate_for_sections(k, k).unwrap(), None);
 }
@@ -862,4 +866,101 @@ fn a_held_gauge_on_the_renamed_copy_of_a_repeated_uuid_holds_its_station() {
         Some(StationRef::new(low, 0)),
         "the lower copy keeps its own gauge"
     );
+}
+
+/// The stations `at` is merged to.
+fn merged_to(state: &AppState, at: StationRef) -> Vec<StationRef> {
+    let project = state.get_project_state().unwrap();
+    let mut out: Vec<StationRef> = project
+        .station_merges
+        .iter()
+        .filter_map(|m| {
+            let (a, b) = (
+                project.resolve_key(&m.station_a)?,
+                project.resolve_key(&m.station_b)?,
+            );
+            (a == at).then_some(b).or((b == at).then_some(a))
+        })
+        .collect();
+    out.sort_by_key(|r| (r.section_id, r.station_index));
+    out
+}
+
+/// At a junction (C merged at K's end, where O starts), combining K and O
+/// keeps C merged to the joined station, the combined section's station 2
+/// whether O is appended to K or K prepended to O; an undo and a redo restore
+/// the whole project exactly; and ignored warnings on C (the branch) and on O
+/// (the moved section) stay ignored through it, a save and a reopen.
+#[test]
+fn a_combine_at_a_junction_keeps_the_branch_and_undoes_exactly() {
+    for keep_k in [true, false] {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("junction.stalx");
+        let (state, k, o) = state();
+        let c = create(&state, "C", vec![shot(180.0, 5.0), shot(180.0, 0.1)]);
+        let merged = state.execute(Command::MergeStations {
+            station_a: StationRef::new(k, 2),
+            station_b: StationRef::new(c, 0),
+        });
+        assert!(merged.success, "{:?}", merged.error);
+        assert!(
+            state
+                .execute(Command::SaveProject {
+                    path: Some(path.clone())
+                })
+                .success
+        );
+        let short = |section: SectionId, index: usize| {
+            let project = state.get_project_state().unwrap();
+            let shot = &project.get_section(section).unwrap().shots[index];
+            (shot.id, shot.uuid.clone().unwrap())
+        };
+        let ignored: Vec<String> = [(c, 1), (o, 2)]
+            .into_iter()
+            .map(|(section, index)| {
+                let (id, uuid) = short(section, index);
+                state
+                    .save_resolved_warning(&crate::persistence::ResolvedWarning {
+                        section_id: section,
+                        shot_id: id,
+                        warning_code: "SHORT_SHOT".to_string(),
+                        resolved_at: chrono::Utc::now(),
+                        resolved_comment: None,
+                        shot_uuid: Some(uuid.clone()),
+                    })
+                    .unwrap();
+                uuid
+            })
+            .collect();
+        let all_ignored = |state: &AppState, what: &str| {
+            let verdicts = short_shot_verdicts_by_uuid(state);
+            for uuid in &ignored {
+                assert_eq!(verdicts.get(uuid), Some(&true), "keep K {keep_k}, {what}");
+            }
+        };
+        all_ignored(&state, "before");
+        let candidate = state.combine_candidate_for_sections(k, o).unwrap().unwrap();
+        assert_eq!(candidate.branches, vec![c]);
+        let before = snapshot(&state);
+
+        let (kept, other) = if keep_k { (k, o) } else { (o, k) };
+        let result = state.execute_combine_sections(kept, other, options());
+        assert!(result.success, "{:?}", result.error);
+        let joined = StationRef::new(kept, 2);
+        assert_eq!(merged_to(&state, joined), vec![StationRef::new(c, 0)]);
+        all_ignored(&state, "after the combine");
+        let after = snapshot(&state);
+
+        assert!(state.undo().success);
+        assert_eq!(snapshot(&state), before, "keep K {keep_k}: the undo");
+        all_ignored(&state, "after the undo");
+        assert!(state.redo().success);
+        assert_eq!(snapshot(&state), after, "keep K {keep_k}: the redo");
+
+        assert!(state.execute(Command::SaveProject { path: None }).success);
+        assert!(state.execute(Command::CloseProject).success);
+        assert!(state.open_project(path).success, "reopen");
+        assert_eq!(merged_to(&state, joined), vec![StationRef::new(c, 0)]);
+        all_ignored(&state, "after a reopen");
+    }
 }
