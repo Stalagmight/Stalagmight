@@ -21,6 +21,12 @@ pub struct SurveyCredit { pub surveyors: Vec<Person>, pub explorers: Vec<Person>
 
 - `Shot.credit` and `ShotData.credit` hold a `SurveyCredit` (`#[serde(default)]`, TS-optional on
   `ShotData`). Every copy of a shot (split, reverse, undo, project append, insert) carries it.
+- **Stored normalized.** Every way a credit reaches a shot (`Shot::set_credit`, a shared credit,
+  an imported `ShotData`, an undo replayed from the file, a deserialized snapshot) stores it
+  `SurveyCredit::into_storable`: control characters removed (whitespace ones become a space;
+  they would make an exported XML file invalid), names and emails clamped to 256 characters,
+  each role deduplicated and capped at 200 people. A credit that already is all that is stored
+  as it is, without a copy.
 - **Person identity.** Names are compared after lowercasing and collapsing whitespace. Emails are
   compared lowercased. Two people are the same when their names and emails are both equal, and an
   email of `None` only matches `None`. Lists keep their order and drop duplicates.

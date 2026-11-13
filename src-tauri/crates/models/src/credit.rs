@@ -35,17 +35,19 @@ pub struct Person {
 }
 
 impl Person {
-    /// A person from user or file text: the name trimmed, the email trimmed and
-    /// dropped when empty. `None` when the name is empty after trimming.
+    /// A person from user or file text: the name and email cleaned of control
+    /// characters ([`clean_text`]) and trimmed, an empty email dropped. `None`
+    /// when the name is empty after that.
     pub fn new(name: &str, email: Option<&str>) -> Option<Self> {
+        let name = clean_text(name);
         let name = name.trim();
         if name.is_empty() {
             return None;
         }
         let email = email
-            .map(str::trim)
-            .filter(|e| !e.is_empty())
-            .map(str::to_string);
+            .map(clean_text)
+            .map(|e| e.trim().to_string())
+            .filter(|e| !e.is_empty());
         Some(Self {
             name: name.to_string(),
             email,
@@ -150,6 +152,31 @@ impl SurveyCredit {
     /// `ShotData::credit` of a whole imported run: `None` for an empty credit.
     pub fn stored(self) -> Option<Self> {
         (!self.is_empty()).then_some(self)
+    }
+
+    /// Whether the credit is already as a shot stores it: every person
+    /// sanitized ([`Person::is_sanitized`]) and no role longer than
+    /// [`MAX_PEOPLE_PER_ROLE`]. Allocation-free.
+    pub fn is_storable(&self) -> bool {
+        [&self.surveyors, &self.explorers]
+            .iter()
+            .all(|role| role.len() <= MAX_PEOPLE_PER_ROLE && role.iter().all(Person::is_sanitized))
+    }
+
+    /// The credit as a shot stores it (`Shot::set_credit`, the one way in):
+    /// every person sanitized - control characters out, trimmed, clamped -
+    /// each role deduplicated and cut to [`MAX_PEOPLE_PER_ROLE`]. Returned as
+    /// it is, with no allocation, when it already is that ([`Self::is_storable`]).
+    #[must_use]
+    pub fn into_storable(self) -> Self {
+        if self.is_storable() {
+            return self;
+        }
+        Self {
+            surveyors: merge_people([self.surveyors]),
+            explorers: merge_people([self.explorers]),
+            date: self.date,
+        }
     }
 
     /// The same credit with every list deduplicated and invalid people dropped.
@@ -267,19 +294,38 @@ fn legacy_name(name: &str) -> String {
         .collect()
 }
 
-/// Whether `list` holds someone who is [`Person::same_as`] `person`.
+/// Whether `list` holds someone who is [`Person::same_as`] `person`. The
+/// needle's identity is built once; to merge whole lists use [`merge_people`],
+/// which keys a hash set instead of scanning.
 pub fn contains_person(list: &[Person], person: &Person) -> bool {
-    list.iter().any(|p| p.same_as(person))
+    let identity = person.identity();
+    list.iter().any(|p| p.identity() == identity)
 }
 
-/// Append `person` to `list` unless it is already there or invalid. Returns
-/// whether the list changed.
+/// Append `person` to `list` unless it is already there, invalid, or the list
+/// already holds [`MAX_PEOPLE_PER_ROLE`] people. Returns whether the list
+/// changed.
 pub fn add_person(list: &mut Vec<Person>, person: Person) -> bool {
-    if !person.is_valid() || contains_person(list, &person) {
+    if list.len() >= MAX_PEOPLE_PER_ROLE || !person.is_valid() || contains_person(list, &person) {
         return false;
     }
     list.push(person);
     true
+}
+
+/// The people of `lists`, in order, each once (by identity, the first
+/// spelling kept), sanitized ([`Person::sanitized`]) and never more than
+/// [`MAX_PEOPLE_PER_ROLE`]. Linear: one hash set of identities, and it stops
+/// reading once the role is full.
+pub fn merge_people(lists: impl IntoIterator<Item = Vec<Person>>) -> Vec<Person> {
+    let mut role = RoleBuilder::new();
+    for person in lists.into_iter().flatten() {
+        if role.is_full() {
+            break;
+        }
+        role.push_person(&person);
+    }
+    role.people
 }
 
 /// Drop every entry of `list` that is [`Person::same_as`] `person`. Returns
@@ -325,6 +371,14 @@ impl RoleBuilder {
 
     fn is_full(&self) -> bool {
         self.people.len() >= MAX_PEOPLE_PER_ROLE
+    }
+
+    fn push_person(&mut self, person: &Person) {
+        if let Some(person) = person.sanitized() {
+            if self.seen.insert(person.identity()) {
+                self.people.push(person);
+            }
+        }
     }
 
     fn push_piece(&mut self, piece: &str) {
@@ -453,15 +507,55 @@ fn clamp_chars(text: &str) -> &str {
 }
 
 impl Person {
-    /// The person as a credit edit stores it: trimmed, clamped to
+    /// The person as every stored credit holds it: cleaned of control
+    /// characters ([`clean_text`]), trimmed, clamped to
     /// [`MAX_PERSON_TEXT_CHARS`], an empty email dropped. `None` for an empty
     /// name.
     pub fn sanitized(&self) -> Option<Person> {
+        let name = clean_text(&self.name);
+        let email = self.email.as_deref().map(clean_text);
         Person::new(
-            clamp_chars(self.name.trim()),
-            self.email.as_deref().map(|e| clamp_chars(e.trim())),
+            clamp_chars(name.trim()),
+            email.as_deref().map(|e| clamp_chars(e.trim())),
         )
     }
+
+    /// Whether the person is already as [`Person::sanitized`] would make it.
+    /// Allocation-free: the check every stored credit passes on its way in.
+    pub fn is_sanitized(&self) -> bool {
+        let clean = |text: &str| {
+            !text.is_empty()
+                && text.trim() == text
+                && !text.chars().any(needs_cleaning)
+                && text.chars().nth(MAX_PERSON_TEXT_CHARS).is_none()
+        };
+        clean(&self.name) && self.email.as_deref().is_none_or(clean)
+    }
+}
+
+/// Whether `c` cannot stay in stored text: a control character (it would
+/// make an exported XML document invalid, or a label unreadable) or one of
+/// the two noncharacters XML 1.0 forbids.
+fn needs_cleaning(c: char) -> bool {
+    c.is_control() || c == '\u{fffe}' || c == '\u{ffff}'
+}
+
+/// `text` with every control character a space if it is whitespace (tab,
+/// newline) and dropped otherwise, and the XML-forbidden noncharacters
+/// dropped. Borrowed when there is nothing to change.
+pub fn clean_text(text: &str) -> std::borrow::Cow<'_, str> {
+    if !text.chars().any(needs_cleaning) {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    std::borrow::Cow::Owned(
+        text.chars()
+            .filter_map(|c| match c {
+                c if !needs_cleaning(c) => Some(c),
+                c if c.is_whitespace() => Some(' '),
+                _ => None,
+            })
+            .collect(),
+    )
 }
 
 /// Which shots a [`CreditEdit`] applies to.

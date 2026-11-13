@@ -293,6 +293,53 @@ fn legacy_credit_text_always_splits_back_into_its_roles() {
     }
 }
 
+/// Review of #719, item 2: stored text never keeps a control character (one
+/// would make an exported XML document invalid): whitespace controls become a
+/// space, others and XML's forbidden noncharacters go.
+#[test]
+fn people_are_cleaned_of_control_characters() {
+    assert_eq!(clean_text("plain"), std::borrow::Cow::Borrowed("plain"));
+    assert_eq!(
+        clean_text("a\tb\nc\u{1}d\u{7f}e\u{9c}f\u{fffe}g"),
+        "a b cdefg"
+    );
+    let person = Person::new(" Bad\u{1}Name\u{b}X ", Some("a\u{0}@x.org\r\n")).unwrap();
+    assert_eq!(person.name, "BadName X");
+    assert_eq!(person.email.as_deref(), Some("a@x.org"));
+    assert!(Person::named("\u{1}\u{2}").is_none());
+    let raw = Person {
+        name: "Tab\tName".to_string(),
+        email: None,
+    };
+    assert!(!raw.is_sanitized());
+    let clean = raw.sanitized().unwrap();
+    assert_eq!(clean.name, "Tab Name");
+    assert!(clean.is_sanitized());
+}
+
+/// `add_person` stops at the role cap; `merge_people` keeps order, drops
+/// repeats by identity and caps.
+#[test]
+fn adding_and_merging_people_respect_the_role_cap() {
+    let mut list: Vec<Person> = (0..MAX_PEOPLE_PER_ROLE)
+        .map(|i| person(&format!("P{i}"), None))
+        .collect();
+    assert!(!add_person(&mut list, person("One More", None)));
+    assert_eq!(list.len(), MAX_PEOPLE_PER_ROLE);
+    let merged = merge_people([
+        vec![person("A", None), person("B", None)],
+        vec![person("a", None), person("C", None)],
+    ]);
+    assert_eq!(names(&merged), ["A", "B", "C"]);
+    let many: Vec<Person> = (0..MAX_PEOPLE_PER_ROLE * 2)
+        .map(|i| person(&format!("Q{i}"), None))
+        .collect();
+    assert_eq!(
+        merge_people([many.clone(), many]).len(),
+        MAX_PEOPLE_PER_ROLE
+    );
+}
+
 #[test]
 fn add_remove_and_dedupe_use_identity() {
     let mut list = vec![person("A", None)];

@@ -291,9 +291,26 @@ pub struct Shot {
     /// has no row of its own (`persistence::sqlite::shot_credits`), and a
     /// copy per shot let a file with a long legacy list and many shots blow
     /// up the memory of every open. The wire shape is the credit itself.
-    #[serde(default, skip_serializing_if = "shared_credit_absent_or_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "shared_credit_absent_or_empty",
+        deserialize_with = "de_storable_credit"
+    )]
     #[ts(optional)]
     pub credit: Option<Arc<SurveyCredit>>,
+}
+
+/// `deserialize_with` for [`Shot::credit`]: a shot read back from a snapshot
+/// or an undo payload stores its credit as [`Shot::set_credit`] would.
+fn de_storable_credit<'de, D>(de: D) -> Result<Option<Arc<SurveyCredit>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let credit = Option::<SurveyCredit>::deserialize(de)?;
+    Ok(credit
+        .map(SurveyCredit::into_storable)
+        .and_then(stored_credit)
+        .map(Arc::new))
 }
 
 /// `skip_serializing_if` for [`ShotData::credit`]: absent and empty are the
@@ -696,7 +713,11 @@ impl Shot {
             kind: data.kind,
             marker_index: data.marker_index,
             temperature: data.temperature,
-            credit: data.credit.and_then(stored_credit).map(Arc::new),
+            credit: data
+                .credit
+                .map(SurveyCredit::into_storable)
+                .and_then(stored_credit)
+                .map(Arc::new),
         }
     }
 
@@ -706,14 +727,25 @@ impl Shot {
     }
 
     /// Replace this shot's survey credit (an empty one is stored as `None`).
+    ///
+    /// Every way a credit reaches a shot goes through here or
+    /// [`Self::set_shared_credit`] (an import's `ShotData`, an edit, an undo
+    /// or redo replayed from the file, a deserialized snapshot), and both store
+    /// it [`SurveyCredit::into_storable`]: no control character, no name past
+    /// the length cap, no role past [`crate::MAX_PEOPLE_PER_ROLE`] people.
     pub fn set_credit(&mut self, credit: SurveyCredit) {
-        self.credit = stored_credit(credit).map(Arc::new);
+        self.credit = stored_credit(credit.into_storable()).map(Arc::new);
     }
 
     /// Give this shot a credit SHARED with other shots: one allocation for all
-    /// of them (an empty one is stored as `None`).
+    /// of them (an empty one is stored as `None`). A credit that is not yet
+    /// storable is stored as its own normalized copy ([`Self::set_credit`]).
     pub fn set_shared_credit(&mut self, credit: &Arc<SurveyCredit>) {
-        self.credit = (!credit.is_empty()).then(|| Arc::clone(credit));
+        if credit.is_storable() {
+            self.credit = (!credit.is_empty()).then(|| Arc::clone(credit));
+        } else {
+            self.set_credit(SurveyCredit::clone(credit));
+        }
     }
 
     /// Apply partial updates to this shot
@@ -1470,6 +1502,71 @@ mod tests {
             "{}",
             ShotData::decl()
         );
+    }
+
+    /// Review of #719, item 2: every way a credit reaches a shot stores it
+    /// normalized - control characters out, names clamped, each role capped -
+    /// whether it comes through `set_credit` (an edit, an undo replayed from
+    /// the file), `ShotData` (an import), a shared credit, or a deserialized
+    /// snapshot.
+    #[test]
+    fn every_way_in_stores_a_normalized_credit() {
+        use crate::{Person, MAX_PEOPLE_PER_ROLE, MAX_PERSON_TEXT_CHARS};
+        let raw = |name: &str| Person {
+            name: name.to_string(),
+            email: None,
+        };
+        let dirty = || SurveyCredit {
+            surveyors: (0..MAX_PEOPLE_PER_ROLE + 50)
+                .map(|i| raw(&format!("P{i}")))
+                .collect(),
+            explorers: vec![
+                raw("Bad\u{1}Name\tHere"),
+                raw(&"n".repeat(MAX_PERSON_TEXT_CHARS + 9)),
+                raw("\u{7}"),
+            ],
+            date: None,
+        };
+        let check = |credit: &SurveyCredit, path: &str| {
+            assert_eq!(credit.surveyors.len(), MAX_PEOPLE_PER_ROLE, "{path}");
+            let names: Vec<&str> = credit.explorers.iter().map(|p| p.name.as_str()).collect();
+            assert_eq!(names.len(), 2, "{path}: a name of controls only is dropped");
+            assert_eq!(names[0], "BadName Here", "{path}");
+            assert_eq!(names[1].chars().count(), MAX_PERSON_TEXT_CHARS, "{path}");
+            assert!(credit.is_storable(), "{path}");
+        };
+
+        let mut shot = Shot::new(1, ShotData::default());
+        shot.set_credit(dirty());
+        check(shot.credit(), "set_credit");
+
+        let imported = Shot::new(
+            2,
+            ShotData {
+                credit: Some(dirty()),
+                ..ShotData::default()
+            },
+        );
+        check(imported.credit(), "ShotData");
+
+        let shared = Arc::new(dirty());
+        let mut shot = Shot::new(3, ShotData::default());
+        shot.set_shared_credit(&shared);
+        check(shot.credit(), "set_shared_credit");
+
+        let mut wire = serde_json::to_value(Shot::new(4, ShotData::default())).unwrap();
+        wire["credit"] = serde_json::to_value(dirty()).unwrap();
+        let restored: Shot = serde_json::from_value(wire).unwrap();
+        check(restored.credit(), "deserialized");
+
+        // A credit that already is storable is shared, not copied.
+        let clean = Arc::new(SurveyCredit {
+            surveyors: vec![raw("Ann")],
+            ..SurveyCredit::default()
+        });
+        let mut shot = Shot::new(5, ShotData::default());
+        shot.set_shared_credit(&clean);
+        assert!(Arc::ptr_eq(shot.credit.as_ref().unwrap(), &clean));
     }
 
     #[test]

@@ -5835,6 +5835,48 @@ mod tests {
         assert!(start.longitude.abs() < f64::EPSILON);
     }
 
+    /// Review of #719, item 2: a control character typed or imported into a
+    /// name never reaches the exported document (one makes it invalid XML):
+    /// the shot stores an imported credit cleaned, so the export carries no C0
+    /// byte but tab, newline and carriage return, and reads back.
+    #[test]
+    fn a_control_character_in_a_name_never_reaches_the_export() {
+        use crate::models::{Person, SurveyCredit};
+        let raw = |name: &str| Person {
+            name: name.to_string(),
+            email: None,
+        };
+        let mut project = Project::new("Controls".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Main".to_string()),
+            shots: vec![ShotData {
+                length: 5.0,
+                credit: Some(SurveyCredit {
+                    surveyors: vec![raw("Bad\u{1}Name")],
+                    explorers: vec![raw("Bell\u{7}\u{1b}Ringer")],
+                    date: None,
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let file = NamedTempFile::with_suffix(".tmlu").unwrap();
+        export_tml(&project, file.path()).unwrap();
+        let bytes = std::fs::read(file.path()).unwrap();
+        assert!(
+            !bytes
+                .iter()
+                .any(|&b| b < 0x20 && !matches!(b, b'\t' | b'\n' | b'\r')),
+            "a control byte reached the export"
+        );
+        let parsed = crate::parsers::tml::parse_tml(file.path()).unwrap();
+        let (configs, _, _) =
+            crate::parsers::tml::convert_tml_to_import_configs(&parsed, false, false).unwrap();
+        let credit = configs[0].shots[0].credit();
+        assert_eq!(credit.surveyors[0].name, "BadName");
+        assert_eq!(credit.explorers[0].name, "BellRinger");
+    }
+
     #[test]
     fn the_sidecar_strips_the_section_identity_separator() {
         // SpeleoDB groups shots into sections by hashing

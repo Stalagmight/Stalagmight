@@ -51,11 +51,14 @@ pub(super) fn parse_explorer_field(raw: &str) -> (Vec<Person>, Vec<Person>) {
             .map(|(at, _)| *at)
             .min()
             .unwrap_or(0);
+        // The lead and the explorer half are one role: merged through one
+        // hash set of identities and capped like any role, so two full halves
+        // cannot make 400 explorers, nor a quadratic scan.
         let lead = &raw[..first_tag];
-        let mut explorers = split_people(lead);
-        for person in split_people(explorer.map_or("", |(_, text)| text)) {
-            crate::models::add_person(&mut explorers, person);
-        }
+        let explorers = crate::models::merge_people([
+            split_people(lead),
+            split_people(explorer.map_or("", |(_, text)| text)),
+        ]);
         return (
             explorers,
             split_people(surveyor.map_or("", |(_, text)| text)),
@@ -145,6 +148,27 @@ mod tests {
             assert_eq!(names(&e), *explorers, "explorers of {raw:?}");
             assert_eq!(names(&s), *surveyors, "surveyors of {raw:?}");
         }
+    }
+
+    /// A lead text and an explorer half of 200 different names each merge to
+    /// one capped role of `MAX_PEOPLE_PER_ROLE`, not 400.
+    #[test]
+    fn the_merged_explorer_role_is_capped() {
+        let many = |prefix: &str| {
+            (0..crate::models::MAX_PEOPLE_PER_ROLE)
+                .map(|i| format!("{prefix} {i}"))
+                .collect::<Vec<_>>()
+                .join("; ")
+        };
+        let raw = format!(
+            "{}<Explorer>{}</Explorer><Surveyor>S</Surveyor>",
+            many("Lead"),
+            many("Half")
+        );
+        let (explorers, surveyors) = parse_explorer_field(&raw);
+        assert_eq!(explorers.len(), crate::models::MAX_PEOPLE_PER_ROLE);
+        assert_eq!(explorers[0].name, "Lead 0");
+        assert_eq!(names(&surveyors), ["S"]);
     }
 
     #[test]

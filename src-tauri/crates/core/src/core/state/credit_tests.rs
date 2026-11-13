@@ -755,3 +755,56 @@ fn a_legacy_surveyor_edit_of_uuidless_shots_undoes_exactly() {
     assert!(state.undo().success);
     assert_eq!(credits(&state, sid), before);
 }
+
+/// Review of #719, item 2: an undo or redo replays credits recorded in the
+/// undo stack, which is read back from the file. A recorded credit with a
+/// control character, an over-long name or more than the role cap is stored
+/// normalized, like every other way into a shot.
+#[test]
+fn a_replayed_undo_credit_is_normalized() {
+    use crate::core::ShotCreditChange;
+    use crate::models::{MAX_PEOPLE_PER_ROLE, MAX_PERSON_TEXT_CHARS};
+
+    let state = state_with_project();
+    let id = create_section(&state, None, vec![shot(3.0)]);
+    let uuid = state
+        .get_project_state()
+        .unwrap()
+        .get_section(id)
+        .unwrap()
+        .shots[0]
+        .uuid
+        .clone()
+        .unwrap();
+    let raw = |name: &str| Person {
+        name: name.to_string(),
+        email: Some("x\u{1}@y.org".to_string()),
+    };
+    let recorded = SurveyCredit {
+        surveyors: (0..MAX_PEOPLE_PER_ROLE + 20)
+            .map(|i| raw(&format!("P{i}")))
+            .collect(),
+        explorers: vec![
+            raw("Bell\u{7}Ringer"),
+            raw(&"z".repeat(MAX_PERSON_TEXT_CHARS * 2)),
+        ],
+        date: day(9),
+    };
+    let change = ShotCreditChange {
+        section_id: id,
+        shot_uuid: uuid,
+        before: SurveyCredit::default(),
+        after: recorded,
+        shot_id: 0,
+    };
+    assert!(state.write_recorded_credits(&[change], true).success);
+    let stored = &credits(&state, id)[0];
+    assert_eq!(stored.surveyors.len(), MAX_PEOPLE_PER_ROLE);
+    assert_eq!(stored.explorers[0].name, "BellRinger");
+    assert_eq!(stored.explorers[0].email.as_deref(), Some("x@y.org"));
+    assert_eq!(
+        stored.explorers[1].name.chars().count(),
+        MAX_PERSON_TEXT_CHARS
+    );
+    assert!(stored.is_storable());
+}
