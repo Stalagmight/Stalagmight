@@ -94,3 +94,19 @@ export function countRows(rows: readonly DataRow[]): { stations: number; shots: 
   }
   return { stations, shots, sections: sections.size };
 }
+
+export type ParsedRowKey =
+  | { kind: 'section'; sectionId: number }
+  | { kind: 'station'; sectionId: number; stationIndex: number }
+  | { kind: 'shot'; sectionId: number; shotId: number };
+
+/** Inverse of the row-key builders; null for anything else. */
+export function parseRowKey(key: string): ParsedRowKey | null {
+  const parts = key.split(':');
+  const nums = parts.slice(1).map(Number);
+  if (nums.some((n) => !Number.isInteger(n) || n < 0)) return null;
+  if (parts[0] === 'sec' && nums.length === 1) return { kind: 'section', sectionId: nums[0]! };
+  if (parts[0] === 'st' && nums.length === 2) return { kind: 'station', sectionId: nums[0]!, stationIndex: nums[1]! };
+  if (parts[0] === 'sh' && nums.length === 2) return { kind: 'shot', sectionId: nums[0]!, shotId: nums[1]! };
+  return null;
+}

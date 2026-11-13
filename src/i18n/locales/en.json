@@ -1904,6 +1904,230 @@
       "pager": "Rows {{from}}-{{to}} of {{total}}"
     }
   },
+  "dataWorkspace": {
+    "title": "Data",
+    "rowNoun_one": "row",
+    "rowNoun_other": "rows",
+    "columns": {
+      "issues": "Issues",
+      "type": "Row type",
+      "section": "Section",
+      "name": "Station name",
+      "fromTo": "From → To",
+      "length": "Length (m)",
+      "azimuth": "Azimuth (average)",
+      "azimuth_in": "Azimuth in",
+      "azimuth_out": "Azimuth out",
+      "inclination": "Inclination (average)",
+      "pitch_in": "Inclination in",
+      "pitch_out": "Inclination out",
+      "depth_in": "Depth in",
+      "depth_out": "Depth out",
+      "depth": "Station depth",
+      "left": "Left",
+      "right": "Right",
+      "up": "Up",
+      "down": "Down",
+      "kind": "Jump/Reference",
+      "links": "Links",
+      "comment": "Comment",
+      "x": "X (m)",
+      "y": "Y (m)",
+      "lat": "Latitude",
+      "long": "Longitude",
+      "temperature": "Temperature",
+      "surveyors": "Surveyors",
+      "explorers": "Explorers",
+      "date": "Survey date"
+    },
+    "headers": {
+      "issues": "!",
+      "type": "Type",
+      "section": "Section",
+      "name": "Name",
+      "fromTo": "From → To",
+      "length": "Len (m)",
+      "azimuth": "Az",
+      "azimuth_in": "Az In",
+      "azimuth_out": "Az Out",
+      "inclination": "Incl",
+      "pitch_in": "Incl In",
+      "pitch_out": "Incl Out",
+      "depth_in": "Depth In",
+      "depth_out": "Depth Out",
+      "depth": "Depth",
+      "left": "L",
+      "right": "R",
+      "up": "U",
+      "down": "D",
+      "kind": "J/R",
+      "links": "Links",
+      "comment": "Comment",
+      "x": "X",
+      "y": "Y",
+      "lat": "Lat",
+      "long": "Long",
+      "temperature": "Temp",
+      "surveyors": "Surveyors",
+      "explorers": "Explorers",
+      "date": "Date"
+    },
+    "columnGroups": {
+      "identity": "Identity",
+      "shot": "Shot",
+      "angles": "Angles",
+      "lrud": "LRUD",
+      "station": "Station",
+      "position": "Position",
+      "notes": "Notes",
+      "credit": "Survey credit"
+    },
+    "rowType": {
+      "station": "Station",
+      "shot": "Shot",
+      "section": "Section"
+    },
+    "links": {
+      "zeroDatum": "Zero datum",
+      "continuesFrom": "Continues from {{name}}",
+      "closesTo": "Closes to {{name}}",
+      "joins": "Joins {{name}}",
+      "mergeTitle": "Merged with {{name}} - click to go there",
+      "closureTitle": "Loop closure to {{name}} - click to go there",
+      "continuesFromTitle": "This section starts at {{name}} - click to go there",
+      "joinsTitle": "This section ends at {{name}} - click to go there",
+      "misclosureTitle": "Misclosure {{distance}} m, {{percent}} % of the loop",
+      "zeroDatumTitle": "Zero datum: the survey's fixed GPS anchor"
+    },
+    "gutter": {
+      "showOnMap": "Show on map ({{shortcut}})",
+      "revealedSearch": "Shown because it matches the search",
+      "revealedNav": "Shown because you navigated here",
+      "revealedColumn": "Shown because it holds search matches"
+    },
+    "hover": {
+      "section": "Section",
+      "station": "Station",
+      "shot": "Shot",
+      "name": "Name",
+      "xy": "X / Y",
+      "depth": "Depth",
+      "gps": "Lat / Long",
+      "zeroDatum": "Zero datum",
+      "comment": "Comment",
+      "merges": "Merged with",
+      "closures": "Closures",
+      "incoming": "Shot in",
+      "outgoing": "Shot out",
+      "issues": "Issues",
+      "issueLevelNone": "None",
+      "issueLevelWarning": "Warning",
+      "issueLevelError": "Error",
+      "fromTo": "From → To",
+      "measurements": "Length {{length}} m · Az {{azimuth}} · Depth {{depthIn}} → {{depthOut}}",
+      "inclination": "Inclination {{value}}",
+      "lrud": "LRUD {{left}} / {{right}} / {{up}} / {{down}}",
+      "warnings": "Warnings",
+      "ignored": "ignored",
+      "frozen": "Frozen",
+      "frozenText": "Geometry locked - part of the adjusted network",
+      "kind": "Kind",
+      "credit": "Credit",
+      "surveyedBy": "Surveyed by {{names}}",
+      "exploredBy": "Explored by {{names}}",
+      "onDate": "Survey date {{date}}",
+      "yes": "Yes"
+    },
+    "section": {
+      "collapse": "Collapse section",
+      "expand": "Expand section",
+      "continuesFrom": "continues from",
+      "counts": "{{stations}} stations · {{shots}} shots · {{length}} m"
+    },
+    "menu": {
+      "showOnMap": "Show on map",
+      "openInSurvey": "Open in Survey",
+      "copyRowName": "Copy row name",
+      "filterToSection": "Filter to this section",
+      "collapseSection": "Collapse section",
+      "expandSection": "Expand section"
+    },
+    "headerMenu": {
+      "sortAsc": "Sort ascending",
+      "sortDesc": "Sort descending",
+      "clearSort": "Back to survey order",
+      "hide": "Hide {{name}}",
+      "filterBy": "Filter by this column…",
+      "resetWidth": "Reset width"
+    },
+    "status": {
+      "rows_one": "{{countFormatted}} row",
+      "rows_other": "{{countFormatted}} rows",
+      "stations_one": "{{countFormatted}} station",
+      "stations_other": "{{countFormatted}} stations",
+      "shots_one": "{{countFormatted}} shot",
+      "shots_other": "{{countFormatted}} shots",
+      "sections_one": "{{countFormatted}} section",
+      "sections_other": "{{countFormatted}} sections",
+      "showing": "Showing {{shown}} of {{total}}",
+      "cells_one": "{{countFormatted}} cell",
+      "cells_other": "{{countFormatted}} cells",
+      "sum": "Σ {{name}} {{value}}",
+      "avg": "Avg {{value}}",
+      "min": "Min {{value}}",
+      "max": "Max {{value}}",
+      "selectionAria": "Selection summary"
+    },
+    "readOnly": {
+      "closure": "Closures Computed View - read-only.",
+      "speleo": "Read-only",
+      "generic": "This view is read-only."
+    },
+    "empty": {
+      "noProject": "Open or create a project to see its data here.",
+      "noSections": "This project has no sections yet. Draw or import one to fill the table.",
+      "noRows": "No rows match the current filters.",
+      "clearFilters": "Clear filters"
+    },
+    "mapPane": {
+      "title": "Map",
+      "follow": "Follow",
+      "followTitle": "Keep the active row in view on the map",
+      "openInSurvey": "Open in Survey",
+      "openInSurveyTitle": "Edit the active row in the Survey workspace ({{shortcut}})",
+      "close": "Close the map"
+    },
+    "backToData": {
+      "label": "Back to Data",
+      "title": "Return to the Data workspace at {{name}}",
+      "dismiss": "Dismiss"
+    },
+    "openInData": {
+      "label": "Open in Data",
+      "title": "Open this section in the Data workspace at the selected row"
+    },
+    "skipped": {
+      "summary_one": "{{count}} edit skipped: {{reasons}}",
+      "summary_other": "{{count}} edits skipped: {{reasons}}",
+      "frozen": "frozen geometry",
+      "computed": "computed column",
+      "na": "does not apply",
+      "blocked": "read-only",
+      "invalid": "invalid value"
+    },
+    "tint": {
+      "legend": {
+        "clear": "No issue",
+        "error": "Error",
+        "issuesNote": "Rows without issues stay untinted",
+        "distanceNote": "Unreachable rows stay untinted"
+      }
+    },
+    "shortcuts": {
+      "showOnMap": "Alt+M",
+      "openInSurvey": "Alt+S"
+    }
+  },
   "grid": {
     "contextMenu": {
       "copy": "Copy{{suffix}}",

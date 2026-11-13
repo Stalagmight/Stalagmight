@@ -1,0 +1,197 @@
+/**
+ * Navigation out of (and back into) the Data workspace: "Show on map" (open
+ * the map pane, select, centre), "Open in Survey" (switch mode, select, zoom,
+ * leave a Back-to-Data chip), go-to-row (focus, revealing a filtered-out row),
+ * and the two-way map follow: the active row selects + pans on the map pane,
+ * and a selection made on the map focuses its row. No feedback loop: a
+ * selection this workspace set itself is recognised and ignored.
+ */
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef } from 'react';
+import { useUIStore, type Selection } from '../../store/uiStore';
+import { setSource } from '../../utils/telemetry';
+import { useDataWorkspaceStore } from './store';
+import type { DataModel } from './DataModelContext';
+import type { DataColumnKey, DataRow, DataView } from './types';
+import { rowName } from './model/ctx';
+import { parseRowKey, sectionRowKey, shotRowKey, stationRowKey, type ParsedRowKey } from './model/rows';
+import { shotKeyAt } from './model/links';
+
+export interface DataNav {
+  /** Focus a row; a row the filters hide is revealed (and marked) first. */
+  goToRow: (rowKey: string, colKey?: DataColumnKey) => void;
+  showOnMap: (row: DataRow) => void;
+  openInSurvey: (row: DataRow) => void;
+  copyRowNames: (rows: readonly DataRow[]) => void;
+  filterToSection: (sectionId: number) => void;
+  /** Highlight the rows linked to the hovered station (null clears). */
+  setHoveredPartners: (keys: readonly string[] | null) => void;
+}
+
+export const DataNavContext = createContext<DataNav | null>(null);
+export function useDataNav(): DataNav | null {
+  return useContext(DataNavContext);
+}
+
+/** The app selection a row (or a parsed row key) stands for. */
+export function selectionForRow(row: DataRow | ParsedRowKey): Selection {
+  if (row.kind === 'station') {
+    return { type: 'station', stationRef: { section_id: row.sectionId, station_index: row.stationIndex } };
+  }
+  if (row.kind === 'shot') return { type: 'shot', sectionId: row.sectionId, shotId: row.shotId };
+  return { type: 'section', sectionId: row.sectionId };
+}
+
+/** The row an app selection points at (null for none / multi). */
+export function rowKeyForSelection(sel: Selection | null, model: DataModel | null): string | null {
+  if (!sel) return null;
+  if (sel.type === 'station' && sel.stationRef) return stationRowKey(sel.stationRef.section_id, sel.stationRef.station_index);
+  if (sel.type === 'shot' && sel.sectionId !== undefined && sel.shotId !== undefined) return shotRowKey(sel.sectionId, sel.shotId);
+  if (sel.type === 'section' && sel.sectionId !== undefined) {
+    const header = sectionRowKey(sel.sectionId);
+    if (model?.rowByKey.has(header)) return header;
+    return stationRowKey(sel.sectionId, 0);
+  }
+  return null;
+}
+
+/** Centre (and zoom) the map on a row: a station at point zoom, a shot on its
+ *  midpoint, a section fitted whole. */
+function centerOn(row: DataRow | ParsedRowKey): void {
+  const ui = useUIStore.getState();
+  if (row.kind === 'station') ui.triggerCenterOnStation({ section_id: row.sectionId, station_index: row.stationIndex });
+  else if (row.kind === 'shot') ui.triggerCenterOnShot(row.sectionId, row.shotId);
+  else ui.triggerZoomToSection(row.sectionId);
+}
+
+/**
+ * "Open in Survey": remember the row for the Back-to-Data chip, switch to
+ * Survey, select the row there and zoom the map to it. Store-only, so the map
+ * pane header (outside the workspace's providers) can call it too. Returns the
+ * selection it set (null for a key that names nothing).
+ */
+export function openRowInSurvey(rowKey: string): Selection | null {
+  const parsed = parseRowKey(rowKey);
+  if (!parsed) return null;
+  useDataWorkspaceStore.getState().setReturnToData({ rowKey });
+  setSource('data-table');
+  const ui = useUIStore.getState();
+  ui.setAppMode('survey');
+  const sel = selectionForRow(parsed);
+  setSource('data-table');
+  ui.setSelection(sel);
+  centerOn(parsed);
+  return sel;
+}
+
+const FOLLOW_THROTTLE_MS = 160;
+
+export function useDataNavigation(
+  model: DataModel | null,
+  view: DataView | null,
+  setPartners: (keys: readonly string[] | null) => void,
+): DataNav {
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  const modelRef = useRef(model);
+  modelRef.current = model;
+  /** The last selection this workspace pushed to the app: map-side changes
+   *  that are just that echo are ignored. */
+  const ownSelection = useRef<Selection | null>(null);
+
+  const select = useCallback((row: DataRow) => {
+    const sel = selectionForRow(row);
+    ownSelection.current = sel;
+    setSource('data-table');
+    useUIStore.getState().setSelection(sel);
+  }, []);
+
+  const goToRow = useCallback((rowKey: string, colKey?: DataColumnKey) => {
+    const store = useDataWorkspaceStore.getState();
+    const shown = viewRef.current?.rows.some((r) => r.key === rowKey) ?? false;
+    const req = { rowKey, align: 'center' as const, ...(colKey ? { colKey } : {}) };
+    if (shown) store.requestFocus(req);
+    else store.revealAndFocus(req);
+  }, []);
+
+  const showOnMap = useCallback(
+    (row: DataRow) => {
+      useDataWorkspaceStore.getState().setMapPaneOpen(true);
+      select(row);
+      centerOn(row);
+    },
+    [select],
+  );
+
+  const openInSurvey = useCallback((row: DataRow) => {
+    ownSelection.current = openRowInSurvey(row.key);
+  }, []);
+
+  const copyRowNames = useCallback((rows: readonly DataRow[]) => {
+    const m = modelRef.current;
+    if (!m || rows.length === 0) return;
+    const text = rows.map((r) => rowName(m.ctx, r)).join('\n');
+    void navigator.clipboard?.writeText(text).catch(() => undefined);
+  }, []);
+
+  const filterToSection = useCallback((sectionId: number) => {
+    useDataWorkspaceStore.getState().setFilters({ sectionIds: [sectionId] });
+  }, []);
+
+  // ── Map follow: active row -> map selection + pan (throttled) ───────────
+  const followTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingFollow = useRef<string | null>(null);
+  const lastFollowAt = useRef(0);
+  const runFollow = useCallback(() => {
+    followTimer.current = null;
+    const key = pendingFollow.current;
+    pendingFollow.current = null;
+    const m = modelRef.current;
+    const row = key ? m?.rowByKey.get(key) : undefined;
+    if (!row || !m) return;
+    lastFollowAt.current = Date.now();
+    select(row);
+    const ui = useUIStore.getState();
+    // Pan, never zoom: the user keeps the zoom they chose. A station pans to
+    // the shot that leaves it (or arrives, at a section end).
+    if (row.kind === 'shot') ui.triggerPanToShot(row.sectionId, row.shotId);
+    else if (row.kind === 'station') {
+      const key2 = shotKeyAt(m.ctx, row.sectionId, row.stationIndex) ?? shotKeyAt(m.ctx, row.sectionId, row.stationIndex - 1);
+      const shot = key2 ? m.rowByKey.get(key2) : undefined;
+      if (shot?.kind === 'shot') ui.triggerPanToShot(shot.sectionId, shot.shotId);
+    }
+  }, [select]);
+
+  useEffect(() => {
+    let prevKey = useDataWorkspaceStore.getState().activeRowKey;
+    const unsub = useDataWorkspaceStore.subscribe((s) => {
+      if (s.activeRowKey === prevKey) return;
+      prevKey = s.activeRowKey;
+      if (!s.mapPaneOpen || !s.mapFollow || !s.activeRowKey) return;
+      pendingFollow.current = s.activeRowKey;
+      if (followTimer.current) return;
+      const wait = Math.max(0, FOLLOW_THROTTLE_MS - (Date.now() - lastFollowAt.current));
+      followTimer.current = setTimeout(runFollow, wait);
+    });
+    return () => {
+      unsub();
+      if (followTimer.current) clearTimeout(followTimer.current);
+    };
+  }, [runFollow]);
+
+  // ── Map selection -> focus its row ──────────────────────────────────────
+  useEffect(() => {
+    return useUIStore.subscribe((s, prev) => {
+      if (s.selection === prev.selection || !s.selection) return;
+      if (s.selection === ownSelection.current) return;
+      const key = rowKeyForSelection(s.selection, modelRef.current);
+      if (!key || !modelRef.current?.rowByKey.has(key)) return;
+      if (useDataWorkspaceStore.getState().activeRowKey === key) return;
+      goToRow(key);
+    });
+  }, [goToRow]);
+
+  return useMemo(
+    () => ({ goToRow, showOnMap, openInSurvey, copyRowNames, filterToSection, setHoveredPartners: setPartners }),
+    [goToRow, showOnMap, openInSurvey, copyRowNames, filterToSection, setPartners],
+  );
+}
