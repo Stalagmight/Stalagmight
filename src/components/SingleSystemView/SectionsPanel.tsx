@@ -696,6 +696,20 @@ export function calculateSectionStats(
   };
 }
 
+/**
+ * A section color as the `#rrggbb` a color input can hold. A value already in
+ * that form is kept (lowercased, as the input reports it). Anything else is read
+ * back from `drawn`, the element painted with it, whose computed background the
+ * browser has already resolved to `rgb(...)`. An unpaintable color is black,
+ * which is also what the input itself would have made of it.
+ */
+export function hexColorFor(color: string, drawn: Element | null): string {
+  if (/^#[0-9a-f]{6}$/i.test(color)) return color.toLowerCase();
+  const rgb = drawn ? /^rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(getComputedStyle(drawn).backgroundColor) : null;
+  if (!rgb) return '#000000';
+  return `#${rgb.slice(1, 4).map((c) => Number(c).toString(16).padStart(2, '0')).join('')}`;
+}
+
 interface SectionRowProps {
   section: Section;
   index: number;
@@ -793,18 +807,25 @@ const SectionRow = memo(function SectionRow({
   // (Windows) fires a single `change` after its picker has closed, which commits
   // at once. The effect also resyncs the dot when the color changes elsewhere
   // (undo, Edit Section).
+  //
+  // The input can only hold #rrggbb, and would turn any other color a section
+  // carries (a CSS name or short hex typed in Edit Section) into #000000. So it
+  // is seeded with the color the dot actually draws, and a pick is compared
+  // with that seed, not with `section.color`: a GTK Cancel that puts the seed
+  // back is then never sent as a pick of black.
   const colorRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     const input = colorRef.current;
     if (!input) return;
-    input.value = section.color;
+    const seed = hexColorFor(section.color, input.parentElement);
+    input.value = seed;
     let pending = false;
     const commit = () => {
       if (!pending) return;
       pending = false;
-      if (input.value.toLowerCase() === section.color.toLowerCase()) return;
+      if (input.value.toLowerCase() === seed) return;
       void onColorChange(section.id, input.value).then((applied) => {
-        if (!applied) input.value = section.color;
+        if (!applied) input.value = seed;
       });
     };
     const onChange = () => {
@@ -816,9 +837,8 @@ const SectionRow = memo(function SectionRow({
     return () => {
       input.removeEventListener('change', onChange);
       window.removeEventListener('focus', commit);
-      // A pick still held when the row unmounts (scrolled out of the list) is
-      // sent rather than dropped.
-      commit();
+      // A pick still held when the row goes away is dropped, not sent: by then
+      // the section, or the whole project, may no longer be the one it was for.
     };
   }, [section.id, section.color, onColorChange]);
 

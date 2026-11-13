@@ -310,6 +310,9 @@ test.describe('Panel Interactions', () => {
     await expect
       .poll(() => dot.evaluate((el) => getComputedStyle(el.parentElement!).backgroundColor))
       .toBe('rgb(255, 0, 0)');
+    // ...and the picker opens at that color, not at the #000000 the input
+    // would turn `red` into.
+    await expect(dot).toHaveValue('#ff0000');
   });
 
   test('section color dot is inert while editing is blocked (#654)', async ({ page }) => {
@@ -413,6 +416,23 @@ test.describe('Panel Interactions', () => {
     await choose('#336699');
     await expect.poll(readColor).toBe('#336699');
     expect(updateCalls).toBe(2);
+
+    // The same Cancel on a section whose color is not #rrggbb (Edit Section's
+    // free-text field takes any CSS color) puts back whatever the picker opened
+    // at. That must not be sent as a pick, or Cancel recolors the section.
+    await page.evaluate(
+      (id) => (window as any).__E2E_TEST__.projectStore.getState().updateSection(id, { color: 'red' }),
+      sectionId,
+    );
+    await expect.poll(readColor).toBe('red');
+    const opened = await dot.inputValue();
+    await pickerOpen();
+    await choose('#00ff00');
+    await choose(opened);
+    await pickerClosed();
+    await choose('#123456');
+    await expect.poll(readColor).toBe('#123456');
+    expect(updateCalls).toBe(4);
   });
 
   test('section color dot reports a failed update and reverts (#654)', async ({ page }) => {
