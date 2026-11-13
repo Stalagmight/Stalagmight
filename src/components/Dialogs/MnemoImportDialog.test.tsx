@@ -38,10 +38,10 @@ import { useUIStore } from '../../store/uiStore';
 
 const MNEMO: MnemoPort = {
   name: '/dev/cu.usbmodem101',
-  vid: 0x2e8a,
-  pid: 0x000a,
-  manufacturer: 'Raspberry Pi',
-  product: 'MNemo V2',
+  vid: 0x2341,
+  pid: 0x005e,
+  manufacturer: 'Arduino',
+  product: 'Nano RP2040 Connect',
   likely_mnemo: true,
 };
 const OTHER: MnemoPort = {
@@ -181,6 +181,24 @@ describe('MnemoImportDialog', () => {
 
     expect(invokeIpcMock).toHaveBeenCalledWith('cancel_mnemo_pull', undefined, expect.anything());
     expect(closeDialog).not.toHaveBeenCalled();
+  });
+
+  it('cancels a running pull when the dialog is replaced', async () => {
+    backend({ pull: () => new Promise(() => {}) });
+    const { unmount } = render(<MnemoImportDialog />);
+    await waitFor(() => expect(screen.getByTestId('mnemo-refresh')).not.toBeDisabled());
+    await userEvent.click(screen.getByTestId('mnemo-download'));
+
+    unmount();
+    expect(invokeIpcMock).toHaveBeenCalledWith('cancel_mnemo_pull', undefined, expect.anything());
+  });
+
+  it('sends no cancel when it closes with nothing running', async () => {
+    backend();
+    const { unmount } = render(<MnemoImportDialog />);
+    await waitFor(() => expect(screen.getByTestId('mnemo-refresh')).not.toBeDisabled());
+    unmount();
+    expect(invokeIpcMock).not.toHaveBeenCalledWith('cancel_mnemo_pull', undefined, expect.anything());
   });
 
   it('reports sections it could not read', async () => {

@@ -39,10 +39,14 @@ export default function MnemoImportDialog() {
   // Set in the effect, not only at init: StrictMode runs mount, cleanup, mount,
   // and a ref left false by that first cleanup would drop every reply.
   const mounted = useRef(true);
+  // A pull still running when the dialog goes away (another dialog replaced
+  // it) is cancelled, so it does not hold the port with no Cancel on screen.
+  const pullInFlight = useRef(false);
   useEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
+      if (pullInFlight.current) void cancelMnemoPull().catch(() => {});
     };
   }, []);
 
@@ -102,6 +106,7 @@ export default function MnemoImportDialog() {
     setPhase('pulling');
     setReceived(0);
     setError(null);
+    pullInFlight.current = true;
     try {
       const pulled = await pullMnemo(selected);
       if (!mounted.current) return;
@@ -111,6 +116,8 @@ export default function MnemoImportDialog() {
       if (!mounted.current) return;
       if (!isMnemoCancelled(e)) setError(mnemoErrorMessage(e));
       setPhase('ready');
+    } finally {
+      pullInFlight.current = false;
     }
   };
 

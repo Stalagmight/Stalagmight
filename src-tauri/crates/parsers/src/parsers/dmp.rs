@@ -3327,9 +3327,13 @@ mod tests {
 
     #[test]
     fn parse_dmp_bytes_refuses_empty_and_unknown_versions() {
-        assert!(parse_dmp_bytes(&[]).is_err());
+        let empty = parse_dmp_bytes(&[]).unwrap_err().to_string();
+        assert!(empty.contains("empty"), "{empty}");
+        // Checked by message: an unknown version also finds no sections, so a
+        // bare is_err() would pass with the version check removed.
         let mut data = v3_section_bytes();
         data[0] = 9;
-        assert!(parse_dmp_bytes(&data).is_err());
+        let unknown = parse_dmp_bytes(&data).unwrap_err().to_string();
+        assert!(unknown.contains("Unsupported DMP version"), "{unknown}");
     }
 }

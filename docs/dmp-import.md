@@ -26,8 +26,13 @@ the device's public serial CLI documentation):
 - **`getdata` only after a good firmware reply.** If step 1 does not end with
   `MN2Over`, the pull stops (`not_mnemo`), so another USB serial device never
   receives `getdata`.
-- **The end of a reply** is `MN2Over` followed by 250 ms of quiet. Survey bytes can
-  contain `MN2Over` by chance; the device goes quiet after the real one.
+- **The end of a reply** is an `MN2Over` within the last 16 bytes, followed only
+  by text-like bytes (line endings, a short prompt, NUL padding), and then 250 ms of
+  quiet. It is re-derived after every read, so a chance `MN2Over` inside the survey
+  bytes stops counting as soon as binary data follows it, even after a pause.
+- **Stale bytes first:** before `getfirmwareversion`, whatever the device is still
+  sending (the rest of a cancelled transfer) is read and discarded until 250 ms of
+  quiet, for at most 3 s.
 - **Limits:** 10 s to the first byte; 2 s (firmware) or 8 s (data, the device
   pauses while reading its memory) without a byte; 10 s or 10 min in all; 8 MiB of
   data. Cancel is checked between reads (200 ms read timeout).
@@ -37,23 +42,26 @@ the device's public serial CLI documentation):
 - Only ports the OS lists as USB serial are offered, and `pull_mnemo` refuses any
   name not in that list at the moment it runs, so the IPC cannot open an arbitrary
   device or file. On macOS only `/dev/cu.*` (`/dev/tty.*` waits for carrier detect).
-- Opened exclusively; a port already open elsewhere (often the MNemo desktop app)
-  is `port_busy`.
-- A port whose USB name mentions "mnemo", or whose vendor ID is the RP2040's
-  `0x2E8A`, is marked `likely_mnemo`. The dialog preselects only when exactly one
+- Opened exclusively (the crate's Unix default; Windows never shares a COM port); a
+  port already open elsewhere (often the MNemo desktop app) is `port_busy`. The
+  crate reports both "in use" and "gone" as `NoDevice`, so the ports are listed
+  again to tell `port_busy` from `port_not_found`.
+- A port whose USB name mentions "mnemo", or that reports the MNemo v2's board,
+  an Arduino Nano RP2040 Connect (vendor `0x2341`, product `0x005E`, seen on a real
+  device), is marked `likely_mnemo`. The dialog preselects only when exactly one
   port is; anything else needs an explicit pick.
 - **Linux:** without `libudev` the crate scans `/sys/class/tty` (and reports
   nothing when that is missing). Opening `/dev/ttyACM*` needs the `dialout` group
   (`uucp` on Arch); a refusal is `permission_denied` with that advice. ModemManager
   may briefly probe a newly plugged `ttyACM` device.
-- **Windows:** the built-in CDC driver gives a `COMn` port; an in-use port reports
-  "access denied", which is classified as `port_busy`.
+- **Windows:** the built-in CDC driver gives a `COMn` port.
 - **macOS:** no entitlement is needed for a USB serial port under the hardened
   runtime without App Sandbox.
 
-**The saved file:** `<app local data>/MNemo downloads/MNemo-YYYY-MM-DD_HHMMSS.dmp`,
-written with `create_new` (a clash gets `-2`, `-3`, ...), fsynced, and removed if
-the write fails. It is saved before anything is parsed, and kept even when nothing
+**The saved file:** `<app local data>/MNemo downloads/MNemo-YYYY-MM-DD_HHMMSS.dmp`.
+The text is written and fsynced as `.<name>.part`, then hard-linked to the `.dmp`
+name (a clash gets `-2`, `-3`, ...; a link never replaces an existing file), so a
+crash mid-write leaves no truncated `.dmp`. Nothing deletes old downloads. It is saved before anything is parsed, and kept even when nothing
 in it parses, so it can go in a bug report; the dialog then offers Show file but
 not Import.
 

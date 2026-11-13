@@ -62,9 +62,15 @@ pub(super) struct PullLimits {
     pub(super) firmware: ReplyLimits,
     pub(super) data: ReplyLimits,
     /// After the end marker, wait this long for more bytes before accepting the
-    /// reply. Survey bytes can contain `MN2Over` by chance; the device ends the
-    /// reply there and goes quiet, while a chance match is followed by more data.
+    /// reply. Survey bytes can contain `MN2Over` by chance; when data follows
+    /// such a match (even after a pause) it stops counting as the end, see
+    /// [`reply_end`].
     pub(super) settle: Duration,
+    /// Before the first command, read and discard whatever the device is still
+    /// sending (the rest of a cancelled transfer) until it has been quiet this long.
+    pub(super) drain_quiet: Duration,
+    /// Give up draining after this long and send the command anyway.
+    pub(super) drain_max: Duration,
 }
 
 impl PullLimits {
@@ -82,6 +88,8 @@ impl PullLimits {
             total: Duration::from_mins(10),
         },
         settle: Duration::from_millis(250),
+        drain_quiet: Duration::from_millis(250),
+        drain_max: Duration::from_secs(3),
     };
 }
 
@@ -129,6 +137,7 @@ pub(super) fn pull<P: Read + Write>(
     cancel: &AtomicBool,
     on_progress: &mut dyn FnMut(usize),
 ) -> Result<Pulled, PullError> {
+    drain(port, limits, cancel)?;
     let firmware = exchange(
         port,
         Command::FirmwareVersion,
@@ -159,6 +168,47 @@ pub(super) fn pull<P: Read + Write>(
         firmware: firmware_text(&firmware),
         data,
     })
+}
+
+/// Read one chunk, treating a read timeout as "nothing yet".
+fn read_some<P: Read>(port: &mut P, chunk: &mut [u8]) -> Result<usize, PullError> {
+    match port.read(chunk) {
+        Ok(n) => Ok(n),
+        Err(e)
+            if matches!(
+                e.kind(),
+                ErrorKind::TimedOut | ErrorKind::WouldBlock | ErrorKind::Interrupted
+            ) =>
+        {
+            Ok(0)
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Discard bytes until the port has been quiet for `drain_quiet` (or
+/// `drain_max` has passed), so a transfer cut short by a cancel or a dropped
+/// cable cannot be read as the reply to the next command.
+fn drain<P: Read>(port: &mut P, limits: &PullLimits, cancel: &AtomicBool) -> Result<(), PullError> {
+    let start = Instant::now();
+    let mut quiet_since = start;
+    let mut chunk = vec![0u8; 4 * 1024];
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(PullError::Cancelled);
+        }
+        let now = Instant::now();
+        if now.duration_since(quiet_since) >= limits.drain_quiet
+            || now.duration_since(start) >= limits.drain_max
+        {
+            return Ok(());
+        }
+        if read_some(port, &mut chunk)? > 0 {
+            quiet_since = Instant::now();
+        } else {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
 }
 
 /// Send one command and read its reply up to the end marker.
@@ -210,18 +260,7 @@ fn exchange<P: Read + Write>(
             });
         }
 
-        let read = match port.read(&mut chunk) {
-            Ok(n) => n,
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    ErrorKind::TimedOut | ErrorKind::WouldBlock | ErrorKind::Interrupted
-                ) =>
-            {
-                0
-            }
-            Err(e) => return Err(e.into()),
-        };
+        let read = read_some(port, &mut chunk)?;
         if read == 0 {
             // A port read normally waits for its own timeout; this keeps a port
             // that returns at once from spinning the CPU.
@@ -229,23 +268,39 @@ fn exchange<P: Read + Write>(
             continue;
         }
 
-        // The marker can straddle two reads, so search from just before the new bytes.
-        let search_from = reply.len().saturating_sub(END_MARKER.len() - 1);
         reply.extend_from_slice(&chunk[..read]);
         last_byte_at = Instant::now();
         if reply.len() > cap {
             return Err(PullError::TooLarge);
         }
-        if let Some(found) = rfind(&reply[search_from..], END_MARKER) {
-            marker_at = Some(search_from + found);
-        }
+        // Re-derived from the whole tail on every read, so a chance match inside
+        // the data stops counting as soon as more data follows it.
+        marker_at = reply_end(&reply);
         on_progress(marker_at.unwrap_or(reply.len()));
     }
 }
 
-/// Start of the last occurrence of `needle` in `haystack`.
-fn rfind(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack.windows(needle.len()).rposition(|w| w == needle)
+/// The most bytes after `MN2Over` that can still end a reply: line endings, or
+/// a short prompt the device might print after it.
+const MAX_AFTER_MARKER: usize = 16;
+
+/// Where the reply's data ends: the start of an `MN2Over` near the end of
+/// `reply` that is followed only by text-like bytes (printable ASCII,
+/// whitespace, NUL padding). Survey data after a chance match is binary and
+/// usually long, so it fails this test and the reply keeps going.
+fn reply_end(reply: &[u8]) -> Option<usize> {
+    let window_start = reply
+        .len()
+        .saturating_sub(END_MARKER.len() + MAX_AFTER_MARKER);
+    let found = reply[window_start..]
+        .windows(END_MARKER.len())
+        .rposition(|w| w == END_MARKER)?;
+    let marker = window_start + found;
+    let after = &reply[marker + END_MARKER.len()..];
+    after
+        .iter()
+        .all(|&b| b == 0 || b.is_ascii_graphic() || b.is_ascii_whitespace())
+        .then_some(marker)
 }
 
 /// The firmware reply as display text: Latin-1, control characters dropped,
@@ -305,7 +360,9 @@ mod tests {
             self.written.extend_from_slice(buf);
             if let Some((expected, steps)) = self.replies.pop_front() {
                 assert_eq!(buf, expected.as_slice(), "unexpected command");
-                self.current = steps.into();
+                // Appended, not replaced: bytes the device was already sending
+                // stay in front of the reply, as on a real line.
+                self.current.extend(steps);
             }
             Ok(buf.len())
         }
@@ -337,18 +394,22 @@ mod tests {
         }
     }
 
+    // Margins wide enough that a test thread descheduled for a while (cargo runs
+    // a crate's tests as threads of one process) does not trip a limit.
     const FAST: PullLimits = PullLimits {
         firmware: ReplyLimits {
-            first_byte: Duration::from_millis(60),
-            idle: Duration::from_millis(60),
-            total: Duration::from_millis(400),
+            first_byte: Duration::from_millis(300),
+            idle: Duration::from_millis(300),
+            total: Duration::from_secs(3),
         },
         data: ReplyLimits {
-            first_byte: Duration::from_millis(60),
-            idle: Duration::from_millis(60),
-            total: Duration::from_millis(400),
+            first_byte: Duration::from_millis(300),
+            idle: Duration::from_millis(300),
+            total: Duration::from_secs(3),
         },
-        settle: Duration::from_millis(20),
+        settle: Duration::from_millis(100),
+        drain_quiet: Duration::from_millis(20),
+        drain_max: Duration::from_millis(500),
     };
 
     const FW: &[u8] = b"getfirmwareversion\n";
@@ -410,23 +471,54 @@ mod tests {
     }
 
     #[test]
-    fn marker_bytes_inside_the_data_do_not_end_the_reply() {
+    fn marker_bytes_inside_the_data_do_not_end_the_reply_even_across_a_pause() {
+        // A chance MN2Over followed by binary data, then the device pauses for
+        // longer than `settle` (as it does while reading its memory), then the
+        // rest and the real marker. Nothing may be cut at the chance match.
         let mut first = vec![5u8, 9];
         first.extend_from_slice(END_MARKER);
+        first.extend_from_slice(&[1, 200]);
         let mut device = FakeMnemo::new(vec![
             (FW, vec![Step::Bytes(with_marker(b"fw"))]),
             (
                 DATA,
                 vec![
                     Step::Bytes(first.clone()),
-                    Step::Bytes(with_marker(&[1, 2, 3])),
+                    Step::Quiet(FAST.settle * 2),
+                    Step::Bytes(with_marker(&[3])),
                 ],
             ),
         ]);
         let pulled = run(&mut device).unwrap();
         let mut expected = first;
-        expected.extend_from_slice(&[1, 2, 3]);
+        expected.push(3);
         assert_eq!(pulled.data, expected);
+    }
+
+    #[test]
+    fn the_reply_may_end_with_line_endings_or_a_short_prompt_after_the_marker() {
+        for tail in [&b"\r\n"[..], b"\r\n> ", b"\0\0"] {
+            let mut data = with_marker(&[5, 1]);
+            data.extend_from_slice(tail);
+            let mut device = FakeMnemo::new(vec![
+                (FW, vec![Step::Bytes(with_marker(b"fw"))]),
+                (DATA, vec![Step::Bytes(data)]),
+            ]);
+            assert_eq!(run(&mut device).unwrap().data, vec![5, 1], "tail {tail:?}");
+        }
+    }
+
+    #[test]
+    fn bytes_left_over_from_an_earlier_transfer_are_drained_first() {
+        // A cancelled pull leaves the device mid-reply, marker included.
+        let mut device = FakeMnemo::new(vec![
+            (FW, vec![Step::Bytes(with_marker(b"fw"))]),
+            (DATA, vec![Step::Bytes(with_marker(&[5, 1]))]),
+        ]);
+        device.current = vec![Step::Bytes(with_marker(&[7, 7, 7]))].into();
+        let pulled = run(&mut device).unwrap();
+        assert_eq!(pulled.firmware, "fw");
+        assert_eq!(pulled.data, vec![5, 1]);
     }
 
     #[test]

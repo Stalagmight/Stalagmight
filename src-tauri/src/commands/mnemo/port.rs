@@ -58,18 +58,22 @@ fn is_callout_device(name: &str) -> bool {
 /// Why a port could not be opened.
 #[derive(Debug)]
 pub(super) enum OpenError {
-    /// Another program holds the port (on Unix the crate reports the
-    /// exclusive-open `EBUSY` as "no device"; on Windows an in-use COM port is
-    /// "access denied").
+    /// Another program holds the port.
     Busy,
+    /// The device went away between listing and opening.
+    Gone,
     /// The OS refused access. On Linux this means the user is not in the
     /// group that owns the device (`dialout` or `uucp`).
     PermissionDenied,
     Other(serialport::Error),
 }
 
-/// Open `name` raw, 8N1, at [`BAUD`], exclusively, and drop anything already
-/// buffered so the first bytes read belong to the first command's reply.
+/// Open `name` raw, 8N1, at [`BAUD`], and drop anything already buffered so the
+/// first bytes read belong to the first command's reply.
+///
+/// Exclusive without asking: the crate opens Unix ports with `TIOCEXCL` and an
+/// exclusive `flock` by default (its `exclusive()` setter exists only on Unix),
+/// and Windows never shares a COM port.
 pub(super) fn open(name: &str) -> Result<Box<dyn SerialPort>, OpenError> {
     let port = serialport::new(name, BAUD)
         .data_bits(DataBits::Eight)
@@ -77,26 +81,28 @@ pub(super) fn open(name: &str) -> Result<Box<dyn SerialPort>, OpenError> {
         .stop_bits(StopBits::One)
         .flow_control(FlowControl::None)
         .timeout(READ_TIMEOUT)
-        .exclusive(true)
         .open()
-        .map_err(classify_open_error)?;
+        .map_err(|e| classify_open_error(name, e))?;
     port.clear(ClearBuffer::All).map_err(OpenError::Other)?;
     Ok(port)
 }
 
-fn classify_open_error(e: serialport::Error) -> OpenError {
+/// The crate folds "in use" and "not there" into one `NoDevice` kind: Unix maps
+/// `EBUSY` (the exclusive open failing) to it, and Windows maps
+/// `ERROR_ACCESS_DENIED` (port in use) and file-not-found to it. Listing the
+/// ports again tells the two apart.
+fn classify_open_error(name: &str, e: serialport::Error) -> OpenError {
     match e.kind() {
-        serialport::ErrorKind::NoDevice => OpenError::Busy,
-        serialport::ErrorKind::Io(io::ErrorKind::PermissionDenied) => {
-            if cfg!(windows) {
+        serialport::ErrorKind::NoDevice => {
+            let still_listed = usb_ports().is_ok_and(|ports| ports.iter().any(|p| p.name == name));
+            if still_listed {
                 OpenError::Busy
             } else {
-                OpenError::PermissionDenied
+                OpenError::Gone
             }
         }
-        serialport::ErrorKind::Io(io::ErrorKind::WouldBlock | io::ErrorKind::ResourceBusy) => {
-            OpenError::Busy
-        }
+        serialport::ErrorKind::Io(io::ErrorKind::NotFound) => OpenError::Gone,
+        serialport::ErrorKind::Io(io::ErrorKind::PermissionDenied) => OpenError::PermissionDenied,
         _ => OpenError::Other(e),
     }
 }
@@ -126,6 +132,8 @@ mod tests {
             total: Duration::from_secs(5),
         },
         settle: Duration::from_millis(50),
+        drain_quiet: Duration::from_millis(50),
+        drain_max: Duration::from_millis(500),
     };
 
     /// Read one `\n`-terminated command from the device end.
