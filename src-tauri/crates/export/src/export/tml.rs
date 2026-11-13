@@ -464,41 +464,64 @@ fn write_shot<W: std::io::Write>(
     Ok(())
 }
 
-/// Ariane's `Explorer` field for one row (#329).
+/// Ariane's `Explorer` field for one row (#329), in a form every reader
+/// takes to the same people in the same roles.
 ///
-/// * The element form `<Explorer>e1, e2</Explorer><Surveyor>s1, s2</Surveyor>`
-///   (entity-escaped by the writer, exactly what the importer's element branch
-///   reads) when any surveyor is credited, or when an explorer's name holds
-///   `" / "` - in the plain form the importer would read that as explorer then
-///   surveyor.
-/// * Otherwise the explorers as plain text joined with `", "`, the
-///   single-value form the importer reads as explorers.
+/// * Anyone credited: the element form
+///   `<Explorer>e1, e2</Explorer><Surveyor>s1, s2</Surveyor>` (entity-escaped
+///   by the writer, exactly what the importer's element branch reads), a role
+///   with nobody left empty. Never the plain form: this importer, like a
+///   `.stalx` legacy column, reads a single plain value as surveyors, while
+///   Ariane shows it in its Explorer field and openspeleo-lib reads it as
+///   explorers - the element form names the role for all of them.
 /// * `None` names nobody, written as Ariane's `unknown`.
 ///
-/// `<` and `>` are dropped from every exported name: inside this pseudo-XML a
-/// name holding `</Explorer><Surveyor>` would move people between roles on
-/// re-import. A `,` or `;` inside ONE name cannot round-trip: Ariane itself
-/// separates the people of a role with commas, so the importer splits there.
+/// Within a role, names are joined with `", "`, or with `"; "` when `", "`
+/// would read back otherwise (two one-word names read as one `Last, First`
+/// person). `<` and `>` are dropped from every exported name: inside this
+/// pseudo-XML a name holding `</Explorer><Surveyor>` would move people between
+/// roles on re-import. A `,` or `;` inside ONE name cannot round-trip: Ariane
+/// itself separates the people of a role with commas, so the importer splits
+/// there.
 fn row_explorer(credit: &crate::models::SurveyCredit) -> Option<String> {
-    let names = |people: &[crate::models::Person]| -> Option<String> {
-        let names: Vec<String> = people
-            .iter()
-            .map(|p| p.name.replace(['<', '>'], ""))
-            .filter(|n| !n.trim().is_empty())
-            .collect();
-        (!names.is_empty()).then(|| names.join(", "))
-    };
-    let explorers = names(&credit.explorers);
-    let surveyors = names(&credit.surveyors);
-    let ambiguous = explorers.as_deref().is_some_and(|e| e.contains(" / "));
-    if surveyors.is_none() && !ambiguous {
-        return explorers;
+    let explorers = role_text(&credit.explorers);
+    let surveyors = role_text(&credit.surveyors);
+    if explorers.is_none() && surveyors.is_none() {
+        return None;
     }
     Some(format!(
         "<Explorer>{}</Explorer><Surveyor>{}</Surveyor>",
         explorers.unwrap_or_default(),
         surveyors.unwrap_or_default()
     ))
+}
+
+/// One role's names for [`row_explorer`]: joined with `", "`, or `"; "` when
+/// the importer's splitter ([`crate::models::split_people`]) would not read
+/// the `", "` text back as the same names.
+fn role_text(people: &[crate::models::Person]) -> Option<String> {
+    let names: Vec<String> = people
+        .iter()
+        .map(|p| p.name.replace(['<', '>'], "").trim().to_string())
+        .filter(|n| !n.is_empty())
+        .collect();
+    if names.is_empty() {
+        return None;
+    }
+    let reads_back = |text: &str| {
+        let back = crate::models::split_people(text);
+        back.len() == names.len() && back.iter().zip(&names).all(|(p, n)| &p.name == n)
+    };
+    let commas = names.join(", ");
+    if reads_back(&commas) {
+        return Some(commas);
+    }
+    let semicolons = names.join("; ");
+    Some(if reads_back(&semicolons) {
+        semicolons
+    } else {
+        commas
+    })
 }
 
 /// The row's `Date`: the shot's survey date, ISO.
@@ -4240,9 +4263,12 @@ mod tests {
     }
 
     /// Per-row survey credit (#329): every combination of roles leaves as
-    /// Ariane's `Explorer` field (element form when anyone surveyed, plain
-    /// explorers otherwise) and comes back to the same people on the same
-    /// shot, and a second export of what came back is the same again.
+    /// Ariane's `Explorer` field (always the element form, so a row of
+    /// explorers alone is not read back as surveyors) and comes back to the
+    /// same people on the same shot, and a second export of what came back is
+    /// the same again. Two one-word names in a role are joined with "; ", so
+    /// the `Last, First` rule does not merge them; one person written
+    /// `Last, First` stays one.
     #[test]
     fn survey_credit_round_trips_per_row_and_is_stable() {
         use crate::models::{Person, SurveyCredit};
@@ -4270,6 +4296,21 @@ mod tests {
                 date: day(4),
             },
             SurveyCredit::default(),
+            SurveyCredit {
+                surveyors: vec![p("Ann"), p("Bo")],
+                explorers: vec![p("Cy"), p("Di")],
+                date: day(5),
+            },
+            SurveyCredit {
+                surveyors: vec![p("Solo")],
+                explorers: Vec::new(),
+                date: day(6),
+            },
+            SurveyCredit {
+                surveyors: Vec::new(),
+                explorers: vec![p("Doe, John")],
+                date: day(7),
+            },
         ];
         let project_of = |credits: &[SurveyCredit]| {
             let mut project = Project::new("Credit Cave".to_string(), None);
@@ -4312,9 +4353,7 @@ mod tests {
         // with the stand-in date and comes back with it - the one value that
         // changes, and only on the first trip.
         let mut expected = credits.clone();
-        if let Some(last) = expected.last_mut() {
-            last.date = chrono::NaiveDate::from_ymd_opt(2000, 1, 1);
-        }
+        expected[4].date = chrono::NaiveDate::from_ymd_opt(2000, 1, 1);
         assert_eq!(
             once, expected,
             "every row comes back with its own people and date"
@@ -5812,7 +5851,10 @@ mod tests {
 
         let user = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
         assert_eq!(user[0].section, "Main\u{220e}Line");
-        assert_eq!(user[0].explorer.as_deref(), Some("Alice\u{220e}Bob"));
+        assert_eq!(
+            user[0].explorer.as_deref(),
+            Some("<Explorer>Alice\u{220e}Bob</Explorer><Surveyor></Surveyor>")
+        );
 
         let sidecar = build_export_shots(
             &project,
@@ -5820,7 +5862,10 @@ mod tests {
             AzimuthExport::decide(&project),
         );
         assert_eq!(sidecar[0].section, "Main Line");
-        assert_eq!(sidecar[0].explorer.as_deref(), Some("Alice Bob"));
+        assert_eq!(
+            sidecar[0].explorer.as_deref(),
+            Some("<Explorer>Alice Bob</Explorer><Surveyor></Surveyor>")
+        );
     }
 
     #[test]

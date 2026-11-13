@@ -30,11 +30,18 @@ Both formats use the same XML schema. TML files use long element names (`Azimut`
   Otherwise the legacy `Explorer` element is read, which is ONE field holding
   two roles in two encodings: an entity-escaped element pair
   (`<Explorer>nh</Explorer><Surveyor>ds</Surveyor>`), each half to its role; or
-  plain text, where `a / b` is explorer `a` and surveyor `b` and a single value
-  is explorers. Names inside a role are split on `,` and `;`; `unknown`, `None`,
-  `?` and empty names are dropped one by one, so an unfilled explorer never takes
-  the surveyor with it (#427). The import preview shows them as one line,
-  `"explorers / surveyors"`.
+  plain text, read by the same splitter as a `.stalx` file's legacy
+  `sections.surveyor` column: `a / b` is explorer `a` and surveyor `b`, `a /`
+  is explorer `a` alone, and **a single value with no `" / "` (`Tester`) is a
+  SURVEYOR** - the role every saved file and SpeleoDB's reader have always
+  given that text, so one Ariane file credits the same person the same way
+  whichever build imported it (#719). Names inside a role are split on `,` and
+  `;`, except that exactly two one-word parts (`Doe, John`, and also `ds, kb`)
+  are one `Last, First` person, as in the legacy column. `unknown`, `None`, `?`
+  and empty names are dropped one by one, so an unfilled explorer never takes
+  the surveyor with it (#427). The import preview shows them as one line in the
+  legacy column's form (`"explorers / surveyors"`, `"explorers /"`, or the
+  surveyors alone).
 - Survey date, per shot (part of the credit above)
 - Section color (converted from Ariane's integer RGB format), taken from the section's first shot
 

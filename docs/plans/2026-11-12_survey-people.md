@@ -141,7 +141,7 @@ Ariane as one section. TML duplicate detection uses the file hash only, so it is
 
 | Format | Mapping |
 |---|---|
-| Ariane TML | Per shot. Ariane 26.3 and later write `XMLExplorer`/`XMLSurveyor`; those are preferred when non-empty. Otherwise the legacy `Explorer` field is used. In its element form (`<Explorer>..</Explorer><Surveyor>..</Surveyor>`), each half goes to its role. In the plain form, `a / b` gives explorer `a` and surveyor `b`, and a single value gives explorers, as Ariane's field name and openspeleo-lib say. Names inside a role are split on `,` and `;`. |
+| Ariane TML | Per shot. Ariane 26.3 and later write `XMLExplorer`/`XMLSurveyor`; those are preferred when non-empty. Otherwise the legacy `Explorer` field is used. In its element form (`<Explorer>..</Explorer><Surveyor>..</Surveyor>`), each half goes to its role. The plain form is read by the legacy splitter, exactly as a `.stalx` legacy column: `a / b` gives explorer `a` and surveyor `b`, `a /` explorer `a`, and a single value gives SURVEYORS (#719: the role every saved file and SpeleoDB's reader give that text; Ariane's field name and openspeleo-lib would say explorers). Names inside a role are split on `,` and `;`, with the same `Last, First` rule as the legacy column. |
 | Compass | `SURVEY TEAM:` gives surveyors, split. |
 | Walls | `team:`/`surveyors:` gives surveyors, split. |
 | DMP, GPX | No people. |
@@ -149,8 +149,10 @@ Ariane as one section. TML duplicate detection uses the file hash only, so it is
 
 ## Exports
 
-- **TML:** per row. If any surveyors are set, the `Explorer` field uses the element form;
-  otherwise it holds the explorers as plain text, joined with `", "`. The round trip is stable.
+- **TML:** per row. The `Explorer` field always uses the element form when anyone is credited
+  (#719), so explorers alone are not read back as surveyors; within a role names are joined with
+  `", "`, or `"; "` where `", "` would read back as one `Last, First` person. The round trip is
+  exact and stable.
 - **JSON:** per-shot names and dates, plus section aggregates. No emails.
 - **CSV:** unchanged.
 - **stalx-reader crate:** exposes per-shot credit.
