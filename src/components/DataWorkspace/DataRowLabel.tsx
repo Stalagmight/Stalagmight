@@ -75,7 +75,7 @@ function HoverName({
   return (
     // A press on the name while the card is still pending (not open yet) must
     // cancel it too: the window listeners above only run once it is open.
-    <span className="contents" onMouseDown={press} onContextMenu={press}>
+    <span className="contents" onMouseDown={press} onContextMenu={press} data-testid={`data-row-hover-trigger-${dataRowPart(row)}`}>
       <Tooltip
         className="min-w-0 flex-1"
         tooltipClassName="dw-hover-card"
