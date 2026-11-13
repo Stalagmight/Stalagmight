@@ -78,3 +78,23 @@ describe('SurveyLayer raises the selection\'s section', () => {
     expect(nearestShot.mock.calls[1]![5]).toMatchObject({ raisedSectionId: 2 });
   });
 });
+
+describe('SurveyLayer preview sections', () => {
+  it('highlights a dialog preview on top of the selection and clears it again', () => {
+    const { layer } = makeLayer();
+    const probe = layer as unknown as Probe & {
+      setPreviewSections: (ids: readonly number[]) => void;
+      customRender: { setSectionSelect: ReturnType<typeof vi.fn> };
+    };
+    const calls = () => probe.customRender.setSectionSelect.mock.calls;
+    const last = () => calls()[calls().length - 1]?.[0];
+    probe.setSelectedSection(3);
+    expect(last()).toEqual([3]);
+    probe.setPreviewSections([3, 8]);
+    expect(last()).toEqual([3, 3, 8]);
+    probe.setSelectedSection(null);
+    expect(last()).toEqual([3, 8]);
+    probe.setPreviewSections([]);
+    expect(last()).toEqual([]);
+  });
+});

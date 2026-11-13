@@ -2114,6 +2114,27 @@ pub(super) enum Op {
     DeleteShotAndSplit {
         shot: ShotRefT,
     },
+    /// Split Section Here (#335): at the shot's end station, or `distance`
+    /// along it when `along` is set. `side` picks where the split station's
+    /// comment (0 A, 1 B, 2 both) and zero datum (even A, odd B) go.
+    SplitSection {
+        shot: ShotRefT,
+        along: bool,
+        distance: f64,
+        side: u8,
+    },
+    /// Combine Sections, routed through `combine_candidate` at an end
+    /// `station`: combines its section with whatever section ends there,
+    /// keeping the candidate's `b` section when `keep_b`. `pick` chooses the
+    /// join comment and name (0 kept, 1 other, 2 both), `swap_lr` the walls of
+    /// a section the combine reverses. A blocked candidate still runs, so the
+    /// refusal is exercised too.
+    CombineSections {
+        station: StationRefT,
+        keep_b: bool,
+        swap_lr: bool,
+        pick: u8,
+    },
     DeleteLastShotAndSection {
         shot: ShotRefT,
     },
@@ -2274,6 +2295,24 @@ impl Op {
             Self::DeleteShotAndSplit { shot: target } => {
                 format!("deleteShotAndSplit({})", shot(target))
             }
+            Self::SplitSection {
+                shot: target,
+                along,
+                distance,
+                side,
+            } => format!(
+                "splitSection({},along={along},{distance},side={side})",
+                shot(target)
+            ),
+            Self::CombineSections {
+                station: at,
+                keep_b,
+                swap_lr,
+                pick,
+            } => format!(
+                "combineSections({},keep_b={keep_b},swap_lr={swap_lr},pick={pick})",
+                station(at)
+            ),
             Self::DeleteLastShotAndSection { shot: target } => {
                 format!("deleteLastShotAndSection({})", shot(target))
             }
@@ -3164,6 +3203,11 @@ struct Fuzzer {
     /// Build finding 10's orphan-closure shape on the next boundary crossing.
     /// See `expose_orphan_closure` for why it cannot be built up front.
     orphan_pending: bool,
+    /// The join a successful Split Section Here just made, `(first half, its
+    /// end station)`, so the combine generator can put it back together.
+    /// Written by `apply_op` (a function of the state, so a replay sets it
+    /// the same way) and only READ by the draw.
+    last_split_join: Option<(SectionId, u32)>,
     // Four CASCADE LATCHES lived here, and every one went with the classifier
     // that read it: `heal_reverted` (findings 1 and 11 had reverted the save's
     // gauge capture), `displaced` (the trajectory finding 3's RATCHET had walked
@@ -3240,6 +3284,7 @@ impl Fuzzer {
             temp: None,
             closures,
             orphan_pending: false,
+            last_split_join: None,
             stale_corruption: false,
         };
         // The builder's own commands are undoable, so the stacks are not empty.
@@ -4450,6 +4495,33 @@ impl Fuzzer {
         })
     }
 
+    /// Combine Sections at a section end: the join the last Split Section Here
+    /// made, most of the time while there is one (split-then-combine is the
+    /// inverse pair), otherwise either end of a random section.
+    fn gen_combine_sections(&mut self, targets: &Targets) -> Option<Op> {
+        let (section_id, index) = match self.last_split_join {
+            Some(join) if self.rng.chance(60) => join,
+            _ => {
+                if targets.sections.is_empty() {
+                    return None;
+                }
+                let (id, shots) = &targets.sections[self.rng.below(targets.sections.len())];
+                let index = if self.rng.chance(50) {
+                    0
+                } else {
+                    shots.len() as u32
+                };
+                (*id, index)
+            }
+        };
+        Some(Op::CombineSections {
+            station: StationRefT::new(section_id, index),
+            keep_b: self.rng.chance(30),
+            swap_lr: self.rng.chance(50),
+            pick: self.rng.below(3) as u8,
+        })
+    }
+
     /// The delete/split family, which are `AppState` entry points rather than
     /// `Command` variants and so never see `execute()`'s epilogue - which is
     /// exactly what finding 10 is about.
@@ -4461,7 +4533,7 @@ impl Fuzzer {
             .find(|(id, _)| *id == section_id)
             .map(|(_, shots)| shots.clone())
             .unwrap_or_default();
-        match self.rng.below(5) {
+        match self.rng.below(7) {
             0 => {
                 // Distances AT the boundaries are the interesting ones: a split
                 // there degenerates into a zero-length shot.
@@ -4481,6 +4553,17 @@ impl Fuzzer {
             2 => Some(Op::DeleteLastShotAndSection {
                 shot: Self::shot_ref(targets, section_id, shot_id),
             }),
+            3 => Some(Op::SplitSection {
+                shot: Self::shot_ref(targets, section_id, shot_id),
+                along: self.rng.chance(50),
+                distance: if self.rng.chance(20) {
+                    *self.rng.pick(&[0.0, 1e-9, 0.005])
+                } else {
+                    self.rng.float(0.1, 8.0)
+                },
+                side: self.rng.below(6) as u8,
+            }),
+            4 => self.gen_combine_sections(targets),
             _ => {
                 if shots.len() < 2 {
                     return None;
@@ -4890,6 +4973,100 @@ impl Fuzzer {
                         "split-a".to_string(),
                         "split-b".to_string(),
                     ),
+                ))
+            }
+            Op::SplitSection {
+                shot,
+                along,
+                distance,
+                side,
+            } => {
+                let Some((section_id, shot_id)) = refs.shot(shot, targets) else {
+                    return refs.skip(&op.describe());
+                };
+                let at = if *along {
+                    crate::models::SplitAt::Shot {
+                        shot_id,
+                        distance: *distance,
+                    }
+                } else {
+                    let position = self
+                        .state
+                        .get_project_state()
+                        .and_then(|p| {
+                            p.get_section(section_id)?
+                                .shots
+                                .iter()
+                                .position(|s| s.id == shot_id)
+                        })
+                        .unwrap_or(0);
+                    crate::models::SplitAt::Station {
+                        station_index: position as u32 + 1,
+                    }
+                };
+                let pick = |n: u8| match n {
+                    0 => crate::models::SplitSide::A,
+                    1 => crate::models::SplitSide::B,
+                    _ => crate::models::SplitSide::Both,
+                };
+                let options = crate::models::SplitSectionOptions {
+                    name_a: "split-a".to_string(),
+                    name_b: "split-b".to_string(),
+                    color_a: "#111111".to_string(),
+                    color_b: "#222222".to_string(),
+                    comment_side: pick(side % 3),
+                    datum_side: pick(side % 2),
+                };
+                let result = self.state.execute_split_section(section_id, at, options);
+                if result.success {
+                    self.last_split_join = self.state.get_project_state().and_then(|p| {
+                        let first = p.get_section(section_id)?;
+                        Some((section_id, first.shots.len() as u32))
+                    });
+                }
+                Some(Drawn::new(
+                    format!("splitSection(s={section_id},at={at:?})"),
+                    result,
+                ))
+            }
+            Op::CombineSections {
+                station,
+                keep_b,
+                swap_lr,
+                pick,
+            } => {
+                let Some((section_id, index)) = refs.station(*station, targets) else {
+                    return refs.skip(&op.describe());
+                };
+                // At a junction, any partner: the fuzz picks the first.
+                let Some(candidate) = self
+                    .state
+                    .combine_candidates(StationRef::new(section_id, index))
+                    .ok()
+                    .and_then(|candidates| candidates.into_iter().next())
+                else {
+                    return refs.skip(&op.describe());
+                };
+                let (kept, other) = if *keep_b {
+                    (candidate.section_b, candidate.section_a)
+                } else {
+                    (candidate.section_a, candidate.section_b)
+                };
+                let pick = match pick % 3 {
+                    0 => crate::models::CombinePick::Kept,
+                    1 => crate::models::CombinePick::Other,
+                    _ => crate::models::CombinePick::Both,
+                };
+                let options = crate::models::CombineSectionsOptions {
+                    name: "combined".to_string(),
+                    color: "#333333".to_string(),
+                    swap_lr: *swap_lr,
+                    comment_pick: pick,
+                    name_pick: pick,
+                };
+                Some(Drawn::new(
+                    format!("combineSections(kept={kept},other={other})"),
+                    self.state.execute_combine_sections(kept, other, options),
                 ))
             }
             Op::DeleteLastShotAndSection { shot } => {

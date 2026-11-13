@@ -65,6 +65,12 @@ pub struct PlanAnchor {
     /// no reverse had been recorded against their sections either.
     #[serde(default)]
     pub parity: bool,
+    /// The RECORD parity of `b` when it was written, where `parity` is `a`'s
+    /// (or `b`'s when there is no `a`). The two differ only across a Combine
+    /// Sections join, where shots of both orientations meet; `None` on plans
+    /// written before this existed, which read `parity` for both, as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parity_b: Option<bool>,
     /// `length.to_bits()` of the sole neighbouring shot, recorded only for a TERMINAL station.
     ///
     /// Turns the one case the pair genuinely cannot survive - splitting that shot - into a

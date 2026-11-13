@@ -67,6 +67,11 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.delete_section",
     "command.delete_shot",
     "command.delete_shot_and_split",
+    "command.split_section",
+    "command.split_section_preview",
+    "command.combine_candidate",
+    "command.combine_candidate_for_sections",
+    "command.combine_sections",
     "command.disarm_forced_exit",
     "command.discard_app_update_download",
     "command.download_app_update",
@@ -288,6 +293,8 @@ pub const EVENT_NAMES: &[&str] = &[
     "action.dialog.speleodb-revert",
     "action.dialog.publish-to-speleodb",
     "action.dialog.split-section",
+    "action.dialog.split-section-here",
+    "action.dialog.combine-sections",
     "action.dialog.swap-comments",
     "action.dialog.unrecognised-shot-kind",
     "action.dialog.tml-import",
@@ -361,6 +368,8 @@ pub const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.speleodb-revert",
     "dialog-cancel.publish-to-speleodb",
     "dialog-cancel.split-section",
+    "dialog-cancel.split-section-here",
+    "dialog-cancel.combine-sections",
     "dialog-cancel.swap-comments",
     "dialog-cancel.unrecognised-shot-kind",
     "dialog-cancel.tml-import",
@@ -379,6 +388,8 @@ pub const EVENT_NAMES: &[&str] = &[
     "undo-after.delete_shot",
     "undo-after.delete_shot_and_split",
     "undo-after.edit_shot_credit",
+    "undo-after.split_section",
+    "undo-after.combine_sections",
     "undo-after.execute_batch",
     "undo-after.execute_compass_import",
     "undo-after.execute_gpx_import",
@@ -463,6 +474,8 @@ pub const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.speleodb-revert",
     "dwell.dialog.publish-to-speleodb",
     "dwell.dialog.split-section",
+    "dwell.dialog.split-section-here",
+    "dwell.dialog.combine-sections",
     "dwell.dialog.swap-comments",
     "dwell.dialog.unrecognised-shot-kind",
     "dwell.dialog.tml-import",
@@ -625,6 +638,8 @@ pub const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.speleodb-revert",
     "active-dwell.dialog.publish-to-speleodb",
     "active-dwell.dialog.split-section",
+    "active-dwell.dialog.split-section-here",
+    "active-dwell.dialog.combine-sections",
     "active-dwell.dialog.swap-comments",
     "active-dwell.dialog.unrecognised-shot-kind",
     "active-dwell.dialog.tml-import",
@@ -1140,7 +1155,17 @@ mod tests {
         //   + 1 the recent-people list behind the surveyor / explorer
         //       suggestions (partial `[people]` write, every project):
         //       command.remember_people = 707.
-        assert_eq!(EVENT_NAMES.len(), 707);
+        //   + 6 "Split Section Here" (#335): command.split_section,
+        //       undo-after.split_section, and the full per-dialog set for
+        //       split-section-here = 713.
+        //   + 8 "Combine Sections": command.combine_candidate,
+        //       command.combine_candidate_for_sections, command.combine_sections,
+        //       undo-after.combine_sections, and the full per-dialog set for
+        //       combine-sections = 721.
+        //   + 1 the Split dialog's read-only preview of a loop closure the
+        //       split would turn into a merge: command.split_section_preview
+        //       = 722.
+        assert_eq!(EVENT_NAMES.len(), 722);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

@@ -3,8 +3,8 @@ use tauri::State;
 
 use crate::core::{AppState, Command, CommandResult};
 use crate::models::{
-    ClosureStrategy, Coordinates, SectionId, SectionRelationships, SectionUpdates, ShotData,
-    StationRef, SurveyDirection,
+    ClosureStrategy, CombineCandidate, CombineSectionsOptions, Coordinates, SectionId,
+    SectionRelationships, SectionUpdates, ShotData, StationRef, SurveyDirection,
 };
 
 pub use crate::models::{SegmentGeometry, SegmentSectionGeometry};
@@ -233,6 +233,64 @@ pub(crate) fn get_section_relationships_impl(
     }
 
     Ok(project.get_section_relationships(section_id))
+}
+
+/// What the section ending at `station` can be combined with: one candidate
+/// per other section ending at the same point (a junction lists them all, each
+/// with its own reason when it is blocked). Empty when `station` is not a
+/// section end or nothing else touches it.
+#[tauri::command]
+pub fn combine_candidate(
+    state: State<AppState>,
+    station: StationRef,
+) -> Result<Vec<CombineCandidate>, String> {
+    combine_candidate_impl(state.inner(), station)
+}
+
+pub(crate) fn combine_candidate_impl(
+    state: &AppState,
+    station: StationRef,
+) -> Result<Vec<CombineCandidate>, String> {
+    state.combine_candidates(station)
+}
+
+/// Can sections `a` and `b` be combined? `null` when either is missing or they
+/// are the same section.
+#[tauri::command]
+pub fn combine_candidate_for_sections(
+    state: State<AppState>,
+    a: SectionId,
+    b: SectionId,
+) -> Result<Option<CombineCandidate>, String> {
+    combine_candidate_for_sections_impl(state.inner(), a, b)
+}
+
+pub(crate) fn combine_candidate_for_sections_impl(
+    state: &AppState,
+    a: SectionId,
+    b: SectionId,
+) -> Result<Option<CombineCandidate>, String> {
+    state.combine_candidate_for_sections(a, b)
+}
+
+/// Combine `other` into `kept`: one section, one undo step.
+#[tauri::command]
+pub fn combine_sections(
+    state: State<AppState>,
+    kept: SectionId,
+    other: SectionId,
+    options: CombineSectionsOptions,
+) -> CommandResult {
+    combine_sections_impl(state.inner(), kept, other, options)
+}
+
+pub(crate) fn combine_sections_impl(
+    state: &AppState,
+    kept: SectionId,
+    other: SectionId,
+    options: CombineSectionsOptions,
+) -> CommandResult {
+    state.execute_combine_sections(kept, other, options)
 }
 
 /// Get shot-line geometry for all sections in the segment containing the given section.

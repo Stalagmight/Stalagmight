@@ -1038,6 +1038,39 @@ struct PairOutcome {
 const PAIRS: &[Pair] = &[
     // ---------------------------------------------------------------------
     Pair {
+        id: "combine-sections-then-undo-is-identity",
+        promise: "command_combine_sections.rs execute_combine_sections - Combine Sections is ONE \
+                  undo entry (including the reverse of the other section when the two meet end \
+                  to end): undoing it restores every section, shot, reference and allocator",
+        run: pair_combine_sections_then_undo_is_identity,
+    },
+    // ---------------------------------------------------------------------
+    Pair {
+        id: "split-then-combine-at-the-join-is-identity",
+        promise: "combine_sections.rs module doc - Combine Sections is the inverse of Split \
+                  Section Here: combining a fresh split at its join, with the original name and \
+                  colour, gives back the section, every shot's survey credit included (shot ids \
+                  and the id allocators aside)",
+        run: pair_split_then_combine_at_the_join_is_identity,
+    },
+    // ---------------------------------------------------------------------
+    Pair {
+        id: "combine-end-to-end-is-reverse-then-combine",
+        promise: "combine_sections.rs module doc - when two sections meet end to end the other \
+                  section is reversed first with reverse_section, so combining them equals \
+                  reversing it yourself and combining end to start",
+        run: pair_combine_end_to_end_is_reverse_then_combine,
+    },
+    // ---------------------------------------------------------------------
+    Pair {
+        id: "split-section-then-undo-is-identity",
+        promise: "command_split_section.rs execute_split_section - Split Section Here is ONE \
+                  undo entry: undoing it restores every section, shot, merge, closure, datum, \
+                  comment and per-shot survey credit exactly (#335)",
+        run: pair_split_section_then_undo_is_identity,
+    },
+    // ---------------------------------------------------------------------
+    Pair {
         id: "range-shift-is-n-single-deletes",
         promise: "command_delete_split.rs execute_delete_shot_range_shift - an ATOMIC range \
                   gap-close: identical to the n single deletes on every range that removes no \
@@ -1521,6 +1554,365 @@ fn pair_reverse_twice_is_identity(
     Some(found)
 }
 
+/// Split Section Here (#335) at a random mid-section station, then undo it,
+/// against doing nothing. Every comment/datum side is drawn, so the copies the
+/// split makes onto the second half's start all have to vanish on undo.
+fn pair_split_section_then_undo_is_identity(
+    twins: &Twins,
+    rng: &mut Rng,
+    pair: &'static str,
+) -> Option<Comparison> {
+    let section_id = section_with_shots(&twins.left, rng, 2)?;
+    let shot_count = twins
+        .left
+        .get_project_state()?
+        .get_section(section_id)?
+        .shots
+        .len();
+    let station_index = 1 + rng.below(shot_count - 1) as u32;
+    let side = |n: usize| match n {
+        0 => crate::models::SplitSide::A,
+        1 => crate::models::SplitSide::B,
+        _ => crate::models::SplitSide::Both,
+    };
+    let split = twins.right.execute_split_section(
+        section_id,
+        crate::models::SplitAt::Station { station_index },
+        crate::models::SplitSectionOptions {
+            name_a: "split-a".to_string(),
+            name_b: "split-b".to_string(),
+            color_a: "#111111".to_string(),
+            color_b: "#222222".to_string(),
+            comment_side: side(rng.below(3)),
+            datum_side: side(rng.below(2)),
+        },
+    );
+    if !split.success {
+        return None;
+    }
+    let undo = twins.right.undo();
+    assert!(
+        undo.success,
+        "{pair}: the split of section {section_id} at station {station_index} succeeded but \
+         its undo failed: {:?}",
+        undo.error
+    );
+    let mut found = twins.compare(pair, Mask::Strict);
+    let (unwound, _) = twins.unwind_and_compare(pair, Mask::Strict);
+    found.absorb(unwound.prefixed("AFTER UNWIND: "));
+    Some(found)
+}
+
+fn split_options(name: &str, color: &str) -> crate::models::SplitSectionOptions {
+    crate::models::SplitSectionOptions {
+        name_a: name.to_string(),
+        name_b: format!("{name}-B"),
+        color_a: color.to_string(),
+        color_b: color.to_string(),
+        comment_side: crate::models::SplitSide::A,
+        datum_side: crate::models::SplitSide::A,
+    }
+}
+
+fn combine_options(
+    name: &str,
+    color: &str,
+    swap_lr: bool,
+) -> crate::models::CombineSectionsOptions {
+    crate::models::CombineSectionsOptions {
+        name: name.to_string(),
+        color: color.to_string(),
+        swap_lr,
+        comment_pick: crate::models::CombinePick::Kept,
+        name_pick: crate::models::CombinePick::Kept,
+    }
+}
+
+/// Split a random section at a mid station that no merge or closure touches
+/// (a merge there makes the join a branch, which Combine refuses), on each of
+/// `sides`. Returns the two halves and the section's original name and colour.
+/// `None` when no such station exists, the split is refused, or it changed the
+/// merges (the orphan-closure sweep promoted a closure, which no combine
+/// undoes).
+fn split_at_a_free_station(
+    twins: &Twins,
+    rng: &mut Rng,
+    sides: &[Side],
+) -> Option<(SectionId, SectionId, String, String)> {
+    let section_id = section_with_shots(&twins.left, rng, 2)?;
+    credit_shots_distinctly(twins, rng, section_id);
+    let project = twins.left.get_project_state()?;
+    let section = project.get_section(section_id)?;
+    let (name, color) = (
+        section.name.clone().unwrap_or_default(),
+        section.color.clone(),
+    );
+    let touched = |at: StationRef| {
+        let hit = |key: &crate::models::StationKey| project.resolve_key(key) == Some(at);
+        project
+            .station_merges
+            .iter()
+            .any(|m| hit(&m.station_a) || hit(&m.station_b))
+            || project
+                .loop_closures
+                .iter()
+                .any(|c| hit(&c.station_a) || hit(&c.station_b))
+    };
+    let free: Vec<u32> = (1..section.shots.len() as u32)
+        .filter(|&i| !touched(StationRef::new(section_id, i)))
+        .collect();
+    if free.is_empty() {
+        return None;
+    }
+    let station_index = free[rng.below(free.len())];
+    let merges = project.station_merges.len();
+    let mut second = None;
+    for &side in sides {
+        let state = twins.state(side);
+        let split = state.execute_split_section(
+            section_id,
+            crate::models::SplitAt::Station { station_index },
+            split_options(&name, &color),
+        );
+        if !split.success || state.get_project_state()?.station_merges.len() != merges {
+            return None;
+        }
+        second = split.section_id;
+    }
+    Some((section_id, second?, name, color))
+}
+
+/// Give every shot of `section_id` its own survey credit, the same on both
+/// twins (one shot in three left uncredited), so a pair that splits and
+/// combines it compares PER-SHOT credit rather than one template every shot
+/// shares. Written straight onto both projects: it is the twins' common
+/// starting state, not a step of either route.
+fn credit_shots_distinctly(twins: &Twins, rng: &mut Rng, section_id: SectionId) {
+    let Some(count) = twins
+        .left
+        .get_project_state()
+        .and_then(|p| Some(p.get_section(section_id)?.shots.len()))
+    else {
+        return;
+    };
+    let credits: Vec<Option<crate::models::SurveyCredit>> = (0..count)
+        .map(|i| {
+            (i % 3 != 2).then(|| crate::models::SurveyCredit {
+                surveyors: crate::models::Person::named(&format!("Surveyor {}", rng.below(4)))
+                    .into_iter()
+                    .collect(),
+                explorers: crate::models::Person::named(&format!("Explorer {}", rng.below(3)))
+                    .into_iter()
+                    .collect(),
+                date: chrono::NaiveDate::from_ymd_opt(2026, 1 + rng.below(12) as u32, 1),
+            })
+        })
+        .collect();
+    for side in [&twins.left, &twins.right] {
+        let mut guard = match side.project.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Some(section) = guard.as_mut().and_then(|p| p.get_section_mut(section_id)) {
+            for (shot, credit) in section.shots.iter_mut().zip(&credits) {
+                shot.set_credit(credit.clone().unwrap_or_default());
+            }
+        }
+    }
+}
+
+/// Two sections both twins can combine: a pair the project already holds, or
+/// one made by splitting a section on both twins.
+fn combinable_pair(twins: &Twins, rng: &mut Rng) -> Option<(SectionId, SectionId)> {
+    let project = twins.left.get_project_state()?;
+    let ids: Vec<SectionId> = project.sections.iter().map(|s| s.id).collect();
+    let mut natural = Vec::new();
+    for (i, &a) in ids.iter().enumerate() {
+        for &b in &ids[i + 1..] {
+            if project
+                .combine_candidate_for_sections(a, b)
+                .is_some_and(|c| c.blocked_reason.is_none())
+            {
+                natural.push((a, b));
+            }
+        }
+    }
+    if !natural.is_empty() {
+        return Some(natural[rng.below(natural.len())]);
+    }
+    let (first, second, _, _) = split_at_a_free_station(twins, rng, &[Side::Left, Side::Right])?;
+    twins
+        .left
+        .get_project_state()?
+        .combine_candidate_for_sections(first, second)?
+        .blocked_reason
+        .is_none()
+        .then_some((first, second))
+}
+
+/// Combine Sections, then undo it, against doing nothing.
+fn pair_combine_sections_then_undo_is_identity(
+    twins: &Twins,
+    rng: &mut Rng,
+    pair: &'static str,
+) -> Option<Comparison> {
+    let (a, b) = combinable_pair(twins, rng)?;
+    let (kept, other) = if rng.chance(50) { (a, b) } else { (b, a) };
+    let combined = twins.right.execute_combine_sections(
+        kept,
+        other,
+        combine_options("c", "#333333", rng.chance(50)),
+    );
+    assert!(
+        combined.success,
+        "{pair}: the candidate said {kept} and {other} combine, but the combine failed: {:?}",
+        combined.error
+    );
+    let undo = twins.right.undo();
+    assert!(
+        undo.success,
+        "{pair}: the combine's undo failed: {:?}",
+        undo.error
+    );
+    let mut found = twins.compare(pair, Mask::Strict);
+    let (unwound, _) = twins.unwind_and_compare(pair, Mask::Strict);
+    found.absorb(unwound.prefixed("AFTER UNWIND: "));
+    Some(found)
+}
+
+/// The stored project minus what a split-then-combine is allowed to change:
+/// the id allocators, the shot ids (positions instead), and the gauge pair's
+/// SPELLING (the gauge station itself is compared
+/// separately, through the solver's own anchor).
+fn survey_content(state: &AppState) -> String {
+    let snapshot = mask_timestamps(&canonical_snapshot(state, true));
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&snapshot) else {
+        return snapshot;
+    };
+    if let serde_json::Value::Object(map) = &mut value {
+        map.remove("next_section_id");
+        if let Some(serde_json::Value::Array(sections)) = map.get_mut("sections") {
+            for section in sections {
+                if let serde_json::Value::Object(section) = section {
+                    for key in ["next_shot_id", "gauge_shot_uuid", "gauge_neighbour_uuid"] {
+                        section.remove(key);
+                    }
+                }
+            }
+        }
+    }
+    value.to_string()
+}
+
+/// Split Section Here at a free mid station, then Combine Sections at the join
+/// with the original name and colour, against doing nothing.
+fn pair_split_then_combine_at_the_join_is_identity(
+    twins: &Twins,
+    rng: &mut Rng,
+    pair: &'static str,
+) -> Option<Comparison> {
+    let (first, second, name, color) = split_at_a_free_station(twins, rng, &[Side::Right])?;
+    let candidate = twins
+        .right
+        .get_project_state()?
+        .combine_candidate_for_sections(first, second)?;
+    if candidate.blocked_reason.is_some() {
+        // A section passes through the cut, the halves are tied elsewhere,
+        // or the cut's two copies sit more than 1 m apart in depth: Combine
+        // refuses it.
+        return None;
+    }
+    let combined =
+        twins
+            .right
+            .execute_combine_sections(first, second, combine_options(&name, &color, false));
+    assert!(combined.success, "{pair}: {:?}", combined.error);
+
+    let mut found = Comparison::default();
+    let diffs = diff_snapshots(&survey_content(&twins.left), &survey_content(&twins.right));
+    if !diffs.is_empty() {
+        found.problems.push(format!(
+            "the stored projects differ in {} path(s):\n{}",
+            diffs.len(),
+            describe_diffs(&diffs)
+        ));
+    }
+    let geometry = adjusted_diffs(
+        &adjusted_geometry_of(&twins.left),
+        &adjusted_geometry_of(&twins.right),
+    );
+    if !geometry.is_empty() {
+        found.problems.push(format!(
+            "the ADJUSTED geometry differs:\n    {}",
+            geometry.join("\n    ")
+        ));
+    }
+    let (left, right) = (
+        twins.left.get_project_state()?,
+        twins.right.get_project_state()?,
+    );
+    for section in &left.sections {
+        let (l, r) = (
+            left.adjustment_anchor_for_tests(section.id),
+            right.adjustment_anchor_for_tests(section.id),
+        );
+        if l != r {
+            found.problems.push(format!(
+                "section {}'s gauge station moved: {l:?} -> {r:?}",
+                section.id
+            ));
+        }
+    }
+    if integrity_verdict(&twins.left) != integrity_verdict(&twins.right) {
+        found
+            .problems
+            .push("the app's own integrity verdicts differ".to_string());
+    }
+    Some(found)
+}
+
+/// Two sections that meet END to END: combine them directly (the combine
+/// reverses the other one), against reversing it first and combining end to
+/// start.
+fn pair_combine_end_to_end_is_reverse_then_combine(
+    twins: &Twins,
+    rng: &mut Rng,
+    pair: &'static str,
+) -> Option<Comparison> {
+    let (first, second, _, _) = split_at_a_free_station(twins, rng, &[Side::Left, Side::Right])?;
+    // Reverse the second half on both twins: the halves now meet end to end.
+    for side in [&twins.left, &twins.right] {
+        let reversed = side.execute(Command::ReverseSection {
+            section_id: second,
+            swap_left_right: false,
+        });
+        if !reversed.success {
+            return None;
+        }
+    }
+    let candidate = twins
+        .left
+        .get_project_state()?
+        .combine_candidate_for_sections(first, second)?;
+    if candidate.blocked_reason.is_some() || !candidate.reverses {
+        return None;
+    }
+    let swap_lr = rng.chance(50);
+    let options = combine_options("c", "#333333", swap_lr);
+    let direct = twins
+        .left
+        .execute_combine_sections(first, second, options.clone());
+    assert!(direct.success, "{pair}: {:?}", direct.error);
+    let reversed = twins.right.execute(Command::ReverseSection {
+        section_id: second,
+        swap_left_right: swap_lr,
+    });
+    assert!(reversed.success, "{pair}: {:?}", reversed.error);
+    let combined = twins.right.execute_combine_sections(first, second, options);
+    assert!(combined.success, "{pair}: {:?}", combined.error);
+    Some(twins.compare(pair, Mask::Strict))
+}
+
 /// PAIR 6. `MoveSection(+d)` then `MoveSection(-d)`, against doing nothing.
 ///
 /// An inverse pair rather than an involution, and the arithmetic is exact: the
@@ -1797,7 +2189,7 @@ fn metamorphic_gate() {
 /// classification that starts firing (or stops) is a replay difference rather
 /// than something only a reviewer would notice.
 ///
-/// It covers ALL SEVEN pairs. `one-shot-range-split-is-delete-and-split` used to
+/// It covers EVERY pair. `one-shot-range-split-is-delete-and-split` used to
 /// be filtered out of the shape because it carried
 /// `observation-split-routes-disagree-on-station-comment-keys`, which was
 /// intermittent on identical inputs; the observation was triaged out as this

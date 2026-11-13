@@ -497,6 +497,46 @@ describe('projectStore re-resolves the plan pins around every mutation (#310)', 
     expect(useGasPlanStore.getState().endpoint).toEqual(at(indexOf('d')));
   });
 
+  it('Split Section Here and Combine Sections go through the same round trip', async () => {
+    // Both move stations between sections, which no index arithmetic describes; the backend's
+    // anchors (`dive_plan.rs`: anchors_survive_a_split_its_undo_and_its_redo,
+    // pins_on_both_sections_survive_a_combine) place them in whichever section holds them now.
+    // Here: the store anchors before each of them and re-resolves after.
+    const options = {
+      name_a: 'A',
+      name_b: 'B',
+      color_a: '#111111',
+      color_b: '#222222',
+      comment_side: 'a' as const,
+      datum_side: 'a' as const,
+    };
+    const combine = {
+      name: 'K',
+      color: '#111111',
+      swap_lr: false,
+      comment_pick: 'kept' as const,
+      name_pick: 'kept' as const,
+    };
+    for (const [command, run] of [
+      ['split_section', () => useProjectStore.getState().splitSection(SECTION, { type: 'station', station_index: 1 }, options)],
+      ['combine_sections', () => useProjectStore.getState().combineSections(SECTION, SECTION + 1, combine)],
+    ] as const) {
+      order = ['a', 'b', 'c', 'd', 'e'];
+      useGasPlanStore.getState().reset();
+      const calls: string[] = [];
+      serveDeleteOfB(calls);
+      useGasPlanStore.getState().setEndpoint(at(indexOf('d')));
+
+      await run();
+
+      expect(calls).toContain(command);
+      expect(planAnchorsForRefs).toHaveBeenCalled();
+      expect(useGasPlanStore.getState().endpoint).toEqual(at(indexOf('d')));
+      vi.clearAllMocks();
+      serveAnchors();
+    }
+  });
+
   it('costs a plan with no pins nothing at all', async () => {
     const calls: string[] = [];
     serveDeleteOfB(calls);

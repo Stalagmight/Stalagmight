@@ -337,6 +337,19 @@ impl Database {
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
+    /// Whether the file holds a shot with no uuid: a pre-v6 file not saved
+    /// since, whose shots get a fresh uuid on every load until a save writes
+    /// them. In any other file a shot's uuid, once minted, is the one the next
+    /// save writes.
+    pub fn holds_shots_without_uuid(&self) -> Result<bool> {
+        let exists: bool = self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM shots WHERE uuid IS NULL OR uuid = '')",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(exists)
+    }
+
     /// Whether `uuid` is already stored in the on-disk `shots` table FOR `section_id`. A pre-v6
     /// shot's UUID is minted only in memory until the project is saved, so keying a new ignore
     /// by such an unpersisted UUID would orphan the row on the next open (different UUIDs are

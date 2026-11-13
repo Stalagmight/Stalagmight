@@ -188,7 +188,9 @@ impl Project {
     pub fn make_shot_uuids_project_unique(&mut self) -> ShotUuidRemap {
         let mut order: Vec<usize> = (0..self.sections.len()).collect();
         order.sort_by_key(|&i| self.sections[i].id);
-        self.rename_repeats_in_order(&order, HashMap::new())
+        let remap = self.rename_repeats_in_order(&order, HashMap::new());
+        self.follow_counter_parity(&remap);
+        remap
     }
 
     /// Rename the ids of `new_sections` that another section of the project
@@ -211,6 +213,10 @@ impl Project {
             .filter(|&i| newcomers.contains(&self.sections[i].id))
             .collect();
         order.sort_by_key(|&i| self.sections[i].id);
+        // Not `follow_counter_parity`: the set is the project's own, and a
+        // newcomer's record parity comes from the data it was built from (Add
+        // .stalx carries its source's set), never from a project shot that
+        // happened to share its old id.
         self.rename_repeats_in_order(&order, claimed)
     }
 
@@ -260,16 +266,50 @@ impl Project {
         remap
     }
 
-    /// Apply `remap` to the live project: shot ids, gauge anchors and every
-    /// `AfterShot` station key in a renamed section, then refresh the uuid index
+    /// Give every shot `remap` renamed the counter-parity entry its old id had
+    /// (`counter_parity_shots`), so it keeps its record parity.
+    ///
+    /// The old id's entry STAYS. When the rename resolved a repeat, the
+    /// section that kept the old id still holds a shot with it, and the set,
+    /// keyed by id, cannot say which of the two copies the entry was written
+    /// for: before the rename both read it. Keeping it on both changes no
+    /// shot's record parity. When the old id is held by no one any more the
+    /// leftover entry is inert, and the next save prunes it. Only for a
+    /// project's OWN repeats (the load heal, or a caller renaming a sole
+    /// holder): a newcomer's parity comes from its own source.
+    pub fn follow_counter_parity(&mut self, remap: &ShotUuidRemap) {
+        let renamed: Vec<String> = remap
+            .iter()
+            .filter(|(_, old, _)| self.counter_parity_shots.contains(*old))
+            .map(|(_, _, new)| new.to_string())
+            .collect();
+        self.counter_parity_shots.extend(renamed);
+    }
+
+    /// Apply `remap` to the live project: shot ids, gauge anchors, held gauges
+    /// and every `AfterShot` station key in a renamed section, then refresh the uuid index
     /// of those sections. Positional (`Index`) keys need nothing: a rename does
-    /// not move a shot. Never calls [`Self::touch`].
+    /// not move a shot. Never calls [`Self::touch`]. The counter-parity set is
+    /// left to the caller ([`Self::follow_counter_parity`]).
     pub fn apply_shot_uuid_remap(&mut self, remap: &ShotUuidRemap) {
         if remap.is_empty() {
             return;
         }
         for section in &mut self.sections {
             remap.rewrite_section(section);
+        }
+        // A held gauge names its shots in its section, like a station key.
+        for held in &mut self.held_gauges {
+            if let Some(new) = remap.get(held.section_id, &held.shot) {
+                held.shot = new.to_string();
+            }
+            if let Some(new) = held
+                .neighbour
+                .as_deref()
+                .and_then(|n| remap.get(held.section_id, n))
+            {
+                held.neighbour = Some(new.to_string());
+            }
         }
         self.map_station_refs(|mut key| {
             remap.rewrite_key(&mut key);

@@ -69,7 +69,7 @@ impl Project {
     /// per run; between them the same station could come out one ulp apart depending on
     /// which API asked. Sorting at this single shared site makes them bit-identical.
     /// Group MEMBERSHIP is untouched - this only fixes the order it is added in.
-    fn compute_station_depth(&self, colocated: &[StationRef]) -> f64 {
+    pub(super) fn compute_station_depth(&self, colocated: &[StationRef]) -> f64 {
         // A one-station group (every unmerged station, i.e. nearly all of them on a big
         // project) has no ordering question, so it keeps the allocation-free path: this
         // runs once per group per full coordinate rebuild.
@@ -346,7 +346,23 @@ impl Project {
     ///
     /// The captured pair and the parity flag both persist, so the choice is reproducible
     /// across reloads.
-    fn default_anchor_for_component(&self, component: &HashSet<SectionId>) -> Option<StationRef> {
+    ///
+    /// A station an edit held for the component ([`Self::held_gauges`]) comes
+    /// first: a split, combine or delete-and-split that left the component's
+    /// station outside its lowest-id section records it there, so the edit
+    /// does not move the adjusted component (`project/gauge.rs`).
+    pub(super) fn default_anchor_for_component(
+        &self,
+        component: &HashSet<SectionId>,
+    ) -> Option<StationRef> {
+        if let Some(at) = self
+            .held_gauges
+            .iter()
+            .filter(|held| component.contains(&held.section_id))
+            .find_map(|held| self.resolve_held_gauge(held))
+        {
+            return Some(at);
+        }
         let section = self
             .sections
             .iter()
@@ -367,7 +383,7 @@ impl Project {
     /// been saved yet) or whose recorded shots are gone. That fallback is what an
     /// already-existing project uses until its first save, and it deliberately reproduces the
     /// legacy answer - station 0 - so upgrading moves nobody.
-    fn gauge_index(section: &Section) -> usize {
+    pub(super) fn gauge_index(section: &Section) -> usize {
         let position_of = |uuid: &Option<String>| -> Option<usize> {
             let uuid = uuid.as_deref()?;
             section

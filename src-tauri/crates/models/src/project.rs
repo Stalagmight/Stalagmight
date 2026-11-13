@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use ts_rs::TS;
 
@@ -35,9 +35,14 @@ use super::{Coordinates, GpsCoordinates, Shot, ShotUpdates, Station};
 use crate::config::ClosureAdjustmentConfig;
 
 mod classify;
+mod combine_candidate;
+mod combine_sections;
 mod connectivity;
+mod gauge;
 mod mutations;
 mod shots;
+mod split_section;
+mod station_rekey;
 
 mod integrity;
 mod merge_topology;
@@ -50,12 +55,37 @@ mod uuid_unique;
 
 #[cfg(test)]
 mod anchor_fuzz;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::float_cmp,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod combine_sections_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::panic,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod component_gauge_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::float_cmp,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod split_section_tests;
 
 pub use classify::ClassifyScope;
+pub use combine_candidate::{
+    COMBINE_DEPTH_LIMIT_M, COMBINE_DEPTH_NOTICE_M, COMBINE_TOLERANCE_M, MAX_COMBINE_PARTNERS,
+};
 pub use gas::{
     CylRole, Cylinder, Diver, GasReachField, PlanMode, PlanSegment, RouteLeg, RouteProfilePoint,
     TankMaterial, Team,
 };
+pub use gauge::HeldGauge;
 pub use integrity::{IntegrityViolation, ViolationSeverity};
 pub use merge_topology::MergeTopology;
 pub use reverse::{reverse_shots, shot_run_displacement};
@@ -343,6 +373,42 @@ pub struct Project {
     #[serde(default)]
     #[ts(optional)]
     pub default_azimuth_reference: Option<AzimuthReference>,
+
+    /// Shots whose RECORD orientation runs against their section's
+    /// [`Section::reverse_parity`], by uuid: a shot's record parity is its
+    /// section's parity, flipped when its uuid is here
+    /// ([`Self::shot_record_parity`]).
+    ///
+    /// A parity flips with every reverse of the record, which is what a
+    /// single-neighbour dive-plan pin reads to know which end of its shot it
+    /// sits on. While every shot of a section shares the section's parity, the
+    /// section's flag says it all. Combine Sections breaks that: the other
+    /// section's shots join a section whose parity can differ from theirs, and
+    /// they are recorded here (toggled) so every shot keeps its own. Because
+    /// this lives on the project, every undo snapshot carries it with the
+    /// shots, so an undo puts the shots and their orientation back together.
+    ///
+    /// Persisted in `project_settings` (no schema bump); omitted from serde
+    /// when empty, so a project that never combined serializes as before.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    #[ts(skip)]
+    pub counter_parity_shots: BTreeSet<String>,
+
+    /// Stations that hold their component fixed in the least-squares
+    /// adjustment in place of the lowest-id section's gauge station
+    /// (`default_anchor_for_component` reads them first, in order): a Split
+    /// Section Here, Combine Sections or delete-and-split kept a component's
+    /// gauge on its physical station, and the section that anchors the
+    /// component afterwards does not hold that station (see `project/gauge.rs`).
+    /// Named by shot uuids, so they follow their shots through later edits.
+    ///
+    /// Part of the project, so every undo snapshot carries it. Persisted in
+    /// `project_settings` (no schema bump), pruned to the entries that still
+    /// name a station on save and on load; omitted from serde when empty. An
+    /// older build ignores it and falls back to the lowest-id rule.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(skip)]
+    pub held_gauges: Vec<HeldGauge>,
 
     /// Transient flag (NOT persisted) - when true,
     /// [`Self::cascade_connection_offsets`] returns immediately. Used by
@@ -712,6 +778,8 @@ impl Project {
             validation: crate::config::ValidationConfig::default(),
             surface_elevation: None,
             default_azimuth_reference: None,
+            counter_parity_shots: BTreeSet::new(),
+            held_gauges: Vec::new(),
             cascade_deferred: false,
             section_index_cache: HashMap::new(),
             shot_uuid_index: HashMap::new(),

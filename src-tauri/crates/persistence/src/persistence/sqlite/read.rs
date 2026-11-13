@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use chrono::{NaiveDate, Utc};
 use rusqlite::{params, OptionalExtension};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::models::{
     AzimuthReference, ClosureStrategy, CorrectionSource, GpsCoordinates, LoopClosure,
@@ -581,8 +581,7 @@ impl Database {
                 let credit_rows = super::shot_credits::load_credit_rows(&self.conn)?;
                 let recorded =
                     super::shot_credits::load_recorded_legacy(&self.conn, &stored_legacy)?;
-                let mut claimed: std::collections::HashSet<(u32, &str)> =
-                    std::collections::HashSet::new();
+                let mut claimed: HashSet<(u32, &str)> = HashSet::new();
                 for section in sections.iter_mut() {
                     let section_id = section.id;
                     // The rows hold only while the legacy pair is the one this
@@ -767,6 +766,18 @@ impl Database {
         // legacy-seeding fallback - `None` genuinely means "unknown".
         let surface_elevation = self.load_project_surface_elevation()?;
         let default_azimuth_reference = self.load_project_default_azimuth_reference()?;
+        // Only shots this file holds: an entry for any other uuid is stale (a
+        // file edited by hand, or by a build that did not prune it), and
+        // would otherwise wait in the set for a shot that later takes that
+        // uuid, an Add of a copy of the same survey for one.
+        let mut counter_parity_shots = self.load_project_counter_parity_shots();
+        if !counter_parity_shots.is_empty() {
+            let held: HashSet<&str> = sections
+                .iter()
+                .flat_map(|s| s.shots.iter().filter_map(|shot| shot.uuid.as_deref()))
+                .collect();
+            counter_parity_shots.retain(|uuid| held.contains(uuid.as_str()));
+        }
 
         // Pre-populate the section_id → index lookup so callers get
         // O(1) get_section without needing rebuild_section_index().
@@ -790,7 +801,8 @@ impl Database {
                 }
             }
         }
-        Ok(Project {
+        let section_count = sections.len();
+        let mut project = Project {
             name,
             location,
             created_at,
@@ -811,13 +823,19 @@ impl Database {
             validation,
             surface_elevation,
             default_azimuth_reference,
+            counter_parity_shots,
+            held_gauges: self.load_project_held_gauges(&shot_uuid_index, section_count),
             cascade_deferred: false,
             section_index_cache,
             shot_uuid_index,
             // Nothing loaded from disk is a proven solver fixpoint; the load path
             // re-solves offsets from scratch anyway (`redrive_offsets_after_load`).
             realign_fixpoint: None,
-        })
+        };
+        // Only entries that still name a station: a dangling one (a file
+        // edited by hand) anchors nothing.
+        project.prune_held_gauges();
+        Ok(project)
     }
 
     /// Load loop closures from database
@@ -1067,7 +1085,7 @@ impl Database {
         let mut columns = self
             .conn
             .prepare("SELECT name FROM pragma_table_info('speleo_link')")?;
-        let columns: std::collections::HashSet<String> = columns
+        let columns: HashSet<String> = columns
             .query_map([], |row| row.get::<_, String>(0))?
             .collect::<std::result::Result<_, _>>()?;
         // Named as expressions rather than as a dynamic column list so the SELECT
@@ -1386,6 +1404,91 @@ impl Database {
             }
             parsed
         }))
+    }
+
+    /// Load the stations a split, combine or delete-and-split held as their
+    /// component's least-squares gauge (`Project::held_gauges`), kept in
+    /// `project_settings` under `held_gauges` (no schema bump; readers that do
+    /// not know the key fall back to the lowest-id rule). A missing key reads
+    /// as none; an unparseable value too, with a warning: the gauge then falls
+    /// back to the lowest-id rule, which moves the adjusted view, never the
+    /// survey.
+    ///
+    /// The file is untrusted, so the work is bounded before anything else
+    /// reads the list: entries whose section does not hold their shot (one
+    /// probe of `shot_uuid_index`, the index the load just built) and
+    /// duplicates are dropped, and what is left is cut to `section_count`
+    /// entries (the edits keep at most one per component). The load's heal
+    /// then keeps one per component (`Project::normalize_held_gauges`).
+    pub fn load_project_held_gauges(
+        &self,
+        shot_uuid_index: &HashMap<(u32, String), u32>,
+        section_count: usize,
+    ) -> Vec<crate::models::HeldGauge> {
+        let json: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM project_settings WHERE key = 'held_gauges'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .unwrap_or(None);
+        let parsed: Vec<crate::models::HeldGauge> = json
+            .map(|s| {
+                serde_json::from_str(&s).unwrap_or_else(|e| {
+                    tracing::warn!(
+                        error = %e,
+                        "stored held_gauges is present but unparseable; reading as none"
+                    );
+                    Vec::new()
+                })
+            })
+            .unwrap_or_default();
+        let mut seen = HashSet::new();
+        let mut held: Vec<crate::models::HeldGauge> = parsed
+            .into_iter()
+            .filter(|g| shot_uuid_index.contains_key(&(g.section_id, g.shot.clone())))
+            .filter(|g| seen.insert(g.clone()))
+            .collect();
+        if held.len() > section_count {
+            tracing::warn!(
+                stored = held.len(),
+                section_count,
+                "stored held_gauges has more entries than sections; keeping the first"
+            );
+            held.truncate(section_count);
+        }
+        held
+    }
+
+    /// Load the shots whose record orientation runs against their section's
+    /// parity (`Project::counter_parity_shots`), kept in `project_settings`
+    /// under `counter_parity_shots` like the other project-level values (no
+    /// schema bump; readers that do not know the key skip it). A missing key
+    /// reads as none; an unparseable value too, with a warning: the set only
+    /// refines single-neighbour dive-plan pins, so a lost entry costs a pin
+    /// that may need re-placing, never the survey.
+    pub fn load_project_counter_parity_shots(&self) -> std::collections::BTreeSet<String> {
+        let json: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM project_settings WHERE key = 'counter_parity_shots'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .unwrap_or(None);
+        json.map(|s| {
+            serde_json::from_str(&s).unwrap_or_else(|e| {
+                tracing::warn!(
+                    error = %e,
+                    "stored counter_parity_shots is present but unparseable; reading as none"
+                );
+                std::collections::BTreeSet::new()
+            })
+        })
+        .unwrap_or_default()
     }
 
     /// Load the project-level default north reference (#438). A missing key -

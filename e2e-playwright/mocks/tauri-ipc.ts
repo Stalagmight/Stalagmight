@@ -619,6 +619,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // Records undo/redo invocations so specs can prove the shortcuts are inert in the
       // read-only workspaces (zero calls in Plan/Export, then one back in Survey).
       let undoRedoCalls: string[] = [];
+      // Split Section Here and Combine Sections each push a whole-project
+      // snapshot here, and `undo` restores the newest one, so a spec can prove
+      // one Undo puts the sections back. Only these two commands record one:
+      // every other mocked mutation stays a no-op under undo, as before.
+      const structuralUndo: Array<Record<string, unknown>> = [];
+      // Joins a split left co-located but unmerged, `[first half end, second
+      // half start]`: what the real backend finds by position.
+      let colocatedJoins: Array<[{ section_id: number; station_index: number }, { section_id: number; station_index: number }]> = [];
       (window as unknown as Record<string, unknown>).__MOCK_GET_UNDO_REDO_CALLS__ = () => [...undoRedoCalls];
       (window as unknown as Record<string, unknown>).__MOCK_RESET_UNDO_REDO_CALLS__ = () => {
         undoRedoCalls = [];
@@ -4141,6 +4149,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'undo':
           case 'redo': {
             undoRedoCalls.push(cmd);
+            // Split/combine record whole-project snapshots; credit edits record
+            // per-shot steps. The specs never interleave the two, so a pending
+            // structural step is undone first.
+            const snapshot = cmd === 'undo' ? structuralUndo.pop() : undefined;
+            if (snapshot && currentProject) {
+              const restored = JSON.parse(JSON.stringify(snapshot)) as { project: typeof currentProject; joins: typeof colocatedJoins };
+              currentProject = restored.project;
+              colocatedJoins = restored.joins;
+              return { success: true, section_ids: [] };
+            }
             const from = cmd === 'undo' ? mockCreditUndo : mockCreditRedo;
             const to = cmd === 'undo' ? mockCreditRedo : mockCreditUndo;
             const step = from.pop();
@@ -4152,7 +4170,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           }
 
           case 'can_undo':
-            return mockCreditUndo.length > 0;
+            return mockCreditUndo.length > 0 || structuralUndo.length > 0;
 
           case 'can_redo':
             return mockCreditRedo.length > 0;
@@ -5320,6 +5338,224 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'delete_shot_and_split':
             console.log('[Mock IPC] delete_shot_and_split called with:', args);
             return { success: true, section_ids: [] };
+
+          case 'split_section_preview': {
+            // Nothing in the mock's survey ties the halves by a loop closure alone, so a split
+            // moves nothing. A spec can set `__MOCK_SPLIT_PREVIEW__` to show the warning.
+            const win = window as unknown as Record<string, unknown>;
+            return (
+              win.__MOCK_SPLIT_PREVIEW__ ?? { closures_to_merges: 0, moved_side: null, moved_m: 0 }
+            );
+          }
+
+          case 'split_section': {
+            console.log('[Mock IPC] split_section called with:', args);
+            const win = window as unknown as Record<string, unknown>;
+            const existing = win.__MOCK_SPLIT_SECTION_CALLS__ as unknown[] | undefined;
+            const calls = Array.isArray(existing) ? existing : [];
+            calls.push(args ?? null);
+            win.__MOCK_SPLIT_SECTION_CALLS__ = calls;
+
+            type MockSection = { id: number; name: string; color: string; shots: Array<{ id: number } & Record<string, unknown>> } & Record<string, unknown>;
+            const sections = (currentProject?.sections ?? []) as MockSection[];
+            const sectionId = (args?.sectionId ?? args?.section_id) as number;
+            const at = args?.at as { type: 'station'; station_index: number } | { type: 'shot'; shot_id: number; distance: number } | undefined;
+            const options = args?.options as { name_b: string; color_b: string; name_a: string; color_a: string } | undefined;
+            const section = sections.find((s) => s.id === sectionId);
+            if (!section || !at || !options) {
+              return { success: false, error: `Section ${sectionId} not found`, section_ids: [], warnings: [] };
+            }
+            let k: number;
+            if (at.type === 'station') {
+              k = at.station_index;
+            } else {
+              const idx = section.shots.findIndex((s) => s.id === at.shot_id);
+              if (idx < 0) {
+                return { success: false, error: `Shot ${at.shot_id} not found`, section_ids: [], warnings: [] };
+              }
+              const target = section.shots[idx] as Record<string, unknown> & { id: number };
+              const length = (target.length as number) ?? 0;
+              if (at.distance < 0.01) {
+                k = idx;
+              } else if (length - at.distance < 0.01) {
+                k = idx + 1;
+              } else {
+                const nextId = section.shots.reduce((max, s) => Math.max(max, s.id), 0) + 1;
+                section.shots.splice(idx, 0, { ...target, id: nextId, length: at.distance, comment: null, marker_index: null });
+                target.length = length - at.distance;
+                k = idx + 1;
+              }
+            }
+            if (k <= 0 || k >= section.shots.length) {
+              return { success: false, error: 'Cannot split a section at its first or last station', section_ids: [], warnings: [] };
+            }
+            structuralUndo.push(JSON.parse(JSON.stringify({ project: currentProject, joins: colocatedJoins })));
+            sectionCounter = Math.max(sectionCounter, ...sections.map((s) => s.id)) + 1;
+            const newSection: MockSection = {
+              ...section,
+              id: sectionCounter,
+              name: options.name_b,
+              color: options.color_b,
+              shots: section.shots.slice(k),
+            };
+            section.shots = section.shots.slice(0, k);
+            section.name = options.name_a;
+            section.color = options.color_a;
+            sections.push(newSection);
+            colocatedJoins.push([
+              { section_id: section.id, station_index: section.shots.length },
+              { section_id: newSection.id, station_index: 0 },
+            ]);
+            // The backend touches the project, as every edit does (the ruler and the reach
+            // field reset on modified_at); the undo snapshot keeps the value from before.
+            if (currentProject) currentProject.modified_at = new Date(Date.now() + 1).toISOString();
+            return { success: true, section_id: newSection.id, section_ids: [section.id, newSection.id], warnings: [], error: null };
+          }
+
+          case 'combine_candidate':
+          case 'combine_candidate_for_sections': {
+            // A small model of the real query (`combine_candidate.rs`): two
+            // section ends touch when they are station-merged or a split left
+            // them co-located. At a junction the station query lists every
+            // partner; the others at the point stay as branches. A station in
+            // the MIDDLE of a section at the point blocks.
+            type Ref = { section_id: number; station_index: number };
+            type MockSection = { id: number; shots: unknown[] };
+            const sections = (currentProject?.sections ?? []) as MockSection[];
+            const merges = (currentProject?.station_merges ?? []) as Array<{ station_a: Ref; station_b: Ref }>;
+            const same = (x: Ref, y: Ref) => x.section_id === y.section_id && x.station_index === y.station_index;
+            const isEnd = (r: Ref) => {
+              const section = sections.find((s) => s.id === r.section_id);
+              return !!section && (r.station_index === 0 || r.station_index === section.shots.length);
+            };
+            const partnersOf = (r: Ref): Ref[] => [
+              ...merges.flatMap((m) => (same(m.station_a, r) ? [m.station_b] : same(m.station_b, r) ? [m.station_a] : [])),
+              ...colocatedJoins.flatMap(([x, y]) => (same(x, r) ? [y] : same(y, r) ? [x] : [])),
+            ];
+            const candidate = (at: Ref, partner: Ref, blocked: string | null, branches: number[] = []) => {
+              const [a, b] = at.section_id < partner.section_id ? [at, partner] : [partner, at];
+              const sa = sections.find((s) => s.id === a.section_id);
+              const sb = sections.find((s) => s.id === b.section_id);
+              const end = (r: Ref, s?: MockSection) => (r.station_index === 0 && (s?.shots.length ?? 0) > 0 ? 'start' : 'end');
+              const endA = end(a, sa);
+              const endB = end(b, sb);
+              return {
+                section_a: a.section_id,
+                section_b: b.section_id,
+                end_a: endA,
+                end_b: endB,
+                station_a: a,
+                station_b: b,
+                merged: merges.some((m) => (same(m.station_a, a) && same(m.station_b, b)) || (same(m.station_a, b) && same(m.station_b, a))),
+                reverses: endA === endB,
+                blocked_reason: blocked,
+                blocked_keeping_a: null,
+                blocked_keeping_b: null,
+                shot_count_a: sa?.shots.length ?? 0,
+                shot_count_b: sb?.shots.length ?? 0,
+                comment_a: null,
+                comment_b: null,
+                station_name_a: null,
+                station_name_b: null,
+                depth_difference_m: null,
+                branches,
+                loose_ends: [],
+              };
+            };
+            const forStation = (at: Ref) => {
+              if (!isEnd(at)) return [];
+              const partners = partnersOf(at);
+              const through = partners.find((p) => !isEnd(p));
+              const ends = partners.filter((p) => isEnd(p));
+              if (ends.length === 0) {
+                return partners.length === 0 ? [] : [candidate(at, partners[0]!, 'Merged to the middle of another section')];
+              }
+              return ends.map((partner) =>
+                candidate(
+                  at,
+                  partner,
+                  through ? `Section ${through.section_id} is merged here at a station in its middle` : null,
+                  ends.filter((p) => p !== partner).map((p) => p.section_id)
+                )
+              );
+            };
+            if (cmd === 'combine_candidate') {
+              return forStation(args?.station as Ref);
+            }
+            const [first, second] = [args?.a as number, args?.b as number];
+            const ends = (id: number): Ref[] => {
+              const section = sections.find((s) => s.id === id);
+              return section ? [{ section_id: id, station_index: 0 }, { section_id: id, station_index: section.shots.length }] : [];
+            };
+            if (first === second || ends(first).length === 0 || ends(second).length === 0) return null;
+            for (const at of ends(first)) {
+              const found = forStation(at).find((c) => c.section_a === second || c.section_b === second);
+              if (found) return found;
+            }
+            return candidate(ends(first)[1]!, ends(second)[0]!, 'These sections do not meet at an end station');
+          }
+
+          case 'combine_sections': {
+            console.log('[Mock IPC] combine_sections called with:', args);
+            const win = window as unknown as Record<string, unknown>;
+            const existing = win.__MOCK_COMBINE_SECTIONS_CALLS__ as unknown[] | undefined;
+            const calls = Array.isArray(existing) ? existing : [];
+            calls.push(args ?? null);
+            win.__MOCK_COMBINE_SECTIONS_CALLS__ = calls;
+            type Ref = { section_id: number; station_index: number };
+            type MockSection = { id: number; name: string; color: string; shots: Array<{ id: number } & Record<string, unknown>> } & Record<string, unknown>;
+            const sections = (currentProject?.sections ?? []) as MockSection[];
+            const kept = sections.find((s) => s.id === (args?.kept as number));
+            const other = sections.find((s) => s.id === (args?.other as number));
+            const options = args?.options as { name: string; color: string } | undefined;
+            if (!kept || !other || !options || kept === other) {
+              return { success: false, error: 'Sections not found', section_ids: [], warnings: [] };
+            }
+            const merges = (currentProject?.station_merges ?? []) as Array<{ station_a: Ref; station_b: Ref }>;
+            const touching = (x: Ref, y: Ref) =>
+              merges.some((m) => (m.station_a.section_id === x.section_id && m.station_a.station_index === x.station_index && m.station_b.section_id === y.section_id && m.station_b.station_index === y.station_index) ||
+                (m.station_b.section_id === x.section_id && m.station_b.station_index === x.station_index && m.station_a.section_id === y.section_id && m.station_a.station_index === y.station_index)) ||
+              colocatedJoins.some(([a, b]) => (a.section_id === x.section_id && a.station_index === x.station_index && b.section_id === y.section_id && b.station_index === y.station_index) ||
+                (b.section_id === x.section_id && b.station_index === x.station_index && a.section_id === y.section_id && a.station_index === y.station_index));
+            const keptEnd = { section_id: kept.id, station_index: kept.shots.length };
+            const keptStart = { section_id: kept.id, station_index: 0 };
+            const otherStart = { section_id: other.id, station_index: 0 };
+            const otherEnd = { section_id: other.id, station_index: other.shots.length };
+            let pairing: 'append' | 'append-reversed' | 'prepend' | 'prepend-reversed' | null = null;
+            if (touching(keptEnd, otherStart)) pairing = 'append';
+            else if (touching(keptEnd, otherEnd)) pairing = 'append-reversed';
+            else if (touching(keptStart, otherEnd)) pairing = 'prepend';
+            else if (touching(keptStart, otherStart)) pairing = 'prepend-reversed';
+            if (!pairing) {
+              return { success: false, error: 'These sections do not meet at an end station', section_ids: [], warnings: [] };
+            }
+            structuralUndo.push(JSON.parse(JSON.stringify({ project: currentProject, joins: colocatedJoins })));
+            const mod360 = (a: number) => ((a % 360) + 360) % 360;
+            let moved = other.shots.map((shot) => ({ ...shot }));
+            if (pairing.endsWith('reversed')) {
+              moved = moved.reverse().map((shot) => ({
+                ...shot,
+                azimuth_in: mod360(((shot.azimuth_out as number) ?? 0) + 180),
+                azimuth_out: mod360(((shot.azimuth_in as number) ?? 0) + 180),
+                depth_in: shot.depth_out,
+                depth_out: shot.depth_in,
+              }));
+            }
+            let nextId = kept.shots.reduce((max, s) => Math.max(max, s.id), kept.id * 100000) + 1;
+            moved = moved.map((shot) => ({ ...shot, id: nextId++ }));
+            kept.shots = pairing.startsWith('append') ? [...kept.shots, ...moved] : [...moved, ...kept.shots];
+            kept.name = options.name;
+            kept.color = options.color;
+            sections.splice(sections.indexOf(other), 1);
+            if (currentProject) {
+              currentProject.station_merges = merges.filter((m) => m.station_a.section_id !== other.id && m.station_b.section_id !== other.id) as typeof currentProject.station_merges;
+            }
+            colocatedJoins = colocatedJoins.filter(([a, b]) => a.section_id !== other.id && b.section_id !== other.id);
+            // The backend touches the project, as every edit does (the ruler and the reach
+            // field reset on modified_at); the undo snapshot keeps the value from before.
+            if (currentProject) currentProject.modified_at = new Date(Date.now() + 1).toISOString();
+            return { success: true, section_id: kept.id, section_ids: [kept.id], warnings: [], error: null };
+          }
 
           case 'preview_delete_shot_range': {
             console.log('[Mock IPC] preview_delete_shot_range called with:', args);

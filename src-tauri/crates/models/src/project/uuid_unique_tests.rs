@@ -281,3 +281,60 @@ fn a_plan_anchor_saved_against_a_renamed_id_still_finds_its_shot() {
         "the section that kept the id still finds it directly"
     );
 }
+
+/// Every shot's record parity (`Project::shot_record_parity`), section by
+/// section, in shot order.
+fn record_parities(project: &Project) -> Vec<Vec<bool>> {
+    project
+        .sections
+        .iter()
+        .map(|section| {
+            section
+                .shots
+                .iter()
+                .map(|shot| project.shot_record_parity(section, shot.uuid.as_deref()))
+                .collect()
+        })
+        .collect()
+}
+
+/// The load heal renames one project's own repeats. The counter-parity set is
+/// keyed by id, so before the heal both copies of `IDS[1]` read its entry;
+/// after it both still do, the kept copy through the old id and the renamed
+/// one through the new.
+#[test]
+fn the_load_heal_keeps_every_shots_record_parity() {
+    let mut project = two_copies();
+    project.counter_parity_shots.insert(IDS[1].to_string());
+    let before = record_parities(&project);
+    assert_eq!(before, vec![vec![false, true, false]; 2], "setup");
+
+    project.make_shot_uuids_project_unique();
+
+    assert_eq!(record_parities(&project), before);
+    assert!(project
+        .counter_parity_shots
+        .contains(&reminted_shot_uuid(1, IDS[1])));
+}
+
+/// A newcomer that yields an id to the project does NOT take the project's
+/// counter-parity entry for it: that entry belongs to the project's shot, and
+/// the newcomer's parity comes from its own source (Add .stalx carries it).
+#[test]
+fn a_newcomer_renamed_off_a_shared_id_does_not_take_its_counter_parity() {
+    let mut project = Project::new("Door".to_string(), None);
+    project.add_section(copy_of_ids());
+    project.counter_parity_shots.insert(IDS[1].to_string());
+    project.add_section(copy_of_ids());
+
+    project.reassign_repeated_shot_uuids(&[1]);
+
+    assert_eq!(
+        record_parities(&project),
+        vec![vec![false, true, false], vec![false, false, false]]
+    );
+    assert_eq!(
+        project.counter_parity_shots,
+        [IDS[1].to_string()].into_iter().collect()
+    );
+}
