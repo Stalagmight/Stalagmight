@@ -2323,7 +2323,8 @@ function useNetworkStatus() {
 The dialog offers the files beside the project named after it plus a suffix
 that contains `.backup` or ends in `.tmp` (`cave.stalx.backup`,
 `cave.stalx.backup.1`, `cave.stalx.tmp`), and only those that start with
-SQLite's header. It never offers the project itself (under any name), its
+SQLite's header. It never offers the project itself (nor, on Unix, a hard
+link to it), its
 `.pre-restore` copy, SQLite's `-journal`/`-wal`/`-shm` files, or an empty file
 (#720).
 
@@ -2339,8 +2340,8 @@ fails changes nothing:
 - Otherwise the backup is copied beside the project and opened as a project
   first. The previous `.pre-restore` copy is set aside, a copy of the project
   replaces it, and the backup copy replaces the project, each by rename. If the
-  last step fails, the previous `.pre-restore` copy goes back. The restored file
-  keeps the project's permissions.
+  last step fails, the previous `.pre-restore` copy goes back. On Unix the
+  restored file keeps the project's permission bits.
 - The dialog never offers the `.pre-restore` copy. Restoring it directly (over
   IPC) swaps the two files back.
 

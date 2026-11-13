@@ -31,12 +31,17 @@
 //! Steps 2 and 3 run with the project slot and the load token locked (in that
 //! order, as the SpeleoDB cache install takes them), and not at all while a
 //! load is in flight or the project, its safety copy or the backup is the open
-//! project. A load opens its file before it takes the project slot, so one
-//! already under way could otherwise map the old file and later save over the
-//! restore; and an open project would be saved over it, while closing it here
-//! would throw its unsaved edits away. A rename leaves every open handle on the
-//! inode it had, so even a file the app has open under another name (renamed by
-//! another process) keeps the content its live connection reads.
+//! project (checked before step 1 too, so such a refusal writes nothing). A
+//! load opens its file before it takes the project slot, so one already under
+//! way could otherwise map the old file and later save over the restore; and
+//! an open project would be saved over it, while closing it here would throw
+//! its unsaved edits away. (`Command::OpenProject` and the SpeleoDB reopen open
+//! a file without the load token. Racing one of them takes concurrent IPC
+//! calls on the same file, and the rename still leaves that connection's file
+//! intact: a later save could undo the restore, but nothing is lost.) A rename
+//! leaves every open handle on the inode it had, so even a file the app has
+//! open under another name (renamed by another process) keeps the content its
+//! live connection reads.
 //!
 //! SQLite finds a database's `-journal`, `-wal` and `-shm` by NAME
 //! ([`super::speleodb_sidecars`] explains the hazard). An armed journal, or a
@@ -85,9 +90,38 @@ impl AppState {
     fn restore(&self, project: &Path, backup: &Path) -> Result<String, String> {
         let files = Files::new(project, backup)?;
         files.check()?;
-        // 1. The backup's bytes, staged and opened before anything is written.
+        {
+            let project_slot = self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let loading = self
+                .active_loading
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            files.refuse_busy(project_slot.as_ref(), loading.is_some())?;
+        }
+        // 1. The backup's bytes, staged and checked before anything is written.
+        // Only the staged copy is opened: SQLite may create a `-wal`/`-shm`
+        // beside a file it opens, even read-only, and the backup is only read.
         let staged = stage_copy(&files.backup_real, &files.dir, &files.project)?;
-        drop(Database::open_readonly(&staged).map_err(|e| unopenable_backup(backup, &staged, &e))?);
+        let checked = Database::check_not_newer_at(&staged)
+            .map_err(|newer| {
+                // A backup a newer Stalagmight saved would put a file this
+                // build cannot open in the project's place (#649).
+                let newer = crate::persistence::NewerSchema {
+                    file: name(backup),
+                    ..newer
+                };
+                format!("Not restored: {newer}")
+            })
+            .and_then(|()| {
+                Database::open_readonly(&staged)
+                    .map(drop)
+                    .map_err(|e| unopenable_backup(backup, &staged, &e))
+            });
+        remove_sidecars_of(&staged);
+        checked?;
 
         let project_slot = self
             .project
@@ -97,17 +131,9 @@ impl AppState {
             .active_loading
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if loading.is_some() {
-            return Err(
-                "Not restored: a project is being opened. Try again once it has opened."
-                    .to_string(),
-            );
-        }
-        if let Some(open) = project_slot.as_ref().and_then(|p| p.file_path.as_deref()) {
-            files.refuse_open(open)?;
-        }
-        // Again under the locks: the files may have changed while the backup
-        // was being copied.
+        // Again under the locks: a load may have started, and the files may have
+        // changed, while the backup was being copied.
+        files.refuse_busy(project_slot.as_ref(), loading.is_some())?;
         files.check()?;
         let result = files.replace(staged);
         drop(loading);
@@ -189,28 +215,38 @@ impl<'a> Files<'a> {
             "replacing the file would lose them. Open the project again so Stalagmight can \
              finish them, or move that file away to restore without them.",
         )?;
-        if !self.undo {
-            refuse_unfinished(
-                &self.safety,
-                &format!(
-                    "{}, where a restore keeps its copy of {},",
-                    name(&self.safety),
-                    name(&self.project)
-                ),
-                "replacing the file would lose them. Move those files away, then restore.",
-            )?;
-        }
+        refuse_unfinished(
+            &self.safety,
+            &format!(
+                "{}, where a restore keeps its copy of {},",
+                name(&self.safety),
+                name(&self.project)
+            ),
+            "replacing the file would lose them. Move those files away, then restore.",
+        )?;
         // Copying a backup over a project a newer Stalagmight saved would put an
-        // older file in its place, and a backup a newer Stalagmight saved would
-        // put a file this build cannot open there (#649).
-        for file in [self.project.as_path(), self.backup_real.as_path()] {
-            Database::check_not_newer_at(file).map_err(|e| format!("Not restored: {e}"))?;
-        }
+        // older file in its place (#649). The backup's own check is on its
+        // staged copy.
+        Database::check_not_newer_at(&self.project).map_err(|e| format!("Not restored: {e}"))?;
         Ok(())
     }
 
-    /// A restore never touches a file the app has open: see the module docs.
-    fn refuse_open(&self, open: &Path) -> Result<(), String> {
+    /// A restore never runs while a project is being opened, and never touches
+    /// the file the app has open: see the module docs.
+    fn refuse_busy(
+        &self,
+        open_project: Option<&crate::models::Project>,
+        loading: bool,
+    ) -> Result<(), String> {
+        if loading {
+            return Err(
+                "Not restored: a project is being opened. Try again once it has opened."
+                    .to_string(),
+            );
+        }
+        let Some(open) = open_project.and_then(|p| p.file_path.as_deref()) else {
+            return Ok(());
+        };
         if same_file_on_disk(open, &self.project) {
             return Err(format!(
                 "Not restored: {} is open in Stalagmight. Close it, then restore.",
@@ -259,10 +295,11 @@ impl<'a> Files<'a> {
             .map_err(|e| e.to_string())
             .and_then(|()| install(staged, &self.project));
         if let Err(e) = installed {
-            let put_back = previous.map_or_else(String::new, |p| self.put_back(p));
+            let outcome = previous.map_or_else(|| Ok(()), |p| self.put_back(p));
             return Err(format!(
-                "Not restored: could not replace {} ({e}). Nothing was changed.{put_back}",
-                name(&self.project)
+                "Not restored: could not replace {} ({e}).{}",
+                name(&self.project),
+                after_failure(outcome)
             ));
         }
         // The previous safety copy (parked) is deleted when `previous` drops.
@@ -292,51 +329,60 @@ impl<'a> Files<'a> {
         let copy = stage_copy(&self.project, &self.dir, &self.project)?;
         let previous = park(&self.safety, &self.dir)?;
         if let Err(e) = install(copy, &self.safety) {
-            let put_back = self.put_back(previous);
+            let outcome = self.put_back(previous);
             return Err(format!(
-                "Not restored: could not keep a copy of {} as {} ({e}). Nothing was changed.\
-                 {put_back}",
+                "Not restored: could not keep a copy of {} as {} ({e}).{}",
                 name(&self.project),
-                name(&self.safety)
+                name(&self.safety),
+                after_failure(outcome)
             ));
         }
         Ok(previous)
     }
 
     /// Undo step 2 after a failure: the parked copy goes back, or the new copy
-    /// goes when there was none. Returns a note for the message when that
-    /// itself fails, naming where the previous copy is.
-    fn put_back(&self, previous: Previous) -> String {
+    /// goes when there was none. An `Err` says, for the message, what could
+    /// not be undone and where the previous copy is.
+    fn put_back(&self, previous: Previous) -> Result<(), String> {
         match previous {
             Previous::Nothing => match std::fs::remove_file(&self.safety) {
-                Ok(()) => String::new(),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+                Ok(()) => Ok(()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
                 Err(e) => {
                     tracing::warn!(error = %e, path = %self.safety.display(), "could not remove the new safety copy");
-                    format!(
-                        " {} holds a copy of the unchanged project.",
+                    Err(format!(
+                        "The project is unchanged, and {} now holds a copy of it.",
                         name(&self.safety)
-                    )
+                    ))
                 }
             },
             Previous::File(parked) => match parked.persist(&self.safety) {
                 Ok(()) => {
                     sync_dir(&self.safety);
-                    String::new()
+                    Ok(())
                 }
                 Err(e) => {
                     tracing::error!(error = %e.error, path = %self.safety.display(), "could not put the previous safety copy back");
-                    match e.path.keep() {
-                        Ok(kept) => format!(
-                            " The previous {} could not be put back; it is in {}.",
-                            name(&self.safety),
-                            name(&kept)
-                        ),
-                        Err(_) => String::new(),
-                    }
+                    // Never delete the only copy of it.
+                    let mut parked = e.path;
+                    parked.disable_cleanup(true);
+                    Err(format!(
+                        "The project is unchanged, but the previous {} could not be put back: it \
+                         is in {}.",
+                        name(&self.safety),
+                        name(&parked)
+                    ))
                 }
             },
         }
+    }
+}
+
+/// The end of a failure message: whether step 2 was undone.
+fn after_failure(put_back: Result<(), String>) -> String {
+    match put_back {
+        Ok(()) => " Nothing was changed.".to_string(),
+        Err(note) => format!(" {note}"),
     }
 }
 
@@ -468,6 +514,18 @@ fn stage_copy(source: &Path, dir: &Path, project: &Path) -> Result<tempfile::Tem
     let staged = staged.into_temp_path();
     std::fs::set_permissions(&staged, permissions).map_err(|e| failed("copy", &e))?;
     Ok(staged)
+}
+
+/// Delete what SQLite left beside a staged copy it opened (never a user's file).
+fn remove_sidecars_of(staged: &Path) {
+    for suffix in ["-journal", "-wal", "-shm"] {
+        let sidecar = sidecar_path(staged, suffix);
+        if let Err(e) = std::fs::remove_file(&sidecar) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(error = %e, path = %sidecar.display(), "could not remove a staged copy's sidecar");
+            }
+        }
+    }
 }
 
 /// Rename `staged` over `dest`, with `dest`'s sidecars moved out of SQLite's
