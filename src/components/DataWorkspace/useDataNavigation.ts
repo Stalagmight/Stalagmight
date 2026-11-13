@@ -100,6 +100,11 @@ export function openRowInSurvey(rowKey: string, beforeSelect?: (sel: Selection) 
 }
 
 const FOLLOW_THROTTLE_MS = 160;
+/** A pane that just opened is still being laid out and MapLibre resizes its
+ *  canvas on the next observer tick; panning before that centres the row on
+ *  the OLD (full-width) viewport, i.e. at the pane's right edge. Same settle
+ *  idea as SECTION_FOCUS_REFIT_DELAY_MS in SingleSystemView. */
+const PANE_OPEN_SETTLE_MS = 320;
 
 export function useDataNavigation(
   model: DataModel | null,
@@ -203,9 +208,13 @@ export function useDataNavigation(
       if (s.activeRowKey === prevKey && !opened && !followOn) return;
       prevKey = s.activeRowKey;
       if (!s.mapPaneOpen || !s.mapFollow || !s.activeRowKey) return;
-      // A just-opened pane is still resizing: pan once it has settled.
-      if (opened) lastFollowAt.current = Date.now();
       pendingFollow.current = s.activeRowKey;
+      // A just-opened pane is still resizing: pan once it has settled.
+      if (opened) {
+        if (followTimer.current) clearTimeout(followTimer.current);
+        followTimer.current = setTimeout(runFollow, PANE_OPEN_SETTLE_MS);
+        return;
+      }
       if (followTimer.current) return;
       const wait = Math.max(0, FOLLOW_THROTTLE_MS - (Date.now() - lastFollowAt.current));
       followTimer.current = setTimeout(runFollow, wait);
