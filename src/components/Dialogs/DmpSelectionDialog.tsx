@@ -12,6 +12,7 @@ import { isImportableDmpShot } from '../../hooks/useImportState';
 import type { DmpFile } from '../../types/commands';
 import type { Person } from '../../types/ipc.generated';
 import { CreditPeopleFields } from '../common/CreditFields';
+import { OptionalDateInput } from '../common/OptionalDateInput';
 import { listPeopleProps, type CreditLists } from '../common/SectionMetadataForm';
 import { personKey } from '../../utils/people';
 
@@ -409,12 +410,13 @@ export default function DmpSelectionDialog({
               <label className="block text-sm text-text-secondary mb-1">
                 {t('dialogs.dmpSelection.dateOverrideLabel')}
               </label>
-              <input
-                type="date"
+              <OptionalDateInput
                 value={defaultDate}
-                onChange={(e) => setDefaultDate(e.target.value)}
-                className="w-full"
-                data-testid="default-date-input"
+                onChange={setDefaultDate}
+                onClear={() => setDefaultDate('')}
+                label={t('dialogs.dmpSelection.dateOverrideLabel')}
+                inputClassName="w-full"
+                testId="default-date-input"
               />
             </div>
           </div>

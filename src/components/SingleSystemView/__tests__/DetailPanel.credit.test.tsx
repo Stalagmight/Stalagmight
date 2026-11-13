@@ -152,6 +152,13 @@ describe('Detail panel survey credit - one shot', () => {
     expect(editShotCredit).not.toHaveBeenCalled();
   });
 
+  it('clears the date with "Clear date", as one edit', () => {
+    render(<DetailPanel />);
+    fireEvent.click(tid('detail-credit-date-clear'));
+    expect(editShotCredit).toHaveBeenCalledTimes(1);
+    expect(editShotCredit).toHaveBeenCalledWith({ type: 'shots', shots: [[1, 102]] }, { set_date: null });
+  });
+
   it('never turns a half-typed date into "no date"', () => {
     render(<DetailPanel />);
     const date = tid('detail-credit-date') as HTMLInputElement;
@@ -168,6 +175,51 @@ describe('Detail panel survey credit - one shot', () => {
     expect(tid('detail-credit-surveyors-pill-0-label')).toHaveTextContent('Ann Diver');
     expect(qid('detail-credit-surveyors-pill-0-remove')).toBeNull();
     expect(qid('detail-credit-surveyors-input')).toBeNull();
+  });
+});
+
+describe('Detail panel survey credit - an undated shot', () => {
+  beforeEach(() => {
+    const project = useProjectStore.getState().project!;
+    const section = project.sections[0]!;
+    useProjectStore.setState({
+      project: {
+        ...project,
+        sections: [
+          {
+            ...section,
+            shots: section.shots.map((s) => (s.id === 101 ? { ...s, credit: { ...s.credit!, date: null } } : s)),
+          },
+        ],
+      },
+    });
+    useUIStore.getState().setSelection({ type: 'shot', sectionId: 1, shotId: 101 });
+  });
+
+  // WebKitGTK paints an empty native date input as TODAY's date, so an undated
+  // shot looked surveyed today.
+  it('says "No date" instead of showing an empty date input', () => {
+    render(<DetailPanel />);
+    expect(tid('detail-credit-date-empty')).toHaveTextContent('No date');
+    expect(qid('detail-credit-date')).toBeNull();
+    expect(document.querySelector('input[type="date"]')).toBeNull();
+  });
+
+  it('click to edit: one commit on Enter', () => {
+    render(<DetailPanel />);
+    fireEvent.click(tid('detail-credit-date-empty'));
+    fireEvent.change(tid('detail-credit-date'), { target: { value: '2026-05-01' } });
+    fireEvent.keyDown(tid('detail-credit-date'), { key: 'Enter' });
+    expect(editShotCredit).toHaveBeenCalledTimes(1);
+    expect(editShotCredit).toHaveBeenCalledWith({ type: 'shots', shots: [[1, 101]] }, { set_date: '2026-05-01' });
+  });
+
+  it('opening and leaving without a date writes nothing and shows "No date" again', () => {
+    render(<DetailPanel />);
+    fireEvent.click(tid('detail-credit-date-empty'));
+    fireEvent.blur(tid('detail-credit-date'));
+    expect(editShotCredit).not.toHaveBeenCalled();
+    expect(tid('detail-credit-date-empty')).toBeInTheDocument();
   });
 });
 

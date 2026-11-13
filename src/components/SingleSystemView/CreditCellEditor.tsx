@@ -14,6 +14,7 @@ import { useCallback, useLayoutEffect, useMemo, useRef, useState, type KeyboardE
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { PeopleInput } from '../common/PeopleInput';
+import { OptionalDateInput } from '../common/OptionalDateInput';
 import { Button } from '../common/Button';
 import { useDismissableLayer } from '../../hooks/useDismissableLayer';
 import { usePeopleSuggestions } from '../../hooks/usePeopleSuggestions';
@@ -109,10 +110,13 @@ function useFieldFocus(
     const box = boxRef.current;
     if (!placed || !box) return undefined;
     const focusField = () => {
-      const field = box.querySelector<HTMLInputElement>('input');
+      // The field: the input, or an empty date's "No date" button.
+      const field = box.querySelector<HTMLElement>('input, [data-date-empty]');
       if (!field || closingRef.current || box.contains(document.activeElement)) return;
       field.focus({ preventScroll: true });
-      if (field.type === 'text') field.setSelectionRange(field.value.length, field.value.length);
+      if (field instanceof HTMLInputElement && field.type === 'text') {
+        field.setSelectionRange(field.value.length, field.value.length);
+      }
     };
     focusField();
     const frame = requestAnimationFrame(focusField);
@@ -247,13 +251,14 @@ export function CreditCellEditor({ shot, field, anchor, seed = '', onCommit, onC
       ) : (
         <label className="block text-sm text-text-secondary">
           <span className="mb-1 block">{label}</span>
-          <input
-            ref={dateRef}
-            type="date"
+          <OptionalDateInput
+            inputRef={dateRef}
             value={date}
-            onChange={(e) => setDate(e.target.value)}
-            className="w-full"
-            data-testid="credit-cell-editor-date"
+            onChange={setDate}
+            onClear={() => setDate('')}
+            label={label}
+            inputClassName="w-full"
+            testId="credit-cell-editor-date"
           />
         </label>
       )}

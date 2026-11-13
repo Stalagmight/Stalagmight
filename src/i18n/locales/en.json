@@ -4038,7 +4038,9 @@
       "mixedUndated_one": "{{range}}, {{count}} shot undated",
       "mixedUndated_other": "{{range}}, {{count}} shots undated",
       "setForAll": "Set for all shots",
-      "keepPerShot": "Keep per-shot dates"
+      "keepPerShot": "Keep per-shot dates",
+      "empty": "No date",
+      "clear": "Clear date"
     },
     "cellEditor": {
       "hint": "Enter to save, Esc to cancel",

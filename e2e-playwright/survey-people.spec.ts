@@ -253,6 +253,51 @@ test.describe('Survey people', () => {
     expect(input!.x).toBeGreaterThan(pill!.x + pill!.width);
   });
 
+  // WebKitGTK paints an empty native date input as TODAY's date, so an undated
+  // shot looked surveyed today: no date is "No date", which opens the input on
+  // click, and a date can be cleared again.
+  test('an undated shot says "No date"; click to edit, Enter commits once, Clear removes it', async ({ page }) => {
+    const sectionId = await seedSection(page);
+    const shotId = (await firstSection(page)).shots[0]!.id;
+    await page.evaluate(
+      async ([sid, id]) => {
+        const ps = (window as unknown as { __E2E_TEST__: { projectStore: { getState: () => Record<string, (...a: unknown[]) => Promise<unknown>> } } })
+          .__E2E_TEST__.projectStore.getState();
+        await ps.editShotCredit({ type: 'shots', shots: [[sid, id]] }, { set_date: null });
+        (window as unknown as E2EWindow).__E2E_TEST__.uiStore.getState().setSelection({ type: 'shot', sectionId: sid, shotId: id });
+        (window as unknown as E2EWindow).__MOCK_EDIT_SHOT_CREDIT_CALLS__ = [];
+      },
+      [sectionId, shotId] as const,
+    );
+    const empty = page.getByTestId('detail-credit-date-empty');
+    await expect(empty).toHaveText('No date');
+    await expect(page.getByTestId('detail-credit-date')).toHaveCount(0);
+
+    // Opening and leaving with nothing picked writes nothing.
+    await empty.click();
+    const input = page.getByTestId('detail-credit-date');
+    await expect(input).toBeFocused();
+    await input.press('Escape');
+    await expect(empty).toBeFocused();
+    expect(await creditCalls(page)).toEqual([]);
+
+    await empty.click();
+    await input.fill('2026-05-01');
+    await input.press('Enter');
+    await expect.poll(() => creditCalls(page)).toEqual([
+      { targets: { type: 'shots', shots: [[sectionId, shotId]] }, edit: { set_date: '2026-05-01' } },
+    ]);
+    await expect(input).toHaveValue('2026-05-01');
+
+    await page.getByTestId('detail-credit-date-clear').click();
+    await expect.poll(() => creditCalls(page)).toHaveLength(2);
+    expect((await creditCalls(page))[1]).toEqual({
+      targets: { type: 'shots', shots: [[sectionId, shotId]] },
+      edit: { set_date: null },
+    });
+    await expect(page.getByTestId('detail-credit-date-empty')).toHaveText('No date');
+  });
+
   test('Escape closes the suggestion list, then clears the text, without closing the dialog', async ({ page }) => {
     const sectionId = await seedSection(page);
     await openDialog(page, 'edit-section', { sectionId });

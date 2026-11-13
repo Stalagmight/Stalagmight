@@ -232,12 +232,19 @@ describe('the credit cell popover and the keyboard', () => {
     expect(onEdit).toHaveBeenCalledWith(0, 'surveyors', []);
   });
 
-  it('the date cell opens its popover from a key with the date input focused', () => {
+  it('the date cell opens its popover from a key with the date field focused', () => {
     const { onEdit } = renderTable();
     click(0, 'survey_date');
     fireEvent.keyDown(scroller(), { key: '2' });
 
     expect(editor()).toHaveAttribute('data-field', 'survey_date');
+    // An undated shot: the field is "No date" (an empty native date input
+    // reads as today's date in WebKitGTK), and Enter opens the input.
+    const empty = screen.getByTestId('credit-cell-editor-date-empty');
+    expect(document.activeElement).toBe(empty);
+    expect(screen.queryByTestId('credit-cell-editor-date')).toBeNull();
+    fireEvent.keyDown(empty, { key: 'Enter' });
+    expect(editor()).toBeInTheDocument();
     expect(document.activeElement).toBe(screen.getByTestId('credit-cell-editor-date'));
     expect(onEdit).not.toHaveBeenCalled();
   });

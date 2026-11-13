@@ -50,6 +50,7 @@ import { nextShotKind } from '../../utils/shotKind';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 import { CreditPeopleFields } from '../common/CreditFields';
+import { OptionalDateInput } from '../common/OptionalDateInput';
 import { listPeopleProps, type CreditLists } from '../common/SectionMetadataForm';
 import { personKey } from '../../utils/people';
 
@@ -488,12 +489,13 @@ export default function ImportDialog() {
                 <label className="block text-sm text-text-secondary mb-1">
                   {t('credit.dateLabel')}
                 </label>
-                <input
-                  type="date"
+                <OptionalDateInput
                   value={date}
-                  onChange={(e) => setDate(e.target.value)}
-                  className="w-full"
-                  data-testid="import-section-date-input"
+                  onChange={setDate}
+                  onClear={() => setDate('')}
+                  label={t('credit.dateLabel')}
+                  inputClassName="w-full"
+                  testId="import-section-date-input"
                 />
               </div>
               <div className="w-24 shrink-0">

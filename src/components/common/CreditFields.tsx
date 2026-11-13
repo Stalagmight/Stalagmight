@@ -14,6 +14,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { PeopleInput, type PeopleInputValue } from './PeopleInput';
+import { OptionalDateInput } from './OptionalDateInput';
 import { usePeopleSuggestions } from '../../hooks/usePeopleSuggestions';
 import { rememberPeople } from '../../store/recentPeople';
 import type { CreditDateAggregate, CreditRole } from '../../utils/creditEdit';
@@ -130,7 +131,9 @@ interface DraftDateInputProps {
  * typed segments make a valid date, so typing 2026-04-11 over 2026-03-02 passes
  * through 2026-04-01; committing each of those wrote one undo step per segment.
  * Escape puts the committed date back (and, when nothing was changed, cancels
- * through `onCancel`). A half-typed date is never committed as "no date".
+ * through `onCancel`). A half-typed date is never committed as "no date". No
+ * date shows as "No date", never as an empty native input (which WebKitGTK
+ * paints as today), and "Clear date" commits the removal at once.
  */
 function DraftDateInput({ value, onCommit, onCancel, disabled, autoFocus = false, testId, label }: DraftDateInputProps) {
   const [draft, setDraft] = useState(value);
@@ -149,10 +152,9 @@ function DraftDateInput({ value, onCommit, onCancel, disabled, autoFocus = false
     if (draft !== value) onCommit(draft === '' ? null : draft);
   };
   return (
-    <input
-      type="date"
+    <OptionalDateInput
       value={draft}
-      onChange={(event) => setDraft(event.target.value)}
+      onChange={setDraft}
       onBlur={(event) => commit(event.currentTarget)}
       onKeyDown={(event) => {
         if (event.key === 'Enter') {
@@ -171,11 +173,14 @@ function DraftDateInput({ value, onCommit, onCancel, disabled, autoFocus = false
           }
         }
       }}
+      onClear={() => {
+        setDraft('');
+        if (value !== '') onCommit(null);
+      }}
       disabled={disabled}
-      autoFocus={autoFocus}
-      aria-label={label}
-      className="h-9 w-40 px-2"
-      data-testid={testId}
+      startEditing={autoFocus}
+      label={label}
+      testId={testId}
     />
   );
 }

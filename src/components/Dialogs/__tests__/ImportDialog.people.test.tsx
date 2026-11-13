@@ -108,6 +108,7 @@ describe('New Section people', () => {
     typePerson('surveyors', 'Ann Diver');
     typePerson('surveyors', 'Cy Survey');
     typePerson('explorers', 'Bo Lead');
+    fireEvent.click(byTestId('import-section-date-input-empty'));
     fireEvent.change(byTestId('import-section-date-input'), { target: { value: '2026-03-02' } });
     act(() => {
       byTestId('import-section-create').click();
