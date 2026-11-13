@@ -14,7 +14,8 @@ order: 1
   - **Reference** (`R`): a shot retaken along a line already surveyed, so two
     sections can be joined exactly, without ambiguity. On
     [import](../workflows/importing-from-mnemo.md), Stalagmight uses them to
-    suggest where sections join.
+    suggest where sections join. Survey length leaves references out, so the
+    same passage is not counted twice.
 - **LRUD**: left, right, up and down distances to the cave walls, i.e. the
   passage size.
 - **Section**: a run of shots, usually one linear stretch of surveyed line.
