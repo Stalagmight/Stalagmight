@@ -135,10 +135,14 @@ left inside the combined section, and a reload moves and converts nothing.
 
 **Mutation** (`project/combine_sections.rs`):
 
+0. Shot uuids the other section shares with the kept one are renewed first
+   (`renew_shared_shot_uuids`, derived like the load heal). The command runs
+   it as a heal before it pins position-keyed ignores and records the undo
+   step, so the pins, the held component gauge and the snapshot name each
+   shot by the identity it keeps.
 1. What has to give (`prepare_combine`): convert the other section's bearings
-   to the kept north reference; re-mint shot uuids it shares with the kept
-   section; drop closures across the join point; tear the plan's ties into
-   `Batch` closures; shift the moving side.
+   to the kept north reference; drop closures across the join point; tear the
+   plan's ties into `Batch` closures; shift the moving side.
 2. Reverse the other section when the ends match, with `reverse_section`.
 3. Settle the join:
    - The join merge and any closure between the two join stations go (either
