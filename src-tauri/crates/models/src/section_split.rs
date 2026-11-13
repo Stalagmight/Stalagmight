@@ -60,3 +60,17 @@ pub struct SplitSectionOptions {
     /// Which half keeps a zero datum on the split station: `A` or `B`.
     pub datum_side: SplitSide,
 }
+
+impl SplitSectionOptions {
+    /// Why these choices cannot make a split, if they cannot: a half with no
+    /// name (empty or only whitespace), or a zero datum asked to stay on both
+    /// halves. The model, the command and the dialog's preview all refuse on
+    /// it, so they agree.
+    pub fn refusal(&self) -> Option<String> {
+        if self.name_a.trim().is_empty() || self.name_b.trim().is_empty() {
+            return Some("Each half of a split needs a name".to_string());
+        }
+        (self.datum_side == SplitSide::Both)
+            .then(|| "A zero datum can stay on only one half of a split".to_string())
+    }
+}

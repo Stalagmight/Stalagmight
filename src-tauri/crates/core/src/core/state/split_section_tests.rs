@@ -1152,6 +1152,37 @@ fn the_preview_refuses_exactly_what_the_split_refuses() {
             false,
         ),
         (
+            "an empty first-half name",
+            |_, m| {
+                (
+                    m,
+                    SplitAt::Station { station_index: 1 },
+                    SplitSectionOptions {
+                        name_a: String::new(),
+                        ..options()
+                    },
+                )
+            },
+            false,
+        ),
+        (
+            "a whitespace-only second-half name, inside a shot",
+            |s, m| {
+                (
+                    m,
+                    SplitAt::Shot {
+                        shot_id: shot_id(s, m, 1),
+                        distance: 2.0,
+                    },
+                    SplitSectionOptions {
+                        name_b: " \t ".to_string(),
+                        ..options()
+                    },
+                )
+            },
+            false,
+        ),
+        (
             "no shot id left, inside a shot",
             |s, m| {
                 let mut project = s.get_project_state().unwrap();

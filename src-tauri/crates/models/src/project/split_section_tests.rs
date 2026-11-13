@@ -486,3 +486,37 @@ fn the_shot_insert_check_is_exact_at_the_cap_and_the_id_window() {
         "no section"
     );
 }
+
+/// Each half needs a name: an empty or whitespace-only one is refused before
+/// anything changes, and a padded one is stored trimmed.
+#[test]
+fn a_split_needs_a_name_for_each_half_and_trims_it() {
+    let (mut project, main, _) = project();
+    let before = serde_json::to_string(&project).unwrap();
+    for (name_a, name_b) in [("", "B"), ("A", "   "), ("\t", "B")] {
+        let options = SplitSectionOptions {
+            name_a: name_a.to_string(),
+            name_b: name_b.to_string(),
+            ..options(SplitSide::A, SplitSide::A)
+        };
+        let reason = project
+            .split_section_at_station(main, 1, &options)
+            .unwrap_err();
+        assert!(reason.contains("needs a name"), "{reason}");
+        assert_eq!(serde_json::to_string(&project).unwrap(), before);
+    }
+    let options = SplitSectionOptions {
+        name_a: "  Main-A ".to_string(),
+        name_b: "Main-B\t".to_string(),
+        ..options(SplitSide::A, SplitSide::A)
+    };
+    let second = project.split_section_at_station(main, 1, &options).unwrap();
+    assert_eq!(
+        project.get_section(main).unwrap().name.as_deref(),
+        Some("Main-A")
+    );
+    assert_eq!(
+        project.get_section(second).unwrap().name.as_deref(),
+        Some("Main-B")
+    );
+}

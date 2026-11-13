@@ -50,7 +50,7 @@ impl AppState {
         // This path bypasses `execute()`, so it carries its own frame check
         // (#469): moving a datum to the second half can re-define the frame.
         let frame_before = self.frame_datum_key();
-        let undo_name_b = options.name_b.clone();
+        let undo_name_b = options.name_b.trim().to_string();
 
         let second_id = {
             let Ok(mut proj_guard) = self.project.lock() else {
@@ -186,8 +186,9 @@ impl AppState {
     }
 
     /// Every refusal of Split Section Here, read-only and in the order the
-    /// command decides them: the read-only edit gate (#191, D-B6), a zero
-    /// datum asked to stay on both halves, then the cut itself
+    /// command decides them: the read-only edit gate (#191, D-B6), the
+    /// options (a half with no name, a zero datum asked to stay on both
+    /// halves: [`SplitSectionOptions::refusal`]), then the cut itself
     /// ([`Self::validate_cut`]). The command and
     /// [`Self::split_section_preview`] both run it, so a preview refuses
     /// exactly what the split would, with the same reason. The edit gate reads
@@ -201,8 +202,8 @@ impl AppState {
         if let Err(refused) = self.guard_mutation("Split section") {
             return Err(refused.error.unwrap_or_default());
         }
-        if options.datum_side == SplitSide::Both {
-            return Err("A zero datum can stay on only one half of a split".to_string());
+        if let Some(refusal) = options.refusal() {
+            return Err(refusal);
         }
         self.with_project(|project| Self::validate_cut(project, section_id, at))
     }

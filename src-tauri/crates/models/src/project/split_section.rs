@@ -61,8 +61,8 @@ impl Project {
         station_index: u32,
         options: &SplitSectionOptions,
     ) -> Result<SectionId, String> {
-        if options.datum_side == SplitSide::Both {
-            return Err("A zero datum can stay on only one half of a split".to_string());
+        if let Some(refusal) = options.refusal() {
+            return Err(refusal);
         }
         if let Some(refusal) = self.split_station_refusal(section_id, station_index) {
             return Err(refusal);
@@ -98,13 +98,13 @@ impl Project {
         let first = self
             .get_section_mut(section_id)
             .ok_or_else(|| format!("Section {section_id} not found"))?;
-        first.name = Some(options.name_a.clone());
+        first.name = Some(options.name_a.trim().to_string());
         first.color.clone_from(&options.color_a);
         first.shots.truncate(k);
 
         let second_id = self
             .add_section(SectionData {
-                name: Some(options.name_b.clone()),
+                name: Some(options.name_b.trim().to_string()),
                 // No legacy template: `Section::new` would give it to every
                 // tail shot whose credit is empty, crediting shots nobody
                 // credited.
