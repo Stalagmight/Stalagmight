@@ -1021,6 +1021,108 @@ fn a_schema_expression_failing_part_way_through_the_read_degrades() {
     );
 }
 
+/// Every WARN event `run` emits on this thread, as `field=value` lines.
+fn warnings_during(run: impl FnOnce()) -> Vec<String> {
+    use std::fmt::Write as _;
+    use std::sync::{Arc, Mutex};
+
+    struct Capture(Arc<Mutex<Vec<String>>>);
+    struct Line(String);
+    impl tracing::field::Visit for Line {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            let _ = write!(self.0, "{}={value:?} ", field.name());
+        }
+    }
+    impl tracing::Subscriber for Capture {
+        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            if *event.metadata().level() == tracing::Level::WARN {
+                let mut line = Line(String::new());
+                event.record(&mut line);
+                self.0.lock().unwrap().push(line.0);
+            }
+        }
+        fn enter(&self, _: &tracing::span::Id) {}
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    tracing::subscriber::with_default(Capture(Arc::clone(&lines)), run);
+    let lines = lines.lock().unwrap().clone();
+    lines
+}
+
+/// The credit read's warnings carry the table, the step, SQLite's extended
+/// result code and counts - never SQLite's message (which names columns and,
+/// on a connection past the schema guard, could quote stored text) and never
+/// a person's name or email.
+#[test]
+fn the_credit_read_logs_codes_and_counts_never_text() {
+    let dir = TempDir::new().unwrap();
+    let (path, _, _) = rows_needed(&dir, "no-email.stalx");
+    sql(
+        &path,
+        "CREATE TABLE people_copy AS SELECT id, name FROM credit_people;
+         DROP TABLE credit_people;
+         CREATE TABLE credit_people (id INTEGER PRIMARY KEY, name TEXT);
+         INSERT INTO credit_people SELECT id, name FROM people_copy;
+         DROP TABLE people_copy;",
+    );
+    let warnings = warnings_during(|| {
+        reload(&path);
+    });
+    let shape: Vec<&String> = warnings
+        .iter()
+        .filter(|w| w.contains("step=\"prepare\""))
+        .collect();
+    assert_eq!(shape.len(), 1, "{warnings:?}");
+    assert!(shape[0].contains("table=\"credit_people\""), "{shape:?}");
+    assert!(shape[0].contains("sqlite_code=Some(1)"), "{shape:?}");
+    assert!(
+        warnings
+            .iter()
+            .all(|w| !w.contains("no such column") && !w.contains("email")),
+        "{warnings:?}"
+    );
+
+    // Skipped entries are counted, never named.
+    let (path, _, _) = rows_needed(&dir, "skipped.stalx");
+    sql(
+        &path,
+        "UPDATE credit_people SET email = X'00' WHERE name = 'Ann Lee';
+         UPDATE shot_credits SET surveyors = surveyors || ',99'
+             WHERE rowid = (SELECT max(rowid) FROM shot_credits);",
+    );
+    let warnings = warnings_during(|| {
+        reload(&path);
+    });
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("table=\"shot_credits\"") && w.contains("skipped=1")),
+        "{warnings:?}"
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("table=\"credit_people\"") && w.contains("unreadable_values=1")),
+        "{warnings:?}"
+    );
+    assert!(
+        warnings
+            .iter()
+            .all(|w| !w.contains("Ann Lee") && !w.contains("Bo Ray")),
+        "{warnings:?}"
+    );
+}
+
 /// #717: values of the wrong type inside readable tables are skipped, never
 /// fatal, and only where they are: a row whose key or value cannot be read
 /// is no row (its shot falls back, the other shot keeps its own row); a

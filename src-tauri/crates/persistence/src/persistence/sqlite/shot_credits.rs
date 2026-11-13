@@ -441,12 +441,15 @@ impl Unreadable {
         }
     }
 
+    /// Logged with SQLite's extended result code, never its message: on a
+    /// connection that skipped the schema guard a message could quote what
+    /// the file holds.
     fn warn(&self) {
-        let error = self.error.as_ref().map(ToString::to_string);
+        let sqlite_code = self.error.as_ref().and_then(extended_code);
         tracing::warn!(
             table = self.table,
             step = self.step,
-            error = error.as_deref().unwrap_or("none"),
+            sqlite_code = ?sqlite_code,
             purpose = "read per-shot survey credit",
             "A survey-credit table cannot be read; every shot falls back to its section's \
              legacy surveyor/date"
@@ -474,12 +477,15 @@ fn warn_skipped(table: &'static str, skipped: usize, unreadable_values: usize) {
 /// code (BUSY, LOCKED, IOERR, NOMEM, INTERRUPT, CORRUPT, NOTADB, FULL, TOOBIG,
 /// AUTH, ...) and every non-SQLite error is not about the table's shape.
 pub(super) fn is_schema_error(error: &rusqlite::Error) -> bool {
+    extended_code(error).is_some_and(|code| code & 0xff == rusqlite::ffi::SQLITE_ERROR)
+}
+
+/// SQLite's extended result code behind `error`, if SQLite raised it.
+fn extended_code(error: &rusqlite::Error) -> Option<i32> {
     match error {
         rusqlite::Error::SqliteFailure(failure, _)
-        | rusqlite::Error::SqlInputError { error: failure, .. } => {
-            failure.extended_code & 0xff == rusqlite::ffi::SQLITE_ERROR
-        }
-        _ => false,
+        | rusqlite::Error::SqlInputError { error: failure, .. } => Some(failure.extended_code),
+        _ => None,
     }
 }
 
