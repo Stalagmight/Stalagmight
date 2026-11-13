@@ -574,6 +574,49 @@ fn a_restore_that_fails_at_the_last_step_changes_nothing() {
     }
 }
 
+/// The same with no safety copy before the restore: the new one goes again.
+#[test]
+fn a_failed_first_restore_leaves_no_safety_copy_behind() {
+    let dir = TempDir::new().unwrap();
+    let (project, backup) = cave(&dir);
+    block_the_rename_onto(&project);
+    let before = snapshot(dir.path());
+
+    let err = state()
+        .restore_project_from_backup(&project, &backup)
+        .unwrap_err();
+
+    assert!(err.ends_with("). Nothing was changed."), "{err}");
+    assert_eq!(snapshot(dir.path()), before);
+    assert!(!pre_restore_path(&project).exists());
+}
+
+/// A backup in WAL mode (as a file from elsewhere may be) restores, and
+/// checking it leaves no `-wal`/`-shm` behind under the staged copy's name.
+#[test]
+fn a_wal_mode_backup_leaves_no_sidecars_behind() {
+    let dir = TempDir::new().unwrap();
+    let (project, backup) = cave(&dir);
+    {
+        let conn = rusqlite::Connection::open(&backup).unwrap();
+        let mode: String = conn
+            .query_row("PRAGMA journal_mode = WAL", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(mode, "wal");
+    }
+    assert_eq!(names(dir.path()), ["cave.stalx", "cave.stalx.backup"]);
+
+    state()
+        .restore_project_from_backup(&project, &backup)
+        .unwrap();
+
+    assert_eq!(
+        names(dir.path()),
+        ["cave.stalx", "cave.stalx.backup", "cave.stalx.pre-restore"]
+    );
+    assert_eq!(label(&project), "Older");
+}
+
 /// A load opens its file before it takes the project slot, so a restore while
 /// one is in flight could be saved over later: refused, nothing changed.
 #[test]
