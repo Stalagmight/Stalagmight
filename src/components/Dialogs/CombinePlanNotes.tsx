@@ -133,17 +133,32 @@ export function CombinePlanNotes({
               {plan.torn_ties.map((tie) => {
                 const id = `${tie.station_a.section_id}-${tie.station_a.station_index}-${tie.station_b.section_id}-${tie.station_b.station_index}`;
                 const key = tie.kind === 'merge' ? 'tornMerge' : 'tornSnapped';
+                const named = t(`dialogs.combineSections.${key}`, {
+                  a: stationLabel(tie.station_a),
+                  b: stationLabel(tie.station_b),
+                });
+                // The datum side is the end that does not move with the moving section.
+                const held = [tie.station_a, tie.station_b].find(
+                  (s) => !plan.moved_sections.includes(s.section_id)
+                );
                 return (
                   <li key={id} data-testid={`combine-torn-tie-${id}`}>
-                    {t(`dialogs.combineSections.${key}`, {
-                      a: stationLabel(tie.station_a),
-                      b: stationLabel(tie.station_b),
-                    })}
+                    {tie.reason === 'zero_datum' && held
+                      ? t('dialogs.combineSections.tornHeld', { tie: named, held: sectionName(held.section_id) })
+                      : named}
                   </li>
                 );
               })}
             </ul>
-            <span className="block mt-1 text-text-secondary">{t('dialogs.combineSections.tornWhy')}</span>
+            {plan.torn_ties.some((tie) => tie.reason === 'loop') && (
+              <span className="block mt-1 text-text-secondary" data-testid="combine-torn-why">
+                {t(
+                  plan.moving_section !== null
+                    ? 'dialogs.combineSections.tornWhyMoves'
+                    : 'dialogs.combineSections.tornWhyStays'
+                )}
+              </span>
+            )}
           </li>
         )}
       </ul>

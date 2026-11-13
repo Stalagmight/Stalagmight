@@ -7,7 +7,8 @@ use crate::{
     AzimuthReference, ClosureStrategy, CombineJoinEnds, CombineJoinKind, CombinePick,
     CombineSectionsOptions, CorrectionSource, GpsCoordinates, LoopClosure, NorthReference, Person,
     Project, SectionData, SectionEnd, SectionId, ShotData, SplitSectionOptions, SplitSide,
-    StationKey, StationMerge, StationRef, SurveyCredit, TornTie, TornTieKind, ZeroDatum,
+    StationKey, StationMerge, StationRef, SurveyCredit, TornTie, TornTieKind, TornTieReason,
+    ZeroDatum,
 };
 
 fn shot(azimuth: f64, length: f64) -> ShotData {
@@ -739,6 +740,7 @@ fn a_second_rigid_tie_becomes_a_loop_closure() {
             station_a: StationRef::new(o, 3),
             station_b: StationRef::new(c, 1),
             kind: TornTieKind::Merge,
+            reason: TornTieReason::Loop,
         }]
     );
     project.combine_sections(k, o, &options()).unwrap();
@@ -1050,7 +1052,7 @@ fn sections_that_do_not_meet_meet_twice_or_are_empty() {
     let (mut project, k, o) = pair(SectionEnd::End, SectionEnd::Start, false, 0.5);
     let reason = blocked(&project, k, o);
     assert!(reason.contains("do not meet"), "{reason}");
-    assert!(reason.contains("loop closure"), "{reason}");
+    assert!(reason.contains("close a loop"), "{reason}");
     assert!(project.combine_sections(k, o, &options()).is_err());
 
     // Both ends co-located with the other's, untied: either join works.

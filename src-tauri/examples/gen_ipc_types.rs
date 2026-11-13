@@ -62,7 +62,7 @@ use stalagmight_lib::models::{
     SectionRelationships, SectionStats, SectionUpdates, Shot, ShotData, ShotKind, ShotUpdates,
     SpeleoLink, SplitAt, SplitPreview, SplitSectionOptions, SplitSide, Station, StationMergeWire,
     StationPair, StationRef, SurveyCredit, SurveyDirection, TankMaterial, Team, TornTie,
-    TornTieKind, UnrecognisedShotKind, ZeroDatumWire,
+    TornTieKind, TornTieReason, UnrecognisedShotKind, ZeroDatumWire,
 };
 use stalagmight_lib::parsers::compass::{CompassFile, CompassSurveySummary, InvalidShotCounts};
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};
@@ -251,6 +251,7 @@ fn main() {
     export::<CombinePlan>(&out_dir);
     export::<TornTie>(&out_dir);
     export::<TornTieKind>(&out_dir);
+    export::<TornTieReason>(&out_dir);
     export::<SectionEnd>(&out_dir);
     export::<SplitAt>(&out_dir);
     export::<SplitPreview>(&out_dir);
@@ -563,6 +564,7 @@ fn main() {
         "CombinePlan",
         "TornTie",
         "TornTieKind",
+        "TornTieReason",
         "SectionEnd",
         "Station",
         "StationRef",

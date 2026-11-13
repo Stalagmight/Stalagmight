@@ -728,8 +728,8 @@ impl Project {
                     end_b: SectionEnd::Start,
                 },
                 Touch::refused(format!(
-                    "{} and {} do not meet at an end station: merge two of their ends, or \
-                     create a loop closure between them, first",
+                    "{} and {} do not meet at an end station: merge or close a loop between \
+                     two of their ends first",
                     label(a),
                     label(b)
                 )),

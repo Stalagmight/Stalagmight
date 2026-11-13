@@ -1727,10 +1727,10 @@
       "creditTitle": "Survey credit of the combined section ({{shots}})",
       "personShots": "{{name}} ({{shots}})",
       "acrossClosure": "(across a loop closure)",
-      "closureJoin": "{{kept}} and {{other}} meet here across a loop closure: the survey puts the two ends {{distance}} apart.",
+      "closureJoin": "{{kept}} and {{other}} meet here across a loop closure: the survey puts the two ends {{distance}} apart horizontally.",
       "changesTitle": "Combining also changes:",
-      "moveClosure": "{{moving}} moves {{distance}} so the two ends meet, closing the loop here.",
-      "moveGap": "{{moving}} moves {{distance}} so the two ends meet exactly.",
+      "moveClosure": "{{moving}} moves {{distance}} horizontally so the two ends meet, closing the loop here.",
+      "moveGap": "{{moving}} moves {{distance}} horizontally so the two ends meet exactly.",
       "movesWith_one": "{{names}} is attached to it and moves with it.",
       "movesWith_other": "{{names}} are attached to it and move with it.",
       "keptMoves": "{{kept}} is the one that moves, because a zero datum holds {{other}} in place.",
@@ -1746,7 +1746,9 @@
       "tornTitle_other": "These {{count}} connections become loop closures:",
       "tornMerge": "The merge of {{a}} and {{b}}",
       "tornSnapped": "The snapped closure between {{a}} and {{b}}",
-      "tornWhy": "A section cannot be tied to itself, and the side that moves cannot stay tied to what stays, so the loop's misclosure moves to these closures. The Closures Computed View adjusts them like any other loop."
+      "tornHeld": "{{tie}}: {{held}} is held by a zero datum and stays where it is.",
+      "tornWhyMoves": "The loop's misclosure moves to the new closure, and the Closures Computed View adjusts it like any other loop.",
+      "tornWhyStays": "Otherwise the combined section would be tied to itself. The Closures Computed View adjusts the closure like any other loop."
     }
   },
   "undo": {

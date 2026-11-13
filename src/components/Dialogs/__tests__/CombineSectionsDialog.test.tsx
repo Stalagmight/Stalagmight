@@ -327,10 +327,11 @@ describe('CombineSectionsDialog', () => {
   });
 
   it('across a loop closure, says what moves and which ties become closures, per kept section', async () => {
-    const tie = (a: [number, number], b: [number, number], kind: string) => ({
+    const tie = (a: [number, number], b: [number, number], kind: string, reason = 'loop') => ({
       station_a: { section_id: a[0], station_index: a[1] },
       station_b: { section_id: b[0], station_index: b[1] },
       kind,
+      reason,
     });
     dialogData = {
       candidate: candidate({
@@ -346,7 +347,7 @@ describe('CombineSectionsDialog', () => {
           moving_section: 5,
           moved_sections: [5],
           shift_m: 0.42,
-          torn_ties: [tie([2, 0], [9, 0], 'snapped_closure')],
+          torn_ties: [tie([2, 0], [9, 0], 'snapped_closure'), tie([5, 2], [8, 0], 'merge', 'zero_datum')],
         }),
       }),
     };
@@ -356,10 +357,10 @@ describe('CombineSectionsDialog', () => {
     ];
     render(<CombineSectionsDialog />);
     expect(screen.getByTestId('combine-closure-join')).toHaveTextContent(
-      'Main-A and Main-B meet here across a loop closure: the survey puts the two ends 0.42m apart.'
+      'Main-A and Main-B meet here across a loop closure: the survey puts the two ends 0.42m apart horizontally.'
     );
     expect(screen.getByTestId('combine-note-move')).toHaveTextContent(
-      'Main-B moves 0.42m so the two ends meet, closing the loop here.'
+      'Main-B moves 0.42m horizontally so the two ends meet, closing the loop here.'
     );
     expect(screen.getByTestId('combine-note-move-with')).toHaveTextContent('Side is attached to it and moves with it.');
     expect(screen.getByTestId('combine-note-torn')).toHaveTextContent('This connection becomes a loop closure:');
@@ -373,7 +374,9 @@ describe('CombineSectionsDialog', () => {
     );
     expect(screen.getAllByTestId(/^combine-torn-tie-/).map((li) => li.textContent)).toEqual([
       'The snapped closure between 2:0 and 9:0',
+      'The merge of 5:2 and 8:0: Section 8 is held by a zero datum and stays where it is.',
     ]);
+    expect(screen.getByTestId('combine-torn-why')).toHaveTextContent("The loop's misclosure moves to the new closure");
     fireEvent.click(screen.getByTestId('combine-confirm'));
     await waitFor(() => expect(closeDialog).toHaveBeenCalled());
     expect(combineSections.mock.calls[0]?.[2]).toMatchObject({ join: { kept: 'start', other: 'end' } });

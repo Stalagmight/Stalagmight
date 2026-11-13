@@ -90,6 +90,18 @@ pub enum TornTieKind {
     SnappedClosure,
 }
 
+/// Why a rigid tie becomes a loop closure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum TornTieReason {
+    /// It would tie the combined section to itself: the loop the combine
+    /// closes now closes here.
+    Loop,
+    /// A zero datum holds the section on its far side, which stays while the
+    /// moving side moves.
+    ZeroDatum,
+}
+
 /// A rigid tie the combine turns into an ordinary loop closure, because it
 /// would otherwise tie the combined section to itself or hold the moving side
 /// in place. Named by its stations as they are before the combine.
@@ -98,6 +110,7 @@ pub struct TornTie {
     pub station_a: StationRef,
     pub station_b: StationRef,
     pub kind: TornTieKind,
+    pub reason: TornTieReason,
 }
 
 /// What combining changes beyond joining the shots, for ONE choice of the

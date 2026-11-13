@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 use crate::{
     ClosureStrategy, CombineCandidate, CombineJoinEnds, CombineJoinKind, CombinePick,
     CombineSectionsOptions, GpsCoordinates, Project, SectionData, SectionEnd, SectionId, ShotData,
-    StationRef, TornTieKind,
+    StationRef, TornTieKind, TornTieReason,
 };
 
 fn shot(azimuth: f64, length: f64) -> ShotData {
@@ -303,6 +303,11 @@ fn both_sides_held_tear_the_merge_to_the_moving_sides_datum() {
     let plan = &candidate.plan_keeping_a;
     assert_eq!(plan.moved_sections, vec![o]);
     assert_eq!(plan.torn_ties.len(), 1);
+    assert_eq!(
+        plan.torn_ties[0].reason,
+        TornTieReason::ZeroDatum,
+        "it tears because B's datum holds B, not to open a loop"
+    );
     let (a_before, b_before) = (stations(&project, a), stations(&project, b));
     project
         .combine_sections(

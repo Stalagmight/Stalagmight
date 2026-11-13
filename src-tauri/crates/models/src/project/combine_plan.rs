@@ -35,6 +35,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
     ClosureStrategy, CombinePlan, LoopClosure, SectionId, StationRef, TornTie, TornTieKind,
+    TornTieReason,
 };
 
 use super::combine_candidate::COMBINE_TOLERANCE_M;
@@ -106,6 +107,9 @@ pub(crate) struct TiePlan {
     pub shift: (f64, f64),
     /// The ties that become ordinary loop closures.
     pub torn: Vec<Tie>,
+    /// Which of `torn` tear because a zero datum holds the section on their
+    /// far side (the rest close a loop through the combined section).
+    pub held_by_datum: Vec<TieId>,
     /// Whether the joined station keeps the kept section's manual offset
     /// (the fixed side's: false when the kept section is the one that moves).
     pub kept_offset_wins: bool,
@@ -207,12 +211,17 @@ impl Project {
 
         // False for a non-finite gap too: nothing moves then.
         let shifting = gap.0.hypot(gap.1) > COMBINE_TOLERANCE_M;
-        let (moving, fixed, mut torn) = if shifting {
+        let (moving, fixed, mut torn, held_by_datum) = if shifting {
             self.pick_moving_side(join, &loop_ties, &adjacency_without, &anchored)?
         } else {
             // Nothing moves (beyond the tolerance the join already allows):
             // only the loops the combine would close inside one section tear.
-            (join.other, join.kept, loop_ties(join.other, join.kept))
+            (
+                join.other,
+                join.kept,
+                loop_ties(join.other, join.kept),
+                Vec::new(),
+            )
         };
         let adjacency = adjacency_without(&torn);
         let side = reach(&adjacency, moving, fixed);
@@ -255,6 +264,7 @@ impl Project {
             moved,
             shift: (gap.0 * sign, gap.1 * sign),
             torn: torn_ties,
+            held_by_datum,
             kept_offset_wins: moving == join.other,
         })
     }
@@ -269,12 +279,12 @@ impl Project {
         loop_ties: &dyn Fn(SectionId, SectionId) -> Vec<TieId>,
         adjacency_without: &dyn Fn(&[TieId]) -> Adjacency,
         anchored: &dyn Fn(&HashSet<SectionId>) -> bool,
-    ) -> Result<(SectionId, SectionId, Vec<TieId>), String> {
+    ) -> Result<(SectionId, SectionId, Vec<TieId>, Vec<TieId>), String> {
         let sides = [(join.other, join.kept), (join.kept, join.other)];
         for (m, f) in sides {
             let torn = loop_ties(m, f);
             if !anchored(&reach(&adjacency_without(&torn), m, f)) {
-                return Ok((m, f, torn));
+                return Ok((m, f, torn, Vec::new()));
             }
         }
         for (m, f) in sides {
@@ -290,8 +300,8 @@ impl Project {
                 .filter(|(n, _)| anchored(&reach(&adjacency, *n, m)))
                 .map(|(_, id)| *id)
                 .collect();
-            torn.extend(datum_ties);
-            return Ok((m, f, torn));
+            torn.extend(datum_ties.iter().copied());
+            return Ok((m, f, torn, datum_ties));
         }
         Err(
             "Both sections carry a zero datum on one of their stations: a section can hold \
@@ -321,6 +331,11 @@ impl Project {
                     kind: match tie.id {
                         TieId::Merge(_) => TornTieKind::Merge,
                         TieId::Closure(_) => TornTieKind::SnappedClosure,
+                    },
+                    reason: if plan.held_by_datum.contains(&tie.id) {
+                        TornTieReason::ZeroDatum
+                    } else {
+                        TornTieReason::Loop
                     },
                 })
                 .collect(),

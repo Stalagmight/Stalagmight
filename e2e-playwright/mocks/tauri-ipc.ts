@@ -5454,7 +5454,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               const torn = merges
                 .filter((m) => pair.has(m.station_a.section_id) && pair.has(m.station_b.section_id) && m.station_a.section_id !== m.station_b.section_id)
                 .filter((m) => !((same(m.station_a, a) && same(m.station_b, b)) || (same(m.station_a, b) && same(m.station_b, a))))
-                .map((m) => ({ station_a: m.station_a, station_b: m.station_b, kind: 'merge' }));
+                .map((m) => ({ station_a: m.station_a, station_b: m.station_b, kind: 'merge', reason: 'loop' }));
               // Nothing moves within the backend's 1 mm tolerance.
               const shift = closure ? (closure.misclosure_distance ?? 0) : 0;
               const plan = (kept: number, other: number) => ({
