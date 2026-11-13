@@ -50,9 +50,13 @@
 //!   object, a missing column, a read that fails part way, or a `credit_people`
 //!   missing beside `shot_credits` - gives no rows at all, with a warning: every
 //!   shot falls back to its section's legacy columns.
-//! - Inside a readable table, an unreadable row or person is skipped (counted
-//!   in a warning, never named), a dangling person id is dropped, and a row
-//!   naming no shot of the project is ignored.
+//! - Inside a readable table, an unreadable entry is skipped (counted in a
+//!   warning, never named). A row is used only when ALL of it reads back as
+//!   this build writes it: one with an unreadable value, or naming a person id
+//!   `credit_people` does not hold readably (dangling, unreadable, blank), is
+//!   skipped whole, so its shot reads the legacy columns instead of losing a
+//!   name the next save would then drop for good. A row naming no shot of the
+//!   project is ignored.
 
 use std::collections::HashMap;
 
@@ -240,15 +244,6 @@ pub(super) fn read_credit_rows(
         return Ok(rows);
     }
     let people = read_people(conn)?;
-    let resolve = |ids: &str| -> Vec<Person> {
-        let list: Vec<Person> = ids
-            .split(',')
-            .filter_map(|token| token.trim().parse::<i64>().ok())
-            .filter_map(|id| people.get(&id).cloned())
-            .take(MAX_PEOPLE_PER_ROLE)
-            .collect();
-        dedupe_people(list)
-    };
     // A table of another shape (an unreleased build of this feature keyed
     // rows by uuid alone) fails here.
     let mut stmt = conn
@@ -256,53 +251,90 @@ pub(super) fn read_credit_rows(
         .map_err(|e| Unreadable::new(TABLE, "prepare", e))?;
     let iter = stmt
         .query_map([], |row| {
-            Ok((
-                row.get::<_, u32>(0),
-                row.get::<_, String>(1),
-                row.get::<_, Option<String>>(2),
-                row.get::<_, Option<String>>(3),
-                row.get::<_, Option<String>>(4),
-            ))
+            Ok(StoredRow {
+                section_id: row.get(0),
+                uuid: row.get(1),
+                date: row.get(2),
+                surveyors: row.get(3),
+                explorers: row.get(4),
+            })
         })
         .map_err(|e| Unreadable::new(TABLE, "query", e))?;
-    let (mut skipped, mut unreadable_values) = (0_usize, 0_usize);
+    let mut skipped = 0_usize;
     for row in iter {
         // As in `read_recorded_legacy`: only the read itself can fail here.
-        let (section_id, uuid, date, surveyors, explorers) =
-            row.map_err(|e| Unreadable::new(TABLE, "read", e))?;
-        let (Ok(section_id), Ok(uuid)) = (section_id, uuid) else {
-            skipped += 1;
-            continue;
-        };
-        if uuid.is_empty() {
-            skipped += 1;
-            continue;
+        let row = row.map_err(|e| Unreadable::new(TABLE, "read", e))?;
+        match row.credit(&people) {
+            Some((key, credit)) => {
+                rows.insert(key, credit);
+            }
+            None => skipped += 1,
         }
-        let mut readable = |value: rusqlite::Result<Option<String>>| {
-            value.unwrap_or_else(|_| {
-                unreadable_values += 1;
-                None
-            })
-        };
-        let date = readable(date).and_then(|d| NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok());
-        let surveyors = readable(surveyors).unwrap_or_default();
-        let explorers = readable(explorers).unwrap_or_default();
-        rows.insert(
-            (section_id, uuid),
-            SurveyCredit {
-                surveyors: resolve(&surveyors),
-                explorers: resolve(&explorers),
-                date,
-            },
-        );
     }
-    warn_skipped(TABLE, skipped, unreadable_values);
+    warn_skipped(TABLE, skipped, 0);
     Ok(rows)
 }
 
+/// One `shot_credits` row as stored, each value as it decoded.
+struct StoredRow {
+    section_id: rusqlite::Result<u32>,
+    uuid: rusqlite::Result<String>,
+    date: rusqlite::Result<Option<String>>,
+    surveyors: rusqlite::Result<Option<String>>,
+    explorers: rusqlite::Result<Option<String>>,
+}
+
+impl StoredRow {
+    /// The row's key and credit, or `None` when any of it does not read back
+    /// as this build writes it: a key that is not an integer and a non-empty
+    /// text, a date that is neither NULL nor an ISO date, or a people column
+    /// that is not text or names an id `people` does not hold (dangling, or a
+    /// person that could not be read). Using such a row anyway would strip
+    /// what it cannot read from the shot, and the next save would make that
+    /// loss permanent; without it the shot reads its section's legacy
+    /// columns, which name everyone this build credited there.
+    fn credit(self, people: &HashMap<i64, Person>) -> Option<(CreditKey, SurveyCredit)> {
+        let section_id = self.section_id.ok()?;
+        let uuid = self.uuid.ok().filter(|u| !u.is_empty())?;
+        let date = match self.date.ok()? {
+            None => None,
+            Some(text) => Some(NaiveDate::parse_from_str(&text, "%Y-%m-%d").ok()?),
+        };
+        let surveyors = resolve_ids(&self.surveyors.ok()??, people)?;
+        let explorers = resolve_ids(&self.explorers.ok()??, people)?;
+        Some((
+            (section_id, uuid),
+            SurveyCredit {
+                surveyors,
+                explorers,
+                date,
+            },
+        ))
+    }
+}
+
+/// The people a comma-joined id list names, in order and deduplicated (at
+/// most [`MAX_PEOPLE_PER_ROLE`]), or `None` when any id is not one `people`
+/// holds. An empty list names nobody.
+fn resolve_ids(ids: &str, people: &HashMap<i64, Person>) -> Option<Vec<Person>> {
+    let mut list = Vec::new();
+    if ids.trim().is_empty() {
+        return Some(list);
+    }
+    for token in ids.split(',') {
+        let person = people.get(&token.trim().parse::<i64>().ok()?)?;
+        if list.len() < MAX_PEOPLE_PER_ROLE {
+            list.push(person.clone());
+        }
+    }
+    Some(dedupe_people(list))
+}
+
 /// Every readable person of `credit_people`, by id. The table must exist: the
-/// rows it serves cannot be read without it. An unreadable or blank person is
-/// skipped and counted; a row naming them drops them like a dangling id.
+/// rows it serves cannot be read without it. A person whose id or name cannot
+/// be read, or whose name is blank, is skipped and counted, and a row naming
+/// them is unreadable as a whole ([`StoredRow::credit`]). An unreadable email
+/// alone reads as none: the person is still who the rows name.
 fn read_people(conn: &Connection) -> Result<HashMap<i64, Person>, Unreadable> {
     const TABLE: &str = "credit_people";
     if !is_table(conn, TABLE)? {

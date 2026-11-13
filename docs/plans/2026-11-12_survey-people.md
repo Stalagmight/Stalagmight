@@ -82,8 +82,10 @@ How this feature fits:
   A shot's row says that its credit is explicit, even when the lists are empty. A shot with no row
   falls back to the legacy section columns through the splitter. That makes old files and files
   saved by older builds work unchanged.
-- The uuid is the one `write.rs` already mints at save time. Unreadable or dangling rows are
-  skipped, never fatal. A credit table that cannot be read as a whole (a missing column, a view,
+- The uuid is the one `write.rs` already mints at save time. A row is used only when all of it
+  reads back as written: one with an unreadable value, or naming a person id that `credit_people`
+  does not hold readably (dangling, unreadable, blank), is skipped whole, so its shot reads the
+  legacy columns rather than losing a name the next save would drop for good. Never fatal. A credit table that cannot be read as a whole (a missing column, a view,
   a read failing part way, or `credit_people` missing beside `shot_credits`) gives no rows at all:
   every shot falls back to the legacy columns, with a warning that holds counts, never names
   (#717).

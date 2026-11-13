@@ -625,18 +625,16 @@ fn shots_added_without_rows_fall_back_while_rows_hold() {
     );
 }
 
+/// A row is used only when all of it reads back as this build writes it. A
+/// row with an unreadable value, or naming a person id `credit_people` does
+/// not hold readably, is skipped whole: its shot reads the legacy column
+/// instead of losing what could not be read, which the next save would make
+/// permanent. Valid rows beside them still apply, an empty list included.
 #[test]
-fn unreadable_and_dangling_rows_are_skipped_not_fatal() {
+fn unreadable_and_dangling_rows_are_skipped_whole_not_fatal() {
     let dir = TempDir::new().unwrap();
     let mut project = Project::new("Bad".to_string(), None);
-    let id = section_with(
-        &mut project,
-        vec![
-            credit(&["A"], &[], day(1)),
-            credit(&["B"], &[], None),
-            credit(&["C"], &[], None),
-        ],
-    );
+    let id = section_with(&mut project, vec![credit(&["A"], &[], day(1)); 10]);
     project.ensure_shot_uuids();
     let uuids: Vec<String> = project
         .get_section(id)
@@ -646,32 +644,50 @@ fn unreadable_and_dangling_rows_are_skipped_not_fatal() {
         .map(|s| s.uuid.clone().unwrap())
         .collect();
     let path = save(&dir, "bad.stalx", &project);
+    let row = |shot: usize, date: &str, surveyors: &str, explorers: &str| {
+        format!(
+            "INSERT INTO shot_credits (section_id, shot_uuid, date, surveyors, explorers)
+                 VALUES ({id}, '{}', {date}, {surveyors}, {explorers});",
+            uuids[shot]
+        )
+    };
     sql(
         &path,
-        &format!(
+        &[
             "DELETE FROM shot_credits;
              DELETE FROM credit_people;
              INSERT INTO credit_people (id, name, email) VALUES (1, 'Good', NULL);
              INSERT INTO credit_people (id, name, email) VALUES (2, '   ', NULL);
              INSERT INTO credit_people (id, name, email) VALUES (3, X'00ff', NULL);
-             INSERT INTO shot_credits (section_id, shot_uuid, date, surveyors, explorers)
-                 VALUES ({id}, '{}', 'not a date', '1, 2,3, 99,x', '1');
-             INSERT INTO shot_credits (section_id, shot_uuid, date, surveyors, explorers)
-                 VALUES ({id}, '{}', X'01', X'02', '');
-             UPDATE sections SET surveyor = 'Fallback', date = NULL WHERE id = {id};
-             UPDATE credit_sections SET surveyor = 'Fallback', date = NULL WHERE section_id = {id};",
-            uuids[0], uuids[1]
-        ),
+             INSERT INTO credit_people (id, name, email) VALUES (4, 'Mailless', X'05');"
+                .to_string(),
+            row(0, "NULL", "'1'", "'1'"),
+            row(1, "NULL", "'1, 99'", "''"),
+            row(2, "NULL", "'1,x'", "''"),
+            row(3, "NULL", "'2'", "''"),
+            row(4, "NULL", "'3'", "''"),
+            row(5, "'not a date'", "'1'", "''"),
+            row(6, "X'01'", "'1'", "''"),
+            row(7, "NULL", "X'02'", "''"),
+            // shot 8 has no row
+            row(9, "'2023-08-04'", "''", "' 4 '"),
+            format!(
+                "UPDATE sections SET surveyor = 'Fallback', date = NULL WHERE id = {id};
+                 UPDATE credit_sections SET surveyor = 'Fallback', date = NULL
+                     WHERE section_id = {id};"
+            ),
+        ]
+        .join("\n"),
     );
-    let loaded = reload(&path);
-    let got = credits_of(&loaded, id);
-    // Dangling ids, a blank name and a BLOB name are dropped; a bad date reads
-    // as none.
-    assert_eq!(got[0], credit(&["Good"], &["Good"], None));
-    // A row with a BLOB date still says "explicit" for its readable parts.
-    assert_eq!(got[1], SurveyCredit::default());
-    // No row: the legacy column.
-    assert_eq!(got[2], credit(&["Fallback"], &[], None));
+    let db = Database::open_existing(&path).unwrap();
+    assert_eq!(shot_credits::read_credit_rows(&db.conn).unwrap().len(), 2);
+    let got = credits_of(&db.load_project().unwrap(), id);
+    let fallback = credit(&["Fallback"], &[], None);
+    let mut expected = vec![fallback; 10];
+    expected[0] = credit(&["Good"], &["Good"], None);
+    // An unreadable email alone reads as none; an empty list is explicit.
+    expected[9] = credit(&[], &["Mailless"], day(4));
+    assert_eq!(got, expected);
 }
 
 /// A file saved before shot uuids were project-unique can hold one uuid in
@@ -857,32 +873,48 @@ fn a_credit_table_that_is_a_view_is_refused_at_open_and_never_fatal_to_read() {
 }
 
 /// #717: values of the wrong type inside readable tables are skipped, never
-/// fatal. A row whose key cannot be read is no row (its shot falls back); a
+/// fatal, and only where they are: a row whose key or value cannot be read
+/// is no row (its shot falls back, the other shot keeps its own row); a
 /// record whose pair cannot be read records nothing (its section's rows do
-/// not apply); a person whose id or name cannot be read is dropped from the
-/// rows naming them, like a dangling id.
+/// not apply, the other section's still do); a person who cannot be read
+/// makes the rows naming them unreadable (those shots fall back).
 #[test]
 fn credit_values_of_the_wrong_type_are_skipped_not_fatal() {
     let dir = TempDir::new().unwrap();
-    let (path, id, fallback) = rows_needed(&dir, "keys.stalx");
-    sql(
-        &path,
-        "UPDATE shot_credits SET section_id = 'not a number'
-             WHERE rowid = (SELECT min(rowid) FROM shot_credits);
-         UPDATE shot_credits SET shot_uuid = X'0102'
-             WHERE rowid = (SELECT max(rowid) FROM shot_credits);",
-    );
-    let loaded = reload(&path);
-    assert_eq!(credits_of(&loaded, id), vec![fallback.clone(), fallback]);
+    let own = [
+        credit(&["Ann Lee"], &[], day(1)),
+        credit(&["Bo Ray"], &[], day(2)),
+    ];
+    let first_row = "rowid = (SELECT min(rowid) FROM shot_credits)";
+    let second_row = "rowid = (SELECT max(rowid) FROM shot_credits)";
+    for (broken, statement) in [
+        (
+            0,
+            format!("UPDATE shot_credits SET section_id = 'not a number' WHERE {first_row};"),
+        ),
+        (
+            1,
+            format!("UPDATE shot_credits SET shot_uuid = X'0102' WHERE {second_row};"),
+        ),
+        (
+            1,
+            format!("UPDATE shot_credits SET date = X'01' WHERE {second_row};"),
+        ),
+        (
+            0,
+            "UPDATE credit_people SET name = X'41' WHERE name = 'Ann Lee';".to_string(),
+        ),
+    ] {
+        let (path, id, fallback) = rows_needed(&dir, "one.stalx");
+        sql(&path, &statement);
+        let mut expected = own.to_vec();
+        expected[broken] = fallback;
+        assert_eq!(credits_of(&reload(&path), id), expected, "{statement}");
+    }
 
-    let (path, id, fallback) = rows_needed(&dir, "record.stalx");
-    sql(&path, "UPDATE credit_sections SET surveyor = X'41';");
-    assert_eq!(
-        credits_of(&reload(&path), id),
-        vec![fallback.clone(), fallback]
-    );
-
-    let (path, id, _) = rows_needed(&dir, "people.stalx");
+    // A whole people table of the wrong types: every row names an unreadable
+    // person, so every shot falls back - nobody's name is lost.
+    let (path, id, fallback) = rows_needed(&dir, "people.stalx");
     sql(
         &path,
         "CREATE TABLE kept AS SELECT * FROM credit_people;
@@ -891,13 +923,29 @@ fn credit_values_of_the_wrong_type_are_skipped_not_fatal() {
          INSERT INTO credit_people SELECT id, name, email FROM kept;
          DROP TABLE kept;",
     );
-    let db = Database::open_existing(&path).unwrap();
-    let rows = shot_credits::read_credit_rows(&db.conn).unwrap();
-    assert_eq!(rows.len(), 2, "the rows still read");
     assert_eq!(
-        credits_of(&db.load_project().unwrap(), id),
-        vec![credit(&[], &[], day(1)), credit(&[], &[], day(2))]
+        credits_of(&reload(&path), id),
+        vec![fallback.clone(), fallback]
     );
+
+    // Two sections with rows; one section's record unreadable.
+    let mut project = Project::new("Records".to_string(), None);
+    let a = section_with(&mut project, own.to_vec());
+    let b_own = vec![
+        credit(&["Cy Press"], &[], day(3)),
+        credit(&["Di Vers"], &[], day(4)),
+    ];
+    let b = section_with(&mut project, b_own.clone());
+    project.ensure_shot_uuids();
+    let path = save(&dir, "records.stalx", &project);
+    sql(
+        &path,
+        &format!("UPDATE credit_sections SET surveyor = X'41' WHERE section_id = {a};"),
+    );
+    let loaded = reload(&path);
+    let a_fallback = credit(&["Ann Lee", "Bo Ray"], &[], day(1));
+    assert_eq!(credits_of(&loaded, a), vec![a_fallback.clone(), a_fallback]);
+    assert_eq!(credits_of(&loaded, b), b_own);
 }
 
 /// Every row of `table` as text, in rowid order, minus `skip` columns.
