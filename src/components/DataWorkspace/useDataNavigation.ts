@@ -67,15 +67,19 @@ function centerOn(row: DataRow | ParsedRowKey): void {
  * "Open in Survey": remember the row for the Back-to-Data chip, switch to
  * Survey, select the row there and zoom the map to it. Store-only, so the map
  * pane header (outside the workspace's providers) can call it too. Returns the
- * selection it set (null for a key that names nothing).
+ * selection it set (null for a key that names nothing). `beforeSelect` sees
+ * that selection BEFORE it is set: the selection subscribers run
+ * synchronously inside `setSelection`, so a caller that must recognise its own
+ * selection has to know it by then.
  */
-export function openRowInSurvey(rowKey: string): Selection | null {
+export function openRowInSurvey(rowKey: string, beforeSelect?: (sel: Selection) => void): Selection | null {
   const parsed = parseRowKey(rowKey);
   if (!parsed) return null;
   useDataWorkspaceStore.getState().setReturnToData({ rowKey });
   const ui = useUIStore.getState();
   ui.setAppMode('survey');
   const sel = selectionForRow(parsed);
+  beforeSelect?.(sel);
   setSource('data-table');
   ui.setSelection(sel);
   centerOn(parsed);
@@ -122,7 +126,11 @@ export function useDataNavigation(
   );
 
   const openInSurvey = useCallback((row: DataRow) => {
-    ownSelection.current = openRowInSurvey(row.key);
+    // The guard must be set before the selection fires the subscription below,
+    // or it leaves a focus request that jumps the grid on the next entry.
+    openRowInSurvey(row.key, (sel) => {
+      ownSelection.current = sel;
+    });
   }, []);
 
   const copyRowNames = useCallback((rows: readonly DataRow[]) => {
@@ -189,6 +197,10 @@ export function useDataNavigation(
     return useUIStore.subscribe((s, prev) => {
       if (s.selection === prev.selection || !s.selection) return;
       if (s.selection === ownSelection.current) return;
+      // Data is being left (Open in Survey from the map pane header, or any
+      // switch that selects on its way out): a request now would sit in the
+      // store and jump the grid when Data is entered again.
+      if (s.appMode !== 'data') return;
       const key = rowKeyForSelection(s.selection, modelRef.current);
       if (!key || !modelRef.current?.rowByKey.has(key)) return;
       if (useDataWorkspaceStore.getState().activeRowKey === key) return;

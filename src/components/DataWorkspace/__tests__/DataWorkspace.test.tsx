@@ -36,7 +36,7 @@ import { defaultConfig, type Config } from '../../../types/config';
 import { makeCtx, makeData, makeProject, WARNINGS } from './dataFixtures';
 import { DataSectionHeader } from '../DataSectionHeader';
 import { sectionStatsOf } from '../useDataWorkspaceModel';
-import type { DataNav } from '../useDataNavigation';
+import { openRowInSurvey, type DataNav } from '../useDataNavigation';
 
 class NoopResizeObserver {
   observe() {}
@@ -374,6 +374,28 @@ describe('Map follow and map selection', () => {
     });
     expect(useUIStore.getState().selection).toEqual({ type: 'shot', sectionId: 1, shotId: 102 });
     expect(useUIStore.getState().requestPanToShot).toEqual({ sectionId: 1, shotId: 102 });
+  });
+
+  it('Open in Survey leaves no focus request behind (hover card and map pane header)', () => {
+    vi.useFakeTimers();
+    render(<DataWorkspace />);
+    fireEvent.mouseDown(screen.getByTestId('data-cell-sh-1-3-length'));
+    fireEvent.mouseEnter(screen.getByTestId('data-row-name-st-1-2').parentElement!);
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    fireEvent.click(screen.getByTestId('data-hover-open-in-survey-st-1-2'));
+    expect(useUIStore.getState().appMode).toBe('survey');
+    expect(useUIStore.getState().selection).toEqual({ type: 'station', stationRef: { section_id: 1, station_index: 2 } });
+    expect(useDataWorkspaceStore.getState().focusRequest).toBeNull();
+
+    // The map pane header's path (store-only, no guard of its own).
+    act(() => useUIStore.setState({ appMode: 'data' }));
+    act(() => {
+      openRowInSurvey('st:3:2');
+    });
+    expect(useUIStore.getState().selection).toEqual({ type: 'station', stationRef: { section_id: 3, station_index: 2 } });
+    expect(useDataWorkspaceStore.getState().focusRequest).toBeNull();
   });
 
   it('focuses the row of a selection made on the map', () => {
