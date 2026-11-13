@@ -476,13 +476,11 @@ fn write_shot<W: std::io::Write>(
 ///   explorers - the element form names the role for all of them.
 /// * `None` names nobody, written as Ariane's `unknown`.
 ///
-/// Within a role, names are joined with `", "`, or with `"; "` when `", "`
-/// would read back otherwise (two one-word names read as one `Last, First`
-/// person). `<` and `>` are dropped from every exported name: inside this
-/// pseudo-XML a name holding `</Explorer><Surveyor>` would move people between
-/// roles on re-import. A `,` or `;` inside ONE name cannot round-trip: Ariane
-/// itself separates the people of a role with commas, so the importer splits
-/// there.
+/// Within a role, names are joined with `", "` ([`role_text`]). `<` and `>`
+/// are dropped from every exported name: inside this pseudo-XML a name holding
+/// `</Explorer><Surveyor>` would move people between roles on re-import. A `,`
+/// or `;` inside ONE name cannot round-trip: Ariane itself separates the
+/// people of a role with commas, so the importer splits there.
 fn row_explorer(credit: &crate::models::SurveyCredit) -> Option<String> {
     let explorers = role_text(&credit.explorers);
     let surveyors = role_text(&credit.surveyors);
@@ -496,32 +494,16 @@ fn row_explorer(credit: &crate::models::SurveyCredit) -> Option<String> {
     ))
 }
 
-/// One role's names for [`row_explorer`]: joined with `", "`, or `"; "` when
-/// the importer's splitter ([`crate::models::split_people`]) would not read
-/// the `", "` text back as the same names.
+/// One role's names for [`row_explorer`], joined with `", "`: the importer
+/// reads every TML role as a name list ([`crate::models::NameSource`]), with
+/// no `Last, First` rule, so two one-word names come back as two people.
 fn role_text(people: &[crate::models::Person]) -> Option<String> {
     let names: Vec<String> = people
         .iter()
         .map(|p| p.name.replace(['<', '>'], "").trim().to_string())
         .filter(|n| !n.is_empty())
         .collect();
-    if names.is_empty() {
-        return None;
-    }
-    let reads_back = |text: &str| {
-        let back = crate::models::split_people(text);
-        back.len() == names.len() && back.iter().zip(&names).all(|(p, n)| &p.name == n)
-    };
-    let commas = names.join(", ");
-    if reads_back(&commas) {
-        return Some(commas);
-    }
-    let semicolons = names.join("; ");
-    Some(if reads_back(&semicolons) {
-        semicolons
-    } else {
-        commas
-    })
+    (!names.is_empty()).then(|| names.join(", "))
 }
 
 /// The row's `Date`: the shot's survey date, ISO.
@@ -4266,9 +4248,9 @@ mod tests {
     /// Ariane's `Explorer` field (always the element form, so a row of
     /// explorers alone is not read back as surveyors) and comes back to the
     /// same people on the same shot, and a second export of what came back is
-    /// the same again. Two one-word names in a role are joined with "; ", so
-    /// the `Last, First` rule does not merge them; one person written
-    /// `Last, First` stays one.
+    /// the same again. Two one-word names in a role stay two people: a TML
+    /// role is a name list, with no `Last, First` rule. (A `,` inside ONE name
+    /// cannot round-trip: Ariane separates people with commas.)
     #[test]
     fn survey_credit_round_trips_per_row_and_is_stable() {
         use crate::models::{Person, SurveyCredit};
@@ -4305,11 +4287,6 @@ mod tests {
                 surveyors: vec![p("Solo")],
                 explorers: Vec::new(),
                 date: day(6),
-            },
-            SurveyCredit {
-                surveyors: Vec::new(),
-                explorers: vec![p("Doe, John")],
-                date: day(7),
             },
         ];
         let project_of = |credits: &[SurveyCredit]| {

@@ -8,6 +8,7 @@ import {
   isCreditEmpty,
   legacyPeople,
   samePerson,
+  splitRoles,
   sectionCreditSummary,
   sectionFirstDate,
   sectionSurveyorText,
@@ -64,10 +65,18 @@ describe('sectionCredit', () => {
     expect(sectionFirstDate({ shots: [] })).toBe('');
   });
 
+  // Mirrors the backend's `legacy_splitter_table` (credit/tests.rs).
   it('splits legacy text exactly like the backend', () => {
     const cases: Array<[string, string[], string[]]> = [
       ['nh / ds', ['nh'], ['ds']],
+      // The Ariane form's halves are name lists: no Last, First rule (#427).
+      ['Doe, John / C', ['Doe', 'John'], ['C']],
+      ['ds, kb / ab', ['ds', 'kb'], ['ab']],
+      // Free text keeps the Last, First rule.
       ['Doe, John', [], ['Doe, John']],
+      ['ds, kb', [], ['ds, kb']],
+      ['John Doe, Jane Roe', [], ['John Doe', 'Jane Roe']],
+      ['Ann; Bo', [], ['Ann', 'Bo']],
       ['A, B; C', [], ['A', 'B', 'C']],
       ['unknown / ds', [], ['ds']],
       ['?', [], []],
@@ -85,6 +94,28 @@ describe('sectionCredit', () => {
     ];
     for (const [text, explorers, surveyors] of cases) {
       const split = legacyPeople(text);
+      expect(names(split.explorers), text).toEqual(explorers);
+      expect(names(split.surveyors), text).toEqual(surveyors);
+      expect(splitRoles(text, 'freeText'), text).toEqual(split);
+    }
+  });
+
+  // Mirrors the backend's `ariane_name_list_splitter_table`: text from an
+  // Ariane file is a name list everywhere, and a single name is a surveyor.
+  it('splits Ariane text as name lists, exactly like the backend', () => {
+    const cases: Array<[string, string[], string[]]> = [
+      ['Tester', [], ['Tester']],
+      ['ds, kb', [], ['ds', 'kb']],
+      ['Doe, John', [], ['Doe', 'John']],
+      ['Doe,John', [], ['Doe', 'John']],
+      ['ds, kb / ab', ['ds', 'kb'], ['ab']],
+      ['nh /', ['nh'], []],
+      ['A, B; C', [], ['A', 'B', 'C']],
+      ['unknown / ds', [], ['ds']],
+      ['a / b / c', [], ['a / b / c']],
+    ];
+    for (const [text, explorers, surveyors] of cases) {
+      const split = splitRoles(text, 'nameList');
       expect(names(split.explorers), text).toEqual(explorers);
       expect(names(split.surveyors), text).toEqual(surveyors);
     }

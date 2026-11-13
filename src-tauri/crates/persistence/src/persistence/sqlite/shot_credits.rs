@@ -11,9 +11,10 @@
 //! `sections.date` as one ISO date. Those two legacy columns are still written,
 //! as the section aggregate: `sections.date` is the earliest shot date, and
 //! `sections.surveyor` is [`crate::models::legacy_credit_text`] - the distinct
-//! surveyor names joined with `", "` (the text it always held), or, when anyone
-//! explored the section, the Ariane `"explorers / surveyors"` form, and
-//! `"explorers /"` when nobody surveyed. Older Ariane imports stored only the
+//! surveyor names joined with `", "` (the text it always held; `"; "` for two
+//! one-word names, which free text would read as one `Last, First` person),
+//! or, when anyone explored the section, the Ariane `"explorers / surveyors"`
+//! form, both halves name lists, and `"explorers /"` when nobody surveyed. Older Ariane imports stored only the
 //! first of those, and only with two distinct, non-empty halves: that importer
 //! dropped empty and placeholder halves and collapsed identical ones. A `/`
 //! next to a space inside a name is written `-` there, so the halves stay
@@ -37,13 +38,13 @@
 //!   earliest one;
 //! - emails are gone, and same-named people become one name;
 //! - names come back as the legacy text spells them: a `/` next to a space as
-//!   `-`, a name holding `,` or `;` as several people, two one-word names in
-//!   one role as one `Last, First` person, and a name that is only a
+//!   `-`, a name holding `,` or `;` as several people (except a
+//!   surveyors-only text that is exactly `Last, First`, such as `Doe, John`,
+//!   which the free-text rule keeps as one), and a name that is only a
 //!   placeholder (`?`, `unknown`, `none`) as nobody;
 //! - a 0.5.3 Ariane TML export and re-import collapses identical halves
 //!   (`"Jo Diver / Jo Diver"` comes back as the surveyor `Jo Diver` alone);
-//!   `"explorers /"` survives that round trip, but importing such a TML in
-//!   this build keeps the `/` in the last explorer's name.
+//!   `"explorers /"` survives that round trip and reads back as explorers.
 //!
 //! The tables can still end up next to a legacy pair this build did not write
 //! (a hand edit, another tool editing the file in place). So

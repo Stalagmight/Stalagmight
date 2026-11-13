@@ -15,8 +15,9 @@ fn legacy_splitter_table() {
         // The Ariane importer's "explorers / surveyors" join.
         ("nh / ds", &["nh"], &["ds"]),
         ("A, B, C / D; E", &["A", "B", "C"], &["D", "E"]),
-        // Two one-word comma parts read as `Last, First` in either half.
-        ("Doe, John / C", &["Doe, John"], &["C"]),
+        // Its halves are Ariane name lists: no `Last, First` rule (#427).
+        ("Doe, John / C", &["Doe", "John"], &["C"]),
+        ("ds, kb / ab", &["ds", "kb"], &["ab"]),
         // One half empty, as the importer wrote it for a missing role.
         (" / ds", &[], &["ds"]),
         ("nh / ", &["nh"], &[]),
@@ -35,9 +36,10 @@ fn legacy_splitter_table() {
         ("John Doe", &[], &["John Doe"]),
         ("a / b / c", &[], &["a / b / c"]),
         ("a/b", &[], &["a/b"]),
-        // `Last, First` is one person...
+        // In free text, `Last, First` is one person...
         ("Doe, John", &[], &["Doe, John"]),
         ("Doe,John", &[], &["Doe,John"]),
+        ("ds, kb", &[], &["ds, kb"]),
         // ...but not when either part is more than one word, or there is a `;`.
         ("John Doe, Jane Roe", &[], &["John Doe", "Jane Roe"]),
         ("A, B; C", &[], &["A", "B", "C"]),
@@ -59,14 +61,50 @@ fn legacy_splitter_table() {
         let (e, s) = legacy_people(input);
         assert_eq!(names(&e), *explorers, "explorers of {input:?}");
         assert_eq!(names(&s), *surveyors, "surveyors of {input:?}");
+        assert_eq!(
+            split_roles(input, NameSource::FreeText),
+            (e, s),
+            "legacy_people is the free-text splitter"
+        );
+    }
+}
+
+/// The same splitter for text from an Ariane file (#719 review): a name list
+/// everywhere, so only the `Last, First` cases differ from the legacy column's
+/// free text, and a single name is still a surveyor. Mirrored by the vitest
+/// table in `src/utils/__tests__/sectionCredit.test.ts`.
+#[test]
+fn ariane_name_list_splitter_table() {
+    // (input, explorers, surveyors)
+    let cases: &[(&str, &[&str], &[&str])] = &[
+        ("Tester", &[], &["Tester"]),
+        ("ds, kb", &[], &["ds", "kb"]),
+        ("Doe, John", &[], &["Doe", "John"]),
+        ("Doe,John", &[], &["Doe", "John"]),
+        ("ds, kb / ab", &["ds", "kb"], &["ab"]),
+        ("nh /", &["nh"], &[]),
+        ("A, B; C", &[], &["A", "B", "C"]),
+        ("unknown / ds", &[], &["ds"]),
+        ("a / b / c", &[], &["a / b / c"]),
+    ];
+    for (input, explorers, surveyors) in cases {
+        let (e, s) = split_roles(input, NameSource::NameList);
+        assert_eq!(names(&e), *explorers, "explorers of {input:?}");
+        assert_eq!(names(&s), *surveyors, "surveyors of {input:?}");
     }
 }
 
 #[test]
-fn split_names_splits_on_both_separators_without_the_last_first_rule() {
-    assert_eq!(names(&split_names("Doe, John")), ["Doe", "John"]);
-    assert_eq!(names(&split_names("A;B, c ; a")), ["A", "B", "c"]);
-    assert!(split_names(" ; , ").is_empty());
+fn a_name_list_splits_on_both_separators_without_the_last_first_rule() {
+    assert_eq!(
+        names(&split_role("Doe, John", NameSource::NameList)),
+        ["Doe", "John"]
+    );
+    assert_eq!(
+        names(&split_role("A;B, c ; a", NameSource::NameList)),
+        ["A", "B", "c"]
+    );
+    assert!(split_role(" ; , ", NameSource::NameList).is_empty());
 }
 
 #[test]
@@ -148,16 +186,27 @@ fn legacy_credit_text_table() {
         ),
         // Explorers only: an empty second half.
         (&["Ida Ice"], &[], Some("Ida Ice /"), &["Ida Ice"], &[]),
+        // The " / " form's halves are name lists: two one-word names stay two.
         (
             &["E1", "E2"],
             &["S1", "S2"],
             Some("E1, E2 / S1, S2"),
-            // Two one-word names read back as one `Last, First` person: the
-            // splitter's rule for older files, unchanged. This build writes a
-            // row for such a shot; after an older build's save the names stay
-            // in their role, as one person.
-            &["E1, E2"],
-            &["S1, S2"],
+            &["E1", "E2"],
+            &["S1", "S2"],
+        ),
+        // Surveyors only, two one-word names: "; ", since free text would
+        // read "Ann, Bo" as one `Last, First` person.
+        (&[], &["Ann", "Bo"], Some("Ann; Bo"), &[], &["Ann", "Bo"]),
+        // One person named `Last, First` stays one in free text...
+        (&[], &["Doe, John"], Some("Doe, John"), &[], &["Doe, John"]),
+        // ...but not in the " / " form (a `,` inside one name cannot come
+        // back from a name list; this build's per-shot rows keep it).
+        (
+            &["Doe, John"],
+            &[],
+            Some("Doe, John /"),
+            &["Doe", "John"],
+            &[],
         ),
         (
             &["E1", "E2", "E3"],
@@ -245,8 +294,8 @@ fn legacy_credit_text_table() {
 /// #718: whatever the names, the text splits back into the roles it was
 /// written from. Exhaustive over every name of up to three characters from
 /// `a`, space and `/` - every way a name can touch the `" / "` separator - in
-/// lists of one and three names per role (two one-word names would read as one
-/// `Last, First` person, see `legacy_credit_text_table`).
+/// lists of one, two and three names per role (two one-word surveyors alone
+/// are written with "; ", see `legacy_credit_text_table`).
 #[test]
 fn legacy_credit_text_always_splits_back_into_its_roles() {
     let mut raw: Vec<String> = vec![String::new()];
@@ -284,7 +333,11 @@ fn legacy_credit_text_always_splits_back_into_its_roles() {
     for a in &pool {
         for b in &pool {
             let three = [a.clone(), b.clone(), filler.clone()];
+            let two = [a.clone(), b.clone()];
             check(std::slice::from_ref(a), std::slice::from_ref(b));
+            check(&two, &[]);
+            check(&[], &two);
+            check(&two, &two);
             check(&three, &[]);
             check(&[], &three);
             check(&three, std::slice::from_ref(a));
@@ -551,10 +604,10 @@ fn the_splitters_are_bounded_on_huge_text() {
         .collect::<Vec<_>>()
         .join(", ");
     let started = std::time::Instant::now();
-    let surveyors = split_people(&many);
-    let names = split_names(&many);
+    let surveyors = split_role(&many, NameSource::FreeText);
+    let names = split_role(&many, NameSource::NameList);
     let (explorers, legacy_surveyors) = legacy_people(&format!("{many} / {many}"));
-    let duplicates = split_names(&"A, ".repeat(1_000_000));
+    let duplicates = split_role(&"A, ".repeat(1_000_000), NameSource::NameList);
     let separators = legacy_people(&" / ".repeat(1_000_000));
     assert!(
         started.elapsed() < std::time::Duration::from_secs(5),
@@ -572,11 +625,11 @@ fn the_splitters_are_bounded_on_huge_text() {
 /// Every split name is stored the way it reads back after a save: clamped to
 /// [`MAX_PERSON_TEXT_CHARS`] at the split, so a reopen cannot change it.
 #[test]
-fn split_names_are_clamped_like_every_stored_person() {
+fn split_names_are_clamped_like_every_stored_person_in_either_source() {
     let long = "x".repeat(MAX_PERSON_TEXT_CHARS + 44);
     for people in [
-        split_people(&long),
-        split_names(&format!("{long}; B")),
+        split_role(&long, NameSource::FreeText),
+        split_role(&format!("{long}; B"), NameSource::NameList),
         legacy_people(&format!("{long} / {long}")).0,
     ] {
         assert_eq!(people[0].name.chars().count(), MAX_PERSON_TEXT_CHARS);

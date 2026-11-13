@@ -7,14 +7,15 @@
 //! also write separate `XMLExplorer` / `XMLSurveyor` elements; those win when
 //! either is non-empty.
 //!
-//! The plain form is read by the SAME splitter as a `.stalx` file's legacy
-//! `sections.surveyor` column ([`legacy_people`]), so one text names the same
-//! people in the same roles on both paths: a single value with no `" / "`
-//! is surveyors, which is what every saved file and SpeleoDB's reader have
-//! always made of it. Within a role, names are split by [`split_people`]
-//! (`,` and `;`, except that `Last, First` is one person).
+//! Everything read here is an Ariane NAME LIST ([`NameSource::NameList`]):
+//! names split on `,` and `;` only, so `ds, kb` is two people (#427), never
+//! one `Last, First` person. The plain form goes through the SAME splitter as
+//! a `.stalx` file's legacy `sections.surveyor` column ([`split_roles`]), so
+//! one text names people in the same roles on both paths: a single value with
+//! no `" / "` is surveyors, which is what every saved file and SpeleoDB's
+//! reader have always made of it.
 
-use crate::models::{legacy_people, split_people, Person};
+use crate::models::{split_role, split_roles, NameSource, Person};
 
 /// The text of `<tag>...</tag>` inside an already-unescaped field value, with
 /// the byte offset of its OPENING tag so the caller can see what came before it.
@@ -35,9 +36,9 @@ fn tagged_half<'a>(raw: &'a str, tag: &str) -> Option<(usize, &'a str)> {
 /// * Element form: each half goes to its role. Text before the first tag is a
 ///   name that lost its element; it is kept, as an explorer (the field's own
 ///   role).
-/// * Plain form, read exactly like the legacy column ([`legacy_people`]):
-///   `a / b` gives explorer `a` and surveyor `b`, `a /` explorer `a` alone, and
-///   any other text - a single name included - surveyors.
+/// * Plain form, read by the legacy column's splitter ([`split_roles`]) as a
+///   name list: `a / b` gives explorer `a` and surveyor `b`, `a /` explorer
+///   `a` alone, and any other text - a single name included - surveyors.
 ///
 /// Placeholders (`unknown`, `none`, `?`) and empty names are dropped per name,
 /// so an unfilled explorer half never takes the surveyor with it (#427).
@@ -56,15 +57,15 @@ pub(super) fn parse_explorer_field(raw: &str) -> (Vec<Person>, Vec<Person>) {
         // cannot make 400 explorers, nor a quadratic scan.
         let lead = &raw[..first_tag];
         let explorers = crate::models::merge_people([
-            split_people(lead),
-            split_people(explorer.map_or("", |(_, text)| text)),
+            split_role(lead, NameSource::NameList),
+            split_role(explorer.map_or("", |(_, text)| text), NameSource::NameList),
         ]);
         return (
             explorers,
-            split_people(surveyor.map_or("", |(_, text)| text)),
+            split_role(surveyor.map_or("", |(_, text)| text), NameSource::NameList),
         );
     }
-    legacy_people(raw)
+    split_roles(raw, NameSource::NameList)
 }
 
 /// The shot's people: the Ariane 26.3+ `XMLExplorer`/`XMLSurveyor` pair when
@@ -74,8 +75,8 @@ pub(super) fn shot_people(
     xml_explorer: Option<&str>,
     xml_surveyor: Option<&str>,
 ) -> (Vec<Person>, Vec<Person>) {
-    let explorers = split_people(xml_explorer.unwrap_or_default());
-    let surveyors = split_people(xml_surveyor.unwrap_or_default());
+    let explorers = split_role(xml_explorer.unwrap_or_default(), NameSource::NameList);
+    let surveyors = split_role(xml_surveyor.unwrap_or_default(), NameSource::NameList);
     if !explorers.is_empty() || !surveyors.is_empty() {
         return (explorers, surveyors);
     }
@@ -84,9 +85,9 @@ pub(super) fn shot_people(
 
 /// One line for a shot's people (`TmlShot::explorer`, and through it
 /// `TmlSection::surveyor`, the section's legacy template): the legacy column's
-/// text ([`crate::models::legacy_credit_text`]), so [`legacy_people`] reads it
-/// back into the same roles - `"explorers / surveyors"`, `"explorers /"`, or
-/// the surveyors alone.
+/// text ([`crate::models::legacy_credit_text`]), so the legacy splitter reads
+/// it back into the same people in the same roles - `"explorers / surveyors"`,
+/// `"explorers /"`, or the surveyors alone.
 pub fn people_line(explorers: &[Person], surveyors: &[Person]) -> Option<String> {
     crate::models::legacy_credit_text(explorers, surveyors)
 }
@@ -108,9 +109,9 @@ mod tests {
             // A single value is surveyors, as in a .stalx legacy column.
             ("Tester", &[], &["Tester"]),
             ("A, B; C", &[], &["A", "B", "C"]),
-            // `Last, First` is one person on this path too.
-            ("Doe, John", &[], &["Doe, John"]),
-            ("Doe, John / Ann Lee", &["Doe, John"], &["Ann Lee"]),
+            // An Ariane field is a name list: no `Last, First` rule.
+            ("ds, kb", &[], &["ds", "kb"]),
+            ("Doe, John / Ann Lee", &["Doe", "John"], &["Ann Lee"]),
             // Explorers only, as this app writes them in the plain form.
             ("nh /", &["nh"], &[]),
             ("unknown / ds", &[], &["ds"]),
@@ -121,16 +122,9 @@ mod tests {
                 &["ds"],
             ),
             (
-                "<Explorer>unknown</Explorer><Surveyor>ds, kb; ab</Surveyor>",
-                &[],
-                &["ds", "kb", "ab"],
-            ),
-            // Exactly two one-word names read as one `Last, First` person, as
-            // in the legacy column: one splitter on both paths.
-            (
                 "<Explorer>unknown</Explorer><Surveyor>ds, kb</Surveyor>",
                 &[],
-                &["ds, kb"],
+                &["ds", "kb"],
             ),
             ("<Surveyor>ds</Surveyor>", &[], &["ds"]),
             ("lead<Explorer>nh</Explorer>", &["lead", "nh"], &[]),
@@ -139,7 +133,7 @@ mod tests {
             ("a / b / c", &[], &["a / b / c"]),
             (
                 "<Explorer>Doe, John</Explorer><Surveyor>Ann; Bo</Surveyor>",
-                &["Doe, John"],
+                &["Doe", "John"],
                 &["Ann", "Bo"],
             ),
         ];
@@ -198,7 +192,8 @@ mod tests {
             Some("Ann Lee, Bo Ray /")
         );
         assert_eq!(people_line(&[], &[]), None);
-        let (e, s) = legacy_people(&people_line(&[p("Ann Lee"), p("Bo Ray")], &[]).unwrap());
+        let (e, s) =
+            crate::models::legacy_people(&people_line(&[p("Ann Lee"), p("Bo Ray")], &[]).unwrap());
         assert_eq!((names(&e), names(&s)), (vec!["Ann Lee", "Bo Ray"], vec![]));
     }
 }

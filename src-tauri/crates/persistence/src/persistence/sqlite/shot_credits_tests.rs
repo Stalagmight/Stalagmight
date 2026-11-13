@@ -504,6 +504,74 @@ fn a_placeholder_only_name_is_lost_on_an_older_save_but_kept_here() {
     );
 }
 
+/// #719 review: two one-word surveyors alone are written "Ann; Bo", not
+/// "Ann, Bo" (free text would read that as one `Last, First` person), so
+/// after an older build's save (the per-shot tables gone) they still come
+/// back as two people. With explorers, the " / " form's halves are name
+/// lists and keep ", ".
+#[test]
+fn two_one_word_surveyors_survive_an_older_builds_save_as_two_people() {
+    let dir = TempDir::new().unwrap();
+    let mut project = Project::new("Pair".to_string(), None);
+    let alone = section_with(&mut project, vec![credit(&["Ann", "Bo"], &[], day(1))]);
+    let with_explorers = section_with(
+        &mut project,
+        vec![credit(&["Ann", "Bo"], &["ds", "kb"], day(2))],
+    );
+    let path = save(&dir, "pair.stalx", &project);
+    let db = Database::open_readonly(&path).unwrap();
+    assert_eq!(legacy_surveyor(&db, alone).as_deref(), Some("Ann; Bo"));
+    assert_eq!(
+        legacy_surveyor(&db, with_explorers).as_deref(),
+        Some("ds, kb / Ann, Bo")
+    );
+    assert_eq!(
+        count(&db, "shot_credits"),
+        0,
+        "the text reproduces both shots"
+    );
+    drop(db);
+    sql(
+        &path,
+        "DROP TABLE shot_credits; DROP TABLE credit_people; DROP TABLE credit_sections;",
+    );
+    let older = reload(&path);
+    assert_eq!(
+        credits_of(&older, alone),
+        vec![credit(&["Ann", "Bo"], &[], day(1))]
+    );
+    assert_eq!(
+        credits_of(&older, with_explorers),
+        vec![credit(&["Ann", "Bo"], &["ds", "kb"], day(2))]
+    );
+}
+
+/// #719 review: a legacy free text that is not in the Ariane form keeps the
+/// `Last, First` rule ("Doe, John" is one surveyor), while either half of the
+/// Ariane form is a name list ("ds, kb / ab" is two explorers and a
+/// surveyor).
+#[test]
+fn legacy_free_text_and_the_ariane_form_split_by_their_own_rule() {
+    let dir = TempDir::new().unwrap();
+    let mut project = Project::new("Rules".to_string(), None);
+    let id = section_with(&mut project, vec![SurveyCredit::default(); 2]);
+    let path = save(&dir, "rules.stalx", &project);
+    for (text, expected) in [
+        ("Doe, John", credit(&["Doe, John"], &[], None)),
+        ("ds, kb / ab", credit(&["ab"], &["ds", "kb"], None)),
+    ] {
+        sql(
+            &path,
+            &format!("UPDATE sections SET surveyor = '{text}', date = NULL WHERE id = {id};"),
+        );
+        assert_eq!(
+            credits_of(&reload(&path), id),
+            vec![expected.clone(), expected],
+            "{text:?}"
+        );
+    }
+}
+
 /// #718: the explorers-only text this build wrote before it became trim-proof
 /// (`"x / "`), trimmed by an older build's Edit Section to `"x /"`, still reads
 /// as explorers - not as one surveyor named `"x /"`.
@@ -765,7 +833,7 @@ fn a_credit_table_of_another_shape_is_ignored_then_replaced() {
 /// A saved section of two shots that both need a row (their credits differ
 /// from the section aggregate), and the credit every shot reads when the
 /// rows cannot be used: the section's legacy columns, "Ann Lee, Bo Ray" and
-/// day 1. (Two one-word names would read back as one `Last, First` person.)
+/// day 1.
 fn rows_needed(dir: &TempDir, name: &str) -> (std::path::PathBuf, SectionId, SurveyCredit) {
     let mut project = Project::new("Rows".to_string(), None);
     let id = section_with(

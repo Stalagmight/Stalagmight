@@ -78,10 +78,14 @@ ignores tables it does not know): `credit_people (id, name, email)` and
 `(section_id, shot_uuid)`, the people columns
 comma-joined `credit_people` ids. The legacy `sections.surveyor` and
 `sections.date` are still written, as the section aggregate: the earliest shot
-date, and the distinct surveyor names joined with `", "` - or, when anyone
-explored the section, the Ariane `"explorers / surveyors"` form (`"Ida Ice /"`
-when nobody surveyed, which survives the trim an older build's Edit Section
-does on save), with a `" / "` inside a name written `" - "`. A stored text
+date, and the distinct surveyor names joined with `", "` (`"; "` for exactly
+two one-word names, which the free-text `Last, First` rule would otherwise
+read as one person) - or, when anyone explored the section, the Ariane
+`"explorers / surveyors"` form, both halves name lists joined with `", "`
+(`"Ida Ice /"` when nobody surveyed, which survives the trim an older build's
+Edit Section does on save), with a `" / "` inside a name written `" - "`. A
+`,` or `;` inside one name cannot come back as one person after an older
+build's save; this build's per-shot rows keep it exact. A stored text
 this build would not write the same way (a list longer than a role keeps, a
 name past the length clamp, another spelling) is written back verbatim while
 nobody's credit in the section has changed since the file was opened. A shot
@@ -96,8 +100,8 @@ both roles (#718): each section still lists its explorers and surveyors. What
 collapses: per-shot differences, later dates and emails go to the section
 aggregate; same-named people become one name; names come back as the legacy
 text spells them (a `/` next to a space as `-`, a name with `,` or `;` as
-several people, two one-word names in one role as one `Last, First` person, a
-placeholder-only name such as `?` or `unknown` as nobody); and a 0.5.3 Ariane
+several people, a placeholder-only name such as `?` or `unknown` as nobody);
+and a 0.5.3 Ariane
 TML export and re-import collapses identical halves (`"Jo Diver / Jo Diver"`
 becomes the surveyor `Jo Diver` alone). Older Ariane imports stored only the
 two-halves form, and only with two distinct, non-empty halves. A third table, `credit_sections (section_id, surveyor, date)`,

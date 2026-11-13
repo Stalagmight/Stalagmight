@@ -42,11 +42,16 @@ pub struct SurveyCredit { pub surveyors: Vec<Person>, pub explorers: Vec<Person>
   So old persisted undo entries and every existing test literal keep working. `Section` keeps a
   deserialize-only `surveyor`/`date` (`skip_serializing`, `ts(skip)`), and the migration below
   absorbs it whenever an old `Project` snapshot is restored.
-- **Legacy splitter** (`credit::legacy_people(text) -> (explorers, surveyors)`):
-  - Text with exactly two `" / "` halves came from the Ariane importer: the first half is the
-    explorers, the second the surveyors. Any other text is surveyors only.
-  - Each half is split on `;`. Each piece is then split on `,`, unless the whole half looks like
-    `Last, First` (exactly two comma parts, each one word).
+- **Splitter** (`credit::split_roles(text, source) -> (explorers, surveyors)`, one function for
+  the TML import, the legacy column - `legacy_people` is its free-text call - and the frontend's
+  `splitRoles`, #719 review):
+  - Text in the Ariane form (two `" / "` halves, or a trimmed text ending in `" /"`) gives the
+    explorers then the surveyors, both halves split as NAME LISTS. Any other text is surveyors
+    only: a single unseparated name is a surveyor on every path.
+  - A name list (`NameSource::NameList`: anything from an Ariane file, either half of the Ariane
+    form, a Compass or Walls team line) is split on `,` and `;` only: `ds, kb` is two people.
+  - Free text (`NameSource::FreeText`: a legacy surveyor text outside the Ariane form) is split
+    the same, except that exactly two comma parts of one word each are one `Last, First` person.
   - Pieces are trimmed. Empty pieces and the placeholders `unknown`, `none` and `?` are dropped,
     and duplicates are removed.
 
@@ -104,6 +109,7 @@ How this feature fits:
   |---|---|
   | Nobody credited | NULL |
   | Surveyors only | `Sue Diver, Tom Tank` (unchanged from before #718) |
+  | Surveyors only, two one-word names | `Ann; Bo` (`Ann, Bo` would read back as one `Last, First` person) |
   | Explorers only | `Ida Ice /` (an empty second half, no trailing space) |
   | Both | `Ex Plorer, Ida Ice / Sue Diver, Tom Tank` |
 
@@ -122,13 +128,13 @@ How this feature fits:
   collapses after such a save:
   - per-shot differences, later dates and emails go to the section aggregate;
   - same-named people become one name;
-  - names come back as the legacy text spells them: a `/` next to a space as `-`, a name with `,`
-    or `;` as several people, two one-word names in one role as one `Last, First` person (the
-    splitter's rule for older files), and a placeholder-only name (`?`, `unknown`, `none`) as
-    nobody;
+  - names come back as the legacy text spells them: a `/` next to a space as `-`, a name holding
+    `,` or `;` as several people (except a surveyors-only text that is exactly `Last, First`, such
+    as `Doe, John`, which the free-text rule keeps as one), and a placeholder-only name (`?`,
+    `unknown`, `none`) as nobody;
   - a 0.5.3 Ariane TML export and re-import collapses identical halves (`Jo Diver / Jo Diver`
-    comes back as the surveyor `Jo Diver` alone). `Ida Ice /` survives that round trip, but
-    importing such a TML in this build keeps the `/` in the last explorer's name.
+    comes back as the surveyor `Jo Diver` alone). `Ida Ice /` survives that round trip, and this
+    build reads it back as the explorer `Ida Ice`.
 
   The same text is what SpeleoDB shows. Older Ariane imports stored only the two-halves form, and
   only with two distinct, non-empty halves (that importer dropped empty and placeholder halves and
@@ -150,7 +156,7 @@ Ariane as one section. TML duplicate detection uses the file hash only, so it is
 
 | Format | Mapping |
 |---|---|
-| Ariane TML | Per shot. Ariane 26.3 and later write `XMLExplorer`/`XMLSurveyor`; those are preferred when non-empty. Otherwise the legacy `Explorer` field is used. In its element form (`<Explorer>..</Explorer><Surveyor>..</Surveyor>`), each half goes to its role. The plain form is read by the legacy splitter, exactly as a `.stalx` legacy column: `a / b` gives explorer `a` and surveyor `b`, `a /` explorer `a`, and a single value gives SURVEYORS (#719: the role every saved file and SpeleoDB's reader give that text; Ariane's field name and openspeleo-lib would say explorers). Names inside a role are split on `,` and `;`, with the same `Last, First` rule as the legacy column. |
+| Ariane TML | Per shot. Ariane 26.3 and later write `XMLExplorer`/`XMLSurveyor`; those are preferred when non-empty. Otherwise the legacy `Explorer` field is used. In its element form (`<Explorer>..</Explorer><Surveyor>..</Surveyor>`), each half goes to its role. The plain form is read by the legacy splitter, exactly as a `.stalx` legacy column: `a / b` gives explorer `a` and surveyor `b`, `a /` explorer `a`, and a single value gives SURVEYORS (#719: the role every saved file and SpeleoDB's reader give that text; Ariane's field name and openspeleo-lib would say explorers). Every Ariane field is a name list: names inside a role are split on `,` and `;`, with no `Last, First` rule (`ds, kb` is two people, #427). |
 | Compass | `SURVEY TEAM:` gives surveyors, split. The survey's one credit is ONE allocation every shot shares (`ShotData.credit` is an `Arc`), not a copy per shot. |
 | Walls | `team:`/`surveyors:` gives surveyors, split, shared like Compass. |
 | DMP, GPX | No people. |
@@ -160,8 +166,8 @@ Ariane as one section. TML duplicate detection uses the file hash only, so it is
 
 - **TML:** per row. The `Explorer` field always uses the element form when anyone is credited
   (#719), so explorers alone are not read back as surveyors; within a role names are joined with
-  `", "`, or `"; "` where `", "` would read back as one `Last, First` person. The round trip is
-  exact and stable.
+  `", "` (the import reads a name list). The round trip is exact and stable, except for a `,` or
+  `;` inside one name.
 - **JSON:** per-shot names and dates, plus section aggregates. No emails.
 - **CSV:** unchanged.
 - **stalx-reader crate:** exposes per-shot credit.

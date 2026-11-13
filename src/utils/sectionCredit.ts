@@ -121,19 +121,31 @@ export function sectionFirstDate(section: Pick<Section, 'shots'>): string {
 
 const PLACEHOLDERS = new Set(['unknown', 'none', '?']);
 
-/** Split one role's free text the way the backend's `split_people` does. */
-export function splitPeople(half: string): Person[] {
-  const text = half.trim();
+/**
+ * Where a text naming people comes from (the backend's `credit::NameSource`),
+ * which decides how one role of it is split. `nameList`: a field known to list
+ * names - anything from an Ariane file, either half of a legacy text in the
+ * Ariane `" / "` form, a Compass or Walls team line - split on `,` and `;`
+ * only (`ds, kb` is two people). `freeText`: a legacy surveyor text a person
+ * typed, outside the Ariane form - split the same, except that exactly two
+ * comma parts of one word each are one `Last, First` person (`Doe, John`).
+ */
+export type NameSource = 'nameList' | 'freeText';
+
+/** Split one role's text the way the backend's `split_role` does. */
+export function splitRole(text: string, source: NameSource): Person[] {
+  const trimmed = text.trim();
   const out: Person[] = [];
   const push = (piece: string): void => {
     const name = piece.trim();
     if (!name || PLACEHOLDERS.has(name.toLowerCase())) return;
     out.push({ name });
   };
-  const parts = text.split(',').map((p) => p.trim());
-  const lastFirst = !text.includes(';') && parts.length === 2 && parts.every((p) => p !== '' && !/\s/.test(p));
-  if (lastFirst) push(text);
-  else for (const piece of text.split(';')) for (const name of piece.split(',')) push(name);
+  const parts = trimmed.split(',').map((p) => p.trim());
+  const lastFirst =
+    source === 'freeText' && !trimmed.includes(';') && parts.length === 2 && parts.every((p) => p !== '' && !/\s/.test(p));
+  if (lastFirst) push(trimmed);
+  else for (const name of trimmed.split(/[,;]/)) push(name);
   return dedupePeople(out);
 }
 
@@ -155,15 +167,21 @@ export function legacyHalves(text: string): [string, string] | null {
 }
 
 /**
- * Split a legacy free-text surveyor into explorers and surveyors, exactly as
- * the backend's `credit::legacy_people` does: text in the Ariane form
- * ({@link legacyHalves}) is explorers then surveyors; anything else is
- * surveyors only.
+ * Split a text naming people into explorers and surveyors, exactly as the
+ * backend's `credit::split_roles` does: text in the Ariane form
+ * ({@link legacyHalves}) is explorers then surveyors, both halves name lists;
+ * anything else is surveyors only, split by `source` - a single name is a
+ * surveyor whatever the source.
  */
-export function legacyPeople(text: string): { explorers: Person[]; surveyors: Person[] } {
+export function splitRoles(text: string, source: NameSource): { explorers: Person[]; surveyors: Person[] } {
   const halves = legacyHalves(text);
   if (halves) {
-    return { explorers: splitPeople(halves[0]), surveyors: splitPeople(halves[1]) };
+    return { explorers: splitRole(halves[0], 'nameList'), surveyors: splitRole(halves[1], 'nameList') };
   }
-  return { explorers: [], surveyors: splitPeople(text) };
+  return { explorers: [], surveyors: splitRole(text, source) };
+}
+
+/** A legacy `sections.surveyor` text, as the backend's `credit::legacy_people` reads it. */
+export function legacyPeople(text: string): { explorers: Person[]; surveyors: Person[] } {
+  return splitRoles(text, 'freeText');
 }

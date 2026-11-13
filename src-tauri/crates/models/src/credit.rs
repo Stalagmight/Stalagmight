@@ -140,10 +140,13 @@ impl SurveyCredit {
 
     /// A survey team as the cave-survey text formats write it (Compass
     /// `SURVEY TEAM:`, a Walls `team:` comment): surveyors, split on `,` and
-    /// `;` ([`split_names`]), with the survey's date.
+    /// `;` ([`split_role`] as a [`NameSource::NameList`]), with the survey's
+    /// date.
     pub fn from_team(team: Option<&str>, date: Option<NaiveDate>) -> Self {
         Self {
-            surveyors: team.map(split_names).unwrap_or_default(),
+            surveyors: team
+                .map(|team| split_role(team, NameSource::NameList))
+                .unwrap_or_default(),
             explorers: Vec::new(),
             date,
         }
@@ -236,42 +239,59 @@ pub fn join_distinct_names(people: &[Person]) -> Option<String> {
 /// SpeleoDB reads, and all an older build keeps, since a released build saves
 /// by writing a fresh file and drops the per-shot tables (#718).
 ///
-/// - No explorers: the surveyors' names joined with `", "`, or `None` when
-///   there are none either (the text every build before #718 wrote).
+/// - No explorers: the surveyors as free text, their names joined with
+///   `", "` (the text every build before #718 wrote), or `None` when there are
+///   none either. The one exception is a role of exactly two one-word names,
+///   joined with `"; "` (`"Ann; Bo"`): `"Ann, Bo"` would read back as one
+///   `Last, First` person ([`NameSource::FreeText`]), also after an older
+///   build's save.
 /// - Explorers and surveyors: the Ariane importer's `"explorers / surveyors"`
-///   form, which [`legacy_people`] reads back into both roles.
+///   form, each half joined with `", "` - read back as name lists
+///   ([`NameSource::NameList`]), which have no `Last, First` rule.
 /// - Explorers only: `"Ida Ice /"`, with no space after the `/`, so the text
 ///   survives trimming: an older build's Edit Section trims the surveyor on
 ///   every save, and [`legacy_halves`] reads both `"Ida Ice /"` and
 ///   `"Ida Ice / "` as explorers only.
 ///
-/// Each half names each display name once ([`join_distinct_names`]). A `/`
-/// with a space or a name edge on both sides is written `-` in this text only
-/// (`"A / B"` becomes `"A - B"`), so no name can hold or complete the `" / "`
-/// that splits the roles; the per-shot tables keep the real name. The halves
-/// are read back by [`split_people`], so a half of exactly two one-word names
-/// reads as one `Last, First` person: this build writes a row for such a shot.
+/// Each half names each display name once, compared like
+/// [`Person::name_key`]. A `/` with a space or a name edge on both sides is
+/// written `-` in this text only (`"A / B"` becomes `"A - B"`), so no name can
+/// hold or complete the `" / "` that splits the roles. A `,` or `;` inside one
+/// name cannot come back as one person once an older build has saved the file
+/// (it splits there); the per-shot tables keep every real name in this build.
 pub fn legacy_credit_text(explorers: &[Person], surveyors: &[Person]) -> Option<String> {
-    let surveyors = legacy_half(surveyors);
-    match legacy_half(explorers) {
-        None => surveyors,
-        Some(explorers) => Some(match surveyors {
-            Some(surveyors) => format!("{explorers} / {surveyors}"),
-            None => format!("{explorers} /"),
-        }),
+    let explorers = legacy_names(explorers);
+    let surveyors = legacy_names(surveyors);
+    match (explorers.is_empty(), surveyors.is_empty()) {
+        (true, true) => None,
+        (true, false) => {
+            let commas = surveyors.join(", ");
+            Some(if looks_like_last_first(&commas) {
+                surveyors.join("; ")
+            } else {
+                commas
+            })
+        }
+        (false, true) => Some(format!("{} /", explorers.join(", "))),
+        (false, false) => Some(format!(
+            "{} / {}",
+            explorers.join(", "),
+            surveyors.join(", ")
+        )),
     }
 }
 
-/// One role of [`legacy_credit_text`]: each written name once, joined with
-/// `", "`; `None` when nobody is named.
-fn legacy_half(people: &[Person]) -> Option<String> {
-    let written: Vec<Person> = people
+/// One role of [`legacy_credit_text`]: each written name once.
+fn legacy_names(people: &[Person]) -> Vec<String> {
+    let mut seen = HashSet::new();
+    people
         .iter()
         // Trimmed first: a name's edge is where it meets the separator, and
         // a raw name ("A /\t") may still carry whitespace there.
         .filter_map(|p| Person::named(&legacy_name(p.name.trim())))
-        .collect();
-    join_distinct_names(&written)
+        .filter(|p| seen.insert(p.name_key()))
+        .map(|p| p.name)
+        .collect()
 }
 
 /// A name as [`legacy_credit_text`] writes it: every `/` whose neighbours are
@@ -410,21 +430,52 @@ impl RoleBuilder {
 /// Placeholder texts that name nobody, compared ignoring ASCII case.
 const PLACEHOLDERS: [&str; 3] = ["unknown", "none", "?"];
 
-/// Split a legacy free-text surveyor into `(explorers, surveyors)`.
+/// Where a text naming people comes from, which decides how one role of it is
+/// split ([`split_role`], [`split_roles`]): only text a person typed freely
+/// gets the `Last, First` rule (#719 review).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NameSource {
+    /// A field known to list names: anything parsed from an Ariane file (the
+    /// plain `Explorer` field, the element form's halves, `XMLExplorer` /
+    /// `XMLSurveyor`), either half of a legacy text in the Ariane `" / "`
+    /// form, and a Compass or Walls team line. Split on `,` and `;` only:
+    /// `ds, kb` is two people.
+    NameList,
+    /// Free text a person typed: a legacy `sections.surveyor` text that is NOT
+    /// in the Ariane form. Split on `;` and `,`, except that exactly two comma
+    /// parts, each one word, are one `Last, First` person (`Doe, John`).
+    FreeText,
+}
+
+/// Split a text naming people into `(explorers, surveyors)`: the one splitter
+/// every path shares - the TML import (`source` [`NameSource::NameList`]), a
+/// `.stalx` legacy column ([`legacy_people`], [`NameSource::FreeText`]), and
+/// the frontend's copies (`legacyPeople` in `src/utils/sectionCredit.ts`, the
+/// Playwright mock).
 ///
 /// * Text in the Ariane form ([`legacy_halves`]) gives the explorers from its
-///   first half and the surveyors from its second. Any other text is
-///   surveyors only.
-/// * Each half is split on `;`. Each piece is then split on `,`, unless the
-///   whole half looks like `Last, First` (exactly two comma parts, each one
-///   word), which is one person.
+///   first half and the surveyors from its second, each split as a
+///   [`NameSource::NameList`], whatever `source`: that form is the Ariane
+///   importer's own join.
+/// * Any other text names SURVEYORS only, split by `source`'s rule: a single
+///   unseparated name is a surveyor on every path.
 /// * Pieces are trimmed. Empty pieces and the placeholders `unknown`, `none`
 ///   and `?` are dropped, and duplicates are removed.
-pub fn legacy_people(text: &str) -> (Vec<Person>, Vec<Person>) {
+pub fn split_roles(text: &str, source: NameSource) -> (Vec<Person>, Vec<Person>) {
     match legacy_halves(text) {
-        Some((explorers, surveyors)) => (split_people(explorers), split_people(surveyors)),
-        None => (Vec::new(), split_people(text)),
+        Some((explorers, surveyors)) => (
+            split_role(explorers, NameSource::NameList),
+            split_role(surveyors, NameSource::NameList),
+        ),
+        None => (Vec::new(), split_role(text, source)),
     }
+}
+
+/// A `.stalx` legacy `sections.surveyor` text as `(explorers, surveyors)`:
+/// [`split_roles`] with text outside the Ariane form read as
+/// [`NameSource::FreeText`].
+pub fn legacy_people(text: &str) -> (Vec<Person>, Vec<Person>) {
+    split_roles(text, NameSource::FreeText)
 }
 
 /// The `(explorers, surveyors)` halves of legacy text in the Ariane form, or
@@ -451,28 +502,18 @@ pub fn legacy_halves(text: &str) -> Option<(&str, &str)> {
     }
 }
 
-/// Split one role's free text into people (the per-half rule of
-/// [`legacy_people`]).
+/// Split one role's text into people by its source's rule ([`NameSource`]).
 ///
 /// Bounded like every splitter here (see [`RoleBuilder`]): at most
 /// [`MAX_PEOPLE_PER_ROLE`] people, each clamped to [`MAX_PERSON_TEXT_CHARS`].
-pub fn split_people(half: &str) -> Vec<Person> {
-    let half = half.trim();
+pub fn split_role(text: &str, source: NameSource) -> Vec<Person> {
+    let text = text.trim();
     let mut role = RoleBuilder::new();
-    if looks_like_last_first(half) {
-        role.push_piece(half);
+    if source == NameSource::FreeText && looks_like_last_first(text) {
+        role.push_piece(text);
     } else {
-        role.extend(half.split(';').flat_map(|piece| piece.split(',')));
+        role.extend(text.split([',', ';']));
     }
-    role.people
-}
-
-/// Split free text on `,` and `;` alone (no `Last, First` rule): the importers'
-/// rule for a field that holds only names, such as an Ariane explorer list.
-/// Bounded like [`split_people`].
-pub fn split_names(text: &str) -> Vec<Person> {
-    let mut role = RoleBuilder::new();
-    role.extend(text.split([',', ';']));
     role.people
 }
 
