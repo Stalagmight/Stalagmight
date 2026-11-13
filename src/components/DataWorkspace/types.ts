@@ -9,6 +9,8 @@
 import type { SurveyData, SectionMetadata } from '../../types/survey-data';
 import type { Project } from '../../types/project';
 import type { ProjectWarning, BatchCommand } from '../../types/commands';
+import type { DecimalPrecision } from '../../types/config';
+import type { TFunction } from 'i18next';
 
 // ─── Rows ──────────────────────────────────────────────────────────────────
 
@@ -161,6 +163,12 @@ export interface DataModelCtx {
   locale: string;
   /** useEditingBlocked() at build time. */
   editingBlocked: boolean;
+  /** Per-category decimal places (`useDecimalPrecision`). Optional for
+   *  backward compatibility: absent = `precision` everywhere, 6 for GPS. */
+  decimals?: DecimalPrecision;
+  /** Translator for the few localized cell texts (row type, links, issues).
+   *  Optional: absent = English fallbacks. */
+  t?: TFunction;
 }
 
 // ─── Edits ─────────────────────────────────────────────────────────────────

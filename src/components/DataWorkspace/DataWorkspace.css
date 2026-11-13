@@ -1,0 +1,83 @@
+/* Data workspace: only what the SpreadsheetGrid look does not already give.
+   Colours come from the --cc-* theme tokens (every theme, incl. kaleido_eink),
+   no transitions or animations. */
+
+/* The "Show on map" button in the gutter: shown on row hover and on the
+   active row, never in the tab order. */
+.dw-row .dw-map-btn {
+  opacity: 0;
+}
+.dw-row:hover .dw-map-btn,
+.dw-row[data-active='true'] .dw-map-btn,
+.dw-row .dw-map-btn:focus-visible {
+  opacity: 1;
+}
+
+/* Station rows read as the anchors of the chain. */
+.dw-row-station .dw-row-name {
+  font-weight: 600;
+  color: var(--cc-text-primary);
+}
+.dw-row-shot .dw-row-name {
+  color: var(--cc-text-secondary);
+}
+
+/* Rows linked to the hovered junction / closure station. */
+.sg-grid .dw-row-partner .sg-cell {
+  background: color-mix(in srgb, var(--cc-accent) 14%, var(--cc-panel));
+}
+.sg-grid .dw-row-partner .sg-gutter {
+  box-shadow: inset 0 0 0 999px color-mix(in srgb, var(--cc-accent) 18%, transparent);
+}
+
+/* A row shown only because of a search match / a navigation: a dashed accent
+   edge on the gutter (the tooltip says why). */
+.dw-revealed-mark {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  right: 0;
+  width: 2px;
+  background-image: linear-gradient(0deg, var(--cc-accent) 50%, transparent 0);
+  background-size: 2px 6px;
+}
+
+/* Hidden column shown only because it holds search matches. */
+.sg-grid .dw-header-revealed {
+  box-shadow: inset 0 -2px 0 0 var(--cc-accent);
+  font-style: italic;
+}
+
+/* Link chips in the Links column: the EntityBlob pill look (.sh-pill), as
+   buttons. --o is the chip colour. */
+.dw-chip {
+  max-width: 100%;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.dw-chip:focus-visible {
+  outline: 2px solid var(--cc-accent);
+  outline-offset: 1px;
+}
+
+/* A cell whose custom content holds a find match. */
+.dw-cell-match {
+  box-shadow: inset 0 0 0 1px var(--cc-warning);
+  border-radius: 3px;
+}
+
+/* Hover card: the shared Tooltip bubble, made interactive. */
+.dw-hover-card {
+  pointer-events: auto !important;
+  max-width: 26rem !important;
+  white-space: normal !important;
+}
+.dw-hover-card dt {
+  color: var(--cc-text-secondary);
+}
+
+/* Section header band. */
+.dw-section-header {
+  font-size: 12px;
+  color: var(--cc-text-primary);
+}
