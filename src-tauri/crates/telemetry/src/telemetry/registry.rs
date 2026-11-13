@@ -526,6 +526,8 @@ pub const EVENT_NAMES: &[&str] = &[
     // Same again for the edit-section dialog's shot grid.
     "command.update_edit_section_view",
     "command.update_import_shots_view",
+    // Same for the Data workspace (columns, tint, map pane, section headers).
+    "command.update_data_workspace_view",
     "command.update_gas_config",
     // Depth / distance colour palette + pins, written from the map legend cog
     // and the export panel (partial `[map_palette]` write).
@@ -1170,7 +1172,10 @@ mod tests {
         //   + 2 station names edited in place (the Data workspace's name
         //       column): command.set_station_name and how often it is undone
         //       straight after, undo-after.set_station_name = 724.
-        assert_eq!(EVENT_NAMES.len(), 724);
+        //   + 1 the Data workspace's persisted view (columns, tint, map pane,
+        //       section headers; partial `[panels]` write):
+        //       command.update_data_workspace_view = 725.
+        assert_eq!(EVENT_NAMES.len(), 725);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

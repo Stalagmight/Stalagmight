@@ -1,6 +1,7 @@
-//! The `[panels]` config table: panel sizes, reveal state, and the persisted
-//! column layout for each of the app's four shot grids (data table, stations
-//! table, new-section dialog, edit-section dialog).
+//! The `[panels]` config table: panel sizes, reveal state, the persisted
+//! column layout for each of the app's shot grids (data table, stations table,
+//! new-section dialog, edit-section dialog, import grids), and the Data
+//! workspace's view (columns, row tint, map pane, section headers).
 //!
 //! Split out of `types.rs` because the four grids' order/hidden/width triples
 //! pushed that file past its size budget (#157). Everything here is reachable
@@ -139,6 +140,38 @@ pub struct PanelsConfig {
     /// Import-time shot grids: column widths in pixels, keyed by grid column key.
     #[serde(default, deserialize_with = "lenient_column_widths")]
     pub import_shots_column_widths: BTreeMap<String, u32>,
+    /// Data workspace (the full-screen Data mode spreadsheet): column order, as
+    /// column keys from src/components/DataWorkspace/columnsMeta.ts. Empty =
+    /// that file's default order. Its own set again: Data mode's grid has
+    /// columns no other grid has (row type, section, links, position), so no
+    /// other grid's list could govern it.
+    #[serde(default)]
+    pub data_workspace_column_order: Vec<String>,
+    /// Data workspace: hidden column keys. Authoritative once present (an empty
+    /// list means "show all"); the default mirrors `DATA_DEFAULT_HIDDEN` in
+    /// columnsMeta.ts, pinned by src/types/__tests__/dataWorkspaceConfig.test.ts.
+    #[serde(default = "default_data_workspace_hidden_columns")]
+    pub data_workspace_hidden_columns: Vec<String>,
+    /// Data workspace: column widths in pixels, keyed by column key. See
+    /// `data_table_shot_column_widths` for the BTreeMap and the tolerant
+    /// deserializer.
+    #[serde(default, deserialize_with = "lenient_column_widths")]
+    pub data_workspace_column_widths: BTreeMap<String, u32>,
+    /// Data workspace row tint: one of [`DATA_WORKSPACE_TINT_MODES`]. An unknown
+    /// value is repaired to the default on load.
+    #[serde(default = "default_data_workspace_tint_mode")]
+    pub data_workspace_tint_mode: String,
+    /// Data workspace: whether the map pane beside the table is open.
+    #[serde(default)]
+    pub data_workspace_map_pane_open: bool,
+    /// Data workspace: map pane width in pixels (clamped to 360-4000 on load).
+    /// Mirrors `MAP_PANE_MIN_WIDTH` / `MAP_PANE_DEFAULT_WIDTH` in
+    /// src/components/DataWorkspace/store.ts.
+    #[serde(default = "default_data_workspace_map_pane_width")]
+    pub data_workspace_map_pane_width: u32,
+    /// Data workspace: whether each section starts with a header row.
+    #[serde(default = "default_true")]
+    pub data_workspace_section_headers: bool,
     /// Sections panel open (pinned) at startup
     #[serde(default = "default_true")]
     pub sections_panel_open: bool,
@@ -186,6 +219,7 @@ impl PanelsConfig {
         self.detail_panel_width = self.detail_panel_width.clamp(200, 500);
         self.data_table_height = self.data_table_height.clamp(100, 500);
         self.wizard_map_panel_width = self.wizard_map_panel_width.clamp(280, 900);
+        self.data_workspace_map_pane_width = self.data_workspace_map_pane_width.clamp(360, 4000);
         normalize_panel_mode(&mut self.sections_panel_mode);
         normalize_panel_mode(&mut self.detail_panel_mode);
         normalize_panel_mode(&mut self.data_table_mode);
@@ -194,6 +228,7 @@ impl PanelsConfig {
         normalize_column_widths(&mut self.new_section_column_widths);
         normalize_column_widths(&mut self.edit_section_column_widths);
         normalize_column_widths(&mut self.import_shots_column_widths);
+        normalize_column_widths(&mut self.data_workspace_column_widths);
         // The eight column-key LISTS need the same ceiling as the width maps
         // beside them, and for the same reason - see `normalize_column_names`.
         // Doing it here rather than in `update_data_table_view_impl` is what
@@ -211,6 +246,8 @@ impl PanelsConfig {
         normalize_column_names(&mut self.edit_section_hidden_columns);
         normalize_column_names(&mut self.import_shots_column_order);
         normalize_column_names(&mut self.import_shots_hidden_columns);
+        normalize_column_names(&mut self.data_workspace_column_order);
+        normalize_column_names(&mut self.data_workspace_hidden_columns);
         // Same both-doors argument for the angle display modes. The PARTIAL
         // command validates them and rejects an unknown string, but
         // `update_config` takes a whole `Config` and used to write one through
@@ -224,7 +261,56 @@ impl PanelsConfig {
             &mut self.data_table_inclination_mode,
             default_inclination_mode,
         );
+        // Same repair-don't-reject rule for the Data workspace's tint, whose
+        // partial door (`update_data_workspace_view_impl`) rejects instead.
+        if !DATA_WORKSPACE_TINT_MODES.contains(&self.data_workspace_tint_mode.as_str()) {
+            self.data_workspace_tint_mode = default_data_workspace_tint_mode();
+        }
     }
+}
+
+/// The accepted values for `data_workspace_tint_mode`, mirroring `TINT_MODES` in
+/// src/components/DataWorkspace/types.ts (pinned by
+/// src/test/__tests__/configBoundsMirror.test.ts). Shared with
+/// `commands::config::update_data_workspace_view_impl`, which rejects anything
+/// outside it, so the validating door and the repairing one agree.
+pub const DATA_WORKSPACE_TINT_MODES: [&str; 6] =
+    ["none", "section", "issues", "depth", "distance", "type"];
+
+pub(super) fn default_data_workspace_tint_mode() -> String {
+    "section".to_string()
+}
+
+pub(super) fn default_data_workspace_map_pane_width() -> u32 {
+    480
+}
+
+/// The Data workspace's default hidden columns: identity columns the row name
+/// already carries, the per-leg angles, positions, temperature and credit.
+/// Mirrors `DATA_DEFAULT_HIDDEN` in src/components/DataWorkspace/columnsMeta.ts.
+pub(super) fn default_data_workspace_hidden_columns() -> Vec<String> {
+    [
+        "type",
+        "section",
+        "name",
+        "fromTo",
+        "azimuth_in",
+        "azimuth_out",
+        "inclination",
+        "pitch_in",
+        "pitch_out",
+        "x",
+        "y",
+        "lat",
+        "long",
+        "temperature",
+        "surveyors",
+        "explorers",
+        "date",
+    ]
+    .iter()
+    .map(|key| (*key).to_string())
+    .collect()
 }
 
 /// The accepted values for `data_table_azimuth_mode` / `data_table_inclination_mode`.

@@ -730,6 +730,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           | undefined) ?? {}),
       };
 
+      // The Data workspace's view (`panels.data_workspace_*`: columns, tint,
+      // map pane, section headers), persisted via update_data_workspace_view and
+      // overlaid onto get_config / reload_config like the stores above. Seedable
+      // via `window.__E2E_SEED_DATA_WORKSPACE_VIEW__` (keys are the panels field
+      // names) from a test's own init script registered before setupMockedPage.
+      const mockDataWorkspaceView: Record<string, unknown> = {
+        ...(((window as unknown as Record<string, unknown>).__E2E_SEED_DATA_WORKSPACE_VIEW__ as
+          | Record<string, unknown>
+          | undefined) ?? {}),
+      };
+
       // `map.controls.show_navigation_tools` (#409): the Pan/Zoom toolbar group is
       // hidden unless the user opts in, so the mock's config reports false and a
       // spec that needs the tools seeds `window.__E2E_SEED_SHOW_NAVIGATION_TOOLS__`
@@ -4261,6 +4272,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   ...mockEditSectionView,
                   ...mockImportShotsView,
                 ...mockImportShotsView,
+                ...mockDataWorkspaceView,
                 },
                 ...(mockGasConfig ? { gas: mockGasConfig } : {}),
                 ...(mockMapPalette ? { map_palette: mockMapPalette } : {}),
@@ -4489,6 +4501,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 ...mockNewSectionView,
                 ...mockEditSectionView,
                 ...mockImportShotsView,
+                ...mockDataWorkspaceView,
               },
               cache: {
                 tile_cache_enabled: true,
@@ -4724,6 +4737,35 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return null; // Tauri serializes () as null
           }
 
+          case 'update_data_workspace_view': {
+            console.log('[Mock IPC] update_data_workspace_view called with:', args);
+            const win = window as unknown as Record<string, unknown>;
+            const existing = win.__MOCK_DATA_WORKSPACE_VIEW_CALLS__ as unknown[] | undefined;
+            const calls = Array.isArray(existing) ? existing : [];
+            calls.push(args ?? null);
+            win.__MOCK_DATA_WORKSPACE_VIEW_CALLS__ = calls;
+            // Mirrors the Rust door: an unknown tint is refused and nothing in
+            // the call is written; the pane width is clamped to 360-4000.
+            const tintMode = args?.tintMode as string | undefined;
+            if (
+              tintMode != null &&
+              !['none', 'section', 'issues', 'depth', 'distance', 'type'].includes(tintMode)
+            ) {
+              throw new Error(`Invalid Data workspace tint mode '${tintMode}'`);
+            }
+            const view = mockDataWorkspaceView;
+            if (args?.columnOrder != null) view.data_workspace_column_order = args.columnOrder;
+            if (args?.hiddenColumns != null) view.data_workspace_hidden_columns = args.hiddenColumns;
+            if (args?.columnWidths != null) view.data_workspace_column_widths = args.columnWidths;
+            if (tintMode != null) view.data_workspace_tint_mode = tintMode;
+            if (args?.mapPaneOpen != null) view.data_workspace_map_pane_open = args.mapPaneOpen;
+            if (typeof args?.mapPaneWidth === 'number') {
+              view.data_workspace_map_pane_width = Math.min(4000, Math.max(360, args.mapPaneWidth));
+            }
+            if (args?.sectionHeaders != null) view.data_workspace_section_headers = args.sectionHeaders;
+            return null; // Tauri serializes () as null
+          }
+
           case 'reload_config': {
             // Return saved config if available (for testing persistence),
             // overlaying the same two stores get_config does. Without the
@@ -4743,6 +4785,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   ...mockEditSectionView,
                   ...mockImportShotsView,
                 ...mockImportShotsView,
+                ...mockDataWorkspaceView,
                 },
                 ...(mockGasConfig ? { gas: mockGasConfig } : {}),
                 ...(mockMapPalette ? { map_palette: mockMapPalette } : {}),
@@ -4973,6 +5016,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 ...mockNewSectionView,
                 ...mockEditSectionView,
                 ...mockImportShotsView,
+                ...mockDataWorkspaceView,
               },
               cache: {
                 tile_cache_enabled: true,

@@ -1978,6 +1978,7 @@ pub fn run() {
             commands::config::update_new_section_view,
             commands::config::update_edit_section_view,
             commands::config::update_import_shots_view,
+            commands::config::update_data_workspace_view,
             commands::config::update_gas_config,
             commands::config::update_map_palette,
             commands::config::remember_people,

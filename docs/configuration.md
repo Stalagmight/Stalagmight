@@ -294,6 +294,22 @@ data_table_mode = "pin"
 # table means no overrides. A junk entry costs that one column its width rather
 # than failing the whole [panels] table, and nothing prunes an entry whose column
 # no longer exists. At most 256 entries per table, keys up to 128 bytes.
+#
+# The Data workspace (Data mode's full-screen table) keeps its own view here,
+# written by `update_data_workspace_view` whenever it changes (500 ms debounce):
+data_workspace_column_order = []    # Column keys; empty = the default order
+data_workspace_hidden_columns = ["type", "section", "name", "fromTo", "azimuth_in", "azimuth_out", "inclination", "pitch_in", "pitch_out", "x", "y", "lat", "long", "temperature", "surveyors", "explorers", "date"]
+                                    # Default shown above; [] = show every column
+data_workspace_tint_mode = "section" # Row tint: "none" | "section" | "issues" | "depth" | "distance" | "type"
+data_workspace_map_pane_open = false # Map pane beside the table
+data_workspace_map_pane_width = 480 # Pixels (clamped to 360-4000)
+data_workspace_section_headers = true # A header row before each section
+#
+#   [panels.data_workspace_column_widths]   # Same rules as the data-table widths
+#   comment = 320
+#
+# An unknown tint mode is refused by the command and repaired to "section" on
+# load; the key lists and widths get the same bounds as the data table's.
 
 [export]
 default_image_format = "png"        # Default image format for exports
