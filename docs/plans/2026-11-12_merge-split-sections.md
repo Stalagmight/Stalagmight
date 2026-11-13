@@ -111,12 +111,17 @@ loop is closed by a closure (snapped ones are rigid, the rest are soft).
   group). The combine folds them into the joined station. A tie that reaches a
   station of either section other than its join station is not one: that
   section comes back to the join point, and the tie is a loop.
-- **The moving side.** With a gap over the 1 mm tolerance, the other section
-  M moves, with everything still merged to it, unless that side holds a zero
-  datum and the kept side does not; then the kept side moves. With both sides
-  anchored, M (whichever does not itself carry a datum) also tears its merges
-  towards its datum sides. Only when both sections carry a datum themselves is
-  the combine refused.
+- **The moving side.** With a gap over the 1 mm tolerance, one side moves,
+  with everything still merged to it: a side a zero datum holds stays;
+  between two free sides, the one holding the closure-adjusted view's anchor
+  (`Project::adjustment_anchor_of`: a datum in the survey, else its gauge
+  station, the rule the solve uses) stays, or Plan and Export would shift the
+  whole cave by the gap (reported after #726: keeping the higher id across a
+  closure join moved the lower id's gauge); otherwise the other section M
+  moves. The plan says why the kept side moves (`KeptMovesReason`). With both
+  sides anchored, M (whichever does not itself carry a datum) also tears its
+  merges towards its datum sides. Only when both sections carry a datum
+  themselves is the combine refused.
 - **Loop ties.** A merge from M to a section that still reaches the fixed one
   F without M (and without the join) closes a loop through the combined
   section: it becomes a `Batch` closure. Tearing at M, not further round the
@@ -132,12 +137,21 @@ loop is closed by a closure (snapped ones are rigid, the rest are soft).
   stations other merges already make one point (a junction's branches merged
   pairwise).
 
+The station menu offers each pair of sections once, joined the way the
+two-section query prefers (a section can end at the point with both ends, one
+side by side and one across a closure), and a pair of two other sections only
+when one of them ends at this point.
+
 `combine_closure_tests.rs` checks the shapes one by one and then sweeps random
 small networks (merged branches, snapped and recorded loops, zero datums, a
 second anchored network tied on by a closure), combining everything the station
 menu offers, keeping either section: the fixed side never moves, the moving
 side moves by exactly the plan's shift, merges stay a forest, nothing snapped is
-left inside the combined section, and a reload moves and converts nothing.
+left inside the combined section, a reload moves and converts nothing, and the
+closure-adjusted view stays put (compared with the coincident pairs the solve
+leaves untied, snapped closures and a side-by-side join, tied on both sides).
+A chain fuzzer applies random sequences of combines, splits and reverses with
+the same checks after every step.
 
 **Mutation** (`project/combine_sections.rs`):
 

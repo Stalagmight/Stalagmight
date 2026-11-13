@@ -160,8 +160,9 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
 - **A loop closure is a join.** Two section ends tied by a closure are, by the
   survey's own statement, one point, apart by the misclosure. Combining there
   moves one side by the misclosure (the other section and what is merged to
-  it, or the kept side when a zero datum holds the other) and drops the
-  closure. The rigid ties that would then tie the combined section to itself,
+  it, or the kept side when a zero datum holds the other, or when the other
+  side holds the station this view is anchored at, so the closure-adjusted
+  survey does not shift) and drops the closure. The rigid ties that would then tie the combined section to itself,
   or hold the moving side, become `Batch` closures between the same stations
   (`project/combine_plan.rs`): merges form a forest, so on each path at most
   one merge tears, the one nearest the moving section; a snapped (aligned)

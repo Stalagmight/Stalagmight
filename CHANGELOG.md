@@ -7,6 +7,10 @@ Update this file every time a new version is tagged.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Combining two sections across a loop closure no longer shifts the whole cave in Plan and Export** - one side moves to close the loop, and when it was the side the Closures Computed View holds the survey at (for example, keeping the section with the higher id), every closure-adjusted station moved with it while the survey itself looked right. That side now stays put, and the dialog says when the section you keep is the one that moves and why. Where a section reaches the clicked station with both ends, Combine Section With... now joins the two side by side instead of moving one across the loop closure ([#726](https://github.com/Stalagmight/Stalagmight/pull/726))
+
 ### Added
 
 - **Change a section's color from the Sections panel** - click the color dot next to a section to open the color picker. The new color applies to the whole section, and Undo reverts it in one step. In a read-only view, clicking the dot tells you the color cannot be changed there ([#654](https://github.com/Stalagmight/Stalagmight/issues/654))
