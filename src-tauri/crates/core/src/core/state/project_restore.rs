@@ -160,7 +160,8 @@ fn restore(project: &Path, backup: &Path, open: Option<&Path>) -> Result<String,
         )
     })?;
 
-    if is_same_file(backup, &safety) {
+    // An undo: the backup was the safety copy, which now holds the replaced file.
+    if kept && is_same_file(backup, &safety) {
         return Ok(format!(
             "Restored {0}, the copy the last restore kept. The two files swapped places: \
              {0} now holds the file it replaced, so restoring it again switches back.",

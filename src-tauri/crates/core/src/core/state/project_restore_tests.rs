@@ -465,6 +465,23 @@ fn a_missing_project_is_restored_without_a_safety_copy() {
     assert_eq!(names(dir.path()), ["cave.stalx", "cave.stalx.backup"]);
 }
 
+/// A safety copy left behind by an earlier restore, restored into a project
+/// that is gone: nothing is swapped, so the message does not say so.
+#[test]
+fn a_left_over_safety_copy_restored_into_a_missing_project_is_not_a_swap() {
+    let dir = TempDir::new().unwrap();
+    let project = dir.path().join("cave.stalx");
+    let safety = project_file(dir.path(), "cave.stalx.pre-restore", "Kept");
+
+    let message = state()
+        .restore_project_from_backup(&project, &safety)
+        .unwrap();
+
+    assert_eq!(message, format!("Restored from {}.", safety.display()));
+    assert_eq!(label(&project), "Kept");
+    assert_eq!(label(&safety), "Kept", "the copy is only read");
+}
+
 #[test]
 fn a_missing_backup_is_reported() {
     let dir = TempDir::new().unwrap();
