@@ -218,11 +218,55 @@ See [TESTING.md](TESTING.md) for the tiers and which one a test belongs in, and
 - Reset to defaults per category
 
 ### 2.10 Updates & Telemetry
-- In-app updates from signed manifests on GitHub, on one of two tracks chosen in
+- In-app updates from manifests on GitHub, on one of two tracks chosen in
   Settings: **Stable** (final releases only, the default) or **Beta** (release
   candidates, then the final they lead to). A build from a release candidate starts
   on Beta. The retired Weekly track's setting is read as Beta. See
   [releasing.md](releasing.md#updater-manifests)
+  - **Trust:** the manifest is fetched over https and is not signed itself. The
+    bundle it points at is minisign-verified against the public key built into the
+    running app before anything installs it.
+  - **When it checks:** about 10 seconds after launch, then every 4 hours while the
+    app is open (a 5-minute timer compares wall-clock time, so a machine waking from
+    sleep catches up within minutes), when About's "Check for updates" is pressed,
+    and whenever the update track is switched. The 4-hour check is skipped while an
+    update is downloading or downloaded, so a download in hand is not re-checked
+    until the app restarts.
+  - **"Update automatically"** (Settings > General > Updates, on by default): an
+    update a check finds downloads straight away. From a launch, 4-hour or
+    track-switch check there is no banner until it is ready (a failed download then
+    shows the banner's Download); from About's check the banner shows progress.
+    Turned off, no automatic checks run, and a download a check started that has not
+    installed yet is cancelled (#645); one the user started with Download is kept.
+    About's check and a track switch still check, and the banner then offers
+    Download, which waits for a click.
+  - **Installing:** on macOS and Linux a downloaded update installs when the app
+    quits, after the usual quit guards, so the next launch runs it. The banner says
+    "Stalagmight X will be installed when you quit" and offers "Restart now". Nothing
+    restarts the app on its own. Two cases show "Restart to update" instead:
+    Windows (the updater's NSIS installer always relaunches the app, so installing
+    on quit would reopen the window the user just closed) and a Mac whose app folder
+    the user cannot write to (the install would raise an administrator prompt after
+    the window had closed).
+  - **Restarting** to update goes through the same quit guards as any other quit,
+    with one difference: a SpeleoDB project holding the write lock over work
+    SpeleoDB has not seen is not asked the exit question. It keeps the lock, saves
+    unsaved edits, and restarts. A restart while a SpeleoDB transfer is running
+    waits for it, like a quit: "Keep Stalagmight open" calls the restart off, and
+    "Quit now" cuts the transfer. A transfer that starts after the wait has passed
+    makes the backend refuse the restart with a toast, keeping the download.
+  - **"Hide"** on the banner hides it for that version for the rest of the session.
+    About's "Check for updates" brings it back, and a newer version shows again.
+    Where updates install on quit, a hidden, downloaded update still does.
+  - **Packages that cannot update themselves:** the updater replaces an AppImage,
+    an NSIS-installed Windows app, or a macOS `.app` (Apple silicon, the only macOS
+    build released). A copy installed from a `.deb`, `.rpm` or `.msi` is never
+    offered an update: its check fails before reading the manifest, automatic
+    checks stay silent, and About says "Could not check for updates" without
+    giving the reason.
+  - **Development builds** do not update themselves. A debug build checks,
+    downloads and installs only when `STALAGMIGHT_UPDATE_URL` names a manifest
+    (#644; see [releasing.md](releasing.md#local-end-to-end-updater-test)).
 - Opt-in telemetry only
 - No external network calls except tile servers, SpeleoDB sync, the update check, and opt-in telemetry
 
@@ -1804,7 +1848,7 @@ The sidebar displays 12 settings categories, with a visual separator before the 
 
 | Category | Contents |
 |----------|----------|
-| General | Language/number/date formats, auto-save toggle/interval, recent projects limit, undo history/persist limits, shortcut feedback preference, splash screen and onboarding, telemetry opt-in (telemetry-enabled builds) |
+| General | Language/number/date formats, auto-save toggle/interval, recent projects limit, undo history/persist limits, shortcut feedback preference, splash screen and onboarding, telemetry opt-in (telemetry-enabled builds), "Update automatically" and the update track (Stable/Beta) |
 | Appearance | Theme mode (dark/light/auto), day and night color theme selection with preview cards, 10 color themes |
 | Units | Length/depth/angle units, decimal precision |
 | Gas planning | Swim speed, jump RMV multiplier, whether reference legs count toward gas |

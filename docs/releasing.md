@@ -404,23 +404,23 @@ before it can be handed to anyone.
 
 ## Update artifacts and signing
 
-`bundle.createUpdaterArtifacts` is **not** set in `tauri.conf.json` - it is
-enabled CI-side only, in the release workflow's `build` job, and only once a
-real `plugins.updater.pubkey` is committed there (issue #579 provisioning).
-This is deliberate, not incidental: `tauri-cli` base64-decodes that pubkey
-with a hard failure at bundle time whenever `createUpdaterArtifacts` is on,
-so turning it on in the checked-in config before the real key exists breaks
-every build, on every platform, including a contributor's local
-`pnpm tauri build`. Keeping enablement CI-side means local dev builds never
-need a signing key at all, today or after the key lands.
+The real `plugins.updater.pubkey` is committed in `tauri.conf.json` (#586),
+and every release since v0.5.0 ships signed update artifacts.
+`bundle.createUpdaterArtifacts` is still **not** set in the checked-in
+config - it is enabled CI-side only, in the release workflow's `build` job.
+`tauri-cli` signs every updater bundle whenever `createUpdaterArtifacts` is
+on and fails the build without the private key, so turning it on in the
+checked-in config would break a contributor's local `pnpm tauri build`.
+Keeping enablement CI-side means local builds never need the signing key.
 
 Each `build` leg derives whether updater artifacts are enabled for that run
 (`UPDATER_ON`) from `plugins.updater.pubkey` in the checked-out
-`tauri.conf.json` - non-empty means on. While the pubkey is pending, every
-build runs exactly as it did before #579 and a `::warning::` says so in the
-log. Once enabled, each leg emits, alongside the installers already listed
-above, a signed update bundle per platform plus a detached `.sig` (Tauri
-signs every package type it bundles, not only the updater's own artifact):
+`tauri.conf.json` - non-empty means on, which is every run on this repo. The
+off path (no pubkey: build exactly as before #579, with a `::warning::` in the
+log) is kept so a fork that removes the key still builds. Each leg emits,
+alongside the installers already listed above, a signed update bundle per
+platform plus a detached `.sig` (Tauri signs every package type it bundles,
+not only the updater's own artifact):
 
 | Platform | Update artifact | Signature |
 |----------|------------------|-----------|
@@ -434,18 +434,47 @@ Linux `.deb.sig`/`.rpm.sig`) exist because Tauri signs whatever it bundles,
 not because anything consumes them yet. When `UPDATER_ON` is true, the
 `build` job's collect step asserts at least one `.sig` landed and the
 `release` job's completeness check requires the full platform-specific set
-above; both are skipped while the pubkey is pending, since no `.sig` exists
-to require.
+above; both are skipped on the no-pubkey path, since no `.sig` exists to
+require.
 
-**The updater plugin is not wired up yet.** Once the real pubkey and its
-GitHub-hosted `latest-stable.json` endpoint are committed to
-`plugins.updater`, the plugin itself still needs registering in `lib.rs`
-before anything reads either value at runtime - that, generating and
-publishing `latest-stable.json`, and replacing the pubkey are later steps in
-the #579 arc. `scripts/check-updater-pubkey.mjs` (`pnpm lint:updater-pubkey`,
-gated in CI) is a tripwire for that commit: it passes trivially while
-`plugins.updater` is absent, and the day it lands, a placeholder, malformed
-base64, or a non-https/non-`github.com` endpoint fails the gate immediately.
+**The updater plugin is registered only when a pubkey is committed.**
+`lib.rs` adds `tauri_plugin_updater` only when
+`commands::app_update::updater_configured()` finds a non-empty
+`plugins.updater.pubkey` in `tauri.conf.json`, because the plugin's own
+`Config` has a required `pubkey` with no `Default`: a fork or branch without
+the key would otherwise fail `Builder::build()` and not start at all. Without
+the key, `check_for_app_update` answers "This build has no update signing
+key, so it cannot check for updates", and nothing downloads or installs
+without a successful check first. `scripts/check-updater-pubkey.mjs`
+(`pnpm lint:updater-pubkey`, gated in CI) fails on a placeholder, malformed
+base64, or a non-https/non-`github.com` endpoint.
+
+What the app does with an update - when it checks, the background download,
+installing on quit, and the platform exceptions - is in
+[SPEC 2.10](SPEC.md#210-updates--telemetry). Two release-side facts follow
+from it:
+
+- **Publishing reaches installs without a click.** Once a track's manifest
+  points at a build, every install on that track with "Update automatically"
+  on downloads it at its next check (within about 4 hours, or at the next
+  launch), and wherever updates install on quit (macOS and Linux, except a
+  Mac whose app folder the user cannot write to) installs it at the next quit.
+  A final reaches Stable and Beta installs, a candidate Beta ones. Treat a
+  publish as shipping: a candidate reaches the smaller Beta audience first
+  ([Rehearsing an update from a candidate](#rehearsing-an-update-from-a-candidate)).
+  Repointing recalls nothing already downloaded: a running app holding a
+  downloaded update skips its 4-hour check and installs those bytes at the next
+  quit, and an installed build stays installed
+  ([Rollback / repoint runbook](#rollback--repoint-runbook)).
+- **Only some packages update themselves.** The updater replaces an
+  AppImage, an NSIS-installed Windows app, or a macOS `.app` (the macOS
+  entry is in a manifest only for a Developer ID-signed release, and only for
+  Apple silicon, `darwin-aarch64`). A copy installed from a `.deb`, `.rpm` or
+  `.msi`, and a release binary with no bundle marker (a bare `cargo build`),
+  refuse in `self_update_refusal` (`app_update.rs`) before the manifest is
+  read. The refusal text is not shown to the user: About says "Could not
+  check for updates" and automatic checks stay silent, so such users must be
+  told to update through their package some other way.
 
 ### Keypair custody
 
@@ -463,7 +492,7 @@ download carrying the new public key.
 
 | Secret | Required for | Effect when unset |
 |--------|---------------|---------------------|
-| `TAURI_SIGNING_PRIVATE_KEY` | Every `build` leg, once `plugins.updater.pubkey` is committed | The `build` job fails fast with a named error. Tauri itself already refuses to sign without this key - this guard exists only to fail earlier with a clearer, named message instead of chasing Tauri's own error. While the pubkey is pending this secret is not required at all |
+| `TAURI_SIGNING_PRIVATE_KEY` | Every `build` leg (the pubkey is committed) | The `build` job fails fast with a named error. Tauri itself already refuses to sign without this key - this guard exists only to fail earlier with a clearer, named message instead of chasing Tauri's own error. Only the no-pubkey path (a fork without the key) skips it |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Only if the key above has a password | Passed through empty otherwise |
 | `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` | Real Developer ID signing + notarization of the macOS leg | Absent (or `APPLE_SIGNING_IDENTITY` empty) leaves the macOS leg exactly as it was before #579: ad-hoc signed via the checked-in `signingIdentity: "-"`, not notarized |
 
@@ -797,6 +826,65 @@ against real signed artifacts just by cutting one - no hand-made manifest:
 [#650](https://github.com/Stalagmight/Stalagmight/issues/650) has the full
 0.5.2 test plan: rc.1 from a 0.5.1 Weekly install, rc.1 to rc.2 on Beta, rc.2
 to the final, and Stable untouched throughout.
+
+### Local end-to-end updater test
+
+Exercises check -> download -> verify -> install against a throwaway key and a
+manifest served from `localhost`, without the real signing key or GitHub
+Releases. Everything here is local and disposable; none of it is committed.
+
+```bash
+# 1. A throwaway minisign keypair (never the real one). An empty password is
+#    fine. Prints the public key and also writes it to <key>.pub.
+pnpm tauri signer generate -w /tmp/stalagmight-updater-test.key
+
+# 2. Export the private key BEFORE building: with createUpdaterArtifacts on,
+#    `tauri build` signs each updater bundle itself and fails without the key.
+export TAURI_SIGNING_PRIVATE_KEY=/tmp/stalagmight-updater-test.key
+export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=
+
+# 3. Temporarily put the step 1 public key in plugins.updater.pubkey in
+#    src-tauri/tauri.conf.json (do not commit it), then build with updater
+#    artifacts on, using the same --config merge the release workflow uses.
+#    The bundle and its .sig land under src-tauri/target/debug/bundle/.
+pnpm tauri build --config '{"bundle":{"createUpdaterArtifacts":true}}' --debug
+
+# 4. Write latest.json next to the bundle. The platforms key is Tauri's
+#    {os}-{arch} form (linux-x86_64, windows-x86_64, darwin-x86_64,
+#    darwin-aarch64), not a Rust target triple: a triple matches nothing, the
+#    check reports "up to date", and the recipe silently tests nothing.
+#    { "version": "9.9.9", "notes": "local test", "pub_date": "<RFC 3339>",
+#      "platforms": { "linux-x86_64": { "signature": "<.sig file contents>",
+#        "url": "http://127.0.0.1:8000/<bundle file name>" } } }
+
+# 5. Serve that directory (it keeps running; use a second terminal for step 6).
+python3 -m http.server 8000
+
+# 6. Run the packaged build from step 3, launched from its bundle output,
+#    with the variable set, e.g. on Linux:
+STALAGMIGHT_UPDATE_URL=http://127.0.0.1:8000/latest.json \
+  src-tauri/target/debug/bundle/appimage/<AppImage file name>
+```
+
+The launch check runs after about 10 seconds, or press About's "Check for
+updates". The packaged build exercises the whole cycle: check, download, signature check,
+and the install (at quit on macOS and Linux, or through "Restart to update").
+
+`STALAGMIGHT_UPDATE_URL` (`UPDATE_URL_ENV` in `app_update.rs`) is honoured
+verbatim only in a debug build, which is what lets a plain
+`http://127.0.0.1` URL work here. A release build accepts it only as an
+https `github.com` URL and otherwise ignores it (`is_trusted_manifest_url`).
+Without the variable, a debug build refuses to check, download or install at
+all (#644), so `./scripts/dev.sh` never updates itself from the real
+manifest.
+
+**Do not download an update into `./scripts/dev.sh`.** With the variable set,
+a `tauri dev` build updates like any other: "Update automatically" is on by
+default, so the launch check downloads at once, and on macOS and Linux a quit
+or a restart then installs over `target/debug`. To check the manifest and the
+banner from a dev build, turn "Update automatically" off in Settings first and
+start the app with the variable only after that, then stop at the banner's
+Download.
 
 ## Testing the release tooling
 
