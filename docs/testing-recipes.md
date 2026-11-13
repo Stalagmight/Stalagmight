@@ -337,7 +337,8 @@ the hazard before the recovery save reaches it.
 Green over 60 seeds / 720 states. The one thing it measures rather than
 asserts is what a TORN temp does when opened directly (the recovery UI lists
 `.tmp` files as restore candidates; since #720 `restore_from_backup` refuses
-one that does not open as a project, and before that it validated nothing): 306 refused, 11-13 loaded as the interrupted save, 41-43 loaded with
+one that does not open as a project, and before that it validated nothing):
+306 refused, 11-13 loaded as the interrupted save, 41-43 loaded with
 the survey intact and the undo history gone. That last split is the one number
 that moves between runs, and it moves for finding 21's reason - `HashMap` order
 in the writer decides which row a fixed byte offset cuts through. The 306 does

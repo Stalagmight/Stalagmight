@@ -15,36 +15,41 @@
 //!   with the project before reading it, and reported success (F5).
 //!
 //! So a restore never writes INTO a file. It stages full copies beside the
-//! project and renames them into place, in this order:
+//! project and renames them into place:
 //!
 //! 1. The backup's bytes are copied to a staged file before anything else is
 //!    written, and the staged copy is opened the way a load opens a project. A
 //!    backup that would not open is refused while nothing has changed.
-//! 2. A copy of the project replaces `<project>.stalx.pre-restore`. When that is
-//!    the backup being restored, its bytes are already staged, so undoing a
+//! 2. A copy of the project replaces `<project>.stalx.pre-restore`. The copy that
+//!    was there is parked under a hidden name until step 3 is done. When it is
+//!    the backup being restored, its bytes are staged as well, so undoing a
 //!    restore swaps the two files and loses neither.
-//! 3. The staged backup replaces the project.
+//! 3. The staged backup replaces the project. If that fails, the parked copy
+//!    goes back to `<project>.stalx.pre-restore`: a restore that fails changes
+//!    nothing.
 //!
-//! A rename leaves every open handle on the inode it had, so a file the app has
-//! open under another name (renamed by another process) keeps the content its
-//! live connection reads. A restore still refuses outright when the project,
-//! the safety copy or the backup is the open project: the in-memory project
-//! would otherwise be saved over the restore later, and closing it here would
-//! throw its unsaved edits away.
+//! Steps 2 and 3 run with the project slot and the load token locked (in that
+//! order, as the SpeleoDB cache install takes them), and not at all while a
+//! load is in flight or the project, its safety copy or the backup is the open
+//! project. A load opens its file before it takes the project slot, so one
+//! already under way could otherwise map the old file and later save over the
+//! restore; and an open project would be saved over it, while closing it here
+//! would throw its unsaved edits away. A rename leaves every open handle on the
+//! inode it had, so even a file the app has open under another name (renamed by
+//! another process) keeps the content its live connection reads.
 //!
 //! SQLite finds a database's `-journal`, `-wal` and `-shm` by NAME
 //! ([`super::speleodb_sidecars`] explains the hazard). An armed journal, or a
 //! WAL with frames, holds committed changes that the file alone does not, so a
-//! restore refuses rather than copy the backup or replace the project without
-//! them. Any other sidecar beside a name that is about to be replaced is moved
-//! out of SQLite's sight first, so the new file never picks up the old one's.
+//! restore refuses rather than copy, replace or put back a file without them.
+//! Any other sidecar beside a name that is about to be replaced is moved out of
+//! SQLite's sight first, so the new file never picks up the old one's.
 
 use std::path::{Path, PathBuf};
 
-use super::project_io::same_file;
 use super::speleodb_sidecars::{has_hot_journal, sidecar_path, SetAsideSidecars};
 use super::AppState;
-use crate::persistence::Database;
+use crate::persistence::{same_file_on_disk, Database};
 
 /// Where a restore keeps a copy of the file it replaces.
 pub(super) fn pre_restore_path(project: &Path) -> PathBuf {
@@ -60,15 +65,7 @@ impl AppState {
         project: &Path,
         backup: &Path,
     ) -> Result<String, String> {
-        // Held for the whole restore, so no load can make one of these files
-        // the open project half-way through.
-        let guard = self
-            .project
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let open = guard.as_ref().and_then(|p| p.file_path.clone());
-        let result = restore(project, backup, open.as_deref());
-        drop(guard);
+        let result = self.restore(project, backup);
         match &result {
             Ok(message) => tracing::info!(
                 project = %project.display(),
@@ -84,99 +81,291 @@ impl AppState {
         }
         result
     }
+
+    fn restore(&self, project: &Path, backup: &Path) -> Result<String, String> {
+        let files = Files::new(project, backup)?;
+        files.check()?;
+        // 1. The backup's bytes, staged and opened before anything is written.
+        let staged = stage_copy(&files.backup_real, &files.dir, &files.project)?;
+        drop(Database::open_readonly(&staged).map_err(|e| unopenable_backup(backup, &staged, &e))?);
+
+        let project_slot = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let loading = self
+            .active_loading
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if loading.is_some() {
+            return Err(
+                "Not restored: a project is being opened. Try again once it has opened."
+                    .to_string(),
+            );
+        }
+        if let Some(open) = project_slot.as_ref().and_then(|p| p.file_path.as_deref()) {
+            files.refuse_open(open)?;
+        }
+        // Again under the locks: the files may have changed while the backup
+        // was being copied.
+        files.check()?;
+        let result = files.replace(staged);
+        drop(loading);
+        drop(project_slot);
+        result
+    }
 }
 
-fn restore(project: &Path, backup: &Path, open: Option<&Path>) -> Result<String, String> {
-    let project = follow_link(project)?;
-    let safety = pre_restore_path(&project);
+/// The files one restore touches.
+struct Files<'a> {
+    /// The project's file, after following a link.
+    project: PathBuf,
+    /// The backup as the caller named it, for messages.
+    backup: &'a Path,
+    /// The backup's file, after following a link: where its sidecars are.
+    backup_real: PathBuf,
+    /// `<project>.stalx.pre-restore`.
+    safety: PathBuf,
+    /// The project's folder, where everything is staged.
+    dir: PathBuf,
+    /// The backup is the safety copy: restoring it undoes the last restore.
+    undo: bool,
+}
 
-    if !backup.exists() {
-        return Err(format!("Backup file not found: {}", backup.display()));
-    }
-    if !backup.is_file() {
-        return Err(format!("Not restored: {} is not a file.", name(backup)));
-    }
-    if is_same_file(&project, backup) {
-        return Err(format!(
-            "Not restored: the backup you picked is {} itself.",
-            name(&project)
-        ));
-    }
-    if let Some(open) = open {
-        refuse_open(open, &project, &safety, backup)?;
-    }
-    // Before SQLite opens either file: an open acts on the sidecars it finds.
-    refuse_unfinished(backup, "the backup")?;
-    refuse_unfinished(&project, "the project")?;
-    // Copying a backup over a project a newer Stalagmight saved would put an
-    // older file in its place, and a backup a newer Stalagmight saved would put
-    // a file this build cannot open there (#649). Both before the safety copy.
-    for file in [project.as_path(), backup] {
-        Database::check_not_newer_at(file).map_err(|e| format!("Not restored: {e}"))?;
-    }
-
-    let dir = project
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-
-    // 1. The backup's bytes, staged before anything else is written.
-    let staged = stage_copy(backup, dir, &project)?;
-    drop(Database::open_readonly(&staged).map_err(|e| unopenable_backup(backup, &staged, &e))?);
-
-    // 2. The safety copy of the project, when there is a project to copy.
-    let kept = match std::fs::symlink_metadata(&project) {
-        Ok(_) => {
-            let copy = stage_copy(&project, dir, &project)?;
-            install(copy, &safety).map_err(|e| {
-                format!(
-                    "Not restored: could not keep a copy of {} as {} ({e}). \
-                     Nothing was changed.",
-                    name(&project),
-                    name(&safety)
-                )
-            })?;
-            true
+impl<'a> Files<'a> {
+    fn new(project: &Path, backup: &'a Path) -> Result<Self, String> {
+        let project = follow_link(project)?;
+        if !backup.exists() {
+            return Err(format!("Backup file not found: {}", backup.display()));
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
-        Err(e) => {
+        let backup_real = follow_link(backup)?;
+        let safety = pre_restore_path(&project);
+        let dir = project
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
+        let undo = same_file_on_disk(backup, &safety);
+        Ok(Self {
+            project,
+            backup,
+            backup_real,
+            safety,
+            dir,
+            undo,
+        })
+    }
+
+    /// Everything that refuses a restore before it writes anything, apart
+    /// from the open project. Nothing here opens a file that is not a regular
+    /// file, so a FIFO or a device cannot block it.
+    fn check(&self) -> Result<(), String> {
+        if !self.backup_real.is_file() {
             return Err(format!(
-                "Not restored: could not read {} ({e}). Nothing was changed.",
-                name(&project)
-            ))
+                "Not restored: {} is not a file.",
+                name(self.backup)
+            ));
         }
-    };
-
-    // 3. The backup takes the project's name.
-    install(staged, &project).map_err(|e| {
-        let kept_note = if kept {
-            format!(" A copy of it is in {}.", name(&safety))
-        } else {
-            String::new()
-        };
-        format!(
-            "Not restored: could not replace {} ({e}). The project is unchanged.{kept_note}",
-            name(&project)
-        )
-    })?;
-
-    // An undo: the backup was the safety copy, which now holds the replaced file.
-    if kept && is_same_file(backup, &safety) {
-        return Ok(format!(
-            "Restored {0}, the copy the last restore kept. The two files swapped places: \
-             {0} now holds the file it replaced, so restoring it again switches back.",
-            name(&safety)
-        ));
+        if same_file_on_disk(&self.project, self.backup) {
+            return Err(format!(
+                "Not restored: the backup you picked is {} itself.",
+                name(&self.project)
+            ));
+        }
+        for path in [&self.project, &self.safety] {
+            if std::fs::symlink_metadata(path).is_ok_and(|m| !m.is_file()) {
+                return Err(format!("Not restored: {} is not a file.", name(path)));
+            }
+        }
+        // Before SQLite opens a file: an open acts on the sidecars it finds.
+        refuse_unfinished(
+            &self.backup_real,
+            &format!("the backup {}", name(self.backup)),
+            "a copy of the file alone would lose them. Pick another backup.",
+        )?;
+        refuse_unfinished(
+            &self.project,
+            &format!("the project {}", name(&self.project)),
+            "replacing the file would lose them. Open the project again so Stalagmight can \
+             finish them, or move that file away to restore without them.",
+        )?;
+        if !self.undo {
+            refuse_unfinished(
+                &self.safety,
+                &format!(
+                    "{}, where a restore keeps its copy of {},",
+                    name(&self.safety),
+                    name(&self.project)
+                ),
+                "replacing the file would lose them. Move those files away, then restore.",
+            )?;
+        }
+        // Copying a backup over a project a newer Stalagmight saved would put an
+        // older file in its place, and a backup a newer Stalagmight saved would
+        // put a file this build cannot open there (#649).
+        for file in [self.project.as_path(), self.backup_real.as_path()] {
+            Database::check_not_newer_at(file).map_err(|e| format!("Not restored: {e}"))?;
+        }
+        Ok(())
     }
-    Ok(if kept {
+
+    /// A restore never touches a file the app has open: see the module docs.
+    fn refuse_open(&self, open: &Path) -> Result<(), String> {
+        if same_file_on_disk(open, &self.project) {
+            return Err(format!(
+                "Not restored: {} is open in Stalagmight. Close it, then restore.",
+                name(&self.project)
+            ));
+        }
+        if same_file_on_disk(open, &self.safety) {
+            return Err(format!(
+                "Not restored: {} is open in Stalagmight, and the restore keeps its copy of {} \
+                 there. Close it, then restore.",
+                name(&self.safety),
+                name(&self.project)
+            ));
+        }
+        if same_file_on_disk(open, self.backup) {
+            return Err(format!(
+                "Not restored: the backup {} is open in Stalagmight. Close it, then restore.",
+                name(self.backup)
+            ));
+        }
+        Ok(())
+    }
+
+    /// Steps 2 and 3: the safety copy, then the backup takes the project's name.
+    fn replace(&self, staged: tempfile::TempPath) -> Result<String, String> {
+        let project_meta = match std::fs::metadata(&self.project) {
+            Ok(meta) => Some(meta),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => {
+                return Err(format!(
+                    "Not restored: could not read {} ({e}). Nothing was changed.",
+                    name(&self.project)
+                ))
+            }
+        };
+        let kept = project_meta.is_some();
+        let previous = if kept {
+            Some(self.keep_safety_copy()?)
+        } else {
+            None
+        };
+        // The restored file takes the place of the project, permissions included.
+        let permissions = project_meta.map(|meta| meta.permissions());
+        let installed = permissions
+            .map_or(Ok(()), |p| std::fs::set_permissions(&staged, p))
+            .map_err(|e| e.to_string())
+            .and_then(|()| install(staged, &self.project));
+        if let Err(e) = installed {
+            let put_back = previous.map_or_else(String::new, |p| self.put_back(p));
+            return Err(format!(
+                "Not restored: could not replace {} ({e}). Nothing was changed.{put_back}",
+                name(&self.project)
+            ));
+        }
+        // The previous safety copy (parked) is deleted when `previous` drops.
+        drop(previous);
+
+        if kept && self.undo {
+            return Ok(format!(
+                "Restored {0}, the copy the last restore kept. The two files swapped places: \
+                 {0} now holds the file it replaced, so restoring it again switches back.",
+                name(&self.safety)
+            ));
+        }
+        Ok(if kept {
+            format!(
+                "Restored from {}. The file it replaced is kept as {}.",
+                self.backup.display(),
+                name(&self.safety)
+            )
+        } else {
+            format!("Restored from {}.", self.backup.display())
+        })
+    }
+
+    /// Step 2: a copy of the project replaces the safety copy, and the one that
+    /// was there is parked until the restore is done.
+    fn keep_safety_copy(&self) -> Result<Previous, String> {
+        let copy = stage_copy(&self.project, &self.dir, &self.project)?;
+        let previous = park(&self.safety, &self.dir)?;
+        if let Err(e) = install(copy, &self.safety) {
+            let put_back = self.put_back(previous);
+            return Err(format!(
+                "Not restored: could not keep a copy of {} as {} ({e}). Nothing was changed.\
+                 {put_back}",
+                name(&self.project),
+                name(&self.safety)
+            ));
+        }
+        Ok(previous)
+    }
+
+    /// Undo step 2 after a failure: the parked copy goes back, or the new copy
+    /// goes when there was none. Returns a note for the message when that
+    /// itself fails, naming where the previous copy is.
+    fn put_back(&self, previous: Previous) -> String {
+        match previous {
+            Previous::Nothing => match std::fs::remove_file(&self.safety) {
+                Ok(()) => String::new(),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+                Err(e) => {
+                    tracing::warn!(error = %e, path = %self.safety.display(), "could not remove the new safety copy");
+                    format!(
+                        " {} holds a copy of the unchanged project.",
+                        name(&self.safety)
+                    )
+                }
+            },
+            Previous::File(parked) => match parked.persist(&self.safety) {
+                Ok(()) => {
+                    sync_dir(&self.safety);
+                    String::new()
+                }
+                Err(e) => {
+                    tracing::error!(error = %e.error, path = %self.safety.display(), "could not put the previous safety copy back");
+                    match e.path.keep() {
+                        Ok(kept) => format!(
+                            " The previous {} could not be put back; it is in {}.",
+                            name(&self.safety),
+                            name(&kept)
+                        ),
+                        Err(_) => String::new(),
+                    }
+                }
+            },
+        }
+    }
+}
+
+/// What was at the safety copy's name before this restore.
+enum Previous {
+    /// Nothing: a failed restore removes the new copy again.
+    Nothing,
+    /// The previous safety copy, under a hidden name. Deleted when dropped.
+    File(tempfile::TempPath),
+}
+
+/// Move the safety copy out of the way, under a hidden name in `dir`.
+fn park(safety: &Path, dir: &Path) -> Result<Previous, String> {
+    if std::fs::symlink_metadata(safety).is_err() {
+        return Ok(Previous::Nothing);
+    }
+    let failed = |e: &dyn std::fmt::Display| {
         format!(
-            "Restored from {}. The file it replaced is kept as {}.",
-            backup.display(),
-            name(&safety)
+            "Not restored: could not set {} aside ({e}). Nothing was changed.",
+            name(safety)
         )
-    } else {
-        format!("Restored from {}.", backup.display())
-    })
+    };
+    let parked = tempfile::Builder::new()
+        .prefix(&format!(".{}.previous-", name(safety)))
+        .tempfile_in(dir)
+        .map_err(|e| failed(&e))?
+        .into_temp_path();
+    std::fs::rename(safety, &parked).map_err(|e| failed(&e))?;
+    Ok(Previous::File(parked))
 }
 
 /// Why the backup cannot be restored, in the dialog's words. The full reason
@@ -202,70 +391,35 @@ fn unopenable_backup(backup: &Path, staged: &Path, error: &anyhow::Error) -> Str
     )
 }
 
-/// A project path that is a symbolic link is restored into the file it names,
-/// as the in-place copy used to, so the link stays a link.
-fn follow_link(project: &Path) -> Result<PathBuf, String> {
-    match std::fs::symlink_metadata(project) {
-        Ok(meta) if meta.file_type().is_symlink() => std::fs::canonicalize(project).map_err(|e| {
+/// A path that is a symbolic link stands for the file it names: a project is
+/// restored into that file, as the in-place copy used to (the link stays a
+/// link), and a backup's sidecars are beside that file.
+fn follow_link(path: &Path) -> Result<PathBuf, String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => std::fs::canonicalize(path).map_err(|e| {
             format!(
                 "Not restored: {} is a link to a file that cannot be found ({e}).",
-                name(project)
+                name(path)
             )
         }),
-        _ => Ok(project.to_path_buf()),
+        _ => Ok(path.to_path_buf()),
     }
 }
 
-/// The same file on disk: the same canonical path, or (on Unix) the same inode,
-/// which also catches a hard link under another name.
-fn is_same_file(a: &Path, b: &Path) -> bool {
-    same_file(a, b) || same_inode(a, b)
-}
-
-#[cfg(unix)]
-fn same_inode(a: &Path, b: &Path) -> bool {
-    use std::os::unix::fs::MetadataExt as _;
-    match (std::fs::metadata(a), std::fs::metadata(b)) {
-        (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
-        _ => false,
-    }
-}
-
-#[cfg(not(unix))]
-fn same_inode(_: &Path, _: &Path) -> bool {
-    false
-}
-
-/// A restore never touches a file the app has open: see the module docs.
-fn refuse_open(open: &Path, project: &Path, safety: &Path, backup: &Path) -> Result<(), String> {
-    if is_same_file(open, project) {
-        return Err(format!(
-            "Not restored: {} is open in Stalagmight. Close it, then restore.",
-            name(project)
-        ));
-    }
-    if is_same_file(open, safety) {
-        return Err(format!(
-            "Not restored: {} is open in Stalagmight, and the restore keeps its copy of {} \
-             there. Close it, then restore.",
-            name(safety),
-            name(project)
-        ));
-    }
-    if is_same_file(open, backup) {
-        return Err(format!(
-            "Not restored: the backup {} is open in Stalagmight. Close it, then restore.",
-            name(backup)
-        ));
-    }
-    Ok(())
-}
-
-/// Refuse a file whose committed state is partly in a sidecar: copying or
-/// replacing the file alone would tear it or drop those changes.
-fn refuse_unfinished(db: &Path, role: &str) -> Result<(), String> {
+/// Refuse a file whose committed state is partly in a sidecar, or whose
+/// sidecar is not a regular file (which nothing here opens).
+fn refuse_unfinished(db: &Path, what: &str, consequence: &str) -> Result<(), String> {
     let journal = sidecar_path(db, "-journal");
     let wal = sidecar_path(db, "-wal");
+    for sidecar in [&journal, &wal] {
+        if std::fs::symlink_metadata(sidecar).is_ok_and(|m| !m.is_file()) {
+            return Err(format!(
+                "Not restored: {} beside {} is not a file. Move it away, then restore.",
+                name(sidecar),
+                name(db)
+            ));
+        }
+    }
     let wal_has_frames = std::fs::metadata(&wal).is_ok_and(|m| m.len() > 0);
     let unfinished = if has_hot_journal(db) {
         journal
@@ -274,22 +428,23 @@ fn refuse_unfinished(db: &Path, role: &str) -> Result<(), String> {
     } else {
         return Ok(());
     };
-    let advice = if role == "the project" {
-        "Open the project once so Stalagmight can finish them, then restore."
-    } else {
-        "Pick another backup."
-    };
     Err(format!(
-        "Not restored: {role} {} has changes that were never finished, in {} beside it. {advice}",
-        name(db),
+        "Not restored: {what} has changes that were never finished, in {} beside it, and \
+         {consequence}",
         name(&unfinished)
     ))
 }
 
 /// A full, durable copy of `source` beside the project, under a hidden name the
-/// backup list never offers.
+/// backup list never offers, with the permissions of `source`.
 fn stage_copy(source: &Path, dir: &Path, project: &Path) -> Result<tempfile::TempPath, String> {
-    let staged = tempfile::Builder::new()
+    let failed = |what: &str, e: &dyn std::fmt::Display| {
+        format!(
+            "Not restored: could not {what} {} ({e}). Nothing was changed.",
+            name(source)
+        )
+    };
+    let mut staged = tempfile::Builder::new()
         .prefix(&format!(".{}.restore-", name(project)))
         .suffix(".stalx")
         .tempfile_in(dir)
@@ -298,20 +453,20 @@ fn stage_copy(source: &Path, dir: &Path, project: &Path) -> Result<tempfile::Tem
                 "Not restored: could not create a file beside {} ({e}). Nothing was changed.",
                 name(project)
             )
-        })?
-        .into_temp_path();
-    std::fs::copy(source, &staged).map_err(|e| {
-        format!(
-            "Not restored: could not copy {} ({e}). Nothing was changed.",
-            name(source)
-        )
-    })?;
-    sync_file(&staged).map_err(|e| {
-        format!(
-            "Not restored: could not write a copy of {} to disk ({e}). Nothing was changed.",
-            name(source)
-        )
-    })?;
+        })?;
+    let mut reader = std::fs::File::open(source).map_err(|e| failed("read", &e))?;
+    let permissions = reader
+        .metadata()
+        .map_err(|e| failed("read", &e))?
+        .permissions();
+    std::io::copy(&mut reader, staged.as_file_mut()).map_err(|e| failed("copy", &e))?;
+    // Through the handle that wrote it, so a read-only source does not stop it.
+    staged
+        .as_file()
+        .sync_all()
+        .map_err(|e| failed("write a copy of", &e))?;
+    let staged = staged.into_temp_path();
+    std::fs::set_permissions(&staged, permissions).map_err(|e| failed("copy", &e))?;
     Ok(staged)
 }
 
@@ -330,14 +485,6 @@ fn install(staged: tempfile::TempPath, dest: &Path) -> Result<(), String> {
             Err(e.error.to_string())
         }
     }
-}
-
-fn sync_file(path: &Path) -> std::io::Result<()> {
-    std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(path)?
-        .sync_all()
 }
 
 /// Make a rename in `dest`'s directory durable (Unix; Windows has no directory

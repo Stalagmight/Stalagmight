@@ -550,7 +550,7 @@ impl Database {
                         || suffix
                             .rsplit_once('.')
                             .is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("tmp")))
-                    && !is_same_file(&entry.path(), path);
+                    && !same_file_on_disk(&entry.path(), path);
                 if is_backup {
                     let file_meta = std::fs::metadata(entry.path())
                         .ok()
@@ -672,8 +672,9 @@ fn starts_like_a_database(path: &Path) -> bool {
 }
 
 /// The same file on disk: the same canonical path, or (on Unix) the same inode,
-/// which also catches a hard link under another name.
-fn is_same_file(a: &Path, b: &Path) -> bool {
+/// which also catches a hard link under another name. What the backup list and
+/// a restore (#720) mean by "the project itself".
+pub fn same_file_on_disk(a: &Path, b: &Path) -> bool {
     if let (Ok(ca), Ok(cb)) = (a.canonicalize(), b.canonicalize()) {
         if ca == cb {
             return true;
