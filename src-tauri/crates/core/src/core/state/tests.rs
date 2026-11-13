@@ -23806,6 +23806,29 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
                 },
             }),
         );
+        // Station metadata, alone and in the Data workspace's mixed batch.
+        assert_disabled(
+            "execute:SetStationName",
+            &state.execute(Command::SetStationName {
+                station_ref: StationRef::new(sid, 1),
+                name: Some("A1".to_string()),
+            }),
+        );
+        assert_disabled(
+            "execute:Batch:StationMetadata",
+            &state.execute(Command::Batch {
+                commands: vec![
+                    Command::SetStationComment {
+                        station_ref: StationRef::new(sid, 1),
+                        comment: Some("note".to_string()),
+                    },
+                    Command::SetStationName {
+                        station_ref: StationRef::new(sid, 1),
+                        name: Some("A1".to_string()),
+                    },
+                ],
+            }),
+        );
         assert_disabled(
             "execute:ReverseSection",
             &state.execute(Command::ReverseSection {

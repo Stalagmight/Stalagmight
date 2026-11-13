@@ -786,6 +786,41 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         if (name === null) delete mockStationNames[key];
         else mockStationNames[key] = name;
       };
+      // Mirrors Rust `sanitize_station_name`: drop control / bidi characters (a
+      // whitespace control becomes a space), trim, clamp to 256 chars; empty ->
+      // null, which removes the name.
+      const mockSanitizeStationName = (raw: string | null | undefined): string | null => {
+        if (raw == null) return null;
+        let cleaned = '';
+        for (const ch of raw) {
+          const cp = ch.codePointAt(0) ?? 0;
+          const unsafe =
+            cp <= 0x1f || (cp >= 0x7f && cp <= 0x9f) || cp === 0xfffe || cp === 0xffff ||
+            cp === 0x061c || cp === 0x200e || cp === 0x200f ||
+            (cp >= 0x202a && cp <= 0x202e) || (cp >= 0x2066 && cp <= 0x2069);
+          if (!unsafe) cleaned += ch;
+          else if (/\s/.test(ch)) cleaned += ' ';
+        }
+        const trimmed = Array.from(cleaned.trim()).slice(0, 256).join('').trimEnd();
+        return trimmed === '' ? null : trimmed;
+      };
+      // Mirrors the Rust station setters' validation (`write_station_name`,
+      // `set_station_comment`): the section must exist and the index must be at
+      // most its shot count. Null when the ref is fine (or no project is loaded).
+      const mockStationRefError = (
+        ref: { section_id: number; station_index: number } | undefined,
+      ): string | null => {
+        if (!ref) return 'Missing station';
+        if (!currentProject) return null;
+        const section = (currentProject.sections as Array<{ id: number; shots: unknown[] }>).find(
+          (s) => s.id === ref.section_id,
+        );
+        if (!section) return `Section ${ref.section_id} not found`;
+        if (ref.station_index > section.shots.length) {
+          return `Station index ${ref.station_index} out of range (section has ${section.shots.length + 1} stations)`;
+        }
+        return null;
+      };
 
       // Track last export_image call for test assertions
       let lastExportImageArgs: Record<string, unknown> | null = null;
@@ -3685,6 +3720,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               ? (JSON.parse(JSON.stringify(currentProject)) as typeof currentProject)
               : null;
             const commentsBefore = { ...mockStationComments };
+            const namesBefore = { ...mockStationNames };
             // #24: entries accumulate ACROSS sub-commands, in step order and with repeats -
             // each carries the shot count in force at its own step, which is what lets the
             // frontend compose rather than replay. A batch reversing the same section twice
@@ -3738,6 +3774,23 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   targets: command.targets,
                   edit: command.edit,
                 }) as typeof result;
+              } else if (command?.type === 'set_station_comment' || command?.type === 'set_station_name') {
+                // Data-workspace multi-cell edit / find-replace: station cells ride
+                // the same batch as shot cells, one undo step. Validated here like
+                // the Rust setters, so an out-of-range station rolls the whole
+                // batch back.
+                const stationRef = command.station_ref as { section_id: number; station_index: number } | undefined;
+                const refError = mockStationRefError(stationRef);
+                if (refError) {
+                  result = { success: false, error: refError };
+                } else if (command.type === 'set_station_name') {
+                  result = mockHandler('set_station_name', { stationRef, name: command.name }) as typeof result;
+                } else {
+                  result = mockHandler('set_station_comment', {
+                    stationRef,
+                    comment: (command.comment as string | null | undefined) || null,
+                  }) as typeof result;
+                }
               } else if (command?.type === 'reverse_section') {
                 // Multi-section reverse (#24) is batched so it is atomic and
                 // costs one undo, so the batch has to replay it too.
@@ -3758,6 +3811,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   delete mockStationComments[key];
                 }
                 Object.assign(mockStationComments, commentsBefore);
+                for (const key of Object.keys(mockStationNames)) {
+                  delete mockStationNames[key];
+                }
+                Object.assign(mockStationNames, namesBefore);
                 return result;
               }
             }
@@ -4115,6 +4172,18 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             } else {
               mockStationComments[key] = comment;
             }
+            return { success: true, section_ids: [] };
+          }
+
+          case 'set_station_name': {
+            console.log('[Mock IPC] set_station_name called with:', args);
+            const stationRef = args?.stationRef as { section_id: number; station_index: number } | undefined;
+            const refError = mockStationRefError(stationRef);
+            if (refError || !stationRef) return { success: false, error: refError ?? 'Missing station' };
+            const name = mockSanitizeStationName(args?.name as string | null | undefined);
+            const key = `${stationRef.section_id}:${stationRef.station_index}`;
+            if (name === null) delete mockStationNames[key];
+            else mockStationNames[key] = name;
             return { success: true, section_ids: [] };
           }
 

@@ -1925,6 +1925,7 @@ pub fn run() {
             commands::station::set_zero_datum,
             commands::station::remove_zero_datum,
             commands::station::set_station_comment,
+            commands::station::set_station_name,
             commands::station::move_comment,
             commands::station::move_station,
             commands::station::check_merge_connectivity,

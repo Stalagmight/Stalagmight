@@ -159,6 +159,27 @@ pub(crate) fn set_station_comment_impl(
     })
 }
 
+/// Set or clear a station name (the free-text identifier shown beside its
+/// positional id). Whitespace-only or `None` removes it; otherwise the backend
+/// stores it trimmed, cleaned of control/bidi characters and clamped (see
+/// `sanitize_station_name`).
+#[tauri::command]
+pub fn set_station_name(
+    state: State<AppState>,
+    station_ref: StationRef,
+    name: Option<String>,
+) -> CommandResult {
+    set_station_name_impl(state.inner(), station_ref, name)
+}
+
+pub(crate) fn set_station_name_impl(
+    state: &AppState,
+    station_ref: StationRef,
+    name: Option<String>,
+) -> CommandResult {
+    state.execute(Command::SetStationName { station_ref, name })
+}
+
 /// Move or swap a comment between stations/shots atomically (single undo entry)
 #[tauri::command]
 pub fn move_comment(

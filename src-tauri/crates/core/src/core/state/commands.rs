@@ -66,6 +66,7 @@ impl AppState {
             | SetZeroDatum { .. }
             | RemoveZeroDatum { .. }
             | SetStationComment { .. }
+            | SetStationName { .. }
             | MoveSection { .. }
             | MoveSegment { .. }
             | MoveStation { .. }
@@ -172,6 +173,8 @@ impl AppState {
             // edit, while their undo (restore the previous comment) does not invert
             // that geometry change - an asymmetric undo.
             | SetStationComment { .. }
+            // A station name is the same kind of metadata, for the same reasons.
+            | SetStationName { .. }
             | MoveComment { .. }
             | RepairIntegrity
             | UpdateProjectSettings
@@ -801,6 +804,9 @@ impl AppState {
                 station_ref,
                 comment,
             } => self.set_station_comment(*station_ref, comment.clone()),
+            Command::SetStationName { station_ref, name } => {
+                self.set_station_name(*station_ref, name.as_deref())
+            }
             Command::MoveSection { section_id, offset } => self.move_section(*section_id, *offset),
             Command::MoveSegment { section_id, offset } => self.move_segment(*section_id, *offset),
             Command::MoveStation {
@@ -1038,9 +1044,19 @@ impl AppState {
     /// `reconcile_geometry()` - which the epilogue runs only when the batch
     /// actually touches geometry (see `Command::affects_geometry`), so a metadata-only
     /// UpdateShot batch (comment/LRUD/reference) commits WITHOUT reconciling.
-    /// `SetStationComment` is still NOT allowed: as a whole it is INERT metadata
-    /// (see `command_integrity_profiles_are_stable`), so it would never carry the
-    /// geometry that justifies a batch; comment edits stay one-command-per-undo.
+    ///
+    /// `SetStationComment` and `SetStationName` are permitted for the same reason
+    /// `EditShotCredit` is: the Data workspace interleaves station and shot rows in
+    /// one grid, so a multi-cell paste/fill or a find/replace across it spans
+    /// station cells (comment, name) AND shot cells (comment, LRUD, credit, ...),
+    /// and the user made ONE edit - it must be ONE undo step, all-or-nothing. Both
+    /// are INERT metadata (see `command_integrity_profiles_are_stable`), which is
+    /// what makes batching them safe: `Command::affects_geometry` is false for
+    /// both, so a batch of only metadata skips the epilogue's `reconcile_geometry`
+    /// and cannot heal drift as a side effect of a text edit (the asymmetric-undo
+    /// hazard), while a batch that also carries a geometry `UpdateShot` reconciles
+    /// exactly as it would without them. The batch's `ProjectSnapshotPair` undo
+    /// restores names and comments with everything else.
     ///
     /// `DeleteSection` is permitted so an abandoned import can be withdrawn as ONE
     /// user action (#394): the DMP wizard imports eagerly (the zero-datum anchor on
@@ -1077,6 +1093,10 @@ impl AppState {
                 // Metadata only, and already one step for many shots; a batch
                 // may still group it with other edits of the same action.
                 | Command::EditShotCredit { .. }
+                // Station metadata, batched beside shot edits so a Data-workspace
+                // multi-cell edit or find/replace is one undo step.
+                | Command::SetStationComment { .. }
+                | Command::SetStationName { .. }
                 // Edit Section's Save renames / recolours a section AND edits its
                 // shots' credit in one user action, so both go in one batch and
                 // come back with one undo.
@@ -1174,9 +1194,9 @@ impl AppState {
         // paste/fill of comments / LRUD / reference flags - all metadata-only
         // UpdateShots) must NOT reconcile, or it would heal an already-drifted
         // project as a side effect of a metadata edit whose undo only restores the
-        // metadata (the asymmetric-undo hazard that keeps SetStationComment out of
-        // batches entirely). The outer execute() epilogue applies the same gate to
-        // the Batch command, so the two passes agree.
+        // metadata (the asymmetric-undo hazard that keeps SetStationComment and
+        // SetStationName INERT). The outer execute() epilogue applies the same gate
+        // to the Batch command, so the two passes agree.
         self.convert_orphan_closures_in_open_project();
         if commands.iter().any(Command::affects_geometry) {
             // Same order as `execute()`'s epilogue: renormalise onto the new frame
@@ -1254,6 +1274,14 @@ mod integrity_capability_tests {
             caps(&Command::SetStationComment {
                 station_ref: StationRef::new(1, 0),
                 comment: None
+            }),
+            (false, false, false)
+        );
+        // A station name is the same metadata as a comment: INERT.
+        assert_eq!(
+            caps(&Command::SetStationName {
+                station_ref: StationRef::new(1, 0),
+                name: Some("A1".to_string())
             }),
             (false, false, false)
         );
@@ -1394,22 +1422,46 @@ mod integrity_capability_tests {
         );
     }
 
-    /// The data-table grid commits multi-cell edits (paste/fill) as one batch →
-    /// one undo. `UpdateShot` must be batch-allowed (the batch epilogue reconciles
-    /// only when an edit in the batch actually touches geometry); `SetStationComment`
-    /// must NOT be (INERT metadata - it could never carry the geometry that
-    /// justifies a batch, and batching it once ran the reconcile epilogue and could
-    /// heal drift silently).
+    /// The grids commit multi-cell edits (paste/fill, find/replace) as one batch
+    /// -> one undo. `UpdateShot` must be batch-allowed (the batch epilogue
+    /// reconciles only when an edit in the batch actually touches geometry), and
+    /// so must the station metadata the Data workspace edits in the same grid:
+    /// `SetStationComment` and `SetStationName`. Those two stay INERT, so a batch
+    /// of them never runs the reconcile epilogue (pinned behaviourally by
+    /// `metadata_batch_does_not_heal_drift` in `station_name_batch_tests`).
+    /// Structural commands that renumber or remove shots stay out.
     #[test]
-    fn update_shot_is_batch_allowed_but_station_comment_is_not() {
+    fn update_shot_and_station_metadata_are_batch_allowed() {
         assert!(AppState::is_batch_allowed(&Command::UpdateShot {
             section_id: 1,
             shot_id: 0,
             updates: ShotUpdates::default(),
         }));
-        assert!(!AppState::is_batch_allowed(&Command::SetStationComment {
+        let comment = Command::SetStationComment {
             station_ref: StationRef::new(1, 0),
             comment: None,
+        };
+        let name = Command::SetStationName {
+            station_ref: StationRef::new(1, 0),
+            name: Some("A1".to_string()),
+        };
+        for cmd in [&comment, &name] {
+            assert!(AppState::is_batch_allowed(cmd), "{cmd:?}");
+            assert!(!cmd.affects_geometry(), "{cmd:?} must stay inert");
+        }
+        assert!(!Command::Batch {
+            commands: vec![comment, name],
+        }
+        .affects_geometry());
+        assert!(!AppState::is_batch_allowed(&Command::CreateShot {
+            section_id: 1,
+            shot: ShotData::default(),
+            after_shot_id: None,
+            before_shot_id: None,
+        }));
+        assert!(!AppState::is_batch_allowed(&Command::DeleteShot {
+            section_id: 1,
+            shot_id: 0,
         }));
     }
 }
