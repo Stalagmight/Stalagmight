@@ -1915,6 +1915,11 @@
       "insertBelow": "Insert {{rows}} after",
       "deleteRows": "Delete {{rows}}"
     },
+    "sort": {
+      "ascending": "Sort by {{column}}, ascending",
+      "descending": "Sort by {{column}}, descending",
+      "clear": "Clear sort by {{column}}"
+    },
     "rowNoun_one": "row",
     "rowNoun_other": "rows",
     "columnNoun_one": "column",

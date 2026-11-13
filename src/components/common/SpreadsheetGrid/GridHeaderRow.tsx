@@ -10,6 +10,9 @@ import type { MouseEvent as ReactMouseEvent } from 'react';
 import type { GridColumn } from './types';
 import { DEFAULT_COL_WIDTH } from './types';
 import type { Rect } from './gridGeometry';
+import type { GridLabels } from './gridLabels';
+import { GridSortButton, type SortDir } from './GridSortButton';
+import { ChevronDownIcon, ChevronUpIcon } from '../icons';
 
 export interface GridHeaderRowProps<Row> {
   columns: GridColumn<Row>[];
@@ -32,6 +35,11 @@ export interface GridHeaderRowProps<Row> {
   onHeaderContextMenu?: (colKey: string, pos: { x: number; y: number }) => void;
   onStartResize: (e: ReactMouseEvent, key: string, startWidth: number) => void;
   onAutoFitColumn: (key: string) => void;
+  /** Host-owned sort, drawn as the indicator + `aria-sort`. */
+  sort?: { colKey: string; dir: SortDir } | null | undefined;
+  /** Present when the host sorts: `sortable` columns get the sort button. */
+  onSortChange?: ((colKey: string, dir: SortDir | null) => void) | undefined;
+  labels: Pick<GridLabels, 'sortAscending' | 'sortDescending' | 'sortClear'>;
 }
 
 export function GridHeaderRow<Row>({
@@ -50,6 +58,9 @@ export function GridHeaderRow<Row>({
   onHeaderContextMenu,
   onStartResize,
   onAutoFitColumn,
+  sort,
+  onSortChange,
+  labels,
 }: GridHeaderRowProps<Row>) {
   return (
     <div
@@ -66,14 +77,19 @@ export function GridHeaderRow<Row>({
       {columns.map((c, i) => {
         const fullColSel = rect.r0 === 0 && rect.r1 === rowCount - 1;
         const colSelected = fullColSel && i >= rect.c0 && i <= rect.c1;
+        const dir = sort && sort.colKey === c.key ? sort.dir : null;
         return (
           <div
             key={c.key}
             role="columnheader"
             aria-colindex={i + 1}
+            aria-sort={dir === 'asc' ? 'ascending' : dir === 'desc' ? 'descending' : undefined}
+            title={c.headerTitle}
             className={`sg-header relative flex items-center border-b border-r border-white/10 px-2 text-xs font-medium text-text-secondary ${
               i >= rect.c0 && i <= rect.c1 ? 'sg-header-selected text-text-primary' : ''
-            } ${i === activeColIdx ? 'sg-header-active' : ''}`}
+            } ${i === activeColIdx ? 'sg-header-active' : ''}${dir ? ' sg-header-sorted' : ''}${
+              c.headerClassName ? ` ${c.headerClassName}` : ''
+            }`}
             style={{
               width: widths[i],
               minWidth: widths[i],
@@ -91,6 +107,22 @@ export function GridHeaderRow<Row>({
             <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap">
               {c.header}
             </span>
+            {/* After the label: autofit measures the header's FIRST span. */}
+            {c.sortable && onSortChange ? (
+              <GridSortButton
+                colKey={c.key}
+                header={c.header}
+                dir={dir}
+                testIdPrefix={testIdPrefix}
+                labels={labels}
+                onSortChange={onSortChange}
+              />
+            ) : dir ? (
+              // Sorted by the host without a toggle here: indicator only.
+              <span className="sg-sort-indicator" aria-hidden="true">
+                {dir === 'asc' ? <ChevronUpIcon size={14} /> : <ChevronDownIcon size={14} />}
+              </span>
+            ) : null}
             {/* Drag this edge to resize the column. The handle normally
                 straddles the boundary (right: -2px); on the last column that
                 boundary is the content's right edge, so keep it inside the

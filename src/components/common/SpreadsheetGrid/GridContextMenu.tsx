@@ -6,8 +6,9 @@
  * callback - that absence IS the read-only gate, so a host that withholds
  * `onInsertRows` gets no Insert entry rather than a dead one.
  */
-import type { MutableRefObject } from 'react';
+import { Fragment, type MutableRefObject } from 'react';
 import type { GridLabels } from './gridLabels';
+import type { GridExtraMenuItem } from './types';
 
 export interface GridContextMenuProps {
   /** Viewport position of the click that opened it. */
@@ -29,7 +30,7 @@ export interface GridContextMenuProps {
   onInsertRows?: (beforeIndex: number, count: number) => void;
   onDeleteRows?: (fromRow: number, toRow: number) => boolean | void;
   /** Host entries appended after the built-in ones. */
-  extraItems: { label: string; onClick: () => void }[];
+  extraItems: GridExtraMenuItem[];
   /** Close the menu; every entry calls this after acting. */
   onClose: () => void;
   menuRef: MutableRefObject<HTMLDivElement | null>;
@@ -123,14 +124,19 @@ export function GridContextMenu({
       </button>
       {extraItems.length > 0 && <div className="sg-context-sep" />}
       {extraItems.map((item, index) => (
-        <button
-          key={item.label}
-          type="button"
-          data-testid={`${testIdPrefix}-context-extra-${index}`}
-          onClick={act(item.onClick)}
-        >
-          {item.label}
-        </button>
+        // Index-keyed: two host entries may share a label.
+        <Fragment key={`${index}:${item.label}`}>
+          {item.separatorBefore && index > 0 && <div className="sg-context-sep" />}
+          <button
+            type="button"
+            data-testid={item.testId ?? `${testIdPrefix}-context-extra-${index}`}
+            disabled={item.disabled}
+            aria-disabled={item.disabled || undefined}
+            onClick={item.disabled ? undefined : act(item.onClick)}
+          >
+            {item.label}
+          </button>
+        </Fragment>
       ))}
     </div>
   );

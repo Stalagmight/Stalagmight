@@ -123,6 +123,10 @@ export interface GridScrollRequest {
   /** 'auto' = minimum scroll (default); 'center' = centre the row. */
   align?: 'auto' | 'center';
   nonce: number;
+  /** Move DOM focus to the grid: `true` always, `false` never. Default: only
+   *  when focus is already inside the grid or on <body>, so a host input the
+   *  user is typing in (a find box) keeps it. */
+  focus?: boolean;
 }
 
 /** A host entry appended to the grid's right-click menu. */
