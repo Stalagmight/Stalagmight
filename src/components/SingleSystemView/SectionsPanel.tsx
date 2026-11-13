@@ -779,24 +779,44 @@ const SectionRow = memo(function SectionRow({
 
   const longPressHandlers = useLongPress(handleLongPress);
 
-  // The dot is an uncontrolled color input. React's onChange is the DOM `input`
-  // event, which fires on every step while the system picker is open; only the
-  // native `change` (the pick is confirmed) commits, so one pick is one undo
-  // step. The effect also resyncs the dot when the color changes elsewhere
+  // The dot is an uncontrolled color input, committed once per pick so one pick
+  // is one undo step. React's onChange is the DOM `input` event, so it is not
+  // used. The native `change` is not enough on its own either: WebKit (the Linux
+  // and macOS webviews) fires `change` for every color chosen while its picker is
+  // open, such as each swatch clicked in the GTK dialog, and the GTK Cancel button
+  // fires one more to put the old color back. The picker holds the window's
+  // focus while it is open, so a `change` that arrives without focus is held and
+  // only the color the picker closed on is sent when focus comes back. Chromium
+  // (Windows) fires a single `change` after its picker has closed, which commits
+  // at once. The effect also resyncs the dot when the color changes elsewhere
   // (undo, Edit Section).
   const colorRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     const input = colorRef.current;
     if (!input) return;
     input.value = section.color;
+    let pending = false;
     const commit = () => {
+      if (!pending) return;
+      pending = false;
       if (input.value.toLowerCase() === section.color.toLowerCase()) return;
       void onColorChange(section.id, input.value).then((applied) => {
         if (!applied) input.value = section.color;
       });
     };
-    input.addEventListener('change', commit);
-    return () => input.removeEventListener('change', commit);
+    const onChange = () => {
+      pending = true;
+      if (document.hasFocus()) commit();
+    };
+    input.addEventListener('change', onChange);
+    window.addEventListener('focus', commit);
+    return () => {
+      input.removeEventListener('change', onChange);
+      window.removeEventListener('focus', commit);
+      // A pick still held when the row unmounts (scrolled out of the list) is
+      // sent rather than dropped.
+      commit();
+    };
   }, [section.id, section.color, onColorChange]);
 
   // One ref serves three roles: the panel's roving-tabindex/optionRefs registry,

@@ -357,6 +357,64 @@ test.describe('Panel Interactions', () => {
     ).toBe(before);
   });
 
+  test('section color dot commits once, when a WebKit picker closes (#654)', async ({ page }) => {
+    await createProjectWithSections(page);
+    const sectionRow = page.locator('[data-testid^="section-row-"]').filter({ hasText: 'Main Passage' });
+    const sectionId = Number((await sectionRow.getAttribute('data-testid'))!.replace('section-row-', ''));
+    const dot = page.getByTestId(`section-color-${sectionId}`);
+    const readColor = () =>
+      page.evaluate((id) => {
+        const state = (window as any).__E2E_TEST__.projectStore.getState();
+        return state.project.sections.find((s: any) => s.id === id).color as string;
+      }, sectionId);
+    const before = await readColor();
+
+    let updateCalls = 0;
+    page.on('console', (msg) => {
+      if (msg.text().startsWith('[Mock IPC] update_section called')) updateCalls += 1;
+    });
+
+    // WebKit (the Linux and macOS webviews) fires `input` + `change` for every
+    // color chosen while its picker is open, and the picker holds the window's
+    // focus meanwhile. Measured in the real app on Linux: each swatch clicked in
+    // the GTK dialog, and its Cancel button (which puts the old color back).
+    const choose = (value: string) =>
+      dot.evaluate((el, v) => {
+        (el as HTMLInputElement).value = v;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      }, value);
+    const pickerOpen = () =>
+      page.evaluate(() => {
+        Object.defineProperty(document, 'hasFocus', { value: () => false, configurable: true });
+      });
+    const pickerClosed = () =>
+      page.evaluate(() => {
+        delete (document as any).hasFocus;
+        window.dispatchEvent(new Event('focus'));
+      });
+
+    // Three swatches, then Select: one command, with the last color.
+    await pickerOpen();
+    await choose('#00ff00');
+    await choose('#0000ff');
+    await choose('#ff0000');
+    expect(await readColor()).toBe(before);
+    await pickerClosed();
+    await expect.poll(readColor).toBe('#ff0000');
+    expect(updateCalls).toBe(1);
+
+    // A swatch, then Cancel (GTK restores the old color): no command at all.
+    // The direct pick after it is the barrier that proves nothing was queued.
+    await pickerOpen();
+    await choose('#00ff00');
+    await choose('#ff0000');
+    await pickerClosed();
+    await choose('#336699');
+    await expect.poll(readColor).toBe('#336699');
+    expect(updateCalls).toBe(2);
+  });
+
   test('section picker in the data-table sub-header switches sections', async ({ page }) => {
     await createProjectWithSections(page);
     await page.keyboard.press('Control+3');
