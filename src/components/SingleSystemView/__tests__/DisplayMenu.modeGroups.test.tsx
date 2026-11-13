@@ -29,7 +29,7 @@ async function openIn(appMode: AppMode, geometryMode: 'measured' | 'closureAdjus
 }
 
 beforeEach(() => {
-  useUIStore.setState({ syntacticLevel: 'none', showGrid: false, showDepthGradient: false });
+  useUIStore.setState({ syntacticLevel: 'off', showGrid: false, showDepthGradient: false });
   useProjectStore.setState({ project: null });
 });
 

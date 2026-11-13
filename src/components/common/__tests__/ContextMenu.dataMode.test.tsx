@@ -9,14 +9,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { useDataWorkspaceStore } from '../../DataWorkspace/store';
 
-type Resolve = (candidate: unknown) => void;
-let resolveCandidate: Resolve = () => {};
-const queryCombineCandidate = vi.fn(
-  () =>
-    new Promise((resolve) => {
-      resolveCandidate = resolve;
-    })
-);
+// Never answers: these tests only ask whether the question was asked at all.
+const queryCombineCandidate = vi.fn(() => new Promise(() => {}));
 vi.mock('../../../utils/combineSections', () => ({
   queryCombineCandidates: () => queryCombineCandidate(),
   queryCombineCandidateForSections: () => queryCombineCandidate(),
