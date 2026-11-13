@@ -1,5 +1,5 @@
 import { test, expect, type Page } from './fixtures/coverage';
-import { setupMockedPage, createProject, openAppMenu } from './helpers/app';
+import { setupMockedPage, createProject, openAppMenu, enterExportWorkspace } from './helpers/app';
 
 /**
  * Import from MNemo over USB (#725). The mock answers one connected MNemo and a
@@ -67,7 +67,8 @@ test.describe('Import from MNemo', () => {
 
   test('in a read-only mode, the saved file meets the same import guard as any .dmp', async ({ page }) => {
     await createProject(page, 'MNemo Read-only Test');
-    await page.getByTestId('mode-export').click();
+    // Export left the mode switcher: it is entered from the project menu.
+    await enterExportWorkspace(page);
     await openMnemoDialog(page);
     await readMnemo(page);
 
