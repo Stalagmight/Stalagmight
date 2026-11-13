@@ -23,7 +23,7 @@ import { EMPTY_FILTERS, EMPTY_SEARCH } from '../../store';
 export interface ShotSeed {
   length: number;
   azimuth?: number;
-  comment?: string;
+  comment?: string | undefined;
   kind?: ShotKind;
   date?: string;
 }

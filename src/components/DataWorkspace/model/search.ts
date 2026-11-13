@@ -114,16 +114,30 @@ function scan(text: string, compiled: CompiledSearch, visit: (m: RegExpExecArray
 /**
  * Every match of `compiled` in `text`, as `[start, end)` pairs pushed onto
  * `out` (flat: start0, end0, start1, end1, ...). Returns the number added;
- * `limit` stops early.
+ * `limit` stops early. The hot path of a search (once per cell), so the loop is
+ * written out rather than going through `scan`'s callback.
  */
 export function findInText(text: string, compiled: CompiledSearch, out: number[], limit = Infinity): number {
+  const re = compiled.regex;
+  if (!re || text === '' || limit <= 0) return 0;
+  re.lastIndex = 0;
   let added = 0;
-  if (limit <= 0) return 0;
-  scan(text, compiled, (m) => {
-    out.push(m.index, m.index + m[0].length);
-    added++;
-    return added < limit;
-  });
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const start = m.index;
+    const end = start + m[0].length;
+    if (end === start) {
+      if (start >= text.length) break;
+      re.lastIndex = stepPast(text, start, re);
+      continue;
+    }
+    if (compiled.wholeWord && !isWholeWord(text, start, end)) {
+      re.lastIndex = stepPast(text, start, re);
+      continue;
+    }
+    out.push(start, end);
+    if (++added >= limit) break;
+  }
   return added;
 }
 
