@@ -66,10 +66,15 @@ export function useFindNavigation(
     useDataWorkspaceStore.getState().requestFocus({ rowKey: m.rowKey, colKey: m.colKey, align: 'center' });
     if (!focused) return;
     // The grid may take DOM focus when it activates the cell; typing in the
-    // find box must not be interrupted, so hand focus back.
+    // find box must not be interrupted, so hand focus back - unless the user
+    // has meanwhile moved within the toolbar (Ctrl+H to the replace box).
+    const toolbar = focused.closest('[role="toolbar"]');
     requestAnimationFrame(() =>
       requestAnimationFrame(() => {
-        if (document.activeElement !== focused && focused.isConnected) focused.focus({ preventScroll: true });
+        const now = document.activeElement;
+        if (now === focused || !focused.isConnected) return;
+        if (toolbar && now && toolbar.contains(now)) return;
+        focused.focus({ preventScroll: true });
       }),
     );
   }, []);

@@ -33,16 +33,16 @@ export function findShortcutOf(e: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaK
   return null;
 }
 
-/** Focus an input once React has rendered it (the replace row may be mounting). */
-function focusSoon(ref: RefObject<HTMLInputElement>, select: boolean): void {
-  const go = () => {
-    const el = ref.current;
-    if (!el) return false;
+/** Focus an input once React has rendered it (the replace row may still be
+ *  mounting): now, or on one of the next few frames. */
+function focusSoon(ref: RefObject<HTMLInputElement>, select: boolean, framesLeft = 10): void {
+  const el = ref.current;
+  if (el) {
     el.focus();
     if (select) el.select();
-    return true;
-  };
-  if (!go()) requestAnimationFrame(() => void go());
+    return;
+  }
+  if (framesLeft > 0) requestAnimationFrame(() => focusSoon(ref, select, framesLeft - 1));
 }
 
 export function useFindShortcuts(targets: FindShortcutTargets): void {
