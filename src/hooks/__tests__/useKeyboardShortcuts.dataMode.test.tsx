@@ -126,6 +126,22 @@ describe('map-selection keys in Data', () => {
   });
 });
 
+describe('the Survey docks in Data', () => {
+  it('Ctrl+2 / Ctrl+3 do not toggle the docks Data does not render, even on the open pane', () => {
+    useDataWorkspaceStore.setState({ mapPaneOpen: true });
+    useUIStore.setState({ detailPanelOpen: true, dataTableOpen: true });
+    renderHook(() => useKeyboardShortcuts());
+    press({ key: '2', ctrlKey: true });
+    press({ key: '3', ctrlKey: true });
+    expect(useUIStore.getState().detailPanelOpen).toBe(true);
+    expect(useUIStore.getState().dataTableOpen).toBe(true);
+    // Positive control: the same key toggles the Details dock in Survey.
+    useUIStore.setState({ appMode: 'survey' });
+    press({ key: '2', ctrlKey: true });
+    expect(useUIStore.getState().detailPanelOpen).toBe(false);
+  });
+});
+
 describe('outside Data nothing changes', () => {
   it('Survey keeps Delete and the tool keys regardless of the Data pane flag', () => {
     useUIStore.setState({ appMode: 'survey' });

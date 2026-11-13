@@ -591,6 +591,15 @@ export function useKeyboardShortcuts() {
         event.preventDefault();
         return;
       }
+      // Data renders neither the Details nor the bottom dock: toggling them there
+      // would only rewrite Survey's saved panel layout behind the user's back.
+      if (
+        (action === 'toggle_detail_panel' || action === 'toggle_data_table') &&
+        useUIStore.getState().appMode === 'data'
+      ) {
+        event.preventDefault();
+        return;
+      }
 
       if (dataTableFullScreen && !FULLSCREEN_TABLE_ALLOWED_SHORTCUTS.has(action)) {
         event.preventDefault();
