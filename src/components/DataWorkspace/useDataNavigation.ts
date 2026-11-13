@@ -136,7 +136,15 @@ export function useDataNavigation(
 
   const showOnMap = useCallback(
     (row: DataRow) => {
-      useDataWorkspaceStore.getState().setMapPaneOpen(true);
+      const st = useDataWorkspaceStore.getState();
+      // The row becomes the active row first: opening the pane follows the
+      // active row, and following a different (stale) one would override the
+      // selection made here.
+      if (row.kind !== 'section') {
+        st.setActiveRowKey(row.key);
+        st.requestFocus({ rowKey: row.key });
+      }
+      st.setMapPaneOpen(true);
       select(row);
       centerOn(row);
     },

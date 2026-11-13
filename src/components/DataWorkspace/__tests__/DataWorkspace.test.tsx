@@ -670,6 +670,23 @@ describe('Map follow and map selection', () => {
     expect(useUIStore.getState().requestPanToShot).toEqual({ sectionId: 1, shotId: 102 });
   });
 
+  it('"Show on map" on another row keeps that row selected once the pane settles', () => {
+    vi.useFakeTimers();
+    useDataWorkspaceStore.setState({ mapPaneOpen: false, mapFollow: true });
+    render(<DataWorkspace />);
+    fireEvent.mouseDown(screen.getByTestId('data-cell-sh-1-2-length'));
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    fireEvent.click(screen.getByTestId('data-row-map-st-1-3'));
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(useDataWorkspaceStore.getState().mapPaneOpen).toBe(true);
+    expect(useDataWorkspaceStore.getState().activeRowKey).toBe('st:1:3');
+    expect(useUIStore.getState().selection).toEqual({ type: 'station', stationRef: { section_id: 1, station_index: 3 } });
+  });
+
   it('the status bar names collapsed sections instead of reporting "Showing 0"', () => {
     render(<DataWorkspace />);
     expect(screen.queryByTestId('data-status-collapsed')).toBeNull();
