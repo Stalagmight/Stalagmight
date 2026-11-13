@@ -3,7 +3,7 @@
  * id) with "All sections" and a per-row "Only". `filters.sectionIds` is null
  * while every section is shown.
  */
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useDataWorkspaceStore } from '../store';
 import type { DataModelCtx } from '../types';
@@ -32,6 +32,19 @@ export function toggleSection(selected: readonly number[] | null, id: number, al
   else current.add(id);
   if (allIds.every((x) => current.has(x))) return null;
   return allIds.filter((x) => current.has(x));
+}
+
+/** Focus an element once the menu around it is placed (it renders hidden for
+ *  one frame while `useAnchoredFixedMenu` measures it, and a hidden element
+ *  can't take focus). Mounted inside the menu, so it runs once per open. */
+function FocusOnOpen({ target }: { target: RefObject<HTMLElement> }) {
+  useEffect(() => {
+    let id = requestAnimationFrame(() => {
+      id = requestAnimationFrame(() => target.current?.focus());
+    });
+    return () => cancelAnimationFrame(id);
+  }, [target]);
+  return null;
 }
 
 export function SectionsPicker({ ctx }: { ctx: DataModelCtx }) {
@@ -69,10 +82,10 @@ export function SectionsPicker({ ctx }: { ctx: DataModelCtx }) {
       maxHeightCap={480}
       remeasureKey={visible.length}
     >
+      <FocusOnOpen target={searchRef} />
       <div className="px-1 pb-1 pt-0.5">
         <input
           ref={searchRef}
-          autoFocus
           type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}

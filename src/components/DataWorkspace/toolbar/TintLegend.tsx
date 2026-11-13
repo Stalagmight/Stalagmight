@@ -32,12 +32,14 @@ export function depthRange(ctx: DataModelCtx): { min: number; max: number } | nu
     if (z < min) min = z;
     if (z > max) max = z;
   }
+  const include = (d: number) => {
+    if (!Number.isFinite(d)) return;
+    if (d < min) min = d;
+    if (d > max) max = d;
+  };
   for (let i = 0; i < data.shotCount; i++) {
-    for (const d of [data.shotDepthIn[i]!, data.shotDepthOut[i]!]) {
-      if (!Number.isFinite(d)) continue;
-      if (d < min) min = d;
-      if (d > max) max = d;
-    }
+    include(data.shotDepthIn[i]!);
+    include(data.shotDepthOut[i]!);
   }
   return Number.isFinite(min) && Number.isFinite(max) ? { min, max } : null;
 }

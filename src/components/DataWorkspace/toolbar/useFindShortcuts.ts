@@ -3,7 +3,7 @@
  * active mode and nothing modal owns the screen:
  *   Ctrl/Cmd+F  focus the find box (opens find; selects its text)
  *   Ctrl/Cmd+H  open replace (focuses the replacement when there is a query)
- *   F3 / Shift+F3  next / previous match
+ *   F3 / Shift+F3  next / previous match (reopens a closed find on its query)
  * Listens in the capture phase and stops the event, so the browser's own find
  * and any configurable shortcut bound to the same keys don't also fire. None
  * of the default bindings use them (defaultConfig `shortcuts`; F-keys can't be
@@ -70,10 +70,12 @@ export function useFindShortcuts(targets: FindShortcutTargets): void {
           break;
         }
         case 'next':
-          next();
-          break;
         case 'prev':
-          prev();
+          // A closed find with a query reopens on it (the first match from the
+          // active row is selected); otherwise step through the matches.
+          if (!store.search.open && store.search.query !== '') store.setSearch({ open: true });
+          else if (which === 'next') next();
+          else prev();
           break;
       }
     };

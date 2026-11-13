@@ -69,6 +69,7 @@ function Toolbar({ model, view }: { model: DataModel; view: DataView }) {
   // Escape closed find: give the keyboard back to the grid, on the active row.
   const onFindClosed = () => {
     findRef.current?.blur();
+    replaceRef.current?.blur();
     const { activeRowKey, requestFocus } = useDataWorkspaceStore.getState();
     if (activeRowKey) requestFocus({ rowKey: activeRowKey, align: 'auto' });
   };
@@ -102,6 +103,7 @@ function Toolbar({ model, view }: { model: DataModel; view: DataView }) {
                 onSkip={nav.next}
                 previewAll={replace.previewAll}
                 onReplaceAll={() => void replace.replaceAll()}
+                onClosed={onFindClosed}
               />
             )}
           </div>

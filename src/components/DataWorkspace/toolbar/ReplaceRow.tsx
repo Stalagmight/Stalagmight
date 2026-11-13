@@ -23,6 +23,8 @@ interface ReplaceRowProps {
   onSkip: () => void;
   previewAll: () => ReplaceAllPreview | null;
   onReplaceAll: () => void;
+  /** Find was closed with Escape from here: hand focus back to the grid. */
+  onClosed: () => void;
 }
 
 const BOX_BUTTON =
@@ -37,6 +39,7 @@ export function ReplaceRow({
   onSkip,
   previewAll,
   onReplaceAll,
+  onClosed,
 }: ReplaceRowProps) {
   const { t } = useTranslation();
   const replacement = useDataWorkspaceStore((s) => s.search.replacement);
@@ -82,7 +85,10 @@ export function ReplaceRow({
               e.preventDefault();
               e.stopPropagation();
               if (confirm) setConfirm(null);
-              else closeSearch();
+              else {
+                closeSearch();
+                onClosed();
+              }
             }
           }}
           placeholder={editingBlocked ? t('dataToolbar.replace.blocked') : t('dataToolbar.replace.placeholder')}
