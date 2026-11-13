@@ -11,8 +11,16 @@
  *   typing into the cell); `undefined` means invalid - skipped and reported.
  * - A cell whose text would not change is left alone.
  */
-import type { DataColumnDef, DataColumnKey, DataCellEdit, DataModelCtx, DataRow, SearchMatch } from '../types';
-import { compileSearch, execAll, type SearchPattern } from './search';
+import type {
+  DataCellEdit,
+  DataColumnDef,
+  DataColumnKey,
+  DataEntityRow,
+  DataModelCtx,
+  DataRow,
+  SearchMatch,
+} from '../types';
+import { compileSearch, execAll, type CompiledSearch, type SearchPattern } from './search';
 
 export interface ReplaceSpec extends SearchPattern {
   replacement: string;
@@ -40,6 +48,10 @@ export interface ReplacePlan {
   invalid: ReplaceInvalidCell[];
   /** Cells whose text the replacement leaves unchanged. */
   unchangedCells: number;
+  /** Number cells (among `edits`) whose shown text is rounded: the replacement
+   *  is written as shown, so their hidden decimals go (13.46 shown "13.5",
+   *  "1" -> "2" writes 23.5). Reported, not refused. */
+  roundedCells: number;
 }
 
 export interface ReplaceModel {
@@ -114,8 +126,8 @@ export function replaceInText(
   text: string,
   ranges: readonly { start: number; end: number }[],
   spec: ReplaceSpec,
+  compiled: CompiledSearch = compileSearch(spec),
 ): { text: string; replaced: number } {
-  const compiled = compileSearch(spec);
   if (!compiled.regex) return { text, replaced: 0 };
   const found = execAll(text, compiled);
   const sorted = [...ranges].sort((a, b) => a.start - b.start);
@@ -132,6 +144,14 @@ export function replaceInText(
   }
   out += text.slice(cursor);
   return { text: out, replaced };
+}
+
+/** Does a number cell show fewer decimals than it holds? */
+function isRounded(col: DataColumnDef, row: DataEntityRow, ctx: DataModelCtx, shown: string): boolean {
+  const held = col.value(row, ctx);
+  const seen = col.parse ? col.parse(shown, row, ctx) : undefined;
+  if (typeof held !== 'number' || typeof seen !== 'number') return false;
+  return Math.abs(held - seen) > 1e-6 * Math.max(1, Math.abs(held));
 }
 
 /**
@@ -153,7 +173,9 @@ export function planReplace(
     lockedCells: 0,
     invalid: [],
     unchangedCells: 0,
+    roundedCells: 0,
   };
+  const compiled = compileSearch(spec);
   const cells = new Map<string, SearchMatch[]>();
   for (const m of matches) {
     const key = `${m.rowKey}\u0000${m.colKey}`;
@@ -173,7 +195,7 @@ export function planReplace(
       continue;
     }
     const oldText = col.text(row, ctx);
-    const { text: newText, replaced } = replaceInText(oldText, list, spec);
+    const { text: newText, replaced } = replaceInText(oldText, list, spec, compiled);
     if (replaced === 0 || newText === oldText) {
       plan.unchangedCells++;
       continue;
@@ -183,6 +205,7 @@ export function planReplace(
       plan.invalid.push({ rowKey: row.key, colKey: col.key, text: newText, matches: replaced });
       continue;
     }
+    if (col.valueType === 'number' && isRounded(col, row, ctx, oldText)) plan.roundedCells++;
     plan.edits.push({ row, colKey: col.key, value });
     plan.editMatches.push(replaced);
     plan.editTexts.push({ before: oldText, after: newText });

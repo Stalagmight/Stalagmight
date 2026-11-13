@@ -19,6 +19,7 @@ import { SearchIcon } from './toolbarIcons';
 import { FIELD_BOX_CLASS, FIELD_INPUT_CLASS, iconButtonClass } from './ToolbarMenu';
 import { FindOptionsMenu } from './FindOptionsMenu';
 import type { FindNavigation } from './useFindNavigation';
+import { replaceShortcutKey } from './useFindShortcuts';
 
 export const QUERY_DEBOUNCE_MS = 150;
 
@@ -55,11 +56,17 @@ export function FindBar({ view, nav, inputRef, editingBlocked, onClosed }: FindB
     if (timer.current !== null) clearTimeout(timer.current);
   }, []);
 
+  const cancelPending = () => {
+    if (timer.current !== null) clearTimeout(timer.current);
+    timer.current = null;
+  };
   const commit = useCallback(
     (query: string) => {
       if (timer.current !== null) clearTimeout(timer.current);
       timer.current = null;
-      setSearch({ query, open: true });
+      const s = useDataWorkspaceStore.getState().search;
+      // Re-committing the same query would rebuild the whole view for nothing.
+      if (s.query !== query || !s.open) setSearch({ query, open: true });
     },
     [setSearch],
   );
@@ -77,6 +84,8 @@ export function FindBar({ view, nav, inputRef, editingBlocked, onClosed }: FindB
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    // Enter that confirms an IME composition is not a command.
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
     if (e.key === 'Enter') {
       e.preventDefault();
       if (timer.current !== null) commit(draft);
@@ -91,6 +100,8 @@ export function FindBar({ view, nav, inputRef, editingBlocked, onClosed }: FindB
         setDraft('');
         commit('');
       } else {
+        // A pending commit (type, delete, Escape within the debounce) must not reopen find.
+        cancelPending();
         closeSearch();
         onClosed();
       }
@@ -116,7 +127,10 @@ export function FindBar({ view, nav, inputRef, editingBlocked, onClosed }: FindB
     count = { text: t('dataToolbar.find.regexError'), tone: 'error', title: compiled.error };
   } else if (search.open && search.query !== '') {
     if (total === 0) count = { text: t('dataToolbar.find.noResults'), tone: 'error' };
-    else if (currentMatch < 0) count = { text: t('dataToolbar.find.noCurrent', { total: formatNumber(total) }), tone: 'normal' };
+    else if (currentMatch < 0) {
+      const n = `${formatNumber(total)}${view.matchLimitReached ? '+' : ''}`;
+      count = { text: t('dataToolbar.find.noCurrent', { count: total, n }), tone: 'normal' };
+    }
     else {
       const key = view.matchLimitReached ? 'dataToolbar.find.countLimit' : 'dataToolbar.find.count';
       count = { text: t(key, { current: formatNumber(currentMatch + 1), total: formatNumber(total) }), tone: 'normal' };
@@ -228,8 +242,8 @@ export function FindBar({ view, nav, inputRef, editingBlocked, onClosed }: FindB
       <button
         type="button"
         className={iconButtonClass(search.replaceOpen)}
-        title={search.replaceOpen ? t('dataToolbar.find.closeReplace') : t('dataToolbar.find.openReplace')}
-        aria-label={search.replaceOpen ? t('dataToolbar.find.closeReplace') : t('dataToolbar.find.openReplace')}
+        title={search.replaceOpen ? t('dataToolbar.find.closeReplace') : t(replaceShortcutKey())}
+        aria-label={search.replaceOpen ? t('dataToolbar.find.closeReplace') : t(replaceShortcutKey())}
         aria-expanded={search.replaceOpen}
         onClick={() => setSearch({ replaceOpen: !search.replaceOpen, open: true })}
         data-testid="data-find-replace-toggle"

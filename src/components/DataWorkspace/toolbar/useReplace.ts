@@ -24,6 +24,8 @@ export interface ReplaceAllPreview {
   cells: number;
   lockedMatches: number;
   invalidCells: number;
+  /** Number cells shown rounded, written as shown (see ReplacePlan.roundedCells). */
+  roundedCells: number;
   /** The search hit its match cap: only the first matches are included. */
   limited: boolean;
 }
@@ -132,8 +134,9 @@ export function useReplace(view: DataView, model: DataModel, nav: FindNavigation
     }
     // Resume right after the replaced text once the matches are recomputed, so
     // a replacement that still contains the query ("a" -> "aa") is not hit again.
+    // An empty replacement resumes AT the old start (the next match may now begin there).
     const replacedLen = m.end - m.start + (texts.after.length - texts.before.length);
-    nav.setAnchor({ rowKey: m.rowKey, colKey: m.colKey, start: m.start + Math.max(1, replacedLen) });
+    nav.setAnchor({ rowKey: m.rowKey, colKey: m.colKey, start: m.start + Math.max(0, replacedLen) });
     const done = await run(plan);
     if (!done) {
       nav.setAnchor(null);
@@ -164,6 +167,7 @@ export function useReplace(view: DataView, model: DataModel, nav: FindNavigation
       cells: plan.edits.length,
       lockedMatches: plan.lockedMatches,
       invalidCells: plan.invalid.length,
+      roundedCells: plan.roundedCells,
       limited: v.matchLimitReached === true,
     };
   }, [blocked, t, toast]);

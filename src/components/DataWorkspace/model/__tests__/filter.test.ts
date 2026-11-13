@@ -259,6 +259,22 @@ describe('compileCondition - operators', () => {
     ]);
   });
 
+  it('compares at the precision each cell shows, rounding like the cell text', () => {
+    // 3.25 shows as "3.3": it is "= 3.3" and "> 3.2", not "= 3.2"
+    const HALF: SectionSeed[] = [{ id: 7, name: 'L', shots: [{ length: 3.25 }, { length: 12.75 }] }];
+    expect(run(cond('length', 'eq', '3.2'), { precision: 1 }, HALF)).toEqual([]);
+    expect(run(cond('length', 'eq', '3.3'), { precision: 1 }, HALF)).toEqual(['sh:7:700001']);
+    expect(run(cond('length', 'gt', '3.2'), { precision: 1 }, HALF)).toEqual(['sh:7:700001', 'sh:7:700002']);
+    expect(run(cond('length', 'lt', '12.8'), { precision: 1 }, HALF)).toEqual(['sh:7:700001']);
+  });
+
+  it('a grouped number in a comma-decimal locale is an integer target', () => {
+    const BIG: SectionSeed[] = [{ id: 7, name: 'L', shots: [{ length: 1000.04 }, { length: 1000.4 }] }];
+    // de-DE: "1.000" is one thousand (not 1 at three decimals); the cells show "1000"
+    expect(run(cond('length', 'eq', '1.000'), { precision: 0, locale: 'de-DE' }, BIG)).toEqual(['sh:7:700001', 'sh:7:700002']);
+    expect(run(cond('length', 'eq', '1'), { precision: 0, locale: 'de-DE' }, BIG)).toEqual([]);
+  });
+
   it('numeric values parse with the locale', () => {
     expect(run(cond('length', 'gt', '10,1'), { locale: 'de-DE' }, LENGTHS)).toEqual(['sh:7:700002']);
     expect(run(cond('length', 'gt', '10,1'), { locale: 'en-US' }, LENGTHS)).toBeNull();

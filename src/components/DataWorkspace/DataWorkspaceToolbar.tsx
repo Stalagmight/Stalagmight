@@ -79,8 +79,9 @@ function Toolbar({ model, view }: { model: DataModel; view: DataView }) {
       <div
         ref={rootRef}
         className="shrink-0 border-b border-border bg-panel text-xs text-text-primary"
-        role="toolbar"
+        role="group"
         aria-label={t('dataToolbar.aria')}
+        data-data-toolbar
         data-compact={compact ? 'true' : undefined}
         data-testid="data-toolbar"
       >
@@ -97,7 +98,7 @@ function Toolbar({ model, view }: { model: DataModel; view: DataView }) {
               <ReplaceRow
                 inputRef={replaceRef}
                 editingBlocked={model.ctx.editingBlocked}
-                hasMatches={view.matches.length > 0}
+                matches={view.matches}
                 busy={replace.busy}
                 onReplaceOne={() => void replace.replaceOne()}
                 onSkip={nav.next}

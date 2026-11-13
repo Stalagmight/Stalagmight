@@ -22,15 +22,13 @@ export function patternKey(s: Pick<SearchState, 'query' | 'matchCase' | 'wholeWo
   return `${s.open ? 1 : 0}${s.matchCase ? 1 : 0}${s.wholeWord ? 1 : 0}${s.regex ? 1 : 0}:${s.query}`;
 }
 
-/** A stale replace anchor (the edit changed nothing on screen) is dropped after this. */
-const ANCHOR_TTL_MS = 2000;
-
 export interface FindNavigation {
   next: () => void;
   prev: () => void;
   /** Scroll the grid to a match without changing the current index. */
   reveal: (m: SearchMatch) => void;
-  /** After a replace: once the matches update, select the match at or after this spot. */
+  /** After a replace: on the next matches update (same pattern), select the
+   *  match at or after this spot. null cancels it. */
   setAnchor: (spot: MatchSpot | null) => void;
 }
 
@@ -63,24 +61,35 @@ export function useFindNavigation(
 
   const reveal = useCallback((m: SearchMatch) => {
     const focused = keepRef.current.map((r) => r.current).find((el) => el !== null && el === document.activeElement);
-    useDataWorkspaceStore.getState().requestFocus({ rowKey: m.rowKey, colKey: m.colKey, align: 'center' });
+    // While the find / replace box has the keyboard, the grid scrolls and
+    // activates the cell without taking DOM focus (typing must not turn into
+    // a cell edit).
+    useDataWorkspaceStore.getState().requestFocus({
+      rowKey: m.rowKey,
+      colKey: m.colKey,
+      align: 'center',
+      ...(focused ? { takeFocus: false } : {}),
+    });
     if (!focused) return;
-    // The grid may take DOM focus when it activates the cell; typing in the
-    // find box must not be interrupted, so hand focus back - unless the user
-    // has meanwhile moved within the toolbar (Ctrl+H to the replace box).
-    const toolbar = focused.closest('[role="toolbar"]');
+    // Safety net for a grid that takes focus anyway: hand it back - unless the
+    // user has meanwhile moved within the toolbar (Ctrl+H to the replace box).
+    const toolbar = focused.closest('[data-data-toolbar]');
     requestAnimationFrame(() =>
       requestAnimationFrame(() => {
         const now = document.activeElement;
         if (now === focused || !focused.isConnected) return;
-        if (toolbar && now && toolbar.contains(now)) return;
+        // Focus left on purpose: find closed (Escape blurs to the body, then
+        // the grid), or the user moved within the toolbar.
+        if (!useDataWorkspaceStore.getState().search.open) return;
+        if (now === null || now === document.body) return;
+        if (toolbar && toolbar.contains(now)) return;
         focused.focus({ preventScroll: true });
       }),
     );
   }, []);
 
   const lastRef = useRef<{ matches: readonly SearchMatch[]; pattern: string }>({ matches: [], pattern: '' });
-  const anchorRef = useRef<{ spot: MatchSpot; at: number } | null>(null);
+  const anchorRef = useRef<{ spot: MatchSpot; pattern: string } | null>(null);
 
   useEffect(() => {
     const st = useDataWorkspaceStore.getState();
@@ -88,8 +97,9 @@ export function useFindNavigation(
     if (last.matches === view.matches) return;
     const pattern = patternKey(st.search);
     const prevMatch = last.matches[st.currentMatch];
-    const anchor =
-      anchorRef.current && Date.now() - anchorRef.current.at < ANCHOR_TTL_MS ? anchorRef.current.spot : null;
+    // A replace anchor applies to the first recompute after it was set, and
+    // only for the same pattern (a new query starts from the active row).
+    const anchor = anchorRef.current && anchorRef.current.pattern === pattern ? anchorRef.current.spot : null;
     anchorRef.current = null;
     const patternChanged = pattern !== last.pattern;
     const idx = reconcileCurrent({
@@ -128,7 +138,7 @@ export function useFindNavigation(
   const next = useCallback(() => go(1), [go]);
   const prev = useCallback(() => go(-1), [go]);
   const setAnchor = useCallback((spot: MatchSpot | null) => {
-    anchorRef.current = spot ? { spot, at: Date.now() } : null;
+    anchorRef.current = spot ? { spot, pattern: patternKey(useDataWorkspaceStore.getState().search) } : null;
   }, []);
 
   return useMemo(() => ({ next, prev, reveal, setAnchor }), [next, prev, reveal, setAnchor]);

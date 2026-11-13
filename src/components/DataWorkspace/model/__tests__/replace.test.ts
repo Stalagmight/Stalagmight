@@ -150,6 +150,21 @@ describe('planReplace', () => {
     expect(plan.invalid).toEqual([{ rowKey: 'sh:1:100001', colKey: 'length', text: 'ten.0', matches: 1 }]);
   });
 
+  it('counts number cells whose shown text is rounded (written as shown)', () => {
+    const data = makeData([{ id: 1, name: 'M', shots: [{ length: 13.46 }, { length: 12 }] }]);
+    const rows = makeRows(data);
+    const ctx = makeCtx(data, { precision: 1 });
+    const columns = makeColumns();
+    const model = {
+      rowByKey: new Map<string, DataRow>(rows.map((r) => [r.key, r])),
+      columnByKey: new Map<DataColumnKey, (typeof columns)[number]>(columns.map((c) => [c.key, c])),
+    };
+    const matches = buildDataView(rows, columns, ctx, viewState({ search: { ...EMPTY_SEARCH, open: true, query: '1', columnScope: 'custom', columns: ['length'] } })).matches;
+    const plan = planReplace(matches, model, ctx, spec('1', '2'));
+    expect(plan.edits.map((e) => e.value)).toEqual([23.5, 22]);
+    expect(plan.roundedCells).toBe(1);
+  });
+
   it('leaves a cell alone when the text would not change', () => {
     const { ctx, model, matchesFor } = setup();
     const plan = planReplace(matchesFor('sump'), model, ctx, spec('sump', 'sump'));

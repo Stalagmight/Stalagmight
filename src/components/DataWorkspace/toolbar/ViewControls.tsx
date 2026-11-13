@@ -2,7 +2,7 @@
  * The small view controls of the toolbar: the row-type segmented control, the
  * View menu (section headers, collapse / expand all) and the map pane toggle.
  */
-import { useContext } from 'react';
+import { useContext, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useDataWorkspaceStore } from '../store';
 import type { DataModelCtx, RowTypeFilter } from '../types';
@@ -11,16 +11,26 @@ import { MenuDivider, ToolbarCompactContext, ToolbarMenu, toolbarButtonClass } f
 
 const ROW_TYPES: readonly RowTypeFilter[] = ['all', 'stations', 'shots'];
 
-/** All / Stations / Shots, styled like the data table's Shots / Stations switch. */
+/** All / Stations / Shots, styled like the data table's Shots / Stations
+ *  switch. A radio group: one tab stop, arrow keys move the choice. */
 export function RowTypeControl() {
   const { t } = useTranslation();
   const rowTypes = useDataWorkspaceStore((s) => s.filters.rowTypes);
   const setFilters = useDataWorkspaceStore((s) => s.setFilters);
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    const step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
+    if (step === 0) return;
+    e.preventDefault();
+    const next = ROW_TYPES[(ROW_TYPES.indexOf(rowTypes) + step + ROW_TYPES.length) % ROW_TYPES.length]!;
+    if (next !== rowTypes) setFilters({ rowTypes: next });
+    e.currentTarget.querySelector<HTMLButtonElement>(`[data-testid="data-rowtype-${next}"]`)?.focus();
+  };
   return (
     <div
       className="flex h-7 shrink-0 items-stretch overflow-hidden rounded border border-border text-xs"
       role="radiogroup"
       aria-label={t('dataToolbar.rowType.label')}
+      onKeyDown={onKeyDown}
       data-testid="data-rowtype"
     >
       {ROW_TYPES.map((type) => (
@@ -29,6 +39,7 @@ export function RowTypeControl() {
           type="button"
           role="radio"
           aria-checked={rowTypes === type}
+          tabIndex={rowTypes === type ? 0 : -1}
           className={`h-full whitespace-nowrap px-2 ${
             rowTypes === type ? 'bg-accent-20 text-text-primary' : 'text-text-secondary hover:bg-accent-10'
           }`}

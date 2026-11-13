@@ -87,26 +87,45 @@ export function conditionProblem(
   return null;
 }
 
-/** Decimal places the user typed ("10" -> 0, "10.50" -> 2), for `eq` on numbers. */
-function typedDecimals(raw: string, locale: string): number {
-  const { decimal } = getLocaleSeparators(locale);
-  const s = raw.trim();
-  const at = Math.max(s.lastIndexOf(decimal), decimal === '.' ? -1 : s.lastIndexOf('.'));
-  if (at < 0) return 0;
-  const tail = s.slice(at + 1);
-  return /^\d+$/.test(tail) ? Math.min(tail.length, 10) : 0;
+/** Fraction digits a number needs ("10" -> 0, 10.04 -> 2), capped at 10. */
+export function minimalDecimals(n: number): number {
+  let d = 0;
+  while (d < 10) {
+    const scaled = n * 10 ** d;
+    if (Math.abs(scaled - Math.round(scaled)) < 1e-6) break;
+    d++;
+  }
+  return d;
 }
+
+/** Fraction digits a cell shows: the digits after its last locale decimal separator. */
+export function shownDecimals(text: string, decimal: string): number {
+  const at = text.lastIndexOf(decimal);
+  if (at < 0) return 0;
+  let d = 0;
+  while (at + 1 + d < text.length) {
+    const c = text.charCodeAt(at + 1 + d);
+    if (c < 48 || c > 57) break;
+    d++;
+  }
+  return d;
+}
+
+/** Round half away from zero, as number formatting does. */
+const roundHalfAway = (x: number): number => Math.sign(x) * Math.round(Math.abs(x));
 
 const isEmptyValue = (v: number | string | null): boolean =>
   v === null || (typeof v === 'number' ? !Number.isFinite(v) : v.trim() === '');
 
 /**
  * Compile one condition into a row predicate, or null when it is invalid (then
- * it is ignored). Numbers compare at the displayed precision or the typed one,
- * whichever is finer, so a filter agrees with what the cells show (and with the
- * float32 storage, where 10.4 is 10.3999996): with 1 decimal shown, "= 10"
- * keeps 10.04 (shown as 10.0) but not 10.4, and "> 10" drops 10.04. Text
- * comparisons ignore case; `eq` on text also ignores surrounding spaces.
+ * it is ignored). Numbers compare at the precision the cell SHOWS, or the typed
+ * one when that is finer, both rounded the way the cell text is (half away
+ * from zero), so a filter agrees with what the user sees - per column, and with
+ * the float32 storage (10.4 is 10.3999996): with "10.0" shown, "= 10" keeps
+ * 10.04 but not 10.4, "> 10" drops 10.04, and 3.25 shown as "3.3" is "= 3.3",
+ * not "= 3.2". Text comparisons ignore case; `eq` on text also ignores
+ * surrounding spaces.
  */
 export function compileCondition(cond: FilterCondition, col: DataColumnDef, ctx: DataModelCtx): RowPred | null {
   if (conditionProblem(cond, col, ctx.locale) !== null) return null;
@@ -116,13 +135,16 @@ export function compileCondition(cond: FilterCondition, col: DataColumnDef, ctx:
 
   if (col.valueType === 'number' && op !== 'contains' && op !== 'notContains') {
     const target = parseLocaleNumber(cond.value, ctx.locale)!;
-    const decimals = Math.max(ctx.precision, typedDecimals(cond.value, ctx.locale));
-    const half = 0.5 * 10 ** -decimals + 1e-9;
+    const targetDecimals = minimalDecimals(target);
+    const { decimal } = getLocaleSeparators(ctx.locale);
     /** -1 / 0 / 1 against the target at the comparison precision; null = no value. */
     const cmp = (row: DataEntityRow): number | null => {
       const v = col.value(row, ctx);
       if (typeof v !== 'number' || !Number.isFinite(v)) return null;
-      return Math.abs(v - target) < half ? 0 : Math.sign(v - target);
+      const scale = 10 ** Math.max(shownDecimals(col.text(row, ctx), decimal), targetDecimals);
+      const a = roundHalfAway(v * scale);
+      const b = roundHalfAway(target * scale);
+      return a === b ? 0 : a > b ? 1 : -1;
     };
     switch (op) {
       case 'eq': return (row) => cmp(row) === 0;

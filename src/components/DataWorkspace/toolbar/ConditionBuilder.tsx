@@ -122,6 +122,7 @@ export function ConditionBuilder({ model, onAdd }: { model: DataModel; onAdd: (c
               value={value}
               onChange={(e) => setValue(e.target.value)}
               onKeyDown={(e) => {
+                if (e.nativeEvent.isComposing || e.keyCode === 229) return;
                 if (e.key === 'Enter') {
                   e.preventDefault();
                   submit();

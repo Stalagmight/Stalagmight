@@ -44,8 +44,8 @@ function renderToolbar(ctxOpts: Parameters<typeof makeModel>[0] = {}) {
 }
 
 async function typeQuery(text: string) {
-  const input = screen.getByTestId('data-find-input');
-  fireEvent.focus(input);
+  const input = screen.getByTestId('data-find-input') as HTMLInputElement;
+  act(() => input.focus());
   fireEvent.change(input, { target: { value: text } });
   await waitFor(() => expect(store().search.query).toBe(text));
   return input as HTMLInputElement;
@@ -114,6 +114,24 @@ describe('find box', () => {
     await waitFor(() => expect(screen.getByTestId('data-find-count')).toHaveTextContent('3 of 3'));
   });
 
+  it('scrolls to the match without taking focus from the find box', async () => {
+    renderToolbar();
+    const input = await typeQuery('sump');
+    await waitFor(() => expect(store().focusRequest?.rowKey).toBe('sh:1:100001'));
+    expect(document.activeElement).toBe(input);
+    expect(store().focusRequest?.takeFocus).toBe(false);
+  });
+
+  it('Escape right after editing does not let the pending query reopen find', async () => {
+    renderToolbar();
+    const input = await typeQuery('s');
+    fireEvent.change(input, { target: { value: '' } });
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(store().search.open).toBe(false);
+    await new Promise((r) => setTimeout(r, 250));
+    expect(store().search.open).toBe(false);
+  });
+
   it('Escape clears the query, then closes find', async () => {
     renderToolbar();
     const input = await typeQuery('sump');
@@ -164,6 +182,18 @@ describe('replace', () => {
     await waitFor(() =>
       expect(useUIStore.getState().toasts.map((x) => x.message)).toContain('Replaced 3'),
     );
+  });
+
+  it('a pending Replace all confirmation is dropped when the matches change', async () => {
+    renderToolbar();
+    act(() => store().setSearch({ replaceOpen: true, replacement: 'x' }));
+    await typeQuery('sump');
+    await waitFor(() => expect(screen.getByTestId('data-find-count')).toHaveTextContent('of 3'));
+    fireEvent.click(screen.getByTestId('data-replace-all'));
+    expect(screen.getByTestId('data-replace-confirm')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('data-find-match-case'));
+    await waitFor(() => expect(screen.queryByTestId('data-replace-confirm')).toBeNull());
+    expect(executeBatch).not.toHaveBeenCalled();
   });
 
   it('states the read-only matches it will skip', async () => {
@@ -242,6 +272,12 @@ describe('filters, chips and menus', () => {
     expect(store().filters.rowTypes).toBe('shots');
     expect(screen.getByTestId('data-rowtype-shots')).toHaveAttribute('aria-checked', 'true');
     expect(screen.getByTestId('data-chip-rowtype')).toHaveTextContent('Shots only');
+    // a radio group: one tab stop, arrow keys move the choice
+    expect(screen.getByTestId('data-rowtype-all')).toHaveAttribute('tabindex', '-1');
+    fireEvent.keyDown(screen.getByTestId('data-rowtype-shots'), { key: 'ArrowRight' });
+    expect(store().filters.rowTypes).toBe('all');
+    fireEvent.keyDown(screen.getByTestId('data-rowtype-all'), { key: 'ArrowLeft' });
+    expect(store().filters.rowTypes).toBe('shots');
   });
 
   it('one chip per active filter, each removable, and Clear all', () => {

@@ -4,6 +4,8 @@ import { findShortcutOf } from '../useFindShortcuts';
 import { toggleSection } from '../SectionsPicker';
 import { settleOutcome } from '../useReplace';
 import { patternKey } from '../useFindNavigation';
+import { sameFilters } from '../revealPolicy';
+import { EMPTY_FILTERS } from '../../store';
 import type { ReplacePlan } from '../../model/replace';
 import type { DataCellEdit, DataColumnKey, SearchMatch } from '../../types';
 
@@ -71,7 +73,7 @@ describe('matchNav', () => {
 });
 
 describe('findShortcutOf', () => {
-  const k = (key: string, mods: Partial<Record<'ctrlKey' | 'metaKey' | 'altKey' | 'shiftKey', boolean>> = {}) =>
+  const k = (key: string, mods: Partial<Record<'ctrlKey' | 'metaKey' | 'altKey' | 'shiftKey', boolean>> & { code?: string } = {}) =>
     findShortcutOf({ key, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...mods });
   it('maps Ctrl/Cmd+F, Ctrl/Cmd+H, F3 and Shift+F3', () => {
     expect(k('f', { ctrlKey: true })).toBe('find');
@@ -80,12 +82,32 @@ describe('findShortcutOf', () => {
     expect(k('F3')).toBe('next');
     expect(k('F3', { shiftKey: true })).toBe('prev');
   });
+  it('reads the physical key on non-Latin layouts, and Ctrl/Cmd+Alt+F opens replace', () => {
+    expect(k('а', { ctrlKey: true, code: 'KeyF' })).toBe('find');
+    expect(k('р', { metaKey: true, code: 'KeyH' })).toBe('replace');
+    expect(k('ƒ', { metaKey: true, altKey: true, code: 'KeyF' })).toBe('replace');
+    expect(k('f', { ctrlKey: true, altKey: true, code: 'KeyF' })).toBe('replace');
+    expect(k('h', { ctrlKey: true, altKey: true, code: 'KeyH' })).toBeNull();
+  });
   it('ignores other combinations', () => {
     expect(k('f')).toBeNull();
     expect(k('f', { ctrlKey: true, shiftKey: true })).toBeNull();
-    expect(k('f', { ctrlKey: true, altKey: true })).toBeNull();
     expect(k('F3', { ctrlKey: true })).toBeNull();
     expect(k('g', { ctrlKey: true })).toBeNull();
+  });
+});
+
+describe('sameFilters', () => {
+  it('compares by content', () => {
+    expect(sameFilters(EMPTY_FILTERS, { ...EMPTY_FILTERS })).toBe(true);
+    expect(sameFilters(EMPTY_FILTERS, { ...EMPTY_FILTERS, rowTypes: 'all', quick: { ...EMPTY_FILTERS.quick } })).toBe(true);
+    expect(sameFilters({ ...EMPTY_FILTERS, sectionIds: [1, 2] }, { ...EMPTY_FILTERS, sectionIds: [1, 2] })).toBe(true);
+    expect(sameFilters({ ...EMPTY_FILTERS, sectionIds: [1, 2] }, { ...EMPTY_FILTERS, sectionIds: [2, 1] })).toBe(false);
+    expect(sameFilters(EMPTY_FILTERS, { ...EMPTY_FILTERS, sectionIds: [] })).toBe(false);
+    expect(sameFilters(EMPTY_FILTERS, { ...EMPTY_FILTERS, quick: { ...EMPTY_FILTERS.quick, frozen: true } })).toBe(false);
+    const c = { id: 'a', colKey: 'length' as const, op: 'gt' as const, value: '3' };
+    expect(sameFilters({ ...EMPTY_FILTERS, conditions: [c] }, { ...EMPTY_FILTERS, conditions: [{ ...c }] })).toBe(true);
+    expect(sameFilters({ ...EMPTY_FILTERS, conditions: [c] }, { ...EMPTY_FILTERS, conditions: [{ ...c, value: '4' }] })).toBe(false);
   });
 });
 
@@ -113,6 +135,7 @@ describe('settleOutcome', () => {
       lockedCells: 2,
       invalid: [{ rowKey: 'x', colKey: 'length', text: 'q', matches: 1 }],
       unchangedCells: 0,
+      roundedCells: 0,
     };
     expect(settleOutcome(plan, [])).toEqual({ replaced: 6, locked: 4, invalid: 1 });
     expect(settleOutcome(plan, [{ edit: e2, reason: 'frozen' }, { edit: e3, reason: 'invalid' }])).toEqual({

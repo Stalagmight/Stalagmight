@@ -13,11 +13,14 @@ import { LockIcon } from '../../common/icons';
 import { tCount } from './labels';
 import { FIELD_BOX_CLASS, FIELD_INPUT_CLASS } from './ToolbarMenu';
 import type { ReplaceAllPreview } from './useReplace';
+import type { SearchMatch } from '../types';
 
 interface ReplaceRowProps {
   inputRef: RefObject<HTMLInputElement>;
   editingBlocked: boolean;
-  hasMatches: boolean;
+  /** The current matches: any change (a toggle, a scope, a filter, an edit, an
+   *  undo) invalidates a pending Replace all confirmation. */
+  matches: readonly SearchMatch[];
   busy: boolean;
   onReplaceOne: () => void;
   onSkip: () => void;
@@ -33,7 +36,7 @@ const BOX_BUTTON =
 export function ReplaceRow({
   inputRef,
   editingBlocked,
-  hasMatches,
+  matches,
   busy,
   onReplaceOne,
   onSkip,
@@ -50,8 +53,9 @@ export function ReplaceRow({
   const [confirm, setConfirm] = useState<ReplaceAllPreview | null>(null);
   const okRef = useRef<HTMLButtonElement | null>(null);
 
+  const hasMatches = matches.length > 0;
   // Any change to what would be replaced invalidates the confirmation.
-  useEffect(() => setConfirm(null), [replacement, query, regex, hasMatches]);
+  useEffect(() => setConfirm(null), [replacement, query, regex, matches]);
   useEffect(() => {
     if (confirm) okRef.current?.focus();
   }, [confirm]);
@@ -77,6 +81,8 @@ export function ReplaceRow({
           disabled={editingBlocked}
           onChange={(e) => setSearch({ replacement: e.target.value })}
           onKeyDown={(e) => {
+            // Enter that confirms an IME composition is not a command.
+            if (e.nativeEvent.isComposing || e.keyCode === 229) return;
             if (e.key === 'Enter') {
               e.preventDefault();
               if (e.ctrlKey || e.metaKey) askAll();
@@ -158,6 +164,7 @@ export function ReplaceRow({
             })}
             {confirm.lockedMatches > 0 && ` ${tCount(t, 'dataToolbar.replace.confirmLocked', confirm.lockedMatches)}`}
             {confirm.invalidCells > 0 && ` ${tCount(t, 'dataToolbar.replace.confirmInvalid', confirm.invalidCells)}`}
+            {confirm.roundedCells > 0 && ` ${tCount(t, 'dataToolbar.replace.confirmRounded', confirm.roundedCells)}`}
             {confirm.limited && ` ${t('dataToolbar.replace.confirmLimit', { n: formatNumber(MAX_SEARCH_MATCHES) })}`}
           </span>
           <span className="flex shrink-0 gap-1">
