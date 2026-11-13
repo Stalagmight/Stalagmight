@@ -254,6 +254,32 @@ describe('routeOpenedFile - read-only-map import guard (#243)', () => {
     expect(useUIStore.getState().activeDialog).toBe('import-blocked');
   });
 
+  it('allows a DMP import in Data + measured: Data is editable like Survey', async () => {
+    useUIStore.setState({ appMode: 'data', geometryMode: 'measured' });
+    await routeOpenedFile('/cave/survey.dmp');
+    expect(importDmp).toHaveBeenCalledWith('/cave/survey.dmp');
+    expect(useUIStore.getState().activeDialog).not.toBe('error');
+  });
+
+  // Data is not a read-only mode, so the closure view is the whole cause: the
+  // prompt must offer the view switch, not "Switch to Survey" (which would not fix it).
+  it('blocks a DMP import in the closure-adjusted Data view with cause: view, not mode', async () => {
+    useUIStore.setState({ appMode: 'data', geometryMode: 'closureAdjusted' });
+    await routeOpenedFile('/cave/survey.dmp');
+    expect(importDmp).not.toHaveBeenCalled();
+    expect(useUIStore.getState().activeDialog).toBe('import-blocked');
+    expect(useUIStore.getState().dialogData).toMatchObject({ path: '/cave/survey.dmp', cause: 'view' });
+  });
+
+  it('a locked remote project in the closure-adjusted Data view names the view, not Survey mode', async () => {
+    useUIStore.setState({ appMode: 'data', geometryMode: 'closureAdjusted' });
+    useSpeleoStore.setState({ link: READ_ONLY_LINK });
+    await routeOpenedFile('/cave/survey.dmp');
+    const message = String(useUIStore.getState().dialogData.message);
+    expect(message).toContain('Raw Data View');
+    expect(message).not.toContain('Survey mode');
+  });
+
   it('still opens a native .stalx in Plan (opening a project is not an import)', async () => {
     useProjectStore.setState({ project: null, isDirty: false });
     useUIStore.setState({ appMode: 'plan', geometryMode: 'measured' });

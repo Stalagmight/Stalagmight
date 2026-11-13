@@ -84,6 +84,30 @@ describe('Plan mode ↔ color-overlay mutual exclusion (#38)', () => {
     expect(useUIStore.getState().appMode).toBe('survey');
   });
 
+  it.each([
+    ['depth via toggleDisplay (the Shift+D path)', () => useUIStore.getState().toggleDisplay('showDepthGradient')],
+    ['distance via toggleDistanceGradient', () => useUIStore.getState().toggleDistanceGradient()],
+    ['issue-severity via toggleIssueSeverity', () => useUIStore.getState().toggleIssueSeverity()],
+    ['issue-severity via setIssueSeverity(true)', () => useUIStore.getState().setIssueSeverity(true)],
+    ['section via setColorMode', () => useUIStore.getState().setColorMode('section')],
+    ['depth via setColorMode', () => useUIStore.getState().setColorMode('depth')],
+  ])('enabling a color overlay (%s) in Data stays in Data (exitGasPlan is a no-op there)', (_name, enable) => {
+    useUIStore.getState().setAppMode('data');
+    enable();
+    expect(useUIStore.getState().appMode).toBe('data');
+  });
+
+  it('exitGasPlan is a no-op in Data and returns a Plan entered from Data to Data', () => {
+    useUIStore.getState().setAppMode('data');
+    useUIStore.getState().exitGasPlan();
+    expect(useUIStore.getState().appMode).toBe('data');
+    // A read-only mode entered from Data goes back where the user came from.
+    useUIStore.getState().setAppMode('plan');
+    useUIStore.getState().toggleDisplay('showDepthGradient');
+    expect(useUIStore.getState().appMode).toBe('data');
+    expect(useUIStore.getState().showDepthGradient).toBe(true);
+  });
+
   it('restores measured geometry after Plan on the default (measured) survey view', () => {
     // The realistic default path: forced closureAdjusted ≠ saved measured, so this
     // distinguishes "restored the saved value" from "left the forced value" (the
