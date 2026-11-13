@@ -7,6 +7,8 @@ Update this file every time a new version is tagged.
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-11-13
+
 ### Added
 
 - **Surveyors and explorers are people, credited per shot** - the Surveyors and Explorers fields take a list of names, suggesting people from the project, the ones you entered before and, for a SpeleoDB project, its collaborators. Every shot carries its own surveyors, explorers and survey date, so a section surveyed over several trips credits each shot correctly; the data table and the detail panel show and edit them. Ariane `.tml` and `.tmlu` files read and write the credit row by row ([#714](https://github.com/Stalagmight/Stalagmight/issues/714))
