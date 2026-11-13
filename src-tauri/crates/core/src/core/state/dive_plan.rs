@@ -17,7 +17,7 @@ use crate::config::GasConfig;
 use crate::models::project::gas::{MAX_SEGMENT_SPEED_M_PER_MIN, MIN_SEGMENT_SPEED_M_PER_MIN};
 use crate::models::{
     Cylinder, DivePlan, DivePlanMeta, DivePlanSnapshot, Diver, MarkedPoint, PlanAnchorSet,
-    PlanSegment, Project, StationRef, DIVE_PLAN_SCHEMA_VERSION,
+    PlanSegment, Project, Section, StationRef, DIVE_PLAN_SCHEMA_VERSION,
 };
 use crate::persistence::plnx::{PlnxMeta, PlnxStore};
 
@@ -223,13 +223,21 @@ fn to_anchor(project: &Project, r: Option<StationRef>) -> Option<StoredAnchor> {
         (Some(shot), None) | (None, Some(shot)) => Some(shot.length.to_bits()),
         _ => None,
     };
+    // The neighbours' own RECORD parities, not the section's: a combine can put
+    // shots of two orientations in one section, and an undo can take them back
+    // out (see `Project::counter_parity_shots`).
+    let parity = project.shot_record_parity(section, a.as_deref().or(b.as_deref()));
+    let parity_b = b
+        .as_deref()
+        .map(|b| project.shot_record_parity(section, Some(b)));
     Some(StoredAnchor::Pair(PlanAnchor {
         section_id: r.section_id,
         a,
         b,
         // `a` is the shot BEFORE the station, so the station is on its "after" side.
         after_a: true,
-        parity: section.reverse_parity,
+        parity,
+        parity_b,
         terminal_shot_length_bits,
     }))
 }
@@ -261,27 +269,53 @@ fn from_anchor(project: &Project, anchor: &StoredAnchor, stale: &mut u32) -> Opt
     resolved
 }
 
+/// The section `anchor`'s shots live in now: its recorded section while that
+/// still holds one of them (or the anchor names none, a shot-less section),
+/// else the first section that does. Shot uuids are project-unique; a Split
+/// Section Here moves the shots past the cut into a new section, Combine
+/// Sections moves the other section's shots into the kept one, and an undo of
+/// either moves them back.
+fn anchor_section<'p>(project: &'p Project, anchor: &PlanAnchor) -> Option<&'p Section> {
+    let holds = |section: &Section| {
+        [&anchor.a, &anchor.b]
+            .into_iter()
+            .any(|uuid| PlanAnchor::position_of(project, section, uuid).is_some())
+    };
+    let recorded = project.get_section(anchor.section_id);
+    if let Some(section) = recorded {
+        if (anchor.a.is_none() && anchor.b.is_none()) || holds(section) {
+            return Some(section);
+        }
+    }
+    project.sections.iter().find(|s| holds(s)).or(recorded)
+}
+
 fn resolve_anchor(project: &Project, anchor: &PlanAnchor) -> Option<StationRef> {
-    let section = project.get_section(anchor.section_id)?;
+    let section = anchor_section(project, anchor)?;
     let n = section.shots.len();
     let pa = PlanAnchor::position_of(project, section, &anchor.a);
     let pb = PlanAnchor::position_of(project, section, &anchor.b);
-    // A reverse since this anchor was written flips what "after" means.
-    let flipped = anchor.parity != section.reverse_parity;
+    // A reverse of the neighbour's RECORD since this anchor was written flips
+    // what "after" means. Read per neighbour: the record parity follows the
+    // shot, whichever section holds it now.
+    let record_parity =
+        |uuid: &Option<String>| project.shot_record_parity(section, uuid.as_deref());
+    let flipped_a = anchor.parity != record_parity(&anchor.a);
+    let flipped_b = anchor.parity_b.unwrap_or(anchor.parity) != record_parity(&anchor.b);
     let index = match (pa, pb) {
         // (1) Both present: the station is the end of `a` that faces `b`.
         (Some(pa), Some(pb)) if pa < pb => pa + 1,
         (Some(pa), Some(_)) => pa,
         // (2) One present: the saved side, corrected for orientation.
         (Some(p), None) => {
-            if anchor.after_a != flipped {
+            if anchor.after_a != flipped_a {
                 p + 1
             } else {
                 p
             }
         }
         (None, Some(p)) => {
-            if anchor.after_a != flipped {
+            if anchor.after_a != flipped_b {
                 p
             } else {
                 p + 1
@@ -314,7 +348,7 @@ fn resolve_anchor(project: &Project, anchor: &PlanAnchor) -> Option<StationRef> 
             }
         }
     }
-    Some(StationRef::new(anchor.section_id, index as u32))
+    Some(StationRef::new(section.id, index as u32))
 }
 
 /// Place a stored station, whichever form it was written in.
@@ -1264,6 +1298,399 @@ mod tests {
             "the junction moved one index along because a shot was inserted before it"
         );
         assert_eq!(stale, 0);
+    }
+
+    /// Split Section Here moves the shots past the cut into a new section, so an
+    /// anchor recorded against the old section id must follow its shots there.
+    /// The split station itself stays the first half's end.
+    #[test]
+    fn anchors_past_a_section_split_resolve_in_the_second_half() {
+        let (mut project, sec) = project_n_shots(5);
+        let anchors: Vec<_> = (0..=5)
+            .map(|i| to_anchor(&project, Some(StationRef::new(sec, i))).unwrap())
+            .collect();
+
+        let second = project
+            .split_section_at_station(
+                sec,
+                2,
+                &crate::models::SplitSectionOptions {
+                    name_a: "A".to_string(),
+                    name_b: "B".to_string(),
+                    color_a: "#111111".to_string(),
+                    color_b: "#222222".to_string(),
+                    comment_side: crate::models::SplitSide::A,
+                    datum_side: crate::models::SplitSide::A,
+                },
+            )
+            .unwrap();
+
+        let mut stale = 0;
+        for (i, anchor) in anchors.iter().enumerate() {
+            let i = i as u32;
+            let expected = if i <= 2 {
+                StationRef::new(sec, i)
+            } else {
+                StationRef::new(second, i - 2)
+            };
+            assert_eq!(
+                from_anchor(&project, anchor, &mut stale),
+                Some(expected),
+                "anchor for station {i}"
+            );
+        }
+        assert_eq!(stale, 0);
+    }
+
+    /// Two sections K (2 shots) and O (3 shots) merged so that `kept_end` of
+    /// K meets `other_end` of O, each reversed first when asked.
+    fn combine_fixture(
+        kept_end: crate::models::SectionEnd,
+        other_end: crate::models::SectionEnd,
+        reverse_k: bool,
+        reverse_o: bool,
+    ) -> (Project, u32, u32) {
+        use crate::models::{SectionData, SectionEnd, ShotData};
+        let shot = |azimuth: f64, length: f64| ShotData {
+            azimuth_in: azimuth,
+            azimuth_out: azimuth,
+            length,
+            ..Default::default()
+        };
+        let mut project = Project::new("Pins".to_string(), None);
+        let mut add = |shots: Vec<ShotData>| {
+            project
+                .add_section(SectionData {
+                    shots,
+                    ..Default::default()
+                })
+                .id
+        };
+        let k = add(vec![shot(90.0, 10.0), shot(80.0, 5.0)]);
+        let o = add(vec![shot(0.0, 4.0), shot(300.0, 6.0), shot(270.0, 3.0)]);
+        if reverse_k {
+            assert!(project.reverse_section(k, false));
+        }
+        if reverse_o {
+            assert!(project.reverse_section(o, false));
+        }
+        let index = |p: &Project, id, end| match end {
+            SectionEnd::Start => 0,
+            SectionEnd::End => p.get_section(id).unwrap().shots.len() as u32,
+        };
+        let join_k = StationRef::new(k, index(&project, k, kept_end));
+        let join_o = StationRef::new(o, index(&project, o, other_end));
+        project.merge_stations(join_k, join_o).unwrap();
+        (project, k, o)
+    }
+
+    fn combine_options() -> crate::models::CombineSectionsOptions {
+        crate::models::CombineSectionsOptions {
+            name: "K".to_string(),
+            color: "#123456".to_string(),
+            swap_lr: false,
+            comment_pick: crate::models::CombinePick::Kept,
+            name_pick: crate::models::CombinePick::Kept,
+        }
+    }
+
+    fn raw_xy(project: &Project, at: StationRef) -> (f64, f64) {
+        let c = project.compute_station_raw_coords(at).unwrap();
+        (c.x, c.y)
+    }
+
+    /// Every pairing and every combination of the two sections' parities.
+    fn every_combine_shape() -> Vec<(
+        crate::models::SectionEnd,
+        crate::models::SectionEnd,
+        bool,
+        bool,
+    )> {
+        use crate::models::SectionEnd::{End, Start};
+        let mut out = Vec::new();
+        for kept_end in [Start, End] {
+            for other_end in [Start, End] {
+                for (reverse_k, reverse_o) in
+                    [(false, false), (true, false), (false, true), (true, true)]
+                {
+                    out.push((kept_end, other_end, reverse_k, reverse_o));
+                }
+            }
+        }
+        out
+    }
+
+    /// Resolve every pin against `project` and check it lands on its station.
+    fn assert_pins_land(project: &Project, pins: &[(StoredAnchor, (f64, f64))], what: &str) {
+        let mut stale = 0;
+        for (i, (pin, at)) in pins.iter().enumerate() {
+            let placed = from_anchor(project, pin, &mut stale);
+            assert!(placed.is_some(), "{what}: pin {i} is stale");
+            let placed = placed.unwrap();
+            let (x, y) = raw_xy(project, placed);
+            assert!(
+                (x - at.0).hypot(y - at.1) < 1e-6,
+                "{what}: pin {i} moved to {placed:?}"
+            );
+        }
+        assert_eq!(stale, 0, "{what}");
+    }
+
+    /// Combine Sections moves the other section's shots into the kept one,
+    /// reversing them when the two meet end to end or start to start. Every
+    /// pin, on either section and at every station including the two section
+    /// ends (which a pin names by ONE neighbour and a parity-corrected side),
+    /// must land on the same physical station, for every pairing and every
+    /// combination of the two sections' reverse parities.
+    #[test]
+    fn pins_on_both_sections_survive_a_combine() {
+        for (kept_end, other_end, reverse_k, reverse_o) in every_combine_shape() {
+            let what = format!("{kept_end:?}-{other_end:?} reversed {reverse_k}/{reverse_o}");
+            let (mut project, k, o) = combine_fixture(kept_end, other_end, reverse_k, reverse_o);
+            let pins: Vec<(StoredAnchor, (f64, f64))> = [(k, 2), (o, 3)]
+                .into_iter()
+                .flat_map(|(id, n)| (0..=n).map(move |i| StationRef::new(id, i)))
+                .map(|r| (to_anchor(&project, Some(r)).unwrap(), raw_xy(&project, r)))
+                .collect();
+
+            project.combine_sections(k, o, &combine_options()).unwrap();
+
+            assert_pins_land(&project, &pins, &what);
+        }
+    }
+
+    /// The other way round: pins captured AFTER a combine (the plan store
+    /// recaptures every anchor whenever a pin moves) must still land after the
+    /// combine is undone, which restores the two sections, un-reversed, with
+    /// their own parities. The undo restores the project snapshot taken before
+    /// the combine, which `before` is. The reported case: K(1 shot) and O(2
+    /// shots) end to end, O reversed by the combine, the pin at O's original
+    /// start landed one station off.
+    #[test]
+    fn pins_captured_after_a_combine_survive_its_undo() {
+        for (kept_end, other_end, reverse_k, reverse_o) in every_combine_shape() {
+            let what = format!("{kept_end:?}-{other_end:?} reversed {reverse_k}/{reverse_o}");
+            let (mut project, k, o) = combine_fixture(kept_end, other_end, reverse_k, reverse_o);
+            let before = project.clone();
+            project.combine_sections(k, o, &combine_options()).unwrap();
+            let pins: Vec<(StoredAnchor, (f64, f64))> = (0..=5)
+                .map(|i| StationRef::new(k, i))
+                .map(|r| (to_anchor(&project, Some(r)).unwrap(), raw_xy(&project, r)))
+                .collect();
+
+            assert_pins_land(&before, &pins, &format!("undo: {what}"));
+            // And a redo puts them back.
+            assert_pins_land(&project, &pins, &format!("redo: {what}"));
+        }
+    }
+
+    /// The same, through `AppState`: the anchors the plan store asks for after a
+    /// combine, resolved after the real Undo.
+    #[test]
+    fn the_plan_stores_anchors_after_a_combine_survive_the_undo() {
+        use crate::core::Command;
+        use crate::models::SectionEnd::End;
+        let (project, k, o) = combine_fixture(End, End, false, false);
+        let state = AppState::new().unwrap();
+        state.execute(Command::CreateProject {
+            name: "Pins".to_string(),
+            location: None,
+        });
+        state.set_project_for_tests(project);
+        let result = state.execute_combine_sections(k, o, combine_options());
+        assert!(result.success, "{:?}", result.error);
+        let combined = state.get_project_state().unwrap();
+        let refs: Vec<StationRef> = (0..=5).map(|i| StationRef::new(k, i)).collect();
+        let at: Vec<(f64, f64)> = refs.iter().map(|r| raw_xy(&combined, *r)).collect();
+        let anchors: Vec<StoredAnchor> = state
+            .plan_anchors_for_refs(refs)
+            .unwrap()
+            .into_iter()
+            .map(Option::unwrap)
+            .collect();
+
+        assert!(state.undo().success);
+
+        let restored = state.get_project_state().unwrap();
+        let placed = state.plan_refs_for_anchors(anchors).unwrap();
+        for (i, (placed, at)) in placed.iter().zip(&at).enumerate() {
+            assert!(placed.is_some(), "pin {i} is stale");
+            let placed = placed.unwrap();
+            let (x, y) = raw_xy(&restored, placed);
+            assert!(
+                (x - at.0).hypot(y - at.1) < 1e-6,
+                "pin {i} moved to {placed:?}"
+            );
+        }
+    }
+
+    /// A 5-shot section, reversed when asked, loaded into an `AppState`, with
+    /// every station's pin captured and its raw position.
+    fn delete_split_fixture(reversed: bool) -> (AppState, u32, Vec<(StoredAnchor, (f64, f64))>) {
+        use crate::core::Command;
+        use crate::models::{SectionData, ShotData};
+        let shot = |azimuth: f64, length: f64| ShotData {
+            azimuth_in: azimuth,
+            azimuth_out: azimuth,
+            length,
+            ..Default::default()
+        };
+        let mut project = Project::new("Pins".to_string(), None);
+        let id = project
+            .add_section(SectionData {
+                shots: vec![
+                    shot(90.0, 10.0),
+                    shot(80.0, 5.0),
+                    shot(0.0, 4.0),
+                    shot(300.0, 6.0),
+                    shot(270.0, 3.0),
+                ],
+                ..Default::default()
+            })
+            .id;
+        if reversed {
+            assert!(project.reverse_section(id, false));
+        }
+        let pins = (0..=5)
+            .map(|i| StationRef::new(id, i))
+            .map(|r| (to_anchor(&project, Some(r)).unwrap(), raw_xy(&project, r)))
+            .collect();
+        let state = AppState::new().unwrap();
+        state.execute(Command::CreateProject {
+            name: "Pins".to_string(),
+            location: None,
+        });
+        state.set_project_for_tests(project);
+        (state, id, pins)
+    }
+
+    /// Resolve `pins` after a delete-and-split: each one either lands on the
+    /// raw position it was dropped on or is reported stale (its station went
+    /// with the deleted shots) - never on a neighbouring station.
+    fn assert_pins_land_or_stale(
+        state: &AppState,
+        pins: &[(StoredAnchor, (f64, f64))],
+        what: &str,
+    ) -> usize {
+        let project = state.get_project_state().unwrap();
+        let mut stale = 0;
+        let mut landed = 0;
+        for (i, (pin, at)) in pins.iter().enumerate() {
+            let Some(placed) = from_anchor(&project, pin, &mut stale) else {
+                continue;
+            };
+            let (x, y) = raw_xy(&project, placed);
+            assert!(
+                (x - at.0).hypot(y - at.1) < 1e-6,
+                "{what}: pin {i} moved to {placed:?}"
+            );
+            landed += 1;
+        }
+        landed
+    }
+
+    /// Delete-and-split builds section B fresh. A reversed section's B must
+    /// keep its reverse parity, or every pin placed by one neighbour in it -
+    /// its terminal station, and the station at the deleted shot's far end -
+    /// lands one station off.
+    #[test]
+    fn pins_survive_a_delete_and_split_of_a_reversed_section() {
+        for reversed in [false, true] {
+            let (state, id, pins) = delete_split_fixture(reversed);
+            let shot_id = state
+                .get_project_state()
+                .unwrap()
+                .get_section(id)
+                .unwrap()
+                .shots[2]
+                .id;
+            let result =
+                state.execute_delete_shot_and_split(id, shot_id, "A".to_string(), "B".to_string());
+            assert!(result.success, "{:?}", result.error);
+            let what = format!("delete-split reversed {reversed}");
+            // Every station survives a single-shot delete-and-split.
+            assert_eq!(assert_pins_land_or_stale(&state, &pins, &what), 6, "{what}");
+        }
+    }
+
+    /// The same for the range path.
+    #[test]
+    fn pins_survive_a_range_delete_and_split_of_a_reversed_section() {
+        for reversed in [false, true] {
+            let (state, id, pins) = delete_split_fixture(reversed);
+            let shots = state
+                .get_project_state()
+                .unwrap()
+                .get_section(id)
+                .unwrap()
+                .shots
+                .clone();
+            let result = state.execute_delete_shot_range_split(
+                id,
+                shots[1].id,
+                shots[2].id,
+                "A".to_string(),
+                "B".to_string(),
+            );
+            assert!(result.success, "{:?}", result.error);
+            let what = format!("range delete-split reversed {reversed}");
+            // Station 2, between the two deleted shots, goes with them.
+            assert_eq!(assert_pins_land_or_stale(&state, &pins, &what), 5, "{what}");
+        }
+    }
+
+    /// The frontend anchors its positional refs (the plan pins, and the
+    /// distance-gradient origin) through `plan_anchors_for_refs` before an
+    /// edit and places them again through `plan_refs_for_anchors` after it.
+    /// Across a Split Section Here, its undo and its redo, every station of the
+    /// cut section - the split station and the ones that move to the second
+    /// half included - must land on the same physical station each time.
+    #[test]
+    fn anchors_survive_a_split_its_undo_and_its_redo() {
+        for reversed in [false, true] {
+            let (state, id, _) = delete_split_fixture(reversed);
+            let before = state.get_project_state().unwrap();
+            let refs: Vec<StationRef> = (0..=5).map(|i| StationRef::new(id, i)).collect();
+            let at: Vec<(f64, f64)> = refs.iter().map(|r| raw_xy(&before, *r)).collect();
+            let anchors: Vec<StoredAnchor> = state
+                .plan_anchors_for_refs(refs)
+                .unwrap()
+                .into_iter()
+                .map(Option::unwrap)
+                .collect();
+            let assert_land = |what: &str| {
+                let project = state.get_project_state().unwrap();
+                let placed = state.plan_refs_for_anchors(anchors.clone()).unwrap();
+                for (i, (placed, at)) in placed.iter().zip(&at).enumerate() {
+                    assert!(placed.is_some(), "{what}: pin {i} is stale");
+                    let placed = placed.unwrap();
+                    let (x, y) = raw_xy(&project, placed);
+                    assert!(
+                        (x - at.0).hypot(y - at.1) < 1e-6,
+                        "{what}: pin {i} moved to {placed:?}"
+                    );
+                }
+            };
+
+            let split = state.execute_split_section(
+                id,
+                crate::models::SplitAt::Station { station_index: 2 },
+                crate::models::SplitSectionOptions {
+                    name_a: "A".to_string(),
+                    name_b: "B".to_string(),
+                    color_a: "#111111".to_string(),
+                    color_b: "#222222".to_string(),
+                    comment_side: crate::models::SplitSide::A,
+                    datum_side: crate::models::SplitSide::A,
+                },
+            );
+            assert!(split.success, "{:?}", split.error);
+            assert_land(&format!("split, reversed {reversed}"));
+            assert!(state.undo().success);
+            assert_land(&format!("undo, reversed {reversed}"));
+            assert!(state.redo().success);
+            assert_land(&format!("redo, reversed {reversed}"));
+        }
     }
 
     /// Build a section of `n` shots and return `(project, section_id)`.

@@ -38,11 +38,26 @@
  * an involution - it CLAMPS - and a multi-step `undo_to` can walk past a
  * `CreateShot`, so the count differs between steps; either fact on its own
  * breaks a per-entry fold.
+ *
+ * SPLIT SECTION HERE and COMBINE SECTIONS (and their undo and redo) move shots
+ * between sections, which no index transform describes. Around every survey
+ * edit the seam therefore also anchors the distance-gradient origin the way the
+ * plan pins are anchored (`beforeSurveyEdit` / `afterSurveyEdit`): by the shots
+ * either side of it, which the backend places again after the edit, in
+ * whichever section now holds them. An origin that places nowhere, or that
+ * could not be anchored and has fallen out of range, is cleared with a notice
+ * (the ramp falls back to the entrance) rather than left to re-root silently;
+ * and an edit that moved shots between sections clears the selection, the
+ * merge staging, the move-comment pickup and the comment popover, as a reverse
+ * does (`applyEditAftermath`).
  */
+import i18n from '../i18n';
 import type { Section, SectionId, StationRef } from '../types/project';
 import type { ReversedSection } from '../types/ipc/ReversedSection';
 import { selectHasPins, useGasPlanStore } from '../store/gasPlanStore';
 import { useUIStore } from '../store/uiStore';
+import { planAnchorsForRefs, planRefsForAnchors, type PlanAnchor } from './divePlanApi';
+import { TOAST_KEYS } from './toastKeys';
 
 /**
  * The NET renumbering one section came out of an operation with, as the affine
@@ -210,15 +225,19 @@ export function composeReverseTransforms(
  * of reverses that cancelled out renumbered nothing, so the user's selection and
  * half-staged merge are still valid.
  */
-export function applyReverseAftermath(transforms: Map<SectionId, ReverseTransform>): void {
+export function applyReverseAftermath(
+  transforms: Map<SectionId, ReverseTransform>,
+  options: { originPlaced?: boolean } = {}
+): void {
   if (Array.from(transforms.values()).every(isIdentityTransform)) return;
 
   // The gas plan is deliberately absent here (#310): its pins and its saved-plan baseline are
   // re-resolved from backend anchors by `remapPlanPins`, which the same seam already awaited
-  // before this ran. Mirroring them a second time would apply the shift twice.
+  // before this ran. Mirroring them a second time would apply the shift twice. The same holds
+  // for the origin once `afterSurveyEdit` has placed it from its anchor (`originPlaced`).
   const ui = useUIStore.getState();
   const origin = ui.distanceGradientOrigin;
-  if (origin !== null && flipsSection(transforms, origin.section_id)) {
+  if (origin !== null && !options.originPlaced && flipsSection(transforms, origin.section_id)) {
     // Same reasoning as the plan pins: the penetration ramp is rooted on a
     // station the user chose, and its only other reset is a project switch, so
     // without this the ramp silently re-roots from the opposite end of the
@@ -233,4 +252,110 @@ export function applyReverseAftermath(transforms: Map<SectionId, ReverseTransfor
   ui.clearMergeStations();
   ui.clearMoveCommentSource();
   ui.clearCommentTarget();
+}
+
+/** What a survey edit carries from before it to after it for the frontend's positional refs. */
+export interface SurveyEdit {
+  /** Every section's shot count before the edit. */
+  shape: ReadonlyMap<SectionId, number>;
+  /** The distance-gradient origin before the edit, and the backend's anchor for it. */
+  origin: StationRef | null;
+  originAnchor: PlanAnchor | null;
+  /** Set once `afterSurveyEdit` has placed (or cleared) the origin from its anchor. */
+  originPlaced: boolean;
+}
+
+const sameRef = (a: StationRef | null, b: StationRef | null): boolean =>
+  a === b || (a !== null && b !== null && a.section_id === b.section_id && a.station_index === b.station_index);
+
+/**
+ * Before a survey edit: flush the plan-pin anchors (#310), note every section's shot count, and
+ * anchor the distance-gradient origin, if one is set. A failed anchor is a degradation, not a
+ * failure: the origin then falls back to the reverse mirror and the range check.
+ */
+export async function beforeSurveyEdit(
+  sections: readonly Pick<Section, 'id' | 'shots'>[] | undefined
+): Promise<SurveyEdit> {
+  await flushPlanAnchors();
+  const shape = new Map((sections ?? []).map((s) => [s.id, s.shots.length] as const));
+  const origin = useUIStore.getState().distanceGradientOrigin;
+  let originAnchor: PlanAnchor | null = null;
+  if (origin !== null) {
+    try {
+      originAnchor = (await planAnchorsForRefs([origin]))[0] ?? null;
+    } catch (e) {
+      console.debug('[distance] origin anchor capture failed', e);
+    }
+  }
+  return { shape, origin, originAnchor, originPlaced: false };
+}
+
+/** Clear the distance-gradient origin, saying so: the ramp is measured from the entrance again. */
+function dropOrigin(): void {
+  const ui = useUIStore.getState();
+  ui.setDistanceGradientOrigin(null);
+  ui.showToast(i18n.t('map.toasts.distanceOriginReset'), TOAST_KEYS.DISTANCE_ORIGIN_RESET, 'info');
+}
+
+/**
+ * After a survey edit, before the refetch: re-resolve the plan pins, and place the origin again
+ * from its anchor. A user who re-rooted during the round trip keeps their pick.
+ */
+export async function afterSurveyEdit(edit: SurveyEdit | undefined): Promise<void> {
+  await remapPlanPins();
+  if (edit === undefined || edit.origin === null || edit.originAnchor === null) return;
+  let placed: StationRef | null;
+  try {
+    placed = (await planRefsForAnchors([edit.originAnchor]))[0] ?? null;
+  } catch (e) {
+    console.debug('[distance] origin re-resolve failed', e);
+    return;
+  }
+  const ui = useUIStore.getState();
+  if (!sameRef(ui.distanceGradientOrigin, edit.origin)) return;
+  edit.originPlaced = true;
+  if (placed === null) dropOrigin();
+  else if (!sameRef(placed, edit.origin)) ui.setDistanceGradientOrigin(placed);
+}
+
+/**
+ * True when an edit moved shots between sections: a section vanished, or one appeared while an
+ * existing one changed its shot count. That is a split, a combine, a delete-and-split, or the undo
+ * or redo of any of them; a section created or imported on its own is not.
+ */
+export function movedShotsBetweenSections(
+  before: ReadonlyMap<SectionId, number>,
+  after: readonly Pick<Section, 'id' | 'shots'>[]
+): boolean {
+  const now = new Map(after.map((s) => [s.id, s.shots.length] as const));
+  if (Array.from(before.keys()).some((id) => !now.has(id))) return true;
+  const appeared = Array.from(now.keys()).some((id) => !before.has(id));
+  return appeared && Array.from(before).some(([id, count]) => now.get(id) !== count);
+}
+
+/**
+ * Everything the seam does after the refresh: the reverse mirror (skipped for an origin its anchor
+ * already placed), and for an edit that moved shots between sections the four clears and a range
+ * check, so an origin no anchor could place is cleared, with a notice, rather than left past the
+ * end of a section the edit shortened. (Any other edit leaves an out-of-range origin exactly as it
+ * was, as before.)
+ */
+export function applyEditAftermath(
+  reversed: readonly ReversedSection[] | undefined,
+  sections: readonly Pick<Section, 'id' | 'shots'>[],
+  edit: SurveyEdit | undefined
+): void {
+  applyReverseAftermath(composeReverseTransforms(reversed, sections), {
+    originPlaced: edit?.originPlaced ?? false,
+  });
+  if (edit === undefined || !movedShotsBetweenSections(edit.shape, sections)) return;
+  const ui = useUIStore.getState();
+  ui.clearSelection();
+  ui.clearMergeStations();
+  ui.clearMoveCommentSource();
+  ui.clearCommentTarget();
+  const origin = ui.distanceGradientOrigin;
+  if (origin === null) return;
+  const section = sections.find((s) => s.id === origin.section_id);
+  if (section === undefined || origin.station_index > section.shots.length) dropOrigin();
 }

@@ -17,7 +17,7 @@ import {
   READ_ONLY_EDIT_NOTICE,
 } from '../utils/editErrors';
 import { hasEligibleClosures } from '../utils/closures';
-import { applyReverseAftermath, composeReverseTransforms, flushPlanAnchors, remapPlanPins } from '../utils/reverseAftermath';
+import { afterSurveyEdit, applyEditAftermath, beforeSurveyEdit, type SurveyEdit } from '../utils/reverseAftermath';
 import { useUIStore } from './uiStore';
 import { surfaceSaveFailure } from '../utils/saveFeedback';
 import { useGlobalViewStore } from './globalViewStore';
@@ -64,6 +64,7 @@ import type { SurveyData } from '../types/survey-data';
 import { emptySurveyData, surveyDataFromLegacy, surveyDataWithAdjustedStations } from '../types/survey-data';
 import { createProjectConfigActions, type ProjectConfigActions } from './projectConfigActions';
 import { createProjectShotActions, type ProjectShotActions } from './projectShotActions';
+import { createSectionStructureActions, type SectionStructureActions } from './sectionStructureActions';
 import { createProjectHistoryBannerActions, HISTORY_BANNER_CLEARED, type ProjectHistoryBannerActions, type ProjectHistoryBannerState } from './projectHistoryBannerActions';
 import { runProjectSwitch, runConfirmedProjectSwitch, reserveProjectRequest, isProjectRequestCurrent, beginProjectMutation, isProjectMutationCurrent } from '../utils/projectTransition';
 import { releaseFailed, resolveReleaseFailure, settleOpenLockBeforeLeaving } from '../utils/speleoReleaseFailure';
@@ -218,7 +219,7 @@ export interface LoadProjectOutcome {
   superseded?: boolean;
 }
 
-export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBannerActions, ProjectHistoryBannerState, ProjectShotActions {
+export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBannerActions, ProjectHistoryBannerState, ProjectShotActions, SectionStructureActions {
   // State
   project: Project | null;
   /**
@@ -685,7 +686,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     try {
       // #310: anchor the gas-plan pins against the survey as it stands BEFORE this edit - a pin
       // placed a moment ago may still be sitting on the debounce. No-op for a plan with no pins.
-      await flushPlanAnchors();
+      const edit = await beforeSurveyEdit(get().project?.sections);
       // Re-checked AFTER the flush: it is a real IPC round trip, and project load/create/close do
       // not go through the mutation queue, so a project can open while it is in flight. The guard
       // above ran before that window existed, and `args` were captured against the OUTGOING
@@ -696,7 +697,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       if (result.success) {
         // Re-resolve those pins BEFORE the refetch: the reach-field effect keys on modified_at,
         // so a stale pin sent here would paint a route through the wrong station for a frame.
-        if (!lostProject(requestProjectKey)) await remapPlanPins();
+        if (!lostProject(requestProjectKey)) await afterSurveyEdit(edit);
         await get().refreshProjectState();
         // The frontend's own POSITIONAL refs (the distance-gradient origin) are mirrored HERE
         // rather than by the caller, so a reverse
@@ -706,7 +707,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // the origin back, re-applying the forward shift onto restored numbering - silently,
         // since every index stays in range.
         if (!lostProject(requestProjectKey)) {
-          applyReverseAftermath(composeReverseTransforms(result.reversed_sections, get().project?.sections ?? []));
+          applyEditAftermath(result.reversed_sections, get().project?.sections ?? [], edit);
         }
         set({ isDirty: true });
         noteImportResolvedDeferredSave(command, result, set);
@@ -808,8 +809,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     // so compose them and re-mirror once the refreshed state lands. Absent on
     // everything else, which is the common case and costs nothing.
     let reversedSections: readonly ReversedSection[] | undefined;
+    let edit: SurveyEdit | undefined;
     try {
-      await flushPlanAnchors(); // #310, see executeCommandInner
+      edit = await beforeSurveyEdit(get().project?.sections); // #310, see executeCommandInner
       // Re-checked after the flush for the same reason executeCommandInner does: the flush is a
       // real round trip, and a project can open across it while `args` still name the outgoing
       // one. Returning from inside the `try` still runs the `finally`, which is correct rather
@@ -855,7 +857,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // #310: re-resolve the plan pins before the refetch (see executeCommandInner). In the
       // `finally` because a PARTIAL multi-step undo renumbered too, and its pins need it just
       // as much as a clean one's do.
-      if (!lostProject(requestProjectKey)) await remapPlanPins();
+      if (!lostProject(requestProjectKey)) await afterSurveyEdit(edit);
       await get().refreshProjectState();
       // #24: same project-switch guard as executeCommand. Section ids are small per-project
       // integers, so entries from the OUTGOING project would otherwise match sections in
@@ -866,7 +868,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // is NOT the divisor the earlier steps mirrored against - composing the
       // entries is what keeps those steps landing on the right station.
       if (!lostProject(requestProjectKey)) {
-        applyReverseAftermath(composeReverseTransforms(reversedSections, get().project?.sections ?? []));
+        applyEditAftermath(reversedSections, get().project?.sections ?? [], edit);
       }
       // Undo/redo can change which cross-references resolve - e.g. undoing a
       // Repair restores the dropped dangling refs, redoing a delete removes a
@@ -910,6 +912,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   ...createProjectHistoryBannerActions(set, get),
   // splitShotAtDistance / editShotCredit live in projectShotActions.ts
   ...createProjectShotActions(executeCommand),
+  // splitSection / combineSections live in sectionStructureActions.ts
+  ...createSectionStructureActions(executeCommand),
 
   // Loading state actions
   startLoading: (projectName: string, projectPath: string) => {

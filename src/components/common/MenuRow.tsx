@@ -10,11 +10,19 @@
  * ContextMenu) by passing variant classes, trailing content, and any extra
  * button attributes in.
  */
-import { forwardRef, type ReactNode, type ButtonHTMLAttributes, type CSSProperties } from 'react';
+import { forwardRef, useId, type ReactNode, type ButtonHTMLAttributes, type CSSProperties } from 'react';
 
 /** The button base classes shared by every menu row. */
 export const MENU_ROW_BASE_CLASS =
   'w-full px-3 py-2 text-left text-sm flex items-center gap-2';
+
+/** A row's hint line: two lines of `text-xs`, whatever the text. */
+export const MENU_ROW_HINT_CLASS = 'text-xs leading-4 h-8 line-clamp-2 whitespace-normal';
+
+/** Pixel heights the menus position themselves with: a plain row, and the
+ *  extra a hint adds (`h-8`). */
+export const MENU_ROW_HEIGHT_PX = 36;
+export const MENU_ROW_HINT_HEIGHT_PX = 32;
 
 interface MenuRowProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   'data-testid'?: string;
@@ -30,6 +38,12 @@ interface MenuRowProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   className?: string;
   /** Trailing content rendered after the label (chevron, check, shortcut…). */
   children?: ReactNode;
+  /**
+   * A second, smaller muted line under the label (why a row is disabled, or
+   * what it will do). Fixed at two lines, so a row keeps its height while the
+   * text changes; longer text is clamped, so callers also pass it as `title`.
+   */
+  hint?: string | undefined;
 }
 
 /**
@@ -38,12 +52,17 @@ interface MenuRowProps extends ButtonHTMLAttributes<HTMLButtonElement> {
  * onClick, disabled, data-testid, aria-*, onMouseEnter, …) pass straight through.
  */
 export const MenuRow = forwardRef<HTMLButtonElement, MenuRowProps>(function MenuRow(
-  { label, icon, showIcons, iconStyle, className, children, 'data-testid': testId, ...buttonProps },
+  { label, icon, showIcons, iconStyle, className, children, hint, 'data-testid': testId, ...buttonProps },
   ref,
 ) {
+  const hintId = useId();
+  // With a hint, the accessible name stays the label and the hint describes it.
+  const hintProps =
+    hint === undefined ? {} : { 'aria-label': buttonProps['aria-label'] ?? label, 'aria-describedby': hintId };
   return (
     <button
       {...buttonProps}
+      {...hintProps}
       ref={ref}
       data-testid={testId}
       className={`${MENU_ROW_BASE_CLASS}${className ? ` ${className}` : ''}`}
@@ -57,7 +76,20 @@ export const MenuRow = forwardRef<HTMLButtonElement, MenuRowProps>(function Menu
           {icon}
         </span>
       )}
-      <span className="flex-1 truncate">{label}</span>
+      {hint === undefined ? (
+        <span className="flex-1 truncate">{label}</span>
+      ) : (
+        <span className="flex-1 min-w-0 flex flex-col">
+          <span className="truncate">{label}</span>
+          <span
+            id={hintId}
+            className={`${MENU_ROW_HINT_CLASS} text-text-secondary`}
+            data-testid={testId ? `${testId}-hint` : undefined}
+          >
+            {hint}
+          </span>
+        </span>
+      )}
       {children}
     </button>
   );

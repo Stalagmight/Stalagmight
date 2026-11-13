@@ -673,6 +673,7 @@ impl AppState {
                         })
                     })
                     .collect();
+                let homes = super::warnings::ShotHomes::of(project);
                 // Remap each UUID-keyed row to its shot's live position; DROP a
                 // UUID-keyed row whose shot was deleted (UUID no longer live) - it
                 // can never match a live shot by UUID on reload, so it is dead.
@@ -693,13 +694,20 @@ impl AppState {
                                 // file saved before shot UUIDs were project-wide
                                 // unique) names its shot through the derived id, and
                                 // is re-keyed to it here: this save persists it.
-                                let live_uuid = crate::models::live_shot_uuid_for_stored(
+                                let live = crate::models::live_shot_uuid_for_stored(
                                     r.section_id,
                                     uuid,
                                     |id| live_positions.contains_key(&(r.section_id, id)),
-                                )?;
+                                );
+                                // A shot a split or combine moved to another
+                                // section keeps its uuid: re-key the row to its
+                                // new section rather than drop it.
+                                let (home, live_uuid) = match live {
+                                    Some(live) => (r.section_id, live),
+                                    None => (homes.moved_to(r.section_id, uuid)?, uuid.to_string()),
+                                };
                                 let &(sec, shot) =
-                                    live_positions.get(&(r.section_id, live_uuid.as_str()))?;
+                                    live_positions.get(&(home, live_uuid.as_str()))?;
                                 r.shot_uuid = Some(live_uuid);
                                 r.section_id = sec;
                                 r.shot_id = shot;

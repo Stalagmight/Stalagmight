@@ -310,6 +310,7 @@ Project (Cave System)
     ├── validation: ValidationConfig
     ├── surface_elevation: Option<f64>
     ├── default_azimuth_reference: Option<AzimuthReference>
+    ├── counter_parity_shots: {shot_uuid} (shots whose record orientation runs against their section's parity after a Combine; dive-plan pins only)
     └── display toggles (show_stations, show_shots, grid_spacing, geometry_mode, ...)
 ```
 
@@ -916,7 +917,10 @@ defaults from `src-tauri/crates/core/src/config/defaults.rs` and are all rebinda
 There is no Draw or Delete tool. Shots are added from the map context menu:
 **Add Shot Before/After** at the ends of a section, or **Insert Station...** on
 any shot, which splits it in two (also available from the data table's row
-menu). Deletion is select plus Delete/Backspace, or the context menu.
+menu). Deletion is select plus Delete/Backspace, or the context menu. The same
+menu restructures sections without deleting anything: **Split Section Here** on
+a mid-section station or a point along a shot, and **Combine Sections...** on an
+end station where another section ends (see 7.11).
 
 Panning is not a tool either. A plain left-click-drag pans the map under every
 tool in the table except **Zoom**, whose drag draws its zoom box, and in
@@ -1577,6 +1581,46 @@ built anywhere in this flow; it is tracked as an enhancement in #524.
 4. Undo restores the GPS coordinates
 
 ---
+
+### 7.11 Splitting and Combining Sections
+
+**Split Section Here** (station or shot context menu, Survey mode): cuts a
+section in two at a mid-section station, or at a point along a shot (a station
+is inserted there first; within 1 cm of a shot end the cut snaps to that end).
+Nothing is deleted. The first half keeps the section id and ends on the split
+station; the second half starts on a co-located copy and copies the section's
+direction, quality and north reference (every shot keeps its own surveyors,
+explorers and date). The two copies are NOT
+merged. Merges on the split station, its name and its manual offset go to both
+copies; its loop closures stay on the first half; the dialog picks the half for
+its comment (A, B or both) and its zero datum (A or B). Names default to
+`<name>-A` / `<name>-B`, each half has a colour picker: A keeps the section's
+colour, B defaults to the colour a new section gets (the next palette colour no
+section uses, never A's). The dialog notes that the halves are not connected
+(merge the two cut stations for routes and gas planning to continue across
+them). A loop closure from
+before the cut to past it, with nothing else tying the halves, is left as their
+only tie, which the split turns into a merge (a closure must close a loop),
+moving one half by the loop's misclosure; the dialog says which half moves and
+how far before the user confirms (`split_section_preview`). One undo step.
+
+**Combine Sections** (an end station's context menu, or the section menu when
+exactly two sections are selected): two sections that meet end to end become
+one. They meet when an end station of each is the same point: merged to each
+other and to nothing else, or unmerged and co-located within 1 mm horizontally
+(the state a split leaves). The kept section (the lower id by default; the
+dialog can swap) keeps its id, shot numbers, direction and position; the other
+section is reversed first when the two meet end to end or start to start. Every
+per-shot field travels, and every station reference follows its station; the
+join station keeps one comment and one name (the dialog asks when they differ)
+and the kept station's offset. Blocked, with the reason in the menu tooltip,
+for a branch, different north references or quality, a second rigid tie between
+the two, two zero datums, join stations moved by different amounts, or more
+than 99,999 shots, or two sections that share a shot identity. Every shot keeps
+its own surveyors, explorers and date; the dialog summarises the combined credit.
+Combining the two halves of a split gives the section back only when nothing
+else was connected at the split station: a split at a junction ties both halves
+to it, a branch. One undo step. Rules and edge cases: [plans/2026-11-12_merge-split-sections.md](plans/2026-11-12_merge-split-sections.md).
 
 ## 8. Command System
 

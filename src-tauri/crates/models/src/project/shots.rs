@@ -141,6 +141,28 @@ impl Project {
         FEATURE_ID_STRIDE.saturating_sub(1) as usize
     }
 
+    /// Why one more shot cannot go into `section_id`, if it cannot: the
+    /// section is missing, holds the most shots a section may, or has no shot
+    /// id left in this session ([`crate::Section::shot_ids_left`]). Read-only, so a
+    /// caller can refuse before changing anything.
+    pub fn shot_insert_refusal(&self, section_id: SectionId) -> Option<String> {
+        let Some(section) = self.get_section(section_id) else {
+            return Some(format!("Section {section_id} not found"));
+        };
+        if section.shots.len() >= Self::max_shots_per_section() {
+            return Some(format!(
+                "Section {section_id} has reached the maximum of {} shots",
+                Self::max_shots_per_section()
+            ));
+        }
+        (section.shot_ids_left() == 0).then(|| {
+            format!(
+                "Section {section_id} has used up its shot numbers for this session: save \
+                 and reopen to add a station to it"
+            )
+        })
+    }
+
     /// Add a shot to a section
     pub fn add_shot(&mut self, section_id: SectionId, data: ShotData) -> Option<&Shot> {
         let section = self.get_section_mut(section_id)?;
@@ -499,6 +521,10 @@ impl Project {
 
         let t = distance / shot.length;
         let mid_depth = shot.depth_in + t * (shot.depth_out - shot.depth_in);
+        // Every field of the parent that is not geometry or identity travels to
+        // the head piece, including any per-shot field added later: the struct
+        // update copies them all, and only the fields a split must change are
+        // named here.
         let head_data = ShotData {
             // The head child is a NEW shot; only the tail keeps the parent's
             // identity (see this method's doc comment - it is what makes every
@@ -507,23 +533,15 @@ impl Project {
             // shots with one id, and the FIRST-wins repair would then re-mint
             // the tail - moving every anchor. See [`ShotData::uuid`].
             uuid: None,
-            azimuth_in: shot.azimuth_in,
-            azimuth_out: shot.azimuth_out,
             length: distance,
-            depth_in: shot.depth_in,
             depth_out: mid_depth,
-            pitch_in: shot.pitch_in,
-            pitch_out: shot.pitch_out,
-            left: shot.left,
-            right: shot.right,
-            up: shot.up,
-            down: shot.down,
+            // A comment and a marker annotate one physical spot, so they stay on
+            // the tail (the parent's identity) and are not duplicated.
             comment: None,
-            kind: shot.kind,
             marker_index: None,
-            temperature: shot.temperature,
-            // Both pieces were surveyed together, by the same people.
-            credit: shot.credit.as_deref().cloned(),
+            // Everything else travels, credit included: both pieces were
+            // surveyed together, by the same people.
+            ..shot.to_shot_data()
         };
         let tail_updates = ShotUpdates {
             length: Some(tail_length),

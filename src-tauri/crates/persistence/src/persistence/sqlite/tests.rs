@@ -8838,3 +8838,89 @@ fn bundled_sqlite_omits_virtual_table_modules_and_extension_loading() {
         );
     }
 }
+
+/// A one-shot project whose only shot is `counter_parity_shots`' entry, with
+/// the setting then overwritten by `raw` (or deleted, for `None`).
+fn counter_parity_file(raw: Option<&str>) -> (TempDir, Database, String) {
+    let temp = TempDir::new().unwrap();
+    let mut db = Database::open(&temp.path().join("parity.stalx")).unwrap();
+    let mut project = Project::new("Parity".to_string(), None);
+    let id = project
+        .add_section(SectionData {
+            shots: vec![ShotData {
+                length: 5.0,
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .id;
+    let uuid = project.get_section(id).unwrap().shots[0]
+        .uuid
+        .clone()
+        .unwrap();
+    project.counter_parity_shots.insert(uuid.clone());
+    db.save_project(&project).unwrap();
+    assert_eq!(
+        db.load_project().unwrap().counter_parity_shots,
+        std::collections::BTreeSet::from([uuid.clone()]),
+        "precondition: the entry round-trips"
+    );
+    match raw {
+        Some(raw) => {
+            db.conn
+                .execute(
+                    "UPDATE project_settings SET value = ?1 WHERE key = 'counter_parity_shots'",
+                    [raw],
+                )
+                .unwrap();
+        }
+        None => {
+            db.conn
+                .execute(
+                    "DELETE FROM project_settings WHERE key = 'counter_parity_shots'",
+                    [],
+                )
+                .unwrap();
+        }
+    }
+    (temp, db, uuid)
+}
+
+/// The counter-parity set only refines single-neighbour dive-plan pins, so a
+/// missing or malformed setting reads as none rather than failing the load.
+#[test]
+fn a_missing_or_malformed_counter_parity_setting_reads_as_none() {
+    for raw in [
+        None,
+        Some("not json"),
+        Some("{\"a\": 1}"),
+        Some("[1, 2]"),
+        Some("null"),
+    ] {
+        let (_temp, db, _) = counter_parity_file(raw);
+        let loaded = db.load_project();
+        assert!(loaded.is_ok(), "{raw:?} must not error the load");
+        assert!(
+            loaded.unwrap().counter_parity_shots.is_empty(),
+            "{raw:?} must read as none"
+        );
+    }
+}
+
+/// An entry for a shot the file does not hold is dropped at load, so it cannot
+/// later attach to a shot that takes that uuid.
+#[test]
+fn a_counter_parity_entry_for_a_shot_the_file_does_not_hold_is_dropped() {
+    let stale = "00000000-0000-4000-8000-000000000000";
+    let (_temp, db, uuid) = counter_parity_file(None);
+    db.conn
+        .execute(
+            "INSERT INTO project_settings (key, value) VALUES ('counter_parity_shots', ?1)",
+            [serde_json::to_string(&[stale, uuid.as_str()]).unwrap()],
+        )
+        .unwrap();
+    assert_eq!(
+        db.load_project().unwrap().counter_parity_shots,
+        std::collections::BTreeSet::from([uuid])
+    );
+}

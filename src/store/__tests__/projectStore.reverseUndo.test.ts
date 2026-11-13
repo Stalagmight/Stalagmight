@@ -308,6 +308,8 @@ describe('frontend mutation ordering (#24)', () => {
       if (command === 'can_undo' || command === 'can_redo') return false;
       if (command === 'get_project_warnings') return [];
       if (command === 'check_project_integrity') return { messages: [], save_blocked: false };
+      // No anchor for the origin, so the reverse mirror places it (the path under test).
+      if (command === 'plan_anchors_for_refs') return [null];
       // Both mutations report a reverse, at DIFFERENT counts.
       call += 1;
       const shot_count = call === 1 ? 7 : 6;

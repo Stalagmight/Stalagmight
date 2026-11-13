@@ -427,6 +427,32 @@ impl Database {
             }
         }
 
+        // Shots whose record parity runs against their section's (dive-plan
+        // pins only), same table. Only shots the project still holds are
+        // written; absent when none, so a project that never combined is
+        // unchanged.
+        let held: std::collections::HashSet<&str> = project
+            .sections
+            .iter()
+            .flat_map(|s| s.shots.iter().filter_map(|shot| shot.uuid.as_deref()))
+            .collect();
+        let counter_parity: Vec<&String> = project
+            .counter_parity_shots
+            .iter()
+            .filter(|uuid| held.contains(uuid.as_str()))
+            .collect();
+        if counter_parity.is_empty() {
+            tx.execute(
+                "DELETE FROM project_settings WHERE key = 'counter_parity_shots'",
+                [],
+            )?;
+        } else {
+            tx.execute(
+                "INSERT OR REPLACE INTO project_settings (key, value) VALUES ('counter_parity_shots', ?1)",
+                params![serde_json::to_string(&counter_parity)?],
+            )?;
+        }
+
         tx.commit()?;
         tracing::debug!("Transaction committed");
 

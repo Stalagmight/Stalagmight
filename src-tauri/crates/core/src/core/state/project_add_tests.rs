@@ -1988,3 +1988,66 @@ fn a_long_merge_source_path_keeps_its_file_name() {
     );
     assert!(label.chars().count() <= 480, "{}", label.chars().count());
 }
+
+// ===========================================================================
+// Record parity (`counter_parity_shots`) rides with each copied shot
+// ===========================================================================
+
+/// Every shot's record parity in section `id`, in shot order.
+fn record_parities(project: &Project, id: SectionId) -> Vec<bool> {
+    let section = project.get_section(id).unwrap();
+    section
+        .shots
+        .iter()
+        .map(|shot| project.shot_record_parity(section, shot.uuid.as_deref()))
+        .collect()
+}
+
+/// Add copies each shot's record parity from its SOURCE's counter-parity set,
+/// onto whatever uuid the copy ends with. The target's entry for an id the copy
+/// had to yield belongs to the target's shot: the copy must not take it.
+#[test]
+fn add_carries_each_shots_record_parity_from_its_source() {
+    let temp = TempDir::new().unwrap();
+    let mut target = Project::new("Target".to_string(), None);
+    let t0 = target
+        .add_section(section(
+            "T0",
+            vec![shot("t0-0", 0.0, 10.0, 1.0), shot("t0-1", 90.0, 8.0, 1.5)],
+        ))
+        .id;
+    target.counter_parity_shots.insert("t0-0".to_string());
+    let target_path = save_to(temp.path(), "target.stalx", &target);
+
+    let mut source = Project::new("Source".to_string(), None);
+    source.add_section(section(
+        "S",
+        vec![
+            shot("t0-0", 0.0, 10.0, 1.0),
+            shot("t0-1", 90.0, 8.0, 1.5),
+            shot("s-2", 180.0, 6.0, 2.0),
+        ],
+    ));
+    source.counter_parity_shots.insert("t0-1".to_string());
+    source.counter_parity_shots.insert("s-2".to_string());
+    let source_path = save_to(temp.path(), "source.stalx", &source);
+
+    let state = AppState::new().unwrap();
+    assert!(state.open_project(target_path.clone()).success);
+    let added = add(&state, &source_path);
+    assert!(added.success, "{:?}", added.error);
+    let copy = added.section_ids[0];
+
+    let check = |project: &Project, what: &str| {
+        assert_eq!(record_parities(project, t0), vec![true, false], "{what}");
+        assert_eq!(
+            record_parities(project, copy),
+            vec![false, true, true],
+            "{what}"
+        );
+    };
+    check(&state.get_project_state().unwrap(), "after the add");
+    save(&state);
+    reopen(&state, &target_path);
+    check(&state.get_project_state().unwrap(), "after a reopen");
+}

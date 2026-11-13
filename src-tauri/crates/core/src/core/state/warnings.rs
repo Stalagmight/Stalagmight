@@ -9,6 +9,48 @@ use crate::persistence::Database;
 
 use super::AppState;
 
+/// Which section each live shot uuid is in now, for an ignored-warning row
+/// (keyed by `(section_id, shot_uuid)`) whose stored section no longer holds
+/// its shot. Split Section Here, delete-and-split and Combine Sections all move
+/// shots to another section with their uuid, and the ignore has to follow the
+/// shot instead of silently lapsing.
+///
+/// Only a uuid exactly one live shot holds has a home: shot uuids are unique
+/// across the live project, and a repeat (a legacy file) stays where its row
+/// says. Shared by the read side (`compute_project_*`) and the save carry-over
+/// (`project_io`), so an ignore that follows its shot in the session is also
+/// re-keyed by the next save.
+pub(super) struct ShotHomes<'p> {
+    homes: std::collections::HashMap<&'p str, Option<SectionId>>,
+}
+
+impl<'p> ShotHomes<'p> {
+    pub(super) fn of(project: &'p Project) -> Self {
+        let mut homes: std::collections::HashMap<&'p str, Option<SectionId>> =
+            std::collections::HashMap::new();
+        for section in &project.sections {
+            for shot in &section.shots {
+                if let Some(uuid) = shot.uuid.as_deref() {
+                    homes
+                        .entry(uuid)
+                        .and_modify(|home| *home = None)
+                        .or_insert(Some(section.id));
+                }
+            }
+        }
+        Self { homes }
+    }
+
+    /// The section `uuid` moved to, when `stored` (the row's section) no longer
+    /// holds it and exactly one other section does.
+    pub(super) fn moved_to(&self, stored: SectionId, uuid: &str) -> Option<SectionId> {
+        match self.homes.get(uuid) {
+            Some(Some(home)) if *home != stored => Some(*home),
+            _ => None,
+        }
+    }
+}
+
 impl AppState {
     /// Compute project warnings from the given project.
     /// Used by both get_project_warnings command and load_project_full for validation phase.
@@ -76,6 +118,9 @@ impl AppState {
         };
         let mut resolved_by_renamed: std::collections::HashMap<(u32, String), HashSet<&str>> =
             std::collections::HashMap::new();
+        // A shot that a split or a combine moved into another section keeps its
+        // uuid, so its ignore follows it there (see `ShotHomes`).
+        let homes = ShotHomes::of(project);
         for r in &resolved {
             match &r.shot_uuid {
                 Some(uuid) => {
@@ -83,14 +128,23 @@ impl AppState {
                         .entry((r.section_id, uuid.as_str()))
                         .or_default()
                         .insert(r.warning_code.as_str());
-                    if derive_aliases && !live_ids.contains(&(r.section_id, uuid.as_str())) {
-                        resolved_by_renamed
-                            .entry((
-                                r.section_id,
-                                crate::models::reminted_shot_uuid(r.section_id, uuid),
-                            ))
-                            .or_default()
-                            .insert(r.warning_code.as_str());
+                    let renamed =
+                        derive_aliases && !live_ids.contains(&(r.section_id, uuid.as_str())) && {
+                            let alias = crate::models::reminted_shot_uuid(r.section_id, uuid);
+                            let held = live_ids.contains(&(r.section_id, alias.as_str()));
+                            resolved_by_renamed
+                                .entry((r.section_id, alias))
+                                .or_default()
+                                .insert(r.warning_code.as_str());
+                            held
+                        };
+                    if !renamed {
+                        if let Some(home) = homes.moved_to(r.section_id, uuid) {
+                            resolved_by_uuid
+                                .entry((home, uuid.as_str()))
+                                .or_default()
+                                .insert(r.warning_code.as_str());
+                        }
                     }
                 }
                 None => {
@@ -343,6 +397,74 @@ impl AppState {
                 reason = %e,
                 purpose = "pin ignores across a section reverse",
                 "Could not pin position-keyed warning ignores; one may migrate to the mirrored shot"
+            ),
+        }
+    }
+
+    /// Pin the position-keyed ignores of `section_ids`' shots to the shots'
+    /// uuids BEFORE a structural edit moves those shots to another section or
+    /// index (Split Section Here, Combine Sections, and the reverse inside a
+    /// combine). A NULL-uuid row is keyed by `(section_id, shot_id)`, and the
+    /// move changes both, so the ignore would lapse - or, once a later
+    /// renumber lands another shot on that id, suppress the wrong warning. A
+    /// uuid-keyed row then follows its shot through [`ShotHomes`], in the
+    /// session and through the save.
+    ///
+    /// The same rule as [`Self::pin_position_keyed_warnings_after_reverse`]
+    /// (which see for why): only onto a uuid the FILE already holds. A shot
+    /// whose uuid is not on disk yet keeps its position-keyed row, which the
+    /// move then strands - the same residual the reverse documents.
+    pub(super) fn pin_position_keyed_ignores_before_move(&self, section_ids: &[SectionId]) {
+        let live: std::collections::HashMap<(u32, u32), String> = {
+            let guard = match self.project.lock() {
+                Ok(g) => g,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            let Some(project) = guard.as_ref() else {
+                return;
+            };
+            section_ids
+                .iter()
+                .filter_map(|sid| project.get_section(*sid))
+                .flat_map(|section| {
+                    section
+                        .shots
+                        .iter()
+                        .filter_map(move |shot| Some(((section.id, shot.id), shot.uuid.clone()?)))
+                })
+                .collect()
+        };
+        if live.is_empty() {
+            return;
+        }
+        let db_guard = match self.database.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let Some(db) = db_guard.as_ref() else {
+            return;
+        };
+        let live: std::collections::HashMap<(u32, u32), String> = live
+            .into_iter()
+            .filter(|((section_id, _), uuid)| {
+                db.shot_uuid_is_persisted(*section_id, uuid)
+                    .unwrap_or(false)
+            })
+            .collect();
+        if live.is_empty() {
+            return;
+        }
+        match db.backfill_resolved_warning_uuids(&live) {
+            Ok(0) => {}
+            Ok(n) => tracing::info!(
+                pinned = n,
+                "Pinned position-keyed warning ignores to their shot's UUID before a section \
+                 split or combine"
+            ),
+            Err(e) => tracing::warn!(
+                reason = %e,
+                purpose = "pin ignores across a section split or combine",
+                "Could not pin position-keyed warning ignores; one may lapse with its moved shot"
             ),
         }
     }

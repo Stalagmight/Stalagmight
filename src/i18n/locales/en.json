@@ -1710,6 +1710,16 @@
       "mapImagery": {
         "title": "Map imagery"
       }
+    },
+    "splitSectionHere": {
+      "halvesNotConnected": "The halves are not connected: merge the two cut stations if routes and gas planning should continue across them."
+    },
+    "combineSections": {
+      "summary": "Combining {{kept}} ({{keptShots}}) and {{other}} ({{otherShots}}) at station {{station}}",
+      "shots_one": "{{count}} shot",
+      "shots_other": "{{count}} shots",
+      "creditTitle": "Survey credit of the combined section ({{shots}})",
+      "personShots": "{{name}} ({{shots}})"
     }
   },
   "undo": {
@@ -2394,7 +2404,8 @@
       "mergeChecking": "Checking merge compatibility...",
       "mergeNotPossible": "Merge not possible.",
       "anchoredSegmentsError": "Failed to load anchored segments. Move Segment is temporarily blocked.",
-      "noCommentToMove": "No comment to move"
+      "noCommentToMove": "No comment to move",
+      "distanceOriginReset": "The station the distance colors started from is gone, so they start from the entrance again"
     },
     "depthLegend": {
       "aria": "Depth scale from {{min}} (shallow) to {{max}} (deep)",

@@ -130,6 +130,30 @@ group connected) is the opposite case and is governed by
 coincident is simply not stitched. The pair is arbitrary rather than surveyed, so
 moving a group onto it would invent geometry.
 
+## Closures across a Split Section Here or a Combine Sections
+
+- **Split Section Here** leaves a closure on the split station with the FIRST
+  half only; it is not copied to the second half's co-located start. A copy
+  would count the same physical loop twice, and when it is the second half's
+  only tie the promotion rule above would turn it into a merge and move the
+  second half by the loop's misclosure.
+- A closure that CROSSES the cut (from a station before it to one past it, with
+  nothing merged at the split station) is promoted by that rule when it is the
+  halves' only tie, and one half moves by the misclosure. The split is not
+  refused and the promotion is not skipped: keeping a sole-tie closure would
+  only last until the next load or edit converts it, and refusing would leave
+  the user deleting the closure, splitting and merging by hand, with the same
+  move. Instead the Split dialog shows which half moves and how far before the
+  user confirms (`AppState::split_section_preview`, the split run on a copy).
+- **Combine Sections** re-keys a closure on either join station onto the one
+  joined station, drops any closure between the two join stations (whatever
+  its length, it would tie the joined station to itself), and
+  drops a closure the combine made identical to another one. An UNALIGNED
+  closure between the two sections does not block the combine: it becomes a
+  closure inside one section, which the least-squares solve adjusts like any
+  other. An ALIGNED one blocks it, as a second rigid tie would close a loop
+  inside the section.
+
 ## Deferred: Distribution at Create Time (Proportional/Equal)
 
 These algorithms remain in the codebase for possible future use, but are **disabled** today.

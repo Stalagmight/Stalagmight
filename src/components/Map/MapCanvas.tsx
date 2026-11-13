@@ -43,6 +43,7 @@ import { getTileConfig } from '../../utils/tileConfig';
 import { useMapTools } from '../../hooks/useMapTools';
 import { useGasPlanPointMarkers } from './useGasPlanPointMarkers';
 import { useGasPlanDropMarkers } from './useGasPlanDropMarkers';
+import { useStationHighlights } from './useStationHighlights';
 import SurveyLayer, { type SurveyLayerCallbacks } from './SurveyLayer';
 import { SATELLITE_BOTTOM_CANDIDATES } from './mapUtils';
 import { renderFatalMessage } from './surveyLayer/mapErrors';
@@ -94,13 +95,6 @@ interface MoveDragState {
   startLngLat: { lng: number; lat: number };
   currentLngLat: { lng: number; lat: number };
 }
-
-// Helper to convert StationRef to highlight ID format (section_id:station_index)
-// Moved outside component to avoid recreating on each render
-const stationRefToId = (ref: { section_id: number; station_index: number } | null): string | null => {
-  if (!ref) return null;
-  return `${ref.section_id}:${ref.station_index}`;
-};
 
 // Screen pixels per meter at the map center, by projecting a 1 meter step north
 // (1 meter = 1/111320 degrees). Feeds the to-scale placement preview only, so it
@@ -2445,24 +2439,8 @@ function MapCanvas() {
   // Hover sync effects moved to <MapHoverSync> child component to avoid
   // re-rendering this large component on every mousemove (~60fps).
 
-  // Sync highlight layer with snap/merge state
-  // Shows snapped/origin stations even when stations layer is hidden
-  useEffect(() => {
-    if (!surveyLayerRef.current) return;
-
-    const highlightIds: string[] = [];
-
-    const snappedId = stationRefToId(snappedStation);
-    if (snappedId) highlightIds.push(snappedId);
-
-    const mergeAId = stationRefToId(mergeStationA);
-    if (mergeAId && !highlightIds.includes(mergeAId)) highlightIds.push(mergeAId);
-
-    const mergeBId = stationRefToId(mergeStationB);
-    if (mergeBId && !highlightIds.includes(mergeBId)) highlightIds.push(mergeBId);
-
-    surveyLayerRef.current.setHighlightedStations(highlightIds);
-  }, [snappedStation, mergeStationA, mergeStationB, mapLoaded]);
+  // Highlight layer: snap/merge state plus an open split/combine dialog's preview.
+  useStationHighlights(surveyLayerRef, mapLoaded, snappedStation, mergeStationA, mergeStationB);
 
   // Sync shot data labels visibility with SurveyLayer (gated by showShots)
   useEffect(() => {
