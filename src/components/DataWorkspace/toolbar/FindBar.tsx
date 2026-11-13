@@ -199,8 +199,10 @@ export function FindBar({ view, nav, inputRef, editingBlocked, onClosed }: FindB
       {toggleButton('matchCase', 'Aa', t('dataToolbar.find.matchCase'), 'data-find-match-case')}
       {toggleButton('wholeWord', <span className="underline underline-offset-2">ab</span>, t('dataToolbar.find.wholeWord'), 'data-find-whole-word')}
       {toggleButton('regex', '.*', t('dataToolbar.find.regex'), 'data-find-regex')}
+      {/* Room is reserved only while there is a count: an idle find box stays
+          narrow enough for the toolbar to keep its labels. */}
       <span
-        className={`ml-1 min-w-[3.5rem] shrink-0 whitespace-nowrap text-center tabular-nums ${
+        className={`shrink-0 whitespace-nowrap text-center tabular-nums ${count ? 'ml-1 min-w-[3.5rem]' : ''} ${
           count?.tone === 'error' ? 'text-error' : 'text-text-secondary'
         }`}
         title={count?.title}

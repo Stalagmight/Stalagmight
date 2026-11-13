@@ -18,9 +18,12 @@ export const ToolbarCompactContext = createContext(false);
 export const FIELD_BOX_CLASS =
   'flex h-7 items-center gap-0.5 rounded border border-border bg-background pl-1.5 pr-0.5 focus-within:border-accent';
 
-/** The bare input inside a field box (the box draws the border and focus). */
+/** The bare input inside a field box (the box draws the border and focus).
+ *  `w-0` + a floor: an <input>'s intrinsic width (~20 characters) must not
+ *  count toward the box's narrowest size, so the find box can shrink to its
+ *  controls plus a short input before the toolbar drops its labels. */
 export const FIELD_INPUT_CLASS =
-  'h-full min-w-0 flex-1 border-0 bg-transparent px-1 py-0 text-xs text-text-primary outline-none placeholder:text-text-secondary focus:border-0 disabled:cursor-not-allowed';
+  'h-full w-0 min-w-[40px] flex-1 border-0 bg-transparent px-1 py-0 text-xs text-text-primary outline-none placeholder:text-text-secondary focus:border-0 disabled:cursor-not-allowed';
 
 /** Classes for a flat toolbar button: open (accent fill), active (it narrows
  *  the view right now) or idle. */

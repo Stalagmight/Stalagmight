@@ -116,7 +116,8 @@ export function MapToggle() {
   return (
     <button
       type="button"
-      className={toolbarButtonClass({ active: open })}
+      // Pushed to the row's end (the toolbar's last control).
+      className={`${toolbarButtonClass({ active: open })} ml-auto`}
       aria-pressed={open}
       aria-label={compact ? t('dataToolbar.map.button') : undefined}
       title={open ? t('dataToolbar.map.hide') : t('dataToolbar.map.show')}

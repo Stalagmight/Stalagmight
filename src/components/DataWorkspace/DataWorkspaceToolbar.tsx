@@ -4,11 +4,13 @@
  *   box under it while replace is open | row type | Sections | Filter |
  *   Columns | Tint | View | ... Map
  *   then the active filter chips (while anything narrows the view).
- * Below COMPACT_BELOW_PX the menu buttons drop their labels (icon + chevron,
- * label kept as the accessible name) so the controls stay on one line.
+ * The find box shrinks first (to its narrowest, then up to MAX_FIND_PX when
+ * there is room); only when the labelled row still does not fit on one line
+ * do the menu buttons drop their labels (icon + chevron, label kept as the
+ * accessible name and tooltip) - measured, see useToolbarCompact.
  * Reads the model / view from the shell's contexts and the workspace store.
  */
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useDataModel, useDataView, type DataModel } from './DataModelContext';
 import { useDataWorkspaceStore } from './store';
@@ -26,27 +28,9 @@ import { useFindShortcuts } from './toolbar/useFindShortcuts';
 import { useReplace } from './toolbar/useReplace';
 import { installRevealPolicy } from './toolbar/revealPolicy';
 import { ToolbarCompactContext } from './toolbar/ToolbarMenu';
+import { useToolbarCompact } from './toolbar/useToolbarCompact';
 
 installRevealPolicy();
-
-/** Toolbar width under which the menu buttons show icons only. */
-export const COMPACT_BELOW_PX = 1080;
-
-function useCompact(ref: RefObject<HTMLElement>): boolean {
-  const [compact, setCompact] = useState(false);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el || typeof ResizeObserver === 'undefined') return undefined;
-    const ro = new ResizeObserver(([entry]) => {
-      // 0 = not laid out (hidden, or a test DOM): keep the labels.
-      const width = entry?.contentRect.width ?? 0;
-      if (width > 0) setCompact(width < COMPACT_BELOW_PX);
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [ref]);
-  return compact;
-}
 
 export function DataWorkspaceToolbar() {
   const model = useDataModel();
@@ -57,8 +41,8 @@ export function DataWorkspaceToolbar() {
 
 function Toolbar({ model, view }: { model: DataModel; view: DataView }) {
   const { t } = useTranslation();
-  const rootRef = useRef<HTMLDivElement>(null);
-  const compact = useCompact(rootRef);
+  const rowRef = useRef<HTMLDivElement>(null);
+  const compact = useToolbarCompact(rowRef);
   const findRef = useRef<HTMLInputElement>(null);
   const replaceRef = useRef<HTMLInputElement>(null);
   const replaceOpen = useDataWorkspaceStore((s) => s.search.replaceOpen);
@@ -77,7 +61,6 @@ function Toolbar({ model, view }: { model: DataModel; view: DataView }) {
   return (
     <ToolbarCompactContext.Provider value={compact}>
       <div
-        ref={rootRef}
         className="shrink-0 border-b border-border bg-panel text-xs text-text-primary"
         role="group"
         aria-label={t('dataToolbar.aria')}
@@ -85,8 +68,10 @@ function Toolbar({ model, view }: { model: DataModel; view: DataView }) {
         data-compact={compact ? 'true' : undefined}
         data-testid="data-toolbar"
       >
-        <div className="flex flex-wrap items-start gap-x-2 gap-y-1 px-3 py-1.5">
-          <div className="flex min-w-[17rem] flex-[0_1_26rem] flex-col gap-1">
+        {/* One line, never wrapped: the find box gives way first (its own
+            minimum is its controls + a short input), then the labels go. */}
+        <div ref={rowRef} className="flex flex-nowrap items-start gap-x-2 px-3 py-1.5" data-testid="data-toolbar-row">
+          <div className="flex max-w-[360px] flex-[1_1_260px] flex-col gap-1">
             <FindBar
               view={view}
               nav={nav}
@@ -114,7 +99,6 @@ function Toolbar({ model, view }: { model: DataModel; view: DataView }) {
           <ColumnsMenu revealed={view.revealedColumns} />
           <TintMenu ctx={model.ctx} />
           <ViewMenu ctx={model.ctx} />
-          <span className="ml-auto" />
           <MapToggle />
         </div>
         <FilterChips model={model} view={view} />
