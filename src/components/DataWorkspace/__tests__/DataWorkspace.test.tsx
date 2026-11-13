@@ -191,6 +191,37 @@ describe('DataWorkspace empty state', () => {
   });
 });
 
+describe('DataWorkspace keyboard focus', () => {
+  const grid = () => document.querySelector<HTMLElement>('[role="grid"]')!;
+
+  it('puts the keyboard in the grid on entry', () => {
+    render(<DataWorkspace />);
+    expect(grid()).toContainElement(document.activeElement as HTMLElement);
+  });
+
+  it('never pulls the keyboard out of the find box when rows come back', () => {
+    render(<DataWorkspace />);
+    act(() => useDataWorkspaceStore.getState().setSearch({ open: true }));
+    const input = screen.getByTestId('data-find-input');
+    input.focus();
+    fireEvent.change(input, { target: { value: 'zzzz' } });
+    act(() => useDataWorkspaceStore.getState().setSearch({ query: 'zzzz', onlyMatchingRows: true }));
+    expect(screen.getByTestId('data-empty')).toBeInTheDocument();
+    act(() => useDataWorkspaceStore.getState().setSearch({ query: 'squeeze' }));
+    expect(screen.queryByTestId('data-empty')).toBeNull();
+    expect(document.activeElement).toBe(input);
+  });
+
+  it('does not take the keyboard from the find box on entry either', () => {
+    useDataWorkspaceStore.setState({ search: { ...useDataWorkspaceStore.getState().search, open: true, query: 'zzzz', onlyMatchingRows: true } });
+    render(<DataWorkspace />);
+    const input = screen.getByTestId('data-find-input');
+    input.focus();
+    act(() => useDataWorkspaceStore.getState().setSearch({ query: 'squeeze' }));
+    expect(document.activeElement).toBe(input);
+  });
+});
+
 describe('DataSectionHeader', () => {
   it('shows the counts and length, toggles collapse and jumps to the parent', () => {
     const nav = { goToRow: vi.fn() } as unknown as DataNav;

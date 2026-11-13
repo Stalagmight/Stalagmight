@@ -51,6 +51,17 @@ interface EmptyAction {
 
 const EMPTY_ACTION_CLASS = 'rounded border border-border px-2 py-0.5 text-xs text-text-primary hover:bg-accent-10';
 
+/** The keyboard is somewhere the user put it: a field, the toolbar, a menu or
+ *  a dialog. Entry focus never takes it from there. */
+function focusIsElsewhereOnPurpose(el: Element | null): boolean {
+  if (!el || el === document.body) return false;
+  return (
+    isTypingTarget(el) ||
+    el.closest('[data-testid="data-toolbar"], [role="menu"], [role="dialog"], [role="alertdialog"], [role="listbox"], [data-dropdown-open]') !==
+      null
+  );
+}
+
 function EmptyState({ message, showAllRows, clearFilters }: { message: string; showAllRows?: EmptyAction; clearFilters?: EmptyAction }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center text-sm text-text-secondary" data-testid="data-empty">
@@ -135,12 +146,20 @@ export function DataWorkspace() {
   }, []);
 
   // Entering Data puts the keyboard in the grid (the active row is restored by
-  // the grid from store.activeRowKey).
+  // the grid from store.activeRowKey) - once per entry (this component mounts
+  // on every entry), as soon as the grid has rows. Never later: the grid
+  // coming back (the find's "only rows with matches" emptied it, the filters
+  // changed) must not pull the keyboard out of the find box or a menu.
   const hasRows = (view?.rows.length ?? 0) > 0;
+  const entryFocusPending = useRef(true);
   useEffect(() => {
-    if (!hasRows) return;
+    if (!hasRows || !entryFocusPending.current) return;
     const grid = bodyRef.current?.querySelector<HTMLElement>('[role="grid"]');
-    if (grid && !grid.contains(document.activeElement)) grid.focus({ preventScroll: true });
+    if (!grid) return;
+    entryFocusPending.current = false;
+    if (!grid.contains(document.activeElement) && !focusIsElsewhereOnPurpose(document.activeElement)) {
+      grid.focus({ preventScroll: true });
+    }
   }, [hasRows]);
 
   const onKeyDown = useCallback(
