@@ -196,8 +196,8 @@ test.describe('Combine Sections', () => {
 
     await expect(page.getByTestId('combine-closure-join')).toContainText('East and West meet here across a loop closure');
     await expect(page.getByTestId('combine-note-torn')).toContainText('This connection becomes a loop closure:');
-    await expect(page.getByTestId('combine-torn-tie')).toHaveCount(1);
-    await expect(page.getByTestId('combine-torn-tie')).toContainText('The merge of');
+    await expect(page.locator('[data-testid^="combine-torn-tie-"]')).toHaveCount(1);
+    await expect(page.locator('[data-testid^="combine-torn-tie-"]')).toContainText('The merge of');
     await page.getByTestId('combine-confirm').click();
     await waitForNoDialogs(page);
 

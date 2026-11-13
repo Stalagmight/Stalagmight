@@ -11,6 +11,10 @@ Update this file every time a new version is tagged.
 
 - **Change a section's color from the Sections panel** - click the color dot next to a section to open the color picker. The new color applies to the whole section, and Undo reverts it in one step. In a read-only view, clicking the dot tells you the color cannot be changed there ([#654](https://github.com/Stalagmight/Stalagmight/issues/654))
 
+### Changed
+
+- **Combine Sections works across loops** - two sections whose ends are tied by a loop closure can now be combined there: right-click either end and choose Combine Sections. The survey says the two ends are one point, so one side moves by the loop's misclosure to close it (the other section and what is merged to it, or the section you keep when a zero datum holds the other). Combining is no longer refused because the two sections also meet somewhere else, are tied together a second time, or are part of a loop: the merge or snapped closure that would tie the combined section to itself becomes an ordinary loop closure, and the loop's misclosure moves there. Different north references, quality, moved join stations, a section passing through the join, repeated shot identities and depth gaps of any size no longer block either: the other section's bearings are converted to the kept section's north reference, the kept section's quality and join position win, and a section with no shots can be combined. The dialog lists everything that changes, for the section you keep, before you combine. Still refused: two sections that each carry a zero datum, and sections that do not meet (merge two of their ends, or create a loop closure between them, first)
+
 ## [0.5.4] - 2026-11-13
 
 ### Added

@@ -363,7 +363,7 @@ describe('CombineSectionsDialog', () => {
     );
     expect(screen.getByTestId('combine-note-move-with')).toHaveTextContent('Side is attached to it and moves with it.');
     expect(screen.getByTestId('combine-note-torn')).toHaveTextContent('This connection becomes a loop closure:');
-    expect(screen.getAllByTestId('combine-torn-tie').map((li) => li.textContent)).toEqual(['The merge of 5:2 and 9:1']);
+    expect(screen.getAllByTestId(/^combine-torn-tie-/).map((li) => li.textContent)).toEqual(['The merge of 5:2 and 9:1']);
     expect(screen.queryByTestId('combine-note-kept-moves')).toBeNull();
 
     fireEvent.click(screen.getByTestId('combine-swap-kept'));
@@ -371,7 +371,7 @@ describe('CombineSectionsDialog', () => {
     expect(screen.getByTestId('combine-note-kept-moves')).toHaveTextContent(
       'Main-B is the one that moves, because a zero datum holds Main-A in place.'
     );
-    expect(screen.getAllByTestId('combine-torn-tie').map((li) => li.textContent)).toEqual([
+    expect(screen.getAllByTestId(/^combine-torn-tie-/).map((li) => li.textContent)).toEqual([
       'The snapped closure between 2:0 and 9:0',
     ]);
     fireEvent.click(screen.getByTestId('combine-confirm'));

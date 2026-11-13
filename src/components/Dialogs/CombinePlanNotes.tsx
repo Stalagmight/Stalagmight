@@ -130,17 +130,18 @@ export function CombinePlanNotes({
           <li data-testid="combine-note-torn">
             {t('dialogs.combineSections.tornTitle', { count: plan.torn_ties.length })}
             <ul className="list-[circle] pl-5 mt-1 space-y-0.5">
-              {plan.torn_ties.map((tie) => (
-                <li
-                  key={`${tie.station_a.section_id}:${tie.station_a.station_index}-${tie.station_b.section_id}:${tie.station_b.station_index}`}
-                  data-testid="combine-torn-tie"
-                >
-                  {t(tie.kind === 'merge' ? 'dialogs.combineSections.tornMerge' : 'dialogs.combineSections.tornSnapped', {
-                    a: stationLabel(tie.station_a),
-                    b: stationLabel(tie.station_b),
-                  })}
-                </li>
-              ))}
+              {plan.torn_ties.map((tie) => {
+                const id = `${tie.station_a.section_id}-${tie.station_a.station_index}-${tie.station_b.section_id}-${tie.station_b.station_index}`;
+                const key = tie.kind === 'merge' ? 'tornMerge' : 'tornSnapped';
+                return (
+                  <li key={id} data-testid={`combine-torn-tie-${id}`}>
+                    {t(`dialogs.combineSections.${key}`, {
+                      a: stationLabel(tie.station_a),
+                      b: stationLabel(tie.station_b),
+                    })}
+                  </li>
+                );
+              })}
             </ul>
             <span className="block mt-1 text-text-secondary">{t('dialogs.combineSections.tornWhy')}</span>
           </li>

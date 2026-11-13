@@ -27,10 +27,10 @@ the inverse of a split, at a junction too. Both are one undo step.
 
 ## Combine rules
 
-The rule: **the two chosen sections meet end to end at exactly one point; other
-sections there stay attached as branches.** A candidate is an end station
-(index 0 or `len`) of two different sections, both with shots, at the same
-point. The point is the same in one of two ways:
+The rule: **the two chosen sections meet end to end; other sections there stay
+attached as branches.** A candidate is an end station (index 0 or `len`) of two
+different sections at the same point (a section with no shots has one station,
+both of its ends). The point is the same in one of three ways:
 
 - **Merged.** The two stations are in one merge group.
 - **Co-located.** The stations are not merged to each other, and their chain
@@ -38,6 +38,9 @@ point. The point is the same in one of two ways:
   offset plus the shot walk, without manual station offsets. Depth is not part
   of the match (see the depth row below). This is the state a fresh split
   leaves.
+- **Across a loop closure** (added 2026-11-13). A closure ties the two
+  stations, or their merge groups: the survey says they are one point, apart
+  by the loop's misclosure. One side moves by it (see "Across loops" below).
 
 Other sections at the point:
 
@@ -47,56 +50,116 @@ Other sections at the point:
   on a prepend, and a branch merged to both join stations is merged once.
 - **An end there that is not merged** is left as it is, a separate section end
   at the same point; the dialog says so (`CombineCandidate::loose_ends`).
-- **A station in the middle of a section, merged there,** blocks: that section
-  passes through the point and would cross the combined one.
+- **A station in the middle of a section, merged there,** passes through: it
+  stays merged to the joined station, a crossing
+  (`CombineCandidate::passing_through`). It blocked until 2026-11-13.
 
-`combine_candidate_for_sections` tries all four pairings and needs exactly one
-to be eligible. The station query (`combine_candidates(station)`) lists every
-other section with an end at the point, each answered by the same pair rule,
-so the station menu, the Sections panel and the command always agree. At a
+`combine_candidate_for_sections` tries all four pairings; when more than one
+touches (a loop of two sections) it picks a merge first, then co-located ends,
+then a closure, then the smaller gap, then one that needs no reverse. The
+station query (`combine_candidates(station)`) lists every other section with an
+end at the point (merged, co-located, or across a closure from it), each joined
+at the clicked end. The dialog sends that join (`CombineSectionsOptions::join`)
+and the command re-checks exactly it, so the station menu, the Sections panel
+and the command always agree. At a
 junction (more than one partner) the menu opens the dialog on a picker: each
 partner with its name and shot count, enabled or disabled with its own reason.
 Past `MAX_COMBINE_PARTNERS` (16) other ends the point is a pile (unplaced
 sections all start at the origin), not a junction to pick from; the menu points
 to the Sections panel, which combines any two.
 
-**Blocked**, with the reason shown in the menu tooltip and the dialog:
+**Refused**, with the reason shown in the menu row and the dialog:
 
 | Condition | Why |
 |---|---|
-| A section merged at the join at a station in its middle, or an end merged only to the middle of another section | That section passes through the point: it would cross the combined section, and there is no other end to join |
-| Different north reference or quality | Bearings would change meaning; quality weights the adjustment |
-| Still rigidly tied once the join is gone (merge or aligned closure, directly or through other sections) | A rigid loop. `merge_stations` refuses the same shape. An unaligned closure stays as a loop to adjust inside the section |
-| Both join stations carry a zero datum, or (co-located) both rigid groups are anchored | Two datums in one rigid group |
-| Join stations' manual offsets differ by more than 1 mm | The joined station keeps the kept one's offset |
-| Co-located, unmerged ends more than 1 m apart in depth | At one horizontal point but that far apart vertically they are two points (a shaft, stacked passages), not one station read twice; merging them first averages their depth deliberately. Between 5 cm (half the 0.1 m resolution depth gauges record) and 1 m the dialog says how far each end moves: the joined station takes the average of the shot before and after it |
-| A merged join more than 1 mm apart | The merge is torn, and the combine would move the other section |
-| The two sections share a shot identity (one shot uuid in both) | The combined section would hold one shot twice, and every anchor names the first (from #713) |
-| More than 99,999 shots, sections that do not meet or meet at both ends, a section with no shots | Shot-id budget; nothing or something ambiguous to combine |
+| Both sections carry a zero datum on one of their own stations | The combined section would hold two datums in one rigid group |
+| Sections that meet nowhere (not merged, not within 1 mm, no closure between ends) | Nothing says the ends are one point: merge two of them, or create a loop closure between them, first |
+| An end merged only to the middle of another section | No other section end to join |
+| More than 99,999 shots, or the kept section has used up its shot ids this session | Shot-id budget (keep the other, or save and reopen) |
 | A SpeleoDB project open without its edit lock | `guard_mutation`, like every edit (it checks only that lock) |
 | The closure-adjusted view, Plan and Export | The frontend: Plan and Export show no survey menu, the closure view disables its edit items, and both dialogs re-check `isEditingBlockedNow` on confirm |
 
+**Changed instead of refused** (2026-11-13; each listed in the dialog for the
+kept section it shows, from `CombinePlan`):
+
+| Condition | What the combine does |
+|---|---|
+| The two ends are tied by a loop closure, or apart by more than 1 mm (a torn merge, a co-located residual) | The moving side shifts by the gap (see "Across loops") |
+| Still rigidly tied once the join is gone (merge or snapped closure, directly or through other sections) | That tie becomes a `Batch` loop closure, the one nearest the moving section. An unaligned closure stays as a loop to adjust inside the section |
+| Different stored north references | The other section's azimuths turn by the correction difference and it takes the kept reference, so every station stays put. A declared reference equal to the project default is still converted (by 0): the combined section follows the default from now on |
+| Different quality | The kept section's wins |
+| Join stations' manual offsets differ | The fixed side's offset wins; the dialog says how far the other end moves |
+| Unmerged join stations apart in depth (any amount) | Reported above 5 cm (half the 0.1 m resolution depth gauges record): the joined station takes the average of the shot before and after it. Above 1 m this was refused until 2026-11-13; now the user reads the gap and decides |
+| The two sections share a shot identity | The other section's copies get new uuids (derived, like the load heal), and station keys on them follow |
+| A section with no shots | Absorbed at its one station; the end named is the one that needs no reverse |
+
+### Across loops (2026-11-13)
+
+`project/combine_plan.rs` decides, per choice of kept section, what has to give.
+It leans on the merge forest the app keeps: `merge_stations` refuses a merge
+between sections already rigidly connected, so merges never close a loop; a
+loop is closed by a closure (snapped ones are rigid, the rest are soft).
+
+- **Join ties** make the two join stations one point: the ties between the two
+  join stations' merge groups (for a merged join, every tie inside its one
+  group). The combine folds them into the joined station. A tie that reaches a
+  station of either section other than its join station is not one: that
+  section comes back to the join point, and the tie is a loop.
+- **The moving side.** With a gap over the 1 mm tolerance, the other section
+  M moves, with everything still merged to it, unless that side holds a zero
+  datum and the kept side does not; then the kept side moves. With both sides
+  anchored, M (whichever does not itself carry a datum) also tears its merges
+  towards its datum sides. Only when both sections carry a datum themselves is
+  the combine refused.
+- **Loop ties.** A merge from M to a section that still reaches the fixed one
+  F without M (and without the join) closes a loop through the combined
+  section: it becomes a `Batch` closure. Tearing at M, not further round the
+  loop, moves the least. A snapped closure between M's side and F's side is
+  demoted to `Batch` for the same reason, and with a shift every snapped
+  closure from M's side to anything that stays.
+- **After.** The new closures, and every closure with one end on the moved
+  side, are measured again off the final geometry (each without itself, as
+  `create_loop_closure` measures). Nothing the combine leaves is a sole bridge:
+  a torn tie's ends stay connected through the combined section, or tie two
+  anchored groups (a promotion the loader refuses), so a reload converts
+  nothing back. The merge dedupe drops any merge onto the combined section whose
+  stations other merges already make one point (a junction's branches merged
+  pairwise).
+
+`combine_closure_tests.rs` checks the shapes one by one and then sweeps random
+small networks (merged branches, snapped and recorded loops, zero datums, a
+second anchored network tied on by a closure), combining everything the station
+menu offers, keeping either section: the fixed side never moves, the moving
+side moves by exactly the plan's shift, merges stay a forest, nothing snapped is
+left inside the combined section, and a reload moves and converts nothing.
+
 **Mutation** (`project/combine_sections.rs`):
 
-1. Reverse the other section when the ends match, with `reverse_section`.
-2. Settle the join:
+1. What has to give (`prepare_combine`): convert the other section's bearings
+   to the kept north reference; re-mint shot uuids it shares with the kept
+   section; drop closures across the join point; tear the plan's ties into
+   `Batch` closures; shift the moving side.
+2. Reverse the other section when the ends match, with `reverse_section`.
+3. Settle the join:
    - The join merge and any closure between the two join stations go (either
      would tie the joined station to itself).
    - A comment or name both stations carry is kept once if identical, else per
      the pick: kept, other or both (joined with a newline, or ` / ` for names).
-   - The kept station's offset (or none) wins.
-3. Append or prepend the other section's shots. The kept section keeps its shot
+   - The fixed side's offset (or none) wins: the kept station's, unless the
+     kept side is the one that moved.
+4. Append or prepend the other section's shots. The kept section keeps its shot
    ids. The other section's shots get new ids and keep their uuids and every
    other field. A prepend moves the kept anchor back by the other section's
    span, so the kept stations do not move.
-4. Re-key every stored reference by its STORED key (`project/station_rekey.rs`,
+5. Re-key every stored reference by its STORED key (`project/station_rekey.rs`,
    shared with split), with a per-collection injectivity check. Drop closures
    the combine made identical.
-5. Keep the kept section's own gauge on the physical station of the lower
+6. Keep the kept section's own gauge on the physical station of the lower
    section id's (`project/gauge.rs::gauge_pair_for_station`), and the
    component's least-squares anchor on the station it was held at (see "The
    component's anchor" below).
-6. Retire the other id (see dive plans below).
+7. Retire the other id (see dive plans below), and measure the plan's closures
+   again.
 
 ## Deviations from #710 / #709, and why
 
