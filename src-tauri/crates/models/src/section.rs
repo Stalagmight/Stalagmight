@@ -1766,7 +1766,7 @@ mod tests {
                 surveyor: Some("nh / ds".to_string()),
                 shots: vec![
                     ShotData {
-                        credit: Some(own.clone()),
+                        credit: Some(own.clone().into()),
                         ..test_shot_data(1.0)
                     },
                     test_shot_data(2.0),
@@ -1784,7 +1784,7 @@ mod tests {
             1,
             SectionData {
                 shots: vec![ShotData {
-                    credit: Some(credit(&["Old"], &["Ex"])),
+                    credit: Some(credit(&["Old"], &["Ex"]).into()),
                     ..test_shot_data(1.0)
                 }],
                 ..Default::default()

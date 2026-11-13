@@ -194,7 +194,7 @@ mod tests {
         let mut project = Project::new("Credit".to_string(), None);
         let shot = |credit: SurveyCredit| ShotData {
             length: 3.0,
-            credit: credit.stored(),
+            credit: credit.stored().map(Into::into),
             ..Default::default()
         };
         let ann = Person::new("Ann", Some("ann@example.org")).unwrap();

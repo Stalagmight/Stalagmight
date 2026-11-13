@@ -484,7 +484,7 @@ fn a_new_shot_inherits_its_neighbours_credit() {
             .execute(Command::CreateShot {
                 section_id: sid,
                 shot: ShotData {
-                    credit: Some(own.clone()),
+                    credit: Some(own.clone().into()),
                     ..shot(6.0)
                 },
                 after_shot_id: None,
@@ -582,7 +582,7 @@ fn an_old_created_section_entry_with_a_surveyor_restores_people_onto_shots() {
 fn import_overrides_replace_every_shots_credit() {
     let state = state_with_project();
     let mut file_shot = shot(1.0);
-    file_shot.credit = Some(credit(&["From File"], &["Ex"], day(1)));
+    file_shot.credit = Some(credit(&["From File"], &["Ex"], day(1)).into());
     let config = ImportSectionConfig {
         section_index: 0,
         name: Some("Imported".to_string()),
@@ -807,4 +807,62 @@ fn a_replayed_undo_credit_is_normalized() {
         MAX_PERSON_TEXT_CHARS
     );
     assert!(stored.is_storable());
+}
+
+/// #719 review, item 5a: an import that gives every shot of a survey ONE
+/// credit (a Compass or Walls team line) costs one allocation: the imported
+/// shots share it, with or without the dialog's overrides, instead of a copy
+/// each.
+#[test]
+fn an_imported_team_credit_stays_one_shared_allocation() {
+    for overrides in [false, true] {
+        let state = state_with_project();
+        let team = std::sync::Arc::new(credit(&["Ann Smith", "Bo"], &[], day(3)));
+        let shots: Vec<ShotData> = (1..=4)
+            .map(|i| ShotData {
+                credit: Some(std::sync::Arc::clone(&team)),
+                ..shot(f64::from(i))
+            })
+            .collect();
+        let config = ImportSectionConfig {
+            section_index: 0,
+            name: Some("Team".to_string()),
+            surveyor: None,
+            date: None,
+            surveyors: overrides.then(|| vec![person("Dialog")]),
+            explorers: None,
+            override_date: None,
+            color: "#ffffff".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots,
+            placement: ImportPlacement::Origin,
+            station_comments: Vec::new(),
+            station_names: Vec::new(),
+            reverse: false,
+            azimuth_reference: None,
+        };
+        let r = state.execute_import_sections(
+            vec![config],
+            Vec::new(),
+            None,
+            Vec::new(),
+            Vec::new(),
+            crate::core::VirtualShotMode::Auto,
+        );
+        assert!(r.success, "{:?}", r.error);
+        let project = state.get_project_state().unwrap();
+        let section = project.get_section(r.section_ids[0]).unwrap();
+        let first = section.shots[0].credit.as_ref().unwrap();
+        assert!(
+            section.shots.iter().all(|s| s
+                .credit
+                .as_ref()
+                .is_some_and(|c| std::sync::Arc::ptr_eq(c, first))),
+            "overrides: {overrides}"
+        );
+        if !overrides {
+            assert!(std::sync::Arc::ptr_eq(first, &team));
+        }
+    }
 }

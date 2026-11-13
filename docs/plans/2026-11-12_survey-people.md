@@ -151,8 +151,8 @@ Ariane as one section. TML duplicate detection uses the file hash only, so it is
 | Format | Mapping |
 |---|---|
 | Ariane TML | Per shot. Ariane 26.3 and later write `XMLExplorer`/`XMLSurveyor`; those are preferred when non-empty. Otherwise the legacy `Explorer` field is used. In its element form (`<Explorer>..</Explorer><Surveyor>..</Surveyor>`), each half goes to its role. The plain form is read by the legacy splitter, exactly as a `.stalx` legacy column: `a / b` gives explorer `a` and surveyor `b`, `a /` explorer `a`, and a single value gives SURVEYORS (#719: the role every saved file and SpeleoDB's reader give that text; Ariane's field name and openspeleo-lib would say explorers). Names inside a role are split on `,` and `;`, with the same `Last, First` rule as the legacy column. |
-| Compass | `SURVEY TEAM:` gives surveyors, split. |
-| Walls | `team:`/`surveyors:` gives surveyors, split. |
+| Compass | `SURVEY TEAM:` gives surveyors, split. The survey's one credit is ONE allocation every shot shares (`ShotData.credit` is an `Arc`), not a copy per shot. |
+| Walls | `team:`/`surveyors:` gives surveyors, split, shared like Compass. |
 | DMP, GPX | No people. |
 | Import dialogs | Surveyors and Explorers pills, plus a date, override every imported shot when set. |
 

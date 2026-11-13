@@ -1882,7 +1882,7 @@ pub fn normalize_tml_shot(shot: &TmlShot, depth_in: f64) -> ShotData {
         },
         marker_index: None,
         temperature: None,
-        credit: shot.credit.clone(),
+        credit: shot.credit.clone().map(std::sync::Arc::new),
     }
 }
 
@@ -6474,8 +6474,8 @@ mod tests {
             configs.iter().all(|c| c.surveyor.is_none()),
             "the credit rides on the shots"
         );
-        assert_eq!(imported[0].credit.as_ref(), shots[0].credit.as_ref());
-        assert_eq!(imported[1].credit.as_ref(), shots[1].credit.as_ref());
+        assert_eq!(imported[0].credit.as_deref(), shots[0].credit.as_ref());
+        assert_eq!(imported[1].credit.as_deref(), shots[1].credit.as_ref());
         assert_eq!(
             imported[0].credit().date,
             NaiveDate::from_ymd_opt(2024, 6, 15),

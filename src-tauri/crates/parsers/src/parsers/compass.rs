@@ -1718,9 +1718,12 @@ pub fn convert_compass_to_import_configs(
         let p = placement[ci].clone().unwrap_or(ImportPlacement::Origin);
         // The team are the surveyors of every shot of the survey, on its date;
         // the credit rides on the shots, so the section template stays empty.
+        // One allocation for the whole survey: every shot shares it
+        // (`ShotData::credit`), however long the team line and the survey.
         let credit =
             crate::models::SurveyCredit::from_team(chain.surveyor.as_deref(), Some(chain.date))
-                .stored();
+                .stored()
+                .map(std::sync::Arc::new);
         let shots = chain
             .shots
             .iter()
@@ -1883,6 +1886,13 @@ mod tests {
             assert_eq!(names, ["Ann Smith", "Bo", "Cy"]);
             assert_eq!(credit.date, chrono::NaiveDate::from_ymd_opt(1979, 7, 10));
         }
+        // #719 review: one allocation for the survey, shared by every shot,
+        // not a copy of the team per shot.
+        let first = configs[0].shots[0].credit.as_ref().unwrap();
+        assert!(configs[0].shots.iter().all(|s| s
+            .credit
+            .as_ref()
+            .is_some_and(|c| std::sync::Arc::ptr_eq(c, first))));
     }
 
     fn fixture(name: &str) -> PathBuf {

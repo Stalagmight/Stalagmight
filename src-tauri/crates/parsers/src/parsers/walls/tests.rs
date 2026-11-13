@@ -2572,4 +2572,11 @@ fn the_team_comment_is_every_shots_surveyors_on_the_survey_date() {
         assert!(credit.explorers.is_empty());
         assert_eq!(credit.date, NaiveDate::from_ymd_opt(2017, 5, 7));
     }
+    // #719 review: one allocation for the survey, shared by every shot, not a
+    // copy of the team per shot.
+    let first = configs[0].shots[0].credit.as_ref().unwrap();
+    assert!(configs[0].shots.iter().all(|s| s
+        .credit
+        .as_ref()
+        .is_some_and(|c| std::sync::Arc::ptr_eq(c, first))));
 }

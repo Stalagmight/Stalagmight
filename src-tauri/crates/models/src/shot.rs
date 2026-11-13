@@ -328,6 +328,17 @@ impl std::ops::Deref for SharedCredit {
     }
 }
 
+/// How a shot stores a credit that may be shared: the same allocation when it
+/// already is storable (shots given one credit keep sharing it), else a
+/// normalized copy of its own ([`SurveyCredit::into_storable`]); `None` for
+/// an empty one.
+fn storable_shared(credit: Arc<SurveyCredit>) -> Option<Arc<SurveyCredit>> {
+    if credit.is_storable() {
+        return (!credit.is_empty()).then_some(credit);
+    }
+    stored_credit(SurveyCredit::clone(&credit).into_storable()).map(Arc::new)
+}
+
 /// `deserialize_with` for [`Shot::credit`]: a shot read back from a snapshot
 /// or an undo payload stores its credit as [`Shot::set_credit`] would.
 fn de_storable_credit<'de, D>(de: D) -> Result<Option<Arc<SurveyCredit>>, D::Error>
@@ -347,8 +358,8 @@ where
     clippy::ref_option,
     reason = "serde calls skip_serializing_if with &FieldType; Option<&SurveyCredit> does not typecheck there"
 )]
-fn credit_absent_or_empty(credit: &Option<SurveyCredit>) -> bool {
-    credit.as_ref().is_none_or(SurveyCredit::is_empty)
+fn credit_absent_or_empty(credit: &Option<Arc<SurveyCredit>>) -> bool {
+    credit.as_deref().is_none_or(SurveyCredit::is_empty)
 }
 
 /// [`credit_absent_or_empty`] for [`Shot::credit`].
@@ -417,9 +428,14 @@ pub struct ShotData {
     /// The shot's survey credit (see [`Shot::credit`]). `None` and empty are the
     /// same; a create with no credit inherits its neighbour's
     /// (`AppState::create_shot`).
+    ///
+    /// Behind an [`Arc`] like [`Shot::credit`], so an import that gives one
+    /// credit to a whole survey (a Compass or Walls team line) hands every
+    /// shot the same allocation instead of a copy each, and the shots keep
+    /// sharing it ([`Shot::with_uuid`]).
     #[serde(default, skip_serializing_if = "credit_absent_or_empty")]
     #[ts(optional)]
-    pub credit: Option<SurveyCredit>,
+    pub credit: Option<Arc<SurveyCredit>>,
 }
 
 /// Accepts either the modern [`ShotKind`] string or a legacy `is_reference` /
@@ -741,11 +757,7 @@ impl Shot {
             kind: data.kind,
             marker_index: data.marker_index,
             temperature: data.temperature,
-            credit: data
-                .credit
-                .map(SurveyCredit::into_storable)
-                .and_then(stored_credit)
-                .map(Arc::new),
+            credit: data.credit.and_then(storable_shared),
         }
     }
 
@@ -892,7 +904,7 @@ impl Shot {
             kind: self.kind,
             marker_index: self.marker_index,
             temperature: self.temperature,
-            credit: self.credit.as_deref().cloned().and_then(stored_credit),
+            credit: self.credit.clone().filter(|c| !c.is_empty()),
         }
     }
 }
@@ -900,7 +912,7 @@ impl Shot {
 impl ShotData {
     /// The credit this data carries; the empty credit when it has none.
     pub fn credit(&self) -> &SurveyCredit {
-        self.credit.as_ref().unwrap_or(&EMPTY_CREDIT)
+        self.credit.as_deref().unwrap_or(&EMPTY_CREDIT)
     }
 
     /// False if any numeric field is non-finite (NaN/±inf). Used to reject
@@ -972,7 +984,7 @@ impl From<Shot> for ShotData {
             kind: shot.kind,
             marker_index: shot.marker_index,
             temperature: shot.temperature,
-            credit: shot.credit.as_deref().cloned().and_then(stored_credit),
+            credit: shot.credit.filter(|c| !c.is_empty()),
         }
     }
 }
@@ -1568,7 +1580,7 @@ mod tests {
         let imported = Shot::new(
             2,
             ShotData {
-                credit: Some(dirty()),
+                credit: Some(dirty().into()),
                 ..ShotData::default()
             },
         );
@@ -1597,13 +1609,16 @@ mod tests {
     #[test]
     fn credit_travels_through_shot_data_and_empty_is_stored_as_none() {
         let data = ShotData {
-            credit: Some(credited()),
+            credit: Some(credited().into()),
             ..base_shot_data()
         };
         let shot = Shot::new(1, data);
         assert_eq!(shot.credit(), &credited());
-        assert_eq!(shot.to_shot_data().credit, Some(credited()));
-        assert_eq!(ShotData::from(shot.clone()).credit, Some(credited()));
+        assert_eq!(shot.to_shot_data().credit.as_deref(), Some(&credited()));
+        assert_eq!(
+            ShotData::from(shot.clone()).credit.as_deref(),
+            Some(&credited())
+        );
 
         let mut shot = shot;
         shot.set_credit(SurveyCredit::default());
@@ -1613,7 +1628,7 @@ mod tests {
         let shot = Shot::new(
             2,
             ShotData {
-                credit: Some(SurveyCredit::default()),
+                credit: Some(SurveyCredit::default().into()),
                 ..base_shot_data()
             },
         );

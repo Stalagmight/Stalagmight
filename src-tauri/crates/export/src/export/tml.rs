@@ -4326,7 +4326,7 @@ mod tests {
                             length: 5.0,
                             depth_in: i as f64,
                             depth_out: i as f64 + 1.0,
-                            credit: c.clone().stored(),
+                            credit: c.clone().stored().map(Into::into),
                             ..Default::default()
                         })
                         .collect(),
@@ -4376,7 +4376,7 @@ mod tests {
                 name: Some("Main".to_string()),
                 shots: vec![ShotData {
                     length: 5.0,
-                    credit: credit.stored(),
+                    credit: credit.stored().map(Into::into),
                     ..Default::default()
                 }],
                 ..Default::default()
@@ -5851,11 +5851,14 @@ mod tests {
             name: Some("Main".to_string()),
             shots: vec![ShotData {
                 length: 5.0,
-                credit: Some(SurveyCredit {
-                    surveyors: vec![raw("Bad\u{1}Name")],
-                    explorers: vec![raw("Bell\u{7}\u{1b}Ringer")],
-                    date: None,
-                }),
+                credit: Some(
+                    SurveyCredit {
+                        surveyors: vec![raw("Bad\u{1}Name")],
+                        explorers: vec![raw("Bell\u{7}\u{1b}Ringer")],
+                        date: None,
+                    }
+                    .into(),
+                ),
                 ..Default::default()
             }],
             ..Default::default()

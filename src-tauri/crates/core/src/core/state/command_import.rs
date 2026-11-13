@@ -824,9 +824,25 @@ impl AppState {
                 ..Default::default()
             };
             if overrides.kind() != crate::models::CreditEditKind::Nothing {
+                // Shots that share one credit (a Compass or Walls team line)
+                // share its result too: one allocation, not one per shot.
+                let mut applied: HashMap<
+                    *const crate::models::SurveyCredit,
+                    Option<std::sync::Arc<crate::models::SurveyCredit>>,
+                > = HashMap::new();
                 for shot in &mut shots {
-                    let credit = overrides.apply(shot.credit());
-                    shot.credit = (!credit.is_empty()).then_some(credit);
+                    let key = shot
+                        .credit
+                        .as_ref()
+                        .map_or(std::ptr::null(), std::sync::Arc::as_ptr);
+                    let next = applied
+                        .entry(key)
+                        .or_insert_with(|| {
+                            let credit = overrides.apply(shot.credit());
+                            (!credit.is_empty()).then(|| std::sync::Arc::new(credit))
+                        })
+                        .clone();
+                    shot.credit = next;
                 }
             }
             let section_data = SectionData {
