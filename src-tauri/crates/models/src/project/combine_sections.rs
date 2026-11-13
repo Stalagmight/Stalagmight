@@ -1,25 +1,35 @@
-//! Combine Sections: join two sections that meet end to end at exactly one
-//! point into one; other sections there stay attached as branches. The inverse
-//! of Split Section Here (a split at a junction copies its merges to both
-//! halves, and combining them back leaves the other sections attached to the
-//! joined station), except across a section that passes through the point.
+//! Combine Sections: join two sections that meet end to end into one; other
+//! sections there stay attached as branches. The inverse of Split Section
+//! Here (a split at a junction copies its merges to both halves, and combining
+//! them back leaves the other sections attached to the joined station).
 //!
-//! The KEPT section keeps its id, its shot ids, its direction, its station 0
-//! orientation and its exact position. The OTHER section is reversed first when
-//! the two meet end-to-end or start-to-start (`reverse_section`, which
-//! reciprocates bearings, swaps depths, negates pitch and optionally swaps left
-//! and right), then its shots are appended to the kept section (kept end meets
-//! other start) or prepended (kept start meets other end). Every per-shot field
-//! and uuid travels; the other section's shots get new ids from the kept
-//! section's counter.
+//! First, what has to give (`combine_plan.rs`, listed in the dialog):
+//! - the other section's stored bearings turn to read against the kept
+//!   section's north reference, when the two differ;
+//! - the other section's shots that share an identity (uuid) with the kept
+//!   section's get new ones;
+//! - rigid ties that would tie the combined section to itself, or hold the
+//!   moving side, become ordinary loop closures;
+//! - the moving side (the other section and what is still merged to it, or
+//!   the kept side when a zero datum holds the other) moves by the gap at the
+//!   join: a loop closure's misclosure, or a co-located or merged pair's
+//!   residual.
+//!
+//! Then the join. The KEPT section keeps its id, its shot ids, its direction,
+//! its station 0 orientation and (unless it is the side that moves) its exact
+//! position. The OTHER section is reversed first when the two meet end-to-end
+//! or start-to-start (`reverse_section`, which reciprocates bearings, swaps
+//! depths, negates pitch and optionally swaps left and right), then its shots
+//! are appended to the kept section (kept end meets other start) or prepended
+//! (kept start meets other end). Every per-shot field and uuid travels; the
+//! other section's shots get new ids from the kept section's counter.
 //!
 //! The two join stations become ONE station:
-//! - the join merge, and any loop closure between the two join stations (it
-//!   would tie the joined station to itself), go;
+//! - the join merge, and any loop closure across the join point (it would tie
+//!   the joined station to itself), go;
 //! - a comment or name both carry is kept once if identical, otherwise per
 //!   the dialog's choice (kept, other, or both joined);
-//! - the kept station's manual offset (or none) wins, the other's is dropped
-//!   (the candidate check bounds the difference by the tolerance);
+//! - the fixed side's manual offset (or none) wins, the other's is dropped;
 //! - a zero datum on either (never both) and closures to other stations move
 //!   onto the joined station.
 //!
@@ -27,7 +37,8 @@
 //! stays on the same physical station (the lower section id's gauge, which is
 //! the one the component used), and when the two sections' reverse parities
 //! differ the other section's shots keep their own record parity for dive-plan
-//! pins (`Project::counter_parity_shots`).
+//! pins (`Project::counter_parity_shots`). The closures the combine made or
+//! whose ends it moved apart are measured again off the final geometry.
 //!
 //! Credit: survey credit (surveyors, explorers, date) lives on every shot and
 //! travels with it, through the reverse too, so every shot keeps its own
@@ -35,15 +46,31 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::angle::normalize_azimuth;
 use crate::{
-    CombinePick, CombineSectionsOptions, SectionEnd, SectionId, Shot, ShotData, StationKey,
-    StationRef,
+    CombineJoinEnds, CombinePick, CombineSectionsOptions, SectionEnd, SectionId, Shot, ShotData,
+    StationKey, StationRef,
 };
 
+use super::combine_plan::{JoinPoint, TiePlan};
 use super::gauge::captured_gauge;
 use super::reverse::shot_run_displacement;
 use super::station_rekey::take_naming;
+use super::uuid_unique::{reminted_shot_uuid_avoiding, ShotUuidRemap};
 use super::Project;
+
+/// Everything `combine_sections` decided before it changes anything.
+struct CombineSetup {
+    kept_end: SectionEnd,
+    other_end: SectionEnd,
+    join: JoinPoint,
+    ties: TiePlan,
+    rotation: Option<f64>,
+    shared_uuids: Vec<String>,
+    /// Closures across the join point: they would tie the joined station to
+    /// itself.
+    join_closures: HashSet<u64>,
+}
 
 /// The joined station's text, from the kept and the other join station's.
 fn pick_text(
@@ -73,7 +100,68 @@ impl Project {
             ^ shot_uuid.is_some_and(|uuid| self.counter_parity_shots.contains(uuid))
     }
 
-    /// Combine `other` into `kept`. Re-runs the candidate check first, so an
+    /// Decide the join and the plan for combining `other` into `kept`, or why
+    /// not.
+    fn combine_setup(
+        &self,
+        kept: SectionId,
+        other: SectionId,
+        join: Option<CombineJoinEnds>,
+    ) -> Result<CombineSetup, String> {
+        if let Some(reason) = self.combine_refusal(kept, other, join) {
+            return Err(reason);
+        }
+        let fail = || format!("Sections {kept} and {other} cannot be combined");
+        let candidate = self
+            .combine_candidate_joining(kept, other, join)
+            .ok_or_else(fail)?;
+        let (kept_end, other_end) = if candidate.section_a == kept {
+            (candidate.end_a, candidate.end_b)
+        } else {
+            (candidate.end_b, candidate.end_a)
+        };
+        let pairing = super::combine_candidate::Pairing {
+            a: kept,
+            end_a: kept_end,
+            b: other,
+            end_b: other_end,
+        };
+        let table = self.end_table();
+        let touch = self.pairing_touch(pairing, &table).ok_or_else(fail)?;
+        let (_, Some((join, ties))) = self.plan_keeping(pairing, &touch, kept, &table) else {
+            return Err(fail());
+        };
+        let (k, o) = (
+            self.get_section(kept).ok_or_else(fail)?,
+            self.get_section(other).ok_or_else(fail)?,
+        );
+        let join_closures = self
+            .loop_closures
+            .iter()
+            .filter(|c| {
+                match (
+                    self.resolve_key(&c.station_a),
+                    self.resolve_key(&c.station_b),
+                ) {
+                    (Some(a), Some(b)) => join.is_join_tie(a, b),
+                    _ => false,
+                }
+            })
+            .map(|c| c.id)
+            .collect();
+        Ok(CombineSetup {
+            kept_end,
+            other_end,
+            rotation: self.azimuth_rotation(k, o),
+            shared_uuids: Self::shared_shot_uuids(k, o),
+            join,
+            ties,
+            join_closures,
+        })
+    }
+
+    /// Combine `other` into `kept` at `options.join` (or the join the
+    /// two-section query prefers). Re-runs the candidate check first, so an
     /// `Err` (the blocked reason) leaves the project exactly as it was.
     pub fn combine_sections(
         &mut self,
@@ -81,19 +169,85 @@ impl Project {
         other: SectionId,
         options: &CombineSectionsOptions,
     ) -> Result<(), String> {
-        if let Some(reason) = self.combine_refusal(kept, other) {
-            return Err(reason);
-        }
-        let candidate = self
-            .combine_candidate_for_sections(kept, other)
-            .ok_or_else(|| format!("Sections {kept} and {other} cannot be combined"))?;
+        let setup = self.combine_setup(kept, other, options.join)?;
         // Before anything moves, including the reverse below.
         let component_gauges = self.hold_component_gauges(&[kept, other]);
-        let (kept_end, other_end) = if candidate.section_a == kept {
-            (candidate.end_a, candidate.end_b)
-        } else {
-            (candidate.end_b, candidate.end_a)
-        };
+        let remeasure = self.prepare_combine(&setup);
+        self.join_sections(kept, other, &setup, options)?;
+        // The component's lowest id may now be a third section's (the other
+        // section's id is retired): hold the component at the station the
+        // adjustment held before. After the parity toggle, which a held
+        // station named by one shot reads.
+        self.restore_component_gauges(&component_gauges);
+        self.remeasure_closures(&remeasure);
+        self.touch();
+        Ok(())
+    }
+
+    /// Everything that has to give before the join (see the module docs).
+    /// Returns the closures to measure again once the geometry is final.
+    fn prepare_combine(&mut self, setup: &CombineSetup) -> HashSet<u64> {
+        let (kept, other) = (setup.join.kept, setup.join.other);
+        if let Some(rotation) = setup.rotation {
+            let reference = self.get_section(kept).and_then(|k| k.azimuth_reference);
+            if let Some(section) = self.get_section_mut(other) {
+                if rotation.abs() > 0.0 {
+                    for shot in &mut section.shots {
+                        shot.azimuth_in = normalize_azimuth(shot.azimuth_in + rotation);
+                        shot.azimuth_out = normalize_azimuth(shot.azimuth_out + rotation);
+                    }
+                }
+                section.azimuth_reference = reference;
+            }
+        }
+        if !setup.shared_uuids.is_empty() {
+            let in_use: HashSet<String> = self
+                .sections
+                .iter()
+                .flat_map(|s| s.shots.iter().filter_map(|shot| shot.uuid.clone()))
+                .collect();
+            let mut remap = ShotUuidRemap::default();
+            let mut taken = in_use;
+            for old in &setup.shared_uuids {
+                let new = reminted_shot_uuid_avoiding(other, old, |c| taken.contains(c));
+                taken.insert(new.clone());
+                remap.insert(other, old.clone(), new);
+            }
+            self.apply_shot_uuid_remap(&remap);
+            self.follow_counter_parity(&remap);
+        }
+        self.loop_closures
+            .retain(|c| !setup.join_closures.contains(&c.id));
+        let mut remeasure: HashSet<u64> = self.tear_ties(&setup.ties.torn).into_iter().collect();
+        if !setup.ties.moved.is_empty() {
+            let moved: HashSet<SectionId> = setup.ties.moved.iter().copied().collect();
+            // A closure with one end on the side that moves changes length.
+            remeasure.extend(
+                self.loop_closures
+                    .iter()
+                    .filter(|c| {
+                        moved.contains(&c.station_a.section_id)
+                            != moved.contains(&c.station_b.section_id)
+                    })
+                    .map(|c| c.id),
+            );
+            let (dx, dy) = setup.ties.shift;
+            for id in &setup.ties.moved {
+                self.adjust_section_offset(*id, dx, dy);
+            }
+        }
+        remeasure
+    }
+
+    /// Join the shots and the two join stations (see the module docs).
+    fn join_sections(
+        &mut self,
+        kept: SectionId,
+        other: SectionId,
+        setup: &CombineSetup,
+        options: &CombineSectionsOptions,
+    ) -> Result<(), String> {
+        let (kept_end, other_end) = (setup.kept_end, setup.other_end);
         if kept_end == other_end && !self.reverse_section(other, options.swap_lr) {
             return Err(format!("Section {other} not found"));
         }
@@ -111,7 +265,7 @@ impl Project {
         let reference = self.azimuth_reference_for(k);
         // The kept section's own gauge: the lower section id's, which is the
         // one the pair's component used when neither is held elsewhere.
-        // `restore_component_gauges` below settles the component's anchor.
+        // `restore_component_gauges` settles the component's anchor.
         let source = if kept < other { k } else { o };
         let gauge = Self::gauge_index(source) as u32;
         let gauge = match (source.id == kept, append) {
@@ -125,7 +279,7 @@ impl Project {
         // structure), then resolve every stored key against the structure as
         // it still is, so the kept join station's freshly written key is
         // re-keyed with the rest.
-        self.resolve_combine_join(join_k, join_o, options);
+        self.resolve_combine_join(join_k, join_o, options, setup.ties.kept_offset_wins);
         let stored = self.resolve_stored_keys_in(&[kept, other]);
 
         // ---- The shots ------------------------------------------------------
@@ -186,11 +340,6 @@ impl Project {
                 }
             }
         }
-        // The component's lowest id may now be a third section's (the other
-        // section's id is retired): hold the component at the station the
-        // adjustment held before. After the parity toggle, which a held
-        // station named by one shot reads.
-        self.restore_component_gauges(&component_gauges);
         if cfg!(debug_assertions) {
             self.for_each_station_ref(|label, key| {
                 debug_assert!(
@@ -199,7 +348,6 @@ impl Project {
                 );
             });
         }
-        self.touch();
         Ok(())
     }
 
@@ -212,6 +360,7 @@ impl Project {
         join_k: StationRef,
         join_o: StationRef,
         options: &CombineSectionsOptions,
+        kept_offset_wins: bool,
     ) {
         let between = |project: &Project, x: &StationKey, y: &StationKey| {
             let (x, y) = (project.resolve_key(x), project.resolve_key(y));
@@ -254,12 +403,12 @@ impl Project {
             names.insert(key.clone(), text);
         }
         self.station_names = names;
-        // The kept station's own offset (or none) wins, so the kept section
-        // stays exactly in place; the candidate check bounds the difference.
+        // The fixed side's own offset (or none) wins, so that side stays
+        // exactly in place; the plan reports how far the other one moves.
         let mut offsets = std::mem::take(&mut self.station_offsets);
         let offset_k = take_naming(self, &mut offsets, join_k);
-        take_naming(self, &mut offsets, join_o);
-        if let Some(offset) = offset_k {
+        let offset_o = take_naming(self, &mut offsets, join_o);
+        if let Some(offset) = if kept_offset_wins { offset_k } else { offset_o } {
             offsets.insert(key, offset);
         }
         self.station_offsets = offsets;

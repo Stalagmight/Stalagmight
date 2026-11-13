@@ -23923,6 +23923,7 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
                     swap_lr: false,
                     comment_pick: crate::models::CombinePick::Kept,
                     name_pick: crate::models::CombinePick::Kept,
+                    join: None,
                 },
             ),
         );

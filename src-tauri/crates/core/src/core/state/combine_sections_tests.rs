@@ -32,6 +32,7 @@ fn options() -> CombineSectionsOptions {
         swap_lr: true,
         comment_pick: CombinePick::Kept,
         name_pick: CombinePick::Kept,
+        join: None,
     }
 }
 

@@ -36,6 +36,7 @@ use crate::config::ClosureAdjustmentConfig;
 
 mod classify;
 mod combine_candidate;
+mod combine_plan;
 mod combine_sections;
 mod connectivity;
 mod gauge;
@@ -78,9 +79,7 @@ mod component_gauge_tests;
 mod split_section_tests;
 
 pub use classify::ClassifyScope;
-pub use combine_candidate::{
-    COMBINE_DEPTH_LIMIT_M, COMBINE_DEPTH_NOTICE_M, COMBINE_TOLERANCE_M, MAX_COMBINE_PARTNERS,
-};
+pub use combine_candidate::{COMBINE_DEPTH_NOTICE_M, COMBINE_TOLERANCE_M, MAX_COMBINE_PARTNERS};
 pub use gas::{
     CylRole, Cylinder, Diver, GasReachField, PlanMode, PlanSegment, RouteLeg, RouteProfilePoint,
     TankMaterial, Team,

@@ -1424,6 +1424,7 @@ mod tests {
             swap_lr: false,
             comment_pick: crate::models::CombinePick::Kept,
             name_pick: crate::models::CombinePick::Kept,
+            join: None,
         }
     }
 

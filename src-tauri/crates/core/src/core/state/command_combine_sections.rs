@@ -61,7 +61,7 @@ impl AppState {
             let Some(project) = proj_guard.as_ref() else {
                 return CommandResult::failure("No project open".to_string());
             };
-            if let Some(reason) = project.combine_refusal(kept, other) {
+            if let Some(reason) = project.combine_refusal(kept, other, options.join) {
                 return CommandResult::failure(reason);
             }
         }

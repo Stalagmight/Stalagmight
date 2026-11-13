@@ -1,37 +1,42 @@
 //! Combine Sections, the read-only half: can two sections be joined into one,
-//! and where. The context menu, the Sections panel and the dialog ask this, and
-//! `combine_sections` asks it again before it changes anything.
+//! where, and what has to change for it. The context menu, the Sections panel
+//! and the dialog ask this, and `combine_sections` asks it again before it
+//! changes anything.
 //!
-//! The rule: the two chosen sections meet end to end at exactly one point;
-//! other sections there stay attached as branches. An end station of each is
-//! the same point when:
+//! The rule: the two chosen sections meet end to end; other sections there
+//! stay attached as branches. An end station of each is the same point when:
 //! - **merged**: the two end stations are in one merge group;
 //! - **co-located**: unmerged, their chain positions (section offset plus the
 //!   shot walk, without the stations' manual offsets) agree within
-//!   [`COMBINE_TOLERANCE_M`] horizontally.
+//!   [`COMBINE_TOLERANCE_M`] horizontally;
+//! - **closure**: a loop closure ties the two (or their merge groups). The
+//!   survey says they are one point; one side moves by the misclosure.
+//!
+//! Two sections that meet are always combinable, whatever else ties them
+//! (`combine_plan.rs` turns the ties in the way into loop closures and moves a
+//! side), except when both carry a zero datum on one of their own stations,
+//! or the combined section would run out of shot numbers. Two sections that
+//! meet nowhere are refused: merge two of their ends, or close a loop between
+//! them, first.
 //!
 //! Every other section with an END merged at the point stays merged to the
 //! joined station, which becomes a mid-section station of the combined
-//! section (a branch); one with an end there that is not merged is left as it
-//! is (`CombineCandidate::loose_ends`). A station in the MIDDLE of a section
-//! merged at the point blocks (that section would cross the combined one). At
-//! a junction the station query lists every partner, and the user picks one.
-//! Depth is not part of the match: the
-//!   two stations read the depth of different shots (the state a fresh split
-//!   leaves), and the joined station takes their average. A gap above
-//!   [`COMBINE_DEPTH_NOTICE_M`] is reported for the dialog; one above
-//!   [`COMBINE_DEPTH_LIMIT_M`] makes the ends two points, and is refused.
-//!
-//! Blocked, with the reason the user sees, when combining would change what
-//! the survey means or break an invariant the app keeps elsewhere (see
-//! [`Project::combine_blocked_reason`]).
+//! section (a branch); one merged there at a station in its MIDDLE passes
+//! through, and stays merged too (a crossing); one with an end there that is
+//! not merged is left as it is (`CombineCandidate::loose_ends`). At a junction
+//! the station query lists every partner, and the user picks one. Depth is not
+//! part of the match: the two stations read the depth of different shots, and
+//! the joined station takes their average. A gap above
+//! [`COMBINE_DEPTH_NOTICE_M`] is reported for the dialog.
 
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    CombineCandidate, Section, SectionEnd, SectionId, StationKey, StationRef, FEATURE_ID_STRIDE,
+    CombineCandidate, CombineJoinEnds, CombineJoinKind, CombinePlan, Section, SectionEnd,
+    SectionId, StationKey, StationRef, FEATURE_ID_STRIDE,
 };
 
+use super::combine_plan::{JoinPoint, TiePlan};
 use super::station_rekey::value_naming;
 use super::Project;
 
@@ -46,12 +51,6 @@ pub const COMBINE_TOLERANCE_M: f64 = 0.001;
 /// below what the survey can tell apart.
 pub const COMBINE_DEPTH_NOTICE_M: f64 = 0.05;
 
-/// Above this depth gap (metres) the two ends are refused: at one horizontal
-/// point but this far apart vertically they are two points (a shaft, stacked
-/// passages), not one station read twice. Merging them first, which averages
-/// their depth as a deliberate choice, makes the combine possible.
-pub const COMBINE_DEPTH_LIMIT_M: f64 = 1.0;
-
 /// One way two sections can meet: an end of each.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Pairing {
@@ -62,16 +61,47 @@ pub(crate) struct Pairing {
 }
 
 /// What a touching pairing looks like.
-#[derive(Debug, Clone, Default)]
-struct Touch {
-    merged: bool,
-    blocked: Option<String>,
-    /// Other sections merged at the join point: they stay attached to the
-    /// joined station, a branch of the combined section.
-    branches: Vec<SectionId>,
+#[derive(Debug, Clone)]
+pub(crate) struct Touch {
+    pub kind: CombineJoinKind,
+    pub blocked: Option<String>,
+    /// The merge group of each join station (one group when merged).
+    pub group_a: HashSet<StationRef>,
+    pub group_b: HashSet<StationRef>,
+    /// Other sections merged at the join point with an end: they stay
+    /// attached to the joined station, a branch of the combined section.
+    pub branches: Vec<SectionId>,
+    /// Other sections merged at the join point at a station in their middle:
+    /// they pass through, and stay merged to the joined station.
+    pub passing_through: Vec<SectionId>,
     /// Other sections with an end at the join point that is NOT merged to
     /// it: left untouched.
-    loose_ends: Vec<SectionId>,
+    pub loose_ends: Vec<SectionId>,
+}
+
+impl Touch {
+    /// A pairing that does not touch, reported with `reason`.
+    fn refused(reason: String) -> Self {
+        Self {
+            kind: CombineJoinKind::CoLocated,
+            blocked: Some(reason),
+            group_a: HashSet::new(),
+            group_b: HashSet::new(),
+            branches: Vec::new(),
+            passing_through: Vec::new(),
+            loose_ends: Vec::new(),
+        }
+    }
+
+    /// Precedence when two sections meet at more than one place: a merge
+    /// first, then co-located ends, then a closure.
+    fn rank(&self) -> u8 {
+        match self.kind {
+            CombineJoinKind::Merged => 0,
+            CombineJoinKind::CoLocated => 1,
+            CombineJoinKind::Closure => 2,
+        }
+    }
 }
 
 /// The most other section ends the station query lists at one point. Past it
@@ -194,16 +224,30 @@ impl Project {
         EndTable::new(ends)
     }
 
-    /// Does `station` carry a resolvable zero datum?
-    fn has_datum_at(&self, station: StationRef) -> bool {
-        self.zero_datums
-            .iter()
-            .any(|datum| self.resolve_key(&datum.station_ref) == Some(station))
+    /// Does a loop closure tie a station of `group_a` to one of `group_b`?
+    fn closure_between(
+        &self,
+        group_a: &HashSet<StationRef>,
+        group_b: &HashSet<StationRef>,
+    ) -> bool {
+        self.loop_closures.iter().any(|closure| {
+            match (
+                self.resolve_key(&closure.station_a),
+                self.resolve_key(&closure.station_b),
+            ) {
+                (Some(x), Some(y)) => {
+                    (group_a.contains(&x) && group_b.contains(&y))
+                        || (group_b.contains(&x) && group_a.contains(&y))
+                }
+                _ => false,
+            }
+        })
     }
 
     /// Whether `pairing`'s two end stations are the same point (`None` when
-    /// they are not), and if so why combining there is blocked, if it is.
-    fn pairing_touch(&self, pairing: Pairing, ends: &EndTable) -> Option<Touch> {
+    /// they are not), how, what else is there, and why combining the two
+    /// sections is refused, if it is.
+    pub(crate) fn pairing_touch(&self, pairing: Pairing, ends: &EndTable) -> Option<Touch> {
         let section_a = self.get_section(pairing.a)?;
         let section_b = self.get_section(pairing.b)?;
         let at_a = StationRef::new(pairing.a, end_index(section_a, pairing.end_a));
@@ -212,143 +256,77 @@ impl Project {
             ends.at(pairing.a, pairing.end_a)?,
             ends.at(pairing.b, pairing.end_b)?,
         );
-        let apart = distance(pa, pb);
         let group_a = self.get_merge_group(at_a);
         let merged = group_a.contains(&at_b);
-        if !merged && apart > COMBINE_TOLERANCE_M {
+        let group_b = if merged {
+            group_a.clone()
+        } else {
+            self.get_merge_group(at_b)
+        };
+        let kind = if merged {
+            CombineJoinKind::Merged
+        } else if distance(pa, pb) <= COMBINE_TOLERANCE_M {
+            CombineJoinKind::CoLocated
+        } else if self.closure_between(&group_a, &group_b) {
+            CombineJoinKind::Closure
+        } else {
             return None;
+        };
+        // Every other section at the join point: merged there with an end (a
+        // branch) or with a station in its middle (passing through).
+        let mut branches: Vec<SectionId> = Vec::new();
+        let mut passing_through: Vec<SectionId> = Vec::new();
+        for at in group_a.iter().chain(group_b.iter()) {
+            if at.section_id == pairing.a || at.section_id == pairing.b {
+                continue;
+            }
+            let Some(section) = self.get_section(at.section_id) else {
+                continue;
+            };
+            if at.station_index == 0 || at.station_index as usize == section.shots.len() {
+                branches.push(at.section_id);
+            } else {
+                passing_through.push(at.section_id);
+            }
         }
-        // Every station at the join point: both join stations' merge groups.
-        let mut join_group = group_a;
-        if !merged {
-            join_group.extend(self.get_merge_group(at_b));
-        }
-        let mut branches: Vec<SectionId> = join_group
-            .iter()
-            .map(|at| at.section_id)
-            .filter(|id| *id != pairing.a && *id != pairing.b)
-            .collect();
         branches.sort_unstable();
         branches.dedup();
-        let mut loose_ends: Vec<SectionId> = ends
-            .near(pa)
-            .map(|(id, _)| id)
-            .filter(|id| *id != pairing.a && *id != pairing.b && !branches.contains(id))
-            .collect();
+        passing_through.sort_unstable();
+        passing_through.dedup();
+        passing_through.retain(|id| !branches.contains(id));
+        let mut loose_ends: Vec<SectionId> = ends.near(pa).map(|(id, _)| id).collect();
+        if kind == CombineJoinKind::Closure {
+            loose_ends.extend(ends.near(pb).map(|(id, _)| id));
+        }
+        loose_ends.retain(|id| {
+            *id != pairing.a
+                && *id != pairing.b
+                && !branches.contains(id)
+                && !passing_through.contains(id)
+        });
         loose_ends.sort_unstable();
         loose_ends.dedup();
-        let blocked = self
-            .mid_section_at_join(&join_group)
-            .or_else(|| self.combine_blocked_reason(pairing, at_a, at_b, merged, &join_group))
-            .or_else(|| {
-                // A merge the offset solver could not align: combining would move
-                // the other section by the gap.
-                (apart > COMBINE_TOLERANCE_M).then(|| {
-                    format!(
-                        "The merged join stations are {:.1} mm apart",
-                        apart * 1000.0
-                    )
-                })
-            });
         Some(Touch {
-            merged,
-            blocked,
+            kind,
+            blocked: self.combine_blocked_reason(section_a, section_b),
+            group_a,
+            group_b,
             branches,
+            passing_through,
             loose_ends,
         })
     }
 
-    /// Why a station merged at the join point stops the combine, if one
-    /// does: one in the MIDDLE of its section. Other sections' ends there stay
-    /// attached to the joined station as branches, but a section passing
-    /// through the point would cross the combined one there.
-    fn mid_section_at_join(&self, join_group: &HashSet<StationRef>) -> Option<String> {
-        let mut through: Vec<&StationRef> = join_group
-            .iter()
-            .filter(|at| {
-                self.get_section(at.section_id).is_some_and(|section| {
-                    at.station_index > 0 && (at.station_index as usize) < section.shots.len()
-                })
-            })
-            .collect();
-        through.sort_by_key(|at| (at.section_id, at.station_index));
-        through.first().map(|at| {
-            format!(
-                "{} is merged here at a station in its middle",
-                self.get_section(at.section_id)
-                    .map_or_else(|| format!("Section {}", at.section_id), label)
-            )
-        })
-    }
-
-    /// Why combining at a touching `pairing` would be wrong, or `None`.
-    fn combine_blocked_reason(
-        &self,
-        pairing: Pairing,
-        at_a: StationRef,
-        at_b: StationRef,
-        merged: bool,
-        join_group: &HashSet<StationRef>,
-    ) -> Option<String> {
-        let a = self.get_section(pairing.a)?;
-        let b = self.get_section(pairing.b)?;
-        let (name_a, name_b) = (label(a), label(b));
-        if a.shots.is_empty() || b.shots.is_empty() {
-            return Some("A section with no shots cannot be combined".to_string());
-        }
-        // One uuid in both would put the same shot in the section twice, and
-        // every `AfterShot` anchor names the first of them (from #713).
-        let uuids_a: HashSet<&str> = a.shots.iter().filter_map(|s| s.uuid.as_deref()).collect();
-        if b.shots
-            .iter()
-            .filter_map(|s| s.uuid.as_deref())
-            .any(|uuid| uuids_a.contains(uuid))
-        {
+    /// Why combining `a` and `b` is refused wherever they meet, or `None`.
+    /// Everything else that stands in the way is changed, and the plan says
+    /// what (`combine_plan.rs`).
+    fn combine_blocked_reason(&self, a: &Section, b: &Section) -> Option<String> {
+        if self.carries_zero_datum(a.id) && self.carries_zero_datum(b.id) {
             return Some(format!(
-                "{name_a} and {name_b} share a shot identity (the same shot uuid)"
+                "{} and {} each carry a zero datum: a section can hold only one",
+                label(a),
+                label(b)
             ));
-        }
-        // The RAW references: the combined section keeps only the kept one's
-        // `azimuth_reference`, so a section that declares its own reference and
-        // one that follows the project default must not merge even while they
-        // resolve alike. A later change of the default would silently rotate
-        // the shots that brought their own.
-        if let Some(reason) = Self::north_reference_mismatch(a, b, &name_a, &name_b) {
-            return Some(reason);
-        }
-        if (a.quality - b.quality).abs() > 1e-12 {
-            return Some(format!(
-                "{name_a} and {name_b} have different quality factors"
-            ));
-        }
-        if self.rigidly_connected_beyond_join(at_a, at_b, join_group) {
-            return Some(format!(
-                "{name_a} and {name_b} are also connected elsewhere (a loop)"
-            ));
-        }
-        if self.has_datum_at(at_a) && self.has_datum_at(at_b) {
-            return Some("Both join stations carry a zero datum".to_string());
-        }
-        if !merged
-            && self.section_has_zero_datum(pairing.a)
-            && self.section_has_zero_datum(pairing.b)
-        {
-            return Some(format!("{name_a} and {name_b} each have a zero datum"));
-        }
-        if let Some(gap) = self.join_depth_gap(at_a, at_b, merged) {
-            if gap > COMBINE_DEPTH_LIMIT_M {
-                return Some(format!(
-                    "The two ends are {gap:.2} m apart in depth (more than \
-                     {COMBINE_DEPTH_LIMIT_M:.0} m), so they are not one station; merge them \
-                     first if they are"
-                ));
-            }
-        }
-        let offset = |at| self.station_offset_for_ref(at).unwrap_or_default();
-        let (oa, ob) = (offset(at_a), offset(at_b));
-        let moved = ((oa.0 - ob.0).powi(2) + (oa.1 - ob.1).powi(2) + (oa.2 - ob.2).powi(2)).sqrt();
-        if moved > COMBINE_TOLERANCE_M {
-            return Some("The join stations were moved by different amounts".to_string());
         }
         let budget = FEATURE_ID_STRIDE.saturating_sub(1) as usize;
         if a.shots.len() + b.shots.len() > budget {
@@ -376,12 +354,17 @@ impl Project {
         })
     }
 
-    /// Why combining `other` into `kept` is refused, if it is: the pair's
-    /// reason, else the one that depends on which section is kept. The one
-    /// check `combine_sections` and the command both run before changing
+    /// Why combining `other` into `kept` at `join` is refused, if it is: the
+    /// pair's reason, else the one that depends on which section is kept. The
+    /// one check `combine_sections` and the command both run before changing
     /// anything.
-    pub fn combine_refusal(&self, kept: SectionId, other: SectionId) -> Option<String> {
-        let Some(candidate) = self.combine_candidate_for_sections(kept, other) else {
+    pub fn combine_refusal(
+        &self,
+        kept: SectionId,
+        other: SectionId,
+        join: Option<CombineJoinEnds>,
+    ) -> Option<String> {
+        let Some(candidate) = self.combine_candidate_joining(kept, other, join) else {
             return Some(format!("Sections {kept} and {other} cannot be combined"));
         };
         candidate.blocked_reason.or(if candidate.section_a == kept {
@@ -391,96 +374,179 @@ impl Project {
         })
     }
 
-    /// Why two sections' stored north references keep them apart, if they do.
-    fn north_reference_mismatch(
-        a: &Section,
-        b: &Section,
-        name_a: &str,
-        name_b: &str,
-    ) -> Option<String> {
-        match (a.azimuth_reference, b.azimuth_reference) {
-            (None, None) => None,
-            (Some(x), Some(y))
-                if x.north == y.north && (x.correction - y.correction).abs() <= 1e-9 =>
-            {
-                None
-            }
-            (Some(_), Some(_)) => Some(format!(
-                "{name_a} and {name_b} use different north references"
-            )),
-            (None, Some(_)) => Some(format!(
-                "{name_a} follows the project's default north reference, {name_b} declares \
-                 its own"
-            )),
-            (Some(_), None) => Some(format!(
-                "{name_b} follows the project's default north reference, {name_a} declares \
-                 its own"
-            )),
-        }
-    }
-
-    /// Are the join stations' sections still rigidly connected (merges and
-    /// aligned closures) once every tie AT the join point is removed (between
-    /// two of its stations, `join_group`, a third section's end included)?
-    /// Then the combined section would be tied to itself: a rigid loop inside
-    /// one section, or through a third section (which `merge_stations`
-    /// refuses for the same reason). A third section merged only at the join
-    /// point is a branch, not a loop.
-    fn rigidly_connected_beyond_join(
+    /// The candidate for combining `other` into `kept` at `join` (the kept and
+    /// the other section's ends), or at the join the two-section query
+    /// prefers when `join` is `None`. `None` when either section is missing or
+    /// they are the same section.
+    pub fn combine_candidate_joining(
         &self,
-        at_a: StationRef,
-        at_b: StationRef,
-        join_group: &HashSet<StationRef>,
-    ) -> bool {
-        let at_join = |x: Option<StationRef>| x.is_some_and(|x| join_group.contains(&x));
-        let is_join = |x: Option<StationRef>, y: Option<StationRef>| {
-            (at_join(x) && at_join(y))
-                || (x == Some(at_a) && y == Some(at_b))
-                || (x == Some(at_b) && y == Some(at_a))
+        kept: SectionId,
+        other: SectionId,
+        join: Option<CombineJoinEnds>,
+    ) -> Option<CombineCandidate> {
+        let Some(join) = join else {
+            return self.combine_candidate_for_sections(kept, other);
         };
-        let mut adjacency: HashMap<SectionId, Vec<SectionId>> = HashMap::new();
-        let mut edge = |x: &StationKey, y: &StationKey| {
-            adjacency
-                .entry(x.section_id)
-                .or_default()
-                .push(y.section_id);
-            adjacency
-                .entry(y.section_id)
-                .or_default()
-                .push(x.section_id);
+        if kept == other {
+            return None;
+        }
+        let (k, o) = (self.get_section(kept)?, self.get_section(other)?);
+        let pairing = Pairing {
+            a: kept,
+            end_a: join.kept,
+            b: other,
+            end_b: join.other,
         };
-        for merge in &self.station_merges {
-            if !is_join(
-                self.resolve_key(&merge.station_a),
-                self.resolve_key(&merge.station_b),
-            ) {
-                edge(&merge.station_a, &merge.station_b);
-            }
-        }
-        for closure in self.loop_closures.iter().filter(|c| c.is_aligned) {
-            if !is_join(
-                self.resolve_key(&closure.station_a),
-                self.resolve_key(&closure.station_b),
-            ) {
-                edge(&closure.station_a, &closure.station_b);
-            }
-        }
-        let mut seen: HashSet<SectionId> = HashSet::new();
-        let mut queue = vec![at_a.section_id];
-        while let Some(current) = queue.pop() {
-            if current == at_b.section_id {
-                return true;
-            }
-            if seen.insert(current) {
-                queue.extend(adjacency.get(&current).into_iter().flatten().copied());
-            }
-        }
-        false
+        let table = self.end_table();
+        let touch = self.pairing_touch(pairing, &table).unwrap_or_else(|| {
+            Touch::refused(format!(
+                "{} and {} do not meet at those ends",
+                label(k),
+                label(o)
+            ))
+        });
+        self.candidate_for(pairing, touch, &table)
     }
 
-    /// The depth gap between two co-located join stations that are NOT
-    /// merged, each read on its own (`compute_station_depth`); `None` for a
-    /// merged join, whose stations are already one depth.
+    /// Degrees to add to `other`'s stored bearings so they read against
+    /// `kept`'s north reference, when the two STORED references differ. The
+    /// stored ones are compared, not the resolved ones: the combined section
+    /// keeps only `kept`'s, so a section that declares its own reference and
+    /// one that follows the project default differ even while they resolve
+    /// alike (`Some(0.0)`: the values stay, the reference they follow changes).
+    pub(crate) fn azimuth_rotation(&self, kept: &Section, other: &Section) -> Option<f64> {
+        let same = match (kept.azimuth_reference, other.azimuth_reference) {
+            (None, None) => true,
+            (Some(x), Some(y)) => x.north == y.north && (x.correction - y.correction).abs() <= 1e-9,
+            _ => false,
+        };
+        (!same).then(|| {
+            self.azimuth_reference_for(other).correction
+                - self.azimuth_reference_for(kept).correction
+        })
+    }
+
+    /// How far apart the two join stations' manual offsets are, when more
+    /// than the tolerance: the joined station keeps the fixed side's, so the
+    /// other join station moves by this much.
+    fn join_offset_change(&self, join_k: StationRef, join_o: StationRef) -> Option<f64> {
+        let offset = |at| self.station_offset_for_ref(at).unwrap_or_default();
+        let (k, o): ((f64, f64, f64), (f64, f64, f64)) = (offset(join_k), offset(join_o));
+        let apart = ((k.0 - o.0).powi(2) + (k.1 - o.1).powi(2) + (k.2 - o.2).powi(2)).sqrt();
+        (apart > COMBINE_TOLERANCE_M).then_some(apart)
+    }
+
+    /// The uuids shots of both `a` and `b` carry. The combine gives the other
+    /// section's copies new ones: one uuid twice in a section would put the
+    /// same shot in it twice, and every `AfterShot` anchor names the first.
+    pub(crate) fn shared_shot_uuids(a: &Section, b: &Section) -> Vec<String> {
+        let in_a: HashSet<&str> = a
+            .shots
+            .iter()
+            .filter_map(|s| s.uuid.as_deref())
+            .filter(|u| !u.is_empty())
+            .collect();
+        let mut shared: Vec<String> = b
+            .shots
+            .iter()
+            .filter_map(|s| s.uuid.as_deref())
+            .filter(|u| in_a.contains(u))
+            .map(str::to_string)
+            .collect();
+        shared.sort_unstable();
+        shared.dedup();
+        shared
+    }
+
+    /// The join `pairing` names, with `kept` kept, as a [`JoinPoint`], and the
+    /// translation that brings the other join station onto the kept one.
+    pub(crate) fn join_point(
+        &self,
+        pairing: Pairing,
+        touch: &Touch,
+        kept: SectionId,
+        table: &EndTable,
+    ) -> Option<(JoinPoint, (f64, f64))> {
+        let section_a = self.get_section(pairing.a)?;
+        let section_b = self.get_section(pairing.b)?;
+        let at_a = StationRef::new(pairing.a, end_index(section_a, pairing.end_a));
+        let at_b = StationRef::new(pairing.b, end_index(section_b, pairing.end_b));
+        let (pa, pb) = (
+            table.at(pairing.a, pairing.end_a)?,
+            table.at(pairing.b, pairing.end_b)?,
+        );
+        let merged = touch.kind == CombineJoinKind::Merged;
+        Some(if kept == pairing.a {
+            (
+                JoinPoint {
+                    kept: pairing.a,
+                    other: pairing.b,
+                    join_k: at_a,
+                    join_o: at_b,
+                    group_k: touch.group_a.clone(),
+                    group_o: touch.group_b.clone(),
+                    merged,
+                },
+                (pa.0 - pb.0, pa.1 - pb.1),
+            )
+        } else {
+            (
+                JoinPoint {
+                    kept: pairing.b,
+                    other: pairing.a,
+                    join_k: at_b,
+                    join_o: at_a,
+                    group_k: touch.group_b.clone(),
+                    group_o: touch.group_a.clone(),
+                    merged,
+                },
+                (pb.0 - pa.0, pb.1 - pa.1),
+            )
+        })
+    }
+
+    /// The plan the dialog shows for keeping `kept`, and the full plan
+    /// `combine_sections` applies. An empty plan for a blocked pairing.
+    pub(crate) fn plan_keeping(
+        &self,
+        pairing: Pairing,
+        touch: &Touch,
+        kept: SectionId,
+        table: &EndTable,
+    ) -> (CombinePlan, Option<(JoinPoint, TiePlan)>) {
+        let empty = CombinePlan {
+            kept,
+            moving_section: None,
+            moved_sections: Vec::new(),
+            shift_m: 0.0,
+            torn_ties: Vec::new(),
+            azimuth_rotation_deg: None,
+            join_offset_change_m: None,
+        };
+        if touch.blocked.is_some() {
+            return (empty, None);
+        }
+        let Some((join, gap)) = self.join_point(pairing, touch, kept, table) else {
+            return (empty, None);
+        };
+        let Ok(ties) = self.plan_ties(&join, gap) else {
+            return (empty, None);
+        };
+        let (Some(k), Some(o)) = (self.get_section(join.kept), self.get_section(join.other)) else {
+            return (empty, None);
+        };
+        let shown = Self::plan_for_display(
+            &ties,
+            kept,
+            self.azimuth_rotation(k, o),
+            self.join_offset_change(join.join_k, join.join_o),
+        );
+        (shown, Some((join, ties)))
+    }
+
+    /// The depth gap between two join stations that are NOT merged, each
+    /// read on its own (`compute_station_depth`); `None` for a merged join,
+    /// whose stations are already one depth.
     fn join_depth_gap(&self, at_a: StationRef, at_b: StationRef, merged: bool) -> Option<f64> {
         (!merged).then(|| {
             (self.compute_station_depth(&[at_a]) - self.compute_station_depth(&[at_b])).abs()
@@ -488,19 +554,38 @@ impl Project {
     }
 
     /// The answer for one touching pairing, `a` the lower section id.
-    fn candidate_for(&self, pairing: Pairing, touch: Touch) -> Option<CombineCandidate> {
-        let pairing = if pairing.a <= pairing.b {
-            pairing
+    fn candidate_for(
+        &self,
+        pairing: Pairing,
+        touch: Touch,
+        table: &EndTable,
+    ) -> Option<CombineCandidate> {
+        let (mut pairing, touch) = if pairing.a <= pairing.b {
+            (pairing, touch)
         } else {
-            Pairing {
-                a: pairing.b,
-                end_a: pairing.end_b,
-                b: pairing.a,
-                end_b: pairing.end_a,
-            }
+            (
+                Pairing {
+                    a: pairing.b,
+                    end_a: pairing.end_b,
+                    b: pairing.a,
+                    end_b: pairing.end_a,
+                },
+                Touch {
+                    group_a: touch.group_b,
+                    group_b: touch.group_a,
+                    ..touch
+                },
+            )
         };
         let a = self.get_section(pairing.a)?;
         let b = self.get_section(pairing.b)?;
+        // A section with no shots has one station, both of its ends: name the
+        // end that joins without reversing the other section.
+        if a.shots.is_empty() {
+            pairing.end_a = opposite(pairing.end_b);
+        } else if b.shots.is_empty() {
+            pairing.end_b = opposite(pairing.end_a);
+        }
         let station_a = StationRef::new(a.id, end_index(a, pairing.end_a));
         let station_b = StationRef::new(b.id, end_index(b, pairing.end_b));
         let differing = |map: &HashMap<StationKey, String>| match (
@@ -512,6 +597,9 @@ impl Project {
         };
         let (comment_a, comment_b) = differing(&self.station_comments);
         let (station_name_a, station_name_b) = differing(&self.station_names);
+        let merged = touch.kind == CombineJoinKind::Merged;
+        let (plan_keeping_a, _) = self.plan_keeping(pairing, &touch, a.id, table);
+        let (plan_keeping_b, _) = self.plan_keeping(pairing, &touch, b.id, table);
         Some(CombineCandidate {
             section_a: a.id,
             section_b: b.id,
@@ -519,7 +607,8 @@ impl Project {
             end_b: pairing.end_b,
             station_a,
             station_b,
-            merged: touch.merged,
+            merged,
+            join_kind: touch.kind,
             reverses: pairing.end_a == pairing.end_b,
             blocked_reason: touch.blocked,
             blocked_keeping_a: Self::shot_id_room_refusal(a, b),
@@ -531,28 +620,46 @@ impl Project {
             station_name_a,
             station_name_b,
             depth_difference_m: self
-                .join_depth_gap(station_a, station_b, touch.merged)
+                .join_depth_gap(station_a, station_b, merged)
                 .filter(|gap| *gap > COMBINE_DEPTH_NOTICE_M),
             branches: touch.branches,
             loose_ends: touch.loose_ends,
+            passing_through: touch.passing_through,
+            repeated_shot_ids: Self::shared_shot_uuids(a, b).len() as u32,
+            plan_keeping_a,
+            plan_keeping_b,
         })
+    }
+
+    /// The ends of `section` a join can sit on: one for a section with no
+    /// shots, whose single station is both.
+    fn joinable_ends(section: &Section) -> &'static [SectionEnd] {
+        if section.shots.is_empty() {
+            &[SectionEnd::Start]
+        } else {
+            &[SectionEnd::Start, SectionEnd::End]
+        }
     }
 
     /// Every pairing of an end of `s1` with an end of `s2` that touches.
     fn touching_pairings(
         &self,
-        s1: SectionId,
-        s2: SectionId,
+        s1: &Section,
+        s2: &Section,
         table: &EndTable,
     ) -> Vec<(Pairing, Touch)> {
-        let ends = [SectionEnd::Start, SectionEnd::End];
-        ends.iter()
-            .flat_map(|&end_a| ends.iter().map(move |&end_b| (end_a, end_b)))
+        Self::joinable_ends(s1)
+            .iter()
+            .flat_map(|&end_a| {
+                Self::joinable_ends(s2)
+                    .iter()
+                    .map(move |&end_b| (end_a, end_b))
+            })
             .filter_map(|(end_a, end_b)| {
                 let pairing = Pairing {
-                    a: s1,
+                    a: s1.id,
                     end_a,
-                    b: s2,
+                    b: s2.id,
                     end_b,
                 };
                 self.pairing_touch(pairing, table)
@@ -561,10 +668,13 @@ impl Project {
             .collect()
     }
 
-    /// Can sections `s1` and `s2` be combined? Tries all four end pairings and
-    /// requires exactly one to be eligible: two sections that meet at both ends
-    /// are ambiguous (and usually a loop). `None` when either section is
-    /// missing or they are the same section.
+    /// Can sections `s1` and `s2` be combined, and where? Tries all four end
+    /// pairings; when they meet at more than one, the join is a merge first,
+    /// then co-located ends, then a closure, then the smaller gap, then one
+    /// that needs no reverse. The ties at the other meeting points tear into
+    /// loop closures (the plan lists them); the station menu joins at the end
+    /// that was clicked instead. `None` when either section is missing or
+    /// they are the same section.
     pub fn combine_candidate_for_sections(
         &self,
         s1: SectionId,
@@ -574,7 +684,7 @@ impl Project {
     }
 
     /// [`Self::combine_candidate_for_sections`] against an end table the
-    /// caller already built (the station query builds one for its own search).
+    /// caller already built.
     fn candidate_for_sections_with(
         &self,
         s1: SectionId,
@@ -588,41 +698,36 @@ impl Project {
         // same whichever section the caller names first or keeps.
         let (s1, s2) = (s1.min(s2), s1.max(s2));
         let (a, b) = (self.get_section(s1)?, self.get_section(s2)?);
-        let touching = self.touching_pairings(s1, s2, table);
-        let eligible: Vec<&(Pairing, Touch)> = touching
-            .iter()
-            .filter(|(_, t)| t.blocked.is_none())
-            .collect();
-        match (eligible.as_slice(), touching.first()) {
-            ([(pairing, touch)], _) => self.candidate_for(*pairing, touch.clone()),
-            ([], Some((pairing, touch))) => self.candidate_for(*pairing, touch.clone()),
-            ([(pairing, touch), ..], _) => {
-                let mut touch = touch.clone();
-                touch.blocked = Some(format!(
-                    "{} and {} meet at both ends (a loop)",
-                    label(a),
-                    label(b)
-                ));
-                self.candidate_for(*pairing, touch)
-            }
-            ([], None) => {
-                let pairing = Pairing {
+        let gap = |p: &Pairing| match (table.at(p.a, p.end_a), table.at(p.b, p.end_b)) {
+            (Some(x), Some(y)) => distance(x, y),
+            _ => f64::INFINITY,
+        };
+        let best = self
+            .touching_pairings(a, b, table)
+            .into_iter()
+            .min_by(|(p1, t1), (p2, t2)| {
+                t1.rank()
+                    .cmp(&t2.rank())
+                    .then_with(|| gap(p1).total_cmp(&gap(p2)))
+                    .then_with(|| (p1.end_a == p1.end_b).cmp(&(p2.end_a == p2.end_b)))
+            });
+        let (pairing, touch) = best.unwrap_or_else(|| {
+            (
+                Pairing {
                     a: s1,
                     end_a: SectionEnd::End,
                     b: s2,
                     end_b: SectionEnd::Start,
-                };
-                let touch = Touch {
-                    blocked: Some(format!(
-                        "{} and {} do not meet at an end station",
-                        label(a),
-                        label(b)
-                    )),
-                    ..Touch::default()
-                };
-                self.candidate_for(pairing, touch)
-            }
-        }
+                },
+                Touch::refused(format!(
+                    "{} and {} do not meet at an end station: merge two of their ends, or \
+                     create a loop closure between them, first",
+                    label(a),
+                    label(b)
+                )),
+            )
+        });
+        self.candidate_for(pairing, touch, table)
     }
 
     /// The first of [`Self::combine_candidates`]: what a station with one
@@ -631,12 +736,50 @@ impl Project {
         self.combine_candidates(station).into_iter().next()
     }
 
+    /// Every other section end tied to `group` by a loop closure: the ends in
+    /// the merge group of each closure's far station.
+    fn closure_partner_ends(&self, group: &HashSet<StationRef>) -> Vec<(SectionId, SectionEnd)> {
+        let mut out = Vec::new();
+        for closure in &self.loop_closures {
+            let (Some(x), Some(y)) = (
+                self.resolve_key(&closure.station_a),
+                self.resolve_key(&closure.station_b),
+            ) else {
+                continue;
+            };
+            let far = match (group.contains(&x), group.contains(&y)) {
+                (true, false) => y,
+                (false, true) => x,
+                _ => continue,
+            };
+            for member in self.get_merge_group(far) {
+                if let Some(section) = self.get_section(member.section_id) {
+                    out.extend(Self::end_of(section, member.station_index));
+                }
+            }
+        }
+        out
+    }
+
+    /// The end `index` is of `section`, if it is one (`Start` for a section
+    /// with no shots, whose one station is both).
+    fn end_of(section: &Section, index: u32) -> Option<(SectionId, SectionEnd)> {
+        if index == 0 {
+            Some((section.id, SectionEnd::Start))
+        } else if index as usize == section.shots.len() {
+            Some((section.id, SectionEnd::End))
+        } else {
+            None
+        }
+    }
+
     /// What the section that `station` ends can be combined with: one
     /// candidate per other section with an end at the same point (merged to
-    /// it, or co-located), in section order, each with its own reason when it
-    /// is blocked. At a junction the user picks one; the others stay attached
-    /// to the joined station as branches (or, unmerged, untouched). Empty when
-    /// `station` is not an end of its section or nothing else ends there.
+    /// it, co-located with it, or tied to it by a loop closure), in section
+    /// order, each joined at `station` and with its own reason when it is
+    /// blocked. At a junction the user picks one; the others stay attached
+    /// to the joined station as branches (or, unmerged, untouched). Empty
+    /// when `station` is not an end of its section or nothing else ends there.
     ///
     /// A station merged only to the middle of other sections gets one blocked
     /// candidate saying so; a pile of more than [`MAX_COMBINE_PARTNERS`] other
@@ -645,31 +788,36 @@ impl Project {
         let Some(section) = self.get_section(station.section_id) else {
             return Vec::new();
         };
-        let end = if station.station_index == 0 {
-            SectionEnd::Start
-        } else if station.station_index as usize == section.shots.len() {
-            SectionEnd::End
-        } else {
+        let Some((_, end)) = Self::end_of(section, station.station_index) else {
             return Vec::new();
         };
-        // Every other section with an end at this point: merged to it, or
-        // co-located with it.
+        // Every other section with an end at this point: merged to it,
+        // co-located with it, or across a loop closure from it.
         let table = self.end_table();
         let Some(at) = table.at(section.id, end) else {
             return Vec::new();
         };
         let group = self.get_merge_group(station);
-        let mut other_ends: Vec<(SectionId, SectionEnd)> = table.near(at).collect();
+        let mut other_ends: Vec<(SectionId, SectionEnd)> = table
+            .near(at)
+            .filter_map(|(id, end)| {
+                let other = self.get_section(id)?;
+                Some((
+                    id,
+                    if other.shots.is_empty() {
+                        SectionEnd::Start
+                    } else {
+                        end
+                    },
+                ))
+            })
+            .collect();
         for member in &group {
             if let Some(other) = self.get_section(member.section_id) {
-                if member.station_index == 0 {
-                    other_ends.push((other.id, SectionEnd::Start));
-                }
-                if member.station_index as usize == other.shots.len() {
-                    other_ends.push((other.id, SectionEnd::End));
-                }
+                other_ends.extend(Self::end_of(other, member.station_index));
             }
         }
+        other_ends.extend(self.closure_partner_ends(&group));
         other_ends.retain(|(id, _)| *id != section.id);
         other_ends.sort_by_key(|(id, end)| (*id, *end == SectionEnd::End));
         other_ends.dedup();
@@ -692,7 +840,10 @@ impl Project {
                 "{count} section ends meet here: select the two to combine in the Sections \
                  panel"
             ));
-            return self.candidate_for(pairing, touch).into_iter().collect();
+            return self
+                .candidate_for(pairing, touch, &table)
+                .into_iter()
+                .collect();
         }
         if other_ends.is_empty() {
             if group.len() <= 1 {
@@ -709,29 +860,28 @@ impl Project {
                 b: other.section_id,
                 end_b: SectionEnd::Start,
             };
-            let touch = Touch {
-                merged: true,
-                blocked: Some("Merged to the middle of another section".to_string()),
-                ..Touch::default()
-            };
-            return self.candidate_for(pairing, touch).into_iter().collect();
+            let mut touch = Touch::refused("Merged to the middle of another section".to_string());
+            touch.kind = CombineJoinKind::Merged;
+            return self
+                .candidate_for(pairing, touch, &table)
+                .into_iter()
+                .collect();
         }
         other_ends
             .into_iter()
             .filter_map(|other| {
                 let pairing = pairing_with(other);
-                let mut touch = self.pairing_touch(pairing, &table)?;
-                if touch.blocked.is_none() {
-                    // The pair's own answer decides, so the station menu, the
-                    // Sections panel and the command agree: two sections that
-                    // meet at both ends are ambiguous from either. When it is
-                    // eligible it is this pairing, the only eligible one.
-                    touch.blocked = self
-                        .candidate_for_sections_with(pairing.a, pairing.b, &table)?
-                        .blocked_reason;
-                }
-                self.candidate_for(pairing, touch)
+                let touch = self.pairing_touch(pairing, &table)?;
+                self.candidate_for(pairing, touch, &table)
             })
             .collect()
+    }
+}
+
+/// The other end.
+fn opposite(end: SectionEnd) -> SectionEnd {
+    match end {
+        SectionEnd::Start => SectionEnd::End,
+        SectionEnd::End => SectionEnd::Start,
     }
 }
