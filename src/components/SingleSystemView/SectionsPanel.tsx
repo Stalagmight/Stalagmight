@@ -10,13 +10,20 @@ import {
   type SurveyData,
   type SectionMetadata,
 } from '../../types/survey-data';
-import { useEditingBlocked } from '../../hooks/useEditingBlocked';
+import {
+  useEditingBlocked,
+  isEditingBlockedNow,
+  useEditingBlockedReason,
+  editingBlockedReasonNow,
+} from '../../hooks/useEditingBlocked';
 import { useShallow } from 'zustand/react/shallow';
 import { formatFixed, formatNumber } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { IconButton } from '../common/Button';
 import { ExternalLinkIcon, PlusIcon } from '../common/icons';
 import { setSource } from '../../utils/telemetry';
+import { getErrorMessage } from '../../utils/ipc';
+import { TOAST_KEYS } from '../../utils/toastKeys';
 import { useLongPress } from '../../hooks';
 import { DATA_TABLE_MIN_HEIGHT, DATA_TABLE_MAX_HEIGHT } from './layoutConstants';
 import { countsTowardLength } from '../../utils/shotKind';
@@ -74,7 +81,7 @@ export function rovingDefaultTabIndex(
 export default function SectionsPanel({ sections }: SectionsPanelProps) {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
-  const { selection, multiSelection, setSelection, addToSelection, toggleSelection, clearSelection, hoveredSectionId, hoveredShot, hoveredStation, setHoveredSectionId, openDialog, enterSectionFocus, triggerZoomToSection } = useUIStore(
+  const { selection, multiSelection, setSelection, addToSelection, toggleSelection, clearSelection, hoveredSectionId, hoveredShot, hoveredStation, setHoveredSectionId, openDialog, enterSectionFocus, triggerZoomToSection, showToast } = useUIStore(
     useShallow((s) => ({
       selection: s.selection,
       multiSelection: s.multiSelection,
@@ -89,12 +96,19 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
       openDialog: s.openDialog,
       enterSectionFocus: s.enterSectionFocus,
       triggerZoomToSection: s.triggerZoomToSection,
+      showToast: s.showToast,
     }))
   );
 
   // The closure-adjusted view, Plan/Export mode, and a locked remote SpeleoDB
   // project are all read-only - section add/delete are disabled there.
   const editingBlocked = useEditingBlocked();
+  // Why the color dot is inert: a read-only SpeleoDB copy is the project, the
+  // closure-adjusted view (or Plan/Export) is the view.
+  const editingBlockedReason = useEditingBlockedReason();
+  const colorBlockedText = t(
+    editingBlockedReason === 'project' ? 'sections.actions.colorReadOnlyProject' : 'sections.actions.colorReadOnly',
+  );
 
   // The row to highlight comes from any of: an explicit section hover (panel row /
   // DetailPanel section link), or - for map hovers - the section that owns the
@@ -168,6 +182,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
   // Subscribing here rebuilds the id -> metadata lookup below whenever the data
   // changes, without any component re-render caused by reading it per row.
   const surveyData = useProjectStore((s) => s.surveyData);
+  const updateSection = useProjectStore((s) => s.updateSection);
 
   // O(1) section-id -> metadata lookup, built once per surveyData change. This
   // replaces the former per-row `surveyData.sections.find(...)`, which made a
@@ -447,6 +462,37 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     setHoveredSectionId(null);
   }, [setHoveredSectionId]);
 
+  // The row's color dot commits through the same update_section command as the
+  // Edit Section dialog. Re-checked at commit time: the mode can change while the
+  // system picker is open, and the closure-adjusted view and Plan/Export have no
+  // server-side backstop. A rejected CommandResult is already toasted by
+  // executeCommand; a transport rejection is only refreshed and re-thrown, and
+  // the caller owns telling the user (docs/notifications.md).
+  // A click on the dot while editing is blocked, or a pick confirmed after it
+  // became blocked, says why instead of doing nothing.
+  // Read at call time: the mode can change while the system picker is open.
+  const handleSectionColorBlocked = useCallback(() => {
+    showToast(
+      t(editingBlockedReasonNow() === 'project' ? 'sections.actions.colorReadOnlyProject' : 'sections.actions.colorReadOnly'),
+      TOAST_KEYS.EDIT_DISABLED,
+      'warning',
+    );
+  }, [showToast, t]);
+
+  const handleSectionColorChange = useCallback(async (sectionId: SectionId, color: string) => {
+    if (isEditingBlockedNow()) {
+      handleSectionColorBlocked();
+      return false;
+    }
+    setSource('sections-panel');
+    try {
+      return (await updateSection(sectionId, { color })).success;
+    } catch (e) {
+      showToast(getErrorMessage(e, t('editGate.commandFailed')), TOAST_KEYS.COMMAND_FAILED, 'error');
+      return false;
+    }
+  }, [updateSection, showToast, t, handleSectionColorBlocked]);
+
   const handleFocusButtonMouseDown = useCallback((e: React.MouseEvent) => {
     // Stop propagation so the row's own mouse-down handling doesn't double-fire.
     e.stopPropagation();
@@ -591,8 +637,12 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
                     onFocus={handleSectionFocus}
                     onKeyDown={handleKeyDown}
                     onEnterFocus={handleEnterFocusClick}
-                    onEnterFocusMouseDown={handleFocusButtonMouseDown}
-                    onEnterFocusDoubleClick={handleFocusButtonDoubleClick}
+                    onControlMouseDown={handleFocusButtonMouseDown}
+                    onControlDoubleClick={handleFocusButtonDoubleClick}
+                    colorEditable={!editingBlocked}
+                    onColorChange={handleSectionColorChange}
+                    onColorBlocked={handleSectionColorBlocked}
+                    colorBlockedText={colorBlockedText}
                     onLongPress={openSectionContextMenu}
                     optionRefs={optionRefs}
                   />
@@ -663,6 +713,20 @@ export function calculateSectionStats(
   };
 }
 
+/**
+ * A section color as the `#rrggbb` a color input can hold. A value already in
+ * that form is kept (lowercased, as the input reports it). Anything else is read
+ * back from `drawn`, the element painted with it, whose computed background the
+ * browser has already resolved to `rgb(...)`. An unpaintable color is black,
+ * which is also what the input itself would have made of it.
+ */
+export function hexColorFor(color: string, drawn: Element | null): string {
+  if (/^#[0-9a-f]{6}$/i.test(color)) return color.toLowerCase();
+  const rgb = drawn ? /^rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(getComputedStyle(drawn).backgroundColor) : null;
+  if (!rgb) return '#000000';
+  return `#${rgb.slice(1, 4).map((c) => Number(c).toString(16).padStart(2, '0')).join('')}`;
+}
+
 interface SectionRowProps {
   section: Section;
   index: number;
@@ -692,8 +756,17 @@ interface SectionRowProps {
   onFocus: (sectionId: SectionId, index: number) => void;
   onKeyDown: (e: React.KeyboardEvent, index: number) => void;
   onEnterFocus: (section: Section, e: React.MouseEvent) => void;
-  onEnterFocusMouseDown: (e: React.MouseEvent) => void;
-  onEnterFocusDoubleClick: (e: React.MouseEvent) => void;
+  /** Stop a click on a control inside the row (focus button, color dot) from
+   *  also selecting or zooming the row. */
+  onControlMouseDown: (e: React.MouseEvent) => void;
+  onControlDoubleClick: (e: React.MouseEvent) => void;
+  colorEditable: boolean;
+  /** Resolves false when the color was not applied, so the dot can revert. */
+  onColorChange: (sectionId: SectionId, color: string) => Promise<boolean>;
+  /** The dot was clicked while editing is blocked. */
+  onColorBlocked: () => void;
+  /** The dot's tooltip while editing is blocked: why it cannot be changed. */
+  colorBlockedText: string;
   onLongPress: (sectionId: number, x: number, y: number) => void;
   optionRefs: React.MutableRefObject<(HTMLLIElement | null)[]>;
 }
@@ -719,8 +792,12 @@ const SectionRow = memo(function SectionRow({
   onFocus,
   onKeyDown,
   onEnterFocus,
-  onEnterFocusMouseDown,
-  onEnterFocusDoubleClick,
+  onControlMouseDown,
+  onControlDoubleClick,
+  colorEditable,
+  onColorChange,
+  onColorBlocked,
+  colorBlockedText,
   onLongPress,
   optionRefs,
 }: SectionRowProps) {
@@ -738,6 +815,52 @@ const SectionRow = memo(function SectionRow({
   );
 
   const longPressHandlers = useLongPress(handleLongPress);
+
+  // The dot is an uncontrolled color input, committed once per pick so one pick
+  // is one undo step. React's onChange is the DOM `input` event, so it is not
+  // used. The native `change` is not enough on its own either: WebKit (the Linux
+  // and macOS webviews) fires `change` for every color chosen while its picker is
+  // open, such as each swatch clicked in the GTK dialog, and the GTK Cancel button
+  // fires one more to put the old color back. The picker holds the window's
+  // focus while it is open, so a `change` that arrives without focus is held and
+  // only the color the picker closed on is sent when focus comes back. Chromium
+  // (Windows) fires a single `change` after its picker has closed, which commits
+  // at once. The effect also resyncs the dot when the color changes elsewhere
+  // (undo, Edit Section).
+  //
+  // The input can only hold #rrggbb, and would turn any other color a section
+  // carries (a CSS name or short hex typed in Edit Section) into #000000. So it
+  // is seeded with the color the dot actually draws, and a pick is compared
+  // with that seed, not with `section.color`: a GTK Cancel that puts the seed
+  // back is then never sent as a pick of black.
+  const colorRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const input = colorRef.current;
+    if (!input) return;
+    const seed = hexColorFor(section.color, input.parentElement);
+    input.value = seed;
+    let pending = false;
+    const commit = () => {
+      if (!pending) return;
+      pending = false;
+      if (input.value.toLowerCase() === seed) return;
+      void onColorChange(section.id, input.value).then((applied) => {
+        if (!applied) input.value = seed;
+      });
+    };
+    const onChange = () => {
+      pending = true;
+      if (document.hasFocus()) commit();
+    };
+    input.addEventListener('change', onChange);
+    window.addEventListener('focus', commit);
+    return () => {
+      input.removeEventListener('change', onChange);
+      window.removeEventListener('focus', commit);
+      // A pick still held when the row goes away is dropped, not sent: by then
+      // the section, or the whole project, may no longer be the one it was for.
+    };
+  }, [section.id, section.color, onColorChange]);
 
   // One ref serves three roles: the panel's roving-tabindex/optionRefs registry,
   // the virtualizer's height measurement (needs the `data-index` attribute set
@@ -779,17 +902,46 @@ const SectionRow = memo(function SectionRow({
         className="flex items-center gap-2"
         data-testid={`section-item-${section.id}`}
       >
+        {/* The span draws the dot (any CSS color, as before); the color input
+            over it is invisible and only opens the system picker. Disabled, it
+            lets clicks through to the span, which says the view is read-only
+            instead of selecting the row, and `disabled:opacity-0` keeps it
+            hidden against the global `input:disabled { opacity: 0.5 }`. */}
         <span
-          className="w-3 h-3 rounded-full flex-shrink-0"
+          className={`relative w-3 h-3 rounded-full flex-shrink-0 ${
+            colorEditable ? 'hover:ring-2 hover:ring-text-secondary hover:ring-offset-1 hover:ring-offset-panel' : ''
+          }`}
           style={{ backgroundColor: section.color }}
-        />
+          title={colorEditable ? undefined : colorBlockedText}
+          onMouseDown={colorEditable ? undefined : onControlMouseDown}
+          onDoubleClick={colorEditable ? undefined : onControlDoubleClick}
+          onClick={colorEditable ? undefined : (e) => {
+            e.stopPropagation();
+            onColorBlocked();
+          }}
+          data-testid={`section-color-dot-${section.id}`}
+        >
+          {/* A 20px target centered on the 12px dot. */}
+          <input
+            ref={colorRef}
+            type="color"
+            className="absolute -top-1 -left-1 w-5 h-5 opacity-0 cursor-pointer disabled:opacity-0 disabled:pointer-events-none"
+            disabled={!colorEditable}
+            onMouseDown={onControlMouseDown}
+            onDoubleClick={onControlDoubleClick}
+            tabIndex={-1}
+            title={colorEditable ? t('sections.actions.color') : undefined}
+            aria-label={t('sections.actions.color')}
+            data-testid={`section-color-${section.id}`}
+          />
+        </span>
         <span className="flex-1 truncate">
           {section.name ?? t('sections.defaultName', { id: section.id })}
         </span>
         <IconButton
           onClick={(e) => onEnterFocus(section, e)}
-          onMouseDown={onEnterFocusMouseDown}
-          onDoubleClick={onEnterFocusDoubleClick}
+          onMouseDown={onControlMouseDown}
+          onDoubleClick={onControlDoubleClick}
           icon={<ExternalLinkIcon size={12} />}
           size="sm"
           variant="ghost"

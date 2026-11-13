@@ -259,6 +259,253 @@ test.describe('Panel Interactions', () => {
     await expect(page.getByTestId('map-canvas')).toBeVisible();
   });
 
+  test('clicking a section color dot recolors the section without selecting it (#654)', async ({ page }) => {
+    await createProjectWithSections(page);
+    const sectionRow = page.locator('[data-testid^="section-row-"]').filter({ hasText: 'Main Passage' });
+    const sectionId = Number((await sectionRow.getAttribute('data-testid'))!.replace('section-row-', ''));
+    const dot = page.getByTestId(`section-color-${sectionId}`);
+    const readColor = () =>
+      page.evaluate((id) => {
+        const state = (window as any).__E2E_TEST__.projectStore.getState();
+        return state.project.sections.find((s: any) => s.id === id).color as string;
+      }, sectionId);
+    // The picker opens at the section's current color.
+    await expect(dot).toHaveValue((await readColor()).toLowerCase());
+
+    let updateCalls = 0;
+    page.on('console', (msg) => {
+      if (msg.text().startsWith('[Mock IPC] update_section called')) updateCalls += 1;
+    });
+
+    // The dot is a control of its own: clicking it does not select the row.
+    await dot.click();
+    await expect(sectionRow).toHaveAttribute('aria-selected', 'false');
+
+    // Steps through the open picker (`input`) commit nothing; only the
+    // confirmed pick (`change`) does, so one pick is one command (one undo step).
+    const pick = (type: 'input' | 'change', value: string) =>
+      dot.evaluate((el, [t, v]) => {
+        (el as HTMLInputElement).value = v!;
+        el.dispatchEvent(new Event(t!, { bubbles: true }));
+      }, [type, value]);
+    await pick('input', '#00ff00');
+    await pick('input', '#0000ff');
+    await pick('change', '#ff0000');
+    await expect.poll(readColor).toBe('#ff0000');
+    expect(updateCalls).toBe(1);
+
+    // A color changed elsewhere (undo, Edit Section) resyncs the dot.
+    await page.evaluate(
+      (id) => (window as any).__E2E_TEST__.projectStore.getState().updateSection(id, { color: '#336699' }),
+      sectionId,
+    );
+    await expect(dot).toHaveValue('#336699');
+
+    // The visible dot draws any CSS color the section carries (the free-text
+    // field in Edit Section accepts one), not the input's #rrggbb-only value.
+    await page.evaluate(
+      (id) => (window as any).__E2E_TEST__.projectStore.getState().updateSection(id, { color: 'red' }),
+      sectionId,
+    );
+    await expect
+      .poll(() => dot.evaluate((el) => getComputedStyle(el.parentElement!).backgroundColor))
+      .toBe('rgb(255, 0, 0)');
+    // ...and the picker opens at that color, not at the #000000 the input
+    // would turn `red` into.
+    await expect(dot).toHaveValue('#ff0000');
+  });
+
+  test('section color dot is inert while editing is blocked (#654)', async ({ page }) => {
+    await createProjectWithSections(page);
+    const sectionRow = page.locator('[data-testid^="section-row-"]').filter({ hasText: 'Main Passage' });
+    const sectionId = Number((await sectionRow.getAttribute('data-testid'))!.replace('section-row-', ''));
+    const dot = page.getByTestId(`section-color-${sectionId}`);
+    await expect(dot).toBeEnabled();
+
+    const before = await page.evaluate((id) => {
+      const state = (window as any).__E2E_TEST__.projectStore.getState();
+      return state.project.sections.find((s: any) => s.id === id).color as string;
+    }, sectionId);
+
+    const readOnlyToast = page.locator('[data-testid="toast"][data-toast-key="edit-disabled"]');
+    const colorDot = page.getByTestId(`section-color-dot-${sectionId}`);
+    const clearToasts = () => page.evaluate(() => (window as any).__E2E_TEST__.uiStore.setState({ toasts: [] }));
+
+    // The closure-adjusted view is read-only (Plan/Export would also block, but
+    // they hide this panel). The view only sticks on a project with an eligible
+    // loop closure, so seed one; without it MapCanvas reverts to measured.
+    await page.evaluate((secId) => {
+      const store = (window as any).__E2E_TEST__.projectStore;
+      const project = store.getState().project;
+      store.setState({
+        project: {
+          ...project,
+          loop_closures: [
+            ...project.loop_closures,
+            {
+              id: 1,
+              station_a: { section_id: secId, station_index: 0 },
+              station_b: { section_id: secId, station_index: 2 },
+              path_length: 25.7,
+              misclosure_distance: 0.3,
+              error_percentage: 1.2,
+              horizontal_misclosure: 0.25,
+              vertical_misclosure: 0.15,
+              strategy: 'Batch',
+              is_aligned: false,
+            },
+          ],
+        },
+      });
+    }, sectionId);
+    await page.evaluate(() =>
+      (window as any).__E2E_TEST__.uiStore.getState().setGeometryMode('closureAdjusted', 'e2e'),
+    );
+    await expect
+      .poll(() => page.evaluate(() => (window as any).__E2E_TEST__.uiStore.getState().geometryMode))
+      .toBe('closureAdjusted');
+    await expect(dot).toBeDisabled();
+    // The global `input:disabled { opacity: 0.5 }` must not surface the native
+    // swatch over the drawn dot.
+    await expect(dot).toHaveCSS('opacity', '0');
+    // Clicking the dot says why nothing opens, and does not select the row.
+    await expect(colorDot).toHaveAttribute('title', 'This view is read-only, so the section color cannot be changed.');
+    await colorDot.click();
+    await expect(readOnlyToast).toContainText('This view is read-only');
+    await expect(sectionRow).toHaveAttribute('aria-selected', 'false');
+    await clearToasts();
+    await page.evaluate(() =>
+      (window as any).__E2E_TEST__.uiStore.getState().setGeometryMode('measured', 'e2e'),
+    );
+    await expect(dot).toBeEnabled();
+
+    // A remote SpeleoDB project opened without the write lock is read-only too,
+    // and the message names the project rather than the view.
+    await page.evaluate(() =>
+      (window as any).__E2E_TEST__.speleoStore.getState().setLinkOnOpen({ permission: 'READ_AND_WRITE' }),
+    );
+    await expect(dot).toBeDisabled();
+    await expect(colorDot).toHaveAttribute('title', 'This project is open read-only, so the section color cannot be changed.');
+    await colorDot.click();
+    await expect(readOnlyToast).toContainText('This project is open read-only');
+    await expect(sectionRow).toHaveAttribute('aria-selected', 'false');
+    await clearToasts();
+
+    // A pick confirmed after editing became blocked (the system picker was
+    // already open) is refused at commit time, and the dot reverts.
+    await dot.evaluate((el) => {
+      (el as HTMLInputElement).value = '#00ff00';
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await expect(dot).toHaveValue(before.toLowerCase());
+    await expect(readOnlyToast).toContainText('This project is open read-only');
+    expect(
+      await page.evaluate((id) => {
+        const state = (window as any).__E2E_TEST__.projectStore.getState();
+        return state.project.sections.find((s: any) => s.id === id).color as string;
+      }, sectionId),
+    ).toBe(before);
+  });
+
+  test('section color dot commits once, when a WebKit picker closes (#654)', async ({ page }) => {
+    await createProjectWithSections(page);
+    const sectionRow = page.locator('[data-testid^="section-row-"]').filter({ hasText: 'Main Passage' });
+    const sectionId = Number((await sectionRow.getAttribute('data-testid'))!.replace('section-row-', ''));
+    const dot = page.getByTestId(`section-color-${sectionId}`);
+    const readColor = () =>
+      page.evaluate((id) => {
+        const state = (window as any).__E2E_TEST__.projectStore.getState();
+        return state.project.sections.find((s: any) => s.id === id).color as string;
+      }, sectionId);
+    const before = await readColor();
+
+    let updateCalls = 0;
+    page.on('console', (msg) => {
+      if (msg.text().startsWith('[Mock IPC] update_section called')) updateCalls += 1;
+    });
+
+    // WebKit (the Linux and macOS webviews) fires `input` + `change` for every
+    // color chosen while its picker is open, and the picker holds the window's
+    // focus meanwhile. Measured in the real app on Linux: each swatch clicked in
+    // the GTK dialog, and its Cancel button (which puts the old color back).
+    const choose = (value: string) =>
+      dot.evaluate((el, v) => {
+        (el as HTMLInputElement).value = v;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      }, value);
+    const pickerOpen = () =>
+      page.evaluate(() => {
+        Object.defineProperty(document, 'hasFocus', { value: () => false, configurable: true });
+      });
+    const pickerClosed = () =>
+      page.evaluate(() => {
+        delete (document as any).hasFocus;
+        window.dispatchEvent(new Event('focus'));
+      });
+
+    // Three swatches, then Select: one command, with the last color.
+    await pickerOpen();
+    await choose('#00ff00');
+    await choose('#0000ff');
+    await choose('#ff0000');
+    expect(await readColor()).toBe(before);
+    await pickerClosed();
+    await expect.poll(readColor).toBe('#ff0000');
+    expect(updateCalls).toBe(1);
+
+    // A swatch, then Cancel (GTK restores the old color): no command at all.
+    // The direct pick after it is the barrier that proves nothing was queued.
+    await pickerOpen();
+    await choose('#00ff00');
+    await choose('#ff0000');
+    await pickerClosed();
+    await choose('#336699');
+    await expect.poll(readColor).toBe('#336699');
+    expect(updateCalls).toBe(2);
+
+    // The same Cancel on a section whose color is not #rrggbb (Edit Section's
+    // free-text field takes any CSS color) puts back whatever the picker opened
+    // at. That must not be sent as a pick, or Cancel recolors the section.
+    await page.evaluate(
+      (id) => (window as any).__E2E_TEST__.projectStore.getState().updateSection(id, { color: 'red' }),
+      sectionId,
+    );
+    await expect.poll(readColor).toBe('red');
+    const opened = await dot.inputValue();
+    await pickerOpen();
+    await choose('#00ff00');
+    await choose(opened);
+    await pickerClosed();
+    await choose('#123456');
+    await expect.poll(readColor).toBe('#123456');
+    expect(updateCalls).toBe(4);
+  });
+
+  test('section color dot reports a failed update and reverts (#654)', async ({ page }) => {
+    await createProjectWithSections(page);
+    const sectionRow = page.locator('[data-testid^="section-row-"]').filter({ hasText: 'Main Passage' });
+    const sectionId = Number((await sectionRow.getAttribute('data-testid'))!.replace('section-row-', ''));
+    const dot = page.getByTestId(`section-color-${sectionId}`);
+    const before = await dot.inputValue();
+
+    // A transport rejection: executeCommand refreshes and re-throws without a
+    // toast, so the dot's caller has to surface it (docs/notifications.md).
+    await page.evaluate(() =>
+      (window as any).__E2E_TEST__.projectStore.setState({
+        updateSection: () => Promise.reject(new Error('transport closed')),
+      }),
+    );
+    await dot.evaluate((el) => {
+      (el as HTMLInputElement).value = '#00ff00';
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await expect(page.locator('[data-testid="toast"][data-toast-key="command-failed"]')).toContainText(
+      'transport closed',
+    );
+    await expect(dot).toHaveValue(before);
+  });
+
   test('section picker in the data-table sub-header switches sections', async ({ page }) => {
     await createProjectWithSections(page);
     await page.keyboard.press('Control+3');

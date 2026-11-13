@@ -7,6 +7,10 @@ Update this file every time a new version is tagged.
 
 ## [Unreleased]
 
+### Added
+
+- **Change a section's color from the Sections panel** - click the color dot next to a section to open the color picker. The new color applies to the whole section, and Undo reverts it in one step. In a read-only view, clicking the dot tells you the color cannot be changed there ([#654](https://github.com/Stalagmight/Stalagmight/issues/654))
+
 ## [0.5.4] - 2026-11-13
 
 ### Added
