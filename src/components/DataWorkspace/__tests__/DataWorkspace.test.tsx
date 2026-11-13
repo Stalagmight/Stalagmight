@@ -451,6 +451,29 @@ describe('Header menu on a search-revealed column', () => {
 });
 
 describe('Focus requests', () => {
+  it('a first entry starts on station 0 of the first section, never on its header band', () => {
+    render(<DataWorkspace />);
+    expect(useDataWorkspaceStore.getState().activeRowKey).toBe('st:1:0');
+    // In the first shown editable column (Length; Issues comes first but is read-only).
+    expect(document.querySelector('[data-active-cell="true"]')).toHaveAttribute('data-testid', 'data-grid-cell-1-length');
+    expect(screen.getByTestId('data-grid-selection-overlay')).not.toHaveAttribute('data-band-focus');
+  });
+
+  it('an active header row names its section in the gutter, and its outline spans the row', () => {
+    render(<DataWorkspace />);
+    const gutter = screen.getByTestId('data-grid-gutter-10');
+    expect(within(gutter).getByTestId('data-row-name-sec-2')).toHaveTextContent('Branch B');
+    expect(within(gutter).getByTestId('data-row-name-sec-2')).toHaveClass('dw-group-label');
+    fireEvent.mouseDown(screen.getByTestId('data-grid-group-10'));
+    fireEvent.mouseUp(window);
+    expect(gutter).toHaveClass('sg-gutter-active');
+    // Arrow onto the band from the row above: one cell selected, the row outlined.
+    fireEvent.mouseDown(screen.getByTestId('data-grid-cell-9-length'));
+    fireEvent.mouseUp(window);
+    fireEvent.keyDown(document.querySelector('.sg-grid [tabindex="0"]')!, { key: 'ArrowDown' });
+    expect(screen.getByTestId('data-grid-selection-overlay')).toHaveAttribute('data-band-focus', 'true');
+  });
+
   it('a pending focus request beats the remembered active row on entry', () => {
     useDataWorkspaceStore.setState({ activeRowKey: 'st:1:1' });
     useDataWorkspaceStore.getState().requestFocus({ rowKey: 'st:3:2', align: 'center' });

@@ -43,6 +43,10 @@ export interface GridRangeOverlaysProps {
   invalidRect: Rect | null;
   /** A drag is in progress: the selection rectangle tracks 1:1, no glide. */
   interacting: boolean;
+  /** The selection is on one group-header row: its band is a single
+   *  full-width element, so the selection outlines the whole row (no cell
+   *  outline over the band's content, no move edges, no fill handle). */
+  bandFocus?: boolean;
   showMoveEdges: boolean;
   showFillHandle: boolean;
   gutterWidth: number;
@@ -56,6 +60,7 @@ export interface GridRangeOverlaysProps {
 export function GridRangeOverlays(p: GridRangeOverlaysProps) {
   const box = (r: Rect) => rectOverlay(r, p.gutterWidth, p.offsets);
   const { rect } = p;
+  const drawn = p.bandFocus ? { ...rect, c0: 0, c1: Math.max(0, p.offsets.length - 2) } : rect;
   return (
     <>
       {/* Marching-ants for a copied range; a pending cut renders its own
@@ -87,12 +92,13 @@ export function GridRangeOverlays(p: GridRangeOverlaysProps) {
       {p.hasCells && (
         <div
           className={`sg-selection-overlay ${p.interacting ? 'sg-no-anim' : ''}`}
-          style={{ ...box(rect), border: '2px solid var(--sg-blue)', boxSizing: 'border-box', zIndex: 3 }}
+          style={{ ...box(drawn), border: '2px solid var(--sg-blue)', boxSizing: 'border-box', zIndex: 3 }}
           data-testid={`${p.testIdPrefix}-selection-overlay`}
           data-rect={`${rect.r0},${rect.c0},${rect.r1},${rect.c1}`}
+          data-band-focus={p.bandFocus ? 'true' : undefined}
         >
           {/* Grab any edge (not the interior) to move the cells. */}
-          {p.showMoveEdges && (
+          {p.showMoveEdges && !p.bandFocus && (
             <>
               <div className="sg-move-edge" style={{ top: -3, left: 0, right: 0, height: 6 }} onMouseDown={p.onMoveBorderDown} />
               <div className="sg-move-edge" style={{ bottom: -3, left: 0, right: 0, height: 6 }} onMouseDown={p.onMoveBorderDown} />
@@ -100,7 +106,7 @@ export function GridRangeOverlays(p: GridRangeOverlaysProps) {
               <div className="sg-move-edge" style={{ top: 0, bottom: 0, right: -3, width: 6 }} onMouseDown={p.onMoveBorderDown} />
             </>
           )}
-          {p.showFillHandle && (
+          {p.showFillHandle && !p.bandFocus && (
             <div
               className="sg-fill-handle"
               data-testid={`${p.testIdPrefix}-fill-handle`}

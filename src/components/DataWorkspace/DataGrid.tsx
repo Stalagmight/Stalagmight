@@ -13,13 +13,14 @@ import type { CellMarks, GridExtraMenuItem, GridScrollRequest } from '../common/
 import { useGridLabels } from '../../hooks/useGridLabels';
 import { useUIStore } from '../../store/uiStore';
 import { useDataWorkspaceStore } from './store';
-import type { DataColumnKey, DataRow, DataView } from './types';
+import type { DataColumnDef, DataColumnKey, DataRow, DataView } from './types';
 import type { DataWorkspaceModel } from './useDataWorkspaceModel';
 import type { DataEditing } from './useDataEditing';
 import type { DataNav } from './useDataNavigation';
 import type { DataTint } from './useDataTint';
 import { buildGridColumns } from './dataGridColumns';
 import { buildRail } from './model/links';
+import { orderColumns } from './model/search';
 import { isEntityRow, parseRowKey, sectionRowKey } from './model/rows';
 import { DataRowLabel, DATA_GUTTER_WIDTH, type RevealReason } from './DataRowLabel';
 import { DataSectionHeader } from './DataSectionHeader';
@@ -28,6 +29,23 @@ import { dataCellTestId, dataRowTestId } from './dataTestIds';
 import { selectionRectFromDom, summarizeSelection, type GridSelectionInfo, type SelectionSummary } from './selectionSummary';
 
 export const DATA_GRID_PREFIX = 'data-grid';
+
+/**
+ * Where the active cell starts on a first entry (nothing remembered): the first
+ * station / shot row - never a section header band - in the first shown
+ * editable column (else the first shown column). null when nothing is shown.
+ */
+export function initialActiveCell(
+  rows: readonly DataRow[],
+  orderedColumns: readonly Pick<DataColumnDef, 'key' | 'editable'>[],
+  hidden: readonly DataColumnKey[],
+): { row: number; colKey: DataColumnKey | undefined } | null {
+  const row = rows.findIndex(isEntityRow);
+  if (row < 0) return null;
+  const hiddenSet = new Set(hidden);
+  const shown = orderedColumns.filter((c) => !hiddenSet.has(c.key));
+  return { row, colKey: (shown.find((c) => c.editable) ?? shown[0])?.key };
+}
 
 /** FNV-1a over the row keys: changes whenever the rows or their order do. */
 export function rowsVersionOf(rows: readonly DataRow[]): string {
@@ -206,7 +224,17 @@ export function DataGrid({ model, view, height, nav, editing, tint, partners, on
     }
     // Keep the active row across rebuilds (filters, sort, data refresh) by key.
     const key = useDataWorkspaceStore.getState().activeRowKey;
-    if (!key) return;
+    if (!key) {
+      // First entry (or a new project): start on the first data row, not on the
+      // section header band the grid's own default would pick.
+      const start = initialActiveCell(viewRows, orderColumns(model.columns, columnOrder), gridHidden);
+      if (!start) return;
+      const startKey = viewRows[start.row]!.key;
+      lastActive.current = { key: startKey, idx: start.row, colKey: start.colKey ?? '' };
+      setActiveRowKey(startKey);
+      setScrollReq({ row: start.row, ...(start.colKey ? { colKey: start.colKey } : {}), align: 'auto', nonce: ++scrollNonce });
+      return;
+    }
     const idx = rowIndexByKey.get(key);
     if (idx === undefined || idx === lastActive.current?.idx) return;
     const colKey = lastActive.current?.colKey || undefined;
@@ -214,7 +242,7 @@ export function DataGrid({ model, view, height, nav, editing, tint, partners, on
     const align = lastActive.current ? 'auto' : 'center';
     lastActive.current = { key, idx, colKey: colKey ?? '' };
     setScrollReq({ row: idx, ...(colKey ? { colKey } : {}), align, nonce: ++scrollNonce });
-  }, [focusRequest, viewRows, rowIndexByKey, setActiveRowKey, model.rowByKey]);
+  }, [focusRequest, viewRows, rowIndexByKey, setActiveRowKey, model.rowByKey, model.columns, columnOrder, gridHidden]);
 
   const onActiveCellChange = useCallback(
     (rowIndex: number, colKey: string) => {

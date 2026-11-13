@@ -2252,6 +2252,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
               cellMoveDrop={cellMoveDrop}
               invalidRect={invalidColIdx >= 0 && invalidCell ? { r0: invalidCell.row, r1: invalidCell.row, c0: invalidColIdx, c1: invalidColIdx } : null}
               interacting={interacting}
+              bandFocus={rect.r0 === rect.r1 && isGroupAt(rect.r0)}
               showMoveEdges={!editing && !!onBatchEdit}
               showFillHandle={!editing}
               gutterWidth={gutterWidth}

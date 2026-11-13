@@ -87,6 +87,20 @@ function DataRowLabelImpl({ row, ctx, rail, tint, revealed, nav }: Props) {
         <span className="shrink-0 text-[11px] opacity-70">{`${row.shotIndex}→${row.shotIndex + 1}`}</span>
       </span>
     );
+  } else {
+    // A header row's gutter is blank but for the rail's branch elbow: the band
+    // beside it names the section. While the row is active or selected the
+    // label shows (CSS), so the highlighted gutter is never an empty box.
+    name = (
+      <span className="dw-group-label flex min-w-0 items-center gap-1.5" data-testid={`data-row-name-${part}`}>
+        <span
+          className="h-2 w-2 shrink-0 rounded-full"
+          style={{ backgroundColor: ctx.sectionsById.get(row.sectionId)?.color }}
+          aria-hidden="true"
+        />
+        <span className="truncate">{label}</span>
+      </span>
+    );
   }
 
   return (

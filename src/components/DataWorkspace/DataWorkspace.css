@@ -22,6 +22,17 @@
   color: var(--cc-text-secondary);
 }
 
+/* A header row's gutter label: shown only while the row is active or selected
+   (the band already names the section). */
+.dw-group-label {
+  visibility: hidden;
+  font-weight: 600;
+}
+.sg-gutter-active .dw-group-label,
+.sg-gutter-selected .dw-group-label {
+  visibility: visible;
+}
+
 /* Rows linked to the hovered junction / closure station. */
 .sg-grid .dw-row-partner .sg-cell {
   background: color-mix(in srgb, var(--cc-accent) 14%, var(--cc-panel));

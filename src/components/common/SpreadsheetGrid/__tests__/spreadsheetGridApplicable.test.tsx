@@ -370,6 +370,28 @@ describe('group-header rows', () => {
     expect(rectOf()).toBe('2,0,2,0');
   });
 
+  it('an active cell on a group row outlines the whole row, never a cell over the band', () => {
+    renderGrid();
+    const overlay = () => screen.getByTestId('grid-selection-overlay');
+    fireEvent.mouseDown(cell(5, 'len'));
+    fireEvent.mouseUp(window);
+    const cellWidth = parseFloat(overlay().style.width);
+    expect(overlay()).not.toHaveAttribute('data-band-focus');
+    key('ArrowDown');
+    // The selection itself is still the one cell...
+    expect(rectOf()).toBe('6,1,6,1');
+    // ...but it is drawn across every column, from the first one.
+    expect(overlay()).toHaveAttribute('data-band-focus', 'true');
+    expect(parseFloat(overlay().style.width)).toBeGreaterThan(cellWidth);
+    expect(overlay().style.left).toBe(screen.getByTestId('grid-gutter-6').style.width);
+    expect(screen.queryByTestId('grid-fill-handle')).toBeNull();
+    // Off the band: back to the cell outline with its fill handle.
+    key('ArrowDown');
+    expect(overlay()).not.toHaveAttribute('data-band-focus');
+    expect(parseFloat(overlay().style.width)).toBe(cellWidth);
+    expect(screen.getByTestId('grid-fill-handle')).toBeInTheDocument();
+  });
+
   it('takes no edit from paste, fill or typing', () => {
     const { onBatchEdit, onEdit } = renderGrid();
     fireEvent.mouseDown(screen.getByTestId('grid-group-0'));
