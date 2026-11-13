@@ -90,6 +90,10 @@ recent_projects_max = 20            # Maximum recent projects to track
 locale = "system"                   # "system" or a specific locale tag like "en-US"
 number_format = "locale"            # "locale" (follow language) or a locale tag like "de-DE"
 date_format = "locale"              # "locale" (follow language) or a locale tag like "en-GB"
+update_check_enabled = true         # "Update automatically": check at launch and every 4 hours, and download
+                                    # what a check finds in the background. Off: no automatic checks, a
+                                    # download a check started is cancelled if not yet installed, and
+                                    # About's check or a track switch leaves Download to a click (SPEC 2.10)
 update_track = "stable"             # "stable" (finals) or "beta" (candidates, then finals); see Update Track
 
 [units]
