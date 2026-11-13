@@ -2093,6 +2093,9 @@
       "noProject": "Open or create a project to see its data here.",
       "noSections": "This project has no sections yet. Draw or import one to fill the table.",
       "noRows": "No rows match the current filters.",
+      "noMatches": "No rows contain “{{query}}”.",
+      "noMatchesFiltered": "No rows the filters show contain “{{query}}”.",
+      "showAllRows": "Show all rows",
       "clearFilters": "Clear filters"
     },
     "mapPane": {
@@ -2398,6 +2401,7 @@
       },
       "condition": "{{column}} {{op}} {{value}}",
       "conditionNoValue": "{{column}} {{op}}",
+      "onlyMatching": "Only rows with matches",
         "revealedSearch_one": "{{n}} row shown by search",
       "revealedSearch_other": "{{n}} rows shown by search",
       "revealedNav_one": "{{n}} row shown by navigation",
@@ -2410,7 +2414,7 @@
       "hideTitle": "Hide them again",
       "remove": "Remove",
       "clearAll": "Clear all",
-      "clearAllTitle": "Remove every filter and hide the temporarily shown rows and columns"
+      "clearAllTitle": "Remove every filter, show rows without matches again, and hide the temporarily shown rows and columns"
     },
     "sortBar": {
       "text": "Sorted by {{column}}, {{dir}}. Survey order and the link rail are off.",

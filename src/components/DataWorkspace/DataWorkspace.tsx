@@ -16,7 +16,9 @@ import { useProjectStore } from '../../store/projectStore';
 import { useEditingBlocked } from '../../hooks/useEditingBlocked';
 import { DataModelContext, DataViewContext } from './DataModelContext';
 import { useDataWorkspaceStore } from './store';
-import { buildDataView } from './model/view';
+import { buildDataView, type DataViewInput } from './model/view';
+import { filtersActive } from './model/filter';
+import type { DataView } from './types';
 import { useDataWorkspaceModel } from './useDataWorkspaceModel';
 import { useDataWorkspaceViewPersistence } from './useDataWorkspaceViewPersistence';
 import { DataNavContext, useDataNavigation } from './useDataNavigation';
@@ -42,22 +44,47 @@ function isTypingTarget(target: EventTarget | null): boolean {
   );
 }
 
-function EmptyState({ message, action }: { message: string; action?: { label: string; onClick: () => void } }) {
+interface EmptyAction {
+  label: string;
+  onClick: () => void;
+}
+
+const EMPTY_ACTION_CLASS = 'rounded border border-border px-2 py-0.5 text-xs text-text-primary hover:bg-accent-10';
+
+function EmptyState({ message, showAllRows, clearFilters }: { message: string; showAllRows?: EmptyAction; clearFilters?: EmptyAction }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center text-sm text-text-secondary" data-testid="data-empty">
-      <span>{message}</span>
-      {action && (
-        <button
-          type="button"
-          className="rounded border border-border px-2 py-0.5 text-xs text-text-primary hover:bg-accent-10"
-          onClick={action.onClick}
-          data-testid="data-empty-clear-filters"
-        >
-          {action.label}
-        </button>
+      <span data-testid="data-empty-message">{message}</span>
+      {(showAllRows || clearFilters) && (
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          {showAllRows && (
+            <button type="button" className={EMPTY_ACTION_CLASS} onClick={showAllRows.onClick} data-testid="data-empty-show-all-rows">
+              {showAllRows.label}
+            </button>
+          )}
+          {clearFilters && (
+            <button type="button" className={EMPTY_ACTION_CLASS} onClick={clearFilters.onClick} data-testid="data-empty-clear-filters">
+              {clearFilters.label}
+            </button>
+          )}
+        </div>
       )}
     </div>
   );
+}
+
+/**
+ * Why the view is empty, and what undoes it. "Show only rows with matches"
+ * empties it when the search narrows rows the filters let through (or, with
+ * the 'all' row scope, every row: the filters do not matter then); the
+ * filters do when they let nothing through or narrow what the search sees.
+ */
+function emptyViewReason(view: DataView, input: DataViewInput): { search: boolean; filters: boolean } {
+  const narrowed = view.searchNarrowing === true;
+  const allRows = input.search.rowScope === 'all';
+  const search = narrowed && (allRows || view.filteredCount > 0);
+  const filters = filtersActive(input.filters) && !(search && allRows);
+  return { search, filters: filters || !search };
 }
 
 export function DataWorkspace() {
@@ -139,10 +166,26 @@ export function DataWorkspace() {
   } else if (model.rows.length === 0) {
     body = <EmptyState message={t('dataWorkspace.empty.noSections')} />;
   } else if (view.rows.length === 0 || (viewInput.collapsedSections.length === 0 && !viewHasEntities)) {
+    const why = emptyViewReason(view, viewInput);
+    const query = viewInput.search.query;
     body = (
       <EmptyState
-        message={t('dataWorkspace.empty.noRows')}
-        action={{ label: t('dataWorkspace.empty.clearFilters'), onClick: () => useDataWorkspaceStore.getState().clearFilters() }}
+        message={
+          why.search
+            ? t(why.filters ? 'dataWorkspace.empty.noMatchesFiltered' : 'dataWorkspace.empty.noMatches', { query })
+            : t('dataWorkspace.empty.noRows')
+        }
+        {...(why.search
+          ? {
+              showAllRows: {
+                label: t('dataWorkspace.empty.showAllRows'),
+                onClick: () => useDataWorkspaceStore.getState().setSearch({ onlyMatchingRows: false }),
+              },
+            }
+          : {})}
+        {...(why.filters
+          ? { clearFilters: { label: t('dataWorkspace.empty.clearFilters'), onClick: () => useDataWorkspaceStore.getState().clearFilters() } }
+          : {})}
       />
     );
   } else {

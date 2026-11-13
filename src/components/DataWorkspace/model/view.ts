@@ -193,5 +193,6 @@ export function buildDataView(
     totalCount,
     surveyOrder: !sorted,
     matchLimitReached,
+    searchNarrowing: narrow,
   };
 }

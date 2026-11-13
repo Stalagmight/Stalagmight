@@ -246,9 +246,11 @@ describe('buildDataView - search', () => {
       viewState({ search: search('sump', { onlyMatchingRows: true }), revealRowKeys: ['st:2:2'] }),
     );
     expect(keys(v.rows)).toEqual(['sec:1', 'sh:1:100001', 'st:1:2', 'sec:2', 'sh:2:200001', 'st:2:2']);
+    expect(v.searchNarrowing).toBe(true);
     // no query: the option does nothing
     const idle = buildDataView(rows, columns, ctx, viewState({ search: search('', { onlyMatchingRows: true }) }));
     expect(idle.rows).toHaveLength(rows.length);
+    expect(idle.searchNarrowing).toBe(false);
   });
 
   it('only matching rows with no match shows nothing (no orphan headers)', () => {

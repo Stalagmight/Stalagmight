@@ -147,6 +147,50 @@ describe('DataWorkspace rows and gutter', () => {
   });
 });
 
+describe('DataWorkspace empty state', () => {
+  const narrowTo = (query: string, rowScope: 'visible' | 'all' = 'visible') =>
+    useDataWorkspaceStore.setState({
+      search: { ...useDataWorkspaceStore.getState().search, open: true, query, onlyMatchingRows: true, rowScope },
+    });
+
+  it('says when "Show only rows with matches" empties the view and offers Show all rows', () => {
+    narrowTo('zzzz');
+    render(<DataWorkspace />);
+    expect(screen.getByTestId('data-empty-message')).toHaveTextContent('No rows contain “zzzz”.');
+    expect(screen.queryByTestId('data-empty-clear-filters')).toBeNull();
+    fireEvent.click(screen.getByTestId('data-empty-show-all-rows'));
+    expect(useDataWorkspaceStore.getState().search.onlyMatchingRows).toBe(false);
+    expect(screen.queryByTestId('data-empty')).toBeNull();
+  });
+
+  it('offers both when the filters and the search narrowing contribute', () => {
+    useDataWorkspaceStore.getState().setFilters({ sectionIds: [1] });
+    narrowTo('zzzz');
+    render(<DataWorkspace />);
+    expect(screen.getByTestId('data-empty-message')).toHaveTextContent('No rows the filters show contain “zzzz”.');
+    expect(screen.getByTestId('data-empty-show-all-rows')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('data-empty-clear-filters'));
+    expect(useDataWorkspaceStore.getState().filters.sectionIds).toBeNull();
+  });
+
+  it('searching all rows, the filters do not matter: only Show all rows', () => {
+    useDataWorkspaceStore.getState().setFilters({ sectionIds: [1] });
+    narrowTo('zzzz', 'all');
+    render(<DataWorkspace />);
+    expect(screen.getByTestId('data-empty-message')).toHaveTextContent('No rows contain “zzzz”.');
+    expect(screen.queryByTestId('data-empty-clear-filters')).toBeNull();
+  });
+
+  it('filters that let nothing through: only Clear filters', () => {
+    useDataWorkspaceStore.getState().setFilters({ sectionIds: [] });
+    narrowTo('zzzz');
+    render(<DataWorkspace />);
+    expect(screen.getByTestId('data-empty-message')).toHaveTextContent('No rows match the current filters.');
+    expect(screen.queryByTestId('data-empty-show-all-rows')).toBeNull();
+    expect(screen.getByTestId('data-empty-clear-filters')).toBeInTheDocument();
+  });
+});
+
 describe('DataSectionHeader', () => {
   it('shows the counts and length, toggles collapse and jumps to the parent', () => {
     const nav = { goToRow: vi.fn() } as unknown as DataNav;

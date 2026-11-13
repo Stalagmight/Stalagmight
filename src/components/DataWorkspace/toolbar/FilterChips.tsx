@@ -1,8 +1,9 @@
 /**
  * The active-filter chips row: one removable chip per thing that narrows the
- * view (row type, sections, each quick filter, each condition), a chip for rows
- * / columns shown only temporarily (search or navigation) with [Hide], and
- * "Clear all". Hidden when nothing is active. The sort is not a chip: the sort
+ * view (row type, sections, each quick filter, each condition, the find's
+ * "Show only rows with matches" while it narrows), a chip for rows / columns
+ * shown only temporarily (search or navigation) with [Hide], and "Clear all".
+ * Hidden when nothing is active. The sort is not a chip: the sort
  * bar right under the toolbar already says it and undoes it.
  */
 import { useTranslation } from 'react-i18next';
@@ -83,7 +84,8 @@ export function FilterChips({ model, view }: { model: DataModel; view: DataView 
   const bySearch = view.revealedRowKeys.size - byNav;
   const revealedCols = view.revealedColumns.size;
 
-  const anything = filtersActive(filters) || view.revealedRowKeys.size > 0 || revealedCols > 0;
+  const narrowing = view.searchNarrowing === true;
+  const anything = filtersActive(filters) || narrowing || view.revealedRowKeys.size > 0 || revealedCols > 0;
   if (!anything) return null;
 
   const remove = t('dataToolbar.chips.remove');
@@ -143,6 +145,17 @@ export function FilterChips({ model, view }: { model: DataModel; view: DataView 
       />,
     );
   }
+  if (narrowing) {
+    chips.push(
+      <Chip
+        key="only-matching"
+        label={t('dataToolbar.chips.onlyMatching')}
+        onRemove={() => store().setSearch({ onlyMatchingRows: false })}
+        removeLabel={remove}
+        testId="data-chip-only-matching"
+      />,
+    );
+  }
   if (view.revealedRowKeys.size > 0) {
     const key = byNav > 0 && bySearch > 0 ? 'revealedBoth' : byNav > 0 ? 'revealedNav' : 'revealedSearch';
     chips.push(
@@ -184,8 +197,8 @@ export function FilterChips({ model, view }: { model: DataModel; view: DataView 
     const s = store();
     s.clearFilters();
     s.clearRevealed();
-    if (s.search.rowScope === 'all' || s.search.columnScope !== 'visible') {
-      s.setSearch({ rowScope: 'visible', columnScope: 'visible' });
+    if (s.search.rowScope === 'all' || s.search.columnScope !== 'visible' || s.search.onlyMatchingRows) {
+      s.setSearch({ rowScope: 'visible', columnScope: 'visible', onlyMatchingRows: false });
     }
   };
 

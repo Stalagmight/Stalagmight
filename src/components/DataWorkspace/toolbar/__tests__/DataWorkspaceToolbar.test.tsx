@@ -307,6 +307,23 @@ describe('filters, chips and menus', () => {
     expect(screen.queryByTestId('data-chips')).toBeNull();
   });
 
+  it('"Show only rows with matches" is a removable chip while it narrows, and Clear all turns it off', () => {
+    renderToolbar();
+    act(() => store().setSearch({ open: true, query: '', onlyMatchingRows: true }));
+    // Nothing to narrow by yet: no chip.
+    expect(screen.queryByTestId('data-chip-only-matching')).toBeNull();
+    act(() => store().setSearch({ query: 'sump' }));
+    expect(screen.getByTestId('data-chip-only-matching')).toHaveTextContent('Only rows with matches');
+    fireEvent.click(screen.getByTestId('data-chip-only-matching-remove'));
+    expect(store().search.onlyMatchingRows).toBe(false);
+    expect(screen.queryByTestId('data-chips')).toBeNull();
+
+    act(() => store().setSearch({ onlyMatchingRows: true }));
+    fireEvent.click(screen.getByTestId('data-chips-clear-all'));
+    expect(store().search.onlyMatchingRows).toBe(false);
+    expect(store().search.query).toBe('sump');
+  });
+
   it('a navigation reveal shows a chip whose Hide clears it; a filter change clears it too', () => {
     renderToolbar();
     act(() => {

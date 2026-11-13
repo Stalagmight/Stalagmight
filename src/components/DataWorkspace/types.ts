@@ -300,4 +300,7 @@ export interface DataView {
   /** The search stopped at `MAX_SEARCH_MATCHES` (model/search.ts): `matches` is
    *  the first that many in survey order. Optional for older producers. */
   matchLimitReached?: boolean;
+  /** "Show only rows with matches" is narrowing the rows now (the find bar is
+   *  open with a valid query and the option on). Optional for older producers. */
+  searchNarrowing?: boolean;
 }
