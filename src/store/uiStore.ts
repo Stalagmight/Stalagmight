@@ -605,8 +605,9 @@ export interface UIStore {
   setAppMode: (mode: AppMode) => void;
   /** Idempotent "leave a read-only workspace" - used by the setView() cleanup funnel (and
    *  the color-overlay actions) so a stale Plan or Export workspace can't outlive a
-   *  project/view switch or coexist with a survey overlay. Returns to Survey; a no-op in
-   *  any editable mode (Survey, Data), so picking a colour in Data's map pane stays in Data. */
+   *  project/view switch or coexist with a survey overlay. Returns to the editable mode the
+   *  read-only one was entered from (Survey or Data); a no-op in any editable mode, so
+   *  picking a colour in Data's map pane stays in Data. */
   exitGasPlan: () => void;
 
   // Issue-severity coloring overlay (#22). Runtime-only - like

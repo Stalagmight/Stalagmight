@@ -40,7 +40,7 @@ Every row is a render-time `appMode` branch in `SingleSystemView.tsx`,
 | Toolbar tools | `TOOLBAR_ITEMS` | `TOOLBAR_ITEMS` with the map pane open, none with it closed | `READ_ONLY_TOOLBAR_ITEMS` | `READ_ONLY_TOOLBAR_ITEMS` |
 | Display menu | full | full with the map pane open, hidden with it closed | no Color, no Geometry group | hidden |
 | Map context menu | survey menu | survey menu with the map pane open, none with it closed | route menu on a station | none |
-| Map-aimed shortcuts | on | off with the pane closed or focus in the table | read-only | read-only |
+| Map-aimed shortcuts | on | off with the pane closed or focus in the table; the Details / Data dock toggles always off | read-only | read-only |
 
 `READ_ONLY_TOOLBAR_ITEMS` is `TOOLBAR_ITEMS` filtered through `isMutatingTool`
 (dangling separators collapsed), so mutating tools are **hidden, not disabled**
