@@ -6374,10 +6374,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return [
               {
                 name: '/dev/cu.usbmodem101',
-                vid: 0x2e8a,
-                pid: 0x000a,
-                manufacturer: 'Raspberry Pi',
-                product: 'MNemo V2',
+                // What a real MNemo v2 reports: its board, no MNemo name.
+                vid: 0x2341,
+                pid: 0x005e,
+                manufacturer: 'Arduino',
+                product: 'Nano RP2040 Connect',
                 likely_mnemo: true,
               },
             ];
