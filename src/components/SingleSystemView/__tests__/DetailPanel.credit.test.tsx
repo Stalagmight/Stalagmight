@@ -309,6 +309,27 @@ describe('Detail panel survey credit - several shots', () => {
 });
 
 describe('Detail panel survey credit - a section', () => {
+  it('has no hint while the section has shots', () => {
+    useUIStore.getState().setSelection({ type: 'section', sectionId: 1 });
+    render(<DetailPanel />);
+    expect(qid('detail-credit-no-shots')).toBeNull();
+    expect(qid('detail-credit-surveyors-input')).not.toBeNull();
+  });
+
+  // Credit lives on shots: a section with none has nowhere to record it, so
+  // the fields take no input (it would be dropped) and say why.
+  it('disables the credit of a section with no shots, with a hint', () => {
+    const empty = project();
+    empty.sections[0] = { ...empty.sections[0]!, shots: [] };
+    useProjectStore.setState({ project: empty });
+    useUIStore.getState().setSelection({ type: 'section', sectionId: 1 });
+    render(<DetailPanel />);
+    expect(tid('detail-credit-no-shots')).toHaveTextContent('Add a shot to record who surveyed it.');
+    expect(qid('detail-credit-surveyors-input')).toBeNull();
+    expect(qid('detail-credit-explorers-input')).toBeNull();
+    expect(editShotCredit).not.toHaveBeenCalled();
+  });
+
   it('edits every shot of the section through the section target', () => {
     useUIStore.getState().setSelection({ type: 'section', sectionId: 1 });
     render(<DetailPanel />);

@@ -102,6 +102,30 @@ beforeEach(() => {
 });
 
 describe('Edit Section survey credit', () => {
+  // Credit lives on shots, and Save sends it to the section's shots: with
+  // none, typed people and a date would be dropped silently. The fields are
+  // disabled instead, with a hint.
+  it('disables the credit fields of a section with no shots, with a hint', () => {
+    seed([]);
+    const project = useProjectStore.getState().project!;
+    useProjectStore.setState({
+      project: { ...project, sections: [{ ...project.sections[0]!, shots: [] }] },
+    });
+    render(<EditSectionDialog />);
+    expect(tid('section-credit-no-shots')).toHaveTextContent('Add a shot to record who surveyed it.');
+    expect(qid('section-surveyors-input')).toBeNull();
+    expect(qid('section-explorers-input')).toBeNull();
+    // The rest of the section stays editable.
+    expect((tid('section-name-input') as HTMLInputElement).disabled).toBe(false);
+  });
+
+  it('shows no hint when the section has shots', () => {
+    seed([null, null, null]);
+    render(<EditSectionDialog />);
+    expect(qid('section-credit-no-shots')).toBeNull();
+    expect(qid('section-surveyors-input')).not.toBeNull();
+  });
+
   it('shows the union of the shots, with partial pills', () => {
     seed(['2026-03-02', '2026-03-02', '2026-03-02']);
     render(<EditSectionDialog />);

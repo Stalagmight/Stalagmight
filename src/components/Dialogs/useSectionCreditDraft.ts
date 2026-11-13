@@ -34,6 +34,11 @@ export interface SectionCreditDraft {
   onDateReset?: () => void;
   /** The pending edit changes at least one shot. */
   changed: boolean;
+  /**
+   * The section has shots to carry a credit. Without any, an edit would
+   * change nothing and be dropped on Save, so the fields are disabled.
+   */
+  available: boolean;
   /** A people field holds typed text that is not a pill yet. */
   hasPendingText: boolean;
   /**
@@ -99,6 +104,7 @@ export function useSectionCreditDraft(section: Pick<Section, 'shots'> | undefine
       ? { onDateReset: () => setPending((p) => pendDate(p, undefined)) }
       : {}),
     changed,
+    available: credits.length > 0,
     hasPendingText,
     takeEdit,
     reset,

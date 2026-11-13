@@ -4029,6 +4029,7 @@
     "surveyors": "Surveyors",
     "explorers": "Explorers",
     "dateLabel": "Survey date",
+    "noShotsHint": "Add a shot to record who surveyed it.",
     "placeholders": {
       "surveyors": "Type a name, Enter to add",
       "explorers": "Type a name, Enter to add"

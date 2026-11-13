@@ -103,6 +103,12 @@ export interface SectionMetadataFormProps {
    */
   showReverse?: boolean;
   disabled?: boolean;
+  /**
+   * The credit has nowhere to go (Edit Section on a section with no shots:
+   * credit lives on shots). Disables the people and date fields and says
+   * why, instead of taking input Save would drop.
+   */
+  creditUnavailable?: boolean;
 }
 
 export function SectionMetadataForm({
@@ -127,8 +133,10 @@ export function SectionMetadataForm({
   showQuality = false,
   showReverse = false,
   disabled = false,
+  creditUnavailable = false,
 }: SectionMetadataFormProps) {
   const { t } = useTranslation();
+  const creditDisabled = disabled || creditUnavailable;
   return (
     <div className="space-y-3" data-testid="section-metadata-form">
       {showName && (
@@ -146,10 +154,15 @@ export function SectionMetadataForm({
         </div>
       )}
 
+      {creditUnavailable && (
+        <p className="text-sm text-text-tertiary" data-testid="section-credit-no-shots">
+          {t('credit.noShotsHint')}
+        </p>
+      )}
       <CreditPeopleFields
         {...people}
         layout={peopleColumns ? 'columns' : 'stacked'}
-        disabled={disabled}
+        disabled={creditDisabled}
         testIdPrefix="section"
       />
 
@@ -212,14 +225,14 @@ export function SectionMetadataForm({
                 value={dateAggregate}
                 onChange={(next) => onDateChange(next ?? '')}
                 {...(onDateReset ? { onReset: onDateReset } : {})}
-                disabled={disabled}
+                disabled={creditDisabled}
                 testId="section-date-input"
               />
             ) : (
               <DatePicker
                 value={date}
                 onChange={onDateChange}
-                disabled={disabled}
+                disabled={creditDisabled}
                 data-testid="section-date-input"
               />
             )}
