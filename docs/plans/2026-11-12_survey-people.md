@@ -94,10 +94,13 @@ How this feature fits:
   |---|---|
   | Nobody credited | NULL |
   | Surveyors only | `Sue Diver, Tom Tank` (unchanged from before #718) |
-  | Explorers only | `Ida Ice / ` (an empty second half) |
+  | Explorers only | `Ida Ice /` (an empty second half, no trailing space) |
   | Both | `Ex Plorer, Ida Ice / Sue Diver, Tom Tank` |
 
-  Each half names each display name once, compared case-insensitively. A `/` that could join the
+  The explorers-only form has no trailing space because an older build's Edit Section trims the
+  surveyor on every save; the splitter reads `x /` and `x / ` alike as explorers only (a trimmed
+  text ending in ` /` with no other ` / `). Each half names each display name once, compared
+  case-insensitively. A `/` that could join the
   `" / "` separator (inside a name between spaces, or at its edge: `A / B`, `A /`, `/ B`) is
   written `-` in this column only; the per-shot tables keep the real name.
 - Why both roles (#718): a released build (0.5.3 and older) saves by writing a fresh database and

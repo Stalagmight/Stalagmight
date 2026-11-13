@@ -74,6 +74,14 @@ describe('sectionCredit', () => {
       ['A, a, B', [], ['A', 'B']],
       ['a / b / c', [], ['a / b / c']],
       ['B; A', [], ['B', 'A']],
+      // Explorers only, as written ("x /") and as before ("x / "), both
+      // surviving the trim an older build's Edit Section does (#718).
+      ['nh / ', ['nh'], []],
+      ['nh /', ['nh'], []],
+      ['nh; kb /\t', ['nh', 'kb'], []],
+      ['nh / ds /', ['nh'], ['ds /']],
+      ['a / b / c /', [], ['a / b / c /']],
+      ['nh /ds', [], ['nh /ds']],
     ];
     for (const [text, explorers, surveyors] of cases) {
       const split = legacyPeople(text);

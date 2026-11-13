@@ -138,15 +138,32 @@ export function splitPeople(half: string): Person[] {
 }
 
 /**
+ * The `[explorers, surveyors]` halves of legacy text in the Ariane form, or
+ * null for text that names surveyors only, exactly as the backend's
+ * `credit::legacy_halves`: two `" / "` halves (the Ariane importer's join),
+ * or no `" / "` and a text ending in `" /"` once trimmed (explorers only,
+ * `"Ida Ice /"`, which survives the trim an older build's Edit Section does).
+ */
+export function legacyHalves(text: string): [string, string] | null {
+  const halves = text.split(' / ');
+  if (halves.length === 2) return [halves[0]!, halves[1]!];
+  if (halves.length === 1) {
+    const trimmed = text.trimEnd();
+    if (trimmed.endsWith(' /')) return [trimmed.slice(0, -2), ''];
+  }
+  return null;
+}
+
+/**
  * Split a legacy free-text surveyor into explorers and surveyors, exactly as
- * the backend's `credit::legacy_people` does: two `" / "` halves are
- * explorers then surveyors (the Ariane importer's join); anything else is
+ * the backend's `credit::legacy_people` does: text in the Ariane form
+ * ({@link legacyHalves}) is explorers then surveyors; anything else is
  * surveyors only.
  */
 export function legacyPeople(text: string): { explorers: Person[]; surveyors: Person[] } {
-  const halves = text.split(' / ');
-  if (halves.length === 2) {
-    return { explorers: splitPeople(halves[0]!), surveyors: splitPeople(halves[1]!) };
+  const halves = legacyHalves(text);
+  if (halves) {
+    return { explorers: splitPeople(halves[0]), surveyors: splitPeople(halves[1]) };
   }
   return { explorers: [], surveyors: splitPeople(text) };
 }

@@ -79,8 +79,9 @@ ignores tables it does not know): `credit_people (id, name, email)` and
 comma-joined `credit_people` ids. The legacy `sections.surveyor` and
 `sections.date` are still written, as the section aggregate: the earliest shot
 date, and the distinct surveyor names joined with `", "` - or, when anyone
-explored the section, the Ariane `"explorers / surveyors"` form (`"Ida Ice / "`
-when nobody surveyed), with a `" / "` inside a name written `" - "`. A shot
+explored the section, the Ariane `"explorers / surveyors"` form (`"Ida Ice /"`
+when nobody surveyed, which survives the trim an older build's Edit Section
+does on save), with a `" / "` inside a name written `" - "`. A shot
 WITHOUT a row reads its credit from those two columns through the legacy
 splitter, which is the migration for older files; the writer therefore writes
 a row only where that fallback would read back something else.

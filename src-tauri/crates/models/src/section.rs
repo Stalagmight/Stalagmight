@@ -748,7 +748,7 @@ impl Section {
     /// typed into a legacy Surveyor field leaves every shot's explorers alone.
     fn set_legacy_surveyor_on_every_shot(&mut self, text: Option<&str>) {
         let text = text.unwrap_or_default();
-        let has_explorer_half = text.split(" / ").count() == 2;
+        let has_explorer_half = super::legacy_halves(text).is_some();
         let (explorers, surveyors) = legacy_people(text);
         for shot in &mut self.shots {
             let mut credit = shot.credit().clone();
@@ -1749,6 +1749,18 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(section.shots[0].credit(), &credit(&["S2"], &["E2"]));
+        // The explorers-only form names explorers too, trimmed or not (#718).
+        for text in ["E3 /", "E3 / "] {
+            section.apply_updates(&SectionUpdates {
+                surveyor: Some(Some(text.to_string())),
+                ..Default::default()
+            });
+            assert_eq!(section.shots[0].credit(), &credit(&[], &["E3"]), "{text:?}");
+        }
+        section.apply_updates(&SectionUpdates {
+            surveyor: Some(Some("E2 / S2".to_string())),
+            ..Default::default()
+        });
         section.apply_updates(&SectionUpdates {
             surveyor: Some(None),
             ..Default::default()

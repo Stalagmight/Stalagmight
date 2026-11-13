@@ -332,7 +332,7 @@ fn the_legacy_surveyor_column_per_case() {
         texts,
         [
             Some("Sue Diver, Tom Tank"),
-            Some("Ida Ice, Ex Plorer / "),
+            Some("Ida Ice, Ex Plorer /"),
             Some("Ex Plorer, Ida Ice / Sue Diver, Tom Tank"),
             None,
             Some("North - South / Smith - Jones, Lee -, - Kim, A/B"),
@@ -399,74 +399,108 @@ fn every_legacy_text_case_round_trips_exactly_with_rows_only_where_needed() {
 }
 
 /// #718: what a save in a released build (0.5.3 and older) leaves - a fresh
-/// file with only the tables it knows, so the three credit tables are gone.
-/// Every section still lists who explored and who surveyed it. What collapses
-/// is expected and pinned here: every shot of a section now reads the section
-/// aggregate (earliest date), names keep their legacy spelling (`" - "` for a
-/// `" / "`), and same-named people with different emails become one name.
+/// file with only the tables it knows, so the three credit tables are gone -
+/// and the same after that build's Edit Section saved too, which trims the
+/// surveyor text (`surveyor.trim() || null`). Every section still lists who
+/// explored and who surveyed it. What collapses is expected and pinned here:
+/// every shot of a section now reads the section aggregate (earliest date),
+/// names keep their legacy spelling (`" - "` for a `" / "`), and same-named
+/// people with different emails become one name.
 #[test]
 fn an_older_builds_save_keeps_each_sections_roles() {
-    let dir = TempDir::new().unwrap();
+    const DROP: &str =
+        "DROP TABLE shot_credits; DROP TABLE credit_people; DROP TABLE credit_sections;";
+    const EDIT_SECTION_TRIM: &str = "UPDATE sections SET surveyor = NULLIF(trim(surveyor), '');";
     let (project, ids) = roles_project();
     let [surveyors_only, explorers_only, mixed, nobody, slashes, same_named] = ids;
-    let path = save(&dir, "older.stalx", &project);
-    sql(
-        &path,
-        "DROP TABLE shot_credits; DROP TABLE credit_people; DROP TABLE credit_sections;",
-    );
-    let older = reload(&path);
+    for (older_save, trimmed) in [
+        (DROP.to_string(), false),
+        (format!("{DROP} {EDIT_SECTION_TRIM}"), true),
+    ] {
+        let dir = TempDir::new().unwrap();
+        let path = save(&dir, "older.stalx", &project);
+        sql(&path, &older_save);
+        let older = reload(&path);
 
-    for id in [surveyors_only, explorers_only, mixed, nobody] {
+        for id in [surveyors_only, explorers_only, mixed, nobody] {
+            assert_eq!(
+                role_names(&older, id),
+                role_names(&project, id),
+                "section {id} keeps its explorers and surveyors (trimmed: {trimmed})"
+            );
+        }
         assert_eq!(
-            role_names(&older, id),
-            role_names(&project, id),
-            "section {id} keeps its explorers and surveyors"
+            role_names(&older, slashes),
+            (
+                vec!["North - South".to_string()],
+                ["Smith - Jones", "Lee -", "- Kim", "A/B"]
+                    .map(str::to_string)
+                    .to_vec()
+            )
         );
+        assert_eq!(
+            role_names(&older, same_named),
+            (vec!["Jo Diver".to_string()], vec!["Jo Diver".to_string()])
+        );
+
+        // Per shot: the section aggregate on every shot.
+        let every_shot = |id: SectionId, expected: SurveyCredit| {
+            let shots = credits_of(&older, id);
+            assert_eq!(
+                shots,
+                vec![expected; shots.len()],
+                "section {id} (trimmed: {trimmed})"
+            );
+        };
+        every_shot(
+            surveyors_only,
+            credit(&["Sue Diver", "Tom Tank"], &[], day(1)),
+        );
+        every_shot(
+            explorers_only,
+            credit(&[], &["Ida Ice", "Ex Plorer"], day(2)),
+        );
+        every_shot(
+            mixed,
+            credit(
+                &["Sue Diver", "Tom Tank"],
+                &["Ex Plorer", "Ida Ice"],
+                day(3),
+            ),
+        );
+        every_shot(nobody, SurveyCredit::default());
+        every_shot(same_named, credit(&["Jo Diver"], &["Jo Diver"], day(6)));
+        // Shots that differed now agree: the per-shot detail is what is lost.
+        assert_ne!(credits_of(&older, mixed), credits_of(&project, mixed));
+
+        // And this build saves that state back unchanged.
+        let resaved = reload(&save(&dir, "resaved.stalx", &older));
+        for id in ids {
+            assert_eq!(credits_of(&resaved, id), credits_of(&older, id));
+        }
     }
-    assert_eq!(
-        role_names(&older, slashes),
-        (
-            vec!["North - South".to_string()],
-            ["Smith - Jones", "Lee -", "- Kim", "A/B"]
-                .map(str::to_string)
-                .to_vec()
-        )
-    );
-    assert_eq!(
-        role_names(&older, same_named),
-        (vec!["Jo Diver".to_string()], vec!["Jo Diver".to_string()])
-    );
+}
 
-    // Per shot: the section aggregate on every shot.
-    let every_shot = |id: SectionId, expected: SurveyCredit| {
-        let shots = credits_of(&older, id);
-        assert_eq!(shots, vec![expected; shots.len()], "section {id}");
-    };
-    every_shot(
-        surveyors_only,
-        credit(&["Sue Diver", "Tom Tank"], &[], day(1)),
-    );
-    every_shot(
-        explorers_only,
-        credit(&[], &["Ida Ice", "Ex Plorer"], day(2)),
-    );
-    every_shot(
-        mixed,
-        credit(
-            &["Sue Diver", "Tom Tank"],
-            &["Ex Plorer", "Ida Ice"],
-            day(3),
-        ),
-    );
-    every_shot(nobody, SurveyCredit::default());
-    every_shot(same_named, credit(&["Jo Diver"], &["Jo Diver"], day(6)));
-    // Shots that differed now agree: the per-shot detail is what is lost.
-    assert_ne!(credits_of(&older, mixed), credits_of(&project, mixed));
-
-    // And this build saves that state back unchanged.
-    let resaved = reload(&save(&dir, "resaved.stalx", &older));
-    for id in ids {
-        assert_eq!(credits_of(&resaved, id), credits_of(&older, id));
+/// #718: the explorers-only text this build wrote before it became trim-proof
+/// (`"x / "`), trimmed by an older build's Edit Section to `"x /"`, still reads
+/// as explorers - not as one surveyor named `"x /"`.
+#[test]
+fn a_trimmed_explorers_only_text_still_names_explorers() {
+    let dir = TempDir::new().unwrap();
+    let mut project = Project::new("Trimmed".to_string(), None);
+    let id = section_with(&mut project, vec![SurveyCredit::default(); 2]);
+    let path = save(&dir, "trimmed.stalx", &project);
+    for text in ["Ida Ice, Ex Plorer / ", "Ida Ice, Ex Plorer /"] {
+        sql(
+            &path,
+            &format!("UPDATE sections SET surveyor = '{text}', date = NULL WHERE id = {id};"),
+        );
+        let expected = credit(&[], &["Ida Ice", "Ex Plorer"], None);
+        assert_eq!(
+            credits_of(&reload(&path), id),
+            vec![expected.clone(), expected],
+            "{text:?}"
+        );
     }
 }
 

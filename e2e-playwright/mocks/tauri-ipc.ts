@@ -262,7 +262,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       };
       /** `(explorers, surveyors)` of legacy text, as `credit::legacy_people`. */
       const mockLegacyPeople = (text: string): { explorers: MockPerson[]; surveyors: MockPerson[]; halves: boolean } => {
-        const halves = text.split(' / ');
+        // `credit::legacy_halves`: two " / " halves, or explorers only - no
+        // " / " and a text ending in " /" once trimmed ("Ida Ice /").
+        let halves = text.split(' / ');
+        if (halves.length === 1 && text.trimEnd().endsWith(' /')) halves = [text.trimEnd().slice(0, -2), ''];
         return halves.length === 2
           ? { explorers: mockSplitPeople(halves[0] ?? ''), surveyors: mockSplitPeople(halves[1] ?? ''), halves: true }
           : { explorers: [], surveyors: mockSplitPeople(text), halves: false };

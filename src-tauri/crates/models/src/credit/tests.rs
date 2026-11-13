@@ -20,6 +20,14 @@ fn legacy_splitter_table() {
         // One half empty, as the importer wrote it for a missing role.
         (" / ds", &[], &["ds"]),
         ("nh / ", &["nh"], &[]),
+        // Explorers only survives trimming (an older build's Edit Section
+        // trims on every save): a trimmed text ending in " /", with no other
+        // " / ", is explorers only too.
+        ("nh /", &["nh"], &[]),
+        ("nh; kb /\t", &["nh", "kb"], &[]),
+        ("nh / ds /", &["nh"], &["ds /"]),
+        ("a / b / c /", &[], &["a / b / c /"]),
+        ("nh /ds", &[], &["nh /ds"]),
         // A placeholder half names nobody.
         ("unknown / ds", &[], &["ds"]),
         ("nh / ?", &["nh"], &[]),
@@ -139,7 +147,7 @@ fn legacy_credit_text_table() {
             &["Ann Lee", "Bo Ray"],
         ),
         // Explorers only: an empty second half.
-        (&["Ida Ice"], &[], Some("Ida Ice / "), &["Ida Ice"], &[]),
+        (&["Ida Ice"], &[], Some("Ida Ice /"), &["Ida Ice"], &[]),
         (
             &["E1", "E2"],
             &["S1", "S2"],
@@ -168,7 +176,7 @@ fn legacy_credit_text_table() {
         ),
         // A `/` that could join the separator is written `-`, in either role;
         // one with a letter on either side stays.
-        (&["A / B"], &[], Some("A - B / "), &["A - B"], &[]),
+        (&["A / B"], &[], Some("A - B /"), &["A - B"], &[]),
         (&[], &["A / B"], Some("A - B"), &[], &["A - B"]),
         (&["X /"], &["/ Y"], Some("X - / - Y"), &["X -"], &["- Y"]),
         (&["/"], &["S"], Some("- / S"), &["-"], &["S"]),
@@ -198,9 +206,13 @@ fn legacy_credit_text_table() {
     for (explorers, surveyors, text, read_explorers, read_surveyors) in cases {
         let written = legacy_credit_text(&people(explorers), &people(surveyors));
         assert_eq!(written.as_deref(), *text, "{explorers:?} / {surveyors:?}");
-        let (e, s) = legacy_people(written.as_deref().unwrap_or_default());
-        assert_eq!(names(&e), *read_explorers, "explorers of {text:?}");
-        assert_eq!(names(&s), *read_surveyors, "surveyors of {text:?}");
+        // The text as written, and as an older build's Edit Section saves it.
+        let written = written.unwrap_or_default();
+        for read in [written.as_str(), written.trim()] {
+            let (e, s) = legacy_people(read);
+            assert_eq!(names(&e), *read_explorers, "explorers of {read:?}");
+            assert_eq!(names(&s), *read_surveyors, "surveyors of {read:?}");
+        }
     }
     // Same-named people (different emails) are one name in the text.
     let jo = [
@@ -244,10 +256,13 @@ fn legacy_credit_text_always_splits_back_into_its_roles() {
     };
     let check = |explorers: &[Person], surveyors: &[Person]| {
         let text = legacy_credit_text(explorers, surveyors).unwrap_or_default();
-        let (e, s) = legacy_people(&text);
-        let got = |list: Vec<Person>| list.into_iter().map(|p| p.name).collect::<Vec<_>>();
-        assert_eq!(got(e), expected(explorers), "explorers of {text:?}");
-        assert_eq!(got(s), expected(surveyors), "surveyors of {text:?}");
+        // Trimmed too: an older build's Edit Section trims it on every save.
+        for read in [text.as_str(), text.trim()] {
+            let (e, s) = legacy_people(read);
+            let got = |list: Vec<Person>| list.into_iter().map(|p| p.name).collect::<Vec<_>>();
+            assert_eq!(got(e), expected(explorers), "explorers of {read:?}");
+            assert_eq!(got(s), expected(surveyors), "surveyors of {read:?}");
+        }
     };
     for a in &pool {
         for b in &pool {

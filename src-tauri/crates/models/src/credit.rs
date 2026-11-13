@@ -211,9 +211,12 @@ pub fn join_distinct_names(people: &[Person]) -> Option<String> {
 ///
 /// - No explorers: the surveyors' names joined with `", "`, or `None` when
 ///   there are none either (the text every build before #718 wrote).
-/// - Explorers: the Ariane importer's `"explorers / surveyors"` form, which
-///   [`legacy_people`] reads back into both roles - exactly two `" / "`
-///   halves, the second empty when nobody surveyed (`"Ida Ice / "`).
+/// - Explorers and surveyors: the Ariane importer's `"explorers / surveyors"`
+///   form, which [`legacy_people`] reads back into both roles.
+/// - Explorers only: `"Ida Ice /"`, with no space after the `/`, so the text
+///   survives trimming: an older build's Edit Section trims the surveyor on
+///   every save, and [`legacy_halves`] reads both `"Ida Ice /"` and
+///   `"Ida Ice / "` as explorers only.
 ///
 /// Each half names each display name once ([`join_distinct_names`]). A `/`
 /// with a space or a name edge on both sides is written `-` in this text only
@@ -225,7 +228,10 @@ pub fn legacy_credit_text(explorers: &[Person], surveyors: &[Person]) -> Option<
     let surveyors = legacy_half(surveyors);
     match legacy_half(explorers) {
         None => surveyors,
-        Some(explorers) => Some(format!("{explorers} / {}", surveyors.unwrap_or_default())),
+        Some(explorers) => Some(match surveyors {
+            Some(surveyors) => format!("{explorers} / {surveyors}"),
+            None => format!("{explorers} /"),
+        }),
     }
 }
 
@@ -350,22 +356,42 @@ const PLACEHOLDERS: [&str; 3] = ["unknown", "none", "?"];
 
 /// Split a legacy free-text surveyor into `(explorers, surveyors)`.
 ///
-/// * Text with exactly two `" / "` halves came from the Ariane importer, which
-///   joined the file's explorer and surveyor halves that way: the first half is
-///   the explorers, the second the surveyors. Any other text is surveyors only.
+/// * Text in the Ariane form ([`legacy_halves`]) gives the explorers from its
+///   first half and the surveyors from its second. Any other text is
+///   surveyors only.
 /// * Each half is split on `;`. Each piece is then split on `,`, unless the
 ///   whole half looks like `Last, First` (exactly two comma parts, each one
 ///   word), which is one person.
 /// * Pieces are trimmed. Empty pieces and the placeholders `unknown`, `none`
 ///   and `?` are dropped, and duplicates are removed.
 pub fn legacy_people(text: &str) -> (Vec<Person>, Vec<Person>) {
+    match legacy_halves(text) {
+        Some((explorers, surveyors)) => (split_people(explorers), split_people(surveyors)),
+        None => (Vec::new(), split_people(text)),
+    }
+}
+
+/// The `(explorers, surveyors)` halves of legacy text in the Ariane form, or
+/// `None` for text that names surveyors only:
+///
+/// * exactly two `" / "` halves: the Ariane importer's join of a file's
+///   explorer and surveyor halves, and what [`legacy_credit_text`] writes for
+///   a section with both roles;
+/// * no `" / "` at all, and the text ends in `" /"` once trimmed: explorers
+///   only, the second half empty. [`legacy_credit_text`] writes `"Ida Ice /"`;
+///   `"Ida Ice / "` (what it wrote before) reads the same, as does either
+///   after an older build's Edit Section trimmed it on save. A written name
+///   never ends in `" /"` ([`legacy_credit_text`] writes that `/` as `-`).
+pub fn legacy_halves(text: &str) -> Option<(&str, &str)> {
     // Lazily: a crafted text can hold a million separators.
     let mut halves = text.split(" / ");
     match (halves.next(), halves.next(), halves.next()) {
-        (Some(explorers), Some(surveyors), None) => {
-            (split_people(explorers), split_people(surveyors))
-        }
-        _ => (Vec::new(), split_people(text)),
+        (Some(explorers), Some(surveyors), None) => Some((explorers, surveyors)),
+        (Some(_), None, _) => text
+            .trim_end()
+            .strip_suffix(" /")
+            .map(|explorers| (explorers, "")),
+        _ => None,
     }
 }
 
