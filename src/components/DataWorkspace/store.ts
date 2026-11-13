@@ -86,6 +86,10 @@ export interface DataWorkspaceState extends DataWorkspaceViewState {
   activeRowKey: string | null;
   /** One-shot request for the grid to scroll to + activate a row. */
   focusRequest: FocusRequest | null;
+  /** Rows the user navigated to (a link chip, the map, Back to Data) that the
+   *  filters / collapse would hide: shown anyway, marked as revealed, until
+   *  the filters change or the user dismisses them. */
+  revealRowKeys: string[];
   /** Follow the active row in the map pane (centre the map on it). */
   mapFollow: boolean;
   /** Set by "Open in Survey": Survey shows a "Back to Data" chip that
@@ -118,6 +122,9 @@ export interface DataWorkspaceState extends DataWorkspaceViewState {
   // navigation
   setActiveRowKey: (key: string | null) => void;
   requestFocus: (req: Omit<FocusRequest, 'nonce'>) => void;
+  /** Reveal a row the filters hide (see revealRowKeys) and focus it. */
+  revealAndFocus: (req: Omit<FocusRequest, 'nonce'>) => void;
+  clearRevealed: () => void;
   setMapFollow: (on: boolean) => void;
   setReturnToData: (v: { rowKey: string } | null) => void;
   /** Clear everything project-specific (filters, search, sort, collapse,
@@ -137,6 +144,7 @@ export const useDataWorkspaceStore = create<DataWorkspaceState>((set) => ({
   currentMatch: -1,
   activeRowKey: null,
   focusRequest: null,
+  revealRowKeys: [],
   mapFollow: true,
   returnToData: null,
 
@@ -177,6 +185,12 @@ export const useDataWorkspaceStore = create<DataWorkspaceState>((set) => ({
 
   setActiveRowKey: (activeRowKey) => set({ activeRowKey }),
   requestFocus: (req) => set({ focusRequest: { ...req, nonce: ++focusNonce } }),
+  revealAndFocus: (req) =>
+    set((s) => ({
+      revealRowKeys: s.revealRowKeys.includes(req.rowKey) ? s.revealRowKeys : [...s.revealRowKeys, req.rowKey],
+      focusRequest: { ...req, nonce: ++focusNonce },
+    })),
+  clearRevealed: () => set({ revealRowKeys: [] }),
   setMapFollow: (mapFollow) => set({ mapFollow }),
   setReturnToData: (returnToData) => set({ returnToData }),
   resetForProject: () =>
@@ -188,6 +202,7 @@ export const useDataWorkspaceStore = create<DataWorkspaceState>((set) => ({
       currentMatch: -1,
       activeRowKey: null,
       focusRequest: null,
+      revealRowKeys: [],
       returnToData: null,
     }),
 }));

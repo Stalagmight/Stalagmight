@@ -8,7 +8,7 @@ import type { DataWorkspaceState } from '../store';
 
 export type DataViewInput = Pick<
   DataWorkspaceState,
-  'filters' | 'sort' | 'collapsedSections' | 'search' | 'hiddenColumns' | 'columnOrder'
+  'filters' | 'sort' | 'collapsedSections' | 'search' | 'hiddenColumns' | 'columnOrder' | 'revealRowKeys'
 >;
 
 export function buildDataView(

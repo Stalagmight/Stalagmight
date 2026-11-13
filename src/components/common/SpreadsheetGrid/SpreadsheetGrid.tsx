@@ -206,6 +206,11 @@ export interface SpreadsheetGridProps<Row> {
    *  index-based transient state (copy/cut marquee, open editor, range
    *  selection) is reset so it can't land on a different row. */
   rowsVersion?: string | number;
+  /** Group-header rows: when this returns content for a row, the row renders
+   *  as ONE full-width band (content sticky to the left edge so it stays
+   *  visible while scrolling horizontally) instead of per-column cells. Its
+   *  cells are not applicable (no edits, blank copy, skipped by Tab). */
+  groupRowContent?: (row: Row, rowIndex: number) => ReactNode | undefined;
 
   className?: string;
   /** Notified when the user moves the focus (active cell) - wire to app
