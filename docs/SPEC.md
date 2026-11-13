@@ -2319,6 +2319,23 @@ function useNetworkStatus() {
 3. Export Salvageable Data
 4. Cancel
 
+#### Restore from Backup
+The dialog offers the files beside the project named after it plus a suffix
+that contains `.backup` or ends in `.tmp` (`cave.stalx.backup`,
+`cave.stalx.backup.1`, `cave.stalx.tmp`); never the project itself, its
+`.pre-restore` copy or SQLite's `-journal`/`-wal`/`-shm` files (#720).
+
+A restore never writes into a file in place, and a refusal changes nothing:
+- Refused while the project, its `<project>.stalx.pre-restore` or the backup is
+  open in the app, when the backup is the project itself, when the backup does
+  not open as a project (empty, not a project, damaged too), when an armed
+  journal or a WAL with frames sits beside the project or the backup, and when
+  either file was saved by a newer version.
+- Otherwise the backup is copied beside the project first, a copy of the project
+  then replaces `<project>.stalx.pre-restore`, and the backup copy replaces the
+  project, each by rename. Restoring the `.pre-restore` copy therefore swaps
+  the two files back.
+
 #### Backup Before Repair
 Always create backup before attempting repair:
 ```rust
