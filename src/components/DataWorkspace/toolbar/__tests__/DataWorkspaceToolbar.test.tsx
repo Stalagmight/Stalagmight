@@ -292,7 +292,7 @@ describe('filters, chips and menus', () => {
     const chips = screen.getByTestId('data-chips');
     expect(within(chips).getByTestId('data-chip-sections')).toHaveTextContent('Sections: Main, Side');
     expect(within(chips).getByTestId('data-chip-quick-comments')).toHaveTextContent('With comments');
-    expect(within(chips).getByTestId('data-chip-condition-c1')).toHaveTextContent('Length > 30');
+    expect(within(chips).getByTestId('data-chip-condition-c1')).toHaveTextContent('Length (m) > 30');
     expect(within(chips).getByTestId('data-chip-condition-c2')).toHaveTextContent('Comment contains “sump”');
     // the sort has its own bar, not a chip
     expect(within(chips).queryByTestId('data-chip-sort')).toBeNull();
@@ -410,7 +410,7 @@ describe('sort bar', () => {
     expect(screen.queryByTestId('data-sort-bar')).toBeNull();
     act(() => store().setSort({ colKey: 'length', dir: 'asc' }));
     expect(screen.getByTestId('data-sort-bar-text')).toHaveTextContent(
-      'Sorted by Length (ascending). Survey order and the link rail are off.',
+      'Sorted by Length (m), ascending. Survey order and the link rail are off.',
     );
     fireEvent.click(screen.getByTestId('data-sort-reset'));
     expect(store().sort).toBeNull();

@@ -2407,7 +2407,7 @@
       "clearAllTitle": "Remove every filter and hide the temporarily shown rows and columns"
     },
     "sortBar": {
-      "text": "Sorted by {{column}} ({{dir}}). Survey order and the link rail are off.",
+      "text": "Sorted by {{column}}, {{dir}}. Survey order and the link rail are off.",
       "asc": "ascending",
       "desc": "descending",
       "reset": "Back to survey order"

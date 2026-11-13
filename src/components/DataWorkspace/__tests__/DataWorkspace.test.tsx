@@ -29,6 +29,7 @@ import { BackToDataChip } from '../BackToDataChip';
 import { DataMapPaneHeader } from '../DataMapPaneHeader';
 import { OpenInDataButton } from '../OpenInDataButton';
 import { useDataWorkspaceStore } from '../store';
+import { resetDataWorkspaceViewPersistenceForTests } from '../useDataWorkspaceViewPersistence';
 import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
 import { defaultConfig, type Config } from '../../../types/config';
@@ -54,6 +55,9 @@ beforeEach(() => {
   vi.stubGlobal('ResizeObserver', NoopResizeObserver);
   invokeIpcMock.mockReset();
   invokeIpcMock.mockImplementation(() => Promise.resolve(undefined));
+  // The persisted-view baseline is module state: forget it, as a fresh app
+  // start would, or the previous test's map pane state leaks into this one.
+  resetDataWorkspaceViewPersistenceForTests();
   blocked.value = false;
   for (const fn of Object.values(actions)) fn.mockClear();
   useProjectStore.setState({

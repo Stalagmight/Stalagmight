@@ -1,5 +1,5 @@
 /**
- * "Sorted by X (ascending). Survey order and the link rail are off.
+ * "Sorted by X, ascending. Survey order and the link rail are off.
  * [Back to survey order]" - shown under the toolbar while a sort is active, in
  * the quiet info style of the app's banners (UpdateBanner).
  */
