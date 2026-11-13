@@ -446,6 +446,183 @@ fn a_credit_table_of_another_shape_is_ignored_then_replaced() {
     );
 }
 
+/// A saved section of two shots that both need a row (their credits differ
+/// from the section aggregate), and the credit every shot reads when the
+/// rows cannot be used: the section's legacy columns, "Ann Lee, Bo Ray" and
+/// day 1. (Two one-word names would read back as one `Last, First` person.)
+fn rows_needed(dir: &TempDir, name: &str) -> (std::path::PathBuf, SectionId, SurveyCredit) {
+    let mut project = Project::new("Rows".to_string(), None);
+    let id = section_with(
+        &mut project,
+        vec![
+            credit(&["Ann Lee"], &[], day(1)),
+            credit(&["Bo Ray"], &[], day(2)),
+        ],
+    );
+    project.ensure_shot_uuids();
+    let path = save(dir, name, &project);
+    let db = Database::open_readonly(&path).unwrap();
+    assert_eq!(count(&db, "shot_credits"), 2, "both shots need a row");
+    assert_eq!(credits_of(&reload(&path), id), credits_of(&project, id));
+    (path, id, credit(&["Ann Lee", "Bo Ray"], &[], day(1)))
+}
+
+/// #717: a `credit_people` without one of the columns the reader selects (a
+/// hand repair, another tool, a future change) next to valid `shot_credits`
+/// rows. The project opens, and every shot reads its section's legacy credit:
+/// rows whose people cannot be read are not used at all.
+#[test]
+fn a_credit_people_without_its_email_column_falls_back_to_the_legacy_credit() {
+    let dir = TempDir::new().unwrap();
+    let (path, id, fallback) = rows_needed(&dir, "no-email.stalx");
+    sql(
+        &path,
+        "CREATE TABLE people_copy AS SELECT id, name FROM credit_people;
+         DROP TABLE credit_people;
+         CREATE TABLE credit_people (id INTEGER PRIMARY KEY, name TEXT);
+         INSERT INTO credit_people SELECT id, name FROM people_copy;
+         DROP TABLE people_copy;",
+    );
+    let db = Database::open_existing(&path).unwrap();
+    assert_eq!(
+        count(&db, "shot_credits"),
+        2,
+        "the rows themselves are intact"
+    );
+    let unreadable = shot_credits::read_credit_rows(&db.conn).unwrap_err();
+    assert_eq!(
+        (unreadable.table, unreadable.step),
+        ("credit_people", "prepare")
+    );
+    let loaded = db.load_project().unwrap();
+    assert_eq!(credits_of(&loaded, id), vec![fallback.clone(), fallback]);
+
+    // The next save writes the tables in their own shape again.
+    let resaved = save(&dir, "resaved.stalx", &loaded);
+    assert_eq!(credits_of(&reload(&resaved), id), credits_of(&loaded, id));
+}
+
+/// #717: the same for the two other tables, and for a `credit_people` missing
+/// beside `shot_credits` (the rows name people nobody can resolve).
+#[test]
+fn any_credit_table_missing_a_column_falls_back_to_the_legacy_credit() {
+    let cases: [(&str, &str, &str); 3] = [
+        (
+            "shot_credits",
+            "CREATE TABLE kept AS SELECT section_id, shot_uuid, date, surveyors FROM shot_credits;
+             DROP TABLE shot_credits;
+             ALTER TABLE kept RENAME TO shot_credits;",
+            "prepare",
+        ),
+        (
+            "credit_sections",
+            "CREATE TABLE kept AS SELECT section_id, surveyor FROM credit_sections;
+             DROP TABLE credit_sections;
+             ALTER TABLE kept RENAME TO credit_sections;",
+            "prepare",
+        ),
+        ("credit_people", "DROP TABLE credit_people;", "missing"),
+    ];
+    for (table, statements, step) in cases {
+        let dir = TempDir::new().unwrap();
+        let (path, id, fallback) = rows_needed(&dir, "malformed.stalx");
+        sql(&path, statements);
+        let db = Database::open_existing(&path).unwrap();
+        let unreadable = if table == "credit_sections" {
+            shot_credits::read_recorded_legacy(&db.conn, &HashMap::new()).unwrap_err()
+        } else {
+            shot_credits::read_credit_rows(&db.conn).unwrap_err()
+        };
+        assert_eq!((unreadable.table, unreadable.step), (table, step));
+        let loaded = db.load_project().unwrap();
+        assert_eq!(
+            credits_of(&loaded, id),
+            vec![fallback.clone(), fallback],
+            "{table}"
+        );
+    }
+}
+
+/// #717: a credit table that is a VIEW. The app's open refuses any view
+/// before reading anything (#608); the credit read, reached on such a
+/// connection anyway, treats it as unreadable - even a view showing valid
+/// rows - and every shot falls back.
+#[test]
+fn a_credit_table_that_is_a_view_is_refused_at_open_and_never_fatal_to_read() {
+    for table in ["credit_people", "shot_credits", "credit_sections"] {
+        let dir = TempDir::new().unwrap();
+        let (path, id, fallback) = rows_needed(&dir, "view.stalx");
+        sql(
+            &path,
+            &format!(
+                "CREATE TABLE kept AS SELECT * FROM {table};
+                 DROP TABLE {table};
+                 CREATE VIEW {table} AS SELECT * FROM kept;"
+            ),
+        );
+        let refused = Database::open_existing(&path).err().unwrap();
+        assert!(
+            refused
+                .chain()
+                .any(|c| c.downcast_ref::<RefusedSchemaObject>().is_some()),
+            "{table}: {refused:#}"
+        );
+        let db = Database {
+            conn: Connection::open(&path).unwrap(),
+        };
+        let loaded = db.load_project().unwrap();
+        assert_eq!(
+            credits_of(&loaded, id),
+            vec![fallback.clone(), fallback],
+            "{table}"
+        );
+    }
+}
+
+/// #717: values of the wrong type inside readable tables are skipped, never
+/// fatal. A row whose key cannot be read is no row (its shot falls back); a
+/// record whose pair cannot be read records nothing (its section's rows do
+/// not apply); a person whose id or name cannot be read is dropped from the
+/// rows naming them, like a dangling id.
+#[test]
+fn credit_values_of_the_wrong_type_are_skipped_not_fatal() {
+    let dir = TempDir::new().unwrap();
+    let (path, id, fallback) = rows_needed(&dir, "keys.stalx");
+    sql(
+        &path,
+        "UPDATE shot_credits SET section_id = 'not a number'
+             WHERE rowid = (SELECT min(rowid) FROM shot_credits);
+         UPDATE shot_credits SET shot_uuid = X'0102'
+             WHERE rowid = (SELECT max(rowid) FROM shot_credits);",
+    );
+    let loaded = reload(&path);
+    assert_eq!(credits_of(&loaded, id), vec![fallback.clone(), fallback]);
+
+    let (path, id, fallback) = rows_needed(&dir, "record.stalx");
+    sql(&path, "UPDATE credit_sections SET surveyor = X'41';");
+    assert_eq!(
+        credits_of(&reload(&path), id),
+        vec![fallback.clone(), fallback]
+    );
+
+    let (path, id, _) = rows_needed(&dir, "people.stalx");
+    sql(
+        &path,
+        "CREATE TABLE kept AS SELECT * FROM credit_people;
+         DROP TABLE credit_people;
+         CREATE TABLE credit_people (id TEXT, name BLOB, email INTEGER);
+         INSERT INTO credit_people SELECT id, name, email FROM kept;
+         DROP TABLE kept;",
+    );
+    let db = Database::open_existing(&path).unwrap();
+    let rows = shot_credits::read_credit_rows(&db.conn).unwrap();
+    assert_eq!(rows.len(), 2, "the rows still read");
+    assert_eq!(
+        credits_of(&db.load_project().unwrap(), id),
+        vec![credit(&[], &[], day(1)), credit(&[], &[], day(2))]
+    );
+}
+
 /// Every row of `table` as text, in rowid order, minus `skip` columns.
 fn dump(db: &Database, table: &str, skip: &[&str]) -> Vec<Vec<String>> {
     let mut stmt = db

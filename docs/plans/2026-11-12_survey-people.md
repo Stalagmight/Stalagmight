@@ -83,7 +83,10 @@ How this feature fits:
   falls back to the legacy section columns through the splitter. That makes old files and shots
   saved by older builds work unchanged.
 - The uuid is the one `write.rs` already mints at save time. Unreadable or dangling rows are
-  skipped, never fatal.
+  skipped, never fatal. A credit table that cannot be read as a whole (a missing column, a view,
+  a read failing part way, or `credit_people` missing beside `shot_credits`) gives no rows at all:
+  every shot falls back to the legacy columns, with a warning that holds counts, never names
+  (#717).
 - The legacy columns are still written. `sections.surveyor` gets the distinct surveyor names
   joined with `", "`, or NULL. `sections.date` gets the earliest shot date, or NULL.
 - A contract test pins that every table and column the Python reader reads is unchanged, apart
