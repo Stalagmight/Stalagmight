@@ -1049,15 +1049,8 @@ const ORPHAN: Generator[] = [
   },
 ];
 
-/** The export modal, opened by a Ctrl+E interjection. Its contents are not fuzzed. */
-const EXPORT_MODAL: Generator[] = [
-  {
-    name: 'export:close',
-    weight: 10,
-    screens: ['export-modal'],
-    build: (env) =>
-      actionable(env.digest, 'export-dialog-close') ? click('export-dialog-close', 'close the export modal') : null,
-  },
+/** Prompts that sit across a flow without belonging to it. */
+const INTERRUPTS: Generator[] = [
   {
     /**
      * The unsaved-changes prompt, cancelled and nothing else.
@@ -1915,7 +1908,7 @@ export const GENERATORS: readonly Generator[] = [
   ...WALLS,
   ...GPX,
   ...ORPHAN,
-  ...EXPORT_MODAL,
+  ...INTERRUPTS,
   ...ZERO_DATUM,
   ...ZERO_DATUM_CONFIG,
   ...WIZARD_SUGGEST,
@@ -2028,7 +2021,10 @@ export function drawAuxInterjection(rng: Rng): AuxInterjection {
  *              synthetic events straight at an element, so it can "click"
  *              through a backdrop that a mouse cannot. The carousel is also
  *              `disabled` while a placement is running, which the digest
- *              already reports as not-actionable.
+ *              already reports as not-actionable. In the Export workspace the
+ *              same draw may press the toolbar's `export-close-button`
+ *              instead, which is how a walk that Ctrl+E'd into Export leaves it
+ *              by a control rather than only by Escape or a second Ctrl+E.
  *   `close`  - nothing in the UI binds `handleCloseProject` while a dialog is
  *              open, and both keyboard dispatchers return early for every
  *              non-Escape key in that state. Driving the raw store action
@@ -2041,16 +2037,24 @@ export function drawAuxInterjection(rng: Rng): AuxInterjection {
  *
  * `export` is the exception and is legal EVERYWHERE, because Ctrl+E is a real
  * keystroke a user can make at any moment and the app's own dispatcher decides
- * what it does. That is exactly what makes it worth pressing mid-flow: the
- * scenario asserts the modal does NOT open on top of an import screen.
+ * what it does. That is exactly what makes it worth pressing mid-flow: at idle
+ * it toggles the Export workspace, and behind an import screen the scenario
+ * asserts it does NOTHING (EXPORT CHORD - appMode does not move).
  */
 export function buildAuxInterjection(kind: AuxInterjection, env: GenEnv): FuzzMove | null {
-  if (kind === 'export') return click('key:Ctrl+E', 'INTERJECT: Ctrl+E (export modal)');
+  if (kind === 'export') return click('key:Ctrl+E', 'INTERJECT: Ctrl+E (toggle the Export workspace)');
   if (env.digest.screen !== 'idle') return null;
   if (kind === 'mode') {
-    const candidates = ['mode-survey', 'mode-plan', 'mode-export'].filter((testid) => actionable(env.digest, testid));
+    // `export-close-button` is rendered only in Export, so outside it this is
+    // the carousel alone; inside it, leaving is one of the choices.
+    const candidates = ['mode-survey', 'mode-data', 'mode-plan', 'export-close-button'].filter((testid) =>
+      actionable(env.digest, testid),
+    );
     const testid = pickFrom(() => env.ctx.rng(), candidates);
-    return testid === null ? null : click(testid, `INTERJECT: switch app mode via ${testid}`);
+    if (testid === null) return null;
+    return testid === 'export-close-button'
+      ? click('export-close-button', 'INTERJECT: leave the Export workspace via export-close-button')
+      : click(testid, `INTERJECT: switch app mode via ${testid}`);
   }
   if (kind === 'close') {
     return env.digest.hasProject ? { kind: 'closeProject', label: 'INTERJECT: closeProject at idle' } : null;
