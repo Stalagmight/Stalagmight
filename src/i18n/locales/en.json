@@ -2250,6 +2250,7 @@
       "confirmRounded_one": "{{n}} number cell shows a rounded value; it is written as shown.",
       "confirmRounded_other": "{{n}} number cells show rounded values; they are written as shown.",
       "confirmLimit": "Only the first {{n}} matches are included; run Replace all again for the rest.",
+    "confirmRoundedOne": "This number is shown rounded ({{held}} shown as {{shown}}); replacing writes the value as shown. Replace?",
       "confirmOk": "Replace all",
       "cancel": "Cancel",
       "nothingReplaceable": "Nothing to replace: every match is in a read-only cell or would be invalid.",

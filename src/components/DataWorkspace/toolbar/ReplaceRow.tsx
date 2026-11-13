@@ -1,7 +1,9 @@
 /**
  * The replace box under the find box (same width): replacement text with
  * Replace (this match, then the next), Skip and Replace all; Replace all asks
- * first, in a line under the box that states exactly what will happen.
+ * first, in a line under the box that states exactly what will happen. Replace
+ * asks the same way when its cell is a number shown rounded (the hidden
+ * decimals go: the value is written as shown).
  * Disabled, with the reason, while the workspace is read-only.
  */
 import { useEffect, useRef, useState, type RefObject } from 'react';
@@ -12,7 +14,7 @@ import { formatNumber } from '../../../i18n/format';
 import { LockIcon } from '../../common/icons';
 import { tCount } from './labels';
 import { FIELD_BOX_CLASS, FIELD_INPUT_CLASS } from './ToolbarMenu';
-import type { ReplaceAllPreview } from './useReplace';
+import type { ReplaceAllPreview, RoundedOnePreview } from './useReplace';
 import type { SearchMatch } from '../types';
 
 interface ReplaceRowProps {
@@ -23,12 +25,18 @@ interface ReplaceRowProps {
   matches: readonly SearchMatch[];
   busy: boolean;
   onReplaceOne: () => void;
+  /** Non-null: Replace must ask first (see useReplace `previewOne`). */
+  previewOne: () => RoundedOnePreview | null;
   onSkip: () => void;
   previewAll: () => ReplaceAllPreview | null;
   onReplaceAll: () => void;
   /** Find was closed with Escape from here: hand focus back to the grid. */
   onClosed: () => void;
 }
+
+/** The confirmation line under the box: Replace all's counts, or Replace's
+ *  rounded number. */
+type PendingConfirm = { kind: 'all'; preview: ReplaceAllPreview } | { kind: 'one'; rounded: RoundedOnePreview };
 
 const BOX_BUTTON =
   'h-6 shrink-0 whitespace-nowrap rounded px-1.5 text-xs text-text-primary hover:bg-accent-10 disabled:cursor-not-allowed disabled:opacity-40';
@@ -39,6 +47,7 @@ export function ReplaceRow({
   matches,
   busy,
   onReplaceOne,
+  previewOne,
   onSkip,
   previewAll,
   onReplaceAll,
@@ -50,12 +59,15 @@ export function ReplaceRow({
   const query = useDataWorkspaceStore((s) => s.search.query);
   const setSearch = useDataWorkspaceStore((s) => s.setSearch);
   const closeSearch = useDataWorkspaceStore((s) => s.closeSearch);
-  const [confirm, setConfirm] = useState<ReplaceAllPreview | null>(null);
+  const currentMatch = useDataWorkspaceStore((s) => s.currentMatch);
+  const [confirm, setConfirm] = useState<PendingConfirm | null>(null);
   const okRef = useRef<HTMLButtonElement | null>(null);
 
   const hasMatches = matches.length > 0;
   // Any change to what would be replaced invalidates the confirmation.
   useEffect(() => setConfirm(null), [replacement, query, regex, matches]);
+  // Replace's question is about the current match only.
+  useEffect(() => setConfirm((c) => (c?.kind === 'one' ? null : c)), [currentMatch]);
   useEffect(() => {
     if (confirm) okRef.current?.focus();
   }, [confirm]);
@@ -64,7 +76,16 @@ export function ReplaceRow({
 
   const askAll = () => {
     const preview = previewAll();
-    if (preview) setConfirm(preview);
+    if (preview) setConfirm({ kind: 'all', preview });
+  };
+  const askOne = () => {
+    const rounded = previewOne();
+    if (rounded) {
+      setConfirm({ kind: 'one', rounded });
+      return;
+    }
+    setConfirm(null);
+    onReplaceOne();
   };
   const cancel = () => {
     setConfirm(null);
@@ -86,7 +107,7 @@ export function ReplaceRow({
             if (e.key === 'Enter') {
               e.preventDefault();
               if (e.ctrlKey || e.metaKey) askAll();
-              else onReplaceOne();
+              else askOne();
             } else if (e.key === 'Escape') {
               e.preventDefault();
               e.stopPropagation();
@@ -121,7 +142,7 @@ export function ReplaceRow({
               className={BOX_BUTTON}
               disabled={disabled}
               title={t('dataToolbar.replace.oneTitle')}
-              onClick={onReplaceOne}
+              onClick={askOne}
               data-testid="data-replace-one"
             >
               {t('dataToolbar.replace.one')}
@@ -153,19 +174,30 @@ export function ReplaceRow({
         <div
           className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded border border-accent-20 bg-accent-10 px-2 py-1 text-xs"
           role="alertdialog"
-          aria-label={t('dataToolbar.replace.all')}
+          aria-label={confirm.kind === 'all' ? t('dataToolbar.replace.all') : t('dataToolbar.replace.one')}
           aria-describedby="data-replace-confirm-text"
           data-testid="data-replace-confirm"
+          data-kind={confirm.kind}
         >
           <span id="data-replace-confirm-text" className="min-w-0 flex-1" data-testid="data-replace-confirm-text">
-            {t('dataToolbar.replace.confirm', {
-              matches: tCount(t, 'dataToolbar.replace.matches', confirm.matches),
-              cells: tCount(t, 'dataToolbar.replace.cells', confirm.cells),
-            })}
-            {confirm.lockedMatches > 0 && ` ${tCount(t, 'dataToolbar.replace.confirmLocked', confirm.lockedMatches)}`}
-            {confirm.invalidCells > 0 && ` ${tCount(t, 'dataToolbar.replace.confirmInvalid', confirm.invalidCells)}`}
-            {confirm.roundedCells > 0 && ` ${tCount(t, 'dataToolbar.replace.confirmRounded', confirm.roundedCells)}`}
-            {confirm.limited && ` ${t('dataToolbar.replace.confirmLimit', { n: formatNumber(MAX_SEARCH_MATCHES) })}`}
+            {confirm.kind === 'one' ? (
+              t('dataToolbar.replace.confirmRoundedOne', { held: confirm.rounded.held, shown: confirm.rounded.shown })
+            ) : (
+              <>
+                {t('dataToolbar.replace.confirm', {
+                  matches: tCount(t, 'dataToolbar.replace.matches', confirm.preview.matches),
+                  cells: tCount(t, 'dataToolbar.replace.cells', confirm.preview.cells),
+                })}
+                {confirm.preview.lockedMatches > 0 &&
+                  ` ${tCount(t, 'dataToolbar.replace.confirmLocked', confirm.preview.lockedMatches)}`}
+                {confirm.preview.invalidCells > 0 &&
+                  ` ${tCount(t, 'dataToolbar.replace.confirmInvalid', confirm.preview.invalidCells)}`}
+                {confirm.preview.roundedCells > 0 &&
+                  ` ${tCount(t, 'dataToolbar.replace.confirmRounded', confirm.preview.roundedCells)}`}
+                {confirm.preview.limited &&
+                  ` ${t('dataToolbar.replace.confirmLimit', { n: formatNumber(MAX_SEARCH_MATCHES) })}`}
+              </>
+            )}
           </span>
           <span className="flex shrink-0 gap-1">
             <button
@@ -174,7 +206,8 @@ export function ReplaceRow({
               className="rounded bg-accent px-2 py-0.5 text-accent-on hover:bg-accent-90"
               onClick={() => {
                 setConfirm(null);
-                onReplaceAll();
+                if (confirm.kind === 'all') onReplaceAll();
+                else onReplaceOne();
               }}
               onKeyDown={(e) => {
                 if (e.key === 'Escape') {
@@ -185,7 +218,7 @@ export function ReplaceRow({
               }}
               data-testid="data-replace-confirm-ok"
             >
-              {t('dataToolbar.replace.confirmOk')}
+              {confirm.kind === 'all' ? t('dataToolbar.replace.confirmOk') : t('dataToolbar.replace.one')}
             </button>
             <button
               type="button"

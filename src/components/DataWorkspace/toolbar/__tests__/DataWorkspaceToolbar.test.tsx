@@ -225,6 +225,37 @@ describe('replace', () => {
     expect(edits.map((e) => [e.row.key, e.value])).toEqual([['st:1:1', 'X pool']]);
   });
 
+  it('Replace on a number shown rounded asks first; a number shown exactly does not', async () => {
+    const model = makeModel({ precision: 1 }, [{ id: 1, name: 'M', shots: [{ length: 13.46 }, { length: 12 }] }]);
+    render(<Harness model={model} />);
+    act(() => store().setSearch({ replaceOpen: true, replacement: '2', columnScope: 'custom', columns: ['length'] }));
+    await typeQuery('13');
+    await waitFor(() => expect(screen.getByTestId('data-find-count')).toHaveTextContent('1 of 1'));
+    fireEvent.click(screen.getByTestId('data-replace-one'));
+    expect(screen.getByTestId('data-replace-confirm')).toHaveAttribute('data-kind', 'one');
+    expect(screen.getByTestId('data-replace-confirm-text')).toHaveTextContent(
+      'This number is shown rounded (13.46 shown as 13.5); replacing writes the value as shown. Replace?',
+    );
+    expect(screen.getByTestId('data-replace-confirm-ok')).toHaveTextContent('Replace');
+    expect(buildEditCommands).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('data-replace-confirm-cancel'));
+    expect(screen.queryByTestId('data-replace-confirm')).toBeNull();
+    expect(executeBatch).not.toHaveBeenCalled();
+
+    // Enter in the replace box asks the same; Replace then writes as shown.
+    fireEvent.keyDown(screen.getByTestId('data-replace-input'), { key: 'Enter' });
+    fireEvent.click(screen.getByTestId('data-replace-confirm-ok'));
+    await waitFor(() => expect(executeBatch).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(buildEditCommands).mock.calls[0]![0].map((e) => [e.row.key, e.value])).toEqual([['sh:1:100001', 2.5]]);
+
+    // 12 shows as "12.0": nothing hidden, no question.
+    await typeQuery('12');
+    await waitFor(() => expect(screen.getByTestId('data-find-count')).toHaveTextContent('1 of 1'));
+    fireEvent.click(screen.getByTestId('data-replace-one'));
+    expect(screen.queryByTestId('data-replace-confirm')).toBeNull();
+    await waitFor(() => expect(executeBatch).toHaveBeenCalledTimes(2));
+  });
+
   it('is disabled with the reason while the data is read-only', async () => {
     renderToolbar({ editingBlocked: true });
     act(() => store().setSearch({ replaceOpen: true }));

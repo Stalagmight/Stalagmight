@@ -30,6 +30,15 @@ export interface ReplaceAllPreview {
   limited: boolean;
 }
 
+/** The current match's cell is a number shown rounded: Replace writes the text
+ *  as shown, so it asks first (the single-match side of `roundedCells`). */
+export interface RoundedOnePreview {
+  /** The value the cell holds, at full precision ("13.46"). */
+  held: string;
+  /** The value the cell shows ("13.5"). */
+  shown: string;
+}
+
 export interface ReplaceOutcome {
   replaced: number;
   locked: number;
@@ -157,6 +166,24 @@ export function useReplace(view: DataView, model: DataModel, nav: FindNavigation
     }
   }, [busy, blocked, nav, run, t, i18n, toast]);
 
+  /** Whether Replace on the current match must ask first: its cell is a number
+   *  shown rounded, and replacing writes the value as shown (Replace all states
+   *  the same in its confirmation). null = no question; `replaceOne` then
+   *  handles every outcome itself (blocked, locked, invalid, nothing to do). */
+  const previewOne = useCallback((): RoundedOnePreview | null => {
+    const { ctx, rowByKey, columnByKey } = modelRef.current;
+    if (busy || ctx.editingBlocked || isEditingBlockedNow()) return null;
+    const m = viewRef.current.matches[useDataWorkspaceStore.getState().currentMatch];
+    if (!m || m.lockReason !== null) return null;
+    const plan = planReplace([m], { rowByKey, columnByKey }, ctx, spec());
+    const edit = plan.edits[0];
+    const texts = plan.editTexts[0];
+    if (plan.roundedCells === 0 || !edit || !texts) return null;
+    const held = columnByKey.get(edit.colKey)?.value(edit.row, ctx);
+    if (typeof held !== 'number') return null;
+    return { held: formatNumber(held, ctx.locale, { maximumFractionDigits: 6 }), shown: texts.before };
+  }, [busy]);
+
   /** Count what Replace all would do (null + a toast when nothing can be replaced). */
   const previewAll = useCallback((): ReplaceAllPreview | null => {
     if (blocked()) return null;
@@ -198,5 +225,5 @@ export function useReplace(view: DataView, model: DataModel, nav: FindNavigation
     toast(parts.join(' · '), kind);
   }, [busy, blocked, run, t, toast]);
 
-  return { replaceOne, previewAll, replaceAll, busy };
+  return { replaceOne, previewOne, previewAll, replaceAll, busy };
 }

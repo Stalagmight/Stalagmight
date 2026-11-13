@@ -91,6 +91,7 @@ function Toolbar({ model, view }: { model: DataModel; view: DataView }) {
                 matches={view.matches}
                 busy={replace.busy}
                 onReplaceOne={() => void replace.replaceOne()}
+                previewOne={replace.previewOne}
                 onSkip={nav.next}
                 previewAll={replace.previewAll}
                 onReplaceAll={() => void replace.replaceAll()}
