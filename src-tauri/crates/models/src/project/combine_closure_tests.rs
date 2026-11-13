@@ -931,6 +931,13 @@ fn check_combined(
 /// closure between merged stations and no snapped closure inside one
 /// section, and a project a reload neither re-ties nor moves.
 fn check_structure(after: &Project, what: &str) {
+    check_structure_muting(after, what, &[]);
+}
+
+/// [`check_structure`], skipping the invariants named in `mute` (a long
+/// campaign's known findings, `STALAGMIGHT_COMBINE_CHAIN_MUTE`):
+/// `merged-closure` (a closure between merged stations).
+fn check_structure_muting(after: &Project, what: &str, mute: &[String]) {
     let violations = after.check_structural_integrity();
     assert!(violations.is_empty(), "{what}: {violations:?}");
     after.debug_assert_merge_alignment(what);
@@ -983,7 +990,8 @@ fn check_structure(after: &Project, what: &str) {
         let a = after.resolve_key(&closure.station_a).unwrap();
         let b = after.resolve_key(&closure.station_b).unwrap();
         assert!(
-            !after.are_stations_merged(a, b) && a != b,
+            a != b
+                && (mute.iter().any(|m| m == "merged-closure") || !after.are_stations_merged(a, b)),
             "{what}: a closure between merged stations"
         );
         if closure.is_aligned {
@@ -1127,6 +1135,14 @@ fn chains_of_combines_splits_and_reverses_keep_the_invariants() {
     let seeds = env("STALAGMIGHT_COMBINE_CHAIN_SEEDS", 40);
     let first = env("STALAGMIGHT_COMBINE_CHAIN_FIRST_SEED", 0);
     let steps = env("STALAGMIGHT_COMBINE_CHAIN_STEPS", 8);
+    // Known findings a long campaign mutes after they are filed, comma
+    // separated (see `check_structure_muting`).
+    let mute: Vec<String> = std::env::var("STALAGMIGHT_COMBINE_CHAIN_MUTE")
+        .unwrap_or_default()
+        .split(',')
+        .map(|m| m.trim().to_string())
+        .filter(|m| !m.is_empty())
+        .collect();
     let (mut combines, mut splits, mut reverses) = (0usize, 0usize, 0usize);
     for seed in first..first + seeds {
         let mut rng = Rng(seed.wrapping_mul(0xA24B_AED4_963E_E407) | 1);
@@ -1224,7 +1240,7 @@ fn chains_of_combines_splits_and_reverses_keep_the_invariants() {
                     // What the split command runs next: a closure across the
                     // cut that was the halves' only tie is a merge now.
                     after.convert_orphan_closures_to_merges();
-                    check_structure(&after, &what);
+                    check_structure_muting(&after, &what, &mute);
                     project = after;
                     trail.push(op);
                     splits += 1;
