@@ -55,7 +55,7 @@ lines), `GridContextMenu.tsx`, `useGridScrollRequests.ts` (`selectedRow` /
   it into its own header. Subscribe to `onSelectionChange` (selection dims +
   active cell) to render a name-box indicator there.
 - **Mixed row kinds**: `GridColumn.isApplicable(row, i)` blanks a column on rows
-  it does not apply to (quiet `sg-cell-na`, never edited, copied as '', skipped
+  it does not apply to (a plain blank `sg-cell-na`, never edited, copied as '', skipped
   by Tab); `groupRowContent` turns a row into one full-width header band.
 - **Header sorting** (host-owned order): `sortable` columns get a chevron button;
   `sort` draws the direction + `aria-sort`, `onSortChange` gets the next state.
@@ -153,12 +153,13 @@ applicability ones also once per cell in bulk paths), so keep them O(1).
 ### Cell class contract
 
 State colours are `background-color` only (never the `background` shorthand,
-which would wipe the layers): `sg-cell-locked`, `sg-cell-na`,
-`sg-cell-missing`, and the row classes `sg-row-frozen`, `sg-row-hover`,
+which would wipe the layers): `sg-cell-locked`, `sg-cell-missing`, and the row classes `sg-row-frozen`, `sg-row-hover`,
 `sg-row-draft`. Overlays are `background-image` layers driven by variables,
 bottom to top: `--sg-l-tint` (row tint), `--sg-l-match` (`sg-cell-match`), and
 `--sg-l-sel` (`sg-cell-sel`, every selected cell but the active one). `<mark>`
-elements are content, so they paint above all of it.
+elements are content, so they paint above all of it. `sg-cell-na` has no look
+of its own: a not-applicable cell is an ordinary blank cell under the same
+layers.
 
 ## Usage sketch (future DataTable integration)
 

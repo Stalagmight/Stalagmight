@@ -150,30 +150,13 @@
   cursor: not-allowed;
 }
 /* A column that does not apply to this row (GridColumn.isApplicable, or any
-   cell of a group-header row): blank and quiet. Lighter than the locked recess
-   and with the ordinary cell cursor - it reads as "nothing here", not as
-   "forbidden". A faint hatch keeps it distinct from an empty editable cell. */
-.sg-grid .sg-cell-na {
-  background-color: color-mix(in srgb, var(--cc-background) 30%, var(--cc-panel));
-  background-image: repeating-linear-gradient(
-    135deg,
-    transparent 0 5px,
-    color-mix(in srgb, var(--cc-text-secondary) 7%, transparent) 5px 6px
-  );
-}
-/* The hatch is a background-image too: when a layer applies, put the layers
-   over it rather than drop it. */
-.sg-grid .sg-row-tinted .sg-cell.sg-cell-na,
-.sg-grid .sg-cell.sg-cell-na.sg-cell-sel {
-  background-image:
-    linear-gradient(var(--sg-l-sel, transparent), var(--sg-l-sel, transparent)),
-    linear-gradient(var(--sg-l-tint, transparent), var(--sg-l-tint, transparent)),
-    repeating-linear-gradient(
-      135deg,
-      transparent 0 5px,
-      color-mix(in srgb, var(--cc-text-secondary) 7%, transparent) 5px 6px
-    );
-}
+   cell of a group-header row) is a plain blank cell: no class rule at all, so it
+   has the ordinary cell background and cursor and takes the row tint, hover,
+   selection and frozen layers exactly like an empty editable cell. What sets
+   it apart is behaviour (never edited, copied as '', skipped by Tab), not a
+   look: on a grid that mixes row kinds half the cells are N/A, and any pattern
+   on them is noise. `sg-cell-na` stays on the element as the hook for tests
+   and hosts. */
 
 /* The phantom "new shot" draft row at the end of the table. */
 .sg-row-draft .sg-cell {
