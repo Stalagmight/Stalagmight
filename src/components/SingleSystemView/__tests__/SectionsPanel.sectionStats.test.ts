@@ -31,8 +31,6 @@ function section(): Section {
   return {
     id: 1,
     name: 'Main',
-    surveyor: null,
-    date: null,
     color: '#ff0000',
     direction: 'in',
     quality: 1,
