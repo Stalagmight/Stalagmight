@@ -406,6 +406,8 @@ it('retired SpeleoDB commands are absent from IPC and browser mocks', () => {
     'speleodb_set_exclude_geojson',
     'speleodb_set_undo_mode',
     'speleodb_get_project_metadata',
+    'speleodb_unwind_target',
+    'speleodb_rewind_target',
   ]) {
     expect(libRsSource).not.toContain(`commands::speleodb::${command},`);
     expect(mockTsSource).not.toContain(`case '${command}':`);
@@ -413,4 +415,6 @@ it('retired SpeleoDB commands are absent from IPC and browser mocks', () => {
   const barrel = fs.readFileSync(path.join(REPO_ROOT, 'src/types/ipc.generated.ts'), 'utf8');
   // Also covers the retired SpeleoProjectMetadataPatch.
   expect(barrel).not.toContain('SpeleoProjectMetadata');
+  expect(barrel).not.toContain('SpeleoUnwindTarget');
+  expect(barrel).not.toContain('SpeleoRewindTarget');
 });

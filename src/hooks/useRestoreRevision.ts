@@ -40,9 +40,9 @@ export interface RestoreRevisionArgs {
   /**
    * [#303] The "Unwind to previous SpeleoDB version" flavour: KEEP the downloaded
    * copy's undo history instead of dropping it, because that history is what the
-   * action came for. Only the Unwind sets it, and the backend enforces its extra
-   * preconditions (an empty undo stack, and any dirt being a previous Unwind's own
-   * doing) rather than trusting this flag.
+   * action came for. No current caller sets it (the Unwind dialog was removed, #671);
+   * the backend still accepts it and enforces its extra preconditions (an empty undo
+   * stack, and any dirt being a previous Unwind's own doing) rather than trusting it.
    */
   keepUndoHistory?: boolean;
   /**
@@ -52,8 +52,7 @@ export interface RestoreRevisionArgs {
    *
    * An acknowledgement, not a decision: the backend re-derives the same predicate that put
    * `discards_unpushed` on the unwind target, and without this flag it refuses exactly as
-   * before. Only `SpeleoUnwindDialog` sets it, and only when it actually rendered the
-   * warning.
+   * before. A caller may set it only when it actually showed the user that warning.
    */
   discardUnpushed?: boolean;
   /**

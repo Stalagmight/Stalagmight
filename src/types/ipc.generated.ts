@@ -220,8 +220,6 @@ export * from './ipc/SpeleoCacheOwnership';
 export * from './ipc/SpeleoCachedProject';
 export * from './ipc/SpeleoPurgeReport';
 export * from './ipc/SpeleoRevision';
-export * from './ipc/SpeleoUnwindTarget';
-export * from './ipc/SpeleoRewindTarget';
 export * from './ipc/UndoMode';
 export * from './ipc/SpeleoSessionStatus';
 export * from './ipc/SpeleoDbAction';

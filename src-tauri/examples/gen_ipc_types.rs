@@ -82,8 +82,8 @@ use stalagmight_lib::speleodb::{
     SpeleoCollaborator, SpeleoDbAction, SpeleoErrorDto, SpeleoFileAccess, SpeleoLinkStatus,
     SpeleoLocalProjectState, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectSummary,
     SpeleoPublishParams, SpeleoPublishResult, SpeleoReadOnlyOpen, SpeleoReleaseContext,
-    SpeleoRevision, SpeleoRewindTarget, SpeleoSessionStatus, SpeleoUnwindTarget,
-    StartEditingResult, TransportCause, UnpushedLocalEdits, UpdateResult, Visibility,
+    SpeleoRevision, SpeleoSessionStatus, StartEditingResult, TransportCause, UnpushedLocalEdits,
+    UpdateResult, Visibility,
 };
 use stalagmight_lib::tile_attribution::TileAttribution;
 use stalagmight_lib::tile_providers::TileProviderInfo;
@@ -149,6 +149,8 @@ fn main() {
     for name in [
         "SpeleoProjectMetadataPatch",
         "SpeleoProjectMetadata",
+        "SpeleoUnwindTarget",
+        "SpeleoRewindTarget",
         "KeychainReport",
         "TokenFallback",
         "TokenStorage",
@@ -451,11 +453,7 @@ fn main() {
     // adoption's own hand-over to the server managed to do
     // #218 revision-history view: one projected commit
     export::<SpeleoRevision>(&out_dir);
-    // [#303] The hybrid undo stack: which revision the next Unwind would load, and the
-    // per-project policy for whether undo history rides to the server at all.
-    export::<SpeleoUnwindTarget>(&out_dir);
-    // ...and its forward twin, which a redo-side step would load.
-    export::<SpeleoRewindTarget>(&out_dir);
+    // [#303] The per-project policy for whether undo history rides to the server at all.
     export::<stalagmight_lib::models::UndoMode>(&out_dir);
     export::<SpeleoSessionStatus>(&out_dir);
     export::<SpeleoDbAction>(&out_dir);
@@ -711,8 +709,6 @@ fn main() {
         "SpeleoCachedProject",
         "SpeleoPurgeReport",
         "SpeleoRevision",
-        "SpeleoUnwindTarget",
-        "SpeleoRewindTarget",
         "UndoMode",
         "SpeleoSessionStatus",
         "SpeleoDbAction",

@@ -97,16 +97,16 @@ pub struct RevisionHistory {
 
 /// [#303] Which revision the next "Unwind to previous SpeleoDB version" would load.
 ///
-/// `is_current` distinguishes the two shapes of the same action, which the confirmation
-/// dialog has to word differently:
+/// Backend-only since the Unwind UI was removed: a history-keeping restore checks the
+/// requested revision against it. `is_current` distinguishes the two shapes of the same
+/// step:
 ///
 /// - `true` - the target is the commit the working copy ALREADY equals (the first step
 ///   after a push). Nothing moves; what comes back is the undo history that produced this
 ///   state, so the user can keep stepping backwards through their own pushed operations.
 /// - `false` - the target is an ancestor, so the working copy DOES move back, and any
 ///   later push lands that older content as a new forward commit.
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export, export_to = "../../bindings/")]
+#[derive(Debug, Clone)]
 pub struct SpeleoUnwindTarget {
     /// 40-hex commit SHA to check out.
     pub hexsha: String,
@@ -116,28 +116,9 @@ pub struct SpeleoUnwindTarget {
     /// Unwind chain pointer accounts for it, so the swap replaces edits the user never
     /// pushed (and the redo steps that would have replayed them).
     ///
-    /// The dialog raises its red warning on this, and only a caller that passes the
-    /// matching acknowledgement gets past the backend guard - the frontend is told what
-    /// will happen, it is not trusted to decide it.
+    /// Only a caller that passes the matching acknowledgement gets past the backend
+    /// guard - a caller is told what will happen, it is not trusted to decide it.
     pub discards_unpushed: bool,
-}
-
-/// [#303] Which revision a FORWARD chain step would check out - the mirror of
-/// [`SpeleoUnwindTarget`], walking back up toward BASE.
-///
-/// Deliberately carries no `discards_unpushed`. A forward step is only defined while a
-/// chain pointer exists, and `unwind_discards_unpushed` is false whenever one does, so the
-/// field could only ever be `false` - a permanently dead warning that would read as though
-/// the case had been considered and could fire. An edit drops the pointer, which is what
-/// removes this direction entirely rather than warning about it.
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export, export_to = "../../bindings/")]
-pub struct SpeleoRewindTarget {
-    /// 40-hex commit SHA to check out.
-    pub hexsha: String,
-    /// This step lands back ON BASE, i.e. returns the copy to the latest version, so the
-    /// confirmation can say that rather than naming a revision.
-    pub is_latest: bool,
 }
 
 /// [#218] One commit projected for the frontend revision-history view. A read-only

@@ -276,12 +276,6 @@ interface SpeleoStore {
    * itself. Nothing renders it.
    */
   sessionGeneration: number;
-  /**
-   * [#303] Version of the backend state used to resolve the next Unwind/Rewind target.
-   * Unlike `sessionGeneration`, this moves for link-only operations such as a push or
-   * undo-policy change, where the open project and its rendered tree stay the same.
-   */
-  chainTargetGeneration: number;
   /** The open project's link/edit state, or `null` when it is local / none open. */
   link: SpeleoLinkState | null;
   /**
@@ -576,8 +570,6 @@ interface SpeleoStore {
       a successful push/release clears the whole slot anyway). No-op for other kinds,
       so it never wipes an unrelated banner. */
   clearPushFailedBanner: () => void;
-  /** Invalidate any cached Unwind/Rewind target after a successful tree replacement. */
-  invalidateChainTargets: () => void;
   dismissBanner: () => void;
 }
 
@@ -666,7 +658,6 @@ const disownBusy = (): void => {
 export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   session: null,
   sessionGeneration: 0,
-  chainTargetGeneration: 0,
   link: null,
   // Pessimistic until a project open resolves it: an unresolved gate is closed.
   projectLinkKind: 'unknown',
@@ -1298,7 +1289,6 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
               remoteState: 'up_to_date',
               serverError: null,
             },
-            chainTargetGeneration: state.chainTargetGeneration + 1,
             divergence: null,
             banner: null,
           };
@@ -1335,7 +1325,6 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
               remoteState: 'up_to_date',
               serverError: null,
             },
-            chainTargetGeneration: state.chainTargetGeneration + 1,
             banner: null,
           };
         case 'divergence_needed':
@@ -1368,7 +1357,6 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       state.link && (!state.link.hasUnpushedEdits || state.link.unwound)
         ? {
             link: { ...state.link, hasUnpushedEdits: true, unwound: false },
-            chainTargetGeneration: state.chainTargetGeneration + 1,
           }
         : {},
     ),
@@ -1391,9 +1379,6 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
 
   clearPushFailedBanner: () =>
     set((state) => (state.banner?.kind === 'push_failed' ? { banner: null } : {})),
-
-  invalidateChainTargets: () =>
-    set((state) => ({ chainTargetGeneration: state.chainTargetGeneration + 1 })),
 
   dismissBanner: () => set({ banner: null }),
 }));

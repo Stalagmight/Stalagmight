@@ -26,8 +26,8 @@ use crate::core::AppState;
 use crate::speleodb::{
     DoneResult, PushResult, SpeleoDbAction, SpeleoErrorDto, SpeleoLinkStatus,
     SpeleoLocalProjectState, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectSummary,
-    SpeleoPublishParams, SpeleoPublishResult, SpeleoRevision, SpeleoRewindTarget,
-    SpeleoSessionStatus, SpeleoUnwindTarget, StartEditingResult, UpdateResult,
+    SpeleoPublishParams, SpeleoPublishResult, SpeleoRevision, SpeleoSessionStatus,
+    StartEditingResult, UpdateResult,
 };
 
 /// Run a blocking SpeleoDB orchestration call off the main thread. The
@@ -340,13 +340,15 @@ pub async fn speleodb_get_revisions(
 /// being a previous Unwind's own doing) are enforced in the backend, never trusted from
 /// here.
 ///
-/// `discard_unpushed` (#303) says the Unwind dialog raised its red warning and the user
-/// went ahead anyway - the copy holds un-pushed work that this swap replaces (typically
-/// edits the user undid, which sit on the redo stack). It is an acknowledgement, not a
-/// decision: `speleodb_unwind_target.discards_unpushed` is what tells the FE to warn, and
-/// the backend re-derives the same predicate before honouring this. Omitted or `false`,
-/// the guard refuses exactly as it did before, so nothing else that passes
-/// `keep_undo_history` can discard un-pushed work by accident.
+/// `discard_unpushed` (#303) says the caller warned the user and they went ahead anyway -
+/// the copy holds un-pushed work that this swap replaces (typically edits the user undid,
+/// which sit on the redo stack). It is an acknowledgement, not a decision: the backend
+/// re-derives the same predicate before honouring this. Omitted or `false`, the guard
+/// refuses exactly as it did before, so nothing else that passes `keep_undo_history` can
+/// discard un-pushed work by accident.
+///
+/// No frontend surface passes `keep_undo_history` since the Unwind/Rewind UI was removed
+/// (#668, #671); the backend keeps the path and its guards.
 #[tauri::command]
 pub async fn speleodb_restore_revision(
     app: AppHandle,
@@ -376,20 +378,6 @@ pub async fn speleodb_restore_revision(
         )
     })
     .await
-}
-
-/// [#303] Which revision the next "Unwind to previous SpeleoDB version" would load, or
-/// `None` when there is nothing left to reach (an empty repo, the root of the history, or
-/// a project whose undo history is not pushed at all).
-///
-/// Read-only and permission-free, like the revision list it reads. Costs one
-/// `GET /revisions/`, so the frontend asks when the undo dropdown opens rather than on
-/// every status refresh.
-#[tauri::command]
-pub async fn speleodb_unwind_target(
-    app: AppHandle,
-) -> Result<Option<SpeleoUnwindTarget>, SpeleoErrorDto> {
-    run_blocking(app, AppState::speleodb_unwind_target).await
 }
 
 /// [#303] Discard the local copy and return to the server tip.
@@ -425,23 +413,6 @@ pub async fn speleodb_discard_changes(
         s.speleodb_discard_changes(keep_lock, acknowledged)
     })
     .await
-}
-
-/// [#303] Which revision a "Redo into next SpeleoDB version" step would load, or `None`
-/// when there is nothing ahead: not mid-walk (the copy is already at BASE), already back
-/// at BASE, or a chain pointer that cannot be walked from.
-///
-/// That first case is also how an edit removes the direction - a forward command drops the
-/// chain pointer, so this stops resolving and the frontend hides the entry rather than
-/// offering a step that would discard the edit.
-///
-/// Same cost and same timing as its backward twin: one `GET /revisions/`, asked when the
-/// redo dropdown opens rather than on every status refresh.
-#[tauri::command]
-pub async fn speleodb_rewind_target(
-    app: AppHandle,
-) -> Result<Option<SpeleoRewindTarget>, SpeleoErrorDto> {
-    run_blocking(app, AppState::speleodb_rewind_target).await
 }
 
 /// Report whether the backend already holds a usable token (and for whom). The

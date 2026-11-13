@@ -176,6 +176,8 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.speleodb_take_remote",
     "command.speleodb_unlink",
     "command.speleodb_remove_link_at",
+    // Both retained for telemetry-ID stability; the commands were removed (#671). See
+    // REMOVED_COMMANDS.
     "command.speleodb_unwind_target",
     "command.speleodb_rewind_target",
     "command.speleodb_discard_changes",
@@ -292,6 +294,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "action.dialog.speleodb-unpushed-local",
     "action.dialog.speleodb-managed-file",
     "action.dialog.speleodb-restore",
+    // Retained for telemetry-ID stability; the dialog was removed (#671). See REMOVED_DIALOGS.
     "action.dialog.speleodb-unwind",
     "action.dialog.speleodb-unwound-push",
     "action.dialog.speleodb-discard-changes",

@@ -1754,17 +1754,7 @@
     "history": {
       "empty": "No {{mode}} actions.",
       "redo": "Redo history",
-      "undo": "Undo history",
-      "unwind": {
-        "label": "Unwind to previous SpeleoDB version",
-        "hint": "Load earlier edit history from the server",
-        "emptyWithUnwind": "Nothing left to undo in this session. Unwind below to load earlier history from SpeleoDB."
-      },
-      "rewind": {
-        "label": "Redo into next SpeleoDB version",
-        "hint": "Load the next version's edit history from the server",
-        "emptyWithRewind": "Nothing left to redo in this session. Step forward below to load the next version's history from SpeleoDB."
-      }
+      "undo": "Undo history"
     },
     "keyboardAction": "Keyboard action",
     "processing": "Processing...",
@@ -3485,24 +3475,6 @@
       "doneToast": "Restored to revision {{sha}}. Push to make it the latest.",
       "viewToast": "Viewing revision {{sha}}. Use Update to return to the latest.",
       "failed": "Could not restore the revision"
-    },
-    "unwind": {
-      "title": "Unwind to previous SpeleoDB version",
-      "bodyCurrent": "Load the edit history stored with revision {{sha}}. Your survey does not change - the operations that produced it come back, so you can keep undoing them one at a time.",
-      "bodyAncestor": "Check the survey out to revision {{sha}} and load the edit history stored with it, so you can keep undoing from there.",
-      "consequenceCurrent": "The history is downloaded from SpeleoDB. Anything you have not pushed is replaced by that revision.",
-      "consequenceAncestor": "This moves the survey back. SpeleoDB has no revert, so pushing afterwards records the older survey as a new revision rather than removing the newer ones.",
-      "confirmButton": "Unwind",
-      "loading": "Loading history...",
-      "failed": "Could not load the earlier history.",
-      "discardWarning": "This copy holds changes you have not pushed. Unwinding replaces it with revision {{sha}}, so those changes and the current edit history are discarded - including any steps you have undone but not yet redone."
-    },
-    "rewind": {
-      "title": "Redo into next SpeleoDB version",
-      "bodyNext": "Load the edit history stored with revision {{sha}}, the next version forward, so you can keep redoing from there.",
-      "bodyLatest": "Step forward to the latest version and load the edit history stored with it, returning this copy to where the walk started.",
-      "consequence": "The history is downloaded from SpeleoDB, replacing the version currently loaded. Nothing is lost: every step came from a revision the server still holds, so you can walk back again.",
-      "confirmButton": "Redo into next version"
     },
     "unwoundPush": {
       "title": "This copy is at an older version",

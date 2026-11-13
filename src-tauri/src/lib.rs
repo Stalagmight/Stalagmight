@@ -1875,9 +1875,7 @@ pub fn run() {
             // SpeleoDB revision-history read + restore (#218)
             commands::speleodb::speleodb_get_revisions,
             commands::speleodb::speleodb_restore_revision,
-            // SpeleoDB hybrid undo stack: the Unwind target + the per-project policy (#303)
-            commands::speleodb::speleodb_unwind_target,
-            commands::speleodb::speleodb_rewind_target,
+            // SpeleoDB hybrid undo stack: discard the local copy (#303)
             commands::speleodb::speleodb_discard_changes,
             // SpeleoDB Enable-rendering PATCH (#200)
             // SpeleoDB create-on-SDB publish (#207)

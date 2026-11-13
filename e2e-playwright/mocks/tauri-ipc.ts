@@ -6466,11 +6466,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'speleodb_release_lock_acquired_here':
           case 'speleodb_project_access_at':
           case 'speleodb_release_current_lock':
-          // [#303] Which revision a chain step would load, backward and forward. `null`
-          // by default - a mocked project has no revision history to walk - so neither
-          // dropdown shows its step entry unless a spec overrides this.
-          case 'speleodb_unwind_target':
-          case 'speleodb_rewind_target':
             return null;
           // [#303] Discard the local copy and re-lock. Mocked as a plain successful
           // acquire: the specs that reach it care that the app returns to an editing

@@ -17,6 +17,8 @@ const REMOVED_COMMANDS: &[&str] = &[
     "resolve_all_warnings",
     // SpeleoDB commands with no caller, removed in the dead-code cleanup (#670, #671).
     "speleodb_get_project_metadata",
+    "speleodb_unwind_target",
+    "speleodb_rewind_target",
 ];
 
 /// Dialog keys removed from `App.tsx` whose registry slots are likewise
@@ -37,6 +39,9 @@ const REMOVED_DIALOGS: &[&str] = &[
     // over whatever dialog raised it instead of evicting it from the slot.
     "speleodb-close",
     "speleodb-quit",
+    // The Unwind confirmation: nothing opened it once #668 removed the Unwind/Rewind
+    // controls, so it was deleted (#671).
+    "speleodb-unwind",
 ];
 
 /// `action.toggle.*` events that are intentionally NOT derived from

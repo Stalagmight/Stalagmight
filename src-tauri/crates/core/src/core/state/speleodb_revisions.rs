@@ -16,7 +16,7 @@ use super::speleodb_cache::{InheritedUndo, LocalEditsPolicy};
 use super::AppState;
 use crate::models::UndoMode;
 use crate::speleodb::contract::{dto_for_error, Endpoint};
-use crate::speleodb::models::{SpeleoRevision, SpeleoRewindTarget, SpeleoUnwindTarget};
+use crate::speleodb::models::{SpeleoRevision, SpeleoUnwindTarget};
 use crate::speleodb::{client, sync};
 use crate::speleodb::{SpeleoDbError, SpeleoErrorDto, SpeleoOpenResult};
 
@@ -81,14 +81,6 @@ fn downloaded_revision_undo_mode_with_limits(
         }
     }
     result
-}
-
-struct RewindCandidate {
-    target: SpeleoRewindTarget,
-    endpoint: String,
-    token: String,
-    insecure_http: bool,
-    project_id: String,
 }
 
 /// [#218] Validate a git commit SHA supplied over IPC (revision restore) before it
@@ -164,11 +156,10 @@ fn revision_swap_base(
 /// the undo stack no longer covers (edits the user undid, so they sit on the redo stack; a
 /// byte-budget trim; a legacy file), and the swap replaces all of it.
 ///
-/// One predicate, two readers - `speleodb_unwind_target` puts the answer on the DTO so the
-/// dialog can warn BEFORE the user commits, and `speleodb_guard_unwind` decides with it.
-/// Keeping them on the same function is what stops the warning and the refusal from
-/// drifting apart, which is how this surfaced: the entry offered an action that only ever
-/// failed.
+/// One predicate, two readers - `speleodb_unwind_target` puts the answer on the DTO, and
+/// `speleodb_guard_unwind` decides with it. Keeping them on the same function is what stops
+/// the warning flag and the refusal from drifting apart, which is how this surfaced: the
+/// (since removed) Unwind entry offered an action that only ever failed.
 fn unwind_discards_unpushed(has_unpushed_edits: bool, unwound_from: Option<&str>) -> bool {
     has_unpushed_edits && unwound_from.is_none()
 }
@@ -193,11 +184,11 @@ impl AppState {
     ///    refusal, on the grounds that un-pushed work "must not be discarded on the
     ///    strength of a waiver the user was never shown" - but the affordance is offered
     ///    exactly when the undo stack is empty, which is also what undoing everything
-    ///    produces, so the button existed only to fail. The waiver is now SHOWN: the DTO
-    ///    carries the same predicate, the dialog raises a red warning on it, and
-    ///    `discard_unpushed` is that dialog reporting it did. Absent the acknowledgement
-    ///    this still refuses, so no other caller can discard un-pushed work by passing
-    ///    `keep_undo_history` alone.
+    ///    produces, so the button existed only to fail. The waiver has to be SHOWN: the
+    ///    target DTO carries the same predicate, and `discard_unpushed` is the caller
+    ///    reporting that it warned the user. Absent the acknowledgement this still
+    ///    refuses, so no caller can discard un-pushed work by passing `keep_undo_history`
+    ///    alone.
     /// [#303] Is the revision being asked for actually the step the claimed direction
     /// leads to?
     ///
@@ -210,9 +201,9 @@ impl AppState {
     ///
     /// Rather than trust the flag, ask the resolver it names and require the requested
     /// `hexsha` to be what that resolver returns. A lie about direction fails because the
-    /// SHA will not match. Costs the same `GET /revisions/` the affordance already spent to
-    /// offer the step, and it is spent only on the `keep_undo_history` path - the one that
-    /// gets to keep a downloaded copy's history, and so the one that has to earn it.
+    /// SHA will not match. Costs one `GET /revisions/`, spent only on the
+    /// `keep_undo_history` path - the one that gets to keep a downloaded copy's history,
+    /// and so the one that has to earn it.
     ///
     /// Case-insensitive, like every other SHA comparison in this feature.
     fn speleodb_verify_chain_target(
@@ -222,7 +213,6 @@ impl AppState {
     ) -> Result<(), SpeleoErrorDto> {
         let expected = if chain_forward {
             self.speleodb_rewind_candidate()?
-                .map(|candidate| candidate.target.hexsha)
         } else {
             self.speleodb_unwind_target()?.map(|t| t.hexsha)
         };
@@ -393,16 +383,15 @@ impl AppState {
     /// working copy already equals.
     ///
     /// `None` when there is nothing to reach: no link, an empty repo, the root of the
-    /// history, or a chain pointer naming a commit outside the fetched range. The
-    /// frontend hides the affordance on `None` rather than offering a step that fails.
+    /// history, or a chain pointer naming a commit outside the fetched range.
     ///
-    /// Needs the revision topology, so it costs one `GET /revisions/`. Called when the
-    /// undo dropdown opens (and by the confirmation dialog), not on the status refresh.
+    /// Needs the revision topology, so it costs one `GET /revisions/`. Called only by
+    /// `speleodb_verify_chain_target`, for a history-keeping restore going back.
     pub fn speleodb_unwind_target(&self) -> Result<Option<SpeleoUnwindTarget>, SpeleoErrorDto> {
         let link = self.speleodb_validated_link()?;
         // Disabled mode never SHIPPED history, so there is nothing in those commits to
         // come back for. Older commits pushed while the project was Full still have it,
-        // but offering the affordance here would mostly find empty stacks.
+        // but offering the step here would mostly find empty stacks.
         if !self.undo_policy().pushes_history() {
             return Ok(None);
         }
@@ -413,7 +402,7 @@ impl AppState {
             .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
 
         let unwound_from = self.speleodb_unwound_from();
-        // The same predicate the guard decides with, so the dialog's red warning and the
+        // The same predicate the guard decides with, so the warning flag and the
         // backend's refusal can never disagree about this copy.
         let discards_unpushed =
             unwind_discards_unpushed(link.has_unpushed_edits, unwound_from.as_deref());
@@ -430,9 +419,10 @@ impl AppState {
         }))
     }
 
-    /// Resolve the topology-only forward candidate while keeping the authenticated
-    /// request context that the public target query needs to inspect its policy.
-    fn speleodb_rewind_candidate(&self) -> Result<Option<RewindCandidate>, SpeleoErrorDto> {
+    /// [#303] Which revision a FORWARD chain step would check out, walking back up toward
+    /// BASE: topology only, from one `GET /revisions/`. The caller re-checks the child's
+    /// own undo policy after downloading it (`speleodb_restore_revision`).
+    fn speleodb_rewind_candidate(&self) -> Result<Option<String>, SpeleoErrorDto> {
         let link = self.speleodb_validated_link()?;
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
@@ -444,54 +434,9 @@ impl AppState {
             link.base_commit_sha.as_deref(),
             &commits,
         )
-        .map(|(hexsha, is_latest)| RewindCandidate {
-            target: SpeleoRewindTarget { hexsha, is_latest },
-            endpoint,
-            token,
-            insecure_http,
-            project_id: link.project_id,
-        }))
+        .map(|(hexsha, _is_latest)| hexsha))
     }
 
-    /// [#303] Which revision a forward chain step would load, and whether that step returns
-    /// the copy to the latest version.
-    ///
-    /// `None` whenever there is nothing ahead: not mid-walk (so the copy is already at
-    /// BASE), already home, a chain pointer that cannot be walked from, or a target child
-    /// whose policy did not publish undo history. The first of those is what makes an edit
-    /// remove this direction - a forward command drops the pointer, so the target stops
-    /// resolving and the frontend hides the entry rather than offering a step that would
-    /// discard the edit.
-    ///
-    /// Costs one `GET /revisions/` plus one download of the resolved child. The revisions
-    /// API does not carry undo policy, and the CHILD'S mode is the answer: that is the
-    /// revision whose history a forward step loads, regardless of the mode in the older
-    /// copy currently open.
-    pub fn speleodb_rewind_target(&self) -> Result<Option<SpeleoRewindTarget>, SpeleoErrorDto> {
-        let Some(candidate) = self.speleodb_rewind_candidate()? else {
-            return Ok(None);
-        };
-
-        let native = self
-            .speleodb_handle_auth(
-                Endpoint::DownloadStalx,
-                client::download_stalx_at_hash(
-                    &candidate.endpoint,
-                    &candidate.token,
-                    candidate.insecure_http,
-                    &candidate.project_id,
-                    &candidate.target.hexsha,
-                ),
-            )
-            .map_err(|e| dto_for_error(Endpoint::DownloadStalx, &e))?;
-        let scratch_base = self
-            .speleodb_cache_path(&candidate.project_id)
-            .map_err(local_dto)?;
-        let target_mode =
-            downloaded_revision_undo_mode(native.path(), &scratch_base).map_err(local_dto)?;
-
-        Ok(target_mode.pushes_history().then_some(candidate.target))
-    }
     /// [#218] The project's revision history for the read-only history view:
     /// `GET /projects/{id}/revisions/`, projected to [`SpeleoRevision`] DTOs (no
     /// token, only the display fields). Takes an arbitrary project id (a GlobalView
@@ -940,8 +885,8 @@ mod tests {
         );
         assert!(
             body.contains("unwind_discards_unpushed("),
-            "the guard must decide with the SAME predicate the DTO reports, or the dialog's \
-             warning and the refusal can drift apart"
+            "the guard must decide with the SAME predicate the DTO reports, or the warning \
+             flag and the refusal can drift apart"
         );
         // The acknowledgement gates that refusal and nothing else: dropping the `!` would
         // let any `keep_undo_history` caller discard un-pushed work silently, which is the
@@ -952,26 +897,12 @@ mod tests {
         );
     }
 
-    /// The target query and the destructive swap both enforce the same child-policy
-    /// rule. The first keeps a useless forward action out of the UI; the second stops a
-    /// stale or direct IPC call before it replaces the working copy.
+    /// The destructive swap enforces the child-policy rule: a forward step re-checks the
+    /// downloaded child revision's own undo policy, which stops a stale or direct IPC call
+    /// before it replaces the working copy.
     #[test]
     fn forward_chain_steps_are_gated_by_the_downloaded_child_policy() {
         let src = prod_source();
-        let target = src
-            .split_once("pub fn speleodb_rewind_target")
-            .map(|(_, rest)| rest)
-            .and_then(|rest| rest.split("\n    /// ").next())
-            .expect("rewind target body precedes the next item");
-        assert!(
-            target.contains("downloaded_revision_undo_mode("),
-            "the affordance must inspect the child revision's own undo policy"
-        );
-        assert!(
-            !target.contains("self.undo_policy()"),
-            "the currently open parent policy cannot decide whether the child shipped history"
-        );
-
         let restore = src
             .split_once("pub fn speleodb_restore_revision")
             .map(|(_, rest)| rest)

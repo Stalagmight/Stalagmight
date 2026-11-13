@@ -785,6 +785,11 @@ moves to these rules plus the one explicit route below.
 
 ### Unwind: undoing past a commit
 
+> **No UI.** #668 removed the Unwind / Redo-into-next-version entries, and #671 removed
+> the target commands and the confirmation dialog that only they opened. What is left is
+> the backend path: `speleodb_restore_revision` with `keep_undo_history: true` still
+> enforces every rule in this section, but no frontend surface sends that flag.
+
 `sync::unwind_target` walks BASE first, then first-parents:
 
 1. After a push the working copy IS the new commit and its history was just cleared
@@ -814,14 +819,15 @@ undo stack is empty, which is also what undoing everything produces, and that le
 copy dirty with the undone steps on the redo stack. A flat refusal there meant the app
 offered a button whose only outcome was an error. So `unwind_discards_unpushed` (one
 predicate, two readers) both fills `SpeleoUnwindTarget.discards_unpushed` and decides the
-guard: the confirmation raises a red warning on the flag when it OPENS, naming the survey
-changes as well as the history (a copy can be dirty for reasons no undo explains - a
-byte-budget trim, a legacy file - and there content really is replaced), and confirming
-sends `discard_unpushed` back. Without that acknowledgement the guard refuses exactly as
-before, so no other `keep_undo_history` caller can discard un-pushed work by accident.
+guard: the (since removed) confirmation raised a red warning on the flag when it OPENED,
+naming the survey changes as well as the history (a copy can be dirty for reasons no undo
+explains - a byte-budget trim, a legacy file - and there content really is replaced), and
+confirming sent `discard_unpushed` back. Without that acknowledgement the guard refuses
+exactly as before, so no `keep_undo_history` caller can discard un-pushed work by accident.
 
-The frontend offers it as one entry pinned below the undo history list, and clicking it
-opens a confirmation rather than acting. Undo / Ctrl+Z on an empty stack still do nothing.
+Until #668 the frontend offered it as one entry pinned below the undo history list, and
+clicking it opened a confirmation rather than acting. Undo / Ctrl+Z on an empty stack still
+do nothing.
 
 ### ...and forward again
 
@@ -835,8 +841,9 @@ directions. It is the same `speleodb_restore_revision` with the same
 current position, never by scanning for "any commit whose parent is here" - an abandoned
 line can share a parent, and `authored_date` cannot break that tie. BASE is the end of the
 line: past it lies another session's push, and adopting that is an Update, not a step
-through our own history. Landing on BASE is reported as `is_latest` so the confirmation can
-say "return to the latest version" rather than name a sha.
+through our own history. `sync::rewind_target` still reports landing on BASE as
+`is_latest`; the removed confirmation used it to say "return to the latest version" rather
+than name a sha.
 
 **Which stack must be empty.** Backward it is the undo stack (everything undone, so the
 tree sits at the parent's state). Forward it is the **redo** stack: every operation of the
@@ -847,12 +854,12 @@ silently drop the operations still parked on the other stack.
 
 **An edit ends the forward direction, with no code of its own.** A forward step is only
 defined relative to the chain pointer, and a forward command drops it (above), so after an
-edit `speleodb_rewind_target` returns `None` and the entry disappears rather than offering
-to discard that work. The backward direction stays available - it just re-warns first,
-because the pointer no longer excuses the dirty bit.
+edit the forward candidate no longer resolves and a forward step is refused rather than
+discarding that work. The backward direction stays available - it just needs the
+acknowledgement first, because the pointer no longer excuses the dirty bit.
 
-`SpeleoRewindTarget` deliberately carries no `discards_unpushed`: a forward step requires a
-pointer, and the predicate is false whenever one exists, so the field could only ever be a
+The forward direction deliberately has no `discards_unpushed`: a forward step requires a
+pointer, and the predicate is false whenever one exists, so the flag could only ever be a
 constant `false` - a dead warning that would read as though the case had been considered
 and could fire.
 
@@ -994,7 +1001,6 @@ For batch commands, `derive_command_details()` extracts a compact detail string 
 | `src-tauri/crates/models/src/undo_mode.rs` | `UndoMode`, `UndoPolicy` |
 | `src-tauri/crates/speleodb/src/speleodb/sync.rs` | `unwind_target` - the BASE-then-first-parents chain |
 | `src-tauri/crates/core/src/core/state/speleodb_cache.rs` | `InheritedUndo` and the drop-on-adopt chokepoint |
-| `src/components/Dialogs/SpeleoUnwindDialog.tsx` | The Unwind confirmation |
 | `src-tauri/crates/core/src/core/state/undo_policy.rs` | Persisted policy loading and effective undo limits |
 | `src-tauri/crates/core/src/core/state/commands.rs` | `execute()`, `execute_batch()` |
 | `src-tauri/crates/core/src/core/state/undo_capture.rs` | `generate_undo_data()`, `finalize_undo_data()`, `is_undoable()` |

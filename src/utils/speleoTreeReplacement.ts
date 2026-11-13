@@ -69,7 +69,6 @@ export async function applySpeleoTreeReplacement(
     }
     await useSpeleoStore.getState().refreshLinkStatus();
     if (issuedFor && !speleoProjectSessionStillCurrent(issuedFor)) return false;
-    useSpeleoStore.getState().invalidateChainTargets();
     return true;
   });
 }
