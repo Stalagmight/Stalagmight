@@ -174,6 +174,46 @@ test.describe('Combine Sections', () => {
     expect(call).toMatchObject({ kept: a!.id, other: c!.id });
   });
 
+  test('combines two sections in a loop at their loop closure, listing the merge that becomes a closure', async ({ page }) => {
+    const [east, west] = await seed(page, [
+      { name: 'East', count: 2 },
+      { name: 'West', count: 2 },
+    ]);
+    // West's end is merged to East's start; East's end and West's start
+    // close the loop with a loop closure.
+    await merge(page, { section_id: east!.id, station_index: 0 }, { section_id: west!.id, station_index: 2 });
+    const closed = await page.evaluate(
+      ({ a, b }) => (window as any).__E2E_TEST__.projectStore.getState().createLoopClosure(a, b, 'Batch'),
+      { a: { section_id: east!.id, station_index: 2 }, b: { section_id: west!.id, station_index: 0 } }
+    );
+    expect(closed).toMatchObject({ success: true });
+
+    await openContextMenu(page, { type: 'station', ref: { section_id: east!.id, station_index: 2 } });
+    const item = page.getByRole('button', { name: 'Combine Sections...' });
+    await expect(item).toBeEnabled();
+    await expect(item).toContainText('With West, across a loop closure');
+    await item.click();
+
+    await expect(page.getByTestId('combine-closure-join')).toContainText('East and West meet here across a loop closure');
+    await expect(page.getByTestId('combine-note-torn')).toContainText('This connection becomes a loop closure:');
+    await expect(page.getByTestId('combine-torn-tie')).toHaveCount(1);
+    await expect(page.getByTestId('combine-torn-tie')).toContainText('The merge of');
+    await page.getByTestId('combine-confirm').click();
+    await waitForNoDialogs(page);
+
+    const call = await page.evaluate(() => {
+      const calls = ((window as any).__MOCK_COMBINE_SECTIONS_CALLS__ ?? []) as Array<any>;
+      return calls[calls.length - 1] ?? null;
+    });
+    expect(call).toMatchObject({ kept: east!.id, other: west!.id, options: { join: { kept: 'end', other: 'start' } } });
+    expect(await sectionShape(page)).toEqual([['East', 4]]);
+    const ties = await page.evaluate(() => {
+      const project = (window as any).__E2E_TEST__.projectStore.getState().project;
+      return { merges: project.station_merges.length, closures: project.loop_closures.length };
+    });
+    expect(ties).toEqual({ merges: 0, closures: 1 });
+  });
+
   test('keeps its row, disabled, where no other section ends; none on a mid station', async ({ page }) => {
     const [main] = await seed(page, [{ name: 'Main', count: 3 }]);
     await openContextMenu(page, { type: 'station', ref: { section_id: main!.id, station_index: 3 } });
