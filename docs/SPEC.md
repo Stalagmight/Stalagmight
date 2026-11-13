@@ -588,10 +588,13 @@ User Action → Command Dispatcher → Tauri IPC → Rust Executor
 
 ### 6.1 Workspace Modes
 
-An open project is worked in one of three top-level workspace modes, chosen from
-the `ModeCarousel` in the middle of the toolbar (`uiStore.appMode`): **Survey**,
-**Plan**, **Export**. Survey is the editable workspace. Plan and Export force the
-read-only Closures Computed View (on a project with no eligible closures the
+An open project is worked in one of three top-level workspace modes
+(`uiStore.appMode`): **Survey** and **Plan**, chosen from the `ModeCarousel` in
+the middle of the toolbar, and **Export**, which is not in the carousel: the
+project menu and Ctrl+E enter it, and "Close export" returns to the mode it was
+entered from (see [Export Workspace](#export-workspace-exportpaneltsx)). Survey
+is the editable workspace. Plan and Export force the read-only Closures Computed
+View (on a project with no eligible closures the
 geometry falls back to the Raw Data View; the modes are read-only regardless - gating keys
 off `appMode`, not the geometry), so the Sections tab and every
 geometry-mutating tool are Survey-only. Linked projects retain the SpeleoDB left
@@ -600,9 +603,9 @@ available in all three.
 
 Plan is dive and gas planning: the gas reach field over the survey, route and
 turnaround points, and the plan tables, persisted to a `.plnx` sidecar beside the
-project file. Export is the WYSIWYG map export: the right dock hosts the export
-controls and the map area previews what will be written. Both swap the dock
-contents in `SingleSystemView`; the map itself is the same map.
+project file. Export is the WYSIWYG map and data export: the right dock hosts the
+export controls and the map area previews what will be written. Both swap the
+dock contents in `SingleSystemView`; the map itself is the same map.
 
 ### 6.2 Application Views
 
@@ -1365,30 +1368,50 @@ Shown when creating a loop closure between two **connected** stations.
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-#### Export Dialog
+#### Export Workspace (ExportPanel.tsx)
+
+Export is a workspace, not a dialog, and it is not in the mode switcher. It is
+entered from any mode in the switcher by the project menu's **Export** row or
+Ctrl+E, and it remembers that mode (`uiStore.exportReturnMode`).
 
 ```
-┌─ Export ─────────────────────────────────────────────────────────┐
-│                                                                  │
-│  Export Type: [Map Image ▼]                                     │
-│    • Map Image (PNG, SVG, PDF)                                  │
-│    • Survey Data (CSV, JSON, TML)                               │
-│                                                                  │
-│  Format: [PNG ▼]                                                │
-│                                                                  │
-│  Options:                                                        │
-│    [ ] Include station comments                                 │
-│    [ ] Include shot comments                                    │
-│    [ ] Include station IDs                                      │
-│    [ ] Include station names                                    │
-│    [ ] Include section names                                    │
-│    [ ] Include shot data (azimuth, length, depth)               │
-│                                                                  │
-│  Resolution: [High (300 DPI) ▼]                                 │
-│                                                                  │
-│  [ Cancel ]                                      [ Export ]      │
-└──────────────────────────────────────────────────────────────────┘
+┌─ Toolbar ────────────────────────────────────────────────────────────────┐
+│ [≡] [‹ Close export]          [ Survey | Plan ]             [Select] ... │
+└──────────────────────────────────────────────────────────────────────────┘
+┌─ Map area ─────────────────────────────────────┐┌─ Export ──────────[×]─┐
+│                                                ││ Export Type           │
+│                                                ││ (•) Map Image         │
+│        Live preview of the image export        ││ ( ) Survey Data       │
+│        (exactly what will be written;          ││                       │
+│         the map shows through for a            ││ Format: [PNG ▼]       │
+│         data export)                           ││ Resolution: [300 ▼]   │
+│                                                ││ Line-weight threshold │
+│                                                ││ > Comments & Labels   │
+│                                                ││                       │
+│                                                ││ [       Export      ] │
+└────────────────────────────────────────────────┘└───────────────────────┘
 ```
+
+- **Defaults.** The workspace opens on the image export (PNG, 300 DPI) so the
+  preview shows at once. **Survey Data** is one click away and preselects CSV
+  (JSON and TML are the other data formats). The options belong to the open
+  project and reset when another project opens.
+- **Export** asks for a file name, writes the file, and leaves the workspace
+  open for the next export. A cancelled file picker writes nothing. A failed
+  export raises an error toast. An image export shows its progress and disables
+  the button meanwhile. A TML export with unanchored sections shows the
+  "not georeferenced" notice first.
+- **Leaving.** Every way out returns to the mode Export was entered from (Survey
+  when none is known):
+  - the toolbar's **Close export** button, in the slot Import has in Survey
+    (Import and Undo/Redo are hidden in Export);
+  - the close button in the Export panel header;
+  - the project menu row, which reads **Close export** inside Export;
+  - Ctrl+E again;
+  - Escape, once there is no dialog, open list, selection or measurement left
+    for it to clear first.
+- **Gates.** Ctrl+E does nothing behind an open dialog, during placement, in the
+  fullscreen data table, or with no project open.
 
 ---
 
@@ -2711,11 +2734,11 @@ not live co-editing), and floating/dockable panels.
 | Save | Ctrl+S |
 | Save As | Ctrl+Shift+S |
 | Import | Ctrl+I (configurable) |
-| Export | Ctrl+E (configurable) |
+| Export workspace: enter / close | Ctrl+E (configurable) |
 | Quit | Ctrl+Q |
 | Delete Selected | Delete / Backspace |
 | Select All | Ctrl+A |
-| Deselect | Escape |
+| Deselect (then close the Export workspace) | Escape |
 | Zoom In | + / = |
 | Zoom Out | - |
 | Fit to View | F |

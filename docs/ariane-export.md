@@ -368,7 +368,7 @@ dropped or capped.
 | Export command | `src-tauri/src/commands/export.rs` | `export_tml` IPC handler |
 | SpeleoDB sidecar | `src-tauri/crates/core/src/core/state/speleodb_push.rs` | `speleodb_render_tml` renders the co-push sidecar via `export_tml_for_speleodb` |
 | Store method | `src/store/projectStore.ts` | `exportTml()` frontend binding |
-| Export dialog | `src/components/Dialogs/ExportDialog.tsx` | UI with TML format option |
+| Export workspace | `src/components/SingleSystemView/ExportPanel.tsx`, `src/components/Dialogs/ExportControls.tsx` | UI with the TML format option (Survey Data -> TML) and the unanchored-sections notice |
 
 ## Limitations
 
