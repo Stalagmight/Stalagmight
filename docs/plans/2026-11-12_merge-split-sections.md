@@ -16,9 +16,10 @@ the inverse of a split, at a junction too. Both are one undo step.
   station. The behaviour is #710's (see `project/split_section.rs`): merges,
   name and offset go to both copies, the loop closures stay on the first half,
   and the user picks the half for the comment and the zero datum.
-- **Combine Sections.** Right-click an end station where another section ends,
-  or select exactly two sections in the Sections panel, then choose Combine
-  Sections. The dialog shows a summary, a kept-section swap, the name (`X-A` +
+- **Combine Sections.** Right-click an end station where another section ends
+  and pick the partner in the **Combine Section With...** submenu, or select
+  exactly two sections in the Sections panel and choose Combine 2 Sections. The
+  dialog shows a summary, a kept-section swap, the name (`X-A` +
   `X-B` gives `X`) and the colour. It warns that the other section will be
   reversed, with a swap-L/R checkbox. It asks about the join comment and name
   only when they conflict, notes the direction, and summarises the combined
@@ -61,9 +62,10 @@ station query (`combine_candidates(station)`) lists every other section with an
 end at the point (merged, co-located, or across a closure from it), each joined
 at the clicked end. The dialog sends that join (`CombineSectionsOptions::join`)
 and the command re-checks exactly it, so the station menu, the Sections panel
-and the command always agree. At a
-junction (more than one partner) the menu opens the dialog on a picker: each
-partner with its name and shot count, enabled or disabled with its own reason.
+and the command always agree. The station menu's **Combine Section With...**
+row opens a submenu with every partner (2026-11-13, at review: the picker used
+to be in the dialog): its name, shot count and how it meets, enabled or
+disabled with its own reason; picking one opens the dialog on that pair.
 Past `MAX_COMBINE_PARTNERS` (16) other ends the point is a pile (unplaced
 sections all start at the origin), not a junction to pick from; the menu points
 to the Sections panel, which combines any two.

@@ -963,8 +963,9 @@ There is no Draw or Delete tool. Shots are added from the map context menu:
 any shot, which splits it in two (also available from the data table's row
 menu). Deletion is select plus Delete/Backspace, or the context menu. The same
 menu restructures sections without deleting anything: **Split Section Here** on
-a mid-section station or a point along a shot, and **Combine Sections...** on an
-end station where another section ends (see 7.11).
+a mid-section station or a point along a shot, and **Combine Section With...**
+on an end station where another section ends, a submenu of every section ending
+there (see 7.11).
 
 Panning is not a tool either. A plain left-click-drag pans the map under every
 tool in the table except **Zoom**, whose drag draws its zoom box, and in
@@ -1648,8 +1649,9 @@ only tie, which the split turns into a merge (a closure must close a loop),
 moving one half by the loop's misclosure; the dialog says which half moves and
 how far before the user confirms (`split_section_preview`). One undo step.
 
-**Combine Sections** (an end station's context menu, or the section menu when
-exactly two sections are selected): the two chosen sections meet end to end and
+**Combine Sections** (an end station's context menu, **Combine Section
+With...**, or the section menu when exactly two sections are selected): the two
+chosen sections meet end to end and
 become one; other sections there stay attached as branches. They meet when an
 end station of each is the same point: in one merge group; unmerged and
 co-located within 1 mm horizontally (the state a split leaves); or tied by a
@@ -1657,10 +1659,11 @@ loop closure, the survey's own statement that the two are one point, apart by
 the loop's misclosure. Another section's end merged there stays merged to the
 joined station, now a station in the middle of the combined section; a section
 merged there at a station in its middle stays merged too (a crossing); one
-ending there unmerged is left as it is, and the dialog says so. At a junction
-the station menu opens the dialog on a picker listing every partner (name, shot
-count, and "across a loop closure" for a closure join), each enabled or
-disabled with its own reason. Two sections that meet at more than one end (a
+ending there unmerged is left as it is, and the dialog says so. The station
+menu's row opens a submenu listing every section that ends there (name, shot
+count, and how it meets: merged, side by side, or across a loop closure), each
+enabled or disabled with its own reason; picking one opens the dialog on that
+pair. Two sections that meet at more than one end (a
 loop of two) join at the end the station menu was opened on; the Sections panel
 picks a merge first, then co-located ends, then a closure. The kept section (the
 lower id by default; the dialog can swap) keeps its id, shot numbers, direction

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { useUIStore } from '../../store/uiStore';
@@ -12,7 +12,6 @@ import { getDeleteShotDialog } from '../../utils/contextMenuHelpers';
 import { canSplitShot } from '../../utils/shotSplit';
 import {
   combinePreview,
-  combinePreviewAll,
   queryCombineCandidates,
   queryCombineCandidateForSections,
 } from '../../utils/combineSections';
@@ -21,6 +20,7 @@ import { formatShotId, formatStationIdWithName } from '../../utils/formatters';
 import { setSource, trackContextMenuAction, trackDialogComplete } from '../../utils/telemetry';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { MENU_ROW_HEIGHT_PX, MENU_ROW_HINT_HEIGHT_PX, MenuRow, MenuSeparator } from './MenuRow';
+import { ChevronRightIcon } from './icons';
 
 /** The widest the menu grows; a hint line wraps within it. */
 const MENU_MAX_WIDTH_PX = 288;
@@ -51,6 +51,9 @@ import {
 interface ContextMenuItem {
   label: string;
   action: () => void;
+  /** Rows of a flyout opened from this row (on hover, or a click), in place of
+   *  `action`. One level only. */
+  submenu?: ContextMenuItem[];
   /** Leading action icon, shown at the Icons+ highlighting level. */
   icon?: ReactNode;
   disabled?: boolean;
@@ -203,6 +206,29 @@ export default function ContextMenu() {
     return null;
   })();
   const [combineAnswer, setCombineAnswer] = useState<{ key: string; candidates: CombineCandidate[] } | null>(null);
+  // The open submenu: the row it hangs off (by index) and that row's rect.
+  // Measured first while hidden, then placed beside the row (`submenuPos`).
+  const [submenuOf, setSubmenuOf] = useState<{ index: number; left: number; right: number; top: number } | null>(
+    null
+  );
+  const [submenuPos, setSubmenuPos] = useState<{ left: number; top: number; maxHeight: number } | null>(null);
+  const submenuRef = useRef<HTMLDivElement>(null);
+  // Beside its row on the right; flipped left when it would leave the window,
+  // and lifted so its bottom stays on screen (it scrolls past the window).
+  useLayoutEffect(() => {
+    if (!submenuOf) {
+      setSubmenuPos(null);
+      return;
+    }
+    const el = submenuRef.current;
+    if (!el) return;
+    const { width, height } = el.getBoundingClientRect();
+    let left = submenuOf.right - 2;
+    if (left + width > window.innerWidth - 4) left = Math.max(4, submenuOf.left - width + 2);
+    const maxHeight = window.innerHeight - 8;
+    const top = Math.max(4, Math.min(submenuOf.top - 4, window.innerHeight - 4 - Math.min(height, maxHeight)));
+    setSubmenuPos({ left, top, maxHeight });
+  }, [submenuOf]);
   useEffect(() => {
     if (!combineKey) return;
     let live = true;
@@ -252,47 +278,56 @@ export default function ContextMenu() {
     // Refused outright, or neither section can be the kept one.
     const blockedOf = (c: CombineCandidate) =>
       c.blocked_reason ?? (c.blocked_keeping_a && c.blocked_keeping_b ? c.blocked_keeping_a : null);
-    if (combineCandidates.length > 1) {
-      // A junction: the dialog opens on a picker listing every partner, each
-      // with its own reason when it cannot be combined.
-      const open = combineCandidates.filter((c) => blockedOf(c) === null).length;
-      const count = combineCandidates.length;
+    const name = (id: SectionId) => project?.sections.find((s) => s.id === id)?.name?.trim() || `Section ${id}`;
+    const open = (c: CombineCandidate) => () => {
+      openDialog('combine-sections', { candidate: c, preview: combinePreview(c) });
+    };
+    if (combineKey.startsWith('sections')) {
+      const { section_a: a, section_b: b } = combineCandidate;
+      const across = combineCandidate.join_kind === 'closure' ? ', across a loop closure' : '';
+      const blocked = blockedOf(combineCandidate);
       return [
         {
           label,
-          action: () => {
-            openDialog('combine-sections', {
-              candidates: combineCandidates,
-              preview: combinePreviewAll(combineCandidates),
-            });
-          },
-          disabled: open === 0,
-          hint:
-            open === 0
-              ? `None of the ${count} sections ending here can be combined`
-              : `${count} sections end here: choose which one`,
+          action: open(combineCandidate),
+          disabled: blocked !== null,
+          hint: blocked ?? `${name(a)} and ${name(b)} meet end to end${across}`,
         },
       ];
     }
-    const blocked = blockedOf(combineCandidate);
-    const name = (id: SectionId) => project?.sections.find((s) => s.id === id)?.name?.trim() || `Section ${id}`;
-    const { section_a: a, section_b: b } = combineCandidate;
-    const clicked = combineKey.startsWith('station') ? Number(combineKey.split(':')[1]) : null;
-    // The enabled row says what it joins, so the row's height never depends on
-    // the answer.
-    const across = combineCandidate.join_kind === 'closure' ? ', across a loop closure' : '';
-    const joins =
-      clicked === null
-        ? `${name(a)} and ${name(b)} meet end to end${across}`
-        : `With ${name(clicked === a ? b : a)}${across}`;
+    // A station: the row opens a submenu with every section ending there, each
+    // opening the dialog for that pair, or disabled with its own reason.
+    const clicked = Number(combineKey.split(':')[1]);
+    const partnerOf = (c: CombineCandidate) => (c.section_a === clicked ? c.section_b : c.section_a);
+    const shotsOf = (c: CombineCandidate) => (c.section_a === clicked ? c.shot_count_b : c.shot_count_a);
+    const howTheyMeet = (c: CombineCandidate) =>
+      c.join_kind === 'closure' ? 'Across a loop closure' : c.join_kind === 'merged' ? 'Merged here' : 'Side by side here';
+    const partners: ContextMenuItem[] = combineCandidates.map((c) => ({
+      label: `${name(partnerOf(c))} (${shotsOf(c)} ${shotsOf(c) === 1 ? 'shot' : 'shots'})`,
+      action: open(c),
+      disabled: blockedOf(c) !== null,
+      hint: blockedOf(c) ?? howTheyMeet(c),
+    }));
+    const openCount = partners.filter((p) => !p.disabled).length;
+    const count = combineCandidates.length;
+    // The row keeps its hint line, so its height never depends on the answer.
+    const summary =
+      count === 1
+        ? (blockedOf(combineCandidate) ?? `With ${name(partnerOf(combineCandidate))}${
+            combineCandidate.join_kind === 'closure' ? ', across a loop closure' : ''
+          }`)
+        : openCount === 0
+          ? `None of the ${count} sections ending here can be combined`
+          : `${count} sections end here`;
     return [
       {
         label,
-        action: () => {
-          openDialog('combine-sections', { candidate: combineCandidate, preview: combinePreview(combineCandidate) });
-        },
-        disabled: blocked !== null,
-        hint: blocked ?? joins,
+        action: () => {},
+        // A lone partner that is refused has nothing to pick; a junction keeps
+        // its submenu so every partner's reason stays readable.
+        disabled: count === 1 && openCount === 0,
+        hint: summary,
+        submenu: partners,
       },
     ];
   };
@@ -338,7 +373,7 @@ export default function ContextMenu() {
   useDismissableLayer({
     open: true,
     onDismiss: closeDialog,
-    contains: [menuRef],
+    contains: [menuRef, submenuRef],
     anchorScope: scrollScopeRef,
     // Only a caller that has NAMED the scroller which moves this menu can be
     // trusted to survive an unrelated one. Without a scrollScope the menu is
@@ -566,7 +601,7 @@ export default function ContextMenu() {
         },
       });
       items.push({ label: '', action: () => {}, separator: true });
-      items.push(...combineItems('Combine Sections...'));
+      items.push(...combineItems('Combine Section With...'));
       if (!isFirstStation && !isLastStation) {
         items.push({
           label: 'Split Section Here',
@@ -952,11 +987,13 @@ export default function ContextMenu() {
     // read-only navigation like "Zoom to Section"). Edits are made on the measured view.
     const geometryReadOnly = geometryMode === 'closureAdjusted' || speleoReadOnly;
     const READ_ONLY_SAFE_LABELS = new Set(['Zoom to Section']);
+    const gate = (item: ContextMenuItem): ContextMenuItem =>
+      geometryReadOnly && !item.separator && !READ_ONLY_SAFE_LABELS.has(item.label)
+        ? { ...item, disabled: true }
+        : item;
     items = buildMenuItems().map((item) => {
       const withIcon = item.separator ? item : { ...item, icon: iconForLabel(item.label) };
-      return geometryReadOnly && !item.separator && !READ_ONLY_SAFE_LABELS.has(item.label)
-        ? { ...withIcon, disabled: true }
-        : withIcon;
+      return gate(item.submenu ? { ...withIcon, submenu: item.submenu.map(gate) } : withIcon);
     });
   }
 
@@ -991,11 +1028,35 @@ export default function ContextMenu() {
             return <MenuSeparator key={index} />;
           }
 
+          const hasSubmenu = item.submenu !== undefined;
+          const expanded = submenuOf?.index === index;
+          const openSubmenuFrom = (row: HTMLElement) => {
+            const r = row.getBoundingClientRect();
+            setSubmenuOf({ index, left: r.left, right: r.right, top: r.top });
+          };
           return (
             <MenuRow
               key={index}
               data-testid={`context-menu-item-${index}`}
-              onClick={() => { setSource('context-menu'); item.action(); }}
+              onClick={(e) => {
+                if (hasSubmenu) {
+                  if (item.disabled) return;
+                  if (expanded) setSubmenuOf(null);
+                  else openSubmenuFrom(e.currentTarget);
+                  return;
+                }
+                setSource('context-menu');
+                item.action();
+              }}
+              onMouseEnter={(e) => {
+                if (hasSubmenu && !item.disabled) {
+                  if (!expanded) openSubmenuFrom(e.currentTarget);
+                } else if (submenuOf) {
+                  setSubmenuOf(null);
+                }
+              }}
+              aria-haspopup={hasSubmenu ? 'menu' : undefined}
+              aria-expanded={hasSubmenu ? expanded : undefined}
               disabled={item.disabled}
               title={item.hint}
               hint={item.hint}
@@ -1003,12 +1064,44 @@ export default function ContextMenu() {
               icon={item.icon}
               showIcons={showIcons}
               className={`${item.disabled ? 'text-text-secondary cursor-not-allowed' : 'hover:bg-accent-10'} ${
-                item.danger && !item.disabled ? 'text-error hover:bg-error-10' : ''
-              }`}
-            />
+                expanded ? 'bg-accent-10' : ''
+              } ${item.danger && !item.disabled ? 'text-error hover:bg-error-10' : ''}`}
+            >
+              {hasSubmenu && <ChevronRightIcon size={14} className="text-text-secondary flex-shrink-0" />}
+            </MenuRow>
           );
         })}
       </div>
+      {submenuOf && items[submenuOf.index]?.submenu && (
+        <div
+          ref={submenuRef}
+          role="menu"
+          className="fixed bg-panel border border-border rounded-lg shadow-xl py-1 min-w-[180px] overflow-y-auto"
+          data-testid="context-menu-submenu"
+          style={
+            submenuPos
+              ? { left: submenuPos.left, top: submenuPos.top, maxHeight: submenuPos.maxHeight, maxWidth: MENU_MAX_WIDTH_PX }
+              : { left: submenuOf.right, top: submenuOf.top, maxWidth: MENU_MAX_WIDTH_PX, visibility: 'hidden' }
+          }
+        >
+          {items[submenuOf.index]!.submenu!.map((sub, subIndex) => (
+            <MenuRow
+              key={subIndex}
+              data-testid={`context-menu-subitem-${subIndex}`}
+              onClick={() => {
+                setSource('context-menu');
+                sub.action();
+              }}
+              disabled={sub.disabled}
+              title={sub.hint}
+              hint={sub.hint}
+              label={sub.label}
+              showIcons={false}
+              className={sub.disabled ? 'text-text-secondary cursor-not-allowed' : 'hover:bg-accent-10'}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

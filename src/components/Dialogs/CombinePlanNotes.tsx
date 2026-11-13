@@ -1,4 +1,6 @@
-import { useTranslation } from 'react-i18next';
+import { Trans, useTranslation } from 'react-i18next';
+import { useUIStore } from '../../store/uiStore';
+import { DetailLink } from '../common/DetailLink';
 import type { LengthUnit } from '../../types/config';
 import type { CombineCandidate } from '../../types/ipc/CombineCandidate';
 import type { CombinePlan } from '../../types/ipc/CombinePlan';
@@ -134,19 +136,28 @@ export function CombinePlanNotes({
               {plan.torn_ties.map((tie) => {
                 const id = `${tie.station_a.section_id}-${tie.station_a.station_index}-${tie.station_b.section_id}-${tie.station_b.station_index}`;
                 const key = tie.kind === 'merge' ? 'tornMerge' : 'tornSnapped';
-                const named = t(`dialogs.combineSections.${key}`, {
-                  a: stationLabel(tie.station_a),
-                  b: stationLabel(tie.station_b),
-                });
                 // The datum side is the end that does not move with the moving section.
                 const held = [tie.station_a, tie.station_b].find(
                   (s) => !plan.moved_sections.includes(s.section_id)
                 );
                 return (
                   <li key={id} data-testid={`combine-torn-tie-${id}`}>
-                    {tie.reason === 'zero_datum' && held
-                      ? t('dialogs.combineSections.tornHeld', { tie: named, held: sectionName(held.section_id) })
-                      : named}
+                    <Trans
+                      i18nKey={`dialogs.combineSections.${key}`}
+                      components={{
+                        a: <TieEnd at={tie.station_a} sectionName={sectionName} stationLabel={stationLabel} />,
+                        b: <TieEnd at={tie.station_b} sectionName={sectionName} stationLabel={stationLabel} />,
+                      }}
+                    />
+                    {tie.reason === 'zero_datum' && held && (
+                      <>
+                        {' '}
+                        <Trans
+                          i18nKey="dialogs.combineSections.tornHeld"
+                          components={{ held: <SectionPill id={held.section_id} name={sectionName(held.section_id)} /> }}
+                        />
+                      </>
+                    )}
                   </li>
                 );
               })}
@@ -164,5 +175,51 @@ export function CombinePlanNotes({
         )}
       </ul>
     </div>
+  );
+}
+
+/** A section as a link pill (name and id), selecting it on click. */
+function SectionPill({ id, name }: { id: SectionId; name: string }) {
+  return (
+    <DetailLink
+      type="section"
+      target={{ sectionId: id }}
+      displayText={name}
+      pillLabel={name}
+      testId={`combine-tie-section-${id}`}
+      onSelect={() => useUIStore.getState().setSelection({ type: 'section', sectionId: id })}
+      onHoverStart={() => useUIStore.getState().setHoveredSectionId(id)}
+      onHoverEnd={() => useUIStore.getState().setHoveredSectionId(null)}
+    />
+  );
+}
+
+/**
+ * One end of a tie the combine turns into a loop closure: its section and its
+ * station as the link pills the Details panel uses. Hovering the station
+ * rings it on the map behind the dialog.
+ */
+function TieEnd({
+  at,
+  sectionName,
+  stationLabel,
+}: {
+  at: StationRef;
+  sectionName: (id: SectionId) => string;
+  stationLabel: (ref: StationRef) => string;
+}) {
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1 align-middle">
+      <SectionPill id={at.section_id} name={sectionName(at.section_id)} />
+      <DetailLink
+        type="station"
+        target={{ sectionId: at.section_id, position: at.station_index }}
+        displayText={stationLabel(at)}
+        testId={`combine-tie-station-${at.section_id}-${at.station_index}`}
+        onSelect={() => useUIStore.getState().setSelection({ type: 'station', stationRef: at })}
+        onHoverStart={() => useUIStore.getState().setHoveredStation(at)}
+        onHoverEnd={() => useUIStore.getState().setHoveredStation(null)}
+      />
+    </span>
   );
 }

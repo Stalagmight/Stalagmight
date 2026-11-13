@@ -1,10 +1,12 @@
 /**
- * The Combine Sections row of the station context menu: reserved from the first
- * render on every section END station, so the backend's async answer never
- * shifts the rows under the pointer; absent on a mid-section station.
+ * The "Combine Section With..." row of the station context menu: reserved from
+ * the first render on every section END station, so the backend's async answer
+ * never shifts the rows under the pointer; absent on a mid-section station. It
+ * opens a submenu with every section ending there, each opening the dialog for
+ * that pair or disabled with its own reason.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 
 type Resolve = (candidate: unknown) => void;
 let resolveCandidate: Resolve = () => {};
@@ -18,7 +20,6 @@ vi.mock('../../../utils/combineSections', () => ({
   queryCombineCandidates: () => queryCombineCandidate(),
   queryCombineCandidateForSections: () => queryCombineCandidate(),
   combinePreview: () => ({ sections: [], stations: [] }),
-  combinePreviewAll: () => ({ sections: [], stations: [] }),
 }));
 
 let dialogData: Record<string, unknown> = {};
@@ -71,7 +72,14 @@ import ContextMenu from '../ContextMenu';
 
 const rows = () => screen.getAllByRole('button').filter((b) => b.getAttribute('data-testid')?.startsWith('context-menu-item-'));
 const labels = () => rows().map((r) => r.getAttribute('aria-label') ?? r.textContent);
-const combineRow = () => screen.getByRole('button', { name: 'Combine Sections...' });
+const combineRow = () => screen.getByRole('button', { name: 'Combine Section With...' });
+/** The submenu's rows, as [label, enabled, hint]. */
+const submenuRows = () =>
+  [...screen.getByTestId('context-menu-submenu').querySelectorAll('button')].map((b) => [
+    b.getAttribute('aria-label') ?? b.textContent,
+    !b.disabled,
+    b.getAttribute('title'),
+  ]);
 
 function openOn(stationIndex: number) {
   dialogData = {
@@ -130,6 +138,16 @@ describe('ContextMenu Combine Sections row', () => {
     expect(labels()).toEqual(before);
     expect(combineRow()).toBeEnabled();
     expect(hintLine()).toHaveTextContent('With Section 2');
+    expect(combineRow()).toHaveAttribute('aria-haspopup', 'menu');
+    expect(screen.queryByTestId('context-menu-submenu')).toBeNull();
+    fireEvent.click(combineRow());
+    expect(combineRow()).toHaveAttribute('aria-expanded', 'true');
+    expect(submenuRows()).toEqual([['Section 2 (1 shot)', true, 'Merged here']]);
+    fireEvent.click(screen.getByTestId('context-menu-subitem-0'));
+    expect(openDialog).toHaveBeenCalledWith(
+      'combine-sections',
+      expect.objectContaining({ candidate: expect.objectContaining({ section_b: 2 }) })
+    );
   });
 
   it('says when the two ends meet across a loop closure', async () => {
@@ -137,6 +155,8 @@ describe('ContextMenu Combine Sections row', () => {
     await act(async () => resolveCandidate([{ ...candidate(null), merged: false, join_kind: 'closure' }]));
     expect(combineRow()).toBeEnabled();
     expect(hintLine()).toHaveTextContent('With Section 2, across a loop closure');
+    fireEvent.mouseEnter(combineRow());
+    expect(submenuRows()).toEqual([['Section 2 (1 shot)', true, 'Across a loop closure']]);
   });
 
   it('shows the reason as a visible line under the label, not only as a tooltip', async () => {
@@ -175,27 +195,43 @@ describe('ContextMenu Combine Sections row', () => {
     }
   });
 
-  it('at a junction, opens a picker of every partner, or says none can be combined', async () => {
+  it('at a junction, lists every partner in the submenu, each with its own reason', async () => {
     openOn(3);
     const before = labels();
     const both = [candidate(null, 2), candidate('Different quality', 4)];
     await act(async () => resolveCandidate(both));
     expect(labels()).toEqual(before);
     expect(combineRow()).toBeEnabled();
-    expect(hintLine()).toHaveTextContent('2 sections end here: choose which one');
-    combineRow().click();
-    expect(openDialog).toHaveBeenCalledWith('combine-sections', expect.objectContaining({ candidates: both }));
+    expect(hintLine()).toHaveTextContent('2 sections end here');
+    fireEvent.mouseEnter(combineRow());
+    expect(submenuRows()).toEqual([
+      ['Section 2 (1 shot)', true, 'Merged here'],
+      ['Section 4 (1 shot)', false, 'Different quality'],
+    ]);
+    // A disabled partner opens nothing.
+    fireEvent.click(screen.getByTestId('context-menu-subitem-1'));
+    expect(openDialog).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('context-menu-subitem-0'));
+    expect(openDialog).toHaveBeenCalledWith('combine-sections', expect.objectContaining({ candidate: both[0] }));
+    // Moving to another row closes the submenu.
+    fireEvent.mouseEnter(rows()[0]!);
+    expect(screen.queryByTestId('context-menu-submenu')).toBeNull();
     cleanup();
 
+    // None combinable: the submenu still opens, so every reason stays readable.
     openOn(3);
     await act(async () => resolveCandidate([candidate('No', 2), candidate('Neither', 4)]));
-    expect(combineRow()).toBeDisabled();
     expect(hintLine()).toHaveTextContent('None of the 2 sections ending here can be combined');
+    fireEvent.click(combineRow());
+    expect(submenuRows().map(([, enabled, hint]) => [enabled, hint])).toEqual([
+      [false, 'No'],
+      [false, 'Neither'],
+    ]);
   });
 
   it('is absent on a mid-section station, where nothing is asked', () => {
     openOn(1);
-    expect(screen.queryByRole('button', { name: 'Combine Sections...' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Combine Section With...' })).toBeNull();
     expect(queryCombineCandidate).not.toHaveBeenCalled();
   });
 });

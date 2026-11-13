@@ -66,6 +66,16 @@ async function undo(page: Page) {
   await page.evaluate(() => (window as any).__E2E_TEST__.projectStore.getState().undo());
 }
 
+/** Open the station menu's "Combine Section With..." submenu and pick `partner`. */
+async function combineWith(page: Page, partner: string) {
+  const item = page.getByRole('button', { name: 'Combine Section With...' });
+  await expect(item).toBeEnabled();
+  await item.click();
+  const submenu = page.getByTestId('context-menu-submenu');
+  await expect(submenu).toBeVisible();
+  await submenu.getByRole('button', { name: partner }).click();
+}
+
 const sectionShape = async (page: Page) => (await readSections(page)).map((s) => [s.name, s.shots]);
 
 test.describe('Combine Sections', () => {
@@ -82,9 +92,7 @@ test.describe('Combine Sections', () => {
 
     // The first half's end is the join: the item is offered there.
     await openContextMenu(page, { type: 'station', ref: { section_id: main!.id, station_index: 2 } });
-    const item = page.getByRole('button', { name: 'Combine Sections...' });
-    await expect(item).toBeEnabled();
-    await item.click();
+    await combineWith(page, 'Main-B (2 shots)');
     const dialog = page.getByTestId('combine-sections-dialog');
     await expect(dialog).toBeVisible();
     await expect(page.getByTestId('combine-summary')).toHaveText(/Combining Main-A \(2 shots\) and Main-B \(2 shots\) at station/);
@@ -138,7 +146,7 @@ test.describe('Combine Sections', () => {
     expect(call).toMatchObject({ kept: a!.id, other: b!.id, options: { name: 'East', swap_lr: true } });
   });
 
-  test('at a junction, picks which section to combine with', async ({ page }) => {
+  test('at a junction, the menu lists every section ending there and the dialog opens on the one picked', async ({ page }) => {
     const [a, b, c] = await seed(page, [
       { name: 'Trunk', count: 2 },
       { name: 'Left', count: 2 },
@@ -149,20 +157,21 @@ test.describe('Combine Sections', () => {
     await merge(page, join, { section_id: c!.id, station_index: 0 });
 
     await openContextMenu(page, { type: 'station', ref: join });
-    const item = page.getByRole('button', { name: 'Combine Sections...' });
+    const item = page.getByRole('button', { name: 'Combine Section With...' });
     await expect(item).toBeEnabled();
-    await expect(item).toContainText('2 sections end here: choose which one');
+    await expect(item).toContainText('2 sections end here');
     await expect(page.getByRole('button', { name: 'Split Section Here' })).toHaveCount(0);
-    await item.click();
+    // Hovering opens the submenu: every section ending here, and how it meets.
+    await item.hover();
+    const submenu = page.getByTestId('context-menu-submenu');
+    await expect(submenu).toBeVisible();
+    await expect(submenu.getByRole('button', { name: 'Left (2 shots)' })).toContainText('Merged here');
+    await expect(submenu.getByRole('button', { name: 'Right (3 shots)' })).toContainText('Merged here');
+    await submenu.getByRole('button', { name: 'Right (3 shots)' }).click();
 
-    const picker = page.getByTestId('combine-partner-picker');
-    await expect(picker).toContainText('2 sections end here. Combine Trunk with:');
-    await expect(page.getByTestId(`combine-partner-${b!.id}`)).toBeChecked();
-    await expect(page.getByTestId(`combine-partner-${b!.id}`).locator('..')).toContainText('Left (2 shots)');
-    await expect(page.getByTestId(`combine-partner-${c!.id}`).locator('..')).toContainText('Right (3 shots)');
-    await expect(page.getByTestId('combine-branches-note')).toContainText('Right stays attached at the join');
-
-    await page.getByTestId(`combine-partner-${c!.id}`).check();
+    // The dialog opens on that pair, with no picker of its own.
+    await expect(page.getByTestId('combine-sections-dialog')).toBeVisible();
+    await expect(page.getByTestId('combine-partner-picker')).toHaveCount(0);
     await expect(page.getByTestId('combine-branches-note')).toContainText('Left stays attached at the join');
     await expect(page.getByTestId('combine-summary')).toContainText('Combining Trunk (2 shots) and Right (3 shots)');
     await page.getByTestId('combine-confirm').click();
@@ -189,15 +198,21 @@ test.describe('Combine Sections', () => {
     expect(closed).toMatchObject({ success: true });
 
     await openContextMenu(page, { type: 'station', ref: { section_id: east!.id, station_index: 2 } });
-    const item = page.getByRole('button', { name: 'Combine Sections...' });
-    await expect(item).toBeEnabled();
-    await expect(item).toContainText('With West, across a loop closure');
-    await item.click();
+    await expect(page.getByRole('button', { name: 'Combine Section With...' })).toContainText(
+      'With West, across a loop closure'
+    );
+    await combineWith(page, 'West (2 shots)');
 
     await expect(page.getByTestId('combine-closure-join')).toContainText('East and West meet here across a loop closure');
     await expect(page.getByTestId('combine-note-torn')).toContainText('This connection becomes a loop closure:');
     await expect(page.locator('[data-testid^="combine-torn-tie-"]')).toHaveCount(1);
     await expect(page.locator('[data-testid^="combine-torn-tie-"]')).toContainText('The merge of');
+    // Each end of the tie is a section pill and a station pill.
+    const tie = page.locator('[data-testid^="combine-torn-tie-"]');
+    await expect(tie.getByTestId(`combine-tie-section-${east!.id}`)).toBeVisible();
+    await expect(tie.getByTestId(`combine-tie-station-${east!.id}-0`)).toBeVisible();
+    await expect(tie.getByTestId(`combine-tie-section-${west!.id}`)).toBeVisible();
+    await expect(tie.getByTestId(`combine-tie-station-${west!.id}-2`)).toBeVisible();
     await page.getByTestId('combine-confirm').click();
     await waitForNoDialogs(page);
 
@@ -217,7 +232,7 @@ test.describe('Combine Sections', () => {
   test('keeps its row, disabled, where no other section ends; none on a mid station', async ({ page }) => {
     const [main] = await seed(page, [{ name: 'Main', count: 3 }]);
     await openContextMenu(page, { type: 'station', ref: { section_id: main!.id, station_index: 3 } });
-    const item = page.getByRole('button', { name: 'Combine Sections...' });
+    const item = page.getByRole('button', { name: 'Combine Section With...' });
     await expect(item).toBeDisabled();
     await expect(item).toHaveAttribute('title', 'No other section ends at this station');
     await expect(item).toContainText('No other section ends at this station');
@@ -225,6 +240,6 @@ test.describe('Combine Sections', () => {
     await page.keyboard.press('Escape');
     await openContextMenu(page, { type: 'station', ref: { section_id: main!.id, station_index: 1 } });
     await expect(page.getByRole('button', { name: 'Edit Station' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Combine Sections...' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Combine Section With...' })).toHaveCount(0);
   });
 });

@@ -7,10 +7,12 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
 const closeDialog = vi.fn();
 const setSelection = vi.fn();
+const setHoveredStation = vi.fn();
+const setHoveredSectionId = vi.fn();
 const combineSections = vi.fn();
 
 let dialogData: Record<string, unknown> = {};
-const uiState = () => ({ closeDialog, setSelection, dialogData });
+const uiState = () => ({ closeDialog, setSelection, setHoveredStation, setHoveredSectionId, dialogData });
 vi.mock('../../../store/uiStore', () => ({
   useUIStore: Object.assign(() => uiState(), { getState: () => uiState() }),
 }));
@@ -70,6 +72,15 @@ import '../../../i18n';
 import CombineSectionsDialog from '../CombineSectionsDialog';
 
 /** A plan that changes nothing besides the join. */
+/** A torn-tie row as text, each link pill written as [its accessible name]. */
+function tieText(li: HTMLElement): string {
+  const copy = li.cloneNode(true) as HTMLElement;
+  copy.querySelectorAll('button').forEach((b) => {
+    b.replaceWith(` [${(b.getAttribute('aria-label') ?? '').replace(/^Select /, '')}] `);
+  });
+  return (copy.textContent ?? '').replace(/\s+/g, ' ').trim();
+}
+
 function quietPlan(kept: number, overrides: Record<string, unknown> = {}) {
   return {
     kept,
@@ -266,48 +277,6 @@ describe('CombineSectionsDialog', () => {
     expect(screen.queryByTestId('combine-depth-note')).toBeNull();
   });
 
-  it('at a junction, picks the partner first, each enabled or not with its own reason', async () => {
-    sections = [
-      ...creditedSections(),
-      { id: 7, name: 'Side', color: '#333333', direction: 'in', shots: [{ id: 71, length: 4 }] },
-      { id: 8, name: 'Shaft', color: '#444444', direction: 'in', shots: [{ id: 81, length: 9 }] },
-    ];
-    dialogData = {
-      candidates: [
-        candidate({ branches: [7, 8] }),
-        candidate({
-          section_b: 7,
-          station_b: { section_id: 7, station_index: 0 },
-          shot_count_b: 1,
-          branches: [5, 8],
-        }),
-        candidate({
-          section_b: 8,
-          station_b: { section_id: 8, station_index: 0 },
-          shot_count_b: 1,
-          blocked_reason: 'Main-A and Shaft have different quality factors',
-        }),
-      ],
-    };
-    render(<CombineSectionsDialog />);
-    expect(screen.getByTestId('combine-partner-picker')).toHaveTextContent('3 sections end here. Combine Main-A with:');
-    expect(screen.getByTestId('combine-partner-5')).toBeChecked();
-    expect(screen.getByTestId('combine-partner-5').parentElement).toHaveTextContent('Main-B (2 shots)');
-    expect(screen.getByTestId('combine-partner-7')).toBeEnabled();
-    expect(screen.getByTestId('combine-partner-8')).toBeDisabled();
-    expect(screen.getByTestId('combine-partner-reason-8')).toHaveTextContent('different quality factors');
-    expect(screen.queryByTestId('combine-partner-reason-7')).toBeNull();
-    expect(screen.getByTestId('combine-branches-note')).toHaveTextContent(
-      'Side, Shaft stay attached at the join, which becomes a station in the middle of the combined section.'
-    );
-
-    fireEvent.click(screen.getByTestId('combine-partner-7'));
-    expect(screen.getByTestId('combine-branches-note')).toHaveTextContent('Main-B, Shaft stay attached');
-    fireEvent.click(screen.getByTestId('combine-confirm'));
-    await waitFor(() => expect(combineSections).toHaveBeenCalled());
-    expect(combineSections.mock.calls[0]?.slice(0, 2)).toEqual([2, 7]);
-  });
-
   it('says a third section ending at the join unmerged is left as it is', () => {
     sections = [...creditedSections(), { id: 7, name: 'Side', color: '#333333', direction: 'in', shots: [] }];
     dialogData = { candidate: candidate({ loose_ends: [7] }) };
@@ -364,7 +333,11 @@ describe('CombineSectionsDialog', () => {
     );
     expect(screen.getByTestId('combine-note-move-with')).toHaveTextContent('Side is attached to it and moves with it.');
     expect(screen.getByTestId('combine-note-torn')).toHaveTextContent('This connection becomes a loop closure:');
-    expect(screen.getAllByTestId(/^combine-torn-tie-/).map((li) => li.textContent)).toEqual(['The merge of 5:2 and 9:1']);
+    // Each end of a torn tie is a section pill and a station pill, the link
+    // pills of the Details panel, read here by their accessible names.
+    expect(screen.getAllByTestId(/^combine-torn-tie-/).map(tieText)).toEqual([
+      'The merge of [section Main-B] [station 5:2] and [section Section 9] [station 9:1]',
+    ]);
     expect(screen.queryByTestId('combine-note-kept-moves')).toBeNull();
 
     fireEvent.click(screen.getByTestId('combine-swap-kept'));
@@ -372,10 +345,16 @@ describe('CombineSectionsDialog', () => {
     expect(screen.getByTestId('combine-note-kept-moves')).toHaveTextContent(
       'Main-B is the one that moves, because a zero datum holds Main-A in place.'
     );
-    expect(screen.getAllByTestId(/^combine-torn-tie-/).map((li) => li.textContent)).toEqual([
-      'The snapped closure between 2:0 and 9:0',
-      'The merge of 5:2 and 8:0: Section 8 is held by a zero datum and stays where it is.',
+    expect(screen.getAllByTestId(/^combine-torn-tie-/).map(tieText)).toEqual([
+      'The snapped closure between [section Main-A] [station 2:0] and [section Section 9] [station 9:0]',
+      'The merge of [section Main-B] [station 5:2] and [section Section 8] [station 8:0] [section Section 8] is held by a zero datum and stays where it is.',
     ]);
+    // Hovering a station pill rings it on the map; clicking selects it.
+    fireEvent.mouseEnter(screen.getAllByTestId('combine-tie-station-5-2')[0]!);
+    expect(setHoveredStation).toHaveBeenCalledWith({ section_id: 5, station_index: 2 });
+    fireEvent.click(screen.getAllByTestId('combine-tie-station-5-2')[0]!);
+    expect(setSelection).toHaveBeenCalledWith({ type: 'station', stationRef: { section_id: 5, station_index: 2 } });
+    setSelection.mockClear();
     expect(screen.getByTestId('combine-torn-why')).toHaveTextContent("The loop's misclosure moves to the new closure");
     fireEvent.click(screen.getByTestId('combine-confirm'));
     await waitFor(() => expect(closeDialog).toHaveBeenCalled());

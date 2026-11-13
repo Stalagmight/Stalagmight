@@ -63,10 +63,10 @@ function CombinedCreditSummary({ shots }: { shots: Array<Pick<Shot, 'credit'>> }
 /**
  * Combine Sections: join two sections that meet end to end (merged,
  * co-located, or across a loop closure) into one. Other sections there stay
- * attached as branches. Opened with the backend's `CombineCandidate` (a
- * two-section selection, or a station with one partner), or with `candidates`
- * at a junction, where it starts with a picker listing every partner, each
- * enabled or disabled with its own reason. What else the combine changes for
+ * attached as branches. Opened with the backend's `CombineCandidate` for one
+ * pair: a two-section selection, or the partner picked in the station menu's
+ * "Combine Section With..." submenu (which lists every section ending at a
+ * junction, each with its own reason when refused). What else the combine changes for
  * the kept section shown (a side that moves, ties that become loop closures,
  * converted bearings...) is listed before the user confirms.
  */
@@ -75,20 +75,7 @@ export default function CombineSectionsDialog() {
   const { closeDialog, dialogData, setSelection } = useUIStore();
   const { combineSections, project, stations, config } = useProjectStore();
   const lengthUnit = config?.units?.length ?? defaultConfig.units.length;
-  const candidates: CombineCandidate[] =
-    (dialogData.candidates as CombineCandidate[] | undefined) ??
-    (dialogData.candidate ? [dialogData.candidate as CombineCandidate] : []);
-  const refusalOf = (c: CombineCandidate) =>
-    c.blocked_reason ?? (c.blocked_keeping_a && c.blocked_keeping_b ? c.blocked_keeping_a : null);
-  const [chosen, setChosen] = useState(() => Math.max(0, candidates.findIndex((c) => refusalOf(c) === null)));
-  const candidate: CombineCandidate | undefined = candidates[chosen];
-  // At a junction every candidate shares the clicked section: the partner is the other one.
-  const shared =
-    candidates.length > 1
-      ? [candidates[0]!.section_a, candidates[0]!.section_b].find((id) =>
-          candidates.every((c) => c.section_a === id || c.section_b === id)
-        )
-      : undefined;
+  const candidate = dialogData.candidate as CombineCandidate | undefined;
 
   const sectionA = project?.sections.find((s) => s.id === candidate?.section_a);
   const sectionB = project?.sections.find((s) => s.id === candidate?.section_b);
@@ -163,57 +150,6 @@ export default function CombineSectionsDialog() {
     candidate?.blocked_reason ?? (keepB ? candidate?.blocked_keeping_b : candidate?.blocked_keeping_a) ?? null;
   const sectionName = (id: SectionId) => sectionLabel(project?.sections.find((s) => s.id === id), id);
   const listNames = (ids: SectionId[]) => ids.map(sectionName).join(', ');
-  const choose = (index: number) => {
-    const next = candidates[index];
-    if (!next) return;
-    setChosen(index);
-    // Everything the form derived from the previous pair starts over.
-    setKeepB(Boolean(next.blocked_keeping_a) && !next.blocked_keeping_b);
-    setName(null);
-    setColor(null);
-    setCommentPick('kept');
-    setNamePick('kept');
-    setError(null);
-  };
-  const partnerPicker = candidates.length > 1 && (
-    <fieldset className="space-y-2" data-testid="combine-partner-picker">
-      <legend className="text-sm text-text-secondary mb-1">
-        {t('dialogs.combineSections.pickPartner', {
-          section: shared !== undefined ? sectionName(shared) : '',
-          count: candidates.length,
-        })}
-      </legend>
-      {candidates.map((c, index) => {
-        const partner = shared === c.section_a ? c.section_b : c.section_a;
-        const shots = shared === c.section_a ? c.shot_count_b : c.shot_count_a;
-        const refusal = refusalOf(c);
-        return (
-          <label key={`${partner}:${c.end_a}:${c.end_b}`} className="block text-sm cursor-pointer">
-            <span className="flex items-center gap-2">
-              <input
-                type="radio"
-                name="combine-partner"
-                checked={chosen === index}
-                onChange={() => choose(index)}
-                disabled={isSubmitting || refusal !== null}
-                data-testid={`combine-partner-${partner}`}
-              />
-              <span className="truncate">
-                {sectionName(partner)} ({t('dialogs.combineSections.shots', { count: shots })})
-                {c.join_kind === 'closure' && ` ${t('dialogs.combineSections.acrossClosure')}`}
-              </span>
-            </span>
-            {refusal !== null && (
-              <span className="block pl-6 text-text-tertiary" data-testid={`combine-partner-reason-${partner}`}>
-                {refusal}
-              </span>
-            )}
-          </label>
-        );
-      })}
-    </fieldset>
-  );
-
   const handleConfirm = async () => {
     if (isSubmitting || isStale || blocked) return;
     if (isEditingBlockedNow()) {
@@ -283,7 +219,6 @@ export default function CombineSectionsDialog() {
       data-testid="combine-sections-dialog"
     >
       <div className="space-y-4">
-        {partnerPicker}
         <p className="text-text-secondary" data-testid="combine-summary">{summary}</p>
         {!isStale && <p className="text-sm" data-testid="combine-plan">{placement}</p>}
         {!isStale && candidate?.join_kind === 'closure' && (
