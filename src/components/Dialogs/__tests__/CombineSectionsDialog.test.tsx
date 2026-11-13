@@ -88,6 +88,7 @@ function candidate(overrides: Record<string, unknown> = {}) {
     comment_b: null,
     station_name_a: null,
     station_name_b: null,
+    depth_difference_m: null,
     ...overrides,
   };
 }
@@ -226,6 +227,20 @@ describe('CombineSectionsDialog', () => {
     render(<CombineSectionsDialog />);
     expect(screen.getByTestId('combine-blocked')).toHaveTextContent('This is a branch');
     expect(screen.getByTestId('combine-confirm')).toBeDisabled();
+  });
+
+  it('says how far the join moves in depth when the two ends disagree, and only then', () => {
+    dialogData = { candidate: candidate({ depth_difference_m: 0.3 }) };
+    const { unmount } = render(<CombineSectionsDialog />);
+    expect(screen.getByTestId('combine-depth-note')).toHaveTextContent(
+      'The two ends are recorded 0.30m apart in depth. The joined station takes the average, so each end moves 0.15m in depth.'
+    );
+    expect(screen.getByTestId('combine-confirm')).toBeEnabled();
+    unmount();
+
+    dialogData = { candidate: candidate() };
+    render(<CombineSectionsDialog />);
+    expect(screen.queryByTestId('combine-depth-note')).toBeNull();
   });
 
   it('refuses to combine in a read-only view', () => {

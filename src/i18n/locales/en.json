@@ -1715,6 +1715,7 @@
       "halvesNotConnected": "The halves are not connected: merge the two cut stations if routes and gas planning should continue across them."
     },
     "combineSections": {
+      "depthNote": "The two ends are recorded {{gap}} apart in depth. The joined station takes the average, so each end moves {{half}} in depth.",
       "summary": "Combining {{kept}} ({{keptShots}}) and {{other}} ({{otherShots}}) at station {{station}}",
       "shots_one": "{{count}} shot",
       "shots_other": "{{count}} shots",

@@ -5448,6 +5448,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 comment_b: null,
                 station_name_a: null,
                 station_name_b: null,
+                depth_difference_m: null,
               };
             };
             const BRANCH = 'Another station is merged here (a branch)';

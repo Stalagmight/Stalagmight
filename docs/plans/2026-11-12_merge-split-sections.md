@@ -51,6 +51,7 @@ station menu, the Sections panel and the command always agree.
 | Still rigidly tied once the join is gone (merge or aligned closure, directly or through other sections) | A rigid loop. `merge_stations` refuses the same shape. An unaligned closure stays as a loop to adjust inside the section |
 | Both join stations carry a zero datum, or (co-located) both rigid groups are anchored | Two datums in one rigid group |
 | Join stations' manual offsets differ by more than 1 mm | The joined station keeps the kept one's offset |
+| Co-located, unmerged ends more than 1 m apart in depth | At one horizontal point but that far apart vertically they are two points (a shaft, stacked passages), not one station read twice; merging them first averages their depth deliberately. Between 5 cm (half the 0.1 m resolution depth gauges record) and 1 m the dialog says how far each end moves: the joined station takes the average of the shot before and after it |
 | A merged join more than 1 mm apart | The merge is torn, and the combine would move the other section |
 | The two sections share a shot identity (one shot uuid in both) | The combined section would hold one shot twice, and every anchor names the first (from #713) |
 | More than 99,999 shots, sections that do not meet or meet at both ends, a section with no shots | Shot-id budget; nothing or something ambiguous to combine |

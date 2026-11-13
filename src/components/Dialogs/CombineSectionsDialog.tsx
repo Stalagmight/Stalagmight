@@ -6,6 +6,8 @@ import { isEditingBlockedNow } from '../../hooks/useEditingBlocked';
 import { getErrorMessage } from '../../utils/ipc';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { formatStationIdWithName } from '../../utils/formatters';
+import { formatLength } from '../../utils/formatStats';
+import { defaultConfig } from '../../types/config';
 import { defaultCombinedName } from '../../utils/combineSections';
 import type { CombineCandidate } from '../../types/ipc/CombineCandidate';
 import type { CombinePick } from '../../types/ipc/CombinePick';
@@ -65,7 +67,8 @@ function CombinedCreditSummary({ shots }: { shots: Array<Pick<Shot, 'credit'>> }
 export default function CombineSectionsDialog() {
   const { t } = useTranslation();
   const { closeDialog, dialogData, setSelection } = useUIStore();
-  const { combineSections, project, stations } = useProjectStore();
+  const { combineSections, project, stations, config } = useProjectStore();
+  const lengthUnit = config?.units?.length ?? defaultConfig.units.length;
   const candidate = dialogData.candidate as CombineCandidate | undefined;
 
   const sectionA = project?.sections.find((s) => s.id === candidate?.section_a);
@@ -252,6 +255,15 @@ export default function CombineSectionsDialog() {
               Swap {otherName}'s left and right walls
             </label>
           </div>
+        )}
+
+        {candidate?.depth_difference_m != null && (
+          <p className="text-sm text-warning" data-testid="combine-depth-note">
+            {t('dialogs.combineSections.depthNote', {
+              gap: formatLength(candidate.depth_difference_m, lengthUnit, 2),
+              half: formatLength(candidate.depth_difference_m / 2, lengthUnit, 2),
+            })}
+          </p>
         )}
 
         <p className="text-sm text-text-secondary" data-testid="combine-direction-note">

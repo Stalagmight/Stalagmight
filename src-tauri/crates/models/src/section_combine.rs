@@ -84,4 +84,10 @@ pub struct CombineCandidate {
     /// The join stations' names, set only when both have one and they differ.
     pub station_name_a: Option<String>,
     pub station_name_b: Option<String>,
+    /// How far apart in depth (metres) the two join stations are, when they
+    /// are co-located but not merged and the gap is more than
+    /// `COMBINE_DEPTH_NOTICE_M`. The joined station reads the average of the
+    /// shot before and the shot after it, so each end moves by half the gap;
+    /// the dialog says so. `None` for a merged join, which already averages.
+    pub depth_difference_m: Option<f64>,
 }

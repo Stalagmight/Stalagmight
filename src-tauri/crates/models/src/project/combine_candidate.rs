@@ -8,9 +8,11 @@
 //! - **co-located**: unmerged, both stations' merge groups are empty, their
 //!   chain positions (section offset plus the shot walk, without the stations'
 //!   manual offsets) agree within [`COMBINE_TOLERANCE_M`] horizontally, and no
-//!   third section's end sits there too. Depth is never compared: the two
-//!   stations read the depth of different shots (the state a fresh split
-//!   leaves).
+//!   third section's end sits there too. Depth is not part of the match: the
+//!   two stations read the depth of different shots (the state a fresh split
+//!   leaves), and the joined station takes their average. A gap above
+//!   [`COMBINE_DEPTH_NOTICE_M`] is reported for the dialog; one above
+//!   [`COMBINE_DEPTH_LIMIT_M`] makes the ends two points, and is refused.
 //!
 //! Blocked, with the reason the user sees, when combining would change what
 //! the survey means or break an invariant the app keeps elsewhere (see
@@ -28,6 +30,19 @@ use super::Project;
 /// How far apart (metres) the two join stations may be and still count as the
 /// same point; also the bound on how far the other section moves.
 pub const COMBINE_TOLERANCE_M: f64 = 0.001;
+
+/// Above this depth gap (metres) between two co-located, unmerged join
+/// stations, the candidate reports it and the dialog shows it: the joined
+/// station takes their average, so each end moves by half the gap. Half the
+/// 0.1 m resolution depth gauges and dive computers record; a smaller gap is
+/// below what the survey can tell apart.
+pub const COMBINE_DEPTH_NOTICE_M: f64 = 0.05;
+
+/// Above this depth gap (metres) the two ends are refused: at one horizontal
+/// point but this far apart vertically they are two points (a shaft, stacked
+/// passages), not one station read twice. Merging them first, which averages
+/// their depth as a deliberate choice, makes the combine possible.
+pub const COMBINE_DEPTH_LIMIT_M: f64 = 1.0;
 
 /// One way two sections can meet: an end of each.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -268,6 +283,15 @@ impl Project {
         {
             return Some(format!("{name_a} and {name_b} each have a zero datum"));
         }
+        if let Some(gap) = self.join_depth_gap(at_a, at_b, merged) {
+            if gap > COMBINE_DEPTH_LIMIT_M {
+                return Some(format!(
+                    "The two ends are {gap:.2} m apart in depth (more than \
+                     {COMBINE_DEPTH_LIMIT_M:.0} m), so they are not one station; merge them \
+                     first if they are"
+                ));
+            }
+        }
         let offset = |at| self.station_offset_for_ref(at).unwrap_or_default();
         let (oa, ob) = (offset(at_a), offset(at_b));
         let moved = ((oa.0 - ob.0).powi(2) + (oa.1 - ob.1).powi(2) + (oa.2 - ob.2).powi(2)).sqrt();
@@ -393,6 +417,15 @@ impl Project {
     }
 
     /// The answer for one touching pairing, `a` the lower section id.
+    /// The depth gap between two co-located join stations that are NOT
+    /// merged, each read on its own (`compute_station_depth`); `None` for a
+    /// merged join, whose stations are already one depth.
+    fn join_depth_gap(&self, at_a: StationRef, at_b: StationRef, merged: bool) -> Option<f64> {
+        (!merged).then(|| {
+            (self.compute_station_depth(&[at_a]) - self.compute_station_depth(&[at_b])).abs()
+        })
+    }
+
     fn candidate_for(&self, pairing: Pairing, touch: Touch) -> Option<CombineCandidate> {
         let pairing = if pairing.a <= pairing.b {
             pairing
@@ -435,6 +468,9 @@ impl Project {
             comment_b,
             station_name_a,
             station_name_b,
+            depth_difference_m: self
+                .join_depth_gap(station_a, station_b, touch.merged)
+                .filter(|gap| *gap > COMBINE_DEPTH_NOTICE_M),
         })
     }
 

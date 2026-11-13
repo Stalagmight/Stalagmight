@@ -69,7 +69,7 @@ impl Project {
     /// per run; between them the same station could come out one ulp apart depending on
     /// which API asked. Sorting at this single shared site makes them bit-identical.
     /// Group MEMBERSHIP is untouched - this only fixes the order it is added in.
-    fn compute_station_depth(&self, colocated: &[StationRef]) -> f64 {
+    pub(super) fn compute_station_depth(&self, colocated: &[StationRef]) -> f64 {
         // A one-station group (every unmerged station, i.e. nearly all of them on a big
         // project) has no ordering question, so it keeps the allocation-free path: this
         // runs once per group per full coordinate rebuild.

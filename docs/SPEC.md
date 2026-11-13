@@ -1614,7 +1614,9 @@ section is reversed first when the two meet end to end or start to start. Every
 per-shot field travels, and every station reference follows its station; the
 join station keeps one comment and one name (the dialog asks when they differ)
 and the kept station's offset. Blocked, with the reason in the menu tooltip,
-for a branch, different north references or quality, a second rigid tie between
+for co-located, unmerged ends more than 1 m apart in depth (the joined station
+takes their average; between 5 cm and 1 m the dialog says how far each end
+moves), for a branch, different north references or quality, a second rigid tie between
 the two, two zero datums, join stations moved by different amounts, or more
 than 99,999 shots, or two sections that share a shot identity. Every shot keeps
 its own surveyors, explorers and date; the dialog summarises the combined credit.

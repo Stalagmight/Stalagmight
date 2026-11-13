@@ -788,7 +788,7 @@ fn sections_that_do_not_meet_meet_twice_or_are_empty_block() {
 
 /// The join is the same point within 1 mm horizontally; depth never counts.
 #[test]
-fn the_tolerance_is_one_millimetre_and_depth_never_blocks() {
+fn the_tolerance_is_one_millimetre_and_only_a_large_depth_gap_blocks() {
     let (project, k, o) = pair(SectionEnd::End, SectionEnd::Start, false, 0.0009);
     assert_eq!(
         project
@@ -800,18 +800,17 @@ fn the_tolerance_is_one_millimetre_and_depth_never_blocks() {
     let (project, k, o) = pair(SectionEnd::End, SectionEnd::Start, false, 0.0011);
     assert!(blocked(&project, k, o).contains("do not meet"));
 
-    let (mut project, k, o) = pair(SectionEnd::End, SectionEnd::Start, false, 0.0);
-    for shot in &mut project.get_section_mut(o).unwrap().shots {
-        shot.depth_in += 25.0;
-        shot.depth_out += 25.0;
-    }
-    assert_eq!(
-        project
+    // The horizontal test ignores depth: the two ends read the depth of
+    // different shots (the state a fresh split leaves). Only a gap that makes
+    // them two points blocks (`COMBINE_DEPTH_LIMIT_M`).
+    for (gap, blocks) in [(0.9, false), (25.0, true)] {
+        let (project, k, o) = depth_gap_pair(gap, false);
+        let reason = project
             .combine_candidate_for_sections(k, o)
             .unwrap()
-            .blocked_reason,
-        None
-    );
+            .blocked_reason;
+        assert_eq!(reason.is_some(), blocks, "{gap} m: {reason:?}");
+    }
 }
 
 /// The component's gauge is the lower section id's; combining keeps that
@@ -1517,4 +1516,52 @@ fn split_keeps_the_component_anchor() {
         worst < 0.001,
         "anchor {anchor_before:?} -> {anchor_after:?}: the adjusted geometry moved {worst:.4} m"
     );
+}
+
+/// K's end and O's start, co-located (or merged), with all of O `gap` metres
+/// deeper than K's end (every shot shifted, so no slope and no horizontal
+/// position changes).
+fn depth_gap_pair(gap: f64, merged: bool) -> (Project, SectionId, SectionId) {
+    let (mut project, k, o) = pair(SectionEnd::End, SectionEnd::Start, merged, 0.0);
+    for shot in &mut project.get_section_mut(o).unwrap().shots {
+        shot.depth_in += gap;
+        shot.depth_out += gap;
+    }
+    (project, k, o)
+}
+
+/// Two co-located, unmerged ends each read their own shot's depth; combined,
+/// the joined station reads the average of the shot before and after it, so
+/// each end moves by half the gap. Above 5 cm the candidate reports the gap
+/// for the dialog to show; above 1 m the ends are two points and the combine
+/// is refused. A merged join already averages, so it reports nothing.
+#[test]
+fn a_depth_gap_at_an_unmerged_join_is_reported_and_a_large_one_refused() {
+    use super::combine_candidate::{COMBINE_DEPTH_LIMIT_M, COMBINE_DEPTH_NOTICE_M};
+    assert!(COMBINE_DEPTH_NOTICE_M < 0.1 && COMBINE_DEPTH_LIMIT_M >= 1.0);
+
+    let (mut project, k, o) = depth_gap_pair(0.3, false);
+    let candidate = project.combine_candidate_for_sections(k, o).unwrap();
+    assert_eq!(candidate.blocked_reason, None);
+    let gap = candidate.depth_difference_m.unwrap();
+    assert!((gap - 0.3).abs() < 1e-9, "{gap}");
+    project.combine_sections(k, o, &options()).unwrap();
+    let joined = project.compute_station_depth(&[StationRef::new(k, 2)]);
+    assert!((joined - 0.15).abs() < 1e-9, "{joined}");
+
+    let (project, k, o) = depth_gap_pair(0.03, false);
+    let candidate = project.combine_candidate_for_sections(k, o).unwrap();
+    assert_eq!(candidate.depth_difference_m, None, "below the notice");
+
+    let (project, k, o) = depth_gap_pair(1.5, false);
+    let reason = blocked(&project, k, o);
+    assert!(reason.contains("1.50 m apart in depth"), "{reason}");
+
+    let (project, k, o) = depth_gap_pair(1.5, true);
+    let candidate = project.combine_candidate_for_sections(k, o).unwrap();
+    assert_eq!(
+        candidate.blocked_reason, None,
+        "a merged join already averages"
+    );
+    assert_eq!(candidate.depth_difference_m, None);
 }
