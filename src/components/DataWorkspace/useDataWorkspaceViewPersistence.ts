@@ -26,6 +26,7 @@ import { useUIStore } from '../../store/uiStore';
 import { invokeIpc } from '../../utils/ipc';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 import { stableWidths } from '../SingleSystemView/useDataTableViewPersistence';
+import { MAX_COL_WIDTH, MIN_COL_WIDTH } from '../common/SpreadsheetGrid/useColumnWidths';
 import { DATA_COLUMN_BY_KEY, DATA_DEFAULT_HIDDEN } from './columnsMeta';
 import {
   DEFAULT_VIEW,
@@ -64,11 +65,15 @@ function columnKeys(raw: unknown, fallback: readonly DataColumnKey[]): DataColum
   return [...new Set(raw.filter(isColumnKey))];
 }
 
+/** Usable widths only, clamped to what the grid renders and the backend keeps
+ *  (`normalize_column_widths`), so a save never comes back changed. */
 function widths(raw: unknown): Record<string, number> {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
   const out: Record<string, number> = {};
   for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
-    if (typeof value === 'number' && Number.isFinite(value) && value > 0) out[key] = Math.round(value);
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+      out[key] = Math.min(MAX_COL_WIDTH, Math.max(MIN_COL_WIDTH, Math.round(value)));
+    }
   }
   return out;
 }

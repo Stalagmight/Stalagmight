@@ -43,20 +43,17 @@ fn fixture() -> (AppState, SectionId) {
     (state, section)
 }
 
+/// The open project; a test that lost it fails here rather than reading "no name".
+fn project(state: &AppState) -> Project {
+    state.get_project_state().unwrap()
+}
+
 fn name_of(state: &AppState, station: StationRef) -> Option<String> {
-    state
-        .get_project_state()
-        .unwrap()
-        .station_name_for_ref(station)
-        .cloned()
+    project(state).station_name_for_ref(station).cloned()
 }
 
 fn comment_of(state: &AppState, station: StationRef) -> Option<String> {
-    state
-        .get_project_state()
-        .unwrap()
-        .station_comment_for_ref(station)
-        .cloned()
+    project(state).station_comment_for_ref(station).cloned()
 }
 
 fn set_name(state: &AppState, station: StationRef, name: Option<&str>) -> bool {

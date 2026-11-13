@@ -126,7 +126,7 @@ describe('useDataWorkspaceViewPersistence', () => {
       data_workspace_tint_mode: 'rainbow',
       data_workspace_map_pane_width: 1_000_000,
       data_workspace_column_order: ['length', 'not_a_column', 'length'] as string[],
-      data_workspace_column_widths: { length: Number.NaN, comment: 250 },
+      data_workspace_column_widths: { length: Number.NaN, comment: 250, runaway: 99_999, sliver: 3 },
     });
     // A backend that predates the hidden list sends no such field at all.
     delete (legacy.panels as Partial<Panels>).data_workspace_hidden_columns;
@@ -136,7 +136,7 @@ describe('useDataWorkspaceViewPersistence', () => {
     expect(view().tintMode).toBe('section');
     expect(view().mapPaneWidth).toBe(MAP_PANE_MAX_WIDTH);
     expect(view().columnOrder).toEqual(['length']);
-    expect(view().columnWidths).toEqual({ comment: 250 });
+    expect(view().columnWidths).toEqual({ comment: 250, runaway: 2000, sliver: 40 });
     expect(view().hiddenColumns).toEqual([...DATA_DEFAULT_HIDDEN]);
   });
 
