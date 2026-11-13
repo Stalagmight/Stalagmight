@@ -153,8 +153,13 @@ export function DataGrid({ model, view, height, nav, editing, tint, partners, on
         // runs again with the row in the view. Meanwhile, don't re-anchor.
         const store = useDataWorkspaceStore.getState();
         if (!store.revealRowKeys.includes(focusRequest.rowKey)) {
-          const { rowKey, colKey, align } = focusRequest;
-          store.revealAndFocus({ rowKey, ...(colKey ? { colKey } : {}), ...(align ? { align } : {}) });
+          const { rowKey, colKey, align, takeFocus } = focusRequest;
+          store.revealAndFocus({
+            rowKey,
+            ...(colKey ? { colKey } : {}),
+            ...(align ? { align } : {}),
+            ...(takeFocus !== undefined ? { takeFocus } : {}),
+          });
         }
         return;
       }
@@ -162,7 +167,16 @@ export function DataGrid({ model, view, height, nav, editing, tint, partners, on
       const colKey = focusRequest.colKey ?? lastActive.current?.colKey;
       lastActive.current = { key: focusRequest.rowKey, idx, colKey: colKey ?? '' };
       setActiveRowKey(focusRequest.rowKey);
-      setScrollReq({ row: idx, ...(colKey ? { colKey } : {}), align: focusRequest.align ?? 'auto', nonce: ++scrollNonce });
+      setScrollReq({
+        row: idx,
+        ...(colKey ? { colKey } : {}),
+        align: focusRequest.align ?? 'auto',
+        // Find navigation while typing sends takeFocus:false - the find box keeps
+        // focus; anything else uses the grid's default (focus only when the grid
+        // or the body already has it).
+        ...(focusRequest.takeFocus === false ? { focus: false } : focusRequest.takeFocus ? { focus: true } : {}),
+        nonce: ++scrollNonce,
+      });
       return;
     }
     // Keep the active row across rebuilds (filters, sort, data refresh) by key.

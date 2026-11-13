@@ -3,23 +3,19 @@
  * operators, condition and lock-reason wording.
  *
  * Column and group names live under `dataWorkspace.columns.*` /
- * `dataWorkspace.columnGroups.*` (the workspace shell's namespace). Until that
- * lands on this branch they fall back to `dataToolbar.fallback.*`; the app's
- * missing-key handler overrides i18next's `defaultValue`, hence the explicit
- * `exists` check. Once both namespaces are merged the fallback block can go.
+ * `dataWorkspace.columnGroups.*` (the workspace shell's namespace).
  */
 import type { TFunction, i18n as I18n } from 'i18next';
 import type { DataColumnGroup, DataColumnKey, DataLockReason, DataValueType, FilterCondition, FilterOp } from '../types';
 import { opNeedsValue } from '../model/filter';
 import { formatNumber } from '../../../i18n/format';
 
-export function columnLabel(t: TFunction, i18n: I18n, meta: { key: DataColumnKey; labelKey: string }): string {
-  return i18n.exists(meta.labelKey) ? t(meta.labelKey) : t(`dataToolbar.fallback.columns.${meta.key}`);
+export function columnLabel(t: TFunction, _i18n: I18n, meta: { key: DataColumnKey; labelKey: string }): string {
+  return t(meta.labelKey);
 }
 
-export function groupLabel(t: TFunction, i18n: I18n, group: DataColumnGroup): string {
-  const key = `dataWorkspace.columnGroups.${group}`;
-  return i18n.exists(key) ? t(key) : t(`dataToolbar.fallback.columnGroups.${group}`);
+export function groupLabel(t: TFunction, _i18n: I18n, group: DataColumnGroup): string {
+  return t(`dataWorkspace.columnGroups.${group}`);
 }
 
 const DATE_OPS: ReadonlySet<FilterOp> = new Set(['eq', 'neq', 'lt', 'lte', 'gt', 'gte']);
