@@ -868,7 +868,9 @@ const SectionRow = memo(function SectionRow({
             instead of selecting the row, and `disabled:opacity-0` keeps it
             hidden against the global `input:disabled { opacity: 0.5 }`. */}
         <span
-          className="relative w-3 h-3 rounded-full flex-shrink-0"
+          className={`relative w-3 h-3 rounded-full flex-shrink-0 ${
+            colorEditable ? 'hover:ring-2 hover:ring-text-secondary hover:ring-offset-1 hover:ring-offset-panel' : ''
+          }`}
           style={{ backgroundColor: section.color }}
           title={colorEditable ? undefined : t('sections.actions.colorReadOnly')}
           onMouseDown={colorEditable ? undefined : onControlMouseDown}
@@ -879,10 +881,11 @@ const SectionRow = memo(function SectionRow({
           }}
           data-testid={`section-color-dot-${section.id}`}
         >
+          {/* A 20px target centered on the 12px dot. */}
           <input
             ref={colorRef}
             type="color"
-            className="absolute inset-0 w-full h-full opacity-0 disabled:opacity-0 disabled:pointer-events-none"
+            className="absolute -top-1 -left-1 w-5 h-5 opacity-0 cursor-pointer disabled:opacity-0 disabled:pointer-events-none"
             disabled={!colorEditable}
             onMouseDown={onControlMouseDown}
             onDoubleClick={onControlDoubleClick}
