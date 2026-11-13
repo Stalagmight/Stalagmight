@@ -17,6 +17,7 @@ import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { IconButton } from '../common/Button';
 import { ExternalLinkIcon, PlusIcon } from '../common/icons';
 import { setSource } from '../../utils/telemetry';
+import { TOAST_KEYS } from '../../utils/toastKeys';
 import { useLongPress } from '../../hooks';
 import { DATA_TABLE_MIN_HEIGHT, DATA_TABLE_MAX_HEIGHT } from './layoutConstants';
 
@@ -73,7 +74,7 @@ export function rovingDefaultTabIndex(
 export default function SectionsPanel({ sections }: SectionsPanelProps) {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
-  const { selection, multiSelection, setSelection, addToSelection, toggleSelection, clearSelection, hoveredSectionId, hoveredShot, hoveredStation, setHoveredSectionId, openDialog, enterSectionFocus, triggerZoomToSection } = useUIStore(
+  const { selection, multiSelection, setSelection, addToSelection, toggleSelection, clearSelection, hoveredSectionId, hoveredShot, hoveredStation, setHoveredSectionId, openDialog, enterSectionFocus, triggerZoomToSection, showToast } = useUIStore(
     useShallow((s) => ({
       selection: s.selection,
       multiSelection: s.multiSelection,
@@ -88,6 +89,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
       openDialog: s.openDialog,
       enterSectionFocus: s.enterSectionFocus,
       triggerZoomToSection: s.triggerZoomToSection,
+      showToast: s.showToast,
     }))
   );
 
@@ -452,15 +454,24 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
   // system picker is open, and the closure-adjusted view and Plan/Export have no
   // server-side backstop. A transport rejection is surfaced by executeCommand
   // (which refreshes and re-throws); here it only means "not applied".
+  // A click on the dot while editing is blocked, or a pick confirmed after it
+  // became blocked, says why instead of doing nothing.
+  const handleSectionColorBlocked = useCallback(() => {
+    showToast(t('sections.actions.colorReadOnly'), TOAST_KEYS.EDIT_DISABLED, 'warning');
+  }, [showToast, t]);
+
   const handleSectionColorChange = useCallback(async (sectionId: SectionId, color: string) => {
-    if (isEditingBlockedNow()) return false;
+    if (isEditingBlockedNow()) {
+      handleSectionColorBlocked();
+      return false;
+    }
     setSource('sections-panel');
     try {
       return (await updateSection(sectionId, { color })).success;
     } catch {
       return false;
     }
-  }, [updateSection]);
+  }, [updateSection, handleSectionColorBlocked]);
 
   const handleFocusButtonMouseDown = useCallback((e: React.MouseEvent) => {
     // Stop propagation so the row's own mouse-down handling doesn't double-fire.
@@ -610,6 +621,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
                     onControlDoubleClick={handleFocusButtonDoubleClick}
                     colorEditable={!editingBlocked}
                     onColorChange={handleSectionColorChange}
+                    onColorBlocked={handleSectionColorBlocked}
                     onLongPress={openSectionContextMenu}
                     optionRefs={optionRefs}
                   />
@@ -714,6 +726,8 @@ interface SectionRowProps {
   colorEditable: boolean;
   /** Resolves false when the color was not applied, so the dot can revert. */
   onColorChange: (sectionId: SectionId, color: string) => Promise<boolean>;
+  /** The dot was clicked while editing is blocked. */
+  onColorBlocked: () => void;
   onLongPress: (sectionId: number, x: number, y: number) => void;
   optionRefs: React.MutableRefObject<(HTMLLIElement | null)[]>;
 }
@@ -743,6 +757,7 @@ const SectionRow = memo(function SectionRow({
   onControlDoubleClick,
   colorEditable,
   onColorChange,
+  onColorBlocked,
   onLongPress,
   optionRefs,
 }: SectionRowProps) {
@@ -823,15 +838,25 @@ const SectionRow = memo(function SectionRow({
       >
         {/* The span draws the dot (any CSS color, as before); the color input
             over it is invisible and only opens the system picker. Disabled, it
-            lets clicks fall through to the row. */}
+            lets clicks through to the span, which says the view is read-only
+            instead of selecting the row, and `disabled:opacity-0` keeps it
+            hidden against the global `input:disabled { opacity: 0.5 }`. */}
         <span
           className="relative w-3 h-3 rounded-full flex-shrink-0"
           style={{ backgroundColor: section.color }}
+          title={colorEditable ? undefined : t('sections.actions.colorReadOnly')}
+          onMouseDown={colorEditable ? undefined : onControlMouseDown}
+          onDoubleClick={colorEditable ? undefined : onControlDoubleClick}
+          onClick={colorEditable ? undefined : (e) => {
+            e.stopPropagation();
+            onColorBlocked();
+          }}
+          data-testid={`section-color-dot-${section.id}`}
         >
           <input
             ref={colorRef}
             type="color"
-            className="absolute inset-0 w-full h-full opacity-0 disabled:pointer-events-none"
+            className="absolute inset-0 w-full h-full opacity-0 disabled:opacity-0 disabled:pointer-events-none"
             disabled={!colorEditable}
             onMouseDown={onControlMouseDown}
             onDoubleClick={onControlDoubleClick}

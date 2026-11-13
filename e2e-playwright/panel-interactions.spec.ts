@@ -330,6 +330,16 @@ test.describe('Panel Interactions', () => {
       (window as any).__E2E_TEST__.speleoStore.getState().setLinkOnOpen({ permission: 'READ_AND_WRITE' }),
     );
     await expect(dot).toBeDisabled();
+    // The global `input:disabled { opacity: 0.5 }` must not surface the native
+    // swatch over the drawn dot.
+    await expect(dot).toHaveCSS('opacity', '0');
+
+    // Clicking the dot says why nothing opens, and does not select the row.
+    const readOnlyToast = page.locator('[data-testid="toast"][data-toast-key="edit-disabled"]');
+    await page.getByTestId(`section-color-dot-${sectionId}`).click();
+    await expect(readOnlyToast).toContainText('read-only');
+    await expect(sectionRow).toHaveAttribute('aria-selected', 'false');
+    await page.evaluate(() => (window as any).__E2E_TEST__.uiStore.setState({ toasts: [] }));
 
     // A pick confirmed after editing became blocked (the system picker was
     // already open) is refused at commit time, and the dot reverts.
@@ -338,6 +348,7 @@ test.describe('Panel Interactions', () => {
       el.dispatchEvent(new Event('change', { bubbles: true }));
     });
     await expect(dot).toHaveValue(before.toLowerCase());
+    await expect(readOnlyToast).toContainText('read-only');
     expect(
       await page.evaluate((id) => {
         const state = (window as any).__E2E_TEST__.projectStore.getState();
