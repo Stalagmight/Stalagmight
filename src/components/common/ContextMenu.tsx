@@ -12,7 +12,6 @@ import { getDeleteShotDialog } from '../../utils/contextMenuHelpers';
 import { canSplitShot } from '../../utils/shotSplit';
 import {
   combinePreview,
-  combinePreviewAll,
   queryCombineCandidates,
   queryCombineCandidateForSections,
 } from '../../utils/combineSections';
@@ -21,6 +20,8 @@ import { formatShotId, formatStationIdWithName } from '../../utils/formatters';
 import { setSource, trackContextMenuAction, trackDialogComplete } from '../../utils/telemetry';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { MENU_ROW_HEIGHT_PX, MENU_ROW_HINT_HEIGHT_PX, MenuRow, MenuSeparator } from './MenuRow';
+import { ChevronRightIcon } from './icons';
+import { anchorOf, SubmenuFlyout, type SubmenuAnchor } from './ContextSubmenu';
 
 /** The widest the menu grows; a hint line wraps within it. */
 const MENU_MAX_WIDTH_PX = 288;
@@ -51,6 +52,9 @@ import {
 interface ContextMenuItem {
   label: string;
   action: () => void;
+  /** Rows of a flyout opened from this row (on hover, or a click), in place of
+   *  `action`. Rows of a flyout may open their own (`ContextSubmenu.tsx`). */
+  submenu?: ContextMenuItem[];
   /** Leading action icon, shown at the Icons+ highlighting level. */
   icon?: ReactNode;
   disabled?: boolean;
@@ -203,6 +207,10 @@ export default function ContextMenu() {
     return null;
   })();
   const [combineAnswer, setCombineAnswer] = useState<{ key: string; candidates: CombineCandidate[] } | null>(null);
+  // The open flyout chain: one anchor per level (the row it hangs off, by
+  // index in its list, and that row's rect). Empty when no flyout is open.
+  const [submenuPath, setSubmenuPath] = useState<SubmenuAnchor[]>([]);
+  const flyoutsRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!combineKey) return;
     let live = true;
@@ -225,21 +233,29 @@ export default function ContextMenu() {
   }, [combineKey]);
   const combineCandidates = combineAnswer?.key === combineKey ? combineAnswer.candidates : undefined;
   /**
-   * The Combine row, always with a hint line (visible under the label, and as
+   * The combine row, always with a hint line (visible under the label, and as
    * its tooltip): "Checking...", the reason it is disabled, or what it joins.
-   * Whether it is offered is known synchronously (an END
-   * station, or exactly two selected sections), so the row is always there
-   * from the first render: disabled with "Checking..." while the backend's
-   * answer is in flight, then enabled, or disabled with the reason. Inserting
-   * it only once the answer arrived shifted every row below it under the
-   * pointer (and moved the whole menu, whose `top` follows `items.length`),
-   * the same hazard the stage-drop count above is frozen against.
+   * Whether it is offered is known synchronously (an END station, or exactly
+   * two selected sections), so the row is always there from the first render:
+   * disabled with "Checking..." while the backend's answer is in flight, then
+   * enabled, or disabled with the reason. Inserting it only once the answer
+   * arrived shifted every row below it under the pointer (and moved the whole
+   * menu, whose `top` follows `items.length`), the same hazard the stage-drop
+   * count above is frozen against. Its label may change in place.
+   *
+   * On a station, by how many sections end at the point:
+   * - two: one row, "Combine Section With <the other>...", opening the dialog;
+   * - three: "Combine Sections..." with a submenu of every pair ("A with B");
+   * - four or more: "Combine Sections..." > "A with..." > the others, nested.
+   * Sections are "combined", never "merged": merging is what stations do.
+   * The first-named section is the one the dialog keeps by default. Each
+   * pair is enabled, or disabled with its own reason.
    */
   const combineItems = (label: string): ContextMenuItem[] => {
     if (!combineKey) return [];
     const disabled = (hint: string): ContextMenuItem[] => [{ label, action: () => {}, disabled: true, hint }];
     if (combineCandidates === undefined) {
-      return disabled('Checking whether the sections can be combined...');
+      return disabled('Checking which sections meet here...');
     }
     const [combineCandidate] = combineCandidates;
     if (combineCandidate === undefined) {
@@ -252,43 +268,82 @@ export default function ContextMenu() {
     // Refused outright, or neither section can be the kept one.
     const blockedOf = (c: CombineCandidate) =>
       c.blocked_reason ?? (c.blocked_keeping_a && c.blocked_keeping_b ? c.blocked_keeping_a : null);
-    if (combineCandidates.length > 1) {
-      // A junction: the dialog opens on a picker listing every partner, each
-      // with its own reason when it cannot be combined.
-      const open = combineCandidates.filter((c) => blockedOf(c) === null).length;
-      const count = combineCandidates.length;
+    const name = (id: SectionId) => project?.sections.find((s) => s.id === id)?.name?.trim() || `Section ${id}`;
+    const open = (c: CombineCandidate, keep: SectionId) => () => {
+      openDialog('combine-sections', { candidate: c, keep, preview: combinePreview(c) });
+    };
+    const howTheyMeet = (c: CombineCandidate) =>
+      c.join_kind === 'closure' ? 'Across a loop closure' : c.join_kind === 'merged' ? 'Merged here' : 'Side by side here';
+    if (combineKey.startsWith('sections')) {
+      const { section_a: a, section_b: b } = combineCandidate;
+      const across = combineCandidate.join_kind === 'closure' ? ', across a loop closure' : '';
+      const blocked = blockedOf(combineCandidate);
       return [
         {
           label,
-          action: () => {
-            openDialog('combine-sections', {
-              candidates: combineCandidates,
-              preview: combinePreviewAll(combineCandidates),
-            });
-          },
-          disabled: open === 0,
-          hint:
-            open === 0
-              ? `None of the ${count} sections ending here can be combined`
-              : `${count} sections end here: choose which one`,
+          action: open(combineCandidate, a),
+          disabled: blocked !== null,
+          hint: blocked ?? `${name(a)} and ${name(b)} meet end to end${across}`,
         },
       ];
     }
-    const blocked = blockedOf(combineCandidate);
-    const name = (id: SectionId) => project?.sections.find((s) => s.id === id)?.name?.trim() || `Section ${id}`;
-    const { section_a: a, section_b: b } = combineCandidate;
-    const clicked = combineKey.startsWith('station') ? Number(combineKey.split(':')[1]) : null;
-    // The enabled row says what it joins, so the row's height never depends on
-    // the answer.
-    const joins = clicked === null ? `${name(a)} and ${name(b)} meet end to end` : `With ${name(clicked === a ? b : a)}`;
+    const clicked = Number(combineKey.split(':')[1]);
+    const shotsOf = (c: CombineCandidate, id: SectionId) => (c.section_a === id ? c.shot_count_a : c.shot_count_b);
+    const otherOf = (c: CombineCandidate, id: SectionId) => (c.section_a === id ? c.section_b : c.section_a);
+    // Every section at the point, the clicked one first.
+    const sections: SectionId[] = [clicked];
+    for (const c of combineCandidates) {
+      for (const id of [c.section_a, c.section_b]) if (!sections.includes(id)) sections.push(id);
+    }
+    if (sections.length === 2) {
+      const partner = otherOf(combineCandidate, clicked);
+      const blocked = blockedOf(combineCandidate);
+      return [
+        {
+          label: `Combine Section With ${name(partner)}...`,
+          action: open(combineCandidate, clicked),
+          disabled: blocked !== null,
+          hint: blocked ?? howTheyMeet(combineCandidate),
+        },
+      ];
+    }
+    const pairOf = (x: SectionId, y: SectionId) =>
+      combineCandidates.find((c) => (c.section_a === x && c.section_b === y) || (c.section_a === y && c.section_b === x));
+    const pairRow = (rowLabel: string, c: CombineCandidate, keep: SectionId): ContextMenuItem => ({
+      label: rowLabel,
+      action: open(c, keep),
+      disabled: blockedOf(c) !== null,
+      hint: blockedOf(c) ?? howTheyMeet(c),
+    });
+    let submenu: ContextMenuItem[];
+    if (sections.length === 3) {
+      // Every pair, the clicked section's first.
+      submenu = combineCandidates.map((c) => {
+        const first = c.section_a === clicked || c.section_b === clicked ? clicked : c.section_a;
+        return pairRow(`${name(first)} with ${name(otherOf(c, first))}`, c, first);
+      });
+    } else {
+      // Each section, then whom it can be combined with.
+      submenu = sections.flatMap((first) => {
+        const rows = sections.flatMap((second) => {
+          const c = second === first ? undefined : pairOf(first, second);
+          if (!c) return [];
+          const shots = shotsOf(c, second);
+          return [pairRow(`${name(second)} (${shots} ${shots === 1 ? 'shot' : 'shots'})`, c, first)];
+        });
+        return rows.length === 0 ? [] : [{ label: `${name(first)} with...`, action: () => {}, submenu: rows }];
+      });
+    }
+    const openCount = combineCandidates.filter((c) => blockedOf(c) === null).length;
     return [
       {
         label,
-        action: () => {
-          openDialog('combine-sections', { candidate: combineCandidate, preview: combinePreview(combineCandidate) });
-        },
-        disabled: blocked !== null,
-        hint: blocked ?? joins,
+        action: () => {},
+        hint:
+          openCount === 0
+            ? `None of the ${sections.length} sections ending here can be combined`
+            : `${sections.length} sections end here`,
+        submenu,
       },
     ];
   };
@@ -334,7 +389,7 @@ export default function ContextMenu() {
   useDismissableLayer({
     open: true,
     onDismiss: closeDialog,
-    contains: [menuRef],
+    contains: [menuRef, flyoutsRef],
     anchorScope: scrollScopeRef,
     // Only a caller that has NAMED the scroller which moves this menu can be
     // trusted to survive an unrelated one. Without a scrollScope the menu is
@@ -916,7 +971,7 @@ export default function ContextMenu() {
         if (label.startsWith('Reverse ')) {
           return <EntityReverseSymbol entity="section" size={18} />;
         }
-        // "Combine Sections..." and "Combine 2 Sections...".
+        // "Combine Sections...", "Combine Section With <name>..." and "Combine 2 Sections...".
         if (label.startsWith('Combine ')) {
           return <ToolGlyph tool="merge" size={16} />;
         }
@@ -948,11 +1003,15 @@ export default function ContextMenu() {
     // read-only navigation like "Zoom to Section"). Edits are made on the measured view.
     const geometryReadOnly = geometryMode === 'closureAdjusted' || speleoReadOnly;
     const READ_ONLY_SAFE_LABELS = new Set(['Zoom to Section']);
+    const gate = (item: ContextMenuItem): ContextMenuItem => {
+      const nested = item.submenu ? { ...item, submenu: item.submenu.map(gate) } : item;
+      return geometryReadOnly && !item.separator && !READ_ONLY_SAFE_LABELS.has(item.label)
+        ? { ...nested, disabled: true }
+        : nested;
+    };
     items = buildMenuItems().map((item) => {
       const withIcon = item.separator ? item : { ...item, icon: iconForLabel(item.label) };
-      return geometryReadOnly && !item.separator && !READ_ONLY_SAFE_LABELS.has(item.label)
-        ? { ...withIcon, disabled: true }
-        : withIcon;
+      return gate(withIcon);
     });
   }
 
@@ -961,7 +1020,7 @@ export default function ContextMenu() {
   }
 
   // Adjust position to stay within viewport. A row with a hint is taller (its
-  // hint is a fixed two lines, so the height is known before it renders), and
+  // hint is a fixed single line, so the height is known before it renders), and
   // a menu with hints may be as wide as its max width.
   const menuHeight = items.reduce(
     (height, item) => height + MENU_ROW_HEIGHT_PX + (item.hint !== undefined ? MENU_ROW_HINT_HEIGHT_PX : 0),
@@ -987,11 +1046,32 @@ export default function ContextMenu() {
             return <MenuSeparator key={index} />;
           }
 
+          const hasSubmenu = item.submenu !== undefined;
+          const expanded = submenuPath[0]?.index === index;
+          const openSubmenuFrom = (row: HTMLElement) => setSubmenuPath([anchorOf(row, index)]);
           return (
             <MenuRow
               key={index}
               data-testid={`context-menu-item-${index}`}
-              onClick={() => { setSource('context-menu'); item.action(); }}
+              onClick={(e) => {
+                if (hasSubmenu) {
+                  if (item.disabled) return;
+                  if (expanded) setSubmenuPath([]);
+                  else openSubmenuFrom(e.currentTarget);
+                  return;
+                }
+                setSource('context-menu');
+                item.action();
+              }}
+              onMouseEnter={(e) => {
+                if (hasSubmenu && !item.disabled) {
+                  if (!expanded) openSubmenuFrom(e.currentTarget);
+                } else if (submenuPath.length > 0) {
+                  setSubmenuPath([]);
+                }
+              }}
+              aria-haspopup={hasSubmenu ? 'menu' : undefined}
+              aria-expanded={hasSubmenu ? expanded : undefined}
               disabled={item.disabled}
               title={item.hint}
               hint={item.hint}
@@ -999,10 +1079,29 @@ export default function ContextMenu() {
               icon={item.icon}
               showIcons={showIcons}
               className={`${item.disabled ? 'text-text-secondary cursor-not-allowed' : 'hover:bg-accent-10'} ${
-                item.danger && !item.disabled ? 'text-error hover:bg-error-10' : ''
-              }`}
-            />
+                expanded ? 'bg-accent-10' : ''
+              } ${item.danger && !item.disabled ? 'text-error hover:bg-error-10' : ''}`}
+            >
+              {hasSubmenu && <ChevronRightIcon size={14} className="text-text-secondary flex-shrink-0" />}
+            </MenuRow>
           );
+        })}
+      </div>
+      <div ref={flyoutsRef}>
+        {submenuPath.map((anchor, level) => {
+          // The rows of this level: walk the open chain down from the top.
+          let list: ContextMenuItem[] | undefined = items;
+          for (const step of submenuPath.slice(0, level + 1)) list = list?.[step.index]?.submenu;
+          return list ? (
+            <SubmenuFlyout
+              key={level}
+              level={level + 1}
+              anchor={anchor}
+              items={list}
+              path={submenuPath}
+              setPath={setSubmenuPath}
+            />
+          ) : null;
         })}
       </div>
     </div>

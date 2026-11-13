@@ -146,7 +146,7 @@ in `src-tauri/src/commands/telemetry_coverage_tests.rs`.
 | `src-tauri/crates/parsers/src/parsers/dmp.rs` | MNemo DMP file parser |
 | `src-tauri/crates/models/src/project.rs` | Project model with merge/offset logic |
 | `src-tauri/crates/models/src/project/gas.rs` | Gas-weighted reachability engine (`compute_gas_reach_field`) |
-| `src-tauri/crates/models/src/project/split_section.rs`, `combine_candidate.rs`, `combine_sections.rs` | Split Section Here and Combine Sections; `station_rekey.rs` moves stored station refs with their stations (by stored key) and `gauge.rs` keeps the least-squares gauge on one physical station ([plan](plans/2026-11-12_merge-split-sections.md)) |
+| `src-tauri/crates/models/src/project/split_section.rs`, `combine_candidate.rs`, `combine_plan.rs`, `combine_sections.rs` | Split Section Here and Combine Sections (`combine_plan.rs`: across a loop, which side moves and which ties become loop closures); `station_rekey.rs` moves stored station refs with their stations (by stored key) and `gauge.rs` keeps the least-squares gauge on one physical station ([plan](plans/2026-11-12_merge-split-sections.md)) |
 | `src-tauri/crates/models/src/geo.rs` | GPS-to-local coordinate transformation (WGS84 → ENU) |
 | `src-tauri/crates/speleodb/src/speleodb/mod.rs` | SpeleoDB client module root (HTTP, auth, native files, sync, TLS policy) |
 | `src-tauri/crates/persistence/src/cache/tiles.rs` | Satellite tile cache (SQLite-based) |

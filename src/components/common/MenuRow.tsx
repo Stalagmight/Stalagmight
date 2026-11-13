@@ -16,13 +16,19 @@ import { forwardRef, useId, type ReactNode, type ButtonHTMLAttributes, type CSSP
 export const MENU_ROW_BASE_CLASS =
   'w-full px-3 py-2 text-left text-sm flex items-center gap-2';
 
-/** A row's hint line: two lines of `text-xs`, whatever the text. */
-export const MENU_ROW_HINT_CLASS = 'text-xs leading-4 h-8 line-clamp-2 whitespace-normal';
+/** A row's hint line: ONE line of `text-xs`, whatever the text, truncated
+ *  (callers pass the full text as `title`). Fixed so a row whose hint arrives
+ *  later keeps its height; two lines left a blank one under every short hint. */
+export const MENU_ROW_HINT_CLASS = 'text-xs leading-4 h-4 truncate';
+
+/** A wrapping hint, for a row whose hint is known when it first renders (a
+ *  flyout's rows): as tall as the text, up to three lines. */
+export const MENU_ROW_HINT_WRAP_CLASS = 'text-xs leading-4 line-clamp-3 whitespace-normal';
 
 /** Pixel heights the menus position themselves with: a plain row, and the
- *  extra a hint adds (`h-8`). */
+ *  extra a hint adds (`h-4`). */
 export const MENU_ROW_HEIGHT_PX = 36;
-export const MENU_ROW_HINT_HEIGHT_PX = 32;
+export const MENU_ROW_HINT_HEIGHT_PX = 16;
 
 interface MenuRowProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   'data-testid'?: string;
@@ -40,10 +46,13 @@ interface MenuRowProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   children?: ReactNode;
   /**
    * A second, smaller muted line under the label (why a row is disabled, or
-   * what it will do). Fixed at two lines, so a row keeps its height while the
-   * text changes; longer text is clamped, so callers also pass it as `title`.
+   * what it will do). Fixed at one line, so a row keeps its height while the
+   * text changes; longer text is truncated, so callers also pass it as `title`.
    */
   hint?: string | undefined;
+  /** Let the hint wrap to its own height (up to three lines) instead of the
+   *  fixed single line: only for rows that never re-render with a new hint. */
+  hintWraps?: boolean;
 }
 
 /**
@@ -52,7 +61,7 @@ interface MenuRowProps extends ButtonHTMLAttributes<HTMLButtonElement> {
  * onClick, disabled, data-testid, aria-*, onMouseEnter, …) pass straight through.
  */
 export const MenuRow = forwardRef<HTMLButtonElement, MenuRowProps>(function MenuRow(
-  { label, icon, showIcons, iconStyle, className, children, hint, 'data-testid': testId, ...buttonProps },
+  { label, icon, showIcons, iconStyle, className, children, hint, hintWraps, 'data-testid': testId, ...buttonProps },
   ref,
 ) {
   const hintId = useId();
@@ -83,7 +92,7 @@ export const MenuRow = forwardRef<HTMLButtonElement, MenuRowProps>(function Menu
           <span className="truncate">{label}</span>
           <span
             id={hintId}
-            className={`${MENU_ROW_HINT_CLASS} text-text-secondary`}
+            className={`${hintWraps ? MENU_ROW_HINT_WRAP_CLASS : MENU_ROW_HINT_CLASS} text-text-secondary`}
             data-testid={testId ? `${testId}-hint` : undefined}
           >
             {hint}

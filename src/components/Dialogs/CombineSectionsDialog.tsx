@@ -8,14 +8,15 @@ import { trackDialogComplete } from '../../utils/telemetry';
 import { formatStationIdWithName } from '../../utils/formatters';
 import { formatLength } from '../../utils/formatStats';
 import { defaultConfig } from '../../types/config';
-import { defaultCombinedName } from '../../utils/combineSections';
+import { combinePlanFor, defaultCombinedName } from '../../utils/combineSections';
 import type { CombineCandidate } from '../../types/ipc/CombineCandidate';
 import type { CombinePick } from '../../types/ipc/CombinePick';
-import type { Section, SectionId } from '../../types/project';
+import type { Section, SectionId, StationRef } from '../../types/project';
 import type { CreditedPerson, Shot } from '../../types/ipc.generated';
 import { formatCreditDateRange, shotCredit, summarizeCredits } from '../../utils/sectionCredit';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { CombinePlanNotes } from './CombinePlanNotes';
 
 const sectionLabel = (section: Section | undefined, id: number) =>
   section?.name?.trim() ? section.name : `Section ${id}`;
@@ -60,31 +61,22 @@ function CombinedCreditSummary({ shots }: { shots: Array<Pick<Shot, 'credit'>> }
 }
 
 /**
- * Combine Sections: join two sections that meet end to end at one point into
- * one. Other sections there stay attached as branches. Opened with the
- * backend's `CombineCandidate` (a two-section selection, or a station with one
- * partner), or with `candidates` at a junction, where it starts with a picker
- * listing every partner, each enabled or disabled with its own reason.
+ * Combine Sections: join two sections that meet end to end (merged,
+ * co-located, or across a loop closure) into one. Other sections there stay
+ * attached as branches. Opened with the backend's `CombineCandidate` for one
+ * pair: a two-section selection, or the pair picked in the station menu
+ * ("Combine Section With <name>...", or the "Combine Sections..." submenu at a
+ * junction), with `keep` the section the menu named first. What else the
+ * combine changes for the kept section shown (a side that moves, ties that
+ * become loop closures, converted bearings...) is listed, with everything
+ * else informational, under a folded "Details".
  */
 export default function CombineSectionsDialog() {
   const { t } = useTranslation();
   const { closeDialog, dialogData, setSelection } = useUIStore();
   const { combineSections, project, stations, config } = useProjectStore();
   const lengthUnit = config?.units?.length ?? defaultConfig.units.length;
-  const candidates: CombineCandidate[] =
-    (dialogData.candidates as CombineCandidate[] | undefined) ??
-    (dialogData.candidate ? [dialogData.candidate as CombineCandidate] : []);
-  const refusalOf = (c: CombineCandidate) =>
-    c.blocked_reason ?? (c.blocked_keeping_a && c.blocked_keeping_b ? c.blocked_keeping_a : null);
-  const [chosen, setChosen] = useState(() => Math.max(0, candidates.findIndex((c) => refusalOf(c) === null)));
-  const candidate: CombineCandidate | undefined = candidates[chosen];
-  // At a junction every candidate shares the clicked section: the partner is the other one.
-  const shared =
-    candidates.length > 1
-      ? [candidates[0]!.section_a, candidates[0]!.section_b].find((id) =>
-          candidates.every((c) => c.section_a === id || c.section_b === id)
-        )
-      : undefined;
+  const candidate = dialogData.candidate as CombineCandidate | undefined;
 
   const sectionA = project?.sections.find((s) => s.id === candidate?.section_a);
   const sectionB = project?.sections.find((s) => s.id === candidate?.section_b);
@@ -93,9 +85,15 @@ export default function CombineSectionsDialog() {
   // `a` (the lower id) is kept unless the user swaps.
   // Start on `b` only when `a` cannot be kept but `b` can (its shot numbers
   // are used up for the session).
-  const [keepB, setKeepB] = useState(
-    () => Boolean(candidate?.blocked_keeping_a) && !candidate?.blocked_keeping_b
-  );
+  // The section the menu named first (`keep`) is kept, as long as it can be:
+  // otherwise `a`, the lower id, unless `a` cannot be kept but `b` can (its
+  // shot numbers are used up for the session).
+  const [keepB, setKeepB] = useState(() => {
+    const keep = dialogData.keep as SectionId | undefined;
+    if (keep === candidate?.section_b && !candidate?.blocked_keeping_b) return true;
+    if (keep === candidate?.section_a && !candidate?.blocked_keeping_a) return false;
+    return Boolean(candidate?.blocked_keeping_a) && !candidate?.blocked_keeping_b;
+  });
   const kept = keepB ? sectionB : sectionA;
   const other = keepB ? sectionA : sectionB;
   const keptId = (keepB ? candidate?.section_b : candidate?.section_a) ?? 0;
@@ -125,6 +123,15 @@ export default function CombineSectionsDialog() {
       )?.name
     : undefined;
   const joinLabel = join ? formatStationIdWithName(join.section_id, join.station_index, joinName) : '';
+  const stationLabel = (ref: StationRef) =>
+    formatStationIdWithName(
+      ref.section_id,
+      ref.station_index,
+      stations.find(
+        (s) => s.station_ref.section_id === ref.section_id && s.station_ref.station_index === ref.station_index
+      )?.name
+    );
+  const plan = candidate ? combinePlanFor(candidate, keptId) : undefined;
   const keptShots = (keepB ? candidate?.shot_count_b : candidate?.shot_count_a) ?? 0;
   const otherShots = (keepB ? candidate?.shot_count_a : candidate?.shot_count_b) ?? 0;
   const summary = t('dialogs.combineSections.summary', {
@@ -137,7 +144,8 @@ export default function CombineSectionsDialog() {
   // Where the other section's shots go (wording from #713): the kept section
   // keeps its station 0 unless the join is at its start.
   const keptEnd = keepB ? candidate?.end_b : candidate?.end_a;
-  const plan = `${otherName} will be ${candidate?.reverses ? 'reversed and ' : ''}added ${
+  const otherEnd = keepB ? candidate?.end_a : candidate?.end_b;
+  const placement = `${otherName} will be ${candidate?.reverses ? 'reversed and ' : ''}added ${
     keptEnd === 'start' ? 'before' : 'after'
   } ${keptName}.`;
 
@@ -149,56 +157,6 @@ export default function CombineSectionsDialog() {
     candidate?.blocked_reason ?? (keepB ? candidate?.blocked_keeping_b : candidate?.blocked_keeping_a) ?? null;
   const sectionName = (id: SectionId) => sectionLabel(project?.sections.find((s) => s.id === id), id);
   const listNames = (ids: SectionId[]) => ids.map(sectionName).join(', ');
-  const choose = (index: number) => {
-    const next = candidates[index];
-    if (!next) return;
-    setChosen(index);
-    // Everything the form derived from the previous pair starts over.
-    setKeepB(Boolean(next.blocked_keeping_a) && !next.blocked_keeping_b);
-    setName(null);
-    setColor(null);
-    setCommentPick('kept');
-    setNamePick('kept');
-    setError(null);
-  };
-  const partnerPicker = candidates.length > 1 && (
-    <fieldset className="space-y-2" data-testid="combine-partner-picker">
-      <legend className="text-sm text-text-secondary mb-1">
-        {t('dialogs.combineSections.pickPartner', {
-          section: shared !== undefined ? sectionName(shared) : '',
-          count: candidates.length,
-        })}
-      </legend>
-      {candidates.map((c, index) => {
-        const partner = shared === c.section_a ? c.section_b : c.section_a;
-        const shots = shared === c.section_a ? c.shot_count_b : c.shot_count_a;
-        const refusal = refusalOf(c);
-        return (
-          <label key={`${partner}:${c.end_a}:${c.end_b}`} className="block text-sm cursor-pointer">
-            <span className="flex items-center gap-2">
-              <input
-                type="radio"
-                name="combine-partner"
-                checked={chosen === index}
-                onChange={() => choose(index)}
-                disabled={isSubmitting || refusal !== null}
-                data-testid={`combine-partner-${partner}`}
-              />
-              <span className="truncate">
-                {sectionName(partner)} ({t('dialogs.combineSections.shots', { count: shots })})
-              </span>
-            </span>
-            {refusal !== null && (
-              <span className="block pl-6 text-text-tertiary" data-testid={`combine-partner-reason-${partner}`}>
-                {refusal}
-              </span>
-            )}
-          </label>
-        );
-      })}
-    </fieldset>
-  );
-
   const handleConfirm = async () => {
     if (isSubmitting || isStale || blocked) return;
     if (isEditingBlockedNow()) {
@@ -215,6 +173,9 @@ export default function CombineSectionsDialog() {
         swap_lr: swapLr,
         comment_pick: commentConflict ? commentPick : 'kept',
         name_pick: nameConflict ? namePick : 'kept',
+        // The join this dialog shows: two sections can meet at more than one
+        // place (a loop of two), and the backend must not pick another.
+        ...(keptEnd && otherEnd ? { join: { kept: keptEnd, other: otherEnd } } : {}),
       });
       if (!result.success) {
         setError(result.error ?? 'Failed to combine sections');
@@ -265,9 +226,17 @@ export default function CombineSectionsDialog() {
       data-testid="combine-sections-dialog"
     >
       <div className="space-y-4">
-        {partnerPicker}
         <p className="text-text-secondary" data-testid="combine-summary">{summary}</p>
-        {!isStale && <p className="text-sm" data-testid="combine-plan">{plan}</p>}
+        {!isStale && <p className="text-sm" data-testid="combine-plan">{placement}</p>}
+        {!isStale && candidate?.join_kind === 'closure' && (
+          <p className="text-sm" data-testid="combine-closure-join">
+            {t('dialogs.combineSections.closureJoin', {
+              kept: keptName,
+              other: otherName,
+              distance: formatLength(plan?.shift_m ?? 0, lengthUnit, 2),
+            })}
+          </p>
+        )}
 
         <div className="flex items-center justify-between gap-2 text-sm">
           <span data-testid="combine-kept-label">
@@ -306,11 +275,7 @@ export default function CombineSectionsDialog() {
         </div>
 
         {candidate?.reverses && (
-          <div className="space-y-2 text-sm" data-testid="combine-reverse-notice">
-            <p>
-              Reversing {otherName} reciprocates its bearings and swaps its depths, so every station stays where
-              it is.
-            </p>
+          <div className="text-sm" data-testid="combine-reverse-notice">
             <label className="flex items-center gap-2 cursor-pointer">
               <input
                 type="checkbox"
@@ -324,35 +289,6 @@ export default function CombineSectionsDialog() {
           </div>
         )}
 
-        {candidate && candidate.branches.length > 0 && (
-          <p className="text-sm text-text-secondary" data-testid="combine-branches-note">
-            {t('dialogs.combineSections.branchesNote', {
-              names: listNames(candidate.branches),
-              count: candidate.branches.length,
-            })}
-          </p>
-        )}
-        {candidate && candidate.loose_ends.length > 0 && (
-          <p className="text-sm text-text-secondary" data-testid="combine-loose-ends-note">
-            {t('dialogs.combineSections.looseEndsNote', {
-              names: listNames(candidate.loose_ends),
-              count: candidate.loose_ends.length,
-            })}
-          </p>
-        )}
-        {candidate?.depth_difference_m != null && (
-          <p className="text-sm text-warning" data-testid="combine-depth-note">
-            {t('dialogs.combineSections.depthNote', {
-              gap: formatLength(candidate.depth_difference_m, lengthUnit, 2),
-              half: formatLength(candidate.depth_difference_m / 2, lengthUnit, 2),
-            })}
-          </p>
-        )}
-
-        <p className="text-sm text-text-secondary" data-testid="combine-direction-note">
-          The combined section keeps {keptName}'s survey direction ({kept?.direction === 'out' ? 'Out' : 'In'}).
-        </p>
-
         {commentConflict &&
           pickChoice('comment', 'The join station has two comments. Keep:', commentPick, setCommentPick, [
             ['kept', keptText(candidate?.comment_a, candidate?.comment_b)],
@@ -365,14 +301,74 @@ export default function CombineSectionsDialog() {
             ['other', otherText(candidate?.station_name_a, candidate?.station_name_b)],
           ])}
 
-        {!isStale && kept && other && (
-          <CombinedCreditSummary
-            shots={(() => {
-              const moved = candidate?.reverses ? [...other.shots].reverse() : other.shots;
-              return keptEnd === 'start' ? [...moved, ...kept.shots] : [...kept.shots, ...moved];
-            })()}
-          />
-        )}
+        {/* Everything informational, folded: what moves, what becomes a loop
+            closure, branches, depth, direction and credit. */}
+        <details className="text-sm" data-testid="combine-details">
+          <summary className="cursor-pointer text-text-secondary hover:text-text-primary" data-testid="combine-details-toggle">
+            Details
+          </summary>
+          <div className="mt-3 space-y-4">
+            {candidate?.reverses && (
+              <p data-testid="combine-reverse-explain">
+                Reversing {otherName} reciprocates its bearings and swaps its depths, so every station stays where
+                it is.
+              </p>
+            )}
+
+            {candidate && candidate.branches.length > 0 && (
+              <p className="text-text-secondary" data-testid="combine-branches-note">
+                {t('dialogs.combineSections.branchesNote', {
+                  names: listNames(candidate.branches),
+                  count: candidate.branches.length,
+                })}
+              </p>
+            )}
+            {candidate && candidate.loose_ends.length > 0 && (
+              <p className="text-text-secondary" data-testid="combine-loose-ends-note">
+                {t('dialogs.combineSections.looseEndsNote', {
+                  names: listNames(candidate.loose_ends),
+                  count: candidate.loose_ends.length,
+                })}
+              </p>
+            )}
+            {candidate?.depth_difference_m != null && (
+              <p className="text-warning" data-testid="combine-depth-note">
+                {t('dialogs.combineSections.depthNote', {
+                  gap: formatLength(candidate.depth_difference_m, lengthUnit, 2),
+                  half: formatLength(candidate.depth_difference_m / 2, lengthUnit, 2),
+                })}
+              </p>
+            )}
+
+            {!isStale && candidate && plan && (
+              <CombinePlanNotes
+                candidate={candidate}
+                plan={plan}
+                keptId={keptId}
+                keptName={keptName}
+                otherName={otherName}
+                keptQuality={kept?.quality}
+                otherQuality={other?.quality}
+                lengthUnit={lengthUnit}
+                sectionName={sectionName}
+                stationLabel={stationLabel}
+              />
+            )}
+
+            <p className="text-text-secondary" data-testid="combine-direction-note">
+              The combined section keeps {keptName}'s survey direction ({kept?.direction === 'out' ? 'Out' : 'In'}).
+            </p>
+
+            {!isStale && kept && other && (
+              <CombinedCreditSummary
+                shots={(() => {
+                  const moved = candidate?.reverses ? [...other.shots].reverse() : other.shots;
+                  return keptEnd === 'start' ? [...moved, ...kept.shots] : [...kept.shots, ...moved];
+                })()}
+              />
+            )}
+          </div>
+        </details>
 
         {blocked && (
           <div className="p-3 bg-error-10 border border-error-20 rounded text-error text-sm" data-testid="combine-blocked">

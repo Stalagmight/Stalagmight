@@ -205,6 +205,7 @@ fn combine_options() -> CombineSectionsOptions {
         swap_lr: false,
         comment_pick: CombinePick::Kept,
         name_pick: CombinePick::Kept,
+        join: None,
     }
 }
 

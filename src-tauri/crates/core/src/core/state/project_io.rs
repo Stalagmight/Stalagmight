@@ -270,6 +270,38 @@ fn apply_save_heals(project: &mut Project) {
     }
 }
 
+/// The gauge pairs a recorded snapshot holds, by section id (sections with a
+/// pair only): what the EDIT on the other side of a snapshot pair wrote, as
+/// opposed to a pair a save captured after the entry was recorded.
+pub(crate) type RecordedGauges = std::collections::HashMap<SectionId, (String, Option<String>)>;
+
+/// Read just the gauge pairs out of a project snapshot. serde skips every
+/// other field, so this costs one scan of the text, not a project. `None` when
+/// the snapshot does not parse.
+pub(super) fn recorded_gauge_pairs(snapshot: &str) -> Option<RecordedGauges> {
+    #[derive(serde::Deserialize)]
+    struct GaugeOf {
+        id: SectionId,
+        #[serde(default)]
+        gauge_shot_uuid: Option<String>,
+        #[serde(default)]
+        gauge_neighbour_uuid: Option<String>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Gauges {
+        #[serde(default)]
+        sections: Vec<GaugeOf>,
+    }
+    let gauges: Gauges = serde_json::from_str(snapshot).ok()?;
+    Some(
+        gauges
+            .sections
+            .into_iter()
+            .filter_map(|s| Some((s.id, (s.gauge_shot_uuid?, s.gauge_neighbour_uuid))))
+            .collect(),
+    )
+}
+
 /// Bring a project restored from an undo/redo snapshot up to the standard a
 /// saved project is held to, so a history move cannot revert a save's heal
 /// (issue #413, finding 11).
@@ -333,7 +365,17 @@ fn apply_save_heals(project: &mut Project) {
 ///   the save runs it only after the save gate and why a refused save
 ///   deliberately leaves it undone. An undo must not rewrite the user's values;
 ///   the load and save boundaries neutralize them where it matters.
-pub(super) fn reapply_heals_after_restore(restored: &mut Project, live: Option<&Project>) {
+///
+/// `edited`: for a step through a snapshot pair, the gauge pairs the half
+/// being LEFT BEHIND held when it was recorded. A live pair equal to one of
+/// them is the edit's own (a combine that pins its kept section's gauge on the
+/// station it was on), not a save's capture, so it is not carried across: the
+/// restored half did not have it, and the step is an exact inverse.
+pub(super) fn reapply_heals_after_restore(
+    restored: &mut Project,
+    live: Option<&Project>,
+    edited: Option<&RecordedGauges>,
+) {
     restored.ensure_shot_uuids();
     let Some(live) = live else {
         return;
@@ -352,6 +394,16 @@ pub(super) fn reapply_heals_after_restore(restored: &mut Project, live: Option<&
         let Some(gauge_shot) = healed.gauge_shot_uuid.as_deref() else {
             continue;
         };
+        let edits_own =
+            edited
+                .and_then(|pairs| pairs.get(&section.id))
+                .is_some_and(|(shot, neighbour)| {
+                    shot == gauge_shot
+                        && neighbour.as_deref() == healed.gauge_neighbour_uuid.as_deref()
+                });
+        if edits_own {
+            continue;
+        }
         // Matched by id, but the pair names shots BY UUID - and the section this
         // is being copied onto is a DIFFERENT state of that id, which need not
         // hold them. `DeleteShot` records a snapshot pair; save while the undo

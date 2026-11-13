@@ -964,8 +964,9 @@ There is no Draw or Delete tool. Shots are added from the map context menu:
 any shot, which splits it in two (also available from the data table's row
 menu). Deletion is select plus Delete/Backspace, or the context menu. The same
 menu restructures sections without deleting anything: **Split Section Here** on
-a mid-section station or a point along a shot, and **Combine Sections...** on an
-end station where another section ends (see 7.11).
+a mid-section station or a point along a shot, and **Combine Section With
+<name>...** (or, at a junction, **Combine Sections...**) on an end station where
+another section ends (see 7.11).
 
 Panning is not a tool either. A plain left-click-drag pans the map under every
 tool in the table except **Zoom**, whose drag draws its zoom box, and in
@@ -1649,30 +1650,69 @@ only tie, which the split turns into a merge (a closure must close a loop),
 moving one half by the loop's misclosure; the dialog says which half moves and
 how far before the user confirms (`split_section_preview`). One undo step.
 
-**Combine Sections** (an end station's context menu, or the section menu when
-exactly two sections are selected): the two chosen sections meet end to end at
-exactly one point and become one; other sections there stay attached as
-branches. They meet when an end station of each is the same point: in one merge
-group, or unmerged and co-located within 1 mm horizontally (the state a split
-leaves). Another section's end merged there stays merged to the joined station,
-now a station in the middle of the combined section; one ending there unmerged
-is left as it is, and the dialog says so. At a junction the station menu opens
-the dialog on a picker listing every partner (name and shot count), each
-enabled or disabled with its own reason. The kept section (the lower id by default; the
-dialog can swap) keeps its id, shot numbers, direction and position; the other
-section is reversed first when the two meet end to end or start to start. Every
-per-shot field travels, and every station reference follows its station; the
-join station keeps one comment and one name (the dialog asks when they differ)
-and the kept station's offset. Blocked, with the reason in the menu tooltip,
-for co-located, unmerged ends more than 1 m apart in depth (the joined station
-takes their average; between 5 cm and 1 m the dialog says how far each end
-moves), for a section merged there at a station in its middle (it passes
-through), different north references or quality, a second rigid tie between
-the two, two zero datums, join stations moved by different amounts, or more
-than 99,999 shots, or two sections that share a shot identity. Every shot keeps
-its own surveyors, explorers and date; the dialog summarises the combined credit.
-Combining the two halves of a split gives the section back, with whatever was
-merged at the split station still attached there. One undo step. Rules and edge cases: [plans/2026-11-12_merge-split-sections.md](plans/2026-11-12_merge-split-sections.md).
+**Combine Sections** (an end station's context menu, or **Combine 2 Sections...**
+in the section menu when exactly two sections are selected): the two chosen
+sections meet end to end and
+become one; other sections there stay attached as branches. They meet when an
+end station of each is the same point: in one merge group; unmerged and
+co-located within 1 mm horizontally (the state a split leaves); or tied by a
+loop closure, the survey's own statement that the two are one point, apart by
+the loop's misclosure. Another section's end merged there stays merged to the
+joined station, now a station in the middle of the combined section; a section
+merged there at a station in its middle stays merged too (a crossing); one
+ending there unmerged is left as it is, and the dialog says so. The station
+menu offers, by how many sections end at the point: with one other, **Combine
+Section With <name>...**, opening the dialog directly; with three in all,
+**Combine Sections...** and a submenu of every pair ("A with B"); with four or
+more, **Combine Sections...** > "A with..." > the sections A can be combined with.
+Each pair says how the two meet (merged, side by side, or across a loop
+closure), or is disabled with its reason; the section named first is the one
+the dialog keeps by default. The dialog shows the name, colour, the kept
+section and any choices; everything informational (what moves, what becomes a
+loop closure, branches, depth, direction, credit) is folded under **Details**.
+Two sections that meet at more than one end (a
+loop of two) join at the end the station menu was opened on; the Sections panel
+picks a merge first, then co-located ends, then a closure. The kept section (the
+lower id by default; the dialog can swap) keeps its id, shot numbers, direction
+and position; the other section is reversed first when the two meet end to end
+or start to start. Every per-shot field travels, and every station reference
+follows its station; the join station keeps one comment and one name (the
+dialog asks when they differ).
+
+Whatever stands in the way changes instead of blocking, and the dialog lists
+it, for the section it shows as kept, before the user confirms:
+
+- **A side moves.** Across a loop closure (or any other gap over 1 mm) the
+  other section, and everything still merged to it, moves by the gap so the two
+  ends meet. When a zero datum holds the other side and not the kept one, the
+  kept side moves instead.
+- **Ties become loop closures.** A merge or snapped (aligned) closure that
+  would tie the combined section to itself, or keep the moving side tied to what
+  stays, becomes an ordinary loop closure between the same two stations: the
+  one nearest the moving section, so the least moves. The loop's misclosure
+  moves there, and the closures the combine made or stretched are measured
+  again. When both sides are anchored by zero datums, the moving side's merge
+  towards its own datum becomes a closure too (a closure may tie two anchored
+  groups; a merge may not).
+- **Bearings convert.** The combined section has one north reference, the kept
+  one's: the other section's stored azimuths turn by the difference, so every
+  station stays where it is.
+- The kept section's quality factor wins; the fixed side's manual offset on the
+  join station wins (the dialog says how far the other moves); shots of the
+  other section that share an identity (uuid) with the kept one's get new ones;
+  a depth gap between unmerged join stations is reported, whatever its size
+  (the joined station takes the average); a section with no shots is absorbed
+  at its one station.
+
+Refused, with the reason in the menu row: both sections carrying a zero datum on
+one of their own stations (the combined section would hold two), sections that
+meet nowhere (merge two of their ends, or create a loop closure between them,
+first), more than 99,999 shots, and a kept section that has used up its shot
+numbers for the session. A section is never combined with itself. Every shot
+keeps its own surveyors, explorers and date; the dialog summarises the combined
+credit. Combining the two halves of a split gives the section back, with
+whatever was merged at the split station still attached there. One undo step.
+Rules and edge cases: [plans/2026-11-12_merge-split-sections.md](plans/2026-11-12_merge-split-sections.md).
 
 ## 8. Command System
 

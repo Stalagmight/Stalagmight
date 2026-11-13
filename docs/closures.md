@@ -152,13 +152,25 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
   move. Instead the Split dialog shows which half moves and how far before the
   user confirms (`AppState::split_section_preview`, the split run on a copy).
 - **Combine Sections** re-keys a closure on either join station onto the one
-  joined station, drops any closure between the two join stations (whatever
-  its length, it would tie the joined station to itself), and
-  drops a closure the combine made identical to another one. An UNALIGNED
-  closure between the two sections does not block the combine: it becomes a
-  closure inside one section, which the least-squares solve adjusts like any
-  other. An ALIGNED one blocks it, as a second rigid tie would close a loop
-  inside the section.
+  joined station, drops any closure across the join point (whatever its
+  length, it would tie the joined station to itself), and drops a closure the
+  combine made identical to another one. An UNALIGNED closure between the two
+  sections elsewhere stays: it becomes a closure inside one section, which the
+  least-squares solve adjusts like any other.
+- **A loop closure is a join.** Two section ends tied by a closure are, by the
+  survey's own statement, one point, apart by the misclosure. Combining there
+  moves one side by the misclosure (the other section and what is merged to
+  it, or the kept side when a zero datum holds the other) and drops the
+  closure. The rigid ties that would then tie the combined section to itself,
+  or hold the moving side, become `Batch` closures between the same stations
+  (`project/combine_plan.rs`): merges form a forest, so on each path at most
+  one merge tears, the one nearest the moving section; a snapped (aligned)
+  closure across the two sides, or from a side that moves, is demoted to
+  `Batch` the same way. The loop's misclosure moves to the torn tie. Nothing
+  the combine makes is a sole bridge (the torn tie's ends stay connected
+  through the combined section, or tie two anchored groups, whose promotion is
+  refused), so a reload converts nothing back; the randomised sweep in
+  `combine_closure_tests.rs` checks exactly that.
 
 ## Deferred: Distribution at Create Time (Proportional/Equal)
 

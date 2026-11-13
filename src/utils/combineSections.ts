@@ -1,6 +1,7 @@
 import { invokeIpc } from './ipc';
 import type { SectionId, StationRef } from '../types/project';
 import type { CombineCandidate } from '../types/ipc/CombineCandidate';
+import type { CombinePlan } from '../types/ipc/CombinePlan';
 
 /**
  * Combine Sections: the read-only queries the context menu and the Sections
@@ -46,14 +47,36 @@ export function combinePreview(candidate: CombineCandidate): { sections: Section
   return combinePreviewAll([candidate]);
 }
 
-/** The map preview for a picker of candidates at one junction: every section involved, and the join. */
+/**
+ * The map preview for a picker of candidates at one junction: every section
+ * involved, the join, and the stations of every tie the combine would turn
+ * into a loop closure (for either kept section).
+ */
 export function combinePreviewAll(candidates: CombineCandidate[]): { sections: SectionId[]; stations: StationRef[] } {
   const sections = new Set<SectionId>();
   const stations = new Map<string, StationRef>();
+  const ring = (s: StationRef) => stations.set(`${s.section_id}:${s.station_index}`, s);
   for (const c of candidates) {
     sections.add(c.section_a);
     sections.add(c.section_b);
-    for (const s of [c.station_a, c.station_b]) stations.set(`${s.section_id}:${s.station_index}`, s);
+    [c.station_a, c.station_b].forEach(ring);
+    for (const plan of [c.plan_keeping_a, c.plan_keeping_b]) {
+      for (const tie of plan?.torn_ties ?? []) [tie.station_a, tie.station_b].forEach(ring);
+    }
   }
   return { sections: [...sections], stations: [...stations.values()] };
+}
+
+/** What changes beyond the join when `kept` is the kept section. */
+export function combinePlanFor(candidate: CombineCandidate, kept: SectionId): CombinePlan {
+  return kept === candidate.section_b ? candidate.plan_keeping_b : candidate.plan_keeping_a;
+}
+
+/**
+ * A signed angle for the dialog: "+5.0°", "-0.3°", and a small one to three
+ * decimals ("+0.040°") so a real rotation never reads as zero.
+ */
+export function formatRotation(degrees: number): string {
+  const digits = Math.abs(degrees) < 0.05 ? 3 : 1;
+  return `${degrees > 0 ? '+' : degrees < 0 ? '-' : ''}${Math.abs(degrees).toFixed(digits)}°`;
 }
