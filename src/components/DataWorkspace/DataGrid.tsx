@@ -140,8 +140,21 @@ export function DataGrid({ model, view, height, nav, editing, tint, partners, on
   useEffect(() => {
     if (focusRequest && handledNonce.current !== focusRequest.nonce) {
       const idx = rowIndexByKey.get(focusRequest.rowKey);
-      // Not in the view yet (a reveal is on its way): wait, and don't re-anchor.
-      if (idx === undefined) return;
+      if (idx === undefined) {
+        // A row that no longer exists: drop the request.
+        if (!model.rowByKey.has(focusRequest.rowKey)) {
+          handledNonce.current = focusRequest.nonce;
+          return;
+        }
+        // Hidden by the filters / collapse: reveal it (once), then this effect
+        // runs again with the row in the view. Meanwhile, don't re-anchor.
+        const store = useDataWorkspaceStore.getState();
+        if (!store.revealRowKeys.includes(focusRequest.rowKey)) {
+          const { rowKey, colKey, align } = focusRequest;
+          store.revealAndFocus({ rowKey, ...(colKey ? { colKey } : {}), ...(align ? { align } : {}) });
+        }
+        return;
+      }
       handledNonce.current = focusRequest.nonce;
       const colKey = focusRequest.colKey ?? lastActive.current?.colKey;
       lastActive.current = { key: focusRequest.rowKey, idx, colKey: colKey ?? '' };
@@ -159,7 +172,7 @@ export function DataGrid({ model, view, height, nav, editing, tint, partners, on
     const align = lastActive.current ? 'auto' : 'center';
     lastActive.current = { key, idx, colKey: colKey ?? '' };
     setScrollReq({ row: idx, ...(colKey ? { colKey } : {}), align, nonce: ++scrollNonce });
-  }, [focusRequest, rowIndexByKey, setActiveRowKey]);
+  }, [focusRequest, rowIndexByKey, setActiveRowKey, model.rowByKey]);
 
   const onActiveCellChange = useCallback(
     (rowIndex: number, colKey: string) => {

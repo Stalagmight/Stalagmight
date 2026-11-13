@@ -312,6 +312,15 @@ describe('Focus requests', () => {
     render(<DataWorkspace />);
     expect(useDataWorkspaceStore.getState().activeRowKey).toBe('st:3:2');
   });
+
+  it('reveals a requested row the filters hide, and drops a request for a gone row', () => {
+    useDataWorkspaceStore.setState({ collapsedSections: [3] });
+    useDataWorkspaceStore.getState().requestFocus({ rowKey: 'sh:3:302' });
+    render(<DataWorkspace />);
+    expect(useDataWorkspaceStore.getState().revealRowKeys).toEqual(['sh:3:302']);
+    act(() => useDataWorkspaceStore.getState().requestFocus({ rowKey: 'st:99:0' }));
+    expect(useDataWorkspaceStore.getState().revealRowKeys).toEqual(['sh:3:302']);
+  });
 });
 
 describe('Map follow and map selection', () => {

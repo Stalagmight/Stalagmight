@@ -131,12 +131,13 @@ export function DataWorkspace() {
     [model, nav],
   );
 
+  const viewHasEntities = useMemo(() => view?.rows.some((r) => r.kind !== 'section') ?? false, [view]);
   let body;
   if (!project || !model || !view) {
     body = <EmptyState message={t('dataWorkspace.empty.noProject')} />;
   } else if (model.rows.length === 0) {
     body = <EmptyState message={t('dataWorkspace.empty.noSections')} />;
-  } else if (view.rows.length === 0 || (viewInput.collapsedSections.length === 0 && !view.rows.some((r) => r.kind !== 'section'))) {
+  } else if (view.rows.length === 0 || (viewInput.collapsedSections.length === 0 && !viewHasEntities)) {
     body = (
       <EmptyState
         message={t('dataWorkspace.empty.noRows')}

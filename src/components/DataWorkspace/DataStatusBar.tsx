@@ -47,7 +47,9 @@ export function DataStatusBar({
       const unit = columnUnit(num.colKey);
       const places = placesFor(num.colKey, ctx);
       const v = (x: number) => `${formatFixed(x, ctx.locale, places)}${unit ? (unit === '°' ? unit : ` ${unit}`) : ''}`;
-      parts.push(t('dataWorkspace.status.sum', { name: t(`dataWorkspace.headers.${num.colKey}`), value: v(num.sum) }));
+      // The column's name without its unit suffix ("Length (m)" -> "Length").
+      const name = t(`dataWorkspace.columns.${num.colKey}`).replace(/\s*\([^)]*\)$/u, '');
+      parts.push(t('dataWorkspace.status.sum', { name, value: v(num.sum) }));
       parts.push(t('dataWorkspace.status.avg', { value: v(num.avg) }));
       parts.push(t('dataWorkspace.status.min', { value: v(num.min) }));
       parts.push(t('dataWorkspace.status.max', { value: v(num.max) }));
