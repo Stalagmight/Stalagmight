@@ -30,6 +30,8 @@ export interface ReplacePlan {
   edits: DataCellEdit[];
   /** How many matches each edit carries (parallel to `edits`). */
   editMatches: number[];
+  /** The cell text before / after the replacement (parallel to `edits`). */
+  editTexts: { before: string; after: string }[];
   /** Matches that become edits. */
   replacedMatches: number;
   /** Matches skipped because their cell is locked. */
@@ -145,6 +147,7 @@ export function planReplace(
   const plan: ReplacePlan = {
     edits: [],
     editMatches: [],
+    editTexts: [],
     replacedMatches: 0,
     lockedMatches: 0,
     lockedCells: 0,
@@ -182,6 +185,7 @@ export function planReplace(
     }
     plan.edits.push({ row, colKey: col.key, value });
     plan.editMatches.push(replaced);
+    plan.editTexts.push({ before: oldText, after: newText });
     plan.replacedMatches += replaced;
   }
   return plan;

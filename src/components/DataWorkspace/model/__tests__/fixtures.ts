@@ -32,7 +32,7 @@ export interface SectionSeed {
   id: number;
   name: string;
   shots: ShotSeed[];
-  /** z per station (n+1 values); default 0, -1, -2, ... */
+  /** z (depth, positive down) per station (n+1 values); default 0, 1, 2, ... */
   z?: number[];
   stationComments?: Record<number, string>;
   stationNames?: Record<number, string>;
@@ -78,7 +78,7 @@ export function makeData(sections: SectionSeed[]): SurveyData {
     for (let i = 0; i <= sec.shots.length; i++) {
       data.stationSectionIds[sg] = sec.id;
       data.stationIndices[sg] = i;
-      data.stationCoords[sg * 3 + 2] = sec.z?.[i] ?? -i;
+      data.stationCoords[sg * 3 + 2] = sec.z?.[i] ?? i;
       const c = sec.stationComments?.[i];
       if (c) data.stationComments.set(sg, c);
       const nm = sec.stationNames?.[i];
@@ -210,7 +210,7 @@ export function makeColumns(): DataColumnDef[] {
       lock: (row, ctx) => (ctx.frozenShots.has(`${row.sectionId}:${(row as { shotIndex: number }).shotIndex}`) ? 'frozen' : null),
     }),
     col('azimuth', (row, ctx) => (row.kind === 'shot' ? ctx.data.shotAzimuthIn[row.g]! : null), { parse: numParse }),
-    col('depth', (row, ctx) => (row.kind === 'station' ? -ctx.data.stationCoords[row.g * 3 + 2]! : null)),
+    col('depth', (row, ctx) => (row.kind === 'station' ? ctx.data.stationCoords[row.g * 3 + 2]! : null)),
     col(
       'kind',
       (row, ctx) =>

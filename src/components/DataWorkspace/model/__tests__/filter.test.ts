@@ -16,7 +16,7 @@ const SECTIONS: SectionSeed[] = [
       { length: 40, azimuth: 5 },
     ],
     // depths 0, 10, 60, 55, 20
-    z: [0, -10, -60, -55, -20],
+    z: [0, 10, 60, 55, 20],
   },
   {
     id: 2,

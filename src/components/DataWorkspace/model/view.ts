@@ -3,8 +3,9 @@
  * navigation reveals -> "only rows with matches" -> sort.
  *
  * Definitions the toolbar, the grid and the status bar rely on:
- * - A section is collapsed only while it has a header row (`showSectionHeaders`);
- *   with headers off there is nothing to expand it from, so collapse is ignored.
+ * - A section is collapsed only while it has a header row (`showSectionHeaders`)
+ *   and the view is in survey order; with no header on screen there is nothing
+ *   to expand it from, so collapse is ignored (headers off, or sorted).
  * - The find searches only while the find bar is open (`search.open`) and the
  *   query compiles. Row scope 'visible' searches the rows on screen (filters,
  *   collapse and navigation reveals applied); 'all' searches every entity row
@@ -65,8 +66,11 @@ export function buildDataView(
     }
   }
 
-  // 2. Collapse (only sections that have a header to expand from).
-  const collapsed = new Set(state.collapsedSections.filter((id) => headerSections.has(id)));
+  // 2. Collapse: only sections that have a header to expand from, and never
+  // while sorted (the headers are dropped then, so nothing could expand them).
+  const sortCol = state.sort ? columns.find((c) => c.key === state.sort!.colKey) : undefined;
+  const sorted = state.sort !== null && sortCol !== undefined;
+  const collapsed = new Set(sorted ? [] : state.collapsedSections.filter((id) => headerSections.has(id)));
   const shown = new Uint8Array(n);
   for (let i = 0; i < n; i++) {
     if (pass[i] && !collapsed.has(rows[i]!.sectionId)) shown[i] = 1;
@@ -141,12 +145,11 @@ export function buildDataView(
   }
 
   // 6. Order: survey order with headers, or sorted entity rows.
-  const sortCol = state.sort ? columns.find((c) => c.key === state.sort!.colKey) : undefined;
   let viewRows: DataRow[];
-  if (state.sort && sortCol) {
+  if (sorted && state.sort) {
     const entity: DataEntityRow[] = [];
     for (let i = 0; i < n; i++) if (display[i]) entity.push(rows[i] as DataEntityRow);
-    viewRows = sortRows(entity, sortCol, state.sort.dir, ctx);
+    viewRows = sortRows(entity, sortCol!, state.sort.dir, ctx);
   } else {
     viewRows = [];
     for (let i = 0; i < n; i++) {
@@ -188,7 +191,7 @@ export function buildDataView(
     revealedColumns,
     filteredCount,
     totalCount,
-    surveyOrder: !(state.sort && sortCol),
+    surveyOrder: !sorted,
     matchLimitReached,
   };
 }

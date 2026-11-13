@@ -72,6 +72,12 @@ describe('buildDataView - filters and collapse', () => {
     expect(v.rows).toHaveLength(12);
   });
 
+  it('collapse is ignored while sorted (the headers are gone)', () => {
+    const { rows, ctx, columns } = setup();
+    const v = buildDataView(rows, columns, ctx, viewState({ collapsedSections: [1], sort: { colKey: 'length', dir: 'asc' } }));
+    expect(v.rows).toHaveLength(12);
+  });
+
   it('a collapsed section whose rows all fail the filters loses its header', () => {
     const { rows, ctx, columns } = setup();
     const v = buildDataView(

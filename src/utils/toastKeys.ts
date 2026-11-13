@@ -53,6 +53,8 @@ export const TOAST_KEYS = {
   /** Paste outcome on the Plan-mode Segments/Cylinders grids (#590). */
   PLAN_SEGMENTS_PASTE: 'plan-segments-paste',
   PLAN_CYLINDERS_PASTE: 'plan-cylinders-paste',
+  /** Find / replace outcome in the Data workspace (replace one / replace all). */
+  DATA_WORKSPACE_REPLACE: 'data-workspace-replace',
   /**
    * A CSV/JSON/TML/image export the user asked for did not produce a file.
    *
