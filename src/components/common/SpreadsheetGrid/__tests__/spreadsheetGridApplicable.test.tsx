@@ -190,7 +190,7 @@ describe('N/A cells never take an edit', () => {
     expect(screen.getByTestId('grid-cell-editor')).toBeInTheDocument();
   });
 
-  it('a paste skips N/A cells and reports them as skipped', () => {
+  it('a 1x1 paste fills the rows the column applies to; the gaps are not skips', () => {
     const { onBatchEdit, onPasteReport } = renderGrid();
     select(1, 'len', 4, 'len');
     paste('9');
@@ -199,7 +199,50 @@ describe('N/A cells never take an edit', () => {
       { row: 2, colKey: 'len', value: 9 },
       { row: 4, colKey: 'len', value: 9 },
     ]);
-    expect(onPasteReport).toHaveBeenCalledWith({ written: 2, clipped: 0, skipped: 2 });
+    expect(onPasteReport).not.toHaveBeenCalled();
+  });
+
+  it('an external column of values flows past rows it has no cell on', () => {
+    const { onBatchEdit, onPasteReport } = renderGrid();
+    fireEvent.mouseDown(cell(2, 'len'));
+    paste('3\n4\n5');
+    // Shots 2 and 4 take 3 and 4; stations 3, 5, 7 and band 6 take no line;
+    // 5 has no shot left below and clips.
+    expect(onBatchEdit.mock.calls[0]![0]).toEqual([
+      { row: 2, colKey: 'len', value: 3 },
+      { row: 4, colKey: 'len', value: 4 },
+    ]);
+    expect(onPasteReport).toHaveBeenCalledWith({ written: 2, clipped: 1, skipped: 0 });
+  });
+
+  it('a column every row has stays positional, passing only the band', () => {
+    const { onBatchEdit } = renderGrid();
+    fireEvent.mouseDown(cell(4, 'comment'));
+    paste('a\nb\nc');
+    expect(onBatchEdit.mock.calls[0]![0]).toEqual([
+      { row: 4, colKey: 'comment', value: 'a' },
+      { row: 5, colKey: 'comment', value: 'b' },
+      { row: 7, colKey: 'comment', value: 'c' },
+    ]);
+  });
+
+  it('tiles over the rows the column applies to', () => {
+    const rows: Row[] = Array.from({ length: 9 }, (_, i) => ({
+      id: i,
+      kind: i % 2 === 1 ? 'shot' : 'station',
+      name: `n${i}`,
+      len: null,
+      comment: '',
+    }));
+    const { onBatchEdit } = renderGrid({ rows }, { groups: false });
+    select(0, 'len', 8, 'len');
+    paste('1\n2');
+    expect(onBatchEdit.mock.calls[0]![0].map((e: CellEdit) => [e.row, e.value])).toEqual([
+      [1, 1],
+      [3, 2],
+      [5, 1],
+      [7, 2],
+    ]);
   });
 
   it('fill down skips an N/A destination and never fills from an N/A source', () => {

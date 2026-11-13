@@ -437,15 +437,54 @@ describe('DataWorkspace editing', () => {
     expect(actions.executeBatch).not.toHaveBeenCalled();
   });
 
-  it('pastes into many cells as ONE batch', () => {
+  const pasteAt = (testId: string, text: string) => {
+    fireEvent.mouseDown(screen.getByTestId(testId));
+    fireEvent.mouseUp(window);
+    fireEvent.paste(document.querySelector('[role="grid"]')!, { clipboardData: { getData: () => text } });
+  };
+
+  it('pastes an external column into consecutive shots as ONE batch, past the station rows', () => {
     render(<DataWorkspace />);
-    fireEvent.mouseDown(screen.getByTestId('data-cell-sh-1-1-length'));
-    const grid = document.querySelector('[role="grid"]')!;
-    fireEvent.paste(grid, { clipboardData: { getData: () => '3\n\n4' } });
+    // Copied from a spreadsheet: one value per shot, no blank lines for the
+    // station rows interleaved between them.
+    pasteAt('data-cell-sh-1-1-length', '3\n4\n5');
     expect(actions.executeBatch).toHaveBeenCalledTimes(1);
     expect(actions.executeBatch.mock.calls[0]![0]).toEqual([
       { type: 'update_shot', section_id: 1, shot_id: 101, updates: { length: 3 } },
       { type: 'update_shot', section_id: 1, shot_id: 102, updates: { length: 4 } },
+      { type: 'update_shot', section_id: 1, shot_id: 103, updates: { length: 5 } },
+    ]);
+  });
+
+  it('keeps a Comment paste positional: stations and shots both take a line', () => {
+    render(<DataWorkspace />);
+    pasteAt('data-cell-sh-1-1-comment', 'a\nb\nc');
+    expect(actions.executeBatch).toHaveBeenCalledTimes(1);
+    expect(actions.executeBatch.mock.calls[0]![0]).toEqual([
+      { type: 'update_shot', section_id: 1, shot_id: 101, updates: { comment: 'a' } },
+      { type: 'set_station_comment', station_ref: { section_id: 1, station_index: 1 }, comment: 'b' },
+      { type: 'update_shot', section_id: 1, shot_id: 102, updates: { comment: 'c' } },
+    ]);
+  });
+
+  it("pastes the grid's own copy 1:1, its station gaps included", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText, readText: vi.fn().mockRejectedValue(new Error('denied')) } });
+    render(<DataWorkspace />);
+    fireEvent.mouseDown(screen.getByTestId('data-cell-sh-1-1-length'));
+    fireEvent.mouseUp(window);
+    fireEvent.mouseDown(screen.getByTestId('data-cell-sh-1-2-length'), { shiftKey: true });
+    fireEvent.mouseUp(window);
+    const grid = document.querySelector('[role="grid"]')!;
+    await act(async () => {
+      fireEvent.keyDown(grid, { key: 'c', ctrlKey: true });
+    });
+    const copied = writeText.mock.calls[0]![0] as string;
+    expect(copied.split('\n')).toHaveLength(3); // shot 1, station 1 (blank), shot 2
+    pasteAt('data-cell-sh-1-3-length', copied);
+    expect(actions.executeBatch.mock.calls[0]![0]).toEqual([
+      { type: 'update_shot', section_id: 1, shot_id: 103, updates: { length: 8.25 } },
+      { type: 'update_shot', section_id: 1, shot_id: 104, updates: { length: 6.5 } },
     ]);
   });
 

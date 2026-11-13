@@ -92,7 +92,15 @@ applicability ones also once per cell in bulk paths), so keep them O(1).
   (N/A): the cell renders blank with class `sg-cell-na` and NO `getValue` /
   `format` / `render` / `cellClassName` / `cellMarks` call. It never takes an
   edit (type-to-edit, F2, double-click, Space/activate, `openEditor`, paste -
-  counted as `skipped` - fill, clear, cut-move). It copies as ''. Tab / Shift+Tab
+  counted as `skipped` - fill, clear, cut-move). An EXTERNAL paste passes over a
+  row where NONE of the target columns applies: that row consumes no clipboard
+  line, so a column of values copied from another spreadsheet lands on
+  consecutive shots rather than every other value falling into a station gap
+  (`placePaste`'s `rowTakes`). A row where some target columns apply still takes
+  a line (positional within the row; its N/A cells count as `skipped`). A 1x1
+  fill and a tile cover only the selection rows that take a column, and the
+  tiling multiple counts only those rows; gap rows are not reported. The grid's
+  own copy is pasted 1:1, its gaps included. It copies as ''. Tab / Shift+Tab
   skip it per row (`tabTargetWhere`); arrows and clicks still land on it.
   Ctrl+Arrow and the fill-handle double-click pass OVER N/A cells (neither data
   nor a gap). An N/A source never writes: fill skips it, an internal paste skips
@@ -202,7 +210,7 @@ const columns: GridColumn<Shot>[] = [
 Pure logic is unit-tested (Vitest, node env):
 - `__tests__/gridClipboard.test.ts` - locale parsing, TSV serialize/parse round-trips.
 - `__tests__/gridGeometry.test.ts` - selection math, nav (incl. read-only skip),
-  paste placement (fill/tile/clip), fill targets.
+  paste placement (fill/tile/clip, gap rows passed over), fill targets.
 - `__tests__/gridMarksAndApplicable.test.ts` - mark segmentation, applicability,
   N/A-skipping Tab order, fill extent, the sort cycle.
 

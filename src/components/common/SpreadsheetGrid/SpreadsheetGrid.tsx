@@ -919,7 +919,6 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     (text: string, fromStash = false) => {
       if (!text) return;
       const clip = parseTSV(text);
-      const { targets, clipped } = placePaste(clip, rect, rowCount, colCount, !!pasteGrowsRows);
       // Treat the paste as INTERNAL (use stashed RAW values for full fidelity,
       // and complete a pending cut) only when the source is our own stash:
       // either the caller read it directly (`fromStash`, the WebKitGTK fallback),
@@ -931,6 +930,16 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         stash !== null && stash.text === text && (fromStash || clipboardOwned.current)
           ? stash
           : null;
+      // External lines flow past rows none of the target columns applies to
+      // (placePaste); the stash already carries those gaps and maps 1:1.
+      const rowTakes = (r: number, c0: number, c1: number): boolean => {
+        for (let c = c0; c <= c1; c++) {
+          const col = colAt(c);
+          if (col && cellApplicable(r, col)) return true;
+        }
+        return false;
+      };
+      const { targets, clipped } = placePaste(clip, rect, rowCount, colCount, !!pasteGrowsRows, internal ? undefined : rowTakes);
       const ch = clip.length;
       const cw = clip.reduce((m, r) => Math.max(m, r.length), 0);
       const single = ch === 1 && cw === 1;
@@ -1018,7 +1027,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         onPasteReport?.({ written, clipped, skipped: targets.length - written });
       }
     },
-    [rect, rowCount, colCount, colAt, cellEditable, coerce, transferValue, parseForColumn, cutRect, applyEdits, onPasteReport, markMissing, missKey, onClearMissing, pasteGrowsRows],
+    [rect, rowCount, colCount, colAt, cellApplicable, cellEditable, coerce, transferValue, parseForColumn, cutRect, applyEdits, onPasteReport, markMissing, missKey, onClearMissing, pasteGrowsRows],
   );
 
   // Context-menu paste: a synthetic (untrusted) `paste` event can't carry
