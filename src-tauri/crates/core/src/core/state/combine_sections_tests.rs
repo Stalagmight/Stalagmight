@@ -14,13 +14,13 @@ fn shot(azimuth: f64, length: f64) -> ShotData {
         azimuth_in: azimuth,
         azimuth_out: azimuth,
         length,
-        credit: Some(crate::models::SurveyCredit {
+        credit: Some(std::sync::Arc::new(crate::models::SurveyCredit {
             surveyors: crate::models::Person::named(&format!("Surveyor {azimuth}/{length}"))
                 .into_iter()
                 .collect(),
             explorers: Vec::new(),
             date: chrono::NaiveDate::from_ymd_opt(2026, 4, 1),
-        }),
+        })),
         ..Default::default()
     }
 }

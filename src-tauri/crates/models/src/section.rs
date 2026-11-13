@@ -134,6 +134,30 @@ pub struct Section {
     #[serde(default)]
     #[ts(optional)]
     pub azimuth_reference: Option<AzimuthReference>,
+    /// The legacy `sections.surveyor` text this section was READ with, when it
+    /// differs from what this build would write for the same people
+    /// ([`Self::legacy_surveyor_text`]): a list longer than a role keeps, a
+    /// name past the length clamp, another spelling (`A;B`). While nobody's
+    /// credit in the section has changed since, a save writes that text back
+    /// verbatim ([`Self::legacy_surveyor_to_write`]), so older builds and
+    /// SpeleoDB keep seeing exactly what they wrote; the shots themselves hold
+    /// the clamped people. Session-only: set by the file reader, never
+    /// serialized, so a restored snapshot writes this build's text.
+    #[serde(skip)]
+    #[ts(skip)]
+    pub loaded_legacy_surveyor: Option<LoadedLegacyText>,
+}
+
+/// [`Section::loaded_legacy_surveyor`]: the text as stored, and the text this
+/// build derived for the section right after reading it. While the section
+/// still derives that same text, who is credited in it has not changed, and
+/// the stored text is still its truth.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadedLegacyText {
+    /// `sections.surveyor` as the file held it.
+    pub raw: String,
+    /// [`Section::legacy_surveyor_text`] once the section was read.
+    pub derived: Option<String>,
 }
 
 /// Everything about a section that [`SectionData`] cannot carry: the identity of
@@ -472,7 +496,7 @@ fn default_section_quality() -> f64 {
 impl Section {
     /// Create a new section from section data
     pub fn new(id: SectionId, data: SectionData) -> Self {
-        let template = std::sync::Arc::new(SurveyCredit::from_legacy(
+        let template = crate::SharedCredit::new(SurveyCredit::from_legacy(
             data.surveyor.as_deref(),
             data.date,
         ));
@@ -496,6 +520,7 @@ impl Section {
             gauge_shot_uuid: None,
             gauge_neighbour_uuid: None,
             azimuth_reference: None,
+            loaded_legacy_surveyor: None,
         };
 
         // In-section UUID uniqueness, enforced where a `Vec<ShotData>` becomes
@@ -758,7 +783,7 @@ impl Section {
     /// typed into a legacy Surveyor field leaves every shot's explorers alone.
     fn set_legacy_surveyor_on_every_shot(&mut self, text: Option<&str>) {
         let text = text.unwrap_or_default();
-        let has_explorer_half = text.split(" / ").count() == 2;
+        let has_explorer_half = super::legacy_halves(text).is_some();
         let (explorers, surveyors) = legacy_people(text);
         for shot in &mut self.shots {
             let mut credit = shot.credit().clone();
@@ -778,18 +803,47 @@ impl Section {
     }
 
     /// The distinct surveyor names of every shot, in first-appearance order,
-    /// joined with `", "`; `None` when no shot names one. What the legacy
-    /// `sections.surveyor` column and the plain-text consumers carry.
+    /// joined with `", "`; `None` when no shot names one. What the plain-text
+    /// consumers carry.
     pub fn surveyor_names(&self) -> Option<String> {
         super::join_names(&self.credit_summary().surveyor_people())
     }
 
-    /// The legacy `sections.surveyor` text: [`Self::surveyor_names`] with each
-    /// display name once ([`super::join_distinct_names`]), so two same-named
-    /// people with different emails do not read as a duplicate in older
-    /// builds and SpeleoDB. The people themselves live in the per-shot tables.
+    /// The legacy `sections.surveyor` text ([`super::legacy_credit_text`]):
+    /// the section's explorers and surveyors in first-appearance order, in the
+    /// `"explorers / surveyors"` form when anyone explored it and as the plain
+    /// surveyor list otherwise, each display name once. Older builds keep only
+    /// this when they save, and SpeleoDB reads only this (#718); the people
+    /// themselves live in the per-shot tables.
     pub fn legacy_surveyor_text(&self) -> Option<String> {
-        super::join_distinct_names(&self.credit_summary().surveyor_people())
+        let summary = self.credit_summary();
+        super::legacy_credit_text(&summary.explorer_people(), &summary.surveyor_people())
+    }
+
+    /// What a save writes to `sections.surveyor` for a section with shots:
+    /// the text the section was read with while its people are unchanged
+    /// since ([`Self::loaded_legacy_surveyor`]), else
+    /// [`Self::legacy_surveyor_text`]. A long or differently spelled legacy
+    /// text is therefore not cut or respelled by a save that changed nobody's
+    /// credit.
+    pub fn legacy_surveyor_to_write(&self) -> Option<String> {
+        let derived = self.legacy_surveyor_text();
+        match &self.loaded_legacy_surveyor {
+            Some(loaded) if loaded.derived == derived => Some(loaded.raw.clone()),
+            _ => derived,
+        }
+    }
+
+    /// Remember `raw`, the `sections.surveyor` text the section was just read
+    /// with, if it is not what this build would write for the section now
+    /// (see [`Self::loaded_legacy_surveyor`]). Call once the shots carry their
+    /// credit.
+    pub fn remember_loaded_legacy_surveyor(&mut self, raw: &str) {
+        let derived = self.legacy_surveyor_text();
+        self.loaded_legacy_surveyor = (derived.as_deref() != Some(raw)).then(|| LoadedLegacyText {
+            raw: raw.to_string(),
+            derived,
+        });
     }
 
     /// The earliest shot date; what the legacy `sections.date` column carries.
@@ -806,7 +860,7 @@ impl Section {
         if self.shots.is_empty() {
             return false;
         }
-        let template = std::sync::Arc::new(self.take_legacy_template());
+        let template = crate::SharedCredit::new(self.take_legacy_template());
         if template.is_empty() {
             return false;
         }
@@ -1722,7 +1776,7 @@ mod tests {
                 surveyor: Some("nh / ds".to_string()),
                 shots: vec![
                     ShotData {
-                        credit: Some(own.clone()),
+                        credit: Some(own.clone().into()),
                         ..test_shot_data(1.0)
                     },
                     test_shot_data(2.0),
@@ -1740,7 +1794,7 @@ mod tests {
             1,
             SectionData {
                 shots: vec![ShotData {
-                    credit: Some(credit(&["Old"], &["Ex"])),
+                    credit: Some(credit(&["Old"], &["Ex"]).into()),
                     ..test_shot_data(1.0)
                 }],
                 ..Default::default()
@@ -1756,6 +1810,18 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(section.shots[0].credit(), &credit(&["S2"], &["E2"]));
+        // The explorers-only form names explorers too, trimmed or not (#718).
+        for text in ["E3 /", "E3 / "] {
+            section.apply_updates(&SectionUpdates {
+                surveyor: Some(Some(text.to_string())),
+                ..Default::default()
+            });
+            assert_eq!(section.shots[0].credit(), &credit(&[], &["E3"]), "{text:?}");
+        }
+        section.apply_updates(&SectionUpdates {
+            surveyor: Some(Some("E2 / S2".to_string())),
+            ..Default::default()
+        });
         section.apply_updates(&SectionUpdates {
             surveyor: Some(None),
             ..Default::default()

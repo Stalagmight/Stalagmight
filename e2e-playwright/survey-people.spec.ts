@@ -174,6 +174,35 @@ test.describe('Survey people', () => {
     await expect(page.getByTestId('section-surveyors-pill-1-tooltip')).toContainText('On 2 of 3 shots');
   });
 
+  // Credit lives on shots: a section with none has nowhere to record it.
+  // Typed people and a date used to be dropped silently on Save; the fields
+  // are now disabled, with a hint, in Edit Section and in the Detail panel.
+  test('a section with no shots takes no credit, and Edit Section and the Detail panel say why', async ({ page }) => {
+    await seedProjectWithSections(page, [{ name: 'Empty Line', direction: 'in', shots: [] }]);
+    await waitForMapReady(page);
+    await waitForNoDialogs(page);
+    const sectionId = (await firstSection(page)).id;
+    expect((await firstSection(page)).shots).toHaveLength(0);
+
+    await openDialog(page, 'edit-section', { sectionId });
+    const edit = page.getByTestId('edit-section-dialog');
+    await expect(edit).toBeVisible();
+    await expect(page.getByTestId('section-credit-no-shots')).toHaveText('Add a shot to record who surveyed it.');
+    await expect(page.getByTestId('section-surveyors-input')).toHaveCount(0);
+    await expect(page.getByTestId('section-explorers-input')).toHaveCount(0);
+    await expect(page.getByTestId('section-name-input')).toBeEnabled();
+    await page.getByTestId('edit-section-cancel').click();
+    await expect(edit).toBeHidden();
+
+    await page.evaluate((sid) => {
+      (window as unknown as E2EWindow).__E2E_TEST__.uiStore.getState().setSelection({ type: 'section', sectionId: sid });
+    }, sectionId);
+    await expect(page.getByTestId('detail-credit')).toHaveAttribute('data-scope', 'section');
+    await expect(page.getByTestId('detail-credit-no-shots')).toHaveText('Add a shot to record who surveyed it.');
+    await expect(page.getByTestId('detail-credit-surveyors-input')).toHaveCount(0);
+    expect(await creditCalls(page)).toHaveLength(0);
+  });
+
   test('SpeleoDB collaborators are suggested, show their email on hover, and same names are told apart', async ({ page }) => {
     const sectionId = await seedSection(page);
     await page.evaluate(() => {

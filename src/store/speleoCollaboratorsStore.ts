@@ -6,10 +6,12 @@
  *
  * Nothing waits on it: a field renders its other suggestions at once and gains
  * the collaborators when they arrive. A failed fetch is silent (one debug log)
- * and is not retried until the account or project changes - the suggestions
- * are a convenience, and a dead server already has its own surfaces. The
- * backend keeps its own short-lived cache; this one only saves the round trip
- * per session.
+ * and is tried again after {@link RETRY_AFTER_MS} while the project stays
+ * open - the suggestions are a convenience, and a dead server already has its
+ * own surfaces, so never a tight retry loop. Signing out forgets everything
+ * ({@link CollaboratorsState.reset}), and a reply to a request made before
+ * that is dropped instead of filling the cache again. The backend keeps its
+ * own short-lived cache; this one only saves the round trip per session.
  */
 import { useEffect } from 'react';
 import { create } from 'zustand';
@@ -19,14 +21,26 @@ import { debugLog } from '../utils/debugLog';
 import { dedupePeople } from '../utils/people';
 import type { Person, SpeleoCollaborator } from '../types/ipc.generated';
 
-type Entry = { status: 'loading' } | { status: 'ready'; people: Person[] } | { status: 'failed' };
+type Entry =
+  | { status: 'loading' }
+  | { status: 'ready'; people: Person[] }
+  /** `at`: when it failed (ms since the epoch), for the back-off. */
+  | { status: 'failed'; at: number };
+
+/** How long a failed fetch waits before it is tried again. */
+export const RETRY_AFTER_MS = 60_000;
 
 interface CollaboratorsState {
   /** Keyed by {@link collaboratorsKey}. */
   entries: Record<string, Entry>;
-  /** Fetch the collaborators for `key` unless already fetched or in flight. */
+  /** Bumped by every {@link reset}: a reply to an older request is dropped. */
+  generation: number;
+  /**
+   * Fetch the collaborators for `key` unless already fetched or in flight, or
+   * failed less than {@link RETRY_AFTER_MS} ago.
+   */
   ensure: (key: string, projectId: string) => void;
-  /** Forget everything (tests). */
+  /** Forget everything, and every reply still on its way (sign-out, tests). */
   reset: () => void;
 }
 
@@ -54,23 +68,30 @@ export function collaboratorPerson(c: SpeleoCollaborator): Person {
 
 export const useSpeleoCollaboratorsStore = create<CollaboratorsState>((set, get) => ({
   entries: {},
+  generation: 0,
   ensure: (key, projectId) => {
-    if (get().entries[key]) return;
+    const entry = get().entries[key];
+    if (entry && (entry.status !== 'failed' || Date.now() - entry.at < RETRY_AFTER_MS)) return;
+    const generation = get().generation;
+    // A reply to a request made before the last reset (a sign-out) is dropped.
+    const current = () => get().generation === generation;
     set((s) => ({ entries: { ...s.entries, [key]: { status: 'loading' } } }));
     invokeIpc<SpeleoCollaborator[]>('speleodb_project_collaborators', { projectId }, {
       purpose: 'suggest the linked project collaborators as surveyors',
       level: 'debug',
     })
       .then((list) => {
+        if (!current()) return;
         const people = dedupePeople((Array.isArray(list) ? list : []).filter((c) => !!c?.email).map(collaboratorPerson));
         set((s) => ({ entries: { ...s.entries, [key]: { status: 'ready', people } } }));
       })
       .catch((e: unknown) => {
         debugLog('[collaborators] speleodb_project_collaborators failed:', e);
-        set((s) => ({ entries: { ...s.entries, [key]: { status: 'failed' } } }));
+        if (!current()) return;
+        set((s) => ({ entries: { ...s.entries, [key]: { status: 'failed', at: Date.now() } } }));
       });
   },
-  reset: () => set({ entries: {} }),
+  reset: () => set((s) => ({ entries: {}, generation: s.generation + 1 })),
 }));
 
 /** The cache key of the open linked project, or null when there is none to ask about. */
@@ -85,16 +106,32 @@ function useLinkedKey(): { key: string; projectId: string } | null {
 
 /**
  * Mount once for the open project: starts the background fetch whenever a
- * linked project is open with a signed-in account.
+ * linked project is open with a signed-in account, tries a failed one again
+ * after {@link RETRY_AFTER_MS}, and forgets every collaborator on sign-out.
  */
 export function useCollaboratorsSync(): void {
   const linked = useLinkedKey();
   const ensure = useSpeleoCollaboratorsStore((s) => s.ensure);
+  const reset = useSpeleoCollaboratorsStore((s) => s.reset);
+  const loggedIn = useSpeleoStore((s) => s.session?.loggedIn === true);
   const key = linked?.key ?? null;
   const projectId = linked?.projectId ?? null;
+  const failedAt = useSpeleoCollaboratorsStore((s) => {
+    const entry = key !== null ? s.entries[key] : undefined;
+    return entry?.status === 'failed' ? entry.at : null;
+  });
   useEffect(() => {
-    if (key !== null && projectId !== null) ensure(key, projectId);
-  }, [key, projectId, ensure]);
+    if (!loggedIn) reset();
+  }, [loggedIn, reset]);
+  useEffect(() => {
+    if (key === null || projectId === null) return undefined;
+    if (failedAt === null) {
+      ensure(key, projectId);
+      return undefined;
+    }
+    const timer = setTimeout(() => ensure(key, projectId), Math.max(0, failedAt + RETRY_AFTER_MS - Date.now()));
+    return () => clearTimeout(timer);
+  }, [key, projectId, failedAt, ensure]);
 }
 
 /** The open linked project's collaborators; empty until fetched, or for a local project (hook). */

@@ -21,6 +21,12 @@ pub struct SurveyCredit { pub surveyors: Vec<Person>, pub explorers: Vec<Person>
 
 - `Shot.credit` and `ShotData.credit` hold a `SurveyCredit` (`#[serde(default)]`, TS-optional on
   `ShotData`). Every copy of a shot (split, reverse, undo, project append, insert) carries it.
+- **Stored normalized.** Every way a credit reaches a shot (`Shot::set_credit`, a shared credit,
+  an imported `ShotData`, an undo replayed from the file, a deserialized snapshot) stores it
+  `SurveyCredit::into_storable`: control characters removed (whitespace ones become a space;
+  they would make an exported XML file invalid), names and emails clamped to 256 characters,
+  each role deduplicated and capped at 200 people. A credit that already is all that is stored
+  as it is, without a copy.
 - **Person identity.** Names are compared after lowercasing and collapsing whitespace. Emails are
   compared lowercased. Two people are the same when their names and emails are both equal, and an
   email of `None` only matches `None`. Lists keep their order and drop duplicates.
@@ -36,11 +42,16 @@ pub struct SurveyCredit { pub surveyors: Vec<Person>, pub explorers: Vec<Person>
   So old persisted undo entries and every existing test literal keep working. `Section` keeps a
   deserialize-only `surveyor`/`date` (`skip_serializing`, `ts(skip)`), and the migration below
   absorbs it whenever an old `Project` snapshot is restored.
-- **Legacy splitter** (`credit::legacy_people(text) -> (explorers, surveyors)`):
-  - Text with exactly two `" / "` halves came from the Ariane importer: the first half is the
-    explorers, the second the surveyors. Any other text is surveyors only.
-  - Each half is split on `;`. Each piece is then split on `,`, unless the whole half looks like
-    `Last, First` (exactly two comma parts, each one word).
+- **Splitter** (`credit::split_roles(text, source) -> (explorers, surveyors)`, one function for
+  the TML import, the legacy column - `legacy_people` is its free-text call - and the frontend's
+  `splitRoles`, #719 review):
+  - Text in the Ariane form (two `" / "` halves, or a trimmed text ending in `" /"`) gives the
+    explorers then the surveyors, both halves split as NAME LISTS. Any other text is surveyors
+    only: a single unseparated name is a surveyor on every path.
+  - A name list (`NameSource::NameList`: anything from an Ariane file, either half of the Ariane
+    form, a Compass or Walls team line) is split on `,` and `;` only: `ds, kb` is two people.
+  - Free text (`NameSource::FreeText`: a legacy surveyor text outside the Ariane form) is split
+    the same, except that exactly two comma parts of one word each are one `Last, First` person.
   - Pieces are trimmed. Empty pieces and the placeholders `unknown`, `none` and `?` are dropped,
     and duplicates are removed.
 
@@ -76,18 +87,60 @@ How this feature fits:
     `(section_id, shot_uuid)`, where the people columns are comma-joined ids from `credit_people`.
 
   - `credit_sections (section_id, surveyor, date)`: the legacy pair this build wrote. A section
-    whose `sections.surveyor`/`date` no longer match it (an older build retyped them) ignores its
-    rows, so the retyped text wins.
+    whose `sections.surveyor`/`date` no longer match it (retyped in place: a hand edit, another
+    tool) ignores its rows, so the retyped text wins.
 
   A shot's row says that its credit is explicit, even when the lists are empty. A shot with no row
-  falls back to the legacy section columns through the splitter. That makes old files and shots
+  falls back to the legacy section columns through the splitter. That makes old files and files
   saved by older builds work unchanged.
-- The uuid is the one `write.rs` already mints at save time. Unreadable or dangling rows are
-  skipped, never fatal.
-- The legacy columns are still written. `sections.surveyor` gets the distinct surveyor names
-  joined with `", "`, or NULL. `sections.date` gets the earliest shot date, or NULL.
+- The uuid is the one `write.rs` already mints at save time. A row is used only when all of it
+  reads back as written: one with an unreadable value, or naming a person id that `credit_people`
+  does not hold readably (dangling, unreadable, blank), is skipped whole, so its shot reads the
+  legacy columns rather than losing a name the next save would drop for good. Never fatal. A credit table of another shape (a missing column, a view, an expression of its
+  schema failing part way, or `credit_people` missing beside `shot_credits`) gives no rows at all:
+  every shot falls back to the legacy columns, with a warning that holds counts, never names
+  (#717). Only SQLite's generic SQL error counts as a shape; SQLite failing for a reason of its
+  own (busy, locked, I/O, out of memory, interrupted, corrupt, not a database, full, too big)
+  fails the open as before #717, since degrading would let the next save drop the rows for good.
+- The legacy columns are still written. `sections.date` gets the earliest shot date, or NULL.
+  `sections.surveyor` (`credit::legacy_credit_text`) is one plain string, or NULL:
+
+  | Section | `sections.surveyor` |
+  |---|---|
+  | Nobody credited | NULL |
+  | Surveyors only | `Sue Diver, Tom Tank` (unchanged from before #718) |
+  | Surveyors only, two one-word names | `Ann; Bo` (`Ann, Bo` would read back as one `Last, First` person) |
+  | Explorers only | `Ida Ice /` (an empty second half, no trailing space) |
+  | Both | `Ex Plorer, Ida Ice / Sue Diver, Tom Tank` |
+
+  The explorers-only form has no trailing space because an older build's Edit Section trims the
+  surveyor on every save; the splitter reads `x /` and `x / ` alike as explorers only (a trimmed
+  text ending in ` /` with no other ` / `). Each half names each display name once, compared
+  case-insensitively. A stored text this build would not write the same way (more names than a role
+  keeps, a name past the 256-character clamp, another spelling such as `A;B`) is written back
+  verbatim while nobody's credit in the section has changed since the file was opened; the shots
+  hold the clamped people (#719 review). A `/` that could join the
+  `" / "` separator (inside a name between spaces, or at its edge: `A / B`, `A /`, `/ B`) is
+  written `-` in this column only; the per-shot tables keep the real name.
+- Why both roles (#718): a released build (0.5.3 and older) saves by writing a fresh database and
+  renaming it over the project, so it drops these tables, and every shot then reads the legacy
+  columns. With both roles there, each section still lists who explored and who surveyed it. What
+  collapses after such a save:
+  - per-shot differences, later dates and emails go to the section aggregate;
+  - same-named people become one name;
+  - names come back as the legacy text spells them: a `/` next to a space as `-`, a name holding
+    `,` or `;` as several people (except a surveyors-only text that is exactly `Last, First`, such
+    as `Doe, John`, which the free-text rule keeps as one), and a placeholder-only name (`?`,
+    `unknown`, `none`) as nobody;
+  - a 0.5.3 Ariane TML export and re-import collapses identical halves (`Jo Diver / Jo Diver`
+    comes back as the surveyor `Jo Diver` alone). `Ida Ice /` survives that round trip, and this
+    build reads it back as the explorer `Ida Ice`.
+
+  The same text is what SpeleoDB shows. Older Ariane imports stored only the two-halves form, and
+  only with two distinct, non-empty halves (that importer dropped empty and placeholder halves and
+  collapsed identical ones); the explorers-only form and identical halves are new there.
 - A contract test pins that every table and column the Python reader reads is unchanged, apart
-  from those two values. A live check runs against the internal SpeleoDB.
+  from those two values, and pins their text. A live check runs against the internal SpeleoDB.
 
 ## Binary load envelope v7
 
@@ -103,16 +156,18 @@ Ariane as one section. TML duplicate detection uses the file hash only, so it is
 
 | Format | Mapping |
 |---|---|
-| Ariane TML | Per shot. Ariane 26.3 and later write `XMLExplorer`/`XMLSurveyor`; those are preferred when non-empty. Otherwise the legacy `Explorer` field is used. In its element form (`<Explorer>..</Explorer><Surveyor>..</Surveyor>`), each half goes to its role. In the plain form, `a / b` gives explorer `a` and surveyor `b`, and a single value gives explorers, as Ariane's field name and openspeleo-lib say. Names inside a role are split on `,` and `;`. |
-| Compass | `SURVEY TEAM:` gives surveyors, split. |
-| Walls | `team:`/`surveyors:` gives surveyors, split. |
+| Ariane TML | Per shot. Ariane 26.3 and later write `XMLExplorer`/`XMLSurveyor`; those are preferred when non-empty. Otherwise the legacy `Explorer` field is used. In its element form (`<Explorer>..</Explorer><Surveyor>..</Surveyor>`), each half goes to its role. The plain form is read by the legacy splitter, exactly as a `.stalx` legacy column: `a / b` gives explorer `a` and surveyor `b`, `a /` explorer `a`, and a single value gives SURVEYORS (#719: the role every saved file and SpeleoDB's reader give that text; Ariane's field name and openspeleo-lib would say explorers). Every Ariane field is a name list: names inside a role are split on `,` and `;`, with no `Last, First` rule (`ds, kb` is two people, #427). |
+| Compass | `SURVEY TEAM:` gives surveyors, split. The survey's one credit is ONE allocation every shot shares (`ShotData.credit` is an `Arc`), not a copy per shot. |
+| Walls | `team:`/`surveyors:` gives surveyors, split, shared like Compass. |
 | DMP, GPX | No people. |
 | Import dialogs | Surveyors and Explorers pills, plus a date, override every imported shot when set. |
 
 ## Exports
 
-- **TML:** per row. If any surveyors are set, the `Explorer` field uses the element form;
-  otherwise it holds the explorers as plain text, joined with `", "`. The round trip is stable.
+- **TML:** per row. The `Explorer` field always uses the element form when anyone is credited
+  (#719), so explorers alone are not read back as surveyors; within a role names are joined with
+  `", "` (the import reads a name list). The round trip is exact and stable, except for a `,` or
+  `;` inside one name.
 - **JSON:** per-shot names and dates, plus section aggregates. No emails.
 - **CSV:** unchanged.
 - **stalx-reader crate:** exposes per-shot credit.

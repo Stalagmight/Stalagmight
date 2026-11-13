@@ -662,8 +662,11 @@ pub fn convert_walls_to_import_configs(
         let chain = &chains[ci];
         // The team are the surveyors of every shot of the survey, on its date;
         // the credit rides on the shots, so the section template stays empty.
-        let credit =
-            crate::models::SurveyCredit::from_team(chain.surveyor.as_deref(), chain.date).stored();
+        // One allocation for the whole survey: every shot shares it
+        // (`ShotData::credit`), however long the team line and the survey.
+        let credit = crate::models::SurveyCredit::from_team(chain.surveyor.as_deref(), chain.date)
+            .stored()
+            .map(std::sync::Arc::new);
         let shots = chain
             .shots
             .iter()

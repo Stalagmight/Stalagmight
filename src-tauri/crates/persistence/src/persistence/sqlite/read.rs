@@ -575,15 +575,18 @@ impl Database {
                 // section and uuid, else its section's legacy surveyor/date
                 // (`shot_credits`). A uuid repeated inside one section reads
                 // its row once, for its first shot, as the writer wrote it.
+                // A credit table of another shape gives no rows (with a
+                // warning), and every shot falls back (#717); SQLite failing
+                // for a reason of its own (busy, I/O, corrupt) fails the open.
                 let credit_rows = super::shot_credits::load_credit_rows(&self.conn)?;
                 let recorded =
-                    super::shot_credits::load_recorded_legacy(&self.conn, &stored_legacy);
+                    super::shot_credits::load_recorded_legacy(&self.conn, &stored_legacy)?;
                 let mut claimed: HashSet<(u32, &str)> = HashSet::new();
                 for section in sections.iter_mut() {
                     let section_id = section.id;
                     // The rows hold only while the legacy pair is the one this
-                    // build wrote beside them. An older build keeps the rows but
-                    // rewrites the pair; its edit is then the newer truth.
+                    // build wrote beside them. A pair retyped by something else
+                    // (a hand edit, another tool) is then the newer truth.
                     let rows_hold = recorded.get(&section_id) == stored_legacy.get(&section_id);
                     // A section with no shots keeps its legacy pair: nothing
                     // can carry it (`Section::legacy_surveyor`).
@@ -592,7 +595,7 @@ impl Database {
                     }
                     // Computed once per section and SHARED by every shot that
                     // falls back to it - one allocation, not one per shot.
-                    let fallback = std::sync::Arc::new(section.take_legacy_template());
+                    let fallback = crate::models::SharedCredit::new(section.take_legacy_template());
                     for shot in &mut section.shots {
                         let row = shot
                             .uuid
@@ -604,6 +607,13 @@ impl Database {
                             Some((_, credit)) => shot.set_credit(credit.clone()),
                             None => shot.set_shared_credit(&fallback),
                         }
+                    }
+                    // A stored text this build would not write the same way
+                    // (longer than a role keeps, a clamped name, another
+                    // spelling) is written back as it is while nobody's
+                    // credit in the section changes (#719 review).
+                    if let Some((Some(raw), _)) = stored_legacy.get(&section_id) {
+                        section.remember_loaded_legacy_surveyor(raw);
                     }
                 }
 
