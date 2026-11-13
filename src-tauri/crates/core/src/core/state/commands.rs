@@ -1428,7 +1428,7 @@ mod integrity_capability_tests {
     /// so must the station metadata the Data workspace edits in the same grid:
     /// `SetStationComment` and `SetStationName`. Those two stay INERT, so a batch
     /// of them never runs the reconcile epilogue (pinned behaviourally by
-    /// `metadata_batch_does_not_heal_drift` in `station_name_batch_tests`).
+    /// `metadata_batch_does_not_heal_drift` in `station_name_tests`).
     /// Structural commands that renumber or remove shots stay out.
     #[test]
     fn update_shot_and_station_metadata_are_batch_allowed() {
