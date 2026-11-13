@@ -29,6 +29,11 @@ export interface GridLabels {
   shortcutPaste: string;
   shortcutClear: string;
   shortcutFillDown: string;
+  /** Header sort button aria-label / tooltip, naming the NEXT action of the
+   *  asc -> desc -> none cycle for a column. */
+  sortAscending: (columnHeader: string) => string;
+  sortDescending: (columnHeader: string) => string;
+  sortClear: (columnHeader: string) => string;
 }
 
 export const DEFAULT_GRID_LABELS: GridLabels = {
@@ -48,4 +53,7 @@ export const DEFAULT_GRID_LABELS: GridLabels = {
   shortcutPaste: 'Ctrl+V',
   shortcutClear: 'Del',
   shortcutFillDown: 'Ctrl+D',
+  sortAscending: (columnHeader) => `Sort by ${columnHeader}, ascending`,
+  sortDescending: (columnHeader) => `Sort by ${columnHeader}, descending`,
+  sortClear: (columnHeader) => `Clear sort by ${columnHeader}`,
 };

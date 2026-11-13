@@ -97,6 +97,34 @@ export function tabTarget(
 }
 
 /**
+ * {@link tabTarget}, but also skipping cells `accept` refuses (a column that does
+ * not apply to that row, a group-header row). Keeps stepping in Tab order until
+ * an accepted cell; null when there is none before the grid edge (Tab then stays
+ * put rather than landing on a cell it should have skipped). `maxSteps` bounds a
+ * pathological run of refused cells.
+ */
+export function tabTargetWhere(
+  row: number,
+  colIdx: number,
+  dir: 1 | -1,
+  writableCols: number[],
+  rowCount: number,
+  accept: (row: number, colIdx: number) => boolean,
+  maxSteps = 200_000,
+): { row: number; colIdx: number } | null {
+  let cur = { row, colIdx };
+  for (let i = 0; i < maxSteps; i++) {
+    const t = tabTarget(cur.row, cur.colIdx, dir, writableCols, rowCount);
+    if (!t) return null;
+    if (accept(t.row, t.colIdx)) return t;
+    // Clamped at the grid's first/last writable cell: nowhere left to go.
+    if (t.row === cur.row && t.colIdx === cur.colIdx) return null;
+    cur = t;
+  }
+  return null;
+}
+
+/**
  * Cycle the active cell WITHIN a fixed selection rectangle (Google-Sheets
  * Tab/Enter-in-selection). `horizontal` = Tab order (row-major, left→right then
  * wrap to next row); `!horizontal` = Enter order (column-major, top→bottom then

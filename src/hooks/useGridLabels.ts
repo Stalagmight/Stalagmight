@@ -38,6 +38,9 @@ export function useGridLabels(rowNounKey: RowNounKey): GridLabels {
       shortcutPaste: t('grid.shortcuts.paste'),
       shortcutClear: t('grid.shortcuts.clear'),
       shortcutFillDown: t('grid.shortcuts.fillDown'),
+      sortAscending: (column) => t('grid.sort.ascending', { column }),
+      sortDescending: (column) => t('grid.sort.descending', { column }),
+      sortClear: (column) => t('grid.sort.clear', { column }),
     }),
     [t, rowNounKey]
   );

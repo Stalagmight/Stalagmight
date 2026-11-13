@@ -78,29 +78,106 @@
   white-space: nowrap;
 }
 
+/* Cell backgrounds come in two layers.
+   - background-COLOR is the cell's state: frozen / hovered / locked / draft /
+     missing / not-applicable (the rules below). They set only the colour, never
+     the `background` shorthand, which would wipe the image layers.
+   - background-IMAGE stacks translucent overlays on top of it, so they compose
+     with any state instead of replacing it: the host's row tint (bottom), the
+     find-match tint, then the range-selection fill (top). Each layer is a
+     variable that defaults to transparent; only cells that carry one pay for
+     the gradients. Marks (<mark class="sg-mark">) are content, painted above
+     every layer, so a match stays readable under selection / hover / tint. */
+.sg-grid .sg-row-tinted .sg-cell,
+.sg-grid .sg-cell.sg-cell-sel,
+.sg-grid .sg-cell.sg-cell-match {
+  background-image:
+    linear-gradient(var(--sg-l-sel, transparent), var(--sg-l-sel, transparent)),
+    linear-gradient(var(--sg-l-match, transparent), var(--sg-l-match, transparent)),
+    linear-gradient(var(--sg-l-tint, transparent), var(--sg-l-tint, transparent));
+}
+/* Row tint: the host sets `--sg-row-tint` (any colour) through `rowStyle`, and
+   optionally `--sg-row-tint-strength` (default 14%). Mixed into the cell at that
+   strength, over whatever state colour the cell has (N/A and locked included). */
+.sg-grid .sg-row-tinted .sg-cell {
+  --sg-l-tint: color-mix(in srgb, var(--sg-row-tint) var(--sg-row-tint-strength, 14%), transparent);
+}
+/* Range selection (every selected cell but the active one). Same colour the
+   inline fill used to paint, now as the top layer. */
+.sg-grid .sg-cell.sg-cell-sel {
+  --sg-l-sel: var(--sg-blue-fill);
+}
+/* A cell holding a find match (the only cue on custom-render cells, which
+   cannot draw <mark>s), and the stronger look of the focused one. */
+.sg-grid .sg-cell.sg-cell-match {
+  --sg-l-match: var(--cc-warning-10);
+}
+.sg-grid .sg-cell.sg-cell-match-current {
+  --sg-l-match: var(--cc-warning-20);
+  box-shadow: inset 0 0 0 1px var(--cc-warning);
+}
+/* -20, not -30: on the darker themes (one_dark, nord) -30 drops the text
+   contrast under 4:1. The focused match is solid, in the AA text tone. */
+.sg-grid mark.sg-mark {
+  background: var(--cc-warning-20);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0;
+}
+.sg-grid mark.sg-mark-current {
+  background: var(--cc-warning-text);
+  color: var(--cc-panel);
+  box-shadow: 0 0 0 1px var(--cc-warning-text);
+}
+
 /* Frozen rows (host-locked) carry a warning tint. */
 .sg-row-frozen .sg-cell {
-  background: color-mix(in srgb, var(--cc-warning) 14%, var(--cc-panel));
+  background-color: color-mix(in srgb, var(--cc-warning) 14%, var(--cc-panel));
 }
 /* Externally-hovered row (e.g. the shot hovered on the map) - faint accent
    tint. Selection visuals render in overlays above the cells, so this never
    masks them. Declared after the frozen tint so hover wins on frozen rows. */
 .sg-row-hover .sg-cell {
-  background: color-mix(in srgb, var(--cc-accent) 8%, var(--cc-panel));
+  background-color: color-mix(in srgb, var(--cc-accent) 8%, var(--cc-panel));
 }
 /* A cell that cannot be edited while the grid as a whole can (read-only
    column, frozen geometry, read-only mode): visibly recessed - darker
    background, dimmed text, not-allowed cursor. Declared after the row tints
    so the recess survives frozen/hover backgrounds. */
 .sg-grid .sg-cell-locked {
-  background: color-mix(in srgb, var(--cc-background) 60%, var(--cc-panel));
+  background-color: color-mix(in srgb, var(--cc-background) 60%, var(--cc-panel));
   color: var(--cc-text-secondary);
   cursor: not-allowed;
+}
+/* A column that does not apply to this row (GridColumn.isApplicable, or any
+   cell of a group-header row): blank and quiet. Lighter than the locked recess
+   and with the ordinary cell cursor - it reads as "nothing here", not as
+   "forbidden". A faint hatch keeps it distinct from an empty editable cell. */
+.sg-grid .sg-cell-na {
+  background-color: color-mix(in srgb, var(--cc-background) 30%, var(--cc-panel));
+  background-image: repeating-linear-gradient(
+    135deg,
+    transparent 0 5px,
+    color-mix(in srgb, var(--cc-text-secondary) 7%, transparent) 5px 6px
+  );
+}
+/* The hatch is a background-image too: when a layer applies, put the layers
+   over it rather than drop it. */
+.sg-grid .sg-row-tinted .sg-cell.sg-cell-na,
+.sg-grid .sg-cell.sg-cell-na.sg-cell-sel {
+  background-image:
+    linear-gradient(var(--sg-l-sel, transparent), var(--sg-l-sel, transparent)),
+    linear-gradient(var(--sg-l-tint, transparent), var(--sg-l-tint, transparent)),
+    repeating-linear-gradient(
+      135deg,
+      transparent 0 5px,
+      color-mix(in srgb, var(--cc-text-secondary) 7%, transparent) 5px 6px
+    );
 }
 
 /* The phantom "new shot" draft row at the end of the table. */
 .sg-row-draft .sg-cell {
-  background: color-mix(in srgb, var(--cc-text-primary) 3%, var(--cc-panel));
+  background-color: color-mix(in srgb, var(--cc-text-primary) 3%, var(--cc-panel));
 }
 
 /* A required cell the user emptied: the model keeps its value, the cell shows
@@ -113,7 +190,7 @@
    missing values live in the data table, only the inset border survived and the
    red fill silently did not. */
 .sg-grid .sg-cell.sg-cell-missing {
-  background: color-mix(in srgb, var(--cc-error) 14%, var(--cc-panel));
+  background-color: color-mix(in srgb, var(--cc-error) 14%, var(--cc-panel));
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--cc-error) 60%, transparent);
 }
 
@@ -302,6 +379,74 @@
   color: var(--sg-blue);
 }
 
+/* Group-header row (groupRowContent): one band across every column, styled
+   like a quiet header. Its content sticks just right of the gutter (inline
+   `left`), so it stays in view while the grid scrolls sideways. No overflow
+   clip on the band: that would make it the sticky element's scroll box. */
+.sg-grid .sg-group-band {
+  background-color: var(--sg-header-bg);
+  border-color: var(--sg-line-strong);
+  color: var(--sg-header-text);
+  font-size: 12px;
+  cursor: pointer;
+}
+.sg-grid .sg-row-tinted .sg-group-band {
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--sg-row-tint) var(--sg-row-tint-strength, 14%), transparent),
+    color-mix(in srgb, var(--sg-row-tint) var(--sg-row-tint-strength, 14%), transparent)
+  );
+}
+.sg-grid .sg-group-content {
+  position: sticky;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 100%;
+  padding: 0 8px;
+  white-space: nowrap;
+}
+
+/* Header sort affordance: after the label, shown on hover / focus, always on
+   the sorted column. */
+.sg-grid .sg-sort-btn,
+.sg-grid .sg-sort-indicator {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-left: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--sg-header-text);
+}
+.sg-grid .sg-sort-btn {
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 90ms ease-out;
+}
+.sg-grid .sg-header:hover .sg-sort-btn,
+.sg-grid .sg-sort-btn:focus-visible,
+.sg-grid .sg-sort-btn.sg-sort-active {
+  opacity: 1;
+}
+.sg-grid .sg-sort-btn:hover {
+  background-color: color-mix(in srgb, var(--cc-text-primary) 10%, transparent);
+  color: var(--cc-text-primary);
+}
+.sg-grid .sg-sort-btn:focus-visible {
+  outline: 2px solid var(--cc-focus-ring);
+  outline-offset: -1px;
+}
+.sg-grid .sg-sort-btn.sg-sort-active,
+.sg-grid .sg-sort-indicator {
+  color: var(--sg-blue);
+}
+
 /* Right-click context menu. */
 .sg-context-menu {
   min-width: 160px;
@@ -326,9 +471,13 @@
   border: 0;
   cursor: pointer;
 }
-.sg-context-menu button:hover {
+.sg-context-menu button:hover:not(:disabled) {
   background: var(--cc-accent);
   color: var(--cc-accent-on);
+}
+.sg-context-menu button:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 .sg-context-menu .sg-shortcut {
   font-size: 11px;

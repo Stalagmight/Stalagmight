@@ -20,8 +20,11 @@ export function measureColumnWidth(
   key: string
 ): number {
   let max = 0;
-  const header = root.querySelector(`[data-testid="${testIdPrefix}-header-${key}"] span`);
-  if (header) max = Math.max(max, (header as HTMLElement).scrollWidth);
+  const headerCell = root.querySelector(`[data-testid="${testIdPrefix}-header-${key}"]`);
+  const header = headerCell?.querySelector('span');
+  // A sort button sits after the label and must still fit beside it.
+  const sortBtn = headerCell?.querySelector<HTMLElement>('.sg-sort-btn, .sg-sort-indicator');
+  if (header) max = Math.max(max, header.scrollWidth + (sortBtn ? sortBtn.offsetWidth + 4 : 0));
   root.querySelectorAll(`[data-testid^="${testIdPrefix}-cell-"]`).forEach((el) => {
     const node = el as HTMLElement;
     if (node.dataset.testid?.endsWith(`-${key}`)) max = Math.max(max, node.scrollWidth);
@@ -32,18 +35,22 @@ export function measureColumnWidth(
 /**
  * How far a Google-Sheets style auto-fill should reach: down to the data extent
  * of the guide column, stopping at its first empty cell. Returns `from` when
- * there is nothing below to fill into.
+ * there is nothing below to fill into. A guide cell that does not apply to its
+ * row (`applies` false) is passed over, neither data nor a gap, so on a grid
+ * that interleaves row kinds the extent runs through the other kind's rows.
  */
 export function fillExtent<Row>(
   guide: GridColumn<Row>,
   rows: readonly Row[],
   from: number,
-  rowCount: number
+  rowCount: number,
+  applies: (rowIdx: number) => boolean = () => true
 ): number {
   let end = from;
   for (let r = from + 1; r < rowCount; r++) {
     const data = rows[r];
     if (!data) break;
+    if (!applies(r)) continue;
     const v = guide.getValue(data, r);
     if (v == null || v === '') break;
     end = r;
