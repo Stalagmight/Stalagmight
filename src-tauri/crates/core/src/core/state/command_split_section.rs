@@ -27,35 +27,17 @@ impl AppState {
         let Ok(_cmd_guard) = self.command_lock.lock() else {
             return CommandResult::failure("Failed to acquire command lock".to_string());
         };
-        // Read-only edit gate (#191, D-B6).
-        if let Err(f) = self.guard_mutation("Split section") {
-            return f;
-        }
-        if options.datum_side == SplitSide::Both {
-            return CommandResult::failure(
-                "A zero datum can stay on only one half of a split".to_string(),
-            );
-        }
+        // Every refusal is decided first, read-only: the ignore pin below
+        // writes to the database, so a refused split must not reach it.
+        let cut = match self.split_refusal(section_id, at, &options) {
+            Ok(cut) => cut,
+            Err(reason) => return CommandResult::failure(reason),
+        };
         tracing::info!(
             section_id,
             ?at,
             "Executing split_section as single undo unit"
         );
-
-        // Every refusal is decided first, read-only: the ignore pin below
-        // writes to the database, so a refused split must not reach it.
-        let cut = {
-            let Ok(proj_guard) = self.project.lock() else {
-                return CommandResult::failure("Failed to lock project".to_string());
-            };
-            let Some(project) = proj_guard.as_ref() else {
-                return CommandResult::failure("No project open".to_string());
-            };
-            match Self::validate_cut(project, section_id, at) {
-                Ok(cut) => cut,
-                Err(reason) => return CommandResult::failure(reason),
-            }
-        };
 
         // The shots past the cut move to a new section: position-keyed
         // ignores on them would lapse (see the pin's doc).
@@ -163,8 +145,8 @@ impl AppState {
         at: SplitAt,
         options: &SplitSectionOptions,
     ) -> Result<SplitPreview, String> {
+        let cut = self.split_refusal(section_id, at, options)?;
         self.with_project(|project| {
-            let cut = Self::validate_cut(project, section_id, at)?;
             let mut copy = project.clone();
             let last = copy
                 .get_section(section_id)
@@ -201,6 +183,28 @@ impl AppState {
                 moved_m,
             })
         })
+    }
+
+    /// Every refusal of Split Section Here, read-only and in the order the
+    /// command decides them: the read-only edit gate (#191, D-B6), a zero
+    /// datum asked to stay on both halves, then the cut itself
+    /// ([`Self::validate_cut`]). The command and
+    /// [`Self::split_section_preview`] both run it, so a preview refuses
+    /// exactly what the split would, with the same reason. The edit gate reads
+    /// only the SpeleoDB session, before the project lock is taken.
+    fn split_refusal(
+        &self,
+        section_id: SectionId,
+        at: SplitAt,
+        options: &SplitSectionOptions,
+    ) -> Result<Cut, String> {
+        if let Err(refused) = self.guard_mutation("Split section") {
+            return Err(refused.error.unwrap_or_default());
+        }
+        if options.datum_side == SplitSide::Both {
+            return Err("A zero datum can stay on only one half of a split".to_string());
+        }
+        self.with_project(|project| Self::validate_cut(project, section_id, at))
     }
 
     /// Resolve `at` to where the split cuts, or why it is refused. Read-only:

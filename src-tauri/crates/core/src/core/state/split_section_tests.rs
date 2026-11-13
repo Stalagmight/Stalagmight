@@ -1009,3 +1009,218 @@ fn a_delete_and_split_keeps_the_component_anchor() {
         }
     }
 }
+
+/// The Split dialog's preview refuses exactly what the split refuses, with the
+/// same reason, and accepts what it accepts: both run one pre-check. Each row
+/// builds a fresh project, asks for the preview, then runs the split.
+#[test]
+fn the_preview_refuses_exactly_what_the_split_refuses() {
+    type Setup = fn(&AppState, SectionId) -> (SectionId, SplitAt, SplitSectionOptions);
+    let rows: Vec<(&str, Setup, bool)> = vec![
+        (
+            "a mid station",
+            |_, m| (m, SplitAt::Station { station_index: 1 }, options()),
+            true,
+        ),
+        (
+            "inside a shot",
+            |s, m| {
+                (
+                    m,
+                    SplitAt::Shot {
+                        shot_id: shot_id(s, m, 1),
+                        distance: 2.0,
+                    },
+                    options(),
+                )
+            },
+            true,
+        ),
+        (
+            "an unknown section",
+            |_, m| (m + 99, SplitAt::Station { station_index: 1 }, options()),
+            false,
+        ),
+        (
+            "the first station",
+            |_, m| (m, SplitAt::Station { station_index: 0 }, options()),
+            false,
+        ),
+        (
+            "the last station",
+            |_, m| (m, SplitAt::Station { station_index: 3 }, options()),
+            false,
+        ),
+        (
+            "station u32::MAX",
+            |_, m| {
+                (
+                    m,
+                    SplitAt::Station {
+                        station_index: u32::MAX,
+                    },
+                    options(),
+                )
+            },
+            false,
+        ),
+        (
+            "a NaN distance",
+            |s, m| {
+                (
+                    m,
+                    SplitAt::Shot {
+                        shot_id: shot_id(s, m, 1),
+                        distance: f64::NAN,
+                    },
+                    options(),
+                )
+            },
+            false,
+        ),
+        (
+            "a negative distance",
+            |s, m| {
+                (
+                    m,
+                    SplitAt::Shot {
+                        shot_id: shot_id(s, m, 1),
+                        distance: -1.0,
+                    },
+                    options(),
+                )
+            },
+            false,
+        ),
+        (
+            "past the shot's end",
+            |s, m| {
+                (
+                    m,
+                    SplitAt::Shot {
+                        shot_id: shot_id(s, m, 1),
+                        distance: 7.5,
+                    },
+                    options(),
+                )
+            },
+            false,
+        ),
+        (
+            "a snap to the section's start",
+            |s, m| {
+                (
+                    m,
+                    SplitAt::Shot {
+                        shot_id: shot_id(s, m, 0),
+                        distance: 0.001,
+                    },
+                    options(),
+                )
+            },
+            false,
+        ),
+        (
+            "a datum on both halves, at a station",
+            |_, m| {
+                (
+                    m,
+                    SplitAt::Station { station_index: 1 },
+                    SplitSectionOptions {
+                        datum_side: SplitSide::Both,
+                        ..options()
+                    },
+                )
+            },
+            false,
+        ),
+        (
+            "a datum on both halves, inside a shot",
+            |s, m| {
+                (
+                    m,
+                    SplitAt::Shot {
+                        shot_id: shot_id(s, m, 1),
+                        distance: 2.0,
+                    },
+                    SplitSectionOptions {
+                        datum_side: SplitSide::Both,
+                        ..options()
+                    },
+                )
+            },
+            false,
+        ),
+        (
+            "no shot id left, inside a shot",
+            |s, m| {
+                let mut project = s.get_project_state().unwrap();
+                project.get_section_mut(m).unwrap().next_shot_id =
+                    (m + 1) * crate::models::FEATURE_ID_STRIDE;
+                s.set_project_for_tests(project);
+                (
+                    m,
+                    SplitAt::Shot {
+                        shot_id: shot_id(s, m, 1),
+                        distance: 2.0,
+                    },
+                    options(),
+                )
+            },
+            false,
+        ),
+        (
+            "no section id left",
+            |s, m| {
+                let mut project = s.get_project_state().unwrap();
+                project.next_section_id = crate::models::MAX_SECTION_ID + 1;
+                s.set_project_for_tests(project);
+                (m, SplitAt::Station { station_index: 1 }, options())
+            },
+            false,
+        ),
+    ];
+    for (what, setup, accepted) in rows {
+        let (state, main) = state();
+        let (section, at, opts) = setup(&state, main);
+        let preview = state.split_section_preview(section, at, &opts);
+        let result = state.execute_split_section(section, at, opts);
+        assert_eq!(preview.is_ok(), accepted, "{what}: preview {preview:?}");
+        assert_eq!(result.success, accepted, "{what}: split {:?}", result.error);
+        if let Err(reason) = preview {
+            assert_eq!(Some(reason), result.error, "{what}");
+        }
+    }
+
+    // A SpeleoDB project open without its lock: both refuse at the edit gate.
+    let temp = tempfile::TempDir::new().unwrap();
+    let path = temp.path().join("remote.stalx");
+    let (state, main) = state();
+    assert!(
+        state
+            .execute(Command::SaveProject {
+                path: Some(path.clone())
+            })
+            .success
+    );
+    assert!(state.execute(Command::CloseProject).success);
+    crate::persistence::Database::open_existing(&path)
+        .unwrap()
+        .save_speleo_link(Some(&crate::models::SpeleoLink {
+            endpoint: "http://speleodb.invalid/".to_string(),
+            project_id: "22222222-2222-2222-2222-222222222222".to_string(),
+            project_name: "Remote".to_string(),
+            base_commit_sha: Some("def456".to_string()),
+            has_unpushed_edits: false,
+            last_edit_at: None,
+            last_verify_at: None,
+            undo_mode: None,
+        }))
+        .unwrap();
+    assert!(state.open_project(path).success);
+    let at = SplitAt::Station { station_index: 1 };
+    let preview = state.split_section_preview(main, at, &options());
+    let result = state.execute_split_section(main, at, options());
+    assert!(!result.success, "read-only");
+    assert_eq!(preview.err(), result.error, "read-only");
+}
