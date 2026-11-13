@@ -33,13 +33,13 @@ export function ColumnsMenu({ revealed }: { revealed: ReadonlySet<DataColumnKey>
       icon={<EyeIcon size={14} />}
       label={t('dataToolbar.columns.button')}
       title={t('dataToolbar.columns.title')}
-      width={260}
+      width={300}
     >
       <div className="flex items-center justify-between gap-2 px-2 py-1">
-        <span className="text-text-secondary tabular-nums" data-testid="data-columns-count">
+        <span className="min-w-0 truncate whitespace-nowrap text-text-secondary tabular-nums" data-testid="data-columns-count">
           {t('dataToolbar.columns.shown', { shown, total })}
         </span>
-        <span className="flex gap-1">
+        <span className="flex shrink-0 gap-1 whitespace-nowrap">
           <button
             type="button"
             className="rounded px-1.5 py-0.5 hover:bg-accent-10 disabled:opacity-50"

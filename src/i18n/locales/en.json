@@ -2090,6 +2090,14 @@
       "button": "Tint",
       "buttonMode": "Tint: {{mode}}",
       "title": "Row background colour",
+      "short": {
+        "none": "None",
+        "section": "Section",
+        "issues": "Issues",
+        "depth": "Depth",
+        "distance": "Distance",
+        "type": "Row type"
+      },
       "modes": {
         "none": "None",
         "section": "Section colour",
@@ -2149,8 +2157,7 @@
       },
       "condition": "{{column}} {{op}} {{value}}",
       "conditionNoValue": "{{column}} {{op}}",
-      "sort": "Sorted: {{column}} ({{dir}})",
-      "revealedSearch_one": "{{n}} row shown by search",
+        "revealedSearch_one": "{{n}} row shown by search",
       "revealedSearch_other": "{{n}} rows shown by search",
       "revealedNav_one": "{{n}} row shown by navigation",
       "revealedNav_other": "{{n}} rows shown by navigation",
@@ -2162,7 +2169,7 @@
       "hideTitle": "Hide them again",
       "remove": "Remove",
       "clearAll": "Clear all",
-      "clearAllTitle": "Remove every filter, the sort and the temporarily shown rows"
+      "clearAllTitle": "Remove every filter and hide the temporarily shown rows and columns"
     },
     "sortBar": {
       "text": "Sorted by {{column}} ({{dir}}). Survey order and the link rail are off.",

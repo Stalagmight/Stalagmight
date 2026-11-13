@@ -2,11 +2,12 @@
  * The small view controls of the toolbar: the row-type segmented control, the
  * View menu (section headers, collapse / expand all) and the map pane toggle.
  */
+import { useContext } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useDataWorkspaceStore } from '../store';
 import type { DataModelCtx, RowTypeFilter } from '../types';
 import { ListIcon, MapIcon } from '../../common/icons';
-import { MenuDivider, ToolbarMenu, toolbarButtonClass } from './ToolbarMenu';
+import { MenuDivider, ToolbarCompactContext, ToolbarMenu, toolbarButtonClass } from './ToolbarMenu';
 
 const ROW_TYPES: readonly RowTypeFilter[] = ['all', 'stations', 'shots'];
 
@@ -17,7 +18,7 @@ export function RowTypeControl() {
   const setFilters = useDataWorkspaceStore((s) => s.setFilters);
   return (
     <div
-      className="flex shrink-0 items-center overflow-hidden rounded border border-border text-xs"
+      className="flex h-7 shrink-0 items-stretch overflow-hidden rounded border border-border text-xs"
       role="radiogroup"
       aria-label={t('dataToolbar.rowType.label')}
       data-testid="data-rowtype"
@@ -28,7 +29,7 @@ export function RowTypeControl() {
           type="button"
           role="radio"
           aria-checked={rowTypes === type}
-          className={`whitespace-nowrap px-2 py-1 ${
+          className={`h-full whitespace-nowrap px-2 ${
             rowTypes === type ? 'bg-accent-20 text-text-primary' : 'text-text-secondary hover:bg-accent-10'
           }`}
           onClick={() => setFilters({ rowTypes: type })}
@@ -100,17 +101,19 @@ export function MapToggle() {
   const { t } = useTranslation();
   const open = useDataWorkspaceStore((s) => s.mapPaneOpen);
   const setMapPaneOpen = useDataWorkspaceStore((s) => s.setMapPaneOpen);
+  const compact = useContext(ToolbarCompactContext);
   return (
     <button
       type="button"
       className={toolbarButtonClass({ active: open })}
       aria-pressed={open}
+      aria-label={compact ? t('dataToolbar.map.button') : undefined}
       title={open ? t('dataToolbar.map.hide') : t('dataToolbar.map.show')}
       onClick={() => setMapPaneOpen(!open)}
       data-testid="data-map-toggle"
     >
       <MapIcon size={14} />
-      {t('dataToolbar.map.button')}
+      {!compact && t('dataToolbar.map.button')}
     </button>
   );
 }

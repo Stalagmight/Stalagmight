@@ -14,7 +14,7 @@ export function TintMenu({ ctx }: { ctx: DataModelCtx }) {
   const { t } = useTranslation();
   const tintMode = useDataWorkspaceStore((s) => s.tintMode);
   const setTintMode = useDataWorkspaceStore((s) => s.setTintMode);
-  const modeLabel = t(`dataToolbar.tint.modes.${tintMode}`);
+  const modeLabel = t(`dataToolbar.tint.short.${tintMode}`);
 
   return (
     <ToolbarMenu
@@ -22,7 +22,8 @@ export function TintMenu({ ctx }: { ctx: DataModelCtx }) {
       menuTestId="data-tint-menu"
       icon={<TintIcon size={14} />}
       label={tintMode === 'none' ? t('dataToolbar.tint.button') : t('dataToolbar.tint.buttonMode', { mode: modeLabel })}
-      title={t('dataToolbar.tint.title')}
+      title={`${t('dataToolbar.tint.title')}: ${t(`dataToolbar.tint.modes.${tintMode}`)}`}
+      ariaLabel={t('dataToolbar.tint.button')}
       width={300}
       remeasureKey={tintMode}
     >

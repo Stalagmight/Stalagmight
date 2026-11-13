@@ -258,7 +258,8 @@ describe('filters, chips and menus', () => {
     expect(within(chips).getByTestId('data-chip-quick-comments')).toHaveTextContent('With comments');
     expect(within(chips).getByTestId('data-chip-condition-c1')).toHaveTextContent('Length > 30');
     expect(within(chips).getByTestId('data-chip-condition-c2')).toHaveTextContent('Comment contains “sump”');
-    expect(within(chips).getByTestId('data-chip-sort')).toHaveTextContent('Sorted: Length (descending)');
+    // the sort has its own bar, not a chip
+    expect(within(chips).queryByTestId('data-chip-sort')).toBeNull();
     fireEvent.click(screen.getByTestId('data-chip-condition-c1-remove'));
     expect(store().filters.conditions.map((c) => c.id)).toEqual(['c2']);
     fireEvent.click(screen.getByTestId('data-chip-sections-remove'));
@@ -266,7 +267,7 @@ describe('filters, chips and menus', () => {
     fireEvent.click(screen.getByTestId('data-chips-clear-all'));
     expect(store().filters.rowTypes).toBe('all');
     expect(store().filters.conditions).toEqual([]);
-    expect(store().sort).toBeNull();
+    expect(store().sort).toEqual({ colKey: 'length', dir: 'desc' });
     expect(screen.queryByTestId('data-chips')).toBeNull();
   });
 
@@ -338,6 +339,8 @@ describe('filters, chips and menus', () => {
     expect(store().tintMode).toBe('type');
     expect(screen.getByTestId('data-tint-legend')).toHaveTextContent('Station');
     expect(screen.getByTestId('data-tint-button')).toHaveTextContent('Tint: Row type');
+    act(() => store().setTintMode('section'));
+    expect(screen.getByTestId('data-tint-button')).toHaveTextContent('Tint: Section');
     fireEvent.click(screen.getByTestId('data-tint-none'));
     expect(screen.queryByTestId('data-tint-legend')).toBeNull();
   });

@@ -1,8 +1,9 @@
 /**
- * The active-filter chips row: one removable chip per thing that narrows or
- * reorders the view (row type, sections, each quick filter, each condition,
- * the sort), a chip for rows / columns shown only temporarily (search or
- * navigation) with [Hide], and "Clear all". Hidden when nothing is active.
+ * The active-filter chips row: one removable chip per thing that narrows the
+ * view (row type, sections, each quick filter, each condition), a chip for rows
+ * / columns shown only temporarily (search or navigation) with [Hide], and
+ * "Clear all". Hidden when nothing is active. The sort is not a chip: the sort
+ * bar right under the toolbar already says it and undoes it.
  */
 import { useTranslation } from 'react-i18next';
 import { useDataWorkspaceStore } from '../store';
@@ -13,7 +14,7 @@ import type { DataView } from '../types';
 import { CloseIcon } from '../../common/icons';
 import { testIdPart } from '../../../utils/testId';
 import { QUICK_FILTER_KEYS } from './FilterMenu';
-import { columnLabel, conditionText, tCount } from './labels';
+import { conditionText, tCount } from './labels';
 
 const SECTION_NAMES_SHOWN = 2;
 
@@ -72,7 +73,6 @@ function Chip({
 export function FilterChips({ model, view }: { model: DataModel; view: DataView }) {
   const { t, i18n } = useTranslation();
   const filters = useDataWorkspaceStore((s) => s.filters);
-  const sort = useDataWorkspaceStore((s) => s.sort);
   const revealRowKeys = useDataWorkspaceStore((s) => s.revealRowKeys);
   const search = useDataWorkspaceStore((s) => s.search);
   const store = useDataWorkspaceStore.getState;
@@ -83,7 +83,7 @@ export function FilterChips({ model, view }: { model: DataModel; view: DataView 
   const bySearch = view.revealedRowKeys.size - byNav;
   const revealedCols = view.revealedColumns.size;
 
-  const anything = filtersActive(filters) || sort !== null || view.revealedRowKeys.size > 0 || revealedCols > 0;
+  const anything = filtersActive(filters) || view.revealedRowKeys.size > 0 || revealedCols > 0;
   if (!anything) return null;
 
   const remove = t('dataToolbar.chips.remove');
@@ -143,21 +143,6 @@ export function FilterChips({ model, view }: { model: DataModel; view: DataView 
       />,
     );
   }
-  if (sort) {
-    const meta = DATA_COLUMN_BY_KEY.get(sort.colKey);
-    chips.push(
-      <Chip
-        key="sort"
-        label={t('dataToolbar.chips.sort', {
-          column: meta ? columnLabel(t, i18n, meta) : sort.colKey,
-          dir: t(`dataToolbar.sortBar.${sort.dir}`),
-        })}
-        onRemove={() => store().setSort(null)}
-        removeLabel={remove}
-        testId="data-chip-sort"
-      />,
-    );
-  }
   if (view.revealedRowKeys.size > 0) {
     const key = byNav > 0 && bySearch > 0 ? 'revealedBoth' : byNav > 0 ? 'revealedNav' : 'revealedSearch';
     chips.push(
@@ -199,7 +184,6 @@ export function FilterChips({ model, view }: { model: DataModel; view: DataView 
     const s = store();
     s.clearFilters();
     s.clearRevealed();
-    s.setSort(null);
     if (s.search.rowScope === 'all' || s.search.columnScope !== 'visible') {
       s.setSearch({ rowScope: 'visible', columnScope: 'visible' });
     }

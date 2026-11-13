@@ -8,7 +8,7 @@
  * first match from the active row). Escape clears the query, then closes find.
  * Alt+C / Alt+W / Alt+R toggle the options while the box has focus.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useDataWorkspaceStore } from '../store';
 import { compileSearch } from '../model/search';
@@ -16,7 +16,7 @@ import type { DataView } from '../types';
 import { formatNumber } from '../../../i18n/format';
 import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, CloseIcon } from '../../common/icons';
 import { SearchIcon } from './toolbarIcons';
-import { iconButtonClass } from './ToolbarMenu';
+import { FIELD_BOX_CLASS, FIELD_INPUT_CLASS, iconButtonClass } from './ToolbarMenu';
 import { FindOptionsMenu } from './FindOptionsMenu';
 import type { FindNavigation } from './useFindNavigation';
 
@@ -124,7 +124,7 @@ export function FindBar({ view, nav, inputRef, editingBlocked, onClosed }: FindB
   }
   const showLocked = count !== null && count.tone === 'normal' && search.replaceOpen && !editingBlocked && lockedCount > 0;
 
-  const toggleButton = (key: Toggle, glyph: React.ReactNode, title: string, testId: string) => (
+  const toggleButton = (key: Toggle, glyph: ReactNode, title: string, testId: string) => (
     <button
       type="button"
       className={`${iconButtonClass(search[key])} font-mono`}
@@ -141,7 +141,7 @@ export function FindBar({ view, nav, inputRef, editingBlocked, onClosed }: FindB
 
   return (
     <div
-      className="flex min-w-[18rem] max-w-[40rem] flex-[1_1_22rem] items-center gap-0.5 rounded border border-border bg-background pl-1.5 pr-0.5 focus-within:border-accent"
+      className={`${FIELD_BOX_CLASS} w-full`}
       role="search"
       data-testid="data-find"
     >
@@ -162,7 +162,7 @@ export function FindBar({ view, nav, inputRef, editingBlocked, onClosed }: FindB
         aria-invalid={compiled.error ? true : undefined}
         spellCheck={false}
         autoComplete="off"
-        className="min-w-0 flex-1 bg-transparent px-1 py-1 text-xs text-text-primary outline-none placeholder:text-text-secondary"
+        className={FIELD_INPUT_CLASS}
         data-testid="data-find-input"
       />
       {draft !== '' && (

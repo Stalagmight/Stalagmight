@@ -5,16 +5,28 @@
  * `useDismissableLayer` outside-click / scroll / resize dismissal, Escape,
  * `data-dropdown-open` so the global Escape handler yields).
  */
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useAnchoredFixedMenu } from '../../../hooks/useAnchoredFixedMenu';
 import { useDismissableLayer } from '../../../hooks/useDismissableLayer';
 import { ChevronDownIcon } from '../../common/icons';
+
+/** True while the toolbar is too narrow for labels: menu buttons show their
+ *  icon only (the label moves to the accessible name). */
+export const ToolbarCompactContext = createContext(false);
+
+/** The find / replace field box (input + trailing controls). */
+export const FIELD_BOX_CLASS =
+  'flex h-7 items-center gap-0.5 rounded border border-border bg-background pl-1.5 pr-0.5 focus-within:border-accent';
+
+/** The bare input inside a field box (the box draws the border and focus). */
+export const FIELD_INPUT_CLASS =
+  'h-full min-w-0 flex-1 border-0 bg-transparent px-1 py-0 text-xs text-text-primary outline-none placeholder:text-text-secondary focus:border-0 disabled:cursor-not-allowed';
 
 /** Classes for a flat toolbar button: open (accent fill), active (it narrows
  *  the view right now) or idle. */
 export function toolbarButtonClass(state: { open?: boolean; active?: boolean; disabled?: boolean }): string {
   const base =
-    'inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded px-2 py-1 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50';
+    'inline-flex h-7 shrink-0 items-center gap-1 whitespace-nowrap rounded px-2 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50';
   if (state.open) return `${base} bg-accent text-accent-on`;
   if (state.active) return `${base} bg-accent-20 text-text-primary hover:bg-accent-30`;
   return `${base} text-text-primary hover:bg-accent-10`;
@@ -79,6 +91,8 @@ export function ToolbarMenu({
   children,
 }: ToolbarMenuProps) {
   const [open, setOpen] = useState(false);
+  const compact = useContext(ToolbarCompactContext);
+  const showLabel = !iconOnly && !compact;
   const btnRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const close = () => setOpen(false);
@@ -117,14 +131,14 @@ export function ToolbarMenu({
         className={iconOnly ? iconButtonClass(open || active) : toolbarButtonClass({ open, active })}
         onClick={() => setOpen((v) => !v)}
         title={title}
-        aria-label={ariaLabel}
+        aria-label={ariaLabel ?? (!showLabel && typeof label === 'string' ? label : undefined)}
         aria-haspopup="true"
         aria-expanded={open}
         data-active={active ? 'true' : undefined}
         data-testid={testId}
       >
         {icon}
-        {!iconOnly && label}
+        {showLabel && label}
         {!iconOnly && <ChevronDownIcon size={10} />}
       </button>
       {open && (
