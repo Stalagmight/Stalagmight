@@ -47,3 +47,22 @@ export function cellApplies<Row>(
   if (isGroupRow(groupRowContent, row, rowIdx)) return false;
   return columnApplies(col, row, rowIdx);
 }
+
+/** `isGroupRow` per row index, memoized for one `rows` / `groupRowContent`
+ *  pair (rebuild it when either changes). Indexes past the end (a growing
+ *  paste's stand-in rows) are never group rows. */
+export function groupFlagCache<Row>(
+  rows: readonly Row[],
+  groupRowContent: GroupRowContent<Row> | undefined,
+): (rowIdx: number) => boolean {
+  if (!groupRowContent) return () => false;
+  const seen = new Map<number, boolean>();
+  return (rowIdx) => {
+    const hit = seen.get(rowIdx);
+    if (hit !== undefined) return hit;
+    const row = rows[rowIdx];
+    const flag = row !== undefined && isGroupRow(groupRowContent, row, rowIdx);
+    seen.set(rowIdx, flag);
+    return flag;
+  };
+}

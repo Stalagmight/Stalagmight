@@ -37,7 +37,7 @@ import { GridHeaderRow } from './GridHeaderRow';
 import { activateCellIn, directTypedValue, openEditorIn } from './gridActivate';
 import { measureColumnWidth, fillExtent } from './gridAutoFit';
 import { planClear } from './gridClear';
-import { NOT_APPLICABLE, cellApplies } from './gridApplicable';
+import { NOT_APPLICABLE, columnApplies, groupFlagCache } from './gridApplicable';
 import { GridRow, type GridRowHandlers } from './GridRow';
 import { useGridScrollRequests } from './useGridScrollRequests';
 import { GridCellEditor, GridDropLines, GridRangeOverlays, type CellEditorState } from './GridOverlays';
@@ -458,22 +458,25 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
 
   // N/A cells (isApplicable false, or any cell of a group-header row) hold no
   // value: blank, never edited, copied as '', skipped by Tab - see gridApplicable.
+  // The per-row group flag is cached: bulk paths ask once per CELL, and the
+  // host's groupRowContent builds JSX on every call.
+  const isGroupAt = useMemo(() => groupFlagCache(rows, groupRowContent), [rows, groupRowContent]);
   const cellApplicable = useCallback(
     (rowIdx: number, col: GridColumn<Row>): boolean => {
       const row = rowAt(rowIdx);
-      return row === undefined || cellApplies(col, row, rowIdx, groupRowContent);
+      return row === undefined || (!isGroupAt(rowIdx) && columnApplies(col, row, rowIdx));
     },
-    [rowAt, groupRowContent],
+    [rowAt, isGroupAt],
   );
   const cellEditable = useCallback(
     (rowIdx: number, col: GridColumn<Row> | undefined): boolean => {
       if (!col) return false;
       const row = rowAt(rowIdx);
-      if (row === undefined || !cellApplies(col, row, rowIdx, groupRowContent)) return false;
+      if (row === undefined || isGroupAt(rowIdx) || !columnApplies(col, row, rowIdx)) return false;
       if (col.isEditable) return col.isEditable(row, rowIdx);
       return !!col.editable;
     },
-    [rowAt, groupRowContent],
+    [rowAt, isGroupAt],
   );
 
   // Cells whose REQUIRED value (kind 'number') the user cleared: the model

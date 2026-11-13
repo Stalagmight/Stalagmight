@@ -90,7 +90,7 @@ const groupRowContent = (r: Row) =>
     </span>
   ) : undefined;
 
-function renderGrid(over: Partial<SpreadsheetGridProps<Row>> = {}) {
+function renderGrid(over: Partial<SpreadsheetGridProps<Row>> = {}, { groups = true } = {}) {
   const onEdit = vi.fn();
   const onBatchEdit = vi.fn<(edits: CellEdit[]) => void>();
   const onPasteReport = vi.fn();
@@ -100,7 +100,7 @@ function renderGrid(over: Partial<SpreadsheetGridProps<Row>> = {}) {
       rows={ROWS}
       rowKey={(r) => r.id}
       rowLabel={(r) => (r.kind === 'group' ? `grp:${r.name}` : r.name)}
-      groupRowContent={groupRowContent}
+      {...(groups ? { groupRowContent } : {})}
       onEdit={onEdit}
       onBatchEdit={onBatchEdit}
       onPasteReport={onPasteReport}
@@ -166,11 +166,11 @@ describe('N/A cells render blank and quiet', () => {
   });
 
   it('never calls render or cellClassName for an N/A cell', () => {
-    const cellClassName = vi.fn(() => undefined);
+    const cellClassName = vi.fn((_r: Row, _i: number, _k: string): string | undefined => undefined);
     renderGrid({ cellClassName });
     expect(renderBadge.mock.calls.every(([r]) => r.kind === 'station')).toBe(true);
     expect(renderBadge).toHaveBeenCalled();
-    expect(cellClassName.mock.calls.some(([r, , k]) => k === 'len' && (r as Row).kind !== 'shot')).toBe(false);
+    expect(cellClassName.mock.calls.some(([r, , k]) => k === 'len' && r.kind !== 'shot')).toBe(false);
   });
 });
 
@@ -332,7 +332,7 @@ describe('keyboard over N/A cells', () => {
       len,
       comment: '',
     }));
-    renderGrid({ rows, groupRowContent: undefined });
+    renderGrid({ rows }, { groups: false });
     fireEvent.mouseDown(cell(1, 'len'));
     key('ArrowDown', { ctrlKey: true });
     expect(activeCell()).toBe('grid-cell-3-len'); // end of the 5,7 run
