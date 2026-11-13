@@ -469,6 +469,21 @@ impl AppState {
                 })
             }
 
+            // Same for a station name: the inverse names the previous value, which
+            // `undo()` writes back verbatim (`restore_station_name`).
+            Command::SetStationName {
+                station_ref,
+                name: _,
+            } => {
+                let previous_name = project
+                    .key_for_ref(*station_ref)
+                    .and_then(|key| project.station_names.get(&key).cloned());
+                UndoData::InverseCommand(Command::SetStationName {
+                    station_ref: *station_ref,
+                    name: previous_name,
+                })
+            }
+
             // Move commands use inverse commands
             // MoveSection and MoveSegment both move the whole rigid-connected group
             // (MoveSection delegates to move_segment), so both capture every affected

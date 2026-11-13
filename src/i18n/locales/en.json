@@ -1830,6 +1830,7 @@
     "stationsEmpty": "No stations in this section.",
     "frozen": "Geometry locked - part of adjusted network",
     "viewSaveFailed": "Could not save the table layout. Your column widths and visibility may not be restored next time.",
+    "workspaceViewSaveFailed": "Could not save the Data view layout. Your columns, row colors and map pane may not be restored next time.",
     "pasteReport": {
       "written_one": "Pasted {{count}} cell",
       "written_other": "Pasted {{count}} cells",

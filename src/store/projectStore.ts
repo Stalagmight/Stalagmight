@@ -439,6 +439,8 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   createLoopClosure: (stationA: StationRef, stationB: StationRef, closureStrategy: ClosureStrategy) => Promise<CommandResult>;
   removeLoopClosure: (closureId: bigint) => Promise<CommandResult>;
   updateStationComment: (stationRef: StationRef, comment: string | null) => Promise<CommandResult>;
+  /** Set or clear a station's name; `null`/blank removes it (backend trims + cleans). */
+  updateStationName: (stationRef: StationRef, name: string | null) => Promise<CommandResult>;
   moveComment: (source: CommentHolder, target: CommentHolder, swap: boolean) => Promise<CommandResult>;
   setZeroDatum: (stationRef: StationRef, coordinates: GpsCoordinates, options?: { fitToBounds?: boolean }) => Promise<CommandResult>;
   removeZeroDatum: (stationRef: StationRef) => Promise<CommandResult>;
@@ -2044,6 +2046,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       { purpose: 'update station comment', fields: { stationRef } }
     );
   },
+
+  updateStationName: async (stationRef: StationRef, name: string | null) =>
+    executeCommand('set_station_name', { stationRef, name }, { purpose: 'update station name', fields: { stationRef } }),
 
   moveComment: async (source: CommentHolder, target: CommentHolder, swap: boolean) => {
     return executeCommand(

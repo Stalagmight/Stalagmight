@@ -146,6 +146,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.set_project_name_for_path",
     "command.set_shot_kind",
     "command.set_station_comment",
+    "command.set_station_name",
     "command.set_zero_datum",
     "command.speleodb_done",
     "command.speleodb_get_project_metadata",
@@ -407,6 +408,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "undo-after.reverse_section",
     "undo-after.set_shot_kind",
     "undo-after.set_station_comment",
+    "undo-after.set_station_name",
     "undo-after.set_zero_datum",
     "undo-after.split_shot_at_distance",
     "undo-after.unmerge_station_pair",
@@ -524,6 +526,8 @@ pub const EVENT_NAMES: &[&str] = &[
     // Same again for the edit-section dialog's shot grid.
     "command.update_edit_section_view",
     "command.update_import_shots_view",
+    // Same for the Data workspace (columns, tint, map pane, section headers).
+    "command.update_data_workspace_view",
     "command.update_gas_config",
     // Depth / distance colour palette + pins, written from the map legend cog
     // and the export panel (partial `[map_palette]` write).
@@ -1165,7 +1169,13 @@ mod tests {
         //   + 1 the Split dialog's read-only preview of a loop closure the
         //       split would turn into a merge: command.split_section_preview
         //       = 722.
-        assert_eq!(EVENT_NAMES.len(), 722);
+        //   + 2 station names edited in place (the Data workspace's name
+        //       column): command.set_station_name and how often it is undone
+        //       straight after, undo-after.set_station_name = 724.
+        //   + 1 the Data workspace's persisted view (columns, tint, map pane,
+        //       section headers; partial `[panels]` write):
+        //       command.update_data_workspace_view = 725.
+        assert_eq!(EVENT_NAMES.len(), 725);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

@@ -83,6 +83,12 @@ impl AppState {
         // through the epilogue so the entry is either pushed to redo (success)
         // or pushed back to undo (failure).
         let mut result = match &entry.undo_data {
+            // A station name's inverse restores the recorded value verbatim
+            // instead of re-running the sanitizing forward setter, which would
+            // trim a name a file stored untrimmed.
+            UndoData::InverseCommand(Command::SetStationName { station_ref, name }) => {
+                self.restore_station_name(*station_ref, name.clone())
+            }
             UndoData::InverseCommand(inverse_cmd) => {
                 // Execute the inverse command (without pushing to undo stack)
                 self.execute_without_undo(inverse_cmd.clone())

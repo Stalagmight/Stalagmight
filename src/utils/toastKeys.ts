@@ -48,6 +48,8 @@ export const TOAST_KEYS = {
   NEW_SECTION_VIEW_SAVE: 'new-section-view-save',
   EDIT_SECTION_VIEW_SAVE: 'edit-section-view-save',
   IMPORT_SHOTS_VIEW_SAVE: 'import-shots-view-save',
+  /** The Data workspace's persisted view (columns, tint, map pane) failed to save. */
+  DATA_WORKSPACE_VIEW_SAVE: 'data-workspace-view-save',
   PROFILE_EXPORT_FAILED: 'profile-export-failed',
   PROFILE_EXPORT_OK: 'profile-export-ok',
   /** Paste outcome on the Plan-mode Segments/Cylinders grids (#590). */

@@ -394,6 +394,15 @@ side by side. A shot delete drops the name of the
 station it removes, an inserted shot adds an unnamed station, and a reverse
 keeps every name on its physical station.
 
+A name can also be typed or replaced in place (the Data workspace's Name column,
+`set_station_name` / `Command::SetStationName`). What is stored is cleaned the
+way the display already cleans it: control and bidi-override characters are
+dropped (a pasted tab or newline becomes a space), the text is trimmed and
+clamped to 256 characters, and an empty or whitespace-only name removes it.
+A name edit and a station comment edit are metadata only - they move nothing,
+are undone as one step each, and can share one batch (one undo step) with shot
+edits, as a multi-cell edit or find/replace does.
+
 ### 4.3 Coordinate System
 
 - **Internal coordinates**: X (East), Y (North), Z (Depth) in meters

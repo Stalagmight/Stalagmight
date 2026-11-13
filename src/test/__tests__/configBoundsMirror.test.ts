@@ -5,6 +5,9 @@ import { fileURLToPath } from 'node:url';
 import { MIN_COL_WIDTH, MAX_COL_WIDTH } from '../../components/common/SpreadsheetGrid/useColumnWidths';
 import { PANEL_SIZE_BOUNDS } from '../../components/SingleSystemView/layoutConstants';
 import { MAX_DEPTH_REFERENCE_M } from '../../utils/gpsBounds';
+import { MAP_PANE_MIN_WIDTH } from '../../components/DataWorkspace/store';
+import { TINT_MODES } from '../../components/DataWorkspace/types';
+import { MAP_PANE_MAX_WIDTH } from '../../components/DataWorkspace/useDataWorkspaceViewPersistence';
 
 /**
  * Cross-language numeric-bounds mirror (issue #357 item 18).
@@ -22,6 +25,12 @@ import { MAX_DEPTH_REFERENCE_M } from '../../utils/gpsBounds';
  *   - panel sizes: the four `.clamp(a, b)` calls in
  *     `PanelsConfig::normalize` (src-tauri/crates/core/src/config/panels.rs) vs
  *     `PANEL_SIZE_BOUNDS` in src/components/SingleSystemView/layoutConstants.ts.
+ *   - the Data workspace's map pane width: its `.clamp(a, b)` in the same
+ *     `normalize` vs `MAP_PANE_MIN_WIDTH` (DataWorkspace/store.ts) and
+ *     `MAP_PANE_MAX_WIDTH` (DataWorkspace/useDataWorkspaceViewPersistence.ts),
+ *     and its tint modes, `DATA_WORKSPACE_TINT_MODES` vs `TINT_MODES`
+ *     (DataWorkspace/types.ts) - a mode only one side knows is refused by the
+ *     backend's partial door and repaired to the default on load.
  *
  * A one-sided bump gives a SILENT SNAP-BACK: the frontend accepts and saves a
  * value the Rust `normalize()` then clamps back down, and the subsequent
@@ -111,6 +120,32 @@ describe('cross-language numeric bounds mirror (#357 item 18)', () => {
       `wizard_map_panel_width bounds drift: Rust clamp=${JSON.stringify(rustWizardMap)} but TS ` +
         `PANEL_SIZE_BOUNDS['wizard-map']=${JSON.stringify(PANEL_SIZE_BOUNDS['wizard-map'])}. Change both together.`,
     ).toEqual(PANEL_SIZE_BOUNDS['wizard-map']);
+  });
+
+  it('Data workspace map pane bounds agree: the Rust clamp vs MAP_PANE_MIN/MAX_WIDTH (TS)', () => {
+    const rustSource = fs.readFileSync(PANELS_RS, 'utf8');
+    const rust = parseRustClamp(rustSource, 'data_workspace_map_pane_width', 'panels.rs');
+    expect(
+      rust,
+      `data_workspace_map_pane_width bounds drift: Rust clamp=${JSON.stringify(rust)} but TS ` +
+        `min=${MAP_PANE_MIN_WIDTH} max=${MAP_PANE_MAX_WIDTH}. Change both together.`,
+    ).toEqual({ min: MAP_PANE_MIN_WIDTH, max: MAP_PANE_MAX_WIDTH });
+  });
+
+  it('Data workspace tint modes agree: DATA_WORKSPACE_TINT_MODES (Rust) vs TINT_MODES (TS)', () => {
+    const rustSource = fs.readFileSync(PANELS_RS, 'utf8');
+    const match = /const DATA_WORKSPACE_TINT_MODES:\s*\[&str;\s*\d+\]\s*=\s*\[([^\]]*)\]/.exec(rustSource);
+    if (!match) {
+      throw new Error(
+        'Could not find `const DATA_WORKSPACE_TINT_MODES: [&str; N] = [...]` in panels.rs. ' +
+          'If it was renamed or reformatted, update this tripwire to match.',
+      );
+    }
+    const rustModes = [...match[1]!.matchAll(/"([^"]*)"/g)].map((m) => m[1]);
+    expect(
+      rustModes,
+      'Tint mode drift between Rust DATA_WORKSPACE_TINT_MODES and TS TINT_MODES. Change both together.',
+    ).toEqual([...TINT_MODES]);
   });
 
   // #524 review: both sides checked only `isFinite`, so a 1e300 depth reference

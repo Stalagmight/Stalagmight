@@ -165,6 +165,14 @@ pub enum Command {
         station_ref: StationRef,
         comment: Option<String>,
     },
+    /// Set or clear a station's name (`Project::station_names`): the short
+    /// free-text identifier shown beside its positional `S:I` id. Stored as
+    /// `sanitize_station_name` leaves it; `None`, an empty or a whitespace-only
+    /// name removes it.
+    SetStationName {
+        station_ref: StationRef,
+        name: Option<String>,
+    },
 
     // Move commands
     MoveSection {
@@ -711,6 +719,8 @@ impl Command {
             // Who surveyed a shot and when moves no station.
             | Command::EditShotCredit { .. }
             | Command::SetStationComment { .. }
+            // A station's name is a label keyed by its identity; it moves nothing.
+            | Command::SetStationName { .. }
             | Command::MoveComment { .. }
             | Command::RepairIntegrity
             | Command::UpdateProjectSettings
@@ -913,6 +923,13 @@ impl Command {
                     format!("Remove comment from station {station_ref}")
                 }
             }
+            Command::SetStationName { station_ref, name } => {
+                if name.as_deref().is_some_and(|n| !n.trim().is_empty()) {
+                    format!("Set name of station {station_ref}")
+                } else {
+                    format!("Remove name from station {station_ref}")
+                }
+            }
             Command::MoveSection { section_id, .. } => {
                 format!("Move section {section_id}")
             }
@@ -1019,7 +1036,7 @@ mod tests {
 
         assert_eq!(
             variants.len(),
-            32,
+            33,
             "Command's variant set changed. A removal leaves persisted undo \
              history unloadable at that entry and holed either side of it - keep \
              the tag deserializable, or bump SCHEMA_VERSION and call \
@@ -1159,6 +1176,13 @@ mod tests {
                 false,
             ),
             (
+                Command::SetStationName {
+                    station_ref: station_a,
+                    name: Some("17".to_string()),
+                },
+                false,
+            ),
+            (
                 Command::MoveSection {
                     section_id: 1,
                     offset: Coordinates::default(),
@@ -1220,7 +1244,7 @@ mod tests {
 
         assert_eq!(
             cases.len(),
-            30,
+            31,
             "add every new Command variant to this table"
         );
         for (command, expected) in cases {
@@ -1634,6 +1658,27 @@ mod tests {
                     comment: None,
                 },
                 "Remove comment from station 1:0",
+            ),
+            (
+                Command::SetStationName {
+                    station_ref: station_a,
+                    name: Some("A12".to_string()),
+                },
+                "Set name of station 1:0",
+            ),
+            (
+                Command::SetStationName {
+                    station_ref: station_a,
+                    name: Some("   ".to_string()),
+                },
+                "Remove name from station 1:0",
+            ),
+            (
+                Command::SetStationName {
+                    station_ref: station_a,
+                    name: None,
+                },
+                "Remove name from station 1:0",
             ),
             (
                 Command::MoveStation {
