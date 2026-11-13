@@ -414,30 +414,59 @@ impl Project {
         self.station_offsets = offsets;
     }
 
-    /// Drop loop closures inside `section_id` that the combine made identical
-    /// (same two stations), keeping the first: a duplicate would count the
-    /// same loop twice in the adjustment.
-    /// Drop merges inside or onto `section_id` that the combine made
-    /// identical to another one, or that now tie a station to itself. At a
-    /// junction a branch merged to both join stations (directly, or one of
-    /// them through the other) ends up merged twice to the joined station.
+    /// Drop merges onto `section_id` that the combine made redundant: one
+    /// that now ties a station to itself, or ties two stations that other
+    /// merges already make one point. At a junction a branch merged to both
+    /// join stations (directly, or one of them through the other) ends up
+    /// merged twice to the joined station, or merged to it and to a third
+    /// branch that is merged to it too. The merges elsewhere are read first,
+    /// so only a merge onto the combined section is ever dropped.
     fn dedupe_merges_in(&mut self, section_id: SectionId) {
-        let mut seen: HashSet<(StationRef, StationRef)> = HashSet::new();
-        let keep: Vec<bool> = self
+        let resolved: Vec<Option<(StationRef, StationRef)>> = self
             .station_merges
             .iter()
             .map(|m| {
-                if m.station_a.section_id != section_id && m.station_b.section_id != section_id {
-                    return true;
+                Some((
+                    self.resolve_key(&m.station_a)?,
+                    self.resolve_key(&m.station_b)?,
+                ))
+            })
+            .collect();
+        let mut parent: HashMap<StationRef, StationRef> = HashMap::new();
+        fn root(parent: &mut HashMap<StationRef, StationRef>, x: StationRef) -> StationRef {
+            let mut at = x;
+            while let Some(&up) = parent.get(&at) {
+                if up == at {
+                    break;
                 }
-                let (Some(a), Some(b)) = (
-                    self.resolve_key(&m.station_a),
-                    self.resolve_key(&m.station_b),
-                ) else {
+                at = up;
+            }
+            parent.insert(x, at);
+            at
+        }
+        let onto = |m: &crate::StationMerge| {
+            m.station_a.section_id == section_id || m.station_b.section_id == section_id
+        };
+        for (merge, ends) in self.station_merges.iter().zip(&resolved) {
+            if let (false, Some((a, b))) = (onto(merge), ends) {
+                let (ra, rb) = (root(&mut parent, *a), root(&mut parent, *b));
+                parent.insert(ra, rb);
+            }
+        }
+        let keep: Vec<bool> = self
+            .station_merges
+            .iter()
+            .zip(&resolved)
+            .map(|(merge, ends)| {
+                let (true, Some((a, b))) = (onto(merge), ends) else {
                     return true;
                 };
-                let pair = if a <= b { (a, b) } else { (b, a) };
-                a != b && seen.insert(pair)
+                let (ra, rb) = (root(&mut parent, *a), root(&mut parent, *b));
+                if ra == rb {
+                    return false;
+                }
+                parent.insert(ra, rb);
+                true
             })
             .collect();
         if keep.iter().all(|k| *k) {
@@ -447,6 +476,9 @@ impl Project {
         self.station_merges.retain(|_| keep.next().unwrap_or(true));
     }
 
+    /// Drop loop closures inside `section_id` that the combine made identical
+    /// (same two stations), keeping the first: a duplicate would count the
+    /// same loop twice in the adjustment.
     fn dedupe_closures_in(&mut self, section_id: SectionId) {
         let mut seen: HashSet<(StationRef, StationRef)> = HashSet::new();
         let duplicates: HashSet<u64> = self
