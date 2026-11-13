@@ -64,6 +64,26 @@ describe('openWarningsTab', () => {
     expect(s.detailPanelOpen).toBe(true);
   });
 
+  it('leaves Data for Survey: Data renders no Details panel', () => {
+    useUIStore.getState().setAppMode('data');
+    useUIStore.getState().openWarningsTab();
+    const s = useUIStore.getState();
+    expect(s.appMode).toBe('survey');
+    expect(s.detailPanelTab).toBe('warnings');
+    // Data leaves the dock flags alone (no snapshot), so the reveal opens it.
+    expect(s.detailPanelOpen).toBe(true);
+  });
+
+  it('triggerResolveWarning from Data switches to Survey before revealing', () => {
+    useUIStore.getState().setAppMode('data');
+    useUIStore.getState().triggerResolveWarning(3, 7);
+    const s = useUIStore.getState();
+    expect(s.appMode).toBe('survey');
+    expect(s.requestResolveWarning).toEqual({ sectionId: 3, shotId: 7 });
+    expect(s.detailPanelTab).toBe('warnings');
+    expect(s.detailPanelOpen).toBe(true);
+  });
+
   it('leaves data-table fullscreen, which covers the panel', () => {
     useUIStore.getState().enterDataTableFullScreen();
     useUIStore.getState().openWarningsTab();

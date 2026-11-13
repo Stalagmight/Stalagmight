@@ -124,8 +124,9 @@ describe('SpeleoDoneDialog - survey errors before an upload', () => {
     expect(confirm()).toBeEnabled();
   });
 
-  it('Resolve now uploads nothing, keeps the message, and opens the Warnings tab', async () => {
-    useUIStore.setState({ dialogData: { mode: 'push', closeAfterSave: true }, appMode: 'plan' });
+  // From Plan or Data alike: the Warnings tab lives in Survey's Details panel.
+  it.each(['plan', 'data'] as const)('Resolve now uploads nothing, keeps the message, and opens the Warnings tab (from %s)', async (appMode) => {
+    useUIStore.setState({ dialogData: { mode: 'push', closeAfterSave: true }, appMode });
     render(<SpeleoDoneDialog />);
     fireEvent.change(screen.getByTestId('speleodb-done-message'), { target: { value: 'Fixed the sump' } });
     await userEvent.click(screen.getByTestId('speleodb-upload-errors-resolve'));

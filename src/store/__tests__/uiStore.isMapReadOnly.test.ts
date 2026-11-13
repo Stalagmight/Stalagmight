@@ -1,21 +1,47 @@
 /**
  * Truth table for `isMapReadOnly` - the single predicate every "the survey map is
  * read-only right now" gate shares (toolbar controls, Delete/Import guards, the
- * mutating-tool reset). The load-bearing row is (Plan, measured): Plan/Export force
- * closureAdjusted, but that auto-reverts to measured on a no-closures project, so a
- * geometryMode-only check would wrongly report editable and leak mutations into the
- * read-only workspaces (#243, the #225 bug class).
+ * mutating-tool reset). The load-bearing row is (Plan, measured): the read-only
+ * modes force closureAdjusted, but that auto-reverts to measured on a no-closures
+ * project, so a geometryMode-only check would wrongly report editable and leak
+ * mutations into the read-only workspaces (#243, the #225 bug class). Data is the
+ * second editable mode, so it must behave exactly like Survey here.
  */
 import { describe, it, expect } from 'vitest';
-import { isMapReadOnly, showsClosureAdjustedNotice } from '../uiStore';
+import { isEditableMode, isMapReadOnly, showsClosureAdjustedNotice, type AppMode, type GeometryMode } from '../uiStore';
+
+describe('isEditableMode', () => {
+  it('is true for Survey and Data, false for Plan and Export', () => {
+    expect(isEditableMode('survey')).toBe(true);
+    expect(isEditableMode('data')).toBe(true);
+    expect(isEditableMode('plan')).toBe(false);
+    expect(isEditableMode('export')).toBe(false);
+  });
+});
 
 describe('isMapReadOnly', () => {
-  it('is false ONLY in Survey + measured (the one editable state)', () => {
+  it('is false only in Survey or Data and measured (the editable states)', () => {
+    const modes: AppMode[] = ['survey', 'data', 'plan', 'export'];
+    const geometries: GeometryMode[] = ['measured', 'closureAdjusted'];
+    for (const appMode of modes) {
+      for (const geometryMode of geometries) {
+        const editable = (appMode === 'survey' || appMode === 'data') && geometryMode === 'measured';
+        expect(isMapReadOnly({ appMode, geometryMode }), `${appMode} + ${geometryMode}`).toBe(!editable);
+      }
+    }
+  });
+
+  it('is false in Survey + measured and in Data + measured', () => {
     expect(isMapReadOnly({ appMode: 'survey', geometryMode: 'measured' })).toBe(false);
+    expect(isMapReadOnly({ appMode: 'data', geometryMode: 'measured' })).toBe(false);
   });
 
   it('is true in the closure-adjusted survey view', () => {
     expect(isMapReadOnly({ appMode: 'survey', geometryMode: 'closureAdjusted' })).toBe(true);
+  });
+
+  it('is true in the closure-adjusted Data view (the table goes read-only too)', () => {
+    expect(isMapReadOnly({ appMode: 'data', geometryMode: 'closureAdjusted' })).toBe(true);
   });
 
   it('is true in Plan even when geometryMode fell back to measured (the trap)', () => {
@@ -37,8 +63,8 @@ describe('isMapReadOnly', () => {
  * above: the map can be read-only without this badge earning its space.
  *
  * Both rules have been got wrong in opposite directions, so both are pinned here.
- * Survey-only is #299's call - Plan and Export are read-only workspaces outright,
- * so the badge announces nothing there. The `speleoReadOnly` complement stops it
+ * Editable-modes-only is #299's call - Plan and Export are read-only workspaces
+ * outright, so the badge announces nothing there. The `speleoReadOnly` complement stops it
  * being drawn on top of the SpeleoDB badge, which occupies the same corner.
  */
 describe('showsClosureAdjustedNotice', () => {
@@ -51,6 +77,10 @@ describe('showsClosureAdjustedNotice', () => {
 
   it('shows in Survey when the closure view is the only thing blocking edits', () => {
     expect(showsClosureAdjustedNotice(base)).toBe(true);
+  });
+
+  it('shows in Data (on its map pane) too: Data is editable, so the view is the cause', () => {
+    expect(showsClosureAdjustedNotice({ ...base, appMode: 'data' })).toBe(true);
   });
 
   it('is hidden on measured geometry - there is nothing to announce', () => {

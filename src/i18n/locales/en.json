@@ -1,7 +1,8 @@
 {
   "common": {
     "a11y": {
-      "wizardMapResize": "Resize map panel"
+      "wizardMapResize": "Resize map panel",
+      "dataMapPaneResize": "Resize map pane"
     },
     "toast": {
       "dismiss": "Dismiss notification: {{message}}"
@@ -3096,8 +3097,8 @@
   "modeCarousel": {
     "aria": "Workspace mode",
     "survey": "Survey",
-    "plan": "Plan",
-    "export": "Export"
+    "data": "Data",
+    "plan": "Plan"
   },
   "divePlanBar": {
     "label": "Previous dive plans",
@@ -3195,12 +3196,12 @@
         "title": "Stalagmight Workspace",
         "steps": {
           "modes": {
-            "title": "Survey, Plan, Export",
-            "description": "An open project is always in one of three modes. Only Survey can edit; Plan and Export are read-only, and mutating tools are hidden there rather than greyed out.",
+            "title": "Survey, Data, Plan",
+            "description": "Switch workspaces here. Survey and Data edit the project; Plan is read-only, and mutating tools are hidden there rather than greyed out. Export opens from the project menu (or Ctrl+E) and closes back to where you were.",
             "descriptionItems": [
-              "Survey: edit geometry, sections, and shots.",
-              "Plan: gas planning over the Closures Computed View.",
-              "Export: frame and export an image of the survey."
+              "Survey: edit geometry, sections, and shots on the map.",
+              "Data: every section's stations and shots in one table, with an optional map pane.",
+              "Plan: gas planning over the Closures Computed View."
             ]
           },
           "geometry": {

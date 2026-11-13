@@ -42,6 +42,7 @@ vi.mock('react-i18next', () => ({
 
 vi.mock('../../../store/uiStore', () => ({
   useUIStore: h.useUIStore,
+  isEditableMode: (mode: string) => mode === 'survey' || mode === 'data',
 }));
 
 vi.mock('../../../utils/openOrImport', () => ({
@@ -133,6 +134,27 @@ describe('ImportBlockedDialog', () => {
     );
     fireEvent.click(screen.getByTestId('import-blocked-switch'));
     // Already in Survey - only the view needs fixing.
+    expect(setAppMode).not.toHaveBeenCalled();
+    expect(setGeometryMode).toHaveBeenCalledWith('measured');
+    expect(routeOpenedFile).toHaveBeenCalledWith('/cave/survey.dmp', 'Import Failed', {
+      residualReadOnlyToast: true,
+    });
+  });
+
+  it('cause "view" in Data: stays in Data, switches only the view, and continues', () => {
+    // Data edits like Survey, so a closure-adjusted Data user is not sent to
+    // Survey - the Raw Data View alone makes the import possible.
+    h.env.appMode = 'data';
+    h.env.restoredGeometryMode = 'closureAdjusted';
+    h.env.dialogData.cause = 'view';
+    render(<ImportBlockedDialog />);
+    expect(screen.getByTestId('import-blocked-switch').textContent).toBe(
+      'dialogs.importBlocked.switchToMeasured',
+    );
+    expect(screen.getByTestId('import-blocked-stay').textContent).toBe(
+      'dialogs.importBlocked.stayInAdjusted',
+    );
+    fireEvent.click(screen.getByTestId('import-blocked-switch'));
     expect(setAppMode).not.toHaveBeenCalled();
     expect(setGeometryMode).toHaveBeenCalledWith('measured');
     expect(routeOpenedFile).toHaveBeenCalledWith('/cave/survey.dmp', 'Import Failed', {

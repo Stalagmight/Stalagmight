@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useUIStore, type ToolType } from '../../store/uiStore';
+import { isEditableMode, useUIStore, type ToolType } from '../../store/uiStore';
+import { useDataWorkspaceStore } from '../DataWorkspace/store';
 import { useProjectStore } from '../../store/projectStore';
 import { Button, IconButton } from '../common/Button';
 import {
@@ -240,30 +241,44 @@ export default function Toolbar({
   const setActiveTool = useUIStore((s) => s.setActiveTool);
   const exitDataTableFullScreen = useUIStore((s) => s.exitDataTableFullScreen);
   const appMode = useUIStore((s) => s.appMode);
+  // Survey and Data both edit the survey: Import, Undo/Redo and the full tool set.
+  const editableMode = isEditableMode(appMode);
+  // Data's map is a pane the user opens beside the table. While it is closed there is
+  // no map to aim a tool or a Display toggle at, so the map controls are hidden.
+  const dataMapPaneOpen = useDataWorkspaceStore((s) => s.mapPaneOpen);
+  const showMapControls = appMode !== 'data' || dataMapPaneOpen;
   // Toolbar icons appear at the 'toolbar_only' syntactic level and up; the
   // `--sh-*` color vars are the role colors there and a neutral gray at 'off'.
   const syntacticLevel = useUIStore((s) => s.syntacticLevel);
   const showToolbarIcons = syntacticLevelAtLeast(syntacticLevel, 'toolbar_only');
-  // Read-only both in the closure-adjusted view AND in Plan/Export (the whole map is
-  // non-editable there) - disable the geometry-mutating tools in both. Select/Pan/Zoom/
-  // Measure stay enabled, so they remain available in every mode.
+  // Read-only both in the closure-adjusted view AND in Plan or Export (the whole map
+  // is non-editable there) - disable the geometry-mutating tools in both. Select/Pan/
+  // Zoom/Measure stay enabled, so they remain available in every mode.
   // A remote SpeleoDB project opened without the write lock is read-only - disable
   // the mutating tools + Import exactly like closure-adjusted mode (T2a). The
   // backend edit gate is the real enforcement; this is the visual parity.
   const editingBlocked = useEditingBlocked();
-  // Survey shows the full toolbar; Plan/Export show only the non-mutating tools.
-  // On top of that, the navigate group (Pan/Zoom) is hidden unless the user opted
-  // in (#409) - the map pans on a plain drag and zooms on the wheel under every
+  // Survey and Data show the full toolbar; Plan and Export show only the non-mutating
+  // tools. On top of that, the navigate group (Pan/Zoom) is hidden unless the user
+  // opted in (#409) - the map pans on a plain drag and zooms on the wheel under every
   // tool, so the tools are redundant for anyone who can do both. Filtering the
   // ALREADY-filtered read-only layout is why filterToolbarItems re-tidies
-  // separators on every pass: Plan/Export with navigation off is Select | Measure.
+  // separators on every pass: Plan with navigation off is Select | Measure.
   const config = useProjectStore((s) => s.config);
   const showNavigationTools = navigationToolsEnabled(config);
   const toolbarItems = useMemo(() => {
-    const base = appMode === 'survey' ? TOOLBAR_ITEMS : READ_ONLY_TOOLBAR_ITEMS;
+    const base = editableMode ? TOOLBAR_ITEMS : READ_ONLY_TOOLBAR_ITEMS;
     if (showNavigationTools) return base;
     return filterToolbarItems(base, (tool) => !isNavigationTool(tool));
-  }, [appMode, showNavigationTools]);
+  }, [editableMode, showNavigationTools]);
+
+  // Closing Data's map pane takes the map away from under a mutating tool (a merge
+  // or move half done, a comment target picked): drop back to Select, as the
+  // read-only modes do (MapCanvas), so reopening the pane never resumes a stale
+  // gesture. Also covers entering Data with the pane closed.
+  useEffect(() => {
+    if (!showMapControls && isMutatingTool(activeTool)) setActiveTool('select');
+  }, [showMapControls, activeTool, setActiveTool]);
 
   // Progressive condensation when the left (file/history) and right (tools/display)
   // clusters can't clear the absolutely-centered mode carousel. Because the carousel
@@ -333,6 +348,9 @@ export default function Toolbar({
   }, [
     headerWidth,
     appMode,
+    // Data's map pane brings the tool group and Display menu in and out of the
+    // right cluster, so opening or closing it re-runs the fit too.
+    showMapControls,
     dataTableFullScreen,
     showToolbarIcons,
     // canUndo/canRedo intentionally omitted: the undo/redo buttons now hold a
@@ -424,15 +442,15 @@ export default function Toolbar({
           compact={tight}
           aria-label={t('singleView.menu.aria')}
         />
-        {/* Import and Undo/Redo are survey-only (#243): Plan/Export are read-only
-            workspaces, so the mutating file/history controls are HIDDEN there (not
-            merely disabled) - undoing under the read-only map would mutate the survey
-            out from under it. One `appMode === 'survey'` wrapper so the file and
-            history halves can't drift apart. Fullscreen-table mode is a survey
-            sub-state (entering Plan/Export force-exits it via setAppMode ->
-            exitDataTableFullScreen, and only a survey-mounted control sets it), so the
-            "Back to Map" button lives inside this same gate, swapped in for Import. */}
-        {appMode === 'survey' && (
+        {/* Import and Undo/Redo belong to the editable modes, Survey and Data (#243):
+            Plan and Export are read-only workspaces, so the mutating file/history
+            controls are HIDDEN there (not merely disabled) - undoing under the
+            read-only map would mutate the survey out from under it. One editable-mode
+            wrapper so the file and history halves can't drift apart. Fullscreen-table
+            mode is a Survey sub-state (every other mode force-exits it via setAppMode
+            -> exitDataTableFullScreen, and only a survey-mounted control sets it), so
+            the "Back to Map" button lives inside this same gate, swapped in for Import. */}
+        {editableMode && (
           <>
             {dataTableFullScreen ? (
               <Button
@@ -523,7 +541,7 @@ export default function Toolbar({
         )}
       </div>
 
-      {/* Center - the Survey/Plan/Export workspace carousel (#38, the workspace-mode reframe).
+      {/* Center - the Survey/Data/Plan workspace carousel (#38, the workspace-mode reframe).
           The active map *tool* is already shown by the highlighted toolbar button on
           the right, so the center is free for the mode switch. Fullscreen table mode
           (a survey sub-state) shows the table's title instead. */}
@@ -563,6 +581,9 @@ export default function Toolbar({
           <TableSelectDropdown />
         ) : (
           <>
+            {/* Data with its map pane closed has no map, so neither the tools nor the
+                Display menu: the right cluster is empty until the pane opens. */}
+            {showMapControls && (
             <div
               className={`flex items-center gap-1 transition-opacity ${placementModeActive ? 'opacity-45 grayscale' : ''}`}
               data-testid="toolbar-tools-group"
@@ -596,13 +617,14 @@ export default function Toolbar({
                 );
               })}
             </div>
-            {/* DisplayMenu is available in Survey + Plan (not Export - the Export panel's own
-                controls decide what the exported image contains, so a survey Display menu there
-                is a confusing no-op). The component keeps the survey-only concerns out of Plan
-                internally: the Raw Data View / Closures Computed View switch (Plan forces the
-                closure map) and the color overlays (the gas reachability gradient owns the
-                coloring there). */}
-            {appMode !== 'export' && <DisplayMenu condensed={displayCondensed} tight={tight} />}
+            )}
+            {/* DisplayMenu is available in Survey, Data (with its map pane open) and Plan -
+                not Export, where the Export panel's own controls decide what the exported
+                image contains, so a survey Display menu there is a confusing no-op. The
+                component keeps the editing-only concerns out of Plan internally: the Raw
+                Data View / Closures Computed View switch (Plan forces the closure map) and
+                the color overlays (the gas reachability gradient owns the coloring there). */}
+            {appMode !== 'export' && showMapControls && <DisplayMenu condensed={displayCondensed} tight={tight} />}
           </>
         )}
       </div>

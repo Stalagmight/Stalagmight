@@ -22,7 +22,7 @@ it('local SpeleoDB tab offers only conversion and opens the project creation for
 });
 it('the local SpeleoDB tab, opened outside Survey, offers conversion without section editors', () => {
   render(<LeftWorkspace sections={<div>Sections content</div>} />);
-  for (const mode of ['plan', 'export'] as const) {
+  for (const mode of ['data', 'plan', 'export'] as const) {
     act(() => useUIStore.getState().setAppMode(mode));
     act(() => useUIStore.getState().openSpeleoWorkspace());
     expect(screen.getByRole('button', { name: 'Convert to a SpeleoDB project' })).toBeVisible();

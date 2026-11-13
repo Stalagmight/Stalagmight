@@ -597,21 +597,31 @@ User Action → Command Dispatcher → Tauri IPC → Rust Executor
 
 ### 6.1 Workspace Modes
 
-An open project is worked in one of three top-level workspace modes, chosen from
-the `ModeCarousel` in the middle of the toolbar (`uiStore.appMode`): **Survey**,
-**Plan**, **Export**. Survey is the editable workspace. Plan and Export force the
-read-only Closures Computed View (on a project with no eligible closures the
-geometry falls back to the Raw Data View; the modes are read-only regardless - gating keys
-off `appMode`, not the geometry), so the Sections tab and every
-geometry-mutating tool are Survey-only. Linked projects retain the SpeleoDB left
-workspace on request in every mode; selection, inspection and measurement stay
-available in all three.
+An open project is worked in one of four top-level workspace modes
+(`uiStore.appMode`): **Survey**, **Data**, **Plan** and **Export**. The
+`ModeCarousel` in the middle of the toolbar switches between Survey, Data and
+Plan. Export is not on the carousel: it opens from the project menu (or Ctrl+E)
+and its **Close export** button returns to the mode it was opened from.
 
-Plan is dive and gas planning: the gas reach field over the survey, route and
-turnaround points, and the plan tables, persisted to a `.plnx` sidecar beside the
-project file. Export is the WYSIWYG map export: the right dock hosts the export
-controls and the map area previews what will be written. Both swap the dock
-contents in `SingleSystemView`; the map itself is the same map.
+Survey and Data are the editable workspaces. Plan and Export force the read-only
+Closures Computed View (on a project with no eligible closures the geometry falls
+back to the Raw Data View; the modes are read-only regardless - gating keys off
+`appMode`, not the geometry), so every geometry-mutating tool, Import and
+Undo/Redo are hidden there. The Sections tab is Survey-only; linked projects keep
+the SpeleoDB left workspace on request in every mode. Selection, inspection and
+measurement stay available in all four.
+
+Survey is the map with the Sections, Details and docked data-table panels. Data is
+one full-window spreadsheet of every section's stations and shots, interleaved per
+section, with an optional map pane on its right (resizable, following the active
+row) and neither the Details nor the bottom dock; it edits the same project, so
+Survey <-> Data keeps the geometry mode, the Display settings and the selection as
+they are. Plan is dive and gas planning: the gas reach field over the survey,
+route and turnaround points, and the plan tables, persisted to a `.plnx` sidecar
+beside the project file. Export is the WYSIWYG map export: the right dock hosts
+the export controls and the map area previews what will be written. Every mode
+uses the same map instance; [app-modes.md](app-modes.md) is the contract each
+mode-gated feature has to keep.
 
 ### 6.2 Application Views
 

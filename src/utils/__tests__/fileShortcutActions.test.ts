@@ -109,6 +109,12 @@ describe('runFileShortcutAction - Ctrl+O vs Ctrl+I (#508)', () => {
   // additive DMP-into-open-project case is rejected by routeOpenedFile's
   // read-only guard with a cause-specific message (pinned in
   // openOrImport.test.ts, the #243 guard's home).
+  it('Ctrl+I in Data is the same in-project import door as in Survey', () => {
+    useUIStore.setState({ appMode: 'data', geometryMode: 'measured' });
+    runFileShortcutAction('import_dmp');
+    expect(pickAndRouteMock).toHaveBeenCalledWith(inProjectImportFilters(), 'Import Failed', { importDoor: true });
+  });
+
   it('import_dmp opens the picker even when editing is blocked (router guards the DMP case)', () => {
     useUIStore.setState({ appMode: 'plan', geometryMode: 'measured' });
     useSpeleoStore.setState({ link: READ_ONLY_LINK });

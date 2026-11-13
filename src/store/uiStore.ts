@@ -48,14 +48,18 @@ export type ViewType = 'global' | 'single';
 export type GeometryMode = 'measured' | 'closureAdjusted';
 
 /**
- * Top-level workspace mode (#38 follow-up, the workspace-mode reframe). Selected from the
- * top-middle carousel when a project is open:
- *  - `survey` - the editable survey workspace (everything as it was).
+ * Top-level workspace mode (#38 follow-up, the workspace-mode reframe). Survey, Data and
+ * Plan are picked from the top-middle carousel when a project is open; Export is entered
+ * from the project menu (or Ctrl+E) and left with its Close export button:
+ *  - `survey` - the editable survey workspace: map, Sections, Details, docked data table.
+ *  - `data`   - the editable Data workspace: one table of every section's stations and
+ *               shots, with an optional map pane beside it.
  *  - `plan`   - the gas planner: read-only closure map + gas overlay, Plan-setup
  *               sidebar, tabbed bottom tables.
- *  - `export` - read-only closure map + an export stub (SVG/JPG, future work).
- * Plan/Export force the read-only closure-adjusted map; only Survey edits. Runtime
- * only (never persisted) and meaningful only in single-project view.
+ *  - `export` - read-only closure map + the export panel and preview.
+ * Survey and Data edit ({@link isEditableMode}); Plan and Export are read-only and force
+ * the closure-adjusted map. Runtime only (never persisted) and meaningful only in
+ * single-project view.
  */
 export type AppMode = 'survey' | 'data' | 'plan' | 'export';
 export const APP_MODE_DEFAULT: AppMode = 'survey';
@@ -64,18 +68,33 @@ export const APP_MODE_DEFAULT: AppMode = 'survey';
 export const GEOMETRY_MODE_DEFAULT: GeometryMode = 'measured';
 
 /**
- * The survey map is read-only whenever the closure-adjusted geometry is shown OR
- * we're in a non-survey workspace (Plan/Export). Both terms are load-bearing:
- * Plan/Export force `closureAdjusted`, but that auto-reverts to `measured` on a
- * project with no eligible closures (see MapCanvas), so `appMode` is the robust
- * authority - a `geometryMode`-only check leaks mutations (import, undo) into the
- * read-only workspaces (#243, the #225 bug class). One predicate so the many
- * gate sites can't drift.
+ * The two workspaces that edit the survey: Survey and Data. Plan and Export are
+ * read-only. Mode entry/exit snapshots (see `setAppMode`), display persistence,
+ * undo/redo and the Import button all key on this, so a new editable mode is one
+ * line here rather than a hunt for every `appMode === 'survey'`.
  */
-export function isMapReadOnly(state: Pick<UIStore, 'geometryMode' | 'appMode'>): boolean {
-  return state.geometryMode === 'closureAdjusted' || state.appMode !== 'survey';
+export function isEditableMode(mode: AppMode): boolean {
+  return mode === 'survey' || mode === 'data';
 }
 
+/**
+ * The survey map is read-only whenever the closure-adjusted geometry is shown OR
+ * we're in a read-only workspace (Plan, Export). Both terms are load-bearing:
+ * the read-only modes force `closureAdjusted`, but that auto-reverts to `measured`
+ * on a project with no eligible closures (see MapCanvas), so `appMode` is the robust
+ * authority - a `geometryMode`-only check leaks mutations (import, undo) into the
+ * read-only workspaces (#243, the #225 bug class). One predicate so the many
+ * gate sites can't drift. False only in Survey or Data on the measured geometry.
+ */
+export function isMapReadOnly(state: Pick<UIStore, 'geometryMode' | 'appMode'>): boolean {
+  return state.geometryMode === 'closureAdjusted' || !isEditableMode(state.appMode);
+}
+
+/**
+ * Whether the map draws the "Closures Computed View is read-only" notice: only in an
+ * editable workspace (the read-only modes force that geometry, so the notice would
+ * explain nothing), and only when no placement or SpeleoDB badge already explains it.
+ */
 export function showsClosureAdjustedNotice(args: {
   geometryMode: GeometryMode;
   appMode: AppMode;
@@ -85,7 +104,7 @@ export function showsClosureAdjustedNotice(args: {
   return (
     args.geometryMode === 'closureAdjusted' &&
     !args.placementMode &&
-    args.appMode === 'survey' &&
+    isEditableMode(args.appMode) &&
     !args.speleoReadOnly
   );
 }
@@ -573,19 +592,22 @@ export interface UIStore {
   setDistanceGradientOrigin: (ref: StationRef | null) => void;
   setDistanceField: (field: DistanceField | null) => void;
 
-  // Top-level workspace mode (#38 follow-up): Survey / Plan / Export. Runtime-only
+  // Top-level workspace mode (#38 follow-up): Survey / Data / Plan / Export. Runtime-only
   // (never persisted), meaningful only in single-project view. `plan` subsumes the
   // former gas sub-mode - the survey layer, the carousel, and the panel swaps all read
-  // `appMode`. Plan/Export force the read-only closure-adjusted map (see setAppMode).
+  // `appMode`. Plan and Export force the read-only closure-adjusted map (see setAppMode).
   appMode: AppMode;
-  /** Switch workspace mode. Entering Plan/Export forces the closure-adjusted (read-only)
-   *  map and suppresses the survey color overlays; returning to Survey restores the prior
-   *  geometry mode. Entering Plan reveals the Plan-setup sidebar; leaving Plan resets
-   *  gasPlanStore. */
+  /** Switch workspace mode. Leaving an editable mode (Survey, Data) for a read-only one
+   *  (Plan, Export) snapshots the geometry mode, display flags and docks, then forces the
+   *  closure-adjusted map and suppresses the survey color overlays; coming back to an
+   *  editable mode restores the snapshot. Survey <-> Data keeps everything as it is.
+   *  The gas store survives every switch (#244). */
   setAppMode: (mode: AppMode) => void;
-  /** Idempotent "return to Survey" - used by the setView() cleanup funnel (and the
-   *  color-overlay actions) so a stale Plan/Export workspace can't outlive a project/view
-   *  switch or coexist with a survey overlay. No-op when already in Survey. */
+  /** Idempotent "leave a read-only workspace" - used by the setView() cleanup funnel (and
+   *  the color-overlay actions) so a stale Plan or Export workspace can't outlive a
+   *  project/view switch or coexist with a survey overlay. Returns to the editable mode the
+   *  read-only one was entered from (Survey or Data); a no-op in any editable mode, so
+   *  picking a colour in Data's map pane stays in Data. */
   exitGasPlan: () => void;
 
   // Issue-severity coloring overlay (#22). Runtime-only - like
@@ -833,21 +855,30 @@ let focusLayoutSnapshot:
   | null = null;
 
 /**
- * The survey geometry mode captured when entering Plan/Export, restored on return to
- * Survey. Plan/Export force `closureAdjusted` (the read-only closure map); this remembers
- * what the user had so Survey comes back to it. Module-level bookkeeping (the UI never
- * reads it), like {@link focusLayoutSnapshot}.
+ * The geometry mode captured when leaving an editable mode (Survey, Data) for a
+ * read-only one (Plan, Export), restored when an editable mode is entered again.
+ * The read-only modes force `closureAdjusted` (the read-only closure map); this
+ * remembers what the user had so Survey or Data comes back to it. Module-level
+ * bookkeeping (the UI never reads it), like {@link focusLayoutSnapshot}. The
+ * `prePlan` names predate Data and Export; the snapshots cover both read-only modes.
  */
 let prePlanGeometryMode: GeometryMode | null = null;
 
 /**
- * Display/overlay flags captured when entering Plan/Export, restored on return to
- * Survey - so Display changes made while planning/exporting are scoped to that mode
- * and never mutate (or persist to) the Survey view. Includes the color overlays that
- * Plan force-clears on entry, so entering Plan no longer silently turns a survey
+ * The editable mode (Survey or Data) a read-only one was entered from, captured with
+ * the snapshots below, so `exitGasPlan()` (Shift+D in Plan, a view switch) returns
+ * the user to the workspace they left rather than always to Survey.
+ */
+let preReadOnlyMode: 'survey' | 'data' | null = null;
+
+/**
+ * Display/overlay flags captured on the same editable -> read-only edge, restored on
+ * the way back - so Display changes made while planning/exporting are scoped to that
+ * mode and never mutate (or persist to) the editable view. Includes the color overlays
+ * that Plan force-clears on entry, so entering Plan no longer silently turns a survey
  * depth/distance gradient off for good. Module-level bookkeeping like
  * {@link prePlanGeometryMode}; the persistence skip lives in `toggleDisplay` /
- * `setGridSpacing` (they only write to the saved config while in Survey).
+ * `setGridSpacing` (they only write to the saved config in an editable mode).
  */
 const PREPLAN_DISPLAY_KEYS = [
   'showStations',
@@ -883,13 +914,15 @@ const snapshotDisplay = (s: UIStore): PrePlanDisplay => {
 
 /**
  * The right Dock (detail panel) and bottom Dock (data table) open/mode captured
- * when entering Plan/Export, restored on return to Survey (#241). Plan/Export
- * force both docks open (`revealDetailPanel` + the Plan-only pinned data table)
- * so the setup/Cylinders panels surface without hunting for a closed dock;
+ * on the editable -> read-only edge, restored on the way back (#241). Plan and
+ * Export force both docks open (`revealDetailPanel` + the Plan-only pinned data
+ * table) so the setup/Cylinders panels surface without hunting for a closed dock;
  * without this snapshot a dock the user had closed stayed force-opened after
- * exiting back to Survey. Module-level bookkeeping like {@link prePlanGeometryMode}
- * - restored via a plain `set()` (not `toggleDetailPanel`/`toggleDataTable`), so
- * the restore itself is never persisted, mirroring the fullscreen-table snapshot.
+ * exiting back to Survey. Data renders neither dock but leaves their flags alone,
+ * so a snapshot taken in Data is Survey's own dock state. Module-level bookkeeping
+ * like {@link prePlanGeometryMode} - restored via a plain `set()` (not
+ * `toggleDetailPanel`/`toggleDataTable`), so the restore itself is never persisted,
+ * mirroring the fullscreen-table snapshot.
  */
 let prePlanDocks:
   | {
@@ -912,7 +945,8 @@ let fullScreenTableSnapshot:
 
 /**
  * Show the Details panel on its Warnings tab, making sure it will actually mount
- * and be visible: section-focus and data-table fullscreen hide or cover the
+ * and be visible: any mode but Survey has no Details panel, and section-focus and
+ * data-table fullscreen hide or cover the
  * panel, and the panel may simply be collapsed. WarningsContent only consumes a
  * resolve request while mounted (detailPanelOpen && tab === 'warnings'), so
  * without this a request would be a no-op that sat stale and fired on a later
@@ -932,6 +966,13 @@ function revealWarningsTab(
   extra: Partial<UIStore>,
 ): void {
   let s = useUIStore.getState();
+  // The Details panel exists only in Survey: Data renders no right dock, and Plan
+  // and Export put panels of their own there. Switch first, or the request would
+  // sit stale with nothing mounted to consume it.
+  if (s.appMode !== 'survey') {
+    s.setAppMode('survey');
+    s = useUIStore.getState();
+  }
   if (s.focusedSectionId !== null) s.exitSectionFocus();
   if (s.dataTableFullScreen) s.exitDataTableFullScreen();
   // Re-read: the exits above can change the panel's mode/open.
@@ -1533,9 +1574,8 @@ export const useUIStore = create<UIStore>((set) => ({
     revealWarningsTab(set, { requestResolveWarning: { sectionId, shotId } });
   },
   openWarningsTab: () => {
-    // The Warnings tab lives in the Details panel, which Plan and Export replace
-    // with panels of their own: return to Survey first (a no-op when there).
-    useUIStore.getState().exitGasPlan();
+    // The Warnings tab lives in the Details panel, which only Survey renders:
+    // revealWarningsTab returns to Survey first (from Data, Plan or Export).
     revealWarningsTab(set, {});
   },
   clearResolveWarningRequest: () => set({ requestResolveWarning: null }),
@@ -1691,55 +1731,80 @@ export const useUIStore = create<UIStore>((set) => ({
   setAppMode: (mode) => {
     const s = useUIStore.getState();
     if (s.appMode === mode) return;
-    if (s.appMode === 'survey' && mode !== 'survey') {
+    const fromEditable = isEditableMode(s.appMode);
+    const toEditable = isEditableMode(mode);
+    // Left dock: Sections is a Survey-only tab. Leaving Survey remembers whether
+    // SpeleoDB was showing (it then stays up) and points the dock at SpeleoDB, which
+    // Data, Plan and Export otherwise show only on request. Returning to Survey
+    // brings back the tab Survey had.
+    if (s.appMode === 'survey') {
       set({ speleoOutsideSurvey: s.leftWorkspace === 'speleodb' && s.leftWorkspaceVisible, leftWorkspace: 'speleodb' });
     }
-    if (mode === 'survey') {
-      // Returning to Survey: restore the geometry mode we had before entering
-      // Plan/Export. The gas overlay + markers are appMode-gated (they clear when
-      // appMode leaves 'plan'), so we do NOT reset the gas store here - the loaded
-      // plan / working inputs PERSIST across mode switches within a session (#244).
-      // A new session / project switch still empties it (the reset on project load).
+    const leftRestore: Partial<UIStore> =
+      mode === 'survey' ? { leftWorkspace: s.surveyLeftWorkspace, speleoOutsideSurvey: false } : {};
+    // Every mode but Survey drops the Survey-only sub-states that assume the
+    // docked survey layout: section focus and the fullscreen data table. Done
+    // before any snapshot below, because both exits may restore the user's real
+    // pre-focus / pre-fullscreen dock state.
+    if (mode !== 'survey') {
+      s.exitSectionFocus();
+      s.exitDataTableFullScreen();
+    }
+
+    // Survey <-> Data: both edit the same map, so the geometry mode, the display
+    // flags, the docks and a pending measurement all carry over untouched - no
+    // snapshot is taken or restored. Data renders neither the right nor the bottom
+    // dock, but it leaves their flags alone, so Survey gets them back as they were.
+    if (fromEditable && toEditable) {
+      set({ appMode: mode, ...leftRestore });
+      return;
+    }
+
+    if (toEditable) {
+      // Read-only -> editable (Plan or Export -> Survey or Data): restore the
+      // geometry mode, display flags and docks snapshotted on the way in, so the
+      // read-only mode's forced closure map, its Display tweaks (and the forced
+      // color-overlay clear) and its force-opened docks (#241) don't bleed into the
+      // editable view. Data restores exactly what Survey would. The gas overlay +
+      // markers are appMode-gated (they clear when appMode leaves 'plan'), so we do
+      // NOT reset the gas store here - the loaded plan / working inputs PERSIST
+      // across mode switches within a session (#244). A new session / project
+      // switch still empties it (the reset on project load).
       const restore = prePlanGeometryMode ?? GEOMETRY_MODE_DEFAULT;
       prePlanGeometryMode = null;
-      // Restore the Survey display flags captured on entry so Plan/Export tweaks
-      // (and the forced color-overlay clear) don't bleed into the survey view.
       const displayRestore = prePlanDisplay ?? {};
       prePlanDisplay = null;
-      // Restore the docks Plan/Export force-opened (#241) - a dock the user had
-      // closed before entering must come back closed, not stay stranded open.
       const dockRestore = prePlanDocks ?? {};
       prePlanDocks = null;
+      preReadOnlyMode = null;
       set({
-        appMode: 'survey',
-        leftWorkspace: s.surveyLeftWorkspace,
-        speleoOutsideSurvey: false,
+        appMode: mode,
+        ...leftRestore,
         geometryMode: restore,
         ...displayRestore,
         ...dockRestore,
+        // The ruler readout depends on which geometry is active.
         ...MEASURE_CLEARED,
       });
       return;
     }
+
     // Entering Plan or Export. Both show the read-only closure map, so:
-    //  - drop the survey-editing modes (section focus, fullscreen table) that
-    //    assume an editable measured view;
-    //  - remember the survey geometry mode (only when coming FROM survey - a
-    //    plan↔export switch must not overwrite the saved survey value with
+    //  - remember the editable view (only on the editable -> read-only edge - a
+    //    plan <-> export switch must not overwrite the saved geometry with
     //    'closureAdjusted'), then force closureAdjusted. Set directly (not via
     //    setGeometryMode) so this forced display isn't persisted as the user's
     //    "remember last used" preference;
     //  - suppress the three color overlays (they paint the same shots/stations
     //    layer the gas overlay uses, and are a survey concern).
-    s.exitSectionFocus();
-    s.exitDataTableFullScreen();
-    if (s.appMode === 'survey') {
+    if (fromEditable) {
+      preReadOnlyMode = s.appMode === 'data' ? 'data' : 'survey';
       prePlanGeometryMode = s.geometryMode;
       prePlanDisplay = snapshotDisplay(s);
       // Snapshot the docks AFTER the exits above, which may themselves have just
       // restored the user's real pre-focus/pre-fullscreen dock state - capturing
       // stale pre-exit values here would restore the wrong (focus-forced) state
-      // on the way back out of Plan/Export.
+      // on the way back out of the read-only mode.
       const afterExit = useUIStore.getState();
       prePlanDocks = {
         detailPanelOpen: afterExit.detailPanelOpen,
@@ -1758,7 +1823,7 @@ export const useUIStore = create<UIStore>((set) => ({
       ...colorModeFlags('section'),
       ...MEASURE_CLEARED,
     });
-    // Both Plan (setup sidebar) and Export (export stub) render in the right Dock -
+    // Both Plan (setup sidebar) and Export (export panel) render in the right Dock -
     // reveal it on entry so the panel surfaces even from a closed dock. Inlined
     // (not revealDetailPanel/toggleDetailPanel) because a mode-forced open is not
     // a user action: it must never persist via savePanelLayout, or the user's
@@ -1772,14 +1837,17 @@ export const useUIStore = create<UIStore>((set) => ({
     // Plan no longer pins the bottom Dock here: with staged entry (#395) the
     // Cylinders/DPV/Segments/Profile tabs only exist once an origin is chosen, so
     // SingleSystemView pins it open at that moment instead (revealPlanTables).
-    // Export shows the read-only map + export stub. We do NOT reset the gas store on
-    // entry: the overlay is appMode-gated (hidden outside Plan) and a loaded plan must
-    // survive a Plan -> Export -> Plan round-trip within a session (#244). The gas store
-    // is emptied only on project load.
+    // We do NOT reset the gas store on entry: the overlay is appMode-gated (hidden
+    // outside Plan) and a loaded plan must survive a Plan -> Export -> Plan
+    // round-trip within a session (#244). The gas store is emptied only on project load.
   },
   exitGasPlan: () => {
-    if (useUIStore.getState().appMode === 'survey') return;
-    useUIStore.getState().setAppMode('survey');
+    const ui = useUIStore.getState();
+    // Survey and Data are both editable workspaces with the full Display menu:
+    // a colour pick, Shift+D or an overlay there must never eject the user.
+    if (isEditableMode(ui.appMode)) return;
+    // Back to the editable mode the read-only one was entered from.
+    ui.setAppMode(preReadOnlyMode ?? 'survey');
   },
   toggleDisplay: (key) => {
     trackAction(`toggle.${key}`);
@@ -1820,11 +1888,13 @@ export const useUIStore = create<UIStore>((set) => ({
     // Session-only overlays (the Debug submenu) are never restored on load, so
     // persisting them would only write orphan rows - skip the IPC call entirely.
     if (SESSION_ONLY_DISPLAY_TOGGLES.has(key)) return;
-    // Persist only Survey display changes. In Plan/Export the toggles are scoped to
-    // that mode (snapshotted on entry, restored on exit), so they must not write to
-    // the saved survey config. Re-read appMode: the showDepthGradient branch above
-    // calls exitGasPlan() first, so a Shift+D from Plan lands (and persists) in Survey.
-    if (useUIStore.getState().appMode === 'survey') {
+    // Persist only display changes made in an editable mode (Survey, Data - they
+    // share one view). In Plan or Export the toggles are scoped to that mode
+    // (snapshotted on entry, restored on exit), so they must not write to the saved
+    // config. Re-read appMode: the showDepthGradient branch above calls
+    // exitGasPlan() first, so a Shift+D from Plan lands (and persists) in the
+    // editable mode Plan was entered from.
+    if (isEditableMode(useUIStore.getState().appMode)) {
       // Station IDs / names: write the PAIR as it now stands, not just the key.
       // In memory the pair is never both-on, so this also repairs a stored pair
       // that is (a write that failed, a file edited elsewhere): the load lets
@@ -1837,8 +1907,8 @@ export const useUIStore = create<UIStore>((set) => ({
   },
   setGridSpacing: (spacing) => {
     set({ gridSpacing: spacing });
-    // Scoped to Plan/Export while there (restored on exit) - don't persist it.
-    if (useUIStore.getState().appMode !== 'survey') return;
+    // Scoped to Plan or Export while there (restored on exit) - don't persist it.
+    if (!isEditableMode(useUIStore.getState().appMode)) return;
     // Persist the spacing setting
     invokeIpc(
       'save_display_setting',
@@ -1893,6 +1963,7 @@ export const useUIStore = create<UIStore>((set) => ({
     // module var outlives the project that set it). Clearing it + forcing survey here
     // makes that restore a no-op (appMode already 'survey').
     prePlanGeometryMode = null;
+    preReadOnlyMode = null;
     // Same module-var-outlives-project hazard for the Plan/Export display snapshot:
     // clear it so a load doesn't later restore the previous project's survey display.
     prePlanDisplay = null;
@@ -2162,6 +2233,10 @@ export const useUIStore = create<UIStore>((set) => ({
     // (#38) here too - its overlay/panel must not outlive entry into placement
     // (idempotent no-op when gas is off).
     useUIStore.getState().exitGasPlan();
+    // Placement is a full-map flow: Data's table covers the map (or squeezes it into
+    // a side pane), so place on Survey's map. Survey <-> Data keeps every display
+    // flag and the geometry, so this costs the user nothing but the table view.
+    if (useUIStore.getState().appMode === 'data') useUIStore.getState().setAppMode('survey');
     setDwellState('placement');
     set({
       // Placement REQUIRES visible stations (#518). `MapCanvas` cancels an active

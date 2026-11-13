@@ -126,6 +126,42 @@ describe('Plan/Export dock snapshot/restore (#241)', () => {
     expect(useUIStore.getState().focusedSectionId).toBeNull();
   });
 
+  // Data renders neither dock but must not touch their flags: Survey gets its own
+  // layout back, and a snapshot taken on the way from Data into Plan is Survey's.
+  it('Survey -> Data -> Survey leaves the docks exactly as they were', () => {
+    useUIStore.setState({ detailPanelOpen: true, detailPanelMode: 'hover', dataTableOpen: true, dataTableMode: 'pin' });
+    useUIStore.getState().setAppMode('data');
+    let s = useUIStore.getState();
+    expect([s.detailPanelOpen, s.detailPanelMode, s.dataTableOpen, s.dataTableMode]).toEqual([true, 'hover', true, 'pin']);
+    useUIStore.getState().setAppMode('survey');
+    s = useUIStore.getState();
+    expect([s.detailPanelOpen, s.detailPanelMode, s.dataTableOpen, s.dataTableMode]).toEqual([true, 'hover', true, 'pin']);
+    expect(invokeIpcMock).not.toHaveBeenCalledWith('update_panel_layout', expect.anything(), expect.anything());
+  });
+
+  it('Data -> Plan -> Data restores the docks Plan force-opened (the snapshot is Survey\'s)', () => {
+    useUIStore.getState().setAppMode('data');
+    useUIStore.getState().setAppMode('plan');
+    expect(useUIStore.getState().detailPanelOpen).toBe(true);
+    useUIStore.getState().setAppMode('data');
+    expect(useUIStore.getState().appMode).toBe('data');
+    expect(useUIStore.getState().detailPanelOpen).toBe(false);
+    useUIStore.getState().setAppMode('survey');
+    expect(useUIStore.getState().detailPanelOpen).toBe(false);
+  });
+
+  it('entering Data exits section focus and the fullscreen table, restoring their docks', () => {
+    useUIStore.setState({ detailPanelOpen: true, detailPanelMode: 'pin' });
+    useUIStore.getState().enterSectionFocus(1, 300);
+    useUIStore.getState().setAppMode('data');
+    expect(useUIStore.getState().focusedSectionId).toBeNull();
+    expect(useUIStore.getState().detailPanelOpen).toBe(true);
+    useUIStore.getState().setAppMode('survey');
+    useUIStore.getState().enterDataTableFullScreen();
+    useUIStore.getState().setAppMode('data');
+    expect(useUIStore.getState().dataTableFullScreen).toBe(false);
+  });
+
   // #241: pins the appMode==='survey' snapshot guard - a Plan -> Export switch must
   // not overwrite the real pre-Plan snapshot with Export's (already-forced) state.
   it('restores the original survey dock state across a survey -> plan -> export -> survey chain', () => {
