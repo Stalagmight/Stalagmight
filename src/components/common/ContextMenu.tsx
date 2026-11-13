@@ -280,7 +280,11 @@ export default function ContextMenu() {
     const clicked = combineKey.startsWith('station') ? Number(combineKey.split(':')[1]) : null;
     // The enabled row says what it joins, so the row's height never depends on
     // the answer.
-    const joins = clicked === null ? `${name(a)} and ${name(b)} meet end to end` : `With ${name(clicked === a ? b : a)}`;
+    const across = combineCandidate.join_kind === 'closure' ? ', across a loop closure' : '';
+    const joins =
+      clicked === null
+        ? `${name(a)} and ${name(b)} meet end to end${across}`
+        : `With ${name(clicked === a ? b : a)}${across}`;
     return [
       {
         label,

@@ -69,6 +69,20 @@ vi.mock('../DialogWrapper', () => ({
 import '../../../i18n';
 import CombineSectionsDialog from '../CombineSectionsDialog';
 
+/** A plan that changes nothing besides the join. */
+function quietPlan(kept: number, overrides: Record<string, unknown> = {}) {
+  return {
+    kept,
+    moving_section: null,
+    moved_sections: [],
+    shift_m: 0,
+    torn_ties: [],
+    azimuth_rotation_deg: null,
+    join_offset_change_m: null,
+    ...overrides,
+  };
+}
+
 function candidate(overrides: Record<string, unknown> = {}) {
   return {
     section_a: 2,
@@ -91,6 +105,11 @@ function candidate(overrides: Record<string, unknown> = {}) {
     depth_difference_m: null,
     branches: [],
     loose_ends: [],
+    join_kind: 'co_located',
+    passing_through: [],
+    repeated_shot_ids: 0,
+    plan_keeping_a: quietPlan(2),
+    plan_keeping_b: quietPlan(5),
     ...overrides,
   };
 }
@@ -128,8 +147,10 @@ describe('CombineSectionsDialog', () => {
       swap_lr: true,
       comment_pick: 'kept',
       name_pick: 'kept',
+      join: { kept: 'end', other: 'start' },
     });
     expect(setSelection).toHaveBeenCalledWith({ type: 'section', sectionId: 2 });
+    expect(screen.queryByTestId('combine-plan-notes')).toBeNull();
   });
 
   it('swaps the kept section, and the untouched defaults follow it', async () => {
@@ -303,5 +324,83 @@ describe('CombineSectionsDialog', () => {
     fireEvent.click(screen.getByTestId('combine-confirm'));
     expect(combineSections).not.toHaveBeenCalled();
     expect(screen.getByTestId('combine-error')).toHaveTextContent('Editing is disabled');
+  });
+
+  it('across a loop closure, says what moves and which ties become closures, per kept section', async () => {
+    const tie = (a: [number, number], b: [number, number], kind: string) => ({
+      station_a: { section_id: a[0], station_index: a[1] },
+      station_b: { section_id: b[0], station_index: b[1] },
+      kind,
+    });
+    dialogData = {
+      candidate: candidate({
+        join_kind: 'closure',
+        plan_keeping_a: quietPlan(2, {
+          moving_section: 5,
+          moved_sections: [5, 7],
+          shift_m: 0.42,
+          torn_ties: [tie([5, 2], [9, 1], 'merge')],
+        }),
+        // Keeping Main-B: a zero datum holds Main-A, so the kept side moves.
+        plan_keeping_b: quietPlan(5, {
+          moving_section: 5,
+          moved_sections: [5],
+          shift_m: 0.42,
+          torn_ties: [tie([2, 0], [9, 0], 'snapped_closure')],
+        }),
+      }),
+    };
+    sections = [
+      ...creditedSections(),
+      { id: 7, name: 'Side', color: '#333333', direction: 'in', shots: shots(1) },
+    ];
+    render(<CombineSectionsDialog />);
+    expect(screen.getByTestId('combine-closure-join')).toHaveTextContent(
+      'Main-A and Main-B meet here across a loop closure: the survey puts the two ends 0.42m apart.'
+    );
+    expect(screen.getByTestId('combine-note-move')).toHaveTextContent(
+      'Main-B moves 0.42m so the two ends meet, closing the loop here.'
+    );
+    expect(screen.getByTestId('combine-note-move-with')).toHaveTextContent('Side is attached to it and moves with it.');
+    expect(screen.getByTestId('combine-note-torn')).toHaveTextContent('This connection becomes a loop closure:');
+    expect(screen.getAllByTestId('combine-torn-tie').map((li) => li.textContent)).toEqual(['The merge of 5:2 and 9:1']);
+    expect(screen.queryByTestId('combine-note-kept-moves')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('combine-swap-kept'));
+    expect(screen.getByTestId('combine-note-move')).toHaveTextContent('Main-B moves 0.42m');
+    expect(screen.getByTestId('combine-note-kept-moves')).toHaveTextContent(
+      'Main-B is the one that moves, because a zero datum holds Main-A in place.'
+    );
+    expect(screen.getAllByTestId('combine-torn-tie').map((li) => li.textContent)).toEqual([
+      'The snapped closure between 2:0 and 9:0',
+    ]);
+    fireEvent.click(screen.getByTestId('combine-confirm'));
+    await waitFor(() => expect(closeDialog).toHaveBeenCalled());
+    expect(combineSections.mock.calls[0]?.[2]).toMatchObject({ join: { kept: 'start', other: 'end' } });
+  });
+
+  it('lists converted bearings, the kept quality and offset, renewed shot ids and crossings', () => {
+    sections = creditedSections().map((s) => ({ ...s, quality: s.id === 2 ? 1 : 2 }));
+    dialogData = {
+      candidate: candidate({
+        passing_through: [5],
+        repeated_shot_ids: 2,
+        plan_keeping_a: quietPlan(2, { azimuth_rotation_deg: 5, join_offset_change_m: 0.25 }),
+      }),
+    };
+    render(<CombineSectionsDialog />);
+    expect(screen.getByTestId('combine-note-rotation')).toHaveTextContent(
+      "Main-B's bearings turn by +5.0° to read against Main-A's north reference"
+    );
+    expect(screen.getByTestId('combine-note-quality')).toHaveTextContent(
+      "The combined section keeps Main-A's quality factor (1); Main-B's was 2."
+    );
+    expect(screen.getByTestId('combine-note-offset')).toHaveTextContent(
+      "The joined station keeps Main-A's, so Main-B's end moves 0.25m."
+    );
+    expect(screen.getByTestId('combine-note-repeated-ids')).toHaveTextContent(
+      "2 of Main-B's shots have the same identity as shots of Main-A, and get new ones."
+    );
+    expect(screen.getByTestId('combine-note-passing')).toHaveTextContent('Main-B passes through the join');
   });
 });

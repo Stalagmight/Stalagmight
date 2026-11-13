@@ -103,6 +103,11 @@ const candidate = (blocked: string | null, partner = 2) => ({
   depth_difference_m: null,
   branches: [],
   loose_ends: [],
+  join_kind: 'merged',
+  passing_through: [],
+  repeated_shot_ids: 0,
+  plan_keeping_a: null,
+  plan_keeping_b: null,
 });
 
 describe('ContextMenu Combine Sections row', () => {
@@ -127,12 +132,19 @@ describe('ContextMenu Combine Sections row', () => {
     expect(hintLine()).toHaveTextContent('With Section 2');
   });
 
+  it('says when the two ends meet across a loop closure', async () => {
+    openOn(3);
+    await act(async () => resolveCandidate([{ ...candidate(null), merged: false, join_kind: 'closure' }]));
+    expect(combineRow()).toBeEnabled();
+    expect(hintLine()).toHaveTextContent('With Section 2, across a loop closure');
+  });
+
   it('shows the reason as a visible line under the label, not only as a tooltip', async () => {
     openOn(3);
-    await act(async () => resolveCandidate([candidate('Section 2 is merged here at a station in its middle')]));
-    expect(hintLine()).toHaveTextContent('Section 2 is merged here at a station in its middle');
+    await act(async () => resolveCandidate([candidate('Section 1 and Section 2 each carry a zero datum: a section can hold only one')]));
+    expect(hintLine()).toHaveTextContent('Section 1 and Section 2 each carry a zero datum: a section can hold only one');
     expect(hintLine()).toBeVisible();
-    expect(combineRow()).toHaveAttribute('title', 'Section 2 is merged here at a station in its middle');
+    expect(combineRow()).toHaveAttribute('title', 'Section 1 and Section 2 each carry a zero datum: a section can hold only one');
   });
 
   it('positions the menu for the taller hinted row', () => {

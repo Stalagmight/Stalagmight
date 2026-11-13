@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { combinePreview, defaultCombinedName } from '../combineSections';
+import { combinePreview, combinePreviewAll, defaultCombinedName, formatRotation } from '../combineSections';
 import type { CombineCandidate } from '../../types/ipc/CombineCandidate';
 
 describe('defaultCombinedName', () => {
@@ -31,5 +31,44 @@ describe('combinePreview', () => {
         { section_id: 4, station_index: 0 },
       ],
     });
+  });
+});
+
+describe('combinePreviewAll', () => {
+  it('also rings the stations of every tie the combine turns into a loop closure', () => {
+    const plan = (kept: number, a: [number, number], b: [number, number]) => ({
+      kept,
+      torn_ties: [
+        {
+          station_a: { section_id: a[0], station_index: a[1] },
+          station_b: { section_id: b[0], station_index: b[1] },
+          kind: 'merge',
+        },
+      ],
+    });
+    const candidate = {
+      section_a: 1,
+      section_b: 4,
+      station_a: { section_id: 1, station_index: 3 },
+      station_b: { section_id: 4, station_index: 0 },
+      plan_keeping_a: plan(1, [4, 2], [7, 1]),
+      plan_keeping_b: plan(4, [1, 0], [7, 0]),
+    } as unknown as CombineCandidate;
+    expect(combinePreviewAll([candidate]).stations).toEqual([
+      { section_id: 1, station_index: 3 },
+      { section_id: 4, station_index: 0 },
+      { section_id: 4, station_index: 2 },
+      { section_id: 7, station_index: 1 },
+      { section_id: 1, station_index: 0 },
+      { section_id: 7, station_index: 0 },
+    ]);
+  });
+});
+
+describe('formatRotation', () => {
+  it('signs the angle and keeps one decimal', () => {
+    expect(formatRotation(5)).toBe('+5.0°');
+    expect(formatRotation(-0.34)).toBe('-0.3°');
+    expect(formatRotation(0)).toBe('0.0°');
   });
 });
