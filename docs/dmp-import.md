@@ -1,6 +1,76 @@
 # DMP Import Wizard
 
-The DMP import wizard (`DmpNewImportDialog`) is the primary UI for importing cave survey data from mNemo DMP files. It uses a connection-wizard pattern: the backend pre-computes placement suggestions, the user confirms or adjusts each one, and a batch import executes at the end.
+The DMP import wizard (`DmpNewImportDialog`) is the primary UI for importing cave survey data from MNemo DMP files. It uses a connection-wizard pattern: the backend pre-computes placement suggestions, the user confirms or adjusts each one, and a batch import executes at the end.
+
+## Reading the device over USB (#725)
+
+**Import from MNemo...** (both hamburger menus, hidden on Android) reads a
+USB-connected MNemo v2 instead of a file. It does not import anything itself: it
+saves what it read as a `.dmp` and hands that path to `routeOpenedFile`, the same
+route as a `.dmp` picked from disk. The read-only guard, the no-project path
+(`new-project-for-import`), duplicate-section detection and this wizard therefore
+apply unchanged; pulling the device again after each dive brings the earlier
+sections back already unticked, because their content hashes match.
+
+**The serial exchange** (`src-tauri/src/commands/mnemo/protocol.rs`, written from
+the device's public serial CLI documentation):
+
+| Step | Sent | Reply |
+|------|------|-------|
+| 1 | `getfirmwareversion\n` | text, then `MN2Over` |
+| 2 | `getdata\n` | the survey memory (the bytes a `.dmp` holds as text), then `MN2Over` |
+
+- **57600 baud, 8N1, raw, never 1200.** Opening an RP2040 board at 1200 baud
+  reboots it into its bootloader. No IPC argument carries a baud rate or a
+  command: the two commands are private constants.
+- **`getdata` only after a good firmware reply.** If step 1 does not end with
+  `MN2Over`, the pull stops (`not_mnemo`), so another USB serial device never
+  receives `getdata`.
+- **The end of a reply** is an `MN2Over` within the last 16 bytes, followed only
+  by text-like bytes (line endings, a short prompt, NUL padding), and then 250 ms of
+  quiet. It is re-derived after every read, so a chance `MN2Over` inside the survey
+  bytes stops counting as soon as binary data follows it, even after a pause.
+- **Stale bytes first:** before `getfirmwareversion`, whatever the device is still
+  sending (the rest of a cancelled transfer) is read and discarded until 250 ms of
+  quiet, for at most 3 s.
+- **Limits:** 10 s to the first byte; 2 s (firmware) or 8 s (data, the device
+  pauses while reading its memory) without a byte; 10 s or 10 min in all; 8 MiB of
+  data. Cancel is checked between reads (200 ms read timeout).
+
+**The port** (`port.rs`, the `serialport` crate with default features off):
+
+- Only ports the OS lists as USB serial are offered, and `pull_mnemo` refuses any
+  name not in that list at the moment it runs, so the IPC cannot open an arbitrary
+  device or file. On macOS only `/dev/cu.*` (`/dev/tty.*` waits for carrier detect).
+- Opened exclusively (the crate's Unix default; Windows never shares a COM port); a
+  port already open elsewhere (often the MNemo desktop app) is `port_busy`. The
+  crate reports both "in use" and "gone" as `NoDevice`, so the ports are listed
+  again to tell `port_busy` from `port_not_found`.
+- A port whose USB name mentions "mnemo", or that reports the MNemo v2's board,
+  an Arduino Nano RP2040 Connect (vendor `0x2341`, product `0x005E`, seen on a real
+  device), is marked `likely_mnemo`. The dialog preselects only when exactly one
+  port is; anything else needs an explicit pick.
+- **Linux:** without `libudev` the crate scans `/sys/class/tty` (and reports
+  nothing when that is missing). Opening `/dev/ttyACM*` needs the `dialout` group
+  (`uucp` on Arch); a refusal is `permission_denied` with that advice. ModemManager
+  may briefly probe a newly plugged `ttyACM` device.
+- **Windows:** the built-in CDC driver gives a `COMn` port.
+- **macOS:** no entitlement is needed for a USB serial port under the hardened
+  runtime without App Sandbox.
+
+**The saved file:** `<app local data>/MNemo downloads/MNemo-YYYY-MM-DD_HHMMSS.dmp`.
+The text is written and fsynced as `.<name>.part`, then hard-linked to the `.dmp`
+name (a clash gets `-2`, `-3`, ...; a link never replaces an existing file), so a
+crash mid-write leaves no truncated `.dmp`. Nothing deletes old downloads. It is saved before anything is parsed, and kept even when nothing
+in it parses, so it can go in a bug report; the dialog then offers Show file but
+not Import.
+
+**What the parser skipped:** `parse_dmp_bytes` returns a `DmpReadLoss` with the
+sections that failed to parse (for example a corrupted date) and the bytes after
+the last complete section, ignoring zero padding and a `MN2Over` trailer. A non-zero
+tail is usually a survey that was not closed on the device. The dialog shows both;
+the wizard still drops them, as it does for a file. Recovering such sections is a
+separate follow-up.
 
 ## Wizard Phases
 
@@ -326,11 +396,11 @@ Sections unreachable after all passes remain in the wizard's manual segment-plac
 
 ## Station Names
 
-mNemo numbers a section's start station 0 and the end of its N-th shot N, and
+MNemo numbers a section's start station 0 and the end of its N-th shot N, and
 divers key their notes to those numbers. The `.dmp` file carries no station
 numbers, and every later edit - the shots the importer skips, an overlap trim,
 a deleted or added row, any edit after import - shifts the positional
-`S:I` station IDs, so the import records each station's mNemo number as its
+`S:I` station IDs, so the import records each station's MNemo number as its
 **name** (`Project.station_names`).
 
 - **Counting.** ASSUMED, not yet confirmed against a device: only the shots the
@@ -384,7 +454,7 @@ a deleted or added row, any edit after import - shifts the positional
 |----------|----------|---------|
 | `applyAllOverlapTreatments` | `src/utils/overlapTreatment.ts` | Single-pass overlap mutation for all suggestions |
 | `buildBatchImport` | `src/components/Dialogs/DmpNewImportDialog.tsx` | Construct ordered `ImportSectionConfig[]` for backend |
-| `stationNamesForEmittedShots` | `src/utils/importSectionConfig.ts` | A section's station names (mNemo numbers) from its emitted rows |
+| `stationNamesForEmittedShots` | `src/utils/importSectionConfig.ts` | A section's station names (MNemo numbers) from its emitted rows |
 | `buildAdjacency` | `src/utils/segmentContext.ts` | Adjacency map from `importing`-type connections |
 | `computeDmpBfsContext` | `src/utils/segmentContext.ts` | BFS collecting DMP neighbor geometry + existing anchors |
 | `stationPositionFromShotLines` | `src/utils/segmentContext.ts` | Extract XY from backend `shot_lines` (station 0 = `[0][0]`, station N = `[N-1][1]`) |
@@ -403,6 +473,9 @@ a deleted or added row, any edit after import - shifts the positional
 | `suggest_all_import_placements` | `ImportSectionForSuggestion[]` | `CrossSectionSuggestion[]` | Compares against existing + other imports |
 | `get_segment_geometry` | `sectionId` | `SegmentGeometry` | All connected sections' shot-lines, centered on queried section |
 | `import_sections` | `sections, fileHash, existingShotUpdates` | `CommandResult` | Batch import with atomic existing shot updates and undo support |
+| `list_mnemo_ports` | none | `MnemoPort[]` | USB serial ports now present, likely MNemos first |
+| `pull_mnemo` | `port` | `MnemoPullResult` or `MnemoError` | Reads the device, saves the `.dmp`; emits `mnemo-pull-progress`; one at a time |
+| `cancel_mnemo_pull` | none | none | Stops a running pull within one read |
 
 ## Backend Safety Guards
 

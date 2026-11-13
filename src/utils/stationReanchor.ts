@@ -3,7 +3,7 @@
  * edit.
  *
  * Pure index arithmetic, deliberately free of any opinion about WHICH rows
- * count: the zero-datum dialog re-anchors over the rows it will emit, the mNemo
+ * count: the zero-datum dialog re-anchors over the rows it will emit, the MNemo
  * wizard over the rows the user can see, and both spaces obey the same maths.
  * The caller counts, converts its array index to a position in that space, and
  * passes the totals in.

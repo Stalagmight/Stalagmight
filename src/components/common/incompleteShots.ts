@@ -8,7 +8,7 @@
  * an invitation, not an obligation, and the hosts drop it.
  *
  * Its own module because three dialogs ask the same question and two of them
- * (the mNemo wizard, zero-datum config) are already past the file-size ratchet's
+ * (the MNemo wizard, zero-datum config) are already past the file-size ratchet's
  * budget - anything shared has to leave.
  */
 import type { TFunction } from 'i18next';

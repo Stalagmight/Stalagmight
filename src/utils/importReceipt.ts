@@ -3,7 +3,7 @@ import type { ImportReceipt } from '../types/ipc/ImportReceipt';
 
 /**
  * Combine the receipts from several `import_sections` calls made during one
- * logical import (the mNemo DMP wizard batches early/segment/late/pending
+ * logical import (the MNemo DMP wizard batches early/segment/late/pending
  * imports, each a separate backend call) into a single summary. Counts are
  * summed, warnings are concatenated in call order, and the file-level fields
  * (`source_format`, `file_name`, `sections_found`, the first non-null

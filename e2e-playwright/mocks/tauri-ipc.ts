@@ -771,7 +771,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // threaded back in from here or an edit would vanish on the next refresh.
       const mockStationComments: Record<string, string> = {};
 
-      // Station names (the mNemo numbers a DMP import sends as `station_names`),
+      // Station names (the MNemo numbers a DMP import sends as `station_names`),
       // keyed "sectionId:stationIndex" and threaded into get_project_state's
       // derived stations like the comments above. Filled by import_sections;
       // tests can also seed one through __MOCK_SET_STATION_NAME__. The mock
@@ -2795,7 +2795,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               ...(sectionIds[0] != null ? { section_id: sectionIds[0] } : {}),
               sections: importedSections,
               import_receipt: {
-                source_format: sourceLabel ?? 'mNemo DMP',
+                source_format: sourceLabel ?? 'MNemo DMP',
                 file_name: sourceFileName ?? '',
                 sections_found: sectionsFoundArg ?? sectionIds.length,
                 sections_imported: sectionIds.length,
@@ -6365,6 +6365,42 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // Present so the contract holds and an accidental call is visible as
             // a failed assertion rather than an unhandled null.
             throw new Error(`${cmd} is not driven by the default mock state`);
+
+          // Import from MNemo over USB (#725). One connected MNemo by default; a
+          // spec swaps the port list or the pull reply via __MOCK_IPC_OVERRIDES__.
+          // The pull answers a path the rest of the mock already treats as a
+          // DMP, so Continue lands in the normal DMP import.
+          case 'list_mnemo_ports':
+            return [
+              {
+                name: '/dev/cu.usbmodem101',
+                // What a real MNemo v2 reports: its board, no MNemo name.
+                vid: 0x2341,
+                pid: 0x005e,
+                manufacturer: 'Arduino',
+                product: 'Nano RP2040 Connect',
+                likely_mnemo: true,
+              },
+            ];
+          case 'pull_mnemo': {
+            const win = window as unknown as Record<string, unknown>;
+            const calls = (win.__MOCK_PULL_MNEMO_CALLS__ as unknown[] | undefined) ?? [];
+            calls.push(args ?? null);
+            win.__MOCK_PULL_MNEMO_CALLS__ = calls;
+            return {
+              path: '/mock/MNemo-2026-11-13_143005.dmp',
+              file_name: 'MNemo-2026-11-13_143005.dmp',
+              firmware: 'MNemo mock firmware',
+              bytes: 4096,
+              sections: 2,
+              shots: 14,
+              skipped_sections: 0,
+              unread_trailing_bytes: 0,
+              unreadable_reason: null,
+            };
+          }
+          case 'cancel_mnemo_pull':
+            return null;
 
           // Silent no-ops: commands that should succeed without side-effects
           case 'push_frontend_log':

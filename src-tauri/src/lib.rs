@@ -1560,6 +1560,8 @@ pub fn run() {
         .manage(commands::app_update::AppUpdateState::default())
         // Exit never cuts an in-flight SpeleoDB operation (lock#6): see `exit_wait`.
         .manage(commands::exit_wait::ExitWait::default())
+        // One Import-from-MNemo pull at a time, and its cancel flag (#725).
+        .manage(commands::mnemo::MnemoPullState::default())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -1941,6 +1943,9 @@ pub fn run() {
             commands::history::redo_to,
             // Import/Export
             commands::import::import_dmp,
+            commands::mnemo::list_mnemo_ports,
+            commands::mnemo::pull_mnemo,
+            commands::mnemo::cancel_mnemo_pull,
             commands::import::calculate_file_hash,
             commands::import::check_duplicate_import,
             commands::import::track_imported_file,

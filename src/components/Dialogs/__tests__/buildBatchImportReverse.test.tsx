@@ -198,9 +198,9 @@ describe('buildBatchImport reverse mirroring', () => {
 });
 
 describe('buildBatchImport station names', () => {
-  it('names the stations of every emitted section after its mNemo numbers', () => {
+  it('names the stations of every emitted section after its MNemo numbers', () => {
     // Section 0 arrives with edits (its middle row deleted); section 1 without
-    // (so it is converted straight from the file). Each row's mNemo number is
+    // (so it is converted straight from the file). Each row's MNemo number is
     // its 1-based position among the importable shots.
     const dmpFile: DmpFile = {
       version: 1,

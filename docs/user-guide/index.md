@@ -13,5 +13,5 @@ How to use Stalagmight. Pages link to each other.
 
 New here? Start with [Creating a new survey](workflows/creating-a-new-survey.md),
 or bring in what you have with
-[Importing from an mNemo](workflows/importing-from-mnemo.md) or
+[Importing from an MNemo](workflows/importing-from-mnemo.md) or
 [Importing an Ariane survey](workflows/importing-from-ariane.md).

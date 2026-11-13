@@ -3,7 +3,7 @@
  * before anything is imported (#425).
  *
  * `SectionPreview` already knows how to draw several sections at given
- * offsets - that is what the mNemo wizard's segment view uses - but it speaks
+ * offsets - that is what the MNemo wizard's segment view uses - but it speaks
  * `DmpSection`. This module is the adapter plus the layout: it applies the same
  * shot filter and the same placement rules the Rust converter applies
  * (`convert_tml_with_options` / `determine_placement` in

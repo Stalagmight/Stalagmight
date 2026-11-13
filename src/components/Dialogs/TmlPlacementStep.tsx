@@ -5,7 +5,7 @@
  * (`determine_placement`, tml/import_options.rs), and a file WITH one had its
  * coordinates applied without ever being shown. Both are now a visible choice.
  *
- * Deliberately NOT the mNemo wizard's manual-placement engine. This dialog only
+ * Deliberately NOT the MNemo wizard's manual-placement engine. This dialog only
  * ever opens on a brand-new, empty project (see `openOrImport.ts` - Ariane is a
  * new-project-only format, and an open project routes through
  * `import-as-new-project` first), so there is no existing station to attach to

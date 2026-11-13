@@ -863,7 +863,7 @@ any step that pushed an undo entry. Per-flow oracles are in
 residue, the receipt's numbers against the project's delta, the receipt's own
 rendering, and leftover staging files.
 
-It covers all five importable families - mNemo `.dmp`, Ariane `.tml`/`.tmlu`,
+It covers all five importable families - MNemo `.dmp`, Ariane `.tml`/`.tmlu`,
 Compass `.dat`/`.mak`, Walls `.srv`/`.wpj` and GPX - which is not just five
 parsers but two flow SHAPES: `.dmp` is the only additive import, and every other
 extension routes to `new-project-for-import` whether or not a project is open

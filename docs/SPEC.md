@@ -96,7 +96,7 @@ See [SpeleoDB](SpeleoDB.md) and [Saving](saving.md) for failure and recovery rul
 
 ### 1.1 Purpose
 
-Stalagmight is a desktop application for processing underwater cave survey data. It provides tools to import, visualize, edit, and export cave survey data collected by cave divers using mNemo devices or manual methods.
+Stalagmight is a desktop application for processing underwater cave survey data. It provides tools to import, visualize, edit, and export cave survey data collected by cave divers using MNemo devices or manual methods.
 
 ### 1.2 Target Users
 
@@ -115,7 +115,8 @@ Stalagmight is a desktop application for processing underwater cave survey data.
 ### 1.4 Scope
 
 **Shipped:**
-- Import: DMP (mNemo devices), Walls (experimental), Compass, Ariane `.tml`/`.tmlu`, GPX - see `src-tauri/crates/parsers/src/parsers/`
+- Import: DMP (MNemo devices), Walls (experimental), Compass, Ariane `.tml`/`.tmlu`, GPX - see `src-tauri/crates/parsers/src/parsers/`
+- Reading an MNemo v2 directly over USB into the DMP import (desktop only, read-only on the device) - see [dmp-import.md](dmp-import.md#reading-the-device-over-usb-725)
 - Manual data entry via a spreadsheet interface
 - 2D plan-view map with satellite imagery
 - Section management (create, edit, delete, merge)
@@ -132,7 +133,7 @@ Stalagmight is a desktop application for processing underwater cave survey data.
 **Not built:**
 - 3D visualization
 - Web version
-- Direct mNemo device communication
+- MNemo device communication over WiFi, and writing to the device
 - LRUD passage-wall rendering on the map
 
 In-flight work lives in the GitHub issue tracker rather than a list here
@@ -291,7 +292,7 @@ See [TESTING.md](TESTING.md) for the tiers and which one a test belongs in, and
 | **LRUD** | Left, Right, Up, Down - passage dimension measurements at a station. |
 | **Loop Closure** | When two survey paths meet at the same physical point, creating a loop. |
 | **Closure Error** | The discrepancy between expected and actual positions when a loop closes. Expressed as percentage. |
-| **DMP File** | Binary file format from mNemo device containing survey data. |
+| **DMP File** | Binary file format from MNemo device containing survey data. |
 | **Cave System** | A complete cave survey project. One cave system per project file. |
 | **Global View** | Application view showing all cave systems on a map. |
 | **Single System View** | Application view for editing a specific cave system. |
@@ -382,8 +383,8 @@ same way on load, with its undo history translated alongside (see
 The index is positional: inserting, deleting or reversing shots renumbers it.
 A station can also carry a **name**, free text stored apart from the shots and
 keyed to the physical station, so it stays put through those edits. A DMP
-import records each station's mNemo station number there (see
-[dmp-import.md](dmp-import.md#station-names)); names are not unique (mNemo
+import records each station's MNemo station number there (see
+[dmp-import.md](dmp-import.md#station-names)); names are not unique (MNemo
 restarts at 0 in every section), so the grid, the detail panel and the station
 links show a name beside the positional ID (`3:5 · 17`), never instead of it.
 The one place a name stands alone is the opt-in **Station names** map label
@@ -988,7 +989,7 @@ The three move tools are documented in detail in [move-tools.md](move-tools.md).
 - Section names (labels)
 - Station IDs or Station names (labels; one or the other, never both). Station
   IDs label every station with its index. Station names label each named
-  station with its name (e.g. its mNemo station number) and leave unnamed
+  station with its name (e.g. its MNemo station number) and leave unnamed
   stations unlabelled; the pill is disabled while the project has no names.
 - Station comments, shot comments
 - Shot data (azimuth, length, depth)
@@ -2531,7 +2532,7 @@ pub struct DmpShot {
 }
 ```
 
-The file carries no station numbers: mNemo numbers a section's start 0 and the
+The file carries no station numbers: MNemo numbers a section's start 0 and the
 end of its N-th shot N, so the importer derives each station's number from the
 shot's position (counting only the shots it imports - an assumption not yet
 checked against a device) and records it as the station's name; see
@@ -2684,7 +2685,7 @@ historical record of the v1.0 phases, all of which shipped (one caveat: GPS
 entry validates but does not convert MGRS and What3words - see 2.7).
 
 Regularly asked about, and not currently being worked on: 3D visualization, a web
-version, direct mNemo device communication, LRUD passage-wall rendering,
+version, MNemo device communication beyond reading over USB, LRUD passage-wall rendering,
 real-time collaborative editing (SpeleoDB's flow is single-writer file hand-off,
 not live co-editing), and floating/dockable panels.
 

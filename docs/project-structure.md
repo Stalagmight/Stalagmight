@@ -33,7 +33,7 @@ stalagmight/
 │   ├── crates/                   # The 7 workspace member crates
 │   │   ├── models/               # Data structures (Project, Section, Shot, geo, app_dirs)
 │   │   ├── telemetry/            # Anonymous counters + event registry, logging/ (tracing setup)
-│   │   ├── parsers/              # Import parsers: dmp (mNemo, versions 2-5),
+│   │   ├── parsers/              # Import parsers: dmp (MNemo, versions 2-5),
 │   │   │                         #   tml (Ariane), compass, gpx, walls/
 │   │   ├── persistence/          # SQLite operations (.stalx, .plnx), tile caches
 │   │   ├── export/               # CSV, JSON, image, TML export

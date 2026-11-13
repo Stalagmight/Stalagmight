@@ -1,6 +1,6 @@
 ---
 title: Start screen
-description: "The first screen you see in Stalagmight: start a new project, or open a Stalagmight project and import surveys from Ariane, mNemo, Compass, Walls or GPX."
+description: "The first screen you see in Stalagmight: start a new project, or open a Stalagmight project and import surveys from Ariane, MNemo, Compass, Walls or GPX."
 order: 1
 ---
 
@@ -20,7 +20,7 @@ Shown at launch until you open a project. After that it lists recent projects.
 
 ## Details
 
-- Formats: `.stalx` (Stalagmight), `.tml` / `.tmlu` (Ariane), `.dmp` (mNemo),
+- Formats: `.stalx` (Stalagmight), `.tml` / `.tmlu` (Ariane), `.dmp` (MNemo),
   `.dat` / `.mak` (Compass), `.srv` / `.wpj` (Walls), `.gpx` (GPX).
 - An import creates a new project. The original file is not changed.
 - `Systems: 0` is the number of recent projects.

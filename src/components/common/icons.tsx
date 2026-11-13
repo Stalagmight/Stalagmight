@@ -429,6 +429,17 @@ export function DownloadIcon(props: IconProps) {
   );
 }
 
+export function DeviceCableIcon(props: IconProps) {
+  // A handheld instrument on its cable: Import from MNemo over USB.
+  return (
+    <BaseIcon {...props}>
+      <rect x="6" y="2.5" width="8" height="10" rx="1.5" />
+      <path d="M8.5 6 H11.5" />
+      <path d="M10 12.5 V15 C10 16.6 11 17.5 12.6 17.5 H15.5" />
+    </BaseIcon>
+  );
+}
+
 export function FilePlusIcon(props: IconProps) {
   return (
     <BaseIcon {...props}>

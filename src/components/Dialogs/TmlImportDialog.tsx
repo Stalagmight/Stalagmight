@@ -562,7 +562,7 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
         {/* Map column: the file laid out as the import will build it, so the
             section toggles and the placement choice are answered by looking
             rather than by imagining. Same panel (and now the same remembered
-            width, #404) as the mNemo wizard's. */}
+            width, #404) as the MNemo wizard's. */}
         <WizardMapPanel
           width={mapPanelWidth}
           onWidthChange={setMapPanelWidth}

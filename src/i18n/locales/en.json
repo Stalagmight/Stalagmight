@@ -2151,8 +2151,8 @@
       "stations": "Show station markers",
       "sectionNames": "Show section labels",
       "stationLabels": "Show station IDs",
-      "stationNames": "Show station names (e.g. mNemo station numbers) instead of IDs. Stations without a name get no label",
-      "stationNamesUnavailable": "This project has no station names. Stations get names from an mNemo (.dmp) import",
+      "stationNames": "Show station names (e.g. MNemo station numbers) instead of IDs. Stations without a name get no label",
+      "stationNamesUnavailable": "This project has no station names. Stations get names from an MNemo (.dmp) import",
       "shots": "Show shot lines",
       "jumps": "Show jump shots (swum shortcuts)",
       "referenceShots": "Show reference shots (survey ties)",
@@ -2172,6 +2172,7 @@
   "globalView": {
     "actions": {
       "import": "Import",
+      "importFromMnemo": "Import from MNemo...",
       "mergeProjects": "Merge {{countFormatted}} projects",
       "mergeProjectsAria": "Merge {{countFormatted}} selected projects",
       "newProject": "New project",
@@ -2261,7 +2262,7 @@
     },
     "empty": {
       "title": "Open or drop any survey file",
-      "description": "Bring in surveys from Ariane, Compass, Walls, GPX or mNemo, or open an existing Stalagmight project.",
+      "description": "Bring in surveys from Ariane, Compass, Walls, GPX or MNemo, or open an existing Stalagmight project.",
       "dropZone": {
         "cta": "Open or drop a file",
         "promise": "Foreign formats import as a new Stalagmight project - your original file is never modified."

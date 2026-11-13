@@ -228,7 +228,7 @@ fn merge_deferred_save_outcome(
 /// Includes file hash tracking so undo also reverts the duplicate-detection state.
 ///
 /// `source_label` / `source_file_name` / `sections_found` are additive
-/// provenance for the import receipt - today only the mNemo DMP wizard passes
+/// provenance for the import receipt - today only the MNemo DMP wizard passes
 /// them (a later shard). All three are optional and `serde`-defaulted, so
 /// existing callers (and the Playwright IPC mock) are unaffected, and the
 /// base receipt `execute_import_sections` already attached is left at its
@@ -263,7 +263,7 @@ pub fn import_sections(
 
     if source_label.is_some() || source_file_name.is_some() || sections_found.is_some() {
         if let Some(receipt) = result.import_receipt.as_mut() {
-            receipt.source_format = source_label.unwrap_or_else(|| "mNemo DMP".to_string());
+            receipt.source_format = source_label.unwrap_or_else(|| "MNemo DMP".to_string());
             receipt.file_name = source_file_name.unwrap_or_default();
             receipt.sections_found = sections_found.unwrap_or(0);
         }

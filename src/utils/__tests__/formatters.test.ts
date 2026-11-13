@@ -58,7 +58,7 @@ describe('formatStationIdWithName', () => {
     expect(formatStationIdWithName(5, 3, '')).toBe('5:3');
   });
 
-  it('keeps a name of 0 (an mNemo section start)', () => {
+  it('keeps a name of 0 (an MNemo section start)', () => {
     expect(formatStationIdWithName(2, 0, '0')).toBe('2:0 · 0');
   });
 

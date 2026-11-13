@@ -37,7 +37,7 @@ export function useEditSectionViewPersistence(
   });
 }
 
-/** The import-time shot grids (mNemo wizard, zero-datum config). */
+/** The import-time shot grids (MNemo wizard, zero-datum config). */
 export function useImportShotsViewPersistence(
   view: GridViewState,
   setters: GridViewSetters,

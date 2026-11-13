@@ -421,7 +421,7 @@ toggle_data_table = ["Ctrl+3"]
 | | `open_file` | `Ctrl+O` | Open / Import (any supported file) |
 | | `save` | `Ctrl+S` | Save project |
 | | `save_as` | `Ctrl+Shift+S` | Save project as |
-| | `import_dmp` | `Ctrl+I` | Import mNemo `.dmp` into the open project (the unified Open picker when none is open) |
+| | `import_dmp` | `Ctrl+I` | Import MNemo `.dmp` into the open project (the unified Open picker when none is open) |
 | | `export` | `Ctrl+E` | Export project |
 | | `quit` | `Ctrl+Q` | Quit the application |
 | **Tools** | `select` | `S` | Select tool |

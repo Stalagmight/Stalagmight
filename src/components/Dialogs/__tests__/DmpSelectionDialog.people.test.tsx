@@ -1,5 +1,5 @@
 /**
- * Step 1 of the mNemo import: the default Surveyors / Explorers for every
+ * Step 1 of the MNemo import: the default Surveyors / Explorers for every
  * section are pill fields, prefilled with the people the last section was
  * created or imported with this session (`uiStore.lastUsedCredit`), handed to
  * the wizard as `defaultSurveyors` / `defaultExplorers`, and remembered again

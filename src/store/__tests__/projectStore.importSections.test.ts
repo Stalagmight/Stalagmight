@@ -82,7 +82,7 @@ describe('projectStore.importSections argument forwarding', () => {
         'file-hash',
         ['section-hash'],
         'AllReferences',
-        { sourceLabel: 'mNemo DMP', sourceFileName: 'dive.dmp', sectionsFound: 4 },
+        { sourceLabel: 'MNemo DMP', sourceFileName: 'dive.dmp', sectionsFound: 4 },
         UPDATES,
       );
 
@@ -92,7 +92,7 @@ describe('projectStore.importSections argument forwarding', () => {
       sectionHashes: ['section-hash'],
       existingShotUpdates: UPDATES,
       virtualShotMode: 'AllReferences',
-      sourceLabel: 'mNemo DMP',
+      sourceLabel: 'MNemo DMP',
       sourceFileName: 'dive.dmp',
       sectionsFound: 4,
     });

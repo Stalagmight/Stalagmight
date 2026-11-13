@@ -56,7 +56,7 @@ family (`command_shot.rs`, `command_station.rs`, `command_move.rs`, ...) under
   - `station_comments` - free text keyed by `StationKey`. A station is implicit (the
     boundary between consecutive shots), so it has no record of its own to hang a
     comment on.
-  - `station_names` - a station's name (a DMP import's mNemo station number), keyed
+  - `station_names` - a station's name (a DMP import's MNemo station number), keyed
     and handled exactly like `station_comments`, so it stays on its physical station
     when shots are inserted, deleted or reversed.
   - `validation` - per-project thresholds, stored in the `.stalx` so they travel with the
@@ -143,7 +143,7 @@ in `src-tauri/src/commands/telemetry_coverage_tests.rs`.
 | `src-tauri/crates/core/src/core/state/` | `AppState` (`app_state.rs`) plus one module per command family |
 | `src-tauri/crates/persistence/src/persistence/sqlite.rs` | `Database` struct + `SCHEMA_VERSION` and its migration history; the impl is split across `persistence/sqlite/` (open, read, write, schema, integrity, undo, repair, settings, warnings) |
 | `src-tauri/crates/persistence/src/persistence/plnx.rs` | `.plnx` sibling store for named dive plans |
-| `src-tauri/crates/parsers/src/parsers/dmp.rs` | mNemo DMP file parser |
+| `src-tauri/crates/parsers/src/parsers/dmp.rs` | MNemo DMP file parser |
 | `src-tauri/crates/models/src/project.rs` | Project model with merge/offset logic |
 | `src-tauri/crates/models/src/project/gas.rs` | Gas-weighted reachability engine (`compute_gas_reach_field`) |
 | `src-tauri/crates/models/src/project/split_section.rs`, `combine_candidate.rs`, `combine_sections.rs` | Split Section Here and Combine Sections; `station_rekey.rs` moves stored station refs with their stations (by stored key) and `gauge.rs` keeps the least-squares gauge on one physical station ([plan](plans/2026-11-12_merge-split-sections.md)) |

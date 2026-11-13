@@ -63,7 +63,7 @@ import { useProjectStore } from '../../../store/projectStore';
 import type { Project } from '../../../types/project';
 
 const receipt = (): ImportReceipt => ({
-  source_format: 'mNemo DMP',
+  source_format: 'MNemo DMP',
   file_name: 'dive.dmp',
   sections_found: 2,
   sections_imported: 1,

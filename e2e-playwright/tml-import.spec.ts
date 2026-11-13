@@ -238,7 +238,7 @@ test.describe('Ariane TML import journey', () => {
   // #447: the Cancel/Import footer used to scroll away with the dialog body,
   // starting below the fold at 1024x640 (the issue's cited default zoom).
   //
-  // #425 moved this dialog to the mNemo wizard's shape - a `WizardScrollBody`
+  // #425 moved this dialog to the MNemo wizard's shape - a `WizardScrollBody`
   // scroller with a map column beside the settings - so the footer is now a
   // flex SIBLING below the scroller rather than sticky inside it. The
   // guarantee is unchanged and still worth pinning structurally: nothing the

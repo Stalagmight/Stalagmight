@@ -45,7 +45,7 @@ the [survey view](survey-view.md).
   - **Azimuth**: `Avg` (default) is one value per shot. `In+Out` gives
     `Az In` and `Az Out`, for surveyors who read the azimuth at both ends.
   - **Inclination**: same choices, `Off` by default. It can be typed in, but is
-    mainly filled by mNemo imports.
+    mainly filled by MNemo imports.
 - **Create Section** needs at least one complete shot. A half-filled row has to
   be completed or deleted first.
 - After **Create Section**, placing the section on an existing station merges

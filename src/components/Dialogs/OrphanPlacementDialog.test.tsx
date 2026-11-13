@@ -143,7 +143,7 @@ describe('OrphanPlacementDialog - finishes once (#681)', () => {
     const showToast = vi.fn();
     useUIStore.setState({ showToast, openDialog: vi.fn() });
     const receipt: ImportReceipt = {
-      source_format: 'mNemo DMP', file_name: 'cave.dmp', sections_found: 1, sections_imported: 1,
+      source_format: 'MNemo DMP', file_name: 'cave.dmp', sections_found: 1, sections_imported: 1,
       shot_count: 12, closures_requested: 0, closures_created: 0, unit_conversion: null,
       warnings: [], info: [], zero_datum_created: null,
     };
@@ -212,7 +212,7 @@ describe('OrphanPlacementDialog - finishes once (#681)', () => {
 
 describe('OrphanPlacementDialog - receipt surface routing (#411/#420)', () => {
   const RECEIPT: ImportReceipt = {
-    source_format: 'mNemo DMP',
+    source_format: 'MNemo DMP',
     file_name: 'cave.dmp',
     sections_found: 1,
     sections_imported: 1,
