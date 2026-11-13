@@ -11,6 +11,7 @@ import {
   readCanvasPixelBlock,
   selectDropdownOption,
   selectDropdownOptionAt,
+  enterExportWorkspace,
   type PixelRgba,
   type SectionSeed,
 } from './helpers/app';
@@ -274,8 +275,11 @@ async function waitForMapLayout(page: Page): Promise<void> {
   await waitForMapIdle(page);
 }
 
+/** Survey and Plan are in the mode switcher; Export is entered from the project menu
+ *  (it left the switcher), and the switcher's Survey/Plan buttons leave it again. */
 async function enterMode(page: Page, mode: 'survey' | 'plan' | 'export'): Promise<void> {
-  await page.locator(`[data-testid="mode-${mode}"]`).click();
+  if (mode === 'export') await enterExportWorkspace(page);
+  else await page.locator(`[data-testid="mode-${mode}"]`).click();
   await waitForMapLayout(page);
 }
 
