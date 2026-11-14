@@ -6,7 +6,7 @@
  * its own. Header drag-to-reorder and drag-to-select still live in the parent -
  * this only renders the targets and forwards the events.
  */
-import { useLayoutEffect, useRef, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from 'react';
+import { useLayoutEffect, useMemo, useRef, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from 'react';
 import type { GridColumn } from './types';
 import { DEFAULT_COL_WIDTH } from './types';
 import type { Rect } from './gridGeometry';
@@ -62,6 +62,8 @@ function GridHeaderCorner({
   testIdPrefix: string;
 }) {
   const first = useFirstVisibleRow(scrollRef, rowCount);
+  // Called again only for a new index (or a new host callback).
+  const content = useMemo(() => render(first), [render, first]);
   const ref = useRef<HTMLSpanElement>(null);
   // The content is any node, so the tooltip is whatever text it rendered.
   useLayoutEffect(() => {
@@ -72,7 +74,7 @@ function GridHeaderCorner({
   });
   return (
     <span ref={ref} className="sg-corner-content" data-testid={`${testIdPrefix}-header-corner`} data-first-visible-row={first}>
-      {render(first)}
+      {content}
     </span>
   );
 }
