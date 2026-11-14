@@ -5716,6 +5716,192 @@ fn test_over_anchoring_warning_is_never_suppressible() {
     );
 }
 
+/// The issue #737 survey (a two-section loop closed B:3-A:2) plus a closure
+/// across the one shot A:1-A:2, planted as a file written before the
+/// creation-time refusal can carry it. Returns `(project, a, closure id)`.
+fn project_with_closure_across_one_shot() -> (Project, u32, u64) {
+    let azimuth = |az: f64, length: f64| ShotData {
+        azimuth_in: az,
+        azimuth_out: az,
+        length,
+        ..Default::default()
+    };
+    let mut project = Project::new("AcrossOneShot".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![azimuth(90.0, 10.0), azimuth(90.0, 10.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![
+                azimuth(0.0, 10.0),
+                azimuth(90.0, 20.5),
+                azimuth(180.0, 10.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    project
+        .merge_stations(StationRef::new(a, 0), StationRef::new(b, 0))
+        .unwrap();
+    project
+        .create_loop_closure(
+            StationRef::new(b, 3),
+            StationRef::new(a, 2),
+            ClosureStrategy::Batch,
+        )
+        .unwrap();
+    let id = project.next_closure_id;
+    project.next_closure_id += 1;
+    project.loop_closures.push(crate::models::LoopClosure {
+        id,
+        station_a: project.key_for_ref(StationRef::new(a, 1)).unwrap(),
+        station_b: project.key_for_ref(StationRef::new(a, 2)).unwrap(),
+        path_length: 10.0,
+        misclosure_distance: 10.0,
+        error_percentage: 100.0,
+        horizontal_misclosure: 10.0,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::Batch,
+        is_aligned: false,
+    });
+    project.ensure_shot_uuids();
+    (project, a, id)
+}
+
+#[test]
+fn test_closure_across_one_shot_warning_is_never_suppressible() {
+    // #737: the warning is an error, so neither the Ignore command nor a stray
+    // resolved row (legacy, bulk) can hide it. It clears only when the closure
+    // goes.
+    let (project, a, id) = project_with_closure_across_one_shot();
+    let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
+    let app = app_with_custom_state(app_state);
+
+    let warning = validation::get_project_warnings(state(&app))
+        .into_iter()
+        .find(|w| w.code == crate::models::CLOSURE_ACROSS_ONE_SHOT)
+        .expect("a closure across one shot must raise a warning");
+    assert_eq!(warning.closure_id, Some(id));
+    assert_eq!((warning.section_id, warning.shot_index), (a, 1));
+    assert!(!warning.is_resolved);
+
+    // The Ignore command quietly declines to persist anything for an error.
+    validation::resolve_warning_impl(
+        state(&app).inner(),
+        warning.section_id,
+        warning.shot_id,
+        warning.code.clone(),
+        None,
+    )
+    .unwrap();
+    // A forced row keyed exactly like the warning is not honoured either.
+    state(&app)
+        .inner()
+        .save_resolved_warning(&crate::persistence::ResolvedWarning {
+            section_id: warning.section_id,
+            shot_id: warning.shot_id,
+            warning_code: warning.code.clone(),
+            resolved_at: chrono::Utc::now(),
+            resolved_comment: None,
+            shot_uuid: warning.shot_uuid,
+        })
+        .unwrap();
+    let after = validation::get_project_warnings(state(&app));
+    let still = after
+        .iter()
+        .find(|w| w.code == crate::models::CLOSURE_ACROSS_ONE_SHOT)
+        .expect("the warning is still there");
+    assert!(!still.is_resolved, "never suppressed by a resolved row");
+
+    // The wire carries the id as a camelCase number.
+    let wire = serde_json::to_value(still).unwrap();
+    assert_eq!(wire["closureId"], serde_json::json!(id));
+
+    // Removing the closure is the fix.
+    let removed = state(&app)
+        .inner()
+        .execute(Command::RemoveLoopClosure { closure_id: id });
+    assert!(removed.success, "{:?}", removed.error);
+    assert!(validation::get_project_warnings(state(&app))
+        .iter()
+        .all(|w| w.code != crate::models::CLOSURE_ACROSS_ONE_SHOT));
+}
+
+#[test]
+fn test_get_adjustment_report_command() {
+    // #737: the new IPC reports the skipped closure at once, and a failed
+    // component only after the adjusted view has solved; get_adjusted_stations
+    // itself still answers a bare station list.
+    let (mut project, a, id) = project_with_closure_across_one_shot();
+    let x = project
+        .add_section(SectionData {
+            shots: vec![shot_data(10.0)],
+            ..Default::default()
+        })
+        .id;
+    let y = project
+        .add_section(SectionData {
+            shots: vec![shot_data(10.0)],
+            ..Default::default()
+        })
+        .id;
+    project
+        .set_zero_datum(
+            StationRef::new(x, 0),
+            GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+        )
+        .unwrap();
+    project
+        .set_zero_datum(
+            StationRef::new(y, 0),
+            GpsCoordinates::new(0.0001, 0.0001, 0.0).unwrap(),
+        )
+        .unwrap();
+    project
+        .create_loop_closure(
+            StationRef::new(x, 0),
+            StationRef::new(y, 0),
+            ClosureStrategy::Batch,
+        )
+        .unwrap();
+    let app = app_with_state();
+    state(&app).inner().set_project_for_tests(project);
+
+    let report =
+        tauri::async_runtime::block_on(project::get_adjustment_report(app.handle().clone()));
+    assert_eq!(report.skipped_closures.len(), 1);
+    assert_eq!(report.skipped_closures[0].closure_id, id);
+    assert_eq!(report.skipped_closures[0].shot_section_id, a);
+    assert_eq!(report.skipped_closures[0].shot_index, 1);
+    assert!(report.failures.is_empty(), "no solve yet");
+
+    // What the get_adjusted_stations command runs.
+    let stations = state(&app).inner().get_adjusted_stations().unwrap();
+    assert!(!stations.is_empty());
+
+    let report =
+        tauri::async_runtime::block_on(project::get_adjustment_report(app.handle().clone()));
+    assert_eq!(report.failures.len(), 1, "{report:?}");
+    assert!(report.failures[0].section_ids.contains(&x));
+    assert!(report.failures[0]
+        .reason
+        .starts_with("loop closures tie two zero datums"));
+    let wire = serde_json::to_value(&report).unwrap();
+    assert_eq!(
+        wire["skipped_closures"][0]["closure_id"],
+        serde_json::json!(id)
+    );
+
+    // No project open: an empty report, not an error.
+    let empty = app_with_state();
+    let report =
+        tauri::async_runtime::block_on(project::get_adjustment_report(empty.handle().clone()));
+    assert_eq!(report, crate::models::AdjustmentReport::default());
+}
+
 #[test]
 fn test_get_project_warnings_detects_invalid_azimuth() {
     let app = app_with_state();

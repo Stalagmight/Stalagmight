@@ -70,11 +70,25 @@ impl AppState {
             (true, None)
         };
 
+        // The closure dialog's guard (#737): the same refusal, in the same words,
+        // that `create_loop_closure` would answer with - so the dialog can say
+        // why before the user clicks Create. Only a pair the dialog can be
+        // opened for needs it (a merge-able pair is in two components, so it
+        // cannot be tied); the backend stays the authority either way.
+        let closure_refusal = if can_merge {
+            None
+        } else {
+            project
+                .closure_tie_refusal(station_a, station_b)
+                .map(|refusal| refusal.message())
+        };
+
         Ok(ConnectivityResult {
             connected,
             preview,
             can_merge,
             reason,
+            closure_refusal,
         })
     }
 

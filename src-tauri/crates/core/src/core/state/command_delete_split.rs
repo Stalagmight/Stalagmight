@@ -663,7 +663,7 @@ impl AppState {
         // Same frame check as the split paths above (#469, item 1).
         let frame_before = self.frame_datum_key();
 
-        let result_section = {
+        let (result_section, removed_closures) = {
             let Ok(mut proj_guard) = self.project.lock() else {
                 return CommandResult::failure("Failed to lock project".to_string());
             };
@@ -746,6 +746,8 @@ impl AppState {
                 .iter()
                 .filter_map(|&i| project.key_for_ref(StationRef::new(section_id, i)))
                 .collect();
+            // Closures already across one shot before the range goes (#737).
+            let across_before = super::command_shot::closures_across_one_shot_ids(project);
 
             for &sid in &range_shot_ids {
                 if let Err(e) = project.remove_shot_with_rewire_excluding_anchors(
@@ -759,6 +761,15 @@ impl AppState {
                     return CommandResult::failure(e);
                 }
             }
+            // An interior gap-close brings the head boundary one shot from the
+            // first surviving tail station, so a closure between them (A:1-A:4
+            // with shots 1..2 deleted) now spans one shot and closes nothing.
+            // Unlike the single-shot delete, which refuses to shift a shot that
+            // is part of any loop, the range only refuses merge loops - so this
+            // is reachable here. Removed now, inside the one undo unit, before
+            // the cascade sees the final topology (#737).
+            let removed_closures =
+                super::command_shot::remove_closures_newly_across_one_shot(project, &across_before);
             // Single cascade now that every range shot (and any doomed merge) is
             // gone, so a doomed station's intermediate shift never propagates into
             // a connected free-floating section - the per-shot cascades were
@@ -806,7 +817,7 @@ impl AppState {
             // Undo restores from the `ProjectSnapshotPair`, which legitimately puts
             // the PRE-conversion state back: the closure was a true loop before the
             // delete, so restoring it as a closure is the correct inverse.
-            section_id
+            (section_id, removed_closures)
         };
 
         self.renormalize_frame_if_changed(frame_before);
@@ -839,7 +850,9 @@ impl AppState {
             purpose = "gap-close a deleted shot range",
             "Delete shot range (shift) completed"
         );
-        CommandResult::success().with_section_id(result_section)
+        CommandResult::success()
+            .with_section_id(result_section)
+            .with_warnings(removed_closures)
     }
 
     /// Execute a delete-last-shot-and-section operation as a single atomic undo/redo unit.

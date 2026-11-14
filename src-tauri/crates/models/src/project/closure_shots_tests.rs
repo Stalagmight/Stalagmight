@@ -597,3 +597,55 @@ fn every_known_solver_error_has_a_plain_reason() {
         );
     }
 }
+
+// ---- wire shape (#441 rule: an omitted field is declared optional) -----------
+
+#[test]
+fn the_new_wire_fields_are_omitted_when_absent_and_declared_optional() {
+    use ts_rs::TS;
+
+    let warning = crate::ProjectWarning {
+        section_id: 0,
+        shot_id: 1,
+        shot_index: 0,
+        code: crate::CLOSURE_ACROSS_ONE_SHOT.to_string(),
+        message: String::new(),
+        severity: crate::WarningSeverity::Error,
+        is_resolved: false,
+        shot_uuid: None,
+        datum_station_index: None,
+        datum_refs: None,
+        closure_id: None,
+    };
+    let absent = serde_json::to_value(&warning).unwrap();
+    assert!(absent.get("closureId").is_none(), "{absent}");
+    let present = serde_json::to_value(crate::ProjectWarning {
+        closure_id: Some(7),
+        ..warning
+    })
+    .unwrap();
+    assert_eq!(present["closureId"], serde_json::json!(7));
+    let decl = crate::ProjectWarning::decl();
+    assert!(decl.contains("closureId?: number"), "{decl}");
+
+    let connectivity = crate::ConnectivityResult {
+        connected: true,
+        preview: None,
+        can_merge: false,
+        reason: None,
+        closure_refusal: None,
+    };
+    let absent = serde_json::to_value(&connectivity).unwrap();
+    assert!(absent.get("closure_refusal").is_none(), "{absent}");
+    // `reason` is the control: always on the wire, so required in TS.
+    assert!(absent.get("reason").is_some());
+    let decl = crate::ConnectivityResult::decl();
+    assert!(decl.contains("closure_refusal?: string"), "{decl}");
+    assert!(decl.contains("reason: string | null"), "{decl}");
+    // A pre-#737 payload without the key still reads.
+    let old: crate::ConnectivityResult = serde_json::from_value(
+        serde_json::json!({"connected": true, "preview": null, "can_merge": false, "reason": null}),
+    )
+    .unwrap();
+    assert!(old.closure_refusal.is_none());
+}

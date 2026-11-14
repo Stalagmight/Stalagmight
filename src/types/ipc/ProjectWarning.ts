@@ -2,4 +2,4 @@
 import type { StationRef } from "./StationRef";
 import type { WarningSeverity } from "./WarningSeverity";
 
-export interface ProjectWarning { sectionId: number, shotId: number, shotIndex: number, code: string, message: string, severity: WarningSeverity, isResolved: boolean, shotUuid?: string, datumStationIndex?: number, datumRefs?: Array<StationRef>, }
+export interface ProjectWarning { sectionId: number, shotId: number, shotIndex: number, code: string, message: string, severity: WarningSeverity, isResolved: boolean, shotUuid?: string, datumStationIndex?: number, datumRefs?: Array<StationRef>, closureId?: number, }
