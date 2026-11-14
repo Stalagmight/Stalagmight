@@ -1588,7 +1588,7 @@ fn combine_at_the_join(
     (plan, solves, combined)
 }
 
-/// Nico's review of #737, point 1. #735 moves the kept side instead of the
+/// The #743 review, point 1. #735 moves the kept side instead of the
 /// other when the other holds the closure-adjusted view's anchor - but only
 /// where that view solves the joined survey: it solves a closure there now,
 /// or the combine turns a tie into one it will solve. Nothing is solved here
@@ -1654,7 +1654,7 @@ fn the_anchor_rule_follows_the_solve_of_the_closure_the_combine_makes() {
     }
 }
 
-/// Nico's review of #737, point 4. K runs three shots east; O starts 0.4 m
+/// The #743 review, point 4. K runs three shots east; O starts 0.4 m
 /// past K's end and is tied to it only by a legacy closure join (one the solve
 /// does not take). K also carries a Batch closure: across its first shot only
 /// (K:0-K:1, which the solve skips) or across two shots (K:0-K:2, a real loop,
