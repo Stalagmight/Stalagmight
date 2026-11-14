@@ -141,16 +141,18 @@ describe('useDataWorkspaceViewPersistence', () => {
     expect(view().hiddenColumns).toEqual([...DATA_DEFAULT_HIDDEN]);
   });
 
-  it('drops the retired Links column from a saved view (its chips sit over the shot cells now)', () => {
+  it('drops the retired Links and Issues columns from a saved view (chips and gutter icon now)', () => {
     useProjectStore.setState({
       config: configWith({
-        data_workspace_hidden_columns: ['links', 'x'],
+        data_workspace_hidden_columns: ['links', 'issues', 'x'],
         data_workspace_column_widths: { comment: 250 },
       }),
     });
     renderHook(() => useDataWorkspaceViewPersistence());
     expect(view().hiddenColumns).toEqual(['x']);
-    expect(normalizeDataWorkspaceView({ columnOrder: ['links'] }).columnOrder).not.toContain('links');
+    const order = normalizeDataWorkspaceView({ columnOrder: ['issues', 'links', 'comment'] }).columnOrder;
+    expect(order).not.toContain('links');
+    expect(order).not.toContain('issues');
   });
 
   it('keeps an empty hidden list as "show all"', () => {

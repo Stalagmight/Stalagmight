@@ -55,7 +55,6 @@ describe('Data workspace headers match the Survey data table', () => {
   const dt = en.dataTable.columns;
   const meters = en.common.units.meters;
   const survey: Partial<Record<DataColumnKey, string>> = {
-    issues: dt.warningsShort,
     length: dt.length.replace('{{unit}}', meters),
     azimuth: dt.azimuthShort,
     azimuth_in: dt.azimuthInShort,

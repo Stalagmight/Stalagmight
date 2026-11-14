@@ -279,12 +279,35 @@ describe('DataSectionHeader', () => {
 });
 
 describe('DataWorkspace cells', () => {
-  it('shows the issue icons, frozen lock and the J/R glyph', () => {
+  it('shows the issue icons and frozen lock at the end of the gutter name, and the J/R glyph', () => {
     render(<DataWorkspace />);
     expect(screen.getByTestId('data-issues-sh-3-3')).toHaveClass('text-error');
     expect(screen.getByTestId('data-issues-sh-3-2')).toHaveClass('text-warning');
     expect(screen.getByTestId('data-issues-sh-3-1')).toHaveClass('text-text-secondary');
+    expect(screen.queryByTestId('data-issues-sh-1-1')).toBeNull();
+    // In the gutter, after the "Show on map" pin; no Issues column any more.
+    const gutter = screen.getByTestId('data-row-sh-3-3');
+    expect(gutter.lastElementChild!.lastElementChild).toBe(screen.getByTestId('data-issues-sh-3-3'));
+    expect(screen.getByTestId('data-issues-sh-3-3').previousElementSibling).toBe(screen.getByTestId('data-row-map-sh-3-3'));
+    expect(screen.queryByTestId('data-grid-header-issues')).toBeNull();
     expect(screen.getByTestId('data-kind-sh-2-2')).toHaveTextContent('J');
+  });
+
+  it('a click on a shot issue opens Survey with the resolver, as the old column did', () => {
+    const resolve = vi.spyOn(useUIStore.getState(), 'triggerResolveWarning');
+    render(<DataWorkspace />);
+    fireEvent.click(screen.getByTestId('data-issues-sh-3-3'));
+    expect(useUIStore.getState().appMode).toBe('survey');
+    expect(useUIStore.getState().selection).toEqual({ type: 'shot', sectionId: 3, shotId: 303 });
+    expect(resolve).toHaveBeenCalledWith(3, 303);
+    resolve.mockRestore();
+  });
+
+  it('a find match in the issue text outlines the icon', () => {
+    useDataWorkspaceStore.setState({ search: { ...useDataWorkspaceStore.getState().search, open: true, query: 'depth jump' } });
+    render(<DataWorkspace />);
+    expect(screen.getByTestId('data-issues-sh-3-3')).toHaveClass('dw-match-outline', 'dw-match-outline-current');
+    expect(screen.getByTestId('data-issues-sh-3-2')).not.toHaveClass('dw-match-outline');
   });
 
   it('cycles the shot kind on click', () => {
@@ -574,9 +597,9 @@ describe('Focus requests', () => {
   it('a first entry starts on station 0 of the first section, never on its header band', () => {
     render(<DataWorkspace />);
     expect(useDataWorkspaceStore.getState().activeRowKey).toBe('st:1:0');
-    // In the first shown column that applies to a station row (Issues), so the
-    // table opens at its left edge.
-    expect(document.querySelector('[data-active-cell="true"]')).toHaveAttribute('data-testid', 'data-grid-cell-1-issues');
+    // In the first shown column that applies to a station row (Comment: Depth
+    // is hidden by default), never a blank shot cell.
+    expect(document.querySelector('[data-active-cell="true"]')).toHaveAttribute('data-testid', 'data-grid-cell-1-comment');
     expect(screen.getByTestId('data-grid-selection-overlay')).not.toHaveAttribute('data-band-focus');
   });
 

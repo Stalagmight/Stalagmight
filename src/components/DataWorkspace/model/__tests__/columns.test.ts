@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DATA_COLUMNS } from '../../columnsMeta';
 import { buildDataRows } from '../rows';
-import { coerceCell, f32, parseShotKind, validationError } from '../columns';
+import { coerceCell, f32, issuesText, parseShotKind, rowWarnings, validationError } from '../columns';
 import { COLUMNS, col, makeCtx } from '../../__tests__/dataFixtures';
 import type { DataEntityRow, DataRow } from '../../types';
 
@@ -77,12 +77,11 @@ describe('buildColumnDefs', () => {
     expect(col('kind').value(row('sh:2:202'), ctx)).toBe('Jump');
   });
 
-  it('lists unresolved warnings as searchable text, errors weigh most', () => {
-    const errShot = row('sh:3:303');
-    expect(col('issues').text(errShot, ctx)).toBe('Depth jump too large [ZERO_DEPTH]');
-    expect(col('issues').value(errShot, ctx)).toBe(1000);
-    expect(col('issues').value(row('sh:3:302'), ctx)).toBe(1);
-    expect(col('issues').value(row('sh:1:101'), ctx)).toBeNull();
+  it('lists unresolved warnings as searchable text (the issue icon, no column)', () => {
+    expect(COLUMNS.map((c) => c.key)).not.toContain('issues');
+    expect(issuesText(rowWarnings(ctx, row('sh:3:303')))).toBe('Depth jump too large [ZERO_DEPTH]');
+    expect(issuesText(rowWarnings(ctx, row('sh:3:302')))).toBe('Very short shot [SHORT_SHOT]');
+    expect(issuesText(rowWarnings(ctx, row('sh:1:101')))).toBe('');
   });
 
   it('reads comments for both row kinds', () => {

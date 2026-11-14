@@ -25,6 +25,8 @@
  *   full name) is searched like an always-shown first column under the
  *   'visible' and 'all' column scopes (not 'custom', which lists real
  *   columns): at most one read-only match per row, before its cell matches.
+ * - A row's issues (`ROW_ISSUES_KEY`: its unresolved warnings, the gutter's
+ *   issue icon) are searched under the same scopes, right after the row name.
  * - A station's links (`ROW_LINKS_KEY`: its chip labels, one per line) are
  *   searched under the same scopes, and listed where the shot-only block
  *   starts (`linksColumnPosition`): their chips span it.
@@ -39,12 +41,13 @@ import type {
   SearchColKey,
   SearchMatch,
 } from '../types';
-import { ROW_LINKS_KEY, ROW_NAME_KEY } from '../types';
+import { ROW_ISSUES_KEY, ROW_LINKS_KEY, ROW_NAME_KEY } from '../types';
 import type { DataWorkspaceState } from '../store';
 import { applyFilters } from './filter';
 import { compileSearch, findInText, MAX_SEARCH_MATCHES, orderColumns, rowNameMatch, searchColumnsInScope } from './search';
 import { sortRows } from './sort';
 import { linksSearchText, stationLinkItems } from './linkItems';
+import { issuesText, rowWarnings } from './columns';
 
 export type DataViewInput = Pick<
   DataWorkspaceState,
@@ -155,6 +158,11 @@ export function buildDataView(
             matchLimitReached = true;
             break outer;
           }
+        }
+        // The issue icon at the end of the gutter name.
+        if (collect(i, row, ROW_ISSUES_KEY, issuesText(rowWarnings(ctx, row)), 'computed')) {
+          matchLimitReached = true;
+          break outer;
         }
       }
       let linksText = searchPseudo && row.kind === 'station' ? linksSearchText(stationLinkItems(ctx, row)) : '';

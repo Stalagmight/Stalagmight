@@ -79,7 +79,6 @@ export type DataColumnKey =
   | 'up'
   | 'down'
   | 'kind'
-  | 'issues'
   | 'comment'
   | 'x'
   | 'y'
@@ -98,7 +97,7 @@ export type DataValueType = 'number' | 'text' | 'enum' | 'date';
 export type DataLockReason =
   /** The column does not apply to this row kind (a shot field on a station row). */
   | 'na'
-  /** Computed / derived column (X, Y, depth, issues...). */
+  /** Computed / derived column (X, Y, depth...), or the find's pseudo-columns. */
   | 'computed'
   /** Geometry field of a frozen shot. */
   | 'frozen'
@@ -273,14 +272,22 @@ export const ROW_NAME_KEY = 'row-name' as const;
  */
 export const ROW_LINKS_KEY = 'row-links' as const;
 
-/** Find keys that are not grid columns (the row name, the links). */
-export type PseudoSearchKey = typeof ROW_NAME_KEY | typeof ROW_LINKS_KEY;
+/**
+ * The find's issues pseudo-column: a row's unresolved warnings ("message
+ * [CODE]; ...", `issuesText`), shown as the issue icon at the end of its
+ * gutter name. Searched and locked like the row name; a match outlines the
+ * icon.
+ */
+export const ROW_ISSUES_KEY = 'row-issues' as const;
+
+/** Find keys that are not grid columns (the row name, the issues, the links). */
+export type PseudoSearchKey = typeof ROW_NAME_KEY | typeof ROW_ISSUES_KEY | typeof ROW_LINKS_KEY;
 
 export function isPseudoSearchKey(key: string): key is PseudoSearchKey {
-  return key === ROW_NAME_KEY || key === ROW_LINKS_KEY;
+  return key === ROW_NAME_KEY || key === ROW_ISSUES_KEY || key === ROW_LINKS_KEY;
 }
 
-/** Where a find match can sit: a column, the row name or the links. */
+/** Where a find match can sit: a column, the row name, the issues or the links. */
 export type SearchColKey = DataColumnKey | PseudoSearchKey;
 
 /** One match: a substring of one cell's display text (or of the row name,

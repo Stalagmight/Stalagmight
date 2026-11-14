@@ -153,24 +153,13 @@ export function misclosureText(ctx: DataModelCtx, misclosure: number | null, err
   return `Δ ${fmt(ctx, misclosure, d.length)} m · ${fmt(ctx, errorPct, 1)} %`;
 }
 
-/** Unresolved warnings as searchable text: "message [CODE]; ...". */
+/** Unresolved warnings as searchable text (the find's issues pseudo-column,
+ *  `ROW_ISSUES_KEY`): "message [CODE]; ...". */
 export function issuesText(warnings: readonly ProjectWarning[]): string {
   return warnings
     .filter((w) => !w.isResolved)
     .map((w) => `${w.message} [${w.code}]`)
     .join('; ');
-}
-
-/** Sortable issue weight: errors outrank any number of warnings. */
-function issuesValue(warnings: readonly ProjectWarning[]): number | null {
-  let errors = 0;
-  let warns = 0;
-  for (const w of warnings) {
-    if (w.isResolved) continue;
-    if (w.severity === 'error') errors++;
-    else warns++;
-  }
-  return errors + warns === 0 ? null : errors * 1000 + warns;
 }
 
 // ─── Parsing helpers ──────────────────────────────────────────────────────
@@ -332,8 +321,6 @@ export function fromToText(row: DataEntityRow, ctx: DataModelCtx): string {
 const commentText = (row: DataEntityRow, ctx: DataModelCtx) =>
   (row.kind === 'shot' ? ctx.data.shotComments.get(row.g) : ctx.data.stationComments.get(row.g)) ?? '';
 
-const issuesTextOf = (row: DataEntityRow, ctx: DataModelCtx) => issuesText(rowWarnings(ctx, row));
-
 const kindText = (row: DataEntityRow, ctx: DataModelCtx) => {
   const s = asShot(row);
   return s ? shotKindGlyph(shotKindOf(ctx, s)) : '';
@@ -392,7 +379,6 @@ const LOGIC: Record<DataColumnKey, Logic> = {
     },
     coerce: (raw) => parseShotKind(raw),
   },
-  issues: { text: issuesTextOf, value: (row, ctx) => issuesValue(rowWarnings(ctx, row)) },
   comment: { text: commentText, value: textValue(commentText), coerce: (raw) => parseOptionalText(raw) },
   x: stationNumber((s, ctx) => stationCoord(ctx, s, 0), (c) => decimalsOf(c).coordinates),
   y: stationNumber((s, ctx) => stationCoord(ctx, s, 1), (c) => decimalsOf(c).coordinates),

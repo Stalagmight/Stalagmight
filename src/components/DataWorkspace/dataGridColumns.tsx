@@ -5,21 +5,19 @@
  * coercion + the DataTable validators (an interactive edit flashes the
  * reason), and a cell takes an edit iff `def.lockReason()` is null.
  *
- * Two columns render their own content: Issues (the DataTable warning / lock
- * icons) and Kind (the J/R glyph that cycles on click, like the DataTable).
- * A station's link chips are no column: DataGrid spans them over the row's
+ * Kind renders its own content (the J/R glyph that cycles on click, like the
+ * DataTable). A row's issues and a station's links are no columns: the issue
+ * icon sits in the gutter (RowIssueIcon), the link chips span the row's
  * shot-only cells (StationLinkChips).
  */
 import type { TFunction } from 'i18next';
 import type { GridColumn } from '../common/SpreadsheetGrid/types';
-import { AlertCircleIcon, AlertTriangleIcon, LockIcon } from '../common/icons';
 import { SHOT_KIND_CLASS, SHOT_KIND_LABEL_KEY, nextShotKind } from '../../utils/shotKind';
 import type { DataColumnDef, DataColumnKey, DataModelCtx, DataRow, DataView, ShotRow } from './types';
-import { coerceCell, isShotFrozen, rowWarnings, shotKindOf, validationError } from './model/columns';
+import { coerceCell, shotKindOf, validationError } from './model/columns';
 import { shotCredit } from './model/ctx';
 import { isEntityRow } from './model/rows';
 import { dataRowPart } from './dataTestIds';
-import type { DataNav } from './useDataNavigation';
 
 const NULLABLE_NUMBERS = new Set<DataColumnKey>(['inclination', 'pitch_in', 'pitch_out', 'left', 'right', 'up', 'down', 'temperature']);
 const CREDIT = new Set<DataColumnKey>(['surveyors', 'explorers', 'date']);
@@ -28,56 +26,8 @@ export interface GridColumnDeps {
   t: TFunction;
   ctx: DataModelCtx;
   view: DataView;
-  nav: DataNav;
   onCycleKind: (row: ShotRow, dir: 1 | -1) => void;
   onOpenCredit: (row: DataRow, colKey: DataColumnKey, seed: string) => void;
-  onResolveWarning: (row: ShotRow) => void;
-}
-
-const stop = (e: { stopPropagation(): void }) => e.stopPropagation();
-
-function IssuesCell({ row, deps }: { row: DataRow; deps: GridColumnDeps }) {
-  if (!isEntityRow(row)) return null;
-  const { ctx, t } = deps;
-  const frozen = row.kind === 'shot' && isShotFrozen(ctx, row);
-  const open = rowWarnings(ctx, row).filter((w) => !w.isResolved);
-  if (open.length === 0 && !frozen) return null;
-  const hasError = open.some((w) => w.severity === 'error');
-  const tooltip = [...(frozen ? [t('dataTable.frozen')] : []), ...open.map((w) => w.message)].join('\n');
-  const colorClass = hasError ? 'text-error' : frozen && open.length === 0 ? 'text-text-secondary' : 'text-warning';
-  const icon =
-    frozen && open.length === 0 ? <LockIcon size={13} /> : hasError ? <AlertCircleIcon size={14} /> : <AlertTriangleIcon size={14} />;
-  const part = dataRowPart(row);
-  const content = (
-    <>
-      {icon}
-      {open.length > 1 && <span className="ml-0.5 text-[11px] tabular-nums">{open.length}</span>}
-      {frozen && open.length > 0 && <LockIcon size={11} />}
-    </>
-  );
-  if (open.length > 0 && row.kind === 'shot' && !ctx.editingBlocked) {
-    return (
-      <button
-        type="button"
-        className={`${colorClass} inline-flex cursor-pointer items-center rounded hover:opacity-80 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset`}
-        title={tooltip}
-        aria-label={t('detailPanel.warnings.resolve')}
-        onMouseDown={stop}
-        onClick={(e) => {
-          e.stopPropagation();
-          deps.onResolveWarning(row);
-        }}
-        data-testid={`data-issues-${part}`}
-      >
-        {content}
-      </button>
-    );
-  }
-  return (
-    <span className={`${colorClass} inline-flex items-center`} title={tooltip} data-testid={`data-issues-${part}`}>
-      {content}
-    </span>
-  );
 }
 
 function KindCell({ row, deps }: { row: DataRow; deps: GridColumnDeps }) {
@@ -139,7 +89,6 @@ export function buildGridColumns(defs: readonly DataColumnDef[], deps: GridColum
       };
     }
     if (key === 'comment') col.multiline = true;
-    if (key === 'issues') col.render = (row) => <IssuesCell row={row} deps={deps} />;
     if (key === 'kind') {
       col.render = (row) => <KindCell row={row} deps={deps} />;
       col.noInlineEdit = true;

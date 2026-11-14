@@ -1922,7 +1922,6 @@
     "rowNoun_one": "row",
     "rowNoun_other": "rows",
     "columns": {
-      "issues": "Issues",
       "type": "Row type",
       "section": "Section",
       "name": "Station name",
@@ -1953,7 +1952,6 @@
       "date": "Survey date"
     },
     "headers": {
-      "issues": "!",
       "type": "Type",
       "section": "Section",
       "name": "Name",

@@ -1,8 +1,10 @@
 /**
  * The row-name gutter of the Data workspace grid: a 3px tint stripe, the link
  * rail, the row ID (`rowIdLabel`: stations bold "0:5" with their name muted;
- * shots indented "0:6" with a muted "5→6"), a revealed-row marker, and the "Show on map" button
- * (on row hover / the active row). Hovering the name opens the hover card
+ * shots indented "0:6" with a muted "5→6"), a revealed-row marker, a
+ * station's link count (only when no shot-only column is shown), the "Show on
+ * map" button (on row hover / the active row) and, right-aligned at the end,
+ * the row's issue icon. Hovering the name opens the hover card
  * after a short delay, beside the gutter so it never covers the rows being
  * read; it closes on scroll, on any mouse press outside it and when a context
  * menu opens. Hovering a linked station highlights its partner rows.
@@ -13,7 +15,7 @@ import { Tooltip } from '../common/Tooltip';
 import { EyeIcon, PinIcon } from '../common/icons';
 import type { CellMarks } from '../common/SpreadsheetGrid/types';
 import { MarkedText } from '../common/SpreadsheetGrid/gridMarks';
-import type { DataEntityRow, DataModelCtx, DataRow } from './types';
+import type { DataEntityRow, DataModelCtx, DataRow, ShotRow } from './types';
 import type { RailCell } from './model/links';
 import { linkedRowKeys, stationLinks } from './model/links';
 import { rowIdLabel } from './model/rowIds';
@@ -21,6 +23,7 @@ import { stationDisplayName } from './model/columns';
 import { DataRail, GUTTER_STRIPE, RAIL_WIDTH } from './DataRail';
 import { DataHoverCard } from './DataHoverCard';
 import { GutterLinks } from './StationLinkChips';
+import { RowIssueIcon } from './RowIssueIcon';
 import type { LinkItem } from './model/linkItems';
 import { dataRowPart } from './dataTestIds';
 import type { DataNav } from './useDataNavigation';
@@ -49,6 +52,10 @@ interface Props {
   gutterLinks?: readonly LinkItem[] | null;
   /** Find matches in the links (ROW_LINKS_KEY), for `gutterLinks`. */
   linkMarks?: CellMarks | undefined;
+  /** Find matches in the issue text (ROW_ISSUES_KEY). */
+  issueMarks?: CellMarks | undefined;
+  /** A click on a shot's issue icon. */
+  onResolveWarning: (row: ShotRow) => void;
 }
 
 /**
@@ -129,7 +136,7 @@ function HoverName({
   );
 }
 
-function DataRowLabelImpl({ row, ctx, rail, tint, revealed, nav, nameMarks, gutterLinks, linkMarks }: Props) {
+function DataRowLabelImpl({ row, ctx, rail, tint, revealed, nav, nameMarks, gutterLinks, linkMarks, issueMarks, onResolveWarning }: Props) {
   const { t } = useTranslation();
   const gutterRef = useRef<HTMLDivElement>(null);
   const part = dataRowPart(row);
@@ -201,6 +208,7 @@ function DataRowLabelImpl({ row, ctx, rail, tint, revealed, nav, nameMarks, gutt
       >
         <PinIcon size={13} />
       </button>
+      <RowIssueIcon row={row} ctx={ctx} marks={issueMarks} onResolve={onResolveWarning} />
     </div>
   );
 }

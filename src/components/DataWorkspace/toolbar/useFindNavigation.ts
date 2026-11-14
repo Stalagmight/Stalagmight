@@ -10,6 +10,7 @@ import { linksColumnPosition } from '../model/view';
 import { shotBlockSpan } from '../model/columnGroups';
 import type { DataModel } from '../DataModelContext';
 import {
+  ROW_ISSUES_KEY,
   ROW_LINKS_KEY,
   ROW_NAME_KEY,
   isPseudoSearchKey,
@@ -65,10 +66,12 @@ export function useFindNavigation(
 
   const ordered = useMemo(() => orderColumns(model.columns, columnOrder), [model.columns, columnOrder]);
   const colPos = useMemo(() => {
-    // The row name sits in the gutter, before every column; a station's links
+    // The row name sits in the gutter, before every column, the issue icon at
+    // its end; a station's links
     // where the shot-only block starts (buildDataView lists them there).
     const map = new Map<SearchColKey, number>([
       [ROW_NAME_KEY, -1],
+      [ROW_ISSUES_KEY, -0.5],
       [ROW_LINKS_KEY, linksColumnPosition(ordered) - 0.5],
     ]);
     ordered.forEach((c, i) => map.set(c.key, i));
@@ -98,8 +101,8 @@ export function useFindNavigation(
     // a cell edit).
     useDataWorkspaceStore.getState().requestFocus({
       rowKey: m.rowKey,
-      // A row name match keeps the active column (the name is in the gutter);
-      // a links match goes to the chips (kept when they are in the gutter).
+      // A row name / issue match keeps the active column (both are in the
+      // gutter); a links match goes to the chips (kept when in the gutter).
       ...focusColumn(m.colKey, linksColRef.current),
       align: 'center',
       ...(focused ? { takeFocus: false } : {}),

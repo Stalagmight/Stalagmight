@@ -29,7 +29,6 @@ const m = (
  *  `__tests__/columnsMeta.test.ts`; a width the user dragged is stored apart
  *  (`columnWidths`) and wins. */
 export const DATA_COLUMNS: readonly DataColumnMeta[] = [
-  m('issues', 'identity', 'both', 'text', 48, { align: 'center' }),
   m('type', 'identity', 'both', 'enum', 72),
   m('section', 'identity', 'both', 'text', 160),
   m('name', 'station', 'station', 'text', 96, { editable: true }),
