@@ -477,6 +477,9 @@ export function WarningResolution({
         ];
       }
       case 'datum_gps_gap':
+      case 'datum_gps_gap_start':
+        // `_start` is the same warning for a fix on station 0, kept as its own
+        // code so its Ignore cannot collide with a fix on station 1 (#741).
         // A GPS fix whose GPS is further from its surveyed position than the
         // sanity threshold (#741). Nothing on the shot to fix: look at the
         // station, or correct the datum's GPS / accuracy in Edit Station.

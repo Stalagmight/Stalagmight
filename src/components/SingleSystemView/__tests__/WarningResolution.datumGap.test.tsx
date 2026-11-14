@@ -49,9 +49,9 @@ const warning: ProjectWarning = {
 const openDialog = vi.fn();
 const onExit = vi.fn();
 
-function renderIt() {
+function renderIt(w: ProjectWarning = warning) {
   return render(
-    <WarningResolution warning={warning} section={section} shot={shot} onExit={onExit} onResolved={vi.fn()} onSkip={vi.fn()} />
+    <WarningResolution warning={w} section={section} shot={shot} onExit={onExit} onResolved={vi.fn()} onSkip={vi.fn()} />
   );
 }
 
@@ -69,6 +69,12 @@ describe('WarningResolution datum_gps_gap (#741)', () => {
     expect(screen.getByTestId('warning-resolution-option-edit-datum')).toBeEnabled();
     expect(screen.getByTestId('warning-resolution-option-ignore')).toBeInTheDocument();
     expect(screen.getByText('Edit zero datum')).toBeInTheDocument();
+  });
+
+  it('offers the same options for a fix on station 0, which has its own code', () => {
+    renderIt({ ...warning, code: 'datum_gps_gap_start', shotIndex: 0, datumStationIndex: 0 });
+    expect(screen.getByTestId('warning-resolution-option-go-to-station')).toBeEnabled();
+    expect(screen.getByTestId('warning-resolution-option-edit-datum')).toBeEnabled();
   });
 
   it('opens Edit Station on the fix station, focused on its GPS', async () => {
