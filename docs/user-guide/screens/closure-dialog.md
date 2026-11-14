@@ -29,3 +29,8 @@ instead of the merge dialog when the stations cannot be merged, see
   5%.
 - Creating the closure does not move the survey. See
   [loop closure](../concepts/sections-shots-stations.md).
+- A closure needs at least two separate paths between its stations. When the
+  two stations are the two ends of one shot (or are tied to them through merges
+  and other closures), or are already tied together, the dialog says why in red
+  above the stations and **Create Closure** is off. Pick other stations, or
+  **Cancel**.

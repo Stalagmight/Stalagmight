@@ -41,7 +41,7 @@ against this page first.
 | Surface | Use for | Persistence | Examples in the codebase |
 |---|---|---|---|
 | Modal dialog | User must acknowledge/decide before continuing; data at risk | Until dismissed; app inert behind it | `ErrorDialog`, `ImportReceiptDialog` (only when the receipt has a warning, is empty, converted units, or created a zero datum, #411), corruption recovery |
-| Banner / indicator | Ongoing conditions | Until the condition clears | integrity banner (`App.tsx`), `SpeleoBanner`, `OfflineIndicator`, read-only badges (`MapTopLeftOverlay`), `UpdateBanner` (#579, #631: an update is available, downloading, or ready. A background download (from a launch, periodic or track-switch check) shows no banner until it is ready; one started from About or the banner's Download shows progress. A failed check shows nothing and goes quietly to idle, except that About's manual check says so inline in the dialog. A failed Download from the banner, a failed Restart, and a restart the backend refuses because a SpeleoDB transfer started are toasts; a failed background download just drops back to the banner's Download, and a failed install on quit is only logged) |
+| Banner / indicator | Ongoing conditions | Until the condition clears | integrity banner (`App.tsx`), `SpeleoBanner`, `OfflineIndicator`, read-only badges and the adjustment notice (`MapTopLeftOverlay`; #737: loop closures the Closures Computed View skips because they span a single shot, and parts of the survey it shows measured, with a Show warnings action), `UpdateBanner` (#579, #631: an update is available, downloading, or ready. A background download (from a launch, periodic or track-switch check) shows no banner until it is ready; one started from About or the banner's Download shows progress. A failed check shows nothing and goes quietly to idle, except that About's manual check says so inline in the dialog. A failed Download from the banner, a failed Restart, and a restart the backend refuses because a SpeleoDB transfer started are toasts; a failed background download just drops back to the banner's Download, and a failed install on quit is only logged) |
 | Toast | Transient outcome of an action whose result is off-screen or non-obvious | Auto-dismiss (5-9 s by kind) | save confirmations, blocked-edit notice, export results, warning-free non-converted import receipt (#411) |
 | Log only | Internal, recoverable, debug | n/a | `console.warn`/`console.error` |
 
@@ -159,6 +159,15 @@ regions). Read the comment blocks in those two files plus
   save contract** (#92/#104): "imported but could not save" keeps
   `success: true` + warning so data survives exit. Never route ordinary warnings
   through it; import-quality warnings ride `CommandResult.import_receipt`.
+- **A side effect the user did not ask for gets its own warning code.** A delete
+  with shift that removes a loop closure it left spanning a single shot (#737)
+  reports each removal as `CLOSURE_REMOVED_ACROSS_ONE_SHOT` in
+  `CommandResult.warnings`; `notifyRemovedClosures` (`utils/closureRemovalToast.ts`,
+  called by the `deleteShot` / `deleteShotRangeShift` store actions) turns them
+  into ONE warning toast (key `closure-removed`) in the backend's words, the way
+  the `command-failed` catch-all shows `result.error`. A toast, not a dialog: the
+  delete did what was asked, nothing needs deciding, and one Undo restores the
+  closure with the shots.
 - Genuine IPC rejections (transport errors) re-sync state and re-throw; the caller
   that initiated the action owns surfacing them under the rules above.
 

@@ -1367,6 +1367,16 @@ Shown when creating a loop closure between two **connected** stations.
 └──────────────────────────────────────────────────────────────────┘
 ```
 
+When the backend would refuse the pair (#737), the connectivity check carries the
+reason (`ConnectivityResult.closure_refusal`) and the dialog shows it above the
+station details in an error box (`closure-refusal`) with **Create Closure**
+disabled. The two refusals are a closure that would tie together the two ends of
+one shot (directly, or through merges and other closures) - "This closure would
+tie together the two ends of one shot (A:1 to A:2), so there is no loop to close.
+Pick stations joined by at least two separate paths." - and a pair that other
+merges and closures already tie together. The backend refuses the same pairs
+regardless of the dialog. See [closures.md](closures.md#create-loop-closure).
+
 #### Export Dialog
 
 ```
@@ -1484,6 +1494,10 @@ The Merge Tool connects two stations. The behavior depends on whether the statio
 1. User activates Merge Tool (M)
 2. Selects two stations that are already in the same connected group
 3. ClosureDialog appears with closure preview data (path length, misclosure, error %)
+   - If the two stations are joined by only ONE shot (directly or through merges
+     and other closures), or are already tied together, the dialog says why and
+     Create is disabled: a closure needs at least two separate paths between its
+     stations (#737)
 4. User selects error distribution method
 5. Confirm → Loop closure created, shown as dashed line on map
 6. Closure stations updated with `closures_with` references (direct + transitive)
@@ -1538,6 +1552,11 @@ The Merge Tool connects two stations. The behavior depends on whether the statio
    shot removes the whole section
 3. On Split Section, the section splits into two, named "<section>-A" and
    "<section>-B" by default (both editable)
+4. A delete with shift (a single shot's Shift Geometry, or a range of shots with
+   shift) that leaves a loop closure spanning a single shot - e.g. closure A:1-A:4
+   after shots 1..2 are gap-closed - removes that closure with the delete and says
+   so in a warning toast ("Removed loop closure A:1 to A:2: after the delete it
+   spans a single shot."). One Undo restores the shots and the closure (#737)
 
 **Deleting a Station:** Not supported. Selecting a station and pressing Delete
 opens the Delete Station dialog, whose Delete button is disabled; it tells the
@@ -2339,6 +2358,12 @@ fn backup_before_repair(path: &Path) -> Result<PathBuf> {
   "Show resolved" toggle reveals them
 - Auto-clear when field corrected
 - Cleared errors stay cleared (don't re-validate automatically)
+- Closure errors (#737): a loop closure that ties the two ends of one shot together
+  (`CLOSURE_ACROSS_ONE_SHOT`, one per closure, on that shot) resolves with "Remove
+  this loop closure" (disabled while editing is blocked) or "Go to closure station";
+  a part of the survey the Closures Computed View could not adjust
+  (`CLOSURE_ADJUSTMENT_FAILED`) resolves with "Go to station". Both are errors, so
+  neither offers Ignore
 
 ---
 

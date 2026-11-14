@@ -7,6 +7,10 @@ Update this file every time a new version is tagged.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A loop closure across one shot no longer undoes the Closures Computed View** - a closure between two stations at the ends of one shot (directly, or through merges and other closures) made the closure solve fail, and the whole connected survey, other loops included, silently fell back to its measured positions in the Closures Computed View, Plan and Export. Such a closure has no loop to close: the Create Loop Closure dialog now says so and offers no Create (also for stations other merges and closures already tie together), and the import refuses it too. One already in a project is skipped by the solve, so the rest of the survey is adjusted again, and the Warnings tab lists it on its shot with Remove this loop closure. Deleting shots with shift no longer leaves one behind: a closure the delete shortens to a single shot is removed with it, a warning says which, and one Undo brings both back. When part of the survey still cannot be adjusted (for example a closure tying two zero datums together), a notice above the map and an entry in the Warnings tab say so and why, instead of only the log ([#737](https://github.com/Stalagmight/Stalagmight/issues/737))
+
 ## [0.5.4] - 2026-11-14
 
 ### Added

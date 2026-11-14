@@ -25,6 +25,10 @@ The closure shows as a dashed line. The survey itself does not move. To see it
 adjusted to its closures, switch to **Plan**, or pick **Closures Computed View**
 in the [Display menu](../screens/display-menu.md).
 
+The two stations must be joined by at least two separate paths. Two stations at
+the ends of one shot are not a loop, so the dialog refuses them, and the same
+goes for stations that other merges and closures already tie together.
+
 ## Step details
 
 ### 1-2. Pick both stations
@@ -64,3 +68,16 @@ Closure** in **Details** (4 above) does the same.
 3. The closure.
 
 A station with more than one closure asks which one to remove.
+
+## When the computed view leaves something out
+
+The **Closures Computed View** skips a closure whose two stations are the two
+ends of one shot (an older project can still have one), and shows a part of the
+survey as measured when its closures cannot be solved, for example a closure
+that ties two zero datums together. A notice beside the read-only label above
+the map says so, and **Show warnings** opens the
+[Warnings panel](../screens/warnings-panel.md), where each one is listed with
+its fix.
+
+Deleting shots with shift can shorten a loop to a single shot. The delete then
+removes that closure too and says so; **Undo** brings back both.

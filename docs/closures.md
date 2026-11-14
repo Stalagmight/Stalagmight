@@ -70,6 +70,21 @@ Validation rules:
   **unless** both sections are connected to zero datums via merges (see `section_has_zero_datum`).
   This zero-datum check uses merge-only connectivity (closures are ignored).
 - Duplicate closure pairs are rejected.
+- A closure needs a loop to close (#737). The pair is refused, for every strategy
+  (`Batch`, `LeastSquaresWeighted` and `Move` alike), when it would tie the two
+  ends of ONE shot together - directly (A:1 to A:2), or because merges and other
+  closures already tie each station to one end of the same shot - with *"This
+  closure would tie together the two ends of one shot (A:1 to A:2), so there is no
+  loop to close. Pick stations joined by at least two separate paths."*, and when
+  the two stations are already one point through other merges and closures
+  (*"These stations are already tied together through other merges and closures,
+  so this closure would add nothing."*). Both are judged against the constraint
+  knots the solve uses (see below), by the one shared helper
+  `project/closure_shots.rs`. The importer's `create_loop_closures_batch` refuses
+  the same pairs with the same words.
+- The closure dialog shows that refusal before Create: `check_merge_connectivity`
+  returns it in `ConnectivityResult.closure_refusal`, the dialog prints it and
+  disables Create (`closure-refusal`). The backend stays the authority.
 
 Metrics are computed from current station coordinates:
 - Misclosure distance and horizontal/vertical components are computed from current raw station coordinates.
@@ -219,6 +234,19 @@ Eligible closures are `Batch` + `LeastSquaresWeighted` (`Move` closures are alre
 Algorithm overview (unchanged math; the only change is *where* it writes - a clone, not the
 live project):
 - Build constraint groups where stations connected via merges **or closures** are in the same group.
+  A closure whose two stations would end up in one group as the two ends of one
+  shot - a *closure across one shot* - is skipped first (#737): the solve keeps
+  such a shot at its measured vector, so it could not close, and it used to fail
+  the whole component with "inconsistent section translation".
+  `Project::closures_across_one_shot` decides it with a union-find over every
+  station: all merges first, then the eligible closures in `loop_closures` order;
+  a closure that would put both ends of some shot into one group that were not in
+  one before it is NOT united and is reported with that shot. A skipped closure
+  unites nothing, so it never changes what a later closure sees. Uniting walks only
+  the smaller group, so the sweep is linear in the common case and deterministic.
+  `adjust_loop_closures` drops these closures before the solve, so the groups, the
+  spur detection and the `is_aligned` marking all see the same set; a component
+  whose only closures are skipped keeps its measured geometry and is not an error.
 - If a group contains a zero datum, it is fixed; multiple zero datums in a single group is an error.
 - If no zero datum exists in the component, the anchor station's group is fixed.
 - For each shot, build weighted constraints in X/Y using section quality and base sigmas from config:
@@ -230,6 +258,44 @@ live project):
 - Update the clone's shot vectors from solved group coordinates and apply section-level
   translations to keep merged stations aligned, then compute coordinates from the clone.
 - Zero datum positions are verified to remain fixed; any movement is an error.
+
+A component whose solve still fails (for example a closure that ties two zero
+datums into one group: "Multiple zero datums in a single constraint group", which
+creation allows because both sections have fixed coordinates) is rolled back to its
+measured geometry, as before - but it is no longer silent (#737).
+`Project::into_adjusted_stations` returns each failure (anchor, sections, the
+solver's error), `AppState` keeps them beside the memoized adjusted stations, and:
+
+- the `get_adjustment_report` IPC returns `{ skipped_closures, failures }`: the
+  closures skipped above (computed on request) and the failures of the cached solve
+  of the CURRENT project version only, each with a plain-language reason (the raw
+  solver text stays in the log). `get_adjusted_stations` is unchanged.
+- the Warnings tab lists one `CLOSURE_ACROSS_ONE_SHOT` error per skipped closure, on
+  the shot it spans (Resolve: **Remove this loop closure**, or go to its station),
+  and one `CLOSURE_ADJUSTMENT_FAILED` error per failed part, read from the same
+  cached solve (the warnings pass never runs the solve; the frontend refreshes
+  warnings once the report names a failure). Both are errors, so neither can be
+  ignored.
+- the Closures Computed View (and Plan / Export, which draw the adjusted geometry)
+  shows a notice beside the read-only pill - "1 loop closure skipped: it spans a
+  single shot." and/or "Part of the survey could not be adjusted and is shown as
+  measured." - with **Show warnings**, which opens the Warnings tab.
+
+## Deleting shots around a closure
+
+A delete with shift can shorten the path between a closure's two stations. The
+single **Delete shot** refuses to shift a shot that is part of any loop, closure
+loops included; the range gap-close (**Delete shots** with shift) refuses only
+merge loops, so closure A:1-A:4 with shots 1..2 gap-closed becomes A:1-A:2 - one
+shot, no loop. Both delete commands therefore compare
+`closures_across_one_shot` before and after the delete and remove every closure
+that is newly across one shot, inside the same project snapshot pair, so one Undo
+restores the shots and the closure together. Each removal is reported in
+`CommandResult.warnings` (`CLOSURE_REMOVED_ACROSS_ONE_SHOT`, "Removed loop closure
+A:1 to A:2: after the delete it spans a single shot.") and shown as one warning
+toast. A closure that already spanned one shot before the delete is left alone (it
+has its own warning). This lives in the commands, not in
+`remove_shot_with_rewire*`, which is also the inverse of `CreateShot` (#413).
 
 ## Co-location and Move Tools
 
