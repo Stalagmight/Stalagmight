@@ -440,7 +440,13 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   removeLoopClosure: (closureId: bigint) => Promise<CommandResult>;
   updateStationComment: (stationRef: StationRef, comment: string | null) => Promise<CommandResult>;
   moveComment: (source: CommentHolder, target: CommentHolder, swap: boolean) => Promise<CommandResult>;
-  setZeroDatum: (stationRef: StationRef, coordinates: GpsCoordinates, options?: { fitToBounds?: boolean }) => Promise<CommandResult>;
+  /** `accuracyM`: the GPS accuracy in metres (#741); omitted means the backend
+   *  default (5 m), 0 is a hard pin. */
+  setZeroDatum: (
+    stationRef: StationRef,
+    coordinates: GpsCoordinates,
+    options?: { fitToBounds?: boolean; accuracyM?: number }
+  ) => Promise<CommandResult>;
   removeZeroDatum: (stationRef: StationRef) => Promise<CommandResult>;
   moveSection: (sectionId: SectionId, offset: Coordinates) => Promise<CommandResult>;
   moveSegment: (sectionId: SectionId, offset: Coordinates) => Promise<CommandResult>;
@@ -2053,12 +2059,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     );
   },
 
-  setZeroDatum: async (stationRef: StationRef, coordinates: GpsCoordinates, options?: { fitToBounds?: boolean }) => {
+  setZeroDatum: async (stationRef, coordinates, options) => {
     // Detect first zero datum before the IPC call changes state
     const isFirstDatum = (get().project?.zero_datums.length ?? 0) === 0;
+    const accuracyM = options?.accuracyM;
     const result = await executeCommand(
       'set_zero_datum',
-      { stationRef, coordinates },
+      accuracyM === undefined ? { stationRef, coordinates } : { stationRef, coordinates, accuracyM },
       { purpose: 'anchor survey to GPS coordinates', fields: { stationRef } }
     );
     if (result.success && options?.fitToBounds !== false) {
