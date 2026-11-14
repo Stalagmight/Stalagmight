@@ -1,11 +1,90 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use crate::config::ClosureAdjustmentConfig;
-use crate::{Coordinates, LoopClosure, SectionId, StationRef};
+use crate::{
+    gps_to_local, Coordinates, LoopClosure, SectionId, StationRef, DEFAULT_GPS_ACCURACY_M,
+};
 
 use super::Project;
 
+/// An accuracy below this many metres is treated as a hard pin: the weight
+/// `1 / accuracy^2` would otherwise dwarf every shot weight by many orders of
+/// magnitude and only add roundoff.
+const HARD_FIX_ACCURACY_M: f64 = 1e-3;
+
+/// One GPS fix (#741) as the Closures Computed View solve sees it.
+///
+/// # Weight, and how it compares to a shot
+///
+/// The solve is two independent per-axis weighted least-squares problems in
+/// local metres (x = east, y = north). A shot contributes the observation
+/// `p_j - p_i = shot vector` with per-axis variance
+///
+/// ```text
+/// sigma_dx^2 = (sin(az) * sigma_len)^2 + (len * cos(az) * sigma_az)^2
+/// sigma_dy^2 = (cos(az) * sigma_len)^2 + (len * sin(az) * sigma_az)^2
+/// ```
+///
+/// where `sigma_len = base_sigma_length_m * quality` (default 0.05 m) and
+/// `sigma_az = base_sigma_azimuth_deg * quality` in radians (default 1 deg),
+/// and weight `1 / sigma^2`, in 1/m^2. A fix contributes `p = gps` on each
+/// axis with weight `1 / accuracy^2`, the accuracy read as a per-axis 1-sigma
+/// in metres: the same units, so the two are directly comparable.
+///
+/// Variances add along a traverse. 500 m as 50 shots of 10 m due east gives
+/// 50 * 0.05^2 = 0.125 m^2 along-track and 50 * (10 * 0.01745)^2 = 1.52 m^2
+/// across, so the shot model trusts that traverse to about 0.35 m / 1.23 m,
+/// while a 5 m fix has 25 m^2. With the default config the survey is the
+/// stiffer of the two: a 40 m cross-track gap moves the fix station
+/// 40 * 1.52 / (1.52 + 25) = 2.3 m toward its GPS. Only a hard fix (accuracy
+/// 0), or a config with larger base sigmas, puts the station on its GPS.
+pub(super) struct FixObservation {
+    pub(super) station: StationRef,
+    /// GPS position in the frame's local metres.
+    pub(super) east: f64,
+    pub(super) north: f64,
+    /// `1 / accuracy^2`; `None` for a hard fix, which fixes its group at
+    /// `(east, north)` instead.
+    pub(super) weight: Option<f64>,
+}
+
 impl Project {
+    /// Every GPS fix in `component` that resolves, in list order, with its
+    /// GPS position in the frame's local metres. A fix's elevation is never
+    /// read: the solve is horizontal only.
+    ///
+    /// A non-finite or negative stored accuracy is not a measurement; it falls
+    /// back to the default rather than turning the fix into a pin.
+    pub(super) fn gps_fix_observations(
+        &self,
+        component: &HashSet<SectionId>,
+    ) -> Vec<FixObservation> {
+        let Some(frame) = self.frame_datum() else {
+            return Vec::new();
+        };
+        self.gps_fix_datums()
+            .into_iter()
+            .filter_map(|zd| {
+                let station = self.resolve_key(&zd.station_ref)?;
+                if !component.contains(&station.section_id) {
+                    return None;
+                }
+                let (east, north) = gps_to_local(&zd.gps, &frame.gps);
+                let accuracy = match zd.effective_accuracy_m() {
+                    a if a.is_finite() && a >= 0.0 => a,
+                    _ => DEFAULT_GPS_ACCURACY_M,
+                };
+                let weight = (accuracy >= HARD_FIX_ACCURACY_M).then(|| 1.0 / (accuracy * accuracy));
+                Some(FixObservation {
+                    station,
+                    east,
+                    north,
+                    weight,
+                })
+            })
+            .collect()
+    }
+
     /// Solve the two SPD weighted-Laplacian systems `A·x = atb_x` and
     /// `A·y = atb_y` the closure adjustment assembles. Both systems share the
     /// same sparsity (`adj`) but use different per-axis weights.
@@ -275,6 +354,11 @@ impl Project {
         x
     }
 
+    /// The Closures Computed View solve for one component. Placement datums
+    /// hold their groups at the raw position; GPS fixes pull theirs toward
+    /// their GPS ([`FixObservation`]); with neither, `anchor_station` holds
+    /// the component. `closures` may be empty: a component whose only reason
+    /// to adjust is a GPS fix is solved the same way. Horizontal only.
     pub(super) fn adjust_least_squares(
         &mut self,
         component: &HashSet<SectionId>,
@@ -368,12 +452,15 @@ impl Project {
             groups.entry(root).or_default().push(*station);
         }
 
-        let zero_datum_set: HashSet<StationRef> = self
-            .zero_datums
-            .iter()
-            .filter(|zd| component.contains(&zd.station_ref.section_id))
-            .filter_map(|zd| self.resolve_key(&zd.station_ref))
+        // Only PLACEMENT datums are fixed at their raw coordinates. A GPS fix
+        // (a later datum in an already placed merge component, #741) is an
+        // observation instead; see `gps_fix_observations`.
+        let placement_set: HashSet<StationRef> = self
+            .placement_datum_refs()
+            .into_iter()
+            .filter(|sr| component.contains(&sr.section_id))
             .collect();
+        let fixes = self.gps_fix_observations(component);
 
         let mut fixed_groups: HashSet<StationRef> = HashSet::new();
         let mut fixed_coords: HashMap<StationRef, Coordinates> = HashMap::new();
@@ -381,11 +468,17 @@ impl Project {
         for (root, members) in &groups {
             let mut datum_members: Vec<StationRef> = members
                 .iter()
-                .filter(|m| zero_datum_set.contains(m))
+                .filter(|m| placement_set.contains(m))
                 .copied()
                 .collect();
+            // Two placement datums are in different merge components by
+            // construction, so they share a group only when a closure ties the
+            // two datum stations themselves. The group cannot sit at both raw
+            // positions; refusing leaves the component in Raw Data View.
             if datum_members.len() > 1 {
-                return Err("Multiple zero datums in a single constraint group".to_string());
+                return Err(
+                    "Multiple placement zero datums in a single constraint group".to_string(),
+                );
             }
             if let Some(datum) = datum_members.pop() {
                 let coords = raw_coords
@@ -397,7 +490,25 @@ impl Project {
             }
         }
 
-        if fixed_groups.is_empty() {
+        // A hard fix (accuracy 0) fixes its group AT ITS GPS position. A group
+        // that is already fixed keeps its position: a placement datum wins over
+        // a fix in its own group (they are one point, so both cannot hold), and
+        // the first hard fix in list order wins over a later one.
+        for fix in &fixes {
+            if fix.weight.is_some() {
+                continue;
+            }
+            let root = *station_root
+                .get(&fix.station)
+                .ok_or_else(|| "GPS fix station not found".to_string())?;
+            if fixed_groups.insert(root) {
+                let z = raw_coords.get(&fix.station).map_or(0.0, |c| c.z);
+                fixed_coords.insert(root, Coordinates::new(fix.east, fix.north, z));
+            }
+        }
+
+        let anchor_fixed = fixed_groups.is_empty();
+        if anchor_fixed {
             let anchor_root = *station_root
                 .get(&anchor_station)
                 .ok_or_else(|| "Anchor station not found".to_string())?;
@@ -589,6 +700,24 @@ impl Project {
             }
         }
 
+        // Soft GPS fixes: one diagonal and one right-hand-side term per fix on
+        // its group's unknown, i.e. the observation `x_group = east` (and
+        // `y_group = north`) with weight `1 / accuracy^2`. A fix whose group is
+        // fixed (placement datum or hard fix) adds nothing.
+        for fix in &fixes {
+            let Some(w) = fix.weight else { continue };
+            let Some(&i) = station_root
+                .get(&fix.station)
+                .and_then(|root| unknown_index.get(root))
+            else {
+                continue;
+            };
+            diag_x[i] += w;
+            diag_y[i] += w;
+            atb_x[i] += w * fix.east;
+            atb_y[i] += w * fix.north;
+        }
+
         // Warm-start guess: each unknown group's measured position. This seeds the
         // core PCG so a coordinate that is unconstrained on an axis (e.g. only a
         // zero-length cardinal shot touches it → zero weight → null-space row)
@@ -704,10 +833,14 @@ impl Project {
             }
 
             // Fixed stations must not be pruned - they anchor the network
-            // even if they sit at a graph leaf.  The anchor station is only
-            // fixed when no zero datums exist (mirrors the solver logic).
-            let mut pinned: HashSet<StationRef> = zero_datum_set.clone();
-            if pinned.is_empty() {
+            // even if they sit at a graph leaf. A GPS fix, hard or soft, is
+            // pinned too: it is a second observation of the passage that leads
+            // to it, so that passage is no longer a spur and its shots must
+            // take the solved positions. The anchor station is pinned exactly
+            // when the solver fixed it.
+            let mut pinned: HashSet<StationRef> = placement_set;
+            pinned.extend(fixes.iter().map(|f| f.station));
+            if anchor_fixed {
                 pinned.insert(anchor_station);
             }
 
@@ -903,3 +1036,11 @@ impl Project {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "lsq_fix_tests.rs"]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod fix_tests;

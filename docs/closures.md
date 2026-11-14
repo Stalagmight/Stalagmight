@@ -214,16 +214,21 @@ Common error conditions:
 
 The Closures Computed View solves with **only** `LeastSquaresWeighted`. It runs
 non-destructively on a throwaway clone (`Project::compute_adjusted_station_coordinates`),
-once per connected component that has eligible closures, anchored on a zero datum when present
-and otherwise on a deterministic default anchor (the lexicographically smallest
+once per connected component that has eligible closures or a GPS fix, anchored on a zero datum
+when present and otherwise on a deterministic default anchor (the lexicographically smallest
 `(section_id, station_index)` station in the component, via `default_anchor_for_component`).
 Eligible closures are `Batch` + `LeastSquaresWeighted` (`Move` closures are already coincident).
 
 Algorithm overview (unchanged math; the only change is *where* it writes - a clone, not the
 live project):
 - Build constraint groups where stations connected via merges **or closures** are in the same group.
-- If a group contains a zero datum, it is fixed; multiple zero datums in a single group is an error.
-- If no zero datum exists in the component, the anchor station's group is fixed.
+- If a group contains a **placement** datum, it is fixed at its raw position. Two placement
+  datums in one group (only possible when a closure ties the two datum stations themselves) is
+  an error, and the component falls back to raw geometry.
+- **GPS fixes** (#741; a later datum in an already placed merge component, see
+  `project/datum_roles.rs`) enter as observations, not as fixed groups. See "GPS fixes" below.
+- If neither a placement datum nor a hard fix exists in the component, the anchor station's
+  group is fixed.
 - For each shot, build weighted constraints in X/Y using section quality and base sigmas from config:
   - `base_sigma_length_m`
   - `base_sigma_azimuth_deg`
@@ -232,7 +237,40 @@ live project):
   Conjugate Gradient solver (see [performance.md](performance.md) for algorithm details).
 - Update the clone's shot vectors from solved group coordinates and apply section-level
   translations to keep merged stations aligned, then compute coordinates from the clone.
-- Zero datum positions are verified to remain fixed; any movement is an error.
+- Placement datum positions are verified to remain fixed; any movement is an error. A GPS fix
+  is expected to move.
+
+### GPS fixes
+
+A GPS fix pulls its station toward `gps_to_local(fix.gps, frame.gps)`, the GPS position in the
+frame's local metres. It is the observation `p = gps` on each horizontal axis with weight
+`1 / accuracy^2` (`ZeroDatum::effective_accuracy_m`, default 5 m, read as a per-axis 1-sigma):
+one diagonal term and one right-hand-side term on its group's unknown. Shots use the same units,
+so the two compare directly. A shot's per-axis variance is
+`(sin(az) * sigma_len)^2 + (len * cos(az) * sigma_az)^2` across x (cos and sin swapped for y),
+with `sigma_len = base_sigma_length_m * quality` and `sigma_az = base_sigma_azimuth_deg * quality`,
+and variances add along a traverse.
+
+What that means at the default config (0.05 m, 1 deg): a level 500 m traverse of 10 m shots is
+trusted to about 0.35 m along its length and 1.23 m across it, far tighter than a 5 m GPS. A fix
+40 m off across that traverse moves its station only about 2.3 m toward the GPS; the rest of the
+gap stays visible. Only a hard fix, or larger base sigmas, puts the station on its GPS.
+
+- **Accuracy 0 is a hard fix** (anything under 1 mm counts): its group is fixed AT the GPS
+  position, the way a placement datum fixes its group at its raw one. A non-finite or negative
+  stored accuracy is not a measurement and falls back to the default.
+- **A fixed group ignores a fix.** A fix in the placement datum's own group (merged onto it) is
+  the same point and cannot hold both positions; the placement wins. Between two hard fixes in
+  one group, the first in list order wins.
+- **Fixes count as pinned for the spur prune.** A fix at the end of a passage is a second
+  observation of it, so its shots take the solved positions instead of being skipped as a spur.
+- **Horizontal only.** Depths never move, and the fix's elevation (`depth_reference`) is never
+  read.
+- **No closure needed.** `adjust_least_squares` accepts an empty closure list, so a component
+  whose only reason to adjust is a GPS fix is solved the same way.
+
+Tests: `project/lsq_fix_tests.rs` (two entrances joined by a 500 m traverse, the GPS 40 m off,
+checked against the closed-form series-spring answer).
 
 ## Co-location and Move Tools
 
