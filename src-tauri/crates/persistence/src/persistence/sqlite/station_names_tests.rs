@@ -59,7 +59,7 @@ fn digits(values: &[&str]) -> Vec<Option<String>> {
     values.iter().map(|v| Some((*v).to_string())).collect()
 }
 
-fn table_exists(db: &Database, table: &str) -> bool {
+pub(super) fn table_exists(db: &Database, table: &str) -> bool {
     db.conn
         .query_row(
             "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?1",
@@ -149,8 +149,20 @@ fn a_file_without_the_table_opens_reads_and_saves() {
     assert_eq!(names_of(&reloaded, a), digits(&["0", "1", "2", "3"]));
 }
 
+/// The tables OpenSpeleo's Python `stalagmight_lib` reads, each by an explicit
+/// column list (see the contract test below).
+pub(super) const READ_BY_STALAGMIGHT_LIB: [&str; 7] = [
+    "project",
+    "sections",
+    "shots",
+    "station_comments",
+    "project_settings",
+    "zero_datums",
+    "station_merges",
+];
+
 /// Every row of `table` as text, in rowid order, minus `skip` columns.
-fn dump(db: &Database, table: &str, skip: &[&str]) -> Vec<Vec<String>> {
+pub(super) fn dump(db: &Database, table: &str, skip: &[&str]) -> Vec<Vec<String>> {
     if !table_exists(db, table) {
         return Vec::new();
     }
@@ -194,15 +206,6 @@ fn dump(db: &Database, table: &str, skip: &[&str]) -> Vec<Vec<String>> {
 /// for that reader - coordinate a release of the Python package first.
 #[test]
 fn names_leave_every_table_an_outside_reader_reads_unchanged() {
-    const READ_BY_STALAGMIGHT_LIB: [&str; 7] = [
-        "project",
-        "sections",
-        "shots",
-        "station_comments",
-        "project_settings",
-        "zero_datums",
-        "station_merges",
-    ];
     assert_eq!(
         SCHEMA_VERSION, 18,
         "SpeleoDB's Python stalagmight_lib accepts exactly v18; see this test's doc comment"
