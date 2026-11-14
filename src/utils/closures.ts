@@ -1,4 +1,5 @@
 import type { ClosureStrategy } from '../types/ipc/ClosureStrategy';
+import type { DatumRole } from '../types/ipc/DatumRole';
 
 /**
  * Per-strategy eligibility for the least-squares closure-adjustment solve.
@@ -34,4 +35,17 @@ export function hasEligibleClosures(
   loopClosures: ReadonlyArray<{ strategy: ClosureStrategy }>
 ): boolean {
   return loopClosures.some((lc) => CLOSURE_STRATEGY_ELIGIBILITY[lc.strategy]);
+}
+
+/**
+ * Whether the Closures Computed View can differ from the Raw Data View: an
+ * eligible closure, or a GPS fix the solve pulls the survey toward (#741). A
+ * GPS fix never moves raw geometry, so it is a reason to adjust on its own.
+ * Every gate on "is the computed view worth offering / computing" reads this.
+ */
+export function hasAdjustmentInputs(project: {
+  loop_closures: ReadonlyArray<{ strategy: ClosureStrategy }>;
+  zero_datums: ReadonlyArray<{ role: DatumRole }>;
+}): boolean {
+  return hasEligibleClosures(project.loop_closures) || project.zero_datums.some((zd) => zd.role === 'GpsFix');
 }

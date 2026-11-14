@@ -1646,6 +1646,19 @@
       "acceptAll": "Accept All",
       "skipAll": "Skip All"
     },
+    "editStation": {
+      "accuracyLabel": "Accuracy (m)",
+      "accuracyHint": "0 makes the computed survey go exactly through this GPS. A larger number lets the survey pull it by up to about that much (a smartwatch is roughly 5 m).",
+      "accuracyInvalid": "Enter an accuracy of 0 m or more.",
+      "roleLabel": "Role:",
+      "rolePlacement": "places this part of the survey on its GPS",
+      "roleGpsFix": "GPS fix - bends the Closures Computed View toward its GPS and does not move the Raw Data View",
+      "gpsFixNotice": "This survey already has a zero datum. This one will bend the Closures Computed View toward its GPS. It does not move the Raw Data View.",
+      "gap": "GPS is {{distance}} m {{direction}} of the surveyed position.",
+      "gapExceeds": "That is more than the {{threshold}} m expected over {{distance}} m of survey from the nearest other zero datum. Check the GPS reading and the survey; you can still save.",
+      "gapExceedsNoDistance": "That is more than the {{threshold}} m expected. Check the GPS reading and the survey; you can still save.",
+      "editingDisabled": "Editing is disabled in the current view"
+    },
     "zeroDatumSelection": {
       "title": "Select Zero Datum Section",
       "subtitle": "A zero datum ties one station to a real-world GPS position, so this section will establish the GPS reference point for this project. All other sections will be positioned relative to this one.",
@@ -1990,8 +2003,8 @@
         "normalize": "Normalize to 0-360°",
         "useAbs": "Use absolute value",
         "clear": "Clear value",
-        "keepDatum": "Keep {{station}}, remove the others",
         "goToStation": "Go to station",
+        "editZeroDatum": "Edit zero datum",
         "adjustLength": "Use inclination - adjust length",
         "adjustInclination": "Use length - adjust inclination",
         "splitInclLength": "Split - adjust inclination & length",
@@ -2121,7 +2134,7 @@
       "closureAdjusted": "Closures Computed View",
       "measuredDescription": "Raw measured survey positions.",
       "closureAdjustedDescription": "Loop-closure-corrected positions - read-only.",
-      "noClosures": "No loop closures to adjust"
+      "noClosures": "No loop closures or GPS fixes to adjust"
     },
     "spacing": {
       "label": "Grid spacing"
