@@ -26,7 +26,11 @@
 //!   kept section's is not, or (no datum deciding) M's side holds the station
 //!   the closure-adjusted view holds the survey at
 //!   (`Project::adjustment_anchor_of`) and the kept side does not: moving it
-//!   would shift the whole adjusted survey by the gap. When both sides are held, the merges from M to the
+//!   would shift the whole adjusted survey by the gap. That applies only where
+//!   the view solves the joined survey - a closure it solves there now, or a
+//!   tie the combine turns into one it will solve - and a closure that joins
+//!   the two ends of one shot is one the solve skips (#737), so it counts for
+//!   neither. When both sides are held, the merges from M to the
 //!   datum sides also become closures (a closure between two anchored groups
 //!   is legitimate; a merge is not). Only when BOTH sections carry a zero datum
 //!   on one of their own stations is the combine refused: the combined section
