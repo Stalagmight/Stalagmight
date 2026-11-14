@@ -612,3 +612,114 @@ fn an_old_id_follows_the_derived_one_the_history_already_holds() {
         assert_eq!(shot_uuid.as_deref(), Some(derived.as_str()));
     }
 }
+
+/// Ids no test section shares with `X`.
+const Y: [&str; 1] = ["bbbbbbbb-0000-4000-8000-000000000001"];
+
+/// A project whose section `i` holds the ids `held[i]`.
+fn sections_holding(held: &[&[&str]]) -> Project {
+    let mut project = Project::new("Held".to_string(), None);
+    for ids in held {
+        project.add_section(SectionData {
+            shots: ids.iter().map(|u| shot(u)).collect(),
+            ..Default::default()
+        });
+    }
+    project
+}
+
+fn json(project: &Project) -> String {
+    serde_json::to_string(project).unwrap()
+}
+
+fn section_snapshot_ids(stack: &UndoStack) -> Vec<Option<String>> {
+    stack
+        .undo_entries()
+        .find_map(|entry| match &entry.undo_data {
+            UndoData::SectionSnapshot { section_data, .. } => {
+                Some(section_data.shots.iter().map(|s| s.uuid.clone()).collect())
+            }
+            _ => None,
+        })
+        .unwrap()
+}
+
+/// #732: section 0 was created, then a later combine or split (one snapshot
+/// pair) moved its shots into section 1. The create entry replays into the
+/// pair's `before`, where section 0 alone holds them: a move, not a repeat, so
+/// nothing is renamed even though section 1 holds the ids live.
+#[test]
+fn shots_moved_out_of_a_created_section_keep_their_ids() {
+    let mut live = sections_holding(&[&Y, &X]);
+    let renamed = live.make_shot_uuids_project_unique();
+    assert!(renamed.is_empty());
+    let mut stack = stack_of(vec![
+        UndoData::CreatedSectionSnapshot {
+            section_id: 0,
+            section_data: copy_data(),
+            identity: SectionIdentity::default(),
+        },
+        UndoData::ProjectSnapshotPair {
+            before: json(&sections_holding(&[&X])),
+            after: json(&live),
+        },
+    ]);
+    assert_eq!(stack.translate_shot_uuids(&live, &renamed), 0);
+}
+
+/// The other side of #732: a whole-project snapshot OLDER than the entry that
+/// reinstalls a section says nothing about what that entry replays into. Here
+/// section 0 alone held the ids once, then section 1 came to hold them too
+/// (a pre-uniqueness history), and section 0 was deleted. Undoing that delete
+/// lands beside the live section 1, so section 0's copy must still be renamed.
+#[test]
+fn an_older_snapshot_does_not_excuse_a_reinstall_beside_a_live_holder() {
+    let mut live = sections_holding(&[&Y, &X]);
+    let renamed = live.make_shot_uuids_project_unique();
+    assert!(renamed.is_empty());
+    let older = json(&sections_holding(&[&X]));
+    let mut stack = stack_of(vec![
+        UndoData::ProjectSnapshotPair {
+            before: older.clone(),
+            after: older,
+        },
+        UndoData::SectionSnapshot {
+            section_id: 0,
+            section_data: copy_data(),
+        },
+    ]);
+    assert!(stack.translate_shot_uuids(&live, &renamed) > 0);
+    let reinstalled = section_snapshot_ids(&stack);
+    for (id, old) in reinstalled.iter().zip(X) {
+        assert_ne!(
+            id.as_deref(),
+            Some(old),
+            "the reinstalled copy keeps a live id"
+        );
+    }
+}
+
+/// A reinstall is judged against the project it replays into, not the live
+/// one: the newer snapshot pair puts section 0 holding the ids back first, so
+/// undoing the older delete of section 1 would repeat them - even though no
+/// live section holds them.
+#[test]
+fn a_reinstall_into_a_newer_snapshot_that_holds_the_ids_is_renamed() {
+    let mut live = sections_holding(&[&Y]);
+    let renamed = live.make_shot_uuids_project_unique();
+    assert!(renamed.is_empty());
+    let holding = json(&sections_holding(&[&X]));
+    let mut stack = stack_of(vec![
+        UndoData::SectionSnapshot {
+            section_id: 1,
+            section_data: copy_data(),
+        },
+        UndoData::ProjectSnapshotPair {
+            before: holding,
+            after: json(&live),
+        },
+    ]);
+    assert!(stack.translate_shot_uuids(&live, &renamed) > 0);
+    let expected: Vec<Option<String>> = X.iter().map(|u| Some(new_id(u))).collect();
+    assert_eq!(section_snapshot_ids(&stack), expected);
+}

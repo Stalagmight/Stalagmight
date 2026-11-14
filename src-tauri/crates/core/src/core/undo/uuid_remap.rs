@@ -15,7 +15,7 @@
 //! bring back). It is a function of the file alone, so independent loads of one
 //! file - a reopen without saving, a SpeleoDB Unwind - agree.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::time::Instant;
 
 use serde::Deserialize;
@@ -55,6 +55,7 @@ impl UndoStack {
         for entry in self.undo_stack.iter_mut().chain(self.redo_stack.iter_mut()) {
             ids.collect(&mut entry.undo_data);
         }
+        ids.order_reinstalls(&self.undo_stack, &self.redo_stack);
         let map = history_remap(project, renamed, &ids);
         if map.is_empty() {
             return 0;
@@ -89,10 +90,59 @@ pub(super) struct HistoryIds {
     /// moved from one section to another (a split) is held by both only at
     /// different times, and is no repeat.
     repeats: Vec<(String, BTreeSet<SectionId>)>,
-    /// (section, id) of every shot an entry reinstalls whole - an Add's
-    /// sections, a re-created section - which will sit beside the live project
-    /// when that entry is replayed.
-    reinstalled: BTreeSet<(SectionId, String)>,
+    /// Every shot an entry reinstalls whole (an Add's sections, a re-created
+    /// or deleted section), with the project it lands in when that entry is
+    /// replayed: `None` for the live project, or an index into `walls`.
+    reinstalled: Vec<(SectionId, String, Option<usize>)>,
+    /// Who holds each id in a whole-project state an entry restores (an undo's
+    /// `before`, a redo's `after`): stepping through that entry replaces the
+    /// project, so it is what every entry beyond it replays into (#732).
+    walls: Vec<BTreeMap<String, BTreeSet<SectionId>>>,
+}
+
+/// The (section, id) of every shot `data` reinstalls whole.
+fn reinstalled_ids(data: &UndoData) -> Vec<(SectionId, &str)> {
+    match data {
+        UndoData::AddedProjectContent(content) => content
+            .sections
+            .iter()
+            .flat_map(|section| {
+                section
+                    .shots
+                    .iter()
+                    .filter_map(move |s| Some((section.id, s.uuid.as_deref()?)))
+            })
+            .collect(),
+        UndoData::SectionSnapshot {
+            section_id,
+            section_data,
+        } => section_data
+            .shots
+            .iter()
+            .filter_map(|s| Some((*section_id, s.uuid.as_deref()?)))
+            .collect(),
+        UndoData::CreatedSectionSnapshot {
+            section_id,
+            section_data,
+            identity,
+        } => section_data
+            .shots
+            .iter()
+            .filter_map(|s| s.uuid.as_deref())
+            .chain(identity.shot_uuids.iter().flatten().map(String::as_str))
+            .map(|uuid| (*section_id, uuid))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Who holds each id in one serialized project.
+fn holders_in(json: &str) -> BTreeMap<String, BTreeSet<SectionId>> {
+    let mut held: BTreeMap<String, BTreeSet<SectionId>> = BTreeMap::new();
+    probe_snapshot(json, &mut |section, uuid| {
+        held.entry(uuid.to_string()).or_default().insert(section);
+    });
+    held
 }
 
 impl HistoryIds {
@@ -114,55 +164,65 @@ impl HistoryIds {
         match data {
             UndoData::ProjectSnapshot(json) => {
                 probe_snapshot(json, &mut |section, uuid| note(&mut state, section, uuid));
-                self.close_state(&mut state, false);
+                self.close_state(&mut state);
             }
             UndoData::ProjectSnapshotPair { before, after } => {
                 probe_snapshot(before, &mut |section, uuid| note(&mut state, section, uuid));
-                self.close_state(&mut state, false);
+                self.close_state(&mut state);
                 probe_snapshot(after, &mut |section, uuid| note(&mut state, section, uuid));
-                self.close_state(&mut state, false);
+                self.close_state(&mut state);
             }
-            UndoData::AddedProjectContent(content) => {
-                for section in &content.sections {
-                    for uuid in section.shots.iter().filter_map(|s| s.uuid.as_deref()) {
-                        note(&mut state, section.id, uuid);
+            other => {
+                let reinstalled = reinstalled_ids(other);
+                if !reinstalled.is_empty() {
+                    for (section, uuid) in reinstalled {
+                        note(&mut state, section, uuid);
                     }
+                    self.close_state(&mut state);
                 }
-                self.close_state(&mut state, true);
             }
-            UndoData::SectionSnapshot {
-                section_id,
-                section_data,
-            } => {
-                for uuid in section_data.shots.iter().filter_map(|s| s.uuid.as_deref()) {
-                    note(&mut state, *section_id, uuid);
+        }
+    }
+
+    /// Record, for every shot an entry reinstalls, the project it lands in when
+    /// that entry is replayed. Each stack is walked from the live end outwards
+    /// (`back()` is the entry next to the live project): an entry replays into
+    /// the live project unless a whole-project snapshot lies between them, in
+    /// which case it replays into the nearest one's state - the `before` an
+    /// undo restores, or the `after` a redo restores. Comparing against the
+    /// live project instead mistakes a shot a later combine or split moved for
+    /// a repeat (#732).
+    fn order_reinstalls(&mut self, undo: &VecDeque<UndoEntry>, redo: &VecDeque<UndoEntry>) {
+        for (stack, undoing) in [(undo, true), (redo, false)] {
+            if !stack
+                .iter()
+                .any(|entry| !reinstalled_ids(&entry.undo_data).is_empty())
+            {
+                continue;
+            }
+            let mut wall: Option<usize> = None;
+            for entry in stack.iter().rev() {
+                for (section, uuid) in reinstalled_ids(&entry.undo_data) {
+                    self.reinstalled.push((section, uuid.to_string(), wall));
                 }
-                self.close_state(&mut state, true);
-            }
-            UndoData::CreatedSectionSnapshot {
-                section_id,
-                section_data,
-                identity,
-            } => {
-                let data_ids = section_data.shots.iter().filter_map(|s| s.uuid.as_deref());
-                for uuid in data_ids.chain(identity.shot_uuids.iter().flatten().map(String::as_str))
-                {
-                    note(&mut state, *section_id, uuid);
+                let restores = match &entry.undo_data {
+                    UndoData::ProjectSnapshot(json) if undoing => Some(json),
+                    UndoData::ProjectSnapshotPair { before, after } => {
+                        Some(if undoing { before } else { after })
+                    }
+                    _ => None,
+                };
+                if let Some(json) = restores {
+                    self.walls.push(holders_in(json));
+                    wall = Some(self.walls.len() - 1);
                 }
-                self.close_state(&mut state, true);
             }
-            _ => {}
         }
     }
 
     /// Fold one recorded state into the totals and clear it for the next.
-    fn close_state(&mut self, state: &mut BTreeMap<String, BTreeSet<SectionId>>, reinstalls: bool) {
+    fn close_state(&mut self, state: &mut BTreeMap<String, BTreeSet<SectionId>>) {
         for (uuid, sections) in std::mem::take(state) {
-            if reinstalls {
-                for &section in &sections {
-                    self.reinstalled.insert((section, uuid.clone()));
-                }
-            }
             let holders = self.holders.entry(uuid.clone()).or_default();
             holders.extend(sections.iter().copied());
             if sections.len() > 1 {
@@ -181,9 +241,13 @@ impl HistoryIds {
 ///    history (history saved against an earlier heal) -> that;
 /// 4. S must yield X: another section holds X in the same recorded state and
 ///    keeps it (the one holding X live, else the lowest), or S is a section an
-///    entry reinstalls while another live section holds X -> a derived
+///    entry reinstalls while another section holds X in the project that entry
+///    replays into (see [`HistoryIds::order_reinstalls`]) -> a derived
 ///    replacement, stepped past every id in use;
-/// 5. otherwise unchanged - including an id that only MOVED between sections.
+/// 5. otherwise unchanged - including an id that only MOVED between sections,
+///    such as a shot a combine or a split moved out of a section an older entry
+///    created or added: the move's own snapshot is what that entry replays
+///    into, and it holds the shot in that section alone (#732).
 pub(super) fn history_remap(
     project: &Project,
     renamed: &ShotUuidRemap,
@@ -206,11 +270,16 @@ pub(super) fn history_remap(
             yields.insert((section, uuid.as_str()));
         }
     }
-    for (section, uuid) in &ids.reinstalled {
-        if live_holder
-            .get(uuid.as_str())
-            .is_some_and(|&holder| holder != *section)
-        {
+    for (section, uuid, wall) in &ids.reinstalled {
+        let elsewhere = match wall.and_then(|i| ids.walls.get(i)) {
+            Some(held) => held
+                .get(uuid)
+                .is_some_and(|sections| sections.iter().any(|s| s != section)),
+            None => live_holder
+                .get(uuid.as_str())
+                .is_some_and(|&holder| holder != *section),
+        };
+        if elsewhere {
             yields.insert((*section, uuid.as_str()));
         }
     }
