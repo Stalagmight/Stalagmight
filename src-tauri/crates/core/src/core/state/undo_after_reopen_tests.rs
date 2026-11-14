@@ -89,7 +89,10 @@ fn shot_uuids(state: &AppState) -> Vec<(SectionId, Vec<String>)> {
         .map(|s| {
             (
                 s.id,
-                s.shots.iter().map(|shot| shot.uuid.clone().unwrap()).collect(),
+                s.shots
+                    .iter()
+                    .map(|shot| shot.uuid.clone().unwrap())
+                    .collect(),
             )
         })
         .collect()
@@ -227,8 +230,11 @@ fn a_split_undone_after_a_reopen_keeps_every_shot_uuid() {
     save_close_reopen(&state, &path);
 
     assert_exact_undo_and_redo_after_reopen(&state, &path, "split", |state| {
-        let result =
-            state.execute_split_section(main, SplitAt::Station { station_index: 1 }, split_options());
+        let result = state.execute_split_section(
+            main,
+            SplitAt::Station { station_index: 1 },
+            split_options(),
+        );
         assert!(result.success, "{:?}", result.error);
     });
 }

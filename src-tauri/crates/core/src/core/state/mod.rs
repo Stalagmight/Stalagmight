@@ -172,13 +172,6 @@ mod reverse_tests;
 mod shot_uuid_tests;
 #[cfg(test)]
 #[expect(
-    clippy::unwrap_used,
-    clippy::indexing_slicing,
-    reason = "test module: panics on a failed assumption are the point"
-)]
-mod undo_after_reopen_tests;
-#[cfg(test)]
-#[expect(
     clippy::expect_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
@@ -250,6 +243,13 @@ mod station_names_import_tests;
     clippy::print_stdout
 )]
 mod tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod undo_after_reopen_tests;
 // `any(test, feature = "test-support")`: the root crate's tests reach the
 // AppState test setters in here (via the `test-support` feature the root's
 // [dev-dependencies] enable); the source-scan tripwires inside stay
