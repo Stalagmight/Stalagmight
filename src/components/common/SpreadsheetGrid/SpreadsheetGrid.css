@@ -398,6 +398,62 @@
   padding: 0 8px;
   white-space: nowrap;
 }
+/* groupContentStart 'gutter': the content is a child of the sticky gutter
+   (z-20), placed at the inset (inline `left`) and flowing on over the band, so
+   it rides along with the gutter while scrolling sideways and paints above the
+   gutter's background and the band. No background of its own: the gutter's
+   selected / active / hover tints and the band-focus outline show through.
+   The band's text style, not the gutter's (11px, bold when active, accent when
+   selected). Clipped only at its own width cap (the visible area). */
+.sg-grid .sg-group-content.sg-group-content-gutter {
+  position: absolute;
+  top: 0;
+  z-index: 1;
+  overflow: hidden;
+  padding: 0 8px 0 0;
+  color: var(--sg-header-text);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+/* Spanning cells (spanCells): one box over a run of columns, above the cells
+   and under the selection overlay (inline z-index 2). Transparent, so cell
+   states and the selection fill show through; the pointer passes through to
+   the cells except on interactive descendants. */
+.sg-grid .sg-span {
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  padding: 0 8px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.sg-grid .sg-span :is(a, button, input, select, textarea, summary, [role='button'], [role='link'], [tabindex], [data-sg-interactive]) {
+  pointer-events: auto;
+}
+
+/* headerCorner content: left-aligned, ellipsized (the full text is its title). */
+.sg-grid .sg-corner-content {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  font-size: 12px;
+}
+
+/* A header drag whose drop the host's constrainColumnOrder turns into a no-op:
+   no drop line, a not-allowed cursor and a faded ghost. */
+.sg-grid.sg-grabbing.sg-drop-blocked,
+.sg-grid.sg-grabbing.sg-drop-blocked * {
+  cursor: not-allowed !important;
+}
+.sg-grid.sg-drop-blocked .sg-col-ghost {
+  opacity: 0.55;
+}
 
 /* Header sort affordance: after the label, shown on hover / focus, always on
    the sorted column. */

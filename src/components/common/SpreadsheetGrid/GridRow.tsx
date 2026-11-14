@@ -17,6 +17,7 @@ import type { CellMarks, GridColumn } from './types';
 import { ROW_HEIGHT } from './types';
 import { columnApplies, type GroupRowContent } from './gridApplicable';
 import { MarkedText, markCellClass } from './gridMarks';
+import { GridSpan, type SpanRange, type SpanResult } from './GridSpanLayer';
 
 export interface GridRowHandlers {
   cellMouseDown: (rowIdx: number, colIdx: number, e: ReactMouseEvent) => void;
@@ -66,6 +67,17 @@ export interface GridRowProps<Row> {
   rowStyle?: ((row: Row, rowIndex: number) => CSSProperties | undefined) | undefined;
   cellMarks?: ((row: Row, rowIndex: number, colKey: string) => CellMarks | undefined) | undefined;
   groupRowContent?: GroupRowContent<Row> | undefined;
+  /** Set = a group row's content starts INSIDE the gutter, this many px from
+   *  its left edge (`groupContentStart: 'gutter'`); unset = in the band. */
+  groupInset?: number | undefined;
+  /** Cap on the gutter-start content's width (the viewport minus the inset),
+   *  so it never reaches past the visible area. */
+  groupMaxWidth?: number | undefined;
+  spanCells?: ((row: Row, rowIndex: number) => SpanResult | undefined) | undefined;
+  /** Resolves a span's keys for the current column layout (order + hiding). */
+  spanRange?: SpanRange | undefined;
+  /** Column x offsets, parallel to {@link widths} plus the total at the end. */
+  offsets?: readonly number[] | undefined;
 }
 
 const alignClass = (align: GridColumn<unknown>['align']) =>
@@ -83,6 +95,7 @@ function GridRowInner<Row>(props: GridRowProps<Row>) {
     selC0, selC1, isActiveRow, activeColIdx, activeRing, editingColKey, hovered, gutterGrab,
     gridHasWritableColumns, isMissing, handlers,
     rowClassName, cellClassName, rowLabel, rowTestId, cellTestId, rowStyle, cellMarks, groupRowContent,
+    groupInset, groupMaxWidth, spanCells, spanRange, offsets,
   } = props;
 
   const groupContent = groupRowContent?.(row, rowIdx);
@@ -90,6 +103,9 @@ function GridRowInner<Row>(props: GridRowProps<Row>) {
   const extraRowClass = rowClassName?.(row, rowIdx);
   const hostStyle = rowStyle?.(row, rowIdx);
   const rowSelected = selC0 >= 0;
+  const inGutter = isGroup && groupInset !== undefined;
+  const span = !isGroup && spanCells && spanRange && offsets ? spanCells(row, rowIdx) : undefined;
+  const spanCols = span ? spanRange?.(span.from, span.to) : null;
 
   return (
     <div
@@ -119,6 +135,19 @@ function GridRowInner<Row>(props: GridRowProps<Row>) {
         <span className="flex h-full w-full items-center justify-center" data-testid={rowTestId?.(row, rowIdx)}>
           {rowLabel ? rowLabel(row, rowIdx) : rowIdx + 1}
         </span>
+        {inGutter && (
+          // Gutter-start group content: a child of the sticky gutter, so it
+          // stays at the inset while scrolling sideways, above the gutter's
+          // background and the band, and a click on it is a gutter click.
+          <div
+            className="sg-group-content sg-group-content-gutter"
+            style={{ left: groupInset, maxWidth: groupMaxWidth }}
+            data-testid={`${testIdPrefix}-group-content-${rowIdx}`}
+            onMouseEnter={() => handlers.bandMouseEnter(rowIdx)}
+          >
+            {groupContent}
+          </div>
+        )}
       </div>
       {isGroup ? (
         // One band over every column. A click selects the row like the gutter
@@ -137,9 +166,11 @@ function GridRowInner<Row>(props: GridRowProps<Row>) {
         >
           {/* Sticky just right of the gutter, so the label stays in view while
               the grid scrolls horizontally. */}
-          <div className="sg-group-content" style={{ left: gutterWidth }}>
-            {groupContent}
-          </div>
+          {!inGutter && (
+            <div className="sg-group-content" style={{ left: gutterWidth }} data-testid={`${testIdPrefix}-group-content-${rowIdx}`}>
+              {groupContent}
+            </div>
+          )}
         </div>
       ) : (
         columns.map((col, c) => {
@@ -220,6 +251,11 @@ function GridRowInner<Row>(props: GridRowProps<Row>) {
             </div>
           );
         })
+      )}
+      {span && spanCols && offsets && (
+        <GridSpan c0={spanCols.c0} c1={spanCols.c1} offsets={offsets} gutterWidth={gutterWidth} testId={`${testIdPrefix}-span-${rowIdx}`}>
+          {span.content}
+        </GridSpan>
       )}
     </div>
   );
