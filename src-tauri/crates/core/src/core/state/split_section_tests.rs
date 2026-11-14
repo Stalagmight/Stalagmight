@@ -1347,6 +1347,7 @@ fn loaded_station_state() -> (AppState, SectionId, SectionId, SectionId) {
         .store_zero_datum_without_repositioning(
             StationRef::new(main, 2),
             GpsCoordinates::new(20.5, -87.4, 0.0).unwrap(),
+            None,
         )
         .unwrap();
     let (a, b) = (key(&project, StationRef::new(lp, 3)), cut);

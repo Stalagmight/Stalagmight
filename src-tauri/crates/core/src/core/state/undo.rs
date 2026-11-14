@@ -376,6 +376,7 @@ impl AppState {
             UndoData::ZeroDatumInfo {
                 station_ref,
                 previous_gps,
+                previous_accuracy_m,
                 position,
                 previous_offsets,
             } => {
@@ -405,11 +406,12 @@ impl AppState {
                                     .find(|zd| Some(&zd.station_ref) == datum_key.as_ref())
                                 {
                                     existing.gps = *gps;
+                                    existing.accuracy_m = *previous_accuracy_m;
                                 } else if let Some(key) = datum_key {
                                     let datum = crate::models::ZeroDatum {
                                         station_ref: key,
                                         gps: *gps,
-                                        accuracy_m: None,
+                                        accuracy_m: *previous_accuracy_m,
                                     };
                                     match position {
                                         Some(index) => {

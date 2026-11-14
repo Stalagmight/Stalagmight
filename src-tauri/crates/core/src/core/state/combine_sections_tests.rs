@@ -105,14 +105,18 @@ fn a_combine_is_one_undo_step_and_redoes() {
 
 /// A blocked combine is refused before anything happens: nothing changes and
 /// no undo entry is pushed, so the next undo reverts the edit before it.
-/// Both sections carrying a zero datum is the one refusal left besides
-/// sections that do not meet (a section can hold only one datum).
+/// Both sections placed by their own zero datum is the one refusal left
+/// besides sections that do not meet. (Merged at the join, the second datum
+/// would be a GPS fix of one component, which no longer blocks, #741 - so the
+/// join merge is dropped here, leaving the ends coincident and unmerged.)
 #[test]
 fn a_refused_combine_changes_nothing_and_leaves_no_undo_entry() {
     let (state, k, o) = state();
     {
         let mut guard = state.project.lock().unwrap();
         let project = guard.as_mut().unwrap();
+        let (unmerged, _) = project.unmerge_stations(StationRef::new(k, 2), StationRef::new(o, 0));
+        assert!(unmerged);
         for at in [StationRef::new(k, 0), StationRef::new(o, 3)] {
             let station_ref = project.key_for_ref(at).unwrap();
             project.zero_datums.push(crate::models::ZeroDatum {
@@ -165,6 +169,7 @@ fn a_datum_on_the_other_section_keeps_the_frame() {
             longitude: -87.0,
             depth_reference: 0.0,
         },
+        accuracy_m: None,
     });
     assert!(datum.success, "{:?}", datum.error);
     let merged = state.execute(Command::MergeStations {

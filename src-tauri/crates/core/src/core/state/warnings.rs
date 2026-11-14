@@ -3,7 +3,7 @@ use std::collections::HashSet;
 
 use crate::core::{Validator, WarningSeverity};
 use crate::models::{
-    Project, ProjectWarning, SectionId, ShotData, ShotId, MULTIPLE_DATUMS_PER_MERGE_COMPONENT,
+    DatumGap, Project, ProjectWarning, SectionId, ShotData, ShotId, DATUM_GPS_GAP,
 };
 use crate::persistence::Database;
 
@@ -243,55 +243,39 @@ impl AppState {
             }
         }
 
-        // Project-level: two or more zero datums in one merge-connected component
-        // over-constrain the rigid group, so the offset cascade tears a merge edge
-        // apart. Emit ONE error per component (not one per datum, which collided on
-        // the (section, shot, code) key - issue #57, finding #4), attached to the
-        // first datum's adjacent shot, carrying the FULL datum list so the Resolve
-        // view can offer "keep this one, remove the others". (Per-shot
-        // ProjectWarning shape: anchor station 0 -> shot 0; station i -> shot i-1.)
-        for component in project.over_anchored_merge_components() {
-            // Attach the warning to the first datum that maps to a real shot. The
-            // first datum may sit at station 0 of an empty section (no shot there);
-            // skipping on it alone would silently drop the whole component's error
-            // even when another datum in the component IS attachable (Codex). Fall
-            // through the component to the first datum with a shot.
-            let representative = component.iter().find_map(|d| {
-                let section = project.get_section(d.section_id)?;
-                let shot_index = if d.station_index == 0 {
-                    0
-                } else {
-                    (d.station_index - 1) as usize
-                };
-                let shot = section.shots.get(shot_index)?;
-                Some((d, section, shot_index, shot))
-            });
-            let Some((first, section, shot_index, shot)) = representative else {
+        // Project-level: one advisory warning per GPS-fix zero datum whose GPS is
+        // further from its surveyed position than 15 m plus 2% of the survey
+        // distance to the nearest other datum (#741 decision 4). Attached to the
+        // fix's adjacent shot (station 0 -> shot 0, station i -> shot i-1), so it
+        // keys and ignores like any per-shot warning; `datum_station_index` names
+        // the fix's station for "Go to station". The gap is the backend's
+        // (`Project::gps_fix_gaps`), so every readout of it agrees.
+        let mut gaps: Vec<_> = project
+            .gps_fix_gaps()
+            .into_iter()
+            .filter(|(_, gap)| gap.exceeds_threshold)
+            .collect();
+        gaps.sort_by_key(|(sr, _)| (sr.section_id, sr.station_index));
+        for (datum, gap) in gaps {
+            let Some(section) = project.get_section(datum.section_id) else {
                 continue;
             };
-            let anchors = component
-                .iter()
-                .map(|r| format!("{}:{}", r.section_id, r.station_index))
-                .collect::<Vec<_>>()
-                .join(", ");
+            let shot_index = datum.station_index.saturating_sub(1) as usize;
+            let Some(shot) = section.shots.get(shot_index) else {
+                continue;
+            };
+            let is_resolved = is_resolved_for(&shot.uuid, section.id, shot.id, DATUM_GPS_GAP);
             all_warnings.push(ProjectWarning {
                 section_id: section.id,
                 shot_id: shot.id,
                 shot_index,
-                message: format!(
-                    "This merge group is anchored by {} zero datums ({anchors}). Two or more GPS anchors over-constrain one rigid group; keep one and remove the others.",
-                    component.len()
-                ),
-                code: MULTIPLE_DATUMS_PER_MERGE_COMPONENT.to_string(),
-                // An error (severity_for_code), so it is never ignorable and the
-                // generic error force-false above also covers it: it clears only
-                // when a datum is actually removed (then this warning is no longer
-                // generated at all), never via a stray resolved row.
-                severity: crate::models::severity_for_code(MULTIPLE_DATUMS_PER_MERGE_COMPONENT),
-                is_resolved: false,
+                message: datum_gps_gap_message(&gap),
+                code: DATUM_GPS_GAP.to_string(),
+                severity: crate::models::severity_for_code(DATUM_GPS_GAP),
+                is_resolved,
                 shot_uuid: shot.uuid.clone(),
-                datum_station_index: Some(first.station_index),
-                datum_refs: Some(component.clone()),
+                datum_station_index: Some(datum.station_index),
+                datum_refs: None,
             });
         }
 
@@ -656,4 +640,15 @@ impl AppState {
         let shot = section.shots.iter().find(|s| s.id == shot_id)?;
         shot.uuid.clone()
     }
+}
+
+/// The `datum_gps_gap` warning text: the gap in metres, which way the GPS lies
+/// from the surveyed station, and the threshold it exceeds.
+fn datum_gps_gap_message(gap: &DatumGap) -> String {
+    format!(
+        "The GPS position of this zero datum is {:.1} m from where the survey puts it \
+         (bearing {:.0} degrees), more than the {:.1} m expected. Check the GPS reading \
+         and the survey between the datums.",
+        gap.gap_m, gap.bearing_deg, gap.threshold_m
+    )
 }

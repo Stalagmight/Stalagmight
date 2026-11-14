@@ -155,6 +155,10 @@ pub enum Command {
     SetZeroDatum {
         station_ref: StationRef,
         coordinates: GpsCoordinates,
+        /// Horizontal accuracy in metres; `None` is the default (#741).
+        /// `serde(default)` so undo history persisted before it still loads.
+        #[serde(default)]
+        accuracy_m: Option<f64>,
     },
     RemoveZeroDatum {
         station_ref: StationRef,
@@ -1142,6 +1146,7 @@ mod tests {
                 Command::SetZeroDatum {
                     station_ref: station_a,
                     coordinates: GpsCoordinates::new(1.0, 2.0, 3.0).unwrap(),
+                    accuracy_m: None,
                 },
                 true,
             ),
@@ -1598,6 +1603,7 @@ mod tests {
                 Command::SetZeroDatum {
                     station_ref: station_b,
                     coordinates: gps,
+                    accuracy_m: None,
                 },
                 "Set zero datum at 1:1",
             ),

@@ -127,6 +127,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.plan_anchors_for_refs",
     "command.plan_refs_for_anchors",
     "command.preview_delete_shot",
+    "command.preview_zero_datum",
     "command.pull_mnemo",
     "command.push_frontend_log",
     "command.redo",
@@ -1179,7 +1180,9 @@ mod tests {
         //   + 3 Import from MNemo over USB (#725): command.list_mnemo_ports,
         //       command.pull_mnemo, command.cancel_mnemo_pull = 725.
         //   + 4 the full per-dialog set for mnemo-import = 729.
-        assert_eq!(EVENT_NAMES.len(), 729);
+        //   + 1 the Edit Station dialog's read-only preview of what a new zero
+        //       datum would do (#741): command.preview_zero_datum = 730.
+        assert_eq!(EVENT_NAMES.len(), 730);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there
