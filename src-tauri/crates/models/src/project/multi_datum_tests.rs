@@ -256,27 +256,40 @@ fn merging_two_placed_pieces_moves_the_later_one_and_makes_its_datum_a_fix() {
 }
 
 #[test]
-fn unmerging_returns_the_fix_to_placement_and_moves_nothing() {
+fn unmerging_places_the_detached_piece_on_its_own_gps() {
     let (mut project, a, b) = two_placed_pieces();
     project
         .merge_stations(StationRef::new(a, 2), StationRef::new(b, 0))
         .unwrap();
     let merged = raw_xy(&project);
+    // The merge moved B 30 m west onto A:2; its datum is a fix 30 m off.
+    assert_eq!(xy(&project, StationRef::new(b, 0)), (0.0, 100.0));
 
+    let before = project.datum_layout();
     let (ok, _) = project.unmerge_stations(StationRef::new(a, 2), StationRef::new(b, 0));
     assert!(ok);
+    assert!(project.settle_datum_layout(&before));
     project.resolve_offsets();
 
-    assert_same_xy(&merged, &raw_xy(&project));
     assert_eq!(
         project.datum_roles(),
         vec![Some(DatumRole::Placement), Some(DatumRole::Placement)],
-        "the detached piece is placed by its own datum again, where it is"
+        "the detached piece is placed by its own datum again"
     );
+    // A stays; B goes back onto its GPS, 30 m east, rigidly.
+    let after = raw_xy(&project);
+    for (sr, (mx, my)) in &merged {
+        let (ax, ay) = after[sr];
+        let east = if sr.section_id == b { 30.0 } else { 0.0 };
+        assert!(
+            (ax - (mx + east)).abs() < 1e-6 && (ay - my).abs() < 1e-6,
+            "{sr:?}: ({mx}, {my}) -> ({ax}, {ay})"
+        );
+    }
 }
 
 #[test]
-fn removing_a_placement_datum_promotes_the_fix_without_moving_raw_geometry() {
+fn removing_a_placement_datum_places_the_promoted_fix_on_its_gps() {
     // (a) The removed placement is not the frame: an unrelated piece holds it.
     let (mut project, a, b) = two_entrance_traverse();
     let elsewhere = north_line(&mut project, 1, 10.0);
@@ -301,26 +314,43 @@ fn removing_a_placement_datum_promotes_the_fix_without_moving_raw_geometry() {
         ]
     );
 
-    let frame_before = project.frame_datum_key();
+    let layout = project.datum_layout();
     assert!(project.remove_zero_datum(StationRef::new(a, 0)));
-    project.renormalize_frame_if_changed(frame_before);
+    project.settle_datum_layout(&layout);
     project.resolve_offsets();
-    assert_same_xy(&before, &raw_xy(&project));
     assert_eq!(
         project.datum_roles(),
         vec![Some(DatumRole::Placement), Some(DatumRole::Placement)]
     );
+    // The frame did not change; the traverse moves 40 m east so the promoted
+    // fix sits on its GPS, and the frame's piece stays.
+    let after = raw_xy(&project);
+    for (sr, (bx, by)) in &before {
+        let (ax, ay) = after[sr];
+        let east = if sr.section_id == elsewhere {
+            0.0
+        } else {
+            40.0
+        };
+        assert!(
+            (ax - (bx + east)).abs() < 1e-6 && (ay - by).abs() < 1e-6,
+            "{sr:?}: ({bx}, {by}) -> ({ax}, {ay})"
+        );
+    }
+    let (fx, fy) = xy(&project, StationRef::new(b, 5));
+    assert!((fx - 40.0).abs() < 1e-6 && (fy - 500.0).abs() < 1e-6);
 
-    // (b) The removed placement IS the frame: the only movement is the frame's
-    // rigid re-translation onto the promoted datum's station.
+    // (b) The removed placement IS the frame and the survey is one piece: the
+    // placement and the re-frame onto the promoted datum add up to one rigid
+    // translation by (0, -500).
     let (mut project, a, b) = two_entrance_traverse();
     project
         .set_zero_datum(StationRef::new(b, 5), gps_at(40.0, 500.0))
         .unwrap();
     let before = raw_xy(&project);
-    let frame_before = project.frame_datum_key();
+    let layout = project.datum_layout();
     assert!(project.remove_zero_datum(StationRef::new(a, 0)));
-    project.renormalize_frame_if_changed(frame_before);
+    project.settle_datum_layout(&layout);
     project.resolve_offsets();
     let after = raw_xy(&project);
     for (sr, (bx, by)) in &before {
@@ -331,6 +361,29 @@ fn removing_a_placement_datum_promotes_the_fix_without_moving_raw_geometry() {
         );
     }
     assert_eq!(project.datum_roles(), vec![Some(DatumRole::Placement)]);
+}
+
+#[test]
+fn settling_twice_with_the_same_layout_moves_nothing_when_the_frame_is_kept() {
+    // A placement only measures, so a repeat with the frame unchanged is inert.
+    let (mut project, a, b) = two_entrance_traverse();
+    let elsewhere = north_line(&mut project, 1, 10.0);
+    project
+        .set_zero_datum(StationRef::new(elsewhere, 0), gps_at(-200.0, 0.0))
+        .unwrap();
+    project
+        .set_zero_datum(StationRef::new(b, 5), gps_at(40.0, 500.0))
+        .unwrap();
+    // Make the separate piece's datum the frame by moving it first.
+    let elsewhere_datum = project.zero_datums.remove(1);
+    project.zero_datums.insert(0, elsewhere_datum);
+    project.renormalize_frame();
+    let layout = project.datum_layout();
+    assert!(project.remove_zero_datum(StationRef::new(a, 0)));
+    assert!(project.settle_datum_layout(&layout));
+    let settled = raw_xy(&project);
+    assert!(!project.settle_datum_layout(&layout));
+    assert_same_xy(&settled, &raw_xy(&project));
 }
 
 #[test]
@@ -472,4 +525,99 @@ fn the_distribution_fallback_walks_to_a_placement_datum_never_a_fix() {
         .shortest_path_to_any_zero_datum(StationRef::new(b, 5))
         .expect("the placement datum is reachable");
     assert_eq!(found, StationRef::new(a, 0));
+}
+
+/// Store a GPS fix on `sr` directly, as a load does: no placement, no checks.
+fn push_fix(project: &mut Project, sr: StationRef, gps: GpsCoordinates) {
+    let station_ref = project.key_for_ref(sr).unwrap();
+    project.zero_datums.push(ZeroDatum {
+        station_ref,
+        gps,
+        accuracy_m: None,
+    });
+}
+
+#[test]
+fn each_fix_measures_its_survey_distance_to_its_own_nearest_other_datum() {
+    // A 400 m line L (40 shots of 10 m) placed at L:0, with fixes at L:10,
+    // L:30 and L:31, and a 40 m branch merged at L:22 with a fix at its end.
+    let mut project = Project::new("NearestDatum".to_string(), None);
+    let line = north_line(&mut project, 40, 10.0);
+    let branch = north_line(&mut project, 4, 10.0);
+    project.ensure_shot_uuids();
+    merge(
+        &mut project,
+        StationRef::new(line, 22),
+        StationRef::new(branch, 0),
+    );
+    project
+        .set_zero_datum(StationRef::new(line, 0), origin())
+        .unwrap();
+    let fixes = [
+        (StationRef::new(line, 10), 100.0),
+        (StationRef::new(line, 30), 10.0),
+        (StationRef::new(line, 31), 10.0),
+        (StationRef::new(branch, 4), 120.0),
+    ];
+    for (i, (sr, _)) in fixes.iter().enumerate() {
+        push_fix(&mut project, *sr, gps_at(i as f64, 100.0 * i as f64));
+    }
+
+    let gaps = project.gps_fix_gaps();
+    assert_eq!(gaps.len(), fixes.len());
+    for (sr, expected) in fixes {
+        let got = gaps[&sr].survey_distance_m.unwrap();
+        assert!((got - expected).abs() < 1e-9, "{sr:?}: {got} vs {expected}");
+        // The one-pass answer agrees with the per-station preview path.
+        let zd = project
+            .zero_datums
+            .iter()
+            .find(|zd| project.resolve_key(&zd.station_ref) == Some(sr))
+            .unwrap();
+        assert_eq!(project.datum_gap(sr, &zd.gps), Some(gaps[&sr]));
+    }
+}
+
+#[test]
+fn gap_check_cost_does_not_multiply_with_the_number_of_fixes() {
+    // 80 sections of 50 shots chained end to start, a placement datum at the
+    // start and a GPS fix on every other station: about 4000 fixes. One Dijkstra
+    // per fix took tens of seconds here; one shared pass takes a fraction of one.
+    let mut project = Project::new("ManyFixes".to_string(), None);
+    let sections: Vec<SectionId> = (0..80).map(|_| north_line(&mut project, 50, 2.0)).collect();
+    project.ensure_shot_uuids();
+    for pair in sections.windows(2) {
+        merge(
+            &mut project,
+            StationRef::new(pair[0], 50),
+            StationRef::new(pair[1], 0),
+        );
+    }
+    project
+        .set_zero_datum(StationRef::new(sections[0], 0), origin())
+        .unwrap();
+    for (s, &section) in sections.iter().enumerate() {
+        for i in 1..=50u32 {
+            let north = (s as f64 * 50.0 + f64::from(i)) * 2.0;
+            push_fix(
+                &mut project,
+                StationRef::new(section, i),
+                gps_at(1.0, north),
+            );
+        }
+    }
+    assert_eq!(project.gps_fix_datums().len(), 4000);
+
+    let started = std::time::Instant::now();
+    let gaps = project.gps_fix_gaps();
+    let elapsed = started.elapsed();
+    assert_eq!(gaps.len(), 4000);
+    // Each fix is one 2 m shot from the next datum along the chain.
+    assert!(gaps
+        .values()
+        .all(|g| (g.survey_distance_m.unwrap() - 2.0).abs() < 1e-9));
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "gps_fix_gaps over 4000 fixes took {elapsed:?}"
+    );
 }

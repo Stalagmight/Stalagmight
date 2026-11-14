@@ -47,7 +47,9 @@
 //! Nothing the table holds fails the load, as with the credit tables (#717): a
 //! table of another shape (a column missing, more rows than the file has
 //! stations) is ignored with a warning; an unreadable or invalid row is skipped
-//! and counted, never named; an unreadable accuracy reads as the default.
+//! and counted, never named; an accuracy that is unreadable, or outside the
+//! range the app accepts (`validate_gps_accuracy`: 0 to `MAX_GPS_ACCURACY_M`),
+//! reads as the default.
 //! SQLite failing for a reason of its own (busy, I/O, corrupt) still fails the
 //! open, so a save cannot then drop the rows for good.
 
@@ -56,7 +58,9 @@ use std::collections::{HashMap, HashSet};
 use anyhow::Result;
 use rusqlite::{params, Connection, Transaction};
 
-use crate::models::{DatumRole, GpsCoordinates, Project, Section, StationKey, ZeroDatum};
+use crate::models::{
+    validate_gps_accuracy, DatumRole, GpsCoordinates, Project, Section, StationKey, ZeroDatum,
+};
 
 use super::shot_credits::{extended_code, is_schema_error};
 
@@ -273,7 +277,8 @@ struct Row {
     shot_uuid: Option<String>,
     /// `None` for a placement row, else a fix's valid GPS.
     gps: Option<GpsCoordinates>,
-    /// `Err` when the stored accuracy is unreadable, negative or not finite.
+    /// `Err` when the stored accuracy is unreadable or one the app would refuse
+    /// to store (`validate_gps_accuracy`).
     accuracy_m: Result<Option<f64>, ()>,
 }
 
@@ -333,9 +338,10 @@ fn decode(
         }
         _ => return None,
     };
+    // The same rule as every write path, so a crafted file cannot hold a value
+    // the Edit Station dialog could never have stored.
     let accuracy_m = match accuracy_m {
-        Ok(None) => Ok(None),
-        Ok(Some(a)) if a.is_finite() && a >= 0.0 => Ok(Some(a)),
+        Ok(a) if validate_gps_accuracy(a).is_ok() => Ok(a),
         _ => Err(()),
     };
     Some(Row {

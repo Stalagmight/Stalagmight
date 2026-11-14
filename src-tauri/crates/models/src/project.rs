@@ -19,6 +19,7 @@ use super::placement_suggest;
 
 mod closure;
 mod coordinates;
+mod datum_placement;
 mod datum_roles;
 mod distance;
 // Crate-visible only so the `.plnx` load path can reach the engine's segment-speed bounds
@@ -96,6 +97,7 @@ mod split_section_tests;
 
 pub use classify::ClassifyScope;
 pub use combine_candidate::{COMBINE_DEPTH_NOTICE_M, COMBINE_TOLERANCE_M, MAX_COMBINE_PARTNERS};
+pub use datum_placement::DatumLayout;
 pub use datum_roles::{
     datum_gap_threshold_m, DatumGap, ZeroDatumPreview, DATUM_GAP_WARN_BASE_M,
     DATUM_GAP_WARN_FRACTION,

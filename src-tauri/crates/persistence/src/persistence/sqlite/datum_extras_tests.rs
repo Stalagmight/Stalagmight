@@ -7,7 +7,7 @@ use tempfile::TempDir;
 
 use super::station_names_tests::{dump, table_exists, READ_BY_STALAGMIGHT_LIB};
 use super::*;
-use crate::models::{DatumRole, SectionId, ShotData, StationRef};
+use crate::models::{DatumRole, SectionId, ShotData, StationRef, MAX_GPS_ACCURACY_M};
 
 /// Three sections: A (3 shots) merged at its end to B (2 shots), and C (1
 /// shot) on its own. Datums, in list order: A0 places A+B (accuracy 2 m), B2
@@ -349,6 +349,43 @@ fn corrupt_rows_are_skipped_and_the_load_succeeds() {
                 Some(DatumRole::Placement)
             ),
             (StationRef::new(a, 2), 20.4, None, Some(DatumRole::GpsFix)),
+        ]
+    );
+}
+
+/// A stored accuracy is held to the rule every write path uses
+/// (`validate_gps_accuracy`): above `MAX_GPS_ACCURACY_M` it reads as the
+/// default, and the bound itself is kept.
+#[test]
+fn an_accuracy_the_app_would_refuse_reads_as_the_default() {
+    let dir = TempDir::new().unwrap();
+    let Fixture { project, a, b, .. } = fixture();
+    let path = saved_file(&dir, "accuracy.stalx", &project);
+    {
+        let db = Database::open_existing(&path).unwrap();
+        db.conn
+            .execute_batch(&format!(
+                "
+                UPDATE zero_datum_extras SET accuracy_m = {} WHERE position = 0;
+                UPDATE zero_datum_extras SET accuracy_m = {} WHERE position = 1;
+                ",
+                MAX_GPS_ACCURACY_M + 0.5,
+                MAX_GPS_ACCURACY_M
+            ))
+            .unwrap();
+    }
+
+    let loaded = load(&path);
+    let accuracies: Vec<_> = summary(&loaded)
+        .into_iter()
+        .map(|(sr, _, accuracy, _)| (sr, accuracy))
+        .take(2)
+        .collect();
+    assert_eq!(
+        accuracies,
+        vec![
+            (StationRef::new(a, 0), None),
+            (StationRef::new(b, 2), Some(MAX_GPS_ACCURACY_M)),
         ]
     );
 }

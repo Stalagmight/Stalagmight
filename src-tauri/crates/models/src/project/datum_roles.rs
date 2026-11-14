@@ -17,7 +17,8 @@
 //! [`Project::placement_datum_refs`]; only the solve, the gap check, export and
 //! Plan mode read the fixes.
 
-use std::collections::{HashMap, HashSet};
+use std::cmp::{Ordering, Reverse};
+use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use super::{Project, SectionId, StationRef, ZeroDatum};
 use crate::station::DatumRole;
@@ -200,32 +201,76 @@ impl Project {
     /// The survey distance is to the nearest OTHER resolvable datum (placement
     /// or fix), along the survey graph, so it works both for a datum that is
     /// already stored and for one that is only being previewed.
+    ///
+    /// One station's worth of work (one graph build and one Dijkstra), for the
+    /// Edit Station preview. Every fix at once goes through
+    /// [`Self::gps_fix_gaps`], which shares one pass between them.
     pub fn datum_gap(&self, station_ref: StationRef, gps: &GpsCoordinates) -> Option<DatumGap> {
-        let frame = self.frame_datum()?;
+        let frame_gps = self.frame_datum()?.gps;
         let surveyed = self.compute_station_raw_coords(station_ref)?;
-        let (gx, gy) = gps_to_local(gps, &frame.gps);
-        let (dx, dy) = (gx - surveyed.x, gy - surveyed.y);
-        let gap_m = dx.hypot(dy);
-        let bearing_deg = dx.atan2(dy).to_degrees().rem_euclid(360.0);
-
         let survey_distance_m = self.survey_distance_to_other_datum(station_ref);
-        let threshold_m = datum_gap_threshold_m(survey_distance_m.unwrap_or(f64::INFINITY));
-        Some(DatumGap {
-            gap_m,
-            bearing_deg,
+        Some(DatumGap::between(
+            (surveyed.x, surveyed.y),
+            gps,
+            &frame_gps,
             survey_distance_m,
-            threshold_m,
-            exceeds_threshold: gap_m > threshold_m,
-        })
+        ))
     }
 
     /// Gaps for every GPS-fix datum, keyed by its resolved station.
+    ///
+    /// Runs on every project open, so its cost must not multiply with the
+    /// number of fixes: the survey graph is built once, and one multi-source
+    /// Dijkstra that keeps each station's two nearest DISTINCT datums answers
+    /// "nearest other datum" for every datum at once.
     pub fn gps_fix_gaps(&self) -> HashMap<StationRef, DatumGap> {
-        self.gps_fix_datums()
+        let Some(frame_gps) = self.frame_datum().map(|zd| zd.gps) else {
+            return HashMap::new();
+        };
+        let fixes: Vec<(StationRef, GpsCoordinates)> = self
+            .gps_fix_datums()
             .into_iter()
-            .filter_map(|zd| {
-                let sr = self.resolve_key(&zd.station_ref)?;
-                Some((sr, self.datum_gap(sr, &zd.gps)?))
+            .filter_map(|zd| Some((self.resolve_key(&zd.station_ref)?, zd.gps)))
+            .collect();
+        if fixes.is_empty() {
+            return HashMap::new();
+        }
+        let distances = self.survey_distances_to_other_datums();
+        fixes
+            .into_iter()
+            .filter_map(|(sr, gps)| {
+                let surveyed = self.compute_station_raw_coords(sr)?;
+                let distance = distances.get(&sr).copied().flatten();
+                Some((
+                    sr,
+                    DatumGap::between((surveyed.x, surveyed.y), &gps, &frame_gps, distance),
+                ))
+            })
+            .collect()
+    }
+
+    /// For every resolvable datum's station, the survey distance to the
+    /// nearest OTHER datum (`None` when none is reachable), from one graph
+    /// build and one pass of [`two_nearest_sources`].
+    fn survey_distances_to_other_datums(&self) -> HashMap<StationRef, Option<f64>> {
+        let stations = self.compute_station_coordinates();
+        let index = Self::station_index_map(&stations);
+        let datums: Vec<(StationRef, usize)> = self
+            .all_datum_refs()
+            .into_iter()
+            .filter_map(|sr| Some((sr, *index.get(&sr)?)))
+            .collect();
+        let sources: Vec<usize> = datums.iter().map(|(_, node)| *node).collect();
+        let adj = self.build_survey_graph(stations.len(), &index, None, false);
+        let nearest = two_nearest_sources(&adj, &sources);
+        datums
+            .into_iter()
+            .map(|(sr, node)| {
+                let other = nearest[node]
+                    .iter()
+                    .find(|(_, source)| *source != node)
+                    .map(|(d, _)| *d);
+                (sr, other)
             })
             .collect()
     }
@@ -244,6 +289,80 @@ impl Project {
         let d = *self.compute_distances_from(&stations, &roots).get(at)?;
         d.is_finite().then_some(d)
     }
+}
+
+impl DatumGap {
+    /// The gap from a station `surveyed` at local (x, y) to `gps`, in the frame
+    /// whose origin is `frame_gps`.
+    fn between(
+        surveyed: (f64, f64),
+        gps: &GpsCoordinates,
+        frame_gps: &GpsCoordinates,
+        survey_distance_m: Option<f64>,
+    ) -> Self {
+        let (gx, gy) = gps_to_local(gps, frame_gps);
+        let (dx, dy) = (gx - surveyed.0, gy - surveyed.1);
+        let gap_m = dx.hypot(dy);
+        let threshold_m = datum_gap_threshold_m(survey_distance_m.unwrap_or(f64::INFINITY));
+        Self {
+            gap_m,
+            bearing_deg: dx.atan2(dy).to_degrees().rem_euclid(360.0),
+            survey_distance_m,
+            threshold_m,
+            exceeds_threshold: gap_m > threshold_m,
+        }
+    }
+}
+
+/// Multi-source Dijkstra that keeps, for every node, the nearest and the
+/// second-nearest DISTINCT source, as `(distance, source)` in increasing
+/// distance (fewer than two when fewer are reachable). Non-finite edges are
+/// never crossed.
+///
+/// Each node is settled at most twice, once per distinct source, and only a
+/// settled label relaxes its edges, so the work is O(E log E) whatever the
+/// number of sources. The first two distinct sources popped at a node are its
+/// two nearest: a source that reaches it only through a node already settled
+/// by two nearer sources reaches it later than both of them.
+fn two_nearest_sources(adj: &[Vec<(usize, f64)>], sources: &[usize]) -> Vec<Vec<(f64, usize)>> {
+    #[derive(PartialEq)]
+    struct Label(f64, usize, usize);
+    impl Eq for Label {}
+    impl PartialOrd for Label {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+    impl Ord for Label {
+        fn cmp(&self, other: &Self) -> Ordering {
+            self.0
+                .total_cmp(&other.0)
+                .then(self.1.cmp(&other.1))
+                .then(self.2.cmp(&other.2))
+        }
+    }
+
+    let mut settled: Vec<Vec<(f64, usize)>> = vec![Vec::new(); adj.len()];
+    let mut heap: BinaryHeap<Reverse<Label>> = sources
+        .iter()
+        .filter(|&&s| s < adj.len())
+        .map(|&s| Reverse(Label(0.0, s, s)))
+        .collect();
+    let open = |labels: &Vec<(f64, usize)>, source: usize| {
+        labels.len() < 2 && labels.iter().all(|(_, s)| *s != source)
+    };
+    while let Some(Reverse(Label(d, node, source))) = heap.pop() {
+        if !open(&settled[node], source) {
+            continue;
+        }
+        settled[node].push((d, source));
+        for &(next, w) in &adj[node] {
+            if w.is_finite() && open(&settled[next], source) {
+                heap.push(Reverse(Label(d + w, next, source)));
+            }
+        }
+    }
+    settled
 }
 
 #[cfg(test)]
