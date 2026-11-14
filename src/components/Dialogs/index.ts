@@ -50,7 +50,6 @@ export { default as PublishToSpeleoDbDialog } from './PublishToSpeleoDbDialog';
 export { default as SpeleoDoneDialog } from './SpeleoDoneDialog';
 export { default as SpeleoDivergenceDialog } from './SpeleoDivergenceDialog';
 export { default as SpeleoRestoreDialog } from './SpeleoRestoreDialog';
-export { default as SpeleoUnwindDialog } from './SpeleoUnwindDialog';
 export { default as SpeleoUnwoundPushDialog } from './SpeleoUnwoundPushDialog';
 export { default as SpeleoDiscardChangesDialog } from './SpeleoDiscardChangesDialog';
 export { default as SpeleoRevertDialog } from './SpeleoRevertDialog';

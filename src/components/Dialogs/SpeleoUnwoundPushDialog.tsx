@@ -55,7 +55,7 @@ export default function SpeleoUnwoundPushDialog() {
   // user's exit request: they are already evicted from uiStore's single dialog slot by
   // the time this renders, so unless this dialog finishes what they started - or hands
   // them back - the request is gone with no trace. `null` for the routes where this
-  // dialog IS the whole interaction (the status button, the lock menu).
+  // dialog IS the whole interaction (the SpeleoDB tab).
   const pendingExit = readPendingExit(dialogData);
   const mounted = useRef(true);
   const project = useProjectStore.getState();

@@ -113,11 +113,11 @@ describe('loadProject ALREADY_OPEN re-resolves the SpeleoDB gate (#270)', () => 
    * ONLY through the unawaited, error-swallowing `refreshLinkStatus`, unlike every
    * other rendered-project path. Left at `unknown` - read-only under the
    * fail-closed gate - a failed status call renders the project permanently
-   * read-only with no status button to act from (it requires
+   * read-only with no SpeleoDB tab action to recover through (it requires
    * `link !== null`). Seeding pessimistically gives the user a way out on screen;
    * the status reply then resolves it either way.
    */
-  it('fails CLOSED, with a status button to recover through, when nothing resolved the gate', async () => {
+  it('fails CLOSED, with a SpeleoDB tab action to recover through, when nothing resolved the gate', async () => {
     useSpeleoStore.setState({ link: null, linkPath: null, projectLinkKind: 'unknown' });
     refreshLinkStatusMock.mockImplementation(() => new Promise<void>(() => {}));
 

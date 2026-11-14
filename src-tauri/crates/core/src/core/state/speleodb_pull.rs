@@ -30,15 +30,20 @@ pub(super) const DOWNLOADED_VALUE_LIMIT: i32 = 64 * 1024 * 1024;
 pub(super) const DOWNLOADED_PROCESSING_DEADLINE: std::time::Duration =
     std::time::Duration::from_secs(30);
 
+const DOWNLOADED_LIMITS: (i32, std::time::Duration) =
+    (DOWNLOADED_VALUE_LIMIT, DOWNLOADED_PROCESSING_DEADLINE);
+
 struct DownloadOptions {
     limits: (i32, std::time::Duration),
-    generation: Option<u64>,
+    /// The session generation the download was reserved under. The install refuses
+    /// once a newer open or login has moved it (`replace_cache_for_session`).
+    generation: u64,
 }
-impl Default for DownloadOptions {
-    fn default() -> Self {
+impl DownloadOptions {
+    fn for_session(generation: u64) -> Self {
         Self {
-            limits: (DOWNLOADED_VALUE_LIMIT, DOWNLOADED_PROCESSING_DEADLINE),
-            generation: None,
+            limits: DOWNLOADED_LIMITS,
+            generation,
         }
     }
 }
@@ -314,10 +319,7 @@ impl AppState {
             link,
             policy,
             InheritedUndo::Drop,
-            DownloadOptions {
-                generation: Some(generation),
-                ..DownloadOptions::default()
-            },
+            DownloadOptions::for_session(generation),
         )
         .map_err(|e| name_other_owner(local_dto(e), &dest, &endpoint, &email))?;
         self.speleodb_record_cache_owner(&dest, &endpoint, &email, &project_name);
@@ -473,7 +475,7 @@ impl AppState {
         source: &std::path::Path,
         link: crate::models::SpeleoLink,
     ) -> Result<crate::models::SpeleoLink, SpeleoDbError> {
-        self.stamp_downloaded_link_within(source, link, DownloadOptions::default().limits)
+        self.stamp_downloaded_link_within(source, link, DOWNLOADED_LIMITS)
     }
 
     fn stamp_downloaded_link_within(
@@ -503,17 +505,14 @@ impl AppState {
         options: DownloadOptions,
     ) -> Result<(), SpeleoDbError> {
         let link = self.stamp_downloaded_link_within(source, link, options.limits)?;
-        let preserved_view = match options.generation {
-            Some(generation) => self.replace_cache_for_session(
-                source,
-                dest,
-                &link.project_id,
-                policy,
-                undo,
-                generation,
-            )?,
-            None => self.replace_cache_stalx_with(source, dest, &link.project_id, policy, undo)?,
-        };
+        let preserved_view = self.replace_cache_for_session(
+            source,
+            dest,
+            &link.project_id,
+            policy,
+            undo,
+            options.generation,
+        )?;
         let db = crate::persistence::Database::open_existing(dest)
             .map_err(|e| SpeleoDbError::Io(format!("could not reopen downloaded project: {e}")))?;
         restore_display_settings(&db, &preserved_view);
@@ -569,10 +568,7 @@ mod tests {
                     link(),
                     LocalEditsPolicy::Protect,
                     InheritedUndo::Drop,
-                    DownloadOptions {
-                        generation: Some(generation),
-                        ..DownloadOptions::default()
-                    }
+                    DownloadOptions::for_session(generation)
                 ),
                 Err(SpeleoDbError::SessionMoved)
             ));
@@ -601,10 +597,7 @@ mod tests {
                     link(),
                     LocalEditsPolicy::Protect,
                     InheritedUndo::Drop,
-                    DownloadOptions {
-                        generation: Some(newer),
-                        ..DownloadOptions::default()
-                    },
+                    DownloadOptions::for_session(newer),
                 )
                 .expect("newer installs");
             let before = std::fs::read(&dest).expect("cache");
@@ -616,10 +609,7 @@ mod tests {
                         link(),
                         LocalEditsPolicy::Protect,
                         InheritedUndo::Drop,
-                        DownloadOptions {
-                            generation: Some(generation),
-                            ..DownloadOptions::default()
-                        }
+                        DownloadOptions::for_session(generation)
                     ),
                     Err(SpeleoDbError::SessionMoved)
                 ));
@@ -679,7 +669,7 @@ mod tests {
                         InheritedUndo::Drop,
                         DownloadOptions {
                             limits,
-                            generation: None,
+                            generation: state.speleodb_session_generation(),
                         },
                     )
                     .expect_err("download must be refused");
@@ -724,10 +714,7 @@ mod tests {
                         link(),
                         LocalEditsPolicy::Protect,
                         InheritedUndo::Drop,
-                        DownloadOptions {
-                            generation: Some(generation),
-                            ..DownloadOptions::default()
-                        },
+                        DownloadOptions::for_session(generation),
                     )
                 });
                 started.recv().expect("download pending");
@@ -770,10 +757,7 @@ mod tests {
                     link(),
                     LocalEditsPolicy::Protect,
                     InheritedUndo::Drop,
-                    DownloadOptions {
-                        generation: Some(generation),
-                        ..DownloadOptions::default()
-                    }
+                    DownloadOptions::for_session(generation)
                 ),
                 Err(SpeleoDbError::SessionMoved)
             ));
@@ -804,10 +788,7 @@ mod tests {
                     link(),
                     LocalEditsPolicy::Protect,
                     InheritedUndo::Drop,
-                    DownloadOptions {
-                        generation: Some(generation),
-                        ..DownloadOptions::default()
-                    }
+                    DownloadOptions::for_session(generation)
                 ),
                 Err(SpeleoDbError::SessionMoved)
             ));
@@ -980,15 +961,15 @@ mod tests {
                 .expect("project");
             assert!(!dest.parent().expect("cache directory").exists());
 
-            AppState::new()
-                .expect("state")
+            let state = AppState::new().expect("state");
+            state
                 .install_linked_download_with_limits(
                     &source,
                     &dest,
                     link(),
                     LocalEditsPolicy::Protect,
                     InheritedUndo::Drop,
-                    DownloadOptions::default(),
+                    DownloadOptions::for_session(state.speleodb_session_generation()),
                 )
                 .expect("first download installs without a pre-existing cache");
 
@@ -1028,7 +1009,7 @@ mod tests {
                     link(),
                     LocalEditsPolicy::Protect,
                     InheritedUndo::Drop,
-                    DownloadOptions::default(),
+                    DownloadOptions::for_session(state.speleodb_session_generation()),
                 )
                 .expect_err("a remote project must not open without its link");
             assert!(
@@ -1066,15 +1047,15 @@ mod tests {
                     .expect("project");
                 db.save_display_setting("test_view", "local").expect("view");
             }
-            AppState::new()
-                .expect("state")
+            let state = AppState::new().expect("state");
+            state
                 .install_linked_download_with_limits(
                     &source,
                     &dest,
                     link(),
                     LocalEditsPolicy::Protect,
                     InheritedUndo::Drop,
-                    DownloadOptions::default(),
+                    DownloadOptions::for_session(state.speleodb_session_generation()),
                 )
                 .expect("install");
             let db = Database::open_existing(&dest).expect("installed");

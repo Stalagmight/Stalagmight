@@ -205,8 +205,8 @@ describe('SpeleoRevisionHistory (#218)', () => {
   });
 
   it('does not offer revision writes without a known write permission', async () => {
-    // Offline, so the grant is not known - treat it as potentially editable and let
-    // the backend gate decide, the same way the status button does.
+    // Offline, so the grant is not known - offer no revision write, the same way the
+    // SpeleoDB tab offers no Start editing without a known write permission.
     useSpeleoStore.setState({
       remoteProjectId: 'p1',
       link: { ...LINK, editState: 'read-only', permission: null },

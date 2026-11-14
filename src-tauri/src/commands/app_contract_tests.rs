@@ -52,9 +52,9 @@ fn generate_handler_block_scans_past_inner_brackets() {
 #[test]
 fn the_legacy_open_project_is_not_exposed_over_ipc() {
     // `AppState::open_project` deliberately has NO canonical-storage guard
-    // (see its doc comment): its one production caller reopens the canonical
-    // cache path after a failed replace. That is only sound while the webview
-    // cannot reach it, so pin the non-exposure the same way
+    // (see its doc comment): only the command executor and tests reach it.
+    // That is only sound while the webview cannot reach it, so pin the
+    // non-exposure the same way
     // `registry_covers_all_commands` reads the handler block.
     let lib_src = include_str!("../lib.rs");
     let block = generate_handler_block(lib_src);

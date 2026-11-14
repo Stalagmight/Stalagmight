@@ -80,8 +80,8 @@ export interface SpeleoActions {
 
 export function useSpeleoActions(): SpeleoActions {
   const { t } = useTranslation();
-  // Shared busy so the status button and the hamburger submenu gate on the same
-  // in-flight lock and can't double-issue a verb (fix 12).
+  // Shared busy so every SpeleoDB entry point gates on the same in-flight lock and
+  // can't double-issue a verb (fix 12).
   const busy = useSpeleoStore((s) => s.busy);
   // Claim/release rather than a bare `setBusy(false)`: a close or a rolled-back
   // remote open resets the shared flag out of band, and an unowned release in a
@@ -422,8 +422,9 @@ export function useSpeleoActions(): SpeleoActions {
       // not what "finish editing" means to the person pressing it.
       //
       // Guarded HERE rather than in each caller because every route to a push comes
-      // through this hook - the status button, the SpeleoDB menu, the close prompt and the
-      // quit prompt - and the trap was that one of them made pushing the primary action.
+      // through this hook - the upload dialog (from the SpeleoDB tab, Save or a banner),
+      // the close prompt and the quit prompt - and the trap was that one of them made
+      // pushing the primary action.
       // `acceptOlderVersion` is the confirmation reporting that the user was shown what it
       // does and chose it anyway.
       if (!opts?.acceptOlderVersion && isUnwoundNotEdited(useSpeleoStore.getState().link)) {
@@ -436,7 +437,7 @@ export function useSpeleoActions(): SpeleoActions {
           // user actually asked for, instead of a released lock and a window still open.
           openExitPrompt('speleodb-unwound-push', { ...data, pendingExit: opts.pendingExit });
         } else {
-          // Nothing is waiting on the outcome (the status button, the lock menu): the
+          // Nothing is waiting on the outcome (the SpeleoDB tab): the
           // confirmation is the whole interaction, exactly as it shipped.
           openDialog('speleodb-unwound-push', data);
         }

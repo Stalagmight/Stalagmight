@@ -11,9 +11,7 @@ use speleodb_api::{types, ApiOpError, HttpClient, HttpError};
 use tokio::io::AsyncWriteExt;
 
 use super::metrics::{Endpoint, Outcome};
-use super::models::{
-    ActiveMutex, Commit, Permission, Project, RevisionCommit, RevisionHistory, Visibility,
-};
+use super::models::{ActiveMutex, Commit, Permission, Project, RevisionCommit, RevisionHistory};
 use super::native::NativeFile;
 use super::{SpeleoDbError, TransportCause};
 
@@ -597,15 +595,6 @@ fn project(value: types::Project) -> Result<Project, SpeleoDbError> {
         active_mutex,
         latest_commit,
         kind: value.r#type.to_string().to_ascii_lowercase(),
-        exclude_geojson: value.exclude_geojson,
-        description: Some(value.description),
-        country: Some(value.country.to_string()),
-        visibility: Some(match value.visibility {
-            types::ProjectVisibility::Private => Visibility::Private,
-            types::ProjectVisibility::Public => Visibility::Public,
-        }),
-        latitude: value.latitude,
-        longitude: value.longitude,
     })
 }
 fn client(
@@ -744,19 +733,6 @@ fn list_projection(value: serde_json::Value) -> Result<Vec<Project>, SpeleoDbErr
             permission,
             active_mutex: nested("active_mutex", "user").map(|user| ActiveMutex { user }),
             latest_commit: nested("latest_commit", "id").map(|id| Commit { id }),
-            exclude_geojson: row
-                .get("exclude_geojson")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false),
-            description: optional("description"),
-            country: optional("country"),
-            visibility: optional("visibility").and_then(|v| match v.as_str() {
-                "PRIVATE" => Some(Visibility::Private),
-                "PUBLIC" => Some(Visibility::Public),
-                _ => None,
-            }),
-            latitude: row.get("latitude").and_then(serde_json::Value::as_f64),
-            longitude: row.get("longitude").and_then(serde_json::Value::as_f64),
         });
     }
     Ok(projects)

@@ -9,12 +9,13 @@ impl AppState {
     /// Legacy open, deliberately WITHOUT the canonical-storage guard that
     /// `do_load_project_full` runs (`foreign_link`): this function has no
     /// `#[tauri::command]` wrapper and is not in `generate_handler!`, so it is
-    /// unreachable from the webview. Its one production caller is the recovery
-    /// reopen after a failed cache replace (`replace_cache_stalx_abandoning`),
-    /// which always reopens the CANONICAL cache path - refusing there would
-    /// strand the shell on a project the backend no longer has open. If this is
-    /// ever exposed over IPC, the guard question returns; a tripwire test pins
-    /// the non-exposure (`the_legacy_open_project_is_not_exposed_over_ipc`).
+    /// unreachable from the webview. It used to back the recovery reopen after a
+    /// failed unlocked cache replace, which always reopened the CANONICAL cache
+    /// path; that replace is gone (#671) and the session-bound one never closes
+    /// the project on failure. The executor's `Command::OpenProject` arm and tests
+    /// are what reach it now. If this is ever exposed over IPC, the guard question
+    /// returns; a tripwire test pins the non-exposure
+    /// (`the_legacy_open_project_is_not_exposed_over_ipc`).
     pub(super) fn open_project_prepared<F>(
         &self,
         path: PathBuf,

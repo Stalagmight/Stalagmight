@@ -137,9 +137,9 @@ describe('recents local-edit accent (#270)', () => {
     const card = screen.getByTestId(cardTestId);
     expect(card).toHaveAttribute('data-local-edits', 'true');
     expect(card.getAttribute('style')).toContain('var(--sh-comment)');
-    // The badge belongs on the status button, where there is an action to take.
+    // No "!" badge on the card: the SpeleoDB tab is where there is an action to take.
     expect(screen.queryByTestId('speleodb-status-unpushed-badge')).not.toBeInTheDocument();
-    // The mark itself carries the same accent as the status button.
+    // The mark itself carries the shared un-uploaded accent.
     expect(screen.getByTestId(`${cardTestId}-speleo-logo`)).toHaveAttribute(
       'data-tint',
       UNPUSHED_ACCENT,
