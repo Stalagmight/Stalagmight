@@ -139,7 +139,7 @@ pub(crate) struct Knots {
 }
 
 impl Knots {
-    fn new(project: &Project) -> Self {
+    pub(crate) fn new(project: &Project) -> Self {
         let total: usize = project.sections.iter().map(|s| s.shots.len() + 1).sum();
         let mut base = HashMap::with_capacity(project.sections.len());
         let mut info = Vec::with_capacity(total);

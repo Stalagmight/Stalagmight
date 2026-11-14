@@ -41,6 +41,7 @@ use crate::{
     TornTieKind, TornTieReason,
 };
 
+use super::closure_shots::Knots;
 use super::combine_candidate::COMBINE_TOLERANCE_M;
 use super::Project;
 
@@ -58,6 +59,43 @@ pub(crate) struct Tie {
     pub id: TieId,
     pub a: StationRef,
     pub b: StationRef,
+}
+
+/// A loop closure with its two resolved stations and whether the solve takes
+/// its strategy, for the anchor rule's solve check.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ResolvedClosure {
+    pub id: u64,
+    pub a: StationRef,
+    pub b: StationRef,
+    pub eligible: bool,
+}
+
+/// What the anchor rule reads about loop closures, worked out once per
+/// candidate query (the station menu and Combine Sections plan two choices of
+/// kept section for every partner) and only when a shifting plan needs it:
+/// the closures the solve skips because they join the two ends of one shot
+/// (#737), and every closure resolved.
+#[derive(Debug, Default)]
+pub(crate) struct ClosureFacts {
+    skipped: std::cell::OnceCell<HashSet<u64>>,
+    closures: std::cell::OnceCell<Vec<ResolvedClosure>>,
+}
+
+impl ClosureFacts {
+    fn skipped(&self, project: &Project) -> &HashSet<u64> {
+        self.skipped.get_or_init(|| {
+            project
+                .closures_across_one_shot()
+                .into_iter()
+                .map(|c| c.closure_id)
+                .collect()
+        })
+    }
+
+    fn closures(&self, project: &Project) -> &[ResolvedClosure] {
+        self.closures.get_or_init(|| project.resolved_closures())
+    }
 }
 
 /// The point two sections are joined at, from the kept section's side.
@@ -194,6 +232,7 @@ impl Project {
         join: &JoinPoint,
         gap: (f64, f64),
         ties: &[Tie],
+        facts: &ClosureFacts,
     ) -> Result<TiePlan, String> {
         let merges: Vec<&Tie> = ties
             .iter()
@@ -231,6 +270,33 @@ impl Project {
             .collect();
         let anchored =
             |sections: &HashSet<SectionId>| sections.iter().any(|s| datum_sections.contains(s));
+        // The snapped closures a plan tears when `moving` moves off `fixed`
+        // with `torn` merges torn: one across the two sides closes a loop
+        // through the combined section, and any from a side that moves stops
+        // being snapped.
+        let snaps_torn = |moving: SectionId,
+                          fixed: SectionId,
+                          torn: &HashSet<TieId>,
+                          shifting: bool|
+         -> HashSet<TieId> {
+            let adjacency = adjacency_without(torn);
+            let side = reach(&adjacency, moving, fixed);
+            let fixed_side = reach(&adjacency, fixed, moving);
+            ties.iter()
+                .filter(|t| matches!(t.id, TieId::Closure(_)))
+                .filter(|t| !join.is_join_tie(t.a, t.b))
+                .filter(|t| {
+                    let (in_a, in_b) = (
+                        side.contains(&t.a.section_id),
+                        side.contains(&t.b.section_id),
+                    );
+                    let crosses = (in_a && fixed_side.contains(&t.b.section_id))
+                        || (in_b && fixed_side.contains(&t.a.section_id));
+                    crosses || (shifting && in_a != in_b)
+                })
+                .map(|t| t.id)
+                .collect()
+        };
 
         // A non-finite gap never reaches here (`pairing_touch` refuses
         // non-finite ends); checked again so a shift can never write one.
@@ -239,26 +305,35 @@ impl Project {
         let (moving, fixed, mut torn, held_by_datum, kept_moves_because) = if shifting {
             // What the closure-adjusted view holds the survey at: the side that
             // holds it must stay, or the whole cave shifts there by the gap.
-            // Only when that view adjusts the joined survey: it holds a closure
-            // the solve takes (the join's own included), or a tie this combine
-            // turns into one (a loop it closes, a snapped closure that stops
-            // being snapped). A survey the view shows as measured keeps the
-            // plain rule, and the other section moves. A closure the solve
-            // skips because it ties the two ends of one shot together (#737)
-            // does not count: the view shows that survey as measured.
+            // Only when that view adjusts the joined survey: it solves a
+            // closure there now (the join's own included), or the combine
+            // turns a tie into one it will solve (a merge torn to close a
+            // loop, a snapped closure made ordinary). A survey the view shows
+            // as measured keeps the plain rule, and the other section moves.
+            //
+            // Both halves apply the across-one-shot skip (#737): a closure
+            // that joins the two ends of one shot is skipped by the solve, so
+            // it adjusts nothing. The first reads the skip set of the project
+            // as it is (once per query); the second runs the joined survey's
+            // own sweep on the plain plan's ties (`joined_survey_is_solved`),
+            // because a torn tie can join the two ends of one shot only once
+            // the two join stations are one.
             let component = self.get_connected_section_ids(join.kept);
-            let skipped: HashSet<u64> = self
-                .closures_across_one_shot()
-                .into_iter()
-                .map(|c| c.closure_id)
-                .collect();
-            let adjusted = self.component_has_eligible_closure(&component, &skipped)
-                || !loop_ties(join.other, join.kept).is_empty()
-                || ties.iter().any(|t| {
-                    matches!(t.id, TieId::Closure(_))
-                        && !join.is_join_tie(t.a, t.b)
-                        && component.contains(&t.a.section_id)
-                });
+            let solved_now = self.component_has_eligible_closure(&component, &HashSet::new())
+                && self.component_has_eligible_closure(&component, facts.skipped(self));
+            let adjusted = solved_now || {
+                let plain_torn = loop_ties(join.other, join.kept);
+                let plain_snaps = snaps_torn(join.other, join.kept, &plain_torn, true);
+                (!plain_torn.is_empty() || !plain_snaps.is_empty())
+                    && self.joined_survey_is_solved(
+                        join,
+                        &component,
+                        ties,
+                        facts.closures(self),
+                        &plain_torn,
+                        &plain_snaps,
+                    )
+            };
             let anchor = if adjusted {
                 self.adjustment_anchor_of(&component)
                     .map(|at| at.section_id)
@@ -284,25 +359,11 @@ impl Project {
                 None,
             )
         };
-        let adjacency = adjacency_without(&torn);
-        let side = reach(&adjacency, moving, fixed);
-        let fixed_side = reach(&adjacency, fixed, moving);
+        let side = reach(&adjacency_without(&torn), moving, fixed);
         // Snapped closures: one across the two sides closes a loop through the
         // combined section, and any from a side that moves stops being snapped.
-        for tie in ties.iter().filter(|t| matches!(t.id, TieId::Closure(_))) {
-            if join.is_join_tie(tie.a, tie.b) {
-                continue;
-            }
-            let (in_a, in_b) = (
-                side.contains(&tie.a.section_id),
-                side.contains(&tie.b.section_id),
-            );
-            let crosses = (in_a && fixed_side.contains(&tie.b.section_id))
-                || (in_b && fixed_side.contains(&tie.a.section_id));
-            if crosses || (shifting && in_a != in_b) {
-                torn.insert(tie.id);
-            }
-        }
+        let snaps = snaps_torn(moving, fixed, &torn, shifting);
+        torn.extend(snaps);
 
         let torn_ties: Vec<Tie> = ties
             .iter()
@@ -329,6 +390,73 @@ impl Project {
             kept_moves_because,
             kept_offset_wins: moving == join.other,
         })
+    }
+
+    /// Every loop closure, resolved, for [`Self::joined_survey_is_solved`].
+    pub(crate) fn resolved_closures(&self) -> Vec<ResolvedClosure> {
+        self.loop_closures
+            .iter()
+            .filter_map(|c| {
+                Some(ResolvedClosure {
+                    id: c.id,
+                    a: self.resolve_key(&c.station_a)?,
+                    b: self.resolve_key(&c.station_b)?,
+                    eligible: Self::closure_is_eligible(c.strategy),
+                })
+            })
+            .collect()
+    }
+
+    /// Would the closure-adjusted view solve the survey this combine joins,
+    /// were `torn` merges torn and `snaps` snapped closures made ordinary
+    /// (the plain plan's, where the other section moves)? The
+    /// combined project's across-one-shot sweep (`closure_knots`), run on this
+    /// one: every merge but the torn ones, the two join stations as the one
+    /// station they become, then the closures in `loop_closures` order (the
+    /// join's own gone, the made-ordinary ones taking part), then the torn
+    /// merges as the `Batch` closures `tear_ties` appends. The survey is solved
+    /// when one closure in `component` takes part without collapsing a shot -
+    /// what `plan_adjustment_anchors` asks of the combined project. `O(n)`;
+    /// reached only for a shifting plan with something to solve.
+    fn joined_survey_is_solved(
+        &self,
+        join: &JoinPoint,
+        component: &HashSet<SectionId>,
+        ties: &[Tie],
+        closures: &[ResolvedClosure],
+        torn: &HashSet<TieId>,
+        snaps: &HashSet<TieId>,
+    ) -> bool {
+        let mut knots = Knots::new(self);
+        let merges = || ties.iter().filter(|t| matches!(t.id, TieId::Merge(_)));
+        for tie in merges().filter(|t| !torn.contains(&t.id)) {
+            knots.join(tie.a, tie.b);
+        }
+        knots.join(join.join_k, join.join_o);
+        let in_component = |a: StationRef, b: StationRef| {
+            component.contains(&a.section_id) && component.contains(&b.section_id)
+        };
+        let takes = |knots: &mut Knots, a: StationRef, b: StationRef| -> bool {
+            if knots.collapsed_shot(a, b).is_some() {
+                return false; // skipped: it would join the two ends of one shot
+            }
+            knots.join(a, b);
+            in_component(a, b)
+        };
+        for closure in closures {
+            if join.is_join_tie(closure.a, closure.b) {
+                continue; // the combine removes it
+            }
+            if !(closure.eligible || snaps.contains(&TieId::Closure(closure.id))) {
+                continue;
+            }
+            if takes(&mut knots, closure.a, closure.b) {
+                return true;
+            }
+        }
+        merges()
+            .filter(|t| torn.contains(&t.id))
+            .any(|t| takes(&mut knots, t.a, t.b))
     }
 
     /// Which side moves when the join has to close by a shift, and the merges

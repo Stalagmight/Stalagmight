@@ -510,6 +510,20 @@ impl Project {
             .or_else(|| self.default_anchor_for_component(component))
     }
 
+    /// [`Self::plan_adjustment_anchors`] for the project as it stands (the
+    /// across-one-shot skip computed here): one anchor per component the
+    /// closure-adjusted view really solves. For tests that compare an edit's
+    /// verdict with what the solve will do on the edited project.
+    #[cfg(test)]
+    pub(crate) fn adjustment_anchors_for_tests(&self) -> Vec<StationRef> {
+        let skipped: HashSet<u64> = self
+            .closures_across_one_shot()
+            .into_iter()
+            .map(|c| c.closure_id)
+            .collect();
+        self.plan_adjustment_anchors(&skipped)
+    }
+
     /// Plan which component anchors to feed the closure-adjustment solve.
     ///
     /// Returns one anchor per connected component that contains an eligible
