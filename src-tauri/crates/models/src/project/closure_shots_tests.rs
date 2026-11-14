@@ -777,3 +777,205 @@ fn the_new_wire_fields_are_omitted_when_absent_and_declared_optional() {
     .unwrap();
     assert!(old.closure_refusal.is_none());
 }
+
+// ---- cost and a brute-force reference -----------------------------------------
+
+/// A Batch closure with positional keys, cheap to resolve, for the large tests.
+fn plant_positional(project: &mut Project, id: u64, a: StationRef, b: StationRef) {
+    project.loop_closures.push(LoopClosure {
+        id,
+        station_a: a.into(),
+        station_b: b.into(),
+        path_length: 1.0,
+        misclosure_distance: 0.0,
+        error_percentage: 0.0,
+        horizontal_misclosure: 0.0,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::Batch,
+        is_aligned: false,
+    });
+}
+
+#[test]
+fn many_skipped_closures_between_two_big_knots_stay_cheap() {
+    // A hostile or legacy file: one section of 20_000 shots, closures tying
+    // every even station into one knot and every odd station into another,
+    // then 60_000 closures each joining an even station to an odd one. Every
+    // one of those collapses a shot, so every one is skipped and none unites
+    // anything: the sweep asks about the same two 10_000-station knots 60_000
+    // times. Walking a knot per question was ~6e8 steps (minutes in debug);
+    // the contracted adjacency answers each in O(1).
+    const SHOTS: u32 = 20_000;
+    const CROSS: u32 = 60_000;
+    let mut p = Project::new("stress".to_string(), None);
+    let s = add(&mut p, (0..SHOTS).map(|_| shot(90.0, 1.0)).collect());
+    let mut id = 1;
+    for i in 0..(SHOTS - 1) {
+        // (0,2), (1,3), (2,4), ...: two chains, evens and odds.
+        plant_positional(&mut p, id, st(s, i), st(s, i + 2));
+        id += 1;
+    }
+    let chains = id - 1;
+    for k in 0..CROSS {
+        let even = 2 * (k % (SHOTS / 2));
+        let odd = 2 * ((k * 7 + 3) % (SHOTS / 2)) + 1;
+        plant_positional(&mut p, id, st(s, even), st(s, odd));
+        id += 1;
+    }
+    let started = std::time::Instant::now();
+    let skipped = p.closures_across_one_shot();
+    let elapsed = started.elapsed();
+    assert_eq!(
+        skipped.len(),
+        CROSS as usize,
+        "every even-odd closure is skipped"
+    );
+    assert!(skipped.iter().all(|c| c.closure_id > chains));
+    // Two knots, one shot between every even and odd neighbour: the lowest is shot 0.
+    assert!(skipped.iter().all(|c| c.collapsed_shot == (s, 0)));
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "sweep took {elapsed:?}"
+    );
+    // The creation-time question about the same two knots is as cheap.
+    let started = std::time::Instant::now();
+    assert_eq!(
+        p.closure_spans_one_shot(st(s, 10), st(s, 9_999)),
+        Some((s, 0))
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+}
+
+/// The rule, spelled out the slow way: a plain union-find over stations; a
+/// closure is skipped when some shot of the project has one end in each of its
+/// two (distinct) knots, the lowest such shot is reported, and a skipped
+/// closure unites nothing.
+fn across_one_shot_by_brute_force(p: &Project) -> Vec<ClosureAcrossOneShot> {
+    use std::collections::HashMap;
+    fn find(parent: &HashMap<StationRef, StationRef>, x: StationRef) -> StationRef {
+        let mut r = x;
+        while let Some(&n) = parent.get(&r) {
+            if n == r {
+                break;
+            }
+            r = n;
+        }
+        r
+    }
+    let mut parent: HashMap<StationRef, StationRef> = HashMap::new();
+    for section in &p.sections {
+        for i in 0..=section.shots.len() as u32 {
+            parent.insert(st(section.id, i), st(section.id, i));
+        }
+    }
+    let union = |parent: &mut HashMap<StationRef, StationRef>, a, b| {
+        let (ra, rb) = (find(parent, a), find(parent, b));
+        if ra != rb {
+            parent.insert(ra, rb);
+        }
+    };
+    for m in &p.station_merges {
+        if let (Some(a), Some(b)) = (p.resolve_key(&m.station_a), p.resolve_key(&m.station_b)) {
+            union(&mut parent, a, b);
+        }
+    }
+    let mut out = Vec::new();
+    for lc in &p.loop_closures {
+        if !matches!(
+            lc.strategy,
+            ClosureStrategy::Batch | ClosureStrategy::LeastSquaresWeighted
+        ) {
+            continue;
+        }
+        let (Some(a), Some(b)) = (p.resolve_key(&lc.station_a), p.resolve_key(&lc.station_b))
+        else {
+            continue;
+        };
+        let (ra, rb) = (find(&parent, a), find(&parent, b));
+        if ra == rb {
+            continue;
+        }
+        let mut lowest: Option<(SectionId, usize)> = None;
+        for section in &p.sections {
+            for i in 0..section.shots.len() {
+                let x = find(&parent, st(section.id, i as u32));
+                let y = find(&parent, st(section.id, i as u32 + 1));
+                if (x == ra && y == rb) || (x == rb && y == ra) {
+                    let c = (section.id, i);
+                    lowest = Some(lowest.map_or(c, |l| l.min(c)));
+                }
+            }
+        }
+        match lowest {
+            Some(collapsed_shot) => out.push(ClosureAcrossOneShot {
+                closure_id: lc.id,
+                station_a: a,
+                station_b: b,
+                collapsed_shot,
+            }),
+            None => union(&mut parent, a, b),
+        }
+    }
+    out
+}
+
+#[test]
+fn the_helper_matches_a_brute_force_reference_on_random_projects() {
+    let mut seed: u64 = 0x0b2c_7e57;
+    let mut next = |m: u64| -> u64 {
+        seed = seed
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        (seed >> 33) % m.max(1)
+    };
+    let mut skipped_total = 0;
+    for _case in 0..200 {
+        let mut p = Project::new("ref".to_string(), None);
+        let mut sections: Vec<SectionId> = Vec::new();
+        for i in 0..=next(4) {
+            let id = add(
+                &mut p,
+                (0..=next(5)).map(|_| shot(next(360) as f64, 2.0)).collect(),
+            );
+            if i > 0 {
+                let prev = sections[next(sections.len() as u64) as usize];
+                let len = p.get_section(prev).unwrap().shots.len() as u64;
+                let _ = p.merge_stations(st(id, next(2) as u32), st(prev, next(len + 1) as u32));
+            }
+            sections.push(id);
+        }
+        let stations: Vec<StationRef> = p
+            .sections
+            .iter()
+            .flat_map(|s| (0..=s.shots.len() as u32).map(move |i| st(s.id, i)))
+            .collect();
+        let pick = |r: u64| stations[r as usize % stations.len()];
+        for _ in 0..=next(8) {
+            let (x, y) = (pick(next(1000)), pick(next(1000)));
+            let strategy = match next(4) {
+                0 => ClosureStrategy::Move,
+                1 => ClosureStrategy::LeastSquaresWeighted,
+                _ => ClosureStrategy::Batch,
+            };
+            plant(&mut p, x, y, strategy);
+        }
+        let expected = across_one_shot_by_brute_force(&p);
+        assert_eq!(p.closures_across_one_shot(), expected);
+        skipped_total += expected.len();
+        // The creation-time question agrees too: on top of the knots the
+        // reference built, would a new closure collapse a shot, and which?
+        let (x, y) = (pick(next(1000)), pick(next(1000)));
+        let mut with_probe = p.clone();
+        plant(&mut with_probe, x, y, ClosureStrategy::Batch);
+        let probe_id = with_probe.loop_closures.last().unwrap().id;
+        let reference = across_one_shot_by_brute_force(&with_probe)
+            .into_iter()
+            .find(|c| c.closure_id == probe_id)
+            .map(|c| c.collapsed_shot);
+        assert_eq!(p.closure_spans_one_shot(x, y), reference, "{x:?} {y:?}");
+    }
+    assert!(
+        skipped_total > 20,
+        "the generator must reach the case: {skipped_total}"
+    );
+}
