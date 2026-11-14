@@ -47,15 +47,19 @@ pub(super) fn station_depth(section: &Section, station_index: usize) -> f64 {
     }
 }
 
-/// The first datum in `section_id` that resolves - the station that section's
-/// START stands on when the section is an entrance (mirrors
-/// `Project::frame_datum`'s first-that-resolves rule, scoped to one section).
-pub(super) fn section_datum(project: &Project, section_id: SectionId) -> Option<&ZeroDatum> {
-    project
-        .zero_datums
-        .iter()
-        .filter(|d| d.station_ref.section_id == section_id)
-        .find(|d| project.resolve_key(&d.station_ref).is_some())
+/// The datum each section's entrance START stands on when that section is an
+/// entrance: the section's first PLACEMENT datum (mirrors `Project::frame_datum`'s
+/// first-that-resolves rule, scoped to one section). A GPS fix never roots an
+/// entrance (#741): its merge component already holds a placement datum, which
+/// does, and the fix gets a START of its own (`tml_datums`).
+pub(super) fn entrance_datums(project: &Project) -> HashMap<SectionId, &ZeroDatum> {
+    let mut by_section: HashMap<SectionId, &ZeroDatum> = HashMap::new();
+    for datum in project.placement_datums() {
+        if let Some(sr) = project.resolve_key(&datum.station_ref) {
+            by_section.entry(sr.section_id).or_insert(datum);
+        }
+    }
+    by_section
 }
 
 /// Build a parent map from station_merges.
@@ -66,6 +70,7 @@ pub(super) fn section_datum(project: &Project, section_id: SectionId) -> Option<
 pub(super) fn build_parent_map(
     project: &Project,
     root_section_id: SectionId,
+    entrance_datums: &HashMap<SectionId, &ZeroDatum>,
 ) -> HashMap<SectionId, ParentLink> {
     #[derive(Debug, Clone, Copy)]
     struct NeighborLink {
@@ -142,7 +147,7 @@ pub(super) fn build_parent_map(
             }
         }
 
-        // A component's entrance prefers a section holding a resolvable datum -
+        // A component's entrance prefers a section holding a placement datum -
         // the same rule the MAIN root follows via `frame_datum` (#378 review):
         // GPS lands only on entrance STARTs, so rooting a datum-carrying
         // component at some other section would export it anchored to the frame
@@ -157,7 +162,7 @@ pub(super) fn build_parent_map(
             .iter()
             .map(|section| section.id)
             .filter(candidate)
-            .find(|id| section_datum(project, *id).is_some())
+            .find(|id| entrance_datums.contains_key(id))
             .or_else(|| {
                 project
                     .sections
