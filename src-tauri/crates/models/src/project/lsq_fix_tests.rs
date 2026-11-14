@@ -223,19 +223,19 @@ fn five_metre_fix_lands_where_the_variance_model_puts_it() {
 }
 
 #[test]
-fn a_bad_stored_accuracy_falls_back_to_the_default() {
-    let solved = |accuracy_m: Option<f64>| {
-        let mut t = traverse(accuracy_m);
-        solve(&mut t.project, t.entrance_1, &[]);
-        raw(&t.project, t.entrance_2)
-    };
-    let default = solved(None);
+fn a_bad_stored_accuracy_pins_the_fix_like_the_default() {
+    // The default is 0, a hard pin, so a bad stored accuracy must put the fix
+    // station ON its GPS. Infinity is the value that tells: read as a weight it
+    // is `1 / inf^2 = 0`, a fix that does not pull at all.
     for bad in [-1.0, f64::NAN, f64::INFINITY] {
-        let got = solved(Some(bad));
-        assert!(
-            (got.x - default.x).abs() < 1e-9 && (got.y - default.y).abs() < 1e-9,
-            "accuracy {bad}: {got:?} vs default {default:?}"
-        );
+        let Traverse {
+            mut project,
+            entrance_1,
+            entrance_2,
+            gps,
+        } = traverse(Some(bad));
+        solve(&mut project, entrance_1, &[]);
+        assert_at(&project, entrance_2, gps.0, gps.1);
     }
 }
 

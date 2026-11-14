@@ -54,7 +54,9 @@ impl Project {
     /// read: the solve is horizontal only.
     ///
     /// A non-finite or negative stored accuracy is not a measurement; it falls
-    /// back to the default rather than turning the fix into a pin.
+    /// back to the default, which is 0, a hard pin. Without the fallback an
+    /// infinite accuracy would give the fix a weight of zero, so the fix would
+    /// silently stop pulling at all.
     pub(super) fn gps_fix_observations(
         &self,
         component: &HashSet<SectionId>,
