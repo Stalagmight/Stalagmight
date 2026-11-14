@@ -9,8 +9,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
     ClosureStrategy, CombineCandidate, CombineJoinEnds, CombineJoinKind, CombinePick,
-    CombineSectionsOptions, GpsCoordinates, KeptMovesReason, Project, SectionData, SectionEnd,
-    SectionId, ShotData, StationRef, TornTieKind, TornTieReason,
+    CombineSectionsOptions, GpsCoordinates, KeptMovesReason, LoopClosure, Project, SectionData,
+    SectionEnd, SectionId, ShotData, StationRef, TornTieKind, TornTieReason,
 };
 
 fn shot(azimuth: f64, length: f64) -> ShotData {
@@ -281,17 +281,39 @@ fn a_pair_meeting_twice_at_a_station_is_offered_once_by_its_best_join() {
         .merge_stations(StationRef::new(far, 0), StationRef::new(l, 0))
         .unwrap();
     // Far's end is merged to K's end, and a closure ties K's end to Far's
-    // start (and so to L's start, merged there).
+    // start (and so to L's start, merged there). With Far's end merged to K's
+    // end, that closure joins the two ends of Far's one shot, which
+    // `create_loop_closure` refuses (#737); before the merge the two are not
+    // connected, so it cannot be made first either. A project saved before
+    // #737 (or a Combine / Add .stalx) can still hold it, so it is planted
+    // as such a project would carry it - a closure the solve skips.
     project
         .merge_stations(StationRef::new(k, 1), StationRef::new(far, 1))
         .unwrap();
-    project
-        .create_loop_closure(
-            StationRef::new(k, 1),
-            StationRef::new(far, 0),
-            ClosureStrategy::Batch,
-        )
-        .unwrap();
+    let (station_a, station_b) = (
+        project.key_for_ref(StationRef::new(k, 1)).unwrap(),
+        project.key_for_ref(StationRef::new(far, 0)).unwrap(),
+    );
+    project.normalize_next_closure_id();
+    let id = project.next_closure_id;
+    project.next_closure_id += 1;
+    project.loop_closures.push(LoopClosure {
+        id,
+        station_a,
+        station_b,
+        path_length: 1.4,
+        misclosure_distance: 1.4,
+        error_percentage: 100.0,
+        horizontal_misclosure: 1.4,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::Batch,
+        is_aligned: false,
+    });
+    assert_eq!(
+        project.closures_across_one_shot().len(),
+        1,
+        "setup: the planted closure spans Far's one shot"
+    );
     let both_ends: Vec<_> = project
         .combine_candidates(StationRef::new(k, 1))
         .into_iter()
@@ -709,7 +731,7 @@ fn tie(project: &mut Project, a: StationRef, b: StationRef) {
         .max()
         .unwrap_or(0)
         + 1;
-    project.loop_closures.push(crate::LoopClosure {
+    project.loop_closures.push(LoopClosure {
         id,
         station_a,
         station_b,
