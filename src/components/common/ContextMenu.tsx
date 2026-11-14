@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { useUIStore } from '../../store/uiStore';
+import { useDataWorkspaceStore } from '../DataWorkspace/store';
 import { useDismissableLayer } from '../../hooks/useDismissableLayer';
 import { useShallow } from 'zustand/react/shallow';
 import { useProjectStore } from '../../store/projectStore';
@@ -136,6 +137,11 @@ export default function ContextMenu() {
     syntacticLevel: s.syntacticLevel,
   })));
   const { t } = useTranslation();
+  // The survey (editing) menu belongs to the editable workspaces that show a map:
+  // Survey, and Data while its map pane is open. Data with the pane closed has no
+  // map to right-click, so nothing there may open the map's mutation menu.
+  const dataMapPaneOpen = useDataWorkspaceStore((s) => s.mapPaneOpen);
+  const surveyMenu = appMode === 'survey' || (appMode === 'data' && dataMapPaneOpen);
   // How many stage drops the CURRENT rig produces (#298) - the backend's own count, so the menu
   // can never offer a slot the engine would ignore (All-thirds and a stage-short rig report none).
   //
@@ -190,7 +196,7 @@ export default function ContextMenu() {
   ];
   const combineKey = ((): string | null => {
     const menuTarget = dialogData.target as { type?: string; ref?: StationRef; sectionId?: SectionId } | undefined;
-    if (appMode !== 'survey' || !menuTarget) return null;
+    if (!surveyMenu || !menuTarget) return null;
     if (menuTarget.type === 'station' && menuTarget.ref) {
       const { section_id, station_index } = menuTarget.ref;
       const shots = project?.sections.find((s) => s.id === section_id)?.shots.length;
@@ -986,21 +992,23 @@ export default function ContextMenu() {
   // drop, marked point, endpoint. These act on PLAN data (the .plnx sidecar), never on the survey,
   // so they are deliberately not gated by the survey read-only predicates: a closure-adjusted view
   // or a SpeleoDB lock must not stop you planning a dive. Export, or a non-station target in Plan,
-  // gets no menu. Survey keeps the full menu, with the closure-adjusted (read-only) view disabling
-  // mutations as before.
+  // gets no menu. Survey (and Data's map pane) keeps the full menu, with the closure-adjusted
+  // (read-only) view disabling mutations as before.
   //
   // Labels are i18n keys and each item carries its own `icon`, NOT `iconForLabel` - that helper
   // matches on English label strings and would silently fall back to the generic arrow under any
   // other locale.
   let items: ContextMenuItem[];
-  if (appMode !== 'survey') {
+  if (!surveyMenu) {
     items =
       appMode === 'plan' && target?.type === 'station'
         ? buildPlanMenuItems(target.ref, stageDropCount, planRouteHasStation(target.ref), closeDialog, t)
         : [];
   } else {
-    // Survey view: closure-adjusted geometry is read-only - disable mutations (all except
-    // read-only navigation like "Zoom to Section"). Edits are made on the measured view.
+    // Survey view (or Data's map pane - the same editable map): closure-adjusted geometry is
+    // read-only - disable mutations (all except read-only navigation like "Zoom to Section").
+    // Edits are made on the measured view. In an editable mode the raw geometryMode check is
+    // exactly isMapReadOnly, which is why it may stay raw here.
     const geometryReadOnly = geometryMode === 'closureAdjusted' || speleoReadOnly;
     const READ_ONLY_SAFE_LABELS = new Set(['Zoom to Section']);
     const gate = (item: ContextMenuItem): ContextMenuItem => {

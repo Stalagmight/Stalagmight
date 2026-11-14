@@ -11,6 +11,7 @@ mod command_shot;
 mod command_split_section;
 mod command_split_shot;
 mod command_station;
+mod command_station_name;
 mod commands;
 mod config;
 mod display_settings;
@@ -227,6 +228,12 @@ mod speleodb_upload_limit_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod split_section_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod station_name_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,

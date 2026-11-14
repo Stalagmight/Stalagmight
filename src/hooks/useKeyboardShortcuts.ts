@@ -3,9 +3,11 @@ import { requestTopDialogClose } from '../utils/dialogStack';
 import { useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { selectEffectiveColorMode } from '../store/displaySelectors';
-import { useUIStore } from '../store/uiStore';
+import { isEditableMode, useUIStore } from '../store/uiStore';
+import { useDataWorkspaceStore } from '../components/DataWorkspace/store';
 import { useProjectStore } from '../store/projectStore';
 import { useGasPlanStore } from '../store/gasPlanStore';
+import { useExportStore } from '../store/exportStore';
 import { useShallow } from 'zustand/react/shallow';
 import { isEditingBlockedNow } from './useEditingBlocked';
 import { isNonInteractiveTool, navigationToolsEnabled } from '../utils/toolUtils';
@@ -177,6 +179,38 @@ const FULLSCREEN_TABLE_ALLOWED_SHORTCUTS: Set<ShortcutAction> = new Set([
 ]);
 
 /**
+ * The Data workspace's counterpart of FULLSCREEN_TABLE_ALLOWED_SHORTCUTS. While
+ * Data's map pane is closed there is no map, and while focus is inside the
+ * workspace (the grid, its toolbar, the find bar) the keys belong to the table:
+ * either way every map-aimed shortcut (tools, Display toggles, zoom, fit, the
+ * Survey docks, and Delete / Ctrl+A on the map selection) stands down. Data is
+ * an editable workspace, so the file actions, undo/redo and Export stay. The
+ * grid handles its own Delete (clear cells) and Ctrl+A and calls preventDefault,
+ * which the top-of-handler guard already honours.
+ */
+const DATA_TABLE_ALLOWED_SHORTCUTS: Set<ShortcutAction> = new Set([
+  'save',
+  'save_as',
+  'new_file',
+  'open_file',
+  'import_dmp',
+  'export',
+  'undo',
+  'redo',
+  'quit',
+]);
+
+/**
+ * Whether a key pressed now is aimed at Data's table rather than the map: in
+ * Data with the map pane closed, or with focus inside the Data workspace.
+ */
+export function dataTableOwnsKeys(target: EventTarget | null): boolean {
+  if (useUIStore.getState().appMode !== 'data') return false;
+  if (!useDataWorkspaceStore.getState().mapPaneOpen) return true;
+  return target instanceof Element && target.closest('[data-testid="data-workspace"]') !== null;
+}
+
+/**
  * Determine if a toast should be shown for an action based on feedback preference.
  */
 function shouldShowToast(action: ShortcutAction, feedback: ShortcutFeedback): boolean {
@@ -300,6 +334,20 @@ function handleZoomOut(zoomStep: number, zoomMin: number): void {
   }
 }
 
+/** Transient map state an Escape clears before it may close the Export workspace. */
+function hasEscapableMapState(s: ReturnType<typeof useUIStore.getState>): boolean {
+  return (
+    s.selection !== null ||
+    s.multiSelection.length > 0 ||
+    s.measureStart !== null ||
+    s.measureEnd !== null ||
+    s.mergeStationA !== null ||
+    s.mergeStationB !== null ||
+    s.commentTarget !== null ||
+    s.moveCommentSource !== null
+  );
+}
+
 export function useKeyboardShortcuts() {
   const { t } = useTranslation();
   const {
@@ -365,6 +413,18 @@ export function useKeyboardShortcuts() {
           return;
         }
       }
+      // An export being written owns the app until it settles: no shortcut may
+      // leave Export, open or close a project, edit, or repaint the preview it
+      // exports from. Escape too (closeExport refuses anyway, and its other
+      // jobs - clearing the map selection or measurement - would change the
+      // preview); only a dialog already open may still be closed with it.
+      if (useExportStore.getState().exporting) {
+        if (event.key === 'Escape' && activeDialog) {
+          event.preventDefault();
+          if (!requestTopDialogClose()) useUIStore.getState().closeDialog();
+        }
+        return;
+      }
 
       setSource('keyboard');
 
@@ -425,6 +485,14 @@ export function useKeyboardShortcuts() {
           event.preventDefault();
           useUIStore.getState().exitDataTableFullScreen();
           return;
+        } else if (useUIStore.getState().appMode === 'export' && !hasEscapableMapState(useUIStore.getState())) {
+          // The Export workspace is the last layer Escape peels: with no dialog,
+          // dropdown or map selection/measurement left to clear, it closes the
+          // workspace back to the mode it was entered from (as Escape closed the
+          // retired Export dialog).
+          event.preventDefault();
+          useUIStore.getState().closeExport();
+          return;
         }
 
         // Always clear tool state (existing behavior)
@@ -452,9 +520,14 @@ export function useKeyboardShortcuts() {
       // ===== RESERVED SHORTCUTS (hardcoded) =====
       // These cannot be overridden by config
 
+      // Data's table owns the map-aimed keys (see DATA_TABLE_ALLOWED_SHORTCUTS).
+      const dataTableKeys = dataTableOwnsKeys(event.target);
+
       // Handle Delete/Backspace - delete selected items
       if (event.key === 'Delete' || event.key === 'Backspace') {
-        if (placementModeActive || dataTableFullScreen) {
+        // In Data the map selection is not what the user is looking at (the pane is
+        // closed, or focus is in the table): never offer to delete it from here.
+        if (placementModeActive || dataTableFullScreen || dataTableKeys) {
           event.preventDefault();
           return;
         }
@@ -492,7 +565,7 @@ export function useKeyboardShortcuts() {
       if (isCtrlOrCmd && event.key.toLowerCase() === 'a') {
         // ALWAYS prevent browser select-all
         event.preventDefault();
-        if (placementModeActive || dataTableFullScreen) {
+        if (placementModeActive || dataTableFullScreen || dataTableKeys) {
           return;
         }
         // GUARD: No select all for pan/zoom tools
@@ -545,6 +618,20 @@ export function useKeyboardShortcuts() {
       }
 
       if (placementModeActive && !PLACEMENT_MODE_ALLOWED_SHORTCUTS.has(action)) {
+        event.preventDefault();
+        return;
+      }
+
+      if (dataTableKeys && !DATA_TABLE_ALLOWED_SHORTCUTS.has(action)) {
+        event.preventDefault();
+        return;
+      }
+      // Data renders neither the Details nor the bottom dock: toggling them there
+      // would only rewrite Survey's saved panel layout behind the user's back.
+      if (
+        (action === 'toggle_detail_panel' || action === 'toggle_data_table') &&
+        useUIStore.getState().appMode === 'data'
+      ) {
         event.preventDefault();
         return;
       }
@@ -612,20 +699,20 @@ export function useKeyboardShortcuts() {
           break;
 
         // Edit actions
-        // GUARD: undo/redo are survey-only (#243) - parity with the toolbar buttons,
-        // which are hidden in Plan/Export. Only appMode is checked (not geometryMode):
-        // the buttons stay available in the closure-adjusted survey view, so the
-        // shortcuts do too.
+        // GUARD: undo/redo belong to the editable modes, Survey and Data (#243) -
+        // parity with the toolbar buttons, which are hidden in Plan and Export. Only
+        // appMode is checked (not geometryMode): the buttons stay available in the
+        // closure-adjusted view, so the shortcuts do too.
         case 'undo':
           event.preventDefault();
-          if (useUIStore.getState().appMode !== 'survey') break;
+          if (!isEditableMode(useUIStore.getState().appMode)) break;
           undo();
           maybeShowToast(action);
           break;
 
         case 'redo':
           event.preventDefault();
-          if (useUIStore.getState().appMode !== 'survey') break;
+          if (!isEditableMode(useUIStore.getState().appMode)) break;
           redo();
           maybeShowToast(action);
           break;
@@ -741,11 +828,15 @@ export function useKeyboardShortcuts() {
           break;
 
         case 'export': {
+          // Export is a workspace, not a dialog: Ctrl+E enters it, and inside it
+          // closes it again, back to the mode it was entered from. The dialog,
+          // overlay, placement and fullscreen-table gates above keep it inert
+          // behind any of those.
           event.preventDefault();
-          const currentProject = useProjectStore.getState().project;
-          if (currentProject) {
-            openDialog('export');
-          }
+          if (!useProjectStore.getState().project) break;
+          const ui = useUIStore.getState();
+          if (ui.appMode === 'export') ui.closeExport();
+          else ui.enterExport();
           break;
         }
       }

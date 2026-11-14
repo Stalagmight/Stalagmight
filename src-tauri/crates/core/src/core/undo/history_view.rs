@@ -4,7 +4,7 @@ use serde::Serialize;
 use ts_rs::TS;
 
 use crate::core::{Command, UndoData, UndoEntry};
-use crate::models::{SectionId, ShotKind, ShotUpdates};
+use crate::models::{sanitize_station_name, SectionId, ShotKind, ShotUpdates};
 
 /// DTO for undo history item sent to frontend
 #[derive(Debug, Clone, Serialize, TS)]
@@ -71,6 +71,7 @@ fn get_command_type(command: &Command) -> String {
         Command::SetZeroDatum { .. } => "set_zero_datum".to_string(),
         Command::RemoveZeroDatum { .. } => "remove_zero_datum".to_string(),
         Command::SetStationComment { .. } => "set_station_comment".to_string(),
+        Command::SetStationName { .. } => "set_station_name".to_string(),
         Command::MoveSection { .. } => "move_section".to_string(),
         Command::MoveSegment { .. } => "move_segment".to_string(),
         Command::MoveStation { .. } => "move_station".to_string(),
@@ -331,6 +332,14 @@ fn derive_command_details(
             }
             None => Some("(removed)".to_string()),
         },
+        // Shown as the edit stored it, so a pasted bidi override cannot reorder
+        // the history row around it.
+        Command::SetStationName { name, .. } => {
+            match name.as_deref().and_then(sanitize_station_name) {
+                Some(n) => Some(format!("Name: {}", truncate_with_ellipsis(&n, 50))),
+                None => Some("(removed)".to_string()),
+            }
+        }
         _ => None,
     }
 }
@@ -903,6 +912,22 @@ fn derive_preview_data(
             Some(PreviewData {
                 changes: vec![FieldChange {
                     field: label,
+                    old_value: String::new(),
+                    new_value: value,
+                }],
+                additional_changes: 0,
+            })
+        }
+
+        // SetStationName - show the name, or that it was removed
+        (Command::SetStationName { name, .. }, _) => {
+            let value = match name.as_deref().and_then(sanitize_station_name) {
+                Some(n) => truncate_with_ellipsis(&n, 80),
+                None => "(removed)".to_string(),
+            };
+            Some(PreviewData {
+                changes: vec![FieldChange {
+                    field: "Name".to_string(),
                     old_value: String::new(),
                     new_value: value,
                 }],

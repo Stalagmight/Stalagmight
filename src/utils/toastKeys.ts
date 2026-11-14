@@ -48,19 +48,22 @@ export const TOAST_KEYS = {
   NEW_SECTION_VIEW_SAVE: 'new-section-view-save',
   EDIT_SECTION_VIEW_SAVE: 'edit-section-view-save',
   IMPORT_SHOTS_VIEW_SAVE: 'import-shots-view-save',
+  /** The Data workspace's persisted view (columns, tint, map pane) failed to save. */
+  DATA_WORKSPACE_VIEW_SAVE: 'data-workspace-view-save',
   PROFILE_EXPORT_FAILED: 'profile-export-failed',
   PROFILE_EXPORT_OK: 'profile-export-ok',
   /** Paste outcome on the Plan-mode Segments/Cylinders grids (#590). */
   PLAN_SEGMENTS_PASTE: 'plan-segments-paste',
   PLAN_CYLINDERS_PASTE: 'plan-cylinders-paste',
+  /** Find / replace outcome in the Data workspace (replace one / replace all). */
+  DATA_WORKSPACE_REPLACE: 'data-workspace-replace',
   /**
    * A CSV/JSON/TML/image export the user asked for did not produce a file.
    *
-   * One key for all six formats and both surfaces (the modal Export dialog and
-   * the Export-mode panel): they are one event class - "the export you asked
-   * for failed" - and `ExportControls` is literally one component rendered
-   * twice, so a per-format key would only ever split the dedup window without
-   * telling the user anything the message does not.
+   * One key for all six formats: they are one event class - "the export you
+   * asked for failed" - raised from one component (`ExportControls`, in the
+   * Export workspace panel), so a per-format key would only ever split the
+   * dedup window without telling the user anything the message does not.
    *
    * Distinct from `COMMAND_FAILED`: the four export actions in `projectStore`
    * do NOT go through `executeCommand`, so the catch-all never fires for them.
@@ -121,6 +124,8 @@ export const TOAST_KEYS = {
 
   // Open / import routing
   IMPORT_IN_PROGRESS: 'import-in-progress',
+  /** A file dropped or picked while an export is being written. */
+  EXPORT_IN_PROGRESS: 'export-in-progress',
 
   // In-app updater (#579)
   APP_UPDATE_DOWNLOAD_FAILED: 'app-update-download-failed',

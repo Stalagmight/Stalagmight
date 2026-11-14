@@ -55,6 +55,16 @@ describe('parseLocaleNumber', () => {
     expect(parseLocaleNumber('abc', 'de-DE')).toBeUndefined();
   });
 
+  it('parses back a negative Intl formatted with a Unicode minus (sv-SE)', () => {
+    const shown = new Intl.NumberFormat('sv-SE').format(-1234.5);
+    expect(shown.charCodeAt(0)).toBe(0x2212);
+    expect(parseLocaleNumber(shown, 'sv-SE')).toBe(-1234.5);
+    expect(parseLocaleNumber('\u22123,5', 'sv-SE')).toBe(-3.5);
+    expect(parseLocaleNumber('\uFE632,25', 'sv-SE')).toBe(-2.25);
+    expect(parseLocaleNumber('\uFF0D7', 'en-US')).toBe(-7);
+    expect(parseLocaleNumber('\u22121.5', 'en-US')).toBe(-1.5);
+  });
+
   it('trims surrounding whitespace', () => {
     expect(parseLocaleNumber('  2.5 ', 'en-US')).toBe(2.5);
   });

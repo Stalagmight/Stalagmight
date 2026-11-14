@@ -150,6 +150,20 @@ describe('Station label toggles in Plan/Export', () => {
   );
 });
 
+describe('Station label toggles in Data', () => {
+  it('apply AND save in Data, which shares the Survey view', () => {
+    useUIStore.setState({ showStationLabels: true });
+    useUIStore.getState().setAppMode('data');
+    vi.clearAllMocks();
+    useUIStore.getState().toggleDisplay('showStationNames');
+    expect(pair()).toEqual({ ids: false, names: true });
+    expect(labelSaves().length).toBeGreaterThan(0);
+    useUIStore.getState().setAppMode('survey');
+    // No snapshot between the editable modes: Survey keeps the Data choice.
+    expect(pair()).toEqual({ ids: false, names: true });
+  });
+});
+
 describe('applyDisplaySettings: the station label pair', () => {
   it('restores a saved names choice', () => {
     useUIStore.getState().applyDisplaySettings(settingsWith({ showStationNames: true }));

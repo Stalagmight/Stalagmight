@@ -7,6 +7,14 @@ Update this file every time a new version is tagged.
 
 ## [Unreleased]
 
+### Added
+
+- **Data workspace: every station and shot in one table** - the switcher at the top now reads Survey, Data and Plan. Data opens one full-window table of the whole project: each section's stations and shots in survey order (station, shot, station, ...), named by their IDs (`0:5`) under a header row per section, whose name stays in the table's corner once it scrolls away. A rail beside the names draws the chain of each section, rings the stations merged to another section, marks loop closures and zero datums, and shows where a branch section starts; hover a name for the station's position, merges, closures (with misclosure), its shots and their warnings. Links and closures appear as chips across a station's shot columns that jump to the other end, and survey issues as an icon beside the row name. Edit values in place, paste or fill many cells, or find and replace (match case, whole word, regular expressions, one by one or all at once); every bulk edit is one Undo step, and read-only cells are skipped and counted. Filter by row type, section, survey issues, comments, merges and closures, frozen or jump/reference shots, or any column condition; search only the rows shown or all rows, showing hidden matches for a moment. Show and hide columns (the shot columns move as one group), sort by any column (survey order and the rail come back with one click), and tint rows by section color, survey issues, depth, distance or row type. A map pane beside the table follows the row you are on; Show on map and Open in Survey take you to it, and a Back to Data chip returns you to the same row. Survey's data table gains an Open in Data button for its section. Station names can now be edited, alone or together with other cells
+
+### Changed
+
+- **Export is in the menu** - Export left the top switcher: open it from the menu or with Ctrl+E, and leave it with Close export (or Ctrl+E, or Escape), which returns to the workspace you came from. It opens the Export workspace with its live preview; the separate Export dialog is gone. While an export is being written, the workspace stays open and other actions wait for it
+
 ## [0.5.4] - 2026-11-14
 
 ### Added

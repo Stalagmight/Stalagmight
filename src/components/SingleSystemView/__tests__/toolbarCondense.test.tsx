@@ -57,7 +57,7 @@ describe('toolbarCondenseLayout', () => {
     // ...but it keeps a floor, and specifically NOT `min-w-0`. The carousel caps its
     // box at the slot, so a slot that may reach 0 renders a zero-width carousel -
     // the mode switcher gone, not merely cramped, and it is the only way into
-    // Plan/Export.
+    // Data or Plan.
     expect(inFlow.centerCls).not.toMatch(/(^|\s)min-w-0(\s|$)/);
     expect(inFlow.centerCls).toMatch(/min-w-\[/);
 
@@ -86,19 +86,21 @@ describe('ModeCarousel box', () => {
     const group = screen.getByTestId('mode-carousel');
     // The cap is what stops the box being laid out across the tool cluster.
     expect(group.className).toContain('max-w-full');
-    // Scrolls, never clips: this is the app's only setAppMode caller (no menu item,
-    // no shortcut), so an eaten mode is an unreachable workspace.
+    // Scrolls, never clips: it is the only way between Survey, Data and Plan (no
+    // menu item, no shortcut), so an eaten mode is an unreachable workspace.
     expect(group.className).toContain('overflow-x-auto');
     expect(group.className).not.toMatch(/(^|\s)overflow-hidden(\s|$)/);
   });
 
   it('keeps every mode present and named in the compact variant', () => {
     render(<ModeCarousel compact />);
-    for (const mode of ['survey', 'plan', 'export']) {
+    for (const mode of ['survey', 'data', 'plan']) {
       const button = screen.getByTestId(`mode-${mode}`);
       expect(button).toHaveAccessibleName(/.+/);
       // The buttons must scroll, not squash into unreadable slivers.
       expect(button.className).toContain('shrink-0');
     }
+    // Export left the carousel: it opens from the project menu / Ctrl+E.
+    expect(screen.queryByTestId('mode-export')).toBeNull();
   });
 });

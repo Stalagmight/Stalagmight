@@ -35,7 +35,7 @@ Commands go through a two-phase capture during execution:
 
 | Variant | Used By | Undo | Redo |
 |---------|---------|------|------|
-| `InverseCommand` | SetStationComment | Execute the inverse command | Execute the original command |
+| `InverseCommand` | SetStationComment, SetStationName | Execute the inverse command (a station name's inverse is written back verbatim by `restore_station_name`, never re-sanitized) | Execute the original command |
 | `PreviousValues` | UpdateShot, SetShotKind, UpdateSectionMetadata | Parse JSON, apply old values, then put the recorded `section_offsets` back (see below) | Execute the original command |
 | `CreatedSectionSnapshot` | CreateSection | Delete the section | Restore from snapshot (preserves the original ID **and** the recorded identity - see below) |
 | `CreatedShotSnapshot` | CreateShot | Remove the created shot - the exact inverse of the insert, guard-free - then put the recorded `section_offsets` back (see below) | Restore from snapshot (preserves original ID) |
@@ -505,6 +505,22 @@ Batch operations (`Command::Batch { commands }`) are **atomic**:
 - If any sub-command fails, the entire batch rolls back via the pre-snapshot
 - The single `UndoEntry` uses `ProjectSnapshotPair` - undo restores "before", redo restores "after"
 - The UI shows batch as one history item; the hover preview lists each sub-command
+
+Only the commands `AppState::is_batch_allowed` lists can be batched (the batch
+arrives over IPC, so it is an allowlist): `CreateSection`, `DeleteSection`,
+`UntrackImport`, `UpdateSectionMetadata`, `ReverseSection`, `UpdateShot`,
+`EditShotCredit`, `SetStationComment`, `SetStationName`, `CreateLoopClosure`,
+`MergeStations`, `MoveSection`, `MoveSegment`, `MoveStation` and
+`SetZeroDatum`. Anything else fails the whole batch before it runs.
+
+The station metadata pair is there for the Data workspace: its grid interleaves
+station and shot rows, so a multi-cell paste/fill or a find/replace spans
+station cells (name, comment) and shot cells, and the user made one edit. Like
+`EditShotCredit`, both are metadata only (`Command::affects_geometry` is false),
+so a batch made only of metadata skips the epilogue's `reconcile_geometry` -
+it cannot heal an already-drifted merge as a side effect of a text edit, which
+would leave an undo that restores the text but not the geometry. A batch that
+also carries a geometry `UpdateShot` reconciles as it would without them.
 
 ## Adding a `.stalx` to the open project (#674)
 

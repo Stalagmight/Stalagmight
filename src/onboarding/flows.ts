@@ -131,9 +131,10 @@ const workspaceFlow: OnboardingFlowDefinition = {
       interaction: 'locked',
     },
     {
-      // Survey-only controls (DisplayMenu gates the Geometry group on
-      // `appMode === 'survey'`). Outside Survey this step has no anchor and
-      // falls back to a centered card rather than blocking.
+      // Editable-mode controls (DisplayMenu gates the Geometry group on
+      // `isEditableMode(appMode)`, i.e. Survey, or Data with its map pane open).
+      // Elsewhere this step has no anchor and falls back to a centered card
+      // rather than blocking.
       id: 'geometry',
       titleKey: 'onboarding.flows.workspace.steps.geometry.title',
       descriptionKey: 'onboarding.flows.workspace.steps.geometry.description',

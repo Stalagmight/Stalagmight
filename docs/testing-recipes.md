@@ -811,7 +811,10 @@ Use these instead of `waitForTimeout`. All from `helpers/app.ts`:
 
 `helpers/app.ts` also has seeding helpers (`createSectionViaStore`,
 `seedProjectWithSections`), menu navigation (`openAppMenu`,
-`openSettingsFromMenu`, `openDebugFromMenu`), the DMP wizard drivers
+`openSettingsFromMenu`, `openDebugFromMenu`), the Export workspace's entry and
+exit (`enterExportWorkspace` opens it from the project menu, since Export is not
+a mode-switcher button; `closeExportWorkspace` clicks its toolbar "Close
+export"), the DMP wizard drivers
 (`openDmpSelectionDialog`, `proceedToDmpImportWizard`, `placeAllSections`), and
 canvas readback (`getDrawnGeometry`, `getStationScreenPositions`,
 `readCanvasPixel`, `countCanvasInk`). Read the file before writing a new

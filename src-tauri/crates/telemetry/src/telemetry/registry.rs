@@ -149,6 +149,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.set_project_name_for_path",
     "command.set_shot_kind",
     "command.set_station_comment",
+    "command.set_station_name",
     "command.set_zero_datum",
     "command.speleodb_done",
     // Retained for telemetry-ID stability; the command was removed (#670). See REMOVED_COMMANDS.
@@ -416,6 +417,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "undo-after.reverse_section",
     "undo-after.set_shot_kind",
     "undo-after.set_station_comment",
+    "undo-after.set_station_name",
     "undo-after.set_zero_datum",
     "undo-after.split_shot_at_distance",
     "undo-after.unmerge_station_pair",
@@ -534,6 +536,8 @@ pub const EVENT_NAMES: &[&str] = &[
     // Same again for the edit-section dialog's shot grid.
     "command.update_edit_section_view",
     "command.update_import_shots_view",
+    // Same for the Data workspace (columns, tint, map pane, section headers).
+    "command.update_data_workspace_view",
     "command.update_gas_config",
     // Depth / distance colour palette + pins, written from the map legend cog
     // and the export panel (partial `[map_palette]` write).
@@ -1179,7 +1183,13 @@ mod tests {
         //   + 3 Import from MNemo over USB (#725): command.list_mnemo_ports,
         //       command.pull_mnemo, command.cancel_mnemo_pull = 725.
         //   + 4 the full per-dialog set for mnemo-import = 729.
-        assert_eq!(EVENT_NAMES.len(), 729);
+        //   + 2 station names edited in place (the Data workspace's name
+        //       column): command.set_station_name and how often it is undone
+        //       straight after, undo-after.set_station_name = 731.
+        //   + 1 the Data workspace's persisted view (columns, tint, map pane,
+        //       section headers; partial `[panels]` write):
+        //       command.update_data_workspace_view = 732.
+        assert_eq!(EVENT_NAMES.len(), 732);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

@@ -95,4 +95,9 @@ export type BatchCommand =
   | { type: 'edit_shot_credit'; targets: CreditTargets; edit: CreditEdit }
   // Edit Section's Save: a rename / recolour and the shots' credit edit go in
   // one batch, so the Save is one undo step.
-  | { type: 'update_section_metadata'; section_id: SectionId; updates: SectionUpdates };
+  | { type: 'update_section_metadata'; section_id: SectionId; updates: SectionUpdates }
+  // Station metadata, batchable so a Data-workspace multi-cell edit or a
+  // find / replace across station and shot cells is ONE undo step. `null`
+  // (or '') removes the comment / name.
+  | { type: 'set_station_comment'; station_ref: StationRef; comment: string | null }
+  | { type: 'set_station_name'; station_ref: StationRef; name: string | null };

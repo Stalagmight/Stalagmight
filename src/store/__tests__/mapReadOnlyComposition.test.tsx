@@ -63,6 +63,24 @@ describe('useEditingBlocked()', () => {
     expect(result.current).toBe(true);
   });
 
+  it('is false in Data + measured + no lock: Data is editable like Survey', () => {
+    useUIStore.setState({ appMode: 'data', geometryMode: 'measured' });
+    const { result } = renderHook(() => useEditingBlocked());
+    expect(result.current).toBe(false);
+  });
+
+  it('is true in Data on the closure-adjusted view, and on a locked remote project', () => {
+    useUIStore.setState({ appMode: 'data', geometryMode: 'closureAdjusted' });
+    const { result, rerender } = renderHook(() => useEditingBlocked());
+    expect(result.current).toBe(true);
+    act(() => {
+      useUIStore.setState({ geometryMode: 'measured' });
+      useSpeleoStore.setState({ link: READ_ONLY_LINK });
+    });
+    rerender();
+    expect(result.current).toBe(true);
+  });
+
   it('is true in Plan mode even though geometryMode fell back to measured', () => {
     useUIStore.setState({ appMode: 'plan', geometryMode: 'measured' });
     const { result } = renderHook(() => useEditingBlocked());

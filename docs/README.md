@@ -39,7 +39,7 @@ in determines how you write it, and picking wrong is the most common rework.
 
 | Doc | Contents |
 |-----|----------|
-| [app-modes.md](app-modes.md) | Survey / Plan / Export modes, and the read-only contract every mutation path has to check. |
+| [app-modes.md](app-modes.md) | Survey / Data / Plan / Export modes, mode entry and exit, and the read-only contract every mutation path has to check. |
 | [saving.md](saving.md) | Atomic save (`.stalx.tmp` then rename), auto-save, undo persistence, and the deferred-import save contract. |
 | [undo-redo.md](undo-redo.md) | Command-pattern undo: two-phase capture, `UndoData` variants, batch and non-undoable commands, persistence, lock ordering. |
 | [closures.md](closures.md) | Loop closure as a non-destructive display mode: Raw Data View vs Closures Computed View, the weighted least-squares solve, co-location. |

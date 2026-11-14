@@ -30,16 +30,10 @@ vi.mock('../../utils/fileDialogs', () => ({
   ensureExtension: vi.fn((p: string) => p),
 }));
 
-vi.mock('../../utils/telemetry', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../utils/telemetry')>()),
-  trackDialogComplete: vi.fn(),
-}));
-
 import ExportControls from './ExportControls';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { saveDialog } from '../../utils/fileDialogs';
-import { trackDialogComplete } from '../../utils/telemetry';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 import { DEFAULT_IMAGE_OPTIONS } from '../../store/exportStore';
 import type { Project } from '../../types/ipc/Project';
@@ -61,7 +55,6 @@ let getAnchoredSectionIds: ReturnType<typeof vi.fn>;
 let exportTml: ReturnType<typeof vi.fn>;
 
 const baseProps = {
-  variant: 'dialog' as const,
   exportType: 'data' as const,
   onExportTypeChange: vi.fn(),
   dataFormat: 'tml' as const,
@@ -175,68 +168,61 @@ describe('TML export unanchored-section notice', () => {
 });
 
 /**
- * A cancelled OS save picker must not complete the dialog (#560).
+ * A cancelled OS save picker writes nothing (#560).
  *
- * `handleExport`'s completion block (`trackDialogComplete` + `onComplete`)
- * used to sit OUTSIDE both `if (selected)` guards, so it ran even when
- * `saveDialog` resolved `null` (the user cancelled). That closed the dialog
- * on a cancel and suppressed the `dialog-cancel.export` telemetry
- * `trackDialogComplete` is meant to gate.
+ * The retired modal dialog once treated a cancelled picker as a completed
+ * export and closed itself. The Export workspace panel has no completion step,
+ * but a cancel must still write nothing and leave the panel ready to export.
  */
 describe('export save-picker cancel (#560)', () => {
   beforeEach(() => {
     vi.mocked(saveDialog).mockResolvedValue(null);
   });
 
-  it('data export: leaves the dialog open and does not track completion on cancel', async () => {
+  it('data export: writes nothing on cancel and stays ready', async () => {
     const exportCsv = vi.fn(async () => undefined);
-    const onComplete = vi.fn();
     useProjectStore.setState({
       project: buildProject([section(1)], [ZERO_DATUM]),
       getAnchoredSectionIds,
       exportCsv,
     });
 
-    render(<ExportControls {...baseProps} dataFormat="csv" onComplete={onComplete} />);
+    render(<ExportControls {...baseProps} dataFormat="csv" />);
     await userEvent.click(screen.getByTestId('export-button'));
 
     await waitFor(() => expect(saveDialog).toHaveBeenCalledTimes(1));
     expect(exportCsv).not.toHaveBeenCalled();
-    expect(onComplete).not.toHaveBeenCalled();
-    expect(trackDialogComplete).not.toHaveBeenCalled();
+    expect(screen.getByTestId('export-button')).toBeEnabled();
   });
 
-  it('image export: leaves the dialog open and does not track completion on cancel', async () => {
+  it('image export: writes nothing on cancel and stays ready', async () => {
     const exportImage = vi.fn(async () => undefined);
-    const onComplete = vi.fn();
     useProjectStore.setState({
       project: buildProject([section(1)], [ZERO_DATUM]),
       getAnchoredSectionIds,
       exportImage,
     });
 
-    render(<ExportControls {...baseProps} exportType="image" onComplete={onComplete} />);
+    render(<ExportControls {...baseProps} exportType="image" />);
     await userEvent.click(screen.getByTestId('export-button'));
 
     await waitFor(() => expect(saveDialog).toHaveBeenCalledTimes(1));
     expect(exportImage).not.toHaveBeenCalled();
-    expect(onComplete).not.toHaveBeenCalled();
-    expect(trackDialogComplete).not.toHaveBeenCalled();
+    expect(screen.getByTestId('export-button')).toBeEnabled();
   });
 
-  it('TML "continue anyway" re-entry: still does not complete on a cancelled picker', async () => {
+  it('TML "continue anyway" re-entry: still writes nothing on a cancelled picker', async () => {
     // The unanchored-warning "Continue" path re-enters handleExport with
     // skipTmlAnchorCheck - it must obey the same cancel guard as the direct path.
     getAnchoredSectionIds.mockResolvedValue([]);
     const exportTmlFn = vi.fn(async () => undefined);
-    const onComplete = vi.fn();
     useProjectStore.setState({
       project: buildProject([section(1), section(2)], []),
       getAnchoredSectionIds,
       exportTml: exportTmlFn,
     });
 
-    render(<ExportControls {...baseProps} onComplete={onComplete} />);
+    render(<ExportControls {...baseProps} />);
     await userEvent.click(screen.getByTestId('export-button'));
 
     const dialog = await screen.findByTestId('tml-unanchored-warning-dialog');
@@ -245,24 +231,22 @@ describe('export save-picker cancel (#560)', () => {
 
     await waitFor(() => expect(saveDialog).toHaveBeenCalledTimes(1));
     expect(exportTmlFn).not.toHaveBeenCalled();
-    expect(onComplete).not.toHaveBeenCalled();
-    expect(trackDialogComplete).not.toHaveBeenCalled();
+    expect(screen.getByTestId('export-button')).toBeEnabled();
   });
 });
 
 /**
  * A failed export must reach a surface.
  *
- * Before this, `handleExport`'s catch was a bare `console.error`: the dialog
- * stayed open with its button un-greyed and the panel did nothing at all, which
- * is indistinguishable from "the file was written". Every reachable refusal ends
+ * Before this, `handleExport`'s catch was a bare `console.error`: the panel did
+ * nothing at all, which is indistinguishable from "the file was written". Every reachable refusal ends
  * up in that catch - the backend's "Cannot export over the open project file",
  * `export_png`'s DPI/size bails, and any I/O error - and none of them is visible
  * anywhere else, because the four `projectStore` export actions do NOT go through
  * `executeCommand` and so never reach its `COMMAND_FAILED` catch-all.
  */
 describe('export failure surface', () => {
-  const dataProps = { ...baseProps, dataFormat: 'csv' as const, onComplete: vi.fn() };
+  const dataProps = { ...baseProps, dataFormat: 'csv' as const };
 
   beforeEach(() => {
     useUIStore.setState({ toasts: [] });
@@ -289,8 +273,8 @@ describe('export failure surface', () => {
     // happened, and "Cannot export over the open project file" is already the
     // one-line "what happened, then what to do" the copy rules ask for.
     expect(toast.message).toBe('Cannot export over the open project file');
-    // A failed export is not a completed one.
-    expect(dataProps.onComplete).not.toHaveBeenCalled();
+    // The panel is ready for another try.
+    expect(screen.getByTestId('export-button')).toBeEnabled();
   });
 
   it('falls back to the localized string when the rejection carries no message', async () => {
@@ -320,10 +304,12 @@ describe('export failure surface', () => {
       exportCsv,
     });
 
+    vi.mocked(saveDialog).mockResolvedValue('/tmp/survey.csv');
     render(<ExportControls {...dataProps} />);
     await userEvent.click(screen.getByTestId('export-button'));
 
-    await waitFor(() => expect(dataProps.onComplete).toHaveBeenCalled());
+    await waitFor(() => expect(exportCsv).toHaveBeenCalledWith('/tmp/survey.csv'));
+    await waitFor(() => expect(screen.getByTestId('export-button')).toBeEnabled());
     expect(useUIStore.getState().toasts).toHaveLength(0);
   });
 
@@ -339,7 +325,7 @@ describe('export failure surface', () => {
       exportTml: exportTmlOk,
     });
 
-    render(<ExportControls {...baseProps} onComplete={vi.fn()} />);
+    render(<ExportControls {...baseProps} />);
     await userEvent.click(screen.getByTestId('export-button'));
 
     await waitFor(() => expect(exportTmlOk).toHaveBeenCalledTimes(1));

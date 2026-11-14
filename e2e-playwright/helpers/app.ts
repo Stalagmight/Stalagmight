@@ -255,6 +255,25 @@ export async function openAppMenu(page: Page): Promise<void> {
   await expect(page.getByTestId('app-menu')).toBeVisible({ timeout: 5000 });
 }
 
+/**
+ * Enter the Export workspace the way a user does: the hamburger's "Export" row.
+ * Export is not in the mode switcher (the menu and Ctrl+E reach it), so this
+ * never depends on a `mode-export` button.
+ */
+export async function enterExportWorkspace(page: Page): Promise<void> {
+  await openAppMenu(page);
+  await page.getByTestId('toolbar-export-button').click();
+  await expect(page.getByTestId('export-close-button')).toBeVisible({ timeout: 5000 });
+  await expect(page.getByTestId('export-panel')).toBeVisible({ timeout: 5000 });
+}
+
+/** Leave the Export workspace with the toolbar's "Close export" button. */
+export async function closeExportWorkspace(page: Page): Promise<void> {
+  await page.getByTestId('export-close-button').click();
+  await expect(page.getByTestId('export-close-button')).toHaveCount(0);
+  await expect(page.getByTestId('export-panel')).toHaveCount(0);
+}
+
 /** Open the Settings dialog via the hamburger menu (global view). */
 export async function openSettingsFromMenu(page: Page): Promise<void> {
   await openAppMenu(page);

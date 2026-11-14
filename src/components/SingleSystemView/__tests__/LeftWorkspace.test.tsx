@@ -49,6 +49,23 @@ describe('Left workspace', () => {
     act(() => useUIStore.getState().setAppMode('survey'));
     expect(screen.getByRole('tab', { name: 'Sections' })).toHaveAttribute('aria-selected', 'true');
   });
+  it('treats Data like Plan: SpeleoDB on request, no Sections tab, Survey tab restored', () => {
+    render(<LeftWorkspace sections={<div />} />);
+    act(() => useUIStore.getState().setAppMode('data'));
+    expect(screen.queryByRole('tab', { name: 'Sections' })).toBeNull();
+    expect(useUIStore.getState().speleoOutsideSurvey).toBe(false);
+    act(() => useUIStore.getState().openSpeleoWorkspace('history'));
+    expect(useUIStore.getState().speleoOutsideSurvey).toBe(true);
+    // Choosing a tab outside Survey never rewrites Survey's own choice.
+    act(() => useUIStore.getState().selectLeftWorkspace('speleodb'));
+    expect(useUIStore.getState().surveyLeftWorkspace).toBe('sections');
+    // Data -> Plan keeps the requested SpeleoDB dock up.
+    act(() => useUIStore.getState().setAppMode('plan'));
+    expect(useUIStore.getState().speleoOutsideSurvey).toBe(true);
+    act(() => useUIStore.getState().setAppMode('survey'));
+    expect(useUIStore.getState().speleoOutsideSurvey).toBe(false);
+    expect(screen.getByRole('tab', { name: 'Sections' })).toHaveAttribute('aria-selected', 'true');
+  });
   it('exits fullscreen without clearing selection', () => {
     useUIStore.setState({ dataTableFullScreen: true, selection: { type: 'section', sectionId: 42 } });
     act(() => useUIStore.getState().openSpeleoWorkspace());

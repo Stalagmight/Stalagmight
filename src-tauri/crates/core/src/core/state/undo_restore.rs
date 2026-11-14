@@ -149,6 +149,14 @@ impl AppState {
                 station_ref,
                 comment,
             } => self.set_station_comment(*station_ref, comment.clone()),
+            // Batchable (`is_batch_allowed`): a Data-workspace multi-cell edit or
+            // find/replace runs it here. Redo of a single name edit lands here too
+            // and re-sanitizes, which is idempotent, so it reproduces the forward
+            // edit exactly. (Undo does NOT come through here - see
+            // `restore_station_name`.)
+            Command::SetStationName { station_ref, name } => {
+                self.set_station_name(*station_ref, name.as_deref())
+            }
             Command::MoveStation {
                 station_ref,
                 offset,

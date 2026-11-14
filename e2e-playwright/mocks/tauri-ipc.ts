@@ -624,6 +624,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // one Undo puts the sections back. Only these two commands record one:
       // every other mocked mutation stays a no-op under undo, as before.
       const structuralUndo: Array<Record<string, unknown>> = [];
+      // Opt-in (`window.__E2E_MOCK_UNDO_EDITS__ = true` from a spec's own init
+      // script, before setupMockedPage): `update_shot` and `set_station_comment`
+      // also record a snapshot here - the station comment map included - so a
+      // spec can prove a cell edit is one Undo step. Off by default, so every
+      // other spec keeps its "edits are a no-op under undo" world.
+      const mockUndoEdits = (window as unknown as Record<string, unknown>).__E2E_MOCK_UNDO_EDITS__ === true;
       // Joins a split left co-located but unmerged, `[first half end, second
       // half start]`: what the real backend finds by position.
       let colocatedJoins: Array<[{ section_id: number; station_index: number }, { section_id: number; station_index: number }]> = [];
@@ -730,6 +736,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           | undefined) ?? {}),
       };
 
+      // The Data workspace's view (`panels.data_workspace_*`: columns, tint,
+      // map pane, section headers), persisted via update_data_workspace_view and
+      // overlaid onto get_config / reload_config like the stores above. Seedable
+      // via `window.__E2E_SEED_DATA_WORKSPACE_VIEW__` (keys are the panels field
+      // names) from a test's own init script registered before setupMockedPage.
+      const mockDataWorkspaceView: Record<string, unknown> = {
+        ...(((window as unknown as Record<string, unknown>).__E2E_SEED_DATA_WORKSPACE_VIEW__ as
+          | Record<string, unknown>
+          | undefined) ?? {}),
+      };
+
       // `map.controls.show_navigation_tools` (#409): the Pan/Zoom toolbar group is
       // hidden unless the user opts in, so the mock's config reports false and a
       // spec that needs the tools seeds `window.__E2E_SEED_SHOW_NAVIGATION_TOOLS__`
@@ -785,6 +802,41 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         const key = `${sectionId}:${stationIndex}`;
         if (name === null) delete mockStationNames[key];
         else mockStationNames[key] = name;
+      };
+      // Mirrors Rust `sanitize_station_name`: drop control / bidi characters (a
+      // whitespace control becomes a space), trim, clamp to 256 chars; empty ->
+      // null, which removes the name.
+      const mockSanitizeStationName = (raw: string | null | undefined): string | null => {
+        if (raw == null) return null;
+        let cleaned = '';
+        for (const ch of raw) {
+          const cp = ch.codePointAt(0) ?? 0;
+          const unsafe =
+            cp <= 0x1f || (cp >= 0x7f && cp <= 0x9f) || cp === 0xfffe || cp === 0xffff ||
+            cp === 0x061c || cp === 0x200e || cp === 0x200f ||
+            (cp >= 0x202a && cp <= 0x202e) || (cp >= 0x2066 && cp <= 0x2069);
+          if (!unsafe) cleaned += ch;
+          else if (/\s/.test(ch)) cleaned += ' ';
+        }
+        const trimmed = Array.from(cleaned.trim()).slice(0, 256).join('').trimEnd();
+        return trimmed === '' ? null : trimmed;
+      };
+      // Mirrors the Rust station setters' validation (`write_station_name`,
+      // `set_station_comment`): the section must exist and the index must be at
+      // most its shot count. Null when the ref is fine (or no project is loaded).
+      const mockStationRefError = (
+        ref: { section_id: number; station_index: number } | undefined,
+      ): string | null => {
+        if (!ref) return 'Missing station';
+        if (!currentProject) return null;
+        const section = (currentProject.sections as Array<{ id: number; shots: unknown[] }>).find(
+          (s) => s.id === ref.section_id,
+        );
+        if (!section) return `Section ${ref.section_id} not found`;
+        if (ref.station_index > section.shots.length) {
+          return `Station index ${ref.station_index} out of range (section has ${section.shots.length + 1} stations)`;
+        }
+        return null;
       };
 
       // Track last export_image call for test assertions
@@ -3685,6 +3737,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               ? (JSON.parse(JSON.stringify(currentProject)) as typeof currentProject)
               : null;
             const commentsBefore = { ...mockStationComments };
+            const namesBefore = { ...mockStationNames };
             // #24: entries accumulate ACROSS sub-commands, in step order and with repeats -
             // each carries the shot count in force at its own step, which is what lets the
             // frontend compose rather than replay. A batch reversing the same section twice
@@ -3738,6 +3791,23 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   targets: command.targets,
                   edit: command.edit,
                 }) as typeof result;
+              } else if (command?.type === 'set_station_comment' || command?.type === 'set_station_name') {
+                // Data-workspace multi-cell edit / find-replace: station cells ride
+                // the same batch as shot cells, one undo step. Validated here like
+                // the Rust setters, so an out-of-range station rolls the whole
+                // batch back.
+                const stationRef = command.station_ref as { section_id: number; station_index: number } | undefined;
+                const refError = mockStationRefError(stationRef);
+                if (refError) {
+                  result = { success: false, error: refError };
+                } else if (command.type === 'set_station_name') {
+                  result = mockHandler('set_station_name', { stationRef, name: command.name }) as typeof result;
+                } else {
+                  result = mockHandler('set_station_comment', {
+                    stationRef,
+                    comment: (command.comment as string | null | undefined) || null,
+                  }) as typeof result;
+                }
               } else if (command?.type === 'reverse_section') {
                 // Multi-section reverse (#24) is batched so it is atomic and
                 // costs one undo, so the batch has to replay it too.
@@ -3758,6 +3828,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   delete mockStationComments[key];
                 }
                 Object.assign(mockStationComments, commentsBefore);
+                for (const key of Object.keys(mockStationNames)) {
+                  delete mockStationNames[key];
+                }
+                Object.assign(mockStationNames, namesBefore);
                 return result;
               }
             }
@@ -4107,6 +4181,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           case 'set_station_comment': {
             console.log('[Mock IPC] set_station_comment called with:', args);
+            if (mockUndoEdits) {
+              // structuredClone, not JSON: loop closure ids are BigInts.
+              structuralUndo.push(structuredClone({ project: currentProject, joins: colocatedJoins, comments: mockStationComments }));
+            }
             const stationRef = args?.stationRef as { section_id: number; station_index: number };
             const comment = (args?.comment as string | null | undefined) ?? null;
             const key = `${stationRef.section_id}:${stationRef.station_index}`;
@@ -4115,6 +4193,18 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             } else {
               mockStationComments[key] = comment;
             }
+            return { success: true, section_ids: [] };
+          }
+
+          case 'set_station_name': {
+            console.log('[Mock IPC] set_station_name called with:', args);
+            const stationRef = args?.stationRef as { section_id: number; station_index: number } | undefined;
+            const refError = mockStationRefError(stationRef);
+            if (refError || !stationRef) return { success: false, error: refError ?? 'Missing station' };
+            const name = mockSanitizeStationName(args?.name as string | null | undefined);
+            const key = `${stationRef.section_id}:${stationRef.station_index}`;
+            if (name === null) delete mockStationNames[key];
+            else mockStationNames[key] = name;
             return { success: true, section_ids: [] };
           }
 
@@ -4155,9 +4245,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const snapshot = cmd === 'undo' ? structuralUndo.pop() : undefined;
             if (snapshot && currentProject) {
               // structuredClone, not JSON: loop closure ids are BigInts.
-              const restored = structuredClone(snapshot) as { project: typeof currentProject; joins: typeof colocatedJoins };
+              const restored = structuredClone(snapshot) as {
+                project: typeof currentProject;
+                joins: typeof colocatedJoins;
+                comments?: Record<string, string>;
+              };
               currentProject = restored.project;
               colocatedJoins = restored.joins;
+              if (restored.comments) {
+                for (const key of Object.keys(mockStationComments)) delete mockStationComments[key];
+                Object.assign(mockStationComments, restored.comments);
+              }
               return { success: true, section_ids: [] };
             }
             const from = cmd === 'undo' ? mockCreditUndo : mockCreditRedo;
@@ -4193,6 +4291,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   ...mockEditSectionView,
                   ...mockImportShotsView,
                 ...mockImportShotsView,
+                ...mockDataWorkspaceView,
                 },
                 ...(mockGasConfig ? { gas: mockGasConfig } : {}),
                 ...(mockMapPalette ? { map_palette: mockMapPalette } : {}),
@@ -4421,6 +4520,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 ...mockNewSectionView,
                 ...mockEditSectionView,
                 ...mockImportShotsView,
+                ...mockDataWorkspaceView,
               },
               cache: {
                 tile_cache_enabled: true,
@@ -4656,6 +4756,35 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return null; // Tauri serializes () as null
           }
 
+          case 'update_data_workspace_view': {
+            console.log('[Mock IPC] update_data_workspace_view called with:', args);
+            const win = window as unknown as Record<string, unknown>;
+            const existing = win.__MOCK_DATA_WORKSPACE_VIEW_CALLS__ as unknown[] | undefined;
+            const calls = Array.isArray(existing) ? existing : [];
+            calls.push(args ?? null);
+            win.__MOCK_DATA_WORKSPACE_VIEW_CALLS__ = calls;
+            // Mirrors the Rust door: an unknown tint is refused and nothing in
+            // the call is written; the pane width is clamped to 360-4000.
+            const tintMode = args?.tintMode as string | undefined;
+            if (
+              tintMode != null &&
+              !['none', 'section', 'issues', 'depth', 'distance', 'type'].includes(tintMode)
+            ) {
+              throw new Error(`Invalid Data workspace tint mode '${tintMode}'`);
+            }
+            const view = mockDataWorkspaceView;
+            if (args?.columnOrder != null) view.data_workspace_column_order = args.columnOrder;
+            if (args?.hiddenColumns != null) view.data_workspace_hidden_columns = args.hiddenColumns;
+            if (args?.columnWidths != null) view.data_workspace_column_widths = args.columnWidths;
+            if (tintMode != null) view.data_workspace_tint_mode = tintMode;
+            if (args?.mapPaneOpen != null) view.data_workspace_map_pane_open = args.mapPaneOpen;
+            if (typeof args?.mapPaneWidth === 'number') {
+              view.data_workspace_map_pane_width = Math.min(4000, Math.max(360, args.mapPaneWidth));
+            }
+            if (args?.sectionHeaders != null) view.data_workspace_section_headers = args.sectionHeaders;
+            return null; // Tauri serializes () as null
+          }
+
           case 'reload_config': {
             // Return saved config if available (for testing persistence),
             // overlaying the same two stores get_config does. Without the
@@ -4675,6 +4804,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   ...mockEditSectionView,
                   ...mockImportShotsView,
                 ...mockImportShotsView,
+                ...mockDataWorkspaceView,
                 },
                 ...(mockGasConfig ? { gas: mockGasConfig } : {}),
                 ...(mockMapPalette ? { map_palette: mockMapPalette } : {}),
@@ -4905,6 +5035,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 ...mockNewSectionView,
                 ...mockEditSectionView,
                 ...mockImportShotsView,
+                ...mockDataWorkspaceView,
               },
               cache: {
                 tile_cache_enabled: true,
@@ -5135,6 +5266,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] export_json called with:', args);
             return { success: true, path: args?.path };
 
+          // Ariane TML/TMLU export. The real command returns the #438 notes (codes for
+          // what the single-flag `.tml` could not carry); a mocked project has none.
+          case 'export_tml':
+            console.log('[Mock IPC] export_tml called with:', args);
+            return [];
+
           // Dive-profile export (#299). Records the call so a spec can assert the plan INPUTS
           // reached the backend - the real command recomputes the reach field from them rather
           // than trusting a client-held one, so sending them is the contract under test.
@@ -5265,6 +5402,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           // Section and shot editing commands
           case 'update_shot': {
             console.log('[Mock IPC] update_shot called with:', args);
+            if (mockUndoEdits) {
+              // structuredClone, not JSON: loop closure ids are BigInts.
+              structuralUndo.push(structuredClone({ project: currentProject, joins: colocatedJoins, comments: mockStationComments }));
+            }
             // Mutate currentProject to support persistence testing
             // Note: Tauri invoke passes camelCase from JS side
             if (currentProject && args) {

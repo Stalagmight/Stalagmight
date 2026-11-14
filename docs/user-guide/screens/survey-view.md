@@ -18,8 +18,9 @@ The main window of an open project: the map, with **Sections** on the left,
    [DMP import](dmp-import.md).
 3. **Undo**
 4. **Redo**
-5. **Survey** / **Plan** / **Export**: edit the survey, plan a dive, or export
-   a map.
+5. **Survey** / **Data** / **Plan**: edit the survey on the map, edit all its
+   data in one table (see the [Data view](data-view.md)), or plan a dive.
+   **Export** opens from the menu (or Ctrl+E).
 
 **Tools**
 

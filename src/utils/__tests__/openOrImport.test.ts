@@ -20,6 +20,7 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
 import { routeOpenedFile, pickAndRoute } from '../openOrImport';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { useExportStore } from '../../store/exportStore';
 import { useSpeleoStore, type SpeleoLinkState } from '../../store/speleoStore';
 import { setProjectActionSource, peekProjectActionSource } from '../telemetry';
 
@@ -252,6 +253,32 @@ describe('routeOpenedFile - read-only-map import guard (#243)', () => {
     await routeOpenedFile('/cave/survey.dmp');
     expect(importDmp).not.toHaveBeenCalled();
     expect(useUIStore.getState().activeDialog).toBe('import-blocked');
+  });
+
+  it('allows a DMP import in Data + measured: Data is editable like Survey', async () => {
+    useUIStore.setState({ appMode: 'data', geometryMode: 'measured' });
+    await routeOpenedFile('/cave/survey.dmp');
+    expect(importDmp).toHaveBeenCalledWith('/cave/survey.dmp');
+    expect(useUIStore.getState().activeDialog).not.toBe('error');
+  });
+
+  // Data is not a read-only mode, so the closure view is the whole cause: the
+  // prompt must offer the view switch, not "Switch to Survey" (which would not fix it).
+  it('blocks a DMP import in the closure-adjusted Data view with cause: view, not mode', async () => {
+    useUIStore.setState({ appMode: 'data', geometryMode: 'closureAdjusted' });
+    await routeOpenedFile('/cave/survey.dmp');
+    expect(importDmp).not.toHaveBeenCalled();
+    expect(useUIStore.getState().activeDialog).toBe('import-blocked');
+    expect(useUIStore.getState().dialogData).toMatchObject({ path: '/cave/survey.dmp', cause: 'view' });
+  });
+
+  it('a locked remote project in the closure-adjusted Data view names the view, not Survey mode', async () => {
+    useUIStore.setState({ appMode: 'data', geometryMode: 'closureAdjusted' });
+    useSpeleoStore.setState({ link: READ_ONLY_LINK });
+    await routeOpenedFile('/cave/survey.dmp');
+    const message = String(useUIStore.getState().dialogData.message);
+    expect(message).toContain('Raw Data View');
+    expect(message).not.toContain('Survey mode');
   });
 
   it('still opens a native .stalx in Plan (opening a project is not an import)', async () => {
@@ -676,6 +703,42 @@ describe('pickAndRoute', () => {
     openMock.mockRejectedValue(new Error('picker exploded'));
     await pickAndRoute([{ name: 'Project', extensions: ['stalx'] }], 'Open Failed');
     expect(useUIStore.getState().activeDialog).toBe('error');
+    expect(peekProjectActionSource()).toBeUndefined();
+  });
+});
+
+describe('while an export is being written', () => {
+  beforeEach(() => {
+    useUIStore.setState({ toasts: [] });
+    useExportStore.setState({ exporting: true });
+  });
+  afterEach(() => {
+    useExportStore.setState({ exporting: false });
+  });
+
+  const lastToast = () => useUIStore.getState().toasts.slice(-1)[0];
+
+  it('a dropped file opens nothing and says why', async () => {
+    useProjectStore.setState({ project: { name: 'X' } as never, isDirty: false });
+    for (const path of ['/cave/other.stalx', '/cave/survey.dmp', '/cave/track.gpx']) {
+      await routeOpenedFile(path);
+    }
+    expect(loadProject).not.toHaveBeenCalled();
+    expect(importDmp).not.toHaveBeenCalled();
+    expect(useUIStore.getState().activeDialog).toBeNull();
+    expect(lastToast()).toMatchObject({
+      message: 'Wait for the export to finish before opening or importing a file.',
+      kind: 'warning',
+    });
+    expect(peekProjectActionSource()).toBeUndefined();
+  });
+
+  it('the picker never opens', async () => {
+    openMock.mockResolvedValue('/cave/project.stalx');
+    await pickAndRoute([{ name: 'Project', extensions: ['stalx'] }]);
+    expect(openMock).not.toHaveBeenCalled();
+    expect(loadProject).not.toHaveBeenCalled();
+    expect(lastToast()?.kind).toBe('warning');
     expect(peekProjectActionSource()).toBeUndefined();
   });
 });

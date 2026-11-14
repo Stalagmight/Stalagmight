@@ -1,7 +1,8 @@
 {
   "common": {
     "a11y": {
-      "wizardMapResize": "Resize map panel"
+      "wizardMapResize": "Resize map panel",
+      "dataMapPaneResize": "Resize map pane"
     },
     "toast": {
       "dismiss": "Dismiss notification: {{message}}"
@@ -1842,6 +1843,7 @@
     "stationsEmpty": "No stations in this section.",
     "frozen": "Geometry locked - part of adjusted network",
     "viewSaveFailed": "Could not save the table layout. Your column widths and visibility may not be restored next time.",
+    "workspaceViewSaveFailed": "Could not save the Data view layout. Your columns, row colors and map pane may not be restored next time.",
     "pasteReport": {
       "written_one": "Pasted {{count}} cell",
       "written_other": "Pasted {{count}} cells",
@@ -1916,6 +1918,240 @@
       "pager": "Rows {{from}}-{{to}} of {{total}}"
     }
   },
+  "dataWorkspace": {
+    "title": "Data",
+    "rowNoun_one": "row",
+    "rowNoun_other": "rows",
+    "columns": {
+      "type": "Row type",
+      "section": "Section",
+      "name": "Station name",
+      "fromTo": "From → To",
+      "length": "Length (m)",
+      "azimuth": "Azimuth (average)",
+      "azimuth_in": "Azimuth in",
+      "azimuth_out": "Azimuth out",
+      "inclination": "Inclination (average)",
+      "pitch_in": "Inclination in",
+      "pitch_out": "Inclination out",
+      "depth_in": "Depth in",
+      "depth_out": "Depth out",
+      "depth": "Station depth",
+      "left": "Left",
+      "right": "Right",
+      "up": "Up",
+      "down": "Down",
+      "kind": "Jump/Reference",
+      "comment": "Comment",
+      "x": "X (m)",
+      "y": "Y (m)",
+      "lat": "Latitude",
+      "long": "Longitude",
+      "temperature": "Temperature",
+      "surveyors": "Surveyors",
+      "explorers": "Explorers",
+      "date": "Survey date"
+    },
+    "headers": {
+      "type": "Type",
+      "section": "Section",
+      "name": "Name",
+      "fromTo": "From → To",
+      "length": "Len (m)",
+      "azimuth": "Az",
+      "azimuth_in": "Az In",
+      "azimuth_out": "Az Out",
+      "inclination": "Incl",
+      "pitch_in": "Incl In",
+      "pitch_out": "Incl Out",
+      "depth_in": "Depth In",
+      "depth_out": "Depth Out",
+      "depth": "Depth",
+      "left": "L",
+      "right": "R",
+      "up": "U",
+      "down": "D",
+      "kind": "J/R",
+      "comment": "Comment",
+      "x": "X",
+      "y": "Y",
+      "lat": "Lat",
+      "long": "Long",
+      "temperature": "Temp",
+      "surveyors": "Surveyors",
+      "explorers": "Explorers",
+      "date": "Date"
+    },
+    "columnGroups": {
+      "identity": "Identity",
+      "shot": "Shot",
+      "angles": "Angles",
+      "lrud": "LRUD",
+      "station": "Station",
+      "position": "Position",
+      "notes": "Notes",
+      "credit": "Survey credit"
+    },
+    "rowType": {
+      "station": "Station",
+      "shot": "Shot",
+      "section": "Section"
+    },
+    "links": {
+      "zeroDatum": "Zero datum",
+      "continuesFrom": "Continues from {{name}}",
+      "closesTo": "Closes to {{name}}",
+      "joins": "Joins {{name}}",
+      "mergeTitle": "Merged with {{name}} - click to go there",
+      "closureTitle": "Loop closure to {{name}} - click to go there",
+      "continuesFromTitle": "This section starts at {{name}} - click to go there",
+      "joinsTitle": "This section ends at {{name}} - click to go there",
+      "misclosureTitle": "Misclosure {{distance}} m, {{percent}} % of the loop",
+      "zeroDatumTitle": "Zero datum: the survey's fixed GPS anchor",
+      "moreAria_one": "{{count}} more link",
+      "moreAria_other": "{{count}} more links"
+    },
+    "gutter": {
+      "showOnMap": "Show on map ({{shortcut}})",
+      "linksAria_one": "{{count}} link: {{list}}",
+      "linksAria_other": "{{count}} links: {{list}}",
+      "revealedSearch": "Shown because it matches the search",
+      "revealedNav": "Shown because you navigated here",
+      "revealedColumn": "Shown because it holds search matches"
+    },
+    "hover": {
+      "section": "Section",
+      "station": "Station",
+      "shot": "Shot",
+      "name": "Name",
+      "xy": "X / Y",
+      "depth": "Depth",
+      "gps": "Lat / Long",
+      "zeroDatum": "Zero datum",
+      "comment": "Comment",
+      "merges": "Merged with",
+      "closures": "Closures",
+      "incoming": "Shot in",
+      "outgoing": "Shot out",
+      "issues": "Issues",
+      "issueLevelNone": "None",
+      "issueLevelWarning": "Warning",
+      "issueLevelError": "Error",
+      "fromTo": "From → To",
+      "measurements": "Length {{length}} m · Az {{azimuth}} · Depth {{depthIn}} → {{depthOut}}",
+      "inclination": "Inclination {{value}}",
+      "lrud": "LRUD {{left}} / {{right}} / {{up}} / {{down}}",
+      "warnings": "Warnings",
+      "ignored": "ignored",
+      "frozen": "Frozen",
+      "frozenText": "Geometry locked - part of the adjusted network",
+      "kind": "Kind",
+      "credit": "Credit",
+      "surveyedBy": "Surveyed by {{names}}",
+      "exploredBy": "Explored by {{names}}",
+      "onDate": "Survey date {{date}}",
+      "yes": "Yes"
+    },
+    "section": {
+      "collapse": "Collapse section",
+      "expand": "Expand section",
+      "continuesFrom": "continues from",
+      "counts": "{{stations}} stations · {{shots}} shots · {{length}} m"
+    },
+    "menu": {
+      "showOnMap": "Show on map",
+      "openInSurvey": "Open in Survey",
+      "copyRowName": "Copy row name",
+      "filterToSection": "Filter to this section",
+      "collapseSection": "Collapse section",
+      "expandSection": "Expand section"
+    },
+    "headerMenu": {
+      "sortAsc": "Sort ascending",
+      "sortDesc": "Sort descending",
+      "clearSort": "Back to survey order",
+      "hide": "Hide {{name}}",
+      "hideRevealed": "Hide search-revealed columns",
+      "hideRevealedTitle": "{{name}} is hidden: it shows only because the find searches all columns. This searches the visible columns only again.",
+      "hideRevealedCustom": "Stop searching {{name}}",
+      "hideRevealedCustomTitle": "{{name}} is hidden: it shows only because the find searches it. This takes it out of the searched columns.",
+      "filterBy": "Filter by this column…",
+      "resetWidth": "Reset width"
+    },
+    "status": {
+      "rows_one": "{{countFormatted}} row",
+      "rows_other": "{{countFormatted}} rows",
+      "stations_one": "{{countFormatted}} station",
+      "stations_other": "{{countFormatted}} stations",
+      "shots_one": "{{countFormatted}} shot",
+      "shots_other": "{{countFormatted}} shots",
+      "sections_one": "{{countFormatted}} section",
+      "sections_other": "{{countFormatted}} sections",
+      "showing": "Showing {{shown}} of {{total}}",
+    "collapsed_one": "{{countFormatted}} section collapsed",
+    "collapsed_other": "{{countFormatted}} sections collapsed",
+      "cells_one": "{{countFormatted}} cell",
+      "cells_other": "{{countFormatted}} cells",
+      "sum": "Σ {{name}} {{value}}",
+      "avg": "Avg {{value}}",
+      "min": "Min {{value}}",
+      "max": "Max {{value}}",
+      "selectionAria": "Selection summary"
+    },
+    "readOnly": {
+      "closure": "Closures Computed View - read-only.",
+      "speleo": "Read-only",
+      "generic": "This view is read-only."
+    },
+    "empty": {
+      "noProject": "Open or create a project to see its data here.",
+      "noSections": "This project has no sections yet. Draw or import one to fill the table.",
+      "noRows": "No rows match the current filters.",
+      "noMatches": "No rows contain “{{query}}”.",
+      "noMatchesFiltered": "No rows the filters show contain “{{query}}”.",
+      "showAllRows": "Show all rows",
+      "clearFilters": "Clear filters"
+    },
+    "mapPane": {
+      "title": "Map",
+      "follow": "Follow",
+      "followTitle": "Keep the active row in view on the map",
+      "openInSurvey": "Open in Survey",
+      "openInSurveyTitle": "Edit the active row in the Survey workspace ({{shortcut}})",
+      "close": "Close the map"
+    },
+    "backToData": {
+      "label": "Back to Data",
+      "title": "Return to the Data workspace at {{name}}",
+      "dismiss": "Dismiss"
+    },
+    "openInData": {
+      "label": "Open in Data",
+      "title": "Open this section in the Data workspace at the selected row"
+    },
+    "skipped": {
+      "summary_one": "{{count}} edit skipped: {{reasons}}",
+      "summary_other": "{{count}} edits skipped: {{reasons}}",
+      "frozen": "frozen geometry",
+      "computed": "computed column",
+      "na": "does not apply",
+      "blocked": "read-only",
+      "invalid": "invalid value",
+      "conflict": "an average edited together with its in/out legs (the legs were kept)"
+    },
+    "tint": {
+      "legend": {
+        "clear": "No issue",
+        "error": "Error",
+        "issuesNote": "Rows without issues stay untinted",
+        "distanceNote": "Unreachable rows stay untinted"
+      }
+    },
+    "shortcuts": {
+      "showOnMap": "Alt+M",
+      "openInSurvey": "Alt+S"
+    }
+  },
   "grid": {
     "contextMenu": {
       "copy": "Copy{{suffix}}",
@@ -1926,6 +2162,11 @@
       "insertAbove": "Insert {{rows}} before",
       "insertBelow": "Insert {{rows}} after",
       "deleteRows": "Delete {{rows}}"
+    },
+    "sort": {
+      "ascending": "Sort by {{column}}, ascending",
+      "descending": "Sort by {{column}}, descending",
+      "clear": "Clear sort by {{column}}"
     },
     "rowNoun_one": "row",
     "rowNoun_other": "rows",
@@ -1938,6 +2179,263 @@
       "paste": "Ctrl+V",
       "clear": "Del",
       "fillDown": "Ctrl+D"
+    }
+  },
+  "dataToolbar": {
+    "aria": "Data tools",
+    "find": {
+      "placeholder": "Find in data...",
+      "aria": "Find in data",
+      "matchCase": "Match case (Alt+C)",
+      "wholeWord": "Match whole word (Alt+W)",
+      "regex": "Use regular expression (Alt+R)",
+      "count": "{{current}} of {{total}}",
+      "countLimit": "{{current}} of {{total}}+",
+      "noCurrent_one": "{{n}} match",
+      "noCurrent_other": "{{n}} matches",
+      "noResults": "No results",
+      "readOnly": "{{n}} read-only",
+      "readOnlyTitle": "Matches in cells that can't be edited (computed, frozen or not applicable). Replace skips them.",
+      "regexError": "Invalid pattern",
+      "prev": "Previous match (Shift+Enter, Shift+F3)",
+      "next": "Next match (Enter, F3)",
+      "clear": "Clear (Esc)",
+      "openReplace": "Show replace (Ctrl+H)",
+      "openReplaceMac": "Show replace (Cmd+Alt+F)",
+      "closeReplace": "Hide replace",
+      "options": "Search options",
+      "scopeBadge": "Searching hidden rows or columns too",
+      "rowsHeading": "Rows",
+      "rowsVisible": "Only rows the filters show",
+      "rowsAll": "All rows - temporarily show hidden matches",
+      "columnsHeading": "Columns",
+      "colsVisible": "Visible columns",
+      "colsAll": "All columns - temporarily show hidden ones with matches",
+      "colsCustom": "Choose columns...",
+      "colsCustomCount": "{{count}} of {{total}} chosen",
+      "colsSelectAll": "All",
+      "colsSelectNone": "None",
+      "onlyMatching": "Show only rows with matches"
+    },
+    "replace": {
+      "placeholder": "Replace with...",
+      "aria": "Replace with",
+      "regexHint": "Regex: $1, $&, $<name> insert matched text",
+      "one": "Replace",
+      "oneTitle": "Replace this match and go to the next (Enter)",
+      "all": "Replace all",
+      "allTitle": "Replace every match (asks first; one undo step)",
+      "skip": "Skip",
+      "skipTitle": "Leave this match and go to the next",
+      "confirm": "Replace {{matches}} in {{cells}}?",
+      "matches_one": "{{n}} match",
+      "matches_other": "{{n}} matches",
+      "cells_one": "{{n}} cell",
+      "cells_other": "{{n}} cells",
+      "confirmLocked_one": "{{n}} match in a row name or read-only cell will be skipped.",
+      "confirmLocked_other": "{{n}} matches in row names or read-only cells will be skipped.",
+      "confirmInvalid_one": "{{n}} cell would get an invalid value and will be skipped.",
+      "confirmInvalid_other": "{{n}} cells would get an invalid value and will be skipped.",
+      "confirmRounded_one": "{{n}} number cell shows a rounded value; it is written as shown.",
+      "confirmRounded_other": "{{n}} number cells show rounded values; they are written as shown.",
+      "confirmLimit": "Only the first {{n}} matches are included; run Replace all again for the rest.",
+    "confirmRoundedOne": "This number is shown rounded ({{held}} shown as {{shown}}); replacing writes the value as shown. Replace?",
+      "confirmOk": "Replace all",
+      "cancel": "Cancel",
+      "nothingReplaceable": "Nothing to replace: every match is in a read-only cell or would be invalid.",
+      "blocked": "Replace is off while the data is read-only.",
+      "summaryReplaced": "Replaced {{n}}",
+      "summaryLocked": "skipped {{n}} (read-only)",
+      "summaryInvalid": "{{n}} invalid",
+      "summaryConflict": "skipped {{n}} in an averaged angle whose in/out legs were replaced too (the legs were kept)",
+      "summaryNone": "Nothing replaced",
+      "failed": "Replace failed: {{error}}",
+      "invalidOne": "\"{{text}}\" is not a valid {{column}} value.",
+      "lockedOne": "This cell can't be edited ({{reason}}). Skipped to the next match."
+    },
+    "lockReason": {
+      "na": "not applicable",
+      "computed": "computed",
+      "frozen": "frozen shot",
+      "blocked": "read-only data"
+    },
+    "rowType": {
+      "label": "Row type",
+      "all": "All",
+      "stations": "Stations",
+      "shots": "Shots"
+    },
+    "sections": {
+      "button": "Sections",
+      "buttonCount": "Sections {{shown}}/{{total}}",
+      "title": "Show only some sections",
+      "search": "Search sections",
+      "all": "All sections",
+      "only": "Only",
+      "onlyTitle": "Show only {{name}}",
+      "noResults": "No sections match",
+      "count": "{{shown}} of {{total}} shown"
+    },
+    "filter": {
+      "button": "Filter",
+      "buttonCount": "Filter ({{count}})",
+      "title": "Filter rows",
+      "quickHeading": "Show only",
+      "quick": {
+        "issues": "With survey issues",
+        "comments": "With comments",
+        "links": "Merges and closures",
+        "frozen": "Frozen shots",
+        "virtualShots": "Jumps and references"
+      },
+      "quickHint": {
+        "issues": "Shots with an unresolved warning, and their stations",
+        "comments": "Stations and shots that have a comment",
+        "links": "Stations with a merge or closure, and the shots touching them",
+        "frozen": "Frozen shots and their stations",
+        "virtualShots": "Jump and reference shots and their stations"
+      },
+      "conditionsHeading": "Conditions - all must match",
+      "noConditions": "No conditions yet.",
+      "column": "Column",
+      "operator": "Operator",
+      "value": "Value",
+      "valuePick": "Pick a value",
+      "add": "Add",
+      "addTitle": "Add this condition",
+      "remove": "Remove condition",
+      "problem": {
+        "needsValue": "Enter a value",
+        "notANumber": "Enter a number",
+        "notADate": "Enter a date as YYYY-MM-DD"
+      },
+      "shotHint": "A shot column also keeps the stations at the ends of the matching shots.",
+      "stationHint": "A station column also keeps the shots touching the matching stations.",
+      "clear": "Clear filters",
+      "ops": {
+        "contains": "contains",
+        "notContains": "does not contain",
+        "eq": "=",
+        "neq": "≠",
+        "lt": "<",
+        "lte": "≤",
+        "gt": ">",
+        "gte": "≥",
+        "empty": "is empty",
+        "notEmpty": "is not empty"
+      },
+      "textOps": {
+        "eq": "is",
+        "neq": "is not"
+      },
+      "dateOps": {
+        "eq": "is on",
+        "neq": "is not on",
+        "lt": "is before",
+        "lte": "is on or before",
+        "gt": "is after",
+        "gte": "is on or after"
+      }
+    },
+    "columns": {
+      "button": "Columns",
+      "title": "Show or hide columns",
+      "shown": "{{shown}} of {{total}} shown",
+      "showAll": "Show all",
+      "reset": "Reset to default",
+      "revealed": "shown by search"
+    },
+    "tint": {
+      "button": "Tint",
+      "buttonMode": "Tint: {{mode}}",
+      "title": "Row background colour",
+      "short": {
+        "none": "None",
+        "section": "Section",
+        "issues": "Issues",
+        "depth": "Depth",
+        "distance": "Distance",
+        "type": "Row type"
+      },
+      "modes": {
+        "none": "None",
+        "section": "Section colour",
+        "issues": "Survey issues",
+        "depth": "Depth",
+        "distance": "Distance from origin",
+        "type": "Row type"
+      },
+      "descriptions": {
+        "none": "Plain rows.",
+        "section": "Each row takes its section's colour, as on the map.",
+        "issues": "Shots by how far their readings disagree; stations follow their worst shot.",
+        "depth": "Shallow to deep, with the map's depth palette.",
+        "distance": "Near to far along the survey from the distance origin.",
+        "type": "Stations and shots in their element colours."
+      },
+      "legend": {
+        "agree": "Readings agree",
+        "error": "Error",
+        "shallow": "Shallow",
+        "deep": "Deep",
+        "near": "Near",
+        "far": "Far",
+        "notComputed": "Distances appear once the distance overlay has been computed.",
+        "station": "Station",
+        "shot": "Shot",
+        "more": "+{{count}} more"
+      }
+    },
+    "view": {
+      "button": "View",
+      "title": "Section headers and grouping",
+      "sectionHeaders": "Section headers",
+      "collapseAll": "Collapse all sections",
+      "expandAll": "Expand all sections",
+      "needsHeaders": "Turn on section headers to collapse sections.",
+      "sorted": "Sections can't collapse while the rows are sorted."
+    },
+    "map": {
+      "button": "Map",
+      "show": "Show the map beside the table",
+      "hide": "Hide the map"
+    },
+    "chips": {
+      "aria": "Active filters",
+      "stations": "Stations only",
+      "shots": "Shots only",
+      "sections": "Sections: {{names}}",
+      "sectionsMore": "Sections: {{names}} +{{count}}",
+      "sectionsNone": "Sections: none",
+      "quick": {
+        "issues": "With survey issues",
+        "comments": "With comments",
+        "links": "Merges and closures",
+        "frozen": "Frozen shots",
+        "virtualShots": "Jumps and references"
+      },
+      "condition": "{{column}} {{op}} {{value}}",
+      "conditionNoValue": "{{column}} {{op}}",
+      "onlyMatching": "Only rows with matches",
+        "revealedSearch_one": "{{n}} row shown by search",
+      "revealedSearch_other": "{{n}} rows shown by search",
+      "revealedNav_one": "{{n}} row shown by navigation",
+      "revealedNav_other": "{{n}} rows shown by navigation",
+      "revealedBoth_one": "{{n}} row shown by search and navigation",
+      "revealedBoth_other": "{{n}} rows shown by search and navigation",
+      "revealedColumns_one": "{{n}} hidden column shown by search",
+      "revealedColumns_other": "{{n}} hidden columns shown by search",
+      "hide": "Hide",
+      "hideTitle": "Hide them again",
+      "remove": "Remove",
+      "clearAll": "Clear all",
+      "clearAllTitle": "Remove every filter, show rows without matches again, and hide the temporarily shown rows and columns"
+    },
+    "sortBar": {
+      "text": "Sorted by {{column}}, {{dir}}. Survey order and the link rail are off.",
+      "asc": "ascending",
+      "desc": "descending",
+      "reset": "Back to survey order"
     }
   },
   "detailPanel": {
@@ -2746,6 +3244,7 @@
   },
   "importGate": {
     "inProgress": "Finish or cancel the current import first.",
+    "exportInProgress": "Wait for the export to finish before opening or importing a file.",
     "alreadyOpen": "{{fileName}} is already the open project."
   },
   "newerSchema": {
@@ -3106,8 +3605,8 @@
   "modeCarousel": {
     "aria": "Workspace mode",
     "survey": "Survey",
-    "plan": "Plan",
-    "export": "Export"
+    "data": "Data",
+    "plan": "Plan"
   },
   "divePlanBar": {
     "label": "Previous dive plans",
@@ -3165,7 +3664,10 @@
     }
   },
   "exportPanel": {
-    "title": "Export"
+    "title": "Export",
+    "close": "Close export",
+    "closeHint": "Close export and go back to where you were",
+    "inProgress": "Export in progress"
   },
   "toolbar": {
     "groupAria": "{{group}} tools",
@@ -3205,12 +3707,12 @@
         "title": "Stalagmight Workspace",
         "steps": {
           "modes": {
-            "title": "Survey, Plan, Export",
-            "description": "An open project is always in one of three modes. Only Survey can edit; Plan and Export are read-only, and mutating tools are hidden there rather than greyed out.",
+            "title": "Survey, Data, Plan",
+            "description": "Switch workspaces here. Survey and Data edit the project; Plan is read-only, and mutating tools are hidden there rather than greyed out. Export opens from the project menu (or Ctrl+E) and closes back to where you were.",
             "descriptionItems": [
-              "Survey: edit geometry, sections, and shots.",
-              "Plan: gas planning over the Closures Computed View.",
-              "Export: frame and export an image of the survey."
+              "Survey: edit geometry, sections, and shots on the map.",
+              "Data: every section's stations and shots in one table, with an optional map pane.",
+              "Plan: gas planning over the Closures Computed View."
             ]
           },
           "geometry": {

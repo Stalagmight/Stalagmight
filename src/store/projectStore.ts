@@ -439,6 +439,8 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   createLoopClosure: (stationA: StationRef, stationB: StationRef, closureStrategy: ClosureStrategy) => Promise<CommandResult>;
   removeLoopClosure: (closureId: bigint) => Promise<CommandResult>;
   updateStationComment: (stationRef: StationRef, comment: string | null) => Promise<CommandResult>;
+  /** Set or clear a station's name; `null`/blank removes it (backend trims + cleans). */
+  updateStationName: (stationRef: StationRef, name: string | null) => Promise<CommandResult>;
   moveComment: (source: CommentHolder, target: CommentHolder, swap: boolean) => Promise<CommandResult>;
   setZeroDatum: (stationRef: StationRef, coordinates: GpsCoordinates, options?: { fitToBounds?: boolean }) => Promise<CommandResult>;
   removeZeroDatum: (stationRef: StationRef) => Promise<CommandResult>;
@@ -2045,6 +2047,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     );
   },
 
+  updateStationName: async (stationRef: StationRef, name: string | null) =>
+    executeCommand('set_station_name', { stationRef, name }, { purpose: 'update station name', fields: { stationRef } }),
+
   moveComment: async (source: CommentHolder, target: CommentHolder, swap: boolean) => {
     return executeCommand(
       'move_comment',
@@ -2426,7 +2431,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     // The command returns NOTES (#438): what the single-flag `.tml` format
     // could not carry about this project's north references. Empty for an
     // ordinary project. Raised here rather than in `ExportControls` so every
-    // route reaches the user - the modal, the Export-mode panel and this action
+    // route reaches the user - the Export workspace panel and this action
     // called directly.
     const notes = await invokeIpc<string[]>('export_tml', { path }, {
       purpose: 'export project as Ariane TML',

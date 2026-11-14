@@ -498,6 +498,208 @@ fn test_update_data_table_view_clamps_degenerate_widths() {
     });
 }
 
+/// Every field of the Data workspace view round-trips, and a partial write
+/// leaves the fields it does not name alone.
+#[test]
+fn test_update_data_workspace_view_roundtrip() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        let defaults = config::get_config(state(&app)).panels;
+        assert_eq!(defaults.data_workspace_tint_mode, "none");
+        assert_eq!(defaults.data_workspace_map_pane_width, 480);
+        assert!(!defaults.data_workspace_map_pane_open);
+        assert!(defaults.data_workspace_section_headers);
+        assert!(defaults
+            .data_workspace_hidden_columns
+            .iter()
+            .any(|key| key == "depth"));
+
+        config::update_data_workspace_view_impl(
+            state(&app).inner(),
+            Some(vec!["comment".to_string(), "length".to_string()]),
+            Some(vec!["x".to_string(), "y".to_string()]),
+            Some(BTreeMap::from([
+                ("comment".to_string(), 320),
+                ("length".to_string(), 90),
+            ])),
+            Some("depth".to_string()),
+            Some(true),
+            Some(640),
+            Some(false),
+        )
+        .expect("update data workspace view");
+        let panels = config::get_config(state(&app)).panels;
+        assert_eq!(
+            panels.data_workspace_column_order,
+            vec!["comment", "length"]
+        );
+        assert_eq!(panels.data_workspace_hidden_columns, vec!["x", "y"]);
+        assert_eq!(
+            panels.data_workspace_column_widths,
+            BTreeMap::from([("comment".to_string(), 320), ("length".to_string(), 90)])
+        );
+        assert_eq!(panels.data_workspace_tint_mode, "depth");
+        assert!(panels.data_workspace_map_pane_open);
+        assert_eq!(panels.data_workspace_map_pane_width, 640);
+        assert!(!panels.data_workspace_section_headers);
+
+        // A partial write (just the tint) leaves every other field as it was,
+        // and touches no other view's fields.
+        config::update_data_workspace_view_impl(
+            state(&app).inner(),
+            None,
+            None,
+            None,
+            Some("issues".to_string()),
+            None,
+            None,
+            None,
+        )
+        .expect("partial update");
+        let after = config::get_config(state(&app)).panels;
+        assert_eq!(after.data_workspace_tint_mode, "issues");
+        assert_eq!(after.data_workspace_column_order, vec!["comment", "length"]);
+        assert_eq!(after.data_workspace_map_pane_width, 640);
+        assert!(after.data_workspace_map_pane_open);
+        assert!(!after.data_workspace_section_headers);
+        assert_eq!(
+            after.data_table_shot_hidden_columns,
+            defaults.data_table_shot_hidden_columns
+        );
+
+        // An empty hidden list is stored as such ("show all"), not re-defaulted.
+        config::update_data_workspace_view_impl(
+            state(&app).inner(),
+            None,
+            Some(Vec::new()),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("show all");
+        assert!(config::get_config(state(&app))
+            .panels
+            .data_workspace_hidden_columns
+            .is_empty());
+    });
+}
+
+/// Hostile input through the partial door: an unknown tint is REJECTED with the
+/// whole call (nothing else in it is written), while degenerate widths, pane
+/// widths and column keys are REPAIRED on the way in.
+#[test]
+fn test_update_data_workspace_view_rejects_unknown_tint_and_repairs_the_rest() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        let err = config::update_data_workspace_view_impl(
+            state(&app).inner(),
+            Some(vec!["length".to_string()]),
+            None,
+            None,
+            Some("rainbow".to_string()),
+            Some(true),
+            None,
+            None,
+        );
+        assert!(err.is_err(), "an unknown tint must be refused");
+        let panels = config::get_config(state(&app)).panels;
+        assert!(
+            panels.data_workspace_column_order.is_empty(),
+            "a refused call writes none of its other fields"
+        );
+        assert!(!panels.data_workspace_map_pane_open);
+        assert_eq!(panels.data_workspace_tint_mode, "none");
+
+        let mut hostile_order: Vec<String> = (0..300).map(|i| format!("col{i}")).collect();
+        hostile_order.push(String::new());
+        hostile_order.push("z".repeat(129));
+        hostile_order.push("col0".to_string());
+        config::update_data_workspace_view_impl(
+            state(&app).inner(),
+            Some(hostile_order),
+            Some(vec![
+                "x".to_string(),
+                String::new(),
+                "x".to_string(),
+                "q".repeat(500),
+            ]),
+            Some(BTreeMap::from([
+                ("collapsed".to_string(), 0),
+                ("runaway".to_string(), u32::MAX),
+                (String::new(), 100),
+                ("k".repeat(200), 100),
+            ])),
+            None,
+            None,
+            Some(u32::MAX),
+            None,
+        )
+        .expect("repairable input is accepted");
+        let panels = config::get_config(state(&app)).panels;
+        assert_eq!(panels.data_workspace_column_order.len(), 256);
+        assert_eq!(panels.data_workspace_column_order[0], "col0");
+        assert!(panels
+            .data_workspace_column_order
+            .iter()
+            .all(|k| !k.is_empty() && k.len() <= 128));
+        assert_eq!(panels.data_workspace_hidden_columns, vec!["x"]);
+        assert_eq!(
+            panels.data_workspace_column_widths,
+            BTreeMap::from([("collapsed".to_string(), 40), ("runaway".to_string(), 2000),])
+        );
+        assert_eq!(panels.data_workspace_map_pane_width, 4000);
+
+        config::update_data_workspace_view_impl(
+            state(&app).inner(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(0),
+            None,
+        )
+        .expect("a collapsed pane is repaired, not refused");
+        assert_eq!(
+            config::get_config(state(&app))
+                .panels
+                .data_workspace_map_pane_width,
+            360
+        );
+    });
+}
+
+/// The whole-`Config` door cannot reject, so it repairs: an unknown tint falls
+/// back to the default and the pane width is clamped, while a valid value
+/// survives the same door.
+#[test]
+fn test_update_config_repairs_the_data_workspace_view() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        with_restored_config(&app, || {
+            let mut cfg = config::get_config(state(&app));
+            cfg.panels.data_workspace_tint_mode = "rainbow".to_string();
+            cfg.panels.data_workspace_map_pane_width = 9;
+            config::update_config_impl(state(&app).inner(), cfg).expect("update config");
+            let panels = config::get_config(state(&app)).panels;
+            assert_eq!(panels.data_workspace_tint_mode, "none");
+            assert_eq!(panels.data_workspace_map_pane_width, 360);
+
+            let mut cfg = config::get_config(state(&app));
+            cfg.panels.data_workspace_tint_mode = "distance".to_string();
+            config::update_config_impl(state(&app).inner(), cfg).expect("update config");
+            assert_eq!(
+                config::get_config(state(&app))
+                    .panels
+                    .data_workspace_tint_mode,
+                "distance"
+            );
+        });
+    });
+}
+
 /// The column-key LISTS (order + hidden, shot + station) get the same ceiling as
 /// the width maps beside them. They used to be written straight through from the
 /// renderer with no cap at all: `config.toml` is re-parsed at every launch, so an

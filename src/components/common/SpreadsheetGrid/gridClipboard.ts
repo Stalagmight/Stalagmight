@@ -26,6 +26,9 @@ const SPACE_RE = /[\s  ]/g; // incl. NBSP / narrow NBSP used as group sep
 
 const SPACE_CLASS = '[\\s\\u00A0\\u202F]'; // same set, for building patterns
 
+/** U+2212 MINUS SIGN, U+FE63 SMALL HYPHEN-MINUS, U+FF0D FULLWIDTH HYPHEN-MINUS. */
+const UNICODE_MINUS_RE = /[\u2212\uFE63\uFF0D]/g;
+
 const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /**
@@ -43,7 +46,11 @@ const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\
  * fallback covers "1.5" typed in a comma-decimal locale.
  */
 export function parseLocaleNumber(raw: string, locale: string): number | undefined {
-  const s = raw.trim();
+  // Intl formats negatives with U+2212 MINUS SIGN in sv-SE, nb-NO, fi-FI...;
+  // the small and fullwidth hyphen-minus also arrive in pasted text. Number()
+  // reads only the ASCII '-', so a value the grid itself displayed would not
+  // parse back.
+  const s = raw.trim().replace(UNICODE_MINUS_RE, '-');
   if (s === '') return undefined;
   const { decimal, group } = getLocaleSeparators(locale);
   // Space-like group separators (fr-FR uses NBSP / narrow NBSP) accept any space.

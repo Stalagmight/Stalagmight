@@ -228,14 +228,24 @@ test.describe('Data table fullscreen mode', () => {
     await page.waitForTimeout(300);
     expect(await getActiveTool(page)).toBe('select');
 
-    // Ctrl+I (import) and Ctrl+E (export) are dead: no dialog appears and
-    // the mode stays active.
+    // Ctrl+I (import) and Ctrl+E (the Export workspace) are dead: no dialog
+    // appears, the app mode does not change and the fullscreen table stays.
     await page.keyboard.press('Control+i');
     await page.waitForTimeout(300);
     await expect(page.getByTestId('dmp-selection-dialog')).toHaveCount(0);
+    const modeBefore = await page.evaluate(
+      () => (window as unknown as { __E2E_TEST__: { uiStore: { getState: () => { appMode: string } } } })
+        .__E2E_TEST__.uiStore.getState().appMode,
+    );
     await page.keyboard.press('Control+e');
     await page.waitForTimeout(300);
-    await expect(page.getByTestId('export-dialog')).toHaveCount(0);
+    expect(
+      await page.evaluate(
+        () => (window as unknown as { __E2E_TEST__: { uiStore: { getState: () => { appMode: string } } } })
+          .__E2E_TEST__.uiStore.getState().appMode,
+      ),
+    ).toBe(modeBefore);
+    await expect(page.getByTestId('export-panel')).toHaveCount(0);
     await expect(page.getByTestId('data-table')).toHaveAttribute('data-fullscreen', 'true');
 
     // The fullscreen Sections view stays editable - dirty the project.
