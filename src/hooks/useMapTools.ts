@@ -396,8 +396,8 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
             stationA,
             stationB,
           });
-        } else if (result.connected || result.reason === 'Both sections have fixed coordinates') {
-          // Connected (or both sections fixed) - redirect to closure dialog
+        } else if (result.connected) {
+          // Connected - merging would make a loop, so redirect to closure dialog
           setSource('map');
           openDialog('closure', {
             stationA,
@@ -406,7 +406,8 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
             reason: result.reason,
           });
         } else {
-          // Not connected and merge blocked (e.g. both sides have zero datums)
+          // Not connected and merge blocked. The backend blocks only a loop
+          // today (zero datums no longer block a merge, #741); kept defensive.
           showToast(result.reason ?? t('map.toasts.mergeNotPossible'), TOAST_KEYS.MERGE_BLOCKED, 'warning');
           clearMergeStations();
         }

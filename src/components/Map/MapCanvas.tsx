@@ -1435,7 +1435,7 @@ function MapCanvas() {
           : {};
         if (result.can_merge) {
           openDialog('merge', { stationA: originStation, stationB: targetStation, ...extra });
-        } else if (result.connected || result.reason === 'Both sections have fixed coordinates') {
+        } else if (result.connected) {
           openDialog('closure', {
             stationA: originStation,
             stationB: targetStation,
