@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use crate::core::{Validator, WarningSeverity};
 use crate::models::{
     DatumGap, Project, ProjectWarning, SectionId, ShotData, ShotId, DATUM_GPS_GAP,
+    DATUM_GPS_GAP_START,
 };
 use crate::persistence::Database;
 
@@ -246,10 +247,17 @@ impl AppState {
         // Project-level: one advisory warning per GPS-fix zero datum whose GPS is
         // further from its surveyed position than 15 m plus 2% of the survey
         // distance to the nearest other datum (#741 decision 4). Attached to the
-        // fix's adjacent shot (station 0 -> shot 0, station i -> shot i-1), so it
-        // keys and ignores like any per-shot warning; `datum_station_index` names
-        // the fix's station for "Go to station". The gap is the backend's
-        // (`Project::gps_fix_gaps`), so every readout of it agrees.
+        // fix's adjacent shot, so it keys and ignores like any per-shot warning,
+        // and each fix gets a (shot, code) pair of its own: station i -> shot i-1
+        // under DATUM_GPS_GAP, station 0 -> shot 0 under DATUM_GPS_GAP_START, so
+        // the fixes on stations 0 and 1 never share an Ignore.
+        // `datum_station_index` names the fix's station for "Go to station". The
+        // gap is the backend's (`Project::gps_fix_gaps`), so every readout of it
+        // agrees.
+        //
+        // A fix on a section with no shots has no shot to hang a row on, and the
+        // warnings list, Ignore and navigation are all shot-keyed, so it gets no
+        // row; it is logged instead of dropped silently.
         let mut gaps: Vec<_> = project
             .gps_fix_gaps()
             .into_iter()
@@ -260,18 +268,28 @@ impl AppState {
             let Some(section) = project.get_section(datum.section_id) else {
                 continue;
             };
-            let shot_index = datum.station_index.saturating_sub(1) as usize;
+            let (shot_index, code) = match datum.station_index {
+                0 => (0, DATUM_GPS_GAP_START),
+                i => (i as usize - 1, DATUM_GPS_GAP),
+            };
             let Some(shot) = section.shots.get(shot_index) else {
+                tracing::warn!(
+                    section_id = section.id,
+                    station_index = datum.station_index,
+                    gap_m = gap.gap_m,
+                    purpose = "report a GPS fix far from its survey",
+                    "GPS fix exceeds the gap threshold but its section has no shot to carry the warning"
+                );
                 continue;
             };
-            let is_resolved = is_resolved_for(&shot.uuid, section.id, shot.id, DATUM_GPS_GAP);
+            let is_resolved = is_resolved_for(&shot.uuid, section.id, shot.id, code);
             all_warnings.push(ProjectWarning {
                 section_id: section.id,
                 shot_id: shot.id,
                 shot_index,
                 message: datum_gps_gap_message(&gap),
-                code: DATUM_GPS_GAP.to_string(),
-                severity: crate::models::severity_for_code(DATUM_GPS_GAP),
+                code: code.to_string(),
+                severity: crate::models::severity_for_code(code),
                 is_resolved,
                 shot_uuid: shot.uuid.clone(),
                 datum_station_index: Some(datum.station_index),

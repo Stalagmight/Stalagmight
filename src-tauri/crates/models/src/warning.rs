@@ -23,9 +23,20 @@ pub enum WarningSeverity {
 /// survey or the GPS may be off, and the surveyor may know the gap is real, so
 /// it is an advisory **warning** and ignorable. One row per such fix.
 ///
+/// A warning row hangs off a shot, and an Ignore is keyed by (shot, code), so
+/// each fix needs a (shot, code) pair of its own: a fix on station `i > 0`
+/// sits on the shot that ARRIVES at it (`i - 1`) under this code; a fix on a
+/// section's first station, which no shot arrives at, sits on the shot that
+/// LEAVES it (shot 0) under [`DATUM_GPS_GAP_START`]. Station 1's fix uses
+/// shot 0 too, and the codes keep the two Ignores apart.
+///
 /// (It replaced `multiple_datums_per_merge_component`: several datums in one
 /// merge-connected group are valid since #741.)
 pub const DATUM_GPS_GAP: &str = "datum_gps_gap";
+
+/// [`DATUM_GPS_GAP`] for a fix on a section's first station (station 0). Same
+/// check and message; only the Ignore key differs.
+pub const DATUM_GPS_GAP_START: &str = "datum_gps_gap_start";
 
 /// Canonical severity for a validation warning code - the SINGLE source of truth
 /// shared by `Validator::validate_shot`, the project-level datum gap check,
@@ -42,7 +53,8 @@ pub fn severity_for_code(code: &str) -> WarningSeverity {
         | "NON_FINITE_VALUE"
         | "LENGTH_BELOW_DEPTH_CHANGE" => WarningSeverity::Error,
         // SHORT_SHOT, LONG_SHOT, LARGE_DEPTH_CHANGE, AZIMUTH_DEVIATION,
-        // PITCH_DEVIATION, INCLINATION_DEPTH_MISMATCH and DATUM_GPS_GAP are
+        // PITCH_DEVIATION, INCLINATION_DEPTH_MISMATCH, DATUM_GPS_GAP and
+        // DATUM_GPS_GAP_START are
         // advisory; an unknown code defaults to advisory so a future warning is
         // ignorable until classified.
         _ => WarningSeverity::Warning,
