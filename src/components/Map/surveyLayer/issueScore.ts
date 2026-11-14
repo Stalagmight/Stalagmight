@@ -17,8 +17,8 @@
  *
  * `labelScore` is the score without the warn floor: it ranks and colours the
  * Errors labels, which show the metric values. A station combines the shots
- * touching it the same way (worst or average), is raised to 3 when it is a
- * datum of an over-anchored merge group, and shares its score across its merge
+ * touching it the same way (worst or average), is raised to the severity of a
+ * datum warning naming it (`datum_gps_gap`), and shares its score across its merge
  * group (`stationMergedWith` is transitive, so one sweep per group is exact).
  *
  * Pure: aligned to the global shot / station indices `SurveyData` uses.
@@ -152,14 +152,14 @@ export function computeIssueScores(
     }
   }
 
-  // (6) An over-anchoring error is attached to one representative shot but
-  //     names every zero datum of the group in `datumRefs`; a datum can sit in
-  //     a different merge group from that shot, so colour each one directly.
-  //     After the sharing: a datum's own error is not averaged away.
+  // (6) A datum warning (`datum_gps_gap`, #741) is attached to a shot next to
+  //     its station but names the station itself in `datumStationIndex`, so
+  //     colour that station directly. After the sharing: a datum's own warning
+  //     is not averaged away.
   for (const w of warnings) {
-    if (w.isResolved || !w.datumRefs) continue;
+    if (w.isResolved || w.datumStationIndex === undefined) continue;
     const s = w.severity === 'error' ? SCORE_MAX : SCORE_WARNING;
-    for (const ref of w.datumRefs) raise(stationScore, stationLookup.get(ref.section_id)?.get(ref.station_index), s);
+    raise(stationScore, stationLookup.get(w.sectionId)?.get(w.datumStationIndex), s);
   }
 
   return { shotScore, stationScore, labelScore, ignored };

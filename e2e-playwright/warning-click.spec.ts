@@ -414,13 +414,12 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
     await expect(page.getByTestId('warning-resolution-skip')).toBeVisible();
   });
 
-  test('over-anchoring warning offers no Ignore option', async ({ page }) => {
-    await createProject(page, 'Over-anchor Resolve Test');
+  test('GPS gap warning offers go-to-station and edit-datum, and opens Edit Station', async ({ page }) => {
+    await createProject(page, 'Datum Gap Resolve Test');
     await seedProjectWithSections(page, sectionSeeds);
     await waitForMapIdle(page);
 
-    const sectionIds = await getSectionIds(page);
-    const sectionId = sectionIds[0]!;
+    const sectionId = (await getSectionIds(page))[0]!;
     const shotIds = await getShotIdsForSection(page, sectionId);
 
     await injectWarnings(page, [
@@ -428,29 +427,27 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
         sectionId,
         shotId: shotIds[0]!,
         shotIndex: 0,
-        code: 'multiple_datums_per_merge_component',
-        message: 'This merge group is anchored by 2 zero datums (1:0, 2:0). Keep one and remove the others.',
-        severity: 'error',
+        code: 'datum_gps_gap',
+        message: 'The GPS of this zero datum is 60 m from where the survey puts it.',
+        severity: 'warning',
         isResolved: false,
-        datumStationIndex: 0,
-        datumRefs: [
-          { section_id: sectionId, station_index: 0 },
-          { section_id: sectionIds[1] ?? sectionId, station_index: 0 },
-        ],
+        datumStationIndex: 1,
       },
     ]);
 
     await page.getByTestId('detail-tab-warnings').click();
     await warningResolveButtons(page).first().click();
 
-    // Structural over-anchoring is an error, never suppressed (issue #57): the
-    // resolution view offers one "keep this datum" option per anchor plus
-    // go-to-station, but no Ignore.
+    // A GPS fix that disagrees with the survey (#741) is advisory: look at the
+    // station, fix its datum in Edit Station, or ignore it.
     await expect(page.getByTestId('warning-resolution')).toBeVisible();
-    await expect(page.getByTestId('warning-resolution-option-keep-datum-0')).toBeVisible();
-    await expect(page.getByTestId('warning-resolution-option-keep-datum-1')).toBeVisible();
     await expect(page.getByTestId('warning-resolution-option-go-to-station')).toBeVisible();
-    await expect(page.getByTestId('warning-resolution-option-ignore')).toHaveCount(0);
+    await expect(page.getByTestId('warning-resolution-option-edit-datum')).toBeVisible();
+    await expect(page.getByTestId('warning-resolution-option-ignore')).toBeVisible();
+
+    await page.getByTestId('warning-resolution-option-edit-datum').check();
+    await page.getByTestId('warning-resolution-apply').click();
+    await expect(page.getByTestId('edit-station-dialog')).toBeVisible();
   });
 
   test('inclination/depth mismatch offers use-depth and use-inclination resolutions', async ({ page }) => {
