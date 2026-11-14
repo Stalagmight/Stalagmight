@@ -93,6 +93,12 @@ pub(super) struct HistoryIds {
     /// sections, a re-created section - which will sit beside the live project
     /// when that entry is replayed.
     reinstalled: BTreeSet<(SectionId, String)>,
+    /// (section, id) pairs some recorded whole-project state shows that section
+    /// as the ONLY holder of. A reinstalled shot whose id the live project holds
+    /// elsewhere is then the same shot after a move (a combine or a split moved
+    /// it, and that entry's undo puts it back before the reinstalling entry
+    /// replays), not a repeat (#732).
+    sole_in_a_project_state: BTreeSet<(SectionId, String)>,
 }
 
 impl HistoryIds {
@@ -156,12 +162,16 @@ impl HistoryIds {
     }
 
     /// Fold one recorded state into the totals and clear it for the next.
+    /// `reinstalls`: the state is sections an entry puts back whole; otherwise
+    /// it is a whole-project snapshot.
     fn close_state(&mut self, state: &mut BTreeMap<String, BTreeSet<SectionId>>, reinstalls: bool) {
         for (uuid, sections) in std::mem::take(state) {
             if reinstalls {
                 for &section in &sections {
                     self.reinstalled.insert((section, uuid.clone()));
                 }
+            } else if let (Some(&only), 1) = (sections.first(), sections.len()) {
+                self.sole_in_a_project_state.insert((only, uuid.clone()));
             }
             let holders = self.holders.entry(uuid.clone()).or_default();
             holders.extend(sections.iter().copied());
@@ -181,9 +191,13 @@ impl HistoryIds {
 ///    history (history saved against an earlier heal) -> that;
 /// 4. S must yield X: another section holds X in the same recorded state and
 ///    keeps it (the one holding X live, else the lowest), or S is a section an
-///    entry reinstalls while another live section holds X -> a derived
-///    replacement, stepped past every id in use;
-/// 5. otherwise unchanged - including an id that only MOVED between sections.
+///    entry reinstalls while another live section holds X and no recorded
+///    project state shows S as X's only holder -> a derived replacement,
+///    stepped past every id in use;
+/// 5. otherwise unchanged - including an id that only MOVED between sections:
+///    a shot a combine or a split moved out of a section that an older entry
+///    created or added keeps its id, because the move's own "before" snapshot
+///    shows it in that section alone (#732).
 pub(super) fn history_remap(
     project: &Project,
     renamed: &ShotUuidRemap,
@@ -207,9 +221,13 @@ pub(super) fn history_remap(
         }
     }
     for (section, uuid) in &ids.reinstalled {
-        if live_holder
-            .get(uuid.as_str())
-            .is_some_and(|&holder| holder != *section)
+        let moved_out = ids
+            .sole_in_a_project_state
+            .contains(&(*section, uuid.clone()));
+        if !moved_out
+            && live_holder
+                .get(uuid.as_str())
+                .is_some_and(|&holder| holder != *section)
         {
             yields.insert((*section, uuid.as_str()));
         }

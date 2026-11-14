@@ -172,6 +172,13 @@ mod reverse_tests;
 mod shot_uuid_tests;
 #[cfg(test)]
 #[expect(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod undo_after_reopen_tests;
+#[cfg(test)]
+#[expect(
     clippy::expect_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
