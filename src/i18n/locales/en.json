@@ -1948,7 +1948,8 @@
     "selectionNotFound": "Selection not found.",
     "warnings": {
       "empty": "No warnings.",
-      "count": "{{countFormatted}} warnings",
+      "count_one": "{{countFormatted}} warning",
+      "count_other": "{{countFormatted}} warnings",
       "resolvedCount": "{{countFormatted}} resolved",
       "hideResolved": "Hide resolved",
       "showResolved": "Show resolved",
