@@ -97,7 +97,11 @@ describe('section header rows start in the gutter', () => {
     const i = rowIndex('sec:2');
     const gutter = screen.getByTestId(`data-grid-gutter-${i}`);
     expect(gutter.querySelector('.dw-rail-elbow')).not.toBeNull();
-    expect(gutter.textContent).toBe('');
+    // The gutter's own label is the rail only: the only text in the gutter is
+    // the header content the grid places there (groupContentStart='gutter').
+    const content = screen.getByTestId(`data-grid-group-content-${i}`);
+    expect(gutter.contains(content)).toBe(true);
+    expect((gutter.textContent ?? '').replace(content.textContent ?? '', '')).toBe('');
     const band = renderPart(grid().groupRowContent!(grid().rows[i]!, i)).getByTestId('data-section-header-2');
     // Chevron, dot, full name, #id, counts and the "continues from" chip.
     expect(band).toHaveTextContent('Branch B#2');
