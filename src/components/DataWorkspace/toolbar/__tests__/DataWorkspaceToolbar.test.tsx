@@ -17,7 +17,8 @@ vi.mock('../../../../hooks/useEditingBlocked', () => ({
 }));
 
 import { useDataWorkspaceStore } from '../../store';
-import { DATA_DEFAULT_HIDDEN } from '../../columnsMeta';
+import { DATA_COLUMNS, DATA_DEFAULT_HIDDEN } from '../../columnsMeta';
+import type { DataColumnKey } from '../../types';
 import { useUIStore } from '../../../../store/uiStore';
 import { useProjectStore } from '../../../../store/projectStore';
 import { buildEditCommands } from '../../model/edits';
@@ -418,15 +419,32 @@ describe('filters, chips and menus', () => {
   it('columns menu: toggle, Show all, Reset to default, count', () => {
     renderToolbar();
     fireEvent.click(screen.getByTestId('data-columns-button'));
-    expect(screen.getByTestId('data-columns-count')).toHaveTextContent('30 of 30 shown');
+    const total = DATA_COLUMNS.length;
+    expect(screen.getByTestId('data-columns-count')).toHaveTextContent(`${total} of ${total} shown`);
     fireEvent.click(screen.getByTestId('data-columns-col-comment'));
     expect(store().hiddenColumns).toEqual(['comment']);
-    expect(screen.getByTestId('data-columns-count')).toHaveTextContent('29 of 30 shown');
+    expect(screen.getByTestId('data-columns-count')).toHaveTextContent(`${total - 1} of ${total} shown`);
+    // The links are chips over a station's shot-only cells, not a column.
+    expect(screen.queryByTestId('data-columns-col-links')).toBeNull();
     fireEvent.click(screen.getByTestId('data-columns-reset'));
     expect(store().hiddenColumns).toEqual([...DATA_DEFAULT_HIDDEN]);
     expect(screen.getByTestId('data-columns-reset')).toBeDisabled();
     fireEvent.click(screen.getByTestId('data-columns-show-all'));
     expect(store().hiddenColumns).toEqual([]);
+  });
+
+  it('columns menu reset also brings a split order back in shape (one shot-only block)', () => {
+    // Depth inside the shot-only block, as an order from before the rule had it.
+    const keys: DataColumnKey[] = DATA_COLUMNS.map((c) => c.key).filter((k) => k !== 'depth');
+    keys.splice(keys.indexOf('left'), 0, 'depth');
+    act(() => store().setColumnOrder(keys));
+    act(() => store().setHiddenColumns(['x']));
+    renderToolbar();
+    fireEvent.click(screen.getByTestId('data-columns-button'));
+    fireEvent.click(screen.getByTestId('data-columns-reset'));
+    expect(store().hiddenColumns).toEqual([...DATA_DEFAULT_HIDDEN]);
+    // Back to the default order, which the store keeps as [].
+    expect(store().columnOrder).toEqual([]);
   });
 
   it('tint menu picks a mode and shows its key', () => {

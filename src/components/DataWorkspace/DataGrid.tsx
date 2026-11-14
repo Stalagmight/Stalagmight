@@ -2,8 +2,11 @@
  * The Data workspace's SpreadsheetGrid, wired: column defs -> grid columns,
  * visibility (+ columns revealed by search), order / widths / sort from the
  * store, find highlights, row tints, the rail gutter, section header bands,
+ * the section named in the header corner once its header scrolls away,
  * focus requests (scrollTo) and keeping the active row across rebuilds,
- * context-menu actions, the header menu, and the selection summary.
+ * a station's link chips spanning the shown shot-only columns (or counted in
+ * the gutter when none is shown), context-menu actions, the header menu, and
+ * the selection summary.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -13,17 +16,20 @@ import type { CellMarks, GridExtraMenuItem, GridScrollRequest } from '../common/
 import { useGridLabels } from '../../hooks/useGridLabels';
 import { useUIStore } from '../../store/uiStore';
 import { useDataWorkspaceStore } from './store';
-import { ROW_NAME_KEY, type DataColumnDef, type DataColumnKey, type DataRow, type DataView, type SearchColKey } from './types';
+import { ROW_ISSUES_KEY, ROW_LINKS_KEY, ROW_NAME_KEY, type DataColumnDef, type DataColumnKey, type DataRow, type DataView, type SearchColKey } from './types';
 import type { DataWorkspaceModel } from './useDataWorkspaceModel';
 import type { DataEditing } from './useDataEditing';
 import type { DataNav } from './useDataNavigation';
 import type { DataTint } from './useDataTint';
 import { buildGridColumns } from './dataGridColumns';
 import { buildRail } from './model/links';
+import { stationLinkItems } from './model/linkItems';
+import { constrainDataColumnOrder, shotBlockSpan } from './model/columnGroups';
+import { StationLinkChips } from './StationLinkChips';
 import { orderColumns } from './model/search';
 import { isEntityRow, parseRowKey, sectionRowKey } from './model/rows';
-import { DataRowLabel, DATA_GUTTER_WIDTH, type RevealReason } from './DataRowLabel';
-import { DataSectionHeader } from './DataSectionHeader';
+import { DataRowLabel, DATA_GUTTER_WIDTH, GUTTER_RAIL_LANE, type RevealReason } from './DataRowLabel';
+import { DataSectionCorner, DataSectionHeader } from './DataSectionHeader';
 import { DataHeaderMenu, type HeaderMenuState } from './DataHeaderMenu';
 import { dataCellTestId, dataRowTestId } from './dataTestIds';
 import { selectionRectFromDom, summarizeSelection, type GridSelectionInfo, type SelectionSummary } from './selectionSummary';
@@ -32,26 +38,29 @@ export const DATA_GRID_PREFIX = 'data-grid';
 
 /**
  * Where the active cell starts on a first entry (nothing remembered): the first
- * station / shot row - never a section header band - in the first shown
- * editable column (else the first shown column). null when nothing is shown.
+ * station / shot row - never a section header band - in the first shown column
+ * that applies to that row's kind, so the cell means something (Comment on a
+ * station, as Depth is hidden by default; Length on a shot), never a blank
+ * cell. When no shown column applies to that kind (Comment hidden too), the
+ * first row of the other kind that has one. null when there is no entity row.
  */
 export function initialActiveCell(
   rows: readonly DataRow[],
   orderedColumns: readonly Pick<DataColumnDef, 'key' | 'appliesTo'>[],
   hidden: readonly DataColumnKey[],
 ): { row: number; colKey: DataColumnKey | undefined } | null {
-  const row = rows.findIndex(isEntityRow);
-  if (row < 0) return null;
-  const kind = rows[row]!.kind;
+  const first = rows.findIndex(isEntityRow);
+  if (first < 0) return null;
   const hiddenSet = new Set(hidden);
   const shown = orderedColumns.filter((c) => !hiddenSet.has(c.key));
-  // Land on the first shown column that applies to that row's kind, so the
-  // cell means something (never a blank Length cell on a station row) AND the
-  // table opens scrolled to its left edge - picking the first *editable*
-  // applicable column (a station's Comment) scrolled the measurements away.
-  const applies = (c: Pick<DataColumnDef, 'appliesTo'>) => c.appliesTo === 'both' || c.appliesTo === kind;
-  const pick = shown.find(applies) ?? shown[0];
-  return { row, colKey: pick?.key };
+  const pickFor = (kind: DataRow['kind']) => shown.find((c) => c.appliesTo === 'both' || c.appliesTo === kind)?.key;
+  const firstKind = rows[first]!.kind;
+  const own = pickFor(firstKind);
+  if (own !== undefined) return { row: first, colKey: own };
+  const other = rows.findIndex((r) => isEntityRow(r) && r.kind !== firstKind);
+  const otherCol = other >= 0 ? pickFor(rows[other]!.kind) : undefined;
+  if (otherCol !== undefined) return { row: other, colKey: otherCol };
+  return { row: first, colKey: shown[0]?.key };
 }
 
 /** FNV-1a over the row keys: changes whenever the rows or their order do. */
@@ -143,6 +152,7 @@ export function DataGrid({ model, view, height, nav, editing, tint, partners, on
     [baseLabels, t],
   );
 
+  // The gutter's issue icon on a shot: Survey opens on it with the resolver.
   const onResolveWarning = useCallback(
     (row: DataRow) => {
       if (row.kind !== 'shot') return;
@@ -158,12 +168,10 @@ export function DataGrid({ model, view, height, nav, editing, tint, partners, on
         t,
         ctx,
         view,
-        nav,
         onCycleKind: editing.cycleKind,
         onOpenCredit: editing.openCreditEditor,
-        onResolveWarning,
       }),
-    [model.columns, t, ctx, view, nav, editing.cycleKind, editing.openCreditEditor, onResolveWarning],
+    [model.columns, t, ctx, view, editing.cycleKind, editing.openCreditEditor],
   );
 
   const gridHidden = useMemo(
@@ -294,6 +302,25 @@ export function DataGrid({ model, view, height, nav, editing, tint, partners, on
     },
     [partners, revealReason],
   );
+  // ── Station links: chips spanning the shown shot-only block ────────────
+  const shotSpan = useMemo(
+    () => shotBlockSpan(orderColumns(model.columns, columnOrder).map((c) => c.key), new Set(gridHidden)),
+    [model.columns, columnOrder, gridHidden],
+  );
+  const spanCells = useCallback(
+    (row: DataRow, i: number) => {
+      if (row.kind !== 'station' || !shotSpan) return undefined;
+      const items = stationLinkItems(ctx, row);
+      if (items.length === 0) return undefined;
+      return {
+        from: shotSpan.from,
+        to: shotSpan.to,
+        content: <StationLinkChips row={row} items={items} ctx={ctx} nav={nav} marks={cellMarks(row, i, ROW_LINKS_KEY)} />,
+      };
+    },
+    [shotSpan, ctx, nav, cellMarks],
+  );
+
   const rowLabel = useCallback(
     (row: DataRow, i: number) => (
       <DataRowLabel
@@ -304,9 +331,26 @@ export function DataGrid({ model, view, height, nav, editing, tint, partners, on
         revealed={revealReason(row)}
         nav={nav}
         nameMarks={cellMarks(row, i, ROW_NAME_KEY)}
+        // No shot-only column shown: the chips have no room, the gutter counts them.
+        gutterLinks={row.kind === 'station' && !shotSpan ? stationLinkItems(ctx, row) : null}
+        linkMarks={cellMarks(row, i, ROW_LINKS_KEY)}
+        issueMarks={cellMarks(row, i, ROW_ISSUES_KEY)}
+        onResolveWarning={onResolveWarning}
       />
     ),
-    [ctx, rail, tint, revealReason, nav, cellMarks],
+    [ctx, rail, tint, revealReason, nav, cellMarks, shotSpan, onResolveWarning],
+  );
+  // The section the top rows belong to, in the header corner, once its header
+  // row has scrolled away (or with headers off). Nothing while sorted: the
+  // rows then mix sections.
+  const headerCorner = useCallback(
+    (firstVisibleRow: number) => {
+      if (!view.surveyOrder) return null;
+      const row = viewRows[firstVisibleRow];
+      if (!row || row.kind === 'section') return null;
+      return <DataSectionCorner sectionId={row.sectionId} ctx={ctx} />;
+    },
+    [view.surveyOrder, viewRows, ctx],
   );
   const groupRowContent = useCallback(
     (row: DataRow) =>
@@ -420,7 +464,10 @@ export function DataGrid({ model, view, height, nav, editing, tint, partners, on
         labels={labels}
         hiddenColumns={gridHidden}
         columnOrder={columnOrder}
-        onColumnOrderChange={(order) => setColumnOrder(order as DataColumnKey[])}
+        // The grid applies the constraint to a drag already; again here, so the
+        // store never holds a shot-only block split in two.
+        constrainColumnOrder={constrainDataColumnOrder}
+        onColumnOrderChange={(order) => setColumnOrder(constrainDataColumnOrder(order as DataColumnKey[]))}
         columnWidths={columnWidths}
         onColumnWidthsChange={setColumnWidths}
         sort={sort}
@@ -430,6 +477,10 @@ export function DataGrid({ model, view, height, nav, editing, tint, partners, on
         rowClassName={rowClassName}
         rowsVersion={rowsVersion}
         groupRowContent={groupRowContent}
+        spanCells={spanCells}
+        groupContentStart="gutter"
+        groupContentInset={GUTTER_RAIL_LANE}
+        headerCorner={headerCorner}
         scrollTo={scrollReq}
         extraContextMenuItems={extraContextMenuItems}
         onHeaderContextMenu={(colKey, pos) => setHeaderMenu({ ...pos, colKey: colKey as DataColumnKey })}

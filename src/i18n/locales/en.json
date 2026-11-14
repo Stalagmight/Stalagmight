@@ -1922,7 +1922,6 @@
     "rowNoun_one": "row",
     "rowNoun_other": "rows",
     "columns": {
-      "issues": "Issues",
       "type": "Row type",
       "section": "Section",
       "name": "Station name",
@@ -1942,7 +1941,6 @@
       "up": "Up",
       "down": "Down",
       "kind": "Jump/Reference",
-      "links": "Links",
       "comment": "Comment",
       "x": "X (m)",
       "y": "Y (m)",
@@ -1954,7 +1952,6 @@
       "date": "Survey date"
     },
     "headers": {
-      "issues": "!",
       "type": "Type",
       "section": "Section",
       "name": "Name",
@@ -1974,7 +1971,6 @@
       "up": "U",
       "down": "D",
       "kind": "J/R",
-      "links": "Links",
       "comment": "Comment",
       "x": "X",
       "y": "Y",
@@ -2016,6 +2012,8 @@
     },
     "gutter": {
       "showOnMap": "Show on map ({{shortcut}})",
+      "linksAria_one": "{{count}} link: {{list}}",
+      "linksAria_other": "{{count}} links: {{list}}",
       "revealedSearch": "Shown because it matches the search",
       "revealedNav": "Shown because you navigated here",
       "revealedColumn": "Shown because it holds search matches"

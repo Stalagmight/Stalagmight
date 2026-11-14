@@ -4,6 +4,8 @@ import { sortRows } from '../sort';
 import { EMPTY_FILTERS, EMPTY_QUICK_FILTERS, EMPTY_SEARCH } from '../../store';
 import { ROW_NAME_KEY, type DataColumnDef, type DataEntityRow, type SearchState } from '../../types';
 import { rowNameSearchText } from '../search';
+import { ROW_ID_MODE, rowIdLabel } from '../rowIds';
+import { rowName } from '../ctx';
 import { keys, makeColumns, makeCtx, makeData, makeRows, viewState, type SectionSeed } from './fixtures';
 
 const SECTIONS: SectionSeed[] = [
@@ -119,12 +121,13 @@ describe('buildDataView - row name search', () => {
   it('finds a section by name through its rows, read-only, with the Section column hidden', () => {
     const { rows, ctx, columns } = setup();
     const v = buildDataView(rows, columns, ctx, viewState({ search: search('side'), hiddenColumns: ['section'] }));
+    // The gutter shows only the ID ("2:0"): the hit is in the full name after it.
     expect(nameMatches(v)).toEqual([
-      ['st:2:0', 0, 4],
-      ['sh:2:200001', 0, 4],
-      ['st:2:1', 0, 4],
-      ['sh:2:200002', 0, 4],
-      ['st:2:2', 0, 4],
+      ['st:2:0', 4, 8],
+      ['sh:2:200001', 4, 8],
+      ['st:2:1', 4, 8],
+      ['sh:2:200002', 4, 8],
+      ['st:2:2', 4, 8],
     ]);
     expect(v.matches.every((m) => m.colKey !== ROW_NAME_KEY || m.lockReason === 'computed')).toBe(true);
     expect(v.matchIndex.get('st:2:1')!.get(ROW_NAME_KEY)).toHaveLength(1);
@@ -132,17 +135,39 @@ describe('buildDataView - row name search', () => {
     expect(v.revealedColumns.size).toBe(0);
   });
 
-  it('matches the full section name a shortened label leaves out, once per row', () => {
+  it('matches the row ID, else the full section name, once per row', () => {
     const { rows, ctx, columns } = setup();
     ctx.sectionLabels.set(2, 'Si…ge');
-    ctx.sectionNames.set(2, 'Side passage');
+    ctx.sectionNames.set(2, 'Side passage 2');
     const row = rows.find((r) => r.key === 'st:2:1') as DataEntityRow;
-    expect(rowNameSearchText(ctx, row)).toBe('Si…ge:1\nSide passage');
+    // The canonical ID, a line break, the full name; the short label is gone.
+    expect(rowNameSearchText(ctx, row)).toBe('2:1\nSide passage 2');
     const v = buildDataView(rows, columns, ctx, viewState({ search: search('passage'), hiddenColumns: ['section'] }));
-    expect(nameMatches(v).find(([k]) => k === 'st:2:1')).toEqual(['st:2:1', 13, 20]);
-    // "Si" is in both the label and the full name: one match, in the label.
-    const both = buildDataView(rows, columns, ctx, viewState({ search: search('si'), hiddenColumns: ['section'] }));
-    expect(nameMatches(both).filter(([k]) => k === 'st:2:1')).toEqual([['st:2:1', 0, 2]]);
+    expect(nameMatches(v).find(([k]) => k === 'st:2:1')).toEqual(['st:2:1', 9, 16]);
+    // "2" is in both the ID and the full name: one match, in the ID.
+    const both = buildDataView(rows, columns, ctx, viewState({ search: search('2'), hiddenColumns: ['section'] }));
+    expect(nameMatches(both).filter(([k]) => k === 'st:2:1')).toEqual([['st:2:1', 0, 1]]);
+    // The short label is not searched any more.
+    const label = buildDataView(rows, columns, ctx, viewState({ search: search('Si…'), hiddenColumns: ['section'] }));
+    expect(nameMatches(label)).toEqual([]);
+  });
+
+  it('follows ROW_ID_MODE: the canonical ID by default, the bare index on request', () => {
+    const { rows } = setup();
+    const st = rows.find((r) => r.key === 'st:2:1') as DataEntityRow;
+    const sh = rows.find((r) => r.key === 'sh:2:200002') as DataEntityRow;
+    expect(ROW_ID_MODE).toBe('canonical');
+    expect([rowIdLabel(st), rowIdLabel(sh)]).toEqual(['2:1', '2:2']);
+    expect([rowIdLabel(st, 'index'), rowIdLabel(sh, 'index')]).toEqual(['1', '2']);
+  });
+
+  it('"Copy row name" copies the canonical ID; a header row its section name', () => {
+    const { rows, ctx } = setup();
+    ctx.sectionNames.set(2, 'Side passage');
+    const st = rows.find((r) => r.key === 'st:2:1')!;
+    const header = rows.find((r) => r.key === 'sec:2')!;
+    expect(rowName(ctx, st)).toBe('2:1');
+    expect(rowName(ctx, header)).toBe('Side passage');
   });
 
   it('comes first in its row, before the cell matches', () => {

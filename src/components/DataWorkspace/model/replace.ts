@@ -20,7 +20,7 @@ import type {
   DataRow,
   SearchMatch,
 } from '../types';
-import { ROW_NAME_KEY } from '../types';
+import { isPseudoSearchKey } from '../types';
 import { compileSearch, execAll, type CompiledSearch, type SearchPattern } from './search';
 
 export interface ReplaceSpec extends SearchPattern {
@@ -187,7 +187,7 @@ export function planReplace(
   for (const list of cells.values()) {
     const first = list[0]!;
     // The row name is read-only: counted as locked, never planned.
-    if (first.colKey === ROW_NAME_KEY) {
+    if (isPseudoSearchKey(first.colKey)) {
       plan.lockedMatches += list.length;
       plan.lockedCells++;
       continue;

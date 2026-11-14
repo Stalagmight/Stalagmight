@@ -60,17 +60,23 @@ describe('initialActiveCell', () => {
     expect(start).not.toBeNull();
     const row = all[start!.row]!;
     expect(row.kind).toBe('station');
-    // Issues applies to both kinds and comes first, so the table opens at its
-    // left edge with the measurements in view.
-    expect(start!.colKey).toBe('issues');
-    // With Issues hidden, a station row skips the shot-only Length and lands on
-    // the first station column (Depth), never a blank cell.
-    expect(initialActiveCell(all, DATA_COLUMNS, [...DATA_DEFAULT_HIDDEN, 'issues'])!.colKey).toBe('depth');
+    // A station row skips the shot-only Length and lands on the first shown
+    // column that applies to it: Comment (Depth is hidden by default), never
+    // a blank cell.
+    expect(start!.colKey).toBe('comment');
+    // With Depth shown, Depth.
+    expect(initialActiveCell(all, DATA_COLUMNS, DATA_DEFAULT_HIDDEN.filter((k) => k !== 'depth'))!.colKey).toBe('depth');
   });
 
-  it('a shots-only view with Issues hidden starts on Length', () => {
+  it('a shots-only view starts on Length', () => {
     const shots = all.filter((r) => r.kind === 'shot');
-    expect(initialActiveCell(shots, DATA_COLUMNS, [...DATA_DEFAULT_HIDDEN, 'issues'])?.colKey).toBe('length');
+    expect(initialActiveCell(shots, DATA_COLUMNS, DATA_DEFAULT_HIDDEN)?.colKey).toBe('length');
+  });
+
+  it('no shown column applies to the first row: the first shot instead, never a blank cell', () => {
+    const start = initialActiveCell(all, DATA_COLUMNS, [...DATA_DEFAULT_HIDDEN, 'comment']);
+    expect(all[start!.row]!.kind).toBe('shot');
+    expect(start!.colKey).toBe('length');
   });
 
   it('null when there is no entity row', () => {

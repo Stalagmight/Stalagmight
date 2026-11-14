@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DATA_COLUMNS } from '../../columnsMeta';
 import { buildDataRows } from '../rows';
-import { coerceCell, f32, parseShotKind, validationError } from '../columns';
+import { coerceCell, f32, issuesText, parseShotKind, rowWarnings, validationError } from '../columns';
 import { COLUMNS, col, makeCtx } from '../../__tests__/dataFixtures';
 import type { DataEntityRow, DataRow } from '../../types';
 
@@ -16,6 +16,8 @@ const row = (key: string): DataEntityRow => {
 describe('buildColumnDefs', () => {
   it('implements every column of columnsMeta, in order', () => {
     expect(COLUMNS.map((c) => c.key)).toEqual(DATA_COLUMNS.map((c) => c.key));
+    // A station's links are chips over its shot-only cells, not a column.
+    expect(COLUMNS.map((c) => c.key)).not.toContain('links');
     for (const c of COLUMNS) {
       expect(typeof c.value).toBe('function');
       expect(c.editable).toBe(typeof c.parse === 'function');
@@ -75,22 +77,11 @@ describe('buildColumnDefs', () => {
     expect(col('kind').value(row('sh:2:202'), ctx)).toBe('Jump');
   });
 
-  it('lists links: zero datum, merges, branch start and closures with misclosure', () => {
-    expect(col('links').text(row('st:1:0'), ctx)).toBe('Zero datum');
-    expect(col('links').text(row('st:1:2'), ctx)).toBe('⇄ Branch B:0');
-    expect(col('links').text(row('st:2:0'), ctx)).toBe('Continues from Main:2');
-    expect(col('links').text(row('st:1:4'), ctx)).toBe(
-      'Closes to Downstre…sump 1A:3 · Δ 0.70 m · 1.3 %',
-    );
-    expect(col('links').text(row('st:1:3'), ctx)).toBe('');
-  });
-
-  it('lists unresolved warnings as searchable text, errors weigh most', () => {
-    const errShot = row('sh:3:303');
-    expect(col('issues').text(errShot, ctx)).toBe('Depth jump too large [ZERO_DEPTH]');
-    expect(col('issues').value(errShot, ctx)).toBe(1000);
-    expect(col('issues').value(row('sh:3:302'), ctx)).toBe(1);
-    expect(col('issues').value(row('sh:1:101'), ctx)).toBeNull();
+  it('lists unresolved warnings as searchable text (the issue icon, no column)', () => {
+    expect(COLUMNS.map((c) => c.key)).not.toContain('issues');
+    expect(issuesText(rowWarnings(ctx, row('sh:3:303')))).toBe('Depth jump too large [ZERO_DEPTH]');
+    expect(issuesText(rowWarnings(ctx, row('sh:3:302')))).toBe('Very short shot [SHORT_SHOT]');
+    expect(issuesText(rowWarnings(ctx, row('sh:1:101')))).toBe('');
   });
 
   it('reads comments for both row kinds', () => {
@@ -112,7 +103,7 @@ describe('buildColumnDefs', () => {
 
   it('locks computed columns and everything when editing is blocked', () => {
     expect(col('x').lockReason(row('st:1:1'), ctx)).toBe('computed');
-    expect(col('links').lockReason(row('st:1:1'), ctx)).toBe('computed');
+    expect(col('depth').lockReason(row('st:1:1'), ctx)).toBe('computed');
     const blocked = makeCtx({ editingBlocked: true });
     expect(col('comment').lockReason(row('st:1:1'), blocked)).toBe('blocked');
     expect(col('length').lockReason(row('sh:1:101'), blocked)).toBe('blocked');

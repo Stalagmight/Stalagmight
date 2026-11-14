@@ -32,6 +32,7 @@ import { TOAST_KEYS } from '../../utils/toastKeys';
 import { stableWidths } from '../SingleSystemView/useDataTableViewPersistence';
 import { MAX_COL_WIDTH, MIN_COL_WIDTH } from '../common/SpreadsheetGrid/useColumnWidths';
 import { DATA_COLUMN_BY_KEY, DATA_DEFAULT_HIDDEN } from './columnsMeta';
+import { normalizeColumnOrder } from './model/columnGroups';
 import {
   DEFAULT_VIEW,
   MAP_PANE_DEFAULT_WIDTH,
@@ -93,7 +94,9 @@ function widths(raw: unknown): Record<string, number> {
 export function normalizeDataWorkspaceView(raw: Partial<Record<ViewKey, unknown>>): DataWorkspaceViewState {
   const width = raw.mapPaneWidth;
   return {
-    columnOrder: columnKeys(raw.columnOrder, []),
+    // Completed and constrained (one shot-only block): an order saved before
+    // the constraint, or edited by hand, loads in shape.
+    columnOrder: normalizeColumnOrder(columnKeys(raw.columnOrder, [])),
     hiddenColumns: columnKeys(raw.hiddenColumns, DATA_DEFAULT_HIDDEN),
     columnWidths: widths(raw.columnWidths),
     tintMode: TINT_MODES.includes(raw.tintMode as TintMode) ? (raw.tintMode as TintMode) : DEFAULT_VIEW.tintMode,

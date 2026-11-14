@@ -143,8 +143,8 @@ pub struct PanelsConfig {
     /// Data workspace (the full-screen Data mode spreadsheet): column order, as
     /// column keys from src/components/DataWorkspace/columnsMeta.ts. Empty =
     /// that file's default order. Its own set again: Data mode's grid has
-    /// columns no other grid has (row type, section, links, position), so no
-    /// other grid's list could govern it.
+    /// columns no other grid has (row type, section, position), so no other
+    /// grid's list could govern it.
     #[serde(default)]
     pub data_workspace_column_order: Vec<String>,
     /// Data workspace: hidden column keys. Authoritative once present (an empty
@@ -286,7 +286,8 @@ pub(super) fn default_data_workspace_map_pane_width() -> u32 {
 }
 
 /// The Data workspace's default hidden columns: identity columns the row name
-/// already carries, the per-leg angles, positions, temperature and credit.
+/// already carries, the per-leg angles, the station depth and positions,
+/// temperature and credit.
 /// Mirrors `DATA_DEFAULT_HIDDEN` in src/components/DataWorkspace/columnsMeta.ts.
 pub(super) fn default_data_workspace_hidden_columns() -> Vec<String> {
     [
@@ -299,6 +300,7 @@ pub(super) fn default_data_workspace_hidden_columns() -> Vec<String> {
         "inclination",
         "pitch_in",
         "pitch_out",
+        "depth",
         "x",
         "y",
         "lat",

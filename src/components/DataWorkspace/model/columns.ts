@@ -29,8 +29,7 @@ import { shotKindGlyph } from '../../../utils/shotKind';
 import { xyToGps } from '../../../utils/coordinates';
 import { parseLocaleNumber } from '../../common/SpreadsheetGrid/gridClipboard';
 import { formatPeopleCell, parseDateCell, parsePeopleCell } from '../../SingleSystemView/dataTableCreditColumns';
-import { decimalsOf, fmt, gpsOriginOf, shotCredit, stationName, tr } from './ctx';
-import { stationLinks, type StationLinks } from './links';
+import { decimalsOf, fmt, gpsOriginOf, shotCredit, tr } from './ctx';
 import { stationGlobalIndex } from './rows';
 
 // ─── Shared value readers ─────────────────────────────────────────────────
@@ -154,51 +153,13 @@ export function misclosureText(ctx: DataModelCtx, misclosure: number | null, err
   return `Δ ${fmt(ctx, misclosure, d.length)} m · ${fmt(ctx, errorPct, 1)} %`;
 }
 
-/** The searchable text of a station's links: merges, closures, zero datum,
- *  branch start / end - the same facts the chips show. */
-export function linksText(ctx: DataModelCtx, links: StationLinks): string {
-  const parts: string[] = [];
-  if (links.zeroDatum) parts.push(tr(ctx, 'dataWorkspace.links.zeroDatum', 'Zero datum'));
-  if (links.branchFrom) {
-    parts.push(
-      tr(ctx, 'dataWorkspace.links.continuesFrom', 'Continues from {{name}}', {
-        name: stationName(ctx, links.branchFrom.section_id, links.branchFrom.station_index),
-      }),
-    );
-  }
-  for (const m of links.merges) {
-    if (links.branchFrom && m.section_id === links.branchFrom.section_id && m.station_index === links.branchFrom.station_index) continue;
-    parts.push(`⇄ ${stationName(ctx, m.section_id, m.station_index)}`);
-  }
-  for (const c of links.closures) {
-    const closes = tr(ctx, 'dataWorkspace.links.closesTo', 'Closes to {{name}}', {
-      name: stationName(ctx, c.partner.section_id, c.partner.station_index),
-    });
-    const mis = misclosureText(ctx, c.misclosure, c.errorPct);
-    // As the closure chip reads: "Closes to X · Δ 0.7 m · 1.2 %".
-    parts.push(mis ? `${closes} · ${mis}` : closes);
-  }
-  return parts.join(', ');
-}
-
-/** Unresolved warnings as searchable text: "message [CODE]; ...". */
+/** Unresolved warnings as searchable text (the find's issues pseudo-column,
+ *  `ROW_ISSUES_KEY`): "message [CODE]; ...". */
 export function issuesText(warnings: readonly ProjectWarning[]): string {
   return warnings
     .filter((w) => !w.isResolved)
     .map((w) => `${w.message} [${w.code}]`)
     .join('; ');
-}
-
-/** Sortable issue weight: errors outrank any number of warnings. */
-function issuesValue(warnings: readonly ProjectWarning[]): number | null {
-  let errors = 0;
-  let warns = 0;
-  for (const w of warnings) {
-    if (w.isResolved) continue;
-    if (w.severity === 'error') errors++;
-    else warns++;
-  }
-  return errors + warns === 0 ? null : errors * 1000 + warns;
 }
 
 // ─── Parsing helpers ──────────────────────────────────────────────────────
@@ -360,13 +321,6 @@ export function fromToText(row: DataEntityRow, ctx: DataModelCtx): string {
 const commentText = (row: DataEntityRow, ctx: DataModelCtx) =>
   (row.kind === 'shot' ? ctx.data.shotComments.get(row.g) : ctx.data.stationComments.get(row.g)) ?? '';
 
-const linksTextOf = (row: DataEntityRow, ctx: DataModelCtx) => {
-  const s = asStation(row);
-  return s ? linksText(ctx, stationLinks(ctx, s.sectionId, s.stationIndex, s.g)) : '';
-};
-
-const issuesTextOf = (row: DataEntityRow, ctx: DataModelCtx) => issuesText(rowWarnings(ctx, row));
-
 const kindText = (row: DataEntityRow, ctx: DataModelCtx) => {
   const s = asShot(row);
   return s ? shotKindGlyph(shotKindOf(ctx, s)) : '';
@@ -425,8 +379,6 @@ const LOGIC: Record<DataColumnKey, Logic> = {
     },
     coerce: (raw) => parseShotKind(raw),
   },
-  links: { text: linksTextOf, value: textValue(linksTextOf) },
-  issues: { text: issuesTextOf, value: (row, ctx) => issuesValue(rowWarnings(ctx, row)) },
   comment: { text: commentText, value: textValue(commentText), coerce: (raw) => parseOptionalText(raw) },
   x: stationNumber((s, ctx) => stationCoord(ctx, s, 0), (c) => decimalsOf(c).coordinates),
   y: stationNumber((s, ctx) => stationCoord(ctx, s, 1), (c) => decimalsOf(c).coordinates),

@@ -12,17 +12,21 @@ vi.mock('../../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
 
 import {
   MAP_PANE_MAX_WIDTH,
+  normalizeDataWorkspaceView,
   resetDataWorkspaceViewPersistenceForTests,
   useDataWorkspaceViewPersistence,
 } from '../useDataWorkspaceViewPersistence';
 import { DEFAULT_VIEW, MAP_PANE_MIN_WIDTH, useDataWorkspaceStore } from '../store';
-import { DATA_DEFAULT_HIDDEN } from '../columnsMeta';
+import { DATA_COLUMNS, DATA_DEFAULT_HIDDEN } from '../columnsMeta';
 import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
 import { defaultConfig, type Config } from '../../../types/config';
 import { TOAST_KEYS } from '../../../utils/toastKeys';
 
 type Panels = Config['panels'];
+
+/** The default column order without some keys. */
+const defaultOrderWithout = (...keys: string[]) => DATA_COLUMNS.map((c) => c.key).filter((k) => !keys.includes(k));
 
 function configWith(panels: Partial<Panels> = {}): Config {
   const config = structuredClone(defaultConfig) as Config;
@@ -96,7 +100,9 @@ describe('useDataWorkspaceViewPersistence', () => {
 
     expect(view()).toMatchObject({
       viewLoaded: true,
-      columnOrder: ['comment', 'length'],
+      // Completed and kept in shape: Length joins the shot-only block, after
+      // the columns before it.
+      columnOrder: ['comment', 'type', 'section', 'name', 'length', ...defaultOrderWithout('comment', 'type', 'section', 'name', 'length')],
       hiddenColumns: ['x'],
       columnWidths: { comment: 300 },
       tintMode: 'depth',
@@ -135,9 +141,48 @@ describe('useDataWorkspaceViewPersistence', () => {
 
     expect(view().tintMode).toBe('none');
     expect(view().mapPaneWidth).toBe(MAP_PANE_MAX_WIDTH);
-    expect(view().columnOrder).toEqual(['length']);
+    // Unknown keys and repeats dropped, then completed and constrained: a
+    // shot-only Length dragged before the identity columns rejoins its block.
+    expect(view().columnOrder).toEqual(['type', 'section', 'name', 'length', ...defaultOrderWithout('type', 'section', 'name', 'length')]);
     expect(view().columnWidths).toEqual({ comment: 250, runaway: 2000, sliver: 40 });
     expect(view().hiddenColumns).toEqual([...DATA_DEFAULT_HIDDEN]);
+  });
+
+  it('drops the retired Links and Issues columns from a saved view (chips and gutter icon now)', () => {
+    useProjectStore.setState({
+      config: configWith({
+        data_workspace_hidden_columns: ['links', 'issues', 'x'],
+        data_workspace_column_widths: { comment: 250 },
+      }),
+    });
+    renderHook(() => useDataWorkspaceViewPersistence());
+    expect(view().hiddenColumns).toEqual(['x']);
+    const order = normalizeDataWorkspaceView({ columnOrder: ['issues', 'links', 'comment'] }).columnOrder;
+    expect(order).not.toContain('links');
+    expect(order).not.toContain('issues');
+  });
+
+  it('loads an order saved with the old default (Issues, Links, station depth inside the block) as the new default', () => {
+    // What the grid saved before: every column, Issues first, the station
+    // Depth between Depth out and Left, Links before Comment, the credit last.
+    const old = [
+      'issues', 'type', 'section', 'name', 'fromTo', 'length', 'azimuth', 'azimuth_in', 'azimuth_out', 'inclination',
+      'pitch_in', 'pitch_out', 'depth_in', 'depth_out', 'depth', 'left', 'right', 'up', 'down', 'kind', 'links',
+      'comment', 'x', 'y', 'lat', 'long', 'temperature', 'surveyors', 'explorers', 'date',
+    ];
+    useProjectStore.setState({ config: configWith({ data_workspace_column_order: old }) });
+    renderHook(() => useDataWorkspaceViewPersistence());
+    // The shot-only columns in one block, Depth after it: the default, kept as [].
+    expect(view().columnOrder).toEqual([]);
+    expect(normalizeDataWorkspaceView({ columnOrder: DATA_COLUMNS.map((c) => c.key) }).columnOrder).toEqual([]);
+  });
+
+  it('loads a hand-edited order with the comment inside the block in shape', () => {
+    const order = ['type', 'section', 'name', 'fromTo', 'length', 'comment', ...defaultOrderWithout('type', 'section', 'name', 'fromTo', 'length', 'comment')];
+    useProjectStore.setState({ config: configWith({ data_workspace_column_order: order }) });
+    renderHook(() => useDataWorkspaceViewPersistence());
+    // Two shot columns before it, many after: it snaps to the near edge, before the block.
+    expect(view().columnOrder).toEqual(['type', 'section', 'name', 'comment', 'fromTo', 'length', ...defaultOrderWithout('type', 'section', 'name', 'comment', 'fromTo', 'length')]);
   });
 
   it('keeps an empty hidden list as "show all"', () => {
@@ -245,11 +290,12 @@ describe('useDataWorkspaceViewPersistence', () => {
       });
     });
     expect(view().tintMode).toBe('depth');
-    expect(view().columnOrder).toEqual(['comment']);
+    const commentFirst = ['comment', ...defaultOrderWithout('comment')];
+    expect(view().columnOrder).toEqual(commentFirst);
 
     await advance(500);
     expect(saves()).toHaveLength(1);
-    expect(saves()[0]![1]).toMatchObject({ tintMode: 'depth', columnOrder: ['comment'] });
+    expect(saves()[0]![1]).toMatchObject({ tintMode: 'depth', columnOrder: commentFirst });
   });
 
   it('applies a later config arrival when there is nothing unsaved', async () => {

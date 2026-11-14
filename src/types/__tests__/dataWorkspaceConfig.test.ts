@@ -20,6 +20,8 @@ describe('panels.data_workspace_* defaults (generated) match the Data workspace 
     for (const key of panels.data_workspace_hidden_columns) {
       expect(DATA_COLUMN_BY_KEY.has(key as never), `unknown column key ${key}`).toBe(true);
     }
+    // Station depth starts hidden on both sides.
+    expect(panels.data_workspace_hidden_columns).toContain('depth');
   });
 
   it('every other field equals DEFAULT_VIEW', () => {

@@ -3194,6 +3194,11 @@ fn test_data_workspace_view_fields_default_on_a_legacy_table_like_a_fresh_instal
         .data_workspace_hidden_columns
         .iter()
         .any(|key| key == "section"));
+    // Station depth starts hidden too (the shots' depth in / out carry it).
+    assert!(fresh
+        .data_workspace_hidden_columns
+        .iter()
+        .any(|key| key == "depth"));
 }
 
 #[test]

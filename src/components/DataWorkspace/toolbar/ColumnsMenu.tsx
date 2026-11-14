@@ -1,6 +1,7 @@
 /**
  * Show / hide columns, grouped like the column registry, with "Show all",
- * "Reset to default" and the shown count. Writes `setHiddenColumns`, which the
+ * "Reset to default" (the default hidden set; the order is brought back in
+ * shape, the shot-only columns in one block) and the shown count. Writes `setHiddenColumns`, which the
  * view persistence mirrors to config. A hidden column the search is showing
  * temporarily is marked.
  */
@@ -8,6 +9,7 @@ import { useTranslation } from 'react-i18next';
 import { useDataWorkspaceStore } from '../store';
 import { DATA_COLUMN_GROUPS, DATA_COLUMNS, DATA_DEFAULT_HIDDEN } from '../columnsMeta';
 import type { DataColumnKey } from '../types';
+import { normalizeColumnOrder } from '../model/columnGroups';
 import { EyeIcon } from '../../common/icons';
 import { MenuDivider, ToolbarMenu } from './ToolbarMenu';
 import { columnLabel, groupLabel } from './labels';
@@ -53,7 +55,13 @@ export function ColumnsMenu({ revealed }: { revealed: ReadonlySet<DataColumnKey>
             type="button"
             className="rounded px-1.5 py-0.5 hover:bg-accent-10 disabled:opacity-50"
             disabled={isDefault}
-            onClick={() => setHiddenColumns([...DATA_DEFAULT_HIDDEN])}
+            onClick={() => {
+              setHiddenColumns([...DATA_DEFAULT_HIDDEN]);
+              // An order from before the shot-only block rule comes back in shape.
+              const state = useDataWorkspaceStore.getState();
+              const order = normalizeColumnOrder(state.columnOrder);
+              if (order.join() !== state.columnOrder.join()) state.setColumnOrder(order);
+            }}
             data-testid="data-columns-reset"
           >
             {t('dataToolbar.columns.reset')}

@@ -17,6 +17,7 @@
  */
 import type { DataColumnDef, DataColumnKey, DataEntityRow, DataModelCtx, SearchState } from '../types';
 import { sectionLabelOf } from './ctx';
+import { rowIdLabel } from './rowIds';
 
 /** Hard cap on the matches one search collects (memory and highlight cost). */
 export const MAX_SEARCH_MATCHES = 100_000;
@@ -197,15 +198,15 @@ export function searchColumnsInScope(
   });
 }
 
-/** The gutter's row name: "<label>:<station index>" / "<label>:<shot position>". */
-export function rowNameText(ctx: DataModelCtx, row: DataEntityRow): string {
-  return `${sectionLabelOf(ctx, row.sectionId)}:${row.kind === 'station' ? row.stationIndex : row.position}`;
+/** The gutter's row name: the row's ID ("0:5" / "0:6", see `rowIdLabel`). */
+export function rowNameText(row: DataEntityRow): string {
+  return rowIdLabel(row);
 }
 
 /** The row-name pseudo-column's text (`ROW_NAME_KEY`): the row name, a line
  *  break (no literal query spans it), then the section's full name. */
 export function rowNameSearchText(ctx: DataModelCtx, row: DataEntityRow): string {
-  return `${rowNameText(ctx, row)}\n${ctx.sectionNames.get(row.sectionId) ?? sectionLabelOf(ctx, row.sectionId)}`;
+  return `${rowNameText(row)}\n${ctx.sectionNames.get(row.sectionId) ?? sectionLabelOf(ctx, row.sectionId)}`;
 }
 
 /**
@@ -222,7 +223,7 @@ export function rowNameMatch(
   sectionHit: Map<number, [number, number] | null>,
 ): [number, number] | null {
   const spans: number[] = [];
-  const name = rowNameText(ctx, row);
+  const name = rowNameText(row);
   if (findInText(name, compiled, spans, 1) > 0) return [spans[0]!, spans[1]!];
   let hit = sectionHit.get(row.sectionId);
   if (hit === undefined) {

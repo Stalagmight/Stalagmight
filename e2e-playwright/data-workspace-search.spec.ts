@@ -212,7 +212,7 @@ test.describe('Data workspace - filters, sort, columns', () => {
     const count = page.getByTestId('data-columns-count');
     const initial = await count.textContent();
     await page.getByTestId('data-columns-show-all').click();
-    await expect(count).toHaveText(/^30 of 30 shown$/);
+    await expect(count).toHaveText(/^28 of 28 shown$/);
     await expect(page.getByTestId(`${GRID}-header-temperature`)).toBeVisible();
     await page.getByTestId('data-columns-col-temperature').uncheck();
     await expect(page.getByTestId(`${GRID}-header-temperature`)).toHaveCount(0);

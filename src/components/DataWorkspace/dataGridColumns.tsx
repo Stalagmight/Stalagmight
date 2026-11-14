@@ -5,25 +5,19 @@
  * coercion + the DataTable validators (an interactive edit flashes the
  * reason), and a cell takes an edit iff `def.lockReason()` is null.
  *
- * Three columns render their own content: Links (chips that navigate),
- * Issues (the DataTable warning / lock icons) and Kind (the J/R glyph that
- * cycles on click, like the DataTable).
+ * Kind renders its own content (the J/R glyph that cycles on click, like the
+ * DataTable). A row's issues and a station's links are no columns: the issue
+ * icon sits in the gutter (RowIssueIcon), the link chips span the row's
+ * shot-only cells (StationLinkChips).
  */
-import type { CSSProperties } from 'react';
 import type { TFunction } from 'i18next';
 import type { GridColumn } from '../common/SpreadsheetGrid/types';
-import { AlertCircleIcon, AlertTriangleIcon, LockIcon } from '../common/icons';
-import { getErrorColor } from '../../utils/colors';
 import { SHOT_KIND_CLASS, SHOT_KIND_LABEL_KEY, nextShotKind } from '../../utils/shotKind';
-import { testIdPart } from '../../utils/testId';
 import type { DataColumnDef, DataColumnKey, DataModelCtx, DataRow, DataView, ShotRow } from './types';
-import { coerceCell, isShotFrozen, misclosureText, rowWarnings, shotKindOf, validationError } from './model/columns';
-import { decimalsOf, fmt, shotCredit, stationName } from './model/ctx';
-import { stationLinks, stationRefKey } from './model/links';
+import { coerceCell, shotKindOf, validationError } from './model/columns';
+import { shotCredit } from './model/ctx';
 import { isEntityRow } from './model/rows';
 import { dataRowPart } from './dataTestIds';
-import { LinkChipRow, type LinkChip } from './LinkChipRow';
-import type { DataNav } from './useDataNavigation';
 
 const NULLABLE_NUMBERS = new Set<DataColumnKey>(['inclination', 'pitch_in', 'pitch_out', 'left', 'right', 'up', 'down', 'temperature']);
 const CREDIT = new Set<DataColumnKey>(['surveyors', 'explorers', 'date']);
@@ -32,182 +26,8 @@ export interface GridColumnDeps {
   t: TFunction;
   ctx: DataModelCtx;
   view: DataView;
-  nav: DataNav;
   onCycleKind: (row: ShotRow, dir: 1 | -1) => void;
   onOpenCredit: (row: DataRow, colKey: DataColumnKey, seed: string) => void;
-  onResolveWarning: (row: ShotRow) => void;
-}
-
-const stop = (e: { stopPropagation(): void }) => e.stopPropagation();
-
-function chipStyle(color: string): CSSProperties {
-  return { '--o': color } as CSSProperties;
-}
-
-const CHIP_CLS =
-  'dw-chip sh-pill inline-flex min-w-0 shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-xs leading-none text-text-primary';
-
-function LinksCell({ row, deps }: { row: DataRow; deps: GridColumnDeps }) {
-  if (row.kind !== 'station') return null;
-  const { ctx, nav, t } = deps;
-  const links = stationLinks(ctx, row.sectionId, row.stationIndex, row.g);
-  const part = dataRowPart(row);
-  const chips: LinkChip[] = [];
-  if (links.zeroDatum) {
-    const label = t('dataWorkspace.links.zeroDatum');
-    chips.push({
-      key: 'zd',
-      label,
-      node: (
-        <span
-          className={`${CHIP_CLS} cursor-default`}
-          style={chipStyle('var(--cc-zero-datum)')}
-          title={t('dataWorkspace.links.zeroDatumTitle')}
-          data-testid={`data-chip-zero-${part}`}
-        >
-          {label}
-        </span>
-      ),
-    });
-  }
-  const go = (key: string) => (e: { stopPropagation(): void }) => {
-    e.stopPropagation();
-    nav.goToRow(key);
-  };
-  if (links.branchFrom) {
-    const name = stationName(ctx, links.branchFrom.section_id, links.branchFrom.station_index);
-    const target = `${links.branchFrom.section_id}-${links.branchFrom.station_index}`;
-    const label = t('dataWorkspace.links.continuesFrom', { name });
-    chips.push({
-      key: 'from',
-      label,
-      node: (
-        <button
-          type="button"
-          className={CHIP_CLS}
-          style={chipStyle('var(--sh-section)')}
-          title={t('dataWorkspace.links.continuesFromTitle', { name })}
-          onMouseDown={stop}
-          onClick={go(stationRefKey(links.branchFrom))}
-          data-testid={`data-chip-branch-${part}-${target}`}
-        >
-          <span className="truncate">{label}</span>
-        </button>
-      ),
-    });
-  }
-  for (const m of links.merges) {
-    if (links.branchFrom && m.section_id === links.branchFrom.section_id && m.station_index === links.branchFrom.station_index) continue;
-    const name = stationName(ctx, m.section_id, m.station_index);
-    const label = `⇄ ${name}`;
-    chips.push({
-      key: `m-${m.section_id}-${m.station_index}`,
-      label,
-      node: (
-        <button
-          type="button"
-          className={CHIP_CLS}
-          style={chipStyle('var(--sh-merge)')}
-          title={t('dataWorkspace.links.mergeTitle', { name })}
-          onMouseDown={stop}
-          onClick={go(stationRefKey(m))}
-          data-testid={`data-chip-merge-${part}-${m.section_id}-${m.station_index}`}
-        >
-          <span className="truncate">{label}</span>
-        </button>
-      ),
-    });
-  }
-  for (const c of links.closures) {
-    const name = stationName(ctx, c.partner.section_id, c.partner.station_index);
-    const target = `${c.partner.section_id}-${c.partner.station_index}`;
-    const closes = t('dataWorkspace.links.closesTo', { name });
-    // One chip per closure, its misclosure inside, tinted by the error level
-    // (the station colour while the closure is not computed).
-    const mis = misclosureText(ctx, c.misclosure, c.errorPct);
-    const known = mis !== '' && c.errorPct !== null && c.misclosure !== null;
-    const title = t('dataWorkspace.links.closureTitle', { name });
-    chips.push({
-      key: `c-${c.closureId}-${target}`,
-      label: known ? `${closes} · ${mis}` : closes,
-      node: (
-        <button
-          type="button"
-          className={CHIP_CLS}
-          style={chipStyle(known ? getErrorColor(c.errorPct!) : 'var(--sh-station)')}
-          title={
-            known
-              ? `${title}\n${t('dataWorkspace.links.misclosureTitle', {
-                  distance: fmt(ctx, c.misclosure!, decimalsOf(ctx).length),
-                  percent: fmt(ctx, c.errorPct!, 1),
-                })}`
-              : title
-          }
-          onMouseDown={stop}
-          onClick={go(stationRefKey(c.partner))}
-          data-testid={`data-chip-closure-${part}-${testIdPart(c.closureId)}-${target}`}
-        >
-          <span className="truncate">{closes}</span>
-          {known && (
-            <>
-              <span className="shrink-0 opacity-60" aria-hidden="true">
-                ·
-              </span>
-              <span className="shrink-0 tabular-nums" data-testid={`data-chip-misclosure-${part}-${testIdPart(c.closureId)}`}>
-                {mis}
-              </span>
-            </>
-          )}
-        </button>
-      ),
-    });
-  }
-  if (chips.length === 0) return null;
-  return <LinkChipRow chips={chips} testId={`data-links-${part}`} moreTestId={`data-links-more-${part}`} />;
-}
-
-function IssuesCell({ row, deps }: { row: DataRow; deps: GridColumnDeps }) {
-  if (!isEntityRow(row)) return null;
-  const { ctx, t } = deps;
-  const frozen = row.kind === 'shot' && isShotFrozen(ctx, row);
-  const open = rowWarnings(ctx, row).filter((w) => !w.isResolved);
-  if (open.length === 0 && !frozen) return null;
-  const hasError = open.some((w) => w.severity === 'error');
-  const tooltip = [...(frozen ? [t('dataTable.frozen')] : []), ...open.map((w) => w.message)].join('\n');
-  const colorClass = hasError ? 'text-error' : frozen && open.length === 0 ? 'text-text-secondary' : 'text-warning';
-  const icon =
-    frozen && open.length === 0 ? <LockIcon size={13} /> : hasError ? <AlertCircleIcon size={14} /> : <AlertTriangleIcon size={14} />;
-  const part = dataRowPart(row);
-  const content = (
-    <>
-      {icon}
-      {open.length > 1 && <span className="ml-0.5 text-[11px] tabular-nums">{open.length}</span>}
-      {frozen && open.length > 0 && <LockIcon size={11} />}
-    </>
-  );
-  if (open.length > 0 && row.kind === 'shot' && !ctx.editingBlocked) {
-    return (
-      <button
-        type="button"
-        className={`${colorClass} inline-flex cursor-pointer items-center rounded hover:opacity-80 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset`}
-        title={tooltip}
-        aria-label={t('detailPanel.warnings.resolve')}
-        onMouseDown={stop}
-        onClick={(e) => {
-          e.stopPropagation();
-          deps.onResolveWarning(row);
-        }}
-        data-testid={`data-issues-${part}`}
-      >
-        {content}
-      </button>
-    );
-  }
-  return (
-    <span className={`${colorClass} inline-flex items-center`} title={tooltip} data-testid={`data-issues-${part}`}>
-      {content}
-    </span>
-  );
 }
 
 function KindCell({ row, deps }: { row: DataRow; deps: GridColumnDeps }) {
@@ -269,8 +89,6 @@ export function buildGridColumns(defs: readonly DataColumnDef[], deps: GridColum
       };
     }
     if (key === 'comment') col.multiline = true;
-    if (key === 'links') col.render = (row) => <LinksCell row={row} deps={deps} />;
-    if (key === 'issues') col.render = (row) => <IssuesCell row={row} deps={deps} />;
     if (key === 'kind') {
       col.render = (row) => <KindCell row={row} deps={deps} />;
       col.noInlineEdit = true;

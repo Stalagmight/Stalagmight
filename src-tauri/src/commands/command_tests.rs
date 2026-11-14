@@ -509,6 +509,10 @@ fn test_update_data_workspace_view_roundtrip() {
         assert_eq!(defaults.data_workspace_map_pane_width, 480);
         assert!(!defaults.data_workspace_map_pane_open);
         assert!(defaults.data_workspace_section_headers);
+        assert!(defaults
+            .data_workspace_hidden_columns
+            .iter()
+            .any(|key| key == "depth"));
 
         config::update_data_workspace_view_impl(
             state(&app).inner(),

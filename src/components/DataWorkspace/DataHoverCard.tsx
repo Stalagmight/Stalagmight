@@ -2,20 +2,23 @@
  * The hover card on a row name: everything about the station / shot that the
  * columns may not show, with the merges and closures spelled out and the
  * navigation actions at hand. Values reuse the column texts so they read
- * exactly like the cells.
+ * exactly like the cells. Its title names the section (the gutter shows only
+ * the row ID), and the ID row adds the "<label>:<index>" name the link chips
+ * use.
  */
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { StationRef } from '../../types/project';
 import { SHOT_KIND_LABEL_KEY } from '../../utils/shotKind';
 import { normalizeName } from '../../utils/people';
-import { formatStationId } from '../../utils/formatters';
 import { useDataModel } from './DataModelContext';
 import { useDataNav } from './useDataNavigation';
 import type { DataColumnKey, DataEntityRow, DataModelCtx } from './types';
 import { isShotFrozen, misclosureText, rowWarnings, shotKindOf, stationDisplayName } from './model/columns';
 import { shotCredit, shotName, stationName } from './model/ctx';
 import { stationLinks, stationRefKey, shotKeyAt } from './model/links';
+import { rowIdLabel, shotIdLabel } from './model/rowIds';
+import { proseAround } from './model/linkItems';
 import { dataRowPart } from './dataTestIds';
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
@@ -40,7 +43,7 @@ export function DataHoverCard({ row }: { row: DataEntityRow }) {
   const section = ctx.sectionsById.get(row.sectionId);
   const fullName = ctx.sectionNames.get(row.sectionId) ?? String(row.sectionId);
 
-  const goTo = (ref: StationRef, label: string, testSuffix: string) => (
+  const goTo = (ref: StationRef, label: ReactNode, testSuffix: string) => (
     <button
       type="button"
       className={LINK_CLS}
@@ -73,13 +76,15 @@ export function DataHoverCard({ row }: { row: DataEntityRow }) {
       const r = key ? model.rowByKey.get(key) : undefined;
       if (!r || r.kind !== 'shot') return null;
       const len = model.columnByKey.get('length')?.text(r, ctx) ?? '';
-      return `${shotName(ctx, row.sectionId, position)} · ${len} m`;
+      return `${shotIdLabel(row.sectionId, position)} · ${len} m`;
     };
     const issue = stationIssueLevel(ctx, row);
+    // "Closes to <name>": the prose normal, the station name bold (as the chips).
+    const closesTo = proseAround(ctx, 'dataWorkspace.links.closesTo', 'Closes to {{name}}');
     body = (
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
         <Row label={t('dataWorkspace.hover.station')}>
-          {`${stationName(ctx, row.sectionId, row.stationIndex)} (${formatStationId(row.sectionId, row.stationIndex)})`}
+          {`${rowIdLabel(row)} (${stationName(ctx, row.sectionId, row.stationIndex)})`}
         </Row>
         {name && <Row label={t('dataWorkspace.hover.name')}>{name}</Row>}
         <Row label={t('dataWorkspace.hover.xy')}>{`${text('x')} / ${text('y')} m`}</Row>
@@ -92,7 +97,11 @@ export function DataHoverCard({ row }: { row: DataEntityRow }) {
             <span className="flex flex-wrap gap-x-2" data-testid={`data-hover-merges-${part}`}>
               {links.merges.map((m) => (
                 <span key={`${m.section_id}-${m.station_index}`}>
-                  {goTo(m, stationName(ctx, m.section_id, m.station_index), `${m.section_id}-${m.station_index}`)}
+                  {goTo(
+                    m,
+                    <span className="font-semibold">{stationName(ctx, m.section_id, m.station_index)}</span>,
+                    `${m.section_id}-${m.station_index}`,
+                  )}
                 </span>
               ))}
             </span>
@@ -105,7 +114,11 @@ export function DataHoverCard({ row }: { row: DataEntityRow }) {
                 <span key={`${c.closureId}-${c.partner.section_id}-${c.partner.station_index}`}>
                   {goTo(
                     c.partner,
-                    t('dataWorkspace.links.closesTo', { name: stationName(ctx, c.partner.section_id, c.partner.station_index) }),
+                    <>
+                      {closesTo[0]}
+                      <span className="font-semibold">{stationName(ctx, c.partner.section_id, c.partner.station_index)}</span>
+                      {closesTo[1]}
+                    </>,
                     `${c.partner.section_id}-${c.partner.station_index}`,
                   )}
                   {misclosureText(ctx, c.misclosure, c.errorPct) && (
@@ -134,7 +147,7 @@ export function DataHoverCard({ row }: { row: DataEntityRow }) {
     const names = (people: readonly { name: string }[]) => people.map((p) => normalizeName(p.name)).join(', ');
     body = (
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
-        <Row label={t('dataWorkspace.hover.shot')}>{shotName(ctx, row.sectionId, row.position)}</Row>
+        <Row label={t('dataWorkspace.hover.shot')}>{`${rowIdLabel(row)} (${shotName(ctx, row.sectionId, row.position)})`}</Row>
         <Row label={t('dataWorkspace.hover.fromTo')}>{text('fromTo')}</Row>
         <Row label={t('dataWorkspace.columns.length')}>{text('length')}</Row>
         <Row label={t('dataWorkspace.columns.azimuth')}>{`${text('azimuth')} (${text('azimuth_in')} / ${text('azimuth_out')})`}</Row>
