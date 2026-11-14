@@ -46,7 +46,10 @@ The approaches differ, but every one of these tools lets a cave carry more than 
    measurements: the extra datum does not move anything there, and the gap is shown instead.
 2. **The fix is weighted.** GPS usually comes from a smartwatch, followed by a direct shot to the
    line, so it is good to a few metres, not to centimetres. Each datum gets a horizontal accuracy,
-   default 5 m. An accuracy of 0 is a hard pin.
+   default 0, a hard pin: the computed survey goes exactly through the GPS. A soft
+   default was measured and rejected: with 5 m, a fix 40 m off over a 500 m traverse
+   moved the survey only about 2.4 m, because the solve trusts the survey to about
+   a metre over that distance. A user who wants a softer fix types an accuracy.
 3. **The UI keeps the name "Zero Datum".** When the cave already has one, the Edit Station
    dialog explains what this one will do instead of refusing.
 4. **Sanity warning.** Warn, without blocking, when the gap between the surveyed position and
@@ -117,7 +120,7 @@ The approaches differ, but every one of these tools lets a cave carry more than 
 - **Edit Station dialog.** When the station's piece is already placed, the checkbox stays "Set
   as Zero Datum". The dialog then says this datum will bend the computed survey to fit its GPS,
   and shows the gap and the warning (decision 4) as soon as GPS is entered.
-- **Accuracy field** in metres, default 5.
+- **Accuracy field** in metres, default 0 (goes exactly through the GPS).
 - **Map.** A GPS fix is drawn like a zero datum. Optionally, a thin line from the surveyed
   position to the GPS position, in Raw Data View only.
 - **Warnings tab.** One entry per GPS fix whose gap exceeds the threshold.
@@ -152,7 +155,7 @@ check, export and Plan mode read the fixes.
   - Raw Data View is unchanged;
   - the gap is 40 m;
   - with a hard fix the Computed View puts the fix station on its GPS;
-  - with a 5 m accuracy it lands in between, closer to the GPS.
+  - with a 5 m accuracy it lands in between, at the closed-form position.
 - Merging two placed pieces succeeds, and the later datum becomes a fix. Undo restores both
   placements.
 - Unmerging restores the fix to a placement datum, and the detached piece stays where it was.
@@ -170,7 +173,8 @@ them and implementation started:
 1. **Derived roles in one list.** Not a separate list of GPS fixes.
 2. **The destructive closure distribution strategies ignore fixes.** Only
    placement datums anchor them.
-3. **5 m default accuracy.** Depth never takes a GPS fix's elevation into
+3. **Default accuracy 0, a hard pin** (changed from 5 m after the solve was
+   measured; see decision 2). Depth never takes a GPS fix's elevation into
    account; the solve stays horizontal.
 
 ## Implementation tracks

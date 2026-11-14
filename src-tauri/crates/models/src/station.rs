@@ -488,9 +488,13 @@ impl ZeroDatum {
     }
 }
 
-/// Default horizontal accuracy of a zero datum's GPS, in metres: a smartwatch
-/// fix followed by a direct shot to the line (#741).
-pub const DEFAULT_GPS_ACCURACY_M: f64 = 5.0;
+/// Default horizontal accuracy of a zero datum's GPS, in metres: 0, a hard pin.
+///
+/// The survey bends to go exactly through the GPS, the way Ariane treats every
+/// entrance. A soft default (5 m was measured) barely moves the Closures
+/// Computed View, because the solve trusts a 500 m traverse to about a metre;
+/// a user who wants a softer fix types an accuracy (#741).
+pub const DEFAULT_GPS_ACCURACY_M: f64 = 0.0;
 
 /// What a zero datum does, derived per merge-connected component (#741).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
