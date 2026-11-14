@@ -585,17 +585,29 @@ impl AppState {
         Some(stations)
     }
 
+    /// The cache key of the closure-adjustment config in force now. Takes the
+    /// config lock, so a caller that also needs the project lock reads this
+    /// FIRST, before taking it.
+    pub(super) fn current_adjusted_config_hash(&self) -> u64 {
+        adjusted_config_hash(&self.get_config().closure_adjustment)
+    }
+
     /// The components the last closure-adjusted solve of `project` could not
     /// adjust (#737). Read-only on the memoized cache: empty unless that cache
-    /// was solved from exactly this project version under the current
-    /// closure-adjustment config, so it never runs the solve itself and never
-    /// reports a failure the data has since moved past.
+    /// was solved from exactly this project version under the config whose key
+    /// is `config_hash` ([`Self::current_adjusted_config_hash`], read by the
+    /// caller up front), so it never runs the solve itself and never reports a
+    /// failure the data has since moved past.
     ///
     /// Takes only the cache lock, which no path holds while taking another, so
-    /// a caller may hold the project lock (the warnings pass does).
-    pub(super) fn cached_adjustment_failures(&self, project: &Project) -> Vec<AdjustmentFailure> {
+    /// a caller may hold the project lock - having read `config_hash` before
+    /// it took that lock, so the config lock is never nested inside it.
+    pub(super) fn cached_adjustment_failures(
+        &self,
+        project: &Project,
+        config_hash: u64,
+    ) -> Vec<AdjustmentFailure> {
         let version = project.modified_at.timestamp_nanos_opt().unwrap_or(0);
-        let config_hash = adjusted_config_hash(&self.get_config().closure_adjustment);
         let Ok(cache) = self.adjusted_cache.lock() else {
             return Vec::new();
         };
@@ -613,6 +625,8 @@ impl AppState {
     /// only - see [`Self::cached_adjustment_failures`]). `None` when no project
     /// is open.
     pub fn get_adjustment_report(&self) -> Option<AdjustmentReport> {
+        // Before the project lock: the config lock is never taken inside it.
+        let config_hash = self.current_adjusted_config_hash();
         let guard = self.project.lock().ok()?;
         let project = guard.as_ref()?;
         Some(AdjustmentReport {
@@ -622,7 +636,7 @@ impl AppState {
                 .map(SkippedClosure::from)
                 .collect(),
             failures: self
-                .cached_adjustment_failures(project)
+                .cached_adjustment_failures(project, config_hash)
                 .iter()
                 .map(AdjustmentFailureReport::from)
                 .collect(),

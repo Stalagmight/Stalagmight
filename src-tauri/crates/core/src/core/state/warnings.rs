@@ -63,6 +63,9 @@ impl AppState {
         project: &Project,
         db: Option<&Database>,
     ) -> Vec<ProjectWarning> {
+        // Read before anything else, so the config lock is never taken while a
+        // caller holds the project lock (#737; see `cached_adjustment_failures`).
+        let adjusted_config_hash = self.current_adjusted_config_hash();
         // Load resolved (ignored) warnings. Suppression is keyed by the shot's
         // stable UUID (issue #57): an ignore stays bound to the same shot even
         // after inserts/deletes/reorders renumber `shot_id`. Pre-v8 rows that
@@ -301,7 +304,7 @@ impl AppState {
         all_warnings.extend(Self::closure_across_one_shot_warnings(project));
         // Advisory, so an ignore on its shot is honoured like any warning's.
         all_warnings.extend(
-            self.adjustment_failure_warnings(project)
+            self.adjustment_failure_warnings(project, adjusted_config_hash)
                 .into_iter()
                 .map(|mut w| {
                     w.is_resolved = is_resolved_for(&w.shot_uuid, w.section_id, w.shot_id, &w.code);
@@ -373,8 +376,12 @@ impl AppState {
     /// Attached to the shot at the solve's anchor station (station 0 -> shot 0,
     /// station i -> shot i-1, like the over-anchoring error), falling back to
     /// the first shot of the component.
-    fn adjustment_failure_warnings(&self, project: &Project) -> Vec<ProjectWarning> {
-        self.cached_adjustment_failures(project)
+    fn adjustment_failure_warnings(
+        &self,
+        project: &Project,
+        config_hash: u64,
+    ) -> Vec<ProjectWarning> {
+        self.cached_adjustment_failures(project, config_hash)
             .iter()
             .filter_map(|failure| {
                 let anchor_shot = project.get_section(failure.anchor.section_id).and_then(|s| {

@@ -338,7 +338,19 @@ fn the_report_lists_skipped_closures_and_failures_only_from_a_current_solve() {
     // An older project version never borrows the cached failure.
     let mut older = project(&state);
     older.touch();
-    assert!(state.cached_adjustment_failures(&older).is_empty());
+    let hash = state.current_adjusted_config_hash();
+    assert!(state.cached_adjustment_failures(&older, hash).is_empty());
+    // Nor does the current version under another config, while the current
+    // version under the current config does.
+    assert!(state
+        .cached_adjustment_failures(&project(&state), hash.wrapping_add(1))
+        .is_empty());
+    assert_eq!(
+        state
+            .cached_adjustment_failures(&project(&state), hash)
+            .len(),
+        1
+    );
 
     // Any edit drops the cached solve, and with it the failure.
     let edit = state.execute(Command::RemoveLoopClosure {
