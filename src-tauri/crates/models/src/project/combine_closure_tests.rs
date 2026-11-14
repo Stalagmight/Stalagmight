@@ -1653,3 +1653,112 @@ fn the_anchor_rule_follows_the_solve_of_the_closure_the_combine_makes() {
         }
     }
 }
+
+/// Nico's review of #737, point 4. K runs three shots east; O starts 0.4 m
+/// past K's end and is tied to it only by a legacy closure join (one the solve
+/// does not take). K also carries a Batch closure: across its first shot only
+/// (K:0-K:1, which the solve skips) or across two shots (K:0-K:2, a real loop,
+/// the control). Where the component's only eligible closure is skipped:
+///
+/// - `adjustment_anchor_of` names the same station as for the control and as
+///   for the survey without that closure (it ignores the skip set);
+/// - `plan_adjustment_anchors` gives the component no anchor (nothing to solve);
+/// - Combine treats it as not adjusted: keeping O, the plain rule moves K.
+///
+/// In the control the view solves, so keeping O moves O (K holds the anchor).
+#[test]
+fn a_component_whose_only_closure_is_skipped_keeps_its_anchor_but_is_not_adjusted() {
+    let build = |closure_end: Option<u32>| {
+        let mut project = Project::new("Skipped".to_string(), None);
+        let k = add(
+            &mut project,
+            "K",
+            vec![shot(90.0, 10.0), shot(90.0, 10.0), shot(90.0, 10.0)],
+        );
+        let o = add(&mut project, "O", vec![shot(90.0, 5.0)]);
+        let k_end = xy(&project, StationRef::new(k, 3));
+        place(&mut project, o, 0, (k_end.0 + 0.4, k_end.1));
+        let mut plant = |a: StationRef, b: StationRef, strategy: ClosureStrategy| {
+            let id = project.next_closure_id;
+            project.next_closure_id += 1;
+            project.loop_closures.push(LoopClosure {
+                id,
+                station_a: project.key_for_ref(a).unwrap(),
+                station_b: project.key_for_ref(b).unwrap(),
+                path_length: 1.0,
+                misclosure_distance: 0.4,
+                error_percentage: 1.0,
+                horizontal_misclosure: 0.4,
+                vertical_misclosure: 0.0,
+                strategy,
+                is_aligned: false,
+            });
+        };
+        plant(
+            StationRef::new(k, 3),
+            StationRef::new(o, 0),
+            ClosureStrategy::ProportionalByLength,
+        );
+        if let Some(end) = closure_end {
+            plant(
+                StationRef::new(k, 0),
+                StationRef::new(k, end),
+                ClosureStrategy::Batch,
+            );
+        }
+        (project, k, o)
+    };
+    let (skipped, k, o) = build(Some(1));
+    let (control, ..) = build(Some(2));
+    let (without, ..) = build(None);
+    let component = skipped.get_connected_section_ids(k);
+    assert_eq!(component, HashSet::from([k, o]));
+    assert_eq!(skipped.closures_across_one_shot().len(), 1, "setup");
+    assert!(control.closures_across_one_shot().is_empty(), "setup");
+
+    // The anchor station ignores the skip set.
+    let anchor = skipped.adjustment_anchor_of(&component);
+    assert_eq!(anchor, control.adjustment_anchor_of(&component));
+    assert_eq!(anchor, without.adjustment_anchor_of(&component));
+    assert_eq!(anchor.map(|a| a.section_id), Some(k));
+
+    // The solve plans no anchor where its only closure is skipped.
+    assert!(skipped.adjustment_anchors_for_tests().is_empty());
+    assert_eq!(
+        control.adjustment_anchors_for_tests(),
+        vec![anchor.unwrap()]
+    );
+
+    // Combine at the closure join, keeping O.
+    let keeping_o = |project: &Project| {
+        let candidate = project
+            .combine_candidates(StationRef::new(k, 3))
+            .into_iter()
+            .find(|c| c.section_a == o || c.section_b == o)
+            .unwrap();
+        assert_eq!(candidate.join_kind, CombineJoinKind::Closure);
+        if candidate.section_a == o {
+            candidate.plan_keeping_a
+        } else {
+            candidate.plan_keeping_b
+        }
+    };
+    let plain = keeping_o(&skipped);
+    assert!(plain.shift_m > 0.39, "setup: the join closes by a shift");
+    assert_eq!(
+        plain.moving_section,
+        Some(k),
+        "not adjusted: the other section moves"
+    );
+    assert_eq!(plain.kept_moves_because, None);
+    let held = keeping_o(&control);
+    assert_eq!(
+        held.moving_section,
+        Some(o),
+        "adjusted: K holds the anchor, O moves"
+    );
+    assert_eq!(
+        held.kept_moves_because,
+        Some(KeptMovesReason::AdjustmentAnchor)
+    );
+}
