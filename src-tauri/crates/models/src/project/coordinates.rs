@@ -460,7 +460,7 @@ impl Project {
     #[cfg(any(test, feature = "test-support"))]
     pub fn adjustment_anchor_for_tests(&self, section_id: SectionId) -> Option<StationRef> {
         let component = self.get_connected_section_ids(section_id);
-        self.default_anchor_for_component(&component)
+        self.adjustment_anchor_of(&component)
     }
 
     /// Whether a loop closure participates in the least-squares adjustment.
@@ -472,6 +472,34 @@ impl Project {
             strategy,
             ClosureStrategy::Batch | ClosureStrategy::LeastSquaresWeighted
         )
+    }
+
+    /// Whether the least-squares adjustment solves `component`: it holds a
+    /// closure the solve takes ([`Self::closure_is_eligible`]). A component
+    /// without one is shown as measured in the closure-adjusted view.
+    pub(crate) fn component_has_eligible_closure(&self, component: &HashSet<SectionId>) -> bool {
+        self.loop_closures.iter().any(|lc| {
+            Self::closure_is_eligible(lc.strategy)
+                && component.contains(&lc.station_a.section_id)
+                && component.contains(&lc.station_b.section_id)
+        })
+    }
+
+    /// The station the closure-adjusted view holds `component` at: a zero
+    /// datum in it when present, otherwise a deterministic default (the
+    /// component's held gauge, or the lowest section id's gauge station) so
+    /// the gauge is reproducible across reloads. The one rule the solve
+    /// ([`Self::plan_adjustment_anchors`]) and the edits that must not move
+    /// it (Combine Sections' choice of the side that moves) share.
+    pub(crate) fn adjustment_anchor_of(
+        &self,
+        component: &HashSet<SectionId>,
+    ) -> Option<StationRef> {
+        self.zero_datums
+            .iter()
+            .find(|zd| component.contains(&zd.station_ref.section_id))
+            .and_then(|zd| self.resolve_key(&zd.station_ref))
+            .or_else(|| self.default_anchor_for_component(component))
     }
 
     /// Plan which component anchors to feed the closure-adjustment solve.
@@ -493,25 +521,11 @@ impl Project {
                 visited.insert(*sid);
             }
 
-            let has_eligible = self.loop_closures.iter().any(|lc| {
-                Self::closure_is_eligible(lc.strategy)
-                    && component.contains(&lc.station_a.section_id)
-                    && component.contains(&lc.station_b.section_id)
-            });
-            if !has_eligible {
+            if !self.component_has_eligible_closure(&component) {
                 continue;
             }
 
-            // Anchor on a zero datum in the component when present, otherwise a
-            // deterministic default so the gauge is reproducible across reloads.
-            let anchor = self
-                .zero_datums
-                .iter()
-                .find(|zd| component.contains(&zd.station_ref.section_id))
-                .and_then(|zd| self.resolve_key(&zd.station_ref))
-                .or_else(|| self.default_anchor_for_component(&component));
-
-            if let Some(anchor) = anchor {
+            if let Some(anchor) = self.adjustment_anchor_of(&component) {
                 anchors.push(anchor);
             }
         }

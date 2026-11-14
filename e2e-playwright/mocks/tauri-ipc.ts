@@ -5607,6 +5607,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               const plan = (kept: number, other: number) => ({
                 kept,
                 moving_section: shift > 0.001 ? other : null,
+                kept_moves_because: null,
                 moved_sections: shift > 0.001 ? [other] : [],
                 shift_m: shift > 0.001 ? shift : 0,
                 torn_ties: torn,

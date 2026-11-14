@@ -60,7 +60,9 @@ mod anchor_fuzz;
 #[expect(
     clippy::unwrap_used,
     clippy::panic,
-    reason = "test module: panics on a failed assumption are the point"
+    clippy::print_stderr,
+    reason = "test module: panics on a failed assumption are the point, and the fuzz sweeps \
+              print what they covered and the replay prints each step"
 )]
 mod combine_closure_tests;
 #[cfg(test)]
