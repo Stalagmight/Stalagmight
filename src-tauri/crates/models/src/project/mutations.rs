@@ -1,10 +1,10 @@
 use chrono::Utc;
 use std::collections::{HashMap, HashSet, VecDeque};
-use tracing::{debug, error, info, trace};
+use tracing::{debug, info, trace};
 
 use crate::{
-    gps_to_local, ClosurePreview, ClosureStrategy, Coordinates, GpsCoordinates, LoopClosure,
-    SectionId, StationKey, StationMerge, StationRef, ZeroDatum,
+    gps_to_local, ClosurePreview, ClosureStrategy, Coordinates, DatumRole, GpsCoordinates,
+    LoopClosure, SectionId, StationKey, StationMerge, StationRef, ZeroDatum,
 };
 
 use super::Project;
@@ -48,21 +48,28 @@ impl Project {
             );
         }
 
-        // Check zero datum status - uses transitive connections through existing merges
-        // This ensures that if B is connected to a datum-holding section C through an
-        // earlier merge, b_has_zd will be true and the merge will propagate datum positioning
-        let a_has_zd = self.section_has_zero_datum(station_a.section_id);
-        let b_has_zd = self.section_has_zero_datum(station_b.section_id);
+        // Which side is placed by a zero datum - transitively through existing
+        // merges, so a B merged earlier onto datum-holding C counts as placed. The
+        // value is the placement datum's position in `zero_datums`.
+        let a_placement = self.placement_datum_index(station_a.section_id);
+        let b_placement = self.placement_datum_index(station_b.section_id);
 
-        if a_has_zd && b_has_zd {
-            return Err("Both stations are connected to zero datums. Remove one zero datum before merging, or create a loop closure if the sections are connected.".to_string());
-        }
+        // Both sides placed (#741): the merge is allowed. The group whose placement
+        // datum comes LATER in the list moves to meet the merge, and that datum is a
+        // GPS fix from then on - roles are derived from list order, so nothing is
+        // re-labelled here. The earlier placement keeps its group where it is, so
+        // the frame (the first placement datum of the project) never moves.
+        let a_has_zd = match (a_placement, b_placement) {
+            (Some(a), Some(b)) => a < b,
+            (a, _) => a.is_some(),
+        };
+        let both_placed = a_placement.is_some() && b_placement.is_some();
 
         debug!(
             station_a = ?station_a,
             station_b = ?station_b,
-            a_has_zero_datum = a_has_zd,
-            b_has_zero_datum = b_has_zd,
+            a_placement,
+            b_placement,
             purpose = "merge stations",
             "Resolved zero datum anchors for merge"
         );
@@ -83,9 +90,10 @@ impl Project {
         // This is similar to set_zero_datum() offset calculation but triggered by merge.
         //
         // Determine which section group needs to move:
-        // - If A has zero datum (direct or transitive), B's group moves to align with A
-        // - If B has zero datum (direct or transitive), A's group moves to align with B
-        // - If neither has zero datum, A's group moves to align with B (arbitrary choice)
+        // - If A is placed (and B is not, or B's placement datum is later in the
+        //   list), B's group moves to align with A
+        // - Otherwise, if B is placed, A's group moves to align with B
+        // - If neither is placed, A's group moves to align with B (arbitrary choice)
         let ((anchor_x, anchor_y), (moving_x, moving_y), moving_section_id) = if a_has_zd {
             (coords_a, coords_b, station_b.section_id)
         } else {
@@ -101,22 +109,14 @@ impl Project {
         // Apply offset to all sections in the moving merge group (rigid body)
         // This repositions the entire moving group relative to the datum coordinate system
         let moving_sections = self.get_merged_section_ids(moving_section_id);
-        // Resolve-aware (a dangling datum is not a real anchor - matching
-        // section_has_zero_datum), so a deleted-anchor datum can't trigger a
-        // spurious "merge would move a zero datum" alarm.
-        let moving_has_zero_datum = self
-            .zero_datums
-            .iter()
-            .filter_map(|zd| self.resolve_key(&zd.station_ref))
-            .any(|sr| moving_sections.contains(&sr.section_id));
-        if moving_has_zero_datum && (offset_x.abs() > 1e-9 || offset_y.abs() > 1e-9) {
-            error!(
+        if both_placed {
+            info!(
                 moving_section_id,
                 offset_x,
                 offset_y,
                 moving_section_count = moving_sections.len(),
-                purpose = "protect zero datum position",
-                "Merge would move a zero datum section"
+                purpose = "merge two placed groups",
+                "Merging two placed groups; the later placement datum becomes a GPS fix"
             );
         }
 
@@ -640,37 +640,74 @@ impl Project {
         }
     }
 
-    /// The zero datum (other than `station_ref` itself) that already anchors the
-    /// merge-connected rigid group `station_ref` belongs to, if any. Used to reject
-    /// setting a second datum on an already-anchored group. Merge-only connectivity
-    /// via the shared [`Self::component_datum_refs`] source of truth.
-    fn find_connected_zero_datum(&self, station_ref: StationRef) -> Option<StationRef> {
-        self.component_datum_refs(station_ref.section_id)
-            .into_iter()
-            .find(|&sr| sr != station_ref)
-    }
-
-    /// Format a station reference for user display.
-    /// Uses section name if available, otherwise "Section N" (0-indexed to match canonical IDs).
-    /// Station index is displayed as 0-indexed to match UI format (e.g., "Section #0").
-    fn format_station_ref_for_display(&self, station_ref: StationRef) -> String {
-        let section_label = self
-            .sections
+    /// The role a datum stored on `datum_key` (in `station_ref`'s section) would
+    /// have: the role it already has when the station holds one, otherwise
+    /// [`DatumRole::GpsFix`] exactly when its merge component is already placed
+    /// (a new datum is appended, so it comes after that component's placement).
+    fn role_for_stored_datum(&self, station_ref: StationRef, datum_key: &StationKey) -> DatumRole {
+        if let Some(i) = self
+            .zero_datums
             .iter()
-            .find(|s| s.id == station_ref.section_id)
-            .and_then(|s| s.name.as_ref())
-            .map_or_else(
-                || format!("Section {}", station_ref.section_id),
-                |name| format!("\"{name}\""),
-            );
-
-        // Display station index as 0-indexed to match canonical StationRef format
-        format!("{} #{}", section_label, station_ref.station_index)
+            .position(|zd| zd.station_ref == *datum_key)
+        {
+            if let Some(role) = self.datum_roles().get(i).copied().flatten() {
+                return role;
+            }
+        }
+        if self.section_has_zero_datum(station_ref.section_id) {
+            DatumRole::GpsFix
+        } else {
+            DatumRole::Placement
+        }
     }
 
-    /// Set a station as the zero datum and reposition the survey around it.
+    /// Store `gps` and `accuracy_m` on the datum at `datum_key`, in place when one
+    /// is there (its list position is its role, so it must not move) or appended.
+    /// Returns whether an existing datum was updated.
+    fn store_datum(
+        &mut self,
+        datum_key: StationKey,
+        gps: GpsCoordinates,
+        accuracy_m: Option<f64>,
+    ) -> bool {
+        if let Some(existing) = self
+            .zero_datums
+            .iter_mut()
+            .find(|zd| zd.station_ref == datum_key)
+        {
+            existing.gps = gps;
+            existing.accuracy_m = accuracy_m;
+            true
+        } else {
+            self.zero_datums.push(ZeroDatum {
+                station_ref: datum_key,
+                gps,
+                accuracy_m,
+            });
+            false
+        }
+    }
+
+    /// [`Self::set_zero_datum_with_accuracy`] with the default accuracy.
+    pub fn set_zero_datum(
+        &mut self,
+        station_ref: StationRef,
+        gps: GpsCoordinates,
+    ) -> Result<bool, String> {
+        self.set_zero_datum_with_accuracy(station_ref, gps, None)
+    }
+
+    /// Set a station as a zero datum, and place the survey by it when it is the
+    /// placement datum of its merge component.
     ///
-    /// When a GPS reference is set:
+    /// A station whose merge component is already placed by an EARLIER datum
+    /// gets a GPS FIX (#741): the datum is stored (appended, or updated in place)
+    /// and nothing moves - no translation, no cascade, no re-frame. Raw Data
+    /// View keeps the measurements; the gap between the survey and the GPS is
+    /// shown instead ([`Self::datum_gap`]).
+    ///
+    /// A PLACEMENT datum (a new one on an unplaced component, or a re-set of the
+    /// existing placement datum) moves its group onto the GPS as follows:
     /// - For the FIRST datum (the survey had no resolvable one): the station ends
     ///   at (0, 0), reached by translating EVERY section rigidly
     ///   ([`Self::renormalize_frame`]) rather than only the datum's merge group.
@@ -686,12 +723,14 @@ impl Project {
     ///
     /// Z-coordinates (depths) are preserved and not affected by GPS positioning.
     ///
-    /// Returns Err if the station doesn't exist, GPS is invalid, or if a connected station
-    /// already has a zero datum.
-    pub fn set_zero_datum(
+    /// `accuracy_m` is stored as given (`None` is the default accuracy).
+    ///
+    /// Returns Err if the station doesn't exist, or the GPS or accuracy is invalid.
+    pub fn set_zero_datum_with_accuracy(
         &mut self,
         station_ref: StationRef,
         gps: GpsCoordinates,
+        accuracy_m: Option<f64>,
     ) -> Result<bool, String> {
         if !self.station_exists(station_ref) {
             return Err("Station does not exist".to_string());
@@ -699,19 +738,24 @@ impl Project {
 
         // Validate GPS coordinates to prevent serialization issues
         GpsCoordinates::validate(gps.latitude, gps.longitude, gps.depth_reference)?;
+        crate::validate_gps_accuracy(accuracy_m)?;
 
         // Stable stored identity for this datum's station.
         let datum_key = self
             .key_for_ref(station_ref)
             .ok_or_else(|| "Cannot set zero datum: station has no stable anchor".to_string())?;
 
-        // Check for connected zero datum
-        if let Some(existing) = self.find_connected_zero_datum(station_ref) {
-            let new_station = self.format_station_ref_for_display(station_ref);
-            let existing_station = self.format_station_ref_for_display(existing);
-            return Err(format!(
-                "Cannot set zero datum: {new_station} is connected to {existing_station} which already has a zero datum"
-            ));
+        if self.role_for_stored_datum(station_ref, &datum_key) == DatumRole::GpsFix {
+            let updated_existing = self.store_datum(datum_key, gps, accuracy_m);
+            self.touch();
+            info!(
+                station_ref = ?station_ref,
+                updated_existing,
+                total_zero_datums = self.zero_datums.len(),
+                purpose = "record a GPS fix",
+                "Zero datum stored as a GPS fix; raw geometry unchanged"
+            );
+            return Ok(true);
         }
 
         info!(
@@ -810,23 +854,9 @@ impl Project {
         self.cascade_connection_offsets(&[station_ref.section_id]);
         self.debug_assert_merge_alignment("set_zero_datum");
 
-        // Store the GPS datum
-        // Update in-place if datum exists (preserves order/position for stable center)
-        let mut updated_existing = false;
-        if let Some(existing) = self
-            .zero_datums
-            .iter_mut()
-            .find(|zd| zd.station_ref == datum_key)
-        {
-            existing.gps = gps;
-            updated_existing = true;
-        } else {
-            self.zero_datums.push(ZeroDatum {
-                station_ref: datum_key,
-                gps,
-                accuracy_m: None,
-            });
-        }
+        // Store the GPS datum, in place when it exists: its list position is its
+        // role (and, for the first one, the frame).
+        let updated_existing = self.store_datum(datum_key, gps, accuracy_m);
 
         // The survey had no frame and now has one, so local (0, 0) has just
         // acquired a MEANING it did not have: this datum's GPS. Re-frame onto it
@@ -870,11 +900,16 @@ impl Project {
     /// already is. Nothing moves here; a copy that has to land at the datum's
     /// GPS position is placed afterwards (`place_by_datum` in the core crate).
     ///
+    /// A datum stored on an already-placed merge component is a GPS fix, exactly
+    /// as through `set_zero_datum` (#741); since nothing moves here either way,
+    /// the role only matters to the readers.
+    ///
     /// Returns Err if validation fails (same rules as `set_zero_datum`).
     pub fn store_zero_datum_without_repositioning(
         &mut self,
         station_ref: StationRef,
         gps: GpsCoordinates,
+        accuracy_m: Option<f64>,
     ) -> Result<bool, String> {
         if !self.station_exists(station_ref) {
             return Err("Station does not exist".to_string());
@@ -882,20 +917,12 @@ impl Project {
 
         // Validate GPS coordinates
         GpsCoordinates::validate(gps.latitude, gps.longitude, gps.depth_reference)?;
+        crate::validate_gps_accuracy(accuracy_m)?;
 
         // Stable stored identity for this datum's station.
         let datum_key = self
             .key_for_ref(station_ref)
             .ok_or_else(|| "Cannot store zero datum: station has no stable anchor".to_string())?;
-
-        // Check for connected zero datum (same validation as set_zero_datum)
-        if let Some(existing) = self.find_connected_zero_datum(station_ref) {
-            let new_station = self.format_station_ref_for_display(station_ref);
-            let existing_station = self.format_station_ref_for_display(existing);
-            return Err(format!(
-                "Cannot store zero datum: {new_station} is connected to {existing_station} which already has a zero datum"
-            ));
-        }
 
         debug!(
             station_ref = ?station_ref,
@@ -906,21 +933,7 @@ impl Project {
         );
 
         // Store the GPS datum without computing or applying offsets
-        let mut updated_existing = false;
-        if let Some(existing) = self
-            .zero_datums
-            .iter_mut()
-            .find(|zd| zd.station_ref == datum_key)
-        {
-            existing.gps = gps;
-            updated_existing = true;
-        } else {
-            self.zero_datums.push(ZeroDatum {
-                station_ref: datum_key,
-                gps,
-                accuracy_m: None,
-            });
-        }
+        let updated_existing = self.store_datum(datum_key, gps, accuracy_m);
 
         self.touch();
         debug!(

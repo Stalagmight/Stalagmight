@@ -110,7 +110,10 @@ impl Project {
     /// not, adjust the non-authoritative side's section offset to re-align,
     /// then mark it authoritative so further connections cascade.
     ///
-    /// Zero-datum-bearing sections are always included as authoritative.
+    /// Sections holding a PLACEMENT datum are always included as authoritative.
+    /// A GPS fix (#741) is not: it never moves raw geometry, so its section is
+    /// pulled into line with its merge group like any other. Treating it as
+    /// authoritative would pin two points of one rigid group and tear a merge.
     pub fn cascade_connection_offsets(&mut self, seeds: &[SectionId]) {
         // Honor the batch-import opt-out: skip cascade during the
         // per-section import loop so the cost stays linear. The batch
@@ -165,19 +168,14 @@ impl Project {
         let local = self.section_local_coords();
         let station_offsets = self.resolved_station_offsets();
 
-        // Authoritative anchors: the seeds + every datum-bearing section.
+        // Authoritative anchors: the seeds + every section holding a placement
+        // datum. Dangling datums resolve to nothing, so they are not anchors
+        // (#174), and GPS fixes are not anchors either (#741).
         let mut authoritative: HashSet<SectionId> = HashSet::new();
         for &sid in seeds {
             authoritative.insert(sid);
         }
-        for zd in &self.zero_datums {
-            // Skip dangling datums (anchor key no longer resolves) - they are not
-            // real anchors, mirroring `section_has_zero_datum`/`component_datum_refs`
-            // (#174). Otherwise an unanchored section gets frozen as authoritative.
-            if self.resolve_key(&zd.station_ref).is_some() {
-                authoritative.insert(zd.station_ref.section_id);
-            }
-        }
+        authoritative.extend(self.placement_datum_sections());
 
         let sorted = |auth: &HashSet<SectionId>| {
             let mut v: Vec<SectionId> = auth.iter().copied().collect();
@@ -278,11 +276,14 @@ impl Project {
         }
     }
 
-    /// Check whether `start` can reach a zero datum station via merges and
+    /// Check whether `start` can reach a placement-datum station via merges and
     /// aligned closures WITHOUT traversing through `excluded`.  This is used
     /// by the doubly-anchored guard: a merge/closure to a partner is only a
     /// positional constraint if that partner is independently datum-anchored.
+    /// A GPS fix (#741) pins nothing in raw geometry, so it does not count; nor
+    /// does a dangling datum (#174).
     pub fn has_datum_path_excluding(&self, start: SectionId, excluded: SectionId) -> bool {
+        let placed = self.placement_datum_sections();
         let mut visited = HashSet::new();
         let mut queue = vec![start];
         while let Some(current) = queue.pop() {
@@ -292,10 +293,7 @@ impl Project {
             if !visited.insert(current) {
                 continue;
             }
-            if self.zero_datums.iter().any(|zd| {
-                // A dangling datum (key no longer resolves) does not anchor (#174).
-                zd.station_ref.section_id == current && self.resolve_key(&zd.station_ref).is_some()
-            }) {
+            if placed.contains(&current) {
                 return true;
             }
             for m in &self.station_merges {
@@ -442,8 +440,8 @@ impl Project {
     /// component as `section_id` (resolved to current StationRefs).
     ///
     /// This is the single source of truth for "what anchors this rigid group?" -
-    /// `section_has_zero_datum`, `find_connected_zero_datum`, the merge guard, and
-    /// the over-anchoring detector all derive from it, so they cannot drift apart.
+    /// `section_has_zero_datum`, the zero-datum role of a new datum and the merge
+    /// direction all derive from it, so they cannot drift apart.
     ///
     /// Counts only datums that still RESOLVE: a corrupt project can be opened with a
     /// dangling zero datum (anchor shot deleted) so the user can repair it, and a
@@ -467,136 +465,21 @@ impl Project {
         !self.component_datum_refs(section_id).is_empty()
     }
 
-    /// Group resolved zero datums by their merge-connected component, returning
-    /// only the components that hold MORE THAN ONE datum. An empty result means
-    /// the "≤1 zero datum per merge component" invariant holds.
+    /// Would adding a merge between sections `a` and `b` fuse two placed groups?
+    /// True only when `a` and `b` are in DIFFERENT merge components and EACH
+    /// component is already placed by a zero datum. (A merge component holds a
+    /// resolvable datum exactly when it holds a placement datum: the first one
+    /// in list order is it.)
     ///
-    /// Two GPS anchors in one rigid merge group over-constrain it: the offset
-    /// cascade ([`Self::cascade_connection_offsets`]) marks every datum section
-    /// authoritative, so the two wavefronts meet on a merge edge that cannot
-    /// satisfy both anchors and that merge visibly tears apart. This is how the
-    /// invariant violation surfaces to the user.
-    pub fn over_anchored_merge_components(&self) -> Vec<Vec<StationRef>> {
-        let resolved: Vec<StationRef> = self
-            .zero_datums
-            .iter()
-            .filter_map(|zd| self.resolve_key(&zd.station_ref))
-            .collect();
-        let mut groups: Vec<(HashSet<SectionId>, Vec<StationRef>)> = Vec::new();
-        for sr in resolved {
-            if let Some(group) = groups
-                .iter_mut()
-                .find(|(sections, _)| sections.contains(&sr.section_id))
-            {
-                group.1.push(sr);
-            } else {
-                groups.push((self.get_merged_section_ids(sr.section_id), vec![sr]));
-            }
-        }
-        groups
-            .into_iter()
-            .map(|(_, refs)| refs)
-            .filter(|refs| refs.len() > 1)
-            .collect()
-    }
-
-    /// Label every section with its merge-only component in the HYPOTHETICAL
-    /// graph that drops the merges at the indices in `skip`, and record which of
-    /// those components an anchor still reaches.
-    ///
-    /// ONE O(V + E) pass answers both questions
-    /// [`Self::demote_double_anchoring_merges`] asks of every candidate - "are
-    /// these two halves still connected without the torn merges?" and "is each
-    /// half independently anchored?" - so the separation test and the anchoring
-    /// test can never be answered against different graphs, and neither costs a
-    /// BFS per candidate.
-    ///
-    /// Only datums that still RESOLVE anchor a component, mirroring
-    /// [`Self::component_datum_refs`]: a corrupt project can be opened with a
-    /// dangling zero datum (its anchoring shot was deleted) so the user can repair
-    /// it, and a dangling datum is not a real anchor - counting it would make a
-    /// half look anchored when nothing holds it in place.
-    ///
-    /// Walks `station_merges` into a throwaway local adjacency rather than going
-    /// through the memoized [`Self::get_merged_section_ids`]: the shared memo
-    /// describes the merges that actually exist, and answering a "what if these
-    /// merges were gone" question must never mutate the project or that memo.
-    pub(crate) fn merge_components_excluding(
-        &self,
-        skip: &HashSet<usize>,
-    ) -> ExcludedMergeComponents {
-        let mut adjacency: HashMap<SectionId, Vec<SectionId>> = HashMap::new();
-        for (i, m) in self.station_merges.iter().enumerate() {
-            if skip.contains(&i) {
-                continue;
-            }
-            adjacency
-                .entry(m.station_a.section_id)
-                .or_default()
-                .push(m.station_b.section_id);
-            adjacency
-                .entry(m.station_b.section_id)
-                .or_default()
-                .push(m.station_a.section_id);
-        }
-
-        // Roots: every section in the project, then any section a surviving merge
-        // names that the project does not hold (a dangling endpoint in a project
-        // opened for repair). Nothing is left unlabelled, so a section that
-        // participates in no surviving merge is its own singleton component and
-        // both accessors answer for it.
-        let mut component_of: HashMap<SectionId, usize> = HashMap::new();
-        let mut next_component = 0usize;
-        let roots: Vec<SectionId> = self
-            .sections
-            .iter()
-            .map(|s| s.id)
-            .chain(adjacency.keys().copied())
-            .collect();
-        for root in roots {
-            if component_of.contains_key(&root) {
-                continue;
-            }
-            let component = next_component;
-            next_component += 1;
-            let mut queue = vec![root];
-            while let Some(current) = queue.pop() {
-                if component_of.insert(current, component).is_some() {
-                    continue;
-                }
-                if let Some(neighbours) = adjacency.get(&current) {
-                    for &n in neighbours {
-                        if !component_of.contains_key(&n) {
-                            queue.push(n);
-                        }
-                    }
-                }
-            }
-        }
-
-        let mut anchored: HashSet<usize> = HashSet::new();
-        for zd in &self.zero_datums {
-            let Some(sr) = self.resolve_key(&zd.station_ref) else {
-                continue;
-            };
-            if let Some(&component) = component_of.get(&sr.section_id) {
-                anchored.insert(component);
-            }
-        }
-
-        ExcludedMergeComponents {
-            component_of,
-            anchored,
-        }
-    }
-
-    /// Would adding a merge between sections `a` and `b` place two zero datums in
-    /// one merge component? True only when `a` and `b` are in DIFFERENT merge
-    /// components and EACH component is already anchored - i.e. the merge would
-    /// fuse two independently-anchored rigid groups. Used to keep
-    /// [`Self::convert_orphan_closures_to_merges`] from silently creating the
-    /// over-constraint (a closure between two anchored groups is legitimate; a
-    /// rigid merge between them is not).
+    /// An explicit user merge may fuse two placed groups (#741,
+    /// [`Self::merge_stations`]): the later placement datum becomes a GPS fix and
+    /// its group moves to meet the merge. The AUTOMATIC paths ask this to refuse
+    /// it - the closure-to-merge promotion
+    /// ([`Self::plan_merge_promotion`]) and the closure alignment stamp
+    /// ([`Self::closure_alignment_stamp`]). A closure between two placed groups
+    /// records the misclosure between two GPS-placed surveys, which is a
+    /// legitimate statement on its own; promoting it would translate a placed
+    /// group by that misclosure, a geometry change nobody asked for.
     ///
     /// Asked about a merge that does NOT yet exist, so it reads the real graph
     /// through the memoized [`Self::get_merged_section_ids`].
@@ -613,33 +496,5 @@ impl Project {
                 .any(|sr| component.contains(&sr.section_id))
         };
         anchored(&component_a) && anchored(&self.get_merged_section_ids(b))
-    }
-}
-
-/// Merge-only connected components of every section in a project, computed as if
-/// some set of merges did not exist, plus which components hold at least one
-/// resolved zero datum. Built by [`Project::merge_components_excluding`].
-pub(crate) struct ExcludedMergeComponents {
-    /// section id -> the index of its component in the hypothetical graph.
-    component_of: HashMap<SectionId, usize>,
-    /// Component indices reached by at least one resolved zero datum.
-    anchored: HashSet<usize>,
-}
-
-impl ExcludedMergeComponents {
-    /// True when `a` and `b` are still merge-connected with the excluded merges
-    /// gone. A section this graph does not know is connected to nothing.
-    pub(crate) fn same_component(&self, a: SectionId, b: SectionId) -> bool {
-        match (self.component_of.get(&a), self.component_of.get(&b)) {
-            (Some(x), Some(y)) => x == y,
-            _ => false,
-        }
-    }
-
-    /// True when `section`'s component holds at least one resolved zero datum.
-    pub(crate) fn is_anchored(&self, section: SectionId) -> bool {
-        self.component_of
-            .get(&section)
-            .is_some_and(|c| self.anchored.contains(c))
     }
 }

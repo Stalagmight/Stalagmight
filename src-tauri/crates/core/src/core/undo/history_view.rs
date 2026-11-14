@@ -1220,10 +1220,12 @@ mod tests {
             command: Command::SetZeroDatum {
                 station_ref: StationRef::new(0, 0),
                 coordinates: GpsCoordinates::new(45.123_456, -73.654_321, 100.0).unwrap(),
+                accuracy_m: None,
             },
             undo_data: UndoData::ZeroDatumInfo {
                 station_ref: StationRef::new(0, 0),
                 previous_gps: None,
+                previous_accuracy_m: None,
                 position: None,
                 previous_offsets: HashMap::new(),
             },
@@ -1354,6 +1356,7 @@ mod tests {
             undo_data: UndoData::ZeroDatumInfo {
                 station_ref: StationRef::new(0, 0),
                 previous_gps: Some(GpsCoordinates::new(45.0, -73.0, 0.0).unwrap()),
+                previous_accuracy_m: None,
                 position: Some(0),
                 previous_offsets: HashMap::new(),
             },

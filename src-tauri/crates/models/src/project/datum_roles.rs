@@ -162,6 +162,28 @@ impl Project {
             .collect()
     }
 
+    /// Sections that hold a placement datum on one of their own stations: the
+    /// sections the raw-geometry solvers treat as fixed. A section holding only
+    /// GPS fixes is NOT in it, because a fix never moves raw geometry.
+    pub(crate) fn placement_datum_sections(&self) -> HashSet<SectionId> {
+        self.placement_datum_refs()
+            .into_iter()
+            .map(|sr| sr.section_id)
+            .collect()
+    }
+
+    /// List index of the placement datum of `section_id`'s merge component (the
+    /// first datum in list order that resolves into it), or `None` when the
+    /// component holds no resolvable datum. Comparing two of these decides which
+    /// of two placed groups keeps its placement when they are merged.
+    pub(crate) fn placement_datum_index(&self, section_id: SectionId) -> Option<usize> {
+        let merged = self.get_merged_section_ids(section_id);
+        self.zero_datums.iter().position(|zd| {
+            self.resolve_key(&zd.station_ref)
+                .is_some_and(|sr| merged.contains(&sr.section_id))
+        })
+    }
+
     /// Resolved stations of every resolvable datum, placement and fix alike, in
     /// list order. For consumers that treat every datum as an entrance.
     pub fn all_datum_refs(&self) -> Vec<StationRef> {

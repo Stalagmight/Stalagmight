@@ -364,6 +364,10 @@ impl Project {
         Self::reconstruct_path(start, found, &prev)
     }
 
+    /// Shortest shots+merges path from `start` to the nearest PLACEMENT zero
+    /// datum. Only the destructive closure distribution reads it, and only
+    /// placement datums anchor that distribution (#741): a GPS fix never moves
+    /// raw geometry, so it is not a place to distribute from.
     pub(super) fn shortest_path_to_any_zero_datum(
         &self,
         start: StationRef,
@@ -371,11 +375,7 @@ impl Project {
         if self.zero_datums.is_empty() {
             return None;
         }
-        let zero_set: HashSet<StationRef> = self
-            .zero_datums
-            .iter()
-            .filter_map(|zd| self.resolve_key(&zd.station_ref))
-            .collect();
+        let zero_set: HashSet<StationRef> = self.placement_datum_refs().into_iter().collect();
         let (found, prev) =
             self.shortest_path_with_target(start, |node| zero_set.contains(&node))?;
         let path = Self::reconstruct_path(start, found, &prev)?;

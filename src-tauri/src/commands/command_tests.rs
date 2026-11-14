@@ -1564,7 +1564,8 @@ fn test_project_lifecycle_persists_undo_and_state() {
         assert_success(&merge_result);
 
         let gps = GpsCoordinates::new(10.0, 20.0, 0.0).unwrap();
-        let datum_result = station::set_zero_datum(state(&app), StationRef::new(section_a, 0), gps);
+        let datum_result =
+            station::set_zero_datum(state(&app), StationRef::new(section_a, 0), gps, None);
         assert_success(&datum_result);
 
         let updates = ShotUpdates {
@@ -2003,6 +2004,7 @@ fn test_suggest_orphan_placements_command_offers_the_anchored_host() {
             .store_zero_datum_without_repositioning(
                 StationRef::new(host, 0),
                 GpsCoordinates::new(20.5, -87.3, 0.0).unwrap(),
+                None,
             )
             .unwrap();
         let added = project
@@ -4182,7 +4184,7 @@ fn test_set_zero_datum_success() {
         longitude: 2.0,
         depth_reference: 3.0,
     };
-    let result = station::set_zero_datum(state(&app), StationRef::new(0, 0), gps);
+    let result = station::set_zero_datum(state(&app), StationRef::new(0, 0), gps, None);
     assert_success(&result);
 }
 
@@ -4195,7 +4197,7 @@ fn test_set_zero_datum_fails_invalid_station() {
         longitude: 2.0,
         depth_reference: 3.0,
     };
-    let result = station::set_zero_datum(state(&app), StationRef::new(0, 99), gps);
+    let result = station::set_zero_datum(state(&app), StationRef::new(0, 99), gps, None);
     assert_failure_contains(&result, "does not exist");
 }
 
@@ -4218,7 +4220,7 @@ fn test_remove_zero_datum_success() {
         longitude: 2.0,
         depth_reference: 3.0,
     };
-    let _ = station::set_zero_datum(state(&app), StationRef::new(0, 0), gps);
+    let _ = station::set_zero_datum(state(&app), StationRef::new(0, 0), gps, None);
     let result = station::remove_zero_datum(state(&app), StationRef::new(0, 0));
     assert_success(&result);
 }
@@ -5466,43 +5468,16 @@ fn test_update_project_settings_is_undoable() {
 }
 
 #[test]
-fn test_resolve_warning_refuses_to_ignore_over_anchoring() {
-    // Over-anchoring is not ignorable (issue #57): the resolve_warning command
-    // must refuse to persist a suppression for it.
-    let project = project_with_section(vec![shot_data(0.0)]);
-    let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
-    let app = app_with_custom_state(app_state);
-
-    validation::resolve_warning(
-        state(&app),
-        0,
-        0,
-        crate::models::MULTIPLE_DATUMS_PER_MERGE_COMPONENT.to_string(),
-        None,
-    )
-    .unwrap();
-
-    assert!(
-        state(&app)
-            .inner()
-            .load_resolved_warnings()
-            .unwrap()
-            .is_empty(),
-        "over-anchoring must never be recorded as an ignored warning"
-    );
-}
-
-#[test]
 fn test_resolve_warning_refuses_error_severity_codes() {
     // Issue #57 (Item 10/14): errors are not ignorable - one predicate
     // (warning_is_ignorable) governs every code. Resolving an error-severity
     // warning must persist nothing and leave it unresolved; warnings stay ignorable.
-    use crate::models::{warning_is_ignorable, MULTIPLE_DATUMS_PER_MERGE_COMPONENT};
+    use crate::models::{warning_is_ignorable, DATUM_GPS_GAP};
     assert!(!warning_is_ignorable("ZERO_LENGTH"));
     assert!(!warning_is_ignorable("NEGATIVE_LRUD"));
     assert!(!warning_is_ignorable("INVALID_PITCH"));
     assert!(!warning_is_ignorable("LENGTH_BELOW_DEPTH_CHANGE"));
-    assert!(!warning_is_ignorable(MULTIPLE_DATUMS_PER_MERGE_COMPONENT));
+    assert!(warning_is_ignorable(DATUM_GPS_GAP));
     assert!(warning_is_ignorable("SHORT_SHOT"));
     assert!(warning_is_ignorable("AZIMUTH_DEVIATION"));
     assert!(warning_is_ignorable("INCLINATION_DEPTH_MISMATCH"));
@@ -5648,73 +5623,57 @@ fn test_cross_section_duplicate_uuid_ignore_does_not_cross_suppress() {
 }
 
 #[test]
-fn test_over_anchoring_warning_is_never_suppressible() {
-    // The authoritative invariant: even a stray resolved row (legacy, bulk, or
-    // any other path) must NOT mark an over-anchoring warning resolved. It clears
-    // only by removing a datum, after which the warning is not generated at all.
-    use crate::models::{StationMerge, ZeroDatum};
+fn test_datum_gps_gap_warning_is_ignorable() {
+    // #741: a GPS fix whose GPS disagrees with the survey by more than
+    // 15 m + 2% raises `datum_gps_gap`, an advisory warning the surveyor may
+    // ignore (the gap can be real). Ignoring persists, keyed like any other.
+    use crate::models::{local_to_gps, DATUM_GPS_GAP};
 
-    let mut project = Project::new("OverAnchored".to_string(), None);
+    let origin = GpsCoordinates::new(20.5, -87.25, 0.0).unwrap();
+    let north = ShotData {
+        azimuth_in: 0.0,
+        azimuth_out: 0.0,
+        length: 100.0,
+        ..Default::default()
+    };
+    let mut project = Project::new("TwoEntrances".to_string(), None);
     let a = project
         .add_section(SectionData {
-            shots: vec![shot_data(10.0)],
+            shots: vec![north.clone(); 5],
             ..Default::default()
         })
         .id;
-    let b = project
-        .add_section(SectionData {
-            shots: vec![shot_data(10.0)],
-            ..Default::default()
-        })
-        .id;
-    project.station_merges.push(StationMerge {
-        station_a: StationRef::new(a, 1).into(),
-        station_b: StationRef::new(b, 0).into(),
-        merged_at: chrono::Utc::now(),
-    });
-    project.zero_datums.push(ZeroDatum {
-        station_ref: StationRef::new(a, 0).into(),
-        gps: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
-        accuracy_m: None,
-    });
-    project.zero_datums.push(ZeroDatum {
-        station_ref: StationRef::new(b, 0).into(),
-        gps: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
-        accuracy_m: None,
-    });
     project.ensure_shot_uuids();
+    project
+        .set_zero_datum(StationRef::new(a, 0), origin)
+        .unwrap();
+    let (lat, lon) = local_to_gps(40.0, 500.0, &origin).unwrap();
+    project
+        .set_zero_datum(
+            StationRef::new(a, 5),
+            GpsCoordinates::new(lat, lon, 0.0).unwrap(),
+        )
+        .unwrap();
 
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
-    let datum_warning = validation::get_project_warnings(state(&app))
+    let gap = validation::get_project_warnings(state(&app))
         .into_iter()
-        .find(|w| w.code == crate::models::MULTIPLE_DATUMS_PER_MERGE_COMPONENT)
-        .expect("over-anchored merge component must raise a warning");
-    assert!(!datum_warning.is_resolved, "freshly raised, not resolved");
+        .find(|w| w.code == DATUM_GPS_GAP)
+        .expect("a 40 m gap over 500 m of survey (threshold 25 m) must warn");
+    assert_eq!(gap.datum_station_index, Some(5));
+    assert!(!gap.is_resolved);
 
-    // Force a stray resolved row keyed exactly as the warning (as a bulk save or
-    // a legacy file could). Compute must still refuse to mark it resolved.
-    state(&app)
-        .inner()
-        .save_resolved_warning(&crate::persistence::ResolvedWarning {
-            section_id: datum_warning.section_id,
-            shot_id: datum_warning.shot_id,
-            warning_code: datum_warning.code.clone(),
-            resolved_at: chrono::Utc::now(),
-            resolved_comment: None,
-            shot_uuid: datum_warning.shot_uuid.clone(),
-        })
-        .unwrap();
-
+    validation::resolve_warning(state(&app), gap.section_id, gap.shot_id, gap.code, None).unwrap();
     let after = validation::get_project_warnings(state(&app));
-    let w = after
-        .iter()
-        .find(|w| w.code == crate::models::MULTIPLE_DATUMS_PER_MERGE_COMPONENT)
-        .expect("over-anchoring warning still present");
     assert!(
-        !w.is_resolved,
-        "over-anchoring must never be suppressed by a resolved row"
+        after
+            .iter()
+            .find(|w| w.code == DATUM_GPS_GAP)
+            .expect("still computed")
+            .is_resolved,
+        "an ignored datum gap stays ignored"
     );
 }
 
