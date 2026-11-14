@@ -755,10 +755,10 @@ describe('useSpeleoActions - startEditing falls to the REFUSING answer (#270)', 
 /**
  * [#303] The guard that makes every push route safe at once.
  *
- * Placed in the hook rather than in each caller because there are four ways to reach a
- * push - the status button, the SpeleoDB menu, the close prompt and the quit prompt - and
- * the trap was that one of them made it the primary action. A guard per caller would have
- * fixed that one and left the others.
+ * Placed in the hook rather than in each caller because there are three ways to reach a
+ * push - the upload dialog (from the SpeleoDB tab, Save or a banner), the close prompt
+ * and the quit prompt - and the trap was that one of them made it the primary action.
+ * A guard per caller would have fixed that one and left the others.
  */
 describe('useSpeleoActions - pushing an unwound copy is confirmed first (#303)', () => {
   const seedUnwound = (unwoundNotEdited: boolean) =>
@@ -876,9 +876,8 @@ describe('useSpeleoActions - pushing an unwound copy is confirmed first (#303)',
   });
 
   it('records no return hop for the routes with no exit waiting', async () => {
-    // The status button and the lock menu are pressable with another dialog on screen,
-    // and nothing is mid-flow there: raising a return hop would put a dialog the user
-    // had already left back on top of them.
+    // Nothing is mid-flow on the SpeleoDB tab route: raising a return hop would put a
+    // dialog the user had already left back on top of them.
     seedUnwound(true);
     const openDialog = vi.fn();
     useUIStore.setState({ openDialog, activeDialog: 'speleodb-done', dialogData: {} });

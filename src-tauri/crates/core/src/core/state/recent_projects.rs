@@ -256,13 +256,13 @@ impl AppState {
         };
 
         // Deleting the file backing the OPEN project tears the whole session down
-        // first, for the same two reasons `close_project_if_open_at` closes before
-        // a download-replace: SQLite holds a live handle with a 256 MB mmap over
-        // the file, and on Windows it opens WITHOUT `FILE_SHARE_DELETE`, so both
-        // the Recycle-Bin move and the permanent-remove fallback fail with "Access
-        // is denied" while that handle is alive. Closing after the trash would
-        // therefore be unreachable on Windows - the delete would never get that
-        // far.
+        // first, for the same two reasons a cache download-replace drops the open
+        // project's handle before its rename: SQLite holds a live handle with a
+        // 256 MB mmap over the file, and on Windows it opens WITHOUT
+        // `FILE_SHARE_DELETE`, so both the Recycle-Bin move and the permanent-remove
+        // fallback fail with "Access is denied" while that handle is alive. Closing
+        // after the trash would therefore be unreachable on Windows - the delete
+        // would never get that far.
         //
         // It has to be the FULL teardown, not just `*self.project.lock() = None`:
         // that left the live SQLite handle open on a file that no longer exists,
@@ -294,9 +294,7 @@ impl AppState {
         // `file_path`, which this check can never match.) `close_project` would
         // self-deadlock under the guard, so this goes through
         // `close_open_project_locked` - the same teardown with the guard passed
-        // in. (`close_project_if_open_at` still has the older
-        // check-release-close shape; the same restructuring would suit it, but its
-        // callers replace rather than delete, so it is left alone here.)
+        // in. (`replace_cache_for_session` uses the same one-acquisition shape.)
         //
         // The cost of closing first: if the trash below fails for an unrelated
         // reason (no write access to the parent directory), the project is now
@@ -308,7 +306,7 @@ impl AppState {
         // kept rendering a phantom project with no backend behind it.
         //
         // Matched on file identity, not `==`, for the same reason
-        // `close_project_if_open_at` does: `same_file`'s canonicalization resolves
+        // `replace_cache_for_session` does: `same_file`'s canonicalization resolves
         // `.`/`..`, symlinked parent directories and (on Windows) case/short-name
         // differences, so a second spelling of the open project's path still tears
         // the session down. A plain comparison was survivable while this check only

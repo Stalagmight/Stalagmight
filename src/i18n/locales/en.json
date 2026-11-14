@@ -1746,7 +1746,8 @@
       "tornSnapped": "The snapped closure between <a/> and <b/>",
       "tornHeld": "<held/> is held by a zero datum and stays where it is.",
       "tornWhyMoves": "The loop's misclosure moves to the new closure, and the Closures Computed View adjusts it like any other loop.",
-      "tornWhyStays": "Otherwise the combined section would be tied to itself. The Closures Computed View adjusts the closure like any other loop."
+      "tornWhyStays": "Otherwise the combined section would be tied to itself. The Closures Computed View adjusts the closure like any other loop.",
+      "keptMovesAnchor": "{{kept}} is the one that moves: the Closures Computed View holds the survey at a station on {{other}}'s side, so moving {{other}} would shift the whole cave there."
     }
   },
   "undo": {
@@ -1775,17 +1776,7 @@
     "history": {
       "empty": "No {{mode}} actions.",
       "redo": "Redo history",
-      "undo": "Undo history",
-      "unwind": {
-        "label": "Unwind to previous SpeleoDB version",
-        "hint": "Load earlier edit history from the server",
-        "emptyWithUnwind": "Nothing left to undo in this session. Unwind below to load earlier history from SpeleoDB."
-      },
-      "rewind": {
-        "label": "Redo into next SpeleoDB version",
-        "hint": "Load the next version's edit history from the server",
-        "emptyWithRewind": "Nothing left to redo in this session. Step forward below to load the next version's history from SpeleoDB."
-      }
+      "undo": "Undo history"
     },
     "keyboardAction": "Keyboard action",
     "processing": "Processing...",
@@ -3385,19 +3376,6 @@
     "map": {
       "readOnlyBadge": "SpeleoDB · read-only"
     },
-    "button": {
-      "unlocked": "Read-only - open SpeleoDB menu",
-      "editingUnwound": "Viewing an older survey version - open SpeleoDB menu",
-      "editingDirty": "Editing - changes have not been uploaded. Open SpeleoDB menu.",
-      "editingClean": "Editing - open SpeleoDB menu",
-      "lockedByOther": "Read-only - {{email}} is editing this project. Open SpeleoDB menu.",
-      "remoteAhead": "SpeleoDB has newer changes - open SpeleoDB menu",
-      "conflict": "Local and remote changes need review - open SpeleoDB menu",
-      "viewOnly": "Read-only access - open SpeleoDB menu",
-      "noPermission": "You do not have access to this SpeleoDB project - open SpeleoDB menu",
-      "unknownError": "SpeleoDB reported an unexpected error - open SpeleoDB menu",
-      "loggedOut": "Connect to SpeleoDB to edit this project"
-    },
     "serverError": {
       "title": "SpeleoDB error",
       "fallback": "SpeleoDB returned an unexpected error while checking this project."
@@ -3506,24 +3484,6 @@
       "doneToast": "Restored to revision {{sha}}. Push to make it the latest.",
       "viewToast": "Viewing revision {{sha}}. Use Update to return to the latest.",
       "failed": "Could not restore the revision"
-    },
-    "unwind": {
-      "title": "Unwind to previous SpeleoDB version",
-      "bodyCurrent": "Load the edit history stored with revision {{sha}}. Your survey does not change - the operations that produced it come back, so you can keep undoing them one at a time.",
-      "bodyAncestor": "Check the survey out to revision {{sha}} and load the edit history stored with it, so you can keep undoing from there.",
-      "consequenceCurrent": "The history is downloaded from SpeleoDB. Anything you have not pushed is replaced by that revision.",
-      "consequenceAncestor": "This moves the survey back. SpeleoDB has no revert, so pushing afterwards records the older survey as a new revision rather than removing the newer ones.",
-      "confirmButton": "Unwind",
-      "loading": "Loading history...",
-      "failed": "Could not load the earlier history.",
-      "discardWarning": "This copy holds changes you have not pushed. Unwinding replaces it with revision {{sha}}, so those changes and the current edit history are discarded - including any steps you have undone but not yet redone."
-    },
-    "rewind": {
-      "title": "Redo into next SpeleoDB version",
-      "bodyNext": "Load the edit history stored with revision {{sha}}, the next version forward, so you can keep redoing from there.",
-      "bodyLatest": "Step forward to the latest version and load the edit history stored with it, returning this copy to where the walk started.",
-      "consequence": "The history is downloaded from SpeleoDB, replacing the version currently loaded. Nothing is lost: every step came from a revision the server still holds, so you can walk back again.",
-      "confirmButton": "Redo into next version"
     },
     "unwoundPush": {
       "title": "This copy is at an older version",
@@ -3906,17 +3866,6 @@
       "coordinatesHint": "Enter both latitude and longitude, within their valid ranges.",
       "uploadPending": "The project was created on SpeleoDB. Changes remain on this computer; use Save Changes to finish uploading.",
       "withoutHistory": "The project's first revision was uploaded without undo history: it is over the SpeleoDB size limit."
-    },
-    "lock": {
-      "title": "Write lock",
-      "heldBy": "Write lock held by {{email}}",
-      "heldByYou": "You hold the write lock.",
-      "selfWarning": "Releasing here does not push your changes. Use Done to push and release.",
-      "none": "No write lock is held.",
-      "releaseButton": "Release write lock",
-      "releasing": "Releasing…",
-      "released": "Write lock released.",
-      "releaseFailed": "Could not release the write lock"
     },
     "readOnlyNotice": {
       "title": "Project opened read-only",

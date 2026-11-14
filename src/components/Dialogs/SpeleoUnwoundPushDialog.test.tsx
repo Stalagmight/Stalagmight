@@ -213,9 +213,9 @@ describe('SpeleoUnwoundPushDialog (#303)', () => {
 
   /**
    * [#303] The dialog now also finishes the quit / close it was raised out of, which it
-   * knows about ONLY from `dialogData.pendingExit`. The routes that carry none - the
-   * status button and the SpeleoDB lock menu, where this confirmation IS the whole
-   * interaction - must be untouched by that: no exit, and the same result routing.
+   * knows about ONLY from `dialogData.pendingExit`. The route that carries none - the
+   * SpeleoDB tab, where this confirmation IS the whole interaction - must be
+   * untouched by that: no exit, and the same result routing.
    */
   describe('the routes with no exit waiting are unchanged', () => {
     it('closes and exits nothing when Push anyway succeeds', async () => {

@@ -12,7 +12,14 @@ use crate::telemetry::registry::{EVENT_NAMES, SOURCE_NAMES};
 /// Bare names of commands removed from the app but kept in the vocabulary.
 /// They intentionally have no live handler and no frontend tracking, so the
 /// `command.*` and `undo-after.*` coverage checks skip them.
-const REMOVED_COMMANDS: &[&str] = &["adjust_loop_closures", "resolve_all_warnings"];
+const REMOVED_COMMANDS: &[&str] = &[
+    "adjust_loop_closures",
+    "resolve_all_warnings",
+    // SpeleoDB commands with no caller, removed in the dead-code cleanup (#670, #671).
+    "speleodb_get_project_metadata",
+    "speleodb_unwind_target",
+    "speleodb_rewind_target",
+];
 
 /// Dialog keys removed from `App.tsx` whose registry slots are likewise
 /// retained. The `action.dialog.*` / `dialog-cancel.*` / `dwell.dialog.*`
@@ -32,6 +39,9 @@ const REMOVED_DIALOGS: &[&str] = &[
     // over whatever dialog raised it instead of evicting it from the slot.
     "speleodb-close",
     "speleodb-quit",
+    // The Unwind confirmation: nothing opened it once #668 removed the Unwind/Rewind
+    // controls, so it was deleted (#671).
+    "speleodb-unwind",
 ];
 
 /// `action.toggle.*` events that are intentionally NOT derived from

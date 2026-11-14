@@ -61,7 +61,6 @@ const reset = () => {
     heldLockPromptPending: true,
     remoteProjectId: null,
     sessionGeneration: 0,
-    chainTargetGeneration: 0,
   });
 };
 
@@ -471,7 +470,6 @@ describe('speleoStore', () => {
     );
 
     it('released → read-only, dirty + lock holder cleared, divergence cleared', () => {
-      const generation = useSpeleoStore.getState().chainTargetGeneration;
       useSpeleoStore.getState().applyDone({ kind: 'released' });
       const s = useSpeleoStore.getState();
       expect(s.link?.editState).toBe('read-only');
@@ -480,7 +478,6 @@ describe('speleoStore', () => {
       expect(s.link?.lockHolder).toBeNull();
       expect(s.link?.lockedByOther).toBe(false);
       expect(s.divergence).toBeNull();
-      expect(s.chainTargetGeneration).toBe(generation + 1);
     });
 
     it('released clears a lingering push-unconfirmed banner', () => {
@@ -515,7 +512,6 @@ describe('speleoStore', () => {
 
     it('pushed → keeps the lock, clears dirty + banner, resets remote state', () => {
       useSpeleoStore.setState({ banner: { kind: 'push_unconfirmed' } });
-      const generation = useSpeleoStore.getState().chainTargetGeneration;
       useSpeleoStore.getState().applyPush({ kind: 'pushed' });
       const s = useSpeleoStore.getState();
       // Push behaves like push&release WITHOUT releasing the lock - still editing.
@@ -523,7 +519,6 @@ describe('speleoStore', () => {
       expect(s.link?.hasUnpushedEdits).toBe(false);
       expect(s.link?.remoteState).toBe('up_to_date');
       expect(s.banner).toBeNull();
-      expect(s.chainTargetGeneration).toBe(generation + 1);
     });
 
     it('divergence_needed → divergence origin push, stays editing', () => {
@@ -570,18 +565,15 @@ describe('speleoStore', () => {
       useSpeleoStore
         .getState()
         .seedFromStatus(status({ edit_enabled: true, has_unpushed_edits: true, unwound: true }));
-      const generation = useSpeleoStore.getState().chainTargetGeneration;
       useSpeleoStore.getState().markForwardEdit();
       const link = useSpeleoStore.getState().link;
       expect(link?.hasUnpushedEdits).toBe(true);
       expect(link?.unwound).toBe(false);
       expect(isUnwoundNotEdited(link)).toBe(false);
-      expect(useSpeleoStore.getState().chainTargetGeneration).toBe(generation + 1);
     });
 
     it('markForwardEdit dirties a clean link and no-ops when nothing changes', () => {
       useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true }));
-      const generation = useSpeleoStore.getState().chainTargetGeneration;
       useSpeleoStore.getState().markForwardEdit();
       const after = useSpeleoStore.getState().link;
       expect(after?.hasUnpushedEdits).toBe(true);
@@ -590,7 +582,6 @@ describe('speleoStore', () => {
       // concurrent mutation, so a gratuitous new object would discard live replies.
       useSpeleoStore.getState().markForwardEdit();
       expect(useSpeleoStore.getState().link).toBe(after);
-      expect(useSpeleoStore.getState().chainTargetGeneration).toBe(generation + 1);
     });
 
     it('markForwardEdit is a no-op with no link', () => {
@@ -608,25 +599,6 @@ describe('speleoStore', () => {
       expect(s.link).toBeNull();
       expect(s.divergence).toBeNull();
       expect(s.banner).toBeNull();
-    });
-  });
-
-  describe('setUndoMode', () => {
-    it('invalidates chain targets after the backend accepts the policy change', async () => {
-      useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true }));
-      invokeIpcMock.mockImplementation((command: string) => {
-        if (command === 'speleodb_set_undo_mode') return Promise.resolve(null);
-        if (command === 'speleodb_link_status') {
-          return Promise.resolve(status({ edit_enabled: true, undo_mode: 'disabled' }));
-        }
-        return Promise.resolve(null);
-      });
-      const generation = useSpeleoStore.getState().chainTargetGeneration;
-
-      await useSpeleoStore.getState().setUndoMode('disabled');
-
-      expect(useSpeleoStore.getState().chainTargetGeneration).toBe(generation + 1);
-      expect(useSpeleoStore.getState().link?.undoMode).toBe('disabled');
     });
   });
 
@@ -944,7 +916,7 @@ describe('speleoStore', () => {
   // #270: `speleodb_push_only` / `speleodb_done` answer `not_editing` when the edit
   // gate was already closed - nothing uploaded, nothing released. Folded into
   // Pushed/Released, that cleared `hasUnpushedEdits`, which is exactly the flag
-  // `guardQuit` and the status button's warning read: the app claimed the work had
+  // `guardQuit` and the SpeleoDB tab's un-uploaded marker read: the app claimed the work had
   // landed and stopped protecting it, over edits still only on this computer.
   describe('a no-op push/release must not clear the dirty bit (#270)', () => {
     const dirtyReadOnly = () =>

@@ -27,7 +27,6 @@ async function openRemoteProject(page: Page): Promise<void> {
     w.__MOCK_SET_PROJECT_IS_REMOTE__(true);
     w.__MOCK_IPC_OVERRIDES__ = {
       speleodb_session: { logged_in: true, user_email: 'me@example.com', endpoint: 'https://example.com' },
-      speleodb_get_project_metadata: { name: 'Synthetic cave', description: '', country: 'US', visibility: 'PRIVATE', latitude: null, longitude: null, exclude_geojson: false },
       speleodb_get_revisions: [0, 1].map((i) => ({ id: `${i}aaaaaaabbbbbbbb`, parent_ids: [], author_email: 'surveyor.with.a.long.address@example.org',
         authored_date: '2026-10-01T10:00:00Z', message: 'Synthetic survey update with a long description' })),
       speleodb_project_access_at: { release_context: { project_id: 'remote', endpoint: 'https://example.com' } },

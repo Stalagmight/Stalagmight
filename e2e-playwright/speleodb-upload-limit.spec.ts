@@ -94,7 +94,6 @@ test.describe('revision times', () => {
       w.__MOCK_SET_PROJECT_IS_REMOTE__(true);
       w.__MOCK_IPC_OVERRIDES__ = {
         speleodb_session: { logged_in: true, user_email: 'me@example.com', endpoint: 'https://example.com' },
-        speleodb_get_project_metadata: { name: 'Synthetic cave', description: '', country: 'US', visibility: 'PRIVATE', latitude: null, longitude: null, exclude_geojson: false },
         // The UTC instant the backend hands on, and an older server's New York wall
         // time with no zone, for the same minute.
         speleodb_get_revisions: [

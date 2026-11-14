@@ -205,7 +205,7 @@ export function recentCardStyle(
  * - someone else holds it (warning hourglass - you are waiting),
  * - free / not-yet-scanned: the bare mark.
  *
- * The pen rather than a padlock, matching the toolbar status button: the badge
+ * The pen rather than a padlock: the badge
  * answers "what can I do here", and a padlock reads as "shut" to anyone who has
  * not learned that holding the lock is the permissive state.
  */
@@ -228,7 +228,7 @@ export function SpeleoLockBadge({
 }) {
   const { t } = useTranslation();
   if (!isRemote) return null;
-  // The same accent the status button uses, so one yellow means one thing app-wide.
+  // The shared un-uploaded accent, so one yellow means one thing app-wide.
   const tint = hasLocalEdits ? UNPUSHED_ACCENT : undefined;
 
   if (lockedByMe) {

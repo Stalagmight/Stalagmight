@@ -95,51 +95,6 @@ pub struct RevisionHistory {
     pub commits: Vec<RevisionCommit>,
 }
 
-/// [#303] Which revision the next "Unwind to previous SpeleoDB version" would load.
-///
-/// `is_current` distinguishes the two shapes of the same action, which the confirmation
-/// dialog has to word differently:
-///
-/// - `true` - the target is the commit the working copy ALREADY equals (the first step
-///   after a push). Nothing moves; what comes back is the undo history that produced this
-///   state, so the user can keep stepping backwards through their own pushed operations.
-/// - `false` - the target is an ancestor, so the working copy DOES move back, and any
-///   later push lands that older content as a new forward commit.
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export, export_to = "../../bindings/")]
-pub struct SpeleoUnwindTarget {
-    /// 40-hex commit SHA to check out.
-    pub hexsha: String,
-    /// The target is the working copy's own commit rather than an ancestor.
-    pub is_current: bool,
-    /// [#303] Going ahead would throw away un-pushed work: the copy is dirty and no
-    /// Unwind chain pointer accounts for it, so the swap replaces edits the user never
-    /// pushed (and the redo steps that would have replayed them).
-    ///
-    /// The dialog raises its red warning on this, and only a caller that passes the
-    /// matching acknowledgement gets past the backend guard - the frontend is told what
-    /// will happen, it is not trusted to decide it.
-    pub discards_unpushed: bool,
-}
-
-/// [#303] Which revision a FORWARD chain step would check out - the mirror of
-/// [`SpeleoUnwindTarget`], walking back up toward BASE.
-///
-/// Deliberately carries no `discards_unpushed`. A forward step is only defined while a
-/// chain pointer exists, and `unwind_discards_unpushed` is false whenever one does, so the
-/// field could only ever be `false` - a permanently dead warning that would read as though
-/// the case had been considered and could fire. An edit drops the pointer, which is what
-/// removes this direction entirely rather than warning about it.
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export, export_to = "../../bindings/")]
-pub struct SpeleoRewindTarget {
-    /// 40-hex commit SHA to check out.
-    pub hexsha: String,
-    /// This step lands back ON BASE, i.e. returns the copy to the latest version, so the
-    /// confirmation can say that rather than naming a revision.
-    pub is_latest: bool,
-}
-
 /// [#218] One commit projected for the frontend revision-history view. A read-only
 /// slice of [`RevisionCommit`] carrying only what the UI renders (no token, no
 /// server-internal fields). The list is server-ordered (newest first).
@@ -247,27 +202,6 @@ pub struct Project {
     /// new server types. The project browser includes only STALAGMIGHT projects.
     #[serde(default, rename = "type")]
     pub kind: String,
-    // [Track A] #185/D-A-methods: the server's GeoJSON-export toggle. Parsed (not
-    // ignored) so the full v2 payload round-trips; defaults false when omitted.
-    // Only the project metadata carries it now: the rendering-disabled banner it
-    // used to drive is retired.
-    #[serde(default)]
-    pub exclude_geojson: bool,
-    // [#206] editable metadata, parsed so the Project Settings tab can prefill the
-    // current server truth. `description`/`country` are required server-side (always
-    // present); `visibility` is PRIVATE/PUBLIC; `latitude`/`longitude` are JSON
-    // numbers (the serializer's `format_coordinate` rounds to a float) and are
-    // OMITTED when null (both-or-neither).
-    #[serde(default)]
-    pub(crate) description: Option<String>,
-    #[serde(default)]
-    pub(crate) country: Option<String>,
-    #[serde(default)]
-    pub(crate) visibility: Option<Visibility>,
-    #[serde(default)]
-    pub(crate) latitude: Option<f64>,
-    #[serde(default)]
-    pub(crate) longitude: Option<f64>,
 }
 
 /// IPC-facing summary of a project for the spike dialog's list. Derived from
@@ -353,39 +287,6 @@ pub struct SpeleoCollaborator {
     pub name: Option<String>,
     pub email: String,
     pub level: String,
-}
-
-/// [#206] The editable SpeleoDB project metadata, returned to the webview by
-/// `speleodb_get_project_metadata` for read-only project details. `description`/`country`
-/// are required server-side; `latitude`/`longitude` are the optional both-or-neither
-/// location pin.
-#[derive(Debug, Clone, Serialize, TS)]
-pub struct SpeleoProjectMetadata {
-    pub name: String,
-    pub description: String,
-    /// ISO 3166-1 alpha-2 country code (e.g. "US").
-    pub country: String,
-    pub visibility: Visibility,
-    pub latitude: Option<f64>,
-    pub longitude: Option<f64>,
-    pub exclude_geojson: bool,
-}
-
-impl SpeleoProjectMetadata {
-    /// Project the SDB [`Project`] DTO down to the editable metadata surface,
-    /// defaulting the required-but-Option-parsed fields (they are always present
-    /// on a real GET/PATCH response).
-    pub fn from_project(p: &Project) -> Self {
-        Self {
-            name: p.name.clone(),
-            description: p.description.clone().unwrap_or_default(),
-            country: p.country.clone().unwrap_or_default(),
-            visibility: p.visibility.unwrap_or(Visibility::Private),
-            latitude: p.latitude,
-            longitude: p.longitude,
-            exclude_geojson: p.exclude_geojson,
-        }
-    }
 }
 
 /// [#207] Parameters for creating + publishing a local project on SpeleoDB. The
@@ -753,7 +654,7 @@ mod tests {
         DoneResult, Permission, Project, PushResult, RemoteState, RevisionCommit, RevisionHistory,
         SpeleoDbAction, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult, SpeleoOpenResult,
         SpeleoProjectSummary, SpeleoPublishResult, SpeleoReadOnlyOpen, SpeleoRevision,
-        SpeleoSessionStatus, StartEditingResult, UpdateResult, Visibility,
+        SpeleoSessionStatus, StartEditingResult, UpdateResult,
     };
 
     #[test]
@@ -862,8 +763,8 @@ mod tests {
 
     #[test]
     fn project_parses_full_v2_payload() {
-        // Extra server fields (creation_date, message) are ignored; the modelled
-        // fields - including exclude_geojson (#185/D-A-methods) - parse.
+        // Extra server fields (creation_date, message, the editable metadata) are
+        // ignored; the modelled fields parse.
         let json = r#"{
             "id": "11111111-1111-1111-1111-111111111111",
             "name": "Test Cave",
@@ -882,15 +783,6 @@ mod tests {
         assert_eq!(p.id, "11111111-1111-1111-1111-111111111111");
         assert_eq!(p.name, "Test Cave");
         assert_eq!(p.permission, Some(Permission::ReadAndWrite));
-        // [Track A] #185: exclude_geojson is now PARSED (not ignored).
-        assert!(p.exclude_geojson);
-        // [#206] editable metadata parses (visibility as the uppercase label,
-        // lat/long as JSON numbers).
-        assert_eq!(p.description.as_deref(), Some("A cave"));
-        assert_eq!(p.country.as_deref(), Some("US"));
-        assert_eq!(p.visibility, Some(Visibility::Private));
-        assert_eq!(p.latitude, Some(-45.367573));
-        assert_eq!(p.longitude, Some(100.423897));
         assert_eq!(
             p.active_mutex.as_ref().map(|m| m.user.as_str()),
             Some("holder@example.com")
@@ -921,15 +813,6 @@ mod tests {
         assert!(omitted.active_mutex.is_none());
         assert!(omitted.latest_commit.is_none());
         assert_eq!(omitted.kind, "");
-        // [Track A] #185: exclude_geojson defaults to false when the server omits it.
-        assert!(!omitted.exclude_geojson);
-        // [#206] editable metadata defaults to None when omitted (an empty repo or
-        // a coordinate-less project omits lat/long).
-        assert!(omitted.description.is_none());
-        assert!(omitted.country.is_none());
-        assert!(omitted.visibility.is_none());
-        assert!(omitted.latitude.is_none());
-        assert!(omitted.longitude.is_none());
 
         // Explicit nulls deserialize to None just like absence.
         let nulled: Project = serde_json::from_str(
