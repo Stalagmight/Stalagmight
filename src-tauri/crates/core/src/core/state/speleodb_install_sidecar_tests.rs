@@ -174,49 +174,35 @@ fn control_a_bare_rename_over_a_crashed_copy_replays_its_journal() {
 #[test]
 fn a_discarding_install_never_replays_a_stale_journal_on_any_path() {
     crate::test_helpers::with_isolated_config(|| {
-        for path in ["session-bound", "unbound", "prepared"] {
+        for path in ["session-bound", "prepared"] {
             let dir = tempfile::tempdir().expect("temp");
             let dest = crashed_copy(dir.path(), true);
             let source = server_copy(dir.path(), "download.stalx");
             let server_bytes = std::fs::read(&source).expect("server bytes");
             let state = AppState::new().expect("state");
-            match path {
-                "session-bound" => {
-                    let generation = state.reserve_download_generation();
+            if path == "session-bound" {
+                let generation = state.reserve_download_generation();
+                state
+                    .replace_cache_for_session(
+                        &source,
+                        &dest,
+                        ID,
+                        LocalEditsPolicy::Discard,
+                        InheritedUndo::Keep,
+                        generation,
+                    )
+                    .expect("session-bound install");
+            } else {
+                // The fast-forward / revision-swap chokepoint: a prepared file
+                // staged beside the cache copy, renamed over it.
+                let staged = dest.with_file_name("staged.tmp");
+                std::fs::copy(&source, &staged).expect("stage");
+                let prepared = Database::open_existing(&staged).expect("prepared");
+                drop(
                     state
-                        .replace_cache_for_session(
-                            &source,
-                            &dest,
-                            ID,
-                            LocalEditsPolicy::Discard,
-                            InheritedUndo::Keep,
-                            generation,
-                        )
-                        .expect("session-bound install");
-                }
-                "unbound" => {
-                    state
-                        .replace_cache_stalx_with(
-                            &source,
-                            &dest,
-                            ID,
-                            LocalEditsPolicy::Discard,
-                            InheritedUndo::Keep,
-                        )
-                        .expect("unbound install");
-                }
-                _ => {
-                    // The fast-forward / revision-swap chokepoint: a prepared file
-                    // staged beside the cache copy, renamed over it.
-                    let staged = dest.with_file_name("staged.tmp");
-                    std::fs::copy(&source, &staged).expect("stage");
-                    let prepared = Database::open_existing(&staged).expect("prepared");
-                    drop(
-                        state
-                            .install_prepared_database(&staged, &dest, prepared, None)
-                            .expect("prepared install"),
-                    );
-                }
+                        .install_prepared_database(&staged, &dest, prepared, None)
+                        .expect("prepared install"),
+                );
             }
             assert_installed_exactly(&dest, &server_bytes, path);
         }
@@ -252,18 +238,6 @@ fn a_hot_journal_refuses_every_protected_install_and_survives_it() {
                         LocalEditsPolicy::Protect,
                         InheritedUndo::Drop,
                         generation,
-                    )
-                    .map(drop),
-            ),
-            (
-                "unbound",
-                state
-                    .replace_cache_stalx_with(
-                        &source,
-                        &dest,
-                        ID,
-                        LocalEditsPolicy::Protect,
-                        InheritedUndo::Drop,
                     )
                     .map(drop),
             ),

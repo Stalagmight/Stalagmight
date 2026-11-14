@@ -25,7 +25,6 @@ async function openRemote(page: Page, lockedByOther: boolean) {
     let editing = false;
     const overrides: Record<string, unknown> = {
       speleodb_session: { logged_in: true, user_email: 'me@example.com', endpoint: 'https://example.com' },
-      speleodb_get_project_metadata: { name: 'Synthetic cave', description: 'Synthetic metadata', country: 'US', visibility: 'PRIVATE', latitude: null, longitude: null, exclude_geojson: false },
       speleodb_get_revisions: [],
       speleodb_project_access_at: { release_context: { project_id: 'remote', endpoint: 'https://example.com' } },
     };

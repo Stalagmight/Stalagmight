@@ -80,11 +80,10 @@ use stalagmight_lib::persistence::{BackupInfo, RawTableData, RepairResult, Salva
 use stalagmight_lib::speleodb::{
     DoneResult, EndpointRefusal, Permission, PushResult, RemoteState, SpeleoAccessVerification,
     SpeleoCollaborator, SpeleoDbAction, SpeleoErrorDto, SpeleoFileAccess, SpeleoLinkStatus,
-    SpeleoLocalProjectState, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata,
-    SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult, SpeleoReadOnlyOpen,
-    SpeleoReleaseContext, SpeleoRevision, SpeleoRewindTarget, SpeleoSessionStatus,
-    SpeleoUnwindTarget, StartEditingResult, TransportCause, UnpushedLocalEdits, UpdateResult,
-    Visibility,
+    SpeleoLocalProjectState, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectSummary,
+    SpeleoPublishParams, SpeleoPublishResult, SpeleoReadOnlyOpen, SpeleoReleaseContext,
+    SpeleoRevision, SpeleoSessionStatus, StartEditingResult, TransportCause, UnpushedLocalEdits,
+    UpdateResult, Visibility,
 };
 use stalagmight_lib::tile_attribution::TileAttribution;
 use stalagmight_lib::tile_providers::TileProviderInfo;
@@ -149,6 +148,9 @@ fn main() {
     // Remove generated files whose source types were retired with native transfer.
     for name in [
         "SpeleoProjectMetadataPatch",
+        "SpeleoProjectMetadata",
+        "SpeleoUnwindTarget",
+        "SpeleoRewindTarget",
         "KeychainReport",
         "TokenFallback",
         "TokenStorage",
@@ -457,11 +459,7 @@ fn main() {
     // adoption's own hand-over to the server managed to do
     // #218 revision-history view: one projected commit
     export::<SpeleoRevision>(&out_dir);
-    // [#303] The hybrid undo stack: which revision the next Unwind would load, and the
-    // per-project policy for whether undo history rides to the server at all.
-    export::<SpeleoUnwindTarget>(&out_dir);
-    // ...and its forward twin, which a redo-side step would load.
-    export::<SpeleoRewindTarget>(&out_dir);
+    // [#303] The per-project policy for whether undo history rides to the server at all.
     export::<stalagmight_lib::models::UndoMode>(&out_dir);
     export::<SpeleoSessionStatus>(&out_dir);
     export::<SpeleoDbAction>(&out_dir);
@@ -490,7 +488,6 @@ fn main() {
     export::<PushResult>(&out_dir);
     // SpeleoDB Project Settings metadata (#206) + create-on-SDB publish (#207)
     export::<Visibility>(&out_dir);
-    export::<SpeleoProjectMetadata>(&out_dir);
     export::<SpeleoCollaborator>(&out_dir);
     export::<SpeleoPublishParams>(&out_dir);
     export::<SpeleoPublishResult>(&out_dir);
@@ -724,8 +721,6 @@ fn main() {
         "SpeleoCachedProject",
         "SpeleoPurgeReport",
         "SpeleoRevision",
-        "SpeleoUnwindTarget",
-        "SpeleoRewindTarget",
         "UndoMode",
         "SpeleoSessionStatus",
         "SpeleoDbAction",
@@ -741,7 +736,6 @@ fn main() {
         "UpdateResult",
         "PushResult",
         "Visibility",
-        "SpeleoProjectMetadata",
         "SpeleoCollaborator",
         "SpeleoPublishParams",
         "SpeleoPublishResult",

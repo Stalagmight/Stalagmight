@@ -233,7 +233,7 @@ export type PendingExit =
  * `Record<string, unknown>` - so the confirmation that carries one VALIDATES rather than
  * trusts, exactly as the `cancelReturnsTo` readers do. `null` means "nobody is waiting on
  * this", which is the case for every non-exit route into the same confirmation (the
- * status button, the lock menu).
+ * SpeleoDB tab).
  */
 export function readPendingExit(data: Record<string, unknown>): PendingExit | null {
   const raw = data.pendingExit;

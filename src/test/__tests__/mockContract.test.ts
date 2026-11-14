@@ -398,11 +398,23 @@ describe('mock contract tripwire (#275)', () => {
   });
 });
 
-it('retired SpeleoDB workspace metadata commands are absent from IPC and browser mocks', () => {
-  for (const command of ['speleodb_patch_project', 'speleodb_set_exclude_geojson', 'speleodb_set_undo_mode']) {
-    expect(libRsSource).not.toContain(`commands::speleodb::${command},`);
+it('retired SpeleoDB commands are absent from IPC and browser mocks', () => {
+  for (const command of [
+    'speleodb_patch_project',
+    'speleodb_set_exclude_geojson',
+    'speleodb_set_undo_mode',
+    'speleodb_get_project_metadata',
+    'speleodb_unwind_target',
+    'speleodb_rewind_target',
+  ]) {
+    // Word-bounded, so it also catches a registration without a trailing comma (the
+    // last entry in the list).
+    expect(libRsSource).not.toMatch(new RegExp(`commands::speleodb::${command}\\b`));
     expect(mockTsSource).not.toContain(`case '${command}':`);
   }
   const barrel = fs.readFileSync(path.join(REPO_ROOT, 'src/types/ipc.generated.ts'), 'utf8');
-  expect(barrel).not.toContain('SpeleoProjectMetadataPatch');
+  // Also covers the retired SpeleoProjectMetadataPatch.
+  expect(barrel).not.toContain('SpeleoProjectMetadata');
+  expect(barrel).not.toContain('SpeleoUnwindTarget');
+  expect(barrel).not.toContain('SpeleoRewindTarget');
 });

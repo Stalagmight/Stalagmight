@@ -1193,7 +1193,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           // view paints. `refreshLinkStatus` below refines it, but it is unawaited
           // and swallows its errors, so with `unknown` left standing a failed
           // status call renders the project permanently read-only under the
-          // fail-closed gate AND leaves no status button to act from (it requires
+          // fail-closed gate AND leaves no SpeleoDB tab action to act from (it requires
           // `link !== null`). Seeding remote is the pessimistic
           // direction - read-only, with a way out on screen - and the status reply
           // resolves it either way (a non-remote status seeds `local`).
@@ -1404,7 +1404,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     if (useUIStore.getState().importContext !== 'new-project') {
       set({ isDirty: true });
       // #204/fix 8: an import into an existing remote project is an un-pushed edit -
-      // mirror the SpeleoDB dirty bit so the status button offers push (no-op for a
+      // mirror the SpeleoDB dirty bit so the SpeleoDB tab offers the upload (no-op for a
       // local project). The import command usually already marks it via
       // executeCommand; this keeps the two dirty flags in lockstep on every path.
       // [#303] Forward work, so it drops the chain pointer too - the import reached the
@@ -1694,7 +1694,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         set({ isDirty: true });
         // #204/fix 8: a repair that actually mutated the project makes a remote
         // SpeleoDB project un-pushed-dirty too - mirror the backend dirty bit (as
-        // executeCommand/executeUndoRedo do) so the status button offers push &
+        // executeCommand/executeUndoRedo do) so the SpeleoDB tab offers the upload &
         // prompts for a commit message rather than reading "editing clean". No-op
         // for a local project (no link).
         // [#303] `repair_integrity` pairs it with speleodb_forget_unwind_position under

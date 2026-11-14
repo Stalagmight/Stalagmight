@@ -106,13 +106,13 @@ export interface SpeleoSession {
 
 /**
  * [#303] "This copy is dirty ONLY because a chain step walked it back" - the question the
- * push routes, the close prompt and the status button all ask.
+ * push routes, the close prompt and the SpeleoDB tab all ask.
  *
  * Derived here rather than reported pre-combined by the backend, because the two halves
  * arrive at different times: a step onto the tip leaves the copy CLEAN, so the composite
  * was false at the moment of the refresh, and the Undo that follows marks `hasUnpushedEdits`
  * optimistically without asking the backend anything. Composing locally is what makes the
- * status button react to that Undo instead of waiting for another status refresh - which is exactly
+ * SpeleoDB tab react to that Undo instead of waiting for another status refresh - which is exactly
  * how it was still offering "Push & release" after an unwind.
  */
 export function isUnwoundNotEdited(link: SpeleoLinkState | null | undefined): boolean {
@@ -276,12 +276,6 @@ interface SpeleoStore {
    * itself. Nothing renders it.
    */
   sessionGeneration: number;
-  /**
-   * [#303] Version of the backend state used to resolve the next Unwind/Rewind target.
-   * Unlike `sessionGeneration`, this moves for link-only operations such as a push or
-   * undo-policy change, where the open project and its rendered tree stay the same.
-   */
-  chainTargetGeneration: number;
   /** The open project's link/edit state, or `null` when it is local / none open. */
   link: SpeleoLinkState | null;
   /**
@@ -355,8 +349,8 @@ interface SpeleoStore {
   statusRefreshCount: number;
   /**
    * True while a hand-off verb (start/update/push/done) is in flight. Shared so
-   * every entry point - the status button AND the hamburger submenu - gates on
-   * the same lock and can't double-issue (fix 12).
+   * every SpeleoDB entry point gates on the same lock and can't double-issue
+   * (fix 12).
    *
    * Consumers only READ it; every production write goes through
    * {@link beginBusy} / {@link endBusy} rather than setting the boolean, so a
@@ -448,7 +442,7 @@ interface SpeleoStore {
    * would stall every remote open behind the network.
    *
    * - remote: seeds a pessimistic read-only link if none is seeded yet, so the
-   *   project is read-only from the first frame AND the status button still
+   *   project is read-only from the first frame AND the SpeleoDB tab still
    *   renders its way out ("Start editing"), even if the status call never
    *   answers. `refreshLinkStatus` refines it.
    * - local: drops any link left over from a previously-open remote project
@@ -483,7 +477,7 @@ interface SpeleoStore {
    * edits - so for it the dirty bit is KNOWN true. Hardcoding false there seeded
    * "nothing outstanding" for the one project we have proof is dirty, which
    * disarmed the quit guard (`guardQuit` reads exactly this flag) and dropped the
-   * status button's unpushed warning until some later refresh happened to correct it.
+   * SpeleoDB tab's un-uploaded marker until some later refresh happened to correct it.
    */
   setLinkOnOpen: (a: {
     permission: Permission | null;
@@ -576,13 +570,6 @@ interface SpeleoStore {
       a successful push/release clears the whole slot anyway). No-op for other kinds,
       so it never wipes an unrelated banner. */
   clearPushFailedBanner: () => void;
-  /** [#303] Set the open project's explicit undo-history policy. LOCK-REQUIRED: the value
-      lands in the `.stalx` and rides to the server on the next push, so it becomes
-      every collaborator's. Throws on refusal (no lock, or a local project) so the
-      control can surface it, and re-seeds link status on success. */
-  setUndoMode: (mode: UndoMode) => Promise<void>;
-  /** Invalidate any cached Unwind/Rewind target after a successful tree replacement. */
-  invalidateChainTargets: () => void;
   dismissBanner: () => void;
 }
 
@@ -671,7 +658,6 @@ const disownBusy = (): void => {
 export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   session: null,
   sessionGeneration: 0,
-  chainTargetGeneration: 0,
   link: null,
   // Pessimistic until a project open resolves it: an unresolved gate is closed.
   projectLinkKind: 'unknown',
@@ -1202,7 +1188,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   },
 
   // Reset `busy` too: a hand-off verb in flight when the project closes/switches
-  // would otherwise leave a freshly-opened project's status button disabled until
+  // would otherwise leave a freshly-opened project's SpeleoDB actions disabled until
   // that verb's `finally` runs (its `apply*` no-op safely, guarded on `link`). (N2)
   // That reasoning covers the verb's `apply*` but NOT its `finally`, which would
   // clear `busy` for a NEWER verb on a NEWER project - so disown the claim as well
@@ -1303,7 +1289,6 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
               remoteState: 'up_to_date',
               serverError: null,
             },
-            chainTargetGeneration: state.chainTargetGeneration + 1,
             divergence: null,
             banner: null,
           };
@@ -1316,7 +1301,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
           // was already closed (typically a 401 auto-drop, which runs
           // `speleodb_forget` and deliberately LEAVES the dirty bit alone). Change
           // no link state - above all not `hasUnpushedEdits`, which is the flag
-          // `guardQuit` and the status button's warning both read. The caller
+          // `guardQuit` and the SpeleoDB tab's un-uploaded marker both read. The caller
           // surfaces the honest "reconnect and start editing again" line.
           return {};
         default:
@@ -1340,7 +1325,6 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
               remoteState: 'up_to_date',
               serverError: null,
             },
-            chainTargetGeneration: state.chainTargetGeneration + 1,
             banner: null,
           };
         case 'divergence_needed':
@@ -1373,7 +1357,6 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       state.link && (!state.link.hasUnpushedEdits || state.link.unwound)
         ? {
             link: { ...state.link, hasUnpushedEdits: true, unwound: false },
-            chainTargetGeneration: state.chainTargetGeneration + 1,
           }
         : {},
     ),
@@ -1396,23 +1379,6 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
 
   clearPushFailedBanner: () =>
     set((state) => (state.banner?.kind === 'push_failed' ? { banner: null } : {})),
-
-
-
-  setUndoMode: async (mode) => {
-    // [#303] Throws on failure so the caller (the settings control) renders the
-    // refusal - most usefully the lock one, since this writes the `.stalx` and so
-    // becomes every collaborator's policy on the next push.
-    await invokeIpc<null>('speleodb_set_undo_mode', { mode });
-    // The backend policy changed even if the best-effort status refresh below cannot
-    // reach the server, so a target resolved under the old policy is already stale.
-    get().invalidateChainTargets();
-    // Re-read so the store reflects the committed backend value.
-    await get().refreshLinkStatus();
-  },
-
-  invalidateChainTargets: () =>
-    set((state) => ({ chainTargetGeneration: state.chainTargetGeneration + 1 })),
 
   dismissBanner: () => set({ banner: null }),
 }));
