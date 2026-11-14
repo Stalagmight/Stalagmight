@@ -576,13 +576,16 @@ fn an_undo_entry_with_an_accuracy_the_app_would_refuse_restores_the_default() {
         {
             let mut stack = state.undo_stack.lock().unwrap();
             let mut entry = stack.pop_undo().unwrap();
-            match &mut entry.undo_data {
-                crate::core::UndoData::ZeroDatumInfo {
-                    previous_accuracy_m,
-                    ..
-                } => *previous_accuracy_m = stored,
-                other => panic!("unexpected undo data {other:?}"),
+            let mut tampered = false;
+            if let crate::core::UndoData::ZeroDatumInfo {
+                previous_accuracy_m,
+                ..
+            } = &mut entry.undo_data
+            {
+                *previous_accuracy_m = stored;
+                tampered = true;
             }
+            assert!(tampered, "a SetZeroDatum records ZeroDatumInfo");
             stack.push_undo(entry);
         }
         assert!(state.undo().success);
