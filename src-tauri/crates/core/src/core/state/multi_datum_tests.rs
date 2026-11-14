@@ -9,7 +9,7 @@ use super::AppState;
 use crate::core::Command;
 use crate::models::{
     gps_to_local, local_to_gps, DatumRole, GpsCoordinates, Project, SectionId, ShotData,
-    StationRef, SurveyDirection, DATUM_GPS_GAP,
+    StationRef, SurveyDirection, DATUM_GPS_GAP, DATUM_GPS_GAP_START,
 };
 
 const ORIGIN: (f64, f64) = (20.5, -87.25);
@@ -222,6 +222,65 @@ fn a_fix_past_the_threshold_gets_one_datum_gps_gap_warning() {
             w.message
         );
     }
+}
+
+#[test]
+fn fixes_on_stations_0_and_1_of_one_section_are_ignored_independently() {
+    // Both stations touch shot 0 of B; the codes keep their Ignores apart.
+    let (state, _a, b) = two_entrances();
+    let temp = tempfile::TempDir::new().unwrap();
+    let saved = state.execute(Command::SaveProject {
+        path: Some(temp.path().join("fixes.stalx")),
+    });
+    assert!(saved.success, "{:?}", saved.error);
+    // B:0 is surveyed at (0, 250) and B:1 at (0, 300); each GPS is 40 m east,
+    // over the 16 m threshold 50 m of survey from the other fix gives.
+    set_datum(&state, StationRef::new(b, 0), gps_at(40.0, 250.0), None);
+    set_datum(&state, StationRef::new(b, 1), gps_at(40.0, 300.0), None);
+
+    let gap_rows = |state: &AppState| -> Vec<(Option<u32>, usize, String, bool)> {
+        let p = project(state);
+        let mut rows: Vec<_> = state
+            .compute_project_warnings(&p, None)
+            .into_iter()
+            .filter(|w| w.code == DATUM_GPS_GAP || w.code == DATUM_GPS_GAP_START)
+            .map(|w| (w.datum_station_index, w.shot_index, w.code, w.is_resolved))
+            .collect();
+        rows.sort();
+        rows
+    };
+    assert_eq!(
+        gap_rows(&state),
+        vec![
+            (Some(0), 0, DATUM_GPS_GAP_START.to_string(), false),
+            (Some(1), 0, DATUM_GPS_GAP.to_string(), false),
+        ]
+    );
+
+    // Ignore station 1's row exactly as the frontend does, from the row.
+    let p = project(&state);
+    let row = state
+        .compute_project_warnings(&p, None)
+        .into_iter()
+        .find(|w| w.datum_station_index == Some(1))
+        .unwrap();
+    state
+        .save_resolved_warning(&crate::persistence::ResolvedWarning {
+            section_id: row.section_id,
+            shot_id: row.shot_id,
+            warning_code: row.code.clone(),
+            resolved_at: chrono::Utc::now(),
+            resolved_comment: None,
+            shot_uuid: row.shot_uuid.clone(),
+        })
+        .unwrap();
+    assert_eq!(
+        gap_rows(&state),
+        vec![
+            (Some(0), 0, DATUM_GPS_GAP_START.to_string(), false),
+            (Some(1), 0, DATUM_GPS_GAP.to_string(), true),
+        ]
+    );
 }
 
 #[test]
@@ -499,6 +558,37 @@ fn a_promotion_under_an_unchanged_frame_places_only_its_own_piece() {
     }
 
     assert_undo_redo_round_trip(&state, &before);
+}
+
+#[test]
+fn an_undo_entry_with_an_accuracy_the_app_would_refuse_restores_the_default() {
+    // The undo history is persisted, so a crafted file can carry any value.
+    let (state, _a, b) = two_entrances();
+    let fix = StationRef::new(b, 5);
+    set_datum(&state, fix, gps_at(40.0, 500.0), Some(3.0));
+    set_datum(&state, fix, gps_at(10.0, 495.0), Some(1.0));
+    for (stored, restored) in [
+        (Some(-1.0), None),
+        (Some(crate::models::MAX_GPS_ACCURACY_M + 1.0), None),
+        (Some(f64::NAN), None),
+        (Some(7.0), Some(7.0)),
+    ] {
+        {
+            let mut stack = state.undo_stack.lock().unwrap();
+            let mut entry = stack.pop_undo().unwrap();
+            match &mut entry.undo_data {
+                crate::core::UndoData::ZeroDatumInfo {
+                    previous_accuracy_m,
+                    ..
+                } => *previous_accuracy_m = stored,
+                other => panic!("unexpected undo data {other:?}"),
+            }
+            stack.push_undo(entry);
+        }
+        assert!(state.undo().success);
+        assert_eq!(project(&state).zero_datums[1].accuracy_m, restored);
+        assert!(state.redo().success);
+    }
 }
 
 #[test]
