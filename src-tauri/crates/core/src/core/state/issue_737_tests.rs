@@ -654,6 +654,14 @@ fn the_range_preview_lists_the_closure_the_gap_close_removes_by_its_pre_delete_i
         (predicted[0].station_a, predicted[0].station_b),
         (st(c, 1), st(c, 5))
     );
+    // The IPC path consumes its own clone; same answer, field for field.
+    let owned = project(&state)
+        .into_preview_delete_shot_range(c, first, last)
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&owned).unwrap(),
+        serde_json::to_value(&impact).unwrap()
+    );
     // On the wire for the dialog.
     let wire = serde_json::to_value(&impact).unwrap();
     assert_eq!(

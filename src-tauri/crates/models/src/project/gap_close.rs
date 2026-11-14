@@ -83,16 +83,32 @@ impl Project {
         start_pos: usize,
         end_pos: usize,
     ) -> Result<Vec<ClosurePair>, String> {
-        if !self
-            .loop_closures
-            .iter()
-            .any(|lc| Self::closure_is_eligible(lc.strategy))
-        {
+        if !self.has_eligible_closure() {
             return Ok(Vec::new());
         }
-        let mut sim = self.clone();
-        let before = sim.closures_before_edit();
-        sim.gap_close_shot_range(section_id, start_pos, end_pos)?;
-        Ok(sim.closures_newly_across_one_shot(&before))
+        self.clone()
+            .into_gap_close_closure_removals(section_id, start_pos, end_pos)
+    }
+
+    /// [`Self::preview_gap_close_closure_removals`] on a copy the caller gives
+    /// up, so it is not cloned again.
+    pub fn into_gap_close_closure_removals(
+        mut self,
+        section_id: SectionId,
+        start_pos: usize,
+        end_pos: usize,
+    ) -> Result<Vec<ClosurePair>, String> {
+        if !self.has_eligible_closure() {
+            return Ok(Vec::new());
+        }
+        let before = self.closures_before_edit();
+        self.gap_close_shot_range(section_id, start_pos, end_pos)?;
+        Ok(self.closures_newly_across_one_shot(&before))
+    }
+
+    fn has_eligible_closure(&self) -> bool {
+        self.loop_closures
+            .iter()
+            .any(|lc| Self::closure_is_eligible(lc.strategy))
     }
 }
