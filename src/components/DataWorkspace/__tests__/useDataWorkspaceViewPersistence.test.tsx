@@ -12,6 +12,7 @@ vi.mock('../../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
 
 import {
   MAP_PANE_MAX_WIDTH,
+  normalizeDataWorkspaceView,
   resetDataWorkspaceViewPersistenceForTests,
   useDataWorkspaceViewPersistence,
 } from '../useDataWorkspaceViewPersistence';
@@ -138,6 +139,18 @@ describe('useDataWorkspaceViewPersistence', () => {
     expect(view().columnOrder).toEqual(['length']);
     expect(view().columnWidths).toEqual({ comment: 250, runaway: 2000, sliver: 40 });
     expect(view().hiddenColumns).toEqual([...DATA_DEFAULT_HIDDEN]);
+  });
+
+  it('drops the retired Links column from a saved view (its chips sit over the shot cells now)', () => {
+    useProjectStore.setState({
+      config: configWith({
+        data_workspace_hidden_columns: ['links', 'x'],
+        data_workspace_column_widths: { comment: 250 },
+      }),
+    });
+    renderHook(() => useDataWorkspaceViewPersistence());
+    expect(view().hiddenColumns).toEqual(['x']);
+    expect(normalizeDataWorkspaceView({ columnOrder: ['links'] }).columnOrder).not.toContain('links');
   });
 
   it('keeps an empty hidden list as "show all"', () => {

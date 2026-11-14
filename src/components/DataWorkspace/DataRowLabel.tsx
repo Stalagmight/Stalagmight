@@ -20,6 +20,8 @@ import { rowIdLabel } from './model/rowIds';
 import { stationDisplayName } from './model/columns';
 import { DataRail, GUTTER_STRIPE, RAIL_WIDTH } from './DataRail';
 import { DataHoverCard } from './DataHoverCard';
+import { GutterLinks } from './StationLinkChips';
+import type { LinkItem } from './model/linkItems';
 import { dataRowPart } from './dataTestIds';
 import type { DataNav } from './useDataNavigation';
 
@@ -42,6 +44,11 @@ interface Props {
    *  `rowNameSearchText`, i.e. the shown ID, a line break, the section's
    *  full name. */
   nameMarks?: CellMarks | undefined;
+  /** A station's links when no shot-only column is shown (their chips have
+   *  nowhere to go): counted at the gutter's right. null otherwise. */
+  gutterLinks?: readonly LinkItem[] | null;
+  /** Find matches in the links (ROW_LINKS_KEY), for `gutterLinks`. */
+  linkMarks?: CellMarks | undefined;
 }
 
 /**
@@ -122,7 +129,7 @@ function HoverName({
   );
 }
 
-function DataRowLabelImpl({ row, ctx, rail, tint, revealed, nav, nameMarks }: Props) {
+function DataRowLabelImpl({ row, ctx, rail, tint, revealed, nav, nameMarks, gutterLinks, linkMarks }: Props) {
   const { t } = useTranslation();
   const gutterRef = useRef<HTMLDivElement>(null);
   const part = dataRowPart(row);
@@ -178,6 +185,7 @@ function DataRowLabelImpl({ row, ctx, rail, tint, revealed, nav, nameMarks }: Pr
           <span className="dw-revealed-mark" aria-hidden="true" />
         </span>
       )}
+      {row.kind === 'station' && gutterLinks && <GutterLinks row={row} items={gutterLinks} nav={nav} marks={linkMarks} />}
       <button
         type="button"
         tabIndex={-1}

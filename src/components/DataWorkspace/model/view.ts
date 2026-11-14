@@ -25,6 +25,9 @@
  *   full name) is searched like an always-shown first column under the
  *   'visible' and 'all' column scopes (not 'custom', which lists real
  *   columns): at most one read-only match per row, before its cell matches.
+ * - A station's links (`ROW_LINKS_KEY`: its chip labels, one per line) are
+ *   searched under the same scopes, and listed where the shot-only block
+ *   starts (`linksColumnPosition`): their chips span it.
  */
 import type {
   DataColumnDef,
@@ -36,11 +39,12 @@ import type {
   SearchColKey,
   SearchMatch,
 } from '../types';
-import { ROW_NAME_KEY } from '../types';
+import { ROW_LINKS_KEY, ROW_NAME_KEY } from '../types';
 import type { DataWorkspaceState } from '../store';
 import { applyFilters } from './filter';
 import { compileSearch, findInText, MAX_SEARCH_MATCHES, orderColumns, rowNameMatch, searchColumnsInScope } from './search';
 import { sortRows } from './sort';
+import { linksSearchText, stationLinkItems } from './linkItems';
 
 export type DataViewInput = Pick<
   DataWorkspaceState,
@@ -49,6 +53,17 @@ export type DataViewInput = Pick<
 
 const appliesTo = (col: DataColumnDef, row: DataEntityRow): boolean =>
   col.appliesTo === 'both' || col.appliesTo === row.kind;
+
+/**
+ * Where a station's links sit among the columns, as a display index: just
+ * before the first shot-only column (their chips span the shot-only block),
+ * or after every column when there is none. Find lists and steps through
+ * the links matches there.
+ */
+export function linksColumnPosition(ordered: readonly Pick<DataColumnDef, 'appliesTo'>[]): number {
+  const at = ordered.findIndex((c) => c.appliesTo === 'shot');
+  return at < 0 ? ordered.length : at;
+}
 
 export function buildDataView(
   rows: readonly DataRow[],
@@ -106,13 +121,33 @@ export function buildDataView(
   let matchLimitReached = false;
   if (searching) {
     const spans: number[] = [];
-    const searchRowName = search.columnScope !== 'custom';
+    // The gutter's row name and a station's link chips are always on screen
+    // (no column to hide): searched like shown columns, but not under the
+    // 'custom' scope, which lists real columns.
+    const searchPseudo = search.columnScope !== 'custom';
     const sectionHit = new Map<number, [number, number] | null>();
+    // A station's links sit where the shot-only block starts (the chips span
+    // it): before the first column at or after it in display order.
+    const linksAt = linksColumnPosition(ordered);
+    const orderIndex = new Map(ordered.map((c, k) => [c.key, k]));
+    /** Push the matches of one text; true when the limit is reached. */
+    const collect = (i: number, row: DataEntityRow, colKey: SearchColKey, text: string, lockReason: SearchMatch['lockReason']) => {
+      spans.length = 0;
+      const found = findInText(text, compiled, spans, MAX_SEARCH_MATCHES - matchTotal);
+      if (found === 0) return false;
+      let list = rowMatches[i];
+      if (!list) rowMatches[i] = list = [];
+      for (let k = 0; k < spans.length; k += 2) {
+        list.push({ rowKey: row.key, colKey, start: spans[k]!, end: spans[k + 1]!, lockReason });
+      }
+      matchTotal += found;
+      return matchTotal >= MAX_SEARCH_MATCHES;
+    };
     outer: for (let i = 0; i < n; i++) {
       const row = rows[i]!;
       if (row.kind === 'section') continue;
       if (search.rowScope === 'visible' && !shown[i] && !navReveal[i]) continue;
-      if (searchRowName) {
+      if (searchPseudo) {
         const hit = rowNameMatch(ctx, row, compiled, sectionHit);
         if (hit) {
           rowMatches[i] = [{ rowKey: row.key, colKey: ROW_NAME_KEY, start: hit[0], end: hit[1], lockReason: 'computed' }];
@@ -122,23 +157,28 @@ export function buildDataView(
           }
         }
       }
+      let linksText = searchPseudo && row.kind === 'station' ? linksSearchText(stationLinkItems(ctx, row)) : '';
       for (const col of scopeCols) {
-        if (!appliesTo(col, row)) continue;
-        spans.length = 0;
-        const found = findInText(col.text(row, ctx), compiled, spans, MAX_SEARCH_MATCHES - matchTotal);
-        if (found === 0) continue;
-        const lockReason = col.lockReason(row, ctx);
-        let list = rowMatches[i];
-        if (!list) rowMatches[i] = list = [];
-        for (let k = 0; k < spans.length; k += 2) {
-          list.push({ rowKey: row.key, colKey: col.key, start: spans[k]!, end: spans[k + 1]!, lockReason });
+        if (linksText !== '' && orderIndex.get(col.key)! >= linksAt) {
+          const full = collect(i, row, ROW_LINKS_KEY, linksText, 'computed');
+          linksText = '';
+          if (full) {
+            matchLimitReached = true;
+            break outer;
+          }
         }
-        matchTotal += found;
-        if (hidden.has(col.key)) revealedColumns.add(col.key);
-        if (matchTotal >= MAX_SEARCH_MATCHES) {
+        if (!appliesTo(col, row)) continue;
+        const before = matchTotal;
+        const full = collect(i, row, col.key, col.text(row, ctx), col.lockReason(row, ctx));
+        if (matchTotal > before && hidden.has(col.key)) revealedColumns.add(col.key);
+        if (full) {
           matchLimitReached = true;
           break outer;
         }
+      }
+      if (linksText !== '' && collect(i, row, ROW_LINKS_KEY, linksText, 'computed')) {
+        matchLimitReached = true;
+        break outer;
       }
     }
   }

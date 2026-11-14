@@ -4,7 +4,9 @@
  * store, find highlights, row tints, the rail gutter, section header bands,
  * the section named in the header corner once its header scrolls away,
  * focus requests (scrollTo) and keeping the active row across rebuilds,
- * context-menu actions, the header menu, and the selection summary.
+ * a station's link chips spanning the shown shot-only columns (or counted in
+ * the gutter when none is shown), context-menu actions, the header menu, and
+ * the selection summary.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -14,13 +16,16 @@ import type { CellMarks, GridExtraMenuItem, GridScrollRequest } from '../common/
 import { useGridLabels } from '../../hooks/useGridLabels';
 import { useUIStore } from '../../store/uiStore';
 import { useDataWorkspaceStore } from './store';
-import { ROW_NAME_KEY, type DataColumnDef, type DataColumnKey, type DataRow, type DataView, type SearchColKey } from './types';
+import { ROW_LINKS_KEY, ROW_NAME_KEY, type DataColumnDef, type DataColumnKey, type DataRow, type DataView, type SearchColKey } from './types';
 import type { DataWorkspaceModel } from './useDataWorkspaceModel';
 import type { DataEditing } from './useDataEditing';
 import type { DataNav } from './useDataNavigation';
 import type { DataTint } from './useDataTint';
 import { buildGridColumns } from './dataGridColumns';
 import { buildRail } from './model/links';
+import { stationLinkItems } from './model/linkItems';
+import { shotBlockSpan } from './model/columnGroups';
+import { StationLinkChips } from './StationLinkChips';
 import { orderColumns } from './model/search';
 import { isEntityRow, parseRowKey, sectionRowKey } from './model/rows';
 import { DataRowLabel, DATA_GUTTER_WIDTH, GUTTER_RAIL_LANE, type RevealReason } from './DataRowLabel';
@@ -295,6 +300,25 @@ export function DataGrid({ model, view, height, nav, editing, tint, partners, on
     },
     [partners, revealReason],
   );
+  // ── Station links: chips spanning the shown shot-only block ────────────
+  const shotSpan = useMemo(
+    () => shotBlockSpan(orderColumns(model.columns, columnOrder).map((c) => c.key), new Set(gridHidden)),
+    [model.columns, columnOrder, gridHidden],
+  );
+  const spanCells = useCallback(
+    (row: DataRow, i: number) => {
+      if (row.kind !== 'station' || !shotSpan) return undefined;
+      const items = stationLinkItems(ctx, row);
+      if (items.length === 0) return undefined;
+      return {
+        from: shotSpan.from,
+        to: shotSpan.to,
+        content: <StationLinkChips row={row} items={items} ctx={ctx} nav={nav} marks={cellMarks(row, i, ROW_LINKS_KEY)} />,
+      };
+    },
+    [shotSpan, ctx, nav, cellMarks],
+  );
+
   const rowLabel = useCallback(
     (row: DataRow, i: number) => (
       <DataRowLabel
@@ -305,9 +329,12 @@ export function DataGrid({ model, view, height, nav, editing, tint, partners, on
         revealed={revealReason(row)}
         nav={nav}
         nameMarks={cellMarks(row, i, ROW_NAME_KEY)}
+        // No shot-only column shown: the chips have no room, the gutter counts them.
+        gutterLinks={row.kind === 'station' && !shotSpan ? stationLinkItems(ctx, row) : null}
+        linkMarks={cellMarks(row, i, ROW_LINKS_KEY)}
       />
     ),
-    [ctx, rail, tint, revealReason, nav, cellMarks],
+    [ctx, rail, tint, revealReason, nav, cellMarks, shotSpan],
   );
   // The section the top rows belong to, in the header corner, once its header
   // row has scrolled away (or with headers off). Nothing while sorted: the
@@ -443,6 +470,7 @@ export function DataGrid({ model, view, height, nav, editing, tint, partners, on
         rowClassName={rowClassName}
         rowsVersion={rowsVersion}
         groupRowContent={groupRowContent}
+        spanCells={spanCells}
         groupContentStart="gutter"
         groupContentInset={GUTTER_RAIL_LANE}
         headerCorner={headerCorner}

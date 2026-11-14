@@ -43,15 +43,11 @@ describe('Data workspace default column widths', () => {
 
   it('every default-visible column is listed (the check above covers them all)', () => {
     const visible = DATA_COLUMNS.filter((c) => !DATA_DEFAULT_HIDDEN.includes(c.key)).map((c) => c.key);
-    expect(visible).toEqual(expect.arrayContaining(['length', 'azimuth', 'depth_in', 'depth_out', 'kind', 'links']));
+    expect(visible).toEqual(expect.arrayContaining(['length', 'azimuth', 'depth_in', 'depth_out', 'kind', 'comment']));
   });
 
   it('hides the station depth by default (the shots carry depth in / out)', () => {
     expect(DATA_DEFAULT_HIDDEN).toContain('depth');
-  });
-
-  it('gives the Links column room for a closure chip with its misclosure', () => {
-    expect(DATA_COLUMNS.find((c) => c.key === 'links')!.width).toBeGreaterThanOrEqual(320);
   });
 });
 

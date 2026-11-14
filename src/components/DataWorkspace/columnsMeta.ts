@@ -49,7 +49,6 @@ export const DATA_COLUMNS: readonly DataColumnMeta[] = [
   m('up', 'lrud', 'shot', 'number', 60, { editable: true }),
   m('down', 'lrud', 'shot', 'number', 60, { editable: true }),
   m('kind', 'shot', 'shot', 'enum', 58, { editable: true, align: 'center' }),
-  m('links', 'station', 'station', 'text', 320),
   m('comment', 'notes', 'both', 'text', 280, { editable: true }),
   m('x', 'position', 'station', 'number', 96),
   m('y', 'position', 'station', 'number', 96),

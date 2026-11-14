@@ -272,37 +272,13 @@ describe('DataSectionHeader', () => {
     expect(screen.getByTestId('data-section-counts-2')).toHaveTextContent('3 stations · 2 shots · 10.50 m');
     fireEvent.click(screen.getByTestId('data-section-toggle-2'));
     expect(useDataWorkspaceStore.getState().collapsedSections).toEqual([2]);
+    expect(within(screen.getByTestId('data-section-continues-2')).getByText('Main:2')).toHaveClass('font-semibold');
     fireEvent.click(screen.getByTestId('data-section-continues-2'));
     expect(nav.goToRow).toHaveBeenCalledWith('st:1:2');
   });
 });
 
 describe('DataWorkspace cells', () => {
-  it('renders link chips that jump to the partner row', () => {
-    render(<DataWorkspace />);
-    const links = screen.getByTestId('data-links-st-1-4');
-    expect(within(links).getByText('Closes to Downstre…sump 1A:3')).toBeInTheDocument();
-    // One chip per closure, the misclosure inside it.
-    const closure = screen.getByTestId('data-chip-closure-st-1-4-7-3-3');
-    expect(closure).toHaveTextContent('Closes to Downstre…sump 1A:3·Δ 0.7 m · 1.3 %');
-    expect(within(closure).getByTestId('data-chip-misclosure-st-1-4-7')).toHaveTextContent('Δ 0.7 m · 1.3 %');
-    expect(within(links).getAllByRole('button')).toHaveLength(1);
-    expect(screen.getByTestId('data-chip-zero-st-1-0')).toHaveTextContent('Zero datum');
-    expect(screen.getByTestId('data-chip-branch-st-2-0-1-2')).toHaveTextContent('Continues from Main:2');
-
-    fireEvent.click(screen.getByTestId('data-chip-merge-st-1-2-2-0'));
-    expect(useDataWorkspaceStore.getState().focusRequest).toMatchObject({ rowKey: 'st:2:0', align: 'center' });
-    expect(useDataWorkspaceStore.getState().revealRowKeys).toEqual([]);
-  });
-
-  it('reveals a filtered-out target before focusing it', () => {
-    render(<DataWorkspace />);
-    act(() => useDataWorkspaceStore.getState().toggleSectionCollapsed(3));
-    fireEvent.click(screen.getByTestId('data-chip-closure-st-1-4-7-3-3'));
-    expect(useDataWorkspaceStore.getState().revealRowKeys).toEqual(['st:3:3']);
-    expect(useDataWorkspaceStore.getState().focusRequest).toMatchObject({ rowKey: 'st:3:3' });
-  });
-
   it('shows the issue icons, frozen lock and the J/R glyph', () => {
     render(<DataWorkspace />);
     expect(screen.getByTestId('data-issues-sh-3-3')).toHaveClass('text-error');
@@ -331,7 +307,8 @@ describe('DataWorkspace hover card', () => {
     // The title names the section; the ID row adds the chips' "Label:index".
     expect(card).toHaveTextContent('Main');
     expect(card).toHaveTextContent('1:2 (Main:2)');
-    expect(within(screen.getByTestId('data-hover-merges-st-1-2')).getByText('Branch B:0')).toBeInTheDocument();
+    // The linked station's name is bold, as in the chips.
+    expect(within(screen.getByTestId('data-hover-merges-st-1-2')).getByText('Branch B:0')).toHaveClass('font-semibold');
     // The partner row is highlighted while the junction is hovered.
     expect(screen.getByTestId('data-grid-row-11')).toHaveClass('dw-row-partner');
 

@@ -79,7 +79,6 @@ export type DataColumnKey =
   | 'up'
   | 'down'
   | 'kind'
-  | 'links'
   | 'issues'
   | 'comment'
   | 'x'
@@ -99,7 +98,7 @@ export type DataValueType = 'number' | 'text' | 'enum' | 'date';
 export type DataLockReason =
   /** The column does not apply to this row kind (a shot field on a station row). */
   | 'na'
-  /** Computed / derived column (X, Y, depth, links, issues...). */
+  /** Computed / derived column (X, Y, depth, issues...). */
   | 'computed'
   /** Geometry field of a frozen shot. */
   | 'frozen'
@@ -264,8 +263,25 @@ export interface SearchState {
  */
 export const ROW_NAME_KEY = 'row-name' as const;
 
-/** Where a find match can sit: a column, or the row name. */
-export type SearchColKey = DataColumnKey | typeof ROW_NAME_KEY;
+/**
+ * The find's links pseudo-column: a station's link chips (`linksSearchText`:
+ * the chip labels, one per line). Like the row name it is no grid column (the
+ * chips span the station row's shot-only cells, or sit in the gutter as a
+ * count when no shot column is shown), is searched under the 'visible' and
+ * 'all' column scopes only, never takes an edit (`lockReason: 'computed'`),
+ * and a match outlines the chip(s) it falls in.
+ */
+export const ROW_LINKS_KEY = 'row-links' as const;
+
+/** Find keys that are not grid columns (the row name, the links). */
+export type PseudoSearchKey = typeof ROW_NAME_KEY | typeof ROW_LINKS_KEY;
+
+export function isPseudoSearchKey(key: string): key is PseudoSearchKey {
+  return key === ROW_NAME_KEY || key === ROW_LINKS_KEY;
+}
+
+/** Where a find match can sit: a column, the row name or the links. */
+export type SearchColKey = DataColumnKey | PseudoSearchKey;
 
 /** One match: a substring of one cell's display text (or of the row name,
  *  `colKey === ROW_NAME_KEY`, offsets into `rowNameSearchText`). */

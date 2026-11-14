@@ -12,7 +12,7 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import type { SpreadsheetGridProps } from '../../common/SpreadsheetGrid';
-import type { DataRow } from '../types';
+import type { DataColumnKey, DataRow } from '../types';
 
 vi.mock('@tanstack/react-virtual', () => ({
   useVirtualizer: ({ count }: { count: number }) => ({
@@ -78,7 +78,10 @@ afterEach(() => {
 const grid = () => captured.props as SpreadsheetGridProps<DataRow>;
 const rowIndex = (key: string) => grid().rows.findIndex((r) => r.key === key);
 /** Render a piece of the grid's content (a corner, a span) on its own. */
-const renderPart = (node: ReactNode) => render(<div data-testid="part">{node}</div>);
+const renderPart = (node: ReactNode) => {
+  const { container } = render(<div>{node}</div>);
+  return { getByTestId: (id: string) => within(container).getByTestId(id) as HTMLElement };
+};
 
 describe('section header rows start in the gutter', () => {
   it('asks the grid to start the header content right after the rail', () => {
@@ -93,8 +96,7 @@ describe('section header rows start in the gutter', () => {
     const gutter = screen.getByTestId(`data-grid-gutter-${i}`);
     expect(gutter.querySelector('.dw-rail-elbow')).not.toBeNull();
     expect(gutter.textContent).toBe('');
-    const header = renderPart(grid().groupRowContent!(grid().rows[i]!, i));
-    const band = within(header.getByTestId('part')).getByTestId('data-section-header-2');
+    const band = renderPart(grid().groupRowContent!(grid().rows[i]!, i)).getByTestId('data-section-header-2');
     // Chevron, dot, full name, #id, counts and the "continues from" chip.
     expect(band).toHaveTextContent('Branch B#2');
     expect(within(band).getByTestId('data-section-toggle-2')).toBeInTheDocument();
@@ -111,8 +113,7 @@ describe('header corner', () => {
     expect(corner(rowIndex('sec:1'))).toBeNull();
     expect(corner(rowIndex('sec:2'))).toBeNull();
     // Scrolled into section 3: its dot, full name and #id.
-    const part = renderPart(corner(rowIndex('sh:3:302')));
-    const el = within(part.getByTestId('part')).getByTestId('data-section-corner-3');
+    const el = renderPart(corner(rowIndex('sh:3:302'))).getByTestId('data-section-corner-3');
     expect(el).toHaveTextContent('Downstream sump 1A#3');
     expect(el).toHaveAttribute('title', 'Downstream sump 1A #3');
     expect(corner(rowIndex('st:1:0'))).not.toBeNull();
@@ -131,7 +132,72 @@ describe('header corner', () => {
   it('with section headers off, names the section of the top row', () => {
     useDataWorkspaceStore.setState({ showSectionHeaders: false });
     render(<DataWorkspace />);
-    const part = renderPart(grid().headerCorner!(0));
-    expect(within(part.getByTestId('part')).getByTestId('data-section-corner-1')).toHaveTextContent('Main#1');
+    expect(renderPart(grid().headerCorner!(0)).getByTestId('data-section-corner-1')).toHaveTextContent('Main#1');
+  });
+});
+
+describe("station link chips span the shot-only columns", () => {
+  const span = (key: string) => grid().spanCells!(grid().rows[rowIndex(key)]!, rowIndex(key));
+  const renderSpan = (key: string) => renderPart(span(key)!.content);
+
+  it('spans the shown shot-only block on a station with links; nothing on shots or bare stations', () => {
+    render(<DataWorkspace />);
+    expect(span('st:1:4')).toMatchObject({ from: 'length', to: 'kind' });
+    expect(span('sh:1:102')).toBeUndefined();
+    expect(span('st:1:3')).toBeUndefined();
+  });
+
+  it('renders the chips with the station name bold and the misclosure inside', () => {
+    render(<DataWorkspace />);
+    const part = renderSpan('st:1:4');
+    const closure = part.getByTestId('data-chip-closure-st-1-4-7-3-3');
+    expect(closure).toHaveTextContent('Closes to Downstre…sump 1A:3·Δ 0.7 m · 1.3 %');
+    expect(within(closure).getByText('Downstre…sump 1A:3')).toHaveClass('font-semibold');
+    expect(within(closure).getByText(/^Closes to/).closest('.font-semibold')).toBeNull();
+    expect(part.getByTestId('data-chip-misclosure-st-1-4-7')).toHaveTextContent('Δ 0.7 m · 1.3 %');
+    expect(renderSpan('st:1:0').getByTestId('data-chip-zero-st-1-0')).toHaveTextContent('Zero datum');
+    const branch = renderSpan('st:2:0').getByTestId('data-chip-branch-st-2-0-1-2');
+    expect(branch).toHaveTextContent('Continues from Main:2');
+    expect(within(branch).getByText('Main:2')).toHaveClass('font-semibold');
+  });
+
+  it('a chip jumps to the partner row, revealing it when the filters hide it', () => {
+    useDataWorkspaceStore.setState({ collapsedSections: [3] });
+    render(<DataWorkspace />);
+    renderSpan('st:1:2').getByTestId('data-chip-merge-st-1-2-2-0').click();
+    expect(useDataWorkspaceStore.getState().focusRequest).toMatchObject({ rowKey: 'st:2:0', align: 'center' });
+    expect(useDataWorkspaceStore.getState().revealRowKeys).toEqual([]);
+    renderSpan('st:1:4').getByTestId('data-chip-closure-st-1-4-7-3-3').click();
+    expect(useDataWorkspaceStore.getState().revealRowKeys).toEqual(['st:3:3']);
+    expect(useDataWorkspaceStore.getState().focusRequest).toMatchObject({ rowKey: 'st:3:3' });
+  });
+
+  it('a find match in the links outlines the chip it falls in', () => {
+    useDataWorkspaceStore.setState({ search: { ...useDataWorkspaceStore.getState().search, open: true, query: 'branch b:0' } });
+    render(<DataWorkspace />);
+    const chip = renderSpan('st:1:2').getByTestId('data-chip-merge-st-1-2-2-0');
+    expect(chip).toHaveClass('dw-match-outline', 'dw-match-outline-current');
+    expect(renderSpan('st:1:4').getByTestId('data-chip-closure-st-1-4-7-3-3')).not.toHaveClass('dw-match-outline');
+  });
+
+  it('with no shot-only column shown, the gutter counts the links instead', () => {
+    const shotOnly: DataColumnKey[] = ['length', 'azimuth', 'depth_in', 'depth_out', 'left', 'right', 'up', 'down', 'kind'];
+    useDataWorkspaceStore.setState({ hiddenColumns: [...useDataWorkspaceStore.getState().hiddenColumns, ...shotOnly] });
+    render(<DataWorkspace />);
+    expect(span('st:1:4')).toBeUndefined();
+    const linksOf = (part: string) => screen.getByTestId(['data', 'row', 'links', part].join('-'));
+    const closure = linksOf('st-1-4');
+    expect(closure).toHaveTextContent('1');
+    expect(closure).toHaveAttribute('title', 'Closes to Downstre…sump 1A:3 · Δ 0.7 m · 1.3 %');
+    closure.click();
+    expect(useDataWorkspaceStore.getState().focusRequest).toMatchObject({ rowKey: 'st:3:3' });
+    // A zero datum alone goes nowhere: no button.
+    expect(linksOf('st-1-0').tagName).toBe('SPAN');
+    expect(screen.queryByTestId(['data', 'row', 'links', 'st-1-3'].join('-'))).toBeNull();
+  });
+
+  it('with a shot-only column shown, the gutter does not count them', () => {
+    render(<DataWorkspace />);
+    expect(screen.queryByTestId(['data', 'row', 'links', 'st-1-4'].join('-'))).toBeNull();
   });
 });

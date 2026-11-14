@@ -85,7 +85,7 @@ export function DataSectionHeader({
             }}
             data-testid={`data-section-continues-${sectionId}`}
           >
-            <span className="truncate">{parentName}</span>
+            <span className="truncate font-semibold">{parentName}</span>
           </button>
         </span>
       )}

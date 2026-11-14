@@ -143,8 +143,8 @@ pub struct PanelsConfig {
     /// Data workspace (the full-screen Data mode spreadsheet): column order, as
     /// column keys from src/components/DataWorkspace/columnsMeta.ts. Empty =
     /// that file's default order. Its own set again: Data mode's grid has
-    /// columns no other grid has (row type, section, links, position), so no
-    /// other grid's list could govern it.
+    /// columns no other grid has (row type, section, position), so no other
+    /// grid's list could govern it.
     #[serde(default)]
     pub data_workspace_column_order: Vec<String>,
     /// Data workspace: hidden column keys. Authoritative once present (an empty

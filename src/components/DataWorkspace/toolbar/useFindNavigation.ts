@@ -6,8 +6,19 @@
 import { useCallback, useEffect, useMemo, useRef, type RefObject } from 'react';
 import { useDataWorkspaceStore } from '../store';
 import { orderColumns } from '../model/search';
+import { linksColumnPosition } from '../model/view';
+import { shotBlockSpan } from '../model/columnGroups';
 import type { DataModel } from '../DataModelContext';
-import { ROW_NAME_KEY, type SearchColKey, type DataView, type SearchMatch, type SearchState } from '../types';
+import {
+  ROW_LINKS_KEY,
+  ROW_NAME_KEY,
+  isPseudoSearchKey,
+  type DataColumnKey,
+  type SearchColKey,
+  type DataView,
+  type SearchMatch,
+  type SearchState,
+} from '../types';
 import {
   firstFromRow,
   reconcileCurrent,
@@ -16,6 +27,14 @@ import {
   type MatchOrder,
   type MatchSpot,
 } from './matchNav';
+
+/** The column a find match scrolls to: its own; for the links, the first
+ *  shown shot-only column (none: the chips are in the gutter); none for the
+ *  row name. */
+export function focusColumn(colKey: SearchColKey, linksCol: DataColumnKey | undefined): { colKey?: DataColumnKey } {
+  if (colKey === ROW_LINKS_KEY) return linksCol ? { colKey: linksCol } : {};
+  return isPseudoSearchKey(colKey) ? {} : { colKey };
+}
 
 /** What makes two searches "the same pattern" (scope changes keep the current match). */
 export function patternKey(s: Pick<SearchState, 'query' | 'matchCase' | 'wholeWord' | 'regex' | 'open'>): string {
@@ -44,12 +63,24 @@ export function useFindNavigation(
   const keepRef = useRef(keepFocus);
   keepRef.current = keepFocus;
 
+  const ordered = useMemo(() => orderColumns(model.columns, columnOrder), [model.columns, columnOrder]);
   const colPos = useMemo(() => {
-    // The row name sits in the gutter, before every column.
-    const map = new Map<SearchColKey, number>([[ROW_NAME_KEY, -1]]);
-    orderColumns(model.columns, columnOrder).forEach((c, i) => map.set(c.key, i));
+    // The row name sits in the gutter, before every column; a station's links
+    // where the shot-only block starts (buildDataView lists them there).
+    const map = new Map<SearchColKey, number>([
+      [ROW_NAME_KEY, -1],
+      [ROW_LINKS_KEY, linksColumnPosition(ordered) - 0.5],
+    ]);
+    ordered.forEach((c, i) => map.set(c.key, i));
     return map;
-  }, [model.columns, columnOrder]);
+  }, [ordered]);
+  // A links match scrolls to the chips: the first shown shot-only column.
+  const hiddenColumns = useDataWorkspaceStore((s) => s.hiddenColumns);
+  const linksColRef = useRef<DataColumnKey | undefined>(undefined);
+  linksColRef.current = shotBlockSpan(
+    ordered.map((c) => c.key),
+    new Set(hiddenColumns),
+  )?.from;
 
   const order = useMemo<MatchOrder>(
     () => ({
@@ -67,8 +98,9 @@ export function useFindNavigation(
     // a cell edit).
     useDataWorkspaceStore.getState().requestFocus({
       rowKey: m.rowKey,
-      // A row-name match keeps the active column (the name is in the gutter).
-      ...(m.colKey !== ROW_NAME_KEY ? { colKey: m.colKey } : {}),
+      // A row name match keeps the active column (the name is in the gutter);
+      // a links match goes to the chips (kept when they are in the gutter).
+      ...focusColumn(m.colKey, linksColRef.current),
       align: 'center',
       ...(focused ? { takeFocus: false } : {}),
     });

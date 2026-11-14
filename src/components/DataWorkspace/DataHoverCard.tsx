@@ -18,6 +18,7 @@ import { isShotFrozen, misclosureText, rowWarnings, shotKindOf, stationDisplayNa
 import { shotCredit, shotName, stationName } from './model/ctx';
 import { stationLinks, stationRefKey, shotKeyAt } from './model/links';
 import { rowIdLabel, shotIdLabel } from './model/rowIds';
+import { proseAround } from './model/linkItems';
 import { dataRowPart } from './dataTestIds';
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
@@ -42,7 +43,7 @@ export function DataHoverCard({ row }: { row: DataEntityRow }) {
   const section = ctx.sectionsById.get(row.sectionId);
   const fullName = ctx.sectionNames.get(row.sectionId) ?? String(row.sectionId);
 
-  const goTo = (ref: StationRef, label: string, testSuffix: string) => (
+  const goTo = (ref: StationRef, label: ReactNode, testSuffix: string) => (
     <button
       type="button"
       className={LINK_CLS}
@@ -78,6 +79,8 @@ export function DataHoverCard({ row }: { row: DataEntityRow }) {
       return `${shotIdLabel(row.sectionId, position)} · ${len} m`;
     };
     const issue = stationIssueLevel(ctx, row);
+    // "Closes to <name>": the prose normal, the station name bold (as the chips).
+    const closesTo = proseAround(ctx, 'dataWorkspace.links.closesTo', 'Closes to {{name}}');
     body = (
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
         <Row label={t('dataWorkspace.hover.station')}>
@@ -94,7 +97,11 @@ export function DataHoverCard({ row }: { row: DataEntityRow }) {
             <span className="flex flex-wrap gap-x-2" data-testid={`data-hover-merges-${part}`}>
               {links.merges.map((m) => (
                 <span key={`${m.section_id}-${m.station_index}`}>
-                  {goTo(m, stationName(ctx, m.section_id, m.station_index), `${m.section_id}-${m.station_index}`)}
+                  {goTo(
+                    m,
+                    <span className="font-semibold">{stationName(ctx, m.section_id, m.station_index)}</span>,
+                    `${m.section_id}-${m.station_index}`,
+                  )}
                 </span>
               ))}
             </span>
@@ -107,7 +114,11 @@ export function DataHoverCard({ row }: { row: DataEntityRow }) {
                 <span key={`${c.closureId}-${c.partner.section_id}-${c.partner.station_index}`}>
                   {goTo(
                     c.partner,
-                    t('dataWorkspace.links.closesTo', { name: stationName(ctx, c.partner.section_id, c.partner.station_index) }),
+                    <>
+                      {closesTo[0]}
+                      <span className="font-semibold">{stationName(ctx, c.partner.section_id, c.partner.station_index)}</span>
+                      {closesTo[1]}
+                    </>,
                     `${c.partner.section_id}-${c.partner.station_index}`,
                   )}
                   {misclosureText(ctx, c.misclosure, c.errorPct) && (
