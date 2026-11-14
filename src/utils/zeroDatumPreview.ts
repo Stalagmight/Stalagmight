@@ -2,10 +2,10 @@ import { invokeIpc } from './ipc';
 import type { GpsCoordinates, StationRef } from '../types/project';
 import type { ZeroDatumPreview } from '../types/ipc/ZeroDatumPreview';
 
-/** Default horizontal accuracy of a zero datum's GPS, in metres. Mirrors the
- *  backend's `DEFAULT_GPS_ACCURACY_M` (#741): a datum stored without one reads
- *  as this. */
-export const DEFAULT_DATUM_ACCURACY_M = 5;
+/** Default horizontal accuracy of a zero datum's GPS, in metres: 0, a hard pin.
+ *  Mirrors the backend's `DEFAULT_GPS_ACCURACY_M` (#741): a datum stored
+ *  without one reads as this. */
+export const DEFAULT_DATUM_ACCURACY_M = 0;
 
 /**
  * What setting a zero datum with `coordinates` on `stationRef` would do, without

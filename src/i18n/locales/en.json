@@ -1648,7 +1648,7 @@
     },
     "editStation": {
       "accuracyLabel": "Accuracy (m)",
-      "accuracyHint": "How far the GPS reading may be off. 0 pins the station exactly to its GPS.",
+      "accuracyHint": "0 makes the computed survey go exactly through this GPS. A larger number lets the survey pull it by up to about that much (a smartwatch is roughly 5 m).",
       "accuracyInvalid": "Enter an accuracy of 0 m or more.",
       "roleLabel": "Role:",
       "rolePlacement": "places this part of the survey on its GPS",

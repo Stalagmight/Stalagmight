@@ -440,8 +440,8 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   removeLoopClosure: (closureId: bigint) => Promise<CommandResult>;
   updateStationComment: (stationRef: StationRef, comment: string | null) => Promise<CommandResult>;
   moveComment: (source: CommentHolder, target: CommentHolder, swap: boolean) => Promise<CommandResult>;
-  /** `accuracyM`: the GPS accuracy in metres (#741); omitted means the backend
-   *  default (5 m), 0 is a hard pin. */
+  /** `accuracyM`: the GPS accuracy in metres (#741); 0 is a hard pin, and
+   *  omitted means the backend default (0). */
   setZeroDatum: (
     stationRef: StationRef,
     coordinates: GpsCoordinates,

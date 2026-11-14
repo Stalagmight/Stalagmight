@@ -143,9 +143,17 @@ describe('EditStationDialog zero datum (#741)', () => {
     expect(screen.queryByTestId('station-datum-preview')).not.toBeInTheDocument();
   });
 
-  it('defaults the accuracy to 5 m and passes the entered accuracy on save', async () => {
+  it('defaults the accuracy to a 0 m hard pin', async () => {
     render(<EditStationDialog />);
-    expect(screen.getByTestId('station-datum-accuracy-input')).toHaveValue(5);
+    expect(screen.getByTestId('station-datum-accuracy-input')).toHaveValue(0);
+    expect(screen.getByText(/0 makes the computed survey go exactly through this GPS/)).toBeInTheDocument();
+    typeGps('20.5, -87.4');
+    fireEvent.click(screen.getByTestId('edit-station-save'));
+    await waitFor(() => expect(setZeroDatum).toHaveBeenCalledWith(REF, expect.anything(), { accuracyM: 0 }));
+  });
+
+  it('passes the entered accuracy on save', async () => {
+    render(<EditStationDialog />);
     typeGps('20.5, -87.4');
     fireEvent.change(screen.getByTestId('station-datum-accuracy-input'), { target: { value: '2.5' } });
     fireEvent.click(screen.getByTestId('edit-station-save'));
@@ -157,19 +165,21 @@ describe('EditStationDialog zero datum (#741)', () => {
     );
   });
 
-  it('accepts 0 as a hard pin and refuses a negative accuracy', async () => {
+  it('refuses a negative or empty accuracy until it is fixed', async () => {
     render(<EditStationDialog />);
     typeGps('20.5, -87.4');
     const field = screen.getByTestId('station-datum-accuracy-input');
-    fireEvent.change(field, { target: { value: '-1' } });
-    expect(screen.getByTestId('station-datum-accuracy-error')).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId('edit-station-save'));
-    await act(async () => {});
-    expect(setZeroDatum).not.toHaveBeenCalled();
-    fireEvent.change(field, { target: { value: '0' } });
+    for (const bad of ['-1', '']) {
+      fireEvent.change(field, { target: { value: bad } });
+      expect(screen.getByTestId('station-datum-accuracy-error')).toBeInTheDocument();
+      fireEvent.click(screen.getByTestId('edit-station-save'));
+      await act(async () => {});
+      expect(setZeroDatum).not.toHaveBeenCalled();
+    }
+    fireEvent.change(field, { target: { value: '4' } });
     expect(screen.queryByTestId('station-datum-accuracy-error')).not.toBeInTheDocument();
     fireEvent.click(screen.getByTestId('edit-station-save'));
-    await waitFor(() => expect(setZeroDatum).toHaveBeenCalledWith(REF, expect.anything(), { accuracyM: 0 }));
+    await waitFor(() => expect(setZeroDatum).toHaveBeenCalledWith(REF, expect.anything(), { accuracyM: 4 }));
   });
 
   it('prefills an existing datum accuracy and role, and saves an accuracy-only change', async () => {
@@ -215,7 +225,11 @@ describe('EditStationDialog zero datum (#741)', () => {
     expect(screen.getByTestId('station-datum-gap')).toHaveTextContent('GPS is 40 m');
   });
 
-  it('drops a reply that lands after the project changed under it', async () => {
+  // What this pins is the end state: no answer about the old project survives.
+  // It does NOT isolate the projectIdentityKey prong - deleting it stays green,
+  // because the re-render re-runs the effect, which clears the preview too. The
+  // prong covers the window between a store write and React's commit.
+  it('shows no answer about a project state that changed under the request', async () => {
     const reply = deferred<ZeroDatumPreview>();
     previewZeroDatum.mockReturnValueOnce(reply.promise);
     render(<EditStationDialog />);
