@@ -6,8 +6,11 @@
 //!
 //! - An entrance whose station holds a datum carries that datum's GPS (#378
 //!   item e; the entrance split put its START on that station).
-//! - An entrance with no datum of its own carries the frame datum's: a START
-//!   left at 0,0 drops its component on null island.
+//! - An entrance with no datum of its own carries the GPS of where the raw
+//!   survey puts its station, relative to the frame datum. Repeating the frame
+//!   datum's coordinates instead pinned two STARTs onto one point, and Ariane
+//!   collapses any loop between two STARTs that share coordinates. A START left
+//!   at 0,0 would drop its component on null island.
 //! - A datum anywhere else (a GPS fix part-way through the survey) gets a START
 //!   of its own at its GPS, tied to its station by a zero-length CLOSURE: the
 //!   shape Ariane writes for a loop that ends on an entrance.
@@ -16,7 +19,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::models::{Project, SectionId, ZeroDatum};
+use crate::models::{local_to_gps, GpsCoordinates, Project, SectionId, StationRef, ZeroDatum};
 
 use super::{speleodb_anchor, ExportShot, TmlProfile};
 
@@ -151,23 +154,40 @@ pub(super) fn stamp_starts(
         }
     }
 
+    // The station each START stands on. A merged station aliases onto the
+    // START's id too; the lowest key keeps the choice deterministic, and merged
+    // stations share one raw position anyway.
+    let mut start_station: HashMap<i64, (SectionId, u32)> = HashMap::new();
+    for (&key, &id) in station_to_ariane {
+        if start_ids.contains(&id) {
+            let held = start_station.entry(id).or_insert(key);
+            *held = (*held).min(key);
+        }
+    }
+
     let frame_index = project
         .zero_datums
         .iter()
         .position(|d| std::ptr::eq(d, frame));
     for shot in shots.iter_mut().filter(|s| s.shot_type == "START") {
-        let datum_gps = if let Some(&index) = on_start.get(&shot.id) {
+        let (latitude, longitude) = if let Some(&index) = on_start.get(&shot.id) {
             gps.written.insert(index);
-            &project.zero_datums[index].gps
+            let own = &project.zero_datums[index].gps;
+            (own.latitude, own.longitude)
+        } else if let Some(surveyed) = start_station
+            .get(&shot.id)
+            .and_then(|&(section_id, station)| surveyed_gps(project, frame, section_id, station))
+        {
+            surveyed
         } else {
-            // The frame datum's coordinates are on file through this stamp
-            // even when its own station carries no START.
+            // Last resort, for a START whose station has no raw position: the
+            // frame datum's coordinates, which are then on file through it.
             gps.written.extend(frame_index);
-            &frame.gps
+            (frame.gps.latitude, frame.gps.longitude)
         };
         (shot.latitude, shot.longitude) = match profile {
-            TmlProfile::User => (datum_gps.latitude, datum_gps.longitude),
-            TmlProfile::SpeleoDbSidecar => speleodb_anchor(datum_gps.latitude, datum_gps.longitude),
+            TmlProfile::User => (latitude, longitude),
+            TmlProfile::SpeleoDbSidecar => speleodb_anchor(latitude, longitude),
         };
     }
 
@@ -178,6 +198,21 @@ pub(super) fn stamp_starts(
         gps.fixes.clear();
     }
     gps
+}
+
+/// Where the RAW survey puts a station, as GPS. Raw local metres are relative to
+/// the frame datum (local `(0, 0)` is its GPS), and Ariane runs its own loop
+/// solve, so the measurements are what it should start from.
+fn surveyed_gps(
+    project: &Project,
+    frame: &ZeroDatum,
+    section_id: SectionId,
+    station: u32,
+) -> Option<(f64, f64)> {
+    let local = project.compute_station_raw_coords(StationRef::new(section_id, station))?;
+    let frame_gps: &GpsCoordinates = &frame.gps;
+    local_to_gps(local.x, local.y, frame_gps)
+        .filter(|(lat, lon)| lat.is_finite() && lon.is_finite())
 }
 
 impl DatumGps {
@@ -239,8 +274,7 @@ impl DatumGps {
                  written: a datum that no longer resolves, whose station has no row in this \
                  file, whose GPS is not a number, or that shares its station with an earlier \
                  datum (the SpeleoDB sidecar also leaves out datums part-way through the \
-                 survey). Entrances without their own datum are anchored at the frame datum's \
-                 coordinates."
+                 survey)."
             );
         }
         unwritten

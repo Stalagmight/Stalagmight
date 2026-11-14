@@ -3244,10 +3244,12 @@ mod tests {
         let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
         let starts: Vec<&ExportShot> = shots.iter().filter(|s| s.shot_type == "START").collect();
         assert_eq!(starts.len(), 2, "each detached gallery is its own entrance");
+        // Both galleries start on local (0, 0), so the datum-less one's surveyed
+        // position IS the frame datum's GPS, to within the round trip through
+        // `local_to_gps` (well under a millimetre).
         for start in &starts {
             assert!(
-                (start.latitude - FRAME.0).abs() < f64::EPSILON
-                    && (start.longitude - FRAME.1).abs() < f64::EPSILON,
+                (start.latitude - FRAME.0).abs() < 1e-9 && (start.longitude - FRAME.1).abs() < 1e-9,
                 "START in section {:?} exported at {},{} - the frame datum is at \
                  {},{} and the dangling zero_datums[0] at {},{}",
                 start.section,
@@ -4514,12 +4516,13 @@ mod tests {
         let starts: Vec<&ExportShot> = shots.iter().filter(|s| s.shot_type == "START").collect();
         assert_eq!(starts.len(), 2, "each detached gallery is its own entrance");
 
-        // Every entrance carries the anchor. Leaving the second at 0,0 puts that
-        // gallery on null island, ~9000 km from the rest of the survey.
+        // Every entrance is anchored. Leaving the second at 0,0 puts that
+        // gallery on null island, ~9000 km from the rest of the survey. Both
+        // galleries start on local (0, 0), so the datum-less one's surveyed
+        // position is the datum's GPS, to within the `local_to_gps` round trip.
         for start in &starts {
             assert!(
-                (start.latitude - 20.25).abs() < f64::EPSILON
-                    && (start.longitude - -87.5).abs() < f64::EPSILON,
+                (start.latitude - 20.25).abs() < 1e-9 && (start.longitude - -87.5).abs() < 1e-9,
                 "entrance in section {:?} was left unanchored at {},{}",
                 start.section,
                 start.latitude,

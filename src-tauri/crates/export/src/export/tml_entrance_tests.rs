@@ -17,6 +17,7 @@ fn shots(count: usize, azimuth_in: f64) -> Vec<ShotData> {
         .map(|i| ShotData {
             length: 50.0,
             azimuth_in,
+            azimuth_out: azimuth_in,
             depth_in: i as f64,
             depth_out: (i + 1) as f64,
             ..Default::default()
@@ -214,5 +215,129 @@ fn the_fix_shape_round_trips_to_the_same_stations() {
             .map(|(_, legs)| legs.len())
             .sum::<usize>(),
         11
+    );
+}
+
+/// Where `start` is, in local metres from the placement datum's GPS.
+fn local_of(start: &ExportShot) -> (f64, f64) {
+    let origin = GpsCoordinates::new(PLACEMENT.0, PLACEMENT.1, 0.0).unwrap();
+    let at = GpsCoordinates::new(start.latitude, start.longitude, 0.0).unwrap();
+    crate::models::gps_to_local(&at, &origin)
+}
+
+fn start_of<'a>(shots: &'a [ExportShot], section: &str) -> &'a ExportShot {
+    shots
+        .iter()
+        .find(|s| s.shot_type == "START" && s.section == section)
+        .unwrap()
+}
+
+#[test]
+fn a_datumless_entrance_start_sits_where_the_survey_puts_it() {
+    // Two STARTs with the same lat/lon are pinned onto one point, and Ariane
+    // collapses any loop between them. A datum-less entrance used to repeat
+    // the frame datum's coordinates, so a loop back to the frame's entrance
+    // collapsed onto it.
+    use crate::models::{ClosureStrategy, LoopClosure};
+    let mut project = Project::new("Datumless entrance".to_string(), None);
+    for name in ["Main", "Detached"] {
+        project.add_section(SectionData {
+            name: Some(name.to_string()),
+            color: "#3366ff".to_string(),
+            shots: shots(2, 90.0),
+            ..Default::default()
+        });
+    }
+    project.section_offsets.insert(1, (100.0, 50.0));
+    datum(&mut project, StationRef::new(0, 0), PLACEMENT);
+    project.loop_closures.push(LoopClosure {
+        id: 1,
+        station_a: StationRef::new(1, 2).into(),
+        station_b: StationRef::new(0, 2).into(),
+        path_length: 100.0,
+        misclosure_distance: 0.0,
+        error_percentage: 0.0,
+        horizontal_misclosure: 0.0,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::Batch,
+        is_aligned: false,
+    });
+
+    for profile in [TmlProfile::User, TmlProfile::SpeleoDbSidecar] {
+        let (shots, unwritten) = export(&project, profile);
+        assert_eq!(unwritten, 0);
+        let (east, north) = local_of(start_of(&shots, "Detached"));
+        assert!(
+            (east - 100.0).abs() < 1e-3 && (north - 50.0).abs() < 1e-3,
+            "{profile:?}: the detached START must sit at its surveyed offset, got {east},{north}"
+        );
+        let (east, north) = local_of(start_of(&shots, "Main"));
+        assert!(east.abs() < 1e-3 && north.abs() < 1e-3);
+    }
+}
+
+#[test]
+fn an_unmerged_piece_with_a_closure_back_keeps_its_own_start_position() {
+    // The reachable path: A carries the datum, B is merged in, a closure ties
+    // B back to A, then B is unmerged. Unmerging removes only the closures of
+    // the unmerged pair, so B leaves as a datum-less piece with a loop back to
+    // A's entrance.
+    use crate::models::ClosureStrategy;
+    let mut project = Project::new("Unmerged".to_string(), None);
+    for (name, azimuth) in [("A", 90.0), ("B", 0.0)] {
+        project.add_section(SectionData {
+            name: Some(name.to_string()),
+            color: "#3366ff".to_string(),
+            shots: shots(2, azimuth),
+            ..Default::default()
+        });
+    }
+    let (a2, b0) = (StationRef::new(0, 2), StationRef::new(1, 0));
+    project.merge_stations(a2, b0).unwrap();
+    // Through the mutator, so the survey is laid out against the datum: A0 on
+    // local (0, 0), which IS the datum's GPS.
+    project
+        .set_zero_datum(
+            StationRef::new(0, 0),
+            GpsCoordinates::new(PLACEMENT.0, PLACEMENT.1, 0.0).unwrap(),
+        )
+        .unwrap();
+    project
+        .create_loop_closure(
+            StationRef::new(1, 2),
+            StationRef::new(0, 1),
+            ClosureStrategy::Batch,
+        )
+        .unwrap();
+    assert!(
+        project.unmerge_stations(a2, b0).0,
+        "fixture rot: the unmerge must happen"
+    );
+    assert_eq!(
+        project.loop_closures.len(),
+        1,
+        "fixture rot: the closure B->A survives"
+    );
+    let surveyed = project.compute_station_raw_coords(b0).unwrap();
+    assert!(
+        surveyed.x.hypot(surveyed.y) > 1.0,
+        "fixture rot: B must not sit on A's entrance, or nothing can collapse"
+    );
+
+    let (shots, _) = export(&project, TmlProfile::User);
+    assert!(shots.iter().any(|s| s.shot_type == "CLOSURE"));
+    let a = start_of(&shots, "A");
+    let b = start_of(&shots, "B");
+    assert!(
+        (a.latitude, a.longitude) != (b.latitude, b.longitude),
+        "two STARTs on one point collapse the loop between them"
+    );
+    let (east, north) = local_of(b);
+    assert!(
+        (east - surveyed.x).abs() < 1e-3 && (north - surveyed.y).abs() < 1e-3,
+        "B's START differs from A's by B's surveyed offset: got {east},{north}, \
+         surveyed {},{}",
+        surveyed.x,
+        surveyed.y
     );
 }
