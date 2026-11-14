@@ -315,6 +315,44 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         return { ...project, sections };
       };
 
+      // #741: a zero datum's ROLE is derived, never stored (backend
+      // `datum_roles.rs`): the first datum (list order) of each merge-connected
+      // group of sections places that group, every later one in the group is a GPS
+      // fix. Sections join through station merges.
+      type MockStationRef = { section_id: number; station_index: number };
+      const mockDatumRole = (
+        project: { station_merges?: unknown[]; zero_datums?: unknown[] },
+        ref: MockStationRef
+      ): 'Placement' | 'GpsFix' => {
+        const parent = new Map<number, number>();
+        const root = (s: number): number => {
+          let r = s;
+          while (parent.has(r)) r = parent.get(r)!;
+          return r;
+        };
+        const merges = (project.station_merges ?? []) as Array<{ station_a: MockStationRef; station_b: MockStationRef }>;
+        for (const m of merges) {
+          const a = root(m.station_a.section_id);
+          const b = root(m.station_b.section_id);
+          if (a !== b) parent.set(a, b);
+        }
+        const group = root(ref.section_id);
+        const datums = (project.zero_datums ?? []) as Array<{ station_ref: MockStationRef }>;
+        const placing = datums.find((d) => root(d.station_ref.section_id) === group);
+        if (!placing) return 'Placement';
+        const same =
+          placing.station_ref.section_id === ref.section_id && placing.station_ref.station_index === ref.station_index;
+        return same ? 'Placement' : 'GpsFix';
+      };
+      /** Stamp each datum's derived role on an (already cloned) wire project. */
+      const withDatumRoles = <P extends { station_merges?: unknown[]; zero_datums?: unknown[] } | null>(project: P): P => {
+        if (!project) return project;
+        for (const d of (project.zero_datums ?? []) as Array<{ station_ref: MockStationRef; role?: string }>) {
+          d.role = mockDatumRole(project, d.station_ref);
+        }
+        return project;
+      };
+
       // #310: live plan pins are kept as opaque ANCHORS beside their positional refs, so a
       // survey edit that renumbers stations doesn't silently retarget them. The real backend
       // names a station by the shots on either side of it (core/state/dive_plan.rs's
@@ -1992,7 +2030,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               // showed the populated count. A deep clone keeps every consumer's
               // ref-identity check honest, not just the sections one. (Caused ~50
               // full-suite failures; smoke seeds once, so it never hit this.)
-              project: currentProject ? withShotCredit(structuredClone(currentProject)) : currentProject,
+              project: currentProject ? withDatumRoles(withShotCredit(structuredClone(currentProject))) : currentProject,
               stations: mockStations,
               stats: {
                 section_count: currentProject?.sections.length ?? 0,
@@ -4057,13 +4095,24 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           case 'set_zero_datum': {
             console.log('[Mock IPC] set_zero_datum called with:', args);
-            // Update currentProject's zero_datums to reflect the change
+            {
+              const win = window as unknown as Record<string, unknown>;
+              const calls = (win.__MOCK_SET_ZERO_DATUM_CALLS__ as unknown[]) ?? [];
+              calls.push(args ?? null);
+              win.__MOCK_SET_ZERO_DATUM_CALLS__ = calls;
+            }
+            // Update currentProject's zero_datums to reflect the change. Like the
+            // backend (#741), a second datum in a connected survey is accepted: it
+            // becomes a GPS fix. The role is derived on read (withDatumRoles).
             if (currentProject && args) {
               const stationRef = args.stationRef as { section_id: number; station_index: number };
               const coordinates = args.coordinates as { latitude: number; longitude: number; depth_reference: number };
+              // Optional accuracy in metres; absent means the backend default.
+              const accuracyM = typeof args.accuracyM === 'number' ? args.accuracyM : undefined;
               const datums = currentProject.zero_datums as Array<{
                 station_ref: { section_id: number; station_index: number };
                 gps: { latitude: number; longitude: number; depth_reference: number };
+                accuracy_m?: number;
               }>;
               // Update in-place if exists, otherwise push
               const existing = datums.find(
@@ -4073,16 +4122,48 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               );
               if (existing) {
                 existing.gps = coordinates;
+                if (accuracyM === undefined) delete existing.accuracy_m;
+                else existing.accuracy_m = accuracyM;
               } else {
                 // In-place mutation (same array identity) is load-bearing for the
                 // deep-clone reactivity guard: datum-closure-reactivity.spec.ts only
                 // catches a shallow-clone regression because the fresh array identity
                 // comes from get_project_state's structuredClone, NOT from this write.
                 // If this is ever changed to fresh-copy zero_datums, update that spec.
-                datums.push({ station_ref: stationRef, gps: coordinates });
+                datums.push({
+                  station_ref: stationRef,
+                  gps: coordinates,
+                  ...(accuracyM === undefined ? {} : { accuracy_m: accuracyM }),
+                });
               }
             }
             return { success: true, section_ids: [] };
+          }
+
+          case 'preview_zero_datum': {
+            // #741: read-only. The role comes from the same derivation as the wire
+            // roles; the mock has no geometry, so a GPS fix gets a canned gap that
+            // a spec can override through `window.__MOCK_DATUM_GAP__`.
+            const win = window as unknown as Record<string, unknown>;
+            const calls = (win.__MOCK_PREVIEW_ZERO_DATUM_CALLS__ as unknown[]) ?? [];
+            calls.push(args ?? null);
+            win.__MOCK_PREVIEW_ZERO_DATUM_CALLS__ = calls;
+            if (!currentProject || !args) return null;
+            const stationRef = args.stationRef as MockStationRef;
+            const section = (currentProject.sections as Array<{ id: number; shots?: unknown[] }>).find(
+              (s) => s.id === stationRef.section_id
+            );
+            if (!section || stationRef.station_index > (section.shots?.length ?? 0)) return null;
+            const role = mockDatumRole(currentProject, stationRef);
+            if (role === 'Placement') return { role };
+            const gap = win.__MOCK_DATUM_GAP__ ?? {
+              gap_m: 40,
+              bearing_deg: 45,
+              survey_distance_m: 1400,
+              threshold_m: 43,
+              exceeds_threshold: false,
+            };
+            return { role, gap };
           }
 
           case 'remove_zero_datum': {
