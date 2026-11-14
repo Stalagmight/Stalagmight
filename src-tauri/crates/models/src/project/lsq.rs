@@ -1,280 +1,11 @@
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-
+use super::Project;
 use crate::config::ClosureAdjustmentConfig;
 use crate::{Coordinates, LoopClosure, SectionId, StationRef};
-
-use super::Project;
+use cave_closure::horizontal::{HorizontalGroup, HorizontalObservation, HorizontalProblem};
+use cave_closure::SolveControl;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 impl Project {
-    /// Solve the two SPD weighted-Laplacian systems `A·x = atb_x` and
-    /// `A·y = atb_y` the closure adjustment assembles. Both systems share the
-    /// same sparsity (`adj`) but use different per-axis weights.
-    ///
-    /// A cave survey graph is almost a tree: long degree-2 passages and degree-1
-    /// spurs with only a handful of independent loops (≈ one per eligible
-    /// closure). We exploit that with **exact** Gaussian elimination of every
-    /// node whose current off-diagonal degree is ≤ 2 - degree-1 is leaf
-    /// back-substitution, degree-2 is series reduction (fill between the two
-    /// neighbours). Both axes are carried in lockstep since the structure is
-    /// shared; SPD guarantees positive pivots throughout. Peeling collapses the
-    /// tree and chains in O(n); what survives is the 2-core (≈ the cycle space),
-    /// solved with Jacobi-PCG (tiny, so effectively exact and instant). Peeled
-    /// nodes are then recovered by back-substitution in reverse order.
-    ///
-    /// `adj[i]` holds symmetric off-diagonal entries `(j, off_x, off_y)` (the
-    /// negative edge weights). Returns `(sol_x, sol_y)`, each length `n`.
-    ///
-    /// **Determinism.** The working adjacency is a `BTreeMap` per node, not a
-    /// `HashMap`. Every neighbour walk here feeds a floating-point SUM - the
-    /// Schur complement fill, the back-substitution dot product, the core
-    /// `spmv` - and float addition is not associative, so a hashed walk order
-    /// makes the result a function of the process's `RandomState` rather than of
-    /// the system. Ordering by node index costs a few comparisons on rows of
-    /// degree ≤ 3 and makes the solve reproducible bit for bit (issue #413,
-    /// finding 21).
-    pub(super) fn solve_reduced_laplacian(
-        n: usize,
-        diag_x: &[f64],
-        diag_y: &[f64],
-        atb_x: &[f64],
-        atb_y: &[f64],
-        adj: &[Vec<(usize, f64, f64)>],
-        x0_x: &[f64],
-        x0_y: &[f64],
-    ) -> (Vec<f64>, Vec<f64>) {
-        // A node is only eliminated when its current pivot is *safely positive*
-        // relative to the node's original diagonal. A pivot that is non-positive or
-        // has collapsed to roundoff (a tiny fraction of its starting scale) means
-        // the node sits in the system's null space - a floating axis. Such a pivot
-        // is mathematically 0 but, with varied edge weights, lands at ~±1e-12 from
-        // cancellation, so an absolute 1e-30 floor would wrongly eliminate it and
-        // divide by ~0, shifting the whole component off its warm-started (measured)
-        // translation. These stay in the core for the warm-started PCG instead.
-        const PIVOT_REL: f64 = 1e-9;
-
-        // Mutable working copies of the system (diagonals, rhs, adjacency).
-        let mut dx = diag_x.to_vec();
-        let mut dy = diag_y.to_vec();
-        let mut cx = atb_x.to_vec();
-        let mut cy = atb_y.to_vec();
-        let mut nbr: Vec<BTreeMap<usize, (f64, f64)>> = vec![BTreeMap::new(); n];
-        for (i, row) in adj.iter().enumerate() {
-            for &(j, ox, oy) in row {
-                let e = nbr[i].entry(j).or_insert((0.0, 0.0));
-                e.0 += ox;
-                e.1 += oy;
-            }
-        }
-
-        // Back-substitution record captured at the moment a node is eliminated.
-        struct Elim {
-            u: usize,
-            nbrs: Vec<(usize, f64, f64)>,
-            dxu: f64,
-            dyu: f64,
-            cxu: f64,
-            cyu: f64,
-        }
-        let mut eliminated = vec![false; n];
-        let mut order: Vec<Elim> = Vec::new();
-
-        let mut queue: VecDeque<usize> = (0..n).filter(|&i| nbr[i].len() <= 2).collect();
-        while let Some(u) = queue.pop_front() {
-            // Stale entry: already gone, or degree grew above 2 since enqueued.
-            if eliminated[u] || nbr[u].len() > 2 {
-                continue;
-            }
-            let (pdx, pdy) = (dx[u], dy[u]);
-            // Scale-relative, sign-aware floor: skip when either axis pivot is
-            // non-positive or tiny vs. its original diagonal (null-space / floating).
-            if pdx <= PIVOT_REL * diag_x[u] || pdy <= PIVOT_REL * diag_y[u] {
-                continue; // null-space / ill-conditioned pivot → leave for the core solve
-            }
-            let nbrs: Vec<(usize, f64, f64)> =
-                nbr[u].iter().map(|(&v, &(ox, oy))| (v, ox, oy)).collect();
-            let (pcx, pcy) = (cx[u], cy[u]);
-            eliminated[u] = true;
-            order.push(Elim {
-                u,
-                nbrs: nbrs.clone(),
-                dxu: pdx,
-                dyu: pdy,
-                cxu: pcx,
-                cyu: pcy,
-            });
-
-            // Detach u from its neighbours.
-            for &(v, _, _) in &nbrs {
-                nbr[v].remove(&u);
-            }
-            // Schur complement onto each neighbour: diagonal + rhs.
-            for &(v, ox, oy) in &nbrs {
-                cx[v] -= ox * pcx / pdx;
-                cy[v] -= oy * pcy / pdy;
-                dx[v] -= ox * ox / pdx;
-                dy[v] -= oy * oy / pdy;
-            }
-            // Schur complement fill between neighbour pairs (series reduction).
-            for a in 0..nbrs.len() {
-                for b in (a + 1)..nbrs.len() {
-                    let (i, oxa, oya) = nbrs[a];
-                    let (j, oxb, oyb) = nbrs[b];
-                    let fx = -(oxa * oxb) / pdx;
-                    let fy = -(oya * oyb) / pdy;
-                    let e = nbr[i].entry(j).or_insert((0.0, 0.0));
-                    e.0 += fx;
-                    e.1 += fy;
-                    let e = nbr[j].entry(i).or_insert((0.0, 0.0));
-                    e.0 += fx;
-                    e.1 += fy;
-                }
-            }
-            // Neighbours may now be peelable.
-            for &(v, _, _) in &nbrs {
-                if !eliminated[v] && nbr[v].len() <= 2 {
-                    queue.push_back(v);
-                }
-            }
-        }
-
-        let mut sol_x = vec![0.0; n];
-        let mut sol_y = vec![0.0; n];
-
-        // Solve the irreducible 2-core (degree ≥ 3 / ill-conditioned nodes) with
-        // Jacobi-PCG. For a cave this is at most a few nodes per loop.
-        let core: Vec<usize> = (0..n).filter(|&i| !eliminated[i]).collect();
-        if !core.is_empty() {
-            let k = core.len();
-            let mut local: HashMap<usize, usize> = HashMap::with_capacity(k);
-            for (li, &g) in core.iter().enumerate() {
-                local.insert(g, li);
-            }
-            let cdx: Vec<f64> = core.iter().map(|&g| dx[g]).collect();
-            let cdy: Vec<f64> = core.iter().map(|&g| dy[g]).collect();
-            let crx: Vec<f64> = core.iter().map(|&g| cx[g]).collect();
-            let cry: Vec<f64> = core.iter().map(|&g| cy[g]).collect();
-            let mut cadj: Vec<Vec<(usize, f64, f64)>> = vec![Vec::new(); k];
-            for (li, &g) in core.iter().enumerate() {
-                for (&v, &(ox, oy)) in &nbr[g] {
-                    // Every surviving neighbour is itself a core node.
-                    if let Some(&lv) = local.get(&v) {
-                        cadj[li].push((lv, ox, oy));
-                    }
-                }
-            }
-            let cx0: Vec<f64> = core.iter().map(|&g| x0_x[g]).collect();
-            let cy0: Vec<f64> = core.iter().map(|&g| x0_y[g]).collect();
-            let csx = Self::pcg_axis(k, &cdx, &crx, &cadj, 0, &cx0);
-            let csy = Self::pcg_axis(k, &cdy, &cry, &cadj, 1, &cy0);
-            for (li, &g) in core.iter().enumerate() {
-                sol_x[g] = csx[li];
-                sol_y[g] = csy[li];
-            }
-        }
-
-        // Back-substitute eliminated nodes in reverse elimination order.
-        for rec in order.iter().rev() {
-            let mut sx = rec.cxu;
-            let mut sy = rec.cyu;
-            for &(v, ox, oy) in &rec.nbrs {
-                sx -= ox * sol_x[v];
-                sy -= oy * sol_y[v];
-            }
-            sol_x[rec.u] = sx / rec.dxu;
-            sol_y[rec.u] = sy / rec.dyu;
-        }
-
-        (sol_x, sol_y)
-    }
-
-    /// Jacobi-preconditioned Conjugate Gradient for one axis of an SPD/PSD system
-    /// stored as diagonal + symmetric off-diagonal adjacency `(j, off_x, off_y)`
-    /// (`axis` selects the weight). Used only for the small reduced core.
-    ///
-    /// Starts from the warm-start guess `x0` (the measured positions). This is not
-    /// just for convergence speed: a node that is unconstrained on this axis (e.g.
-    /// reachable only through a zero-length cardinal shot, so its weight is 0) has
-    /// an empty row, leaving that coordinate in the system's null space. CG never
-    /// moves a null-space direction, so it stays at `x0` - preserving the measured
-    /// position instead of snapping it to world 0.
-    fn pcg_axis(
-        n: usize,
-        diag: &[f64],
-        rhs: &[f64],
-        adj: &[Vec<(usize, f64, f64)>],
-        axis: usize,
-        x0: &[f64],
-    ) -> Vec<f64> {
-        let off = |e: (usize, f64, f64)| if axis == 0 { e.1 } else { e.2 };
-        let spmv = |x: &[f64]| -> Vec<f64> {
-            let mut y = vec![0.0; n];
-            for i in 0..n {
-                y[i] += diag[i] * x[i];
-                for &edge in &adj[i] {
-                    y[i] += off(edge) * x[edge.0];
-                }
-            }
-            y
-        };
-        let max_iter = n.min(10_000);
-        let tol = 1e-12;
-        let inv_diag: Vec<f64> = diag
-            .iter()
-            .map(|&d| if d.abs() > 1e-30 { 1.0 / d } else { 1.0 })
-            .collect();
-
-        let mut x = x0.to_vec();
-        let ax0 = spmv(&x);
-        let mut r: Vec<f64> = rhs.iter().zip(ax0.iter()).map(|(&b, &a)| b - a).collect();
-        let mut z: Vec<f64> = r
-            .iter()
-            .zip(inv_diag.iter())
-            .map(|(&ri, &mi)| ri * mi)
-            .collect();
-        let mut p = z.clone();
-        let mut rz: f64 = r.iter().zip(z.iter()).map(|(&ri, &zi)| ri * zi).sum();
-
-        // Converge relative to the *initial residual* ‖b - A·x0‖, not ‖b‖. With a
-        // warm start that is the correct reference: return x0 only when it already
-        // satisfies the system (residual ~0 - which includes pure null-space
-        // directions), and otherwise let CG converge the range component while
-        // leaving null-space directions at x0. Keying the early exit off ‖b‖ alone
-        // would wrongly return a non-optimal x0 when Schur elimination cancels the
-        // core RHS for a balanced loop even though the matrix rows are non-zero
-        // (Codex #86).
-        let r0_norm_sq: f64 = r.iter().map(|&v| v * v).sum();
-        if r0_norm_sq < tol * tol {
-            return x;
-        }
-
-        for _iter in 0..max_iter {
-            let ap = spmv(&p);
-            let pap: f64 = p.iter().zip(ap.iter()).map(|(&pi, &api)| pi * api).sum();
-            if pap.abs() < 1e-30 {
-                break;
-            }
-            let alpha = rz / pap;
-            for i in 0..n {
-                x[i] += alpha * p[i];
-                r[i] -= alpha * ap[i];
-            }
-            let r_norm_sq: f64 = r.iter().map(|&v| v * v).sum();
-            if r_norm_sq < tol * tol * r0_norm_sq {
-                break;
-            }
-            for i in 0..n {
-                z[i] = r[i] * inv_diag[i];
-            }
-            let rz_new: f64 = r.iter().zip(z.iter()).map(|(&ri, &zi)| ri * zi).sum();
-            let beta = rz_new / rz;
-            for i in 0..n {
-                p[i] = z[i] + beta * p[i];
-            }
-            rz = rz_new;
-        }
-        x
-    }
-
     pub(super) fn adjust_least_squares(
         &mut self,
         component: &HashSet<SectionId>,
@@ -409,237 +140,67 @@ impl Project {
             fixed_coords.insert(anchor_root, coords);
         }
 
-        // Number the unknowns from a SORTED sequence of group roots. Walking
-        // `groups.keys()` numbered them in `HashMap` order, and `groups` is built
-        // fresh inside this call - so its `RandomState`, and with it the whole
-        // numbering, was a new random permutation on every invocation. The
-        // numbering is not cosmetic: `solve_reduced_laplacian` peels nodes in
-        // ascending index order and sums each node's neighbours, and float
-        // addition is not associative, so the permutation reached the answer's
-        // last bits (and, through the relative CG stop, its iteration count). The
-        // adjusted geometry is what the map draws and every export writes, so it
-        // has to be a function of the project (issue #413, finding 21).
+        // Preserve source group ordering and representative warm starts. These
+        // select the translation retained by an unconstrained numerical axis.
         let mut roots: Vec<StationRef> = groups.keys().copied().collect();
         roots.sort_unstable();
-        let mut unknown_index: HashMap<StationRef, usize> = HashMap::with_capacity(roots.len());
-        for root in &roots {
-            if !fixed_groups.contains(root) {
-                let next = unknown_index.len();
-                unknown_index.insert(*root, next);
-            }
-        }
-
-        let n = unknown_index.len();
-        if n == 0 {
+        if roots.iter().all(|root| fixed_groups.contains(root)) {
             return Ok(());
         }
-
-        // Sparse assembly for the symmetric positive-definite normal matrix A^T A.
-        // The matrix is a weighted graph Laplacian (grounded at the fixed
-        // datum/anchor) - extremely sparse (≤3 non-zeros per row). We store
-        // diagonal entries and off-diagonal adjacency, then solve via degree-≤2
-        // graph reduction plus PCG on the tiny core (see `solve_reduced_laplacian`).
-        let mut atb_x = vec![0.0; n];
-        let mut atb_y = vec![0.0; n];
-        let mut diag_x = vec![0.0; n];
-        let mut diag_y = vec![0.0; n];
-        // Adjacency list: for each node, list of (neighbor, weight_x, weight_y)
-        let mut adj: Vec<Vec<(usize, f64, f64)>> = vec![Vec::new(); n];
-
+        let group_index: HashMap<StationRef, usize> = roots
+            .iter()
+            .enumerate()
+            .map(|(i, root)| (*root, i))
+            .collect();
+        let mut problem = HorizontalProblem {
+            groups: roots
+                .iter()
+                .map(|root| {
+                    let coords = groups[root]
+                        .first()
+                        .and_then(|m| raw_coords.get(m))
+                        .copied()
+                        .unwrap_or_else(|| Coordinates::new(0.0, 0.0, 0.0));
+                    HorizontalGroup {
+                        initial: [coords.x, coords.y],
+                        fixed: fixed_coords.get(root).map(|c| [c.x, c.y]),
+                    }
+                })
+                .collect(),
+            observations: Vec::new(),
+            sigma_length_m: config.base_sigma_length_m,
+            sigma_azimuth_deg: config.base_sigma_azimuth_deg,
+        };
         for section in self.sections.iter().filter(|s| component.contains(&s.id)) {
-            let quality = if section.quality.is_finite() && section.quality > 0.0 {
-                section.quality
-            } else {
-                1.0
-            };
-            let sigma_len = config.base_sigma_length_m * quality;
-            let sigma_az = config.base_sigma_azimuth_deg.to_radians() * quality;
-            let azimuth_reference = self.azimuth_reference_for(section);
-
+            let reference = self.azimuth_reference_for(section);
             for (idx, shot) in section.shots.iter().enumerate() {
-                let station_i = StationRef::new(section.id, idx as u32);
-                let station_j = StationRef::new(section.id, (idx + 1) as u32);
-
-                let root_i = *station_root
-                    .get(&station_i)
-                    .ok_or_else(|| "Missing station root".to_string())?;
-                let root_j = *station_root
-                    .get(&station_j)
-                    .ok_or_else(|| "Missing station root".to_string())?;
-
-                if root_i == root_j {
+                let from = station_root[&StationRef::new(section.id, idx as u32)];
+                let to = station_root[&StationRef::new(section.id, (idx + 1) as u32)];
+                if from == to {
                     continue;
                 }
-
-                let vec = Self::shot_vector_along(shot, true, azimuth_reference);
-                let az = shot.average_azimuth_true_rad(azimuth_reference);
-                let len = shot.length;
-
-                let sigma_dx =
-                    ((az.sin() * sigma_len).powi(2) + (len * az.cos() * sigma_az).powi(2)).sqrt();
-                let sigma_dy =
-                    ((az.cos() * sigma_len).powi(2) + (len * az.sin() * sigma_az).powi(2)).sqrt();
-
-                let w_x = if sigma_dx > 0.0 {
-                    1.0 / (sigma_dx * sigma_dx)
-                } else {
-                    0.0
-                };
-                let w_y = if sigma_dy > 0.0 {
-                    1.0 / (sigma_dy * sigma_dy)
-                } else {
-                    0.0
-                };
-
-                let i_idx = unknown_index.get(&root_i).copied();
-                let j_idx = unknown_index.get(&root_j).copied();
-
-                let b_x = match (i_idx, j_idx) {
-                    (Some(_), Some(_)) => vec.x,
-                    (Some(_), None) => {
-                        let xj = fixed_coords
-                            .get(&root_j)
-                            .copied()
-                            .unwrap_or_else(|| Coordinates::new(0.0, 0.0, 0.0));
-                        vec.x - xj.x
-                    }
-                    (None, Some(_)) => {
-                        let xi = fixed_coords
-                            .get(&root_i)
-                            .copied()
-                            .unwrap_or_else(|| Coordinates::new(0.0, 0.0, 0.0));
-                        vec.x + xi.x
-                    }
-                    (None, None) => 0.0,
-                };
-                let b_y = match (i_idx, j_idx) {
-                    (Some(_), Some(_)) => vec.y,
-                    (Some(_), None) => {
-                        let yj = fixed_coords
-                            .get(&root_j)
-                            .copied()
-                            .unwrap_or_else(|| Coordinates::new(0.0, 0.0, 0.0));
-                        vec.y - yj.y
-                    }
-                    (None, Some(_)) => {
-                        let yi = fixed_coords
-                            .get(&root_i)
-                            .copied()
-                            .unwrap_or_else(|| Coordinates::new(0.0, 0.0, 0.0));
-                        vec.y + yi.y
-                    }
-                    (None, None) => 0.0,
-                };
-
-                // Accumulate into sparse structure
-                macro_rules! add_sparse {
-                    ($w:expr, $b_val:expr, $diag:expr, $atb:expr, $axis:literal) => {
-                        if $w.is_finite() && $w > 0.0 {
-                            match (i_idx, j_idx) {
-                                (Some(ii), Some(jj)) => {
-                                    $diag[ii] += $w;
-                                    $diag[jj] += $w;
-                                    $atb[ii] += -$w * $b_val;
-                                    $atb[jj] += $w * $b_val;
-                                }
-                                (Some(ii), None) => {
-                                    $diag[ii] += $w;
-                                    $atb[ii] += -$w * $b_val;
-                                }
-                                (None, Some(jj)) => {
-                                    $diag[jj] += $w;
-                                    $atb[jj] += $w * $b_val;
-                                }
-                                (None, None) => {}
-                            }
-                        }
-                    };
-                }
-                add_sparse!(w_x, b_x, diag_x, atb_x, 0);
-                add_sparse!(w_y, b_y, diag_y, atb_y, 1);
-
-                // Record adjacency for off-diagonal entries (edge weight = -w)
-                if let (Some(ii), Some(jj)) = (i_idx, j_idx) {
-                    // Check if edge already exists and accumulate
-                    let mut found = false;
-                    for entry in adj[ii].iter_mut() {
-                        if entry.0 == jj {
-                            entry.1 -= w_x;
-                            entry.2 -= w_y;
-                            found = true;
-                            break;
-                        }
-                    }
-                    if !found {
-                        adj[ii].push((jj, -w_x, -w_y));
-                    }
-                    let mut found = false;
-                    for entry in adj[jj].iter_mut() {
-                        if entry.0 == ii {
-                            entry.1 -= w_x;
-                            entry.2 -= w_y;
-                            found = true;
-                            break;
-                        }
-                    }
-                    if !found {
-                        adj[jj].push((ii, -w_x, -w_y));
-                    }
-                }
+                let vector = Self::shot_vector_along(shot, true, reference);
+                problem.observations.push(HorizontalObservation {
+                    from: group_index[&from],
+                    to: group_index[&to],
+                    displacement: [vector.x, vector.y],
+                    length_m: shot.length,
+                    azimuth_rad: shot.average_azimuth_true_rad(reference),
+                    quality: section.quality,
+                });
             }
         }
-
-        // Warm-start guess: each unknown group's measured position. This seeds the
-        // core PCG so a coordinate that is unconstrained on an axis (e.g. only a
-        // zero-length cardinal shot touches it → zero weight → null-space row)
-        // stays at its measured value instead of snapping to world 0.
-        let mut x0_x = vec![0.0; n];
-        let mut x0_y = vec![0.0; n];
-        for (root, members) in &groups {
-            if let Some(&idx) = unknown_index.get(root) {
-                if let Some(coords) = members.first().and_then(|m| raw_coords.get(m).copied()) {
-                    x0_x[idx] = coords.x;
-                    x0_y[idx] = coords.y;
-                }
-            }
-        }
-
-        // Solve both axes (sharing sparsity, differing in per-axis weights) with
-        // exact degree-≤2 graph reduction: peel spurs and series-reduce long
-        // passages in O(n), then Jacobi-PCG on the small remaining 2-core (≈ the
-        // cycle space, ~#closures nodes), then back-substitute. This replaces the
-        // former full-system PCG, which took O(loop-diameter) iterations - i.e.
-        // O(n) iterations on a single long loop, making the solve O(n²) (#81).
-        // See `solve_reduced_laplacian`.
-        let (sol_x, sol_y) =
-            Self::solve_reduced_laplacian(n, &diag_x, &diag_y, &atb_x, &atb_y, &adj, &x0_x, &x0_y);
-
-        // Optimality guard (tests only): the closure adjustment is the minimizer of
-        // the weighted misclosure, i.e. the solution of the SPD normal equations
-        // `A·x = atb`. Verify that directly on the *real* assembled system by
-        // checking the residual `‖A·x - atb‖∞ ≈ 0` for both axes. This runs for
-        // every test that exercises the solve (analytic, realistic, fuzz), so it
-        // proves the result is the true optimum - not merely that "the loop closed".
+        let solution = problem
+            .solve(&SolveControl::default())
+            .map_err(|e| e.to_string())?;
+        // Retain the original-system optimality assertion in every application
+        // test that exercises the real adapter, not just the library's unit tests.
         #[cfg(test)]
-        {
-            let residual_inf = |diag: &[f64], atb: &[f64], sol: &[f64], axis: usize| -> f64 {
-                let mut max = 0.0_f64;
-                for i in 0..n {
-                    let mut ax = diag[i] * sol[i];
-                    for &(j, wx, wy) in &adj[i] {
-                        ax += if axis == 0 { wx } else { wy } * sol[j];
-                    }
-                    max = max.max((ax - atb[i]).abs());
-                }
-                max
-            };
-            let rx = residual_inf(&diag_x, &atb_x, &sol_x, 0);
-            let ry = residual_inf(&diag_y, &atb_y, &sol_y, 1);
-            assert!(
-                rx < 1e-6 && ry < 1e-6,
-                "closure solve is not at the LSQ optimum: ‖A·x-b‖∞ = ({rx:.3e}, {ry:.3e})"
-            );
-        }
+        assert!(
+            solution.axes.iter().all(|a| a.residual_infinity < 1e-6),
+            "closure solve is not at the LSQ optimum: {:?}",
+            solution.axes
+        );
 
         // Collect original Z coordinates for each group root (depths are not adjusted)
         let mut group_raw_z: HashMap<StationRef, f64> = HashMap::new();
@@ -660,9 +221,8 @@ impl Project {
                 group_coords.insert(*root, Coordinates::new(coords.x, coords.y, raw_z));
                 continue;
             }
-            if let Some(idx) = unknown_index.get(root) {
-                group_coords.insert(*root, Coordinates::new(sol_x[*idx], sol_y[*idx], raw_z));
-            }
+            let [x, y] = solution.coordinates[group_index[root]];
+            group_coords.insert(*root, Coordinates::new(x, y, raw_z));
         }
 
         let station_offsets = self.resolved_station_offsets();

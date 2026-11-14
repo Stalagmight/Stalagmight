@@ -215,20 +215,42 @@ and otherwise on a deterministic default anchor (the lexicographically smallest
 `(section_id, station_index)` station in the component, via `default_anchor_for_component`).
 Eligible closures are `Batch` + `LeastSquaresWeighted` (`Move` closures are already coincident).
 
-Algorithm overview (unchanged math; the only change is *where* it writes - a clone, not the
-live project):
-- Build constraint groups where stations connected via merges **or closures** are in the same group.
-- If a group contains a zero datum, it is fixed; multiple zero datums in a single group is an error.
-- If no zero datum exists in the component, the anchor station's group is fixed.
-- For each shot, build weighted constraints in X/Y using section quality and base sigmas from config:
-  - `base_sigma_length_m`
-  - `base_sigma_azimuth_deg`
-  - `base_sigma_depth_m` (depth is not adjusted - the solve is horizontal-only)
-- Solve independent least-squares systems for X/Y using a sparse Jacobi-preconditioned
-  Conjugate Gradient solver (see [performance.md](performance.md) for algorithm details).
-- Update the clone's shot vectors from solved group coordinates and apply section-level
-  translations to keep merged stations aligned, then compute coordinates from the clone.
-- Zero datum positions are verified to remain fixed; any movement is an error.
+The numerical implementation lives in the Rust `cave-closure` dependency's
+`horizontal` module. `Project::adjust_least_squares` is the application adapter:
+
+- Contract merges and eligible closures into station groups, retaining the original
+  union order, sorted root numbering, and first-member measured warm starts.
+- Fix each zero-datum group; multiple distinct datums in one group remain an error.
+  Without a datum, fix the selected default anchor group.
+- Supply ordered true-north XY displacements, slope lengths, bearings, quality,
+  and the length/azimuth sigmas to `HorizontalProblem`. The shared shot geometry
+  helpers still average forward bearings, apply declination once, and clamp
+  impossible horizontal projections to zero. Depth sigma remains unused.
+- The crate propagates independent X/Y uncertainties, assembles sparse normal
+  equations, eliminates degree-at-most-two nodes, solves the remaining core with
+  measured-position Jacobi-PCG, and back-substitutes. It retains the historical
+  floating-axis translation and stopping rules, without centroid gauges.
+- Reconstruct the throwaway clone's shots and section offsets from the result,
+  skipping spurs and same-group shots. Convert true bearings back to instrument
+  readings once, and preserve recorded depths and pitches. Derived station depths
+  still follow the existing co-location averaging rules.
+- Verify datum positions, recompute closure metrics, and finish through the normal
+  station-coordinate pipeline. A failed component rolls back to its measured
+  snapshot; successful disconnected components remain adjusted.
+
+The crate's general measurement API also has length/azimuth weighting, but its
+centroid gauges and numerical convergence rules differ. The horizontal Rust API
+exists to preserve this application's behavior without changing other consumers.
+Finite historical PCG exits remain usable; diagnostics report termination and the
+original-system residual. Cancellation, invalid requests and nonfinite results
+are errors. The application retains its existing failure rollback and cache policy.
+
+No closure strategy, IPC type, configuration field, or saved-project format changes
+with this dependency. Disabled create-time distribution algorithms remain disabled.
+Explicit synthetic input/output tests and independent mathematical references
+verify the adapter and numerical kernel. See
+[testing-recipes.md](testing-recipes.md#closure-solver-functional-tests) for the
+functional test contract and [performance.md](performance.md) for timing checks.
 
 ## Co-location and Move Tools
 

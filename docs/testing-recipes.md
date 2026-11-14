@@ -1693,3 +1693,27 @@ data for a specific edge case, and record what it is for in the fixtures README.
 | Every test binary aborts at startup on Windows (`0xC0000139`) | Use `./scripts/test.ps1` |
 | A permission-based save-failure test passes vacuously in CI | CI runs as root. Use a root-safe inducer (above) |
 | Flaky or order-dependent | Shared mutable state between tests |
+
+## Closure solver functional tests
+
+The `closure_adjustment` tests construct explicit synthetic surveys and assert
+hand-computed output coordinates: equal and unequal quality paths, a multishot
+loop with a spur, and conflicting datum rejection. They verify measured data stays
+unchanged. No old solver or generated survey fixture is needed. Existing GAMA,
+analytical, residual, datum, and depth tests retain their stricter tolerances.
+
+```bash
+TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-models --lib closure_adjustment
+TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-models --lib --release profile_closure_solve_large -- --ignored --nocapture
+```
+
+The second command measures release-profile scaling, including reconstruction.
+The independent numerical kernel and public input/output tests live in cave-closure;
+its default and all-feature Rust suites must pass as well as the full Stalagmight
+workspace suite. Browser IPC mocks establish UI behavior, not numerical correctness.
+The migration qualification allowed at most 0.30 metres of coordinate difference
+and observed zero difference on its synthetic roster before removing the old solver.
+
+The temporary local dependency requires the sibling crate checkout described in
+[architecture.md](architecture.md#closure-numerical-dependency). Qualification of
+standalone CI and registry packaging follows the later published-crate transition.
