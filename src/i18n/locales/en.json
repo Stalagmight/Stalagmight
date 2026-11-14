@@ -1648,7 +1648,7 @@
     },
     "editStation": {
       "accuracyLabel": "Accuracy (m)",
-      "accuracyHint": "0 makes the computed survey go exactly through this GPS. A larger number lets the survey pull it by up to about that much (a smartwatch is roughly 5 m).",
+      "accuracyHint": "0 puts the computed survey exactly through this GPS. A larger number (a smartwatch is roughly 5 m) trusts the GPS less, and the survey wins most of the gap.",
       "accuracyInvalid": "Enter an accuracy of 0 m or more.",
       "roleLabel": "Role:",
       "rolePlacement": "places this part of the survey on its GPS",

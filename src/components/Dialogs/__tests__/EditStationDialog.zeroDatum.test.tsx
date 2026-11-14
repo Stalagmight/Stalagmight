@@ -146,7 +146,7 @@ describe('EditStationDialog zero datum (#741)', () => {
   it('defaults the accuracy to a 0 m hard pin', async () => {
     render(<EditStationDialog />);
     expect(screen.getByTestId('station-datum-accuracy-input')).toHaveValue(0);
-    expect(screen.getByText(/0 makes the computed survey go exactly through this GPS/)).toBeInTheDocument();
+    expect(screen.getByText(/0 puts the computed survey exactly through this GPS\. A larger number .* trusts the GPS less, and the survey wins most of the gap\./)).toBeInTheDocument();
     typeGps('20.5, -87.4');
     fireEvent.click(screen.getByTestId('edit-station-save'));
     await waitFor(() => expect(setZeroDatum).toHaveBeenCalledWith(REF, expect.anything(), { accuracyM: 0 }));
