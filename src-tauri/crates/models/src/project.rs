@@ -68,6 +68,13 @@ mod closure_shots_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    clippy::print_stderr,
+    reason = "timing test: it prints what it measures, and panics on a broken setup"
+)]
+mod combine_bench;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
     clippy::panic,
     clippy::print_stderr,
     reason = "test module: panics on a failed assumption are the point, and the fuzz sweeps \
