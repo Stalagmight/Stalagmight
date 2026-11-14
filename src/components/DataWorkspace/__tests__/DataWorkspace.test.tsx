@@ -89,6 +89,9 @@ const rowIds = () =>
     .map((el) => el.dataset.testid!)
     .filter((id) => /^data-row-(st|sh|sec)-[\d-]+$/.test(id));
 
+/** The gutter name element of a row ("st-1-1", "sh-1-2"). */
+const rowNameEl = (part: string) => screen.getByTestId(['data', 'row', 'name', part].join('-'));
+
 describe('DataWorkspace rows and gutter', () => {
   it('interleaves every section: header, station 0, shot 1, station 1, ...', () => {
     render(<DataWorkspace />);
@@ -108,11 +111,14 @@ describe('DataWorkspace rows and gutter', () => {
     expect(rowIds()).toHaveLength(24);
   });
 
-  it('names stations "Label:idx" and shots "Label:pos" with from -> to', () => {
+  it('names rows by their canonical IDs only: stations with their name, shots with from -> to', () => {
     render(<DataWorkspace />);
-    expect(screen.getByTestId('data-row-name-st-1-1')).toHaveTextContent('Main:1A1');
-    expect(screen.getByTestId('data-row-name-sh-1-2')).toHaveTextContent('Main:21→2');
-    expect(screen.getByTestId('data-row-name-st-3-3')).toHaveTextContent('Downstre…sump 1A:3');
+    expect(rowNameEl('st-1-1')).toHaveTextContent('1:1A1');
+    expect(rowNameEl('sh-1-2')).toHaveTextContent('1:21→2');
+    expect(rowNameEl('st-3-3')).toHaveTextContent('3:3');
+    // The section is named by its header, not repeated on every row.
+    expect(rowNameEl('st-3-3')).not.toHaveTextContent('Downstre');
+    expect(rowNameEl('sh-1-2')).not.toHaveTextContent('Main');
   });
 
   it('draws the rail: dot, zero datum, junction ring, closure, dashed Jump line, branch elbow', () => {
@@ -158,24 +164,25 @@ describe('Find in row names', () => {
   const find = (query: string) =>
     useDataWorkspaceStore.setState({ search: { ...useDataWorkspaceStore.getState().search, open: true, query } });
 
-  it('marks a match inside the shown name like a cell match', () => {
-    find('sump');
+  it('marks a match inside the shown ID like a cell match', () => {
+    find('3:1');
     render(<DataWorkspace />);
-    // "Downstre…sump 1A:1": the label holds the match.
     const marks = nameOf('st-3-1').querySelectorAll('mark.sg-mark');
-    expect([...marks].map((m) => m.textContent)).toEqual(['sump']);
+    expect([...marks].map((m) => m.textContent)).toEqual(['3:1']);
     expect(nameOf('st-1-1').querySelector('mark, .dw-name-match')).toBeNull();
   });
 
-  it('highlights the whole shortened name when the match is in the full section name', () => {
+  it('highlights the whole ID when the match is in the full section name', () => {
     find('downstream');
     render(<DataWorkspace />);
     const hit = nameOf('sh-3-2').querySelector('.dw-name-match');
     expect(hit).not.toBeNull();
-    expect(hit).toHaveTextContent('Downstre…sump 1A:2');
+    expect(hit).toHaveTextContent('3:2');
     // The first match is the current one: the strong look.
     expect(nameOf('st-3-0').querySelector('.dw-name-match-current')).not.toBeNull();
     expect(nameOf('sh-3-2').querySelector('.dw-name-match-current')).toBeNull();
+    // Rows of other sections do not match.
+    expect(nameOf('st-1-1').querySelector('mark, .dw-name-match')).toBeNull();
   });
 });
 
@@ -321,7 +328,9 @@ describe('DataWorkspace hover card', () => {
       vi.advanceTimersByTime(400);
     });
     const card = screen.getByTestId('data-hover-card-st-1-2');
+    // The title names the section; the ID row adds the chips' "Label:index".
     expect(card).toHaveTextContent('Main');
+    expect(card).toHaveTextContent('1:2 (Main:2)');
     expect(within(screen.getByTestId('data-hover-merges-st-1-2')).getByText('Branch B:0')).toBeInTheDocument();
     // The partner row is highlighted while the junction is hovered.
     expect(screen.getByTestId('data-grid-row-11')).toHaveClass('dw-row-partner');
@@ -826,7 +835,8 @@ describe('Back to Data, map pane header and Open in Data', () => {
     useUIStore.setState({ appMode: 'survey' });
     useDataWorkspaceStore.setState({ returnToData: { rowKey: 'sh:1:102' } });
     render(<BackToDataChip />);
-    expect(screen.getByTestId('back-to-data')).toHaveTextContent('Back to Data· Main:2');
+    // The row ID the gutter shows, with the section for context.
+    expect(screen.getByTestId('back-to-data')).toHaveTextContent('Back to Data· 1:2 (Main)');
     fireEvent.click(screen.getByTestId('back-to-data'));
     expect(useUIStore.getState().appMode).toBe('data');
     expect(useDataWorkspaceStore.getState().focusRequest).toMatchObject({ rowKey: 'sh:1:102' });
@@ -848,7 +858,7 @@ describe('Back to Data, map pane header and Open in Data', () => {
     expect(follow).toHaveAttribute('aria-pressed', 'true');
     fireEvent.click(follow);
     expect(useDataWorkspaceStore.getState().mapFollow).toBe(false);
-    expect(screen.getByTestId('data-map-pane-open-in-survey')).toHaveTextContent('Branch B:1');
+    expect(screen.getByTestId('data-map-pane-open-in-survey')).toHaveTextContent('2:1 (Branch B)');
     fireEvent.click(screen.getByTestId('data-map-pane-open-in-survey'));
     expect(useUIStore.getState().appMode).toBe('survey');
     expect(useDataWorkspaceStore.getState().returnToData).toEqual({ rowKey: 'st:2:1' });

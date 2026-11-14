@@ -255,8 +255,8 @@ export interface SearchState {
 }
 
 /**
- * The find's row-name pseudo-column: the name the gutter shows
- * ("<label>:<id>") followed by the section's full name, so a search for a
+ * The find's row-name pseudo-column: the row ID the gutter shows
+ * ("0:5", `rowIdLabel`) followed by the section's full name, so a search for a
  * section's name finds its rows although no column holds it. Searched under the
  * 'visible' and 'all' column scopes (the gutter is always shown), not under
  * 'custom'; read-only (`lockReason: 'computed'`); never a grid column - a match

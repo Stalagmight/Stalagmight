@@ -1,7 +1,7 @@
 /**
  * The row-name gutter of the Data workspace grid: a 3px tint stripe, the link
- * rail, the row name (stations bold "Label:idx"; shots indented "Label:pos"
- * with a muted "i→i+1"), a revealed-row marker, and the "Show on map" button
+ * rail, the row ID (`rowIdLabel`: stations bold "0:5" with their name muted;
+ * shots indented "0:6" with a muted "5→6"), a revealed-row marker, and the "Show on map" button
  * (on row hover / the active row). Hovering the name opens the hover card
  * after a short delay, beside the gutter so it never covers the rows being
  * read; it closes on scroll, on any mouse press outside it and when a context
@@ -17,6 +17,7 @@ import type { DataModelCtx, DataRow } from './types';
 import type { RailCell } from './model/links';
 import { linkedRowKeys, stationLinks } from './model/links';
 import { sectionLabelOf } from './model/ctx';
+import { rowIdLabel } from './model/rowIds';
 import { stationDisplayName } from './model/columns';
 import { DataRail, RAIL_WIDTH } from './DataRail';
 import { DataHoverCard } from './DataHoverCard';
@@ -36,15 +37,15 @@ interface Props {
   revealed: RevealReason;
   nav: DataNav;
   /** Find matches on the row name (ROW_NAME_KEY): offsets into
-   *  `rowNameSearchText`, i.e. the shown name, a line break, the section's
+   *  `rowNameSearchText`, i.e. the shown ID, a line break, the section's
    *  full name. */
   nameMarks?: CellMarks | undefined;
 }
 
 /**
- * The gutter name with its find highlight: a match inside the shown name is
+ * The gutter ID with its find highlight: a match inside the shown ID is
  * marked like a cell's (`sg-mark`); a match in the section's full name (not
- * shown, the label is shortened) highlights the whole name (`dw-name-match`).
+ * shown in the gutter) highlights the whole ID (`dw-name-match`).
  */
 function NameText({ text, marks }: { text: string; marks: CellMarks | undefined }) {
   if (!marks) return <>{text}</>;
@@ -124,14 +125,13 @@ function DataRowLabelImpl({ row, ctx, rail, tint, revealed, nav, nameMarks }: Pr
   const { t } = useTranslation();
   const gutterRef = useRef<HTMLDivElement>(null);
   const part = dataRowPart(row);
-  const label = sectionLabelOf(ctx, row.sectionId);
   let name: ReactNode = null;
   if (row.kind === 'station') {
     const stationName = stationDisplayName(ctx, row.g);
     name = (
       <span className="dw-row-name flex min-w-0 items-baseline gap-1.5 truncate" data-testid={`data-row-name-${part}`}>
         <span className="truncate">
-          <NameText text={`${label}:${row.stationIndex}`} marks={nameMarks} />
+          <NameText text={rowIdLabel(row)} marks={nameMarks} />
         </span>
         {stationName && <span className="truncate text-[11px] font-normal text-text-secondary">{stationName}</span>}
       </span>
@@ -140,7 +140,7 @@ function DataRowLabelImpl({ row, ctx, rail, tint, revealed, nav, nameMarks }: Pr
     name = (
       <span className="dw-row-name flex min-w-0 items-baseline gap-1.5 truncate pl-3" data-testid={`data-row-name-${part}`}>
         <span className="truncate">
-          <NameText text={`${label}:${row.position}`} marks={nameMarks} />
+          <NameText text={rowIdLabel(row)} marks={nameMarks} />
         </span>
         <span className="shrink-0 text-[11px] opacity-70">{`${row.shotIndex}→${row.shotIndex + 1}`}</span>
       </span>
@@ -156,7 +156,7 @@ function DataRowLabelImpl({ row, ctx, rail, tint, revealed, nav, nameMarks }: Pr
           style={{ backgroundColor: ctx.sectionsById.get(row.sectionId)?.color }}
           aria-hidden="true"
         />
-        <span className="truncate">{label}</span>
+        <span className="truncate">{sectionLabelOf(ctx, row.sectionId)}</span>
       </span>
     );
   }

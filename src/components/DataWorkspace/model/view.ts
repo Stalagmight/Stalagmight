@@ -21,7 +21,7 @@
  *   offset. Hidden columns holding a match under the 'all' / 'custom' column
  *   scopes are listed in `revealedColumns` and sit at their place in the
  *   column order.
- * - The row name (`ROW_NAME_KEY`: the gutter's "<label>:<id>" + the section's
+ * - The row name (`ROW_NAME_KEY`: the gutter's row ID + the section's
  *   full name) is searched like an always-shown first column under the
  *   'visible' and 'all' column scopes (not 'custom', which lists real
  *   columns): at most one read-only match per row, before its cell matches.

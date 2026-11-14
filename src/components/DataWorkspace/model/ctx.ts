@@ -14,6 +14,7 @@ import type { SurveyData } from '../../../types/survey-data';
 import { lazySectionHasNoCredits } from '../../../utils/projectPeople';
 import { formatFixed } from '../../../i18n/format';
 import type { DataModelCtx, DataRow, ShotRow } from '../types';
+import { rowIdLabel } from './rowIds';
 
 export function decimalsOf(ctx: DataModelCtx): DecimalPrecision {
   if (ctx.decimals) return ctx.decimals;
@@ -48,10 +49,11 @@ export function shotName(ctx: DataModelCtx, sectionId: number, position: number)
   return `${sectionLabelOf(ctx, sectionId)}:${position}`;
 }
 
-/** The row name the gutter shows ("Main:3"); a header row gets its full name. */
+/** What "Copy row name" copies: a station / shot row's canonical ID ("0:5",
+ *  whatever `ROW_ID_MODE` the gutter shows - a bare index would lose the
+ *  section once pasted elsewhere); a header row its section's full name. */
 export function rowName(ctx: DataModelCtx, row: DataRow): string {
-  if (row.kind === 'station') return stationName(ctx, row.sectionId, row.stationIndex);
-  if (row.kind === 'shot') return shotName(ctx, row.sectionId, row.position);
+  if (row.kind !== 'section') return rowIdLabel(row, 'canonical');
   return ctx.sectionNames.get(row.sectionId) ?? sectionLabelOf(ctx, row.sectionId);
 }
 

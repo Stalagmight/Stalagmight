@@ -136,7 +136,8 @@ describe('planReplace', () => {
 
   it('counts a row-name match as read-only and never edits it', () => {
     const { ctx, model, matchesFor } = setup();
-    // "Main" is only in the row names (Main:0 ...): one read-only match per row.
+    // "Main" is only in the section's full name, which the row name search
+    // covers (the gutter shows "1:0" ...): one read-only match per row.
     // (The Section column, shown in this setup, also holds "Main": leave it out.)
     const matches = matchesFor('main').filter((m) => m.colKey !== 'section');
     expect(matches.length).toBe(7);
