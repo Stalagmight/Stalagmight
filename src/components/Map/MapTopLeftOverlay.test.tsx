@@ -125,6 +125,31 @@ describe('MapTopLeftOverlay', () => {
     expect(screen.getByTestId('speleodb-readonly-reason')).toHaveClass('flex-[1_1_5rem]', 'max-w-max');
   });
 
+  it('stacks every notice in one column beside the fit button, in order (#737)', () => {
+    render(
+      <MapTopLeftOverlay
+        {...baseProps}
+        showSpeleoReadOnly
+        showClosureReadOnly
+        adjustmentReport={{
+          skipped_closures: [],
+          failures: [{ anchor: { section_id: 0, station_index: 0 }, section_ids: [0], reason: 'x' }],
+        }}
+      />
+    );
+    const column = screen.getByTestId('map-top-left-notices');
+    expect([...column.children].map((c) => c.getAttribute('data-testid'))).toEqual([
+      'speleodb-readonly-banner',
+      'geometry-readonly-banner',
+      'adjustment-notice',
+    ]);
+    // Every notice still takes clicks; the row and the column let them through.
+    for (const id of ['speleodb-readonly-banner', 'geometry-readonly-banner', 'adjustment-notice']) {
+      expect(screen.getByTestId(id)).toHaveClass('pointer-events-auto');
+    }
+    expect(screen.getByTestId('map-top-left-overlay')).toHaveClass('pointer-events-none');
+  });
+
   describe('adjustment notice (#737)', () => {
     const skipped = (closure_id: number) => ({
       closure_id,
@@ -189,7 +214,7 @@ describe('MapTopLeftOverlay', () => {
       expect(screen.getByTestId('adjustment-notice-skipped')).toBeInTheDocument();
     });
 
-    it('opens the Warnings tab, beside the read-only notice rather than over it', async () => {
+    it('opens the Warnings tab, stacked under the read-only notice rather than over it', async () => {
       const openWarningsTab = vi.fn();
       useUIStore.setState({ openWarningsTab } as never);
       render(
@@ -199,9 +224,17 @@ describe('MapTopLeftOverlay', () => {
           adjustmentReport={report({ skipped_closures: [skipped(4)] })}
         />
       );
+      // Fit button | one column of notices, in order: SpeleoDB, closure, adjustment.
       const row = screen.getByTestId('map-top-left-overlay');
-      expect(row).toContainElement(screen.getByTestId('geometry-readonly-banner'));
-      expect(row).toContainElement(screen.getByTestId('adjustment-notice'));
+      const column = screen.getByTestId('map-top-left-notices');
+      expect(column.parentElement).toBe(row);
+      expect(column).toHaveClass('flex', 'min-w-0', 'flex-col', 'items-start', 'gap-2');
+      expect(column).not.toHaveClass('pointer-events-auto');
+      expect([...column.children].map((c) => c.getAttribute('data-testid'))).toEqual([
+        'geometry-readonly-banner',
+        'adjustment-notice',
+      ]);
+      expect(screen.getByTestId('fit-to-view-button').nextElementSibling).toBe(column);
       expect(screen.getByTestId('adjustment-notice')).toHaveClass('pointer-events-auto', 'min-w-0');
       await userEvent.click(screen.getByTestId('adjustment-notice-show-warnings'));
       expect(openWarningsTab).toHaveBeenCalledTimes(1);

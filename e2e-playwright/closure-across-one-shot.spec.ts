@@ -127,10 +127,13 @@ test.describe('Loop closures across one shot (#737)', () => {
     await expect(notice.getByTestId('adjustment-notice-failed')).toHaveText(
       'Part of the survey could not be adjusted and is shown as measured.'
     );
-    // Beside the read-only pill, not stacked on it.
-    const pill = await page.getByTestId('geometry-readonly-banner').boundingBox();
-    const box = await notice.boundingBox();
-    expect(pill && box && (box.x >= pill.x + pill.width - 1 || box.y >= pill.y + pill.height - 1)).toBe(true);
+    // Under the read-only pill in the notice column, left-aligned with it, not
+    // squeezing it: the pill keeps its words on one line at this width.
+    const pill = (await page.getByTestId('geometry-readonly-banner').boundingBox())!;
+    const box = (await notice.boundingBox())!;
+    expect(box.y).toBeGreaterThanOrEqual(pill.y + pill.height - 1);
+    expect(Math.abs(box.x - pill.x)).toBeLessThanOrEqual(1);
+    expect(pill.height).toBeLessThan(40);
 
     await notice.getByTestId('adjustment-notice-show-warnings').click();
     await expect

@@ -159,6 +159,11 @@ export function MapTopLeftOverlay({
         {focused && <span>{t('sections.focus.exitLabel')}</span>}
       </button>
 
+      {/* The notices stack in one column beside the fit button, in this order,
+          so each gets the row's full width: side by side, a second notice
+          squeezed the read-only pill to three lines at 1280 px (#737). The
+          column, like the row, lets clicks through; only the notices take them. */}
+      <div className="flex min-w-0 flex-col items-start gap-2" data-testid="map-top-left-notices">
       {showSpeleoReadOnly && (
         <ReadOnlyNotice testId="speleodb-readonly-banner" glyph={<LockIcon size={13} />}>
           <SpeleoReadOnlyLabel />
@@ -209,6 +214,7 @@ export function MapTopLeftOverlay({
       )}
 
       {adjustmentReport && <AdjustmentNotice report={adjustmentReport} />}
+      </div>
     </div>
   );
 }
