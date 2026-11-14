@@ -492,6 +492,23 @@ impl ZeroDatum {
 /// fix followed by a direct shot to the line (#741).
 pub const DEFAULT_GPS_ACCURACY_M: f64 = 5.0;
 
+/// Largest horizontal accuracy a zero datum may claim, in metres. A fix worse
+/// than this carries no position worth pulling a survey toward; refusing it
+/// keeps a typo (an extra digit) from entering the solve as a weight.
+pub const MAX_GPS_ACCURACY_M: f64 = 1000.0;
+
+/// Validate a zero datum's accuracy: absent (the default), or a finite number
+/// of metres in `0 ..= MAX_GPS_ACCURACY_M`. `0` is a hard pin.
+pub fn validate_gps_accuracy(accuracy_m: Option<f64>) -> Result<(), String> {
+    match accuracy_m {
+        None => Ok(()),
+        Some(a) if a.is_finite() && (0.0..=MAX_GPS_ACCURACY_M).contains(&a) => Ok(()),
+        Some(a) => Err(format!(
+            "GPS accuracy must be between 0 and {MAX_GPS_ACCURACY_M} m (got {a})"
+        )),
+    }
+}
+
 /// What a zero datum does, derived per merge-connected component (#741).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export_to = "bindings/DatumRole.ts")]

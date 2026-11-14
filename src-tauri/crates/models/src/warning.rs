@@ -17,15 +17,18 @@ pub enum WarningSeverity {
     Error,
 }
 
-/// Warning code for a merge-connected group anchored by two or more zero datums.
-/// This is a structural over-constraint, not a tolerance the surveyor can wave
-/// off: it is an **error**, so (like every error) it is not ignorable - the only
-/// resolutions are keeping one datum and removing the others, or going to the
-/// station to fix it. (See issue #57.)
-pub const MULTIPLE_DATUMS_PER_MERGE_COMPONENT: &str = "multiple_datums_per_merge_component";
+/// Warning code for a GPS-fix zero datum whose GPS position is further from
+/// its surveyed position than 15 m plus 2% of the survey distance to the
+/// nearest other datum (#741 decision 4). A sanity check, not a blocker: the
+/// survey or the GPS may be off, and the surveyor may know the gap is real, so
+/// it is an advisory **warning** and ignorable. One row per such fix.
+///
+/// (It replaced `multiple_datums_per_merge_component`: several datums in one
+/// merge-connected group are valid since #741.)
+pub const DATUM_GPS_GAP: &str = "datum_gps_gap";
 
 /// Canonical severity for a validation warning code - the SINGLE source of truth
-/// shared by `Validator::validate_shot`, the project-level over-anchoring check,
+/// shared by `Validator::validate_shot`, the project-level datum gap check,
 /// the issue-severity map coloring, and the resolve/ignore gate. Errors are
 /// blocking data problems that must be fixed; warnings are tolerances the
 /// surveyor may wave off (issue #57).
@@ -37,12 +40,11 @@ pub fn severity_for_code(code: &str) -> WarningSeverity {
         | "INVALID_PITCH"
         | "NEGATIVE_LRUD"
         | "NON_FINITE_VALUE"
-        | "LENGTH_BELOW_DEPTH_CHANGE"
-        | MULTIPLE_DATUMS_PER_MERGE_COMPONENT => WarningSeverity::Error,
+        | "LENGTH_BELOW_DEPTH_CHANGE" => WarningSeverity::Error,
         // SHORT_SHOT, LONG_SHOT, LARGE_DEPTH_CHANGE, AZIMUTH_DEVIATION,
-        // PITCH_DEVIATION and INCLINATION_DEPTH_MISMATCH are advisory; an
-        // unknown code defaults to advisory so a future warning is ignorable
-        // until classified.
+        // PITCH_DEVIATION, INCLINATION_DEPTH_MISMATCH and DATUM_GPS_GAP are
+        // advisory; an unknown code defaults to advisory so a future warning is
+        // ignorable until classified.
         _ => WarningSeverity::Warning,
     }
 }
@@ -76,17 +78,15 @@ pub struct ProjectWarning {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub shot_uuid: Option<String>,
-    /// For `multiple_datums_per_merge_component` only: the `station_index`
-    /// (within `section_id`) of the representative zero datum this row is
-    /// attached to. Lets the Resolve view offer "Go to station" without
-    /// re-deriving the ambiguous station↔shot mapping.
+    /// For `datum_gps_gap` only: the `station_index` (within `section_id`) of
+    /// the GPS-fix datum this row is about. Lets the Resolve view offer "Go to
+    /// station" without re-deriving the ambiguous station-to-shot mapping.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub datum_station_index: Option<u32>,
-    /// For `multiple_datums_per_merge_component` only: every over-anchoring zero
-    /// datum in the merge component (one warning is emitted per component). Lets
-    /// the Resolve view offer "Keep this one, remove the others" for each datum.
-    /// `None` for all other warning codes.
+    /// A list of zero-datum stations for a warning about several of them. No
+    /// current code sets it (`datum_gps_gap` is per fix and leaves it `None`);
+    /// kept so the wire shape does not change.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub datum_refs: Option<Vec<StationRef>>,

@@ -161,12 +161,13 @@ impl Project {
         merges.chain(closures).collect()
     }
 
-    /// Does a zero datum sit on one of `section`'s own stations?
+    /// Does a PLACEMENT zero datum sit on one of `section`'s own stations? A
+    /// GPS fix (#741) holds nothing in raw geometry, so a section carrying only
+    /// fixes may move like any other.
     pub(crate) fn carries_zero_datum(&self, section: SectionId) -> bool {
-        self.zero_datums.iter().any(|datum| {
-            self.resolve_key(&datum.station_ref)
-                .is_some_and(|at| at.section_id == section)
-        })
+        self.placement_datum_refs()
+            .iter()
+            .any(|at| at.section_id == section)
     }
 
     /// Plan the shift and the torn ties for joining `join`, whose join stations'
@@ -206,14 +207,10 @@ impl Project {
                 .map(|(_, id)| *id)
                 .collect()
         };
-        // The sections that carry a zero datum on a station of their own, read
-        // once: every anchored-side question below is a lookup in it.
-        let datum_sections: HashSet<SectionId> = self
-            .zero_datums
-            .iter()
-            .filter_map(|datum| self.resolve_key(&datum.station_ref))
-            .map(|at| at.section_id)
-            .collect();
+        // The sections that carry a placement zero datum on a station of their
+        // own, read once: every anchored-side question below is a lookup in it.
+        // GPS fixes do not hold a side (#741).
+        let datum_sections: HashSet<SectionId> = self.placement_datum_sections();
         let anchored =
             |sections: &HashSet<SectionId>| sections.iter().any(|s| datum_sections.contains(s));
 
@@ -330,8 +327,8 @@ impl Project {
             return Ok((m, f, torn, datum_ties));
         }
         Err(
-            "Both sections carry a zero datum on one of their stations: a section can hold \
-             only one"
+            "Both sections are placed by a zero datum on one of their stations: merge them \
+             first, so the later datum becomes a GPS fix"
                 .to_string(),
         )
     }

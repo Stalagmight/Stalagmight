@@ -84,6 +84,13 @@ mod component_gauge_tests;
     clippy::float_cmp,
     reason = "test module: panics on a failed assumption are the point"
 )]
+mod multi_datum_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::float_cmp,
+    reason = "test module: panics on a failed assumption are the point"
+)]
 mod split_section_tests;
 
 pub use classify::ClassifyScope;

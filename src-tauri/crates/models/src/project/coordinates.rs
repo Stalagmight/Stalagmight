@@ -481,7 +481,7 @@ impl Project {
     /// deterministic default anchor (see [`Self::default_anchor_for_component`]).
     /// Computed from the *measured* topology so it can run once up front, before
     /// any adjustment mutates the working copy.
-    fn plan_adjustment_anchors(&self) -> Vec<StationRef> {
+    pub(crate) fn plan_adjustment_anchors(&self) -> Vec<StationRef> {
         let mut anchors = Vec::new();
         let mut visited: HashSet<SectionId> = HashSet::new();
         for section in &self.sections {
@@ -493,11 +493,13 @@ impl Project {
                 visited.insert(*sid);
             }
 
+            // A GPS fix is an observation the solve fits, so a component holding
+            // one is adjusted even with no eligible closure (#741).
             let has_eligible = self.loop_closures.iter().any(|lc| {
                 Self::closure_is_eligible(lc.strategy)
                     && component.contains(&lc.station_a.section_id)
                     && component.contains(&lc.station_b.section_id)
-            });
+            }) || self.component_has_gps_fix(&component);
             if !has_eligible {
                 continue;
             }
@@ -533,10 +535,12 @@ impl Project {
         config: &ClosureAdjustmentConfig,
     ) -> Vec<Station> {
         // Fast path: nothing to adjust → adjusted == measured (skip the clone).
+        // A GPS fix (#741) is something to adjust too.
         if !self
             .loop_closures
             .iter()
             .any(|lc| Self::closure_is_eligible(lc.strategy))
+            && self.gps_fix_datums().is_empty()
         {
             return self.compute_station_coordinates();
         }
