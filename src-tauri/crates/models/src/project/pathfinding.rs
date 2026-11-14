@@ -825,8 +825,8 @@ mod entrance_tests {
 
     fn shot(length: f64, azimuth_in: f64) -> ShotData {
         ShotData {
-            length,
             azimuth_in,
+            length,
             ..Default::default()
         }
     }
