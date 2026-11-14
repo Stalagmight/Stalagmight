@@ -11,11 +11,21 @@
 //! A closure that does that would squeeze that shot to zero length: its two
 //! stations sit at the two ends of one shot, whatever other routes also join
 //! them (a closure 0:0-0:1 is refused even when a side passage merged on at
-//! both stations is a second route). This module is the ONE place that decides
-//! which closures do, so creation (`create_loop_closure`, the batch importer
-//! path, the connectivity check behind the closure dialog - each refuses ONLY
-//! such a closure), the solve
-//! (`adjust_loop_closures`), the warnings and the delete commands all agree.
+//! both stations is a second route). This module is the ONE place that
+//! decides which closures do, so every path agrees:
+//!
+//! - the paths that CREATE a closure the user asked for refuse such a pair:
+//!   `create_loop_closure`, the batch importer path
+//!   (`create_loop_closures_batch`), and the connectivity check behind the
+//!   closure dialog;
+//! - the paths that carry closures in or make them from something else do NOT
+//!   ask, and need not: a file opened from disk, Add .stalx and Merge Projects
+//!   (`project_append`), Combine Sections (`combine_plan`, which turns a merge
+//!   that would tie the combined section to itself into a closure) and the
+//!   integrity repair's merge demotion (`integrity`). Whatever they bring, the
+//!   solve skips (`adjust_loop_closures`) and the warnings list
+//!   (`CLOSURE_ACROSS_ONE_SHOT`), from this same rule;
+//! - the delete commands remove what a gap-close newly leaves across one shot.
 //!
 //! The rule, applied in `loop_closures` vector order on top of every merge:
 //! a closure is "across one shot" when uniting its two ends' knots would put

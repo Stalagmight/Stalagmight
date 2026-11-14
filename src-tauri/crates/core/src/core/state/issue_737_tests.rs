@@ -368,6 +368,83 @@ fn the_report_is_empty_without_a_project() {
     assert!(state.get_adjustment_report().is_none());
 }
 
+// ---- closures that arrive without create_loop_closure ----------------------------
+
+/// A saved `.stalx` holding the issue's loop plus a closure across the one shot
+/// A:1-A:2, written as a file from before the refusal (or another tool) would
+/// be. Synthetic, in a temp dir; never a fixture.
+fn file_with_closure_across_one_shot(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+    let (mut p, a, _) = issue_loop();
+    p.name = name.to_string();
+    plant(&mut p, st(a, 1), st(a, 2));
+    let path = dir.join(format!("{name}.stalx"));
+    let mut db = crate::persistence::Database::open(&path).unwrap();
+    db.save_project(&p).unwrap();
+    path
+}
+
+/// Assert `p` carries exactly one closure across one shot, that it is warned
+/// about, and that the solve skips it rather than failing.
+fn assert_skipped_and_warned(p: Project) {
+    let skipped = p.closures_across_one_shot();
+    assert_eq!(skipped.len(), 1, "{skipped:?}");
+    let state = state_with(p);
+    let warnings = state.compute_project_warnings(&project(&state), None);
+    let ours: Vec<_> = warnings
+        .iter()
+        .filter(|w| w.code == CLOSURE_ACROSS_ONE_SHOT)
+        .collect();
+    assert_eq!(ours.len(), 1, "{warnings:?}");
+    assert_eq!(ours[0].closure_id, Some(skipped[0].closure_id));
+    state.get_adjusted_stations().unwrap();
+    let report = state.get_adjustment_report().unwrap();
+    assert_eq!(report.skipped_closures.len(), 1);
+    assert!(report.failures.is_empty(), "{report:?}");
+}
+
+#[test]
+fn adding_a_project_file_with_a_closure_across_one_shot_warns_and_skips_it() {
+    // Add .stalx copies closures straight across (`project_append`), past the
+    // creation-time refusal: the solve skip and the warning cover them.
+    let dir = tempfile::tempdir().unwrap();
+    let source = file_with_closure_across_one_shot(dir.path(), "source");
+    let mut target = Project::new("target".to_string(), None);
+    add(&mut target, vec![shot(45.0, 7.0)]);
+    let target_path = dir.path().join("target.stalx");
+    crate::persistence::Database::open(&target_path)
+        .unwrap()
+        .save_project(&target)
+        .unwrap();
+    let state = AppState::new().unwrap();
+    assert!(state.open_project(target_path).success, "open the target");
+    let added = state.execute(Command::add_project_file(source));
+    assert!(added.success, "{:?}", added.error);
+    assert_skipped_and_warned(project(&state));
+}
+
+#[test]
+fn merging_project_files_with_a_closure_across_one_shot_warns_and_skips_it() {
+    // Merge Projects appends every source the same way.
+    let dir = tempfile::tempdir().unwrap();
+    let one = file_with_closure_across_one_shot(dir.path(), "one");
+    let mut other = Project::new("two".to_string(), None);
+    add(&mut other, vec![shot(10.0, 4.0)]);
+    let two = dir.path().join("two.stalx");
+    crate::persistence::Database::open(&two)
+        .unwrap()
+        .save_project(&other)
+        .unwrap();
+    let out = dir.path().join("merged.stalx");
+    let state = AppState::new().unwrap();
+    let merged = state.merge_projects(vec![one, two], out.clone(), "merged".to_string(), false);
+    assert!(merged.success, "{:?}", merged.error);
+    let merged = crate::persistence::Database::open_existing(&out)
+        .unwrap()
+        .load_project()
+        .unwrap();
+    assert_skipped_and_warned(merged);
+}
+
 // ---- delete with shift removes the closure it degenerates ------------------------
 
 /// Assert `result` reported exactly the removal of closures with the given
