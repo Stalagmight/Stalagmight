@@ -267,3 +267,30 @@ fn a_set_zero_datum_command_persisted_before_accuracy_still_loads() {
         }
     ));
 }
+
+#[test]
+fn accuracy_survives_the_batch_command_path() {
+    // The frontend's `execute_batch` sends nested commands as snake_case JSON,
+    // so a set_zero_datum inside a batch carries `accuracy_m` verbatim.
+    let (state, _a, b) = two_entrances();
+    let fix = gps_at(40.0, 500.0);
+    let json = serde_json::json!({
+        "type": "batch",
+        "commands": [{
+            "type": "set_zero_datum",
+            "station_ref": { "section_id": b, "station_index": 5 },
+            "coordinates": {
+                "latitude": fix.latitude,
+                "longitude": fix.longitude,
+                "depth_reference": 0.0
+            },
+            "accuracy_m": 2.5
+        }]
+    });
+    let batch: Command = serde_json::from_value(json).unwrap();
+    let r = state.execute(batch);
+    assert!(r.success, "{:?}", r.error);
+    let p = project(&state);
+    assert_eq!(p.zero_datums[1].accuracy_m, Some(2.5));
+    assert_eq!(p.datum_roles()[1], Some(DatumRole::GpsFix));
+}
