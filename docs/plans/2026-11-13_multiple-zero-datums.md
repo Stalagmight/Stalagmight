@@ -189,8 +189,11 @@ and the wire fields. `component_datum_refs` returns placement datums only.
 | Model | guards, merge and unmerge, cascade, closure distribution, move tools, integrity, warnings, preview command | 1 |
 | Persistence | the new table, load and save | 1 |
 | Frontend | Edit Station dialog, accuracy field, gap, warnings tab, map | 1 |
-| Solve | weighted fixes in the Closures Computed View | 2 |
-| Entrances | Plan mode and Ariane export | 3 |
+| Solve | weighted fixes in the Closures Computed View | 1 |
+| Entrances | Plan mode and Ariane export | 2 |
+
+The solve was folded into PR 1: without it, PR 1 alone would pin a fix at its
+surveyed position in the Computed View.
 
 ## Related
 

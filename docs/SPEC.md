@@ -2824,7 +2824,7 @@ The dropdown also closes when pressing Ctrl+Z or Ctrl+Y (global undo/redo shortc
 | Recorded inclination disagrees with length/depth (> inclination_depth_diff_threshold, default 15°) | Warning | "Shot {section_id}:{position} recorded inclination {pitch}° disagrees with the {computed}° implied by its length and depth change (exceeds {threshold}° threshold)" |
 | Non-finite field value | Error | "Shot {section_id}:{position} has non-finite value(s) in: {fields}" |
 | Inclination outside -90 to 90 degrees | Error | "Shot {section_id}:{position} has an out-of-range pitch_{in/out}: {value}° (must be between -90° and 90°)" |
-| Merge group anchored by two or more zero datums | Error | "This merge group is anchored by {n} zero datums ({anchors}). Two or more GPS anchors over-constrain one rigid group; keep one and remove the others." |
+| GPS fix far from its surveyed position (gap > 15 m + 2% of the survey distance to the nearest other datum) | Warning | "The GPS position of this zero datum is {gap} m from where the survey puts it (bearing {bearing} degrees), more than the {threshold} m expected. ..." |
 | Duplicate station merge | Error | "These stations are already merged" |
 
 ---

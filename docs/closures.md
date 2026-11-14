@@ -114,11 +114,13 @@ gap no cascade, realign or Repair will close.
 Two rules, both in `models/project/offsets.rs`:
 
 - **`plan_merge_promotion`** decides whether the promotion may happen at all, and
-  which side moves. The one refusal is over-anchoring - an edge fusing two
-  independently zero-datum-anchored groups puts two GPS anchors in one rigid
-  component. A refused closure STAYS a closure (re-anchored, if the deletion moved
-  its endpoint), which is legitimate between two anchored groups and is what the
-  over-anchoring detector reports. **Distance is never a refusal**: the loader
+  which side moves. The one refusal is an edge fusing two groups that are each
+  placed by their own zero datum: promoting it would translate a GPS-placed group by
+  the closure's misclosure. A refused closure STAYS a closure (re-anchored, if the
+  deletion moved its endpoint), which is legitimate between two placed groups. An
+  explicit user merge of two placed groups is allowed; the group whose placement
+  datum is later in the list moves and that datum becomes a GPS fix (#741).
+  **Distance is never a refusal**: the loader
   converts unconditionally, so declining on geometry would leave memory and disk
   disagreeing about what the relationship is.
 - **`settle_minted_merges`** translates the movable side's whole rigid group onto
@@ -185,7 +187,8 @@ The adjustment path uses `shortest_path_shots_merges`:
 - Co-located groups are based on merges + loop closures (current behavior treats all closures as co-locating).
 - When building targets, steps that stay inside the same co-located group are skipped.
 
-Key behaviors:
+Key behaviors (a "zero datum" here is a PLACEMENT datum; GPS fixes, #741, are ignored by
+this path and never anchor it):
 - If one endpoint’s co-located group contains a zero datum, that side is treated as the anchor and the path is oriented from anchored -> unanchored.
 - If a zero-datum station lies **on** the loop path (via merges) **and is not an endpoint**,
   it becomes the anchor and the correction is split across both legs (anchor -> A, anchor -> B).
