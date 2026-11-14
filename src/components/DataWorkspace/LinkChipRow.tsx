@@ -1,12 +1,13 @@
 /**
- * The Links cell's chip row: as many whole chips as the cell has room for, then
- * a "+N" pill listing every link, instead of a chip clipped mid-word.
+ * A station's link chip row (spanning its shot-only cells): as many whole
+ * chips as there is room for, then a "+N" pill listing every link, instead of
+ * a chip clipped mid-word.
  *
  * Chips are measured once at their natural width (all of them rendered, each
- * `shrink-0`), per set of chip labels; the cell width is tracked with a
- * ResizeObserver, so resizing the column re-fits without re-measuring. The
- * first chip always shows - truncating inside - so a narrow column never shows
- * a bare "+N".
+ * `shrink-0`), per set of chip labels; the row width is tracked with a
+ * ResizeObserver, so resizing or hiding columns re-fits without re-measuring.
+ * The first chip always shows - truncating inside - so a narrow span never
+ * shows a bare "+N".
  */
 import { cloneElement, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactElement } from 'react';
 import { useTranslation } from 'react-i18next';

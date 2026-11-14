@@ -2,10 +2,11 @@
  * E2E: the Data workspace - one spreadsheet with every section's stations and
  * shots interleaved in survey order.
  *
- * Covers entering Data, the interleaved rows and their names, editing a shot
- * length and a station comment (and undoing both), a link chip jumping to the
- * merge partner, "Show on map" opening the map pane, "Open in Survey" with
- * the Back-to-Data chip, and "Open in Data" from Survey's docked table.
+ * Covers entering Data, the interleaved rows and their IDs, the section
+ * headers in the gutter and the header corner, editing a shot length and a
+ * station comment (and undoing both), a link chip jumping to the merge
+ * partner, "Show on map" opening the map pane, "Open in Survey" with the
+ * Back-to-Data chip, and "Open in Data" from Survey's docked table.
  *
  * Fully synthetic project: three sections, a merge (Main:2 = Branch B:0) and
  * a loop closure (Main:5 -> Sump:3).
@@ -104,12 +105,40 @@ test.describe('Data workspace', () => {
       `data-row-st-${main}-2`,
     ]);
     expect(ids).toContain(`data-row-st-${branch}-0`);
-    await expect(page.getByTestId(`data-row-name-st-${main}-1`)).toContainText('Main:1');
-    await expect(page.getByTestId(`data-row-name-sh-${main}-2`)).toContainText('Main:2');
+    // Row names are the canonical IDs only; the section is named by its header.
+    await expect(page.getByTestId(`data-row-name-st-${main}-1`)).toHaveText(new RegExp(`^${main}:1`));
+    await expect(page.getByTestId(`data-row-name-sh-${main}-2`)).toHaveText(new RegExp(`^${main}:2`));
     // The junction (Main:2) draws a ring on the rail; a Jump shot a dashed line.
     await expect(page.getByTestId(`data-row-st-${main}-2`).locator('.dw-rail-ring')).toHaveCount(1);
     await expect(page.getByTestId(`data-row-sh-${branch}-2`).locator('.dw-rail-line-dashed')).toHaveCount(2);
     await expect(page.getByTestId('data-status-counts')).toContainText('23 rows');
+    // Station depth starts hidden; Links and Issues are no columns any more.
+    for (const key of ['depth', 'links', 'issues']) {
+      await expect(page.getByTestId(`data-grid-header-${key}`)).toHaveCount(0);
+    }
+    await expect(page.getByTestId('data-grid-header-length')).toBeVisible();
+  });
+
+  // Needs the grid's groupContentStart / headerCorner (SpreadsheetGrid).
+  test('section headers start in the gutter; the header corner names a scrolled-away section', async ({ page }) => {
+    const [main] = await seed(page);
+    await enterData(page);
+    const header = page.getByTestId(`data-section-header-${main}`);
+    await expect(header).toContainText('Main');
+    await expect(header).toContainText(`#${main}`);
+    // The header's name starts in the gutter, left of the first column.
+    const headerBox = await header.boundingBox();
+    const firstColumn = await page.getByTestId('data-grid-header-length').boundingBox();
+    expect(headerBox!.x).toBeLessThan(firstColumn!.x);
+    // Its header on screen: nothing in the corner.
+    await expect(page.getByTestId(`data-section-corner-${main}`)).toHaveCount(0);
+    await page.locator('[data-testid="data-workspace"] [role="grid"]').evaluate((el) => {
+      el.scrollTop = 33 * 4;
+    });
+    const corner = page.getByTestId(`data-section-corner-${main}`);
+    await expect(corner).toBeVisible();
+    await expect(corner).toContainText('Main');
+    await expect(corner).toContainText(`#${main}`);
   });
 
   test('edits a shot length and a station comment, and undoes both', async ({ page }) => {
@@ -146,8 +175,11 @@ test.describe('Data workspace', () => {
   test('a merge chip jumps to the partner row', async ({ page }) => {
     const [main, branch] = await seed(page);
     await enterData(page);
+    // Needs the grid's spanCells: the chips span the station's shot-only cells.
     const chip = page.getByTestId(`data-chip-merge-st-${main}-2-${branch}-0`);
     await expect(chip).toContainText('Branch B:0');
+    // The station name is bold, the prose is not.
+    await expect(chip.locator('.font-semibold')).toHaveText('Branch B:0');
     await chip.click();
     await expect.poll(() => activeRowKey(page)).toBe(`st:${branch}:0`);
     await expect(page.getByTestId(`data-row-st-${branch}-0`)).toBeInViewport();
@@ -176,7 +208,8 @@ test.describe('Data workspace', () => {
     await page.keyboard.press('Alt+s');
     await expect.poll(() => appMode(page)).toBe('survey');
     const chip = page.getByTestId('back-to-data');
-    await expect(chip).toContainText('Main:3');
+    // The row ID the gutter shows, with the section for context.
+    await expect(chip).toContainText(`${main}:3 (Main)`);
     await chip.click();
     await expect.poll(() => appMode(page)).toBe('data');
     await expect.poll(() => activeRowKey(page)).toMatch(new RegExp(`^sh:${main}:`));
