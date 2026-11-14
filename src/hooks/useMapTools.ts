@@ -18,6 +18,7 @@ import { setSource } from '../utils/telemetry';
 import type { SurveyLayerCallbacks } from '../components/Map/SurveyLayer';
 import { projectParamOnSegment } from '../components/Map/surveyLayer/hitTest';
 import { TOAST_KEYS } from '../utils/toastKeys';
+import { projectIdentityKey } from '../utils/projectIdentity';
 
 /**
  * #395: what a plain Plan-mode select-click does to the gas plan pins.
@@ -40,15 +41,6 @@ function applyGasPlanClick(ref: StationRef): void {
 /** A measure endpoint's 3D coords (meters). For a raw `point` the fields are inline. */
 function endpointCoords(ep: MeasureEndpoint): Coordinates {
   return ep.kind === 'point' ? { x: ep.x, y: ep.y, z: ep.z } : ep.coords;
-}
-
-/** Stable identity for ruler state: a distinct project file - even a duplicate
- *  sharing created_at/modified_at - and any edit (modified_at) yield a different
- *  key, so an in-flight along-line reply can't bleed across them (#26). */
-function projectIdentityKey(
-  project: { created_at?: string; modified_at?: string; file_path?: string | null } | null | undefined
-): string {
-  return `${project?.created_at ?? ''}|${project?.modified_at ?? ''}|${project?.file_path ?? ''}`;
 }
 
 /** Only stations and shot-points have a cave-line position (enable along-line + tint). */
