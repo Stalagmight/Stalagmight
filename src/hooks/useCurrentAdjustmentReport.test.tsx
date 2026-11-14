@@ -81,14 +81,25 @@ describe('useCurrentAdjustmentReport', () => {
     expect(result.current).toEqual(failedOne);
   });
 
-  it('refreshes the warnings when a part could not be adjusted, and only then', async () => {
+  it('refreshes the warnings when a failed part appears or goes, and only then', async () => {
     const solved: Station[] = [];
     const onFailures = vi.fn();
-    invokeIpc.mockResolvedValueOnce(skippedOne).mockResolvedValueOnce(failedOne);
+    invokeIpc
+      .mockResolvedValueOnce(skippedOne)
+      .mockResolvedValueOnce(failedOne)
+      .mockResolvedValueOnce(skippedOne)
+      .mockResolvedValueOnce(skippedOne);
     await useAdjustmentReportStore.getState().load(solved, onFailures);
     expect(onFailures).not.toHaveBeenCalled();
+    // A failure appears: the Warnings tab gains its entry.
     await useAdjustmentReportStore.getState().load(solved, onFailures);
     await waitFor(() => expect(onFailures).toHaveBeenCalledTimes(1));
+    // It goes (the data was fixed): the tab drops it.
+    await useAdjustmentReportStore.getState().load(solved, onFailures);
+    expect(onFailures).toHaveBeenCalledTimes(2);
+    // Nothing failed before or now: no refresh.
+    await useAdjustmentReportStore.getState().load(solved, onFailures);
+    expect(onFailures).toHaveBeenCalledTimes(2);
   });
 
   it('forgets the report when the query fails', async () => {

@@ -22,8 +22,8 @@ export interface AdjustmentReportState {
   forStations: readonly Station[] | null;
   /**
    * Fetch the report for `forStations`. `onFailures` runs when it names a
-   * failed part, so the Warnings tab (whose failure entry is read from the same
-   * solve) can refresh.
+   * failed part, or the report it replaces did, so the Warnings tab (whose
+   * failure entry is read from the same solve) gains or drops that entry.
    */
   load: (forStations: readonly Station[], onFailures?: () => Promise<void> | void) => Promise<void>;
   clear: () => void;
@@ -32,7 +32,7 @@ export interface AdjustmentReportState {
 /** Bumped by every load and clear, so an answer that arrives late is dropped. */
 let requestSeq = 0;
 
-export const useAdjustmentReportStore = create<AdjustmentReportState>((set) => ({
+export const useAdjustmentReportStore = create<AdjustmentReportState>((set, get) => ({
   report: null,
   forStations: null,
   load: async (forStations, onFailures) => {
@@ -42,8 +42,9 @@ export const useAdjustmentReportStore = create<AdjustmentReportState>((set) => (
         purpose: 'report what the closure-adjusted view left out',
       });
       if (seq !== requestSeq) return;
+      const hadFailures = (get().report?.failures.length ?? 0) > 0;
       set({ report, forStations });
-      if (report.failures.length > 0) await onFailures?.();
+      if (hadFailures || report.failures.length > 0) await onFailures?.();
     } catch (e) {
       if (seq !== requestSeq) return;
       console.warn('Failed to load the adjustment report:', e);
