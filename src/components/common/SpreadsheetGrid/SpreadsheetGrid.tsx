@@ -201,6 +201,31 @@ export interface SpreadsheetGridProps<Row> {
    *  visible while scrolling horizontally) instead of per-column cells. Its
    *  cells are not applicable (no edits, blank copy, skipped by Tab). */
   groupRowContent?: (row: Row, rowIndex: number) => ReactNode | undefined;
+  /** Where a group row's band content starts: 'band' (default, just right of
+   *  the gutter) or 'gutter' (inside the gutter, `groupContentInset` px from
+   *  its left edge, flowing on across the band; sticky to the left edge while
+   *  scrolling horizontally). The gutter's `rowLabel` for a group row still
+   *  renders underneath (e.g. a rail elbow in the inset). */
+  groupContentStart?: 'band' | 'gutter';
+  /** Left inset (px) of group content when `groupContentStart` is 'gutter'. */
+  groupContentInset?: number;
+  /** Content for the frozen top-left header corner (above the gutter), given
+   *  the index of the first row visible below the header (-1 when there are no
+   *  rows). Re-evaluated as the grid scrolls. Must be cheap. */
+  headerCorner?: (firstVisibleRow: number) => ReactNode;
+  /** One spanning element over a contiguous run of columns on a row (e.g. a
+   *  station's link chips across the shot-only columns it has no value in).
+   *  `from`/`to` are column keys; the span covers every VISIBLE column from
+   *  `from` to `to` inclusive in display order. The covered cells keep their
+   *  cell semantics (selection, N/A, no edits); the span is drawn above them,
+   *  is not selectable, and passes clicks through except on its interactive
+   *  children (which must stop mousedown/click propagation). Return undefined
+   *  for no span. Must be O(1). */
+  spanCells?: (row: Row, rowIndex: number) => { from: string; to: string; content: ReactNode } | undefined;
+  /** Constrain a column reorder: given the order a header drag would produce,
+   *  return the order to apply (e.g. keep a group of columns contiguous). The
+   *  grid also uses it to show the drop indicator where the column will land. */
+  constrainColumnOrder?: (order: string[]) => string[];
 
   className?: string;
   /** Notified when the user moves the focus (active cell) - wire to app
