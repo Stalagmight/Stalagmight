@@ -70,6 +70,25 @@ Validation rules:
   **unless** both sections are connected to zero datums via merges (see `section_has_zero_datum`).
   This zero-datum check uses merge-only connectivity (closures are ignored).
 - Duplicate closure pairs are rejected.
+- A closure must not join the two ends of one shot (#737). The pair is refused,
+  for every strategy (`Batch`, `LeastSquaresWeighted` and `Move` alike), when it
+  would tie the two ends of ONE shot together - directly (A:1 to A:2), or because
+  merges and other closures already tie each station to one end of the same shot -
+  with *"This closure would join the two ends of one shot (A:1 to A:2) and squeeze
+  that shot to zero length. Pick two stations that are not the ends of a single
+  shot."*. That holds even when another route also joins the two stations (a side
+  passage merged on at A:1 and closed to A:2, say): the solve would still have to
+  put both ends of the shot at one point. It is
+  judged against the constraint knots the solve uses (see below), by the one
+  shared helper `project/closure_shots.rs`. The importer's
+  `create_loop_closures_batch` refuses the same pairs with the same words.
+  This is the only refusal it adds: a closure between two stations that other
+  merges and closures already tie together is still created, as before. It is
+  harmless to the solve (uniting two stations already in one group is a no-op),
+  and refusing it would drop such closures from imported files.
+- The closure dialog shows that refusal before Create: `check_merge_connectivity`
+  returns it in `ConnectivityResult.closure_refusal`, the dialog prints it and
+  disables Create (`closure-refusal`). The backend stays the authority.
 
 Metrics are computed from current station coordinates:
 - Misclosure distance and horizontal/vertical components are computed from current raw station coordinates.
@@ -219,6 +238,19 @@ Eligible closures are `Batch` + `LeastSquaresWeighted` (`Move` closures are alre
 Algorithm overview (unchanged math; the only change is *where* it writes - a clone, not the
 live project):
 - Build constraint groups where stations connected via merges **or closures** are in the same group.
+  A closure whose two stations would end up in one group as the two ends of one
+  shot - a *closure across one shot* - is skipped first (#737): the solve keeps
+  such a shot at its measured vector, so it could not close, and it used to fail
+  the whole component with "inconsistent section translation".
+  `Project::closures_across_one_shot` decides it with a union-find over every
+  station: all merges first, then the eligible closures in `loop_closures` order;
+  a closure that would put both ends of some shot into one group that were not in
+  one before it is NOT united and is reported with that shot. A skipped closure
+  unites nothing, so it never changes what a later closure sees. Uniting walks only
+  the smaller group, so the sweep is linear in the common case and deterministic.
+  `adjust_loop_closures` drops these closures before the solve, so the groups, the
+  spur detection and the `is_aligned` marking all see the same set; a component
+  whose only closures are skipped keeps its measured geometry and is not an error.
 - If a group contains a zero datum, it is fixed; multiple zero datums in a single group is an error.
 - If no zero datum exists in the component, the anchor station's group is fixed.
 - For each shot, build weighted constraints in X/Y using section quality and base sigmas from config:
@@ -230,6 +262,68 @@ live project):
 - Update the clone's shot vectors from solved group coordinates and apply section-level
   translations to keep merged stations aligned, then compute coordinates from the clone.
 - Zero datum positions are verified to remain fixed; any movement is an error.
+
+A component whose solve still fails (for example a closure that ties two zero
+datums into one group: "Multiple zero datums in a single constraint group", which
+creation allows because both sections have fixed coordinates) is rolled back to its
+measured geometry, as before - but it is no longer silent (#737).
+`Project::into_adjusted_stations` returns each failure (anchor, sections, the
+solver's error), `AppState` keeps them beside the memoized adjusted stations, and:
+
+- the `get_adjustment_report` IPC returns `{ skipped_closures, failures }`: the
+  closures skipped above (computed on request) and the failures of the cached solve
+  of the CURRENT project version only, each with a plain-language reason (the raw
+  solver text stays in the log). `get_adjusted_stations` is unchanged.
+- the Warnings tab lists one `CLOSURE_ACROSS_ONE_SHOT` **error** per skipped
+  closure, on the shot it spans (Resolve: **Remove this loop closure**, or go to its
+  station). It is a pure function of the saved data, so it gates like any error and
+  cannot be ignored.
+- it also lists one `CLOSURE_ADJUSTMENT_FAILED` **warning** per failed part, read
+  from the same cached solve: the warnings pass never runs the solve, so the entry
+  appears once the Closures Computed View, Plan or Export has solved the current
+  version (the frontend refreshes warnings once the report names a failure, or
+  stops naming one) and an edit drops it until the next solve. That is why it is
+  advisory, and ignorable: as an error, the SpeleoDB upload gate and the map's
+  issue colouring would depend on which view was open last, and the measured data
+  it is about is fine - only the derived adjusted view is degraded. Resolve: **Go
+  to station**, or Ignore.
+- the Closures Computed View (and Plan / Export, which draw the adjusted geometry)
+  shows a notice stacked under the read-only pill - "1 loop closure skipped: it
+  spans a single shot." and/or "Part of the survey could not be adjusted and is
+  shown as measured." - with **Show warnings**, which opens the Warnings tab. It is
+  the primary surface: it is drawn with the adjusted view itself, so it is always
+  current.
+
+## Deleting shots around a closure
+
+A delete with shift can shorten the path between a closure's two stations. The
+single **Delete shot** refuses to shift a shot that is part of any loop, closure
+loops included; the range gap-close (**Delete shots** with shift) refuses only
+merge loops, so closure A:1-A:4 with shots 1..2 gap-closed becomes A:1-A:2 - one
+shot, no loop. Both delete commands therefore take
+`Project::closures_before_edit` (the closures already across one shot, and every
+eligible closure's stations as they resolve before the delete), and afterwards
+remove every closure `closures_newly_across_one_shot` reports, inside the same
+project snapshot pair, so one Undo restores the shots and the closure together.
+Each removal is reported in `CommandResult.warnings`
+(`CLOSURE_REMOVED_ACROSS_ONE_SHOT`, "Removed loop closure A:1 to A:4: closing the
+gap left its two stations at the two ends of one shot.") and shown as one warning toast, named by the stations BEFORE the delete:
+the gap-close renumbered A:4 to A:2, but the user created A:1-A:4.
+
+The Delete Shots dialog says so before the user confirms. The range preview
+(`preview_delete_shot_range`) carries `closures_removed_across_one_shot`, which
+`Project::preview_gap_close_closure_removals` computes by running the very
+gap-close the command runs (`Project::gap_close_shot_range`, shared by both) on a
+clone and taking the same `closures_newly_across_one_shot`; the dialog lists them
+under "Close Gap & Delete removes these loop closures (they would span a single
+shot)" (the heading names the gap-close button, "Delete Shots" for a prefix or
+suffix range, since Split removes none). It is absent when no
+gap-close is offered (the whole section, or a blocked shift). The single-shot
+preview has no such list: that delete never shortens a closure to one shot, and
+`preview_delete_shot` runs inside every per-shot removal, so a simulation there
+would recurse. A closure that already spanned one shot before the delete is left alone (it
+has its own warning). This lives in the commands, not in
+`remove_shot_with_rewire*`, which is also the inverse of `CreateShot` (#413).
 
 ## Co-location and Move Tools
 

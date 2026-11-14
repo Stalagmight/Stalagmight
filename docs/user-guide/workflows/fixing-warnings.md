@@ -38,4 +38,8 @@ Always fix errors. A warning may just mean the shot needs retaking, see
 
 The fixes depend on the problem. Inclination in and out too far apart offers
 **Use inclination in**, **Use inclination out**, **Average** (the default) or
-**Set inclination**.
+**Set inclination**. A loop closure across a single shot offers **Remove this
+loop closure** (switch back to the **Raw Data View** first: editing is off in the
+Closures Computed View). A part of the survey the Closures Computed View could
+not adjust is a warning, not an error: it offers **Go to station** and can be
+ignored.

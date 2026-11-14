@@ -663,7 +663,7 @@ impl AppState {
         // Same frame check as the split paths above (#469, item 1).
         let frame_before = self.frame_datum_key();
 
-        let result_section = {
+        let (result_section, removed_closures) = {
             let Ok(mut proj_guard) = self.project.lock() else {
                 return CommandResult::failure("Failed to lock project".to_string());
             };
@@ -714,9 +714,13 @@ impl AppState {
                     );
                 }
             }
-            if let Ok(impact) =
-                project.preview_delete_shot_range(section_id, start_shot_id, end_shot_id)
-            {
+            // Without the gap-close closure prediction: this command is about
+            // to run that very gap-close for real.
+            if let Ok(impact) = project.preview_delete_shot_range_relationships(
+                section_id,
+                start_shot_id,
+                end_shot_id,
+            ) {
                 if impact.shift_blocked {
                     let reasons = if impact.shift_blocked_reasons.is_empty() {
                         "Shift geometry is not allowed for this range.".to_string()
@@ -727,38 +731,30 @@ impl AppState {
                 }
             }
 
-            // Stations the WHOLE range will remove, captured up front as
-            // canonical (position-independent) keys so renumbering during the
-            // per-shot deletes can't invalidate them. Each per-shot gap-close
-            // ignores anchors on these when deciding which side keeps its
-            // position - otherwise an anchor on a later, also-doomed range shot
-            // would displace the survivors (e.g. a suffix shift would keep the
-            // doomed tail fixed and shift the head). Whole-section was refused
-            // above, so start_pos==0 here means prefix.
-            let doomed_indices: Vec<u32> = if start_pos == 0 {
-                (0..=(end_pos as u32)).collect() // prefix
-            } else if end_pos == n - 1 {
-                ((start_pos as u32 + 1)..=(n as u32)).collect() // suffix
-            } else {
-                ((start_pos as u32 + 1)..=(end_pos as u32 + 1)).collect() // interior
-            };
-            let doomed_anchors: std::collections::HashSet<_> = doomed_indices
-                .iter()
-                .filter_map(|&i| project.key_for_ref(StationRef::new(section_id, i)))
-                .collect();
+            // Closures already across one shot, and every closure's stations,
+            // before the range goes (#737): the removal below names a closure by
+            // the ids the user created it with, not the renumbered ones.
+            let closures_before = project.closures_before_edit();
 
-            for &sid in &range_shot_ids {
-                if let Err(e) = project.remove_shot_with_rewire_excluding_anchors(
-                    section_id,
-                    sid,
-                    &doomed_anchors,
-                    /* defer_cascade */ true,
-                ) {
-                    // Already mutated - roll back to the before snapshot.
-                    let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
-                    return CommandResult::failure(e);
-                }
+            // The gap-close itself, shared with the preview that predicts its
+            // closure removals (`Project::gap_close_shot_range`, which also
+            // keeps the doomed-anchor rule this path used to spell out here).
+            if let Err(e) = project.gap_close_shot_range(section_id, start_pos, end_pos) {
+                // Already mutated - roll back to the before snapshot.
+                let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
+                return CommandResult::failure(e);
             }
+            // An interior gap-close brings the head boundary one shot from the
+            // first surviving tail station, so a closure between them (A:1-A:4
+            // with shots 1..2 deleted) now spans one shot and closes nothing.
+            // Unlike the single-shot delete, which refuses to shift a shot that
+            // is part of any loop, the range only refuses merge loops - so this
+            // is reachable here. Removed now, inside the one undo unit, before
+            // the cascade sees the final topology (#737).
+            let removed_closures = super::command_shot::remove_closures_newly_across_one_shot(
+                project,
+                &closures_before,
+            );
             // Single cascade now that every range shot (and any doomed merge) is
             // gone, so a doomed station's intermediate shift never propagates into
             // a connected free-floating section - the per-shot cascades were
@@ -806,7 +802,7 @@ impl AppState {
             // Undo restores from the `ProjectSnapshotPair`, which legitimately puts
             // the PRE-conversion state back: the closure was a true loop before the
             // delete, so restoring it as a closure is the correct inverse.
-            section_id
+            (section_id, removed_closures)
         };
 
         self.renormalize_frame_if_changed(frame_before);
@@ -839,7 +835,9 @@ impl AppState {
             purpose = "gap-close a deleted shot range",
             "Delete shot range (shift) completed"
         );
-        CommandResult::success().with_section_id(result_section)
+        CommandResult::success()
+            .with_section_id(result_section)
+            .with_warnings(removed_closures)
     }
 
     /// Execute a delete-last-shot-and-section operation as a single atomic undo/redo unit.

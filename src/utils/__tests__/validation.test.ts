@@ -6,13 +6,14 @@ import {
   validateSection,
   getHighestSeverity,
   countIssues,
+  countUnresolvedErrors,
   validateEditableShot,
   validatePlacement,
   validateMergeTarget,
   DEFAULT_VALIDATION_CONFIG,
   type ValidationIssue,
 } from '../validation';
-import type { DmpShot } from '../../types/commands';
+import type { DmpShot, ProjectWarning } from '../../types/commands';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -414,5 +415,30 @@ describe('validateMergeTarget', () => {
     const error = validateMergeTarget('fromExisting', 99, new Set([1, 2]), new Set([3, 4]), 0);
     expect(error).not.toBeNull();
     expect(error!.type).toBe('mergeConflict');
+  });
+});
+
+describe('countUnresolvedErrors (#737 closure warnings)', () => {
+  const warning = (code: string, severity: 'error' | 'warning', isResolved = false): ProjectWarning => ({
+    sectionId: 0,
+    shotId: 1,
+    shotIndex: 0,
+    code,
+    message: '',
+    severity,
+    isResolved,
+  });
+
+  it('counts a closure across one shot (an error) and not a failed solve (advisory)', () => {
+    // The backend makes CLOSURE_ADJUSTMENT_FAILED a warning: it exists only
+    // while the cached solve is current, so it must not block an upload
+    // depending on which view was open last.
+    expect(
+      countUnresolvedErrors([
+        warning('CLOSURE_ACROSS_ONE_SHOT', 'error'),
+        warning('CLOSURE_ADJUSTMENT_FAILED', 'warning'),
+        warning('CLOSURE_ADJUSTMENT_FAILED', 'warning', true),
+      ])
+    ).toBe(1);
   });
 });

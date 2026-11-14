@@ -262,6 +262,7 @@ export default function BulkDeleteDialog() {
         <DeleteShotImpactDetails
           impact={impact}
           title="Deleting these shots will update station relationships:"
+          gapCloseAction={isInterior ? 'Close Gap & Delete' : 'Delete Shots'}
         />
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">

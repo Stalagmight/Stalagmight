@@ -1,6 +1,9 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import userEvent from '@testing-library/user-event';
 import { MapTopLeftOverlay } from './MapTopLeftOverlay';
+import { useUIStore } from '../../store/uiStore';
+import type { AdjustmentReport } from '../../types/ipc/AdjustmentReport';
 
 // `t` resolves against the REAL shipped locale file rather than a hand-copied
 // literal table: the assertions below quote user-visible English, and a private
@@ -9,8 +12,8 @@ import { MapTopLeftOverlay } from './MapTopLeftOverlay';
 // `vi.mock` is hoisted above the module's own imports.
 vi.mock('react-i18next', async () => {
   const en: unknown = (await import('../../i18n/locales/en.json')).default;
-  const t = (key: string): string => {
-    const value = key
+  const lookup = (key: string): unknown =>
+    key
       .split('.')
       .reduce<unknown>(
         (node, part) =>
@@ -19,7 +22,13 @@ vi.mock('react-i18next', async () => {
             : undefined,
         en
       );
-    return typeof value === 'string' ? value : key;
+  // English plurals the way i18next picks them (`_one` / `_other` by `count`),
+  // and `{{count}}` interpolation - enough for the adjustment notice (#737).
+  const t = (key: string, options?: { count?: number }): string => {
+    const count = options?.count;
+    const plural = count === undefined ? undefined : lookup(`${key}_${count === 1 ? 'one' : 'other'}`);
+    const value = typeof plural === 'string' ? plural : lookup(key);
+    return typeof value === 'string' ? value.replace('{{count}}', String(count)) : key;
   };
   // The pills' Resume buttons pull in the SpeleoDB action hook, whose imports
   // initialise i18n - hand it a no-op plugin so that init stays inert here.
@@ -114,5 +123,121 @@ describe('MapTopLeftOverlay', () => {
     expect(screen.getByTestId('speleodb-readonly-banner-body')).toContainElement(screen.getByTestId('speleodb-readonly-reason'));
     // The words keep a minimum column before the action drops under them.
     expect(screen.getByTestId('speleodb-readonly-reason')).toHaveClass('flex-[1_1_5rem]', 'max-w-max');
+  });
+
+  it('stacks every notice in one column beside the fit button, in order (#737)', () => {
+    render(
+      <MapTopLeftOverlay
+        {...baseProps}
+        showSpeleoReadOnly
+        showClosureReadOnly
+        adjustmentReport={{
+          skipped_closures: [],
+          failures: [{ anchor: { section_id: 0, station_index: 0 }, section_ids: [0], reason: 'x' }],
+        }}
+      />
+    );
+    const column = screen.getByTestId('map-top-left-notices');
+    expect([...column.children].map((c) => c.getAttribute('data-testid'))).toEqual([
+      'speleodb-readonly-banner',
+      'geometry-readonly-banner',
+      'adjustment-notice',
+    ]);
+    // Every notice still takes clicks; the row and the column let them through.
+    for (const id of ['speleodb-readonly-banner', 'geometry-readonly-banner', 'adjustment-notice']) {
+      expect(screen.getByTestId(id)).toHaveClass('pointer-events-auto');
+    }
+    expect(screen.getByTestId('map-top-left-overlay')).toHaveClass('pointer-events-none');
+  });
+
+  describe('adjustment notice (#737)', () => {
+    const skipped = (closure_id: number) => ({
+      closure_id,
+      station_a: { section_id: 0, station_index: 1 },
+      station_b: { section_id: 0, station_index: 2 },
+      shot_section_id: 0,
+      shot_index: 1,
+    });
+    const failure = {
+      anchor: { section_id: 2, station_index: 0 },
+      section_ids: [2, 3],
+      reason: 'loop closures tie two zero datums to the same point.',
+    };
+    const report = (over: Partial<AdjustmentReport>): AdjustmentReport => ({
+      skipped_closures: [],
+      failures: [],
+      ...over,
+    });
+
+    it('shows nothing without a report, or for an empty one', () => {
+      const { rerender } = render(<MapTopLeftOverlay {...baseProps} />);
+      expect(screen.queryByTestId('adjustment-notice')).toBeNull();
+      rerender(<MapTopLeftOverlay {...baseProps} adjustmentReport={report({})} />);
+      expect(screen.queryByTestId('adjustment-notice')).toBeNull();
+    });
+
+    it('counts the skipped closures, singular and plural', () => {
+      const { rerender } = render(
+        <MapTopLeftOverlay {...baseProps} adjustmentReport={report({ skipped_closures: [skipped(4)] })} />
+      );
+      expect(screen.getByTestId('adjustment-notice-skipped')).toHaveTextContent(
+        '1 loop closure skipped: it spans a single shot.'
+      );
+      expect(screen.queryByTestId('adjustment-notice-failed')).toBeNull();
+      rerender(
+        <MapTopLeftOverlay
+          {...baseProps}
+          adjustmentReport={report({ skipped_closures: [skipped(4), skipped(9)] })}
+        />
+      );
+      expect(screen.getByTestId('adjustment-notice-skipped')).toHaveTextContent(
+        '2 loop closures skipped: each spans a single shot.'
+      );
+    });
+
+    it('says when part of the survey is drawn measured', () => {
+      const { rerender } = render(
+        <MapTopLeftOverlay {...baseProps} adjustmentReport={report({ failures: [failure] })} />
+      );
+      expect(screen.getByTestId('adjustment-notice-failed')).toHaveTextContent(
+        'Part of the survey could not be adjusted and is shown as measured.'
+      );
+      rerender(
+        <MapTopLeftOverlay
+          {...baseProps}
+          adjustmentReport={report({ failures: [failure, failure], skipped_closures: [skipped(1)] })}
+        />
+      );
+      expect(screen.getByTestId('adjustment-notice-failed')).toHaveTextContent(
+        '2 parts of the survey could not be adjusted and are shown as measured.'
+      );
+      expect(screen.getByTestId('adjustment-notice-skipped')).toBeInTheDocument();
+    });
+
+    it('opens the Warnings tab, stacked under the read-only notice rather than over it', async () => {
+      const openWarningsTab = vi.fn();
+      useUIStore.setState({ openWarningsTab } as never);
+      render(
+        <MapTopLeftOverlay
+          {...baseProps}
+          showClosureReadOnly
+          adjustmentReport={report({ skipped_closures: [skipped(4)] })}
+        />
+      );
+      // Fit button | one column of notices, in order: SpeleoDB, closure, adjustment.
+      const row = screen.getByTestId('map-top-left-overlay');
+      const column = screen.getByTestId('map-top-left-notices');
+      expect(column.parentElement).toBe(row);
+      expect(column).toHaveClass('flex', 'min-w-0', 'flex-col', 'items-start', 'gap-2');
+      expect(column).not.toHaveClass('pointer-events-auto');
+      expect([...column.children].map((c) => c.getAttribute('data-testid'))).toEqual([
+        'geometry-readonly-banner',
+        'adjustment-notice',
+      ]);
+      expect(screen.getByTestId('fit-to-view-button').nextElementSibling).toBe(column);
+      expect(screen.getByTestId('adjustment-notice')).toHaveClass('pointer-events-auto', 'min-w-0');
+      await userEvent.click(screen.getByTestId('adjustment-notice-show-warnings'));
+      expect(openWarningsTab).toHaveBeenCalledTimes(1);
+    });
   });
 });

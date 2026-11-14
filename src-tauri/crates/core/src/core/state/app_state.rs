@@ -7,8 +7,9 @@ use std::sync::{Arc, Mutex};
 use crate::cache::TileCache;
 use crate::config::{ClosureAdjustmentConfig, Config, GasConfig};
 use crate::models::{
-    AlongLineResult, Cylinder, DistanceField, Diver, GasReachField, PlanSegment, Project,
-    RulerEndpoint, Station, StationAnchor, StationRef,
+    AdjustmentFailure, AdjustmentFailureReport, AdjustmentReport, AlongLineResult, Cylinder,
+    DistanceField, Diver, GasReachField, PlanSegment, Project, RulerEndpoint, SkippedClosure,
+    Station, StationAnchor, StationRef,
 };
 use crate::persistence::Database;
 use crate::tile_stats::TileFetchStats;
@@ -52,6 +53,10 @@ pub(super) struct AdjustedStationsCache {
     pub(super) version: i64,
     pub(super) config_hash: u64,
     pub(super) stations: Vec<Station>,
+    /// Components that same solve could not adjust and shows measured (#737).
+    /// Read by `get_adjustment_report` and the warnings pass, only while the
+    /// entry matches the project version they are asked about.
+    pub(super) failures: Vec<AdjustmentFailure>,
 }
 
 /// Hash the closure-adjustment config fields that affect the solve, for the
@@ -556,7 +561,8 @@ impl AppState {
             (self.get_project_state()?, generation)
         };
         let solved_version = project.modified_at.timestamp_nanos_opt().unwrap_or(0);
-        let stations = project.into_adjusted_station_coordinates(&config.closure_adjustment);
+        let adjusted = project.into_adjusted_stations(&config.closure_adjustment);
+        let stations = adjusted.stations;
 
         if let Ok(mut cache) = self.adjusted_cache.lock() {
             // Only store if nothing invalidated the cache while command_lock was
@@ -572,10 +578,69 @@ impl AppState {
                     version: solved_version,
                     config_hash,
                     stations: stations.clone(),
+                    failures: adjusted.failures,
                 });
             }
         }
         Some(stations)
+    }
+
+    /// The cache key of the closure-adjustment config in force now. Takes the
+    /// config lock, so a caller that also needs the project lock reads this
+    /// FIRST, before taking it.
+    pub(super) fn current_adjusted_config_hash(&self) -> u64 {
+        adjusted_config_hash(&self.get_config().closure_adjustment)
+    }
+
+    /// The components the last closure-adjusted solve of `project` could not
+    /// adjust (#737). Read-only on the memoized cache: empty unless that cache
+    /// was solved from exactly this project version under the config whose key
+    /// is `config_hash` ([`Self::current_adjusted_config_hash`], read by the
+    /// caller up front), so it never runs the solve itself and never reports a
+    /// failure the data has since moved past.
+    ///
+    /// Takes only the cache lock, which no path holds while taking another, so
+    /// a caller may hold the project lock - having read `config_hash` before
+    /// it took that lock, so the config lock is never nested inside it.
+    pub(super) fn cached_adjustment_failures(
+        &self,
+        project: &Project,
+        config_hash: u64,
+    ) -> Vec<AdjustmentFailure> {
+        let version = project.modified_at.timestamp_nanos_opt().unwrap_or(0);
+        let Ok(cache) = self.adjusted_cache.lock() else {
+            return Vec::new();
+        };
+        match cache.as_ref() {
+            Some(entry) if entry.version == version && entry.config_hash == config_hash => {
+                entry.failures.clone()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// What the Closures Computed View leaves out, for the notice above the map
+    /// (#737): the closures it skips because they span one shot (computed now,
+    /// `O(stations)`), and the components whose solve failed (from the cache
+    /// only - see [`Self::cached_adjustment_failures`]). `None` when no project
+    /// is open.
+    pub fn get_adjustment_report(&self) -> Option<AdjustmentReport> {
+        // Before the project lock: the config lock is never taken inside it.
+        let config_hash = self.current_adjusted_config_hash();
+        let guard = self.project.lock().ok()?;
+        let project = guard.as_ref()?;
+        Some(AdjustmentReport {
+            skipped_closures: project
+                .closures_across_one_shot()
+                .iter()
+                .map(SkippedClosure::from)
+                .collect(),
+            failures: self
+                .cached_adjustment_failures(project, config_hash)
+                .iter()
+                .map(AdjustmentFailureReport::from)
+                .collect(),
+        })
     }
 
     /// Per-station distance field for the distance-gradient overlay (#34),

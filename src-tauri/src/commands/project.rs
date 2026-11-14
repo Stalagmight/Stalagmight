@@ -5,8 +5,8 @@ use ts_rs::TS;
 use crate::core::loading::{CreateProjectFullResult, LoadError, LoadProjectFullResult};
 use crate::core::{AppState, Command, CommandResult};
 use crate::models::{
-    AlongLineResult, DistanceField, FrozenShotRef, Project, ProjectMetadata, ProjectStats,
-    RulerEndpoint, Station, StationRef,
+    AdjustmentReport, AlongLineResult, DistanceField, FrozenShotRef, Project, ProjectMetadata,
+    ProjectStats, RulerEndpoint, Station, StationRef,
 };
 
 /// Update per-project settings (#57): project name + validation thresholds.
@@ -254,6 +254,27 @@ pub async fn get_adjusted_stations(app_handle: tauri::AppHandle) -> Vec<Station>
     tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
         state.inner().get_adjusted_stations().unwrap_or_default()
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/// What the Closures Computed View left out (#737): the loop closures it skips
+/// because they tie the two ends of one shot together (computed now), and the
+/// parts of the survey whose solve failed and are shown measured (from the
+/// memoized solve of the current project only - this never runs the solve).
+/// The frontend asks right after [`get_adjusted_stations`], so the solve it
+/// reports on is the one it just drew. `get_adjusted_stations` keeps returning
+/// a bare `Vec<Station>`, so the export path and other callers are unchanged.
+///
+/// An empty report when no project is open.
+#[tauri::command]
+pub async fn get_adjustment_report<R: tauri::Runtime>(
+    app_handle: tauri::AppHandle<R>,
+) -> AdjustmentReport {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle.state::<AppState>();
+        state.inner().get_adjustment_report().unwrap_or_default()
     })
     .await
     .unwrap_or_default()

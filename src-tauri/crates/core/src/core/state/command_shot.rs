@@ -1,9 +1,66 @@
 use super::AppState;
-use crate::core::{CommandResult, Validator};
+use crate::core::{CommandResult, ValidationWarning, Validator, WarningSeverity};
 use crate::models::{
-    shot_display_position, SectionId, ShotData, ShotId, ShotKind, ShotUpdates, SurveyCredit,
+    shot_display_position, station_id_label, ClosurePair, ClosuresBeforeEdit, Project, SectionId,
+    ShotData, ShotId, ShotKind, ShotUpdates, SurveyCredit, CLOSURE_REMOVED_ACROSS_ONE_SHOT,
     FEATURE_ID_STRIDE,
 };
+
+/// The warning a delete reports for a loop closure it removed because the
+/// delete left it spanning a single shot (#737). Names the closure by its
+/// stations BEFORE the delete (`ClosurePair` from
+/// `Project::closures_newly_across_one_shot`): a gap-close renumbers stations,
+/// and the user created closure 0:1-0:5, not the 0:1-0:2 it became.
+pub(super) fn closure_removed_message(closure: &ClosurePair) -> String {
+    format!(
+        "Removed loop closure {} to {}: closing the gap left its two stations at the two ends of one shot.",
+        station_id_label(closure.station_a),
+        station_id_label(closure.station_b)
+    )
+}
+
+/// After a delete with shift: remove every loop closure the delete left tying
+/// the two ends of one shot together that did not before it (#737), and
+/// report each one for the user, by the stations it had before the delete.
+///
+/// A gap-close shortens the path between a closure's two ends - closure
+/// A:1-A:4 with shots 1..2 deleted becomes A:1-A:2, one shot - so the closure
+/// that closed a real loop now closes none, and the solve would only skip it.
+/// It goes with the delete, inside the same undo unit (both callers record a
+/// project snapshot pair), so one Undo restores the shots AND the closure.
+///
+/// Deliberately NOT part of `remove_shot_with_rewire*`: that is also the
+/// inverse of `CreateShot`, and an inverse must only invert (#413). A closure
+/// that already spanned one shot before the delete is left alone (it carries
+/// its own warning); only what this delete caused is undone here. Removing a
+/// skipped closure never changes another closure's status, because a skipped
+/// closure unites nothing. The range-delete preview lists the same closures
+/// from the same `Project::closures_newly_across_one_shot`.
+pub(super) fn remove_closures_newly_across_one_shot(
+    project: &mut Project,
+    before: &ClosuresBeforeEdit,
+) -> Vec<ValidationWarning> {
+    let newly = project.closures_newly_across_one_shot(before);
+    let mut warnings = Vec::with_capacity(newly.len());
+    for closure in newly {
+        if project.remove_loop_closure(closure.closure_id).is_err() {
+            continue;
+        }
+        tracing::info!(
+            closure_id = closure.closure_id,
+            station_a = ?closure.station_a,
+            station_b = ?closure.station_b,
+            purpose = "drop a closure a delete left across one shot",
+            "Removed loop closure that now spans a single shot"
+        );
+        warnings.push(ValidationWarning {
+            code: CLOSURE_REMOVED_ACROSS_ONE_SHOT.to_string(),
+            message: closure_removed_message(&closure),
+            severity: WarningSeverity::Warning,
+        });
+    }
+    warnings
+}
 
 impl AppState {
     pub(super) fn create_shot(
@@ -329,6 +386,7 @@ impl AppState {
             }
         }
 
+        let closures_before = project.closures_before_edit();
         match project.remove_shot_with_rewire(section_id, shot_id) {
             Ok(_) => {
                 tracing::debug!(
@@ -337,7 +395,15 @@ impl AppState {
                     purpose = "remove shot and rewire geometry",
                     "Shot deleted"
                 );
-                CommandResult::success()
+                // Still under the project lock and ahead of the epilogue's
+                // reconcile, so the snapshot pair's after-half has it (#737).
+                // No shape is known to reach it from a SINGLE delete - it
+                // refuses to shift a shot that is part of any loop, and a
+                // rewire onto a merge partner keeps every knot - so this is
+                // the defensive half keeping both delete paths under one rule
+                // (`no_delete_leaves_a_new_closure_across_one_shot`).
+                let removed = remove_closures_newly_across_one_shot(project, &closures_before);
+                CommandResult::success().with_warnings(removed)
             }
             Err(e) => CommandResult::failure(e),
         }

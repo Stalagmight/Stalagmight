@@ -287,15 +287,23 @@ export function WarningResolution({
 }: WarningResolutionProps) {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
-  const { updateShot, removeZeroDatum, deleteShot, resolveWarning, isShotFrozen } = useProjectStore(
+  const { updateShot, removeZeroDatum, deleteShot, removeLoopClosure, resolveWarning, isShotFrozen } = useProjectStore(
     useShallow((s) => ({
       updateShot: s.updateShot,
       removeZeroDatum: s.removeZeroDatum,
       deleteShot: s.deleteShot,
+      removeLoopClosure: s.removeLoopClosure,
       resolveWarning: s.resolveWarning,
       isShotFrozen: s.isShotFrozen,
     })),
   );
+  // The closure a CLOSURE_ACROSS_ONE_SHOT warning is about (#737), looked up by
+  // the id the warning carries; its first station is where "Go to" lands.
+  const closureStation = useProjectStore((s) => {
+    if (warning.closureId === undefined) return undefined;
+    const closure = s.project?.loop_closures.find((lc) => Number(lc.id) === warning.closureId);
+    return closure?.station_a;
+  });
   const { setSelection, setDetailPanelTab, triggerCenterOnStation, showToast, setGeometryPreview, triggerZoomToShot } = useUIStore(
     useShallow((s) => ({
       setSelection: s.setSelection,
@@ -492,10 +500,40 @@ export function WarningResolution({
           { id: 'go-to-station', label: t('detailPanel.warnings.resolveOptions.goToStation'), navigate: true },
         ];
       }
+      case 'CLOSURE_ACROSS_ONE_SHOT':
+        // A loop closure that ties the two ends of this shot together (#737):
+        // the Closures Computed View skips it, so it closes nothing. An error -
+        // no Ignore. Remove it, or go to its station to see it in Details.
+        return [
+          {
+            id: 'remove-closure',
+            label: t('detailPanel.warnings.resolveOptions.removeClosure'),
+            disabled: editingBlocked || warning.closureId === undefined,
+            danger: true,
+          },
+          ...(closureStation
+            ? [{
+                id: 'go-to-station',
+                label: t('detailPanel.warnings.resolveOptions.goToClosureStation', {
+                  station: `${closureStation.section_id}:${closureStation.station_index}`,
+                }),
+                navigate: true,
+              }]
+            : []),
+        ];
+      case 'CLOSURE_ADJUSTMENT_FAILED':
+        // A part of the survey the closure solve could not adjust (#737). The
+        // fix is in that part's closures or datums, so offer the way there. It
+        // is advisory (the measured data is fine; only the derived view is
+        // degraded), so it can be ignored like any other warning.
+        return [
+          { id: 'go-to-station', label: t('detailPanel.warnings.resolveOptions.goToStation'), navigate: true },
+          ...maybeIgnore,
+        ];
       default:
         return maybeIgnore;
     }
-  }, [warning.code, warning.severity, warning.datumStationIndex, warning.datumRefs, shot, geometryDisabled, editingBlocked, projectSaved, t, precision]);
+  }, [warning.code, warning.severity, warning.datumStationIndex, warning.datumRefs, warning.closureId, closureStation, shot, geometryDisabled, editingBlocked, projectSaved, t, precision]);
 
   // Default selection: prefer "Average" (the safe azimuth fix) when offered, and
   // for an inclination in/out warning `pitchDeviationDefault` (average, unless
@@ -527,7 +565,7 @@ export function WarningResolution({
     // background project refresh rebuilds those references and would otherwise
     // wipe the user's in-progress manual edit and reset their selection.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [warning.sectionId, warning.shotId, warning.code]);
+  }, [warning.sectionId, warning.shotId, warning.code, warning.closureId]);
 
   // Strict parse of a manual field (NaN when empty/non-numeric/garbage). Used
   // only by the proposedCreatesError advisory; the proposal math lives in
@@ -543,7 +581,7 @@ export function WarningResolution({
   const preview = useMemo<GeometryPreview | null>(() => {
     if (!shot) return null;
     const opt = options.find((o) => o.id === selected);
-    if (!opt || opt.ignore || opt.navigate || opt.id.startsWith('keep-datum')) return null;
+    if (!opt || opt.ignore || opt.navigate || opt.id.startsWith('keep-datum') || opt.id === 'remove-closure') return null;
     if (opt.id === 'lrud-abs' || opt.id === 'lrud-clear' || opt.manual === 'lrud') return null;
 
     const stationAt = (stationIndex: number) =>
@@ -662,14 +700,31 @@ export function WarningResolution({
     }
 
     if (opt.navigate) {
-      if (warning.datumStationIndex !== undefined) {
-        const ref = { section_id: warning.sectionId, station_index: warning.datumStationIndex };
+      // The over-anchoring datum, the closure's station, or (a part the solve
+      // could not adjust) the start of the shot the warning is on.
+      const ref =
+        warning.datumStationIndex !== undefined
+          ? { section_id: warning.sectionId, station_index: warning.datumStationIndex }
+          : warning.code === 'CLOSURE_ACROSS_ONE_SHOT'
+            ? closureStation
+            : warning.code === 'CLOSURE_ADJUSTMENT_FAILED'
+              ? { section_id: warning.sectionId, station_index: warning.shotIndex }
+              : undefined;
+      if (ref) {
         setSource('detail-panel');
         setSelection({ type: 'station', stationRef: ref });
         triggerCenterOnStation(ref);
         setDetailPanelTab('details');
       }
       return 'navigated'; // jumped to the station; nothing was suppressed or fixed
+    }
+
+    if (opt.id === 'remove-closure') {
+      if (warning.closureId === undefined) return 'failed';
+      // Undoable like any closure removal; failure surfacing is owned by
+      // executeCommand's catch-all toast.
+      const result = await removeLoopClosure(BigInt(warning.closureId));
+      return result.success ? 'resolved' : 'failed';
     }
 
     if (opt.id.startsWith('keep-datum-')) {

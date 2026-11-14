@@ -4336,11 +4336,15 @@ fn closure_chain_transitivity_two_closures_shared_endpoint() {
     // Test: closure-chain transitivity
     // Setup: 3 sections A, B, C. Merge chain: A.1↔B.0, B.1↔C.0
     //   Closure 1: A.0 ↔ B.1 (between A start and B end)
-    //   Closure 2: B.1 ↔ C.1 (between B end and C end)
+    //   Closure 2: B.1 ↔ C.2 (between B end and C end)
     //
-    // B.1 has 2 direct closures: to A.0 and to C.1
-    // A.0 should see transitive closure to C.1 via B.1
-    // C.1 should see transitive closure to A.0 via B.1
+    // B.1 has 2 direct closures: to A.0 and to C.2
+    // A.0 should see transitive closure to C.2 via B.1
+    // C.2 should see transitive closure to A.0 via B.1
+    //
+    // C has TWO shots: B.1 is merged to C.0, so a closure B.1 ↔ C.1 would tie
+    // the two ends of the one shot C.0-C.1 together, which creation refuses
+    // (#737).
     let mut project = Project::new("ChainTransitive".to_string(), None);
 
     let a = project
@@ -4357,7 +4361,10 @@ fn closure_chain_transitivity_two_closures_shared_endpoint() {
         .id;
     let c = project
         .add_section(SectionData {
-            shots: vec![shot(180.0, 180.0, 3.0, 0.0, 0.0)],
+            shots: vec![
+                shot(180.0, 180.0, 3.0, 0.0, 0.0),
+                shot(270.0, 270.0, 3.0, 0.0, 0.0),
+            ],
             ..Default::default()
         })
         .id;
@@ -4386,22 +4393,19 @@ fn closure_chain_transitivity_two_closures_shared_endpoint() {
         )
         .unwrap();
 
-    // Closure 2: B.1 ↔ C.1 (B.1 is merged with C.0, so B and C are connected)
-    // Wait - B.1 and C.0 are merged. So B.1 and C.1 are in the same section group.
-    // But are_stations_merged(B.1, C.1)? No (direct check only).
-    // Actually C.1 is in section C. B.1 is in section B. They're connected through merge.
-    // create_loop_closure checks connectivity via get_connected_section_ids.
+    // Closure 2: B.1 ↔ C.2 (B.1 is merged with C.0, so B and C are connected;
+    // the loop is C.0-C.1-C.2 back to B.1 = C.0).
     let closure2 = project
         .create_loop_closure(
             StationRef::new(b, 1),
-            StationRef::new(c, 1),
+            StationRef::new(c, 2),
             ClosureStrategy::default(),
         )
         .unwrap();
 
     let stations = project.compute_station_coordinates();
 
-    // B.1: should have 2 direct closures (to A.0 and to C.1)
+    // B.1: should have 2 direct closures (to A.0 and to C.2)
     let b1 = stations
         .iter()
         .find(|s| s.station_ref == StationRef::new(b, 1))
@@ -4415,17 +4419,17 @@ fn closure_chain_transitivity_two_closures_shared_endpoint() {
         "B.1 should have direct closure to A.0, got: {:?}",
         b1.closures()
     );
-    let b1_to_c1 = b1
+    let b1_to_c2 = b1
         .closures()
         .iter()
-        .find(|cr| cr.station_ref == StationRef::new(c, 1) && !cr.is_transitive);
+        .find(|cr| cr.station_ref == StationRef::new(c, 2) && !cr.is_transitive);
     assert!(
-        b1_to_c1.is_some(),
-        "B.1 should have direct closure to C.1, got: {:?}",
+        b1_to_c2.is_some(),
+        "B.1 should have direct closure to C.2, got: {:?}",
         b1.closures()
     );
 
-    // A.0: should have direct closure to B.1 AND transitive closure to C.1 (via B.1)
+    // A.0: should have direct closure to B.1 AND transitive closure to C.2 (via B.1)
     let a0 = stations
         .iter()
         .find(|s| s.station_ref == StationRef::new(a, 0))
@@ -4442,55 +4446,55 @@ fn closure_chain_transitivity_two_closures_shared_endpoint() {
     let a0_transitive = a0
         .closures()
         .iter()
-        .find(|cr| cr.station_ref == StationRef::new(c, 1) && cr.is_transitive);
+        .find(|cr| cr.station_ref == StationRef::new(c, 2) && cr.is_transitive);
     assert!(
         a0_transitive.is_some(),
-        "A.0 should have transitive closure to C.1 (via B.1), got: {:?}",
+        "A.0 should have transitive closure to C.2 (via B.1), got: {:?}",
         a0.closures()
     );
     assert_eq!(
         a0_transitive.unwrap().via_station,
         Some(StationRef::new(b, 1)),
-        "A.0 transitive to C.1 should be via B.1"
+        "A.0 transitive to C.2 should be via B.1"
     );
     assert_eq!(
         a0_transitive.unwrap().closure_id,
         closure2.id,
-        "A.0 transitive to C.1 should reference closure2's id"
+        "A.0 transitive to C.2 should reference closure2's id"
     );
 
-    // C.1: should have direct closure to B.1 AND transitive closure to A.0 (via B.1)
-    let c1 = stations
+    // C.2: should have direct closure to B.1 AND transitive closure to A.0 (via B.1)
+    let c2 = stations
         .iter()
-        .find(|s| s.station_ref == StationRef::new(c, 1))
+        .find(|s| s.station_ref == StationRef::new(c, 2))
         .unwrap();
-    let c1_direct = c1
+    let c2_direct = c2
         .closures()
         .iter()
         .find(|cr| cr.station_ref == StationRef::new(b, 1) && !cr.is_transitive);
     assert!(
-        c1_direct.is_some(),
-        "C.1 should have direct closure to B.1, got: {:?}",
-        c1.closures()
+        c2_direct.is_some(),
+        "C.2 should have direct closure to B.1, got: {:?}",
+        c2.closures()
     );
-    let c1_transitive = c1
+    let c2_transitive = c2
         .closures()
         .iter()
         .find(|cr| cr.station_ref == StationRef::new(a, 0) && cr.is_transitive);
     assert!(
-        c1_transitive.is_some(),
-        "C.1 should have transitive closure to A.0 (via B.1), got: {:?}",
-        c1.closures()
+        c2_transitive.is_some(),
+        "C.2 should have transitive closure to A.0 (via B.1), got: {:?}",
+        c2.closures()
     );
     assert_eq!(
-        c1_transitive.unwrap().via_station,
+        c2_transitive.unwrap().via_station,
         Some(StationRef::new(b, 1)),
-        "C.1 transitive to A.0 should be via B.1"
+        "C.2 transitive to A.0 should be via B.1"
     );
     assert_eq!(
-        c1_transitive.unwrap().closure_id,
+        c2_transitive.unwrap().closure_id,
         closure1.id,
-        "C.1 transitive to A.0 should reference closure1's id"
+        "C.2 transitive to A.0 should reference closure1's id"
     );
 }
 
