@@ -15,6 +15,7 @@ import {
   DEFAULT_DATUM_ACCURACY_M,
   MAX_DATUM_ACCURACY_M,
   compassPoint,
+  datumAccuracyToSend,
   parseDatumAccuracy,
 } from '../../utils/zeroDatumPreview';
 import type { GpsCoordinates } from '../../types/project';
@@ -153,6 +154,10 @@ export default function EditStationDialog() {
         setError(t('dialogs.editStation.accuracyInvalid', { max: MAX_DATUM_ACCURACY_M }));
         return;
       }
+      // Send an accuracy only when the user changed it; otherwise keep what is
+      // stored, which may be none at all.
+      const accuracyM = accuracy === null ? undefined : datumAccuracyToSend(accuracy, storedDatum?.accuracy_m);
+      const accuracyOptions = accuracyM === undefined ? {} : { accuracyM };
 
       if (!wasZeroDatum && willBeZeroDatum) {
         // Setting new zero datum
@@ -168,7 +173,7 @@ export default function EditStationDialog() {
             longitude: gpsCoords.longitude,
             depth_reference: station.coordinates.z,
           },
-          { accuracyM: accuracy ?? DEFAULT_DATUM_ACCURACY_M }
+          accuracyOptions
         );
 
         if (!result.success) {
@@ -201,7 +206,7 @@ export default function EditStationDialog() {
               longitude: gpsCoords.longitude,
               depth_reference: station.coordinates.z,
             },
-            { accuracyM: accuracy ?? DEFAULT_DATUM_ACCURACY_M }
+            accuracyOptions
           );
 
           if (!result.success) {

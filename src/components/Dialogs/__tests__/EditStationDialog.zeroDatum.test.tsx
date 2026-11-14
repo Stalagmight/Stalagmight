@@ -143,13 +143,38 @@ describe('EditStationDialog zero datum (#741)', () => {
     expect(screen.queryByTestId('station-datum-preview')).not.toBeInTheDocument();
   });
 
-  it('defaults the accuracy to a 0 m hard pin', async () => {
+  it('defaults the accuracy to a 0 m hard pin, and stores none for the default', async () => {
     render(<EditStationDialog />);
     expect(screen.getByTestId('station-datum-accuracy-input')).toHaveValue(0);
     expect(screen.getByText(/0 puts the computed survey exactly through this GPS\. A larger number .* trusts the GPS less, and the survey wins most of the gap\./)).toBeInTheDocument();
     typeGps('20.5, -87.4');
     fireEvent.click(screen.getByTestId('edit-station-save'));
-    await waitFor(() => expect(setZeroDatum).toHaveBeenCalledWith(REF, expect.anything(), { accuracyM: 0 }));
+    // The user never set an accuracy, so none is sent: the backend reads an
+    // absent one as the default without writing a side-table row for it.
+    await waitFor(() => expect(setZeroDatum).toHaveBeenCalledWith(REF, expect.anything(), {}));
+  });
+
+  it('re-saves a datum stored without an accuracy without writing one', async () => {
+    dialogData = { stationRef: REF };
+    setProject({ datum: { role: 'GpsFix' } });
+    render(<EditStationDialog />);
+    expect(screen.getByTestId('station-datum-accuracy-input')).toHaveValue(0);
+    typeGps('20.6, -87.4');
+    fireEvent.click(screen.getByTestId('edit-station-save'));
+    await waitFor(() => expect(closeDialog).toHaveBeenCalled());
+    expect(setZeroDatum).toHaveBeenCalledTimes(1);
+    expect(setZeroDatum).toHaveBeenCalledWith(REF, { latitude: 20.6, longitude: -87.4, depth_reference: 4 }, {});
+  });
+
+  it('keeps a stored accuracy through a GPS-only edit', async () => {
+    dialogData = { stationRef: REF };
+    setProject({ datum: { accuracy_m: 12, role: 'GpsFix' } });
+    render(<EditStationDialog />);
+    typeGps('20.6, -87.4');
+    fireEvent.click(screen.getByTestId('edit-station-save'));
+    await waitFor(() => expect(closeDialog).toHaveBeenCalled());
+    // Omitting it would clear the stored 12 m back to the default.
+    expect(setZeroDatum).toHaveBeenCalledWith(REF, expect.anything(), { accuracyM: 12 });
   });
 
   it('passes the entered accuracy on save', async () => {

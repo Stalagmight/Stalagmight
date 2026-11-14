@@ -38,6 +38,18 @@ export function compassPoint(bearingDeg: number): string {
 export const MAX_DATUM_ACCURACY_M = 1000;
 
 /**
+ * The accuracy to send when saving a datum: `entered` when it differs from
+ * what the datum reads as now, otherwise exactly what is stored (`undefined`
+ * when nothing is, so the save sends none). The backend stores what it is sent
+ * and an omitted accuracy as "none", so this keeps a re-save from writing an
+ * explicit default the user never set, and keeps an explicit stored value
+ * through a GPS-only edit.
+ */
+export function datumAccuracyToSend(entered: number, stored: number | undefined): number | undefined {
+  return entered === (stored ?? DEFAULT_DATUM_ACCURACY_M) ? stored : entered;
+}
+
+/**
  * Strict parse of the accuracy field: a finite number of metres in
  * 0 ..= MAX_DATUM_ACCURACY_M (0 is a hard pin). `null` for anything else,
  * including an empty field.
