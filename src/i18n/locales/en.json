@@ -1993,6 +1993,8 @@
         "clear": "Clear value",
         "keepDatum": "Keep {{station}}, remove the others",
         "goToStation": "Go to station",
+        "removeClosure": "Remove this loop closure",
+        "goToClosureStation": "Go to closure station {{station}}",
         "adjustLength": "Use inclination - adjust length",
         "adjustInclination": "Use length - adjust inclination",
         "splitInclLength": "Split - adjust inclination & length",
@@ -2415,7 +2417,12 @@
       "adjustedBadge": "Closures Computed View · read-only",
       "computing": "Computing closures…",
       "computingReadOnly": "Computing Closures - Read Only",
-      "computeFailed": "Couldn't compute the Closures Computed View; showing the Raw Data View."
+      "computeFailed": "Couldn't compute the Closures Computed View; showing the Raw Data View.",
+      "skippedClosures_one": "{{count}} loop closure skipped: it spans a single shot.",
+      "skippedClosures_other": "{{count}} loop closures skipped: each spans a single shot.",
+      "failedParts_one": "Part of the survey could not be adjusted and is shown as measured.",
+      "failedParts_other": "{{count}} parts of the survey could not be adjusted and are shown as measured.",
+      "showWarnings": "Show warnings"
     },
     "toasts": {
       "stationsHidden": "Enable 'Stations' in the Display menu to interact with station markers",

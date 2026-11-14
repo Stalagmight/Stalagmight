@@ -22,6 +22,10 @@ export default function ClosureDialog() {
   const stationB = dialogData.stationB as StationRef | undefined;
   const preview = (dialogData.preview as ClosurePreview | null) ?? undefined;
   const reason = dialogData.reason as string | undefined;
+  // Why the backend would refuse this closure (#737): it would tie the two ends
+  // of one shot together, or the pair is already tied. The dialog says so up
+  // front and offers no Create; the backend refuses the pair regardless.
+  const closureRefusal = dialogData.closureRefusal as string | undefined;
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -88,6 +92,15 @@ export default function ClosureDialog() {
         {reason && (
           <p className="text-sm text-text-secondary">{reason}</p>
         )}
+        {closureRefusal && (
+          <div
+            role="alert"
+            className="p-3 bg-error-10 border border-error-20 rounded text-error text-sm"
+            data-testid="closure-refusal"
+          >
+            {closureRefusal}
+          </div>
+        )}
         {error && (
           <div className="p-3 bg-error-10 border border-error-20 rounded text-error text-sm">{error}</div>
         )}
@@ -143,7 +156,13 @@ export default function ClosureDialog() {
           <Button onClick={handleClose} disabled={isLoading} data-testid="closure-cancel">
             Cancel
           </Button>
-          <Button variant="primary" onClick={handleCreate} disabled={isLoading} data-testid="closure-create">
+          <Button
+            variant="primary"
+            onClick={handleCreate}
+            disabled={isLoading || !!closureRefusal}
+            title={closureRefusal}
+            data-testid="closure-create"
+          >
             {isLoading ? 'Creating...' : 'Create Closure'}
           </Button>
         </div>

@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { FitToViewIcon, LockIcon } from '../common/icons';
+import { useUIStore } from '../../store/uiStore';
+import type { AdjustmentReport } from '../../types/ipc/AdjustmentReport';
+import { AlertTriangleIcon, FitToViewIcon, LockIcon } from '../common/icons';
 import {
   PILL_LABEL_CLS,
   RawDataResumeButton,
@@ -53,12 +55,45 @@ function ReadOnlyNotice({ testId, glyph, children }: { testId: string; glyph: Re
   );
 }
 
+const SHOW_WARNINGS_CLS =
+  'shrink-0 whitespace-nowrap inline-flex items-center rounded border border-accent px-2 py-0.5 font-medium text-accent hover:bg-accent-10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent';
+
+/**
+ * What the Closures Computed View left out (#737), as one notice: the loop
+ * closures it skips because they span a single shot, and the parts of the
+ * survey whose solve failed and are drawn measured. Both have Warnings-tab
+ * entries, which the button opens. Renders nothing for an empty report.
+ */
+function AdjustmentNotice({ report }: { report: AdjustmentReport }) {
+  const { t } = useTranslation();
+  const openWarningsTab = useUIStore((s) => s.openWarningsTab);
+  const skipped = report.skipped_closures.length;
+  const failed = report.failures.length;
+  if (skipped === 0 && failed === 0) return null;
+  return (
+    <ReadOnlyNotice testId="adjustment-notice" glyph={<AlertTriangleIcon size={13} className="text-warning" />}>
+      <span className={`${PILL_LABEL_CLS} flex flex-col`}>
+        {failed > 0 && (
+          <span data-testid="adjustment-notice-failed">{t('map.geometry.failedParts', { count: failed })}</span>
+        )}
+        {skipped > 0 && (
+          <span data-testid="adjustment-notice-skipped">{t('map.geometry.skippedClosures', { count: skipped })}</span>
+        )}
+      </span>
+      <button type="button" className={SHOW_WARNINGS_CLS} onClick={openWarningsTab} data-testid="adjustment-notice-show-warnings">
+        {t('map.geometry.showWarnings')}
+      </button>
+    </ReadOnlyNotice>
+  );
+}
+
 export function MapTopLeftOverlay({
   focused,
   onFitOrExitFocus,
   showSpeleoReadOnly,
   showClosureReadOnly,
   showClosureComputing,
+  adjustmentReport = null,
 }: {
   /** In section-focus mode, the fit button doubles as "exit focus". */
   focused: boolean;
@@ -72,6 +107,11 @@ export function MapTopLeftOverlay({
   showClosureReadOnly: boolean;
   /** The closure solve is running (can be true while the notice above is not). */
   showClosureComputing: boolean;
+  /**
+   * What the adjusted geometry on screen left out (#737), or null when no
+   * adjusted geometry is shown. Gated in `MapCanvas` like the notices above.
+   */
+  adjustmentReport?: AdjustmentReport | null;
 }) {
   const { t } = useTranslation();
 
@@ -167,6 +207,8 @@ export function MapTopLeftOverlay({
           {showClosureReadOnly && <RawDataResumeButton />}
         </ReadOnlyNotice>
       )}
+
+      {adjustmentReport && <AdjustmentNotice report={adjustmentReport} />}
     </div>
   );
 }
