@@ -9,7 +9,7 @@
  * it yet.
  */
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { act, cleanup, render, screen, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import type { SpreadsheetGridProps } from '../../common/SpreadsheetGrid';
 import type { DataColumnKey, DataRow } from '../types';
@@ -45,6 +45,8 @@ import { DataWorkspace } from '../DataWorkspace';
 import { useDataWorkspaceStore } from '../store';
 import { resetDataWorkspaceViewPersistenceForTests } from '../useDataWorkspaceViewPersistence';
 import { GUTTER_RAIL_LANE } from '../DataRowLabel';
+import { DATA_COLUMNS } from '../columnsMeta';
+import { constrainDataColumnOrder } from '../model/columnGroups';
 import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
 import { defaultConfig, type Config } from '../../../types/config';
@@ -199,5 +201,19 @@ describe("station link chips span the shot-only columns", () => {
   it('with a shot-only column shown, the gutter does not count them', () => {
     render(<DataWorkspace />);
     expect(screen.queryByTestId(['data', 'row', 'links', 'st-1-4'].join('-'))).toBeNull();
+  });
+});
+
+describe('column order: the shot-only columns stay one block', () => {
+  it('hands the grid the constraint, and applies it to a reorder too', () => {
+    render(<DataWorkspace />);
+    expect(grid().constrainColumnOrder).toBe(constrainDataColumnOrder);
+    // A drag the grid would report: Comment dropped between Length and Azimuth.
+    const order: DataColumnKey[] = DATA_COLUMNS.map((c) => c.key).filter((k) => k !== 'comment');
+    order.splice(order.indexOf('azimuth'), 0, 'comment');
+    act(() => grid().onColumnOrderChange!(order));
+    const stored = useDataWorkspaceStore.getState().columnOrder;
+    // Two shot columns before it, many after: the start edge.
+    expect(stored.indexOf('comment')).toBe(stored.indexOf('fromTo') - 1);
   });
 });

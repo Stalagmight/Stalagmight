@@ -32,6 +32,8 @@ export const DATA_COLUMNS: readonly DataColumnMeta[] = [
   m('type', 'identity', 'both', 'enum', 72),
   m('section', 'identity', 'both', 'text', 160),
   m('name', 'station', 'station', 'text', 96, { editable: true }),
+  // The shot-only block: one contiguous run, other columns only before or
+  // after it (model/columnGroups.ts constrainDataColumnOrder).
   m('fromTo', 'identity', 'shot', 'text', 110),
   m('length', 'shot', 'shot', 'number', 92, { editable: true }),
   m('azimuth', 'angles', 'shot', 'number', 84, { editable: true }),
@@ -42,21 +44,22 @@ export const DATA_COLUMNS: readonly DataColumnMeta[] = [
   m('pitch_out', 'angles', 'shot', 'number', 88, { editable: true }),
   m('depth_in', 'shot', 'shot', 'number', 100, { editable: true }),
   m('depth_out', 'shot', 'shot', 'number', 100, { editable: true }),
-  m('depth', 'position', 'station', 'number', 84),
   m('left', 'lrud', 'shot', 'number', 60, { editable: true }),
   m('right', 'lrud', 'shot', 'number', 60, { editable: true }),
   m('up', 'lrud', 'shot', 'number', 60, { editable: true }),
   m('down', 'lrud', 'shot', 'number', 60, { editable: true }),
   m('kind', 'shot', 'shot', 'enum', 58, { editable: true, align: 'center' }),
+  m('temperature', 'shot', 'shot', 'number', 80, { editable: true }),
+  m('surveyors', 'credit', 'shot', 'text', 160, { editable: true }),
+  m('explorers', 'credit', 'shot', 'text', 160, { editable: true }),
+  m('date', 'credit', 'shot', 'date', 110, { editable: true }),
+  // After the block: the station depth, the comment, the positions.
+  m('depth', 'position', 'station', 'number', 84),
   m('comment', 'notes', 'both', 'text', 280, { editable: true }),
   m('x', 'position', 'station', 'number', 96),
   m('y', 'position', 'station', 'number', 96),
   m('lat', 'position', 'station', 'number', 110),
   m('long', 'position', 'station', 'number', 110),
-  m('temperature', 'shot', 'shot', 'number', 80, { editable: true }),
-  m('surveyors', 'credit', 'shot', 'text', 160, { editable: true }),
-  m('explorers', 'credit', 'shot', 'text', 160, { editable: true }),
-  m('date', 'credit', 'shot', 'date', 110, { editable: true }),
 ];
 
 export const DATA_COLUMN_BY_KEY: ReadonlyMap<DataColumnKey, DataColumnMeta> = new Map(

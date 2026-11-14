@@ -24,7 +24,7 @@ import type { DataTint } from './useDataTint';
 import { buildGridColumns } from './dataGridColumns';
 import { buildRail } from './model/links';
 import { stationLinkItems } from './model/linkItems';
-import { shotBlockSpan } from './model/columnGroups';
+import { constrainDataColumnOrder, shotBlockSpan } from './model/columnGroups';
 import { StationLinkChips } from './StationLinkChips';
 import { orderColumns } from './model/search';
 import { isEntityRow, parseRowKey, sectionRowKey } from './model/rows';
@@ -464,7 +464,10 @@ export function DataGrid({ model, view, height, nav, editing, tint, partners, on
         labels={labels}
         hiddenColumns={gridHidden}
         columnOrder={columnOrder}
-        onColumnOrderChange={(order) => setColumnOrder(order as DataColumnKey[])}
+        // The grid applies the constraint to a drag already; again here, so the
+        // store never holds a shot-only block split in two.
+        constrainColumnOrder={constrainDataColumnOrder}
+        onColumnOrderChange={(order) => setColumnOrder(constrainDataColumnOrder(order as DataColumnKey[]))}
         columnWidths={columnWidths}
         onColumnWidthsChange={setColumnWidths}
         sort={sort}
