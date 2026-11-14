@@ -7,6 +7,10 @@ Update this file every time a new version is tagged.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Restore from Backup can no longer overwrite the open project, empty a project or destroy the backup it restores** - the recovery dialog's restore used to copy files in place. Restoring over the open project left the app showing the old one, and the next save silently undid the restore, or crashed the app if the backup was empty; a project named like `cave.backup.stalx` was offered as its own backup and came out empty; and restoring the `.pre-restore` copy that a restore keeps overwrote that copy first. A restore now copies the backup beside the project and renames files into place, keeps the replaced file as `<project>.stalx.pre-restore`, and changes nothing when it fails. It refuses, changing nothing, while one of the files is open or a project is being opened, when the backup is the project itself, and when the backup is empty, damaged or not a project. The dialog no longer lists the project itself, its `.pre-restore` copy, SQLite's journal files, or files that are empty or not a database ([#720](https://github.com/Stalagmight/Stalagmight/issues/720))
+
 ## [0.5.4] - 2026-11-14
 
 ### Added
