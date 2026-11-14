@@ -289,6 +289,7 @@ fn both_sides_held_tear_the_merge_to_the_moving_sides_datum() {
     project.zero_datums.push(crate::ZeroDatum {
         station_ref: project.key_for_ref(StationRef::new(b, 1)).unwrap(),
         gps: gps(),
+        accuracy_m: None,
     });
     project
         .create_loop_closure(
@@ -483,6 +484,7 @@ fn network(seed: u64) -> Project {
         project.zero_datums.push(crate::ZeroDatum {
             station_ref: project.key_for_ref(StationRef::new(t, 0)).unwrap(),
             gps: gps(),
+            accuracy_m: None,
         });
         let ends: Vec<StationRef> = project
             .sections

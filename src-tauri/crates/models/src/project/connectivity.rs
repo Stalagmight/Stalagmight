@@ -450,11 +450,14 @@ impl Project {
     /// dangling datum is not a real anchor. Counting it would let a merge pick the
     /// phantom-anchored section as the fixed group and shift the world coordinate
     /// system around a station that doesn't exist.
+    ///
+    /// Since #741 a component can hold several datums, and only its PLACEMENT
+    /// datum anchors the rigid group ([`Self::placement_datum_refs`]); GPS fixes
+    /// never move raw geometry, so they are not returned here.
     pub(crate) fn component_datum_refs(&self, section_id: SectionId) -> Vec<StationRef> {
         let merged = self.get_merged_section_ids(section_id);
-        self.zero_datums
-            .iter()
-            .filter_map(|zd| self.resolve_key(&zd.station_ref))
+        self.placement_datum_refs()
+            .into_iter()
             .filter(|sr| merged.contains(&sr.section_id))
             .collect()
     }

@@ -280,6 +280,7 @@ fn an_add_entry_follows_in_its_sections_refs_and_ignores() {
         zero_datums: vec![ZeroDatum {
             station_ref: key(1, X[0]),
             gps: crate::models::GpsCoordinates::new(20.0, -87.0, 0.0).unwrap(),
+            accuracy_m: None,
         }],
         station_merges: vec![StationMerge {
             station_a: key(1, X[0]),

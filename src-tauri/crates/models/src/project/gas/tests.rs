@@ -2417,6 +2417,7 @@ fn gas_reach_field_none_origin_seeds_from_zero_datums() {
     project.zero_datums.push(ZeroDatum {
         station_ref: origin.into(),
         gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
     let diver = Diver::new(20.0, None).unwrap();
     let big = Cylinder::new(
@@ -2443,6 +2444,7 @@ fn gas_reach_field_unresolvable_origin_falls_back_to_entrance() {
     project.zero_datums.push(ZeroDatum {
         station_ref: origin.into(),
         gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
     let diver = Diver::new(20.0, None).unwrap();
     let big = Cylinder::new(

@@ -122,6 +122,7 @@ fn a_refused_combine_changes_nothing_and_leaves_no_undo_entry() {
                     longitude: -87.0,
                     depth_reference: 0.0,
                 },
+                accuracy_m: None,
             });
         }
     }

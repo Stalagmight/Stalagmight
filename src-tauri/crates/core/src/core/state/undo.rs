@@ -409,6 +409,7 @@ impl AppState {
                                     let datum = crate::models::ZeroDatum {
                                         station_ref: key,
                                         gps: *gps,
+                                        accuracy_m: None,
                                     };
                                     match position {
                                         Some(index) => {

@@ -456,10 +456,53 @@ pub struct StationMerge {
 }
 
 /// Zero datum assignment (backend; wire form is [`ZeroDatumWire`]).
+///
+/// One list holds every datum. Its role is derived, never stored
+/// ([`DatumRole`], `Project::datum_roles`): the first resolvable datum of each
+/// merge-connected component PLACES that rigid group, and every later one in
+/// the same component is a GPS FIX that only the Closures Computed View solve
+/// reads (#741).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ZeroDatum {
     pub station_ref: StationKey,
     pub gps: GpsCoordinates,
+    /// Horizontal accuracy of the GPS position in metres. `None` means
+    /// [`DEFAULT_GPS_ACCURACY_M`]; `Some(0.0)` is a hard pin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accuracy_m: Option<f64>,
+}
+
+impl ZeroDatum {
+    /// A datum with the default accuracy.
+    pub fn new(station_ref: StationKey, gps: GpsCoordinates) -> Self {
+        Self {
+            station_ref,
+            gps,
+            accuracy_m: None,
+        }
+    }
+
+    /// The accuracy the solve uses: the stored one, or the default.
+    pub fn effective_accuracy_m(&self) -> f64 {
+        self.accuracy_m.unwrap_or(DEFAULT_GPS_ACCURACY_M)
+    }
+}
+
+/// Default horizontal accuracy of a zero datum's GPS, in metres: a smartwatch
+/// fix followed by a direct shot to the line (#741).
+pub const DEFAULT_GPS_ACCURACY_M: f64 = 5.0;
+
+/// What a zero datum does, derived per merge-connected component (#741).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "bindings/DatumRole.ts")]
+pub enum DatumRole {
+    /// The first resolvable datum of its merge component: it places that rigid
+    /// group in Raw Data View, exactly as a datum always has. The first
+    /// placement datum of the project also defines the frame.
+    Placement,
+    /// A later datum in a component that is already placed. It never moves raw
+    /// geometry; the Closures Computed View solve pulls the survey toward it.
+    GpsFix,
 }
 
 /// Positional wire form of [`StationMerge`] for the frontend (which reasons by
@@ -480,6 +523,12 @@ pub struct StationMergeWire {
 pub struct ZeroDatumWire {
     pub station_ref: StationRef,
     pub gps: GpsCoordinates,
+    /// Stored accuracy in metres; absent means [`DEFAULT_GPS_ACCURACY_M`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub accuracy_m: Option<f64>,
+    /// Derived role in its merge component.
+    pub role: DatumRole,
 }
 
 /// Strategy for distributing loop closure errors

@@ -1278,6 +1278,7 @@ fn test_save_load_zero_datums() {
             longitude: -93.987_654_321_098_76, // 14 decimal places
             depth_reference: 123.456_789,
         },
+        accuracy_m: None,
     };
 
     let zd2 = ZeroDatum {
@@ -1287,6 +1288,7 @@ fn test_save_load_zero_datums() {
             longitude: 151.209_876_543_210_98,
             depth_reference: -15.5,
         },
+        accuracy_m: None,
     };
 
     project.zero_datums.push(zd1);
@@ -3213,6 +3215,7 @@ fn test_save_load_complex_project_round_trip() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(section_a, 0).into(),
         gps: GpsCoordinates::new(45.5, -90.3, 0.0).unwrap(),
+        accuracy_m: None,
     });
 
     // Add loop closure

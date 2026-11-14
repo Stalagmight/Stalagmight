@@ -684,6 +684,7 @@ impl Database {
                         longitude: lon,
                         depth_reference: depth,
                     },
+                    accuracy_m: None,
                 });
             }
         }

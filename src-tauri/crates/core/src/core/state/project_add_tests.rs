@@ -1236,6 +1236,7 @@ fn a_source_refused_after_the_append_is_rolled_back_exactly() {
     two_datums.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(b0, 2).into(),
         gps: GpsCoordinates::new(20.7, -87.5, 0.0).unwrap(),
+        accuracy_m: None,
     });
     let two_datums = save_to(temp.path(), "two-datums.stalx", &two_datums);
     let refused = add(&state, &two_datums);
@@ -1395,6 +1396,7 @@ fn a_refused_add_spends_no_ids_and_keeps_the_modification_time() {
     two_datums.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(b0, 2).into(),
         gps: GpsCoordinates::new(20.7, -87.5, 0.0).unwrap(),
+        accuracy_m: None,
     });
     let two_datums = save_to(temp.path(), "two-datums.stalx", &two_datums);
     assert!(

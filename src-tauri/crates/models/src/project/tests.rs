@@ -340,6 +340,7 @@ fn station_ref_traversals_cover_every_bearing_collection() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 1).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
     project
         .station_offsets
@@ -464,6 +465,7 @@ fn section_has_zero_datum_with_connected_merges() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(c, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 5.0).unwrap(),
+        accuracy_m: None,
     });
 
     assert!(project.section_has_zero_datum(a));
@@ -656,7 +658,7 @@ fn set_zero_datum_first_datum_translates_every_component() {
 /// datum added while only a dangling one is stored lands on the origin, not at
 /// `gps_to_local(its gps, the dangling one's gps)`.
 ///
-/// A dangling datum is dropped by `Project::datum_to_wire` before the frontend
+/// A dangling datum is dropped by `Project::zero_datums_wire` before the frontend
 /// ever sees it, and `Project::frame_datum_key` skips it, so the map's
 /// `gpsOrigin`, the data table's GPS column and the Ariane export all read the
 /// first resolvable one. `set_zero_datum` used to read `zero_datums.first()`
@@ -694,6 +696,7 @@ fn set_zero_datum_ignores_a_dangling_datum_when_choosing_the_frame() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationKey::new(a, StationAnchor::AfterShot("no-such-uuid".to_string())),
         gps: dangling_gps,
+        accuracy_m: None,
     });
     assert_eq!(
         project.resolve_key(&project.zero_datums[0].station_ref),
@@ -1065,6 +1068,7 @@ fn coordinate_computation_no_global_datum_subtraction() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(section_id, 1).into(),
         gps: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
 
     // Compute coordinates
@@ -1668,10 +1672,12 @@ fn detects_two_datums_in_one_merge_component() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(b, 0).into(),
         gps: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
 
     let over = project.over_anchored_merge_components();
@@ -1729,10 +1735,12 @@ fn double_anchored_bridge_project() -> (Project, SectionId, SectionId, SectionId
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(c, 0).into(),
         gps: GpsCoordinates::new(45.001, -90.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
 
     // The bogus promotion: what should have stayed a loop closure.
@@ -4734,6 +4742,7 @@ fn build_project_with_relationships() -> (Project, SectionId, SectionId, Section
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+        accuracy_m: None,
     });
 
     (project, a, b, c)
@@ -5424,6 +5433,7 @@ fn calculate_penetration_with_zero_datum() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(section_id, 0).into(),
         gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
 
     // Compute stations
@@ -5517,6 +5527,7 @@ fn compute_distances_from_zero_datum_roots_matches_penetration() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(section_id, 0).into(),
         gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
 
     let stations = project.compute_station_coordinates();
@@ -5689,6 +5700,7 @@ fn reachability_includes_non_aligned_closures() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
     // A1 <-> B0 via a NON-aligned closure (is_aligned = false).
     project.loop_closures.push(LoopClosure {
@@ -5740,6 +5752,7 @@ fn distance_field_uses_coordinate_distances() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
 
     let mut stations = project.compute_station_coordinates();
@@ -6123,6 +6136,7 @@ fn distribute_closure_with_zero_datum_mid_path() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 1).into(),
         gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
 
     // Record A:1 position before distribution
@@ -6192,10 +6206,12 @@ fn distribute_closure_both_anchored_fails() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 1).into(),
         gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(b, 1).into(),
         gps: GpsCoordinates::new(0.0, 0.01, 0.0).unwrap(),
+        accuracy_m: None,
     });
 
     // Should fail because both endpoints are anchored
@@ -7601,6 +7617,7 @@ fn compute_adjusted_failed_component_falls_back_sibling_still_adjusts() {
     project.zero_datums.push(ZeroDatum {
         station_ref: dup_key,
         gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
     // Component 2 - disconnected from the first, with a single datum; SUCCEEDS.
     let (c, d) = looped(&mut project);
@@ -7672,6 +7689,7 @@ fn is_shot_frozen_single_datum_dead_end() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(sec, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 5.0).unwrap(),
+        accuracy_m: None,
     });
 
     let frozen = project.compute_frozen_shots();
@@ -7717,10 +7735,12 @@ fn is_shot_frozen_loop_with_two_datums() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 5.0).unwrap(),
+        accuracy_m: None,
     });
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(b, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 5.0).unwrap(),
+        accuracy_m: None,
     });
 
     let frozen = project.compute_frozen_shots();
@@ -7770,6 +7790,7 @@ fn is_shot_frozen_loop_with_aligned_closure() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 5.0).unwrap(),
+        accuracy_m: None,
     });
 
     // Add aligned closure: A:2 <-> B:2
@@ -7839,6 +7860,7 @@ fn is_shot_frozen_unaligned_closure_not_traversed() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 5.0).unwrap(),
+        accuracy_m: None,
     });
 
     // Unaligned closure: A:2 <-> B:2
@@ -7941,10 +7963,12 @@ fn update_shot_rejects_frozen_geometry() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 5.0).unwrap(),
+        accuracy_m: None,
     });
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(b, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 5.0).unwrap(),
+        accuracy_m: None,
     });
 
     // Verify shots are frozen
@@ -8903,6 +8927,7 @@ fn realign_without_a_hold_ignores_a_dangling_first_datum() {
             StationAnchor::AfterShot("no-such-uuid".to_string()),
         ),
         gps: GpsCoordinates::new(20.25, -87.5, 0.0).unwrap(),
+        accuracy_m: None,
     });
     assert!(
         project
@@ -10058,6 +10083,7 @@ fn lsq_with_zero_datum_fixes_that_group() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(45.0, 10.0, 100.0).unwrap(),
+        accuracy_m: None,
     });
 
     let closure = LoopClosure {
@@ -10235,10 +10261,12 @@ fn lsq_long_chain_per_shot_changes_are_small() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 200).into(),
         gps: GpsCoordinates::new(45.0, 10.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(b, 0).into(),
         gps: GpsCoordinates::new(45.01, 10.01, 0.0).unwrap(),
+        accuracy_m: None,
     });
 
     // Large offsets stress-test the solver: absolute coordinates are 500-1800m
@@ -10400,10 +10428,12 @@ fn lsq_realistic_topology_preserves_geometry() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 364).into(),
         gps: GpsCoordinates::new(50.0, 50.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(b, 0).into(),
         gps: GpsCoordinates::new(49.99, 50.013, 0.0).unwrap(),
+        accuracy_m: None,
     });
 
     // Save original shots for section A
@@ -10540,10 +10570,12 @@ fn lsq_spur_shots_are_not_modified() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 100).into(),
         gps: GpsCoordinates::new(45.0, 10.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(b, 0).into(),
         gps: GpsCoordinates::new(45.01, 10.01, 0.0).unwrap(),
+        accuracy_m: None,
     });
 
     // Large offsets to stress the solver
@@ -10806,6 +10838,7 @@ fn check_closure_alignment_sees_drift_that_merge_check_cannot() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
     // Merge A2 <-> B0 and align (B0 lands on A2).
     project
@@ -10871,6 +10904,7 @@ fn cascade_solves_deep_chain_past_old_iteration_cap() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(last, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
     // Knock every section out of alignment, then re-solve from scratch.
     for &id in &ids {
@@ -11266,6 +11300,7 @@ fn redrive_offsets_after_load_heals_persisted_drift() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
     project
         .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
@@ -11409,6 +11444,7 @@ fn section_has_zero_datum_ignores_dangling_datum() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationKey::new(a, StationAnchor::AfterShot("ghost".to_string())),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
 
     assert!(
@@ -11449,6 +11485,7 @@ fn has_datum_path_excluding_ignores_dangling_datum() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationKey::new(a, StationAnchor::AfterShot("ghost".to_string())),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
     assert!(
         !project.has_datum_path_excluding(a, b),
@@ -11488,6 +11525,7 @@ fn realign_after_shot_edit_ignores_dangling_datum() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationKey::new(a, StationAnchor::AfterShot("ghost".to_string())),
         gps: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
     let before = project.section_offset(b);
     project.realign_after_shot_edit(b, None);
@@ -11530,6 +11568,7 @@ fn rigid_group_has_datum_ignores_dangling_datum() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationKey::new(a, StationAnchor::AfterShot("ghost".to_string())),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
     assert!(
         !project.rigid_group_has_datum(a),
@@ -11567,10 +11606,12 @@ fn cascade_connection_offsets_ignores_dangling_datum() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(b, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
     project.zero_datums.push(ZeroDatum {
         station_ref: StationKey::new(a, StationAnchor::AfterShot("ghost".to_string())),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
     // Drift A off the merge; precondition: misaligned.
     project.adjust_section_offset(a, 7.0, -3.0);
@@ -11606,6 +11647,7 @@ fn check_merge_alignment_detects_and_realign_fixes_drift() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
     // Merge A1 <-> B0 (merge_stations computes the aligning offset).
     project
@@ -11657,6 +11699,7 @@ fn realign_corrects_sub_tolerance_offset_drift() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
     project
         .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
@@ -11796,10 +11839,12 @@ fn over_anchored_irreducible_gap() -> (Project, SectionId, SectionId, SectionId)
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(b, 0).into(),
         gps: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
     // Pull B 2 cm off the merge: past the 1 cm invariant the self-heal gates on,
     // under the 5 cm the user is told about.
@@ -11988,6 +12033,7 @@ fn realign_merges_still_skips_for_an_edit_in_a_disjoint_component() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(d, 0).into(),
         gps: GpsCoordinates::new(46.0, -91.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
     project.adjust_section_offset(b, 0.0, -0.02);
 
@@ -12106,6 +12152,7 @@ fn integrity_fixture() -> (Project, SectionId, SectionId) {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 5.0).unwrap(),
+        accuracy_m: None,
     });
     project.loop_closures.push(LoopClosure {
         id: 1,
@@ -12190,6 +12237,7 @@ fn deleting_shot_converts_orphaned_bridge_closure_to_merge() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
     project.record_station_merge(StationMerge {
         station_a: StationRef::new(a, 2).into(),
@@ -13142,6 +13190,7 @@ fn repair_structural_integrity_drops_dangling_refs_and_keeps_valid() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(9999, 0).into(),
         gps: GpsCoordinates::new(1.0, 2.0, 3.0).unwrap(),
+        accuracy_m: None,
     });
     project.section_offsets.insert(9999, (1.0, 1.0));
 
@@ -14891,10 +14940,12 @@ fn bridged_double_anchored_groups(project: &mut Project) -> (SectionId, SectionI
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(b, 1).into(),
         gps: GpsCoordinates::new(11.0, 21.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
 
     (a, middle, b)
@@ -15156,10 +15207,12 @@ fn delete_shot_preview_and_execution_agree_on_the_skipped_stitch() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(p, 1).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(q, 1).into(),
         gps: GpsCoordinates::new(11.0, 21.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
 
     let shot_id = project.get_section(bridge).unwrap().shots[0].id;
@@ -15244,6 +15297,7 @@ fn suggest_orphan_placements_finds_intra_import_suggestion_on_first_import() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(anchored, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
 
     let suggestions = project.suggest_orphan_placements(
@@ -15290,6 +15344,7 @@ fn suggest_orphan_placements_never_pairs_a_pre_existing_orphan_with_a_pre_existi
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(pre_anchor, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
 
     // A later, unrelated import that offers no anchored target of its own -
@@ -15338,6 +15393,7 @@ fn suggest_orphan_placements_still_suggests_a_pre_existing_orphan_against_a_newl
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(new_target, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
 
     let suggestions = project.suggest_orphan_placements(
@@ -15378,6 +15434,7 @@ fn suggest_orphan_placements_places_a_newly_imported_orphan_onto_a_pre_existing_
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(pre_anchor, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
     let new_orphan = project
         .add_section(SectionData {
@@ -15433,6 +15490,7 @@ fn suggest_orphan_placements_never_suggests_two_floating_components_onto_each_ot
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(elsewhere, 0).into(),
         gps: GpsCoordinates::new(1.0, 2.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
 
     let a = project
@@ -15542,6 +15600,7 @@ fn count_unanchored_sections_treats_a_datum_reached_through_a_merge_as_anchored(
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 1).into(),
         gps: GpsCoordinates::new(1.0, 2.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
 
     // The datum lives on A alone, but the merge means B's rigid group is
@@ -15570,6 +15629,7 @@ fn count_unanchored_sections_is_scoped_to_the_newly_imported_component() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(new_anchored, 0).into(),
         gps: GpsCoordinates::new(1.0, 2.0, 0.0).unwrap(),
+        accuracy_m: None,
     });
 
     assert_eq!(
@@ -15621,6 +15681,7 @@ fn two_anchored_components_with_orphan_closures(n: usize, closures: usize) -> Pr
         project.zero_datums.push(ZeroDatum {
             station_ref: StationKey::new(ids[0], StationAnchor::SectionStart),
             gps: GpsCoordinates::new(lat, -87.4, 0.0).unwrap(),
+            accuracy_m: None,
         });
     }
     for i in 0..closures {
@@ -15973,6 +16034,7 @@ fn datum_at(key: StationKey, lat: f64) -> ZeroDatum {
     ZeroDatum {
         station_ref: key,
         gps: GpsCoordinates::new(lat, -87.4, 0.0).unwrap(),
+        accuracy_m: None,
     }
 }
 

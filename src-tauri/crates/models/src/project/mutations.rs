@@ -824,6 +824,7 @@ impl Project {
             self.zero_datums.push(ZeroDatum {
                 station_ref: datum_key,
                 gps,
+                accuracy_m: None,
             });
         }
 
@@ -917,6 +918,7 @@ impl Project {
             self.zero_datums.push(ZeroDatum {
                 station_ref: datum_key,
                 gps,
+                accuracy_m: None,
             });
         }
 
@@ -970,7 +972,7 @@ impl Project {
     /// RESOLVES.
     ///
     /// "First that resolves" rather than plain `zero_datums.first()` because a
-    /// dangling datum is not on the wire at all (`Project::datum_to_wire` drops
+    /// dangling datum is not on the wire at all (`Project::zero_datums_wire` drops
     /// it), so the frontend map and the data table take their GPS origin from the
     /// first RESOLVABLE one. Every consumer that reads a datum in order to make
     /// sense of LOCAL metres routes through here - the renormalisation gate,

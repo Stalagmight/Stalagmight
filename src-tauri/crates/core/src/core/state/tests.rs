@@ -4383,10 +4383,12 @@ fn test_delete_shot_rejects_frozen_shot() {
     project.zero_datums.push(crate::models::ZeroDatum {
         station_ref: StationRef::new(sec_a, 0).into(),
         gps: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+        accuracy_m: None,
     });
     project.zero_datums.push(crate::models::ZeroDatum {
         station_ref: StationRef::new(sec_b, 0).into(),
         gps: GpsCoordinates::new(46.0, -74.0, 110.0).unwrap(),
+        accuracy_m: None,
     });
 
     // SELF-VERIFY the chosen shot is genuinely frozen before asserting the
@@ -4492,10 +4494,12 @@ fn test_delete_shot_and_split_rejects_frozen_shot() {
     project.zero_datums.push(crate::models::ZeroDatum {
         station_ref: StationRef::new(sec_a, 0).into(),
         gps: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+        accuracy_m: None,
     });
     project.zero_datums.push(crate::models::ZeroDatum {
         station_ref: StationRef::new(sec_b, 0).into(),
         gps: GpsCoordinates::new(46.0, -74.0, 110.0).unwrap(),
+        accuracy_m: None,
     });
 
     // SELF-VERIFY the interior split shot (index 1) is genuinely frozen.
@@ -4712,6 +4716,7 @@ fn test_split_shot_at_distance_preserves_anchor_on_endpoint_station() {
     project.zero_datums.push(crate::models::ZeroDatum {
         station_ref: endpoint_key.clone(),
         gps: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+        accuracy_m: None,
     });
     project
         .station_comments
@@ -4859,6 +4864,7 @@ fn test_split_shot_at_distance_first_shot_keeps_section_start_anchor() {
     project.zero_datums.push(crate::models::ZeroDatum {
         station_ref: start_key,
         gps: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+        accuracy_m: None,
     });
 
     let state = AppState::new().unwrap();
@@ -4987,10 +4993,12 @@ fn test_split_shot_at_distance_rejects_frozen_shot() {
     project.zero_datums.push(crate::models::ZeroDatum {
         station_ref: StationRef::new(sec_a, 0).into(),
         gps: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+        accuracy_m: None,
     });
     project.zero_datums.push(crate::models::ZeroDatum {
         station_ref: StationRef::new(sec_b, 0).into(),
         gps: GpsCoordinates::new(46.0, -74.0, 110.0).unwrap(),
+        accuracy_m: None,
     });
 
     let frozen = project.compute_frozen_shots();
@@ -8116,10 +8124,12 @@ fn doubly_anchored_guard_reports_receipt_warning_and_skips_the_shot() {
         project.zero_datums.push(ZeroDatum {
             station_ref: key_front,
             gps: gps.clone(),
+            accuracy_m: None,
         });
         project.zero_datums.push(ZeroDatum {
             station_ref: key_back,
             gps,
+            accuracy_m: None,
         });
         let shot = &project.sections[0].shots[1];
         (shot.id, shot.length)
@@ -23429,10 +23439,12 @@ fn repair_command_demotes_a_double_anchoring_bridge_merge() {
         project.zero_datums.push(crate::models::ZeroDatum {
             station_ref: StationRef::new(a, 0).into(),
             gps: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+            accuracy_m: None,
         });
         project.zero_datums.push(crate::models::ZeroDatum {
             station_ref: StationRef::new(c, 0).into(),
             gps: GpsCoordinates::new(45.001, -90.0, 0.0).unwrap(),
+            accuracy_m: None,
         });
         // Park C 500 m away, then weld it to B with the merge the promotion bug
         // created out of what should have stayed a loop closure.

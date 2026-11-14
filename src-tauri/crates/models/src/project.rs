@@ -19,6 +19,7 @@ use super::placement_suggest;
 
 mod closure;
 mod coordinates;
+mod datum_roles;
 mod distance;
 // Crate-visible only so the `.plnx` load path can reach the engine's segment-speed bounds
 // (`MIN/MAX_SEGMENT_SPEED_M_PER_MIN`) and rank stored speeds on the same domain the engine
@@ -87,6 +88,10 @@ mod split_section_tests;
 
 pub use classify::ClassifyScope;
 pub use combine_candidate::{COMBINE_DEPTH_NOTICE_M, COMBINE_TOLERANCE_M, MAX_COMBINE_PARTNERS};
+pub use datum_roles::{
+    datum_gap_threshold_m, DatumGap, ZeroDatumPreview, DATUM_GAP_WARN_BASE_M,
+    DATUM_GAP_WARN_FRACTION,
+};
 pub use gas::{
     CylRole, Cylinder, Diver, GasReachField, PlanMode, PlanSegment, RouteLeg, RouteProfilePoint,
     TankMaterial, Team,
@@ -707,11 +712,7 @@ impl Serialize for ProjectIpc<'_> {
             .iter()
             .filter_map(|m| p.merge_to_wire(m))
             .collect();
-        let zero_datums: Vec<_> = p
-            .zero_datums
-            .iter()
-            .filter_map(|z| p.datum_to_wire(z))
-            .collect();
+        let zero_datums = p.zero_datums_wire();
         let loop_closures: Vec<_> = p
             .loop_closures
             .iter()
@@ -1555,12 +1556,21 @@ impl Project {
         })
     }
 
-    /// Positional wire form of a stored zero datum, or `None` if its ref dangles.
-    pub fn datum_to_wire(&self, zd: &ZeroDatum) -> Option<ZeroDatumWire> {
-        Some(ZeroDatumWire {
-            station_ref: self.resolve_key(&zd.station_ref)?,
-            gps: zd.gps,
-        })
+    /// Positional wire form of every stored zero datum, in list order, with its
+    /// derived role. A datum whose ref dangles is dropped.
+    pub fn zero_datums_wire(&self) -> Vec<ZeroDatumWire> {
+        self.zero_datums
+            .iter()
+            .zip(self.datum_roles())
+            .filter_map(|(zd, role)| {
+                Some(ZeroDatumWire {
+                    station_ref: self.resolve_key(&zd.station_ref)?,
+                    gps: zd.gps,
+                    accuracy_m: zd.accuracy_m,
+                    role: role?,
+                })
+            })
+            .collect()
     }
 
     /// Positional wire form of a stored loop closure, or `None` if either

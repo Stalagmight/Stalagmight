@@ -1385,6 +1385,7 @@ mod tests {
         project.zero_datums.push(crate::models::ZeroDatum {
             station_ref: key,
             gps: GpsCoordinates::new(45.0, -73.0, 0.0).unwrap(),
+            accuracy_m: None,
         });
         project
     }
