@@ -256,27 +256,40 @@ fn merging_two_placed_pieces_moves_the_later_one_and_makes_its_datum_a_fix() {
 }
 
 #[test]
-fn unmerging_returns_the_fix_to_placement_and_moves_nothing() {
+fn unmerging_places_the_detached_piece_on_its_own_gps() {
     let (mut project, a, b) = two_placed_pieces();
     project
         .merge_stations(StationRef::new(a, 2), StationRef::new(b, 0))
         .unwrap();
     let merged = raw_xy(&project);
+    // The merge moved B 30 m west onto A:2; its datum is a fix 30 m off.
+    assert_eq!(xy(&project, StationRef::new(b, 0)), (0.0, 100.0));
 
+    let before = project.datum_layout();
     let (ok, _) = project.unmerge_stations(StationRef::new(a, 2), StationRef::new(b, 0));
     assert!(ok);
+    assert!(project.settle_datum_layout(&before));
     project.resolve_offsets();
 
-    assert_same_xy(&merged, &raw_xy(&project));
     assert_eq!(
         project.datum_roles(),
         vec![Some(DatumRole::Placement), Some(DatumRole::Placement)],
-        "the detached piece is placed by its own datum again, where it is"
+        "the detached piece is placed by its own datum again"
     );
+    // A stays; B goes back onto its GPS, 30 m east, rigidly.
+    let after = raw_xy(&project);
+    for (sr, (mx, my)) in &merged {
+        let (ax, ay) = after[sr];
+        let east = if sr.section_id == b { 30.0 } else { 0.0 };
+        assert!(
+            (ax - (mx + east)).abs() < 1e-6 && (ay - my).abs() < 1e-6,
+            "{sr:?}: ({mx}, {my}) -> ({ax}, {ay})"
+        );
+    }
 }
 
 #[test]
-fn removing_a_placement_datum_promotes_the_fix_without_moving_raw_geometry() {
+fn removing_a_placement_datum_places_the_promoted_fix_on_its_gps() {
     // (a) The removed placement is not the frame: an unrelated piece holds it.
     let (mut project, a, b) = two_entrance_traverse();
     let elsewhere = north_line(&mut project, 1, 10.0);
@@ -301,26 +314,43 @@ fn removing_a_placement_datum_promotes_the_fix_without_moving_raw_geometry() {
         ]
     );
 
-    let frame_before = project.frame_datum_key();
+    let layout = project.datum_layout();
     assert!(project.remove_zero_datum(StationRef::new(a, 0)));
-    project.renormalize_frame_if_changed(frame_before);
+    project.settle_datum_layout(&layout);
     project.resolve_offsets();
-    assert_same_xy(&before, &raw_xy(&project));
     assert_eq!(
         project.datum_roles(),
         vec![Some(DatumRole::Placement), Some(DatumRole::Placement)]
     );
+    // The frame did not change; the traverse moves 40 m east so the promoted
+    // fix sits on its GPS, and the frame's piece stays.
+    let after = raw_xy(&project);
+    for (sr, (bx, by)) in &before {
+        let (ax, ay) = after[sr];
+        let east = if sr.section_id == elsewhere {
+            0.0
+        } else {
+            40.0
+        };
+        assert!(
+            (ax - (bx + east)).abs() < 1e-6 && (ay - by).abs() < 1e-6,
+            "{sr:?}: ({bx}, {by}) -> ({ax}, {ay})"
+        );
+    }
+    let (fx, fy) = xy(&project, StationRef::new(b, 5));
+    assert!((fx - 40.0).abs() < 1e-6 && (fy - 500.0).abs() < 1e-6);
 
-    // (b) The removed placement IS the frame: the only movement is the frame's
-    // rigid re-translation onto the promoted datum's station.
+    // (b) The removed placement IS the frame and the survey is one piece: the
+    // placement and the re-frame onto the promoted datum add up to one rigid
+    // translation by (0, -500).
     let (mut project, a, b) = two_entrance_traverse();
     project
         .set_zero_datum(StationRef::new(b, 5), gps_at(40.0, 500.0))
         .unwrap();
     let before = raw_xy(&project);
-    let frame_before = project.frame_datum_key();
+    let layout = project.datum_layout();
     assert!(project.remove_zero_datum(StationRef::new(a, 0)));
-    project.renormalize_frame_if_changed(frame_before);
+    project.settle_datum_layout(&layout);
     project.resolve_offsets();
     let after = raw_xy(&project);
     for (sr, (bx, by)) in &before {
@@ -331,6 +361,29 @@ fn removing_a_placement_datum_promotes_the_fix_without_moving_raw_geometry() {
         );
     }
     assert_eq!(project.datum_roles(), vec![Some(DatumRole::Placement)]);
+}
+
+#[test]
+fn settling_twice_with_the_same_layout_moves_nothing_when_the_frame_is_kept() {
+    // A placement only measures, so a repeat with the frame unchanged is inert.
+    let (mut project, a, b) = two_entrance_traverse();
+    let elsewhere = north_line(&mut project, 1, 10.0);
+    project
+        .set_zero_datum(StationRef::new(elsewhere, 0), gps_at(-200.0, 0.0))
+        .unwrap();
+    project
+        .set_zero_datum(StationRef::new(b, 5), gps_at(40.0, 500.0))
+        .unwrap();
+    // Make the separate piece's datum the frame by moving it first.
+    let elsewhere_datum = project.zero_datums.remove(1);
+    project.zero_datums.insert(0, elsewhere_datum);
+    project.renormalize_frame();
+    let layout = project.datum_layout();
+    assert!(project.remove_zero_datum(StationRef::new(a, 0)));
+    assert!(project.settle_datum_layout(&layout));
+    let settled = raw_xy(&project);
+    assert!(!project.settle_datum_layout(&layout));
+    assert_same_xy(&settled, &raw_xy(&project));
 }
 
 #[test]

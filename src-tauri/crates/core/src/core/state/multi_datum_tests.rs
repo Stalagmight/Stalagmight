@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use super::AppState;
 use crate::core::Command;
 use crate::models::{
-    local_to_gps, DatumRole, GpsCoordinates, Project, SectionId, ShotData, StationRef,
-    SurveyDirection, DATUM_GPS_GAP,
+    gps_to_local, local_to_gps, DatumRole, GpsCoordinates, Project, SectionId, ShotData,
+    StationRef, SurveyDirection, DATUM_GPS_GAP,
 };
 
 const ORIGIN: (f64, f64) = (20.5, -87.25);
@@ -246,6 +246,259 @@ fn the_preview_query_names_the_role_and_the_gap() {
         .unwrap()
         .is_none());
     assert_eq!(project(&state).zero_datums.len(), 1, "read-only");
+}
+
+/// Every station's raw (x, y, z), keyed by station.
+fn raw_xyz(project: &Project) -> HashMap<StationRef, (f64, f64, f64)> {
+    project
+        .compute_station_coordinates()
+        .into_iter()
+        .map(|s| {
+            let c = s.coordinates;
+            (s.station_ref, (c.x, c.y, c.z))
+        })
+        .collect()
+}
+
+fn xy_of(project: &Project, sr: StationRef) -> (f64, f64) {
+    let c = project.compute_station_raw_coords(sr).unwrap();
+    (c.x, c.y)
+}
+
+fn assert_near(actual: (f64, f64), expected: (f64, f64), tol: f64, what: &str) {
+    assert!(
+        (actual.0 - expected.0).abs() < tol && (actual.1 - expected.1).abs() < tol,
+        "{what}: {actual:?}, expected {expected:?}"
+    );
+}
+
+/// Undo puts every offset, datum and station back exactly; redo replays the
+/// same settled state.
+fn assert_undo_redo_round_trip(state: &AppState, before: &Project) {
+    let after = project(state);
+    assert!(state.undo().success);
+    let undone = project(state);
+    assert_eq!(undone.section_offsets, before.section_offsets);
+    assert_eq!(undone.zero_datums.len(), before.zero_datums.len());
+    assert_eq!(undone.datum_roles(), before.datum_roles());
+    assert_eq!(raw_xyz(&undone), raw_xyz(before));
+    assert!(state.redo().success);
+    let redone = project(state);
+    assert_eq!(redone.section_offsets, after.section_offsets);
+    assert_eq!(raw_xyz(&redone), raw_xyz(&after));
+}
+
+#[test]
+fn removing_the_frame_places_the_promoted_fix_and_keeps_every_piece_on_its_gps() {
+    // Frame A:0 + fix B:5 (40 m east of where the survey puts it) in one piece,
+    // plus a separately placed piece C with depths.
+    let (state, a, b) = two_entrances();
+    let fix_gps = gps_at(40.0, 500.0);
+    set_datum(&state, StationRef::new(b, 5), fix_gps, None);
+    let c_shots = north_shots(2, 20.0)
+        .into_iter()
+        .enumerate()
+        .map(|(i, mut s)| {
+            s.depth_in = 3.0 + i as f64;
+            s.depth_out = 4.0 + i as f64;
+            s
+        })
+        .collect();
+    let c = create_section(&state, "C", c_shots);
+    let c_gps = gps_at(-300.0, 120.0);
+    set_datum(&state, StationRef::new(c, 0), c_gps, None);
+    let before = project(&state);
+    assert_eq!(
+        before.datum_roles(),
+        vec![
+            Some(DatumRole::Placement),
+            Some(DatumRole::GpsFix),
+            Some(DatumRole::Placement)
+        ]
+    );
+    assert_near(
+        xy_of(&before, StationRef::new(c, 0)),
+        (-300.0, 120.0),
+        1e-6,
+        "C placed",
+    );
+
+    let r = state.execute(Command::RemoveZeroDatum {
+        station_ref: StationRef::new(a, 0),
+    });
+    assert!(r.success, "{:?}", r.error);
+
+    let p = project(&state);
+    assert_eq!(
+        p.frame_datum_key().and_then(|k| p.resolve_key(&k)),
+        Some(StationRef::new(b, 5)),
+        "the promoted fix is the frame"
+    );
+    assert_near(
+        xy_of(&p, StationRef::new(b, 5)),
+        (0.0, 0.0),
+        1e-6,
+        "F on the origin",
+    );
+    let c_expected = gps_to_local(&c_gps, &fix_gps);
+    assert_near(
+        xy_of(&p, StationRef::new(c, 0)),
+        c_expected,
+        0.01,
+        "C on its GPS",
+    );
+    // The traverse moved rigidly by (40, 0) then (-40, -500); C by (-40, -500).
+    let (old, new) = (raw_xyz(&before), raw_xyz(&p));
+    for (sr, (bx, by, bz)) in &old {
+        let (nx, ny, nz) = new[sr];
+        assert!((nz - bz).abs() < 1e-12, "{sr:?}: depth changed");
+        let (ex, ey) = if sr.section_id == c {
+            (bx - 40.0, by - 500.0)
+        } else {
+            (*bx, by - 500.0)
+        };
+        assert_near((nx, ny), (ex, ey), 0.01, &format!("{sr:?}"));
+    }
+
+    assert_undo_redo_round_trip(&state, &before);
+}
+
+#[test]
+fn a_batch_that_deletes_the_frame_section_settles_the_promotion_once() {
+    // `execute_batch` settles inside its snapshot pair; a second settle in
+    // `execute()`'s epilogue would place the new frame against the old one.
+    let (state, a, b) = two_entrances();
+    let fix_gps = gps_at(40.0, 500.0);
+    set_datum(&state, StationRef::new(b, 5), fix_gps, None);
+    let c = create_section(&state, "C", north_shots(2, 20.0));
+    let c_gps = gps_at(-300.0, 120.0);
+    set_datum(&state, StationRef::new(c, 0), c_gps, None);
+    let before = project(&state);
+
+    let r = state.execute(Command::Batch {
+        commands: vec![Command::DeleteSection { section_id: a }],
+    });
+    assert!(r.success, "{:?}", r.error);
+    let p = project(&state);
+    assert_near(
+        xy_of(&p, StationRef::new(b, 5)),
+        (0.0, 0.0),
+        1e-6,
+        "F on the origin",
+    );
+    assert_near(
+        xy_of(&p, StationRef::new(c, 0)),
+        gps_to_local(&c_gps, &fix_gps),
+        0.01,
+        "C on its GPS",
+    );
+
+    assert!(state.undo().success);
+    let undone = project(&state);
+    assert_eq!(undone.section_offsets, before.section_offsets);
+    assert_eq!(raw_xyz(&undone), raw_xyz(&before));
+}
+
+#[test]
+fn unmerging_moves_the_piece_whose_fix_is_promoted_onto_its_gps() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "TwoPieces".to_string(),
+        location: None,
+    });
+    let a = create_section(&state, "A", north_shots(2, 50.0));
+    let b = create_section(&state, "B", north_shots(2, 50.0));
+    set_datum(&state, StationRef::new(a, 0), origin(), None);
+    set_datum(&state, StationRef::new(b, 0), gps_at(30.0, 100.0), None);
+    let r = state.execute(Command::MergeStations {
+        station_a: StationRef::new(a, 2),
+        station_b: StationRef::new(b, 0),
+    });
+    assert!(r.success, "{:?}", r.error);
+    let merged = project(&state);
+    assert_near(
+        xy_of(&merged, StationRef::new(b, 0)),
+        (0.0, 100.0),
+        1e-6,
+        "merged",
+    );
+
+    let r = state.execute(Command::UnmergeStationPair {
+        station_a: StationRef::new(a, 2),
+        station_b: StationRef::new(b, 0),
+    });
+    assert!(r.success, "{:?}", r.error);
+    let p = project(&state);
+    assert_eq!(
+        p.datum_roles(),
+        vec![Some(DatumRole::Placement), Some(DatumRole::Placement)]
+    );
+    assert_near(
+        xy_of(&p, StationRef::new(b, 0)),
+        (30.0, 100.0),
+        1e-6,
+        "B on its GPS",
+    );
+    for i in 0..=2 {
+        let sr = StationRef::new(a, i);
+        assert_eq!(xy_of(&p, sr), xy_of(&merged, sr), "A never moves");
+    }
+
+    assert_undo_redo_round_trip(&state, &merged);
+}
+
+#[test]
+fn a_promotion_under_an_unchanged_frame_places_only_its_own_piece() {
+    // E holds the frame; the traverse is placed by A:0 200 m east of it, with a
+    // fix at B:5 that is 40 m east of where the survey puts it.
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "KeptFrame".to_string(),
+        location: None,
+    });
+    let e = create_section(&state, "E", north_shots(1, 10.0));
+    set_datum(&state, StationRef::new(e, 0), origin(), None);
+    let a = create_section(&state, "A", north_shots(5, 50.0));
+    let b = create_section(&state, "B", north_shots(5, 50.0));
+    let r = state.execute(Command::MergeStations {
+        station_a: StationRef::new(a, 5),
+        station_b: StationRef::new(b, 0),
+    });
+    assert!(r.success, "{:?}", r.error);
+    set_datum(&state, StationRef::new(a, 0), gps_at(200.0, 0.0), None);
+    let fix_gps = gps_at(240.0, 500.0);
+    set_datum(&state, StationRef::new(b, 5), fix_gps, None);
+    let before = project(&state);
+    assert_near(
+        xy_of(&before, StationRef::new(b, 5)),
+        (200.0, 500.0),
+        1e-6,
+        "fix",
+    );
+
+    let r = state.execute(Command::RemoveZeroDatum {
+        station_ref: StationRef::new(a, 0),
+    });
+    assert!(r.success, "{:?}", r.error);
+    let p = project(&state);
+    assert_eq!(
+        p.frame_datum_key().and_then(|k| p.resolve_key(&k)),
+        Some(StationRef::new(e, 0))
+    );
+    assert_near(
+        xy_of(&p, StationRef::new(b, 5)),
+        gps_to_local(&fix_gps, &origin()),
+        1e-6,
+        "the promoted fix sits on its GPS",
+    );
+    let (old, new) = (raw_xyz(&before), raw_xyz(&p));
+    for (sr, (bx, by, _)) in &old {
+        let (nx, ny, _) = new[sr];
+        let east = if sr.section_id == e { 0.0 } else { 40.0 };
+        assert_near((nx, ny), (bx + east, *by), 1e-6, &format!("{sr:?}"));
+    }
+
+    assert_undo_redo_round_trip(&state, &before);
 }
 
 #[test]
