@@ -797,17 +797,122 @@ impl Project {
         (dist, riders, pred)
     }
 
-    /// Resolve the project's zero-datum stations to their indices in `stations`.
+    /// The entrance roots: every resolvable zero datum's station, as an index in
+    /// `stations`. Placement datums and GPS fixes alike (#741 decision 5): a fix
+    /// is a second GPS-located way into the same cave, so penetration, the
+    /// distance gradient and Plan mode's "Start from entrance" walk from it too.
     pub(super) fn zero_datum_roots(
         &self,
         station_index: &HashMap<StationRef, usize>,
     ) -> Vec<usize> {
-        self.zero_datums
-            .iter()
-            .filter_map(|zd| {
-                self.resolve_key(&zd.station_ref)
-                    .and_then(|sr| station_index.get(&sr).copied())
-            })
+        self.all_datum_refs()
+            .into_iter()
+            .filter_map(|sr| station_index.get(&sr).copied())
             .collect()
+    }
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod entrance_tests {
+    use super::super::{CylRole, Cylinder, Diver, TankMaterial};
+    use crate::config::GasConfig;
+    use crate::station::DatumRole;
+    use crate::{GpsCoordinates, Project, SectionData, ShotData, StationRef, ZeroDatum};
+
+    fn shot(length: f64, azimuth_in: f64) -> ShotData {
+        ShotData {
+            length,
+            azimuth_in,
+            ..Default::default()
+        }
+    }
+
+    /// A: four 100 m shots east (A0..A4). B: two 50 m shots north off A4 (B0 is
+    /// merged onto A4). A placement datum on A0 and a GPS fix on B2, the far end:
+    /// two GPS-located ways into one merge-connected cave.
+    fn two_entrance_cave() -> (Project, StationRef, StationRef) {
+        let mut project = Project::new("Two entrances".to_string(), None);
+        let a = project
+            .add_section(SectionData {
+                shots: vec![shot(100.0, 90.0); 4],
+                ..Default::default()
+            })
+            .id;
+        let b = project
+            .add_section(SectionData {
+                shots: vec![shot(50.0, 0.0); 2],
+                ..Default::default()
+            })
+            .id;
+        project
+            .merge_stations(StationRef::new(a, 4), StationRef::new(b, 0))
+            .unwrap();
+        let (entrance, fix) = (StationRef::new(a, 0), StationRef::new(b, 2));
+        for (sr, lat) in [(entrance, 20.0), (fix, 20.001)] {
+            project.zero_datums.push(ZeroDatum::new(
+                sr.into(),
+                GpsCoordinates::new(lat, -87.5, 0.0).unwrap(),
+            ));
+        }
+        assert_eq!(
+            project.datum_roles(),
+            vec![Some(DatumRole::Placement), Some(DatumRole::GpsFix)],
+            "fixture rot: the second datum must be a GPS fix, or this proves nothing"
+        );
+        (project, entrance, fix)
+    }
+
+    fn at<T: Copy>(refs: &[StationRef], values: &[T], sr: StationRef) -> T {
+        values[refs.iter().position(|r| *r == sr).unwrap()]
+    }
+
+    #[test]
+    fn penetration_walks_from_a_gps_fix_as_well_as_the_placement_datum() {
+        let (project, entrance, fix) = two_entrance_cave();
+        let stations = project.compute_station_coordinates();
+        let refs: Vec<StationRef> = stations.iter().map(|s| s.station_ref).collect();
+        let pen = project.compute_penetration_distances(&stations);
+
+        assert!(at(&refs, &pen, entrance).abs() < 1e-6);
+        assert!(at(&refs, &pen, fix).abs() < 1e-6, "the fix is an entrance");
+        // A4 is 400 m from A0 but only 100 m back from the fix.
+        let a4 = StationRef::new(entrance.section_id, 4);
+        assert!((at(&refs, &pen, a4) - 100.0).abs() < 1e-6);
+        // The deepest point is now mid-way, not the far end of B.
+        assert!((project.calculate_penetration(&stations) - 200.0).abs() < 1e-6);
+
+        let field = project.distance_field_from(&stations, None);
+        assert_eq!(at(&field.station_refs, &field.distances, fix), Some(0.0));
+    }
+
+    #[test]
+    fn plan_mode_start_from_entrance_includes_a_gps_fix() {
+        let (project, entrance, fix) = two_entrance_cave();
+        let diver = Diver::new(20.0, None).unwrap();
+        let back_gas = Cylinder::new(
+            11.1,
+            207.0,
+            207.0,
+            TankMaterial::Aluminium,
+            CylRole::BackGas,
+            None,
+        )
+        .unwrap();
+        // `origin: None` is Plan mode's "Start from entrance".
+        let field =
+            project.compute_gas_reach_field(None, None, &diver, &[back_gas], &GasConfig::default());
+        let gas = |sr| at(&field.station_refs, &field.gas_to_reach, sr).unwrap();
+        assert!(gas(entrance).abs() < 1e-9);
+        assert!(gas(fix).abs() < 1e-9, "the fix costs no gas to reach");
+        let b1 = StationRef::new(fix.section_id, 1);
+        let a2 = StationRef::new(entrance.section_id, 2);
+        assert!(
+            gas(b1) < gas(a2),
+            "B1 is 50 m from the fix, A2 200 m from either"
+        );
     }
 }
