@@ -56,6 +56,8 @@ pub struct Survey {
     pub modified_at: String,
     pub sections: Vec<Section>,
     pub station_merges: Vec<StationMerge>,
+    /// Every zero datum: each component's placement datum and its GPS fixes
+    /// alike. [`StationPosition::anchor`] names the placement datum.
     pub zero_datums: Vec<ZeroDatum>,
     pub loop_closures: Vec<LoopClosure>,
     pub station_comments: Vec<StationComment>,
@@ -278,9 +280,11 @@ pub struct StationPosition {
     pub y: f64,
     pub z: f64,
     /// The zero-datum station anchoring this station's connected component
-    /// (connected through shots and station merges): the frame datum when it is
-    /// in the component, otherwise the component's lowest datum station. `None`
-    /// when the component has no datum.
+    /// (connected through shots and station merges): the component's placement
+    /// datum, its first datum in the project's list order, as the app defines
+    /// it. A later datum in the same component is a GPS fix, which never
+    /// anchors. The frame datum is the placement datum of its own component.
+    /// `None` when the component has no datum.
     pub anchor: Option<StationId>,
     /// WGS84 latitude/longitude in degrees, by the exact inverse of the app's own
     /// datum placement (see "Frame"). `None` for a floating station or when the
@@ -380,7 +384,12 @@ impl Survey {
 
         let frame_gps = project.frame_datum().map(|d| d.gps);
         let stations = with_stations.then(|| {
-            let anchors = Anchors::new(project, &station_merges, &zero_datums, frame_datum);
+            let placements: Vec<StationId> = project
+                .placement_datum_refs()
+                .into_iter()
+                .map(StationId::from)
+                .collect();
+            let anchors = Anchors::new(project, &station_merges, &placements);
             let mut positions: Vec<StationPosition> = project
                 .compute_station_positions()
                 .into_iter()
@@ -522,7 +531,8 @@ fn correction_source(project: &Project, section: &stalagmight_models::Section) -
 }
 
 /// Which zero datum anchors each station's component (connected through shots
-/// and station merges). Union-find with path halving and union by size.
+/// and station merges): its placement datum. Union-find with path halving and
+/// union by size.
 struct Anchors {
     index: HashMap<StationId, usize>,
     root: Vec<usize>,
@@ -530,12 +540,7 @@ struct Anchors {
 }
 
 impl Anchors {
-    fn new(
-        project: &Project,
-        merges: &[StationMerge],
-        datums: &[ZeroDatum],
-        frame_datum: Option<StationId>,
-    ) -> Self {
+    fn new(project: &Project, merges: &[StationMerge], placements: &[StationId]) -> Self {
         let mut index = HashMap::new();
         for section in &project.sections {
             for i in 0..=section.shots.len() as u32 {
@@ -568,17 +573,13 @@ impl Anchors {
                 uf.union(a, b);
             }
         }
-        // `datums` is sorted by station, so the first datum seen in a component is
-        // its lowest; the frame datum then overrides it in its own component.
+        // `placements` are the project's placement datums (`Project::datum_roles`),
+        // in list order: at most one per merge component, the first datum of
+        // each. The first one seen still wins, should two ever share a root.
         let mut anchor_of_root = HashMap::new();
-        for d in datums {
-            if let Some(&i) = index.get(&d.station) {
-                anchor_of_root.entry(uf.find(i)).or_insert(d.station);
-            }
-        }
-        if let Some(frame) = frame_datum {
-            if let Some(&i) = index.get(&frame) {
-                anchor_of_root.insert(uf.find(i), frame);
+        for &station in placements {
+            if let Some(&i) = index.get(&station) {
+                anchor_of_root.entry(uf.find(i)).or_insert(station);
             }
         }
         let root = (0..index.len()).map(|i| uf.find(i)).collect();
