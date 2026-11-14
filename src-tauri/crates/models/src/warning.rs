@@ -42,9 +42,16 @@ pub const CLOSURE_ACROSS_ONE_SHOT: &str = "CLOSURE_ACROSS_ONE_SHOT";
 /// Warning code for a part of the survey the closure-adjusted solve could not
 /// adjust, so the Closures Computed View (and Plan / Export) shows it measured
 /// (#737). Read from the solve the app last ran on the current project, never
-/// computed by the warnings pass itself. An **error** for the same reason as
-/// [`CLOSURE_ACROSS_ONE_SHOT`]: the adjusted geometry is wrong until the data
-/// is fixed, and hiding that would bring back the silent fallback.
+/// computed by the warnings pass itself.
+///
+/// **Advisory** (a warning, so it may be ignored), unlike
+/// [`CLOSURE_ACROSS_ONE_SHOT`]. Two reasons. It exists only while the memoized
+/// solve matches the current version, so any edit drops it until the computed
+/// view, Plan or Export solves again: as an error it would make everything that
+/// counts errors - the SpeleoDB upload gate, the map's issue colouring - depend
+/// on which view the user opened last. And the measured data it is about is
+/// fine; only the derived adjusted view is degraded, and the in-view notice
+/// says so wherever that view is drawn.
 pub const CLOSURE_ADJUSTMENT_FAILED: &str = "CLOSURE_ADJUSTMENT_FAILED";
 
 /// `CommandResult` warning code for a loop closure a delete-with-shift removed
@@ -67,10 +74,10 @@ pub fn severity_for_code(code: &str) -> WarningSeverity {
         | "NON_FINITE_VALUE"
         | "LENGTH_BELOW_DEPTH_CHANGE"
         | MULTIPLE_DATUMS_PER_MERGE_COMPONENT
-        | CLOSURE_ACROSS_ONE_SHOT
-        | CLOSURE_ADJUSTMENT_FAILED => WarningSeverity::Error,
+        | CLOSURE_ACROSS_ONE_SHOT => WarningSeverity::Error,
         // SHORT_SHOT, LONG_SHOT, LARGE_DEPTH_CHANGE, AZIMUTH_DEVIATION,
-        // PITCH_DEVIATION and INCLINATION_DEPTH_MISMATCH are advisory; an
+        // PITCH_DEVIATION, INCLINATION_DEPTH_MISMATCH and
+        // CLOSURE_ADJUSTMENT_FAILED (see its docs) are advisory; an
         // unknown code defaults to advisory so a future warning is ignorable
         // until classified.
         _ => WarningSeverity::Warning,

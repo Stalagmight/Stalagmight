@@ -299,7 +299,15 @@ impl AppState {
         }
 
         all_warnings.extend(Self::closure_across_one_shot_warnings(project));
-        all_warnings.extend(self.adjustment_failure_warnings(project));
+        // Advisory, so an ignore on its shot is honoured like any warning's.
+        all_warnings.extend(
+            self.adjustment_failure_warnings(project)
+                .into_iter()
+                .map(|mut w| {
+                    w.is_resolved = is_resolved_for(&w.shot_uuid, w.section_id, w.shot_id, &w.code);
+                    w
+                }),
+        );
 
         // Sort by resolved (unresolved first), then severity (errors first), then by section and shot
         all_warnings.sort_by(|a, b| {
@@ -352,12 +360,15 @@ impl AppState {
             .collect()
     }
 
-    /// One error per component the last closure-adjusted solve of THIS
-    /// project version could not adjust (#737), so a part of the survey shown
-    /// measured in the Closures Computed View is never silent. Read from the
-    /// memoized solve only ([`Self::cached_adjustment_failures`]) - the
-    /// warnings pass never runs the solve - so it appears once the view (or
-    /// Plan / Export) has solved, and the frontend refreshes warnings then.
+    /// One advisory warning per component the last closure-adjusted solve of
+    /// THIS project version could not adjust (#737). Read from the memoized
+    /// solve only ([`Self::cached_adjustment_failures`]) - the warnings pass
+    /// never runs the solve - so it appears once the Closures Computed View,
+    /// Plan or Export has solved the current version (the frontend refreshes
+    /// warnings then), and an edit drops it until the next solve. That is why
+    /// it is advisory, not an error (see `CLOSURE_ADJUSTMENT_FAILED`). The
+    /// primary surface is the notice drawn with the adjusted view itself; this
+    /// entry is where the user reads which part and why.
     ///
     /// Attached to the shot at the solve's anchor station (station 0 -> shot 0,
     /// station i -> shot i-1, like the over-anchoring error), falling back to

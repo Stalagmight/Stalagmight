@@ -140,14 +140,17 @@ describe('WarningResolution - closures across one shot (#737)', () => {
     expect(removeLoopClosure).not.toHaveBeenCalled();
   });
 
-  it('offers a way to the part a failed solve left measured', () => {
+  it('offers a way to the part a failed solve left measured, and Ignore (advisory)', () => {
+    useProjectStore.setState({ databaseOpen: true } as never);
     renderResolution({
       ...acrossOneShot,
       code: 'CLOSURE_ADJUSTMENT_FAILED',
+      severity: 'warning',
       closureId: undefined,
     } as unknown as ProjectWarning);
-    expect(screen.getByTestId('warning-resolution-option-go-to-station')).toBeInTheDocument();
-    expect(screen.queryByText(/ignore/i)).not.toBeInTheDocument();
+    expect(screen.getByTestId('warning-resolution-option-go-to-station')).toBeChecked();
+    // Advisory like any warning: Ignore is offered, after the way there.
+    expect(screen.getByTestId('warning-resolution-option-ignore')).toBeEnabled();
     expect(screen.queryByTestId('warning-resolution-option-remove-closure')).toBeNull();
   });
 });

@@ -2361,12 +2361,14 @@ fn backup_before_repair(path: &Path) -> Result<PathBuf> {
   "Show resolved" toggle reveals them
 - Auto-clear when field corrected
 - Cleared errors stay cleared (don't re-validate automatically)
-- Closure errors (#737): a loop closure that ties the two ends of one shot together
-  (`CLOSURE_ACROSS_ONE_SHOT`, one per closure, on that shot) resolves with "Remove
-  this loop closure" (disabled while editing is blocked) or "Go to closure station";
-  a part of the survey the Closures Computed View could not adjust
-  (`CLOSURE_ADJUSTMENT_FAILED`) resolves with "Go to station". Both are errors, so
-  neither offers Ignore
+- Closure entries (#737): a loop closure that joins the two ends of one shot
+  (`CLOSURE_ACROSS_ONE_SHOT`, one per closure, on that shot) is an error and
+  resolves with "Remove this loop closure" (disabled while editing is blocked) or
+  "Go to closure station", never Ignore. A part of the survey the Closures Computed
+  View could not adjust (`CLOSURE_ADJUSTMENT_FAILED`) is a warning: it is listed
+  once the computed view, Plan or Export has solved the current version and goes
+  with the next edit, so it must not gate like an error; it resolves with "Go to
+  station" or Ignore
 
 ---
 

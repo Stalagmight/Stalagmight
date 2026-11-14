@@ -523,8 +523,13 @@ export function WarningResolution({
         ];
       case 'CLOSURE_ADJUSTMENT_FAILED':
         // A part of the survey the closure solve could not adjust (#737). The
-        // fix is in that part's closures or datums, so offer the way there.
-        return [{ id: 'go-to-station', label: t('detailPanel.warnings.resolveOptions.goToStation'), navigate: true }];
+        // fix is in that part's closures or datums, so offer the way there. It
+        // is advisory (the measured data is fine; only the derived view is
+        // degraded), so it can be ignored like any other warning.
+        return [
+          { id: 'go-to-station', label: t('detailPanel.warnings.resolveOptions.goToStation'), navigate: true },
+          ...maybeIgnore,
+        ];
       default:
         return maybeIgnore;
     }

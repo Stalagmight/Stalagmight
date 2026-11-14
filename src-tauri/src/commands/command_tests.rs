@@ -5831,6 +5831,75 @@ fn test_closure_across_one_shot_warning_is_never_suppressible() {
 }
 
 #[test]
+fn test_closure_adjustment_failure_warning_is_advisory_and_ignorable() {
+    // #737: a failed solve is reported only while the cached solve matches the
+    // current version, so it is ADVISORY - it must not gate an upload depending
+    // on which view was last open - and an Ignore on its shot is honoured.
+    let mut project = Project::new("FailedSolve".to_string(), None);
+    let x = project
+        .add_section(SectionData {
+            shots: vec![shot_data(10.0)],
+            ..Default::default()
+        })
+        .id;
+    let y = project
+        .add_section(SectionData {
+            shots: vec![shot_data(10.0)],
+            ..Default::default()
+        })
+        .id;
+    project
+        .set_zero_datum(
+            StationRef::new(x, 0),
+            GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+        )
+        .unwrap();
+    project
+        .set_zero_datum(
+            StationRef::new(y, 0),
+            GpsCoordinates::new(0.0001, 0.0001, 0.0).unwrap(),
+        )
+        .unwrap();
+    project
+        .create_loop_closure(
+            StationRef::new(x, 0),
+            StationRef::new(y, 0),
+            ClosureStrategy::Batch,
+        )
+        .unwrap();
+    project.ensure_shot_uuids();
+    let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
+    let app = app_with_custom_state(app_state);
+    let failed = |app: &tauri::App<MockRuntime>| {
+        validation::get_project_warnings(state(app))
+            .into_iter()
+            .find(|w| w.code == crate::models::CLOSURE_ADJUSTMENT_FAILED)
+    };
+
+    // Raw Data View, nothing solved yet: no entry.
+    assert!(failed(&app).is_none());
+    state(&app).inner().get_adjusted_stations().unwrap();
+    let warning = failed(&app).expect("the solve failed, so it is reported");
+    assert_eq!(warning.severity, crate::models::WarningSeverity::Warning);
+    assert!(!warning.is_resolved);
+
+    // Ignore persists and is honoured.
+    validation::resolve_warning_impl(
+        state(&app).inner(),
+        warning.section_id,
+        warning.shot_id,
+        warning.code.clone(),
+        None,
+    )
+    .unwrap();
+    let ignored = failed(&app).expect("still listed, as resolved");
+    assert!(
+        ignored.is_resolved,
+        "an advisory warning honours its ignore"
+    );
+}
+
+#[test]
 fn test_get_adjustment_report_command() {
     // #737: the new IPC reports the skipped closure at once, and a failed
     // component only after the adjusted view has solved; get_adjusted_stations

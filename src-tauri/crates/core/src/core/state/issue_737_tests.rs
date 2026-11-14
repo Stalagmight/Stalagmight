@@ -319,10 +319,13 @@ fn the_report_lists_skipped_closures_and_failures_only_from_a_current_solve() {
     assert_eq!(failed.len(), 1, "{warnings:?}");
     let w = failed[0];
     assert!(expected.contains(&w.section_id));
-    assert_eq!(w.severity, WarningSeverity::Error);
-    assert!(!crate::models::warning_is_ignorable(
+    // Advisory: it lives only while the cached solve matches this version, so
+    // it must not gate like an error (the upload gate counts errors).
+    assert_eq!(w.severity, WarningSeverity::Warning);
+    assert!(crate::models::warning_is_ignorable(
         CLOSURE_ADJUSTMENT_FAILED
     ));
+    assert!(!w.is_resolved);
     assert!(
         w.message.starts_with(&format!(
             "Shot {}:{} is in a part of the survey (2 sections)",

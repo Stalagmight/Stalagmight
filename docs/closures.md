@@ -274,16 +274,25 @@ solver's error), `AppState` keeps them beside the memoized adjusted stations, an
   closures skipped above (computed on request) and the failures of the cached solve
   of the CURRENT project version only, each with a plain-language reason (the raw
   solver text stays in the log). `get_adjusted_stations` is unchanged.
-- the Warnings tab lists one `CLOSURE_ACROSS_ONE_SHOT` error per skipped closure, on
-  the shot it spans (Resolve: **Remove this loop closure**, or go to its station),
-  and one `CLOSURE_ADJUSTMENT_FAILED` error per failed part, read from the same
-  cached solve (the warnings pass never runs the solve; the frontend refreshes
-  warnings once the report names a failure). Both are errors, so neither can be
-  ignored.
+- the Warnings tab lists one `CLOSURE_ACROSS_ONE_SHOT` **error** per skipped
+  closure, on the shot it spans (Resolve: **Remove this loop closure**, or go to its
+  station). It is a pure function of the saved data, so it gates like any error and
+  cannot be ignored.
+- it also lists one `CLOSURE_ADJUSTMENT_FAILED` **warning** per failed part, read
+  from the same cached solve: the warnings pass never runs the solve, so the entry
+  appears once the Closures Computed View, Plan or Export has solved the current
+  version (the frontend refreshes warnings once the report names a failure, or
+  stops naming one) and an edit drops it until the next solve. That is why it is
+  advisory, and ignorable: as an error, the SpeleoDB upload gate and the map's
+  issue colouring would depend on which view was open last, and the measured data
+  it is about is fine - only the derived adjusted view is degraded. Resolve: **Go
+  to station**, or Ignore.
 - the Closures Computed View (and Plan / Export, which draw the adjusted geometry)
-  shows a notice beside the read-only pill - "1 loop closure skipped: it spans a
-  single shot." and/or "Part of the survey could not be adjusted and is shown as
-  measured." - with **Show warnings**, which opens the Warnings tab.
+  shows a notice stacked under the read-only pill - "1 loop closure skipped: it
+  spans a single shot." and/or "Part of the survey could not be adjusted and is
+  shown as measured." - with **Show warnings**, which opens the Warnings tab. It is
+  the primary surface: it is drawn with the adjusted view itself, so it is always
+  current.
 
 ## Deleting shots around a closure
 
