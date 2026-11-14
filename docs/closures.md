@@ -315,7 +315,9 @@ The Delete Shots dialog says so before the user confirms. The range preview
 `Project::preview_gap_close_closure_removals` computes by running the very
 gap-close the command runs (`Project::gap_close_shot_range`, shared by both) on a
 clone and taking the same `closures_newly_across_one_shot`; the dialog lists them
-under "Loop closures removed (they would span a single shot)". It is absent when no
+under "Close Gap & Delete removes these loop closures (they would span a single
+shot)" (the heading names the gap-close button, "Delete Shots" for a prefix or
+suffix range, since Split removes none). It is absent when no
 gap-close is offered (the whole section, or a blocked shift). The single-shot
 preview has no such list: that delete never shortens a closure to one shot, and
 `preview_delete_shot` runs inside every per-shot removal, so a simulation there

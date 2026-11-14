@@ -39,9 +39,15 @@ export type ShotImpactRelationships = Pick<
 export default function DeleteShotImpactDetails({
   impact,
   title = 'This deletion will update station relationships:',
+  gapCloseAction = 'Close Gap & Delete',
 }: {
   impact: ShotImpactRelationships | null;
   title?: string;
+  /**
+   * The label of the button that closes the gap. The closures across one shot
+   * are removed only by that action, not by Split, so the heading names it.
+   */
+  gapCloseAction?: string;
 }) {
   if (!impact) return null;
 
@@ -92,7 +98,9 @@ export default function DeleteShotImpactDetails({
 
         {acrossOneShot.length > 0 && (
           <div data-testid="impact-closures-across-one-shot">
-            <p className="font-medium">Loop closures removed (they would span a single shot)</p>
+            <p className="font-medium">
+              {gapCloseAction} removes these loop closures (they would span a single shot)
+            </p>
             <ul className="list-disc list-inside">
               {acrossOneShot.map((closure) => {
                 const closureId = closure.closure_id.toString();

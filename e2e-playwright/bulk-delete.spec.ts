@@ -169,7 +169,10 @@ test.describe('Bulk delete dialog', () => {
     await openBulkDelete(page, interiorData(r));
     const block = page.getByTestId('impact-closures-across-one-shot');
     await expect(block).toBeVisible();
-    await expect(block).toContainText('Loop closures removed (they would span a single shot)');
+    // Only closing the gap removes them, not Split: the heading names the button.
+    await expect(block).toContainText(
+      'Close Gap & Delete removes these loop closures (they would span a single shot)'
+    );
     // The ids the closure was created with, not the renumbered ones.
     await expect(block).toContainText(`#7: ${r.sectionId}:1 <-> ${r.sectionId}:4`);
   });
