@@ -1,6 +1,6 @@
 # Several GPS zero datums in one connected survey
 
-Status: PROPOSED, not started. Issue: #741.
+Status: IN PROGRESS. Issue: #741.
 
 ## Problem
 
@@ -162,13 +162,31 @@ check, export and Plan mode read the fixes.
 - Injection checks: drop the fix observation, and the Computed View tests go red; read fixes as
   placement datums in the raw view, and the merge-tear test goes red.
 
-## Open questions for the geometry owner
+## Open questions, settled by the project owner
 
-1. Derived roles in one list (proposed), or a separate list of GPS fixes?
-2. Should the destructive closure distribution strategies ignore fixes (proposed), or treat
-   them as anchors?
-3. Is a 5 m default accuracy right, and should depth ever take a GPS fix's elevation into
-   account?
+The geometry owner had not answered by 2026-11-14, so the project owner settled
+them and implementation started:
+
+1. **Derived roles in one list.** Not a separate list of GPS fixes.
+2. **The destructive closure distribution strategies ignore fixes.** Only
+   placement datums anchor them.
+3. **5 m default accuracy.** Depth never takes a GPS fix's elevation into
+   account; the solve stays horizontal.
+
+## Implementation tracks
+
+Work runs in parallel on top of one foundation commit, which adds
+`ZeroDatum.accuracy_m`, `DatumRole`, the derived roles
+(`crates/models/src/project/datum_roles.rs`), `DatumGap`, `ZeroDatumPreview`
+and the wire fields. `component_datum_refs` returns placement datums only.
+
+| Track | Scope | PR |
+|---|---|---|
+| Model | guards, merge and unmerge, cascade, closure distribution, move tools, integrity, warnings, preview command | 1 |
+| Persistence | the new table, load and save | 1 |
+| Frontend | Edit Station dialog, accuracy field, gap, warnings tab, map | 1 |
+| Solve | weighted fixes in the Closures Computed View | 2 |
+| Entrances | Plan mode and Ariane export | 3 |
 
 ## Related
 
