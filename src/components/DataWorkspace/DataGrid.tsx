@@ -2,6 +2,7 @@
  * The Data workspace's SpreadsheetGrid, wired: column defs -> grid columns,
  * visibility (+ columns revealed by search), order / widths / sort from the
  * store, find highlights, row tints, the rail gutter, section header bands,
+ * the section named in the header corner once its header scrolls away,
  * focus requests (scrollTo) and keeping the active row across rebuilds,
  * context-menu actions, the header menu, and the selection summary.
  */
@@ -22,8 +23,8 @@ import { buildGridColumns } from './dataGridColumns';
 import { buildRail } from './model/links';
 import { orderColumns } from './model/search';
 import { isEntityRow, parseRowKey, sectionRowKey } from './model/rows';
-import { DataRowLabel, DATA_GUTTER_WIDTH, type RevealReason } from './DataRowLabel';
-import { DataSectionHeader } from './DataSectionHeader';
+import { DataRowLabel, DATA_GUTTER_WIDTH, GUTTER_RAIL_LANE, type RevealReason } from './DataRowLabel';
+import { DataSectionCorner, DataSectionHeader } from './DataSectionHeader';
 import { DataHeaderMenu, type HeaderMenuState } from './DataHeaderMenu';
 import { dataCellTestId, dataRowTestId } from './dataTestIds';
 import { selectionRectFromDom, summarizeSelection, type GridSelectionInfo, type SelectionSummary } from './selectionSummary';
@@ -308,6 +309,18 @@ export function DataGrid({ model, view, height, nav, editing, tint, partners, on
     ),
     [ctx, rail, tint, revealReason, nav, cellMarks],
   );
+  // The section the top rows belong to, in the header corner, once its header
+  // row has scrolled away (or with headers off). Nothing while sorted: the
+  // rows then mix sections.
+  const headerCorner = useCallback(
+    (firstVisibleRow: number) => {
+      if (!view.surveyOrder) return null;
+      const row = viewRows[firstVisibleRow];
+      if (!row || row.kind === 'section') return null;
+      return <DataSectionCorner sectionId={row.sectionId} ctx={ctx} />;
+    },
+    [view.surveyOrder, viewRows, ctx],
+  );
   const groupRowContent = useCallback(
     (row: DataRow) =>
       row.kind === 'section' ? (
@@ -430,6 +443,9 @@ export function DataGrid({ model, view, height, nav, editing, tint, partners, on
         rowClassName={rowClassName}
         rowsVersion={rowsVersion}
         groupRowContent={groupRowContent}
+        groupContentStart="gutter"
+        groupContentInset={GUTTER_RAIL_LANE}
+        headerCorner={headerCorner}
         scrollTo={scrollReq}
         extraContextMenuItems={extraContextMenuItems}
         onHeaderContextMenu={(colKey, pos) => setHeaderMenu({ ...pos, colKey: colKey as DataColumnKey })}

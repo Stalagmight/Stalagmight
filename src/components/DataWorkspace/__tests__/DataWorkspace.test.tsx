@@ -603,11 +603,12 @@ describe('Focus requests', () => {
     expect(screen.getByTestId('data-grid-selection-overlay')).not.toHaveAttribute('data-band-focus');
   });
 
-  it('an active header row names its section in the gutter, and its outline spans the row', () => {
+  it("a header row's gutter is the rail only (the header content names the section); its outline spans the row", () => {
     render(<DataWorkspace />);
     const gutter = screen.getByTestId('data-grid-gutter-10');
-    expect(within(gutter).getByTestId('data-row-name-sec-2')).toHaveTextContent('Branch B');
-    expect(within(gutter).getByTestId('data-row-name-sec-2')).toHaveClass('dw-group-label');
+    expect(within(gutter).queryByTestId(['data', 'row', 'name', 'sec-2'].join('-'))).toBeNull();
+    expect(gutter.querySelector('.dw-rail-elbow')).not.toBeNull();
+    expect(within(screen.getByTestId('data-grid-group-10')).getByTestId('data-section-header-2')).toHaveTextContent('Branch B');
     fireEvent.mouseDown(screen.getByTestId('data-grid-group-10'));
     fireEvent.mouseUp(window);
     expect(gutter).toHaveClass('sg-gutter-active');

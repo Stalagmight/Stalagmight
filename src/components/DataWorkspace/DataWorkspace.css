@@ -35,17 +35,6 @@
   box-shadow: 0 0 0 1px var(--cc-warning-text);
 }
 
-/* A header row's gutter label: shown only while the row is active or selected
-   (the band already names the section). */
-.dw-group-label {
-  visibility: hidden;
-  font-weight: 600;
-}
-.sg-gutter-active .dw-group-label,
-.sg-gutter-selected .dw-group-label {
-  visibility: visible;
-}
-
 /* Rows linked to the hovered junction / closure station. */
 .sg-grid .dw-row-partner .sg-cell {
   background: color-mix(in srgb, var(--cc-accent) 14%, var(--cc-panel));
@@ -96,7 +85,7 @@
   color: var(--cc-text-secondary);
 }
 
-/* Section header band. */
+/* Section header row (its content starts in the gutter, after the rail). */
 .dw-section-header {
   font-size: 12px;
   color: var(--cc-text-primary);

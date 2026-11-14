@@ -13,19 +13,21 @@ import { Tooltip } from '../common/Tooltip';
 import { EyeIcon, PinIcon } from '../common/icons';
 import type { CellMarks } from '../common/SpreadsheetGrid/types';
 import { MarkedText } from '../common/SpreadsheetGrid/gridMarks';
-import type { DataModelCtx, DataRow } from './types';
+import type { DataEntityRow, DataModelCtx, DataRow } from './types';
 import type { RailCell } from './model/links';
 import { linkedRowKeys, stationLinks } from './model/links';
-import { sectionLabelOf } from './model/ctx';
 import { rowIdLabel } from './model/rowIds';
 import { stationDisplayName } from './model/columns';
-import { DataRail, RAIL_WIDTH } from './DataRail';
+import { DataRail, GUTTER_STRIPE, RAIL_WIDTH } from './DataRail';
 import { DataHoverCard } from './DataHoverCard';
 import { dataRowPart } from './dataTestIds';
 import type { DataNav } from './useDataNavigation';
 
 export const DATA_GUTTER_WIDTH = 232;
-const NAME_LEFT = 3 + RAIL_WIDTH + 4;
+/** The tint stripe + link rail at the gutter's left: a section header row's
+ *  content starts right after it (the grid's `groupContentInset`). */
+export const GUTTER_RAIL_LANE = GUTTER_STRIPE + RAIL_WIDTH;
+const NAME_LEFT = GUTTER_RAIL_LANE + 4;
 
 export type RevealReason = 'search' | 'nav' | null;
 
@@ -67,7 +69,7 @@ function HoverName({
   anchorRef,
   children,
 }: {
-  row: DataRow;
+  row: DataEntityRow;
   ctx: DataModelCtx;
   nav: DataNav;
   anchorRef: RefObject<HTMLElement | null>;
@@ -91,7 +93,6 @@ function HoverName({
       window.removeEventListener('contextmenu', suppress, true);
     };
   }, [hovered]);
-  if (row.kind === 'section') return <>{children}</>;
   const press = () => setSuppressed(true);
   return (
     // A press on the name while the card is still pending (not open yet) must
@@ -125,7 +126,18 @@ function DataRowLabelImpl({ row, ctx, rail, tint, revealed, nav, nameMarks }: Pr
   const { t } = useTranslation();
   const gutterRef = useRef<HTMLDivElement>(null);
   const part = dataRowPart(row);
-  let name: ReactNode = null;
+  if (row.kind === 'section') {
+    // A header row's gutter holds only the rail's branch elbow: the header's
+    // own content (dot, name, counts) starts right after the rail, drawn by
+    // the grid over the gutter (`groupContentStart: 'gutter'`).
+    return (
+      <div className="relative h-full w-full">
+        {tint && <span className="absolute inset-y-0 left-0 w-[3px]" style={{ backgroundColor: tint }} aria-hidden="true" />}
+        {rail && <DataRail cell={rail} />}
+      </div>
+    );
+  }
+  let name: ReactNode;
   if (row.kind === 'station') {
     const stationName = stationDisplayName(ctx, row.g);
     name = (
@@ -136,27 +148,13 @@ function DataRowLabelImpl({ row, ctx, rail, tint, revealed, nav, nameMarks }: Pr
         {stationName && <span className="truncate text-[11px] font-normal text-text-secondary">{stationName}</span>}
       </span>
     );
-  } else if (row.kind === 'shot') {
+  } else {
     name = (
       <span className="dw-row-name flex min-w-0 items-baseline gap-1.5 truncate pl-3" data-testid={`data-row-name-${part}`}>
         <span className="truncate">
           <NameText text={rowIdLabel(row)} marks={nameMarks} />
         </span>
         <span className="shrink-0 text-[11px] opacity-70">{`${row.shotIndex}→${row.shotIndex + 1}`}</span>
-      </span>
-    );
-  } else {
-    // A header row's gutter is blank but for the rail's branch elbow: the band
-    // beside it names the section. While the row is active or selected the
-    // label shows (CSS), so the highlighted gutter is never an empty box.
-    name = (
-      <span className="dw-group-label flex min-w-0 items-center gap-1.5" data-testid={`data-row-name-${part}`}>
-        <span
-          className="h-2 w-2 shrink-0 rounded-full"
-          style={{ backgroundColor: ctx.sectionsById.get(row.sectionId)?.color }}
-          aria-hidden="true"
-        />
-        <span className="truncate">{sectionLabelOf(ctx, row.sectionId)}</span>
       </span>
     );
   }
@@ -180,23 +178,21 @@ function DataRowLabelImpl({ row, ctx, rail, tint, revealed, nav, nameMarks }: Pr
           <span className="dw-revealed-mark" aria-hidden="true" />
         </span>
       )}
-      {row.kind !== 'section' && (
-        <button
-          type="button"
-          tabIndex={-1}
-          className="dw-map-btn mr-1 flex h-5 w-5 shrink-0 items-center justify-center rounded text-text-secondary hover:bg-accent-10 hover:text-accent"
-          aria-label={t('dataWorkspace.menu.showOnMap')}
-          title={t('dataWorkspace.gutter.showOnMap', { shortcut: t('dataWorkspace.shortcuts.showOnMap') })}
-          onMouseDown={(e) => e.stopPropagation()}
-          onClick={(e) => {
-            e.stopPropagation();
-            nav.showOnMap(row);
-          }}
-          data-testid={`data-row-map-${part}`}
-        >
-          <PinIcon size={13} />
-        </button>
-      )}
+      <button
+        type="button"
+        tabIndex={-1}
+        className="dw-map-btn mr-1 flex h-5 w-5 shrink-0 items-center justify-center rounded text-text-secondary hover:bg-accent-10 hover:text-accent"
+        aria-label={t('dataWorkspace.menu.showOnMap')}
+        title={t('dataWorkspace.gutter.showOnMap', { shortcut: t('dataWorkspace.shortcuts.showOnMap') })}
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation();
+          nav.showOnMap(row);
+        }}
+        data-testid={`data-row-map-${part}`}
+      >
+        <PinIcon size={13} />
+      </button>
     </div>
   );
 }

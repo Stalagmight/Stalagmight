@@ -10,9 +10,13 @@ import type { ReactElement } from 'react';
 import type { RailCell, RailLine, RailSegment } from './model/links';
 
 export const RAIL_WIDTH = 28;
+/** The gutter's tint stripe left of the rail (the rail starts after it). */
+export const GUTTER_STRIPE = 3;
+/** x of the rail's lane inside the rail. */
+export const RAIL_LANE = 14;
 const H = 33;
 const CY = 16.5;
-const LANE = 14;
+const LANE = RAIL_LANE;
 const NODE_R = 4;
 const BG = 'var(--sg-header-bg, var(--cc-panel))';
 
