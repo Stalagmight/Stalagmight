@@ -199,7 +199,7 @@ fn five_metre_fix_lands_where_the_variance_model_puts_it() {
         entrance_1,
         entrance_2,
         gps,
-    } = traverse(None);
+    } = traverse(Some(5.0));
     let surveyed = raw(&project, entrance_2);
     let (vx, vy) = chain_variance(&project);
     let gps_var = 5.0_f64.powi(2);
