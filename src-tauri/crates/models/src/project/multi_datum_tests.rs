@@ -455,3 +455,21 @@ fn a_component_with_only_a_gps_fix_reaches_the_computed_view_solve() {
     let (plain, _, _) = two_entrance_traverse();
     assert!(plain.plan_adjustment_anchors().is_empty());
 }
+
+#[test]
+fn the_distribution_fallback_walks_to_a_placement_datum_never_a_fix() {
+    // `shortest_path_to_any_zero_datum` feeds the destructive closure
+    // distribution, which only placement datums anchor (#741). From B:5 the fix
+    // at B:4 is one shot away and the placement datum at A:0 is nine: the walk
+    // must end at A:0.
+    let (mut project, a, b) = two_entrance_traverse();
+    project
+        .set_zero_datum(StationRef::new(b, 4), gps_at(40.0, 450.0))
+        .unwrap();
+    assert_eq!(project.datum_roles()[1], Some(DatumRole::GpsFix));
+
+    let (found, _path) = project
+        .shortest_path_to_any_zero_datum(StationRef::new(b, 5))
+        .expect("the placement datum is reachable");
+    assert_eq!(found, StationRef::new(a, 0));
+}
