@@ -370,8 +370,9 @@ export default function EditStationDialog() {
                 </div>
               )}
               <p className="text-xs text-text-secondary pt-1">
-                GPS coordinates for this station. Other stations will have their
-                GPS calculated relative to this datum.
+                GPS coordinates for this station.
+                {(preview?.role ?? storedDatum?.role) !== 'GpsFix' &&
+                  ' Other stations will have their GPS calculated relative to this datum.'}
               </p>
               <div className="flex items-center gap-2 pt-2">
                 <label htmlFor="station-datum-accuracy" className="text-sm text-text-secondary shrink-0">
