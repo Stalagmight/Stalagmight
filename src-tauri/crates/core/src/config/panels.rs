@@ -286,7 +286,8 @@ pub(super) fn default_data_workspace_map_pane_width() -> u32 {
 }
 
 /// The Data workspace's default hidden columns: identity columns the row name
-/// already carries, the per-leg angles, positions, temperature and credit.
+/// already carries, the per-leg angles, the station depth and positions,
+/// temperature and credit.
 /// Mirrors `DATA_DEFAULT_HIDDEN` in src/components/DataWorkspace/columnsMeta.ts.
 pub(super) fn default_data_workspace_hidden_columns() -> Vec<String> {
     [
@@ -299,6 +300,7 @@ pub(super) fn default_data_workspace_hidden_columns() -> Vec<String> {
         "inclination",
         "pitch_in",
         "pitch_out",
+        "depth",
         "x",
         "y",
         "lat",

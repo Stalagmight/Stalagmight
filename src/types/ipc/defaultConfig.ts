@@ -292,6 +292,7 @@ export const defaultConfig: Config = {
       "inclination",
       "pitch_in",
       "pitch_out",
+      "depth",
       "x",
       "y",
       "lat",

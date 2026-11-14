@@ -64,8 +64,9 @@ describe('initialActiveCell', () => {
     // left edge with the measurements in view.
     expect(start!.colKey).toBe('issues');
     // With Issues hidden, a station row skips the shot-only Length and lands on
-    // the first station column (Depth), never a blank cell.
-    expect(initialActiveCell(all, DATA_COLUMNS, [...DATA_DEFAULT_HIDDEN, 'issues'])!.colKey).toBe('depth');
+    // the first shown station column (Links: Depth is hidden by default),
+    // never a blank cell.
+    expect(initialActiveCell(all, DATA_COLUMNS, [...DATA_DEFAULT_HIDDEN, 'issues'])!.colKey).toBe('links');
   });
 
   it('a shots-only view with Issues hidden starts on Length', () => {

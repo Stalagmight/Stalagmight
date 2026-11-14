@@ -77,6 +77,7 @@ export const DATA_DEFAULT_HIDDEN: readonly DataColumnKey[] = [
   'inclination',
   'pitch_in',
   'pitch_out',
+  'depth',
   'x',
   'y',
   'lat',
