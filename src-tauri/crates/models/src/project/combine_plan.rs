@@ -247,7 +247,7 @@ impl Project {
             // skips because it ties the two ends of one shot together (#737)
             // does not count: the view shows that survey as measured.
             let component = self.get_connected_section_ids(join.kept);
-            let skipped: std::collections::HashSet<u64> = self
+            let skipped: HashSet<u64> = self
                 .closures_across_one_shot()
                 .into_iter()
                 .map(|c| c.closure_id)
