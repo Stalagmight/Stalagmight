@@ -527,6 +527,7 @@ impl Project {
         let empty = CombinePlan {
             kept,
             moving_section: None,
+            kept_moves_because: None,
             moved_sections: Vec::new(),
             shift_m: 0.0,
             torn_ties: Vec::new(),
@@ -844,6 +845,9 @@ impl Project {
                 other_ends.extend(Self::end_of(other, member.station_index));
             }
         }
+        // The ends AT this point (merged or side by side), as opposed to the
+        // ones across a loop closure from it.
+        let here: HashSet<(SectionId, SectionEnd)> = other_ends.iter().copied().collect();
         other_ends.extend(self.closure_partner_ends(&group));
         other_ends.retain(|(id, _)| *id != section.id);
         other_ends.sort_by_key(|(id, end)| (*id, *end == SectionEnd::End));
@@ -894,22 +898,20 @@ impl Project {
                 .into_iter()
                 .collect();
         }
-        let mut candidates: Vec<CombineCandidate> = other_ends
+        // Every touching pairing, the clicked section's first; then, for the
+        // station menu, every pairing of two others ending here.
+        let mut touching: Vec<(Pairing, Touch)> = other_ends
             .iter()
             .filter_map(|other| {
                 let pairing = pairing_with(*other);
-                let touch = self.pairing_touch(pairing, &table)?;
-                self.candidate_for(pairing, touch, &table)
+                Some((pairing, self.pairing_touch(pairing, &table)?))
             })
             .collect();
         if all_pairs {
             for (i, x) in other_ends.iter().enumerate() {
                 for y in &other_ends[i + 1..] {
-                    if x.0 == y.0
-                        || candidates
-                            .iter()
-                            .any(|c| (c.section_a, c.section_b) == (x.0.min(y.0), x.0.max(y.0)))
-                    {
+                    // Two ends both across a closure meet over there, not here.
+                    if x.0 == y.0 || !(here.contains(x) || here.contains(y)) {
                         continue;
                     }
                     let pairing = Pairing {
@@ -919,12 +921,47 @@ impl Project {
                         end_b: y.1,
                     };
                     if let Some(touch) = self.pairing_touch(pairing, &table) {
-                        candidates.extend(self.candidate_for(pairing, touch, &table));
+                        touching.push((pairing, touch));
                     }
                 }
             }
         }
-        candidates
+        // One candidate per pair of sections: a section can end at this point
+        // with both ends (one merged or side by side, the other across a
+        // closure), and the menu offers the pair once, by its best join at
+        // this point, ranked as the two-section query ranks the joins it
+        // compares (merged, then side by side, then across a closure; then
+        // the smaller gap; then no reverse).
+        let gap = |p: &Pairing| match (table.at(p.a, p.end_a), table.at(p.b, p.end_b)) {
+            (Some(x), Some(y)) => distance(x, y),
+            _ => f64::INFINITY,
+        };
+        let mut best: Vec<(Pairing, Touch)> = Vec::new();
+        for (pairing, touch) in touching {
+            let key = (pairing.a.min(pairing.b), pairing.a.max(pairing.b));
+            let better = |(p, t): &(Pairing, Touch)| {
+                touch
+                    .rank()
+                    .cmp(&t.rank())
+                    .then_with(|| gap(&pairing).total_cmp(&gap(p)))
+                    .then_with(|| (pairing.end_a == pairing.end_b).cmp(&(p.end_a == p.end_b)))
+                    .is_lt()
+            };
+            match best
+                .iter_mut()
+                .find(|(p, _)| (p.a.min(p.b), p.a.max(p.b)) == key)
+            {
+                Some(slot) => {
+                    if better(slot) {
+                        *slot = (pairing, touch);
+                    }
+                }
+                None => best.push((pairing, touch)),
+            }
+        }
+        best.into_iter()
+            .filter_map(|(pairing, touch)| self.candidate_for(pairing, touch, &table))
+            .collect()
     }
 }
 

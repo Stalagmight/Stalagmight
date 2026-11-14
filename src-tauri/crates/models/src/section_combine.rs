@@ -113,6 +113,18 @@ pub struct TornTie {
     pub reason: TornTieReason,
 }
 
+/// Why the kept section's side is the one that moves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum KeptMovesReason {
+    /// A zero datum holds the other section's side.
+    ZeroDatum,
+    /// The other section's side holds the station the closure-adjusted view
+    /// (Plan, Export) holds the survey at: moving it would shift the whole
+    /// cave there by the gap.
+    AdjustmentAnchor,
+}
+
 /// What combining changes beyond joining the shots, for ONE choice of the
 /// kept section (the candidate carries one for each).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -120,9 +132,11 @@ pub struct CombinePlan {
     /// The kept section this plan is for.
     pub kept: SectionId,
     /// The section whose side moves to close the join (the other section,
-    /// or the kept one when the other is held by a zero datum); `None` when
+    /// or the kept one for the reason in `kept_moves_because`); `None` when
     /// the two ends already coincide (within 1 mm).
     pub moving_section: Option<SectionId>,
+    /// Why the kept section's side moves, when it is the one that does.
+    pub kept_moves_because: Option<KeptMovesReason>,
     /// Every section that moves, the moving section first, then the sections
     /// still rigidly attached to it.
     pub moved_sections: Vec<SectionId>,

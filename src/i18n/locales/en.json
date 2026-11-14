@@ -1746,7 +1746,8 @@
       "tornSnapped": "The snapped closure between <a/> and <b/>",
       "tornHeld": "<held/> is held by a zero datum and stays where it is.",
       "tornWhyMoves": "The loop's misclosure moves to the new closure, and the Closures Computed View adjusts it like any other loop.",
-      "tornWhyStays": "Otherwise the combined section would be tied to itself. The Closures Computed View adjusts the closure like any other loop."
+      "tornWhyStays": "Otherwise the combined section would be tied to itself. The Closures Computed View adjusts the closure like any other loop.",
+      "keptMovesAnchor": "{{kept}} is the one that moves: the Closures Computed View holds the survey at a station on {{other}}'s side, so moving {{other}} would shift the whole cave there."
     }
   },
   "undo": {
