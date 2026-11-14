@@ -236,6 +236,10 @@ describe("groupContentStart: 'gutter'", () => {
     expect(content).toHaveTextContent('Section S1');
     expect(gutter).toHaveTextContent('L0');
     expect(screen.getByTestId('grid-group-0')).not.toHaveTextContent('Section S1');
+    // The gutter's right edge is dropped on that row so it reads as one band
+    // (it would otherwise run through the header text); other rows keep it.
+    expect(gutter).toHaveClass('sg-gutter-group-start');
+    expect(screen.getByTestId('grid-gutter-1')).not.toHaveClass('sg-gutter-group-start');
   });
 
   it("the default 'band' keeps the content in the band, just right of the gutter", () => {
@@ -244,6 +248,7 @@ describe("groupContentStart: 'gutter'", () => {
     expect(content.parentElement).toBe(screen.getByTestId('grid-group-0'));
     expect(content).not.toHaveClass('sg-group-content-gutter');
     expect(content.style.left).toBe(`${G}px`);
+    expect(screen.getByTestId('grid-gutter-0')).not.toHaveClass('sg-gutter-group-start');
   });
 
   it('a click, hover or right-click on the content acts like one on the gutter', () => {

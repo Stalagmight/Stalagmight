@@ -125,7 +125,7 @@ function GridRowInner<Row>(props: GridRowProps<Row>) {
         role="rowheader"
         className={`sg-gutter sticky left-0 z-20 flex items-center justify-center border-b border-r border-white/10 bg-panel text-text-secondary ${
           rowSelected ? 'sg-gutter-selected' : ''
-        } ${isActiveRow ? 'sg-gutter-active' : ''}`}
+        } ${isActiveRow ? 'sg-gutter-active' : ''}${inGutter ? ' sg-gutter-group-start' : ''}`}
         style={{ width: gutterWidth, minWidth: gutterWidth, cursor: gutterGrab ? 'grab' : 'pointer' }}
         data-testid={`${testIdPrefix}-gutter-${rowIdx}`}
         onMouseDown={(e) => handlers.gutterMouseDown(rowIdx, e)}

@@ -405,6 +405,11 @@
    selected / active / hover tints and the band-focus outline show through.
    The band's text style, not the gutter's (11px, bold when active, accent when
    selected). Clipped only at its own width cap (the visible area). */
+/* A group row whose content starts in the gutter reads as one band: the
+   gutter's right edge would otherwise run through the header text. */
+.sg-grid .sg-gutter.sg-gutter-group-start {
+  border-right-color: transparent;
+}
 .sg-grid .sg-group-content.sg-group-content-gutter {
   position: absolute;
   top: 0;
