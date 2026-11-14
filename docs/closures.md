@@ -288,13 +288,27 @@ A delete with shift can shorten the path between a closure's two stations. The
 single **Delete shot** refuses to shift a shot that is part of any loop, closure
 loops included; the range gap-close (**Delete shots** with shift) refuses only
 merge loops, so closure A:1-A:4 with shots 1..2 gap-closed becomes A:1-A:2 - one
-shot, no loop. Both delete commands therefore compare
-`closures_across_one_shot` before and after the delete and remove every closure
-that is newly across one shot, inside the same project snapshot pair, so one Undo
-restores the shots and the closure together. Each removal is reported in
-`CommandResult.warnings` (`CLOSURE_REMOVED_ACROSS_ONE_SHOT`, "Removed loop closure
-A:1 to A:2: after the delete it spans a single shot.") and shown as one warning
-toast. A closure that already spanned one shot before the delete is left alone (it
+shot, no loop. Both delete commands therefore take
+`Project::closures_before_edit` (the closures already across one shot, and every
+eligible closure's stations as they resolve before the delete), and afterwards
+remove every closure `closures_newly_across_one_shot` reports, inside the same
+project snapshot pair, so one Undo restores the shots and the closure together.
+Each removal is reported in `CommandResult.warnings`
+(`CLOSURE_REMOVED_ACROSS_ONE_SHOT`, "Removed loop closure A:1 to A:4: closing the
+gap left its two stations at the two ends of one shot, so it had no loop left to
+close.") and shown as one warning toast, named by the stations BEFORE the delete:
+the gap-close renumbered A:4 to A:2, but the user created A:1-A:4.
+
+The Delete Shots dialog says so before the user confirms. The range preview
+(`preview_delete_shot_range`) carries `closures_removed_across_one_shot`, which
+`Project::preview_gap_close_closure_removals` computes by running the very
+gap-close the command runs (`Project::gap_close_shot_range`, shared by both) on a
+clone and taking the same `closures_newly_across_one_shot`; the dialog lists them
+under "Loop closures removed (they would span a single shot)". It is absent when no
+gap-close is offered (the whole section, or a blocked shift). The single-shot
+preview has no such list: that delete never shortens a closure to one shot, and
+`preview_delete_shot` runs inside every per-shot removal, so a simulation there
+would recurse. A closure that already spanned one shot before the delete is left alone (it
 has its own warning). This lives in the commands, not in
 `remove_shot_with_rewire*`, which is also the inverse of `CreateShot` (#413).
 

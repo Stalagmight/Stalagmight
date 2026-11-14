@@ -8,6 +8,7 @@
 
 use std::collections::HashSet;
 
+use super::command_shot::closure_removed_message;
 use super::AppState;
 use crate::core::{Command, WarningSeverity};
 use crate::models::{
@@ -366,7 +367,12 @@ fn assert_removed(result: &crate::core::CommandResult, labels: &[&str]) {
         .collect();
     let expected: Vec<String> = labels
         .iter()
-        .map(|l| format!("Removed loop closure {l}: after the delete it spans a single shot."))
+        .map(|l| {
+            format!(
+                "Removed loop closure {l}: closing the gap left its two stations at the two ends \
+                 of one shot, so it had no loop left to close."
+            )
+        })
         .collect();
     assert_eq!(removed, expected, "{:?}", result.warnings);
 }
@@ -387,7 +393,8 @@ fn a_range_gap_close_removes_a_closure_it_leaves_across_one_shot_and_one_undo_re
 
     let result = state.execute_delete_shot_range_shift(a, s1, s2);
     assert!(result.success, "{:?}", result.error);
-    assert_removed(&result, &[&format!("{a}:1 to {a}:2")]);
+    // Named by the stations it was created with, not the renumbered A:1-A:2.
+    assert_removed(&result, &[&format!("{a}:1 to {a}:4")]);
     let after = project(&state);
     assert_eq!(after.get_section(a).unwrap().shots.len(), 3);
     assert!(after.loop_closures.iter().all(|lc| lc.id != id));
@@ -438,7 +445,7 @@ fn a_one_shot_range_does_what_the_single_delete_refuses() {
 
     let range = state.execute_delete_shot_range_shift(a, middle, middle);
     assert!(range.success, "{:?}", range.error);
-    assert_removed(&range, &[&format!("{a}:1 to {a}:2")]);
+    assert_removed(&range, &[&format!("{a}:1 to {a}:3")]);
     assert!(project(&state).loop_closures.is_empty());
     assert!(state.undo().success);
     assert_eq!(
@@ -463,7 +470,7 @@ fn a_closure_through_a_merge_is_removed_by_the_shot_it_collapses() {
     let (s1, s2) = (shot_id(&state, a, 1), shot_id(&state, a, 2));
     let result = state.execute_delete_shot_range_shift(a, s1, s2);
     assert!(result.success, "{:?}", result.error);
-    assert_removed(&result, &[&format!("{b}:0 to {a}:2")]);
+    assert_removed(&result, &[&format!("{b}:0 to {a}:4")]);
     assert!(project(&state).loop_closures.iter().all(|lc| lc.id != id));
     assert!(state.undo().success);
     assert_eq!(
@@ -514,6 +521,110 @@ fn a_delete_leaves_a_closure_that_already_spanned_one_shot_alone() {
     assert!(project(&state).loop_closures.iter().any(|lc| lc.id == old));
 }
 
+/// The reviewer's case, through the preview AND the command: section C goes
+/// east 5, east 5, south 5, west 5, north 4.8 and closure C:1-C:5 closes the
+/// loop. Close Gap & Delete on shots C:2..C:4 (positions 1..=3) leaves the
+/// closure as C:1-C:2. The bulk-delete dialog must list it BEFORE the user
+/// confirms, the toast after, and both by the ids the user knows: C:1 to C:5.
+#[test]
+fn the_range_preview_lists_the_closure_the_gap_close_removes_by_its_pre_delete_ids() {
+    let mut p = Project::new("preview".to_string(), None);
+    let c = add(
+        &mut p,
+        vec![
+            shot(90.0, 5.0),
+            shot(90.0, 5.0),
+            shot(180.0, 5.0),
+            shot(270.0, 5.0),
+            shot(0.0, 4.8),
+        ],
+    );
+    let id = p
+        .create_loop_closure(st(c, 1), st(c, 5), ClosureStrategy::Batch)
+        .unwrap()
+        .id;
+    let state = state_with(p);
+    let (first, last) = (shot_id(&state, c, 1), shot_id(&state, c, 3));
+
+    let impact = project(&state)
+        .preview_delete_shot_range(c, first, last)
+        .unwrap();
+    assert!(!impact.shift_blocked, "{:?}", impact.shift_blocked_reasons);
+    let predicted = impact
+        .closures_removed_across_one_shot
+        .clone()
+        .expect("a gap-close is offered, so it is predicted");
+    assert_eq!(predicted.len(), 1);
+    assert_eq!(predicted[0].closure_id, id);
+    assert_eq!(
+        (predicted[0].station_a, predicted[0].station_b),
+        (st(c, 1), st(c, 5))
+    );
+    // On the wire for the dialog.
+    let wire = serde_json::to_value(&impact).unwrap();
+    assert_eq!(
+        wire["closures_removed_across_one_shot"][0]["station_b"]["station_index"],
+        5
+    );
+
+    let result = state.execute_delete_shot_range_shift(c, first, last);
+    assert!(result.success, "{:?}", result.error);
+    assert_removed(&result, &[&format!("{c}:1 to {c}:5")]);
+    assert_eq!(
+        result.warnings[0].message,
+        closure_removed_message(&predicted[0])
+    );
+    assert!(project(&state).loop_closures.is_empty());
+    // Undo puts it back as C:1-C:5.
+    assert!(state.undo().success);
+    assert_eq!(
+        closure_endpoints(&project(&state), id),
+        Some((st(c, 1), st(c, 5)))
+    );
+}
+
+#[test]
+fn the_range_preview_predicts_nothing_where_nothing_goes() {
+    // A gap-close that keeps a real loop: predicted empty, not absent.
+    let (mut p, a) = chain(4);
+    p.create_loop_closure(st(a, 0), st(a, 3), ClosureStrategy::Batch)
+        .unwrap();
+    let state = state_with(p);
+    let middle = shot_id(&state, a, 1);
+    let impact = project(&state)
+        .preview_delete_shot_range(a, middle, middle)
+        .unwrap();
+    assert!(impact
+        .closures_removed_across_one_shot
+        .is_some_and(|v| v.is_empty()));
+    // The whole section offers no gap-close, so nothing is predicted at all,
+    // and the key stays off the wire.
+    let (first, last) = (shot_id(&state, a, 0), shot_id(&state, a, 3));
+    let whole = project(&state)
+        .preview_delete_shot_range(a, first, last)
+        .unwrap();
+    assert!(whole.closures_removed_across_one_shot.is_none());
+    let wire = serde_json::to_value(&whole).unwrap();
+    assert!(
+        wire.get("closures_removed_across_one_shot").is_none(),
+        "{wire}"
+    );
+    // A blocked shift offers no gap-close either: here it would drop the zero
+    // datum on station 2, which the one-shot range removes.
+    let (mut p, a) = chain(4);
+    p.create_loop_closure(st(a, 1), st(a, 3), ClosureStrategy::Batch)
+        .unwrap();
+    p.set_zero_datum(st(a, 2), GpsCoordinates::new(0.0, 0.0, 0.0).unwrap())
+        .unwrap();
+    let state = state_with(p);
+    let middle = shot_id(&state, a, 1);
+    let impact = project(&state)
+        .preview_delete_shot_range(a, middle, middle)
+        .unwrap();
+    assert!(impact.shift_blocked, "the fixture must block the shift");
+    assert!(impact.closures_removed_across_one_shot.is_none());
+}
+
 /// Adversarial: random small surveys (chains, side passages merged on,
 /// closures through the public API) and random single and range deletes. After
 /// every delete that succeeds, no closure may be across one shot that was not
@@ -530,6 +641,7 @@ fn no_delete_leaves_a_new_closure_across_one_shot() {
         (seed >> 33) % m.max(1)
     };
     let mut removals = 0;
+    let mut agreed = 0;
     for _case in 0..40 {
         let mut p = Project::new("fuzz".to_string(), None);
         let mut sections: Vec<SectionId> = Vec::new();
@@ -564,6 +676,7 @@ fn no_delete_leaves_a_new_closure_across_one_shot() {
             .collect();
         let section = sections[next(sections.len() as u64) as usize];
         let n = before.get_section(section).unwrap().shots.len();
+        let mut predicted = None;
         let result = if next(2) == 0 {
             let pos = next(n as u64) as usize;
             state.execute(Command::DeleteShot {
@@ -573,14 +686,32 @@ fn no_delete_leaves_a_new_closure_across_one_shot() {
         } else {
             let start = 1 + next((n - 2) as u64) as usize;
             let end = (start + next(2) as usize).min(n - 2);
-            state.execute_delete_shot_range_shift(
-                section,
+            let (first, last) = (
                 shot_id(&state, section, start),
                 shot_id(&state, section, end),
-            )
+            );
+            // What the bulk-delete dialog will show, taken before the delete.
+            predicted = before
+                .preview_delete_shot_range(section, first, last)
+                .ok()
+                .and_then(|impact| impact.closures_removed_across_one_shot);
+            state.execute_delete_shot_range_shift(section, first, last)
         };
         if !result.success {
             continue;
+        }
+        // The preview predicts exactly what the gap-close removed, by the same
+        // pre-delete names (#737).
+        if let Some(predicted) = predicted {
+            let shown: Vec<String> = predicted.iter().map(closure_removed_message).collect();
+            let removed: Vec<String> = result
+                .warnings
+                .iter()
+                .filter(|w| w.code == CLOSURE_REMOVED_ACROSS_ONE_SHOT)
+                .map(|w| w.message.clone())
+                .collect();
+            assert_eq!(shown, removed, "preview and execute disagree");
+            agreed += usize::from(!removed.is_empty());
         }
         let after = project(&state);
         for c in after.closures_across_one_shot() {
@@ -609,4 +740,5 @@ fn no_delete_leaves_a_new_closure_across_one_shot() {
         removals > 0,
         "no case removed a closure; widen the generator"
     );
+    assert!(agreed > 0, "no removal was predicted by a preview");
 }

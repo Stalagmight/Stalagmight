@@ -824,6 +824,31 @@ impl Project {
         start_shot_id: ShotId,
         end_shot_id: ShotId,
     ) -> Result<DeleteShotRangeImpact, String> {
+        let mut impact =
+            self.preview_delete_shot_range_relationships(section_id, start_shot_id, end_shot_id)?;
+        // Only a gap-close that is actually offered gets a prediction (#737).
+        if !impact.shift_blocked && impact.kind != RangeDeleteKind::WholeSection {
+            impact.closures_removed_across_one_shot = self
+                .preview_gap_close_closure_removals(
+                    section_id,
+                    impact.start_pos as usize,
+                    impact.end_pos as usize,
+                )
+                .ok();
+        }
+        Ok(impact)
+    }
+
+    /// [`Self::preview_delete_shot_range`] without the gap-close closure
+    /// prediction, which simulates the whole gap-close on a clone. The range
+    /// delete itself only needs the shift-blocked verdict before it runs that
+    /// same gap-close for real, so it asks this and does not pay twice.
+    pub fn preview_delete_shot_range_relationships(
+        &self,
+        section_id: SectionId,
+        start_shot_id: ShotId,
+        end_shot_id: ShotId,
+    ) -> Result<DeleteShotRangeImpact, String> {
         let section = self
             .get_section(section_id)
             .ok_or_else(|| format!("Section {section_id} not found"))?;
@@ -1053,6 +1078,7 @@ impl Project {
             shift_blocked_reasons,
             removed_datums,
             removed_comments,
+            closures_removed_across_one_shot: None,
         })
     }
 

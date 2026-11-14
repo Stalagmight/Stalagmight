@@ -143,7 +143,8 @@ test.describe('Loop closures across one shot (#737)', () => {
   });
 
   test('a shift delete that removed a closure says so in one warning toast', async ({ page }) => {
-    const message = 'Removed loop closure 0:1 to 0:2: after the delete it spans a single shot.';
+    const message =
+      'Removed loop closure 0:1 to 0:5: closing the gap left its two stations at the two ends of one shot, so it had no loop left to close.';
     await page.evaluate((message) => {
       const overrides = (window as any).__MOCK_IPC_OVERRIDES__ ?? {};
       overrides.delete_shot_range_shift = {

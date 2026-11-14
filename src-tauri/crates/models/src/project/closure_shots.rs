@@ -29,11 +29,11 @@
 //! `O(n log n)` in the worst case and `O(n)` in the common case, where knots
 //! are a handful of stations.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::{SectionId, StationRef};
 
-use super::Project;
+use super::{ClosurePair, Project};
 
 /// A loop closure the solve skips because it ties the two ends of one shot.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -270,5 +270,67 @@ impl Project {
     ) -> Option<(SectionId, usize)> {
         let (mut knots, _) = self.closure_knots();
         knots.collapsed_shot(a, b)
+    }
+}
+
+/// What an edit needs to know, BEFORE it runs, to name the closures it leaves
+/// across one shot (#737): which eligible closures already were (an edit only
+/// answers for what it causes), and every eligible closure's two stations as
+/// they resolve now. A gap-close renumbers stations, so closure 0:1-0:5 can
+/// come out as 0:1-0:2; the user created it as 0:1-0:5 and is told so.
+#[derive(Debug, Clone, Default)]
+pub struct ClosuresBeforeEdit {
+    across: HashSet<u64>,
+    ends: HashMap<u64, (StationRef, StationRef)>,
+}
+
+impl Project {
+    /// Capture [`ClosuresBeforeEdit`] for the project as it is now.
+    /// `O(stations + closures)`.
+    pub fn closures_before_edit(&self) -> ClosuresBeforeEdit {
+        let across = self
+            .closures_across_one_shot()
+            .into_iter()
+            .map(|c| c.closure_id)
+            .collect();
+        let ends = self
+            .loop_closures
+            .iter()
+            .filter(|lc| Self::closure_is_eligible(lc.strategy))
+            .filter_map(|lc| {
+                Some((
+                    lc.id,
+                    (
+                        self.resolve_key(&lc.station_a)?,
+                        self.resolve_key(&lc.station_b)?,
+                    ),
+                ))
+            })
+            .collect();
+        ClosuresBeforeEdit { across, ends }
+    }
+
+    /// The closures that tie the two ends of one shot together now but did
+    /// not before the edit `before` was taken for, in `loop_closures` order,
+    /// each named by its stations BEFORE the edit (its current ones only if it
+    /// had none then). Shared by the delete commands, which remove them, and
+    /// the range-delete preview, which lists them, so the two cannot disagree.
+    pub fn closures_newly_across_one_shot(&self, before: &ClosuresBeforeEdit) -> Vec<ClosurePair> {
+        self.closures_across_one_shot()
+            .into_iter()
+            .filter(|c| !before.across.contains(&c.closure_id))
+            .map(|c| {
+                let (station_a, station_b) = before
+                    .ends
+                    .get(&c.closure_id)
+                    .copied()
+                    .unwrap_or((c.station_a, c.station_b));
+                ClosurePair {
+                    closure_id: c.closure_id,
+                    station_a,
+                    station_b,
+                }
+            })
+            .collect()
     }
 }

@@ -78,5 +78,7 @@ the map says so, and **Show warnings** opens the
 [Warnings panel](../screens/warnings-panel.md), where each one is listed with
 its fix.
 
-Deleting shots with shift can shorten a loop to a single shot. The delete then
-removes that closure too and says so; **Undo** brings back both.
+Deleting shots with shift can shorten a loop to a single shot. The **Delete
+Shots** dialog lists that closure before you confirm, the delete removes it too
+and says so, both naming the closure by the stations you created it with;
+**Undo** brings back both.

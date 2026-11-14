@@ -1553,9 +1553,13 @@ The Merge Tool connects two stations. The behavior depends on whether the statio
    "<section>-B" by default (both editable)
 4. A delete with shift (a single shot's Shift Geometry, or a range of shots with
    shift) that leaves a loop closure spanning a single shot - e.g. closure A:1-A:4
-   after shots 1..2 are gap-closed - removes that closure with the delete and says
-   so in a warning toast ("Removed loop closure A:1 to A:2: after the delete it
-   spans a single shot."). One Undo restores the shots and the closure (#737)
+   after shots 1..2 are gap-closed - removes that closure with the delete. The
+   Delete Shots dialog lists it before you confirm ("Loop closures removed (they
+   would span a single shot)"), and a warning toast says so afterwards ("Removed
+   loop closure A:1 to A:4: closing the gap left its two stations at the two ends
+   of one shot, so it had no loop left to close."). Both name the closure by the
+   stations it was created with. One Undo restores the shots and the closure
+   (#737)
 
 **Deleting a Station:** Not supported. Selecting a station and pressing Delete
 opens the Delete Station dialog, whose Delete button is disabled; it tells the

@@ -1,26 +1,27 @@
-use std::collections::HashSet;
-
 use super::AppState;
 use crate::core::{CommandResult, ValidationWarning, Validator, WarningSeverity};
 use crate::models::{
-    shot_display_position, station_id_label, Project, SectionId, ShotData, ShotId, ShotKind,
-    ShotUpdates, SurveyCredit, CLOSURE_REMOVED_ACROSS_ONE_SHOT, FEATURE_ID_STRIDE,
+    shot_display_position, station_id_label, ClosurePair, ClosuresBeforeEdit, Project, SectionId,
+    ShotData, ShotId, ShotKind, ShotUpdates, SurveyCredit, CLOSURE_REMOVED_ACROSS_ONE_SHOT,
+    FEATURE_ID_STRIDE,
 };
 
-/// The ids of the closures that tie the two ends of one shot together right
-/// now (#737). A delete-with-shift takes this BEFORE it removes anything and
-/// hands it to [`remove_closures_newly_across_one_shot`] afterwards.
-pub(super) fn closures_across_one_shot_ids(project: &Project) -> HashSet<u64> {
-    project
-        .closures_across_one_shot()
-        .into_iter()
-        .map(|c| c.closure_id)
-        .collect()
+/// The warning a delete reports for a loop closure it removed because the
+/// delete left it spanning a single shot (#737). Names the closure by its
+/// stations BEFORE the delete (`ClosurePair` from
+/// `Project::closures_newly_across_one_shot`): a gap-close renumbers stations,
+/// and the user created closure 0:1-0:5, not the 0:1-0:2 it became.
+pub(super) fn closure_removed_message(closure: &ClosurePair) -> String {
+    format!(
+        "Removed loop closure {} to {}: closing the gap left its two stations at the two ends of one shot, so it had no loop left to close.",
+        station_id_label(closure.station_a),
+        station_id_label(closure.station_b)
+    )
 }
 
 /// After a delete with shift: remove every loop closure the delete left tying
 /// the two ends of one shot together that did not before it (#737), and
-/// report each one for the user.
+/// report each one for the user, by the stations it had before the delete.
 ///
 /// A gap-close shortens the path between a closure's two ends - closure
 /// A:1-A:4 with shots 1..2 deleted becomes A:1-A:2, one shot - so the closure
@@ -33,16 +34,13 @@ pub(super) fn closures_across_one_shot_ids(project: &Project) -> HashSet<u64> {
 /// that already spanned one shot before the delete is left alone (it carries
 /// its own warning); only what this delete caused is undone here. Removing a
 /// skipped closure never changes another closure's status, because a skipped
-/// closure unites nothing.
+/// closure unites nothing. The range-delete preview lists the same closures
+/// from the same `Project::closures_newly_across_one_shot`.
 pub(super) fn remove_closures_newly_across_one_shot(
     project: &mut Project,
-    before: &HashSet<u64>,
+    before: &ClosuresBeforeEdit,
 ) -> Vec<ValidationWarning> {
-    let newly: Vec<_> = project
-        .closures_across_one_shot()
-        .into_iter()
-        .filter(|c| !before.contains(&c.closure_id))
-        .collect();
+    let newly = project.closures_newly_across_one_shot(before);
     let mut warnings = Vec::with_capacity(newly.len());
     for closure in newly {
         if project.remove_loop_closure(closure.closure_id).is_err() {
@@ -52,17 +50,12 @@ pub(super) fn remove_closures_newly_across_one_shot(
             closure_id = closure.closure_id,
             station_a = ?closure.station_a,
             station_b = ?closure.station_b,
-            collapsed_shot = ?closure.collapsed_shot,
             purpose = "drop a closure a delete left across one shot",
             "Removed loop closure that now spans a single shot"
         );
         warnings.push(ValidationWarning {
             code: CLOSURE_REMOVED_ACROSS_ONE_SHOT.to_string(),
-            message: format!(
-                "Removed loop closure {} to {}: after the delete it spans a single shot.",
-                station_id_label(closure.station_a),
-                station_id_label(closure.station_b)
-            ),
+            message: closure_removed_message(&closure),
             severity: WarningSeverity::Warning,
         });
     }
@@ -393,7 +386,7 @@ impl AppState {
             }
         }
 
-        let across_before = closures_across_one_shot_ids(project);
+        let closures_before = project.closures_before_edit();
         match project.remove_shot_with_rewire(section_id, shot_id) {
             Ok(_) => {
                 tracing::debug!(
@@ -409,7 +402,7 @@ impl AppState {
                 // rewire onto a merge partner keeps every knot - so this is
                 // the defensive half keeping both delete paths under one rule
                 // (`no_delete_leaves_a_new_closure_across_one_shot`).
-                let removed = remove_closures_newly_across_one_shot(project, &across_before);
+                let removed = remove_closures_newly_across_one_shot(project, &closures_before);
                 CommandResult::success().with_warnings(removed)
             }
             Err(e) => CommandResult::failure(e),

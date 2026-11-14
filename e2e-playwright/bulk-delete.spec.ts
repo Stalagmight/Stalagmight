@@ -131,6 +131,49 @@ test.describe('Bulk delete dialog', () => {
     await expect(dialog).toContainText('Shift geometry is not allowed');
   });
 
+  test('lists the loop closures closing the gap would remove, before confirming (#737)', async ({ page }) => {
+    const r = await getRange(page);
+    await page.evaluate((sectionId) => {
+      const overrides = (window as any).__MOCK_IPC_OVERRIDES__ ?? {};
+      overrides.preview_delete_shot_range = {
+        section_id: sectionId,
+        start_pos: 1,
+        end_pos: 2,
+        kind: 'interior',
+        removed_stations: [
+          { section_id: sectionId, station_index: 2 },
+          { section_id: sectionId, station_index: 3 },
+        ],
+        removed_merges: [],
+        removed_closures: [],
+        replacement_merges: [],
+        replacement_closure_updates: [],
+        closure_to_merge: [],
+        merge_rewire_skipped: false,
+        closure_rewire_skipped: false,
+        shift_blocked: false,
+        shift_blocked_reasons: [],
+        removed_datums: [],
+        removed_comments: [],
+        closures_removed_across_one_shot: [
+          {
+            closure_id: 7,
+            station_a: { section_id: sectionId, station_index: 1 },
+            station_b: { section_id: sectionId, station_index: 4 },
+          },
+        ],
+      };
+      (window as any).__MOCK_IPC_OVERRIDES__ = overrides;
+    }, r.sectionId);
+
+    await openBulkDelete(page, interiorData(r));
+    const block = page.getByTestId('impact-closures-across-one-shot');
+    await expect(block).toBeVisible();
+    await expect(block).toContainText('Loop closures removed (they would span a single shot)');
+    // The ids the closure was created with, not the renumbered ones.
+    await expect(block).toContainText(`#7: ${r.sectionId}:1 <-> ${r.sectionId}:4`);
+  });
+
   test('prefix range offers only a single delete action (no split names)', async ({ page }) => {
     const r = await getRange(page);
     await openBulkDelete(page, {
