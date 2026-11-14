@@ -41,6 +41,8 @@ import { NOT_APPLICABLE, columnApplies, groupFlagCache } from './gridApplicable'
 import { GridRow, type GridRowHandlers } from './GridRow';
 import { useGridScrollRequests } from './useGridScrollRequests';
 import { GridCellEditor, GridDropLines, GridRangeOverlays, type CellEditorState } from './GridOverlays';
+import { dropBoundaryAt, movedBlockEdges, planColumnDrop, type ColumnDrop } from './gridColumnMove';
+import { spanRangeResolver } from './GridSpanLayer';
 import {
   arrowTarget,
   clamp,
@@ -205,18 +207,26 @@ export interface SpreadsheetGridProps<Row> {
    *  the gutter) or 'gutter' (inside the gutter, `groupContentInset` px from
    *  its left edge, flowing on across the band; sticky to the left edge while
    *  scrolling horizontally). The gutter's `rowLabel` for a group row still
-   *  renders underneath (e.g. a rail elbow in the inset). */
+   *  renders underneath (e.g. a rail elbow in the inset). In 'gutter' mode the
+   *  content is a child of the sticky gutter: it paints above the gutter and
+   *  the band, a click / right-click on it is a gutter one, and its width is
+   *  capped at the visible area. See README "Mixed-row / workspace props". */
   groupContentStart?: 'band' | 'gutter';
-  /** Left inset (px) of group content when `groupContentStart` is 'gutter'. */
+  /** Left inset (px, default 0) of group content when `groupContentStart` is
+   *  'gutter'. */
   groupContentInset?: number;
   /** Content for the frozen top-left header corner (above the gutter), given
    *  the index of the first row visible below the header (-1 when there are no
-   *  rows). Re-evaluated as the grid scrolls. Must be cheap. */
+   *  rows): the first row whose top is at or below the header's bottom edge.
+   *  Re-evaluated as the grid scrolls, but called again only when that index
+   *  (or this callback's identity) changes; only the corner re-renders. Rendered
+   *  left-aligned, one line, ellipsized, its text as the tooltip. Must be cheap. */
   headerCorner?: (firstVisibleRow: number) => ReactNode;
   /** One spanning element over a contiguous run of columns on a row (e.g. a
    *  station's link chips across the shot-only columns it has no value in).
    *  `from`/`to` are column keys; the span covers every VISIBLE column from
-   *  `from` to `to` inclusive in display order. The covered cells keep their
+   *  `from` to `to` inclusive in display order (a hidden end clamps inward,
+   *  reversed ends swap; nothing visible = no span). The covered cells keep their
    *  cell semantics (selection, N/A, no edits); the span is drawn above them,
    *  is not selectable, and passes clicks through except on its interactive
    *  children (which must stop mousedown/click propagation). Return undefined
@@ -224,7 +234,9 @@ export interface SpreadsheetGridProps<Row> {
   spanCells?: (row: Row, rowIndex: number) => { from: string; to: string; content: ReactNode } | undefined;
   /** Constrain a column reorder: given the order a header drag would produce,
    *  return the order to apply (e.g. keep a group of columns contiguous). The
-   *  grid also uses it to show the drop indicator where the column will land. */
+   *  grid also uses it to show the drop indicator where the column will land.
+   *  Gets and returns the FULL order (hidden columns included); an answer equal
+   *  to the current order is a no-op drop (no line, nothing on release). */
   constrainColumnOrder?: (order: string[]) => string[];
 
   className?: string;
@@ -284,7 +296,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     cellMarks,
     rowStyle,
     rowsVersion,
-    groupRowContent,
+    groupRowContent, groupContentStart, groupContentInset = 0, headerCorner, spanCells, constrainColumnOrder,
     className = '',
     onActiveCellChange,
   } = props;
@@ -338,6 +350,8 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   const offsets = useMemo(() => columnOffsets(widths), [widths]);
   const totalWidth = gutterWidth + (offsets[offsets.length - 1] ?? 0);
   const colIndexOf = useCallback((key: string) => colKeys.indexOf(key), [colKeys]);
+  // Rebuilt on reorder / hide (and with spanCells, which re-renders the rows anyway).
+  const spanRange = useMemo(() => (spanCells ? spanRangeResolver(orderedKeys, colKeys) : undefined), [spanCells, orderedKeys, colKeys]);
   const writableColIdxs = useMemo(
     () => visibleColumns.map((c, i) => (isColWritable(c) ? i : -1)).filter((i) => i >= 0),
     [visibleColumns],
@@ -433,7 +447,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   // A move arms only once the pointer travels past a few px (`press`), so a
   // click with drift on a selected header/gutter is never a same-place reorder.
   const colDrag = useRef<{ mode: 'select' | 'move'; anchorCol: number; fromC0: number; fromC1: number; press?: DragPress } | null>(null);
-  const [colMoveDrop, setColMoveDrop] = useState<{ index: number; lineX: number } | null>(null);
+  const [colMoveDrop, setColMoveDrop] = useState<ColumnDrop | null>(null);
   // Generic floating drag-ghost (used by both column and row moves).
   const [colGhost, setColGhost] = useState<{ x: number; y: number; label: string; count: number } | null>(null);
   const rowDrag = useRef<{ mode: 'select' | 'move'; anchorRow: number; fromR0: number; fromR1: number; press?: DragPress } | null>(null);
@@ -1891,20 +1905,16 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     if (colDrag.current?.mode === 'move') {
       const el = scrollRef.current;
       if (!el || !pastThreshold(colDrag.current.press, e)) return;
-      const r = el.getBoundingClientRect();
-      const xContent = e.clientX - r.left + el.scrollLeft - gutterWidth;
-      let idx = 0;
-      for (let i = 0; i < colCount; i++) {
-        if (xContent > (offsets[i] ?? 0) + (widths[i] ?? 0) / 2) idx = i + 1;
-        else break;
-      }
-      setColMoveDrop({ index: idx, lineX: gutterWidth + (offsets[idx] ?? 0) });
-      const from = colDrag.current.fromC0;
+      const { fromC0: from, fromC1 } = colDrag.current;
+      const x = e.clientX - el.getBoundingClientRect().left + el.scrollLeft - gutterWidth;
+      const dropIdx = dropBoundaryAt(x, offsets, widths);
+      const plan = { colKeys, orderedKeys, fromC0: from, fromC1, dropIdx, offsets, gutterWidth };
+      setColMoveDrop(planColumnDrop({ ...plan, constrain: constrainColumnOrder }));
       setColGhost({
         x: e.clientX,
         y: e.clientY,
         label: visibleColumns[from]?.header ?? colKeys[from] ?? '',
-        count: colDrag.current.fromC1 - from + 1,
+        count: fromC1 - from + 1,
       });
       return;
     }
@@ -1978,8 +1988,8 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     resetDrag();
   };
   onUpRef.current = () => {
-    if (colDrag.current?.mode === 'move' && colMoveDrop) {
-      reorderColumns(colDrag.current.fromC0, colDrag.current.fromC1, colMoveDrop.index);
+    if (colDrag.current?.mode === 'move' && colMoveDrop?.order) {
+      applyColumnOrder(colMoveDrop.order, colDrag.current.fromC0, colDrag.current.fromC1);
     }
     if (rowDrag.current?.mode === 'move' && rowMoveDrop) {
       reorderRows(rowDrag.current.fromR0, rowDrag.current.fromR1, rowMoveDrop.index);
@@ -2043,32 +2053,18 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   useTouchContextMenu(scrollRef);
 
   // --- Column reorder --------------------------------------------------------
-  // Move the selected column block [fromC0..fromC1] to insertion index `dropIdx`
-  // (a boundary index among visible columns), preserving each hidden column's
-  // slot in the full order and keeping the moved block selected.
-  const reorderColumns = useCallback(
-    (fromC0: number, fromC1: number, dropIdx: number) => {
+  // Apply a header drop's full order (see planColumnDrop: hidden columns keep
+  // their slots, the host constraint already applied) and keep the block selected.
+  const applyColumnOrder = useCallback(
+    (order: string[], fromC0: number, fromC1: number) => {
       if (!onColumnOrderChange) return;
-      const block = colKeys.slice(fromC0, fromC1 + 1);
-      const blockSet = new Set(block);
-      const rest = orderedKeys.filter((k) => !blockSet.has(k));
-      // The visible column the block lands before; past the last visible
-      // column (or only hidden ones after) → append at the very end.
-      const anchorKey = colKeys.slice(dropIdx).find((k) => !blockSet.has(k));
-      const insertAt = anchorKey !== undefined ? rest.indexOf(anchorKey) : rest.length;
-      const next = [...rest.slice(0, insertAt), ...block, ...rest.slice(insertAt)];
-      onColumnOrderChange(next);
-      const ak = block[0];
-      const fk = block[block.length - 1];
-      if (ak !== undefined && fk !== undefined && rowCount > 0) {
-        setSelection({
-          anchor: { row: 0, colKey: ak },
-          focus: { row: rowCount - 1, colKey: fk },
-          active: { row: 0, colKey: ak },
-        });
-      }
+      onColumnOrderChange(order);
+      const edges = movedBlockEdges(order, colKeys, fromC0, fromC1);
+      if (!edges || rowCount === 0) return;
+      const a = { row: 0, colKey: edges.first };
+      setSelection({ anchor: a, focus: { row: rowCount - 1, colKey: edges.last }, active: a });
     },
-    [colKeys, orderedKeys, onColumnOrderChange, rowCount],
+    [colKeys, onColumnOrderChange, rowCount],
   );
 
   // Rows re-sorted / re-filtered under the same count: index-keyed transient
@@ -2173,7 +2169,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
 
   return (
     <div
-      className={`sg-grid relative flex flex-col ${grabbing ? 'sg-grabbing' : ''} ${className}`}
+      className={`sg-grid relative flex flex-col ${grabbing ? 'sg-grabbing' : ''}${colMoveDrop && !colMoveDrop.order ? ' sg-drop-blocked' : ''} ${className}`}
       data-testid="spreadsheet-grid"
       // The root marker stays unprefixed ("a grid is here"), since callers scope
       // their lookups inside a panel rather than by grid identity. This makes it
@@ -2233,6 +2229,8 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
             sort={sort}
             onSortChange={onSortChange}
             labels={labels}
+            headerCorner={headerCorner}
+            scrollRef={scrollRef}
           />
 
           {/* Rows area */}
@@ -2273,6 +2271,11 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                   rowStyle={rowStyle}
                   cellMarks={cellMarks}
                   groupRowContent={groupRowContent}
+                  groupInset={groupContentStart === 'gutter' ? groupContentInset : undefined}
+                  groupMaxWidth={groupContentStart === 'gutter' && availWidth > groupContentInset ? availWidth - groupContentInset : undefined}
+                  spanCells={spanCells}
+                  spanRange={spanRange}
+                  offsets={spanCells ? offsets : undefined}
                 />
               );
             })}
