@@ -526,3 +526,98 @@ fn the_distribution_fallback_walks_to_a_placement_datum_never_a_fix() {
         .expect("the placement datum is reachable");
     assert_eq!(found, StationRef::new(a, 0));
 }
+
+/// Store a GPS fix on `sr` directly, as a load does: no placement, no checks.
+fn push_fix(project: &mut Project, sr: StationRef, gps: GpsCoordinates) {
+    let station_ref = project.key_for_ref(sr).unwrap();
+    project.zero_datums.push(ZeroDatum {
+        station_ref,
+        gps,
+        accuracy_m: None,
+    });
+}
+
+#[test]
+fn each_fix_measures_its_survey_distance_to_its_own_nearest_other_datum() {
+    // A 400 m line L (40 shots of 10 m) placed at L:0, with fixes at L:10,
+    // L:30 and L:31, and a 40 m branch merged at L:22 with a fix at its end.
+    let mut project = Project::new("NearestDatum".to_string(), None);
+    let line = north_line(&mut project, 40, 10.0);
+    let branch = north_line(&mut project, 4, 10.0);
+    project.ensure_shot_uuids();
+    merge(
+        &mut project,
+        StationRef::new(line, 22),
+        StationRef::new(branch, 0),
+    );
+    project
+        .set_zero_datum(StationRef::new(line, 0), origin())
+        .unwrap();
+    let fixes = [
+        (StationRef::new(line, 10), 100.0),
+        (StationRef::new(line, 30), 10.0),
+        (StationRef::new(line, 31), 10.0),
+        (StationRef::new(branch, 4), 120.0),
+    ];
+    for (i, (sr, _)) in fixes.iter().enumerate() {
+        push_fix(&mut project, *sr, gps_at(i as f64, 100.0 * i as f64));
+    }
+
+    let gaps = project.gps_fix_gaps();
+    assert_eq!(gaps.len(), fixes.len());
+    for (sr, expected) in fixes {
+        let got = gaps[&sr].survey_distance_m.unwrap();
+        assert!((got - expected).abs() < 1e-9, "{sr:?}: {got} vs {expected}");
+        // The one-pass answer agrees with the per-station preview path.
+        let zd = project
+            .zero_datums
+            .iter()
+            .find(|zd| project.resolve_key(&zd.station_ref) == Some(sr))
+            .unwrap();
+        assert_eq!(project.datum_gap(sr, &zd.gps), Some(gaps[&sr]));
+    }
+}
+
+#[test]
+fn gap_check_cost_does_not_multiply_with_the_number_of_fixes() {
+    // 80 sections of 50 shots chained end to start, a placement datum at the
+    // start and a GPS fix on every other station: about 4000 fixes. One Dijkstra
+    // per fix took tens of seconds here; one shared pass takes a fraction of one.
+    let mut project = Project::new("ManyFixes".to_string(), None);
+    let sections: Vec<SectionId> = (0..80).map(|_| north_line(&mut project, 50, 2.0)).collect();
+    project.ensure_shot_uuids();
+    for pair in sections.windows(2) {
+        merge(
+            &mut project,
+            StationRef::new(pair[0], 50),
+            StationRef::new(pair[1], 0),
+        );
+    }
+    project
+        .set_zero_datum(StationRef::new(sections[0], 0), origin())
+        .unwrap();
+    for (s, &section) in sections.iter().enumerate() {
+        for i in 1..=50u32 {
+            let north = (s as f64 * 50.0 + f64::from(i)) * 2.0;
+            push_fix(
+                &mut project,
+                StationRef::new(section, i),
+                gps_at(1.0, north),
+            );
+        }
+    }
+    assert_eq!(project.gps_fix_datums().len(), 4000);
+
+    let started = std::time::Instant::now();
+    let gaps = project.gps_fix_gaps();
+    let elapsed = started.elapsed();
+    assert_eq!(gaps.len(), 4000);
+    // Each fix is one 2 m shot from the next datum along the chain.
+    assert!(gaps
+        .values()
+        .all(|g| (g.survey_distance_m.unwrap() - 2.0).abs() < 1e-9));
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "gps_fix_gaps over 4000 fixes took {elapsed:?}"
+    );
+}
