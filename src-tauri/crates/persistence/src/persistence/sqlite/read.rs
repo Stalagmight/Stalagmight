@@ -688,6 +688,9 @@ impl Database {
                 });
             }
         }
+        // GPS fixes and accuracies, in the saved list order (`datum_extras`).
+        // A table that no longer matches the rows above is ignored.
+        let zero_datums = super::datum_extras::combine(&self.conn, &sections, zero_datums)?;
 
         // Load section offsets
         let mut section_offsets: HashMap<u32, (f64, f64)> = HashMap::new();
