@@ -32,13 +32,19 @@ export function compassPoint(bearingDeg: number): string {
   return COMPASS_POINTS[Math.round(wrapped / 45) % COMPASS_POINTS.length]!;
 }
 
+/** Largest accuracy, in metres, the backend accepts. Mirrors
+ *  `MAX_GPS_ACCURACY_M` in src-tauri/crates/models/src/station.rs, which
+ *  refuses anything above it on save. */
+export const MAX_DATUM_ACCURACY_M = 1000;
+
 /**
- * Strict parse of the accuracy field: a finite number of metres, 0 or more
- * (0 is a hard pin). `null` for anything else, including an empty field.
+ * Strict parse of the accuracy field: a finite number of metres in
+ * 0 ..= MAX_DATUM_ACCURACY_M (0 is a hard pin). `null` for anything else,
+ * including an empty field.
  */
 export function parseDatumAccuracy(raw: string): number | null {
   const s = raw.trim();
   if (s === '') return null;
   const n = Number(s);
-  return Number.isFinite(n) && n >= 0 ? n : null;
+  return Number.isFinite(n) && n >= 0 && n <= MAX_DATUM_ACCURACY_M ? n : null;
 }

@@ -165,13 +165,16 @@ describe('EditStationDialog zero datum (#741)', () => {
     );
   });
 
-  it('refuses a negative or empty accuracy until it is fixed', async () => {
+  it('refuses a negative, empty or over-1000 m accuracy until it is fixed', async () => {
     render(<EditStationDialog />);
     typeGps('20.5, -87.4');
     const field = screen.getByTestId('station-datum-accuracy-input');
-    for (const bad of ['-1', '']) {
+    // 5000 is what the backend refuses on save; the field must refuse it first.
+    for (const bad of ['-1', '', '5000', '1000.5']) {
       fireEvent.change(field, { target: { value: bad } });
-      expect(screen.getByTestId('station-datum-accuracy-error')).toBeInTheDocument();
+      expect(screen.getByTestId('station-datum-accuracy-error')).toHaveTextContent(
+        'Enter an accuracy from 0 to 1000 m.'
+      );
       fireEvent.click(screen.getByTestId('edit-station-save'));
       await act(async () => {});
       expect(setZeroDatum).not.toHaveBeenCalled();

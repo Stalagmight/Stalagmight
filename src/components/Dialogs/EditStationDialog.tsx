@@ -11,7 +11,12 @@ import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { useEditingBlocked, isEditingBlockedNow } from '../../hooks/useEditingBlocked';
 import { useZeroDatumPreview } from '../../hooks/useZeroDatumPreview';
 import { parseGps, detectFormat, type GpsFormat } from '../../utils/gps';
-import { DEFAULT_DATUM_ACCURACY_M, compassPoint, parseDatumAccuracy } from '../../utils/zeroDatumPreview';
+import {
+  DEFAULT_DATUM_ACCURACY_M,
+  MAX_DATUM_ACCURACY_M,
+  compassPoint,
+  parseDatumAccuracy,
+} from '../../utils/zeroDatumPreview';
 import type { GpsCoordinates } from '../../types/project';
 import type { StationRef } from '../../types/project';
 import type { DatumGap } from '../../types/ipc/DatumGap';
@@ -145,7 +150,7 @@ export default function EditStationDialog() {
       const willBeZeroDatum = isZeroDatum;
 
       if (willBeZeroDatum && accuracy === null) {
-        setError(t('dialogs.editStation.accuracyInvalid'));
+        setError(t('dialogs.editStation.accuracyInvalid', { max: MAX_DATUM_ACCURACY_M }));
         return;
       }
 
@@ -372,6 +377,7 @@ export default function EditStationDialog() {
                   type="number"
                   inputMode="decimal"
                   min={0}
+                  max={MAX_DATUM_ACCURACY_M}
                   step="any"
                   value={accuracyInput}
                   onChange={(e) => setAccuracyInput(e.target.value)}
@@ -382,7 +388,7 @@ export default function EditStationDialog() {
               </div>
               {accuracy === null ? (
                 <div className="text-xs text-error pl-1" data-testid="station-datum-accuracy-error">
-                  {t('dialogs.editStation.accuracyInvalid')}
+                  {t('dialogs.editStation.accuracyInvalid', { max: MAX_DATUM_ACCURACY_M })}
                 </div>
               ) : (
                 <p className="text-xs text-text-secondary">{t('dialogs.editStation.accuracyHint')}</p>
