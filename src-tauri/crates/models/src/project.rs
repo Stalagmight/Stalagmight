@@ -61,7 +61,6 @@ mod anchor_fuzz;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
-    clippy::float_cmp,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod closure_shots_tests;
