@@ -10,7 +10,7 @@ crates sit under `src-tauri/crates/`:
 
 | Crate | Contents | Key deps |
 |-------|----------|----------|
-| `stalagmight-models` | The data model: `Project` / `Section` / `Shot` / `Station`, geometry (`geo.rs`), closures/merges/offsets, `app_dirs`, gas config + engine | - (base crate) |
+| `stalagmight-models` | The data model: `Project` / `Section` / `Shot` / `Station`, geometry (`geo.rs`), closures/merges/offsets, `app_dirs`, gas config + engine | cave-closure (numerics) |
 | `stalagmight-telemetry` | Telemetry collector + event registry (`telemetry/`), tracing/logging setup (`logging/`); its `build.rs` owns `TELEMETRY_ENDPOINT` validation and `APP_VERSION` | models |
 | `stalagmight-parsers` | Import parsers: DMP, Ariane TML/TMLU, Compass, Walls, GPX | models |
 | `stalagmight-persistence` | `.stalx` SQLite store + `.plnx` dive-plan store (`persistence/`), tile caches (`cache/`, `tilemap_cache`) | models |
@@ -26,6 +26,20 @@ on by" - so a lower crate never imports from a higher one. The workspace root al
 `[workspace.dependencies]`, the `[workspace.lints]` policy every member
 inherits, and the `telemetry` feature, which forwards to the members that
 implement it (`stalagmight-telemetry`, `stalagmight-speleodb`).
+
+### Closure numerical dependency
+
+`stalagmight-models` calls the consumer-independent `cave_closure::horizontal`
+Rust API for active weighted closure adjustment. Group membership, anchor selection,
+measured/world bearing conversion, reconstruction, and cache/lifecycle behavior stay
+in Stalagmight; numerical weights, matrix assembly, reduction, and PCG live in the
+crate. Neither Python nor the optional sparse-direct/L1 backends are enabled.
+
+The Rust workspace manifest pins the published crate, and `Cargo.lock` records
+its registry checksum. Standalone builds do not require a sibling checkout.
+Monorepo Cargo path overrides can still substitute local sources during
+development; qualify dependency updates in a standalone checkout outside those
+overrides so tests and release builds exercise the published crate.
 
 ## State Flow
 

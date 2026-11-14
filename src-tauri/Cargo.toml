@@ -38,6 +38,8 @@ license = "AGPL-3.0-or-later"
 # additive). tauri + its plugins, tauri-build, and the vendored compass_data
 # path dep stay declared on the packages that use them.
 [workspace.dependencies]
+# Pin the published horizontal compatibility API used by closure adjustment.
+cave-closure = { version = "=0.0.6", default-features = false }
 serde = "1"
 serde_json = "1"
 rusqlite = "0.41"

@@ -3,74 +3,47 @@
 This document covers key algorithmic decisions and their performance
 characteristics, for both the Rust backend and the WebGL frontend.
 
-## Loop Closure Adjustment - Sparse PCG Solver
+## Loop Closure Adjustment - cave-closure
 
-**File:** `src-tauri/crates/models/src/project/lsq.rs`, `adjust_least_squares()`
+The active horizontal solver is `cave_closure::horizontal::HorizontalProblem`.
+The adapter in `src-tauri/crates/models/src/project/lsq.rs` owns application
+station groups, controls, and shot/section reconstruction. The crate owns
+uncertainty propagation, sparse normal equations, reduction, and PCG.
 
-The loop closure adjustment solves a weighted least-squares system to distribute
-survey errors across the network. The normal equations form a weighted graph
-Laplacian matrix - each edge (shot) contributes a constraint between two station
-groups, with weights derived from measurement uncertainties (sigma for length and
-azimuth, scaled by section quality).
+Both axes share an ordered sparse graph but have independent weights. The solver
+peels degree-at-most-two nodes with exact scalar Schur complements, leaving a small
+core for warm-started Jacobi-PCG. The pivot guard is relative to the original
+diagonal on both axes. Floating axes keep the translation selected by the measured
+warm start; no centroid gauges, variance floors, or additional refinement are
+introduced. PCG uses the original initial-residual stopping test and caps iterations
+at the smaller of core size and 10,000. Back-substitution reconstructs all groups.
 
-### Problem structure
+Preparation and reconstruction remain component-scoped linear passes. Long loops
+reduce in near-linear time rather than requiring a full-system iteration per unit
+of loop diameter. Interconnected loop cores cost iterations times their sparse size.
+There is no dense matrix allocation or native sparse-direct backend in this path.
 
-The normal matrix A^T A is:
-- **Symmetric positive-definite** (graph Laplacian)
-- **Extremely sparse** - at most ~3 non-zeros per row (each station group
-  connects to a small number of neighbors via shots)
-- **Dimension n** = number of unknown station groups (groups connected via
-  merges and aligned closures)
+The ignored `profile_closure_solve_large` harness measures end-to-end scaling on
+synthetic loops. Run it in release mode on an otherwise quiet machine. It includes
+application reconstruction, rather than timing only the numerical kernel. Commands
+are in the testing recipes.
 
-X and Y axes are solved independently since they have different per-shot weights
-(the azimuth orientation affects directional uncertainty differently).
+A local macOS ARM64 comparison measured the following medians (five warmed runs,
+including project cloning and reconstruction). These are observations, not absolute
+time guarantees. Migration qualification compared both implementations in the same
+run; the old implementation and its comparison harness have since been removed.
 
-### Algorithm: Jacobi-preconditioned Conjugate Gradient
+| Shots per loop leg | Original (ms) | cave-closure (ms) |
+| --- | ---: | ---: |
+| 1,500 | 3.62 | 3.58 |
+| 3,000 | 6.69 | 6.91 |
+| 6,000 | 14.98 | 14.89 |
+| 12,000 | 31.63 | 32.84 |
 
-Instead of assembling a dense n×n matrix and using LU decomposition (O(n³)), the
-solver uses a sparse representation and iterative Conjugate Gradient:
-
-1. **Sparse assembly:** diagonal entries in `diag_x[i]` / `diag_y[i]`,
-   off-diagonal entries in adjacency list `adj[i] = [(j, w_x, w_y), ...]`.
-   A `macro_rules! add_sparse!` macro handles the fixed/unknown group indexing
-   to avoid borrow issues with mutable arrays.
-
-2. **Sparse matrix-vector product** (`spmv`): iterates diagonal + adjacency
-   list - O(nnz) per call.
-
-3. **Jacobi preconditioner:** M = diag(A), trivially inverted. Good enough for
-   graph Laplacians where the diagonal dominance ensures fast convergence.
-
-4. **Exact degree-≤2 reduction, then CG:** `solve_reduced_laplacian` peels
-   degree-1 spurs and series-reduces degree-2 chains exactly in O(n), runs
-   Jacobi-PCG on the surviving 2-core (≈ one node per eligible closure), then
-   back-substitutes.
-
-**Complexity:** O(n) peeling plus PCG over the tiny 2-core, vs O(n²) for the
-former full-system PCG on a single long loop and O(n³) for dense LU.
-
-**Tolerance:** 1e-12 relative residual norm, max 10,000 iterations.
-
-### Why not a direct sparse solver?
-
-A sparse Cholesky (LDL^T) factorization would also work and give exact results
-in one pass. However:
-- It requires a sparse matrix library (e.g., `sprs`, `cholmod` bindings) - an
-  extra dependency.
-- The graph Laplacian structure makes CG converge extremely fast (typically
-  under 50 iterations for survey networks), so the iterative approach is both
-  simpler and fast enough.
-- The PCG implementation is ~50 lines of pure Rust with no dependencies beyond
-  `std`.
-
-### Profiling results
-
-On a project with ~500 sections (~10,000 stations):
-- **Before (dense LU):** `adjust_least_squares` consumed 96.78% of CPU for
-  multiple minutes. The inner loop was a Gaussian elimination kernel
-  (movsd/mulsd/subsd) operating on a dense n×n matrix.
-- **After (sparse PCG):** `adjust_least_squares` dropped to 5.14% of CPU. The
-  hotspots shifted to normal app activity (image resizing, tile rendering).
+The largest case was 3.8 percent slower, within the 25 percent ceiling, and retained
+near-linear scaling. The migration comparison observed zero coordinate difference
+on its synthetic network roster; the independent mathematical tests retain their
+stricter tolerances alongside the 0.30 metre migration ceiling.
 
 ## Frozen Shot Detection - Tarjan's Bridge-Finding
 

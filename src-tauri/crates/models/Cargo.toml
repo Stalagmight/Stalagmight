@@ -20,6 +20,7 @@ workspace = true
 test-support = []
 
 [dependencies]
+cave-closure = { workspace = true }
 serde = { workspace = true, features = ["derive", "rc"] }
 # `float_roundtrip` mirrors the root crate's serde_json entry (see the rationale
 # there): features are additive, so workspace builds already parse floats
