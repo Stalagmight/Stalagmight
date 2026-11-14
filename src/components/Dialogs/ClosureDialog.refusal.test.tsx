@@ -16,7 +16,7 @@ import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 
 const REFUSAL =
-  'This closure would tie together the two ends of one shot (0:1 to 0:2), so there is no loop to close. Pick stations joined by at least two separate paths.';
+  'This closure would join the two ends of one shot (0:1 to 0:2) and squeeze that shot to zero length. Pick two stations that are not the ends of a single shot.';
 
 const preview = {
   path_length: 10,

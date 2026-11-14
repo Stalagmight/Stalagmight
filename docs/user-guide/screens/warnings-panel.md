@@ -49,10 +49,10 @@ readings disagree.
   Next**.
 - Errors can only be fixed. Warnings can also be ignored with **Ignore (keep
   value, don't warn again)**.
-- Two errors are about loop closures, not readings. A closure that ties
-  together the two ends of one shot has no loop to close, and the Closures
-  Computed View skips it: **Remove this loop closure** fixes it, **Go to
-  closure station** shows it in **Details**. A part of the survey the Closures
+- Two entries are about loop closures, not readings. A closure that joins the
+  two ends of one shot (an error) would squeeze that shot to zero length, so the
+  Closures Computed View skips it: **Remove this loop closure** fixes it, **Go
+  to closure station** shows it in **Details**. A part of the survey the Closures
   Computed View could not adjust is shown there as measured; the message says
   why, and **Go to station** takes you to it.
 - Under **Show resolved**, resolved warnings are struck through. **Mark

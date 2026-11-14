@@ -39,7 +39,7 @@ const shot = {
 const acrossOneShot = {
   code: 'CLOSURE_ACROSS_ONE_SHOT',
   message:
-    'Shot 0:2 has both ends tied together by loop closure 0:1 to 0:2, so that closure has no loop to close.',
+    'Shot 0:2 has both ends joined by loop closure 0:1 to 0:2, which would squeeze the shot to zero length, so the Closures Computed View skips that closure.',
   severity: 'error',
   sectionId: 0,
   shotId: 2,

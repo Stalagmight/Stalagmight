@@ -336,7 +336,7 @@ impl AppState {
                     shot_index,
                     code: CLOSURE_ACROSS_ONE_SHOT.to_string(),
                     message: format!(
-                        "Shot {section_id}:{} has both ends tied together by loop closure {} to {}, so that closure has no loop to close. The Closures Computed View skips it. Remove the closure, or close the loop between stations joined by at least two separate paths.",
+                        "Shot {section_id}:{} has both ends joined by loop closure {} to {}, which would squeeze the shot to zero length, so the Closures Computed View skips that closure. Remove the closure, or close the loop at two stations that are not the ends of a single shot.",
                         shot_index + 1,
                         station_id_label(skipped.station_a),
                         station_id_label(skipped.station_b),

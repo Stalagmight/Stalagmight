@@ -29,16 +29,16 @@ describe('notifyRemovedClosures', () => {
   it('shows one warning toast naming every removed closure', () => {
     const r = result({
       warnings: [
-        removed('Removed loop closure 0:1 to 0:5: closing the gap left its two stations at the two ends of one shot, so it had no loop left to close.'),
+        removed('Removed loop closure 0:1 to 0:5: closing the gap left its two stations at the two ends of one shot.'),
         { code: 'SYSTEM', message: 'unrelated', severity: 'warning' },
-        removed('Removed loop closure 1:0 to 0:4: closing the gap left its two stations at the two ends of one shot, so it had no loop left to close.'),
+        removed('Removed loop closure 1:0 to 0:4: closing the gap left its two stations at the two ends of one shot.'),
       ],
     });
     expect(notifyRemovedClosures(r)).toBe(r);
     expect(showToast).toHaveBeenCalledTimes(1);
     expect(showToast).toHaveBeenCalledWith(
-      'Removed loop closure 0:1 to 0:5: closing the gap left its two stations at the two ends of one shot, so it had no loop left to close. ' +
-        'Removed loop closure 1:0 to 0:4: closing the gap left its two stations at the two ends of one shot, so it had no loop left to close.',
+      'Removed loop closure 0:1 to 0:5: closing the gap left its two stations at the two ends of one shot. ' +
+        'Removed loop closure 1:0 to 0:4: closing the gap left its two stations at the two ends of one shot.',
       TOAST_KEYS.CLOSURE_REMOVED,
       'warning',
     );

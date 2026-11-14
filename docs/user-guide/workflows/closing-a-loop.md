@@ -25,8 +25,9 @@ The closure shows as a dashed line. The survey itself does not move. To see it
 adjusted to its closures, switch to **Plan**, or pick **Closures Computed View**
 in the [Display menu](../screens/display-menu.md).
 
-The two stations must be joined by at least two separate paths. Two stations at
-the ends of one shot are not a loop, so the dialog refuses them.
+The two stations must not be the two ends of one shot: closing there would
+squeeze that shot to zero length, so the dialog refuses them, even when another
+passage also joins them.
 
 ## Step details
 

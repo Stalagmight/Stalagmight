@@ -139,9 +139,10 @@ fn a_closure_across_one_shot_raises_one_unignorable_error_on_its_shot() {
     assert_eq!(
         w.message,
         format!(
-            "Shot {a}:2 has both ends tied together by loop closure {a}:1 to {a}:2, so that \
-             closure has no loop to close. The Closures Computed View skips it. Remove the \
-             closure, or close the loop between stations joined by at least two separate paths."
+            "Shot {a}:2 has both ends joined by loop closure {a}:1 to {a}:2, which would squeeze \
+             the shot to zero length, so the Closures Computed View skips that closure. Remove \
+             the closure, or close the loop at two stations that are not the ends of a single \
+             shot."
         )
     );
     // The DetailPanel pill parses the leading shot reference.
@@ -198,7 +199,8 @@ fn the_connectivity_check_carries_the_backend_refusal() {
     assert!(across.connected && !across.can_merge);
     let refusal = across.closure_refusal.expect("a refusal for one shot");
     assert!(refusal.starts_with(&format!(
-        "This closure would tie together the two ends of one shot ({a}:1 to {a}:2)"
+        "This closure would join the two ends of one shot ({a}:1 to {a}:2) and squeeze that \
+         shot to zero length."
     )));
     // The very words the create command answers with.
     let created = state.execute(Command::CreateLoopClosure {
@@ -370,7 +372,7 @@ fn assert_removed(result: &crate::core::CommandResult, labels: &[&str]) {
         .map(|l| {
             format!(
                 "Removed loop closure {l}: closing the gap left its two stations at the two ends \
-                 of one shot, so it had no loop left to close."
+                 of one shot."
             )
         })
         .collect();

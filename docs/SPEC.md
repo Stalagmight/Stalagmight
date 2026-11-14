@@ -1370,10 +1370,10 @@ Shown when creating a loop closure between two **connected** stations.
 When the backend would refuse the pair (#737), the connectivity check carries the
 reason (`ConnectivityResult.closure_refusal`) and the dialog shows it above the
 station details in an error box (`closure-refusal`) with **Create Closure**
-disabled. The one refusal is a closure that would tie together the two ends of
-one shot (directly, or through merges and other closures): "This closure would
-tie together the two ends of one shot (A:1 to A:2), so there is no loop to close.
-Pick stations joined by at least two separate paths." A pair that other merges and
+disabled. The one refusal is a closure that would join the two ends of one shot
+(directly, or through merges and other closures): "This closure would join the two
+ends of one shot (A:1 to A:2) and squeeze that shot to zero length. Pick two
+stations that are not the ends of a single shot." A pair that other merges and
 closures already tie together is still accepted. The backend refuses the same
 pairs regardless of the dialog. See [closures.md](closures.md#create-loop-closure).
 
@@ -1494,9 +1494,9 @@ The Merge Tool connects two stations. The behavior depends on whether the statio
 1. User activates Merge Tool (M)
 2. Selects two stations that are already in the same connected group
 3. ClosureDialog appears with closure preview data (path length, misclosure, error %)
-   - If the two stations are joined by only ONE shot (directly or through merges
-     and other closures), the dialog says why and Create is disabled: a closure
-     needs at least two separate paths between its stations (#737)
+   - If the two stations are the two ends of one shot (directly or through merges
+     and other closures), the dialog says why and Create is disabled: the closure
+     would squeeze that shot to zero length (#737)
 4. User selects error distribution method
 5. Confirm → Loop closure created, shown as dashed line on map
 6. Closure stations updated with `closures_with` references (direct + transitive)
@@ -1557,7 +1557,7 @@ The Merge Tool connects two stations. The behavior depends on whether the statio
    Delete Shots dialog lists it before you confirm ("Loop closures removed (they
    would span a single shot)"), and a warning toast says so afterwards ("Removed
    loop closure A:1 to A:4: closing the gap left its two stations at the two ends
-   of one shot, so it had no loop left to close."). Both name the closure by the
+   of one shot."). Both name the closure by the
    stations it was created with. One Undo restores the shots and the closure
    (#737)
 

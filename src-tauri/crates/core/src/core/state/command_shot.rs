@@ -13,7 +13,7 @@ use crate::models::{
 /// and the user created closure 0:1-0:5, not the 0:1-0:2 it became.
 pub(super) fn closure_removed_message(closure: &ClosurePair) -> String {
     format!(
-        "Removed loop closure {} to {}: closing the gap left its two stations at the two ends of one shot, so it had no loop left to close.",
+        "Removed loop closure {} to {}: closing the gap left its two stations at the two ends of one shot.",
         station_id_label(closure.station_a),
         station_id_label(closure.station_b)
     )

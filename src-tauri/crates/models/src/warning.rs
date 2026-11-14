@@ -31,10 +31,12 @@ pub const MULTIPLE_DATUMS_PER_MERGE_COMPONENT: &str = "multiple_datums_per_merge
 /// "Remove closure".
 ///
 /// An **error**, so it is not ignorable: the closure is a real defect in the
-/// data (it asserts a loop that does not exist), not a tolerance the surveyor
-/// may wave off, and ignoring it would leave a closure that silently does
-/// nothing. The fix is to remove it (or replace it with one between stations
-/// joined by two separate paths) - exactly like the over-anchoring error above.
+/// data (it would squeeze a surveyed shot to zero length), not a tolerance the
+/// surveyor may wave off, and ignoring it would leave a closure that silently
+/// does nothing. It is also deterministic - a pure function of the saved data,
+/// whatever view is open - so it can gate like any other error. The fix is to
+/// remove it (or close the loop at two stations that are not the ends of a
+/// single shot) - exactly like the over-anchoring error above.
 pub const CLOSURE_ACROSS_ONE_SHOT: &str = "CLOSURE_ACROSS_ONE_SHOT";
 
 /// Warning code for a part of the survey the closure-adjusted solve could not

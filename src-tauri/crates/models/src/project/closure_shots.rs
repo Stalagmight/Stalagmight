@@ -8,8 +8,10 @@
 //! per-section translation check then finds two targets for one section and
 //! the whole component falls back to measured geometry.
 //!
-//! A closure that does that has no loop to close: the two stations it ties
-//! are joined by exactly one shot. This module is the ONE place that decides
+//! A closure that does that would squeeze that shot to zero length: its two
+//! stations sit at the two ends of one shot, whatever other routes also join
+//! them (a closure 0:0-0:1 is refused even when a side passage merged on at
+//! both stations is a second route). This module is the ONE place that decides
 //! which closures do, so creation (`create_loop_closure`, the batch importer
 //! path, the connectivity check behind the closure dialog - each refuses ONLY
 //! such a closure), the solve
@@ -73,7 +75,7 @@ impl ClosureAcrossOneShot {
 pub fn closure_across_one_shot_refusal(shot: (SectionId, usize)) -> String {
     let (from, to) = shot_ends(shot);
     format!(
-        "This closure would tie together the two ends of one shot ({} to {}), so there is no loop to close. Pick stations joined by at least two separate paths.",
+        "This closure would join the two ends of one shot ({} to {}) and squeeze that shot to zero length. Pick two stations that are not the ends of a single shot.",
         station_id_label(from),
         station_id_label(to)
     )

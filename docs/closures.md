@@ -70,12 +70,15 @@ Validation rules:
   **unless** both sections are connected to zero datums via merges (see `section_has_zero_datum`).
   This zero-datum check uses merge-only connectivity (closures are ignored).
 - Duplicate closure pairs are rejected.
-- A closure needs a loop to close (#737). The pair is refused, for every strategy
-  (`Batch`, `LeastSquaresWeighted` and `Move` alike), when it would tie the two
-  ends of ONE shot together - directly (A:1 to A:2), or because merges and other
-  closures already tie each station to one end of the same shot - with *"This
-  closure would tie together the two ends of one shot (A:1 to A:2), so there is no
-  loop to close. Pick stations joined by at least two separate paths."*. It is
+- A closure must not join the two ends of one shot (#737). The pair is refused,
+  for every strategy (`Batch`, `LeastSquaresWeighted` and `Move` alike), when it
+  would tie the two ends of ONE shot together - directly (A:1 to A:2), or because
+  merges and other closures already tie each station to one end of the same shot -
+  with *"This closure would join the two ends of one shot (A:1 to A:2) and squeeze
+  that shot to zero length. Pick two stations that are not the ends of a single
+  shot."*. That holds even when another route also joins the two stations (a side
+  passage merged on at A:1 and closed to A:2, say): the solve would still have to
+  put both ends of the shot at one point. It is
   judged against the constraint knots the solve uses (see below), by the one
   shared helper `project/closure_shots.rs`. The importer's
   `create_loop_closures_batch` refuses the same pairs with the same words.
@@ -295,8 +298,7 @@ remove every closure `closures_newly_across_one_shot` reports, inside the same
 project snapshot pair, so one Undo restores the shots and the closure together.
 Each removal is reported in `CommandResult.warnings`
 (`CLOSURE_REMOVED_ACROSS_ONE_SHOT`, "Removed loop closure A:1 to A:4: closing the
-gap left its two stations at the two ends of one shot, so it had no loop left to
-close.") and shown as one warning toast, named by the stations BEFORE the delete:
+gap left its two stations at the two ends of one shot.") and shown as one warning toast, named by the stations BEFORE the delete:
 the gap-close renumbered A:4 to A:2, but the user created A:1-A:4.
 
 The Delete Shots dialog says so before the user confirms. The range preview

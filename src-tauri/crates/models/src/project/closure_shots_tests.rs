@@ -81,7 +81,7 @@ fn issue_loop() -> (Project, SectionId, SectionId) {
     (p, a, b)
 }
 
-const SPANS_A1_A2: &str = "This closure would tie together the two ends of one shot (0:1 to 0:2), so there is no loop to close. Pick stations joined by at least two separate paths.";
+const SPANS_A1_A2: &str = "This closure would join the two ends of one shot (0:1 to 0:2) and squeeze that shot to zero length. Pick two stations that are not the ends of a single shot.";
 
 // ---- the helper -------------------------------------------------------------
 
@@ -177,6 +177,29 @@ fn a_move_closure_does_not_tie_stations_for_the_solve() {
     plant(&mut p, st(a, 1), st(far, 1), ClosureStrategy::Move);
     plant(&mut p, st(far, 1), st(a, 2), ClosureStrategy::Batch);
     assert!(p.closures_across_one_shot().is_empty());
+}
+
+#[test]
+fn a_closure_across_one_shot_is_refused_even_when_another_route_joins_its_stations() {
+    // A side passage C runs from A:1 back to A:2: merged at A:1, closed to A:2.
+    // A:1 and A:2 are then joined by two routes (the shot, and C), yet a
+    // closure A:1-A:2 would still put both ends of the shot A:1-A:2 at one
+    // point - so it is refused, and planted it is skipped, with the shot named.
+    let (mut p, a, _) = issue_loop();
+    let c = add(
+        &mut p,
+        vec![shot(0.0, 5.0), shot(90.0, 10.0), shot(180.0, 5.0)],
+    );
+    p.merge_stations(st(c, 0), st(a, 1)).unwrap();
+    p.create_loop_closure(st(c, 3), st(a, 2), ClosureStrategy::Batch)
+        .unwrap();
+    assert!(p.closures_across_one_shot().is_empty());
+    let err = p
+        .create_loop_closure(st(a, 1), st(a, 2), ClosureStrategy::Batch)
+        .unwrap_err();
+    assert_eq!(err, SPANS_A1_A2);
+    plant(&mut p, st(a, 1), st(a, 2), ClosureStrategy::Batch);
+    assert_eq!(p.closures_across_one_shot()[0].collapsed_shot, (a, 1));
 }
 
 #[test]

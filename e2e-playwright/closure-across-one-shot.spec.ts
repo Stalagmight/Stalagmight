@@ -22,7 +22,7 @@ import {
 } from './helpers/app';
 
 const REFUSAL =
-  'This closure would tie together the two ends of one shot (0:1 to 0:2), so there is no loop to close. Pick stations joined by at least two separate paths.';
+  'This closure would join the two ends of one shot (0:1 to 0:2) and squeeze that shot to zero length. Pick two stations that are not the ends of a single shot.';
 
 const sectionSeeds: SectionSeed[] = [
   {
@@ -147,7 +147,7 @@ test.describe('Loop closures across one shot (#737)', () => {
 
   test('a shift delete that removed a closure says so in one warning toast', async ({ page }) => {
     const message =
-      'Removed loop closure 0:1 to 0:5: closing the gap left its two stations at the two ends of one shot, so it had no loop left to close.';
+      'Removed loop closure 0:1 to 0:5: closing the gap left its two stations at the two ends of one shot.';
     await page.evaluate((message) => {
       const overrides = (window as any).__MOCK_IPC_OVERRIDES__ ?? {};
       overrides.delete_shot_range_shift = {
