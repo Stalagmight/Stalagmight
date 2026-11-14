@@ -192,9 +192,10 @@ The **root section** and any section left parentless after link resolution (a
 genuinely detached component) each get a synthesized START shot with
 `FromID = -1`. A START carries the GPS of the datum on its own station; the
 entrance split puts the START on that station. A START with no datum of its own
-repeats the frame datum's coordinates, because an unanchored START lands at
-lat/lon 0 and the view opens on the Atlantic (but see
-[the same-coordinates caveat](#every-datum-is-an-entrance-741)). A component's
+carries the GPS of where the raw survey puts its station, relative to the frame
+datum (see [no two STARTs on one point](#no-two-starts-on-one-point)). An
+unanchored START would land at lat/lon 0, and the view would open on the
+Atlantic. A component's
 entrance is a section holding a **placement** datum; a GPS fix never roots one.
 All other sections connect to their parent via `FromID` on their first
 real/reference shot.
@@ -236,12 +237,22 @@ target is a START with no section hanging off it, so the fix rows come back as
 the same stations and legs, with one "loop closure referenced excluded
 stations" import warning per fix. The fix's GPS is not read back as a datum.
 
-**The same-coordinates caveat.** Two STARTs with the same lat/lon are pinned
-on top of each other, and Ariane collapses any loop between them. A START with
-no datum of its own repeats the frame datum's coordinates, so a datum-less
-component that is tied to the rest of the survey by a loop closure (for
-example after the merge that joined it was undone, which keeps unrelated
-closures) is drawn collapsed onto the frame datum's entrance.
+### No two STARTs on one point
+
+Two STARTs with the same lat/lon are pinned on top of each other, and Ariane
+collapses any loop between them (`Err=100%`, measured 2026-11-13). A START with
+no datum of its own used to repeat the frame datum's coordinates, so a
+datum-less piece tied back to the survey by a loop closure was drawn collapsed
+onto the frame's entrance. That is reachable: unmerging a section keeps every
+closure except the unmerged pair's, so a section merged into a datum-carrying
+survey, closed back onto it, and then unmerged leaves exactly that shape.
+
+Such a START now carries the GPS of where the raw survey puts its station:
+its local metres converted with `local_to_gps` against the frame datum, which
+is what local `(0, 0)` means. Two STARTs therefore share coordinates only when
+the survey puts them on the same point. The frame datum's coordinates remain
+the fallback for a START whose station has no raw position. A project with no
+datum at all still writes every START at `0,0`.
 
 A parentless shot whose type is **not** START is an orphan root. Ariane
 tolerates it in isolation, but a file containing both an orphan root and any
@@ -424,7 +435,7 @@ dropped or capped.
 - Shape/cross-section geometry (`Shape`/`SH` elements) is not exported (not stored in the internal model)
 - GPS coordinates are not written per-shot: latitude and longitude are `0.0`
   everywhere except the START shots, which carry their own datum's GPS or
-  repeat the frame datum's (see Topology); without any datum they are `0.0`
-  there too. Only the project-level elevation reference is otherwise set
+  the GPS of their surveyed position (see Topology); without any datum they
+  are `0.0` there too. Only the project-level elevation reference is otherwise set
 - A GPS fix's accuracy is not exported: Ariane has no field for it and pins
   every START exactly
