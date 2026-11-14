@@ -48,8 +48,13 @@ describe('ClosureDialog - refusal guard (#737)', () => {
   });
 
   it('shows the backend refusal and disables Create', async () => {
-    open({ closureRefusal: REFUSAL });
+    open({ closureRefusal: REFUSAL, reason: 'Creates survey loop' });
     render(<ClosureDialog />);
+
+    // The merge redirect's "Creates survey loop" would contradict "no loop to
+    // close": with a refusal it is not shown.
+    expect(screen.queryByText('Creates survey loop')).toBeNull();
+    expect(screen.queryByTestId('closure-reason')).toBeNull();
 
     const refusal = screen.getByTestId('closure-refusal');
     expect(refusal).toHaveTextContent(REFUSAL);
@@ -65,10 +70,12 @@ describe('ClosureDialog - refusal guard (#737)', () => {
   });
 
   it('keeps Create for a pair that closes a real loop', async () => {
-    open({});
+    open({ reason: 'Creates survey loop' });
     render(<ClosureDialog />);
 
     expect(screen.queryByTestId('closure-refusal')).toBeNull();
+    // Without a refusal the redirect reason is shown as before.
+    expect(screen.getByTestId('closure-reason')).toHaveTextContent('Creates survey loop');
     const create = screen.getByTestId('closure-create');
     expect(create).toBeEnabled();
     await userEvent.click(create);

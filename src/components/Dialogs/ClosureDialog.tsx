@@ -89,8 +89,10 @@ export default function ClosureDialog() {
   return (
     <DialogWrapper title="Create Loop Closure" onClose={handleClose} size="lg" data-testid="closure-dialog">
       <div className="space-y-4">
-        {reason && (
-          <p className="text-sm text-text-secondary">{reason}</p>
+        {/* The redirect reason ("Creates survey loop") would contradict a refusal
+            that says there is no loop to close, so the refusal replaces it. */}
+        {reason && !closureRefusal && (
+          <p className="text-sm text-text-secondary" data-testid="closure-reason">{reason}</p>
         )}
         {closureRefusal && (
           <div
