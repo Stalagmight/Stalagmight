@@ -79,11 +79,37 @@ impl Project {
         // depth_in, depth_out, pitch_in, pitch_out are intentionally left unchanged
     }
 
+    /// Least-squares adjust the loop closures of `anchor_station`'s component.
+    ///
+    /// Closures that tie the two ends of one shot together
+    /// ([`Self::closures_across_one_shot`]) are left out before the solve, so
+    /// the constraint groups, the spur detection and the `is_aligned` marking
+    /// all see the same set (#737). When every eligible closure of the
+    /// component is one of them, there is nothing to solve and this returns
+    /// `Ok(())` without touching the project.
     pub fn adjust_loop_closures(
         &mut self,
         anchor_station: StationRef,
         method: ClosureStrategy,
         config: &ClosureAdjustmentConfig,
+    ) -> Result<(), String> {
+        let skipped: HashSet<u64> = self
+            .closures_across_one_shot()
+            .into_iter()
+            .map(|c| c.closure_id)
+            .collect();
+        self.adjust_loop_closures_skipping(anchor_station, method, config, &skipped)
+    }
+
+    /// [`Self::adjust_loop_closures`] with the across-one-shot set computed by
+    /// the caller, so a caller solving several components of one project
+    /// computes it once.
+    pub(super) fn adjust_loop_closures_skipping(
+        &mut self,
+        anchor_station: StationRef,
+        method: ClosureStrategy,
+        config: &ClosureAdjustmentConfig,
+        skipped: &HashSet<u64>,
     ) -> Result<(), String> {
         if !self.station_exists(anchor_station) {
             return Err("Anchor station does not exist".to_string());
@@ -133,6 +159,23 @@ impl Project {
                 "No eligible loop closures found for adjustment"
             );
             return Err("No eligible loop closures found for adjustment".to_string());
+        }
+
+        let closures: Vec<LoopClosure> = closures
+            .into_iter()
+            .filter(|lc| !skipped.contains(&lc.id))
+            .collect();
+        if closures.is_empty() {
+            // Every eligible closure here ties the two ends of one shot: there
+            // is no loop to solve, and the component keeps its measured
+            // geometry - a success, not a failure (#737).
+            debug!(
+                anchor_station = ?anchor_station,
+                skipped = skipped.len(),
+                purpose = "adjust loop closures",
+                "Every eligible closure of the component spans one shot; nothing to adjust"
+            );
+            return Ok(());
         }
 
         match method {

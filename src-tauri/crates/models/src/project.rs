@@ -34,7 +34,9 @@ use super::{Coordinates, GpsCoordinates, Shot, ShotUpdates, Station};
 #[cfg(test)]
 use crate::config::ClosureAdjustmentConfig;
 
+mod adjustment_report;
 mod classify;
+mod closure_shots;
 mod combine_candidate;
 mod combine_plan;
 mod combine_sections;
@@ -56,6 +58,13 @@ mod uuid_unique;
 
 #[cfg(test)]
 mod anchor_fuzz;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::float_cmp,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod closure_shots_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
@@ -87,7 +96,11 @@ mod component_gauge_tests;
 )]
 mod split_section_tests;
 
+pub use adjustment_report::{
+    AdjustedStations, AdjustmentFailure, AdjustmentFailureReport, AdjustmentReport, SkippedClosure,
+};
 pub use classify::ClassifyScope;
+pub use closure_shots::{station_id_label, ClosureAcrossOneShot, ClosureTieRefusal};
 pub use combine_candidate::{COMBINE_DEPTH_NOTICE_M, COMBINE_TOLERANCE_M, MAX_COMBINE_PARTNERS};
 pub use gas::{
     CylRole, Cylinder, Diver, GasReachField, PlanMode, PlanSegment, RouteLeg, RouteProfilePoint,

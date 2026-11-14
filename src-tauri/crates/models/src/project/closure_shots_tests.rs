@@ -1,0 +1,599 @@
+//! Loop closures across one shot (#737): the shared helper, the creation-time
+//! refusal (single and batch paths), the solve skipping them, and the
+//! adjustment failures the view now reports instead of only logging.
+
+use crate::config::ClosureAdjustmentConfig;
+use crate::{
+    ClosureAcrossOneShot, ClosureStrategy, ClosureTieRefusal, GpsCoordinates, LoopClosure, Project,
+    SectionData, SectionId, ShotData, Station, StationRef,
+};
+
+fn shot(azimuth: f64, length: f64) -> ShotData {
+    ShotData {
+        azimuth_in: azimuth,
+        azimuth_out: azimuth,
+        length,
+        ..Default::default()
+    }
+}
+
+fn add(project: &mut Project, shots: Vec<ShotData>) -> SectionId {
+    project
+        .add_section(SectionData {
+            shots,
+            ..Default::default()
+        })
+        .id
+}
+
+fn st(section: SectionId, index: u32) -> StationRef {
+    StationRef::new(section, index)
+}
+
+/// Plant a closure directly, bypassing `create_loop_closure`'s refusal - the
+/// shape a file written before #737 (or another tool) can carry.
+fn plant(project: &mut Project, a: StationRef, b: StationRef, strategy: ClosureStrategy) -> u64 {
+    let (station_a, station_b) = (
+        project.key_for_ref(a).unwrap(),
+        project.key_for_ref(b).unwrap(),
+    );
+    project.normalize_next_closure_id();
+    let id = project.next_closure_id;
+    project.next_closure_id += 1;
+    project.loop_closures.push(LoopClosure {
+        id,
+        station_a,
+        station_b,
+        path_length: 10.0,
+        misclosure_distance: 0.0,
+        error_percentage: 0.0,
+        horizontal_misclosure: 0.0,
+        vertical_misclosure: 0.0,
+        strategy,
+        is_aligned: false,
+    });
+    id
+}
+
+fn coords(stations: &[Station], at: StationRef) -> (f64, f64) {
+    let s = stations.iter().find(|s| s.station_ref == at).unwrap();
+    (s.coordinates.x, s.coordinates.y)
+}
+
+fn gap(stations: &[Station], a: StationRef, b: StationRef) -> f64 {
+    let (pa, pb) = (coords(stations, a), coords(stations, b));
+    (pa.0 - pb.0).hypot(pa.1 - pb.1)
+}
+
+/// The issue's survey: A two shots east, B north/east/south, merged at their
+/// starts, with the far ends B:3 and A:2 0.5 m apart.
+fn issue_loop() -> (Project, SectionId, SectionId) {
+    let mut p = Project::new("737".to_string(), None);
+    let a = add(&mut p, vec![shot(90.0, 10.0), shot(90.0, 10.0)]);
+    let b = add(
+        &mut p,
+        vec![shot(0.0, 10.0), shot(90.0, 20.5), shot(180.0, 10.0)],
+    );
+    p.merge_stations(st(a, 0), st(b, 0)).unwrap();
+    p.create_loop_closure(st(b, 3), st(a, 2), ClosureStrategy::Batch)
+        .unwrap();
+    (p, a, b)
+}
+
+const SPANS_A1_A2: &str = "This closure would tie together the two ends of one shot (0:1 to 0:2), so there is no loop to close. Pick stations joined by at least two separate paths.";
+
+// ---- the helper -------------------------------------------------------------
+
+#[test]
+fn a_closure_directly_across_one_shot_is_reported_with_its_shot() {
+    let (mut p, a, _) = issue_loop();
+    let id = plant(&mut p, st(a, 1), st(a, 2), ClosureStrategy::Batch);
+    assert_eq!(
+        p.closures_across_one_shot(),
+        vec![ClosureAcrossOneShot {
+            closure_id: id,
+            station_a: st(a, 1),
+            station_b: st(a, 2),
+            collapsed_shot: (a, 1),
+        }]
+    );
+    let only = &p.closures_across_one_shot()[0];
+    assert_eq!(only.shot_ends(), (st(a, 1), st(a, 2)));
+}
+
+#[test]
+fn a_closure_between_branches_merged_to_both_ends_of_a_shot_is_reported() {
+    let (mut p, a, _) = issue_loop();
+    // Two side passages starting at A:1 and A:2; a closure between their
+    // starts ties A:1 and A:2 through the merges.
+    let c = add(&mut p, vec![shot(0.0, 5.0)]);
+    let d = add(&mut p, vec![shot(0.0, 5.0)]);
+    p.merge_stations(st(c, 0), st(a, 1)).unwrap();
+    p.merge_stations(st(d, 0), st(a, 2)).unwrap();
+    let id = plant(&mut p, st(c, 0), st(d, 0), ClosureStrategy::Batch);
+    let found = p.closures_across_one_shot();
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].closure_id, id);
+    assert_eq!(found[0].collapsed_shot, (a, 1));
+    // And creation refuses the same pair, naming the shot, not the branches.
+    let err = p
+        .create_loop_closure(st(c, 0), st(d, 0), ClosureStrategy::Batch)
+        .unwrap_err();
+    // The planted closure already makes this pair a duplicate; drop it and ask again.
+    assert_eq!(err, "A loop closure already exists between these stations.");
+    p.loop_closures.retain(|lc| lc.id != id);
+    let err = p
+        .create_loop_closure(st(c, 0), st(d, 0), ClosureStrategy::Batch)
+        .unwrap_err();
+    assert_eq!(err, SPANS_A1_A2);
+}
+
+#[test]
+fn chained_closures_report_the_one_that_closes_the_shot_in_vector_order() {
+    // c1 ties A:1 to a far station X; c2 then ties X to A:2, which closes the
+    // shot A:1-A:2 through c1. Only the LATER closure is skipped, and the order
+    // decides it: swap them and the other one is.
+    let build = |first_to_a2: bool| {
+        let (mut p, a, _) = issue_loop();
+        let far = add(&mut p, vec![shot(180.0, 30.0), shot(90.0, 10.0)]);
+        p.merge_stations(st(far, 0), st(a, 0)).unwrap();
+        let x = st(far, 2);
+        let (first, second) = if first_to_a2 {
+            (
+                plant(&mut p, x, st(a, 2), ClosureStrategy::Batch),
+                plant(&mut p, st(a, 1), x, ClosureStrategy::LeastSquaresWeighted),
+            )
+        } else {
+            (
+                plant(&mut p, st(a, 1), x, ClosureStrategy::LeastSquaresWeighted),
+                plant(&mut p, x, st(a, 2), ClosureStrategy::Batch),
+            )
+        };
+        (p, a, first, second)
+    };
+    for first_to_a2 in [false, true] {
+        let (p, a, first, second) = build(first_to_a2);
+        let found = p.closures_across_one_shot();
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(
+            found[0].closure_id, second,
+            "the later closure is the skipped one"
+        );
+        assert_ne!(found[0].closure_id, first);
+        assert_eq!(found[0].collapsed_shot, (a, 1));
+        // Deterministic: asking twice gives the same answer.
+        assert_eq!(found, p.closures_across_one_shot());
+    }
+}
+
+#[test]
+fn a_move_closure_does_not_tie_stations_for_the_solve() {
+    // A Move closure is not solved, so it puts nothing in a knot: the Batch
+    // closure from its far end to A:2 closes a real loop, not a shot.
+    let (mut p, a, _) = issue_loop();
+    let far = add(&mut p, vec![shot(180.0, 30.0)]);
+    p.merge_stations(st(far, 0), st(a, 0)).unwrap();
+    plant(&mut p, st(a, 1), st(far, 1), ClosureStrategy::Move);
+    plant(&mut p, st(far, 1), st(a, 2), ClosureStrategy::Batch);
+    assert!(p.closures_across_one_shot().is_empty());
+}
+
+#[test]
+fn a_closure_across_two_shots_is_a_real_loop() {
+    let (mut p, a, _) = issue_loop();
+    assert!(p.closure_tie_refusal(st(a, 0), st(a, 2)).is_none());
+    assert!(p.closure_spans_one_shot(st(a, 0), st(a, 2)).is_none());
+    p.create_loop_closure(st(a, 0), st(a, 2), ClosureStrategy::Batch)
+        .unwrap();
+    assert!(p.closures_across_one_shot().is_empty());
+}
+
+#[test]
+fn a_closure_that_collapses_two_shots_reports_the_lowest() {
+    // A:1 merged to B:1 and a real loop closure A:2-B:2 make two knots,
+    // {A:1, B:1} and {A:2, B:2}. A closure joining them collapses BOTH shots
+    // A:1-A:2 and B:1-B:2; the lowest (section, shot) is the one reported.
+    let mut p = Project::new("two".to_string(), None);
+    let a = add(&mut p, vec![shot(90.0, 10.0), shot(90.0, 10.0)]);
+    let b = add(&mut p, vec![shot(0.0, 10.0), shot(0.0, 10.0)]);
+    p.merge_stations(st(a, 1), st(b, 1)).unwrap();
+    p.create_loop_closure(st(a, 2), st(b, 2), ClosureStrategy::Batch)
+        .unwrap();
+    assert_eq!(
+        p.closure_spans_one_shot(st(b, 1), st(a, 2)),
+        Some((a.min(b), 1))
+    );
+    assert_eq!(
+        p.closure_spans_one_shot(st(a, 1), st(b, 2)),
+        Some((a.min(b), 1))
+    );
+    plant(&mut p, st(b, 1), st(a, 2), ClosureStrategy::Batch);
+    assert_eq!(
+        p.closures_across_one_shot()[0].collapsed_shot,
+        (a.min(b), 1)
+    );
+}
+
+#[test]
+fn dangling_and_ineligible_closures_are_ignored() {
+    let (mut p, a, _) = issue_loop();
+    let id = plant(
+        &mut p,
+        st(a, 1),
+        st(a, 2),
+        ClosureStrategy::ProportionalByLength,
+    );
+    assert!(p.closures_across_one_shot().is_empty());
+    // Dangle it: its anchoring shot is gone, so it resolves to nothing.
+    let lc = p.loop_closures.iter_mut().find(|lc| lc.id == id).unwrap();
+    lc.strategy = ClosureStrategy::Batch;
+    lc.station_b.anchor = crate::StationAnchor::AfterShot("gone".to_string());
+    assert!(p.closures_across_one_shot().is_empty());
+}
+
+// ---- refusal at creation -----------------------------------------------------
+
+#[test]
+fn creation_refuses_a_closure_across_one_shot_for_every_strategy() {
+    let (mut p, a, _) = issue_loop();
+    for strategy in [
+        ClosureStrategy::Batch,
+        ClosureStrategy::LeastSquaresWeighted,
+        ClosureStrategy::Move,
+    ] {
+        let err = p
+            .create_loop_closure(st(a, 1), st(a, 2), strategy)
+            .unwrap_err();
+        assert_eq!(err, SPANS_A1_A2, "{strategy:?}");
+        // Either order of the two stations.
+        let err = p
+            .create_loop_closure(st(a, 2), st(a, 1), strategy)
+            .unwrap_err();
+        assert_eq!(err, SPANS_A1_A2, "{strategy:?}");
+    }
+    assert_eq!(p.loop_closures.len(), 1, "nothing was created");
+    assert_eq!(
+        p.closure_tie_refusal(st(a, 1), st(a, 2)),
+        Some(ClosureTieRefusal::SpansOneShot {
+            section_id: a,
+            shot_index: 1
+        })
+    );
+}
+
+#[test]
+fn creation_refuses_a_tie_that_another_closure_already_makes() {
+    let (mut p, a, b) = issue_loop();
+    // A:2 and B:3 are one point through the closure; B:3 to A:2 again is a
+    // duplicate, but a closure from a third station merged onto B:3 is a
+    // redundant tie the duplicate check cannot see.
+    let c = add(&mut p, vec![shot(0.0, 5.0)]);
+    p.merge_stations(st(c, 0), st(b, 3)).unwrap();
+    let err = p
+        .create_loop_closure(st(c, 0), st(a, 2), ClosureStrategy::Batch)
+        .unwrap_err();
+    assert_eq!(
+        err,
+        "These stations are already tied together through other merges and closures, so this closure would add nothing."
+    );
+    assert_eq!(
+        p.closure_tie_refusal(st(c, 0), st(a, 2)),
+        Some(ClosureTieRefusal::AlreadyTied)
+    );
+    assert!(p.closure_spans_one_shot(st(c, 0), st(a, 2)).is_none());
+    // Merged pairs keep their own, older message.
+    let err = p
+        .create_loop_closure(st(c, 0), st(b, 3), ClosureStrategy::Batch)
+        .unwrap_err();
+    assert!(
+        err.starts_with("These stations are already merged."),
+        "{err}"
+    );
+}
+
+#[test]
+fn creation_judges_against_the_knots_the_solve_uses() {
+    // A closure the solve SKIPS ties nothing, so it cannot make a later pair
+    // "already tied" or "across one shot".
+    let (mut p, a, _) = issue_loop();
+    plant(&mut p, st(a, 1), st(a, 2), ClosureStrategy::Batch);
+    // With the skipped A:1-A:2 counted, A:0-A:2 would be one shot (A:0-A:1).
+    assert!(p.closure_tie_refusal(st(a, 0), st(a, 2)).is_none());
+}
+
+#[test]
+fn batch_creation_refuses_the_same_pairs_with_the_same_messages() {
+    fn build() -> (Project, Vec<(StationRef, StationRef)>) {
+        let (mut p, a, b) = issue_loop();
+        let far = add(&mut p, vec![shot(180.0, 30.0), shot(90.0, 10.0)]);
+        p.merge_stations(st(far, 0), st(a, 0)).unwrap();
+        let c = add(&mut p, vec![shot(0.0, 5.0)]);
+        p.merge_stations(st(c, 0), st(b, 3)).unwrap();
+        let pairs = vec![
+            (st(a, 1), st(a, 2)),   // one shot directly
+            (st(a, 1), st(far, 2)), // valid loop
+            (st(far, 2), st(a, 2)), // one shot through the pair above (same batch)
+            (st(c, 0), st(a, 2)),   // already tied through merge + closure
+            (st(a, 0), st(far, 1)), // A:0 is merged to far:0, so one shot
+            (st(b, 1), st(far, 1)), // valid loop
+            (st(c, 1), st(far, 1)), // valid loop
+        ];
+        (p, pairs)
+    }
+    let (mut seq, pairs) = build();
+    let mut bat = seq.clone();
+    let seq_results: Vec<_> = pairs
+        .iter()
+        .map(|&(x, y)| seq.create_loop_closure(x, y, ClosureStrategy::Batch))
+        .collect();
+    let bat_results = bat.create_loop_closures_batch(&pairs);
+    let errs = |r: &[Result<LoopClosure, String>]| -> Vec<Option<String>> {
+        r.iter().map(|r| r.as_ref().err().cloned()).collect()
+    };
+    assert_eq!(errs(&seq_results), errs(&bat_results));
+    let errs = errs(&bat_results);
+    assert_eq!(errs[0].as_deref(), Some(SPANS_A1_A2));
+    assert!(errs[1].is_none());
+    assert_eq!(errs[2].as_deref(), Some(SPANS_A1_A2));
+    assert!(errs[3]
+        .as_deref()
+        .is_some_and(|e| e.starts_with("These stations are already tied together")));
+    assert!(errs[4]
+        .as_deref()
+        .is_some_and(|e| e.contains("one shot (2:0 to 2:1)")));
+    assert!(errs[5].is_none() && errs[6].is_none(), "{errs:?}");
+    let ids = |p: &Project| {
+        p.loop_closures
+            .iter()
+            .map(|lc| (lc.id, lc.station_a.clone(), lc.station_b.clone()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(ids(&seq), ids(&bat));
+    assert!(bat.closures_across_one_shot().is_empty());
+}
+
+// ---- the solve ---------------------------------------------------------------
+
+#[test]
+fn the_solve_skips_a_closure_across_one_shot_and_keeps_the_real_loop_closed() {
+    let (mut p, a, b) = issue_loop();
+    let config = ClosureAdjustmentConfig::default();
+    let (b3, a2) = (st(b, 3), st(a, 2));
+    let before = gap(&p.compute_adjusted_station_coordinates(&config), b3, a2);
+    assert!(before < 1e-6, "the loop is closed before: {before}");
+    // Merge tool A:1 then A:2 used to create this; plant it as an old file would.
+    let id = plant(&mut p, st(a, 1), a2, ClosureStrategy::Batch);
+
+    let mut working = p.clone();
+    let anchor = working.adjustment_anchor_for_tests(a).unwrap();
+    let solve =
+        working.adjust_loop_closures(anchor, ClosureStrategy::LeastSquaresWeighted, &config);
+    assert!(solve.is_ok(), "{solve:?}");
+    // The skipped closure is not marked aligned; the real one is.
+    for lc in &working.loop_closures {
+        assert_eq!(lc.is_aligned, lc.id != id, "closure {}", lc.id);
+    }
+
+    let report = p.compute_adjusted_stations(&config);
+    assert!(report.failures.is_empty(), "{:?}", report.failures);
+    let after = gap(&report.stations, b3, a2);
+    assert!(after < 1e-6, "the loop B:3-A:2 stays closed: {after}");
+    // The shot the closure spans keeps its measured length.
+    let shot_len = gap(&report.stations, st(a, 1), a2);
+    assert!(shot_len > 9.0, "A:1-A:2 was not collapsed: {shot_len}");
+}
+
+#[test]
+fn skipping_a_closure_solves_exactly_as_if_it_did_not_exist() {
+    let (mut p, a, _) = issue_loop();
+    let config = ClosureAdjustmentConfig::default();
+    let without = p.compute_adjusted_station_coordinates(&config);
+    plant(
+        &mut p,
+        st(a, 1),
+        st(a, 2),
+        ClosureStrategy::LeastSquaresWeighted,
+    );
+    let with = p.compute_adjusted_station_coordinates(&config);
+    assert_eq!(without.len(), with.len());
+    for s in &without {
+        let (x, y) = coords(&with, s.station_ref);
+        assert!(
+            (x - s.coordinates.x).abs() < 1e-9 && (y - s.coordinates.y).abs() < 1e-9,
+            "{:?} moved",
+            s.station_ref
+        );
+    }
+}
+
+#[test]
+fn a_component_whose_only_closure_spans_one_shot_solves_to_measured_without_error() {
+    let mut p = Project::new("only".to_string(), None);
+    let a = add(&mut p, vec![shot(90.0, 10.0), shot(0.0, 10.0)]);
+    plant(&mut p, st(a, 1), st(a, 2), ClosureStrategy::Batch);
+    let config = ClosureAdjustmentConfig::default();
+    let mut working = p.clone();
+    let anchor = working.adjustment_anchor_for_tests(a).unwrap();
+    assert_eq!(
+        working.adjust_loop_closures(anchor, ClosureStrategy::LeastSquaresWeighted, &config),
+        Ok(())
+    );
+    assert!(!working.loop_closures[0].is_aligned, "nothing was adjusted");
+    let report = p.compute_adjusted_stations(&config);
+    assert!(report.failures.is_empty());
+    let measured = p.compute_station_coordinates();
+    for s in &measured {
+        assert_eq!(
+            coords(&report.stations, s.station_ref),
+            (s.coordinates.x, s.coordinates.y)
+        );
+    }
+    // A component with no eligible closure at all still reports that as an error.
+    let mut none = Project::new("none".to_string(), None);
+    let n = add(&mut none, vec![shot(90.0, 10.0)]);
+    assert!(none
+        .adjust_loop_closures(st(n, 0), ClosureStrategy::LeastSquaresWeighted, &config)
+        .is_err());
+}
+
+#[test]
+fn random_closures_never_fail_the_solve_and_match_the_solve_without_the_skipped_ones() {
+    // Adversarial: random chains and side passages with random Batch/LSW
+    // closures planted between random stations (no datums), so ties across one
+    // shot arise directly, through merges and through other closures. The solve
+    // must never fail, and dropping the reported closures must not change it.
+    let config = ClosureAdjustmentConfig::default();
+    let mut seed: u64 = 0x0737_5eed;
+    let mut next = |m: u64| -> u64 {
+        seed = seed
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        (seed >> 33) % m
+    };
+    let mut saw_skipped = 0;
+    for _case in 0..60 {
+        let mut p = Project::new("fuzz".to_string(), None);
+        let mut sections = Vec::new();
+        for i in 0..(2 + next(3)) {
+            let shots = (0..=next(4))
+                .map(|_| shot(next(360) as f64, 3.0 + next(10) as f64))
+                .collect();
+            let id = add(&mut p, shots);
+            if i > 0 {
+                let prev: SectionId = sections[next(sections.len() as u64) as usize];
+                let len = p.get_section(prev).unwrap().shots.len() as u64;
+                let _ = p.merge_stations(st(id, 0), st(prev, next(len + 1) as u32));
+            }
+            sections.push(id);
+        }
+        let stations: Vec<StationRef> = p
+            .sections
+            .iter()
+            .flat_map(|s| (0..=s.shots.len() as u32).map(move |i| st(s.id, i)))
+            .collect();
+        for _ in 0..=next(4) {
+            let x = stations[next(stations.len() as u64) as usize];
+            let y = stations[next(stations.len() as u64) as usize];
+            if x != y {
+                let strategy = if next(2) == 0 {
+                    ClosureStrategy::Batch
+                } else {
+                    ClosureStrategy::LeastSquaresWeighted
+                };
+                plant(&mut p, x, y, strategy);
+            }
+        }
+        let skipped = p.closures_across_one_shot();
+        saw_skipped += usize::from(!skipped.is_empty());
+        let report = p.compute_adjusted_stations(&config);
+        assert!(report.failures.is_empty(), "{:?}", report.failures);
+        let mut pruned = p.clone();
+        pruned
+            .loop_closures
+            .retain(|lc| !skipped.iter().any(|s| s.closure_id == lc.id));
+        assert!(pruned.closures_across_one_shot().is_empty());
+        let reference = pruned.compute_adjusted_station_coordinates(&config);
+        for s in &reference {
+            let (x, y) = coords(&report.stations, s.station_ref);
+            assert!(
+                (x - s.coordinates.x).abs() < 1e-6 && (y - s.coordinates.y).abs() < 1e-6,
+                "{:?}: {:?} vs {:?}",
+                s.station_ref,
+                (x, y),
+                (s.coordinates.x, s.coordinates.y)
+            );
+        }
+    }
+    assert!(
+        saw_skipped > 5,
+        "the generator must reach the case: {saw_skipped}"
+    );
+}
+
+// ---- failures are reported, not only logged ----------------------------------
+
+#[test]
+fn a_closure_joining_two_datums_is_reported_as_a_failure_and_a_sibling_still_adjusts() {
+    let mut p = Project::new("datums".to_string(), None);
+    // Component 1: two datum-anchored sections tied datum-to-datum by a closure,
+    // which creation allows ("both sections have fixed coordinates").
+    let x = add(&mut p, vec![shot(90.0, 10.0)]);
+    let y = add(&mut p, vec![shot(0.0, 10.0)]);
+    p.set_zero_datum(st(x, 0), GpsCoordinates::new(0.0, 0.0, 0.0).unwrap())
+        .unwrap();
+    p.set_zero_datum(st(y, 0), GpsCoordinates::new(0.0001, 0.0001, 0.0).unwrap())
+        .unwrap();
+    p.create_loop_closure(st(x, 0), st(y, 0), ClosureStrategy::Batch)
+        .unwrap();
+    // Component 2: the issue's loop, nowhere near it.
+    let a = add(&mut p, vec![shot(90.0, 10.0), shot(90.0, 10.0)]);
+    let b = add(
+        &mut p,
+        vec![shot(0.0, 10.0), shot(90.0, 20.5), shot(180.0, 10.0)],
+    );
+    p.merge_stations(st(a, 0), st(b, 0)).unwrap();
+    p.create_loop_closure(st(b, 3), st(a, 2), ClosureStrategy::Batch)
+        .unwrap();
+
+    let report = p.compute_adjusted_stations(&ClosureAdjustmentConfig::default());
+    assert_eq!(report.failures.len(), 1, "{:?}", report.failures);
+    let failure = &report.failures[0];
+    assert_eq!(failure.section_ids, {
+        let mut v = vec![x, y];
+        v.sort_unstable();
+        v
+    });
+    assert!(failure.section_ids.contains(&failure.anchor.section_id));
+    assert_eq!(
+        failure.error,
+        "Multiple zero datums in a single constraint group"
+    );
+    assert!(
+        failure
+            .user_reason()
+            .starts_with("loop closures tie two zero datums"),
+        "{}",
+        failure.user_reason()
+    );
+    // The sibling component is adjusted all the same.
+    assert!(gap(&report.stations, st(b, 3), st(a, 2)) < 1e-6);
+    // And the plain form still returns the same geometry.
+    let plain = p.compute_adjusted_station_coordinates(&ClosureAdjustmentConfig::default());
+    for s in &plain {
+        assert_eq!(
+            coords(&report.stations, s.station_ref),
+            (s.coordinates.x, s.coordinates.y)
+        );
+    }
+}
+
+#[test]
+fn every_known_solver_error_has_a_plain_reason() {
+    let failure = |error: &str| crate::AdjustmentFailure {
+        anchor: st(0, 0),
+        section_ids: vec![0],
+        error: error.to_string(),
+    };
+    for (raw, starts) in [
+        (
+            "Multiple zero datums in a single constraint group",
+            "loop closures tie two zero datums",
+        ),
+        (
+            "Least squares adjustment produced inconsistent section translation",
+            "the loop closures here could not be solved",
+        ),
+        (
+            "Adjustment would move a zero datum station",
+            "the adjustment would have moved a zero datum",
+        ),
+        ("Missing station root", "the loop-closure solve failed"),
+    ] {
+        let reason = failure(raw).user_reason();
+        assert!(reason.starts_with(starts), "{raw} -> {reason}");
+        assert!(
+            !reason.contains(raw),
+            "the raw text stays in the log: {reason}"
+        );
+    }
+}

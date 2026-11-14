@@ -262,6 +262,15 @@ impl Project {
             return Err("A loop closure already exists between these stations.".to_string());
         }
 
+        // A closure needs a loop to close (#737): refuse one whose ends are
+        // already one point through other merges and closures, or that would
+        // tie the two ends of one shot together - the solve could only skip
+        // it. Whatever the strategy: a tie across one shot means nothing for
+        // a `Move` closure either.
+        if let Some(refusal) = self.closure_tie_refusal(station_a, station_b) {
+            return Err(refusal.message());
+        }
+
         // Compute closure values using shared helper
         let metrics = self.compute_closure_metrics(station_a, station_b)?;
 
@@ -328,11 +337,12 @@ impl Project {
     /// coordinates, a station-level merge-group union-find (the "already merged?"
     /// check → O(α) instead of a BFS per closure), a section-level connectivity
     /// union-find (merges + closures; grown as closures are added), the
-    /// station-merge adjacency, the closure adjacency, and a duplicate-pair set.
+    /// station-merge adjacency, the closure adjacency, a duplicate-pair set, and
+    /// the constraint knots behind the across-one-shot refusal (#737).
     /// Sections/merges/offsets are fixed for the batch (the import's cascade ran
     /// first and Batch closures are never `is_aligned`, so they don't rigidify),
     /// so only the closure-dependent state (connectivity UF, closure adjacency,
-    /// dup set) updates per created closure - exactly what path-length needs to
+    /// dup set, knots) updates per created closure - exactly what path-length needs to
     /// still see earlier closures. Returns one result per input pair (Ok =
     /// created, Err = skipped, with the same reason strings as the single path).
     pub fn create_loop_closures_batch(
@@ -426,6 +436,10 @@ impl Project {
             }
         }
 
+        // The constraint knots the single path asks `closure_tie_refusal`
+        // about (#737), built once and grown as closures are added.
+        let (mut knots, _) = self.closure_knots();
+
         // Normalize the id counter once (legacy id=0 projects).
         self.normalize_next_closure_id();
 
@@ -464,6 +478,12 @@ impl Project {
                 results.push(Err(
                     "A loop closure already exists between these stations.".to_string()
                 ));
+                continue;
+            }
+            if let Some(refusal) =
+                super::closure_shots::tie_refusal(&mut knots, station_a, station_b)
+            {
+                results.push(Err(refusal.message()));
                 continue;
             }
             let (Some(&ca), Some(&cb)) = (coords.get(&station_a), coords.get(&station_b)) else {
@@ -509,6 +529,8 @@ impl Project {
             closure_adj.entry(station_b).or_default().push(station_a);
             closure_pairs.insert(norm(station_a, station_b));
             uf_union(&mut conn_uf, station_a.section_id, station_b.section_id);
+            // A `Batch` closure is eligible, so the next pair sees it tied.
+            knots.join(station_a, station_b);
             created_any = true;
             results.push(Ok(closure));
         }

@@ -243,9 +243,16 @@ impl Project {
             // the solve takes (the join's own included), or a tie this combine
             // turns into one (a loop it closes, a snapped closure that stops
             // being snapped). A survey the view shows as measured keeps the
-            // plain rule, and the other section moves.
+            // plain rule, and the other section moves. A closure the solve
+            // skips because it ties the two ends of one shot together (#737)
+            // does not count: the view shows that survey as measured.
             let component = self.get_connected_section_ids(join.kept);
-            let adjusted = self.component_has_eligible_closure(&component)
+            let skipped: std::collections::HashSet<u64> = self
+                .closures_across_one_shot()
+                .into_iter()
+                .map(|c| c.closure_id)
+                .collect();
+            let adjusted = self.component_has_eligible_closure(&component, &skipped)
                 || !loop_ties(join.other, join.kept).is_empty()
                 || ties.iter().any(|t| {
                     matches!(t.id, TieId::Closure(_))
