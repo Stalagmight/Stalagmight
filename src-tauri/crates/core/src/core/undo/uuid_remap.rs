@@ -205,10 +205,11 @@ impl HistoryIds {
                 for (section, uuid) in reinstalled_ids(&entry.undo_data) {
                     self.reinstalled.push((section, uuid.to_string(), wall));
                 }
-                let restores = match (&entry.undo_data, undoing) {
-                    (UndoData::ProjectSnapshot(json), true)
-                    | (UndoData::ProjectSnapshotPair { before: json, .. }, true)
-                    | (UndoData::ProjectSnapshotPair { after: json, .. }, false) => Some(json),
+                let restores = match &entry.undo_data {
+                    UndoData::ProjectSnapshot(json) if undoing => Some(json),
+                    UndoData::ProjectSnapshotPair { before, after } => {
+                        Some(if undoing { before } else { after })
+                    }
                     _ => None,
                 };
                 if let Some(json) = restores {
