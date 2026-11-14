@@ -190,10 +190,58 @@ per entrance, matching what Ariane itself writes for multi-entrance caves.
 
 The **root section** and any section left parentless after link resolution (a
 genuinely detached component) each get a synthesized START shot with
-`FromID = -1`, anchored at the project coordinates (every START repeats them -
-an unanchored START lands at lat/lon 0 and the view opens on the Atlantic).
+`FromID = -1`. A START carries the GPS of the datum on its own station; the
+entrance split puts the START on that station. A START with no datum of its own
+repeats the frame datum's coordinates, because an unanchored START lands at
+lat/lon 0 and the view opens on the Atlantic (but see
+[the same-coordinates caveat](#every-datum-is-an-entrance-741)). A component's
+entrance is a section holding a **placement** datum; a GPS fix never roots one.
 All other sections connect to their parent via `FromID` on their first
 real/reference shot.
+
+### Every datum is an entrance (#741)
+
+Ariane reads every START's lat/lon as a **hard fix**. When two STARTs disagree
+with the survey between them, it bends the loop to fit and shows the loop
+error (measured 2026-11-13 with a synthetic two-entrance file). That is close
+to the Closures Computed View, except that Ariane is hard where ours is
+weighted by the datum's accuracy.
+
+So every resolvable datum, placement and GPS fix alike, gets a START carrying
+its own GPS:
+
+- A datum on an entrance's station is written on that entrance's START.
+- A datum anywhere else - a GPS fix part-way through a section, or at a
+  section's first station that a merge aliases onto its parent - gets a
+  **zero-length START of its own at its GPS, tied to the fix station by a
+  zero-length CLOSURE** (`FromID` = the fix station's row,
+  `ClosureToID` = the new START). That is the shape Ariane's own files use for
+  a loop that ends on an entrance, and it adds no station: the START is a leaf
+  and the CLOSURE carries no length. Both are minted after every other row and
+  take the fix station's section name, colour, date and people. The START
+  sits at the fix station's depth.
+
+Datums claim Ariane nodes in list order, so the placement datum always claims
+its node first. A datum is **unwritten**, and the export returns the
+`gps-anchors-not-written` note, when it no longer resolves, when its station
+has no row in the file, or when an earlier datum already holds the same node
+(two GPS positions for one point cannot be carried).
+
+The SpeleoDB sidecar leaves the fix STARTs out. Its converter drops CLOSURE
+rows, so a fix START would reach the map preview as a lone anchor with nothing
+hanging off it. The sidecar counts the fixes as unwritten in its log.
+
+On re-import, the in-repo importer drops START rows and skips a closure whose
+target is a START with no section hanging off it, so the fix rows come back as
+the same stations and legs, with one "loop closure referenced excluded
+stations" import warning per fix. The fix's GPS is not read back as a datum.
+
+**The same-coordinates caveat.** Two STARTs with the same lat/lon are pinned
+on top of each other, and Ariane collapses any loop between them. A START with
+no datum of its own repeats the frame datum's coordinates, so a datum-less
+component that is tied to the rest of the survey by a loop closure (for
+example after the merge that joined it was undone, which keeps unrelated
+closures) is drawn collapsed onto the frame datum's entrance.
 
 A parentless shot whose type is **not** START is an orphan root. Ariane
 tolerates it in isolation, but a file containing both an orphan root and any
@@ -226,6 +274,7 @@ IDs are assigned sequentially starting from 0:
 - Root section: START (ID 0), then shots (ID 1, 2, …)
 - Subsequent sections: shots continue the global counter
 - CLOSURE shots are appended at the end
+- Each GPS fix's START and its tying CLOSURE come last, one pair per fix
 
 ## Color Format Conversion
 
@@ -374,6 +423,8 @@ dropped or capped.
 
 - Shape/cross-section geometry (`Shape`/`SH` elements) is not exported (not stored in the internal model)
 - GPS coordinates are not written per-shot: latitude and longitude are `0.0`
-  everywhere except the START shots, which repeat the primary datum's anchor
-  (see Topology); without a primary datum they are `0.0` there too. Only the
-  project-level elevation reference is otherwise set
+  everywhere except the START shots, which carry their own datum's GPS or
+  repeat the frame datum's (see Topology); without any datum they are `0.0`
+  there too. Only the project-level elevation reference is otherwise set
+- A GPS fix's accuracy is not exported: Ariane has no field for it and pins
+  every START exactly
