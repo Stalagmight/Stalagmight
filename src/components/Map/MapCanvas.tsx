@@ -17,7 +17,7 @@ import { isMutatingTool, shouldResetNavigationTool, toolCursor } from '../../uti
 import { mapGestureMode } from '../../utils/mapGestures';
 import { attachDragReleaseForwarder } from '../../utils/mapDragRelease';
 import { wheelZoomRateForLevels, ZOOM_LEVELS_PER_NOTCH_DEFAULT } from '../../utils/zoomRate';
-import { hasEligibleClosures } from '../../utils/closures';
+import { hasAdjustmentInputs } from '../../utils/closures';
 import { useShallow } from 'zustand/react/shallow';
 import {
   getEffectiveShowJumps,
@@ -2329,10 +2329,10 @@ function MapCanvas() {
     }
   }, [geometryMode, project, surveyDataAdjusted, adjustedLoading, loadAdjustedGeometry, setGeometryMode, showToast, t]);
 
-  // The adjusted view is meaningless without an eligible closure: revert to
-  // measured if the last adjustable closure is removed while it is active.
+  // The adjusted view is meaningless without an eligible closure or a GPS fix
+  // (#741): revert to measured if the last one is removed while it is active.
   useEffect(() => {
-    if (geometryMode === 'closureAdjusted' && project && !hasEligibleClosures(project.loop_closures)) {
+    if (geometryMode === 'closureAdjusted' && project && !hasAdjustmentInputs(project)) {
       setGeometryMode('measured');
     }
   }, [geometryMode, project, setGeometryMode]);

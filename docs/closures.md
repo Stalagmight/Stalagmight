@@ -19,8 +19,12 @@ own vocabulary; only the two UI labels were renamed.)
   `toolbar_only` / `off` the two pills are label-only. The mode is persisted per the display
   settings ("remember last used"); default is the Raw Data View. (The stored enum values stay
   `measured` / `closureAdjusted`.) The adjusted option is disabled when
-  the project has no closures eligible for the solve (`Batch` / `LeastSquaresWeighted`); `Move`
-  closures are already coincident, so a project with only those shows the option disabled.
+  the project has neither a closure eligible for the solve (`Batch` / `LeastSquaresWeighted`)
+  nor a GPS fix (a later zero datum in an already placed piece, #741, which the solve pulls the
+  survey toward); `Move` closures are already coincident, so a project with only those shows
+  the option disabled. One helper decides this everywhere - the Display option, the auto-revert
+  to the Raw Data View, and whether the adjusted geometry is fetched at all:
+  `hasAdjustmentInputs` (`src/utils/closures.ts`).
 - Closure-adjusted coordinates are derived by running the weighted least-squares solve on a
   **throwaway clone** of the project (`Project::compute_adjusted_station_coordinates`) and
   returning only the resulting coordinates - the live project's shots/offsets are untouched.

@@ -16,7 +16,7 @@ import {
   isReverifyDivergedError,
   READ_ONLY_EDIT_NOTICE,
 } from '../utils/editErrors';
-import { hasEligibleClosures } from '../utils/closures';
+import { hasAdjustmentInputs } from '../utils/closures';
 import { afterSurveyEdit, applyEditAftermath, beforeSurveyEdit, type SurveyEdit } from '../utils/reverseAftermath';
 import { useUIStore } from './uiStore';
 import { surfaceSaveFailure } from '../utils/saveFeedback';
@@ -2006,9 +2006,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     // No-op (no project, or a fetch already in flight): not a failure.
     if (!project || adjustedLoading) return true;
 
-    // No eligible closures → the adjusted view is identical to measured; reuse
-    // the measured set directly and skip the backend round-trip.
-    if (!hasEligibleClosures(project.loop_closures)) {
+    // No eligible closure and no GPS fix → the adjusted view is identical to
+    // measured; reuse the measured set directly and skip the backend round-trip.
+    if (!hasAdjustmentInputs(project)) {
       set({ stationsAdjusted: stations, surveyDataAdjusted: surveyData });
       return true;
     }

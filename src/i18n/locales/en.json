@@ -2134,7 +2134,7 @@
       "closureAdjusted": "Closures Computed View",
       "measuredDescription": "Raw measured survey positions.",
       "closureAdjustedDescription": "Loop-closure-corrected positions - read-only.",
-      "noClosures": "No loop closures to adjust"
+      "noClosures": "No loop closures or GPS fixes to adjust"
     },
     "spacing": {
       "label": "Grid spacing"
