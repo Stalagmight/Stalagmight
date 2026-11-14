@@ -409,7 +409,9 @@ keeps every name on its physical station.
   datum's station lands on local (0,0), free-floating components included, which
   preserves every station's real-world position (and, for the add, every relative
   position) and changes only the local coordinates
-  (`Project::renormalize_frame`, issue #469)
+  (`Project::renormalize_frame`, issue #469). When the promoted datum was a GPS
+  fix (#741), its piece is first moved onto its GPS against the old frame, so
+  every piece stays on its own GPS through the re-frame
 - **GPS coordinates**: WGS84 (latitude, longitude, depth reference)
 - **Azimuth**: degrees (0-360), stored **as measured**. The stored number is
   never rotated: each section declares what its readings refer to

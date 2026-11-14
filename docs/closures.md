@@ -247,21 +247,25 @@ live project):
 
 A GPS fix pulls its station toward `gps_to_local(fix.gps, frame.gps)`, the GPS position in the
 frame's local metres. It is the observation `p = gps` on each horizontal axis with weight
-`1 / accuracy^2` (`ZeroDatum::effective_accuracy_m`, default 5 m, read as a per-axis 1-sigma):
+`1 / accuracy^2` (`ZeroDatum::effective_accuracy_m`, read as a per-axis 1-sigma; the default is
+0, a hard fix, below):
 one diagonal term and one right-hand-side term on its group's unknown. Shots use the same units,
 so the two compare directly. A shot's per-axis variance is
 `(sin(az) * sigma_len)^2 + (len * cos(az) * sigma_az)^2` across x (cos and sin swapped for y),
 with `sigma_len = base_sigma_length_m * quality` and `sigma_az = base_sigma_azimuth_deg * quality`,
 and variances add along a traverse.
 
-What that means at the default config (0.05 m, 1 deg): a level 500 m traverse of 10 m shots is
-trusted to about 0.35 m along its length and 1.23 m across it, far tighter than a 5 m GPS. A fix
-40 m off across that traverse moves its station only about 2.3 m toward the GPS; the rest of the
-gap stays visible. Only a hard fix, or larger base sigmas, puts the station on its GPS.
+What a soft fix means at the default config (0.05 m, 1 deg), taking an accuracy of 5 m as the
+example: a level 500 m traverse of 10 m shots is trusted to about 0.35 m along its length and
+1.23 m across it, far tighter than a 5 m GPS. A fix 40 m off across that traverse moves its
+station only about 2.3 m toward the GPS; the rest of the gap stays visible. That is why the
+default is a hard fix: only a hard fix, or larger base sigmas, puts the station on its GPS.
 
-- **Accuracy 0 is a hard fix** (anything under 1 mm counts): its group is fixed AT the GPS
-  position, the way a placement datum fixes its group at its raw one. A non-finite or negative
-  stored accuracy is not a measurement and falls back to the default.
+- **Accuracy 0 is a hard fix** (anything under 1 mm counts), and it is the default: its group is
+  fixed AT the GPS position, the way a placement datum fixes its group at its raw one. A
+  non-finite or negative stored accuracy is not a measurement and falls back to the default, so
+  it pins the fix too (read as a weight, an infinite accuracy would make the fix pull nothing).
+  A stored accuracy outside 0 to 1000 m reads as the default on load as well.
 - **A fixed group ignores a fix.** A fix in the placement datum's own group (merged onto it) is
   the same point and cannot hold both positions; the placement wins. Between two hard fixes in
   one group, the first in list order wins.

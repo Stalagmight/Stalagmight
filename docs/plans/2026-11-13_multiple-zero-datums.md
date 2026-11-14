@@ -70,6 +70,15 @@ The approaches differ, but every one of these tools lets a cave carry more than 
   feeds the Computed View solve and the gap check.
 - Roles are derived, never stored. Merging two placed pieces, splitting a piece by an unmerge
   or a delete, and undo all re-derive them, with no promote or demote bookkeeping.
+- **A promoted datum places its piece on its GPS** (project owner's decision). When a command
+  makes a datum the placement datum of its piece that was not one before (a fix promoted by
+  removing the placement datum, an unmerge, or a delete that splits the piece), the piece is
+  translated so that datum sits at `gps_to_local(datum.gps, frame.gps)`, exactly as
+  `set_zero_datum` places a subsequent datum. The arithmetic uses the frame in effect before the
+  command; when the command also changed the frame, the usual re-frame follows. Every command
+  epilogue does this through one call, `Project::settle_datum_layout`
+  (`crates/models/src/project/datum_placement.rs`), and the undo of every command that can
+  promote restores a whole-project snapshot.
 
 ### Persistence: older readers keep a safe view
 
@@ -123,7 +132,10 @@ The approaches differ, but every one of these tools lets a cave carry more than 
 - **Accuracy field** in metres, default 0 (goes exactly through the GPS).
 - **Map.** A GPS fix is drawn like a zero datum. Optionally, a thin line from the surveyed
   position to the GPS position, in Raw Data View only.
-- **Warnings tab.** One entry per GPS fix whose gap exceeds the threshold.
+- **Warnings tab.** One entry per GPS fix whose gap exceeds the threshold. It hangs off the shot
+  that arrives at the fix station (`datum_gps_gap`); a fix on a section's first station uses
+  shot 0 under its own code (`datum_gps_gap_start`), so fixes on stations 0 and 1 are ignored
+  independently. A fix on a section with no shots has no row (it is logged).
 
 ## Consumers to audit
 
@@ -158,7 +170,9 @@ check, export and Plan mode read the fixes.
   - with a 5 m accuracy it lands in between, at the closed-form position.
 - Merging two placed pieces succeeds, and the later datum becomes a fix. Undo restores both
   placements.
-- Unmerging restores the fix to a placement datum, and the detached piece stays where it was.
+- Unmerging restores the fix to a placement datum, and the detached piece moves onto its GPS.
+  Removing the frame datum of a piece that holds a fix puts the fix on the origin and every other
+  separately placed piece on its own GPS. Undo restores both.
 - Save and load round trip. An older-format file without the new table loads unchanged. The
   `zero_datums` rows written never hold two per component.
 - Sanity warning boundary: just under and just over 15 m + 2%.
