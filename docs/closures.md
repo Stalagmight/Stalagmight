@@ -75,13 +75,14 @@ Validation rules:
   ends of ONE shot together - directly (A:1 to A:2), or because merges and other
   closures already tie each station to one end of the same shot - with *"This
   closure would tie together the two ends of one shot (A:1 to A:2), so there is no
-  loop to close. Pick stations joined by at least two separate paths."*, and when
-  the two stations are already one point through other merges and closures
-  (*"These stations are already tied together through other merges and closures,
-  so this closure would add nothing."*). Both are judged against the constraint
-  knots the solve uses (see below), by the one shared helper
-  `project/closure_shots.rs`. The importer's `create_loop_closures_batch` refuses
-  the same pairs with the same words.
+  loop to close. Pick stations joined by at least two separate paths."*. It is
+  judged against the constraint knots the solve uses (see below), by the one
+  shared helper `project/closure_shots.rs`. The importer's
+  `create_loop_closures_batch` refuses the same pairs with the same words.
+  This is the only refusal it adds: a closure between two stations that other
+  merges and closures already tie together is still created, as before. It is
+  harmless to the solve (uniting two stations already in one group is a no-op),
+  and refusing it would drop such closures from imported files.
 - The closure dialog shows that refusal before Create: `check_merge_connectivity`
   returns it in `ConnectivityResult.closure_refusal`, the dialog prints it and
   disables Create (`closure-refusal`). The backend stays the authority.

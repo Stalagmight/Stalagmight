@@ -72,15 +72,16 @@ impl AppState {
 
         // The closure dialog's guard (#737): the same refusal, in the same words,
         // that `create_loop_closure` would answer with - so the dialog can say
-        // why before the user clicks Create. Only a pair the dialog can be
-        // opened for needs it (a merge-able pair is in two components, so it
-        // cannot be tied); the backend stays the authority either way.
+        // why before the user clicks Create. It is the across-one-shot refusal
+        // only. Only a pair the dialog can be opened for needs it (a merge-able
+        // pair is in two components, so no shot can lie between its knots);
+        // the backend stays the authority either way.
         let closure_refusal = if can_merge {
             None
         } else {
             project
-                .closure_tie_refusal(station_a, station_b)
-                .map(|refusal| refusal.message())
+                .closure_spans_one_shot(station_a, station_b)
+                .map(crate::models::closure_across_one_shot_refusal)
         };
 
         Ok(ConnectivityResult {

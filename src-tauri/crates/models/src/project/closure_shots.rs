@@ -11,7 +11,8 @@
 //! A closure that does that has no loop to close: the two stations it ties
 //! are joined by exactly one shot. This module is the ONE place that decides
 //! which closures do, so creation (`create_loop_closure`, the batch importer
-//! path, the connectivity check behind the closure dialog), the solve
+//! path, the connectivity check behind the closure dialog - each refuses ONLY
+//! such a closure), the solve
 //! (`adjust_loop_closures`), the warnings and the delete commands all agree.
 //!
 //! The rule, applied in `loop_closures` vector order on top of every merge:
@@ -55,39 +56,23 @@ impl ClosureAcrossOneShot {
     }
 }
 
-/// Why a new closure between two stations would be refused.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ClosureTieRefusal {
-    /// The closure would tie the two ends of this shot `(section, shot index)`
-    /// together.
-    SpansOneShot {
-        section_id: SectionId,
-        shot_index: usize,
-    },
-    /// The two stations are already one point through other merges and
-    /// closures, so the closure would add nothing.
-    AlreadyTied,
-}
-
-impl ClosureTieRefusal {
-    /// The user-facing refusal. Shared by every creation path and the
-    /// closure dialog, so the dialog shows exactly what the backend says.
-    pub fn message(&self) -> String {
-        match *self {
-            Self::SpansOneShot {
-                section_id,
-                shot_index,
-            } => {
-                let (from, to) = shot_ends((section_id, shot_index));
-                format!(
-                    "This closure would tie together the two ends of one shot ({} to {}), so there is no loop to close. Pick stations joined by at least two separate paths.",
-                    station_id_label(from),
-                    station_id_label(to)
-                )
-            }
-            Self::AlreadyTied => "These stations are already tied together through other merges and closures, so this closure would add nothing.".to_string(),
-        }
-    }
+/// The user-facing refusal for a new closure that would tie the two ends of
+/// the shot `(section, shot index)` together. Shared by every creation path
+/// and the closure dialog's connectivity check, so the dialog shows exactly
+/// what the backend says.
+///
+/// This is the ONLY creation-time refusal the helper makes. A closure between
+/// two stations that other merges and closures already tie together is
+/// accepted as before: uniting two stations already in one knot changes
+/// nothing for the solve, and refusing it would drop closures from imported
+/// files.
+pub fn closure_across_one_shot_refusal(shot: (SectionId, usize)) -> String {
+    let (from, to) = shot_ends(shot);
+    format!(
+        "This closure would tie together the two ends of one shot ({} to {}), so there is no loop to close. Pick stations joined by at least two separate paths.",
+        station_id_label(from),
+        station_id_label(to)
+    )
 }
 
 /// `S:I`, the station id the UI shows (`formatStationId`).
@@ -101,17 +86,6 @@ fn shot_ends((section_id, shot_index): (SectionId, usize)) -> (StationRef, Stati
         StationRef::new(section_id, index),
         StationRef::new(section_id, index.saturating_add(1)),
     )
-}
-
-/// What uniting two stations' knots would do.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TieOutcome {
-    /// Different knots, and no shot runs between them: safe to unite.
-    Joins,
-    /// Same knot already.
-    AlreadyTied,
-    /// Uniting would collapse this shot `(section, shot index)`.
-    Collapses(SectionId, usize),
 }
 
 /// Union-find over every station of the project, slots laid out section by
@@ -208,22 +182,26 @@ impl Knots {
         best
     }
 
-    /// What uniting `a` and `b` would do, without uniting them. `None` when
-    /// either station does not exist.
-    pub(crate) fn probe(&mut self, a: StationRef, b: StationRef) -> Option<TieOutcome> {
+    /// The shot that uniting `a`'s and `b`'s knots would collapse, without
+    /// uniting them: the lowest shot with one end in each knot. `None` when the
+    /// two are already in one knot (uniting changes nothing), when no shot runs
+    /// between the knots, or when either station does not exist.
+    pub(crate) fn collapsed_shot(
+        &mut self,
+        a: StationRef,
+        b: StationRef,
+    ) -> Option<(SectionId, usize)> {
         let (sa, sb) = (self.slot(a)?, self.slot(b)?);
         let (ra, rb) = (self.find(sa), self.find(sb));
         if ra == rb {
-            return Some(TieOutcome::AlreadyTied);
+            return None;
         }
-        Some(match self.shot_between(ra, rb) {
-            Some((section_id, shot_index)) => TieOutcome::Collapses(section_id, shot_index),
-            None => TieOutcome::Joins,
-        })
+        self.shot_between(ra, rb)
     }
 
     /// Unite `a`'s and `b`'s knots unconditionally (a merge, or a closure the
-    /// caller has already probed).
+    /// caller has already checked with [`Self::collapsed_shot`]). A no-op when
+    /// they are already one knot.
     pub(crate) fn join(&mut self, a: StationRef, b: StationRef) {
         if let (Some(sa), Some(sb)) = (self.slot(a), self.slot(b)) {
             let (ra, rb) = (self.find(sa), self.find(sb));
@@ -257,17 +235,15 @@ impl Project {
             ) else {
                 continue;
             };
-            match knots.probe(a, b) {
-                Some(TieOutcome::Joins) => knots.join(a, b),
-                Some(TieOutcome::Collapses(section_id, shot_index)) => {
-                    skipped.push(ClosureAcrossOneShot {
-                        closure_id: closure.id,
-                        station_a: a,
-                        station_b: b,
-                        collapsed_shot: (section_id, shot_index),
-                    });
-                }
-                Some(TieOutcome::AlreadyTied) | None => {}
+            match knots.collapsed_shot(a, b) {
+                Some(collapsed_shot) => skipped.push(ClosureAcrossOneShot {
+                    closure_id: closure.id,
+                    station_a: a,
+                    station_b: b,
+                    collapsed_shot,
+                }),
+                // Joins two knots safely, or (a redundant tie) changes nothing.
+                None => knots.join(a, b),
             }
         }
         (knots, skipped)
@@ -280,46 +256,19 @@ impl Project {
         self.closure_knots().1
     }
 
-    /// Why a NEW closure between `a` and `b` would be refused, judged against
+    /// Whether a NEW closure between `a` and `b` would tie the two ends of one
+    /// shot together, and which shot `(section, shot index)` - judged against
     /// the knots the solve would use now (current merges and the eligible
-    /// closures it does not skip). `None` means the closure would close a
-    /// real loop. Applies whatever the new closure's strategy: a tie across
-    /// one shot means nothing for a `Move` closure either.
-    pub fn closure_tie_refusal(&self, a: StationRef, b: StationRef) -> Option<ClosureTieRefusal> {
-        let (mut knots, _) = self.closure_knots();
-        tie_refusal(&mut knots, a, b)
-    }
-
-    /// Whether a closure between `a` and `b` would tie the two ends of one
-    /// shot together, and which shot.
+    /// closures it does not skip). Applies whatever the new closure's strategy:
+    /// a tie across one shot means nothing for a `Move` closure either. `None`
+    /// for a closure that closes a real loop, and for one whose stations are
+    /// already tied together (redundant, but harmless: it is still created).
     pub fn closure_spans_one_shot(
         &self,
         a: StationRef,
         b: StationRef,
     ) -> Option<(SectionId, usize)> {
-        match self.closure_tie_refusal(a, b)? {
-            ClosureTieRefusal::SpansOneShot {
-                section_id,
-                shot_index,
-            } => Some((section_id, shot_index)),
-            ClosureTieRefusal::AlreadyTied => None,
-        }
-    }
-}
-
-/// The refusal for a closure `a`-`b` against prepared knots (shared with the
-/// batch path, which keeps one `Knots` across its whole input).
-pub(crate) fn tie_refusal(
-    knots: &mut Knots,
-    a: StationRef,
-    b: StationRef,
-) -> Option<ClosureTieRefusal> {
-    match knots.probe(a, b)? {
-        TieOutcome::Joins => None,
-        TieOutcome::AlreadyTied => Some(ClosureTieRefusal::AlreadyTied),
-        TieOutcome::Collapses(section_id, shot_index) => Some(ClosureTieRefusal::SpansOneShot {
-            section_id,
-            shot_index,
-        }),
+        let (mut knots, _) = self.closure_knots();
+        knots.collapsed_shot(a, b)
     }
 }

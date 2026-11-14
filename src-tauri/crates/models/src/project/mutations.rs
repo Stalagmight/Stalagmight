@@ -262,13 +262,13 @@ impl Project {
             return Err("A loop closure already exists between these stations.".to_string());
         }
 
-        // A closure needs a loop to close (#737): refuse one whose ends are
-        // already one point through other merges and closures, or that would
-        // tie the two ends of one shot together - the solve could only skip
-        // it. Whatever the strategy: a tie across one shot means nothing for
-        // a `Move` closure either.
-        if let Some(refusal) = self.closure_tie_refusal(station_a, station_b) {
-            return Err(refusal.message());
+        // A closure needs a loop to close (#737): refuse one that would tie the
+        // two ends of one shot together - the solve could only skip it.
+        // Whatever the strategy: a tie across one shot means nothing for a
+        // `Move` closure either. A pair other merges and closures already tie
+        // together is NOT refused: it changes nothing for the solve.
+        if let Some(shot) = self.closure_spans_one_shot(station_a, station_b) {
+            return Err(super::closure_shots::closure_across_one_shot_refusal(shot));
         }
 
         // Compute closure values using shared helper
@@ -436,7 +436,7 @@ impl Project {
             }
         }
 
-        // The constraint knots the single path asks `closure_tie_refusal`
+        // The constraint knots the single path asks `closure_spans_one_shot`
         // about (#737), built once and grown as closures are added.
         let (mut knots, _) = self.closure_knots();
 
@@ -480,10 +480,10 @@ impl Project {
                 ));
                 continue;
             }
-            if let Some(refusal) =
-                super::closure_shots::tie_refusal(&mut knots, station_a, station_b)
-            {
-                results.push(Err(refusal.message()));
+            if let Some(shot) = knots.collapsed_shot(station_a, station_b) {
+                results.push(Err(super::closure_shots::closure_across_one_shot_refusal(
+                    shot,
+                )));
                 continue;
             }
             let (Some(&ca), Some(&cb)) = (coords.get(&station_a), coords.get(&station_b)) else {

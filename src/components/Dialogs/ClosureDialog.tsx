@@ -23,8 +23,8 @@ export default function ClosureDialog() {
   const preview = (dialogData.preview as ClosurePreview | null) ?? undefined;
   const reason = dialogData.reason as string | undefined;
   // Why the backend would refuse this closure (#737): it would tie the two ends
-  // of one shot together, or the pair is already tied. The dialog says so up
-  // front and offers no Create; the backend refuses the pair regardless.
+  // of one shot together. The dialog says so up front and offers no Create; the
+  // backend refuses the pair regardless.
   const closureRefusal = dialogData.closureRefusal as string | undefined;
 
   const [isLoading, setIsLoading] = useState(false);

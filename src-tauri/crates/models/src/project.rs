@@ -99,7 +99,7 @@ pub use adjustment_report::{
     AdjustedStations, AdjustmentFailure, AdjustmentFailureReport, AdjustmentReport, SkippedClosure,
 };
 pub use classify::ClassifyScope;
-pub use closure_shots::{station_id_label, ClosureAcrossOneShot, ClosureTieRefusal};
+pub use closure_shots::{closure_across_one_shot_refusal, station_id_label, ClosureAcrossOneShot};
 pub use combine_candidate::{COMBINE_DEPTH_NOTICE_M, COMBINE_TOLERANCE_M, MAX_COMBINE_PARTNERS};
 pub use gas::{
     CylRole, Cylinder, Diver, GasReachField, PlanMode, PlanSegment, RouteLeg, RouteProfilePoint,

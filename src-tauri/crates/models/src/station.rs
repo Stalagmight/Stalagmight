@@ -849,8 +849,8 @@ pub struct ConnectivityResult {
     #[serde(default)]
     pub reason: Option<String>,
     /// Why a loop closure between the pair would be refused (#737): it would
-    /// tie the two ends of one shot together, or the pair is already tied
-    /// through other merges and closures. The closure dialog shows it and
+    /// tie the two ends of one shot together, directly or through merges and
+    /// other closures. The closure dialog shows it and
     /// disables Create; `create_loop_closure` refuses the same pair with the
     /// same words regardless. Absent when a closure would close a real loop.
     #[serde(default, skip_serializing_if = "Option::is_none")]

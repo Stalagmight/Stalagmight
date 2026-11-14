@@ -1,11 +1,12 @@
 //! Loop closures across one shot (#737): the shared helper, the creation-time
-//! refusal (single and batch paths), the solve skipping them, and the
-//! adjustment failures the view now reports instead of only logging.
+//! refusal (single and batch paths; the ONLY refusal it adds - a redundant tie
+//! is still accepted), the solve skipping them, and the adjustment failures
+//! the view now reports instead of only logging.
 
 use crate::config::ClosureAdjustmentConfig;
 use crate::{
-    ClosureAcrossOneShot, ClosureStrategy, ClosureTieRefusal, GpsCoordinates, LoopClosure, Project,
-    SectionData, SectionId, ShotData, Station, StationRef,
+    closure_across_one_shot_refusal, ClosureAcrossOneShot, ClosureStrategy, GpsCoordinates,
+    LoopClosure, Project, SectionData, SectionId, ShotData, Station, StationRef,
 };
 
 fn shot(azimuth: f64, length: f64) -> ShotData {
@@ -181,7 +182,6 @@ fn a_move_closure_does_not_tie_stations_for_the_solve() {
 #[test]
 fn a_closure_across_two_shots_is_a_real_loop() {
     let (mut p, a, _) = issue_loop();
-    assert!(p.closure_tie_refusal(st(a, 0), st(a, 2)).is_none());
     assert!(p.closure_spans_one_shot(st(a, 0), st(a, 2)).is_none());
     p.create_loop_closure(st(a, 0), st(a, 2), ClosureStrategy::Batch)
         .unwrap();
@@ -252,36 +252,108 @@ fn creation_refuses_a_closure_across_one_shot_for_every_strategy() {
         assert_eq!(err, SPANS_A1_A2, "{strategy:?}");
     }
     assert_eq!(p.loop_closures.len(), 1, "nothing was created");
-    assert_eq!(
-        p.closure_tie_refusal(st(a, 1), st(a, 2)),
-        Some(ClosureTieRefusal::SpansOneShot {
-            section_id: a,
-            shot_index: 1
-        })
-    );
+    assert_eq!(p.closure_spans_one_shot(st(a, 1), st(a, 2)), Some((a, 1)));
+    assert_eq!(closure_across_one_shot_refusal((a, 1)), SPANS_A1_A2);
+}
+
+/// Positions of every station, keyed for comparison.
+fn positions(stations: &[Station]) -> Vec<(StationRef, (f64, f64))> {
+    let mut v: Vec<_> = stations
+        .iter()
+        .map(|s| (s.station_ref, (s.coordinates.x, s.coordinates.y)))
+        .collect();
+    v.sort_by_key(|(r, _)| (r.section_id, r.station_index));
+    v
+}
+
+fn assert_same_positions(a: &[Station], b: &[Station]) {
+    let (a, b) = (positions(a), positions(b));
+    assert_eq!(a.len(), b.len());
+    for ((ra, pa), (rb, pb)) in a.iter().zip(&b) {
+        assert_eq!(ra, rb);
+        assert!(
+            (pa.0 - pb.0).abs() < 1e-9 && (pa.1 - pb.1).abs() < 1e-9,
+            "{ra:?}: {pa:?} vs {pb:?}"
+        );
+    }
 }
 
 #[test]
-fn creation_refuses_a_tie_that_another_closure_already_makes() {
+fn a_redundant_tie_is_still_created_and_the_solve_handles_it() {
+    // A:2 and B:3 are one point through the closure; a third station merged
+    // onto B:3 is then tied to A:2 too. A closure C:0-A:2 adds nothing - and
+    // is accepted exactly as before #737, for every strategy, because it is
+    // harmless to the solve (the union is a no-op) and refusing it would drop
+    // such closures from imported files. Only a tie across ONE shot is refused.
+    let build = || {
+        let (mut p, a, b) = issue_loop();
+        let c = add(&mut p, vec![shot(0.0, 5.0)]);
+        p.merge_stations(st(c, 0), st(b, 3)).unwrap();
+        (p, a, b, c)
+    };
+    let config = ClosureAdjustmentConfig::default();
+    for strategy in [
+        ClosureStrategy::Batch,
+        ClosureStrategy::LeastSquaresWeighted,
+        ClosureStrategy::Move,
+    ] {
+        let (mut p, a, b, c) = build();
+        let reference = p.compute_adjusted_stations(&config);
+        assert!(p.closure_spans_one_shot(st(c, 0), st(a, 2)).is_none());
+        let created = p.create_loop_closure(st(c, 0), st(a, 2), strategy);
+        assert!(
+            created.is_ok(),
+            "{strategy:?} redundant tie refused: {created:?}"
+        );
+        let created = created.unwrap();
+        assert_eq!(p.loop_closures.len(), 2);
+        // Not reported, not skipped, not a warning.
+        assert!(p.closures_across_one_shot().is_empty());
+        // The solve handles it: no failure, the loop stays closed, and the
+        // geometry is exactly what it was without the redundant closure.
+        let report = p.compute_adjusted_stations(&config);
+        assert!(report.failures.is_empty(), "{:?}", report.failures);
+        assert!(gap(&report.stations, st(b, 3), st(a, 2)) < 1e-6);
+        assert_same_positions(&report.stations, &reference.stations);
+        let mut working = p.clone();
+        let anchor = working.adjustment_anchor_for_tests(a).unwrap();
+        assert_eq!(
+            working.adjust_loop_closures(anchor, ClosureStrategy::LeastSquaresWeighted, &config),
+            Ok(())
+        );
+        if strategy != ClosureStrategy::Move {
+            assert!(
+                working
+                    .loop_closures
+                    .iter()
+                    .find(|lc| lc.id == created.id)
+                    .unwrap()
+                    .is_aligned,
+                "an eligible redundant tie takes part in the solve like any closure"
+            );
+        }
+    }
+
+    // A tie made only of closures (A:1 to X, X to B:2, then A:1 to B:2 again
+    // through a station merged onto X) is accepted the same way.
     let (mut p, a, b) = issue_loop();
-    // A:2 and B:3 are one point through the closure; B:3 to A:2 again is a
-    // duplicate, but a closure from a third station merged onto B:3 is a
-    // redundant tie the duplicate check cannot see.
-    let c = add(&mut p, vec![shot(0.0, 5.0)]);
-    p.merge_stations(st(c, 0), st(b, 3)).unwrap();
-    let err = p
-        .create_loop_closure(st(c, 0), st(a, 2), ClosureStrategy::Batch)
-        .unwrap_err();
-    assert_eq!(
-        err,
-        "These stations are already tied together through other merges and closures, so this closure would add nothing."
-    );
-    assert_eq!(
-        p.closure_tie_refusal(st(c, 0), st(a, 2)),
-        Some(ClosureTieRefusal::AlreadyTied)
-    );
-    assert!(p.closure_spans_one_shot(st(c, 0), st(a, 2)).is_none());
-    // Merged pairs keep their own, older message.
+    let far = add(&mut p, vec![shot(180.0, 30.0), shot(90.0, 10.0)]);
+    p.merge_stations(st(far, 0), st(a, 0)).unwrap();
+    let x = st(far, 2);
+    p.create_loop_closure(st(a, 1), x, ClosureStrategy::Batch)
+        .unwrap();
+    p.create_loop_closure(x, st(b, 2), ClosureStrategy::Batch)
+        .unwrap();
+    let reference = p.compute_adjusted_stations(&config);
+    p.create_loop_closure(st(a, 1), st(b, 2), ClosureStrategy::Batch)
+        .unwrap();
+    assert!(p.closures_across_one_shot().is_empty());
+    let report = p.compute_adjusted_stations(&config);
+    assert!(report.failures.is_empty());
+    assert_same_positions(&report.stations, &reference.stations);
+
+    // Merged pairs keep their own, older refusal.
+    let (mut p, _, b, c) = build();
     let err = p
         .create_loop_closure(st(c, 0), st(b, 3), ClosureStrategy::Batch)
         .unwrap_err();
@@ -292,13 +364,67 @@ fn creation_refuses_a_tie_that_another_closure_already_makes() {
 }
 
 #[test]
+fn batch_creation_accepts_a_redundant_tie_like_the_single_path() {
+    // The importer's path: a file can list the same tie twice through
+    // different stations. Both closures are created, as before #737, and the
+    // batch agrees with the single path closure for closure.
+    fn build() -> (Project, Vec<(StationRef, StationRef)>) {
+        let (mut p, a, b) = issue_loop();
+        let c = add(&mut p, vec![shot(0.0, 5.0)]);
+        p.merge_stations(st(c, 0), st(b, 3)).unwrap();
+        let far = add(&mut p, vec![shot(180.0, 30.0), shot(90.0, 10.0)]);
+        p.merge_stations(st(far, 0), st(a, 0)).unwrap();
+        let pairs = vec![
+            (st(c, 0), st(a, 2)),   // redundant: merge + existing closure
+            (st(a, 1), st(far, 2)), // real loop
+            (st(far, 2), st(b, 2)), // real loop
+            (st(a, 1), st(b, 2)),   // redundant: through the two closures above
+        ];
+        (p, pairs)
+    }
+    let (mut seq, pairs) = build();
+    let mut bat = seq.clone();
+    let seq_results: Vec<_> = pairs
+        .iter()
+        .map(|&(x, y)| seq.create_loop_closure(x, y, ClosureStrategy::Batch))
+        .collect();
+    let bat_results = bat.create_loop_closures_batch(&pairs);
+    for (s, t) in seq_results.iter().zip(&bat_results) {
+        assert!(s.is_ok() && t.is_ok(), "seq {s:?} vs batch {t:?}");
+    }
+    let keys = |p: &Project| {
+        p.loop_closures
+            .iter()
+            .map(|lc| (lc.id, lc.station_a.clone(), lc.station_b.clone()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(keys(&seq), keys(&bat));
+    assert_eq!(bat.loop_closures.len(), 5);
+    assert!(bat.closures_across_one_shot().is_empty());
+    let solved = bat.compute_adjusted_stations(&ClosureAdjustmentConfig::default());
+    assert!(solved.failures.is_empty(), "{:?}", solved.failures);
+    // The two real loops moved things; the redundant ties added nothing on top.
+    let mut without = bat.clone();
+    let redundant: Vec<u64> = vec![bat.loop_closures[1].id, bat.loop_closures[4].id];
+    without
+        .loop_closures
+        .retain(|lc| !redundant.contains(&lc.id));
+    assert_same_positions(
+        &solved.stations,
+        &without
+            .compute_adjusted_stations(&ClosureAdjustmentConfig::default())
+            .stations,
+    );
+}
+
+#[test]
 fn creation_judges_against_the_knots_the_solve_uses() {
     // A closure the solve SKIPS ties nothing, so it cannot make a later pair
-    // "already tied" or "across one shot".
+    // "across one shot".
     let (mut p, a, _) = issue_loop();
     plant(&mut p, st(a, 1), st(a, 2), ClosureStrategy::Batch);
     // With the skipped A:1-A:2 counted, A:0-A:2 would be one shot (A:0-A:1).
-    assert!(p.closure_tie_refusal(st(a, 0), st(a, 2)).is_none());
+    assert!(p.closure_spans_one_shot(st(a, 0), st(a, 2)).is_none());
 }
 
 #[test]
@@ -313,7 +439,7 @@ fn batch_creation_refuses_the_same_pairs_with_the_same_messages() {
             (st(a, 1), st(a, 2)),   // one shot directly
             (st(a, 1), st(far, 2)), // valid loop
             (st(far, 2), st(a, 2)), // one shot through the pair above (same batch)
-            (st(c, 0), st(a, 2)),   // already tied through merge + closure
+            (st(c, 0), st(a, 2)),   // already tied through merge + closure: created
             (st(a, 0), st(far, 1)), // A:0 is merged to far:0, so one shot
             (st(b, 1), st(far, 1)), // valid loop
             (st(c, 1), st(far, 1)), // valid loop
@@ -335,9 +461,11 @@ fn batch_creation_refuses_the_same_pairs_with_the_same_messages() {
     assert_eq!(errs[0].as_deref(), Some(SPANS_A1_A2));
     assert!(errs[1].is_none());
     assert_eq!(errs[2].as_deref(), Some(SPANS_A1_A2));
-    assert!(errs[3]
-        .as_deref()
-        .is_some_and(|e| e.starts_with("These stations are already tied together")));
+    assert!(
+        errs[3].is_none(),
+        "a redundant tie is accepted: {:?}",
+        errs[3]
+    );
     assert!(errs[4]
         .as_deref()
         .is_some_and(|e| e.contains("one shot (2:0 to 2:1)")));

@@ -1,8 +1,8 @@
 /**
  * Component test - the closure dialog's guard (#737). When the connectivity
- * check says the backend would refuse the pair (a closure across one shot, or
- * stations already tied), the dialog shows that reason up front and offers no
- * Create; a pair with a real loop keeps Create enabled. The backend stays the
+ * check says the backend would refuse the pair (a closure across one shot),
+ * the dialog shows that reason up front and offers no Create; any other pair
+ * keeps Create enabled. The backend stays the
  * authority, so the reason shown is the backend's own text, verbatim.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';

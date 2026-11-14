@@ -1370,12 +1370,12 @@ Shown when creating a loop closure between two **connected** stations.
 When the backend would refuse the pair (#737), the connectivity check carries the
 reason (`ConnectivityResult.closure_refusal`) and the dialog shows it above the
 station details in an error box (`closure-refusal`) with **Create Closure**
-disabled. The two refusals are a closure that would tie together the two ends of
-one shot (directly, or through merges and other closures) - "This closure would
+disabled. The one refusal is a closure that would tie together the two ends of
+one shot (directly, or through merges and other closures): "This closure would
 tie together the two ends of one shot (A:1 to A:2), so there is no loop to close.
-Pick stations joined by at least two separate paths." - and a pair that other
-merges and closures already tie together. The backend refuses the same pairs
-regardless of the dialog. See [closures.md](closures.md#create-loop-closure).
+Pick stations joined by at least two separate paths." A pair that other merges and
+closures already tie together is still accepted. The backend refuses the same
+pairs regardless of the dialog. See [closures.md](closures.md#create-loop-closure).
 
 #### Export Dialog
 
@@ -1495,9 +1495,8 @@ The Merge Tool connects two stations. The behavior depends on whether the statio
 2. Selects two stations that are already in the same connected group
 3. ClosureDialog appears with closure preview data (path length, misclosure, error %)
    - If the two stations are joined by only ONE shot (directly or through merges
-     and other closures), or are already tied together, the dialog says why and
-     Create is disabled: a closure needs at least two separate paths between its
-     stations (#737)
+     and other closures), the dialog says why and Create is disabled: a closure
+     needs at least two separate paths between its stations (#737)
 4. User selects error distribution method
 5. Confirm → Loop closure created, shown as dashed line on map
 6. Closure stations updated with `closures_with` references (direct + transitive)

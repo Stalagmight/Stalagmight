@@ -223,6 +223,43 @@ fn the_connectivity_check_carries_the_backend_refusal() {
     assert!(merge.can_merge && merge.closure_refusal.is_none());
 }
 
+#[test]
+fn a_redundant_tie_gets_no_refusal_and_is_created() {
+    // Only a closure across ONE shot is refused (#737). C:0 is merged onto B:3,
+    // which the loop's closure already ties to A:2, so a closure C:0-A:2 adds
+    // nothing - the dialog offers Create and the command creates it, as before.
+    let (mut p, a, b) = issue_loop();
+    let c = add(&mut p, vec![shot(0.0, 5.0)]);
+    p.merge_stations(st(c, 0), st(b, 3)).unwrap();
+    let state = state_with(p);
+    let check = state.check_merge_connectivity(st(c, 0), st(a, 2)).unwrap();
+    assert!(check.connected && !check.can_merge);
+    assert!(
+        check.closure_refusal.is_none(),
+        "{:?}",
+        check.closure_refusal
+    );
+    let created = state.execute(Command::CreateLoopClosure {
+        station_a: st(c, 0),
+        station_b: st(a, 2),
+        closure_strategy: ClosureStrategy::Batch,
+    });
+    assert!(created.success, "{:?}", created.error);
+    let after = project(&state);
+    assert_eq!(after.loop_closures.len(), 2);
+    // No warning, and the adjusted view solves cleanly.
+    let warnings = state.compute_project_warnings(&after, None);
+    assert!(warnings
+        .iter()
+        .all(|w| w.code != CLOSURE_ACROSS_ONE_SHOT && w.code != CLOSURE_ADJUSTMENT_FAILED));
+    state.get_adjusted_stations().unwrap();
+    let report = state.get_adjustment_report().unwrap();
+    assert!(
+        report.skipped_closures.is_empty() && report.failures.is_empty(),
+        "{report:?}"
+    );
+}
+
 // ---- the adjustment report and the failure warning ------------------------------
 
 #[test]

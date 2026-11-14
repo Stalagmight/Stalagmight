@@ -26,8 +26,7 @@ adjusted to its closures, switch to **Plan**, or pick **Closures Computed View**
 in the [Display menu](../screens/display-menu.md).
 
 The two stations must be joined by at least two separate paths. Two stations at
-the ends of one shot are not a loop, so the dialog refuses them, and the same
-goes for stations that other merges and closures already tie together.
+the ends of one shot are not a loop, so the dialog refuses them.
 
 ## Step details
 
