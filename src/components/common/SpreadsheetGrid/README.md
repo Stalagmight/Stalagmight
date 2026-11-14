@@ -12,11 +12,14 @@ It backs the survey data table (`DataTable.tsx`), the raw table view
 #403) and the full-project Data workspace (`src/components/DataWorkspace/`).
 
 Module map: `SpreadsheetGrid.tsx` (state, keyboard, clipboard, drags),
-`GridRow.tsx` (memoized row / group band), `GridHeaderRow.tsx` +
-`GridSortButton.tsx`, `GridOverlays.tsx` (selection, marquees, editor, drop
-lines), `GridContextMenu.tsx`, `useGridScrollRequests.ts` (`selectedRow` /
-`scrollTo`), and the pure helpers `gridGeometry`, `gridClipboard`, `gridClear`,
-`gridApplicable`, `gridMarks`, `gridAutoFit`, `gridActivate`.
+`GridRow.tsx` (memoized row / group band), `GridHeaderRow.tsx` (+ the
+`headerCorner` content) + `GridSortButton.tsx`, `GridOverlays.tsx` (selection,
+marquees, editor, drop lines), `GridSpanLayer.tsx` (`spanCells`),
+`GridContextMenu.tsx`, `useGridScrollRequests.ts` (`selectedRow` /
+`scrollTo`), `useFirstVisibleRow.ts` (the corner's scroll index), and the pure
+helpers `gridGeometry`, `gridClipboard`, `gridClear`, `gridApplicable`,
+`gridMarks`, `gridAutoFit`, `gridActivate`, `gridColumnMove` (header
+drag-to-reorder + `constrainColumnOrder`).
 
 ## Features
 
@@ -153,6 +156,64 @@ applicability ones also once per cell in bulk paths), so keep them O(1).
   band selects the row exactly like a gutter click (and notifies
   `onActiveCellChange(i, firstColKey)`); interactive children must stop
   `mousedown` + `click` propagation. Every cell of the row is N/A.
+  The content element is `${prefix}-group-content-${i}`.
+- **`groupContentStart: 'gutter'`** + **`groupContentInset`** (px, default 0):
+  the group content is rendered as a child of the row's sticky gutter instead
+  of the band (`sg-group-content sg-group-content-gutter`), absolutely placed
+  `groupContentInset` px from the gutter's left edge and flowing on across the
+  band. Being in the gutter it rides along with it while the grid scrolls
+  sideways (it stays at the inset), and it paints above the gutter's background
+  and the band (z 1 inside the gutter's z-20). It has no background, so the
+  gutter's selected / active / hover tints and the band-focus outline show
+  through. The gutter's `rowLabel` still renders under it (draw e.g. a rail
+  elbow in the inset area). Text style is the band's (12px, header colour, not
+  bold), not the gutter's. Width is capped at the measured viewport minus the
+  inset (it clips there, never past the visible area). A mousedown / right-click
+  on it is a gutter click / right-click (it bubbles to the gutter); hovering it
+  is a band hover. Interactive children stop `mousedown` + `click` propagation
+  as in band mode. The band itself, its handlers, its N/A cells and the
+  band-focus selection outline are unchanged. Default `'band'` = before.
+- **`headerCorner(firstVisibleRow)`**: content for the frozen top-left corner
+  (above the gutter), wrapped in `${prefix}-header-corner` (`sg-corner-content`:
+  left-aligned, 6px side padding, one line, ellipsis) with `title` set to its
+  rendered text and `data-first-visible-row`. `firstVisibleRow` = the first row
+  whose top is at or below the header's bottom edge,
+  `ceil(scrollTop / ROW_HEIGHT)` (a third of a pixel of tolerance), clamped to
+  the rows, -1 when there are none. The corner subscribes to the scroller's
+  `scroll` itself, so scrolling re-renders only the corner and only when the
+  index changes; `headerCorner` is called again only for a new index or a new
+  callback identity (keep it a stable `useCallback`). Without the prop the
+  corner is the empty box it was.
+- **`spanCells(row, i)`** -> `{ from, to, content } | undefined`: one element
+  (`${prefix}-span-${i}`, class `sg-span`, `data-span-cols="c0,c1"`) over the
+  visible columns from `from` to `to` inclusive in DISPLAY order: left = the
+  gutter width + the x offset of the first covered column, width = the sum of
+  the covered visible widths. A hidden end clamps inward to the nearest visible
+  column of the run, reversed ends are swapped, an unknown key or a run with no
+  visible column draws nothing. Never drawn on a group row. It is a child of the
+  row (so it virtualizes and memoizes with it) at `z-index: 2`: above the cells,
+  below every overlay (selection 3, marquees 3-5, editor 20) and the sticky
+  gutter (20). Transparent, `pointer-events: none` and `overflow: hidden` with
+  8px side padding; its interactive descendants (`a`, `button`, `input`,
+  `select`, `textarea`, `summary`, `[role=button]`, `[role=link]`,
+  `[tabindex]`, `[data-sg-interactive]`) get `pointer-events: auto` and must
+  stop `mousedown` + `click` propagation. A click anywhere else lands on the
+  cell beneath, and the covered cells keep all their semantics (N/A, edits,
+  selection, Tab). Geometry follows resize / reorder / hide. Rows are memoized
+  on props, so the host signals a changed result with a new `spanCells`
+  identity (like every other per-row callback). Must be O(1).
+- **`constrainColumnOrder(order)`**: a header drag computes the full order its
+  drop would produce (hidden columns in their slots) and passes it through
+  this; the answer is normalized (unknown / repeated keys dropped, missing ones
+  appended) and is what `onColumnOrderChange` receives. While dragging, the
+  drop line is drawn where the block actually lands in the CURRENT layout:
+  before the first visible non-block column that follows the block in the
+  constrained order (the far right edge when none does). When the constrained
+  order equals the current one there is no drop line, the root gets
+  `sg-drop-blocked` (not-allowed cursor, faded ghost) and release does nothing.
+  The moved block stays selected (leftmost to rightmost of its keys in the new
+  order). Without the prop the drag behaves as before (line at the pointer,
+  release always reports the order).
 - **`GridExtraMenuItem`**: `testId` (default `${prefix}-context-extra-${i}`),
   `disabled` (rendered, not clickable), `separatorBefore`; duplicate labels are
   fine.
@@ -213,6 +274,8 @@ Pure logic is unit-tested (Vitest, node env):
   paste placement (fill/tile/clip, gap rows passed over), fill targets.
 - `__tests__/gridMarksAndApplicable.test.ts` - mark segmentation, applicability,
   N/A-skipping Tab order, fill extent, the sort cycle.
+- `__tests__/gridWorkspaceLayout.test.ts` - the header drop plan with and
+  without a constraint, the span-run resolver, the first-visible-row index.
 
 Component tests (jsdom, `@tanstack/react-virtual` mocked to render every row):
 - `__tests__/spreadsheetGridApplicable.test.tsx` - N/A cells and group rows on
@@ -220,6 +283,8 @@ Component tests (jsdom, `@tanstack/react-virtual` mocked to render every row):
 - `__tests__/spreadsheetGridHostProps.test.tsx` - sort, header props, marks,
   row tints, `scrollTo`, `rowsVersion`, extra menu items, paging, memoized rows,
   the move-drag threshold.
+- `__tests__/spreadsheetGridWorkspaceProps.test.tsx` - `headerCorner`,
+  `spanCells`, `groupContentStart: 'gutter'`, `constrainColumnOrder`.
 - the other `spreadsheetGrid*.test.tsx` files - commit, open-editor, delete
   rows, long press, column widths, test ids.
 

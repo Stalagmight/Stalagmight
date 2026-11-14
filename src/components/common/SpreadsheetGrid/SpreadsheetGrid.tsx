@@ -207,18 +207,26 @@ export interface SpreadsheetGridProps<Row> {
    *  the gutter) or 'gutter' (inside the gutter, `groupContentInset` px from
    *  its left edge, flowing on across the band; sticky to the left edge while
    *  scrolling horizontally). The gutter's `rowLabel` for a group row still
-   *  renders underneath (e.g. a rail elbow in the inset). */
+   *  renders underneath (e.g. a rail elbow in the inset). In 'gutter' mode the
+   *  content is a child of the sticky gutter: it paints above the gutter and
+   *  the band, a click / right-click on it is a gutter one, and its width is
+   *  capped at the visible area. See README "Mixed-row / workspace props". */
   groupContentStart?: 'band' | 'gutter';
-  /** Left inset (px) of group content when `groupContentStart` is 'gutter'. */
+  /** Left inset (px, default 0) of group content when `groupContentStart` is
+   *  'gutter'. */
   groupContentInset?: number;
   /** Content for the frozen top-left header corner (above the gutter), given
    *  the index of the first row visible below the header (-1 when there are no
-   *  rows). Re-evaluated as the grid scrolls. Must be cheap. */
+   *  rows): the first row whose top is at or below the header's bottom edge.
+   *  Re-evaluated as the grid scrolls, but called again only when that index
+   *  (or this callback's identity) changes; only the corner re-renders. Rendered
+   *  left-aligned, one line, ellipsized, its text as the tooltip. Must be cheap. */
   headerCorner?: (firstVisibleRow: number) => ReactNode;
   /** One spanning element over a contiguous run of columns on a row (e.g. a
    *  station's link chips across the shot-only columns it has no value in).
    *  `from`/`to` are column keys; the span covers every VISIBLE column from
-   *  `from` to `to` inclusive in display order. The covered cells keep their
+   *  `from` to `to` inclusive in display order (a hidden end clamps inward,
+   *  reversed ends swap; nothing visible = no span). The covered cells keep their
    *  cell semantics (selection, N/A, no edits); the span is drawn above them,
    *  is not selectable, and passes clicks through except on its interactive
    *  children (which must stop mousedown/click propagation). Return undefined
@@ -226,7 +234,9 @@ export interface SpreadsheetGridProps<Row> {
   spanCells?: (row: Row, rowIndex: number) => { from: string; to: string; content: ReactNode } | undefined;
   /** Constrain a column reorder: given the order a header drag would produce,
    *  return the order to apply (e.g. keep a group of columns contiguous). The
-   *  grid also uses it to show the drop indicator where the column will land. */
+   *  grid also uses it to show the drop indicator where the column will land.
+   *  Gets and returns the FULL order (hidden columns included); an answer equal
+   *  to the current order is a no-op drop (no line, nothing on release). */
   constrainColumnOrder?: (order: string[]) => string[];
 
   className?: string;
