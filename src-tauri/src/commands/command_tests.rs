@@ -5888,7 +5888,7 @@ fn test_closure_adjustment_failure_warning_is_advisory_and_ignorable() {
         state(&app).inner(),
         warning.section_id,
         warning.shot_id,
-        warning.code.clone(),
+        warning.code,
         None,
     )
     .unwrap();
