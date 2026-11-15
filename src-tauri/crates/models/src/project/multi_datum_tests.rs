@@ -621,3 +621,62 @@ fn gap_check_cost_does_not_multiply_with_the_number_of_fixes() {
         "gps_fix_gaps over 4000 fixes took {elapsed:?}"
     );
 }
+
+#[test]
+fn a_gps_fix_still_pulls_a_component_whose_only_closure_spans_one_shot() {
+    // The component's only closure ties the two ends of shot A:0-A:1, so the
+    // solve skips it (#737) - which on its own would leave the component at its
+    // measured geometry. The hard GPS fix on B:5, 40 m east of where the survey
+    // puts it, is an observation of its own (#741): the component is still
+    // solved, and the fix station lands on its GPS.
+    let (mut project, a, b) = two_entrance_traverse();
+    let fix = StationRef::new(b, 5);
+    project.set_zero_datum(fix, gps_at(40.0, 500.0)).unwrap();
+    let (key_a, key_b) = (
+        project.key_for_ref(StationRef::new(a, 0)).unwrap(),
+        project.key_for_ref(StationRef::new(a, 1)).unwrap(),
+    );
+    project.normalize_next_closure_id();
+    let id = project.next_closure_id;
+    project.next_closure_id += 1;
+    project.loop_closures.push(crate::LoopClosure {
+        id,
+        station_a: key_a,
+        station_b: key_b,
+        path_length: 50.0,
+        misclosure_distance: 0.0,
+        error_percentage: 0.0,
+        horizontal_misclosure: 0.0,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::Batch,
+        is_aligned: false,
+    });
+    let skipped: Vec<u64> = project
+        .closures_across_one_shot()
+        .into_iter()
+        .map(|c| c.closure_id)
+        .collect();
+    assert_eq!(skipped, [id]);
+    assert_eq!(xy(&project, fix), (0.0, 500.0));
+
+    let solved = project.compute_adjusted_stations(&ClosureAdjustmentConfig::default());
+    assert!(solved.failures.is_empty(), "{:?}", solved.failures);
+    let at = |sr: StationRef| {
+        let s = solved
+            .stations
+            .iter()
+            .find(|s| s.station_ref == sr)
+            .unwrap();
+        (s.coordinates.x, s.coordinates.y)
+    };
+    let (x, y) = at(fix);
+    assert!(
+        (x - 40.0).abs() < 1e-6 && (y - 500.0).abs() < 1e-6,
+        "the fix station is at ({x}, {y}), not on its GPS"
+    );
+    let (x0, y0) = at(StationRef::new(a, 0));
+    assert!(
+        x0.abs() < 1e-6 && y0.abs() < 1e-6,
+        "the placement datum moved"
+    );
+}
