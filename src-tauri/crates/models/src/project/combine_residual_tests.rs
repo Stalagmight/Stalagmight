@@ -11,8 +11,9 @@
 
 use super::combine_closure_tests::{add, check_combined, dist, options, shot, xy};
 use crate::{
-    CombineJoinEnds, CombineJoinKind, CombinePlan, GpsCoordinates, KeptMovesReason, Project,
-    SectionEnd, SectionId, StationRef, TornTieKind, TornTieReason, ZeroDatum,
+    ClosureStrategy, CombineJoinEnds, CombineJoinKind, CombinePlan, GpsCoordinates,
+    KeptMovesReason, LoopClosure, Project, SectionEnd, SectionId, StationRef, TornTieKind,
+    TornTieReason, ZeroDatum,
 };
 
 /// A residual under the 1 mm tolerance, in both axes: 0.5 mm.
@@ -405,4 +406,88 @@ fn a_residual_of_float_dust_moves_nothing_as_before() {
     let (plan, _) = combine(&pair, pair.k, "past dust");
     assert_eq!(plan.moving_section, Some(pair.o));
     assert_eq!(plan.moved_sections, vec![pair.o, pair.m]);
+}
+
+/// Plant a loop closure as a file can carry it (the app only snaps stations
+/// already connected), measured off the current geometry.
+fn plant(
+    project: &mut Project,
+    (a, b): (StationRef, StationRef),
+    strategy: ClosureStrategy,
+    is_aligned: bool,
+) {
+    let id = project.next_closure_id;
+    project.next_closure_id += 1;
+    let gap = dist(xy(project, a), xy(project, b));
+    project.loop_closures.push(LoopClosure {
+        id,
+        station_a: project.key_for_ref(a).unwrap(),
+        station_b: project.key_for_ref(b).unwrap(),
+        path_length: 10.0,
+        misclosure_distance: gap,
+        error_percentage: gap * 10.0,
+        horizontal_misclosure: gap,
+        vertical_misclosure: 0.0,
+        strategy,
+        is_aligned,
+    });
+}
+
+/// A residual tears a snap from the side that moves, as a shift does: Z is
+/// snapped to O's station 1 and merged to W, which an ordinary closure ties
+/// to M (merged to O), so no merge carries Z with O. Keeping K, O and M move
+/// by the residual and Z does not, so the plan lists the snap among the ties
+/// that become loop closures: the dialog shows the move beside it, whose
+/// reason it is (`combineMoveShown`), not the "tied to itself" one. Plan
+/// only: such a combine leaves Z and W held by closures alone, which a reload
+/// then promotes (a combine shifting more than 1 mm does the same; not
+/// #740's).
+#[test]
+fn a_residual_tears_a_snap_from_the_side_that_moves() {
+    let mut pair = side_by_side(SectionEnd::End, SectionEnd::Start, RESIDUAL);
+    let o1 = StationRef::new(pair.o, 1);
+    let z = add(&mut pair.project, "Z", vec![shot(180.0, 5.0)]);
+    let at = xy(&pair.project, o1);
+    place(&mut pair.project, z, 0, at);
+    let w = add(&mut pair.project, "W", vec![shot(90.0, 4.0)]);
+    let z1 = xy(&pair.project, StationRef::new(z, 1));
+    place(&mut pair.project, w, 0, z1);
+    pair.project
+        .merge_stations(StationRef::new(w, 0), StationRef::new(z, 1))
+        .unwrap();
+    let snap = (o1, StationRef::new(z, 0));
+    plant(&mut pair.project, snap, ClosureStrategy::Move, true);
+    let tie = (StationRef::new(w, 1), StationRef::new(pair.m, 1));
+    plant(&mut pair.project, tie, ClosureStrategy::Batch, false);
+    let join = CombineJoinEnds {
+        kept: pair.k_end,
+        other: pair.o_end,
+    };
+    let candidate = pair
+        .project
+        .combine_candidate_joining(pair.k, pair.o, Some(join))
+        .unwrap();
+    assert_eq!(candidate.join_kind, CombineJoinKind::CoLocated);
+    let plan = if candidate.section_a == pair.k {
+        &candidate.plan_keeping_a
+    } else {
+        &candidate.plan_keeping_b
+    };
+    assert_eq!(plan.moving_section, Some(pair.o));
+    assert_eq!(plan.moved_sections, vec![pair.o, pair.m]);
+    assert!(
+        plan.shift_m < 1e-3,
+        "a residual, not a shift: {}",
+        plan.shift_m
+    );
+    let torn: Vec<_> = plan
+        .torn_ties
+        .iter()
+        .map(|t| (t.kind, t.station_a, t.station_b))
+        .collect();
+    assert!(
+        torn.contains(&(TornTieKind::SnappedClosure, snap.0, snap.1))
+            || torn.contains(&(TornTieKind::SnappedClosure, snap.1, snap.0)),
+        "the snap from O, which moves, to Z, which stays: {torn:?}"
+    );
 }
