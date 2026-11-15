@@ -1747,6 +1747,8 @@
       "tornHeld": "<held/> is held by a zero datum and stays where it is.",
       "tornWhyMoves": "The loop's misclosure moves to the new closure, and the Closures Computed View adjusts it like any other loop.",
       "tornWhyStays": "Otherwise the combined section would be tied to itself. The Closures Computed View adjusts the closure like any other loop.",
+      "removedSummary_one": "Combining removes 1 connection that would join the two ends of one shot (see Details).",
+      "removedSummary_other": "Combining removes {{count}} connections that would each join the two ends of one shot (see Details).",
       "removedTitle_one": "This connection is removed:",
       "removedTitle_other": "These {{count}} connections are removed:",
       "removedMerge": "The merge of <a/> and <b/>: as a loop closure it would join the two ends of one shot.",

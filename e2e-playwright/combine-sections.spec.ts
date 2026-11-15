@@ -210,6 +210,8 @@ test.describe('Combine Sections', () => {
     await combineWith(page, 'West');
 
     await expect(page.getByTestId('combine-closure-join')).toContainText('East and West meet here across a loop closure');
+    // The torn merge stays as a closure: nothing is removed (#746).
+    await expect(page.getByTestId('combine-removed-summary')).toHaveCount(0);
     await openDetails(page);
     await expect(page.getByTestId('combine-note-torn')).toContainText('This connection becomes a loop closure:');
     await expect(page.locator('[data-testid^="combine-torn-tie-"]')).toHaveCount(1);
@@ -261,6 +263,12 @@ test.describe('Combine Sections', () => {
     await page.getByTestId('context-menu-submenu').getByRole('button', { name: 'Main with Beyond' }).click();
     await expect(page.getByTestId('combine-sections-dialog')).toBeVisible();
 
+    // Said before the confirm with Details still folded.
+    await expect(page.getByTestId('combine-details')).not.toHaveAttribute('open', '');
+    await expect(page.getByTestId('combine-removed-summary')).toBeVisible();
+    await expect(page.getByTestId('combine-removed-summary')).toHaveText(
+      'Combining removes 1 connection that would join the two ends of one shot (see Details).'
+    );
     await openDetails(page);
     const removed = page.locator('[data-testid^="combine-removed-tie-"]');
     await expect(removed).toHaveCount(1);
