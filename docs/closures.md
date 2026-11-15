@@ -250,6 +250,30 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
   through the combined section, or tie two anchored groups, whose promotion is
   refused), so a reload converts nothing back; the randomised sweep in
   `combine_closure_tests.rs` checks exactly that.
+- **Nothing is left across one shot (#746).** Once the two join stations are
+  one, a tie the combine tears (a merge, or a snap made ordinary) can join the
+  two ends of one shot: a one-shot passage X merged to both join stations,
+  say, whose merge at the moving end would become a closure across X's shot.
+  So can an ordinary closure the join alone puts there. The solve would only
+  skip such a closure, so the combine removes it instead, inside its one
+  project snapshot pair (one Undo restores it with the rest), and reports each
+  as a `CLOSURE_REMOVED_ACROSS_ONE_SHOT` warning ("Removed the merge of 1:1
+  and 2:0: combining the sections left its two stations at the two ends of
+  one shot."), shown in the shared removed-closure toast. The plan names them
+  before the confirm (`CombinePlan.closures_removed_across_one_shot`, each by
+  its stations before the combine and as what it was); the dialog lists them
+  under Details, and leaves them out of the ties that become closures. The
+  dialog and the combine read the one plan: `Project::joined_across_one_shot`
+  runs the joined survey's across-one-shot sweep (`joined_sweep`, the model
+  the anchor rule's `joined_survey_is_solved` also reads) over the plan's torn
+  ties, and `tear_ties` removes those ties instead of tearing them. The anchor
+  verdict does not change: a closure that collapses a shot never made the
+  joined survey solved. A closure that already joined the two ends of one shot
+  before the combine is left alone (it has its own warning), as Delete with
+  shift leaves one. After the join, `closures_newly_across_one_shot` is the
+  backstop: anything the plan missed is removed too (and is a test failure).
+  Unlike a split, a combine runs no orphan-closure sweep: it joins two sections
+  and never strands one on a lone closure.
 
 ## Deferred: Distribution at Create Time (Proportional/Equal)
 
