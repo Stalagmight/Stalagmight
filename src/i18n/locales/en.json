@@ -1764,7 +1764,7 @@
       "replacedFormerSnap": "Loop closure <a/> to <b/>, left from a snap whose stations have since moved apart; the Closures Computed View does not adjust it.",
       "replacedByMerge": "The merge of <a/> and <b/> becomes a loop closure on the same two stations and takes its place.",
       "replacedBySnapped": "The snapped closure between <a/> and <b/> becomes an ordinary loop closure on the same two stations and takes its place.",
-      "replacedByClosure": "Loop closure <a/> to <b/>, already there, ends up on the same two stations and takes its place.",
+      "replacedByClosure": "Loop closure <a/> to <b/>, already there, ties the same two stations and takes its place.",
       "replacedWhy_one": "Two loop closures on the same two stations would count one loop twice, so the combine keeps the one the Closures Computed View adjusts. Undo brings this one back.",
       "replacedWhy_other": "Two loop closures on the same two stations would count one loop twice, so the combine keeps the one the Closures Computed View adjusts. Undo brings these back."
     }

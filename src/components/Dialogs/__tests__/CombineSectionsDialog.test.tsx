@@ -528,8 +528,8 @@ describe('CombineSectionsDialog', () => {
         'stations and takes its place.',
       'Loop closure [section Main-B] [station 5:3] to [section Main-A] [station 2:0] , left from a snap whose ' +
         'stations have since moved apart; the Closures Computed View does not adjust it. Loop closure ' +
-        '[section Main-B] [station 5:3] to [section Main-A] [station 2:1] , already there, ends up on the ' +
-        'same two stations and takes its place.',
+        '[section Main-B] [station 5:3] to [section Main-A] [station 2:1] , already there, ties the same ' +
+        'two stations and takes its place.',
     ]);
     expect(screen.getByTestId('combine-replaced-why')).toHaveTextContent('Undo brings these back.');
   });
