@@ -2,8 +2,8 @@ use chrono::Utc;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::{
-    SectionId, Shot, ShotData, ShotId, ShotKind, ShotUpdates, StationAnchor, StationKey,
-    StationMerge, StationRef, FEATURE_ID_STRIDE,
+    LoopClosure, SectionId, Shot, ShotData, ShotId, ShotKind, ShotUpdates, StationAnchor,
+    StationKey, StationMerge, StationRef, FEATURE_ID_STRIDE,
 };
 
 use super::offsets::MintedMerge;
@@ -822,6 +822,59 @@ impl Project {
         start_shot_id: ShotId,
         end_shot_id: ShotId,
     ) -> Result<DeleteShotRangeImpact, String> {
+        let mut impact =
+            self.preview_delete_shot_range_relationships(section_id, start_shot_id, end_shot_id)?;
+        if Self::gap_close_is_offered(&impact) {
+            impact.closures_removed_across_one_shot = self
+                .preview_gap_close_closure_removals(
+                    section_id,
+                    impact.start_pos as usize,
+                    impact.end_pos as usize,
+                )
+                .ok();
+        }
+        Ok(impact)
+    }
+
+    /// [`Self::preview_delete_shot_range`] for a caller that owns a copy of
+    /// the project it can give up (the IPC command clones the open project
+    /// anyway): the gap-close prediction runs on that copy instead of cloning
+    /// it again.
+    pub fn into_preview_delete_shot_range(
+        self,
+        section_id: SectionId,
+        start_shot_id: ShotId,
+        end_shot_id: ShotId,
+    ) -> Result<DeleteShotRangeImpact, String> {
+        let mut impact =
+            self.preview_delete_shot_range_relationships(section_id, start_shot_id, end_shot_id)?;
+        if Self::gap_close_is_offered(&impact) {
+            impact.closures_removed_across_one_shot = self
+                .into_gap_close_closure_removals(
+                    section_id,
+                    impact.start_pos as usize,
+                    impact.end_pos as usize,
+                )
+                .ok();
+        }
+        Ok(impact)
+    }
+
+    /// Only a gap-close that is actually offered gets a prediction (#737).
+    fn gap_close_is_offered(impact: &DeleteShotRangeImpact) -> bool {
+        !impact.shift_blocked && impact.kind != RangeDeleteKind::WholeSection
+    }
+
+    /// [`Self::preview_delete_shot_range`] without the gap-close closure
+    /// prediction, which simulates the whole gap-close on a clone. The range
+    /// delete itself only needs the shift-blocked verdict before it runs that
+    /// same gap-close for real, so it asks this and does not pay twice.
+    pub fn preview_delete_shot_range_relationships(
+        &self,
+        section_id: SectionId,
+        start_shot_id: ShotId,
+        end_shot_id: ShotId,
+    ) -> Result<DeleteShotRangeImpact, String> {
         let section = self
             .get_section(section_id)
             .ok_or_else(|| format!("Section {section_id} not found"))?;
@@ -1051,6 +1104,7 @@ impl Project {
             shift_blocked_reasons,
             removed_datums,
             removed_comments,
+            closures_removed_across_one_shot: None,
         })
     }
 
@@ -1260,6 +1314,18 @@ impl Project {
         self.remove_shot_with_rewire_excluding_anchors(section_id, shot_id, &HashSet::new(), false)
     }
 
+    /// [`Self::remove_shot_with_rewire`], also returning the loop closures its
+    /// orphan sweep removed because their two stations became one point (#738),
+    /// in the order it removed them, so the Delete Shot command can tell the
+    /// user (by the stations they had before, from a capture it took first).
+    pub fn remove_shot_with_rewire_reporting(
+        &mut self,
+        section_id: SectionId,
+        shot_id: ShotId,
+    ) -> Result<(Shot, DeleteShotImpact, Vec<LoopClosure>), String> {
+        self.remove_shot_reporting(section_id, shot_id, &HashSet::new(), false)
+    }
+
     /// Like [`Self::remove_shot_with_rewire`] but for use inside a bulk-range
     /// delete, with two range-specific knobs:
     /// - `doomed_anchors`: canonical keys of stations the surrounding range will
@@ -1278,6 +1344,19 @@ impl Project {
         doomed_anchors: &HashSet<StationKey>,
         defer_cascade: bool,
     ) -> Result<(Shot, DeleteShotImpact), String> {
+        self.remove_shot_reporting(section_id, shot_id, doomed_anchors, defer_cascade)
+            .map(|(shot, impact, _)| (shot, impact))
+    }
+
+    /// The one body of the shot removal: [`Self::remove_shot_with_rewire_
+    /// excluding_anchors`] plus the closures its orphan sweep removed.
+    fn remove_shot_reporting(
+        &mut self,
+        section_id: SectionId,
+        shot_id: ShotId,
+        doomed_anchors: &HashSet<StationKey>,
+        defer_cascade: bool,
+    ) -> Result<(Shot, DeleteShotImpact, Vec<LoopClosure>), String> {
         let section = self
             .get_section(section_id)
             .ok_or_else(|| format!("Section {section_id} not found"))?;
@@ -1288,11 +1367,12 @@ impl Project {
             .ok_or_else(|| format!("Shot {shot_id} not found in section {section_id}"))?;
 
         let impact = self.preview_delete_shot(section_id, shot_id)?;
-        // Which closures are orphans ALREADY, before this removal touches
-        // anything - see the conversion below for what that is for. Must be taken
-        // here, ahead of the first mutation (the retains just below), or a closure
-        // this removal orphans would be mistaken for one that arrived orphaned.
-        let preexisting_orphans = self.orphan_closure_ids();
+        // Which closures the sweep would act on ALREADY (orphans, and closures
+        // between merged stations), before this removal touches anything - see
+        // the conversion below for what that is for. Must be taken here, ahead of
+        // the first mutation (the retains just below), or a closure this removal
+        // orphans would be mistaken for one that arrived orphaned.
+        let preexisting_orphans = self.swept_closure_ids();
         let removed_station = impact.removed_station;
         // The deleted station's canonical key (still resolvable - the shot is
         // removed below). Stored refs are canonical, so key equality is sound.
@@ -1473,7 +1553,12 @@ impl Project {
         // loop-ness hung off a merge that was. The forward user delete loses
         // nothing: `execute()`'s `can_orphan_closures` epilogue still sweeps the
         // whole project after `Command::DeleteShot`.
-        minted.extend(self.convert_closures_orphaned_since(&preexisting_orphans));
+        let swept = self.convert_closures_orphaned_since(&preexisting_orphans);
+        // Not logged here: this also runs on the copies the delete previews
+        // simulate on, whose removals never happen. The Delete Shot command
+        // reports and logs what it keeps.
+        minted.extend(swept.minted);
+        let swept_away = swept.removed;
 
         // After removing a shot, stations after the deletion point (index > pos)
         // shift by -displacement in section-local coordinates.  We must decide
@@ -1540,7 +1625,7 @@ impl Project {
         }
 
         self.touch();
-        Ok((deleted_shot, impact))
+        Ok((deleted_shot, impact, swept_away))
     }
 
     /// The exact inverse of [`Self::add_shot`] into an **empty** section:
@@ -1586,10 +1671,10 @@ impl Project {
                 "Shot {shot_id} is not the only shot of section {section_id}"
             ));
         }
-        // Which closures are orphans ALREADY, before this inverse touches
-        // anything - see the conversion below. Taken ahead of the retains, which
-        // are this function's first mutation.
-        let preexisting_orphans = self.orphan_closure_ids();
+        // Which closures the sweep would act on ALREADY, before this inverse
+        // touches anything - see the conversion below. Taken ahead of the
+        // retains, which are this function's first mutation.
+        let preexisting_orphans = self.swept_closure_ids();
         // Refs on the station the append created. There are none when the undo
         // follows its own `CreateShot` (anything anchored there would have been
         // pushed above this entry and undone first), but a ref whose anchoring
@@ -1643,7 +1728,12 @@ impl Project {
         // rigid one, though, which can leave the new merge drifted, so THAT case -
         // and only that case - cascades, exactly as the sibling does. Nothing
         // converted is the overwhelmingly common case and stays offset-neutral.
-        let minted = self.convert_closures_orphaned_since(&preexisting_orphans);
+        let swept = self.convert_closures_orphaned_since(&preexisting_orphans);
+        tracing::debug!(
+            removed = ?swept.removed.iter().map(|c| c.id).collect::<Vec<_>>(),
+            "Undoing an append dropped loop closures whose two stations are one point"
+        );
+        let minted = swept.minted;
         if !minted.is_empty() {
             // Settled before the cascade, as the sibling does and for the same
             // reason (#464): the cascade is seeded with this section, so a merge

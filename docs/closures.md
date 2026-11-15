@@ -74,6 +74,25 @@ Validation rules:
   **unless** both sections are connected to zero datums via merges (see `section_has_zero_datum`).
   This zero-datum check uses merge-only connectivity (closures are ignored).
 - Duplicate closure pairs are rejected.
+- A closure must not join the two ends of one shot (#737). The pair is refused,
+  for every strategy (`Batch`, `LeastSquaresWeighted` and `Move` alike), when it
+  would tie the two ends of ONE shot together - directly (A:1 to A:2), or because
+  merges and other closures already tie each station to one end of the same shot -
+  with *"This closure would join the two ends of one shot (A:1 to A:2) and squeeze
+  that shot to zero length. Pick two stations that are not the ends of a single
+  shot."*. That holds even when another route also joins the two stations (a side
+  passage merged on at A:1 and closed to A:2, say): the solve would still have to
+  put both ends of the shot at one point. It is
+  judged against the constraint knots the solve uses (see below), by the one
+  shared helper `project/closure_shots.rs`. The importer's
+  `create_loop_closures_batch` refuses the same pairs with the same words.
+  This is the only refusal it adds: a closure between two stations that other
+  merges and closures already tie together is still created, as before. It is
+  harmless to the solve (uniting two stations already in one group is a no-op),
+  and refusing it would drop such closures from imported files.
+- The closure dialog shows that refusal before Create: `check_merge_connectivity`
+  returns it in `ConnectivityResult.closure_refusal`, the dialog prints it and
+  disables Create (`closure-refusal`). The backend stays the authority.
 
 Metrics are computed from current station coordinates:
 - Misclosure distance and horizontal/vertical components are computed from current raw station coordinates.
@@ -91,6 +110,63 @@ is a merge - so it is converted. This happens on load
 classified `can_orphan_closures`, and inside the shot-removal paths themselves
 (`Project::convert_closures_orphaned_since`, scoped to what that removal orphaned so
 an inverse does no more than invert).
+
+**A closure between merged stations is removed** by the same sweep: one whose two
+stations are one point - the same station (a closure from a station to itself, which
+used to be kept), or one merge group (`are_stations_merged`). It closes no loop. The
+solve can only skip it, its stored misclosure is a gap the geometry no longer has, and
+it would still count as a loop in the project stats and keep the Closures Computed
+View on. Converting it would add nothing, so it goes.
+
+Which edits can make one:
+
+- **Not** creating a closure: Create Loop Closure and the import's batch refuse a
+  merged pair, and so does the shot-removal rewire.
+- **A merge of two placed pieces** (#741): `merge_stations` refuses a merge inside one
+  rigid component, and a closure between two components is either a sole bridge (which
+  every sweep promotes) or ties two zero-datum-placed components. Those two MAY merge
+  since #741 (the later placement datum becomes a GPS fix), and a merge at the
+  closure's two ends makes them one point. The merge command runs the sweep
+  (`command_integrity` flags it `can_orphan_closures`), so the closure is removed and
+  reported inside the merge's undo unit; any other closure between the two pieces ties
+  two different points and stays a loop. Tests try every merge of a closure's two ends,
+  and of their merge groups, on random networks and after every step of the
+  combine/split/reverse chain fuzzer (`check_no_merge_folds_a_closure`): each is
+  refused, or joins two placed pieces and the sweep removes exactly that closure.
+- **A promotion**: two closures that tie a station to the same point record one loop
+  twice (the Merge tool and Combine Sections both allow that), and once the sweep
+  promotes one, the other ties that point to itself (#738).
+- A file, or an undo history, written before #738.
+
+One forward pass is enough: the sweep keeps a station-level merge union-find, extended
+on every promotion, and asks each closure "one point?" before "orphan?"; a promotion
+only joins components that were not connected, so it cannot merge the ends of a
+closure the pass has already kept. Every fate is decided in place and the list is
+compacted once, so a file holding 50 000 such closures (the most the stalx-reader
+accepts) opens in linear time. `Project::sweep_orphan_closures` reports what it
+removed and where each one sat; it logs nothing itself, since the split preview runs
+it on a copy - the callers that keep the result log one line with the count.
+
+- **On load** it is silent, exactly as the promotion is: the project opens without
+  the closure and the log says how many went. The file settles on the next save: an
+  explicit Save writes it, while autosave only runs after an edit.
+- **Inside a command** it is part of that command's undo unit: Split Section Here,
+  the delete-and-split commands, the deletes, unmerges, merges and Remove Zero Datum
+  through `execute()`'s epilogue, Batch and Repair all record a before/after snapshot
+  pair around it, so one Undo brings the closure back. Each of those commands except
+  Repair also reports it (a Batch from its own sweep, so the Merge dialog's
+  snap-to-merge batch reports like a plain merge): a `CLOSURE_REMOVED_MERGED_ENDS` warning per closure,
+  named by the stations it had BEFORE the edit (`Project::closures_before_sweep`,
+  matched by position, else a unique id, else id and stored ends, since a file can
+  repeat an id), which the frontend shows in the closure-removal toast: "Removed loop
+  closure 1:0 to 0:3: another loop closure became a merge, which made its two
+  stations one point." ("...: the merge made its two stations one point." after a
+  merge, or "...: its two stations were already one point." for one the edit did not
+  cause). Split Section Here says it in its dialog instead.
+- **The scoped sweep** an inverse runs (the shot-removal paths) snapshots
+  `Project::swept_closure_ids` first - orphans and closures already between merged
+  stations - and leaves those as recorded; it removes only what its own promotions
+  make redundant.
 
 The two statements are not equivalent, and the difference is the whole of issue #464:
 
@@ -157,6 +233,15 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
   the user deleting the closure, splitting and merging by hand, with the same
   move. Instead the Split dialog shows which half moves and how far before the
   user confirms (`AppState::split_section_preview`, the split run on a copy).
+  When a second closure tied that half to the same point, the merge leaves it
+  between merged stations and the split removes it (#738); the dialog lists
+  each one by the station ids it was created with ("Loop closure 1:0 to 0:3 is
+  removed: its two stations become one point."), read off the same sweep on
+  the copy, so it names exactly what the split removes. A closure that already
+  tied a point to itself before the split (an undo can restore one from a
+  history recorded before #738) is removed by the same sweep and listed apart
+  ("...: its two stations are already one point."); it tied nothing, so it does
+  not change how the dialog describes the halves.
 - **Combine Sections** re-keys a closure on either join station onto the one
   joined station, drops any closure across the join point (whatever its
   length, it would tie the joined station to itself), and drops a closure the
@@ -166,8 +251,9 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
 - **A loop closure is a join.** Two section ends tied by a closure are, by the
   survey's own statement, one point, apart by the misclosure. Combining there
   moves one side by the misclosure (the other section and what is merged to
-  it, or the kept side when a zero datum holds the other) and drops the
-  closure. The rigid ties that would then tie the combined section to itself,
+  it, or the kept side when a zero datum holds the other, or when the other
+  side holds the station this view is anchored at, so the closure-adjusted
+  survey does not shift) and drops the closure. The rigid ties that would then tie the combined section to itself,
   or hold the moving side, become `Batch` closures between the same stations
   (`project/combine_plan.rs`): merges form a forest, so on each path at most
   one merge tears, the one nearest the moving section; a snapped (aligned)
@@ -225,6 +311,20 @@ Eligible closures are `Batch` + `LeastSquaresWeighted` (`Move` closures are alre
 Algorithm overview (unchanged math; the only change is *where* it writes - a clone, not the
 live project):
 - Build constraint groups where stations connected via merges **or closures** are in the same group.
+  A closure whose two stations would end up in one group as the two ends of one
+  shot - a *closure across one shot* - is skipped first (#737): the solve keeps
+  such a shot at its measured vector, so it could not close, and it used to fail
+  the whole component with "inconsistent section translation".
+  `Project::closures_across_one_shot` decides it with a union-find over every
+  station: all merges first, then the eligible closures in `loop_closures` order;
+  a closure that would put both ends of some shot into one group that were not in
+  one before it is NOT united and is reported with that shot. A skipped closure
+  unites nothing, so it never changes what a later closure sees. Uniting walks only
+  the smaller group, so the sweep is linear in the common case and deterministic.
+  `adjust_loop_closures` drops these closures before the solve, so the groups, the
+  spur detection and the `is_aligned` marking all see the same set; a component
+  whose only closures are skipped keeps its measured geometry and is not an error,
+  unless it has a GPS fix, which still pulls it (#741).
 - If a group contains a **placement** datum, it is fixed at its raw position. Two placement
   datums in one group (only possible when a closure ties the two datum stations themselves) is
   an error, and the component falls back to raw geometry.
@@ -278,6 +378,68 @@ default is a hard fix: only a hard fix, or larger base sigmas, puts the station 
 
 Tests: `project/lsq_fix_tests.rs` (two entrances joined by a 500 m traverse, the GPS 40 m off,
 checked against the closed-form series-spring answer).
+
+A component whose solve still fails (for example a closure that ties two placement
+zero datums into one group: "Multiple placement zero datums in a single constraint
+group", which creation allows because both sections have fixed coordinates) is rolled back to its
+measured geometry, as before - but it is no longer silent (#737).
+`Project::into_adjusted_stations` returns each failure (anchor, sections, the
+solver's error), `AppState` keeps them beside the memoized adjusted stations, and:
+
+- the `get_adjustment_report` IPC returns `{ skipped_closures, failures }`: the
+  closures skipped above (computed on request) and the failures of the cached solve
+  of the CURRENT project version only, each with a plain-language reason (the raw
+  solver text stays in the log). `get_adjusted_stations` is unchanged.
+- the Warnings tab lists one `CLOSURE_ACROSS_ONE_SHOT` **error** per skipped
+  closure, on the shot it spans (Resolve: **Remove this loop closure**, or go to its
+  station). It is a pure function of the saved data, so it gates like any error and
+  cannot be ignored.
+- it also lists one `CLOSURE_ADJUSTMENT_FAILED` **warning** per failed part, read
+  from the same cached solve: the warnings pass never runs the solve, so the entry
+  appears once the Closures Computed View, Plan or Export has solved the current
+  version (the frontend refreshes warnings once the report names a failure, or
+  stops naming one) and an edit drops it until the next solve. That is why it is
+  advisory, and ignorable: as an error, the SpeleoDB upload gate and the map's
+  issue colouring would depend on which view was open last, and the measured data
+  it is about is fine - only the derived adjusted view is degraded. Resolve: **Go
+  to station**, or Ignore.
+- the Closures Computed View (and Plan / Export, which draw the adjusted geometry)
+  shows a notice stacked under the read-only pill - "1 loop closure skipped: it
+  spans a single shot." and/or "Part of the survey could not be adjusted and is
+  shown as measured." - with **Show warnings**, which opens the Warnings tab. It is
+  the primary surface: it is drawn with the adjusted view itself, so it is always
+  current.
+
+## Deleting shots around a closure
+
+A delete with shift can shorten the path between a closure's two stations. The
+single **Delete shot** refuses to shift a shot that is part of any loop, closure
+loops included; the range gap-close (**Delete shots** with shift) refuses only
+merge loops, so closure A:1-A:4 with shots 1..2 gap-closed becomes A:1-A:2 - one
+shot, no loop. Both delete commands therefore take
+`Project::closures_before_edit` (the closures already across one shot, and every
+eligible closure's stations as they resolve before the delete), and afterwards
+remove every closure `closures_newly_across_one_shot` reports, inside the same
+project snapshot pair, so one Undo restores the shots and the closure together.
+Each removal is reported in `CommandResult.warnings`
+(`CLOSURE_REMOVED_ACROSS_ONE_SHOT`, "Removed loop closure A:1 to A:4: closing the
+gap left its two stations at the two ends of one shot.") and shown as one warning toast, named by the stations BEFORE the delete:
+the gap-close renumbered A:4 to A:2, but the user created A:1-A:4.
+
+The Delete Shots dialog says so before the user confirms. The range preview
+(`preview_delete_shot_range`) carries `closures_removed_across_one_shot`, which
+`Project::preview_gap_close_closure_removals` computes by running the very
+gap-close the command runs (`Project::gap_close_shot_range`, shared by both) on a
+clone and taking the same `closures_newly_across_one_shot`; the dialog lists them
+under "Close Gap & Delete removes these loop closures (they would span a single
+shot)" (the heading names the gap-close button, "Delete Shots" for a prefix or
+suffix range, since Split removes none). It is absent when no
+gap-close is offered (the whole section, or a blocked shift). The single-shot
+preview has no such list: that delete never shortens a closure to one shot, and
+`preview_delete_shot` runs inside every per-shot removal, so a simulation there
+would recurse. A closure that already spanned one shot before the delete is left alone (it
+has its own warning). This lives in the commands, not in
+`remove_shot_with_rewire*`, which is also the inverse of `CreateShot` (#413).
 
 ## Co-location and Move Tools
 

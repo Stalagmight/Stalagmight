@@ -419,3 +419,48 @@ fn a_held_gauge_follows_its_station_and_a_dangling_one_is_pruned() {
     project.prune_held_gauges();
     assert!(project.held_gauges.is_empty());
 }
+
+/// Horizontal distance between two stations in a station list.
+fn gap_in(stations: &[crate::Station], a: StationRef, b: StationRef) -> f64 {
+    let at = |r: StationRef| {
+        let s = stations.iter().find(|s| s.station_ref == r).unwrap();
+        (s.coordinates.x, s.coordinates.y)
+    };
+    let (pa, pb) = (at(a), at(b));
+    (pa.0 - pb.0).hypot(pa.1 - pb.1)
+}
+
+/// Issue #737's synthetic test. Creation now refuses a closure across one shot,
+/// so it is planted with `close()`, the shape a file written before the
+/// refusal still carries; the solve must skip it and keep the real loop closed.
+#[test]
+fn a_closure_across_one_shot_does_not_fail_the_component() {
+    let mut p = Project::new("F2".to_string(), None);
+    let a = add(&mut p, "A", vec![shot(90.0, 10.0), shot(90.0, 10.0)]);
+    let b = add(
+        &mut p,
+        "B",
+        vec![shot(0.0, 10.0), shot(90.0, 20.5), shot(180.0, 10.0)],
+    );
+    p.merge_stations(StationRef::new(a, 0), StationRef::new(b, 0))
+        .unwrap();
+    let (b3, a2) = (StationRef::new(b, 3), StationRef::new(a, 2));
+    p.create_loop_closure(b3, a2, ClosureStrategy::Batch)
+        .unwrap();
+    let config = ClosureAdjustmentConfig::default();
+    let before = gap_in(&p.compute_adjusted_station_coordinates(&config), b3, a2);
+    // Merge tool: A:1 then A:2 -> Create Loop Closure is refused now ...
+    assert!(p
+        .create_loop_closure(StationRef::new(a, 1), a2, ClosureStrategy::Batch)
+        .is_err());
+    // ... so plant the closure across one shot directly.
+    close(&mut p, StationRef::new(a, 1), a2);
+    let mut working = p.clone();
+    let anchor = working.adjustment_anchor_for_tests(a).unwrap();
+    let solve =
+        working.adjust_loop_closures(anchor, ClosureStrategy::LeastSquaresWeighted, &config);
+    let after = gap_in(&p.compute_adjusted_station_coordinates(&config), b3, a2);
+    assert!(solve.is_ok(), "{solve:?}");
+    assert!(before < 1e-6, "loop B:3-A:2 closed before: {before}");
+    assert!(after < 1e-6, "loop B:3-A:2 stays closed: {after}");
+}

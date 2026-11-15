@@ -12,7 +12,8 @@
 //! - rigid ties that would tie the combined section to itself, or hold the
 //!   moving side, become ordinary loop closures;
 //! - the moving side (the other section and what is still merged to it, or
-//!   the kept side when a zero datum holds the other) moves by the gap at the
+//!   the kept side when a zero datum or the closure-adjusted view's anchor
+//!   holds the other; see `combine_plan.rs`) moves by the gap at the
 //!   join: a loop closure's misclosure, or a co-located or merged pair's
 //!   residual.
 //!

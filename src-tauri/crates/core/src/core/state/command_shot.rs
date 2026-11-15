@@ -1,9 +1,132 @@
 use super::AppState;
-use crate::core::{CommandResult, Validator};
+use crate::core::{CommandResult, ValidationWarning, Validator, WarningSeverity};
 use crate::models::{
-    shot_display_position, SectionId, ShotData, ShotId, ShotKind, ShotUpdates, SurveyCredit,
-    FEATURE_ID_STRIDE,
+    shot_display_position, station_id_label, ClosurePair, ClosuresBeforeEdit, ClosuresBeforeSweep,
+    Project, RemovedClosure, SectionId, ShotData, ShotId, ShotKind, ShotUpdates, SurveyCredit,
+    CLOSURE_REMOVED_ACROSS_ONE_SHOT, CLOSURE_REMOVED_MERGED_ENDS, FEATURE_ID_STRIDE,
 };
+
+/// The warning a delete reports for a loop closure it removed because the
+/// delete left it spanning a single shot (#737). Names the closure by its
+/// stations BEFORE the delete (`ClosurePair` from
+/// `Project::closures_newly_across_one_shot`): a gap-close renumbers stations,
+/// and the user created closure 0:1-0:5, not the 0:1-0:2 it became.
+pub(super) fn closure_removed_message(closure: &ClosurePair) -> String {
+    format!(
+        "Removed loop closure {} to {}: closing the gap left its two stations at the two ends of one shot.",
+        station_id_label(closure.station_a),
+        station_id_label(closure.station_b)
+    )
+}
+
+/// What made the two stations of a closure the sweep removed one point, so
+/// its warning can say so.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum OnePointCause {
+    /// The edit's own promotion of another closure to a merge (#738).
+    Promotion,
+    /// A user merge, which may join two placed pieces since #741.
+    Merge,
+}
+
+impl OnePointCause {
+    /// The cause for the sweep after `cmd`.
+    pub(super) fn of(cmd: &crate::core::Command) -> Self {
+        if matches!(cmd, crate::core::Command::MergeStations { .. }) {
+            Self::Merge
+        } else {
+            Self::Promotion
+        }
+    }
+}
+
+/// The warnings an edit reports for the loop closures its orphan-closure sweep
+/// removed because their two stations are one point (#738), each named by the
+/// stations it had BEFORE the edit. The frontend shows them in one toast with
+/// the closures-across-one-shot ones (`notifyRemovedClosures`).
+pub(super) fn merged_ends_warnings(
+    removed: &[RemovedClosure],
+    cause: OnePointCause,
+) -> Vec<ValidationWarning> {
+    removed
+        .iter()
+        .map(|removed| ValidationWarning {
+            code: CLOSURE_REMOVED_MERGED_ENDS.to_string(),
+            message: format!(
+                "Removed loop closure {} to {}: {}",
+                station_id_label(removed.pair.station_a),
+                station_id_label(removed.pair.station_b),
+                match (removed.already_one_point, cause) {
+                    (true, _) => "its two stations were already one point.",
+                    (false, OnePointCause::Promotion) => {
+                        "another loop closure became a merge, which made its two stations one point."
+                    }
+                    (false, OnePointCause::Merge) => {
+                        "the merge made its two stations one point."
+                    }
+                }
+            ),
+            severity: WarningSeverity::Warning,
+        })
+        .collect()
+}
+
+/// After an edit that ran the whole-project sweep: log what it removed, and
+/// turn it into [`merged_ends_warnings`] named against `before` (the capture
+/// the edit took before it changed anything).
+pub(super) fn report_swept_closures(
+    project: &Project,
+    before: &ClosuresBeforeSweep,
+    sweep: &crate::models::OrphanClosureSweep,
+    context: &str,
+    cause: OnePointCause,
+) -> Vec<ValidationWarning> {
+    sweep.log_removed(context);
+    merged_ends_warnings(&project.removed_closures_named(before, sweep), cause)
+}
+
+/// After a delete with shift: remove every loop closure the delete left tying
+/// the two ends of one shot together that did not before it (#737), and
+/// report each one for the user, by the stations it had before the delete.
+///
+/// A gap-close shortens the path between a closure's two ends - closure
+/// A:1-A:4 with shots 1..2 deleted becomes A:1-A:2, one shot - so the closure
+/// that closed a real loop now closes none, and the solve would only skip it.
+/// It goes with the delete, inside the same undo unit (both callers record a
+/// project snapshot pair), so one Undo restores the shots AND the closure.
+///
+/// Deliberately NOT part of `remove_shot_with_rewire*`: that is also the
+/// inverse of `CreateShot`, and an inverse must only invert (#413). A closure
+/// that already spanned one shot before the delete is left alone (it carries
+/// its own warning); only what this delete caused is undone here. Removing a
+/// skipped closure never changes another closure's status, because a skipped
+/// closure unites nothing. The range-delete preview lists the same closures
+/// from the same `Project::closures_newly_across_one_shot`.
+pub(super) fn remove_closures_newly_across_one_shot(
+    project: &mut Project,
+    before: &ClosuresBeforeEdit,
+) -> Vec<ValidationWarning> {
+    let newly = project.closures_newly_across_one_shot(before);
+    let mut warnings = Vec::with_capacity(newly.len());
+    for closure in newly {
+        if project.remove_loop_closure(closure.closure_id).is_err() {
+            continue;
+        }
+        tracing::info!(
+            closure_id = closure.closure_id,
+            station_a = ?closure.station_a,
+            station_b = ?closure.station_b,
+            purpose = "drop a closure a delete left across one shot",
+            "Removed loop closure that now spans a single shot"
+        );
+        warnings.push(ValidationWarning {
+            code: CLOSURE_REMOVED_ACROSS_ONE_SHOT.to_string(),
+            message: closure_removed_message(&closure),
+            severity: WarningSeverity::Warning,
+        });
+    }
+    warnings
+}
 
 impl AppState {
     pub(super) fn create_shot(
@@ -329,15 +452,33 @@ impl AppState {
             }
         }
 
-        match project.remove_shot_with_rewire(section_id, shot_id) {
-            Ok(_) => {
+        let closures_before = project.closures_before_edit();
+        let closures_before_sweep = project.closures_before_sweep();
+        match project.remove_shot_with_rewire_reporting(section_id, shot_id) {
+            Ok((_, _, swept_away)) => {
                 tracing::debug!(
                     section_id,
                     shot_id,
                     purpose = "remove shot and rewire geometry",
                     "Shot deleted"
                 );
-                CommandResult::success()
+                // Still under the project lock and ahead of the epilogue's
+                // reconcile, so the snapshot pair's after-half has it (#737).
+                // No shape is known to reach it from a SINGLE delete - it
+                // refuses to shift a shot that is part of any loop, and a
+                // rewire onto a merge partner keeps every knot - so this is
+                // the defensive half keeping both delete paths under one rule
+                // (`no_delete_leaves_a_new_closure_across_one_shot`).
+                let mut removed = remove_closures_newly_across_one_shot(project, &closures_before);
+                // The closures the removal's own orphan sweep took because their
+                // two stations became one point (#738); `execute()`'s epilogue
+                // reports any its whole-project sweep takes after this.
+                crate::models::log_removed_closures(&swept_away, "delete shot");
+                removed.extend(merged_ends_warnings(
+                    &project.removed_closures_named_by_id(&closures_before_sweep, &swept_away),
+                    OnePointCause::Promotion,
+                ));
+                CommandResult::success().with_warnings(removed)
             }
             Err(e) => CommandResult::failure(e),
         }

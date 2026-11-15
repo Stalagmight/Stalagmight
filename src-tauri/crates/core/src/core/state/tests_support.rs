@@ -35,6 +35,26 @@ impl AppState {
         self.initial_save_deferred
             .store(deferred, std::sync::atomic::Ordering::Relaxed);
     }
+
+    /// Run `f` against the open project's LIVE database handle - the very
+    /// connection the session reads through, with whatever mmap its open set up -
+    /// or return `None` when no database is open. The #706 fuzzer's probe: a
+    /// fresh connection would map the file as it is NOW and could never fault on
+    /// a mapping a truncation left behind.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_open_database_for_tests<T>(&self, f: impl FnOnce(&Database) -> T) -> Option<T> {
+        let guard = self
+            .database
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.as_ref().map(f)
+    }
+
+    /// The path of the open project's file, if one is open.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn open_project_path_for_tests(&self) -> Option<std::path::PathBuf> {
+        self.open_project_path()
+    }
 }
 
 /// Every production region in the `core::state::speleodb*` family, paired with the

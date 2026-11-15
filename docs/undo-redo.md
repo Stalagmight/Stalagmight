@@ -179,10 +179,19 @@ The map (`history_remap`):
 4. renames an id its section must YIELD to a derived id stepped past every id in
    use. A section yields when another section holds the same id in the SAME
    recorded state - one project snapshot, or the sections one entry reinstalls
-   (an Add, a re-created section) together with the live project - and keeps
-   it: the one holding the id live, else the lowest. This is what covers a copy
-   only the history still holds (a deleted section an undo would bring back);
+   (an Add, a re-created or deleted section) together with the project that
+   entry replays into - and keeps it: the one holding the id live, else the
+   lowest. This is what covers a copy only the history still holds (a deleted
+   section an undo would bring back);
 5. leaves everything else alone.
+
+The project a reinstalling entry replays into is the live one only when no
+whole-project snapshot lies between them. Otherwise it is the nearest such
+snapshot's state - the `before` an undo restores, or the `after` a redo
+restores - because stepping through that entry replaces the whole project first
+(`HistoryIds::order_reinstalls`). Comparing against the live project instead
+gave a new id to every shot a combine or split had moved out of a section that
+an older entry created or added, on the first undo after a reopen (#732).
 
 Rule 4 asks about one recorded state at a time on purpose. A split moves shots,
 ids and all, from one section to a new one (and Combine Sections moves them back

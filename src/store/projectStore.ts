@@ -17,6 +17,8 @@ import {
   READ_ONLY_EDIT_NOTICE,
 } from '../utils/editErrors';
 import { hasAdjustmentInputs } from '../utils/closures';
+import { notifyRemovedClosures } from '../utils/closureRemovalToast';
+import { useAdjustmentReportStore } from './adjustmentReportStore';
 import { afterSurveyEdit, applyEditAftermath, beforeSurveyEdit, type SurveyEdit } from '../utils/reverseAftermath';
 import { useUIStore } from './uiStore';
 import { surfaceSaveFailure } from '../utils/saveFeedback';
@@ -442,11 +444,7 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   moveComment: (source: CommentHolder, target: CommentHolder, swap: boolean) => Promise<CommandResult>;
   /** `accuracyM`: the GPS accuracy in metres (#741); 0 is a hard pin, and
    *  omitted means the backend default (0). */
-  setZeroDatum: (
-    stationRef: StationRef,
-    coordinates: GpsCoordinates,
-    options?: { fitToBounds?: boolean; accuracyM?: number }
-  ) => Promise<CommandResult>;
+  setZeroDatum: (stationRef: StationRef, coordinates: GpsCoordinates, options?: { fitToBounds?: boolean; accuracyM?: number }) => Promise<CommandResult>;
   removeZeroDatum: (stationRef: StationRef) => Promise<CommandResult>;
   moveSection: (sectionId: SectionId, offset: Coordinates) => Promise<CommandResult>;
   moveSegment: (sectionId: SectionId, offset: Coordinates) => Promise<CommandResult>;
@@ -1855,11 +1853,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   deleteSection: async (sectionId: SectionId) => {
-    return executeCommand(
+    return notifyRemovedClosures(await executeCommand(
       'delete_section',
       { sectionId },
       { purpose: 'remove section from project', fields: { sectionId } }
-    );
+    ));
   },
 
   reverseSection: async (sectionId: SectionId, swapLeftRight: boolean) => {
@@ -1899,27 +1897,27 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   deleteShot: async (sectionId: SectionId, shotId: ShotId) => {
-    return executeCommand(
+    return notifyRemovedClosures(await executeCommand(
       'delete_shot',
       { sectionId, shotId },
       { purpose: 'delete shot from section', fields: { sectionId, shotId } }
-    );
+    ));
   },
 
   deleteShotAndSplit: async (sectionId: SectionId, shotId: ShotId, nameA: string, nameB: string) => {
-    return executeCommand(
+    return notifyRemovedClosures(await executeCommand(
       'delete_shot_and_split',
       { sectionId, shotId, nameA, nameB },
       { purpose: 'delete shot and split section', fields: { sectionId, shotId } }
-    );
+    ));
   },
 
   deleteLastShotAndSection: async (sectionId: SectionId, shotId: ShotId) => {
-    return executeCommand(
+    return notifyRemovedClosures(await executeCommand(
       'delete_last_shot_and_section',
       { sectionId, shotId },
       { purpose: 'remove single-shot section', fields: { sectionId, shotId } }
-    );
+    ));
   },
 
   deleteShotRangeSplit: async (
@@ -1929,19 +1927,19 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     nameA: string,
     nameB: string
   ) => {
-    return executeCommand(
+    return notifyRemovedClosures(await executeCommand(
       'delete_shot_range_split',
       { sectionId, startShotId, endShotId, nameA, nameB },
       { purpose: 'delete shot range and split section', fields: { sectionId, startShotId, endShotId } }
-    );
+    ));
   },
 
   deleteShotRangeShift: async (sectionId: SectionId, startShotId: ShotId, endShotId: ShotId) => {
-    return executeCommand(
+    return notifyRemovedClosures(await executeCommand(
       'delete_shot_range_shift',
       { sectionId, startShotId, endShotId },
       { purpose: 'delete shot range and close gap', fields: { sectionId, startShotId, endShotId } }
-    );
+    ));
   },
 
   setShotKind: async (sectionId: SectionId, shotId: ShotId, kind: ShotKind) => {
@@ -1954,27 +1952,27 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
   // Station operations
   mergeStations: async (stationA: StationRef, stationB: StationRef) => {
-    return executeCommand(
+    return notifyRemovedClosures(await executeCommand(
       'merge_stations',
       { stationA, stationB },
       { purpose: 'connect survey sections', fields: { stationA, stationB } }
-    );
+    ));
   },
 
   unmergeStations: async (stationRef: StationRef) => {
-    return executeCommand(
+    return notifyRemovedClosures(await executeCommand(
       'unmerge_stations',
       { stationRef },
       { purpose: 'disconnect merged stations', fields: { stationRef } }
-    );
+    ));
   },
 
   unmergeStationPair: async (stationA: StationRef, stationB: StationRef) => {
-    return executeCommand(
+    return notifyRemovedClosures(await executeCommand(
       'unmerge_station_pair',
       { stationA, stationB },
       { purpose: 'disconnect selected merged station pair', fields: { stationA, stationB } }
-    );
+    ));
   },
 
   checkMergeConnectivity: async (stationA: StationRef, stationB: StationRef) => {
@@ -2035,6 +2033,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         ? surveyDataWithAdjustedStations(surveyData, adjusted)
         : surveyDataFromLegacy(project.sections, adjusted);
       set({ stationsAdjusted: adjusted, surveyDataAdjusted, adjustedLoading: false });
+      // What this solve left out (#737); a failed part also has a Warnings entry.
+      void useAdjustmentReportStore.getState().load(adjusted, get().refreshWarnings);
       return true;
     } catch (e) {
       console.warn('Failed to load adjusted geometry:', e);
@@ -2077,11 +2077,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   removeZeroDatum: async (stationRef: StationRef) => {
-    return executeCommand(
+    return notifyRemovedClosures(await executeCommand(
       'remove_zero_datum',
       { stationRef },
       { purpose: 'remove GPS anchor', fields: { stationRef } }
-    );
+    ));
   },
 
   moveSection: async (sectionId: SectionId, offset: Coordinates) => {

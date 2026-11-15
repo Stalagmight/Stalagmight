@@ -1369,6 +1369,16 @@ Shown when creating a loop closure between two **connected** stations.
 └──────────────────────────────────────────────────────────────────┘
 ```
 
+When the backend would refuse the pair (#737), the connectivity check carries the
+reason (`ConnectivityResult.closure_refusal`) and the dialog shows it above the
+station details in an error box (`closure-refusal`) with **Create Closure**
+disabled. The one refusal is a closure that would join the two ends of one shot
+(directly, or through merges and other closures): "This closure would join the two
+ends of one shot (A:1 to A:2) and squeeze that shot to zero length. Pick two
+stations that are not the ends of a single shot." A pair that other merges and
+closures already tie together is still accepted. The backend refuses the same
+pairs regardless of the dialog. See [closures.md](closures.md#create-loop-closure).
+
 #### Export Dialog
 
 ```
@@ -1486,6 +1496,9 @@ The Merge Tool connects two stations. The behavior depends on whether the statio
 1. User activates Merge Tool (M)
 2. Selects two stations that are already in the same connected group
 3. ClosureDialog appears with closure preview data (path length, misclosure, error %)
+   - If the two stations are the two ends of one shot (directly or through merges
+     and other closures), the dialog says why and Create is disabled: the closure
+     would squeeze that shot to zero length (#737)
 4. User selects error distribution method
 5. Confirm → Loop closure created, shown as dashed line on map
 6. Closure stations updated with `closures_with` references (direct + transitive)
@@ -1540,6 +1553,16 @@ The Merge Tool connects two stations. The behavior depends on whether the statio
    shot removes the whole section
 3. On Split Section, the section splits into two, named "<section>-A" and
    "<section>-B" by default (both editable)
+4. A delete with shift (a single shot's Shift Geometry, or a range of shots with
+   shift) that leaves a loop closure spanning a single shot - e.g. closure A:1-A:4
+   after shots 1..2 are gap-closed - removes that closure with the delete. The
+   Delete Shots dialog lists it before you confirm ("Close Gap & Delete removes
+   these loop closures (they would span a single shot)"; Split removes none), and
+   a warning toast says so afterwards ("Removed
+   loop closure A:1 to A:4: closing the gap left its two stations at the two ends
+   of one shot."). Both name the closure by the
+   stations it was created with. One Undo restores the shots and the closure
+   (#737)
 
 **Deleting a Station:** Not supported. Selecting a station and pressing Delete
 opens the Delete Station dialog, whose Delete button is disabled; it tells the
@@ -1650,7 +1673,17 @@ them). A loop closure from
 before the cut to past it, with nothing else tying the halves, is left as their
 only tie, which the split turns into a merge (a closure must close a loop),
 moving one half by the loop's misclosure; the dialog says which half moves and
-how far before the user confirms (`split_section_preview`). One undo step.
+how far before the user confirms (`split_section_preview`). A second closure
+that tied that half to the same point would then tie the point to itself (its
+two stations are merged), so the split removes it (#738), and the dialog lists
+each one by the station ids it was created with: "Loop closure 1:0 to 0:3 is
+removed: its two stations become one point." A closure that already tied a
+point to itself goes too, listed as "...: its two stations are already one
+point." One undo step brings back every closure. The delete-and-split commands,
+Delete Shot, Delete Section, Unmerge and Remove Zero Datum remove such closures
+the same way and say so in a toast, by the station ids they were created with.
+A project file that already holds a closure between merged stations, or from a
+station to itself, opens without it ([closures.md](closures.md)).
 
 **Combine Sections** (an end station's context menu, or **Combine 2 Sections...**
 in the section menu when exactly two sections are selected): the two chosen
@@ -1686,8 +1719,10 @@ it, for the section it shows as kept, before the user confirms:
 
 - **A side moves.** Across a loop closure (or any other gap over 1 mm) the
   other section, and everything still merged to it, moves by the gap so the two
-  ends meet. When a zero datum holds the other side and not the kept one, the
-  kept side moves instead.
+  ends meet. The kept side moves instead when a zero datum holds the other side
+  and not the kept one, or, with no datum deciding, when the other side holds
+  the station the Closures Computed View holds the survey at: moving it would
+  shift the whole cave in Plan and Export. The dialog says which and why.
 - **Ties become loop closures.** A merge or snapped (aligned) closure that
   would tie the combined section to itself, or keep the moving side tied to what
   stays, becomes an ordinary loop closure between the same two stations: the
@@ -2319,6 +2354,32 @@ function useNetworkStatus() {
 3. Export Salvageable Data
 4. Cancel
 
+#### Restore from Backup
+The dialog offers the files beside the project named after it plus a suffix
+that contains `.backup` or ends in `.tmp` (`cave.stalx.backup`,
+`cave.stalx.backup.1`, `cave.stalx.tmp`), and only those that start with
+SQLite's header. It never offers the project itself (nor, on Unix, a hard
+link to it), its
+`.pre-restore` copy, SQLite's `-journal`/`-wal`/`-shm` files, or an empty file
+(#720).
+
+A restore never writes into a file in place, and a restore that is refused or
+fails changes nothing:
+- Refused while the project, its `<project>.stalx.pre-restore` or the backup is
+  open in the app, or while a project is being opened; when the backup is the
+  project itself; when the backup does not open as a project (empty, not a
+  project, damaged too); when an armed journal or a WAL with frames sits beside
+  the backup, the project or the `.pre-restore` copy; when one of those files,
+  or such a sidecar, is not a regular file; and when the project or the backup
+  was saved by a newer version.
+- Otherwise the backup is copied beside the project and opened as a project
+  first. The previous `.pre-restore` copy is set aside, a copy of the project
+  replaces it, and the backup copy replaces the project, each by rename. If the
+  last step fails, the previous `.pre-restore` copy goes back. On Unix the
+  restored file keeps the project's permission bits.
+- The dialog never offers the `.pre-restore` copy. Restoring it directly (over
+  IPC) swaps the two files back.
+
 #### Backup Before Repair
 Always create backup before attempting repair:
 ```rust
@@ -2339,6 +2400,14 @@ fn backup_before_repair(path: &Path) -> Result<PathBuf> {
   "Show resolved" toggle reveals them
 - Auto-clear when field corrected
 - Cleared errors stay cleared (don't re-validate automatically)
+- Closure entries (#737): a loop closure that joins the two ends of one shot
+  (`CLOSURE_ACROSS_ONE_SHOT`, one per closure, on that shot) is an error and
+  resolves with "Remove this loop closure" (disabled while editing is blocked) or
+  "Go to closure station", never Ignore. A part of the survey the Closures Computed
+  View could not adjust (`CLOSURE_ADJUSTMENT_FAILED`) is a warning: it is listed
+  once the computed view, Plan or Export has solved the current version and goes
+  with the next edit, so it must not gate like an error; it resolves with "Go to
+  station" or Ignore
 
 ---
 

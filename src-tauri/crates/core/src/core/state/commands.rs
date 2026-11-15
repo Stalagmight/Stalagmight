@@ -1,10 +1,14 @@
+use super::command_shot::OnePointCause;
 use super::AppState;
 #[cfg(test)]
 use crate::core::CommentHolder;
 use crate::core::{
     Command, CommandResult, IntegrityCheckResult, IntegrityRepairResult, ReversedSection, UndoData,
+    ValidationWarning,
 };
-use crate::models::{DatumLayout, Project, SectionData, SectionId, ViolationSeverity};
+use crate::models::{
+    ClosuresBeforeSweep, DatumLayout, Project, SectionData, SectionId, ViolationSeverity,
+};
 #[cfg(test)]
 use crate::models::{ShotData, ShotId, ShotUpdates};
 
@@ -152,6 +156,14 @@ impl AppState {
             can_dangle_refs: false,
             can_orphan_closures: true,
         };
+        // Same flags again, for a third reason: a merge ADDS connectivity, so it
+        // strands nothing, but since #741 it may join two placed pieces tied by
+        // an inert closure, and then that closure's two ends are one point. The
+        // sweep removes and reports it (#738), inside the merge's undo pair.
+        const MERGE: CommandIntegrity = CommandIntegrity {
+            can_dangle_refs: false,
+            can_orphan_closures: true,
+        };
         match cmd {
             // Lifecycle + pure metadata edits: touch no geometry and no refs.
             // RepairIntegrity never runs through execute() (it records its own
@@ -221,13 +233,14 @@ impl AppState {
             // argument as finding 10, one command further out).
             RemoveZeroDatum { .. } => REMOVE_DATUM,
 
+            MergeStations { .. } => MERGE,
+
             // Everything else keeps references valid and cannot strand a closure.
             // Whether it also needs geometry reconciliation is the separate,
             // exhaustive Command::affects_geometry classification.
             ReverseSection { .. }
             | CreateSection { .. }
             | UpdateShot { .. }
-            | MergeStations { .. }
             | CreateLoopClosure { .. }
             | RemoveLoopClosure { .. }
             // ADDING an anchor moves the guard the other way - it can only turn a
@@ -248,23 +261,52 @@ impl AppState {
         }
     }
 
-    /// Convert any sole-bridge loop closures in the open project to merges.
-    fn convert_orphan_closures_in_open_project(&self) {
+    /// Convert any sole-bridge loop closures in the open project to merges, and
+    /// remove any closure between merged stations (#738). With `before` (the
+    /// capture a command took before it ran), the removed closures come back as
+    /// warnings named by the stations they had before it, saying `cause` made
+    /// them one point; without it they are only logged (`execute()`'s epilogue
+    /// for a Batch, whose `execute_batch` already swept and reported).
+    fn convert_orphan_closures_in_open_project(
+        &self,
+        before: Option<&ClosuresBeforeSweep>,
+        cause: OnePointCause,
+    ) -> Vec<ValidationWarning> {
         let mut guard = match self.project.lock() {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
         };
         let Some(project) = guard.as_mut() else {
-            return;
+            return Vec::new();
         };
-        let converted = project.convert_orphan_closures_to_merges();
-        if converted > 0 {
+        let sweep = project.sweep_orphan_closures();
+        if sweep.converted > 0 {
             tracing::info!(
-                converted,
+                converted = sweep.converted,
                 purpose = "enforce closures-are-loops invariant",
                 "Converted sole-bridge loop closures to merges after a removal"
             );
         }
+        if let Some(before) = before {
+            return super::command_shot::report_swept_closures(
+                project,
+                before,
+                &sweep,
+                "after a removal",
+                cause,
+            );
+        }
+        sweep.log_removed("batch");
+        Vec::new()
+    }
+
+    /// [`Project::closures_before_sweep`] of the open project, if one is open.
+    fn closures_before_sweep_in_open_project(&self) -> Option<ClosuresBeforeSweep> {
+        let guard = match self.project.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.as_ref().map(Project::closures_before_sweep)
     }
 
     /// The open project's datums and their roles (an empty layout with no
@@ -705,6 +747,15 @@ impl AppState {
         // user repairs via the banner. We only reject commands that newly
         // introduce corruption into a clean project.
         let pre_had_critical = integrity_snapshot.is_some() && self.project_has_critical();
+        // What the epilogue's orphan sweep needs to name the closures it removes
+        // by the stations they had before this command (#738).
+        // A Batch takes its own inside `execute_batch`, where its sweep runs.
+        let closures_before =
+            if integrity.can_orphan_closures && !matches!(cmd, Command::Batch { .. }) {
+                self.closures_before_sweep_in_open_project()
+            } else {
+                None
+            };
 
         let mut result = match &cmd {
             Command::CreateProject { name, location } => {
@@ -863,7 +914,11 @@ impl AppState {
         // merge is solved immediately (#8). Scoped to removal commands so a move
         // still leaves an inert closure independent.
         if result.success && integrity.can_orphan_closures {
-            self.convert_orphan_closures_in_open_project();
+            let swept = self.convert_orphan_closures_in_open_project(
+                closures_before.as_ref(),
+                OnePointCause::of(&cmd),
+            );
+            result.warnings.extend(swept);
         }
 
         // Local (0, 0) MEANS `zero_datums[0]`'s GPS, so a command that promoted a
@@ -1121,6 +1176,22 @@ impl AppState {
         // the kind of thing that grows. This is the only placement that stays
         // correct when it does.
         let datums_before = self.datum_layout();
+        // What the sweep below needs to name the closures it removes (#738); a
+        // batched merge of two placed pieces can make a closure's ends one
+        // point (#741), e.g. the Merge dialog's snap-to-merge batch.
+        let closures_before = commands
+            .iter()
+            .any(|c| Self::command_integrity(c).can_orphan_closures)
+            .then(|| self.closures_before_sweep_in_open_project())
+            .flatten();
+        let batch_cause = if commands
+            .iter()
+            .any(|c| OnePointCause::of(c) == OnePointCause::Merge)
+        {
+            OnePointCause::Merge
+        } else {
+            OnePointCause::Promotion
+        };
 
         // Capture pre-batch snapshot for rollback on partial failure and undo
         let before_snapshot = match self.capture_project_snapshot() {
@@ -1175,7 +1246,9 @@ impl AppState {
         // metadata (the asymmetric-undo hazard that keeps SetStationComment out of
         // batches entirely). The outer execute() epilogue applies the same gate to
         // the Batch command, so the two passes agree.
-        self.convert_orphan_closures_in_open_project();
+        all_warnings.extend(
+            self.convert_orphan_closures_in_open_project(closures_before.as_ref(), batch_cause),
+        );
         if commands.iter().any(Command::affects_geometry) {
             // Same order as `execute()`'s epilogue: renormalise onto the new frame
             // first, then reconcile the geometry that lands on it (#469, item 1).

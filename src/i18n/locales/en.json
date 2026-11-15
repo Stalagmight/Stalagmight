@@ -1759,7 +1759,8 @@
       "tornSnapped": "The snapped closure between <a/> and <b/>",
       "tornHeld": "<held/> is held by a zero datum and stays where it is.",
       "tornWhyMoves": "The loop's misclosure moves to the new closure, and the Closures Computed View adjusts it like any other loop.",
-      "tornWhyStays": "Otherwise the combined section would be tied to itself. The Closures Computed View adjusts the closure like any other loop."
+      "tornWhyStays": "Otherwise the combined section would be tied to itself. The Closures Computed View adjusts the closure like any other loop.",
+      "keptMovesAnchor": "{{kept}} is the one that moves: the Closures Computed View holds the survey at a station on {{other}}'s side, so moving {{other}} would shift the whole cave there."
     }
   },
   "undo": {
@@ -1960,7 +1961,8 @@
     "selectionNotFound": "Selection not found.",
     "warnings": {
       "empty": "No warnings.",
-      "count": "{{countFormatted}} warnings",
+      "count_one": "{{countFormatted}} warning",
+      "count_other": "{{countFormatted}} warnings",
       "resolvedCount": "{{countFormatted}} resolved",
       "hideResolved": "Hide resolved",
       "showResolved": "Show resolved",
@@ -2005,6 +2007,8 @@
         "clear": "Clear value",
         "goToStation": "Go to station",
         "editZeroDatum": "Edit zero datum",
+        "removeClosure": "Remove this loop closure",
+        "goToClosureStation": "Go to closure station {{station}}",
         "adjustLength": "Use inclination - adjust length",
         "adjustInclination": "Use length - adjust inclination",
         "splitInclLength": "Split - adjust inclination & length",
@@ -2427,7 +2431,12 @@
       "adjustedBadge": "Closures Computed View · read-only",
       "computing": "Computing closures…",
       "computingReadOnly": "Computing Closures - Read Only",
-      "computeFailed": "Couldn't compute the Closures Computed View; showing the Raw Data View."
+      "computeFailed": "Couldn't compute the Closures Computed View; showing the Raw Data View.",
+      "skippedClosures_one": "{{count}} loop closure skipped: it spans a single shot.",
+      "skippedClosures_other": "{{count}} loop closures skipped: each spans a single shot.",
+      "failedParts_one": "Part of the survey could not be adjusted and is shown as measured.",
+      "failedParts_other": "{{count}} parts of the survey could not be adjusted and are shown as measured.",
+      "showWarnings": "Show warnings"
     },
     "toasts": {
       "stationsHidden": "Enable 'Stations' in the Display menu to interact with station markers",

@@ -42,11 +42,14 @@ export interface WarningTestIdIdentity {
   shotId: number;
   code: string;
   datumStationIndex?: number;
+  /** CLOSURE_ACROSS_ONE_SHOT only (#737): two closures can span one shot. */
+  closureId?: number;
 }
 
 export function warningKey(warning: WarningTestIdIdentity): string {
   const datum = warning.datumStationIndex === undefined ? '' : `:d${warning.datumStationIndex}`;
-  return `${warning.sectionId}:${warning.shotId}:${warning.code}${datum}`;
+  const closure = warning.closureId === undefined ? '' : `:c${warning.closureId}`;
+  return `${warning.sectionId}:${warning.shotId}:${warning.code}${datum}${closure}`;
 }
 
 export function warningResolveTestId(warning: WarningTestIdIdentity): string {

@@ -23,7 +23,14 @@
 //! - **The shift.** Two ends tied by a loop closure are apart by its
 //!   misclosure; M's side (M and everything still merged to it) moves by it.
 //!   M is the other section, unless its side is held by a zero datum and the
-//!   kept section's is not. When both sides are held, the merges from M to the
+//!   kept section's is not, or (no datum deciding) M's side holds the station
+//!   the closure-adjusted view holds the survey at
+//!   (`Project::adjustment_anchor_of`) and the kept side does not: moving it
+//!   would shift the whole adjusted survey by the gap. That applies only where
+//!   the view solves the joined survey - a closure it solves there now, or a
+//!   tie the combine turns into one it will solve - and a closure that joins
+//!   the two ends of one shot is one the solve skips (#737), so it counts for
+//!   neither. When both sides are held, the merges from M to the
 //!   datum sides also become closures (a closure between two anchored groups
 //!   is legitimate; a merge is not). Only when BOTH sections carry a zero datum
 //!   on one of their own stations is the combine refused: the combined section
@@ -34,10 +41,11 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    ClosureStrategy, CombinePlan, LoopClosure, SectionId, StationRef, TornTie, TornTieKind,
-    TornTieReason,
+    ClosureStrategy, CombinePlan, KeptMovesReason, LoopClosure, SectionId, StationRef, TornTie,
+    TornTieKind, TornTieReason,
 };
 
+use super::closure_shots::Knots;
 use super::combine_candidate::COMBINE_TOLERANCE_M;
 use super::Project;
 
@@ -55,6 +63,43 @@ pub(crate) struct Tie {
     pub id: TieId,
     pub a: StationRef,
     pub b: StationRef,
+}
+
+/// A loop closure with its two resolved stations and whether the solve takes
+/// its strategy, for the anchor rule's solve check.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ResolvedClosure {
+    pub id: u64,
+    pub a: StationRef,
+    pub b: StationRef,
+    pub eligible: bool,
+}
+
+/// What the anchor rule reads about loop closures, worked out once per
+/// candidate query (the station menu and Combine Sections plan two choices of
+/// kept section for every partner) and only when a shifting plan needs it:
+/// the closures the solve skips because they join the two ends of one shot
+/// (#737), and every closure resolved.
+#[derive(Debug, Default)]
+pub(crate) struct ClosureFacts {
+    skipped: std::cell::OnceCell<HashSet<u64>>,
+    closures: std::cell::OnceCell<Vec<ResolvedClosure>>,
+}
+
+impl ClosureFacts {
+    fn skipped(&self, project: &Project) -> &HashSet<u64> {
+        self.skipped.get_or_init(|| {
+            project
+                .closures_across_one_shot()
+                .into_iter()
+                .map(|c| c.closure_id)
+                .collect()
+        })
+    }
+
+    fn closures(&self, project: &Project) -> &[ResolvedClosure] {
+        self.closures.get_or_init(|| project.resolved_closures())
+    }
 }
 
 /// The point two sections are joined at, from the kept section's side.
@@ -110,12 +155,24 @@ pub(crate) struct TiePlan {
     /// Which of `torn` tear because a zero datum holds the section on their
     /// far side (the rest close a loop through the combined section).
     pub held_by_datum: Vec<TieId>,
+    /// Why the kept section's side moves, when it does.
+    pub kept_moves_because: Option<KeptMovesReason>,
     /// Whether the joined station keeps the kept section's manual offset
     /// (the fixed side's: false when the kept section is the one that moves).
     pub kept_offset_wins: bool,
 }
 
 type Adjacency = HashMap<SectionId, Vec<(SectionId, TieId)>>;
+
+/// The moving section, the fixed one, the ties to tear, which of those tear
+/// for a zero datum, and why the kept side moves (when it does).
+type MovingSide = (
+    SectionId,
+    SectionId,
+    HashSet<TieId>,
+    Vec<TieId>,
+    Option<KeptMovesReason>,
+);
 
 /// Every section reachable from `start` over `adjacency` without entering
 /// `blocked` (`start` included).
@@ -180,6 +237,7 @@ impl Project {
         join: &JoinPoint,
         gap: (f64, f64),
         ties: &[Tie],
+        facts: &ClosureFacts,
     ) -> Result<TiePlan, String> {
         let merges: Vec<&Tie> = ties
             .iter()
@@ -213,18 +271,86 @@ impl Project {
         let datum_sections: HashSet<SectionId> = self.placement_datum_sections();
         let anchored =
             |sections: &HashSet<SectionId>| sections.iter().any(|s| datum_sections.contains(s));
+        // The snapped closures a plan tears when `moving` moves off `fixed`
+        // with `torn` merges torn: one across the two sides closes a loop
+        // through the combined section, and any from a side that moves stops
+        // being snapped.
+        let snaps_torn = |moving: SectionId,
+                          fixed: SectionId,
+                          torn: &HashSet<TieId>,
+                          shifting: bool|
+         -> HashSet<TieId> {
+            let adjacency = adjacency_without(torn);
+            let side = reach(&adjacency, moving, fixed);
+            let fixed_side = reach(&adjacency, fixed, moving);
+            ties.iter()
+                .filter(|t| matches!(t.id, TieId::Closure(_)))
+                .filter(|t| !join.is_join_tie(t.a, t.b))
+                .filter(|t| {
+                    let (in_a, in_b) = (
+                        side.contains(&t.a.section_id),
+                        side.contains(&t.b.section_id),
+                    );
+                    let crosses = (in_a && fixed_side.contains(&t.b.section_id))
+                        || (in_b && fixed_side.contains(&t.a.section_id));
+                    crosses || (shifting && in_a != in_b)
+                })
+                .map(|t| t.id)
+                .collect()
+        };
 
         // A non-finite gap never reaches here (`pairing_touch` refuses
         // non-finite ends); checked again so a shift can never write one.
         let shifting =
             gap.0.is_finite() && gap.1.is_finite() && gap.0.hypot(gap.1) > COMBINE_TOLERANCE_M;
-        let (moving, fixed, mut torn, held_by_datum) = if shifting {
+        let (moving, fixed, mut torn, held_by_datum, kept_moves_because) = if shifting {
+            // What the closure-adjusted view holds the survey at: the side that
+            // holds it must stay, or the whole cave shifts there by the gap.
+            // Only when that view adjusts the joined survey: it solves a
+            // closure there now (the join's own included), or the combine
+            // turns a tie into one it will solve (a merge torn to close a
+            // loop, a snapped closure made ordinary). A survey the view shows
+            // as measured keeps the plain rule, and the other section moves.
+            //
+            // Both halves apply the across-one-shot skip (#737): a closure
+            // that joins the two ends of one shot is skipped by the solve, so
+            // it adjusts nothing. The first reads the skip set of the project
+            // as it is (once per query); the second runs the joined survey's
+            // own sweep on the plain plan's ties (`joined_survey_is_solved`),
+            // because a torn tie can join the two ends of one shot only once
+            // the two join stations are one.
+            let component = self.get_connected_section_ids(join.kept);
+            // A GPS fix is an observation the solve fits on its own (#741), so a
+            // component holding one is adjusted with or without a closure.
+            let solved_now = self.component_has_gps_fix(&component)
+                || (self.component_has_eligible_closure(&component, &HashSet::new())
+                    && self.component_has_eligible_closure(&component, facts.skipped(self)));
+            let adjusted = solved_now || {
+                let plain_torn = loop_ties(join.other, join.kept);
+                let plain_snaps = snaps_torn(join.other, join.kept, &plain_torn, true);
+                (!plain_torn.is_empty() || !plain_snaps.is_empty())
+                    && self.joined_survey_is_solved(
+                        join,
+                        &component,
+                        ties,
+                        facts.closures(self),
+                        &plain_torn,
+                        &plain_snaps,
+                    )
+            };
+            let anchor = if adjusted {
+                self.adjustment_anchor_of(&component)
+                    .map(|at| at.section_id)
+            } else {
+                None
+            };
             Self::pick_moving_side(
                 join,
                 &loop_ties,
                 &adjacency_without,
                 &anchored,
                 &datum_sections,
+                anchor,
             )?
         } else {
             // Nothing moves (beyond the tolerance the join already allows):
@@ -234,27 +360,14 @@ impl Project {
                 join.kept,
                 loop_ties(join.other, join.kept),
                 Vec::new(),
+                None,
             )
         };
-        let adjacency = adjacency_without(&torn);
-        let side = reach(&adjacency, moving, fixed);
-        let fixed_side = reach(&adjacency, fixed, moving);
+        let side = reach(&adjacency_without(&torn), moving, fixed);
         // Snapped closures: one across the two sides closes a loop through the
         // combined section, and any from a side that moves stops being snapped.
-        for tie in ties.iter().filter(|t| matches!(t.id, TieId::Closure(_))) {
-            if join.is_join_tie(tie.a, tie.b) {
-                continue;
-            }
-            let (in_a, in_b) = (
-                side.contains(&tie.a.section_id),
-                side.contains(&tie.b.section_id),
-            );
-            let crosses = (in_a && fixed_side.contains(&tie.b.section_id))
-                || (in_b && fixed_side.contains(&tie.a.section_id));
-            if crosses || (shifting && in_a != in_b) {
-                torn.insert(tie.id);
-            }
-        }
+        let snaps = snaps_torn(moving, fixed, &torn, shifting);
+        torn.extend(snaps);
 
         let torn_ties: Vec<Tie> = ties
             .iter()
@@ -278,27 +391,120 @@ impl Project {
             shift: (gap.0 * sign, gap.1 * sign),
             torn: torn_ties,
             held_by_datum,
+            kept_moves_because,
             kept_offset_wins: moving == join.other,
         })
     }
 
+    /// Every loop closure, resolved, for [`Self::joined_survey_is_solved`].
+    pub(crate) fn resolved_closures(&self) -> Vec<ResolvedClosure> {
+        self.loop_closures
+            .iter()
+            .filter_map(|c| {
+                Some(ResolvedClosure {
+                    id: c.id,
+                    a: self.resolve_key(&c.station_a)?,
+                    b: self.resolve_key(&c.station_b)?,
+                    eligible: Self::closure_is_eligible(c.strategy),
+                })
+            })
+            .collect()
+    }
+
+    /// Would the closure-adjusted view solve the survey this combine joins,
+    /// were `torn` merges torn and `snaps` snapped closures made ordinary
+    /// (the plain plan's, where the other section moves)? The
+    /// combined project's across-one-shot sweep (`closure_knots`), run on this
+    /// one: every merge but the torn ones, the two join stations as the one
+    /// station they become, then the closures in `loop_closures` order (the
+    /// join's own gone, the made-ordinary ones taking part), then the torn
+    /// merges as the `Batch` closures `tear_ties` appends. The survey is solved
+    /// when one closure in `component` takes part without collapsing a shot -
+    /// what `plan_adjustment_anchors` asks of the combined project. `O(n)`;
+    /// reached only for a shifting plan with something to solve.
+    fn joined_survey_is_solved(
+        &self,
+        join: &JoinPoint,
+        component: &HashSet<SectionId>,
+        ties: &[Tie],
+        closures: &[ResolvedClosure],
+        torn: &HashSet<TieId>,
+        snaps: &HashSet<TieId>,
+    ) -> bool {
+        let mut knots = Knots::new(self);
+        let merges = || ties.iter().filter(|t| matches!(t.id, TieId::Merge(_)));
+        for tie in merges().filter(|t| !torn.contains(&t.id)) {
+            knots.join(tie.a, tie.b);
+        }
+        knots.join(join.join_k, join.join_o);
+        let in_component = |a: StationRef, b: StationRef| {
+            component.contains(&a.section_id) && component.contains(&b.section_id)
+        };
+        let takes = |knots: &mut Knots, a: StationRef, b: StationRef| -> bool {
+            if knots.collapsed_shot(a, b).is_some() {
+                return false; // skipped: it would join the two ends of one shot
+            }
+            knots.join(a, b);
+            in_component(a, b)
+        };
+        for closure in closures {
+            if join.is_join_tie(closure.a, closure.b) {
+                continue; // the combine removes it
+            }
+            if !(closure.eligible || snaps.contains(&TieId::Closure(closure.id))) {
+                continue;
+            }
+            if takes(&mut knots, closure.a, closure.b) {
+                return true;
+            }
+        }
+        merges()
+            .filter(|t| torn.contains(&t.id))
+            .any(|t| takes(&mut knots, t.a, t.b))
+    }
+
     /// Which side moves when the join has to close by a shift, and the merges
-    /// that tear for it: the other section's side, unless a zero datum holds
-    /// it and the kept side is free. With both sides held, the merges from the
-    /// moving section to its datum sides tear too.
+    /// that tear for it:
+    /// - a side a zero datum holds stays;
+    /// - between two free sides, the one holding `anchor` (the section the
+    ///   closure-adjusted view is held at, when no datum is in the survey)
+    ///   stays, or Plan and Export would shift the whole cave by the gap;
+    /// - otherwise the other section's side moves.
+    ///
+    /// With both sides held by datums, the moving section (one that carries
+    /// no datum itself) also tears its merges towards its datum sides.
     fn pick_moving_side(
         join: &JoinPoint,
         loop_ties: &dyn Fn(SectionId, SectionId) -> HashSet<TieId>,
         adjacency_without: &dyn Fn(&HashSet<TieId>) -> Adjacency,
         anchored: &dyn Fn(&HashSet<SectionId>) -> bool,
         datum_sections: &HashSet<SectionId>,
-    ) -> Result<(SectionId, SectionId, HashSet<TieId>, Vec<TieId>), String> {
+        anchor: Option<SectionId>,
+    ) -> Result<MovingSide, String> {
         let sides = [(join.other, join.kept), (join.kept, join.other)];
+        // The sides no zero datum holds, in preference order.
+        let mut free: Vec<(SectionId, SectionId, HashSet<TieId>, bool)> = Vec::new();
         for (m, f) in sides {
             let torn = loop_ties(m, f);
-            if !anchored(&reach(&adjacency_without(&torn), m, f)) {
-                return Ok((m, f, torn, Vec::new()));
+            let side = reach(&adjacency_without(&torn), m, f);
+            if !anchored(&side) {
+                let holds_anchor = anchor.is_some_and(|a| side.contains(&a));
+                free.push((m, f, torn, holds_anchor));
             }
+        }
+        let pick = free
+            .iter()
+            .position(|(_, _, _, holds)| !holds)
+            .or(if free.is_empty() { None } else { Some(0) });
+        if let Some(pick) = pick {
+            let other_free = free.iter().any(|(m, ..)| *m == join.other);
+            let (m, f, torn, _) = free.swap_remove(pick);
+            let because = (m == join.kept).then_some(if other_free {
+                KeptMovesReason::AdjustmentAnchor
+            } else {
+                KeptMovesReason::ZeroDatum
+            });
+            return Ok((m, f, torn, Vec::new(), because));
         }
         for (m, f) in sides {
             if datum_sections.contains(&m) {
@@ -324,7 +530,8 @@ impl Project {
                 }
             }
             torn.extend(datum_ties.iter().copied());
-            return Ok((m, f, torn, datum_ties));
+            let because = (m == join.kept).then_some(KeptMovesReason::ZeroDatum);
+            return Ok((m, f, torn, datum_ties, because));
         }
         Err(
             "Both sections are placed by a zero datum on one of their stations: merge them \
@@ -343,6 +550,7 @@ impl Project {
         CombinePlan {
             kept,
             moving_section: plan.moving,
+            kept_moves_because: plan.kept_moves_because,
             moved_sections: plan.moved.clone(),
             shift_m: plan.shift.0.hypot(plan.shift.1),
             torn_ties: plan
