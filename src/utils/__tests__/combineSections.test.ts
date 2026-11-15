@@ -1,6 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { combinePreview, combinePreviewAll, defaultCombinedName, formatRotation } from '../combineSections';
+import {
+  combineMoveShown,
+  combinePreview,
+  combinePreviewAll,
+  defaultCombinedName,
+  formatRotation,
+} from '../combineSections';
 import type { CombineCandidate } from '../../types/ipc/CombineCandidate';
+import type { CombinePlan } from '../../types/ipc/CombinePlan';
 
 describe('defaultCombinedName', () => {
   it('gives the two halves of a split their original name back, whichever is kept', () => {
@@ -132,5 +139,19 @@ describe('formatRotation', () => {
     expect(formatRotation(0)).toBe('0.000°');
     expect(formatRotation(0.04)).toBe('+0.040°');
     expect(formatRotation(-0.04)).toBe('-0.040°');
+  });
+});
+
+describe('combineMoveShown', () => {
+  const plan = (moving_section: number | null, shift_m: number) =>
+    ({ kept: 1, moving_section, moved_sections: moving_section === null ? [] : [moving_section], shift_m }) as
+      unknown as CombinePlan;
+
+  it('lists a move past the side-by-side tolerance only (#740)', () => {
+    expect(combineMoveShown(plan(null, 0))).toBe(false);
+    expect(combineMoveShown(plan(4, 0.0006))).toBe(false);
+    expect(combineMoveShown(plan(4, 0.001))).toBe(false);
+    expect(combineMoveShown(plan(4, 0.0011))).toBe(true);
+    expect(combineMoveShown(plan(4, 0.4))).toBe(true);
   });
 });

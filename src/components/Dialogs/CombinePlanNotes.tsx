@@ -8,7 +8,7 @@ import type { CombineRemovedKind } from '../../types/ipc/CombineRemovedKind';
 import type { CombineReplacedKind } from '../../types/ipc/CombineReplacedKind';
 import type { SectionId, StationRef } from '../../types/project';
 import { formatLength } from '../../utils/formatStats';
-import { formatRotation } from '../../utils/combineSections';
+import { combineMoveShown, formatRotation } from '../../utils/combineSections';
 
 interface CombinePlanNotesProps {
   candidate: CombineCandidate;
@@ -51,7 +51,9 @@ export function CombinePlanNotes({
   const listNames = (ids: SectionId[]) => ids.map(sectionName).join(', ');
   const notes: Array<{ key: string; text: string }> = [];
 
-  if (plan.moving_section !== null) {
+  // A move within the side-by-side tolerance (#740) is planned exactly but
+  // not listed: see `combineMoveShown`.
+  if (plan.moving_section !== null && combineMoveShown(plan)) {
     const moving = sectionName(plan.moving_section);
     notes.push({
       key: 'move',
@@ -180,7 +182,7 @@ export function CombinePlanNotes({
             {plan.torn_ties.some((tie) => tie.reason === 'loop') && (
               <span className="block mt-1 text-text-secondary" data-testid="combine-torn-why">
                 {t(
-                  plan.moving_section !== null
+                  combineMoveShown(plan)
                     ? 'dialogs.combineSections.tornWhyMoves'
                     : 'dialogs.combineSections.tornWhyStays'
                 )}

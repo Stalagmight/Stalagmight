@@ -79,6 +79,24 @@ export function combinePlanFor(candidate: CombineCandidate, kept: SectionId): Co
 }
 
 /**
+ * How far apart (metres) two section ends may be and still be the same point,
+ * side by side (the backend's `COMBINE_TOLERANCE_M`).
+ */
+export const COMBINE_SIDE_BY_SIDE_M = 0.001;
+
+/**
+ * Does the dialog list the plan's move? A side-by-side join moves a side by
+ * its residual, under 1 mm (#740): the plan names that side, what moves with
+ * it and why, exactly, but a line saying it moves "0.00m" next to "Side by
+ * side here" would only be noise, so the dialog lists moves past the
+ * tolerance. It says nothing of a smaller one, and nothing that claims the
+ * side stays either.
+ */
+export function combineMoveShown(plan: CombinePlan): boolean {
+  return plan.moving_section !== null && plan.shift_m > COMBINE_SIDE_BY_SIDE_M;
+}
+
+/**
  * A signed angle for the dialog: "+5.0°", "-0.3°", and a small one to three
  * decimals ("+0.040°") so a real rotation never reads as zero.
  */
