@@ -1,15 +1,20 @@
 //! [#738] A loop closure left between merged stations, at the app-state level:
-//! Split Section Here's preview names the closure the split removes, the split
-//! removes exactly that one inside its own undo unit, Delete Shot & Split does
-//! the same, and a project file that already holds one opens without it.
+//! Split Section Here's preview names the closure the split removes (apart
+//! from one that already was between merged stations), the split removes
+//! exactly that one inside its own undo unit, every other command whose sweep
+//! removes one reports it as a warning named by its stations before the edit,
+//! and a project file that already holds one opens without it and loses it on
+//! disk at the next save.
 //!
 //! All data is synthetic: projects built in memory, and the one file written
 //! goes to a temporary directory.
 
 use super::AppState;
+use crate::core::{Command, CommandResult};
 use crate::models::{
-    ClosurePair, ClosureStrategy, LoopClosure, Project, SectionData, SectionId, ShotData, SplitAt,
-    SplitPreview, SplitSectionOptions, SplitSide, StationRef,
+    ClosurePair, ClosureStrategy, GpsCoordinates, LoopClosure, Project, SectionData, SectionId,
+    ShotData, SplitAt, SplitPreview, SplitSectionOptions, SplitSide, StationRef,
+    CLOSURE_REMOVED_MERGED_ENDS,
 };
 
 fn shot(azimuth: f64, length: f64) -> ShotData {
@@ -132,6 +137,16 @@ fn new_merges(before: &Project, after: &Project) -> Vec<[StationRef; 2]> {
         .collect()
 }
 
+/// The messages of a result's merged-ends warnings, in order.
+fn merged_ends_messages(result: &CommandResult) -> Vec<String> {
+    result
+        .warnings
+        .iter()
+        .filter(|w| w.code == CLOSURE_REMOVED_MERGED_ENDS)
+        .map(|w| w.message.clone())
+        .collect()
+}
+
 fn pair(closure_id: u64, a: StationRef, b: StationRef) -> ClosurePair {
     ClosurePair {
         closure_id,
@@ -161,6 +176,7 @@ fn split_and_check(
     );
     assert_eq!(preview.closures_to_merges, 1);
     assert_eq!(preview.removed_closures, removed, "the preview's list");
+    assert_eq!(preview.removed_already_one_point, []);
 
     let result = state.execute_split_section(s, at, options());
     assert!(result.success, "{:?}", result.error);
@@ -323,6 +339,14 @@ fn delete_shot_and_split_leaves_no_closure_between_merged_stations() {
     assert_eq!(new_merges(&before_project, &after_project).len(), 1);
     let after = full_snapshot(&state);
 
+    assert_eq!(
+        merged_ends_messages(&result),
+        [
+            "Removed loop closure 1:0 to 0:3: another loop closure became a merge, which made its \
+          two stations one point."
+        ]
+    );
+
     assert!(state.undo().success);
     assert_eq!(
         full_snapshot(&state),
@@ -406,12 +430,26 @@ fn a_file_with_closures_between_merged_stations_opens_without_them() {
     assert_eq!(opened.station_merges.len(), 2, "no merge added or lost");
     assert_eq!(opened.stats().loop_count, 1);
 
-    assert!(
-        state
-            .execute(crate::core::Command::SaveProject { path: None })
-            .success
+    // The open changed memory only: the file still holds all three until a
+    // save. An explicit Save writes it, though the open made no edit.
+    let on_disk = |path: &std::path::Path| -> Vec<u64> {
+        crate::persistence::Database::open(path)
+            .unwrap()
+            .load_project()
+            .unwrap()
+            .loop_closures
+            .iter()
+            .map(|c| c.id)
+            .collect()
+    };
+    assert_eq!(on_disk(&path), [real, direct, chained]);
+    assert!(state.execute(Command::SaveProject { path: None }).success);
+    assert!(state.execute(Command::CloseProject).success);
+    assert_eq!(
+        on_disk(&path),
+        [real],
+        "the save wrote the open's removals (read without the open's sweep)"
     );
-    assert!(state.execute(crate::core::Command::CloseProject).success);
     assert!(state.open_project(path).success, "reopen");
     assert_eq!(
         project(&state)
@@ -420,5 +458,205 @@ fn a_file_with_closures_between_merged_stations_opens_without_them() {
             .map(|c| c.id)
             .collect::<Vec<_>>(),
         [real]
+    );
+}
+
+/// The issue's survey with one more closure that ALREADY ties a point to
+/// itself (planted, as an undo from a pre-#738 history can restore one): the
+/// split's sweep takes it too, and the preview names it apart, so the dialog
+/// does not count it among the closures that tie the half.
+#[test]
+fn the_preview_names_a_closure_already_between_merged_stations_apart() {
+    let (mut p, s, t, ids) = survey(&["S", "T"]);
+    let w = add(&mut p, "W", vec![shot(0.0, 4.0)]);
+    p.merge_stations(st(t, 1), st(w, 0)).unwrap();
+    let stale = plant(&mut p, st(t, 1), st(w, 0));
+    let state = state_with(p);
+    let before = full_snapshot(&state);
+    let at = SplitAt::Station { station_index: 2 };
+
+    let preview = state.split_section_preview(s, at, &options()).unwrap();
+    assert_eq!(preview.removed_closures, [pair(ids[1], st(t, 0), st(s, 3))]);
+    assert_eq!(
+        preview.removed_already_one_point,
+        [pair(stale, st(t, 1), st(w, 0))]
+    );
+
+    let result = state.execute_split_section(s, at, options());
+    assert!(result.success, "{:?}", result.error);
+    assert!(project(&state).loop_closures.is_empty());
+    assert!(state.undo().success);
+    assert_eq!(full_snapshot(&state), before, "one undo restores all three");
+}
+
+/// A file can repeat a closure id (very old, or written by hand). The preview
+/// still names the closure the split removes, not another with its id: the
+/// second closure takes the first one's id here, and it is the second that
+/// goes.
+#[test]
+fn the_preview_names_the_removed_closure_when_ids_repeat() {
+    let (mut p, s, t, ids) = survey(&["S", "T"]);
+    p.loop_closures[1].id = ids[0];
+    let state = state_with(p);
+    let preview = state
+        .split_section_preview(s, SplitAt::Station { station_index: 2 }, &options())
+        .unwrap();
+    assert_eq!(preview.removed_closures, [pair(ids[0], st(t, 0), st(s, 3))]);
+}
+
+/// Delete Shot Range & Split on the issue's survey (the north shot alone):
+/// the same removal, reported the same way.
+#[test]
+fn delete_shot_range_and_split_reports_the_closure_it_removes() {
+    let (p, s, _, _) = survey(&["S", "T"]);
+    let north = p.get_section(s).unwrap().shots[1].id;
+    let state = state_with(p);
+    let before = full_snapshot(&state);
+
+    let result = state.execute_delete_shot_range_split(
+        s,
+        north,
+        north,
+        "S-A".to_string(),
+        "S-B".to_string(),
+    );
+    assert!(result.success, "{:?}", result.error);
+    assert!(project(&state).loop_closures.is_empty());
+    assert_eq!(
+        merged_ends_messages(&result),
+        [
+            "Removed loop closure 1:0 to 0:3: another loop closure became a merge, which made its \
+          two stations one point."
+        ]
+    );
+    assert!(state.undo().success);
+    assert_eq!(full_snapshot(&state), before);
+}
+
+/// A branch X hangs off N through Y: N runs 20 m east, M starts merged at N:2,
+/// Y runs 3 m north from N:0 and X starts at Y:1, going east, east and back
+/// south to 0.1 m short of N:2. X's end is tied to the one point {N:2, M:0}
+/// twice: X:3 to N:2, then M:0 to X:3. Cutting X loose - unmerging it from Y,
+/// deleting Y, or deleting X's first shot - leaves those two closures as X's
+/// only ties. Returns the project and N, M, X, Y.
+fn branch_survey() -> (Project, [SectionId; 4]) {
+    let mut p = Project::new("branch".to_string(), None);
+    let n = add(&mut p, "N", vec![shot(90.0, 10.0), shot(90.0, 10.0)]);
+    let m = add(&mut p, "M", vec![shot(0.0, 5.0)]);
+    let x = add(
+        &mut p,
+        "X",
+        vec![shot(90.0, 10.0), shot(90.0, 10.0), shot(180.0, 2.9)],
+    );
+    let y = add(&mut p, "Y", vec![shot(0.0, 3.0)]);
+    p.merge_stations(st(n, 2), st(m, 0)).unwrap();
+    p.merge_stations(st(n, 0), st(y, 0)).unwrap();
+    p.merge_stations(st(y, 1), st(x, 0)).unwrap();
+    p.create_loop_closure(st(x, 3), st(n, 2), ClosureStrategy::Batch)
+        .unwrap();
+    p.create_loop_closure(st(m, 0), st(x, 3), ClosureStrategy::Batch)
+        .unwrap();
+    (p, [n, m, x, y])
+}
+
+/// Every other command whose sweep can remove one - through `execute()`'s
+/// epilogue (Unmerge, Delete Section), the single Delete Shot (whose own shot
+/// removal sweeps), and Delete Last Shot & Section - reports the closure it
+/// removed by the stations it had BEFORE the edit (the first-shot delete
+/// renumbers X:3 to X:2; the warning still says 2:3), and one undo brings both
+/// closures back.
+#[test]
+fn every_command_that_removes_one_reports_it_by_its_stations_before_the_edit() {
+    let expected = [
+        "Removed loop closure 1:0 to 2:3: another loop closure became a merge, \
+                     which made its two stations one point.",
+    ];
+    for what in [
+        "unmerge",
+        "delete section",
+        "delete shot",
+        "delete last shot",
+    ] {
+        let (p, [_, _, x, y]) = branch_survey();
+        let first_of_x = p.get_section(x).unwrap().shots[0].id;
+        let only_of_y = p.get_section(y).unwrap().shots[0].id;
+        let state = state_with(p);
+        let before = full_snapshot(&state);
+        let result = match what {
+            "unmerge" => state.execute(Command::UnmergeStationPair {
+                station_a: st(y, 1),
+                station_b: st(x, 0),
+            }),
+            "delete section" => state.execute(Command::DeleteSection { section_id: y }),
+            "delete shot" => state.execute(Command::DeleteShot {
+                section_id: x,
+                shot_id: first_of_x,
+            }),
+            _ => state.execute_delete_last_shot_and_section(y, only_of_y),
+        };
+        assert!(result.success, "{what}: {:?}", result.error);
+        assert!(
+            project(&state).loop_closures.is_empty(),
+            "{what}: one closure became the merge, the other went"
+        );
+        assert_eq!(merged_ends_messages(&result), expected, "{what}");
+        assert!(state.undo().success, "{what}");
+        assert_eq!(full_snapshot(&state), before, "{what}: one undo");
+    }
+}
+
+/// Remove Zero Datum too: two anchored surveys, B tied to A's point {A:1, C:0}
+/// twice; once B's datum goes, the first closure becomes the merge and the
+/// second is removed and reported.
+#[test]
+fn removing_a_zero_datum_reports_the_closure_its_sweep_removes() {
+    let mut p = Project::new("datums".to_string(), None);
+    let a = add(&mut p, "A", vec![shot(90.0, 10.0)]);
+    let c = add(&mut p, "C", vec![shot(0.0, 3.0)]);
+    let b = add(&mut p, "B", vec![shot(0.0, 10.0)]);
+    p.merge_stations(st(a, 1), st(c, 0)).unwrap();
+    let gps = |lat| GpsCoordinates::new(lat, -87.4, 0.0).unwrap();
+    p.set_zero_datum(st(a, 0), gps(20.5)).unwrap();
+    p.set_zero_datum(st(b, 0), gps(20.5001)).unwrap();
+    p.create_loop_closure(st(b, 1), st(a, 1), ClosureStrategy::Batch)
+        .unwrap();
+    p.create_loop_closure(st(c, 0), st(b, 1), ClosureStrategy::Batch)
+        .unwrap();
+    let state = state_with(p);
+    let before = full_snapshot(&state);
+
+    let result = state.execute(Command::RemoveZeroDatum {
+        station_ref: st(b, 0),
+    });
+    assert!(result.success, "{:?}", result.error);
+    assert!(project(&state).loop_closures.is_empty());
+    assert_eq!(
+        merged_ends_messages(&result),
+        [
+            "Removed loop closure 1:0 to 2:1: another loop closure became a merge, which made its \
+          two stations one point."
+        ]
+    );
+    assert!(state.undo().success);
+    assert_eq!(full_snapshot(&state), before);
+}
+
+/// A closure between merged stations that an edit did not cause (planted, as
+/// an undo from a pre-#738 history can restore one) is reported as such when
+/// the edit's sweep takes it.
+#[test]
+fn a_closure_that_already_was_between_merged_stations_is_reported_as_such() {
+    let (mut p, [n, m, x, y]) = branch_survey();
+    p.loop_closures.clear();
+    plant(&mut p, st(m, 0), st(n, 2));
+    let state = state_with(p);
+    let result = state.execute(Command::UnmergeStationPair {
+        station_a: st(y, 1),
+        station_b: st(x, 0),
+    });
+    assert!(result.success, "{:?}", result.error);
+    assert_eq!(
+        merged_ends_messages(&result),
+        ["Removed loop closure 1:0 to 0:2: its two stations were already one point."]
     );
 }

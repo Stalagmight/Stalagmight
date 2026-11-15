@@ -46,12 +46,17 @@ pub struct SplitPreview {
     pub moved_side: Option<SplitSide>,
     /// How far it moves, in metres (0 when nothing moves).
     pub moved_m: f64,
-    /// The loop closures the split removes because their two stations become
-    /// one point (one merge group), in the order the split removes them.
-    /// Named by their stations BEFORE the split, the ids the user created them
-    /// with. The preview runs the split's own sweep on a copy, so this is
-    /// exactly what the split removes.
+    /// The loop closures the split removes because the merges it makes put
+    /// their two stations on one point (one merge group), in the order the
+    /// split removes them. Named by their stations BEFORE the split, the ids
+    /// the user created them with. The preview runs the split's own sweep on a
+    /// copy, so this is exactly what the split removes.
     pub removed_closures: Vec<ClosurePair>,
+    /// The loop closures the split removes whose two stations were one point
+    /// before it: the sweep the split ends in cleans up a closure an undo
+    /// restored from a history recorded before #738, wherever it is. Named the
+    /// same way. Empty in any project this version wrote.
+    pub removed_already_one_point: Vec<ClosurePair>,
 }
 
 /// The choices the Split Section Here dialog sends.

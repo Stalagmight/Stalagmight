@@ -2,4 +2,4 @@
 import type { ClosurePair } from "./ClosurePair";
 import type { SplitSide } from "./SplitSide";
 
-export interface SplitPreview { closures_to_merges: number, moved_side: SplitSide | null, moved_m: number, removed_closures: Array<ClosurePair>, }
+export interface SplitPreview { closures_to_merges: number, moved_side: SplitSide | null, moved_m: number, removed_closures: Array<ClosurePair>, removed_already_one_point: Array<ClosurePair>, }
