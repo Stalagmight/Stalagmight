@@ -177,14 +177,20 @@ pub(super) fn stamp_starts(
     // A frame whose own GPS cannot be placed anchors nothing: its STARTs stay
     // at 0,0, as in a project with no datum, and the datums count unwritten.
     let frame_gps = Some(&frame.gps).filter(|gps| is_placeable(gps));
+    // Where the raw survey puts the frame's own station. Local `(0, 0)` is
+    // meant to be there, but a legacy project need not hold that, so every
+    // surveyed START is measured from it rather than from the origin.
+    let frame_xy = project
+        .resolve_key(&frame.station_ref)
+        .and_then(|sr| project.compute_station_raw_xy(sr));
     for shot in shots.iter_mut().filter(|s| s.shot_type == "START") {
         let (latitude, longitude) = if let Some(&index) = on_start.get(&shot.id) {
             gps.written.insert(index);
             let own = &project.zero_datums[index].gps;
             (own.latitude, own.longitude)
-        } else if let Some(surveyed) = frame_gps.and_then(|origin| {
+        } else if let Some(surveyed) = frame_gps.zip(frame_xy).and_then(|(origin, from)| {
             let &(section_id, station) = start_station.get(&shot.id)?;
-            surveyed_gps(project, origin, StationRef::new(section_id, station))
+            surveyed_gps(project, origin, from, StationRef::new(section_id, station))
         }) {
             surveyed
         } else if let Some(origin) = frame_gps {
@@ -210,16 +216,18 @@ pub(super) fn stamp_starts(
     gps
 }
 
-/// Where the RAW survey puts a station, as GPS. Raw local metres are relative to
-/// the frame datum (local `(0, 0)` is its GPS, `origin`), and Ariane runs its
-/// own loop solve, so the measurements are what it should start from.
+/// Where the RAW survey puts `station`, as GPS: its raw offset from `frame_xy`
+/// (the frame datum station's raw position) placed against `origin` (that
+/// datum's GPS). Ariane runs its own loop solve, so the measurements are what
+/// it should start from.
 fn surveyed_gps(
     project: &Project,
     origin: &GpsCoordinates,
+    (frame_x, frame_y): (f64, f64),
     station: StationRef,
 ) -> Option<(f64, f64)> {
-    let local = project.compute_station_raw_coords(station)?;
-    local_to_gps(local.x, local.y, origin)
+    let (x, y) = project.compute_station_raw_xy(station)?;
+    local_to_gps(x - frame_x, y - frame_y, origin)
         .filter(|&(latitude, longitude)| in_range(latitude, longitude))
 }
 

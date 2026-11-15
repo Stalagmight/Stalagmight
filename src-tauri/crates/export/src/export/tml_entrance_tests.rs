@@ -483,3 +483,32 @@ fn an_entrance_datum_off_the_globe_is_unwritten_and_its_start_is_surveyed() {
         );
     }
 }
+
+#[test]
+fn a_datumless_start_is_measured_from_the_frame_station_not_the_origin() {
+    // A legacy project need not keep the frame datum's station on raw (0, 0).
+    let mut project = Project::new("Offset frame".to_string(), None);
+    for name in ["Main", "Detached"] {
+        project.add_section(SectionData {
+            name: Some(name.to_string()),
+            color: "#3366ff".to_string(),
+            shots: shots(2, 90.0),
+            ..Default::default()
+        });
+    }
+    project.section_offsets.insert(0, (30.0, -20.0));
+    project.section_offsets.insert(1, (130.0, 30.0));
+    datum(&mut project, StationRef::new(0, 0), PLACEMENT);
+    assert_eq!(
+        project.compute_station_raw_xy(StationRef::new(0, 0)),
+        Some((30.0, -20.0)),
+        "fixture rot: the frame station must sit off the origin"
+    );
+
+    let (shots, _) = export(&project, TmlProfile::User);
+    let (east, north) = local_of(start_of(&shots, "Detached"));
+    assert!(
+        (east - 100.0).abs() < 1e-3 && (north - 50.0).abs() < 1e-3,
+        "the START sits at its surveyed offset FROM THE FRAME STATION, got {east},{north}"
+    );
+}

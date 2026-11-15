@@ -258,9 +258,11 @@ closure except the unmerged pair's, so a section merged into a datum-carrying
 survey, closed back onto it, and then unmerged leaves exactly that shape.
 
 Such a START now carries the GPS of where the raw survey puts its station:
-its local metres converted with `local_to_gps` against the frame datum, which
-is what local `(0, 0)` means. Two STARTs therefore share coordinates only when
-the survey puts them on the same point. The frame
+its raw offset from the frame datum's station, converted with `local_to_gps`
+against the frame datum. That station is meant to sit at local `(0, 0)`, but
+a legacy project need not hold that, so the offset is taken from the
+station's raw position rather than from the origin. Two STARTs therefore
+share coordinates only when the survey puts them on the same point. The frame
 datum's coordinates remain the fallback for a START whose station has no raw
 position. A project with no datum at all, or whose frame datum's GPS is not a
 point on the globe, still writes every START at `0,0`.
