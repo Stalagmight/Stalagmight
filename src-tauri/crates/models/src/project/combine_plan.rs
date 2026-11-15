@@ -698,9 +698,10 @@ impl Project {
     /// becomes a `Batch` one. Remove the `dropped` ties outright (#746): the
     /// closure each is or would become joins the two ends of one shot. One
     /// pass over the merges for both, since a merge is named by its index.
-    /// Returns the ids of every closure touched, whose figures
-    /// [`Self::remeasure_closures`] fills in once the geometry is final.
-    pub(crate) fn tear_ties(&mut self, torn: &[Tie], dropped: &[Tie]) -> Vec<u64> {
+    /// Returns every closure touched, by id, with the tie of `torn` it came
+    /// from: [`Self::remeasure_closures`] fills in their figures once the
+    /// geometry is final, and the combine's backstop names one by its tie.
+    pub(crate) fn tear_ties(&mut self, torn: &[Tie], dropped: &[Tie]) -> Vec<(u64, Tie)> {
         let dropped_merges: HashSet<usize> = dropped
             .iter()
             .filter_map(|t| match t.id {
@@ -719,43 +720,41 @@ impl Project {
             self.loop_closures
                 .retain(|c| !dropped_closures.contains(&c.id));
         }
-        let merge_indices: HashSet<usize> = torn
+        let torn_merges: HashMap<usize, Tie> = torn
             .iter()
             .filter_map(|t| match t.id {
-                TieId::Merge(i) => Some(i),
+                TieId::Merge(i) => Some((i, *t)),
                 TieId::Closure(_) => None,
             })
             .collect();
-        let closure_ids: HashSet<u64> = torn
+        let torn_closures: HashMap<u64, Tie> = torn
             .iter()
             .filter_map(|t| match t.id {
-                TieId::Closure(id) => Some(id),
+                TieId::Closure(id) => Some((id, *t)),
                 TieId::Merge(_) => None,
             })
             .collect();
-        let mut touched: Vec<u64> = Vec::new();
-        for closure in self
-            .loop_closures
-            .iter_mut()
-            .filter(|c| closure_ids.contains(&c.id))
-        {
-            closure.strategy = ClosureStrategy::Batch;
-            closure.is_aligned = false;
-            touched.push(closure.id);
+        let mut touched: Vec<(u64, Tie)> = Vec::new();
+        for closure in &mut self.loop_closures {
+            if let Some(tie) = torn_closures.get(&closure.id) {
+                closure.strategy = ClosureStrategy::Batch;
+                closure.is_aligned = false;
+                touched.push((closure.id, *tie));
+            }
         }
         let mut index = 0;
         let mut removed = Vec::new();
         self.station_merges.retain(|merge| {
             index += 1;
-            if merge_indices.contains(&(index - 1)) {
-                removed.push(merge.clone());
+            if let Some(tie) = torn_merges.get(&(index - 1)) {
+                removed.push((merge.clone(), *tie));
                 false
             } else {
                 !dropped_merges.contains(&(index - 1))
             }
         });
         self.normalize_next_closure_id();
-        for merge in removed {
+        for (merge, tie) in removed {
             let id = self.next_closure_id;
             self.next_closure_id += 1;
             self.loop_closures.push(LoopClosure {
@@ -770,7 +769,7 @@ impl Project {
                 strategy: ClosureStrategy::Batch,
                 is_aligned: false,
             });
-            touched.push(id);
+            touched.push((id, tie));
         }
         touched
     }

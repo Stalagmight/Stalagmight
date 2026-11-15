@@ -2639,3 +2639,66 @@ fn a_closure_the_join_puts_across_one_shot_is_removed() {
         }
     }
 }
+
+/// #746, the backstop's naming. Should the plan ever miss a closure the
+/// combine leaves across one shot, the backstop removes it and names it as
+/// the user knew it before the combine: a closure a tie of this combine
+/// became by that tie (the torn merge, a merge; a snap made ordinary, a
+/// snapped closure), any other by its own stations as a loop closure. Here
+/// `tear_ties` tears both of shape (a)'s merges for real, and the naming
+/// reads the ids it returns.
+#[test]
+fn the_backstop_names_a_missed_closure_by_the_tie_it_came_from() {
+    use super::combine_plan::TieId;
+    for x_to_o in [XToO::Merge, XToO::Snapped] {
+        let (mut project, k, o) = passage_join(1, x_to_o);
+        let x = named(&project, "X");
+        let ties = project.rigid_ties();
+        let x_to_o_tie = *ties
+            .iter()
+            .find(|t| {
+                [t.a, t.b].contains(&StationRef::new(x, 1))
+                    && [t.a, t.b].contains(&StationRef::new(o, 0))
+            })
+            .unwrap();
+        let expected_kind = match x_to_o_tie.id {
+            TieId::Merge(_) => CombineRemovedKind::Merge,
+            TieId::Closure(_) => CombineRemovedKind::SnappedClosure,
+        };
+        let torn_into: HashMap<u64, super::combine_plan::Tie> =
+            project.tear_ties(&[x_to_o_tie], &[]).into_iter().collect();
+        assert_eq!(torn_into.len(), 1, "{x_to_o:?}");
+        let (&closure_id, _) = torn_into.iter().next().unwrap();
+        // As `closures_newly_across_one_shot` names a closure it has no
+        // "before" stations for: by where it is now (stand-ins here).
+        let now = |at: StationRef| StationRef::new(k, at.station_index + 7);
+        let missed = [
+            crate::ClosurePair {
+                closure_id,
+                station_a: now(x_to_o_tie.a),
+                station_b: now(x_to_o_tie.b),
+            },
+            crate::ClosurePair {
+                closure_id: 999,
+                station_a: StationRef::new(k, 0),
+                station_b: StationRef::new(k, 1),
+            },
+        ];
+        assert_eq!(
+            Project::name_missed(&missed, &torn_into),
+            vec![
+                CombineRemovedClosure {
+                    station_a: x_to_o_tie.a,
+                    station_b: x_to_o_tie.b,
+                    kind: expected_kind,
+                },
+                CombineRemovedClosure {
+                    station_a: StationRef::new(k, 0),
+                    station_b: StationRef::new(k, 1),
+                    kind: CombineRemovedKind::LoopClosure,
+                },
+            ],
+            "{x_to_o:?}"
+        );
+    }
+}
