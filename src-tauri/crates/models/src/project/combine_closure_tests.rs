@@ -1004,6 +1004,29 @@ pub(super) fn check_combined(
         }
         CombineJoinKind::Merged => {}
     }
+    // Where each station of the two sections is in the combined one.
+    let home = |at: StationRef| -> StationRef {
+        if at.section_id == kept {
+            StationRef::new(kept, at.station_index + offset)
+        } else if at.section_id == other {
+            let along = if reversed {
+                no - at.station_index
+            } else {
+                at.station_index
+            };
+            StationRef::new(
+                kept,
+                if kept_end == SectionEnd::End {
+                    nk + along
+                } else {
+                    along
+                },
+            )
+        } else {
+            at
+        }
+    };
+    check_eligible_ties_kept(before, after, candidate, kept, &home, what);
     let (was, was_ok) = adjusted_checked(&tied);
     let (now, now_ok) = adjusted_checked(&with_snaps(after));
     assert!(
@@ -1011,27 +1034,6 @@ pub(super) fn check_combined(
         "{what}: the closure-adjusted view solved before the combine and fails after it"
     );
     if before.get_connected_section_ids(kept).contains(&other) && was_ok && now_ok {
-        let home = |at: StationRef| -> StationRef {
-            if at.section_id == kept {
-                StationRef::new(kept, at.station_index + offset)
-            } else if at.section_id == other {
-                let along = if reversed {
-                    no - at.station_index
-                } else {
-                    at.station_index
-                };
-                StationRef::new(
-                    kept,
-                    if kept_end == SectionEnd::End {
-                        nk + along
-                    } else {
-                        along
-                    },
-                )
-            } else {
-                at
-            }
-        };
         let tolerance = 1e-4;
         for (at, p) in &was {
             let Some(q) = now.get(&home(*at)) else {
@@ -1046,6 +1048,103 @@ pub(super) fn check_combined(
     }
 
     check_structure_muting(after, what, mute);
+}
+
+/// #749, after every combine the sweeps make: every two stations the plan's
+/// model of the joined survey (`joined_sweep`) ties by a closure the solve
+/// takes still have one between them after the combine, at their new
+/// stations: each eligible closure that is not a join tie (the combine
+/// removes those, and the model skips them) and each tie the plan tears into
+/// a `Batch` closure, except the ones the plan lists as removed across one
+/// shot. A dedupe that kept a legacy or snapped closure over the eligible one
+/// on the same two stations fails here, whether or not the anchor rule read
+/// it. `home` maps a station of the two sections to the combined one.
+fn check_eligible_ties_kept(
+    before: &Project,
+    after: &Project,
+    candidate: &CombineCandidate,
+    kept: SectionId,
+    home: &dyn Fn(StationRef) -> StationRef,
+    what: &str,
+) {
+    let (plan, other, join_k, join_o) = if kept == candidate.section_a {
+        (
+            &candidate.plan_keeping_a,
+            candidate.section_b,
+            candidate.station_a,
+            candidate.station_b,
+        )
+    } else {
+        (
+            &candidate.plan_keeping_b,
+            candidate.section_a,
+            candidate.station_b,
+            candidate.station_a,
+        )
+    };
+    let merged = candidate.join_kind == CombineJoinKind::Merged;
+    let group_k = before.get_merge_group(join_k);
+    let join = super::combine_plan::JoinPoint {
+        kept,
+        other,
+        join_k,
+        join_o,
+        group_o: if merged {
+            group_k.clone()
+        } else {
+            before.get_merge_group(join_o)
+        },
+        group_k,
+        merged,
+    };
+    let ordered = |a: StationRef, b: StationRef| {
+        let key = |s: StationRef| (s.section_id, s.station_index);
+        if key(a) <= key(b) {
+            (a, b)
+        } else {
+            (b, a)
+        }
+    };
+    let removed: HashSet<(StationRef, StationRef)> = plan
+        .closures_removed_across_one_shot
+        .iter()
+        .flatten()
+        .map(|r| ordered(r.station_a, r.station_b))
+        .collect();
+    let tied_after: HashSet<(StationRef, StationRef)> = after
+        .loop_closures
+        .iter()
+        .filter(|c| Project::closure_is_eligible(c.strategy))
+        .filter_map(|c| {
+            Some(ordered(
+                after.resolve_key(&c.station_a)?,
+                after.resolve_key(&c.station_b)?,
+            ))
+        })
+        .collect();
+    let eligible_before = before
+        .loop_closures
+        .iter()
+        .filter(|c| Project::closure_is_eligible(c.strategy))
+        .filter_map(|c| {
+            Some((
+                before.resolve_key(&c.station_a)?,
+                before.resolve_key(&c.station_b)?,
+            ))
+        })
+        .filter(|(a, b)| !join.is_join_tie(*a, *b));
+    let torn = plan.torn_ties.iter().map(|t| (t.station_a, t.station_b));
+    for (a, b) in eligible_before.chain(torn) {
+        if removed.contains(&ordered(a, b)) {
+            continue;
+        }
+        let (x, y) = (home(a), home(b));
+        assert!(
+            tied_after.contains(&ordered(x, y)),
+            "{what}: no closure the solve takes is left between {x:?} and {y:?} (was {a:?} - \
+             {b:?})"
+        );
+    }
 }
 
 /// #746, after every combine the sweeps make: the plan the menu offered names
