@@ -5,6 +5,7 @@ import type { LengthUnit } from '../../types/config';
 import type { CombineCandidate } from '../../types/ipc/CombineCandidate';
 import type { CombinePlan } from '../../types/ipc/CombinePlan';
 import type { CombineRemovedKind } from '../../types/ipc/CombineRemovedKind';
+import type { CombineReplacedKind } from '../../types/ipc/CombineReplacedKind';
 import type { SectionId, StationRef } from '../../types/project';
 import { formatLength } from '../../utils/formatStats';
 import { formatRotation } from '../../utils/combineSections';
@@ -27,10 +28,11 @@ interface CombinePlanNotesProps {
  * section the dialog currently shows (the backend's `CombinePlan`): the side
  * that moves and how far, the ties that become loop closures, the ties
  * removed because as closures they would join the two ends of one shot
- * (#746), converted bearings, the quality and manual offset the combined
- * section keeps, shot identities that are renewed, and sections that pass
- * through the join. The user reads all of it before confirming; nothing here
- * is a refusal.
+ * (#746), the closures replaced by a loop closure on the same two stations
+ * that the Closures Computed View adjusts (#749), converted bearings, the
+ * quality and manual offset the combined section keeps, shot identities that
+ * are renewed, and sections that pass through the join. The user reads all of
+ * it before confirming; nothing here is a refusal.
  */
 export function CombinePlanNotes({
   candidate,
@@ -127,6 +129,8 @@ export function CombinePlanNotes({
 
   // The plan the combine itself runs names these (#746): exactly what it removes.
   const removed = plan.closures_removed_across_one_shot ?? [];
+  // And these (#749): exactly the closures it replaces.
+  const replaced = plan.closures_replaced ?? [];
   const tieId = (a: StationRef, b: StationRef) =>
     `${a.section_id}-${a.station_index}-${b.section_id}-${b.station_index}`;
   const ends = (a: StationRef, b: StationRef) => ({
@@ -134,7 +138,9 @@ export function CombinePlanNotes({
     b: <TieEnd at={b} sectionName={sectionName} stationLabel={stationLabel} />,
   });
 
-  if (notes.length === 0 && plan.torn_ties.length === 0 && removed.length === 0) return null;
+  if (notes.length === 0 && plan.torn_ties.length === 0 && removed.length === 0 && replaced.length === 0) {
+    return null;
+  }
   return (
     <div className="space-y-2 text-sm" data-testid="combine-plan-notes">
       <div className="text-text-secondary">{t('dialogs.combineSections.changesTitle')}</div>
@@ -203,6 +209,31 @@ export function CombinePlanNotes({
             </span>
           </li>
         )}
+        {replaced.length > 0 && (
+          <li data-testid="combine-note-replaced">
+            {t('dialogs.combineSections.replacedTitle', { count: replaced.length })}
+            <ul className="list-[circle] pl-5 mt-1 space-y-0.5">
+              {replaced.map((closure, index) => {
+                const id = tieId(closure.station_a, closure.station_b);
+                return (
+                  <li key={`${id}-${index}`} data-testid={`combine-replaced-tie-${id}`}>
+                    <Trans
+                      i18nKey={`dialogs.combineSections.${REPLACED_KEY[closure.kind]}`}
+                      components={ends(closure.station_a, closure.station_b)}
+                    />{' '}
+                    <Trans
+                      i18nKey={`dialogs.combineSections.${REPLACED_BY_KEY[closure.by_kind]}`}
+                      components={ends(closure.by_station_a, closure.by_station_b)}
+                    />
+                  </li>
+                );
+              })}
+            </ul>
+            <span className="block mt-1 text-text-secondary" data-testid="combine-replaced-why">
+              {t('dialogs.combineSections.replacedWhy', { count: replaced.length })}
+            </span>
+          </li>
+        )}
       </ul>
     </div>
   );
@@ -213,6 +244,20 @@ const REMOVED_KEY: Record<CombineRemovedKind, string> = {
   merge: 'removedMerge',
   snapped_closure: 'removedSnapped',
   loop_closure: 'removedClosure',
+};
+
+/** The dialog line for each kind of closure the combine replaces (#749). */
+const REPLACED_KEY: Record<CombineReplacedKind, string> = {
+  legacy_closure: 'replacedLegacy',
+  snapped_closure: 'replacedSnapped',
+  former_snap: 'replacedFormerSnap',
+};
+
+/** What replaces it, as what it was before the combine (#749). */
+const REPLACED_BY_KEY: Record<CombineRemovedKind, string> = {
+  merge: 'replacedByMerge',
+  snapped_closure: 'replacedBySnapped',
+  loop_closure: 'replacedByClosure',
 };
 
 /** A section as a link pill (name and id), selecting it on click. */

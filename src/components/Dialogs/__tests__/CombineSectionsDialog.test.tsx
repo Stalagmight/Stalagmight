@@ -466,6 +466,108 @@ describe('CombineSectionsDialog', () => {
     expect(screen.getByTestId('combine-removed-summary')).toBeInTheDocument();
   });
 
+  it('lists the closures the combine replaces by one the view adjusts on the same two stations (#749)', () => {
+    const at = (s: number, i: number) => ({ section_id: s, station_index: i });
+    const replaced = (
+      a: [number, number],
+      b: [number, number],
+      kind: string,
+      by: [[number, number], [number, number]],
+      byKind: string
+    ) => ({
+      station_a: at(...a),
+      station_b: at(...b),
+      kind,
+      by_station_a: at(...by[0]),
+      by_station_b: at(...by[1]),
+      by_kind: byKind,
+    });
+    dialogData = {
+      candidate: candidate({
+        join_kind: 'closure',
+        plan_keeping_a: quietPlan(2, {
+          moving_section: 2,
+          kept_moves_because: 'adjustment_anchor',
+          moved_sections: [2],
+          shift_m: 0.4,
+          closures_replaced: [replaced([5, 2], [5, 0], 'legacy_closure', [[2, 1], [5, 2]], 'merge')],
+        }),
+        plan_keeping_b: quietPlan(5, {
+          moving_section: 2,
+          moved_sections: [2],
+          shift_m: 0.4,
+          closures_replaced: [
+            replaced([5, 2], [5, 0], 'snapped_closure', [[2, 1], [5, 2]], 'snapped_closure'),
+            replaced([5, 3], [2, 0], 'former_snap', [[5, 3], [2, 1]], 'loop_closure'),
+          ],
+        }),
+      }),
+    };
+    render(<CombineSectionsDialog />);
+    // A replacement keeps the connection, so it is listed in Details only,
+    // with no summary line outside the fold (that is for removals, #746).
+    expect(screen.queryByTestId('combine-removed-summary')).toBeNull();
+    expect(screen.queryByTestId('combine-note-removed')).toBeNull();
+    expect(screen.getByTestId('combine-note-replaced')).toHaveTextContent(/^This closure is replaced:/);
+    expect(screen.getAllByTestId(/^combine-replaced-tie-/).map(tieText)).toEqual([
+      'Loop closure [section Main-B] [station 5:2] to [section Main-B] [station 5:0] , an older kind the ' +
+        'Closures Computed View does not adjust. The merge of [section Main-A] [station 2:1] and ' +
+        '[section Main-B] [station 5:2] becomes a loop closure on the same two stations and takes its place.',
+    ]);
+    expect(screen.getByTestId('combine-replaced-why')).toHaveTextContent(
+      'Two loop closures on the same two stations would count one loop twice, so the combine keeps the one ' +
+        'the Closures Computed View adjusts. Undo brings this one back.'
+    );
+
+    fireEvent.click(screen.getByTestId('combine-swap-kept'));
+    expect(screen.getByTestId('combine-note-replaced')).toHaveTextContent(/^These 2 closures are replaced:/);
+    expect(screen.getAllByTestId(/^combine-replaced-tie-/).map(tieText)).toEqual([
+      'The snapped closure between [section Main-B] [station 5:2] and [section Main-B] [station 5:0] : its ' +
+        'two stations will no longer share one depth. The snapped closure between [section Main-A] ' +
+        '[station 2:1] and [section Main-B] [station 5:2] becomes an ordinary loop closure on the same two ' +
+        'stations and takes its place.',
+      'Loop closure [section Main-B] [station 5:3] to [section Main-A] [station 2:0] , left from a snap whose ' +
+        'stations have since moved apart; the Closures Computed View does not adjust it. Loop closure ' +
+        '[section Main-B] [station 5:3] to [section Main-A] [station 2:1] , already there, ends up on the ' +
+        'same two stations and takes its place.',
+    ]);
+    expect(screen.getByTestId('combine-replaced-why')).toHaveTextContent('Undo brings these back.');
+  });
+
+  it('says nothing about replaced closures when the combine replaces none (#749)', () => {
+    dialogData = {
+      candidate: candidate({
+        join_kind: 'closure',
+        plan_keeping_a: quietPlan(2, { moving_section: 5, moved_sections: [5], shift_m: 0.4 }),
+      }),
+    };
+    render(<CombineSectionsDialog />);
+    expect(screen.queryByTestId('combine-note-replaced')).toBeNull();
+    expect(screen.queryByTestId('combine-replaced-why')).toBeNull();
+  });
+
+  it('shows the replaced closures even when nothing else changes (#749)', () => {
+    dialogData = {
+      candidate: candidate({
+        plan_keeping_a: quietPlan(2, {
+          closures_replaced: [
+            {
+              station_a: { section_id: 5, station_index: 2 },
+              station_b: { section_id: 5, station_index: 0 },
+              kind: 'legacy_closure',
+              by_station_a: { section_id: 2, station_index: 1 },
+              by_station_b: { section_id: 5, station_index: 2 },
+              by_kind: 'loop_closure',
+            },
+          ],
+        }),
+      }),
+    };
+    render(<CombineSectionsDialog />);
+    expect(screen.getByTestId('combine-plan-notes')).toBeInTheDocument();
+    expect(screen.getAllByTestId(/^combine-replaced-tie-/)).toHaveLength(1);
+  });
+
   it('says the kept side moves when the other side holds the Closures Computed View in place', () => {
     dialogData = {
       candidate: candidate({
