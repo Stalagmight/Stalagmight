@@ -309,9 +309,14 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
   coincident or merged ends) joins as before. Re-solving the offsets after the
   combine instead would seed each component at its datum or lowest id, not
   at the side the anchor rule keeps, and would heal drift anywhere else in
-  the project too: the plan could not say what moves. The dialog lists no
-  move under 1 mm (`combineMoveShown`; "moves 0.00m" next to "Side by side
-  here" is noise), but says nothing that claims a side stays. The sweeps check
+  the project too: the plan could not say what moves. The dialog lists a
+  move under 1 mm only when the plan tears a tie (`combineMoveShown`): a
+  snap from the moving side made ordinary, or the moving section's merge
+  torn with both sides held by datums. Their listed reason is the move, so
+  the move is listed beside them, to 0.1 mm ("moveSideBySide"); otherwise
+  "moves 0.00m" next to "Side by side here" would be noise. The
+  `COMBINE_SIDE_BY_SIDE_M` copy of the tolerance in `combineSections.ts` is
+  pinned to `COMBINE_TOLERANCE_M` by a tripwire test. The sweeps check
   the plan against the result to 1e-6 (a plan that moves nothing, to dust),
   merged stations on one point and a reload that moves nothing, and
   `side_by_side_network` plants such residuals, which the other generators,
