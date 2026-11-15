@@ -521,3 +521,52 @@ fn a_split_needs_a_name_for_each_half_and_trims_it() {
         Some("Main-B")
     );
 }
+
+/// #738, the issue's test: two closures tie S:3 to the one point {S:1, T:0};
+/// after the cut at S:2 they are the second half's only ties, the sweep
+/// promotes the first, and the second must not stay between merged stations.
+#[test]
+fn split_leaves_no_closure_between_merged_stations() {
+    let mut project = Project::new("F3".to_string(), None);
+    let s = project
+        .add_section(SectionData {
+            name: Some("S".to_string()),
+            shots: vec![shot(90.0, 10.0), shot(0.0, 10.0), shot(180.0, 9.9)],
+            ..Default::default()
+        })
+        .id;
+    let t = project
+        .add_section(SectionData {
+            name: Some("T".to_string()),
+            shots: vec![shot(90.0, 5.0)],
+            ..Default::default()
+        })
+        .id;
+    project
+        .merge_stations(StationRef::new(s, 1), StationRef::new(t, 0))
+        .unwrap();
+    let batch = crate::ClosureStrategy::Batch;
+    project
+        .create_loop_closure(StationRef::new(s, 3), StationRef::new(s, 1), batch)
+        .unwrap();
+    project
+        .create_loop_closure(StationRef::new(t, 0), StationRef::new(s, 3), batch)
+        .unwrap();
+    project
+        .split_section_at_station(s, 2, &options(SplitSide::A, SplitSide::A))
+        .unwrap();
+    project.convert_orphan_closures_to_merges(); // what AppState::apply_cut runs after the split
+    let degenerate: Vec<_> = project
+        .loop_closures
+        .iter()
+        .filter_map(|c| {
+            let a = project.resolve_key(&c.station_a)?;
+            let b = project.resolve_key(&c.station_b)?;
+            project.are_stations_merged(a, b).then_some((c.id, a, b))
+        })
+        .collect();
+    assert!(
+        degenerate.is_empty(),
+        "closure(s) between merged stations: {degenerate:?}"
+    );
+}

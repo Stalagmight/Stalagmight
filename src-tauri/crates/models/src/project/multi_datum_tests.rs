@@ -493,7 +493,7 @@ fn a_component_with_only_a_gps_fix_reaches_the_computed_view_solve() {
         .unwrap();
     assert!(project.loop_closures.is_empty());
 
-    let anchors = project.plan_adjustment_anchors();
+    let anchors = project.adjustment_anchors_for_tests();
     assert_eq!(anchors, vec![StationRef::new(a, 0)]);
     let mut working = project.clone();
     working
@@ -506,7 +506,7 @@ fn a_component_with_only_a_gps_fix_reaches_the_computed_view_solve() {
 
     // A project with no fix and no closure still takes the fast path.
     let (plain, _, _) = two_entrance_traverse();
-    assert!(plain.plan_adjustment_anchors().is_empty());
+    assert!(plain.adjustment_anchors_for_tests().is_empty());
 }
 
 #[test]

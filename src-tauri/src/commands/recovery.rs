@@ -1,5 +1,8 @@
 use std::path::PathBuf;
 
+use tauri::State;
+
+use crate::core::AppState;
 use crate::persistence::{BackupInfo, Database, RepairResult, SalvagedData};
 
 /// Attempt to repair a corrupt database file.
@@ -41,37 +44,30 @@ pub fn list_backups(path: PathBuf) -> Vec<BackupInfo> {
     Database::list_backups(&path)
 }
 
-/// Restore a project from a backup file.
+/// Restore a project from a backup file (the recovery dialog's "Restore from
+/// Backup").
 ///
-/// Copies the backup over the original project file after creating a safety
-/// backup of the current (corrupt) file.
+/// Keeps a copy of the replaced file as `<project>.stalx.pre-restore`, never
+/// writes into a file in place, and refuses (changing nothing) while the
+/// project, that copy or the backup is open. See
+/// `AppState::restore_project_from_backup` (#720).
 #[tauri::command]
-pub fn restore_from_backup(project_path: PathBuf, backup_path: PathBuf) -> Result<String, String> {
+pub fn restore_from_backup(
+    state: State<'_, AppState>,
+    project_path: PathBuf,
+    backup_path: PathBuf,
+) -> Result<String, String> {
+    restore_from_backup_impl(state.inner(), project_path, backup_path)
+}
+
+/// [`restore_from_backup`] without the Tauri state wrapper.
+pub fn restore_from_backup_impl(
+    state: &AppState,
+    project_path: PathBuf,
+    backup_path: PathBuf,
+) -> Result<String, String> {
     tracing::info!(project = ?project_path, backup = ?backup_path, "IPC: restore_from_backup");
-
-    // Verify backup exists
-    if !backup_path.exists() {
-        return Err(format!("Backup file not found: {}", backup_path.display()));
-    }
-
-    // Copying a backup over a project a newer Stalagmight saved would put an
-    // older file in its place, and a backup a newer Stalagmight saved would put
-    // a file this build cannot open there (#649). Both before the safety copy.
-    for file in [&project_path, &backup_path] {
-        Database::check_not_newer_at(file).map_err(|e| format!("Not restored: {e}"))?;
-    }
-
-    // Create a safety backup of the current (corrupt) file before overwriting
-    let safety = project_path.with_extension("stalx.pre-restore");
-    if let Err(e) = std::fs::copy(&project_path, &safety) {
-        tracing::warn!(error = %e, "Could not create pre-restore backup (continuing anyway)");
-    }
-
-    // Copy backup over the project file
-    std::fs::copy(&backup_path, &project_path)
-        .map_err(|e| format!("Failed to restore backup: {e}"))?;
-
-    Ok(format!("Restored from {}", backup_path.display()))
+    state.restore_project_from_backup(&project_path, &backup_path)
 }
 
 /// Export whatever data can be salvaged from a corrupt database.
@@ -90,7 +86,8 @@ pub fn export_salvageable_data(path: PathBuf) -> Result<SalvagedData, String> {
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod tests {
-    use super::restore_from_backup;
+    use super::restore_from_backup_impl;
+    use crate::core::AppState;
     use crate::models::Project;
     use crate::persistence::{Database, SCHEMA_VERSION};
     use std::path::{Path, PathBuf};
@@ -112,6 +109,13 @@ mod tests {
             .copy_from_slice(&version.to_be_bytes());
         std::fs::write(&path, bytes).unwrap();
         path
+    }
+
+    /// The command as the dialog calls it, on a fresh session with nothing open.
+    fn restore_from_backup(project: PathBuf, backup: PathBuf) -> Result<String, String> {
+        crate::test_helpers::with_isolated_config(|| {
+            restore_from_backup_impl(&AppState::new().unwrap(), project, backup)
+        })
     }
 
     /// [#649] Restoring an older backup over a project a newer Stalagmight saved

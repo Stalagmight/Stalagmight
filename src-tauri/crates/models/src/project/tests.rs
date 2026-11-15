@@ -3671,11 +3671,15 @@ fn closure_chain_transitivity_two_closures_shared_endpoint() {
     // Test: closure-chain transitivity
     // Setup: 3 sections A, B, C. Merge chain: A.1↔B.0, B.1↔C.0
     //   Closure 1: A.0 ↔ B.1 (between A start and B end)
-    //   Closure 2: B.1 ↔ C.1 (between B end and C end)
+    //   Closure 2: B.1 ↔ C.2 (between B end and C end)
     //
-    // B.1 has 2 direct closures: to A.0 and to C.1
-    // A.0 should see transitive closure to C.1 via B.1
-    // C.1 should see transitive closure to A.0 via B.1
+    // B.1 has 2 direct closures: to A.0 and to C.2
+    // A.0 should see transitive closure to C.2 via B.1
+    // C.2 should see transitive closure to A.0 via B.1
+    //
+    // C has TWO shots: B.1 is merged to C.0, so a closure B.1 ↔ C.1 would tie
+    // the two ends of the one shot C.0-C.1 together, which creation refuses
+    // (#737).
     let mut project = Project::new("ChainTransitive".to_string(), None);
 
     let a = project
@@ -3692,7 +3696,10 @@ fn closure_chain_transitivity_two_closures_shared_endpoint() {
         .id;
     let c = project
         .add_section(SectionData {
-            shots: vec![shot(180.0, 180.0, 3.0, 0.0, 0.0)],
+            shots: vec![
+                shot(180.0, 180.0, 3.0, 0.0, 0.0),
+                shot(270.0, 270.0, 3.0, 0.0, 0.0),
+            ],
             ..Default::default()
         })
         .id;
@@ -3721,22 +3728,19 @@ fn closure_chain_transitivity_two_closures_shared_endpoint() {
         )
         .unwrap();
 
-    // Closure 2: B.1 ↔ C.1 (B.1 is merged with C.0, so B and C are connected)
-    // Wait - B.1 and C.0 are merged. So B.1 and C.1 are in the same section group.
-    // But are_stations_merged(B.1, C.1)? No (direct check only).
-    // Actually C.1 is in section C. B.1 is in section B. They're connected through merge.
-    // create_loop_closure checks connectivity via get_connected_section_ids.
+    // Closure 2: B.1 ↔ C.2 (B.1 is merged with C.0, so B and C are connected;
+    // the loop is C.0-C.1-C.2 back to B.1 = C.0).
     let closure2 = project
         .create_loop_closure(
             StationRef::new(b, 1),
-            StationRef::new(c, 1),
+            StationRef::new(c, 2),
             ClosureStrategy::default(),
         )
         .unwrap();
 
     let stations = project.compute_station_coordinates();
 
-    // B.1: should have 2 direct closures (to A.0 and to C.1)
+    // B.1: should have 2 direct closures (to A.0 and to C.2)
     let b1 = stations
         .iter()
         .find(|s| s.station_ref == StationRef::new(b, 1))
@@ -3750,17 +3754,17 @@ fn closure_chain_transitivity_two_closures_shared_endpoint() {
         "B.1 should have direct closure to A.0, got: {:?}",
         b1.closures()
     );
-    let b1_to_c1 = b1
+    let b1_to_c2 = b1
         .closures()
         .iter()
-        .find(|cr| cr.station_ref == StationRef::new(c, 1) && !cr.is_transitive);
+        .find(|cr| cr.station_ref == StationRef::new(c, 2) && !cr.is_transitive);
     assert!(
-        b1_to_c1.is_some(),
-        "B.1 should have direct closure to C.1, got: {:?}",
+        b1_to_c2.is_some(),
+        "B.1 should have direct closure to C.2, got: {:?}",
         b1.closures()
     );
 
-    // A.0: should have direct closure to B.1 AND transitive closure to C.1 (via B.1)
+    // A.0: should have direct closure to B.1 AND transitive closure to C.2 (via B.1)
     let a0 = stations
         .iter()
         .find(|s| s.station_ref == StationRef::new(a, 0))
@@ -3777,55 +3781,55 @@ fn closure_chain_transitivity_two_closures_shared_endpoint() {
     let a0_transitive = a0
         .closures()
         .iter()
-        .find(|cr| cr.station_ref == StationRef::new(c, 1) && cr.is_transitive);
+        .find(|cr| cr.station_ref == StationRef::new(c, 2) && cr.is_transitive);
     assert!(
         a0_transitive.is_some(),
-        "A.0 should have transitive closure to C.1 (via B.1), got: {:?}",
+        "A.0 should have transitive closure to C.2 (via B.1), got: {:?}",
         a0.closures()
     );
     assert_eq!(
         a0_transitive.unwrap().via_station,
         Some(StationRef::new(b, 1)),
-        "A.0 transitive to C.1 should be via B.1"
+        "A.0 transitive to C.2 should be via B.1"
     );
     assert_eq!(
         a0_transitive.unwrap().closure_id,
         closure2.id,
-        "A.0 transitive to C.1 should reference closure2's id"
+        "A.0 transitive to C.2 should reference closure2's id"
     );
 
-    // C.1: should have direct closure to B.1 AND transitive closure to A.0 (via B.1)
-    let c1 = stations
+    // C.2: should have direct closure to B.1 AND transitive closure to A.0 (via B.1)
+    let c2 = stations
         .iter()
-        .find(|s| s.station_ref == StationRef::new(c, 1))
+        .find(|s| s.station_ref == StationRef::new(c, 2))
         .unwrap();
-    let c1_direct = c1
+    let c2_direct = c2
         .closures()
         .iter()
         .find(|cr| cr.station_ref == StationRef::new(b, 1) && !cr.is_transitive);
     assert!(
-        c1_direct.is_some(),
-        "C.1 should have direct closure to B.1, got: {:?}",
-        c1.closures()
+        c2_direct.is_some(),
+        "C.2 should have direct closure to B.1, got: {:?}",
+        c2.closures()
     );
-    let c1_transitive = c1
+    let c2_transitive = c2
         .closures()
         .iter()
         .find(|cr| cr.station_ref == StationRef::new(a, 0) && cr.is_transitive);
     assert!(
-        c1_transitive.is_some(),
-        "C.1 should have transitive closure to A.0 (via B.1), got: {:?}",
-        c1.closures()
+        c2_transitive.is_some(),
+        "C.2 should have transitive closure to A.0 (via B.1), got: {:?}",
+        c2.closures()
     );
     assert_eq!(
-        c1_transitive.unwrap().via_station,
+        c2_transitive.unwrap().via_station,
         Some(StationRef::new(b, 1)),
-        "C.1 transitive to A.0 should be via B.1"
+        "C.2 transitive to A.0 should be via B.1"
     );
     assert_eq!(
-        c1_transitive.unwrap().closure_id,
+        c2_transitive.unwrap().closure_id,
         closure1.id,
-        "C.1 transitive to A.0 should reference closure1's id"
+        "C.2 transitive to A.0 should reference closure1's id"
     );
 }
 
@@ -11861,7 +11865,7 @@ fn removing_a_shot_converts_the_closure_it_orphans_and_not_an_older_one() {
         StationRef::new(e, 1),
     );
     assert_eq!(
-        project.orphan_closure_ids(),
+        project.swept_closure_ids(),
         HashSet::from([2]),
         "setup: D1=E1 must already be an orphan and B2=C2 must not"
     );
@@ -11970,7 +11974,7 @@ fn removing_an_appended_first_shot_converts_the_closure_it_orphans_and_not_an_ol
         StationRef::new(e, 1),
     );
     assert_eq!(
-        project.orphan_closure_ids(),
+        project.swept_closure_ids(),
         HashSet::from([2]),
         "setup: D1=E1 must already be an orphan and B2=C2 must not"
     );
@@ -15124,11 +15128,95 @@ fn the_orphan_sweep_is_fast_with_thousands_of_refused_promotions() {
     );
 }
 
+/// `count` closures whose two stations are one point, cycling over `pairs`
+/// (the stalx-reader caps a file at 50 000 closures).
+fn closures_on_one_point(project: &mut Project, pairs: &[(StationKey, StationKey)], count: usize) {
+    for i in 0..count {
+        let (a, b) = pairs[i % pairs.len()].clone();
+        project.loop_closures.push(test_closure(
+            i as u64 + 1,
+            a,
+            b,
+            ClosureStrategy::Batch,
+            false,
+        ));
+    }
+}
+
+/// The load removes closures between merged stations (#738) in one compaction,
+/// not one `Vec::remove` each: 50 000 of them, the most a file the
+/// stalx-reader accepts can hold, are gone in linear time. Here each is a
+/// closure from a station to itself, the cheapest such closure to write.
 #[test]
-fn the_orphan_sweep_still_promotes_in_order_and_keeps_a_redundant_twin() {
+fn the_load_removes_fifty_thousand_closures_from_a_station_to_itself_fast() {
+    let mut project = two_anchored_components_with_orphan_closures(1_000, 0);
+    let stations: Vec<(StationKey, StationKey)> = project
+        .sections
+        .iter()
+        .map(|s| {
+            let key = StationKey::new(s.id, StationAnchor::SectionStart);
+            (key.clone(), key)
+        })
+        .collect();
+    closures_on_one_point(&mut project, &stations, 50_000);
+
+    let started = std::time::Instant::now();
+    project.redrive_offsets_after_load();
+    let elapsed = started.elapsed();
+
+    assert!(project.loop_closures.is_empty());
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "the post-load redrive took {elapsed:?}"
+    );
+}
+
+/// [`the_load_removes_fifty_thousand_closures_from_a_station_to_itself_fast`]
+/// with closures that double the merges of two long merge chains instead.
+#[test]
+fn the_load_removes_fifty_thousand_closures_between_merged_stations_fast() {
+    let mut project = two_anchored_components_with_orphan_closures(1_000, 0);
+    let merged: Vec<(StationKey, StationKey)> = project
+        .station_merges
+        .iter()
+        .map(|m| (m.station_a.clone(), m.station_b.clone()))
+        .collect();
+    closures_on_one_point(&mut project, &merged, 50_000);
+    let mut bigger = project.clone();
+
+    let started = std::time::Instant::now();
+    project.redrive_offsets_after_load();
+    let redriven = started.elapsed();
+
+    assert!(project.loop_closures.is_empty());
+    assert!(
+        redriven < std::time::Duration::from_secs(10),
+        "the post-load redrive took {redriven:?}"
+    );
+
+    // At 50 000 a removal per closure still fits in a few seconds (the list
+    // stays in cache), so the bound above would not catch one coming back. Four
+    // times as many does: one compaction is a fraction of a second here, a
+    // `Vec::remove` each is tens of seconds.
+    bigger.loop_closures.clear();
+    closures_on_one_point(&mut bigger, &merged, 200_000);
+    let started = std::time::Instant::now();
+    let sweep = bigger.sweep_orphan_closures();
+    let swept = started.elapsed();
+    assert_eq!((sweep.converted, sweep.removed.len()), (0, 200_000));
+    assert_eq!(sweep.removed_positions.len(), 200_000);
+    assert!(
+        swept < std::time::Duration::from_secs(5),
+        "the sweep took {swept:?}"
+    );
+}
+
+#[test]
+fn the_orphan_sweep_still_promotes_in_order_and_removes_the_twin_it_merged() {
     // One anchored component and one free one, bridged by two closures between
-    // the same stations: the first becomes the merge, the second is then a
-    // genuine (redundant) loop and stays a closure.
+    // the same stations: the first becomes the merge, and the second, whose two
+    // stations that merge makes one point, closes no loop and goes (#738; it
+    // used to stay as a closure between merged stations).
     let mut project = two_anchored_components_with_orphan_closures(3, 0);
     project.zero_datums.pop();
     let (a0, b0) = (project.sections[0].id, project.sections[3].id);
@@ -15147,17 +15235,11 @@ fn the_orphan_sweep_still_promotes_in_order_and_keeps_a_redundant_twin() {
         });
     }
 
-    let converted = project.convert_orphan_closures_to_merges();
+    let sweep = project.sweep_orphan_closures();
 
-    assert_eq!(converted, 1);
-    assert_eq!(
-        project
-            .loop_closures
-            .iter()
-            .map(|c| c.id)
-            .collect::<Vec<_>>(),
-        [12]
-    );
+    assert_eq!(sweep.converted, 1);
+    assert_eq!(sweep.removed.iter().map(|c| c.id).collect::<Vec<_>>(), [12]);
+    assert!(project.loop_closures.is_empty());
 }
 
 #[test]
@@ -15219,6 +15301,12 @@ fn remeasuring_alignment_is_fast_with_thousands_of_aligned_closures_in_one_compo
     // merge: each closure's gap is zero, so each reaches the double-anchor
     // question, which a per-closure merge walk made quadratic.
     let mut project = two_anchored_components_with_orphan_closures(4_000, 0);
+    // Place the sections first (untimed: the offset cascade's own cost is
+    // tracked separately). After the closures go in it could not: a load
+    // removes a closure between merged stations (#738), and every one of these
+    // doubles a merge. The re-measure still meets them in memory - an undo can
+    // restore a state recorded before that rule - so its cost is what is timed.
+    project.redrive_offsets_after_load();
     let doubled: Vec<(StationKey, StationKey)> = project
         .station_merges
         .iter()
@@ -15239,17 +15327,11 @@ fn remeasuring_alignment_is_fast_with_thousands_of_aligned_closures_in_one_compo
         });
     }
 
-    // Place the sections (untimed: the offset cascade's own cost is tracked
-    // separately), then re-measure from scratch.
-    project.redrive_offsets_after_load();
-    for closure in &mut project.loop_closures {
-        closure.is_aligned = false;
-    }
-
     let started = std::time::Instant::now();
     project.remeasure_closure_alignment();
     let elapsed = started.elapsed();
 
+    assert_eq!(project.loop_closures.len(), 2 * 3_999);
     assert!(project.loop_closures.iter().all(|c| c.is_aligned));
     assert!(
         elapsed < std::time::Duration::from_secs(5),
@@ -15301,8 +15383,13 @@ fn resolving_offsets_is_fast_with_thousands_of_closures_doubling_merges() {
     // Seeding the solve walked each component rescanning every merge and closure
     // per visited section, O(sections x edges) (#602).
     let mut project = two_anchored_components_with_orphan_closures(8_000, 0);
-    double_every_merge_with_move_closures(&mut project, false);
+    // Placed before the closures go in: a load would remove every one of them,
+    // since each doubles a merge (#738). `resolve_offsets` still meets the
+    // shape in memory (an undo can restore a state recorded before that rule).
     project.redrive_offsets_after_load();
+    double_every_merge_with_move_closures(&mut project, false);
+    project.remeasure_closure_alignment();
+    assert_eq!(project.loop_closures.len(), 2 * 7_999);
     assert!(project.loop_closures.iter().all(|c| c.is_aligned));
 
     // Debug build: about 0.65 s of CPU, against about 5.2 s before #602.

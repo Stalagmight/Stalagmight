@@ -63,7 +63,10 @@ export function CombinePlanNotes({
       });
     }
     if (plan.moving_section === keptId) {
-      notes.push({ key: 'kept-moves', text: t('dialogs.combineSections.keptMoves', { kept: keptName, other: otherName }) });
+      // Why the kept side moves: a zero datum holds the other side, or the
+      // other side holds the point the Closures Computed View is held at.
+      const key = plan.kept_moves_because === 'adjustment_anchor' ? 'keptMovesAnchor' : 'keptMoves';
+      notes.push({ key: 'kept-moves', text: t(`dialogs.combineSections.${key}`, { kept: keptName, other: otherName }) });
     }
   }
   if (plan.azimuth_rotation_deg !== null) {

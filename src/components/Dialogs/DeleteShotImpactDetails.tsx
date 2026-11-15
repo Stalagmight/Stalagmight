@@ -1,4 +1,4 @@
-import type { DeleteShotImpact } from '../../types/commands';
+import type { DeleteShotImpact, DeleteShotRangeImpact } from '../../types/commands';
 import type { StationRef } from '../../types/project';
 import { EntityBlob } from '../common/EntityBlob';
 
@@ -19,7 +19,10 @@ function Pair({ a, b }: { a: StationRef; b: StationRef }) {
 
 /**
  * The station-relationship fields shared by `DeleteShotImpact` and
- * `DeleteShotRangeImpact`, so this component renders either one.
+ * `DeleteShotRangeImpact`, so this component renders either one. The range
+ * preview adds the loop closures its gap-close would remove because they would
+ * span a single shot (#737); the single-shot delete never shortens a closure to
+ * one shot, so it has no such field.
  */
 export type ShotImpactRelationships = Pick<
   DeleteShotImpact,
@@ -30,18 +33,28 @@ export type ShotImpactRelationships = Pick<
   | 'closure_to_merge'
   | 'merge_rewire_skipped'
   | 'closure_rewire_skipped'
->;
+> &
+  Partial<Pick<DeleteShotRangeImpact, 'closures_removed_across_one_shot'>>;
 
 export default function DeleteShotImpactDetails({
   impact,
   title = 'This deletion will update station relationships:',
+  gapCloseAction = 'Close Gap & Delete',
 }: {
   impact: ShotImpactRelationships | null;
   title?: string;
+  /**
+   * The label of the button that closes the gap. The closures across one shot
+   * are removed only by that action, not by Split, so the heading names it.
+   */
+  gapCloseAction?: string;
 }) {
   if (!impact) return null;
 
+  // Named by their stations before the delete, as the user created them.
+  const acrossOneShot = impact.closures_removed_across_one_shot ?? [];
   const hasDetails =
+    acrossOneShot.length > 0 ||
     impact.removed_merges.length > 0 ||
     impact.removed_closures.length > 0 ||
     impact.replacement_merges.length > 0 ||
@@ -75,6 +88,24 @@ export default function DeleteShotImpactDetails({
                 const closureId = closure.closure_id.toString();
                 return (
                   <li key={`removed-closure-${closureId}`}>
+                    #{closureId}: <Pair a={closure.station_a} b={closure.station_b} />
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
+
+        {acrossOneShot.length > 0 && (
+          <div data-testid="impact-closures-across-one-shot">
+            <p className="font-medium">
+              {gapCloseAction} removes these loop closures (they would span a single shot)
+            </p>
+            <ul className="list-disc list-inside">
+              {acrossOneShot.map((closure) => {
+                const closureId = closure.closure_id.toString();
+                return (
+                  <li key={`across-one-shot-closure-${closureId}`}>
                     #{closureId}: <Pair a={closure.station_a} b={closure.station_b} />
                   </li>
                 );

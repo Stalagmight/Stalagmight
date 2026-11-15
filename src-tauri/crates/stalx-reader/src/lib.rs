@@ -431,9 +431,11 @@ fn read_copy(copy: &Path, options: &ReadOptions) -> Result<Survey, ReadError> {
     let derived_uuids = derive_missing_shot_uuids(&mut project);
     // The post-load steps of the app's own open (`project_load.rs`) that change
     // what this crate reports: ids for legacy closures, re-derived section
-    // offsets (which also re-anchors refs and turns orphan closures into
-    // merges), and the one-shot Jump/Reference classification an old file's
-    // migration left pending. All in-memory; the copy is discarded.
+    // offsets (which also re-anchors refs, turns orphan closures into merges
+    // and removes closures between merged stations - in one linear pass, so
+    // the 50 000 the count limit allows cannot stall it), and the one-shot
+    // Jump/Reference classification an old file's migration left pending. All
+    // in-memory; the copy is discarded.
     remaining(expires)?;
     project.assign_closure_ids();
     remaining(expires)?;

@@ -44,7 +44,14 @@ const previewSplitSection = vi.fn();
 vi.mock('../../../utils/splitSection', () => ({
   previewSplitSection: (...args: unknown[]) => previewSplitSection(...args),
 }));
-const NO_MOVE = { closures_to_merges: 0, moved_side: null, moved_m: 0 };
+const NO_MOVE = {
+  closures_to_merges: 0,
+  moved_side: null,
+  moved_m: 0,
+  removed_closures: [],
+  removed_already_one_point: [],
+};
+const ref = (section_id: number, station_index: number) => ({ section_id, station_index });
 
 vi.mock('../DialogWrapper', () => ({
   DialogWrapper: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
@@ -175,7 +182,7 @@ describe('SplitSectionHereDialog', () => {
   });
 
   it('warns, before the split, that a loop closure across the cut will move a half', async () => {
-    previewSplitSection.mockResolvedValue({ closures_to_merges: 1, moved_side: 'b', moved_m: 0.5 });
+    previewSplitSection.mockResolvedValue({ ...NO_MOVE, closures_to_merges: 1, moved_side: 'b', moved_m: 0.5 });
     render(<SplitSectionHereDialog />);
     const warning = await screen.findByTestId('split-here-closure-warning');
     expect(warning).toHaveTextContent(
@@ -192,10 +199,122 @@ describe('SplitSectionHereDialog', () => {
   });
 
   it('names the first half and counts the closures when it is the one that moves', async () => {
-    previewSplitSection.mockResolvedValue({ closures_to_merges: 2, moved_side: 'a', moved_m: 1.25 });
+    previewSplitSection.mockResolvedValue({ ...NO_MOVE, closures_to_merges: 2, moved_side: 'a', moved_m: 1.25 });
     render(<SplitSectionHereDialog />);
     expect(await screen.findByTestId('split-here-closure-warning')).toHaveTextContent(
       'Main-A is tied to Main-B only by 2 loop closures, so the split turns them into merges and moves Main-A'
+    );
+  });
+
+  it('keeps the one-closure wording when the split removes no closure', async () => {
+    previewSplitSection.mockResolvedValue({ ...NO_MOVE, closures_to_merges: 1, moved_side: 'b', moved_m: 0.1 });
+    render(<SplitSectionHereDialog />);
+    const warning = await screen.findByTestId('split-here-closure-warning');
+    expect(screen.getByTestId('split-here-closure-move')).toHaveTextContent(
+      'Main-B is tied to Main-A only by a loop closure, so the split turns it into a merge and moves Main-B 0.10m to close it.'
+    );
+    expect(screen.queryAllByTestId(/^split-here-closure-removed-/)).toHaveLength(0);
+    expect(warning).toBeInTheDocument();
+  });
+
+  it('names each closure the split removes by the stations it was created with (#738)', async () => {
+    // Two closures tie Main-B's end to the one point Main:1 / 1:0: one becomes the
+    // merge, the other would tie that point to itself.
+    previewSplitSection.mockResolvedValue({
+      ...NO_MOVE,
+      closures_to_merges: 1,
+      moved_side: 'b',
+      moved_m: 0.1,
+      removed_closures: [{ closure_id: 2n, station_a: ref(1, 0), station_b: ref(3, 3) }],
+    });
+    render(<SplitSectionHereDialog />);
+    await screen.findByTestId('split-here-closure-warning');
+    expect(screen.getByTestId('split-here-closure-move')).toHaveTextContent(
+      'Main-B is tied to Main-A only by loop closures, so the split turns one of them into a merge and moves Main-B 0.10m to close it.'
+    );
+    expect(screen.getAllByTestId(/^split-here-closure-removed-/)).toHaveLength(1);
+    expect(screen.getByTestId('split-here-closure-removed-0')).toHaveTextContent(
+      'Loop closure 1:0 to 3:3 is removed: its two stations become one point.'
+    );
+    expect(screen.getByTestId('split-here-confirm')).toBeEnabled();
+  });
+
+  it('lists every removed closure and counts the merges when there are several', async () => {
+    previewSplitSection.mockResolvedValue({
+      ...NO_MOVE,
+      closures_to_merges: 2,
+      moved_side: 'a',
+      moved_m: 1.25,
+      removed_closures: [
+        { closure_id: 4n, station_a: ref(3, 3), station_b: ref(5, 0) },
+        { closure_id: 6n, station_a: ref(6, 0), station_b: ref(3, 3) },
+      ],
+    });
+    render(<SplitSectionHereDialog />);
+    await screen.findByTestId('split-here-closure-warning');
+    expect(screen.getByTestId('split-here-closure-move')).toHaveTextContent(
+      'Main-A is tied to Main-B only by loop closures, so the split turns 2 of them into merges and moves Main-A'
+    );
+    expect(screen.getAllByTestId(/^split-here-closure-removed-/).map((p) => p.textContent)).toEqual([
+      'Loop closure 3:3 to 5:0 is removed: its two stations become one point.',
+      'Loop closure 6:0 to 3:3 is removed: its two stations become one point.',
+    ]);
+  });
+
+  it('lists a closure that already tied a point to itself apart, without changing the move wording', async () => {
+    // An undo can restore such a closure from a history recorded before #738; the
+    // split's sweep removes it too, but it tied nothing, so the halves are still
+    // tied "only by a loop closure".
+    previewSplitSection.mockResolvedValue({
+      ...NO_MOVE,
+      closures_to_merges: 1,
+      moved_side: 'b',
+      moved_m: 0.1,
+      removed_already_one_point: [{ closure_id: 7n, station_a: ref(5, 1), station_b: ref(6, 0) }],
+    });
+    render(<SplitSectionHereDialog />);
+    await screen.findByTestId('split-here-closure-warning');
+    expect(screen.getByTestId('split-here-closure-move')).toHaveTextContent(
+      'Main-B is tied to Main-A only by a loop closure, so the split turns it into a merge and moves Main-B 0.10m to close it.'
+    );
+    expect(screen.queryAllByTestId(/^split-here-closure-removed-/)).toHaveLength(0);
+    expect(screen.getByTestId('split-here-closure-already-0')).toHaveTextContent(
+      'Loop closure 5:1 to 6:0 is removed: its two stations are already one point.'
+    );
+  });
+
+  it('keeps one line per closure when a file repeats a closure id', async () => {
+    previewSplitSection.mockResolvedValue({
+      ...NO_MOVE,
+      closures_to_merges: 1,
+      moved_side: 'b',
+      moved_m: 0.1,
+      removed_closures: [
+        { closure_id: 4n, station_a: ref(1, 0), station_b: ref(3, 3) },
+        { closure_id: 4n, station_a: ref(2, 0), station_b: ref(3, 3) },
+      ],
+      removed_already_one_point: [{ closure_id: 4n, station_a: ref(5, 1), station_b: ref(6, 0) }],
+    });
+    render(<SplitSectionHereDialog />);
+    await screen.findByTestId('split-here-closure-warning');
+    expect(screen.getAllByTestId(/^split-here-closure-removed-/).map((p) => p.textContent)).toEqual([
+      'Loop closure 1:0 to 3:3 is removed: its two stations become one point.',
+      'Loop closure 2:0 to 3:3 is removed: its two stations become one point.',
+    ]);
+    expect(screen.getAllByTestId(/^split-here-closure-already-/)).toHaveLength(1);
+  });
+
+  it('says a closure is removed even when nothing moves', async () => {
+    previewSplitSection.mockResolvedValue({
+      ...NO_MOVE,
+      closures_to_merges: 1,
+      removed_closures: [{ closure_id: 2n, station_a: ref(1, 0), station_b: ref(3, 3) }],
+    });
+    render(<SplitSectionHereDialog />);
+    await screen.findByTestId('split-here-closure-warning');
+    expect(screen.queryByTestId('split-here-closure-move')).toBeNull();
+    expect(screen.getByTestId('split-here-closure-removed-0')).toHaveTextContent(
+      'Loop closure 1:0 to 3:3 is removed: its two stations become one point.'
     );
   });
 

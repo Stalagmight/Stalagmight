@@ -22,6 +22,7 @@ mod project_create;
 mod project_io;
 mod project_load;
 mod project_merge;
+mod project_restore;
 mod project_source;
 mod raw_data;
 mod recent_projects;
@@ -133,6 +134,19 @@ mod issue_555_tests;
 )]
 mod issue_649_tests;
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod issue_737_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod issue_738_tests;
+#[cfg(test)]
 mod metamorphic_undo_tests;
 #[cfg(test)]
 #[expect(
@@ -154,6 +168,13 @@ mod open_undo_bugs_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod project_add_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod project_restore_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
@@ -251,6 +272,13 @@ mod station_names_import_tests;
     clippy::print_stdout
 )]
 mod tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod undo_after_reopen_tests;
 // `any(test, feature = "test-support")`: the root crate's tests reach the
 // AppState test setters in here (via the `test-support` feature the root's
 // [dev-dependencies] enable); the source-scan tripwires inside stay

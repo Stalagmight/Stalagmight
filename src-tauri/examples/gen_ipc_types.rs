@@ -51,20 +51,20 @@ use stalagmight_lib::models::placement_suggest::{
     PlacementSuggestion, SuggestionConfidence, TargetType,
 };
 use stalagmight_lib::models::{
-    AlongLineResult, AzimuthReference, ClosurePair, ClosurePreview, ClosureRef, ClosureStrategy,
-    ClosureUpdate, CombineCandidate, CombineJoinEnds, CombineJoinKind, CombinePick, CombinePlan,
-    CombineSectionsOptions, ConnectivityResult, Coordinates, CorrectionSource, CreditEdit,
-    CreditTargets, CreditedPerson, CylRole, Cylinder, DatumGap, DatumRole, DeleteShotImpact,
-    DeleteShotRangeImpact, DistanceField, DivePlan, DivePlanMeta, DivePlanSnapshot, Diver,
-    ExistingShotUpdate, FrozenShotRef, GasReachField, GpsBounds, GpsCoordinates, ImportPlacement,
-    ImportSectionConfig, LoopClosureWire, MarkedPoint, NorthReference, PathShot, Person,
-    PlanAnchorSet, PlanMode, PlanSegment, Project, ProjectMetadata, ProjectStats, ProjectWarning,
-    RangeDeleteKind, RouteLeg, RouteProfilePoint, RulerEndpoint, Section, SectionCreditSummary,
-    SectionData, SectionEnd, SectionRelationships, SectionStats, SectionUpdates, Shot, ShotData,
-    ShotKind, ShotUpdates, SpeleoLink, SplitAt, SplitPreview, SplitSectionOptions, SplitSide,
-    Station, StationMergeWire, StationPair, StationRef, SurveyCredit, SurveyDirection,
-    TankMaterial, Team, TornTie, TornTieKind, TornTieReason, UnrecognisedShotKind,
-    ZeroDatumPreview, ZeroDatumWire,
+    AdjustmentFailureReport, AdjustmentReport, AlongLineResult, AzimuthReference, ClosurePair,
+    ClosurePreview, ClosureRef, ClosureStrategy, ClosureUpdate, CombineCandidate, CombineJoinEnds,
+    CombineJoinKind, CombinePick, CombinePlan, CombineSectionsOptions, ConnectivityResult,
+    Coordinates, CorrectionSource, CreditEdit, CreditTargets, CreditedPerson, CylRole, Cylinder,
+    DatumGap, DatumRole, DeleteShotImpact, DeleteShotRangeImpact, DistanceField, DivePlan,
+    DivePlanMeta, DivePlanSnapshot, Diver, ExistingShotUpdate, FrozenShotRef, GasReachField,
+    GpsBounds, GpsCoordinates, ImportPlacement, ImportSectionConfig, KeptMovesReason,
+    LoopClosureWire, MarkedPoint, NorthReference, PathShot, Person, PlanAnchorSet, PlanMode,
+    PlanSegment, Project, ProjectMetadata, ProjectStats, ProjectWarning, RangeDeleteKind, RouteLeg,
+    RouteProfilePoint, RulerEndpoint, Section, SectionCreditSummary, SectionData, SectionEnd,
+    SectionRelationships, SectionStats, SectionUpdates, Shot, ShotData, ShotKind, ShotUpdates,
+    SkippedClosure, SpeleoLink, SplitAt, SplitPreview, SplitSectionOptions, SplitSide, Station,
+    StationMergeWire, StationPair, StationRef, SurveyCredit, SurveyDirection, TankMaterial, Team,
+    TornTie, TornTieKind, TornTieReason, UnrecognisedShotKind, ZeroDatumPreview, ZeroDatumWire,
 };
 use stalagmight_lib::parsers::compass::{CompassFile, CompassSurveySummary, InvalidShotCounts};
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};
@@ -256,6 +256,7 @@ fn main() {
     export::<TornTie>(&out_dir);
     export::<TornTieKind>(&out_dir);
     export::<TornTieReason>(&out_dir);
+    export::<KeptMovesReason>(&out_dir);
     export::<SectionEnd>(&out_dir);
     export::<SplitAt>(&out_dir);
     export::<SplitPreview>(&out_dir);
@@ -289,6 +290,9 @@ fn main() {
     export::<ConnectivityResult>(&out_dir);
     export::<ClosurePreview>(&out_dir);
     export::<ProjectWarning>(&out_dir);
+    export::<SkippedClosure>(&out_dir);
+    export::<AdjustmentFailureReport>(&out_dir);
+    export::<AdjustmentReport>(&out_dir);
     export::<FrozenShotRef>(&out_dir);
     export::<ProjectState>(&out_dir);
 
@@ -572,6 +576,7 @@ fn main() {
         "TornTie",
         "TornTieKind",
         "TornTieReason",
+        "KeptMovesReason",
         "SectionEnd",
         "Station",
         "StationRef",
@@ -596,6 +601,9 @@ fn main() {
         "ConnectivityResult",
         "ClosurePreview",
         "ProjectWarning",
+        "SkippedClosure",
+        "AdjustmentFailureReport",
+        "AdjustmentReport",
         "FrozenShotRef",
         "ProjectState",
         "MatchDirection",

@@ -85,6 +85,7 @@ function quietPlan(kept: number, overrides: Record<string, unknown> = {}) {
   return {
     kept,
     moving_section: null,
+    kept_moves_because: null,
     moved_sections: [],
     shift_m: 0,
     torn_ties: [],
@@ -317,6 +318,7 @@ describe('CombineSectionsDialog', () => {
         // Keeping Main-B: a zero datum holds Main-A, so the kept side moves.
         plan_keeping_b: quietPlan(5, {
           moving_section: 5,
+          kept_moves_because: 'zero_datum',
           moved_sections: [5],
           shift_m: 0.42,
           torn_ties: [tie([2, 0], [9, 0], 'snapped_closure'), tie([5, 2], [8, 0], 'merge', 'zero_datum')],
@@ -362,6 +364,25 @@ describe('CombineSectionsDialog', () => {
     fireEvent.click(screen.getByTestId('combine-confirm'));
     await waitFor(() => expect(closeDialog).toHaveBeenCalled());
     expect(combineSections.mock.calls[0]?.[2]).toMatchObject({ join: { kept: 'start', other: 'end' } });
+  });
+
+  it('says the kept side moves when the other side holds the Closures Computed View in place', () => {
+    dialogData = {
+      candidate: candidate({
+        join_kind: 'closure',
+        plan_keeping_a: quietPlan(2, {
+          moving_section: 2,
+          kept_moves_because: 'adjustment_anchor',
+          moved_sections: [2],
+          shift_m: 0.4,
+        }),
+      }),
+    };
+    render(<CombineSectionsDialog />);
+    expect(screen.getByTestId('combine-note-move')).toHaveTextContent('Main-A moves 0.40m horizontally');
+    expect(screen.getByTestId('combine-note-kept-moves')).toHaveTextContent(
+      "Main-A is the one that moves: the Closures Computed View holds the survey at a station on Main-B's side"
+    );
   });
 
   it('lists converted bearings, the kept quality and offset, renewed shot ids and crossings', () => {

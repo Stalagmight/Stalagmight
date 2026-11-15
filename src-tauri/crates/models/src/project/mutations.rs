@@ -64,6 +64,18 @@ impl Project {
             (a, _) => a.is_some(),
         };
         let both_placed = a_placement.is_some() && b_placement.is_some();
+        // Two placed groups tied by an inert closure are the one shape the
+        // connectivity check above lets through where a loop closure already
+        // ties the two merge groups (the sweep leaves such a bridge, #738). A
+        // merge there would leave that closure tying one point to itself, so
+        // it is refused, as the old two-datum rule used to refuse it.
+        if both_placed && self.closure_ties_merge_groups(station_a, station_b) {
+            return Err(
+                "A loop closure already ties these stations together. Remove it before merging \
+                 them, or keep the closure instead of the merge."
+                    .to_string(),
+            );
+        }
 
         debug!(
             station_a = ?station_a,
@@ -262,6 +274,15 @@ impl Project {
             return Err("A loop closure already exists between these stations.".to_string());
         }
 
+        // A closure needs a loop to close (#737): refuse one that would tie the
+        // two ends of one shot together - the solve could only skip it.
+        // Whatever the strategy: a tie across one shot means nothing for a
+        // `Move` closure either. A pair other merges and closures already tie
+        // together is NOT refused: it changes nothing for the solve.
+        if let Some(shot) = self.closure_spans_one_shot(station_a, station_b) {
+            return Err(super::closure_shots::closure_across_one_shot_refusal(shot));
+        }
+
         // Compute closure values using shared helper
         let metrics = self.compute_closure_metrics(station_a, station_b)?;
 
@@ -328,11 +349,12 @@ impl Project {
     /// coordinates, a station-level merge-group union-find (the "already merged?"
     /// check → O(α) instead of a BFS per closure), a section-level connectivity
     /// union-find (merges + closures; grown as closures are added), the
-    /// station-merge adjacency, the closure adjacency, and a duplicate-pair set.
+    /// station-merge adjacency, the closure adjacency, a duplicate-pair set, and
+    /// the constraint knots behind the across-one-shot refusal (#737).
     /// Sections/merges/offsets are fixed for the batch (the import's cascade ran
     /// first and Batch closures are never `is_aligned`, so they don't rigidify),
     /// so only the closure-dependent state (connectivity UF, closure adjacency,
-    /// dup set) updates per created closure - exactly what path-length needs to
+    /// dup set, knots) updates per created closure - exactly what path-length needs to
     /// still see earlier closures. Returns one result per input pair (Ok =
     /// created, Err = skipped, with the same reason strings as the single path).
     pub fn create_loop_closures_batch(
@@ -426,6 +448,10 @@ impl Project {
             }
         }
 
+        // The constraint knots the single path asks `closure_spans_one_shot`
+        // about (#737), built once and grown as closures are added.
+        let (mut knots, _) = self.closure_knots();
+
         // Normalize the id counter once (legacy id=0 projects).
         self.normalize_next_closure_id();
 
@@ -464,6 +490,12 @@ impl Project {
                 results.push(Err(
                     "A loop closure already exists between these stations.".to_string()
                 ));
+                continue;
+            }
+            if let Some(shot) = knots.collapsed_shot(station_a, station_b) {
+                results.push(Err(super::closure_shots::closure_across_one_shot_refusal(
+                    shot,
+                )));
                 continue;
             }
             let (Some(&ca), Some(&cb)) = (coords.get(&station_a), coords.get(&station_b)) else {
@@ -509,6 +541,8 @@ impl Project {
             closure_adj.entry(station_b).or_default().push(station_a);
             closure_pairs.insert(norm(station_a, station_b));
             uf_union(&mut conn_uf, station_a.section_id, station_b.section_id);
+            // A `Batch` closure is eligible, so the next pair sees it tied.
+            knots.join(station_a, station_b);
             created_any = true;
             results.push(Ok(closure));
         }
@@ -587,6 +621,36 @@ impl Project {
     }
 
     /// Check if two stations are merged
+    /// Does a loop closure tie a station of `a`'s merge group to a station of
+    /// `b`'s? Merging `a` and `b` would then leave that closure between
+    /// merged stations (#738). One adjacency build and two BFS walks.
+    fn closure_ties_merge_groups(&self, a: StationRef, b: StationRef) -> bool {
+        let adjacency = self.build_station_merge_adjacency();
+        let group = |start: StationRef| -> HashSet<StationRef> {
+            let mut seen = HashSet::from([start]);
+            let mut queue = VecDeque::from([start]);
+            while let Some(current) = queue.pop_front() {
+                for &n in adjacency.get(&current).into_iter().flatten() {
+                    if seen.insert(n) {
+                        queue.push_back(n);
+                    }
+                }
+            }
+            seen
+        };
+        let (group_a, group_b) = (group(a), group(b));
+        self.loop_closures.iter().any(|lc| {
+            let (Some(x), Some(y)) = (
+                self.resolve_key(&lc.station_a),
+                self.resolve_key(&lc.station_b),
+            ) else {
+                return false;
+            };
+            (group_a.contains(&x) && group_b.contains(&y))
+                || (group_a.contains(&y) && group_b.contains(&x))
+        })
+    }
+
     pub fn are_stations_merged(&self, a: StationRef, b: StationRef) -> bool {
         if a == b {
             return true;

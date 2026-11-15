@@ -4,7 +4,7 @@ use tracing::warn;
 use crate::config::ClosureAdjustmentConfig;
 use crate::{ClosureRef, ClosureStrategy, Coordinates, Section, SectionId, Station, StationRef};
 
-use super::Project;
+use super::{AdjustedStations, AdjustmentFailure, Project};
 
 impl Project {
     /// Get all stations colocated with the given station (via merges and aligned closures).
@@ -460,18 +460,69 @@ impl Project {
     #[cfg(any(test, feature = "test-support"))]
     pub fn adjustment_anchor_for_tests(&self, section_id: SectionId) -> Option<StationRef> {
         let component = self.get_connected_section_ids(section_id);
-        self.default_anchor_for_component(&component)
+        self.adjustment_anchor_of(&component)
     }
 
     /// Whether a loop closure participates in the least-squares adjustment.
     /// Mirrors the strategy filter inside [`Self::adjust_loop_closures`]: `Move`
     /// closures are already coincident (snap-to-merge) and the deferred
     /// proportional/equal strategies are not solved.
-    fn closure_is_eligible(strategy: ClosureStrategy) -> bool {
+    pub(crate) fn closure_is_eligible(strategy: ClosureStrategy) -> bool {
         matches!(
             strategy,
             ClosureStrategy::Batch | ClosureStrategy::LeastSquaresWeighted
         )
+    }
+
+    /// Whether the least-squares adjustment solves `component`: it holds a
+    /// closure the solve takes ([`Self::closure_is_eligible`]) and does not
+    /// skip. `skipped` is the set the solve leaves out because each of them
+    /// ties the two ends of one shot together ([`Self::closures_across_one_shot`],
+    /// #737). A component without such a closure is shown as measured in the
+    /// closure-adjusted view.
+    pub(crate) fn component_has_eligible_closure(
+        &self,
+        component: &HashSet<SectionId>,
+        skipped: &HashSet<u64>,
+    ) -> bool {
+        self.loop_closures.iter().any(|lc| {
+            Self::closure_is_eligible(lc.strategy)
+                && !skipped.contains(&lc.id)
+                && component.contains(&lc.station_a.section_id)
+                && component.contains(&lc.station_b.section_id)
+        })
+    }
+
+    /// The station the closure-adjusted view holds `component` at: a placement
+    /// zero datum in it when present, otherwise a deterministic default (the
+    /// component's held gauge, or the lowest section id's gauge station) so
+    /// the gauge is reproducible across reloads. The one rule the solve
+    /// ([`Self::plan_adjustment_anchors`]) and the edits that must not move
+    /// it (Combine Sections' choice of the side that moves) share.
+    pub(crate) fn adjustment_anchor_of(
+        &self,
+        component: &HashSet<SectionId>,
+    ) -> Option<StationRef> {
+        // A PLACEMENT datum (#741): a GPS fix is pulled by the solve, never
+        // held, so it cannot be the station the component is held at.
+        self.placement_datum_refs()
+            .into_iter()
+            .find(|sr| component.contains(&sr.section_id))
+            .or_else(|| self.default_anchor_for_component(component))
+    }
+
+    /// [`Self::plan_adjustment_anchors`] for the project as it stands (the
+    /// across-one-shot skip computed here): one anchor per component the
+    /// closure-adjusted view really solves. For tests that compare an edit's
+    /// verdict with what the solve will do on the edited project.
+    #[cfg(test)]
+    pub(crate) fn adjustment_anchors_for_tests(&self) -> Vec<StationRef> {
+        let skipped: HashSet<u64> = self
+            .closures_across_one_shot()
+            .into_iter()
+            .map(|c| c.closure_id)
+            .collect();
+        self.plan_adjustment_anchors(&skipped)
     }
 
     /// Plan which component anchors to feed the closure-adjustment solve.
@@ -481,7 +532,7 @@ impl Project {
     /// deterministic default anchor (see [`Self::default_anchor_for_component`]).
     /// Computed from the *measured* topology so it can run once up front, before
     /// any adjustment mutates the working copy.
-    pub(crate) fn plan_adjustment_anchors(&self) -> Vec<StationRef> {
+    fn plan_adjustment_anchors(&self, skipped: &HashSet<u64>) -> Vec<StationRef> {
         let mut anchors = Vec::new();
         let mut visited: HashSet<SectionId> = HashSet::new();
         for section in &self.sections {
@@ -493,27 +544,17 @@ impl Project {
                 visited.insert(*sid);
             }
 
-            // A GPS fix is an observation the solve fits, so a component holding
-            // one is adjusted even with no eligible closure (#741).
-            let has_eligible = self.loop_closures.iter().any(|lc| {
-                Self::closure_is_eligible(lc.strategy)
-                    && component.contains(&lc.station_a.section_id)
-                    && component.contains(&lc.station_b.section_id)
-            }) || self.component_has_gps_fix(&component);
-            if !has_eligible {
+            // A closure the solve skips (it spans one shot, #737) gives the
+            // component nothing to solve, so it does not earn a snapshot. A GPS
+            // fix is an observation the solve fits, so a component holding one
+            // is adjusted even with no eligible closure (#741).
+            if !self.component_has_eligible_closure(&component, skipped)
+                && !self.component_has_gps_fix(&component)
+            {
                 continue;
             }
 
-            // Anchor on a zero datum in the component when present, otherwise a
-            // deterministic default so the gauge is reproducible across reloads.
-            let anchor = self
-                .zero_datums
-                .iter()
-                .find(|zd| component.contains(&zd.station_ref.section_id))
-                .and_then(|zd| self.resolve_key(&zd.station_ref))
-                .or_else(|| self.default_anchor_for_component(&component));
-
-            if let Some(anchor) = anchor {
+            if let Some(anchor) = self.adjustment_anchor_of(&component) {
                 anchors.push(anchor);
             }
         }
@@ -534,18 +575,7 @@ impl Project {
         &self,
         config: &ClosureAdjustmentConfig,
     ) -> Vec<Station> {
-        // Fast path: nothing to adjust → adjusted == measured (skip the clone).
-        // A GPS fix (#741) is something to adjust too.
-        if !self
-            .loop_closures
-            .iter()
-            .any(|lc| Self::closure_is_eligible(lc.strategy))
-            && self.gps_fix_datums().is_empty()
-        {
-            return self.compute_station_coordinates();
-        }
-
-        self.clone().into_adjusted_station_coordinates(config)
+        self.compute_adjusted_stations(config).stations
     }
 
     /// By-value counterpart of [`Self::compute_adjusted_station_coordinates`] that
@@ -573,13 +603,53 @@ impl Project {
         self,
         config: &ClosureAdjustmentConfig,
     ) -> Vec<Station> {
-        let anchors = self.plan_adjustment_anchors();
+        self.into_adjusted_stations(config).stations
+    }
+
+    /// [`Self::compute_adjusted_station_coordinates`], plus the components the
+    /// solve could not adjust (each is shown measured). Callers that only draw
+    /// the geometry use the plain form; the app keeps the failures so the user
+    /// is told (#737) instead of finding one line in the log.
+    pub fn compute_adjusted_stations(&self, config: &ClosureAdjustmentConfig) -> AdjustedStations {
+        // Fast path: nothing to adjust → adjusted == measured (skip the clone).
+        // A GPS fix (#741) is something to adjust too.
+        if !self
+            .loop_closures
+            .iter()
+            .any(|lc| Self::closure_is_eligible(lc.strategy))
+            && self.gps_fix_datums().is_empty()
+        {
+            return AdjustedStations {
+                stations: self.compute_station_coordinates(),
+                failures: Vec::new(),
+            };
+        }
+        self.clone().into_adjusted_stations(config)
+    }
+
+    /// By-value [`Self::compute_adjusted_stations`]; see
+    /// [`Self::into_adjusted_station_coordinates`] for the rollback and its cost.
+    ///
+    /// The across-one-shot closures are found once, on the pristine measured
+    /// project: the solve rewrites shot vectors and offsets, never merges or
+    /// closures, so the set holds for every component.
+    pub fn into_adjusted_stations(self, config: &ClosureAdjustmentConfig) -> AdjustedStations {
+        let skipped: HashSet<u64> = self
+            .closures_across_one_shot()
+            .into_iter()
+            .map(|c| c.closure_id)
+            .collect();
+        let anchors = self.plan_adjustment_anchors(&skipped);
         let mut working = self;
+        let mut failures = Vec::new();
         for anchor in anchors {
             let snapshot = working.clone();
-            if let Err(e) =
-                working.adjust_loop_closures(anchor, ClosureStrategy::LeastSquaresWeighted, config)
-            {
+            if let Err(e) = working.adjust_loop_closures_skipping(
+                anchor,
+                ClosureStrategy::LeastSquaresWeighted,
+                config,
+                &skipped,
+            ) {
                 working = snapshot;
                 warn!(
                     error = %e,
@@ -587,9 +657,22 @@ impl Project {
                     purpose = "derive closure-adjusted view",
                     "Skipping closure adjustment for component; showing measured geometry"
                 );
+                let mut section_ids: Vec<SectionId> = working
+                    .get_connected_section_ids(anchor.section_id)
+                    .into_iter()
+                    .collect();
+                section_ids.sort_unstable();
+                failures.push(AdjustmentFailure {
+                    anchor,
+                    section_ids,
+                    error: e,
+                });
             }
         }
-        working.compute_station_coordinates()
+        AdjustedStations {
+            stations: working.compute_station_coordinates(),
+            failures,
+        }
     }
 
     /// Compute all station coordinates from shots with optional progress callback.
@@ -850,7 +933,13 @@ impl Project {
                 .get(&b_ref)
                 .map_or_else(|| vec![b_ref], |&gid| groups[gid].clone());
 
-            // Skip if both endpoints are in the same merge group (legacy data edge case)
+            // Skip a closure whose two endpoints are one merge group: it ties a
+            // point to itself, so listing it would only show a station closed
+            // onto its own merged partners. The orphan-closure sweep removes
+            // these on every load and every edit that runs it (#738), so the
+            // app does not make one; the skip stays because an undo can still
+            // restore one from a history recorded before that fix, until the
+            // next such edit or open.
             let a_group_id = station_to_group.get(&a_ref);
             let b_group_id = station_to_group.get(&b_ref);
             if a_group_id.is_some() && a_group_id == b_group_id {

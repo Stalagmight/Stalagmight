@@ -263,7 +263,9 @@ pub(crate) fn preview_delete_shot_range_impl(
     let project = state
         .get_project_state()
         .ok_or_else(|| "No project open".to_string())?;
-    project.preview_delete_shot_range(section_id, start_shot_id, end_shot_id)
+    // The clone above is ours: the gap-close prediction runs on it rather than
+    // cloning the project a second time (#737).
+    project.into_preview_delete_shot_range(section_id, start_shot_id, end_shot_id)
 }
 
 /// Delete a contiguous interior range of shots and split the section into two

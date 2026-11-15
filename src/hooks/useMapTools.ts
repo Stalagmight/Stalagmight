@@ -404,6 +404,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
             stationB,
             preview: result.preview,
             reason: result.reason,
+            closureRefusal: result.closure_refusal,
           });
         } else {
           // Not connected and merge blocked. The backend blocks only a loop
