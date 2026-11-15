@@ -963,12 +963,14 @@ fn check_combined(
     // closure group holding both ends of one shot; the same survey hits it
     // before the combine once its snaps count).
     //
-    // Likewise a join closure the solve does not take (a legacy strategy,
-    // which the passage sweep plants) leaves the two join stations apart in
+    // Likewise a join closure whose strategy the solve does not take (a
+    // legacy one, which the passage sweep plants; `with_snaps` has already
+    // made the snapped ones ordinary) leaves the two join stations apart in
     // the view, and the combine puts them on one point: the "before" view
-    // counts it as an ordinary closure. One the solve skips (it joins the two
-    // ends of one shot) leaves that view unsolved, and the comparison does not
-    // apply.
+    // counts it as an ordinary closure. Only such a closure: any other is
+    // compared as the solve takes it, as before #746. One the solve skips (it
+    // joins the two ends of one shot) leaves that view unsolved, and the
+    // comparison does not apply.
     let mut tied = with_snaps(before);
     match candidate.join_kind {
         CombineJoinKind::CoLocated => tie(&mut tied, candidate.station_a, candidate.station_b),
@@ -982,7 +984,11 @@ fn check_combined(
                     .map_or_else(|| HashSet::from([at]), |m| m.iter().copied().collect())
             };
             let (ga, gb) = (group(candidate.station_a), group(candidate.station_b));
-            for closure in &mut tied.loop_closures {
+            for closure in tied
+                .loop_closures
+                .iter_mut()
+                .filter(|c| !Project::closure_is_eligible(c.strategy))
+            {
                 let ends = (
                     before.resolve_key(&closure.station_a),
                     before.resolve_key(&closure.station_b),
@@ -1435,8 +1441,9 @@ fn every_offered_combine_in_random_networks_keeps_the_invariants() {
          {with_branches} moved with attached sections",
         first + seeds
     );
-    // The sweep reaches what it is for (120 seeds: ~6000 combines, ~2300
-    // torn ties, ~1000 shifts, ~290 with the kept side moving). Not asked of a
+    // The sweep reaches what it is for (seeds 0..120: 6176 combines, 2342
+    // torn ties, 1032 shifts, 292 with the kept side moving, 235 moving
+    // attached sections; master at #747 gives the same). Not asked of a
     // handful of seeds (a rerun of one).
     if seeds < 50 {
         return;
