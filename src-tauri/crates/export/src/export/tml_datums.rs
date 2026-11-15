@@ -63,15 +63,23 @@ pub(super) fn start_shot(
 /// A CLOSURE row: Ariane nodes `from_id` and `to_id` are one physical point
 /// surveyed twice, so its length IS the depth gap between the two (see the
 /// closure pass in `build_export_shots_with_report`).
+///
+/// `from` is the row of node `from_id`. The CLOSURE takes its depth and its
+/// date and people. A CLOSURE off a mid-section row re-imports as a branch
+/// section of its own, and the importer evaluates the declination at the
+/// earliest section date in the file. A CLOSURE written with no date would get
+/// the `2000-01-01` stand-in and drag that epoch back, turning the whole
+/// re-imported survey.
 pub(super) fn closure_shot(
     id: i64,
     from_id: i64,
     to_id: i64,
     section: String,
     color: String,
-    depth_a: f64,
+    from: Option<&ExportShot>,
     depth_b: f64,
 ) -> ExportShot {
+    let depth_a = from.map_or(0.0, |row| row.depth);
     ExportShot {
         id,
         uuid: None,
@@ -89,8 +97,8 @@ pub(super) fn closure_shot(
         up: 0.0,
         down: 0.0,
         comment: None,
-        explorer: None,
-        date: None,
+        explorer: from.and_then(|row| row.explorer.clone()),
+        date: from.and_then(|row| row.date.clone()),
         color,
         latitude: 0.0,
         longitude: 0.0,
@@ -297,7 +305,7 @@ impl DatumGps {
                 next_id,
                 row.section.clone(),
                 row.color.clone(),
-                row.depth,
+                Some(row),
                 row.depth,
             );
             next_id += 2;

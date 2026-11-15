@@ -550,3 +550,98 @@ fn a_datumless_start_is_measured_from_the_frame_station_not_the_origin() {
         "the START sits at its surveyed offset FROM THE FRAME STATION, got {east},{north}"
     );
 }
+
+/// Main and Side dated 2015-06-01 by Ann: a loop closure from Side's middle
+/// back onto Main, and a GPS fix on Side's middle. Both CLOSURE rows hang off a
+/// mid-section row, so each re-imports as a branch section of its own.
+fn dated_cave_with_mid_section_closures() -> Project {
+    let date = chrono::NaiveDate::from_ymd_opt(2015, 6, 1).unwrap();
+    let mut project = Project::new("Dated".to_string(), None);
+    for (name, count, azimuth) in [("Main", 4, 90.0), ("Side", 3, 0.0)] {
+        project.add_section(SectionData {
+            name: Some(name.to_string()),
+            color: "#3366ff".to_string(),
+            date: Some(date),
+            surveyor: Some("Ann".to_string()),
+            shots: shots(count, azimuth),
+            ..Default::default()
+        });
+    }
+    project
+        .merge_stations(StationRef::new(0, 4), StationRef::new(1, 0))
+        .unwrap();
+    let gps = |(lat, lon)| GpsCoordinates::new(lat, lon, 0.0).unwrap();
+    project
+        .set_zero_datum(StationRef::new(0, 0), gps(PLACEMENT))
+        .unwrap();
+    project
+        .create_loop_closure(
+            StationRef::new(1, 2),
+            StationRef::new(0, 2),
+            crate::models::ClosureStrategy::Batch,
+        )
+        .unwrap();
+    project
+        .set_zero_datum(StationRef::new(1, 1), gps(FIX_MID_SECTION))
+        .unwrap();
+    assert_eq!(
+        project.gps_fix_datums().len(),
+        1,
+        "fixture rot: the datum on Side must be a GPS fix"
+    );
+    project
+}
+
+#[test]
+fn closure_rows_carry_the_date_and_people_of_their_row() {
+    let project = dated_cave_with_mid_section_closures();
+    let (shots, _) = export(&project, TmlProfile::User);
+    let closures: Vec<&ExportShot> = shots.iter().filter(|s| s.shot_type == "CLOSURE").collect();
+    assert_eq!(closures.len(), 2, "the loop closure and the fix's tie");
+    for closure in closures {
+        let row = shots.iter().find(|s| s.id == closure.from_id).unwrap();
+        assert_eq!(
+            (&closure.date, &closure.explorer),
+            (&row.date, &row.explorer),
+            "CLOSURE {} hangs off row {}",
+            closure.id,
+            row.id
+        );
+        assert_eq!(closure.date.as_deref(), Some("2015-06-01"));
+    }
+}
+
+#[test]
+fn a_mid_section_closure_does_not_move_the_reimport_declination_epoch() {
+    // Each CLOSURE off a mid-section row re-imports as a branch section, and the
+    // importer evaluates the declination at the earliest section date. Written
+    // undated, the rows took the 2000-01-01 stand-in and turned the whole
+    // re-imported survey by the 2000-vs-2015 declination difference.
+    let project = dated_cave_with_mid_section_closures();
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("dated.tml");
+    export_tml(&project, &path).unwrap();
+    let parsed = crate::parsers::tml::parse_tml(&path).unwrap();
+    assert!(parsed.use_magnetic_azimuth, "fixture rot: needs a magnetic file");
+    assert!(
+        parsed.sections.len() > 1,
+        "fixture rot: the closures must re-import as branch sections"
+    );
+    let dates: Vec<_> = parsed.sections.iter().map(|s| s.date).collect();
+    assert!(
+        dates
+            .iter()
+            .all(|d| *d == chrono::NaiveDate::from_ymd_opt(2015, 6, 1)),
+        "{dates:?}"
+    );
+    let (configs, _, _) =
+        crate::parsers::tml::convert_tml_to_import_configs(&parsed, false, true).unwrap();
+    for config in &configs {
+        assert_eq!(
+            config.azimuth_reference.map(|r| r.source),
+            Some(crate::models::CorrectionSource::IgrfAuto { epoch_year: 2015 }),
+            "{:?}",
+            config.name
+        );
+    }
+}

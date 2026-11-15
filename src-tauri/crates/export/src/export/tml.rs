@@ -1518,10 +1518,10 @@ fn build_export_shots_with_report(
     // Third pass: generate CLOSURE shots from loop_closures
     // Depth of every Ariane node emitted so far, so a closure can be hung off
     // the node it actually references rather than off its endpoint's section.
-    let node_depth: HashMap<i64, f64> = blocks
+    let node_rows: HashMap<i64, &ExportShot> = blocks
         .iter()
         .flat_map(|b| b.shots.iter())
-        .map(|s| (s.id, s.depth))
+        .map(|s| (s.id, s))
         .collect();
     let mut closure_shots = Vec::new();
     for closure in &project.loop_closures {
@@ -1614,19 +1614,19 @@ fn build_export_shots_with_report(
         //   is minted after every `from_id` in the file has been assigned, so
         //   nothing hangs off it and no position propagates through it.
         //
-        // - `node_depth` is snapshotted BEFORE the geometry repair, so a connector
+        // - `node_rows` is snapshotted BEFORE the geometry repair, so a connector
         //   onto a node the repair later re-hangs names a depth that node no longer
         //   has. The repair re-hangs the connector too if that breaks its own
         //   bound, so the file stays readable either way; what stays stale is the
         //   depth of that leaf, the one value here nobody reads. Refreshing it
         //   would mean rebuilding the closures after the repair - for a phantom.
-        let depth_a = node_depth.get(&from_id).copied().unwrap_or(0.0);
-        let depth_b = node_depth.get(&to_id).copied().unwrap_or(0.0);
+        let depth_b = node_rows.get(&to_id).map_or(0.0, |row| row.depth);
         // The two endpoints are the same physical point surveyed twice, so the
         // connector's length (`closure_shot`) IS the vertical part of the closure
         // error. Emitting exactly that keeps `|depth - origin_depth| <= length`
         // true by construction, and stays honest: a perfectly closed loop still
-        // gets 0.
+        // gets 0. The connector also takes the date and people of the row it
+        // hangs off (see `closure_shot`).
 
         closure_shots.push(closure_shot(
             closure_id,
@@ -1634,7 +1634,7 @@ fn build_export_shots_with_report(
             to_id,
             section_name,
             color,
-            depth_a,
+            node_rows.get(&from_id).copied(),
             depth_b,
         ));
     }
