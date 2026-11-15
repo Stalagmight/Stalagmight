@@ -2108,6 +2108,12 @@ const CHAINS_THE_CAMPAIGNS_FAILED_ON: &[&str] = &[
     // a legacy closure; the closure the solve takes must stay.
     "p929;combine(4:End, 5:Start);combine(0:Start, 2:Start);reverse(3);reverse(0);\
      combine(4:End, 0:Start);combine(3:End, 4:Start)",
+    // #749 again, found by `check_eligible_ties_kept` with the rule before
+    // #749: the last combine drops the eligible one of two closures on 5:4
+    // and 5:1.
+    "p334;combine(1:End, 6:End);split(2 at 1);reverse(2);split(1 at 2);\
+     combine(8:Start, 1:End);combine(2:Start, 7:Start);combine(5:End, 8:End);\
+     split(3 at 1);reverse(0);combine(0:Start, 9:End);combine(5:Start, 4:Start)",
 ];
 
 /// [`CHAINS_THE_CAMPAIGNS_FAILED_ON`], replayed with every combine checked
