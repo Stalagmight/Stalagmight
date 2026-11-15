@@ -227,6 +227,30 @@ fn an_orphan_with_a_fix_and_no_closures_still_exports() {
 }
 
 #[test]
+fn a_fix_start_sits_at_its_rows_repaired_depth() {
+    // The geometry repair re-hangs Loop onto M4 (depth 4) because L0 was
+    // surveyed at depth 0, so the L2 row is written 4 m deeper than the
+    // survey says. The fix rows are appended AFTER the repair, so the START
+    // takes the written depth; appended before it, the START would keep the
+    // survey's depth and the zero-length tie would measure a 4 m drop.
+    let project = three_entrance_cave(true);
+    let surveyed = project.sections[2].shots[1].depth_out;
+    let (shots, _) = export(&project, TmlProfile::User);
+    let (start, tie, row) = fix_shape(&shots, FIX_MID_SECTION);
+    assert_eq!(row.uuid, uuid_of(&project, 2, 1));
+    assert_eq!(
+        (surveyed, row.depth),
+        (2.0, 6.0),
+        "fixture rot: the repair must move the fix row, or this proves nothing"
+    );
+    assert_eq!(
+        start.depth, row.depth,
+        "the START sits at the repaired depth"
+    );
+    assert_eq!((tie.depth_in, tie.depth, tie.length), (6.0, 6.0, 0.0));
+}
+
+#[test]
 fn the_sidecar_leaves_the_fixes_out_and_counts_them() {
     let project = three_entrance_cave(true);
     let (shots, unwritten) = export(&project, TmlProfile::SpeleoDbSidecar);
