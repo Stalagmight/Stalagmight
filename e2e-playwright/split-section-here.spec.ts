@@ -124,6 +124,42 @@ test.describe('Split Section Here (#335)', () => {
     await expect.poll(ruler).toEqual([false, false]);
   });
 
+  test('names the loop closure the split removes before it splits (#738)', async ({ page }) => {
+    // The preview (the split run on a copy in the backend) reports one closure that
+    // becomes a merge and moves Main-B, and a second one to the same point that the
+    // merge leaves tying that point to itself, named by the stations it was created with.
+    const section = await seedFourShotSection(page);
+    await page.evaluate((id) => {
+      (window as any).__MOCK_SPLIT_PREVIEW__ = {
+        closures_to_merges: 1,
+        moved_side: 'b',
+        moved_m: 0.1,
+        removed_closures: [
+          {
+            closure_id: 2,
+            station_a: { section_id: id, station_index: 4 },
+            station_b: { section_id: id, station_index: 1 },
+          },
+        ],
+      };
+    }, section.id);
+    await openContextMenu(page, { type: 'station', ref: { section_id: section.id, station_index: 2 } });
+    await page.getByRole('button', { name: 'Split Section Here' }).click();
+    await expect(page.getByTestId('split-section-here-dialog')).toBeVisible();
+
+    await expect(page.getByTestId('split-here-closure-move')).toHaveText(
+      'Main-B is tied to Main-A only by loop closures, so the split turns one of them into a merge and moves ' +
+        'Main-B 0.10m to close it.'
+    );
+    await expect(page.getByTestId('split-here-closure-removed')).toHaveText(
+      `Loop closure ${section.id}:4 to ${section.id}:1 is removed: its two stations become one point.`
+    );
+    // Still the user's call.
+    await page.getByTestId('split-here-confirm').click();
+    await expect(page.getByTestId('split-section-here-dialog')).not.toBeVisible();
+    await expect.poll(async () => (await readSections(page)).length).toBe(2);
+  });
+
   test('is absent on an end station', async ({ page }) => {
     const section = await seedFourShotSection(page);
     await openContextMenu(page, { type: 'station', ref: { section_id: section.id, station_index: 4 } });
