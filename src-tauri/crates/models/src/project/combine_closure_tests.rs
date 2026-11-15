@@ -1113,6 +1113,107 @@ fn check_removed_were_merged(after: &Project, removed: &[LoopClosure], what: &st
     }
 }
 
+/// Try every merge that would make a closure's two stations one point - each
+/// end, or any member of its merge group, to the other end or any member of
+/// its group - and require `merge_stations` to refuse it (#738: a merge is
+/// not a route to a closure between merged stations). Returns how many it
+/// tried.
+fn check_no_merge_folds_a_closure(project: &Project, what: &str) -> usize {
+    let mut merged: Vec<StationRef> = project
+        .station_merges
+        .iter()
+        .flat_map(|m| [m.station_a.clone(), m.station_b.clone()])
+        .filter_map(|key| project.resolve_key(&key))
+        .collect();
+    merged.sort_by_key(|at| (at.section_id, at.station_index));
+    merged.dedup();
+    let group = |x: StationRef| -> Vec<StationRef> {
+        let mut g: Vec<StationRef> = merged
+            .iter()
+            .copied()
+            .filter(|&m| project.are_stations_merged(x, m))
+            .collect();
+        if !g.contains(&x) {
+            g.push(x);
+        }
+        g
+    };
+    let mut tried = 0;
+    for closure in &project.loop_closures {
+        let (Some(a), Some(b)) = (
+            project.resolve_key(&closure.station_a),
+            project.resolve_key(&closure.station_b),
+        ) else {
+            continue;
+        };
+        for x in group(a) {
+            for y in group(b) {
+                if x == y {
+                    continue;
+                }
+                tried += 1;
+                let mut after = project.clone();
+                if after.merge_stations(x, y).is_ok() {
+                    panic!(
+                        "{what}: merge_stations({x:?}, {y:?}) merged the two ends of closure {} \
+                         ({a:?} - {b:?})",
+                        closure.id
+                    );
+                }
+            }
+        }
+    }
+    tried
+}
+
+/// [`check_no_merge_folds_a_closure`] on the random networks (merged trees,
+/// snapped and recorded loops, a second anchored survey tied on by a closure),
+/// after a random split. The chain test below asks it after every combine,
+/// split and reverse too, which is where the ties a combine tears into
+/// closures come in.
+#[test]
+fn merge_stations_never_leaves_a_closure_between_merged_stations() {
+    let seeds = std::env::var("STALAGMIGHT_SWEEP_SEEDS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(200u64);
+    let mut tried = 0;
+    for seed in 0..seeds {
+        let mut rng = Rng(seed.wrapping_mul(0x94D0_49BB_1331_11EB) | 1);
+        let mut project = network(seed);
+        tried += check_no_merge_folds_a_closure(&project, &format!("seed {seed}"));
+        let long: Vec<SectionId> = project
+            .sections
+            .iter()
+            .filter(|s| s.shots.len() >= 2)
+            .map(|s| s.id)
+            .collect();
+        if let Some(&id) = long.get(rng.below(long.len())) {
+            let shots = project.get_section(id).unwrap().shots.len();
+            let at = 1 + rng.below(shots - 1) as u32;
+            let options = crate::SplitSectionOptions {
+                name_a: format!("S{id}a"),
+                name_b: format!("S{id}b"),
+                color_a: "#123456".to_string(),
+                color_b: "#654321".to_string(),
+                comment_side: crate::SplitSide::A,
+                datum_side: crate::SplitSide::A,
+            };
+            if project.split_section_at_station(id, at, &options).is_ok() {
+                project.sweep_orphan_closures();
+                tried += check_no_merge_folds_a_closure(
+                    &project,
+                    &format!("seed {seed} split({id} at {at})"),
+                );
+            }
+        }
+    }
+    eprintln!("merge probe seeds 0..{seeds}: {tried} merges tried, all refused");
+    if seeds >= 100 {
+        assert!(tried > seeds as usize, "only {tried} merges tried");
+    }
+}
+
 /// Every combine the station menu offers in random networks, keeping either
 /// section: refused only for two zero datums, and every invariant holds.
 ///
@@ -1242,7 +1343,7 @@ fn chains_of_combines_splits_and_reverses_keep_the_invariants() {
         .filter(|m| !m.is_empty())
         .collect();
     let (mut combines, mut splits, mut reverses) = (0usize, 0usize, 0usize);
-    let mut swept_away = 0usize;
+    let (mut swept_away, mut probed) = (0usize, 0usize);
     for seed in first..first + seeds {
         let mut rng = Rng(seed.wrapping_mul(0xA24B_AED4_963E_E407) | 1);
         let mut project = network(seed);
@@ -1305,6 +1406,7 @@ fn chains_of_combines_splits_and_reverses_keep_the_invariants() {
                         )
                         .unwrap_or_else(|e| panic!("{what}: {e}"));
                     check_combined(&project, &after, &candidate, kept, &what, &mute);
+                    probed += check_no_merge_folds_a_closure(&after, &what);
                     project = after;
                     trail.push(op);
                     combines += 1;
@@ -1344,6 +1446,7 @@ fn chains_of_combines_splits_and_reverses_keep_the_invariants() {
                     check_removed_were_merged(&after, &sweep.removed, &what);
                     swept_away += sweep.removed.len();
                     check_structure_muting(&after, &what, &mute);
+                    probed += check_no_merge_folds_a_closure(&after, &what);
                     project = after;
                     trail.push(op);
                     splits += 1;
@@ -1378,7 +1481,8 @@ fn chains_of_combines_splits_and_reverses_keep_the_invariants() {
     }
     eprintln!(
         "combine chains seeds {first}..{}: {combines} combines, {splits} splits, {reverses} \
-         reverses, {swept_away} closures between merged stations removed",
+         reverses, {swept_away} closures between merged stations removed, {probed} merges of \
+         a closure's two ends tried (all refused)",
         first + seeds
     );
     if seeds >= 20 {

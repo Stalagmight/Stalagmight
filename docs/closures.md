@@ -108,21 +108,39 @@ classified `can_orphan_closures`, and inside the shot-removal paths themselves
 an inverse does no more than invert).
 
 **A closure between merged stations is removed** by the same sweep: one whose two
-stations are one point - the same station, or one merge group (`are_stations_merged`).
-It closes no loop. The solve can only skip it, its stored misclosure is a gap the
-geometry no longer has, and it would still count as a loop in the project stats and
-keep the Closures Computed View on. No edit makes one directly (Create Loop Closure
-and the shot-removal rewire refuse the pair), but a promotion can: two closures that
-tie a station to the same point record one loop twice (the Merge tool and Combine
-Sections both allow that), and once the sweep promotes one, the other ties that point
-to itself (#738). Converting it would add nothing, so it goes. One forward pass is
-enough: the sweep keeps a station-level merge union-find, extended on every promotion,
-and asks each closure "one point?" before "orphan?"; a promotion only joins components
-that were not connected, so it cannot merge the ends of a closure the pass has already
-kept. `Project::sweep_orphan_closures` reports what it removed.
+stations are one point - the same station (a closure from a station to itself, which
+used to be kept), or one merge group (`are_stations_merged`). It closes no loop. The
+solve can only skip it, its stored misclosure is a gap the geometry no longer has, and
+it would still count as a loop in the project stats and keep the Closures Computed
+View on. Converting it would add nothing, so it goes.
+
+Which edits can make one:
+
+- **Not** creating a closure: Create Loop Closure and the import's batch refuse a
+  merged pair, and so does the shot-removal rewire.
+- **Not** a merge: `merge_stations` refuses a merge inside one rigid component, and a
+  closure between two components is either a sole bridge (which every sweep promotes)
+  or ties two zero-datum-anchored components, which a merge may not join. Tests try
+  every merge of a closure's two ends, and of their merge groups, on random networks
+  and after every step of the combine/split/reverse chain fuzzer
+  (`check_no_merge_folds_a_closure`): all are refused.
+- **A promotion**: two closures that tie a station to the same point record one loop
+  twice (the Merge tool and Combine Sections both allow that), and once the sweep
+  promotes one, the other ties that point to itself (#738).
+- A file, or an undo history, written before #738.
+
+One forward pass is enough: the sweep keeps a station-level merge union-find, extended
+on every promotion, and asks each closure "one point?" before "orphan?"; a promotion
+only joins components that were not connected, so it cannot merge the ends of a
+closure the pass has already kept. Every fate is decided in place and the list is
+compacted once, so a file holding 50 000 such closures (the most the stalx-reader
+accepts) opens in linear time. `Project::sweep_orphan_closures` reports what it
+removed and where each one sat; it logs nothing itself, since the split preview runs
+it on a copy - the callers that keep the result log one line with the count.
 
 - **On load** it is silent, exactly as the promotion is: the project opens without
-  the closure, the log says so, and the file settles on the next save.
+  the closure and the log says how many went. The file settles on the next save: an
+  explicit Save writes it, while autosave only runs after an edit.
 - **Inside a command** it is part of that command's undo unit: Split Section Here,
   the delete-and-split commands, the deletes, unmerges and Remove Zero Datum through
   `execute()`'s epilogue, Batch and Repair all record a before/after snapshot pair

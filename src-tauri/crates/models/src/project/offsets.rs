@@ -8,7 +8,9 @@ use std::hash::{Hash, Hasher};
 #[cfg(debug_assertions)]
 use tracing::error;
 
-use crate::{ClosureStrategy, LoopClosure, SectionId, StationKey, StationMerge, StationRef};
+use crate::{
+    ClosurePair, ClosureStrategy, LoopClosure, SectionId, StationKey, StationMerge, StationRef,
+};
 
 use super::union_find::UnionFind;
 use super::Project;
@@ -199,6 +201,16 @@ pub(crate) struct MintedMerge {
     moving: StationKey,
 }
 
+/// What the orphan-closure pass decided for one closure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Fate {
+    Keep,
+    /// Its two stations are one point: dropped.
+    Removed,
+    /// A sole bridge: now a merge.
+    Promoted,
+}
+
 /// What one pass of [`Project::convert_closures_orphaned_since`] did.
 #[derive(Debug, Default)]
 pub(crate) struct ClosureSweep {
@@ -208,6 +220,8 @@ pub(crate) struct ClosureSweep {
     /// The closures removed because their two stations are one point (#738),
     /// in `loop_closures` order, as they were stored.
     pub(crate) removed: Vec<LoopClosure>,
+    /// Where each of `removed` sat in `loop_closures` when the pass began.
+    pub(crate) removed_positions: Vec<usize>,
 }
 
 /// What the whole-project orphan-closure sweep did
@@ -217,10 +231,76 @@ pub struct OrphanClosureSweep {
     /// How many closures it turned into merges.
     pub converted: usize,
     /// The closures it removed because their two stations are one point: the
-    /// same station, or one merge group (#738). In `loop_closures` order, as
-    /// they were stored, so a caller can name them by the stations they had
-    /// before the edit that ran the sweep.
+    /// same station (a closure from a station to itself), or one merge group
+    /// (#738). In `loop_closures` order, as they were stored, so a caller can
+    /// name them by the stations they had before the edit that ran the sweep
+    /// ([`Project::closures_before_sweep`]).
     pub removed: Vec<LoopClosure>,
+    /// Where each of `removed` sat in `loop_closures` when the sweep began,
+    /// parallel to it: an edit that adds and drops no closure before its sweep
+    /// (Split Section Here) can match each one to its entry by position.
+    pub removed_positions: Vec<usize>,
+}
+
+impl OrphanClosureSweep {
+    /// Log what an APPLIED sweep removed: one line with the count, the ids at
+    /// debug level only (a file can hold 50 000 of them). The sweep itself
+    /// logs nothing, because Split Section Here's preview runs it on a copy
+    /// whose removals never happen; the callers that keep the result log it.
+    pub fn log_removed(&self, context: &str) {
+        log_removed_closures(&self.removed, context);
+    }
+}
+
+/// One closure as it stood before an edit ([`ClosuresBeforeSweep`]).
+#[derive(Debug, Clone)]
+struct ClosureBefore {
+    id: u64,
+    keys: (StationKey, StationKey),
+    ends: Option<(StationRef, StationRef)>,
+    one_point: bool,
+}
+
+/// What an edit that ends in the whole-project sweep captures BEFORE it
+/// changes anything, to name the closures the sweep then removes
+/// ([`Project::closures_before_sweep`], [`Project::removed_closures_named`]):
+/// every closure's id, stored ends, resolved stations, and whether its two
+/// stations were already one point.
+#[derive(Debug, Clone, Default)]
+pub struct ClosuresBeforeSweep {
+    closures: Vec<ClosureBefore>,
+}
+
+/// A closure the sweep removed, named for the user (#738).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RemovedClosure {
+    /// By the stations it had before the edit, the ids the user created it
+    /// with (its stations after the edit only if it cannot be matched to a
+    /// closure the edit started with).
+    pub pair: ClosurePair,
+    /// Its two stations were one point BEFORE the edit, so the edit did not
+    /// cause the removal: the sweep only cleaned up a closure a file or an undo
+    /// history from before #738 still held. Otherwise the edit's own promotion
+    /// of another closure made them one point.
+    pub already_one_point: bool,
+}
+
+/// [`OrphanClosureSweep::log_removed`] for any list of removed closures.
+pub fn log_removed_closures(removed: &[LoopClosure], context: &str) {
+    if removed.is_empty() {
+        return;
+    }
+    tracing::info!(
+        removed = removed.len(),
+        context,
+        purpose = "a loop closure between merged stations closes no loop",
+        "Removed loop closures whose two stations are one point"
+    );
+    tracing::debug!(
+        closure_ids = ?removed.iter().map(|c| c.id).collect::<Vec<_>>(),
+        context,
+        "Loop closures removed for merged ends"
+    );
 }
 
 /// One beyond-invariant merge, as the fixpoint fingerprint records it: the two
@@ -910,7 +990,7 @@ impl Project {
         // Upgrade any positional (Index) ref from an older file to the stable
         // shot-UUID anchor now that shots (with UUIDs) are loaded.
         self.reanchor_station_refs();
-        self.convert_orphan_closures_to_merges();
+        self.sweep_orphan_closures().log_removed("open");
         // Zero-trust: never honor a persisted derivable offset - re-solve
         // unconditionally so a sub-tolerance stale offset can't survive the load.
         let healed = self.resolve_offsets();
@@ -978,12 +1058,21 @@ impl Project {
     /// misclosure is a stored number the geometry no longer has (the merge holds
     /// the two stations together), the solve can only skip it, and it still
     /// counts as a loop in the project stats and keeps the Closures Computed View
-    /// on. Every path that makes a closure refuses this pair
-    /// ([`Self::create_loop_closure`], the shot-removal rewire); the one way to
-    /// reach it is a promotion merging the two ends of a closure that tied the
-    /// same two points as the promoted one - the same loop recorded twice, which
-    /// a closure is allowed to be. Converting it would add nothing (the two
-    /// stations are merged already), so the sweep REMOVES it.
+    /// on. Converting it would add nothing (the two stations are merged
+    /// already), so the sweep REMOVES it - a closure from a station to itself
+    /// included, which used to be kept.
+    ///
+    /// Which paths can produce one. Making a closure refuses a merged pair
+    /// ([`Self::create_loop_closure`], [`Self::create_loop_closures_batch`]),
+    /// and so does the shot-removal rewire. A merge cannot make one either:
+    /// [`Self::merge_stations`] refuses a merge inside one rigid component, and a
+    /// closure between two components is either a sole bridge, which every
+    /// sweep promotes, or ties two anchored components, which a merge may not
+    /// join (pinned by `merge_stations_never_leaves_a_closure_between_merged_
+    /// stations`). What does produce one is a promotion that merges the two ends
+    /// of a closure that tied the same two points as the promoted one - the same
+    /// loop recorded twice, which the Merge tool and Combine Sections allow -
+    /// and a file or an undo history written before #738.
     ///
     /// A closure with an endpoint that no longer resolves is not one point: a
     /// dangling ref is integrity's problem, as for [`Self::is_orphan_closure`].
@@ -1041,17 +1130,22 @@ impl Project {
     /// for a load, a Repair and a forward command - and wrong inside an inverse,
     /// which is what [`Self::convert_closures_orphaned_since`] exists for. On the
     /// load it is silent, as the promotions always were: the project opens in
-    /// the state the app may hold, the sweep logs each removal, and the file
-    /// settles on the next save.
+    /// the state the app may hold, the log says how many closures went, and the
+    /// file settles on the next save (an explicit Save writes it; autosave only
+    /// runs after an edit). Logs what it removed, since its caller keeps only
+    /// the count.
     pub fn convert_orphan_closures_to_merges(&mut self) -> usize {
-        self.sweep_orphan_closures().converted
+        let sweep = self.sweep_orphan_closures();
+        sweep.log_removed("sweep");
+        sweep.converted
     }
 
     /// [`Self::convert_orphan_closures_to_merges`], saying what it did: how many
     /// closures it turned into merges and which closures it removed because
     /// their two stations are one point. Split Section Here's preview runs it on
     /// a copy to name the closures the split removes, and the split runs it for
-    /// real, so the dialog and the edit cannot disagree.
+    /// real, so the dialog and the edit cannot disagree. Logs nothing: a caller
+    /// that keeps the result logs it ([`OrphanClosureSweep::log_removed`]).
     pub fn sweep_orphan_closures(&mut self) -> OrphanClosureSweep {
         let sweep = self.convert_closures_orphaned_since(&HashSet::new());
         // Settled immediately: this entry point's callers - the load, Repair and
@@ -1061,7 +1155,111 @@ impl Project {
         OrphanClosureSweep {
             converted: sweep.minted.len(),
             removed: sweep.removed,
+            removed_positions: sweep.removed_positions,
         }
+    }
+
+    /// Capture [`ClosuresBeforeSweep`] for the project as it is now, before an
+    /// edit that ends in the whole-project sweep. `O(merges + closures)`.
+    pub fn closures_before_sweep(&self) -> ClosuresBeforeSweep {
+        let mut components = StationComponents::new(self);
+        ClosuresBeforeSweep {
+            closures: self
+                .loop_closures
+                .iter()
+                .map(|c| ClosureBefore {
+                    id: c.id,
+                    keys: (c.station_a.clone(), c.station_b.clone()),
+                    ends: self
+                        .resolve_key(&c.station_a)
+                        .zip(self.resolve_key(&c.station_b)),
+                    one_point: self.closure_ends_are_one_point(c, &mut components),
+                })
+                .collect(),
+        }
+    }
+
+    /// Name every closure `sweep` removed by the closure it was in `before`,
+    /// and say whether its two stations were already one point then. Asked of
+    /// the project AFTER the sweep.
+    ///
+    /// A closure is matched, in this order: by position, when the edit added
+    /// and dropped no closure before its sweep (Split Section Here) and the
+    /// entry there has its id; else the one closure `before` held with its id;
+    /// else the one with its id and the same stored ends. Ids are not trusted
+    /// alone because a hostile or very old file can repeat one. A closure
+    /// matched to none is named by its stations now and counted as one the edit
+    /// made redundant.
+    pub fn removed_closures_named(
+        &self,
+        before: &ClosuresBeforeSweep,
+        sweep: &OrphanClosureSweep,
+    ) -> Vec<RemovedClosure> {
+        let started_with = self.loop_closures.len() + sweep.converted + sweep.removed.len();
+        let positions =
+            (started_with == before.closures.len()).then_some(sweep.removed_positions.as_slice());
+        self.name_removed_closures(before, &sweep.removed, positions)
+    }
+
+    /// [`Self::removed_closures_named`] for closures an edit removed some other
+    /// way than the whole-project sweep (the shot removal's own scoped sweep),
+    /// matched without positions.
+    pub fn removed_closures_named_by_id(
+        &self,
+        before: &ClosuresBeforeSweep,
+        removed: &[LoopClosure],
+    ) -> Vec<RemovedClosure> {
+        self.name_removed_closures(before, removed, None)
+    }
+
+    fn name_removed_closures(
+        &self,
+        before: &ClosuresBeforeSweep,
+        removed: &[LoopClosure],
+        positions: Option<&[usize]>,
+    ) -> Vec<RemovedClosure> {
+        let mut by_id: HashMap<u64, Vec<&ClosureBefore>> = HashMap::new();
+        for entry in &before.closures {
+            by_id.entry(entry.id).or_default().push(entry);
+        }
+        removed
+            .iter()
+            .enumerate()
+            .map(|(i, closure)| {
+                let at_position = positions
+                    .and_then(|p| p.get(i))
+                    .and_then(|&position| before.closures.get(position))
+                    .filter(|entry| entry.id == closure.id);
+                let same_id = by_id.get(&closure.id).map(Vec::as_slice).unwrap_or(&[]);
+                let entry = at_position.or_else(|| match same_id {
+                    [only] => Some(*only),
+                    many => many
+                        .iter()
+                        .find(|e| e.keys == (closure.station_a.clone(), closure.station_b.clone()))
+                        .copied(),
+                });
+                let (station_a, station_b) = entry
+                    .and_then(|e| e.ends)
+                    .or_else(|| {
+                        self.resolve_key(&closure.station_a)
+                            .zip(self.resolve_key(&closure.station_b))
+                    })
+                    .unwrap_or_else(|| {
+                        (
+                            StationRef::new(closure.station_a.section_id, 0),
+                            StationRef::new(closure.station_b.section_id, 0),
+                        )
+                    });
+                RemovedClosure {
+                    pair: ClosurePair {
+                        closure_id: closure.id,
+                        station_a,
+                        station_b,
+                    },
+                    already_one_point: entry.is_some_and(|e| e.one_point),
+                }
+            })
+            .collect()
     }
 
     /// [`Self::convert_orphan_closures_to_merges`] restricted to what a mutation
@@ -1114,25 +1312,24 @@ impl Project {
         // one merge group would end in a promotion refused for the same reason.
         // One pass therefore leaves no closure between merged stations outside
         // `preexisting`.
-        let mut idx = 0;
-        while idx < self.loop_closures.len() {
+        //
+        // Every closure's fate is decided in place and the list is compacted
+        // ONCE at the end: a `Vec::remove` per closure made a file holding many
+        // closures between merged stations quadratic to open. Nothing the pass
+        // asks reads `loop_closures` (the predicates read `components`, the
+        // promotion plan the merges and datums), so deciding against the
+        // uncompacted list is the same as deciding against a shrinking one.
+        let mut fates = vec![Fate::Keep; self.loop_closures.len()];
+        for (idx, fate) in fates.iter_mut().enumerate() {
             let closure = &self.loop_closures[idx];
             if preexisting.contains(&closure.id) {
-                idx += 1;
                 continue;
             }
             if self.closure_ends_are_one_point(closure, &mut components) {
-                let removed = self.loop_closures.remove(idx);
-                tracing::info!(
-                    closure_id = removed.id,
-                    purpose = "a loop closure between merged stations closes no loop",
-                    "Removed a loop closure whose two stations are one point"
-                );
-                sweep.removed.push(removed);
+                *fate = Fate::Removed;
                 continue;
             }
             if !self.is_orphan_closure(closure, &mut components) {
-                idx += 1;
                 continue;
             }
 
@@ -1144,14 +1341,11 @@ impl Project {
             // move for the coincidence the edge declares to be true. A refusal
             // keeps it a (soft) closure - legitimate between two anchored groups -
             // and lets the over-anchoring detector surface it for the user.
-            let (id, a, b) = {
-                let closure = &self.loop_closures[idx];
-                (
-                    closure.id,
-                    closure.station_a.clone(),
-                    closure.station_b.clone(),
-                )
-            };
+            let (id, a, b) = (
+                closure.id,
+                closure.station_a.clone(),
+                closure.station_b.clone(),
+            );
             // The double-anchor refusal is answered from the components first, so a
             // refused closure costs a lookup instead of `plan_merge_promotion`'s two
             // merge-graph walks (#597); the plan still decides every promotion.
@@ -1167,29 +1361,40 @@ impl Project {
                     "Left a sole-bridge loop closure unconverted: promoting it is not legal \
                      (both endpoints zero-datum-anchored, or an endpoint no longer resolves)"
                 );
-                idx += 1;
                 continue;
             };
 
-            let closure = self.loop_closures.remove(idx);
-            let already = match (
-                self.resolve_key(&closure.station_a),
-                self.resolve_key(&closure.station_b),
-            ) {
-                (Some(a), Some(b)) => {
-                    components.join(a, b);
-                    self.has_direct_merge(a, b)
-                }
-                _ => false,
-            };
-            if !already {
-                self.record_station_merge(StationMerge {
-                    station_a: closure.station_a,
-                    station_b: closure.station_b,
-                    merged_at: Utc::now(),
-                });
+            if let (Some(ra), Some(rb)) = (self.resolve_key(&a), self.resolve_key(&b)) {
+                components.join(ra, rb);
+                // A direct merge between the two ends would have made them one
+                // point, and the closure would have been removed just above.
+                debug_assert!(
+                    !self.has_direct_merge(ra, rb),
+                    "an orphan closure doubles a direct merge"
+                );
             }
+            self.record_station_merge(StationMerge {
+                station_a: a,
+                station_b: b,
+                merged_at: Utc::now(),
+            });
+            *fate = Fate::Promoted;
             sweep.minted.push(plan);
+        }
+        if fates.iter().any(|fate| *fate != Fate::Keep) {
+            let closures = std::mem::take(&mut self.loop_closures);
+            let mut kept = Vec::with_capacity(closures.len());
+            for (position, (closure, fate)) in closures.into_iter().zip(fates).enumerate() {
+                match fate {
+                    Fate::Keep => kept.push(closure),
+                    Fate::Removed => {
+                        sweep.removed_positions.push(position);
+                        sweep.removed.push(closure);
+                    }
+                    Fate::Promoted => {}
+                }
+            }
+            self.loop_closures = kept;
         }
         sweep
     }

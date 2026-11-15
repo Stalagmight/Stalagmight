@@ -15665,6 +15665,89 @@ fn the_orphan_sweep_is_fast_with_thousands_of_refused_promotions() {
     );
 }
 
+/// `count` closures whose two stations are one point, cycling over `pairs`
+/// (the stalx-reader caps a file at 50 000 closures).
+fn closures_on_one_point(project: &mut Project, pairs: &[(StationKey, StationKey)], count: usize) {
+    for i in 0..count {
+        let (a, b) = pairs[i % pairs.len()].clone();
+        project.loop_closures.push(test_closure(
+            i as u64 + 1,
+            a,
+            b,
+            ClosureStrategy::Batch,
+            false,
+        ));
+    }
+}
+
+/// The load removes closures between merged stations (#738) in one compaction,
+/// not one `Vec::remove` each: 50 000 of them, the most a file the
+/// stalx-reader accepts can hold, are gone in linear time. Here each is a
+/// closure from a station to itself, the cheapest such closure to write.
+#[test]
+fn the_load_removes_fifty_thousand_closures_from_a_station_to_itself_fast() {
+    let mut project = two_anchored_components_with_orphan_closures(1_000, 0);
+    let stations: Vec<(StationKey, StationKey)> = project
+        .sections
+        .iter()
+        .map(|s| {
+            let key = StationKey::new(s.id, StationAnchor::SectionStart);
+            (key.clone(), key)
+        })
+        .collect();
+    closures_on_one_point(&mut project, &stations, 50_000);
+
+    let started = std::time::Instant::now();
+    project.redrive_offsets_after_load();
+    let elapsed = started.elapsed();
+
+    assert!(project.loop_closures.is_empty());
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "the post-load redrive took {elapsed:?}"
+    );
+}
+
+/// [`the_load_removes_fifty_thousand_closures_from_a_station_to_itself_fast`]
+/// with closures that double the merges of two long merge chains instead.
+#[test]
+fn the_load_removes_fifty_thousand_closures_between_merged_stations_fast() {
+    let mut project = two_anchored_components_with_orphan_closures(1_000, 0);
+    let merged: Vec<(StationKey, StationKey)> = project
+        .station_merges
+        .iter()
+        .map(|m| (m.station_a.clone(), m.station_b.clone()))
+        .collect();
+    closures_on_one_point(&mut project, &merged, 50_000);
+    let mut bigger = project.clone();
+
+    let started = std::time::Instant::now();
+    project.redrive_offsets_after_load();
+    let redriven = started.elapsed();
+
+    assert!(project.loop_closures.is_empty());
+    assert!(
+        redriven < std::time::Duration::from_secs(10),
+        "the post-load redrive took {redriven:?}"
+    );
+
+    // At 50 000 a removal per closure still fits in a few seconds (the list
+    // stays in cache), so the bound above would not catch one coming back. Four
+    // times as many does: one compaction is a fraction of a second here, a
+    // `Vec::remove` each is tens of seconds.
+    bigger.loop_closures.clear();
+    closures_on_one_point(&mut bigger, &merged, 200_000);
+    let started = std::time::Instant::now();
+    let sweep = bigger.sweep_orphan_closures();
+    let swept = started.elapsed();
+    assert_eq!((sweep.converted, sweep.removed.len()), (0, 200_000));
+    assert_eq!(sweep.removed_positions.len(), 200_000);
+    assert!(
+        swept < std::time::Duration::from_secs(5),
+        "the sweep took {swept:?}"
+    );
+}
+
 #[test]
 fn the_orphan_sweep_still_promotes_in_order_and_removes_the_twin_it_merged() {
     // One anchored component and one free one, bridged by two closures between

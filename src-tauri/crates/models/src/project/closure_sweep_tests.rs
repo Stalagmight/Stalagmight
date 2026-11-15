@@ -211,3 +211,72 @@ fn the_scoped_sweep_removes_what_its_promotion_merged_and_keeps_what_it_found() 
     assert_eq!(ids(&p.sweep_orphan_closures().removed), [recorded]);
     assert!(p.loop_closures.is_empty());
 }
+
+/// A closure from a station to itself closes nothing either, and goes too. It
+/// used to be kept: it is in one section, so it was never an orphan.
+#[test]
+fn a_closure_from_a_station_to_itself_goes() {
+    let (mut p, [r, t, _, _]) = network();
+    let real = p
+        .create_loop_closure(st(r, 4), st(r, 0), ClosureStrategy::Batch)
+        .unwrap()
+        .id;
+    let to_itself = plant(&mut p, st(r, 2), st(r, 2));
+    let also_to_itself = plant(&mut p, st(t, 1), st(t, 1));
+
+    let sweep = p.sweep_orphan_closures();
+
+    assert_eq!(ids(&sweep.removed), [to_itself, also_to_itself]);
+    assert_eq!(sweep.removed_positions, [1, 2]);
+    assert_eq!(ids(&p.loop_closures), [real]);
+}
+
+/// No merge can make a closure's two stations one point (#738): the Merge tool
+/// is not a route to the state the sweep removes. Every closure shape the app
+/// keeps, with each end merged to the other, directly or through the other's
+/// merge group: a loop on one section, two branches off one point tied at
+/// their far ends, and two anchored surveys tied by a closure. `merge_stations`
+/// refuses each - the first two as already connected, the last for its two
+/// zero datums - and nothing changes.
+#[test]
+fn merge_stations_refuses_to_merge_the_two_ends_of_a_closure() {
+    let (mut p, [r, t, u, v]) = network();
+    p.create_loop_closure(st(r, 4), st(r, 0), ClosureStrategy::Batch)
+        .unwrap();
+    p.create_loop_closure(st(t, 2), st(v, 1), ClosureStrategy::Batch)
+        .unwrap();
+    let before = serde_json::to_string(&p).unwrap();
+    for (x, y) in [
+        (st(r, 4), st(r, 0)),
+        (st(t, 2), st(v, 1)),
+        (st(t, 2), st(r, 3)),
+        (st(u, 0), st(v, 1)),
+    ] {
+        let refused = p.merge_stations(x, y).unwrap_err();
+        assert!(
+            refused.contains("already connected"),
+            "{x:?} {y:?}: {refused}"
+        );
+    }
+    assert_eq!(serde_json::to_string(&p).unwrap(), before);
+
+    // Two anchored surveys, tied by a closure (a sole bridge the sweep must
+    // leave, since promoting it would weld two anchors into one group).
+    let mut q = Project::new("anchored".to_string(), None);
+    let a = add(&mut q, "A", vec![shot(90.0, 10.0)]);
+    let b = add(&mut q, "B", vec![shot(0.0, 10.0)]);
+    let c = add(&mut q, "C", vec![shot(0.0, 3.0)]);
+    q.merge_stations(st(b, 1), st(c, 0)).unwrap();
+    let gps = |lat| crate::GpsCoordinates::new(lat, -87.4, 0.0).unwrap();
+    q.set_zero_datum(st(a, 0), gps(20.5)).unwrap();
+    q.set_zero_datum(st(b, 0), gps(20.6)).unwrap();
+    q.create_loop_closure(st(a, 1), st(b, 1), ClosureStrategy::Batch)
+        .unwrap();
+    assert_eq!(q.sweep_orphan_closures().converted, 0, "the bridge stays");
+    let before = serde_json::to_string(&q).unwrap();
+    for (x, y) in [(st(a, 1), st(b, 1)), (st(a, 1), st(c, 0))] {
+        let refused = q.merge_stations(x, y).unwrap_err();
+        assert!(refused.contains("zero datums"), "{x:?} {y:?}: {refused}");
+    }
+    assert_eq!(serde_json::to_string(&q).unwrap(), before);
+}
