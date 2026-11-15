@@ -385,10 +385,13 @@ fn a_datumless_entrance_start_sits_where_the_survey_puts_it() {
 
 #[test]
 fn an_unmerged_piece_with_a_closure_back_keeps_its_own_start_position() {
-    // The reachable path: A carries the datum, B is merged in, a closure ties
-    // B back to A, then B is unmerged. Unmerging removes only the closures of
-    // the unmerged pair, so B leaves as a datum-less piece with a loop back to
-    // A's entrance.
+    // A carries the datum, B is merged in, a closure ties B back to A, then B
+    // is unmerged. The model's unmerge removes only the closures of the
+    // unmerged pair, so B leaves as a datum-less piece with a loop back to A's
+    // entrance. The app would turn that lone closure into a merge after the
+    // command (`convert_orphan_closures_to_merges`), so this shape comes only
+    // from a project built outside it; what the app reaches is the separate
+    // piece without the closure, which must not land on A's entrance either.
     use crate::models::ClosureStrategy;
     let mut project = Project::new("Unmerged".to_string(), None);
     for (name, azimuth) in [("A", 90.0), ("B", 0.0)] {
