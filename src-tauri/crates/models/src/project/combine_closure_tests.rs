@@ -2189,10 +2189,11 @@ fn replay_a_combine_chain() {
     // "29;combine(0:Start, 1:End);split(0 at 1);reverse(4)", replayed with the
     // plan, ties and gauge printed before each combine. A seed written "p29"
     // starts from `passage_network(29)` (the passage chains).
-    replay_chain(
+    let replaced = replay_chain(
         &std::env::var("STALAGMIGHT_COMBINE_CHAIN_REPLAY").unwrap(),
         true,
     );
+    eprintln!("replaced over the chain: {replaced:?}");
 }
 
 /// Chains the long campaigns failed on, each the trail its failure printed
@@ -2213,18 +2214,67 @@ const CHAINS_THE_CAMPAIGNS_FAILED_ON: &[&str] = &[
 ];
 
 /// [`CHAINS_THE_CAMPAIGNS_FAILED_ON`], replayed with every combine checked
-/// as the chains check it.
+/// as the chains check it. Each is pinned for a closure its last combine
+/// replaces (#749), so each must still replace one, and between them a
+/// legacy closure: neither the sweeps nor the chains reach that kind in
+/// their default seed ranges.
 #[test]
 fn chains_the_campaigns_failed_on_keep_the_invariants() {
+    let mut kinds = HashSet::new();
     for spec in CHAINS_THE_CAMPAIGNS_FAILED_ON {
-        replay_chain(spec, false);
+        let replaced = replay_chain(spec, false);
+        assert!(!replaced.is_empty(), "{spec}: replaced no closure");
+        kinds.extend(replaced.iter().map(|r| format!("{:?}", r.kind)));
     }
+    assert!(
+        kinds.contains("LegacyClosure"),
+        "no legacy closure replaced: {kinds:?}"
+    );
+}
+
+/// The seeds of the two sweeps (`network`, `passage_network`) whose combines
+/// replace a closure (#749): in 1,000 seeds of either only these do, so the
+/// default seed ranges reach none. Each replaces a snap with the ordinary
+/// closure a torn snap becomes, some with the snap first in the list, where
+/// the rule before #749 kept the snap and dropped the closure the plan
+/// counted (`check_eligible_ties_kept` fails then).
+const SEEDS_THAT_REPLACE_A_CLOSURE: &[u64] = &[350, 519, 619];
+
+/// Every offered combine of [`SEEDS_THAT_REPLACE_A_CLOSURE`], checked as the
+/// sweeps check it, must replace closures, and some with the closure that
+/// stays coming later in the list (the case the rule before #749 got wrong).
+#[test]
+fn the_sweep_seeds_that_replace_a_closure_keep_the_invariants() {
+    let mut stats = SweepStats::default();
+    reset_closure_dedupes();
+    for &seed in SEEDS_THAT_REPLACE_A_CLOSURE {
+        combine_every_offered(&network(seed), seed, &mut stats);
+        combine_every_offered(&passage_network(seed), seed, &mut stats);
+    }
+    let counts = CLOSURE_DEDUPES.with(std::cell::Cell::get);
+    eprintln!(
+        "seeds {SEEDS_THAT_REPLACE_A_CLOSURE:?}: {} combines, {} closures replaced ({:?}); {}",
+        stats.combined,
+        stats.replaced,
+        stats.replaced_kinds,
+        closure_dedupes_report()
+    );
+    assert!(
+        stats.replaced_kinds.contains("SnappedClosure"),
+        "no snap replaced: {:?}",
+        stats.replaced_kinds
+    );
+    assert!(
+        counts.eligible_after_ineligible > 0 && counts.snapped_dropped_for_eligible > 0,
+        "{counts:?}"
+    );
 }
 
 /// Replay the chain `spec` ("seed;op;op;..."), checking every combine like
 /// the chains do; `verbose` prints the plan, the ties and the gauge before
-/// each combine.
-fn replay_chain(spec: &str, verbose: bool) {
+/// each combine. Returns every closure its combines replaced (#749).
+fn replay_chain(spec: &str, verbose: bool) -> Vec<crate::CombineReplacedClosure> {
+    let mut all_replaced = Vec::new();
     let mut parts = spec.split(';');
     let seed = parts.next().unwrap().trim();
     let mut project = match seed.strip_prefix('p') {
@@ -2281,6 +2331,7 @@ fn replay_chain(spec: &str, verbose: bool) {
             );
             check_replaced(&project, &after, plan, &outcome.replaced, op);
             check_combined(&project, &after, &c, k, op, &[]);
+            all_replaced.extend(outcome.replaced);
             project = after;
         } else if let Some(rest) = op.strip_prefix("split(") {
             let (id, at) = rest.trim_end_matches(')').split_once(" at ").unwrap();
@@ -2301,6 +2352,7 @@ fn replay_chain(spec: &str, verbose: bool) {
             project.reverse_section(rest.trim_end_matches(')').parse().unwrap(), true);
         }
     }
+    all_replaced
 }
 
 /// What [`replay_chain`] prints before a combine: the plan, the anchor, the
