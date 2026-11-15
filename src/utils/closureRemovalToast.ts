@@ -5,7 +5,9 @@ import { TOAST_KEYS } from './toastKeys';
 /**
  * The `CommandResult` warning code a delete with shift reports for each loop
  * closure it removed because, after the delete, the closure spans a single
- * shot (#737; `CLOSURE_REMOVED_ACROSS_ONE_SHOT` in the Rust models).
+ * shot (#737; `CLOSURE_REMOVED_ACROSS_ONE_SHOT` in the Rust models), and
+ * Combine Sections for each tie it removed because, combined, the closure it
+ * is or would become joins the two ends of one shot (#746).
  */
 export const CLOSURE_REMOVED_ACROSS_ONE_SHOT = 'CLOSURE_REMOVED_ACROSS_ONE_SHOT';
 
@@ -23,15 +25,15 @@ const CLOSURE_REMOVED_CODES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Tell the user about every closure an edit removed (across one shot, #737, or
- * between merged stations, #738), then hand the result on unchanged, so a store
- * action can wrap its command in one expression.
+ * Tell the user about every closure an edit removed (across one shot, #737 and
+ * #746, or between merged stations, #738), then hand the result on unchanged,
+ * so a store action can wrap its command in one expression.
  *
  * One toast for the whole edit (a range can remove more than one closure):
  * the messages are the backend's own words, joined, under one dedup key - one
  * event, one surface (docs/notifications.md). A warning toast, not an error:
- * the delete did what was asked, and one Undo brings the closure back with the
- * shots.
+ * the edit did what was asked, and one Undo brings the closure back with the
+ * rest of it.
  */
 export function notifyRemovedClosures(result: CommandResult): CommandResult {
   if (!result.success) return result;

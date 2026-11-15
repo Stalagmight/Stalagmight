@@ -366,6 +366,106 @@ describe('CombineSectionsDialog', () => {
     expect(combineSections.mock.calls[0]?.[2]).toMatchObject({ join: { kept: 'start', other: 'end' } });
   });
 
+  it('lists the ties the combine removes across one shot, per kept section, before the confirm (#746)', async () => {
+    const removed = (a: [number, number], b: [number, number], kind: string) => ({
+      station_a: { section_id: a[0], station_index: a[1] },
+      station_b: { section_id: b[0], station_index: b[1] },
+      kind,
+    });
+    dialogData = {
+      candidate: candidate({
+        join_kind: 'closure',
+        plan_keeping_a: quietPlan(2, {
+          moving_section: 5,
+          moved_sections: [5],
+          shift_m: 0.4,
+          closures_removed_across_one_shot: [removed([9, 1], [5, 0], 'merge')],
+        }),
+        plan_keeping_b: quietPlan(5, {
+          moving_section: 5,
+          kept_moves_because: 'adjustment_anchor',
+          moved_sections: [5],
+          shift_m: 0.4,
+          closures_removed_across_one_shot: [
+            removed([9, 1], [5, 0], 'snapped_closure'),
+            removed([2, 1], [5, 0], 'loop_closure'),
+          ],
+        }),
+      }),
+    };
+    render(<CombineSectionsDialog />);
+    // Said outside the folded Details, which stay closed: a user who never
+    // opens them still learns before confirming that a connection goes.
+    const details = screen.getByTestId('combine-details');
+    expect(details).not.toHaveAttribute('open');
+    const summary = screen.getByTestId('combine-removed-summary');
+    expect(details).not.toContainElement(summary);
+    expect(summary).toHaveTextContent(
+      'Combining removes 1 connection that would join the two ends of one shot (see Details).'
+    );
+    // Not a torn tie: the plan names it only as removed.
+    expect(screen.queryByTestId('combine-note-torn')).toBeNull();
+    expect(screen.getByTestId('combine-note-removed')).toHaveTextContent(/^This connection is removed:/);
+    expect(screen.getAllByTestId(/^combine-removed-tie-/).map(tieText)).toEqual([
+      'The merge of [section Section 9] [station 9:1] and [section Main-B] [station 5:0] : as a loop ' +
+        'closure it would join the two ends of one shot.',
+    ]);
+    expect(screen.getByTestId('combine-removed-why')).toHaveTextContent(
+      'Such a closure would squeeze that shot to zero length, so the Closures Computed View would only skip it. ' +
+        'Undo brings it back.'
+    );
+
+    fireEvent.click(screen.getByTestId('combine-swap-kept'));
+    expect(screen.getByTestId('combine-removed-summary')).toHaveTextContent(
+      'Combining removes 2 connections that would each join the two ends of one shot (see Details).'
+    );
+    expect(screen.getByTestId('combine-note-removed')).toHaveTextContent(/^These 2 connections are removed:/);
+    expect(screen.getAllByTestId(/^combine-removed-tie-/).map(tieText)).toEqual([
+      'The snapped closure between [section Section 9] [station 9:1] and [section Main-B] [station 5:0] : ' +
+        'as an ordinary closure it would join the two ends of one shot.',
+      'Loop closure [section Main-A] [station 2:1] to [section Main-B] [station 5:0] : it would join the ' +
+        'two ends of one shot.',
+    ]);
+    expect(screen.getByTestId('combine-removed-why')).toHaveTextContent(
+      'Such closures would squeeze their shot to zero length, so the Closures Computed View would only skip them.'
+    );
+    fireEvent.click(screen.getByTestId('combine-confirm'));
+    await waitFor(() => expect(closeDialog).toHaveBeenCalled());
+  });
+
+  it('says nothing about removed connections when the combine removes none (#746)', () => {
+    dialogData = {
+      candidate: candidate({
+        join_kind: 'closure',
+        plan_keeping_a: quietPlan(2, { moving_section: 5, moved_sections: [5], shift_m: 0.4 }),
+      }),
+    };
+    render(<CombineSectionsDialog />);
+    expect(screen.getByTestId('combine-closure-join')).toBeInTheDocument();
+    expect(screen.queryByTestId('combine-removed-summary')).toBeNull();
+    expect(screen.queryByTestId('combine-note-removed')).toBeNull();
+  });
+
+  it('shows the removed ties even when nothing else changes', () => {
+    dialogData = {
+      candidate: candidate({
+        plan_keeping_a: quietPlan(2, {
+          closures_removed_across_one_shot: [
+            {
+              station_a: { section_id: 2, station_index: 2 },
+              station_b: { section_id: 5, station_index: 0 },
+              kind: 'loop_closure',
+            },
+          ],
+        }),
+      }),
+    };
+    render(<CombineSectionsDialog />);
+    expect(screen.getByTestId('combine-plan-notes')).toBeInTheDocument();
+    expect(screen.getAllByTestId(/^combine-removed-tie-/)).toHaveLength(1);
+    expect(screen.getByTestId('combine-removed-summary')).toBeInTheDocument();
+  });
+
   it('says the kept side moves when the other side holds the Closures Computed View in place', () => {
     dialogData = {
       candidate: candidate({

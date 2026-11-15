@@ -50,11 +50,12 @@ use std::collections::{HashMap, HashSet};
 
 use crate::angle::normalize_azimuth;
 use crate::{
-    CombineJoinEnds, CombinePick, CombineSectionsOptions, SectionEnd, SectionId, Shot, ShotData,
-    StationKey, StationRef,
+    ClosurePair, ClosuresBeforeEdit, CombineJoinEnds, CombinePick, CombineRemovedClosure,
+    CombineRemovedKind, CombineSectionsOptions, SectionEnd, SectionId, Shot, ShotData, StationKey,
+    StationRef,
 };
 
-use super::combine_plan::{JoinPoint, TiePlan};
+use super::combine_plan::{JoinPoint, Tie, TieId, TiePlan};
 use super::gauge::captured_gauge;
 use super::reverse::shot_run_displacement;
 use super::station_rekey::take_naming;
@@ -200,20 +201,28 @@ impl Project {
     /// failures left (a section vanishing mid-way) are unreachable, but this
     /// does not roll back: `execute_combine_sections` restores its snapshot
     /// on any `Err`.
+    ///
+    /// Returns the ties it removed because, combined, the loop closure each
+    /// is or would become joins the two ends of one shot (#746): the plan's
+    /// `dropped` list, the one the dialog showed, named by the stations they
+    /// had before the combine.
     pub fn combine_sections(
         &mut self,
         kept: SectionId,
         other: SectionId,
         options: &CombineSectionsOptions,
-    ) -> Result<(), String> {
+    ) -> Result<Vec<CombineRemovedClosure>, String> {
         let setup = self.combine_setup(kept, other, options.join)?;
+        // For the check after the join that the plan's prediction left no
+        // closure across one shot behind.
+        let closures_before = self.closures_before_edit();
         // Shared shot identities first (a no-op when the command already
         // renewed them), so the held gauge below names shots by the identity
         // they keep.
         self.renew_shared_shot_uuids(kept, other);
         // Before anything moves, including the reverse below.
         let component_gauges = self.hold_component_gauges(&[kept, other]);
-        let remeasure = self.prepare_combine(&setup);
+        let (remeasure, torn_into) = self.prepare_combine(&setup);
         self.join_sections(kept, other, &setup, options)?;
         // The component's lowest id may now be a third section's (the other
         // section's id is retired): hold the component at the station the
@@ -221,13 +230,86 @@ impl Project {
         // station named by one shot reads.
         self.restore_component_gauges(&component_gauges);
         self.remeasure_closures(&remeasure);
+        let mut removed: Vec<CombineRemovedClosure> = setup
+            .ties
+            .dropped
+            .iter()
+            .map(|(tie, kind)| CombineRemovedClosure {
+                station_a: tie.a,
+                station_b: tie.b,
+                kind: *kind,
+            })
+            .collect();
+        removed
+            .extend(self.remove_unpredicted_closures_across_one_shot(&closures_before, &torn_into));
         self.touch();
-        Ok(())
+        Ok(removed)
+    }
+
+    /// The backstop to the plan's prediction (#746): any closure the combined
+    /// project skips now but did not before the combine is one the plan's
+    /// model of the joined survey missed. That is the preview/execution drift
+    /// the dialog listing exists to prevent, so in a debug build (every test,
+    /// fuzzer and debug app build) it is a `debug_assert!` failure. In a
+    /// release build the closure is removed all the same, so a combine never
+    /// leaves a NEW closure across one shot, with an error in the log. Each is
+    /// named by its stations before the combine and as what it was then: a
+    /// closure a tie of this combine became (`torn_into`, from `tear_ties`)
+    /// by that tie, a merge or snapped closure; any other by its own stations
+    /// (`before`), as a loop closure.
+    fn remove_unpredicted_closures_across_one_shot(
+        &mut self,
+        before: &ClosuresBeforeEdit,
+        torn_into: &HashMap<u64, Tie>,
+    ) -> Vec<CombineRemovedClosure> {
+        let missed = self.closures_newly_across_one_shot(before);
+        debug_assert!(
+            missed.is_empty(),
+            "combine left closures across one shot its plan did not predict: {missed:?}"
+        );
+        if missed.is_empty() {
+            return Vec::new();
+        }
+        tracing::error!(
+            missed = missed.len(),
+            purpose = "never leave a closure across one shot behind a combine",
+            "Combine left closures across one shot its plan did not predict; removing them"
+        );
+        let ids: HashSet<u64> = missed.iter().map(|c| c.closure_id).collect();
+        self.loop_closures.retain(|c| !ids.contains(&c.id));
+        Self::name_missed(&missed, torn_into)
+    }
+
+    /// Name each closure the backstop removes as the user knew it before the
+    /// combine (see [`Self::remove_unpredicted_closures_across_one_shot`]).
+    pub(super) fn name_missed(
+        missed: &[ClosurePair],
+        torn_into: &HashMap<u64, Tie>,
+    ) -> Vec<CombineRemovedClosure> {
+        missed
+            .iter()
+            .map(|c| match torn_into.get(&c.closure_id) {
+                Some(tie) => CombineRemovedClosure {
+                    station_a: tie.a,
+                    station_b: tie.b,
+                    kind: match tie.id {
+                        TieId::Merge(_) => CombineRemovedKind::Merge,
+                        TieId::Closure(_) => CombineRemovedKind::SnappedClosure,
+                    },
+                },
+                None => CombineRemovedClosure {
+                    station_a: c.station_a,
+                    station_b: c.station_b,
+                    kind: CombineRemovedKind::LoopClosure,
+                },
+            })
+            .collect()
     }
 
     /// Everything that has to give before the join (see the module docs).
-    /// Returns the closures to measure again once the geometry is final.
-    fn prepare_combine(&mut self, setup: &CombineSetup) -> HashSet<u64> {
+    /// Returns the closures to measure again once the geometry is final, and
+    /// the tie each closure a torn tie became came from.
+    fn prepare_combine(&mut self, setup: &CombineSetup) -> (HashSet<u64>, HashMap<u64, Tie>) {
         let (kept, other) = (setup.join.kept, setup.join.other);
         if let Some(rotation) = setup.rotation {
             let reference = self.get_section(kept).and_then(|k| k.azimuth_reference);
@@ -243,7 +325,12 @@ impl Project {
         }
         self.loop_closures
             .retain(|c| !setup.join_closures.contains(&c.id));
-        let mut remeasure: HashSet<u64> = self.tear_ties(&setup.ties.torn).into_iter().collect();
+        let dropped: Vec<Tie> = setup.ties.dropped.iter().map(|(tie, _)| *tie).collect();
+        let torn_into: HashMap<u64, Tie> = self
+            .tear_ties(&setup.ties.torn, &dropped)
+            .into_iter()
+            .collect();
+        let mut remeasure: HashSet<u64> = torn_into.keys().copied().collect();
         if !setup.ties.moved.is_empty() {
             let moved: HashSet<SectionId> = setup.ties.moved.iter().copied().collect();
             // A closure with one end on the side that moves changes length.
@@ -261,7 +348,7 @@ impl Project {
                 self.adjust_section_offset(*id, dx, dy);
             }
         }
-        remeasure
+        (remeasure, torn_into)
     }
 
     /// Join the shots and the two join stations (see the module docs).

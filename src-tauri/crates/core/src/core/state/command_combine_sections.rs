@@ -2,10 +2,51 @@
 //! Here (`command_split_section.rs`), and built the same way.
 
 use super::AppState;
-use crate::core::{Command, CommandResult};
+use crate::core::{Command, CommandResult, ValidationWarning, WarningSeverity};
+use std::collections::HashMap;
+
 use crate::models::{
-    CombineCandidate, CombineSectionsOptions, SectionId, SectionUpdates, StationRef,
+    section_label, station_id_label, CombineCandidate, CombineRemovedClosure, CombineRemovedKind,
+    CombineSectionsOptions, SectionId, SectionUpdates, StationRef, CLOSURE_REMOVED_ACROSS_ONE_SHOT,
 };
+
+/// The warnings a combine reports for the ties it removed because, combined,
+/// the loop closure each is or would become joins the two ends of one shot
+/// (#746). Named as the Combine dialog listed them, by the stations they had
+/// BEFORE the combine, each with its section's name then (`labels`, taken
+/// before the combine): the other section is gone afterwards, and the kept
+/// one may be renamed, so a bare "2:0" would name a section the user cannot
+/// find. The frontend shows them in one toast with the other removed-closure
+/// warnings (`notifyRemovedClosures`).
+pub(super) fn combine_removed_warnings(
+    removed: &[CombineRemovedClosure],
+    labels: &HashMap<SectionId, String>,
+) -> Vec<ValidationWarning> {
+    let station = |at: StationRef| match labels.get(&at.section_id) {
+        Some(name) => format!("{name} {}", station_id_label(at)),
+        None => station_id_label(at),
+    };
+    removed
+        .iter()
+        .map(|removed| {
+            let (a, b) = (station(removed.station_a), station(removed.station_b));
+            let what = match removed.kind {
+                CombineRemovedKind::Merge => format!("the merge of {a} and {b}"),
+                CombineRemovedKind::SnappedClosure => {
+                    format!("the snapped closure between {a} and {b}")
+                }
+                CombineRemovedKind::LoopClosure => format!("loop closure {a} to {b}"),
+            };
+            ValidationWarning {
+                code: CLOSURE_REMOVED_ACROSS_ONE_SHOT.to_string(),
+                message: format!(
+                    "Removed {what}: combining the sections left its two stations at the two ends of one shot."
+                ),
+                severity: WarningSeverity::Warning,
+            }
+        })
+        .collect()
+}
 
 impl AppState {
     /// Read-only: what can be combined at the point `station` ends at: the
@@ -32,8 +73,11 @@ impl AppState {
 
     /// Combine `other` into `kept` (see `Project::combine_sections`). One undo
     /// entry (`ProjectSnapshotPair`) covers the optional reverse of `other` and
-    /// the combine. A refusal (the candidate's blocked reason) changes nothing
-    /// and pushes no undo entry. Returns `kept` as `section_id`.
+    /// the combine, and the closures across one shot the combine removes
+    /// (#746), so one Undo restores them too. A refusal (the candidate's
+    /// blocked reason) changes nothing and pushes no undo entry. Returns
+    /// `kept` as `section_id`, and a `CLOSURE_REMOVED_ACROSS_ONE_SHOT` warning
+    /// per removed tie.
     pub fn execute_combine_sections(
         &self,
         kept: SectionId,
@@ -93,6 +137,7 @@ impl AppState {
             color: Some(options.color.clone()),
             ..Default::default()
         };
+        let warnings;
 
         {
             let Ok(mut proj_guard) = self.project.lock() else {
@@ -101,15 +146,37 @@ impl AppState {
             let Some(project) = proj_guard.as_mut() else {
                 return CommandResult::failure("No project open".to_string());
             };
-            if let Err(e) = project.combine_sections(kept, other, &options) {
-                // The model re-checks before it mutates, so this is reachable
-                // only if the project changed under the check above; put it
-                // back regardless.
-                let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
-                return CommandResult::failure(e);
-            }
+            // Every section's name as it is now, for the warnings below: they
+            // name stations as they were before the combine.
+            let labels: HashMap<SectionId, String> = project
+                .sections
+                .iter()
+                .map(|s| (s.id, section_label(s)))
+                .collect();
+            let removed = match project.combine_sections(kept, other, &options) {
+                Ok(removed) => removed,
+                Err(e) => {
+                    // The model re-checks before it mutates, so this is
+                    // reachable only if the project changed under the check
+                    // above; put it back regardless.
+                    let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
+                    return CommandResult::failure(e);
+                }
+            };
             // No orphan-closure sweep (the split runs one): a combine joins two
-            // sections and never strands a section on a lone closure.
+            // sections and never strands a section on a lone closure. The
+            // closures it would leave across one shot it removes itself, from
+            // the plan the dialog listed them from (#746).
+            for tie in &removed {
+                tracing::info!(
+                    station_a = ?tie.station_a,
+                    station_b = ?tie.station_b,
+                    kind = ?tie.kind,
+                    purpose = "drop a tie a combine left across one shot",
+                    "Combine removed a loop closure that would span a single shot"
+                );
+            }
+            warnings = combine_removed_warnings(&removed, &labels);
             project.touch();
         }
 
@@ -140,5 +207,6 @@ impl AppState {
         CommandResult::success()
             .with_section_id(kept)
             .with_section_ids(vec![kept])
+            .with_warnings(warnings)
     }
 }
