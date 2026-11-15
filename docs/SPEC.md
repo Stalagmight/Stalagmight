@@ -1720,7 +1720,11 @@ it, for the section it shows as kept, before the user confirms:
   ends meet. The kept side moves instead when a zero datum holds the other side
   and not the kept one, or, with no datum deciding, when the other side holds
   the station the Closures Computed View holds the survey at: moving it would
-  shift the whole cave in Plan and Export. The dialog says which and why.
+  shift the whole cave in Plan and Export. The dialog says which and why. Ends
+  side by side move a side by their residual under 1 mm the same way, with
+  everything merged to it, so merged stations stay one point and reopening
+  the project moves nothing; the dialog does not list a move that small
+  (#740).
 - **Ties become loop closures.** A merge or snapped (aligned) closure that
   would tie the combined section to itself, or keep the moving side tied to what
   stays, becomes an ordinary loop closure between the same two stations: the

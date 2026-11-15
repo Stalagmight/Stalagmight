@@ -202,7 +202,10 @@ pub struct CombinePlan {
     pub kept: SectionId,
     /// The section whose side moves to close the join (the other section,
     /// or the kept one for the reason in `kept_moves_because`); `None` when
-    /// the two ends already coincide (within 1 mm).
+    /// the two join stations already coincide, to float dust
+    /// (`Project::OFFSET_DUST_M`). Side-by-side ends a fraction of a
+    /// millimetre apart move a side too (#740): the combined section hangs
+    /// the other section's stations off the kept join station.
     pub moving_section: Option<SectionId>,
     /// Why the kept section's side moves, when it is the one that does.
     pub kept_moves_because: Option<KeptMovesReason>,
