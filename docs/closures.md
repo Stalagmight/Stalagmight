@@ -258,9 +258,16 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
   other. Keeping the first closure did the same whenever the ordinary one
   came first; with the snap first it dropped the ordinary closure instead,
   which the plan had counted. The kept closure holds the two on one point in
-  the Closures Computed View, which the snap alone did not. The dialog lists
-  no closure the dedupe drops: the connection it lists as becoming a loop
-  closure is the one that stays.
+  the Closures Computed View, which the snap alone did not. The dialog lists,
+  in Details, every closure the solve does not take that the dedupe drops for
+  one it does (`CombinePlan.closures_replaced`), with what takes its place:
+  the plan runs the same `closure_dedupe` rule on its model of the combined
+  closure list (`closure_dedupe.rs`), and the combine reports what it really
+  replaced, a difference being a `debug_assert!` failure (an error in the log
+  in a release build). Duplicates the solve treats alike go silently: nothing
+  changes for the view. A replacement keeps the connection, so there is no
+  summary line outside Details and no toast, unlike a removal across one
+  shot.
 - **A loop closure is a join.** Two section ends tied by a closure are, by the
   survey's own statement, one point, apart by the misclosure. Combining there
   moves one side by the misclosure (the other section and what is merged to
