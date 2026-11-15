@@ -113,8 +113,12 @@ export default function SplitSectionHereDialog() {
   // A closure that tied the moved half to the same point as the one that
   // becomes the merge is then a closure between merged stations, which the
   // split removes (#738): the halves were tied by more than the merged ones,
-  // and the note lists the rest, by the stations they were created with.
+  // and the note lists the rest, by the stations they were created with. One
+  // that already tied a point to itself (an undo can restore one from an old
+  // history) goes too, but tied nothing, so it is listed apart and does not
+  // change how the halves are described.
   const removed = preview?.removed_closures ?? [];
+  const alreadyOnePoint = preview?.removed_already_one_point ?? [];
   const tiedBy =
     removed.length > 0 ? 'loop closures' : closures === 1 ? 'a loop closure' : `${closures} loop closures`;
   const turned =
@@ -255,19 +259,22 @@ export default function SplitSectionHereDialog() {
           sideChoice('comment', 'Keep the station comment on', commentSide, setCommentSide, ['a', 'b', 'both'])}
         {isDatum && sideChoice('datum', 'Keep the zero datum on', datumSide, setDatumSide, ['a', 'b'])}
 
-        {(moveNote || removed.length > 0) && (
+        {(moveNote || removed.length > 0 || alreadyOnePoint.length > 0) && (
           <div
             className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm space-y-1"
             data-testid="split-here-closure-warning"
           >
             {moveNote && <p data-testid="split-here-closure-move">{moveNote}</p>}
-            {removed.map((closure) => (
-              <p
-                key={closure.closure_id.toString()}
-                data-testid={`split-here-closure-removed-${closure.closure_id.toString()}`}
-              >
+            {removed.map((closure, i) => (
+              <p key={`${closure.closure_id.toString()}-${i}`} data-testid={`split-here-closure-removed-${i}`}>
                 Loop closure <StationId station={closure.station_a} /> to <StationId station={closure.station_b} /> is
                 removed: its two stations become one point.
+              </p>
+            ))}
+            {alreadyOnePoint.map((closure, i) => (
+              <p key={`${closure.closure_id.toString()}-${i}`} data-testid={`split-here-closure-already-${i}`}>
+                Loop closure <StationId station={closure.station_a} /> to <StationId station={closure.station_b} /> is
+                removed: its two stations are already one point.
               </p>
             ))}
           </div>

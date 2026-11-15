@@ -5359,6 +5359,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 moved_side: null,
                 moved_m: 0,
                 removed_closures: [],
+                removed_already_one_point: [],
               }
             );
           }

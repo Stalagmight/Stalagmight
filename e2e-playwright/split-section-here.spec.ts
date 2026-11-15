@@ -134,6 +134,7 @@ test.describe('Split Section Here (#335)', () => {
         closures_to_merges: 1,
         moved_side: 'b',
         moved_m: 0.1,
+        removed_already_one_point: [],
         removed_closures: [
           {
             closure_id: 2,
@@ -151,13 +152,59 @@ test.describe('Split Section Here (#335)', () => {
       'Main-B is tied to Main-A only by loop closures, so the split turns one of them into a merge and moves ' +
         'Main-B 0.10m to close it.'
     );
-    await expect(page.getByTestId('split-here-closure-removed-2')).toHaveText(
+    await expect(page.getByTestId('split-here-closure-removed-0')).toHaveText(
       `Loop closure ${section.id}:4 to ${section.id}:1 is removed: its two stations become one point.`
     );
     // Still the user's call.
     await page.getByTestId('split-here-confirm').click();
     await expect(page.getByTestId('split-section-here-dialog')).not.toBeVisible();
     await expect.poll(async () => (await readSections(page)).length).toBe(2);
+  });
+
+  test('a delete and split, or an unmerge, that removed a closure between merged stations says so (#738)', async ({
+    page,
+  }) => {
+    // The backend names each closure its orphan sweep removed by the stations it had
+    // before the edit; the store shows them in the one closure-removal toast.
+    const section = await seedFourShotSection(page);
+    const message =
+      'Removed loop closure 1:0 to 0:3: another loop closure became a merge, which made its two stations one point.';
+    await page.evaluate((message) => {
+      const removed = {
+        success: true,
+        section_ids: [],
+        warnings: [{ code: 'CLOSURE_REMOVED_MERGED_ENDS', message, severity: 'warning' }],
+      };
+      const overrides = (window as any).__MOCK_IPC_OVERRIDES__ ?? {};
+      overrides.delete_shot_and_split = removed;
+      overrides.unmerge_station_pair = removed;
+      (window as any).__MOCK_IPC_OVERRIDES__ = overrides;
+    }, message);
+    const toast = page.getByTestId('toast').filter({ hasText: message });
+
+    const split = await page.evaluate(
+      ({ id, shot }) =>
+        (window as any).__E2E_TEST__.projectStore
+          .getState()
+          .deleteShotAndSplit(id, shot, 'Main-A', 'Main-B') as Promise<{ success: boolean }>,
+      { id: section.id, shot: section.shots[1]!.id }
+    );
+    expect(split.success).toBe(true);
+    await expect(toast).toHaveCount(1);
+
+    await page.evaluate(() => (window as any).__E2E_TEST__.uiStore.getState().clearToast());
+    await expect(toast).toHaveCount(0);
+    const unmerged = await page.evaluate(
+      (id) =>
+        (window as any).__E2E_TEST__.projectStore
+          .getState()
+          .unmergeStationPair({ section_id: id, station_index: 1 }, { section_id: id + 1, station_index: 0 }) as Promise<{
+          success: boolean;
+        }>,
+      section.id
+    );
+    expect(unmerged.success).toBe(true);
+    await expect(toast).toHaveCount(1);
   });
 
   test('is absent on an end station', async ({ page }) => {
