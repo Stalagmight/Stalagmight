@@ -1952,11 +1952,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
   // Station operations
   mergeStations: async (stationA: StationRef, stationB: StationRef) => {
-    return executeCommand(
+    return notifyRemovedClosures(await executeCommand(
       'merge_stations',
       { stationA, stationB },
       { purpose: 'connect survey sections', fields: { stationA, stationB } }
-    );
+    ));
   },
 
   unmergeStations: async (stationRef: StationRef) => {

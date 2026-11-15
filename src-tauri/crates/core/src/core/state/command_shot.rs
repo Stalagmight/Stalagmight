@@ -19,11 +19,35 @@ pub(super) fn closure_removed_message(closure: &ClosurePair) -> String {
     )
 }
 
+/// What made the two stations of a closure the sweep removed one point, so
+/// its warning can say so.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum OnePointCause {
+    /// The edit's own promotion of another closure to a merge (#738).
+    Promotion,
+    /// A user merge, which may join two placed pieces since #741.
+    Merge,
+}
+
+impl OnePointCause {
+    /// The cause for the sweep after `cmd`.
+    pub(super) fn of(cmd: &crate::core::Command) -> Self {
+        if matches!(cmd, crate::core::Command::MergeStations { .. }) {
+            Self::Merge
+        } else {
+            Self::Promotion
+        }
+    }
+}
+
 /// The warnings an edit reports for the loop closures its orphan-closure sweep
 /// removed because their two stations are one point (#738), each named by the
 /// stations it had BEFORE the edit. The frontend shows them in one toast with
 /// the closures-across-one-shot ones (`notifyRemovedClosures`).
-pub(super) fn merged_ends_warnings(removed: &[RemovedClosure]) -> Vec<ValidationWarning> {
+pub(super) fn merged_ends_warnings(
+    removed: &[RemovedClosure],
+    cause: OnePointCause,
+) -> Vec<ValidationWarning> {
     removed
         .iter()
         .map(|removed| ValidationWarning {
@@ -32,10 +56,14 @@ pub(super) fn merged_ends_warnings(removed: &[RemovedClosure]) -> Vec<Validation
                 "Removed loop closure {} to {}: {}",
                 station_id_label(removed.pair.station_a),
                 station_id_label(removed.pair.station_b),
-                if removed.already_one_point {
-                    "its two stations were already one point."
-                } else {
-                    "another loop closure became a merge, which made its two stations one point."
+                match (removed.already_one_point, cause) {
+                    (true, _) => "its two stations were already one point.",
+                    (false, OnePointCause::Promotion) => {
+                        "another loop closure became a merge, which made its two stations one point."
+                    }
+                    (false, OnePointCause::Merge) => {
+                        "the merge made its two stations one point."
+                    }
                 }
             ),
             severity: WarningSeverity::Warning,
@@ -51,9 +79,10 @@ pub(super) fn report_swept_closures(
     before: &ClosuresBeforeSweep,
     sweep: &crate::models::OrphanClosureSweep,
     context: &str,
+    cause: OnePointCause,
 ) -> Vec<ValidationWarning> {
     sweep.log_removed(context);
-    merged_ends_warnings(&project.removed_closures_named(before, sweep))
+    merged_ends_warnings(&project.removed_closures_named(before, sweep), cause)
 }
 
 /// After a delete with shift: remove every loop closure the delete left tying
@@ -447,6 +476,7 @@ impl AppState {
                 crate::models::log_removed_closures(&swept_away, "delete shot");
                 removed.extend(merged_ends_warnings(
                     &project.removed_closures_named_by_id(&closures_before_sweep, &swept_away),
+                    OnePointCause::Promotion,
                 ));
                 CommandResult::success().with_warnings(removed)
             }

@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { getErrorMessage } from '../../utils/ipc';
+import { notifyRemovedClosures } from '../../utils/closureRemovalToast';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
 import { EntityBlob } from '../common/EntityBlob';
@@ -53,8 +54,10 @@ export default function MergeDialog() {
       if (onBeforeConfirm) await onBeforeConfirm();
       // When preCommands exist (snap-to-merge), batch move + merge as single undo operation
       const mergeCmd: BatchCommand = { type: 'merge_stations', station_a: stationA, station_b: stationB };
+      // The store's mergeStations toasts a closure the merge removed (#738/#741);
+      // the batch reports it the same way, so toast it here too.
       const result = preCommands
-        ? await executeBatch([...preCommands, mergeCmd])
+        ? notifyRemovedClosures(await executeBatch([...preCommands, mergeCmd]))
         : await mergeStations(stationA, stationB);
       if (result.success) {
         clearMergeStations();

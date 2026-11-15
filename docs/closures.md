@@ -122,12 +122,17 @@ Which edits can make one:
 
 - **Not** creating a closure: Create Loop Closure and the import's batch refuse a
   merged pair, and so does the shot-removal rewire.
-- **Not** a merge: `merge_stations` refuses a merge inside one rigid component, and a
-  closure between two components is either a sole bridge (which every sweep promotes)
-  or ties two zero-datum-anchored components, which a merge may not join. Tests try
-  every merge of a closure's two ends, and of their merge groups, on random networks
-  and after every step of the combine/split/reverse chain fuzzer
-  (`check_no_merge_folds_a_closure`): all are refused.
+- **A merge of two placed pieces** (#741): `merge_stations` refuses a merge inside one
+  rigid component, and a closure between two components is either a sole bridge (which
+  every sweep promotes) or ties two zero-datum-placed components. Those two MAY merge
+  since #741 (the later placement datum becomes a GPS fix), and a merge at the
+  closure's two ends makes them one point. The merge command runs the sweep
+  (`command_integrity` flags it `can_orphan_closures`), so the closure is removed and
+  reported inside the merge's undo unit; any other closure between the two pieces ties
+  two different points and stays a loop. Tests try every merge of a closure's two ends,
+  and of their merge groups, on random networks and after every step of the
+  combine/split/reverse chain fuzzer (`check_no_merge_folds_a_closure`): each is
+  refused, or joins two placed pieces and the sweep removes exactly that closure.
 - **A promotion**: two closures that tie a station to the same point record one loop
   twice (the Merge tool and Combine Sections both allow that), and once the sweep
   promotes one, the other ties that point to itself (#738).
@@ -146,16 +151,18 @@ it on a copy - the callers that keep the result log one line with the count.
   the closure and the log says how many went. The file settles on the next save: an
   explicit Save writes it, while autosave only runs after an edit.
 - **Inside a command** it is part of that command's undo unit: Split Section Here,
-  the delete-and-split commands, the deletes, unmerges and Remove Zero Datum through
-  `execute()`'s epilogue, Batch and Repair all record a before/after snapshot pair
-  around it, so one Undo brings the closure back. Each of those commands except Batch
-  and Repair also reports it: a `CLOSURE_REMOVED_MERGED_ENDS` warning per closure,
+  the delete-and-split commands, the deletes, unmerges, merges and Remove Zero Datum
+  through `execute()`'s epilogue, Batch and Repair all record a before/after snapshot
+  pair around it, so one Undo brings the closure back. Each of those commands except
+  Repair also reports it (a Batch from its own sweep, so the Merge dialog's
+  snap-to-merge batch reports like a plain merge): a `CLOSURE_REMOVED_MERGED_ENDS` warning per closure,
   named by the stations it had BEFORE the edit (`Project::closures_before_sweep`,
   matched by position, else a unique id, else id and stored ends, since a file can
   repeat an id), which the frontend shows in the closure-removal toast: "Removed loop
   closure 1:0 to 0:3: another loop closure became a merge, which made its two
-  stations one point." (or "...: its two stations were already one point." for one
-  the edit did not cause). Split Section Here says it in its dialog instead.
+  stations one point." ("...: the merge made its two stations one point." after a
+  merge, or "...: its two stations were already one point." for one the edit did not
+  cause). Split Section Here says it in its dialog instead.
 - **The scoped sweep** an inverse runs (the shot-removal paths) snapshots
   `Project::swept_closure_ids` first - orphans and closures already between merged
   stations - and leaves those as recorded; it removes only what its own promotions

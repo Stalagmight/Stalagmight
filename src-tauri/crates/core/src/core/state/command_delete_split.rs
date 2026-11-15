@@ -281,6 +281,7 @@ impl AppState {
                 &closures_before,
                 &sweep,
                 "delete shot and split",
+                super::command_shot::OnePointCause::Promotion,
             );
 
             project.touch();
@@ -572,6 +573,7 @@ impl AppState {
                 &closures_before,
                 &sweep,
                 "delete shot range and split",
+                super::command_shot::OnePointCause::Promotion,
             );
             project.touch();
             (new_id, swept_warnings)
@@ -1008,6 +1010,7 @@ impl AppState {
                 &closures_before,
                 &sweep,
                 "delete last shot and section",
+                super::command_shot::OnePointCause::Promotion,
             );
 
             tracing::info!(

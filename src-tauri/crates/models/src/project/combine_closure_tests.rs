@@ -1117,9 +1117,10 @@ fn check_removed_were_merged(after: &Project, removed: &[LoopClosure], what: &st
 
 /// Try every merge that would make a closure's two stations one point - each
 /// end, or any member of its merge group, to the other end or any member of
-/// its group - and require `merge_stations` to refuse it (#738: a merge is
-/// not a route to a closure between merged stations). Returns how many it
-/// tried.
+/// its group - and require that no closure between merged stations survives it
+/// (#738): `merge_stations` refuses it, or - only for two placed pieces, which
+/// may merge since #741 - the sweep the merge command runs removes exactly
+/// that closure. Returns how many it tried.
 fn check_no_merge_folds_a_closure(project: &Project, what: &str) -> usize {
     let mut merged: Vec<StationRef> = project
         .station_merges
@@ -1155,12 +1156,36 @@ fn check_no_merge_folds_a_closure(project: &Project, what: &str) -> usize {
                 }
                 tried += 1;
                 let mut after = project.clone();
+                if after.merge_stations(x, y).is_err() {
+                    continue;
+                }
                 assert!(
-                    after.merge_stations(x, y).is_err(),
+                    project.placement_datum_index(x.section_id).is_some()
+                        && project.placement_datum_index(y.section_id).is_some(),
                     "{what}: merge_stations({x:?}, {y:?}) merged the two ends of closure {} \
-                     ({a:?} - {b:?})",
+                     ({a:?} - {b:?}) between pieces that are not both placed",
                     closure.id
                 );
+                let sweep = after.sweep_orphan_closures();
+                assert!(
+                    sweep.removed.iter().any(|c| c.id == closure.id),
+                    "{what}: the sweep after merge_stations({x:?}, {y:?}) kept closure {}",
+                    closure.id
+                );
+                for left in &after.loop_closures {
+                    let (Some(p), Some(q)) = (
+                        after.resolve_key(&left.station_a),
+                        after.resolve_key(&left.station_b),
+                    ) else {
+                        continue;
+                    };
+                    assert!(
+                        !after.are_stations_merged(p, q),
+                        "{what}: closure {} between merged stations after \
+                         merge_stations({x:?}, {y:?})",
+                        left.id
+                    );
+                }
             }
         }
     }

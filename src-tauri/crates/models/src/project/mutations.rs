@@ -64,18 +64,10 @@ impl Project {
             (a, _) => a.is_some(),
         };
         let both_placed = a_placement.is_some() && b_placement.is_some();
-        // Two placed groups tied by an inert closure are the one shape the
-        // connectivity check above lets through where a loop closure already
-        // ties the two merge groups (the sweep leaves such a bridge, #738). A
-        // merge there would leave that closure tying one point to itself, so
-        // it is refused, as the old two-datum rule used to refuse it.
-        if both_placed && self.closure_ties_merge_groups(station_a, station_b) {
-            return Err(
-                "A loop closure already ties these stations together. Remove it before merging \
-                 them, or keep the closure instead of the merge."
-                    .to_string(),
-            );
-        }
+        // Two placed pieces can be tied by an inert closure (the sweep leaves
+        // such a bridge). A merge that makes that closure's two ends one point
+        // is allowed; the command's orphan-closure sweep then removes and
+        // reports the closure (#738), inside the merge's own undo unit.
 
         debug!(
             station_a = ?station_a,
@@ -621,36 +613,6 @@ impl Project {
     }
 
     /// Check if two stations are merged
-    /// Does a loop closure tie a station of `a`'s merge group to a station of
-    /// `b`'s? Merging `a` and `b` would then leave that closure between
-    /// merged stations (#738). One adjacency build and two BFS walks.
-    fn closure_ties_merge_groups(&self, a: StationRef, b: StationRef) -> bool {
-        let adjacency = self.build_station_merge_adjacency();
-        let group = |start: StationRef| -> HashSet<StationRef> {
-            let mut seen = HashSet::from([start]);
-            let mut queue = VecDeque::from([start]);
-            while let Some(current) = queue.pop_front() {
-                for &n in adjacency.get(&current).into_iter().flatten() {
-                    if seen.insert(n) {
-                        queue.push_back(n);
-                    }
-                }
-            }
-            seen
-        };
-        let (group_a, group_b) = (group(a), group(b));
-        self.loop_closures.iter().any(|lc| {
-            let (Some(x), Some(y)) = (
-                self.resolve_key(&lc.station_a),
-                self.resolve_key(&lc.station_b),
-            ) else {
-                return false;
-            };
-            (group_a.contains(&x) && group_b.contains(&y))
-                || (group_a.contains(&y) && group_b.contains(&x))
-        })
-    }
-
     pub fn are_stations_merged(&self, a: StationRef, b: StationRef) -> bool {
         if a == b {
             return true;

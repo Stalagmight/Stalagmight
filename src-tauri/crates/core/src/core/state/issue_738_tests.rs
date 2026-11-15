@@ -660,3 +660,104 @@ fn a_closure_that_already_was_between_merged_stations_is_reported_as_such() {
         ["Removed loop closure 1:0 to 0:2: its two stations were already one point."]
     );
 }
+
+/// Two anchored surveys, each placed by its own datum, tied by two closures:
+/// A:1-B:1 and A:2-B:2. Since #741 the two may merge (B's datum becomes a GPS
+/// fix). Returns the project, A, B and the two closure ids.
+fn two_placed_pieces() -> (Project, SectionId, SectionId, [u64; 2]) {
+    let mut p = Project::new("placed".to_string(), None);
+    let a = add(&mut p, "A", vec![shot(90.0, 10.0), shot(90.0, 10.0)]);
+    let b = add(&mut p, "B", vec![shot(0.0, 10.0), shot(0.0, 10.0)]);
+    let gps = |lat| GpsCoordinates::new(lat, -87.4, 0.0).unwrap();
+    p.set_zero_datum(st(a, 0), gps(20.5)).unwrap();
+    p.set_zero_datum(st(b, 0), gps(20.5001)).unwrap();
+    let folded = p
+        .create_loop_closure(st(a, 1), st(b, 1), ClosureStrategy::Batch)
+        .unwrap()
+        .id;
+    let elsewhere = p
+        .create_loop_closure(st(a, 2), st(b, 2), ClosureStrategy::Batch)
+        .unwrap()
+        .id;
+    (p, a, b, [folded, elsewhere])
+}
+
+/// Merging two placed pieces at the two ends of a closure (#741) makes that
+/// closure tie one point to itself: the merge command's own sweep removes it
+/// and reports it (#738), and one Undo brings back both the merge and the
+/// closure. The Merge dialog's snap-to-merge sends the merge in a Batch, which
+/// reports the same way.
+#[test]
+fn merging_two_placed_pieces_removes_and_reports_the_closure_it_folds() {
+    for batched in [false, true] {
+        let (p, a, b, [folded, elsewhere]) = two_placed_pieces();
+        let state = state_with(p);
+        let before = full_snapshot(&state);
+        let merge = Command::MergeStations {
+            station_a: st(a, 1),
+            station_b: st(b, 1),
+        };
+        let result = state.execute(if batched {
+            Command::Batch {
+                commands: vec![merge],
+            }
+        } else {
+            merge
+        });
+        assert!(result.success, "batched {batched}: {:?}", result.error);
+        let after = project(&state);
+        assert!(after.are_stations_merged(st(a, 1), st(b, 1)));
+        assert_eq!(after.gps_fix_datums().len(), 1, "batched {batched}");
+        let left: Vec<u64> = after.loop_closures.iter().map(|c| c.id).collect();
+        assert_eq!(left, [elsewhere], "batched {batched}: {folded} went");
+        assert!(closures_between_merged_stations(&after).is_empty());
+        assert_eq!(
+            merged_ends_messages(&result),
+            ["Removed loop closure 0:1 to 1:1: the merge made its two stations one point."],
+            "batched {batched}"
+        );
+
+        assert!(state.undo().success, "batched {batched}");
+        assert_eq!(full_snapshot(&state), before, "batched {batched}: one undo");
+        assert!(state.redo().success, "batched {batched}");
+        assert_eq!(
+            full_snapshot(&state),
+            AppState::serialize_project_snapshot(&after).unwrap(),
+            "batched {batched}: redo"
+        );
+    }
+}
+
+/// The other closure between the two merged pieces ties two different points
+/// (A:2 and B:2), so it is a genuine loop: it stays, its ends stay apart, and
+/// the Closures Computed View solves it.
+#[test]
+fn a_closure_elsewhere_between_two_merged_placed_pieces_stays_a_loop() {
+    let (p, a, b, [_, elsewhere]) = two_placed_pieces();
+    let state = state_with(p);
+    let result = state.execute(Command::MergeStations {
+        station_a: st(a, 1),
+        station_b: st(b, 1),
+    });
+    assert!(result.success, "{:?}", result.error);
+    let after = project(&state);
+    assert!(
+        after.loop_closures.iter().any(|c| c.id == elsewhere),
+        "the closure elsewhere survives the merge"
+    );
+    let kept = after
+        .loop_closures
+        .iter()
+        .find(|c| c.id == elsewhere)
+        .unwrap();
+    let (x, y) = (
+        after.resolve_key(&kept.station_a).unwrap(),
+        after.resolve_key(&kept.station_b).unwrap(),
+    );
+    assert_eq!((x, y), (st(a, 2), st(b, 2)));
+    assert!(!after.are_stations_merged(x, y));
+    assert!(after.closures_across_one_shot().is_empty());
+    let solved =
+        after.compute_adjusted_stations(&crate::config::ClosureAdjustmentConfig::default());
+    assert!(solved.failures.is_empty(), "{:?}", solved.failures);
+}
