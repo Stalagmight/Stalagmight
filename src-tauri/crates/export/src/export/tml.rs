@@ -587,6 +587,12 @@ fn write_zip(path: &Path, xml: &[u8]) -> Result<()> {
     })
 }
 
+/// A parentless row that is not a START: Ariane reads it as an entrance it
+/// cannot place, and draws an empty map once any CLOSURE row exists.
+fn is_orphan_root(shot: &ExportShot) -> bool {
+    shot.from_id == -1 && shot.shot_type != "START"
+}
+
 /// Refuse to write a chain Ariane would draw as an empty map.
 ///
 /// Ariane reads `FromID = -1` as an entrance and expects `Type = START` there; every
@@ -610,10 +616,7 @@ fn ensure_rooted_chain(shots: &[ExportShot], profile: TmlProfile) -> Result<()> 
         return Ok(());
     }
 
-    let orphans: Vec<&ExportShot> = shots
-        .iter()
-        .filter(|s| s.from_id == -1 && s.shot_type != "START")
-        .collect();
+    let orphans: Vec<&ExportShot> = shots.iter().filter(|s| is_orphan_root(s)).collect();
 
     let Some(first) = orphans.first() else {
         return Ok(());

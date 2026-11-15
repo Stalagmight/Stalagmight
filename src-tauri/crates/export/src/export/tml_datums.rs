@@ -225,12 +225,27 @@ impl DatumGps {
     /// depth, and a START left at the pre-repair depth would put a vertical
     /// misclosure into a tie that measures none. Neither row needs the repair:
     /// a zero-length tie between two equal depths satisfies every bound.
+    ///
+    /// A file that already holds an orphan root gets no fix rows at all: Ariane
+    /// draws an empty map for an orphan alongside ANY CLOSURE row (#379), and
+    /// nothing shows a CLOSURE onto a START is exempt. Leaving the fixes out (and
+    /// counting them unwritten) keeps a file that drew before drawing, where
+    /// writing them would turn it blank or have `ensure_rooted_chain` refuse it
+    /// over closures the user never made.
     pub(super) fn append_fix_starts(
         mut self,
         project: &Project,
         shots: &mut Vec<ExportShot>,
         mut next_id: i64,
     ) -> usize {
+        if !self.fixes.is_empty() && shots.iter().any(super::is_orphan_root) {
+            tracing::warn!(
+                fixes = self.fixes.len(),
+                "Ariane export: GPS fixes left out, because this survey has a shot with no \
+                 parent station and a fix's CLOSURE tie would blank Ariane's map"
+            );
+            self.fixes.clear();
+        }
         for (node, index) in std::mem::take(&mut self.fixes) {
             let gps = &project.zero_datums[index].gps;
             let Some(row) = shots.iter().find(|s| s.id == node) else {
@@ -273,8 +288,8 @@ impl DatumGps {
                 "Ariane stores GPS on START rows only; {unwritten} GPS anchor(s) were not \
                  written: a datum that no longer resolves, whose station has no row in this \
                  file, whose GPS is not a number, or that shares its station with an earlier \
-                 datum (the SpeleoDB sidecar also leaves out datums part-way through the \
-                 survey)."
+                 datum (datums part-way through the survey are also left out of the \
+                 SpeleoDB sidecar, and of a file with a shot that has no parent station)."
             );
         }
         unwritten

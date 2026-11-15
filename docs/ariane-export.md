@@ -232,6 +232,12 @@ The SpeleoDB sidecar leaves the fix STARTs out. Its converter drops CLOSURE
 rows, so a fix START would reach the map preview as a lone anchor with nothing
 hanging off it. The sidecar counts the fixes as unwritten in its log.
 
+A file that holds an orphan root (see below) also leaves every fix out and
+counts it unwritten. Ariane blanks its map for an orphan alongside **any**
+CLOSURE row, and a fix's tie is one; nothing shows a CLOSURE onto a START is
+exempt. Writing the fixes would turn a file that drew into a blank one, or
+have the orphan guard refuse it over closures the user never made.
+
 On re-import, the in-repo importer drops START rows and skips a closure whose
 target is a START with no section hanging off it, so the fix rows come back as
 the same stations and legs, with one "loop closure referenced excluded

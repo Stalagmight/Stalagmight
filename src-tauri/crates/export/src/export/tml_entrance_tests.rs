@@ -154,7 +154,70 @@ fn a_fix_start_is_tied_to_its_station_by_a_zero_length_closure() {
             .iter()
             .all(|s| s.from_id != start.id && s.from_id != tie.id));
     }
-    assert!(ensure_rooted_chain(&shots, TmlProfile::User).is_ok());
+}
+
+/// A (placement on A0, a GPS fix on A1), then an empty section E bridging a
+/// merge from A1 to B0. E has no row, so B's first shot is left parentless: an
+/// orphan root the builder produces on its own, with no project closure.
+fn orphaned_cave_with_a_fix() -> Project {
+    let mut project = Project::new("Orphan".to_string(), None);
+    for (name, count) in [("A", 2), ("E", 0), ("B", 2)] {
+        project.add_section(SectionData {
+            name: Some(name.to_string()),
+            color: "#3366ff".to_string(),
+            shots: shots(count, 90.0),
+            ..Default::default()
+        });
+    }
+    merge(&mut project, StationRef::new(0, 1), StationRef::new(1, 0));
+    merge(&mut project, StationRef::new(1, 0), StationRef::new(2, 0));
+    datum(&mut project, StationRef::new(0, 0), PLACEMENT);
+    datum(&mut project, StationRef::new(0, 1), FIX_MID_SECTION);
+    assert_eq!(
+        project.gps_fix_datums().len(),
+        1,
+        "fixture rot: A1 is a fix"
+    );
+    assert!(project.loop_closures.is_empty());
+    project
+}
+
+#[test]
+fn an_orphan_with_a_fix_and_no_closures_still_exports() {
+    // Ariane blanks its map for an orphan root alongside ANY CLOSURE row, and
+    // a fix's tie is one. So the fix is left out and counted, rather than the
+    // export failing over "closures" the user never made.
+    let project = orphaned_cave_with_a_fix();
+    let (shots, unwritten) = export(&project, TmlProfile::User);
+    assert!(
+        shots.iter().any(is_orphan_root),
+        "fixture rot: the builder must leave B orphaned, or this proves nothing"
+    );
+    assert!(shots.iter().all(|s| s.shot_type != "CLOSURE"));
+    assert!(start_at(&shots, FIX_MID_SECTION).is_empty());
+    assert_eq!(unwritten, 1, "the left-out fix is reported");
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let notes = export_tml(&project, &dir.path().join("cave.tml"))
+        .expect("an orphan with no closure must still export, as it did before fixes");
+    assert!(notes.iter().any(|n| n == "gps-anchors-not-written"));
+
+    // A real closure still takes the refusal, and it names the user's closures.
+    let mut closed = project;
+    closed.loop_closures.push(crate::models::LoopClosure {
+        id: 1,
+        station_a: StationRef::new(2, 2).into(),
+        station_b: StationRef::new(0, 2).into(),
+        path_length: 100.0,
+        misclosure_distance: 0.0,
+        error_percentage: 0.0,
+        horizontal_misclosure: 0.0,
+        vertical_misclosure: 0.0,
+        strategy: crate::models::ClosureStrategy::Batch,
+        is_aligned: false,
+    });
+    let refused = export_tml(&closed, &dir.path().join("closed.tml"));
+    assert!(refused.unwrap_err().to_string().contains("loop closures"));
 }
 
 #[test]
