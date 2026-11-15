@@ -2459,7 +2459,9 @@ fn chains_the_campaigns_failed_on_keep_the_invariants() {
                 kinds.extend(replay.replaced.iter().map(|r| format!("{:?}", r.kind)));
             }
             PinnedFor::Residual => {
-                let last = replay.plans.last().expect("a combine");
+                let Some(last) = replay.plans.last() else {
+                    panic!("{spec}: no combine");
+                };
                 assert!(
                     moves_a_residual(last),
                     "{spec}: the last combine moves no residual: {last:?}"
