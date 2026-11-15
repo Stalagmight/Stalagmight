@@ -7,7 +7,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::combine_sections::{ClosureDedupes, CLOSURE_DEDUPES};
+use super::closure_dedupe::{ClosureDedupes, CLOSURE_DEDUPES};
 use crate::{
     ClosureStrategy, CombineCandidate, CombineJoinEnds, CombineJoinKind, CombinePick,
     CombineRemovedClosure, CombineRemovedKind, CombineSectionsOptions, GpsCoordinates,
@@ -1147,6 +1147,83 @@ fn check_eligible_ties_kept(
     }
 }
 
+/// #749, after every combine the sweeps make: the plan the menu offered
+/// names exactly the closures the combine replaced (an empty list absent),
+/// each a closure the solve does not take that was there before on the
+/// stations named, of the kind named, and gone after; and the one that
+/// replaces it was what it is named as before the combine (a merge, a snapped
+/// closure the plan tears, or a loop closure the solve takes). (A miss of the
+/// plan's model is also a panic inside the combine, from its backstop.)
+/// Returns how many it replaced.
+pub(super) fn check_replaced(
+    before: &Project,
+    after: &Project,
+    plan: &crate::CombinePlan,
+    replaced: &[crate::CombineReplacedClosure],
+    what: &str,
+) -> usize {
+    assert_eq!(
+        plan.closures_replaced.clone().unwrap_or_default(),
+        replaced,
+        "{what}: the dialog lists exactly what the combine replaces"
+    );
+    assert_ne!(
+        plan.closures_replaced.as_ref().map(Vec::len),
+        Some(0),
+        "{what}: an empty list is absent"
+    );
+    let same = |project: &Project,
+                c: &crate::StationKey,
+                d: &crate::StationKey,
+                a: StationRef,
+                b: StationRef| {
+        matches!(
+            (project.resolve_key(c), project.resolve_key(d)),
+            (Some(x), Some(y)) if (x, y) == (a, b) || (y, x) == (a, b)
+        )
+    };
+    for r in replaced {
+        let gone: Vec<&LoopClosure> = before
+            .loop_closures
+            .iter()
+            .filter(|c| {
+                !Project::closure_is_eligible(c.strategy)
+                    && super::closure_dedupe::replaced_kind(c.strategy, c.is_aligned) == r.kind
+                    && same(before, &c.station_a, &c.station_b, r.station_a, r.station_b)
+            })
+            .collect();
+        assert!(
+            !gone.is_empty(),
+            "{what}: {r:?} is not a closure of the project before"
+        );
+        assert!(
+            gone.iter()
+                .all(|g| !after.loop_closures.iter().any(|c| c.id == g.id
+                    && c.strategy == g.strategy
+                    && c.is_aligned == g.is_aligned)),
+            "{what}: {r:?} is still there"
+        );
+        let (a, b) = (r.by_station_a, r.by_station_b);
+        let by = match r.by_kind {
+            CombineRemovedKind::Merge => before
+                .station_merges
+                .iter()
+                .any(|m| same(before, &m.station_a, &m.station_b, a, b)),
+            CombineRemovedKind::SnappedClosure => plan.torn_ties.iter().any(|t| {
+                t.kind == TornTieKind::SnappedClosure
+                    && ((t.station_a, t.station_b) == (a, b)
+                        || (t.station_b, t.station_a) == (a, b))
+            }),
+            CombineRemovedKind::LoopClosure => before.loop_closures.iter().any(|c| {
+                Project::closure_is_eligible(c.strategy)
+                    && same(before, &c.station_a, &c.station_b, a, b)
+            }),
+        };
+        assert!(by, "{what}: {r:?} names a replacement that was not there");
+    }
+    replaced.len()
+}
+
 /// #746, after every combine the sweeps make: the plan the menu offered names
 /// exactly the ties the combine removed, each named by stations it had before
 /// the combine and as what it was then (a merge, a snapped closure, an
@@ -1441,6 +1518,8 @@ struct SweepStats {
     shifted: usize,
     kept_moved: usize,
     with_branches: usize,
+    replaced: usize,
+    replaced_kinds: HashSet<String>,
 }
 
 /// Start counting this thread's closure dedupes (#749) from zero.
@@ -1494,8 +1573,8 @@ fn combine_every_offered(project: &Project, seed: u64, stats: &mut SweepStats) {
                 };
                 let what = format!("seed {seed} {end:?} keep {kept} other {other}");
                 let mut after = project.clone();
-                let removed = after
-                    .combine_sections(
+                let outcome = after
+                    .combine_sections_reporting(
                         kept,
                         other,
                         &options(Some(CombineJoinEnds {
@@ -1504,6 +1583,7 @@ fn combine_every_offered(project: &Project, seed: u64, stats: &mut SweepStats) {
                         })),
                     )
                     .unwrap_or_else(|e| panic!("{what}: {e}"));
+                let removed = outcome.removed_across_one_shot;
                 let plan = if kept == candidate.section_a {
                     &candidate.plan_keeping_a
                 } else {
@@ -1511,6 +1591,10 @@ fn combine_every_offered(project: &Project, seed: u64, stats: &mut SweepStats) {
                 };
                 stats.dropped +=
                     check_removed_across_one_shot(project, &after, plan, &removed, &what);
+                stats.replaced += check_replaced(project, &after, plan, &outcome.replaced, &what);
+                stats
+                    .replaced_kinds
+                    .extend(outcome.replaced.iter().map(|r| format!("{:?}", r.kind)));
                 stats
                     .dropped_kinds
                     .extend(removed.iter().map(|r| format!("{:?}", r.kind)));
@@ -1554,12 +1638,15 @@ fn every_offered_combine_in_random_networks_keeps_the_invariants() {
         shifted,
         kept_moved,
         with_branches,
+        replaced,
+        replaced_kinds,
         ..
     } = stats;
     eprintln!(
         "combine sweep seeds {first}..{}: {combined} combines, {torn} torn ties, {dropped} \
          ties removed across one shot, {shifted} shifted, {kept_moved} kept side moved, \
-         {with_branches} moved with attached sections; {}",
+         {with_branches} moved with attached sections, {replaced} closures replaced (#749, \
+         {replaced_kinds:?}); {}",
         first + seeds,
         closure_dedupes_report()
     );
@@ -1693,12 +1780,14 @@ fn every_offered_combine_around_a_passage_keeps_the_invariants() {
     }
     eprintln!(
         "combine passage sweep seeds {first}..{}: {} combines, {} torn ties, {} ties removed \
-         across one shot ({:?}); {}",
+         across one shot ({:?}), {} closures replaced (#749, {:?}); {}",
         first + seeds,
         stats.combined,
         stats.torn,
         stats.dropped,
         stats.dropped_kinds,
+        stats.replaced,
+        stats.replaced_kinds,
         closure_dedupes_report()
     );
     if seeds < 50 {
@@ -1776,6 +1865,7 @@ fn combine_chains(make: fn(u64) -> Project, env_prefix: &str, label: &str) -> us
         .collect();
     let (mut combines, mut splits, mut reverses) = (0usize, 0usize, 0usize);
     let (mut swept_away, mut probed, mut dropped) = (0usize, 0usize, 0usize);
+    let mut replaced = 0usize;
     reset_closure_dedupes();
     for seed in first..first + seeds {
         let mut rng = Rng(seed.wrapping_mul(0xA24B_AED4_963E_E407) | 1);
@@ -1828,8 +1918,8 @@ fn combine_chains(make: fn(u64) -> Project, env_prefix: &str, label: &str) -> us
                     let op = format!("combine({kept}:{kept_end:?}, {other}:{other_end:?})");
                     let what = what(&op, &trail);
                     let mut after = project.clone();
-                    let removed = after
-                        .combine_sections(
+                    let outcome = after
+                        .combine_sections_reporting(
                             kept,
                             other,
                             &options(Some(CombineJoinEnds {
@@ -1844,8 +1934,14 @@ fn combine_chains(make: fn(u64) -> Project, env_prefix: &str, label: &str) -> us
                     } else {
                         &candidate.plan_keeping_b
                     };
-                    dropped +=
-                        check_removed_across_one_shot(&project, &after, plan, &removed, &what);
+                    dropped += check_removed_across_one_shot(
+                        &project,
+                        &after,
+                        plan,
+                        &outcome.removed_across_one_shot,
+                        &what,
+                    );
+                    replaced += check_replaced(&project, &after, plan, &outcome.replaced, &what);
                     probed += check_no_merge_folds_a_closure(&after, &what);
                     project = after;
                     trail.push(op);
@@ -1922,8 +2018,8 @@ fn combine_chains(make: fn(u64) -> Project, env_prefix: &str, label: &str) -> us
     eprintln!(
         "{label} seeds {first}..{}: {combines} combines, {splits} splits, {reverses} \
          reverses, {swept_away} closures between merged stations removed, {dropped} ties \
-         removed across one shot, {probed} merges of a closure's two ends tried (all refused); \
-         {}",
+         removed across one shot, {replaced} closures replaced (#749), {probed} merges of a \
+         closure's two ends tried (all refused); {}",
         first + seeds,
         closure_dedupes_report()
     );
@@ -2167,11 +2263,23 @@ fn replay_chain(spec: &str, verbose: bool) {
                 print_chain_step(&project, &c, plan, k);
             }
             let mut after = project.clone();
-            let removed = after.combine_sections(k, o, &options(Some(join))).unwrap();
+            let outcome = after
+                .combine_sections_reporting(k, o, &options(Some(join)))
+                .unwrap();
             if verbose {
-                eprintln!("  removed across one shot {removed:?}");
+                eprintln!(
+                    "  removed across one shot {:?}, replaced {:?}",
+                    outcome.removed_across_one_shot, outcome.replaced
+                );
             }
-            check_removed_across_one_shot(&project, &after, plan, &removed, op);
+            check_removed_across_one_shot(
+                &project,
+                &after,
+                plan,
+                &outcome.removed_across_one_shot,
+                op,
+            );
+            check_replaced(&project, &after, plan, &outcome.replaced, op);
             check_combined(&project, &after, &c, k, op, &[]);
             project = after;
         } else if let Some(rest) = op.strip_prefix("split(") {

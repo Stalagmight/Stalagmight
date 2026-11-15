@@ -1322,9 +1322,10 @@ fn a_combine_removes_a_closure_its_join_puts_across_one_shot() {
 /// with B's start keeps A, which moves 0.4 m onto B's start, and tears the
 /// merge into a `Batch` closure on the legacy closure's two stations. That
 /// closure is the one left there, so the view solves the joined survey as
-/// the plan said it would, held where B's start was; one Undo restores the
+/// the plan said it would, held where B's start was, and the plan lists the
+/// legacy closure as replaced by the torn merge's; one Undo restores the
 /// project byte for byte, Redo re-applies it, and a save and a reopen keep
-/// it.
+/// it. No warning: the connection stays.
 #[test]
 fn a_combine_keeps_the_closure_the_solve_takes_over_a_legacy_one() {
     use crate::models::{
@@ -1409,6 +1410,18 @@ fn a_combine_keeps_the_closure_the_solve_takes_over_a_legacy_one() {
         Some(KeptMovesReason::AdjustmentAnchor)
     );
     assert_eq!(plan.torn_ties.len(), 1, "the merge becomes a loop closure");
+    // The dialog lists the legacy closure the torn merge's closure replaces.
+    assert_eq!(
+        plan.closures_replaced,
+        Some(vec![crate::models::CombineReplacedClosure {
+            station_a: StationRef::new(b, 2),
+            station_b: StationRef::new(b, 0),
+            kind: crate::models::CombineReplacedKind::LegacyClosure,
+            by_station_a: StationRef::new(a, 1),
+            by_station_b: StationRef::new(b, 2),
+            by_kind: crate::models::CombineRemovedKind::Merge,
+        }])
+    );
     let before = snapshot(&state);
 
     let result = state.execute_combine_sections(

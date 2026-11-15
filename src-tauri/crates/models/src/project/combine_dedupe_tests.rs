@@ -4,12 +4,13 @@
 //! the closure-adjusted view (`combine_closure_tests::check_combined`).
 
 use super::combine_closure_tests::{
-    add, adjusted, check_combined, check_removed_across_one_shot, dist, options, shot, xy,
+    add, adjusted, check_combined, check_removed_across_one_shot, check_replaced, dist, options,
+    shot, xy,
 };
 use crate::{
     ClosureStrategy, CombineCandidate, CombineJoinEnds, CombineJoinKind, CombinePlan,
-    KeptMovesReason, LoopClosure, Project, SectionEnd, SectionId, StationRef, TornTieKind,
-    TornTieReason,
+    CombineRemovedKind, CombineReplacedClosure, CombineReplacedKind, KeptMovesReason, LoopClosure,
+    Project, SectionEnd, SectionId, StationRef, TornTieKind, TornTieReason,
 };
 
 /// Plant a loop closure between `a` and `b` as a file can carry it: any
@@ -280,6 +281,11 @@ fn legacy_loop(strategy: ClosureStrategy) -> (Project, SectionId, SectionId) {
 /// takes). Before #749 the first closure stayed whatever it was: the legacy
 /// one, which the solve ignores, so the view showed the joined survey
 /// unadjusted after the plan had moved A for a solved one.
+///
+/// The plan the station menu offered lists the closure that gives way, by
+/// its stations before the combine and as what it was, with the torn merge
+/// that replaces it; the combine reports exactly that. An ordinary closure
+/// already there is not listed: nothing changes for the solve.
 #[test]
 fn a_merge_torn_onto_a_legacy_closure_leaves_the_closure_the_solve_takes() {
     for strategy in [LEGACY, EQUAL, MOVE, BATCH, LSQ] {
@@ -319,11 +325,32 @@ fn a_merge_torn_onto_a_legacy_closure_leaves_the_closure_the_solve_takes() {
             )],
             "{what}"
         );
+        let replaced_kind = match strategy {
+            MOVE => Some(CombineReplacedKind::FormerSnap),
+            LEGACY | EQUAL => Some(CombineReplacedKind::LegacyClosure),
+            _ => None,
+        };
+        let listed: Vec<CombineReplacedClosure> = replaced_kind
+            .map(|kind| CombineReplacedClosure {
+                station_a: StationRef::new(b, 2),
+                station_b: StationRef::new(b, 0),
+                kind,
+                by_station_a: StationRef::new(a, 1),
+                by_station_b: StationRef::new(b, 2),
+                by_kind: CombineRemovedKind::Merge,
+            })
+            .into_iter()
+            .collect();
+        assert_eq!(
+            plan.closures_replaced,
+            (!listed.is_empty()).then(|| listed.clone()),
+            "{what}"
+        );
         let b0 = xy(&project, StationRef::new(b, 0));
 
         let mut combined = project.clone();
-        let removed = combined
-            .combine_sections(
+        let outcome = combined
+            .combine_sections_reporting(
                 a,
                 b,
                 &options(Some(CombineJoinEnds {
@@ -332,6 +359,7 @@ fn a_merge_torn_onto_a_legacy_closure_leaves_the_closure_the_solve_takes() {
                 })),
             )
             .unwrap();
+        assert_eq!(outcome.replaced, listed, "{what}");
 
         // B's stations follow A's two: B:2 is A:3, B:0 the joined A:1.
         let (joined, b2) = (StationRef::new(a, 1), StationRef::new(a, 3));
@@ -371,7 +399,14 @@ fn a_merge_torn_onto_a_legacy_closure_leaves_the_closure_the_solve_takes() {
             "{what}: the loop is closed"
         );
 
-        check_removed_across_one_shot(&project, &combined, plan, &removed, &what);
+        check_removed_across_one_shot(
+            &project,
+            &combined,
+            plan,
+            &outcome.removed_across_one_shot,
+            &what,
+        );
+        check_replaced(&project, &combined, plan, &outcome.replaced, &what);
         check_combined(&project, &combined, &candidate, a, &what, &[]);
     }
 }
@@ -420,6 +455,8 @@ fn snapped_beside_the_join(snap_first: bool) -> (Project, [SectionId; 3]) {
 /// goes with its rigidity and depth co-location, which nothing in the plan
 /// models after the join; before #749 the first of the two stayed, so with
 /// the snap first the solve no longer held X's start on the joined station.
+/// The plan lists the snap as replaced by the ordinary closure, by their
+/// stations before the combine, and the combine reports exactly that.
 #[test]
 fn a_snapped_and_an_ordinary_closure_made_identical_keep_the_ordinary_one() {
     for snap_first in [true, false] {
@@ -457,10 +494,20 @@ fn a_snapped_and_an_ordinary_closure_made_identical_keep_the_ordinary_one() {
                     .any(|t| t.kind == TornTieKind::SnappedClosure),
                 "{what}: setup: the snap is not torn"
             );
+            let listed = vec![CombineReplacedClosure {
+                station_a: StationRef::new(x, 0),
+                station_b: StationRef::new(k, 1),
+                kind: CombineReplacedKind::SnappedClosure,
+                by_station_a: StationRef::new(x, 0),
+                by_station_b: StationRef::new(o, 0),
+                by_kind: CombineRemovedKind::LoopClosure,
+            }];
+            assert_eq!(plan.closures_replaced, Some(listed.clone()), "{what}");
             let mut combined = project.clone();
-            let removed = combined
-                .combine_sections(kept, other, &options(Some(join)))
+            let outcome = combined
+                .combine_sections_reporting(kept, other, &options(Some(join)))
                 .unwrap();
+            assert_eq!(outcome.replaced, listed, "{what}");
 
             // K's end is the joined station: K:1 keeping K, O:1 keeping O
             // (K's two stations come first).
@@ -472,8 +519,92 @@ fn a_snapped_and_an_ordinary_closure_made_identical_keep_the_ordinary_one() {
                 dist(view[&StationRef::new(x, 0)], view[&joined]) < 1e-6,
                 "{what}: the solve holds X's start on the joined station"
             );
-            check_removed_across_one_shot(&project, &combined, plan, &removed, &what);
+            check_removed_across_one_shot(
+                &project,
+                &combined,
+                plan,
+                &outcome.removed_across_one_shot,
+                &what,
+            );
+            check_replaced(&project, &combined, plan, &outcome.replaced, &what);
             check_combined(&project, &combined, &candidate, kept, &what, &[]);
         }
     }
+}
+
+/// A snapped closure the combine tears lands on a legacy closure's two
+/// stations. K runs 10 m east; O runs 9.6 m back west from 0.4 m short of
+/// K's end and is merged onto K's start, and a `Batch` closure ties K's end
+/// to O's start (the join). X runs the same 9.6 m west from O's start onto
+/// K's start, merged there, and its start is snapped to O's start. A legacy
+/// closure ties X's start to K's end.
+///
+/// Combining K's end with O's start moves O (K holds the anchor) and so
+/// tears the snap into an ordinary closure between X's start and the joined
+/// station, where the legacy closure is too. The torn snap is the one the
+/// solve takes, so it stays and the legacy closure goes; the plan lists that,
+/// naming the replacement as the snapped closure it was.
+#[test]
+fn a_snap_the_combine_tears_replaces_a_legacy_closure_on_its_stations() {
+    let mut project = Project::new("Torn snap".to_string(), None);
+    let k = add(&mut project, "K", vec![shot(90.0, 10.0)]);
+    let o = add(&mut project, "O", vec![shot(270.0, 9.6)]);
+    let x = add(&mut project, "X", vec![shot(270.0, 9.6)]);
+    let at = StationRef::new;
+    project.merge_stations(at(o, 1), at(k, 0)).unwrap();
+    project.merge_stations(at(x, 1), at(k, 0)).unwrap();
+    project
+        .create_loop_closure(at(k, 1), at(o, 0), BATCH)
+        .unwrap();
+    let snap = project
+        .create_loop_closure(at(x, 0), at(o, 0), MOVE)
+        .unwrap();
+    assert!(snap.is_aligned, "setup: X's start sits on O's start");
+    let legacy = project.next_closure_id;
+    plant(&mut project, (at(x, 0), at(k, 1)), LEGACY, false, legacy);
+
+    let join = CombineJoinEnds {
+        kept: SectionEnd::End,
+        other: SectionEnd::Start,
+    };
+    let candidate = project.combine_candidate_joining(k, o, Some(join)).unwrap();
+    assert_eq!(candidate.join_kind, CombineJoinKind::Closure);
+    let plan = plan_keeping(&candidate, k);
+    assert_eq!(plan.moving_section, Some(o));
+    assert!(
+        plan.torn_ties
+            .iter()
+            .any(|t| t.kind == TornTieKind::SnappedClosure),
+        "setup: the snap tears: {:?}",
+        plan.torn_ties
+    );
+    let listed = vec![CombineReplacedClosure {
+        station_a: at(x, 0),
+        station_b: at(k, 1),
+        kind: CombineReplacedKind::LegacyClosure,
+        by_station_a: at(x, 0),
+        by_station_b: at(o, 0),
+        by_kind: CombineRemovedKind::SnappedClosure,
+    }];
+    assert_eq!(plan.closures_replaced, Some(listed.clone()));
+
+    let mut combined = project.clone();
+    let outcome = combined
+        .combine_sections_reporting(k, o, &options(Some(join)))
+        .unwrap();
+    assert_eq!(outcome.replaced, listed);
+    assert_eq!(
+        closures_between(&combined, at(x, 0), at(k, 1)),
+        vec![(snap.id, BATCH, false)],
+        "the torn snap stays, as an ordinary closure"
+    );
+    check_removed_across_one_shot(
+        &project,
+        &combined,
+        plan,
+        &outcome.removed_across_one_shot,
+        "torn snap",
+    );
+    check_replaced(&project, &combined, plan, &outcome.replaced, "torn snap");
+    check_combined(&project, &combined, &candidate, k, "torn snap", &[]);
 }
