@@ -6,6 +6,7 @@ import { isEditingBlockedNow } from '../../hooks/useEditingBlocked';
 import { getErrorMessage } from '../../utils/ipc';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { formatLength } from '../../utils/formatStats';
+import { formatStationId } from '../../utils/formatters';
 import { getNextSectionColor } from '../../utils/colors';
 import { MIN_SPLIT_CHILD_LENGTH_M } from '../../utils/shotSplit';
 import { previewSplitSection } from '../../utils/splitSection';
@@ -13,8 +14,15 @@ import { defaultConfig } from '../../types/config';
 import type { SplitAt } from '../../types/ipc/SplitAt';
 import type { SplitPreview } from '../../types/ipc/SplitPreview';
 import type { SplitSide } from '../../types/ipc/SplitSide';
+import type { StationRef } from '../../types/ipc/StationRef';
 import { Button } from '../common/Button';
+import { EntityBlob } from '../common/EntityBlob';
 import { DialogWrapper } from './DialogWrapper';
+
+/** A station by the id the user knows it by, as a pill at the Full level. */
+function StationId({ station }: { station: StationRef }) {
+  return <EntityBlob entity="station">{formatStationId(station.section_id, station.station_index)}</EntityBlob>;
+}
 
 /**
  * "Split Section Here" (#335): cut one section into two at a station, or at a
@@ -102,6 +110,29 @@ export default function SplitSectionHereDialog() {
   const movedName = preview?.moved_side === 'a' ? nameA.trim() || 'A' : nameB.trim() || 'B';
   const otherName = preview?.moved_side === 'a' ? nameB.trim() || 'B' : nameA.trim() || 'A';
   const closures = preview?.closures_to_merges ?? 0;
+  // A closure that tied the moved half to the same point as the one that
+  // becomes the merge is then a closure between merged stations, which the
+  // split removes (#738): the halves were tied by more than the merged ones,
+  // and the note lists the rest, by the stations they were created with. One
+  // that already tied a point to itself (an undo can restore one from an old
+  // history) goes too, but tied nothing, so it is listed apart and does not
+  // change how the halves are described.
+  const removed = preview?.removed_closures ?? [];
+  const alreadyOnePoint = preview?.removed_already_one_point ?? [];
+  const tiedBy =
+    removed.length > 0 ? 'loop closures' : closures === 1 ? 'a loop closure' : `${closures} loop closures`;
+  const turned =
+    removed.length > 0
+      ? closures === 1
+        ? 'one of them into a merge'
+        : `${closures} of them into merges`
+      : closures === 1
+        ? 'it into a merge'
+        : 'them into merges';
+  const moveNote = preview?.moved_side
+    ? `${movedName} is tied to ${otherName} only by ${tiedBy}, so the split turns ${turned} and moves ` +
+      `${movedName} ${formatLength(preview.moved_m, lengthUnit, 2)} to close ${closures === 1 ? 'it' : 'them'}.`
+    : null;
 
   const summary =
     at?.type === 'shot' && shot
@@ -228,14 +259,24 @@ export default function SplitSectionHereDialog() {
           sideChoice('comment', 'Keep the station comment on', commentSide, setCommentSide, ['a', 'b', 'both'])}
         {isDatum && sideChoice('datum', 'Keep the zero datum on', datumSide, setDatumSide, ['a', 'b'])}
 
-        {preview?.moved_side && (
+        {(moveNote || removed.length > 0 || alreadyOnePoint.length > 0) && (
           <div
-            className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm"
+            className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm space-y-1"
             data-testid="split-here-closure-warning"
           >
-            {movedName} is tied to {otherName} only by {closures === 1 ? 'a loop closure' : `${closures} loop closures`},
-            so the split turns {closures === 1 ? 'it into a merge' : 'them into merges'} and moves {movedName}{' '}
-            {formatLength(preview.moved_m, lengthUnit, 2)} to close {closures === 1 ? 'it' : 'them'}.
+            {moveNote && <p data-testid="split-here-closure-move">{moveNote}</p>}
+            {removed.map((closure, i) => (
+              <p key={`${closure.closure_id.toString()}-${i}`} data-testid={`split-here-closure-removed-${i}`}>
+                Loop closure <StationId station={closure.station_a} /> to <StationId station={closure.station_b} /> is
+                removed: its two stations become one point.
+              </p>
+            ))}
+            {alreadyOnePoint.map((closure, i) => (
+              <p key={`${closure.closure_id.toString()}-${i}`} data-testid={`split-here-closure-already-${i}`}>
+                Loop closure <StationId station={closure.station_a} /> to <StationId station={closure.station_b} /> is
+                removed: its two stations are already one point.
+              </p>
+            ))}
           </div>
         )}
 

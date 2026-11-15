@@ -926,7 +926,13 @@ impl Project {
                 .get(&b_ref)
                 .map_or_else(|| vec![b_ref], |&gid| groups[gid].clone());
 
-            // Skip if both endpoints are in the same merge group (legacy data edge case)
+            // Skip a closure whose two endpoints are one merge group: it ties a
+            // point to itself, so listing it would only show a station closed
+            // onto its own merged partners. The orphan-closure sweep removes
+            // these on every load and every edit that runs it (#738), so the
+            // app does not make one; the skip stays because an undo can still
+            // restore one from a history recorded before that fix, until the
+            // next such edit or open.
             let a_group_id = station_to_group.get(&a_ref);
             let b_group_id = station_to_group.get(&b_ref);
             if a_group_id.is_some() && a_group_id == b_group_id {

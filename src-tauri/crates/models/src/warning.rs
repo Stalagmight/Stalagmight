@@ -59,6 +59,13 @@ pub const CLOSURE_ADJUSTMENT_FAILED: &str = "CLOSURE_ADJUSTMENT_FAILED";
 /// (#737). The frontend shows each one as a toast.
 pub const CLOSURE_REMOVED_ACROSS_ONE_SHOT: &str = "CLOSURE_REMOVED_ACROSS_ONE_SHOT";
 
+/// `CommandResult` warning code for a loop closure an edit's orphan-closure
+/// sweep removed because its two stations are one point (#738): the edit made
+/// another closure a merge, which put this one's ends on one point, or they
+/// already were (a file or undo history from before that fix). The frontend
+/// shows them in the same toast as [`CLOSURE_REMOVED_ACROSS_ONE_SHOT`].
+pub const CLOSURE_REMOVED_MERGED_ENDS: &str = "CLOSURE_REMOVED_MERGED_ENDS";
+
 /// Canonical severity for a validation warning code - the SINGLE source of truth
 /// shared by `Validator::validate_shot`, the project-level over-anchoring check,
 /// the issue-severity map coloring, and the resolve/ignore gate. Errors are

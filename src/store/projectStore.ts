@@ -1851,11 +1851,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   deleteSection: async (sectionId: SectionId) => {
-    return executeCommand(
+    return notifyRemovedClosures(await executeCommand(
       'delete_section',
       { sectionId },
       { purpose: 'remove section from project', fields: { sectionId } }
-    );
+    ));
   },
 
   reverseSection: async (sectionId: SectionId, swapLeftRight: boolean) => {
@@ -1903,19 +1903,19 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   deleteShotAndSplit: async (sectionId: SectionId, shotId: ShotId, nameA: string, nameB: string) => {
-    return executeCommand(
+    return notifyRemovedClosures(await executeCommand(
       'delete_shot_and_split',
       { sectionId, shotId, nameA, nameB },
       { purpose: 'delete shot and split section', fields: { sectionId, shotId } }
-    );
+    ));
   },
 
   deleteLastShotAndSection: async (sectionId: SectionId, shotId: ShotId) => {
-    return executeCommand(
+    return notifyRemovedClosures(await executeCommand(
       'delete_last_shot_and_section',
       { sectionId, shotId },
       { purpose: 'remove single-shot section', fields: { sectionId, shotId } }
-    );
+    ));
   },
 
   deleteShotRangeSplit: async (
@@ -1925,11 +1925,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     nameA: string,
     nameB: string
   ) => {
-    return executeCommand(
+    return notifyRemovedClosures(await executeCommand(
       'delete_shot_range_split',
       { sectionId, startShotId, endShotId, nameA, nameB },
       { purpose: 'delete shot range and split section', fields: { sectionId, startShotId, endShotId } }
-    );
+    ));
   },
 
   deleteShotRangeShift: async (sectionId: SectionId, startShotId: ShotId, endShotId: ShotId) => {
@@ -1958,19 +1958,19 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   unmergeStations: async (stationRef: StationRef) => {
-    return executeCommand(
+    return notifyRemovedClosures(await executeCommand(
       'unmerge_stations',
       { stationRef },
       { purpose: 'disconnect merged stations', fields: { stationRef } }
-    );
+    ));
   },
 
   unmergeStationPair: async (stationA: StationRef, stationB: StationRef) => {
-    return executeCommand(
+    return notifyRemovedClosures(await executeCommand(
       'unmerge_station_pair',
       { stationA, stationB },
       { purpose: 'disconnect selected merged station pair', fields: { stationA, stationB } }
-    );
+    ));
   },
 
   checkMergeConnectivity: async (stationA: StationRef, stationB: StationRef) => {
@@ -2074,11 +2074,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   removeZeroDatum: async (stationRef: StationRef) => {
-    return executeCommand(
+    return notifyRemovedClosures(await executeCommand(
       'remove_zero_datum',
       { stationRef },
       { purpose: 'remove GPS anchor', fields: { stationRef } }
-    );
+    ));
   },
 
   moveSection: async (sectionId: SectionId, offset: Coordinates) => {

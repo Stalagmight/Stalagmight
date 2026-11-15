@@ -1,9 +1,9 @@
 use super::AppState;
 use crate::core::{CommandResult, ValidationWarning, Validator, WarningSeverity};
 use crate::models::{
-    shot_display_position, station_id_label, ClosurePair, ClosuresBeforeEdit, Project, SectionId,
-    ShotData, ShotId, ShotKind, ShotUpdates, SurveyCredit, CLOSURE_REMOVED_ACROSS_ONE_SHOT,
-    FEATURE_ID_STRIDE,
+    shot_display_position, station_id_label, ClosurePair, ClosuresBeforeEdit, ClosuresBeforeSweep,
+    Project, RemovedClosure, SectionId, ShotData, ShotId, ShotKind, ShotUpdates, SurveyCredit,
+    CLOSURE_REMOVED_ACROSS_ONE_SHOT, CLOSURE_REMOVED_MERGED_ENDS, FEATURE_ID_STRIDE,
 };
 
 /// The warning a delete reports for a loop closure it removed because the
@@ -17,6 +17,43 @@ pub(super) fn closure_removed_message(closure: &ClosurePair) -> String {
         station_id_label(closure.station_a),
         station_id_label(closure.station_b)
     )
+}
+
+/// The warnings an edit reports for the loop closures its orphan-closure sweep
+/// removed because their two stations are one point (#738), each named by the
+/// stations it had BEFORE the edit. The frontend shows them in one toast with
+/// the closures-across-one-shot ones (`notifyRemovedClosures`).
+pub(super) fn merged_ends_warnings(removed: &[RemovedClosure]) -> Vec<ValidationWarning> {
+    removed
+        .iter()
+        .map(|removed| ValidationWarning {
+            code: CLOSURE_REMOVED_MERGED_ENDS.to_string(),
+            message: format!(
+                "Removed loop closure {} to {}: {}",
+                station_id_label(removed.pair.station_a),
+                station_id_label(removed.pair.station_b),
+                if removed.already_one_point {
+                    "its two stations were already one point."
+                } else {
+                    "another loop closure became a merge, which made its two stations one point."
+                }
+            ),
+            severity: WarningSeverity::Warning,
+        })
+        .collect()
+}
+
+/// After an edit that ran the whole-project sweep: log what it removed, and
+/// turn it into [`merged_ends_warnings`] named against `before` (the capture
+/// the edit took before it changed anything).
+pub(super) fn report_swept_closures(
+    project: &Project,
+    before: &ClosuresBeforeSweep,
+    sweep: &crate::models::OrphanClosureSweep,
+    context: &str,
+) -> Vec<ValidationWarning> {
+    sweep.log_removed(context);
+    merged_ends_warnings(&project.removed_closures_named(before, sweep))
 }
 
 /// After a delete with shift: remove every loop closure the delete left tying
@@ -387,8 +424,9 @@ impl AppState {
         }
 
         let closures_before = project.closures_before_edit();
-        match project.remove_shot_with_rewire(section_id, shot_id) {
-            Ok(_) => {
+        let closures_before_sweep = project.closures_before_sweep();
+        match project.remove_shot_with_rewire_reporting(section_id, shot_id) {
+            Ok((_, _, swept_away)) => {
                 tracing::debug!(
                     section_id,
                     shot_id,
@@ -402,7 +440,14 @@ impl AppState {
                 // rewire onto a merge partner keeps every knot - so this is
                 // the defensive half keeping both delete paths under one rule
                 // (`no_delete_leaves_a_new_closure_across_one_shot`).
-                let removed = remove_closures_newly_across_one_shot(project, &closures_before);
+                let mut removed = remove_closures_newly_across_one_shot(project, &closures_before);
+                // The closures the removal's own orphan sweep took because their
+                // two stations became one point (#738); `execute()`'s epilogue
+                // reports any its whole-project sweep takes after this.
+                crate::models::log_removed_closures(&swept_away, "delete shot");
+                removed.extend(merged_ends_warnings(
+                    &project.removed_closures_named_by_id(&closures_before_sweep, &swept_away),
+                ));
                 CommandResult::success().with_warnings(removed)
             }
             Err(e) => CommandResult::failure(e),

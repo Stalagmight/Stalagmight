@@ -326,7 +326,7 @@
 //!
 //!   FIXED by scoping the inverse rather than by recording the conversion in an
 //!   `UndoData` variant: the two shot-removal paths snapshot the ALREADY-orphaned
-//!   closure ids before mutating (`Project::orphan_closure_ids`) and convert only
+//!   closure ids before mutating (`Project::swept_closure_ids`) and convert only
 //!   what they themselves orphaned (`Project::convert_closures_orphaned_since`,
 //!   models/project/offsets.rs). An inverse then does no more than invert, while
 //!   a closure genuinely stranded by the removal - including one whose endpoints
