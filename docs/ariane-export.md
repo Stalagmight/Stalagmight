@@ -244,8 +244,21 @@ have the orphan guard refuse it over closures the user never made.
 
 On re-import, the in-repo importer drops START rows and skips a closure whose
 target is a START with no section hanging off it, so the fix rows come back as
-the same stations and legs, with one "loop closure referenced excluded
-stations" import warning per fix. The fix's GPS is not read back as a datum.
+the same stations and legs. The fix's GPS is not read back as a datum. The
+import receipt carries two counted warnings, each one line for all the fixes
+together (`N` = the number of fixes):
+
+- "N sections had no shots after filtering and were dropped". The tie hangs
+  off its fix station's row, which the parser reads as a branch: a one-row
+  section holding only the CLOSURE, dropped empty. Any loop closure from a
+  station part-way along a section does the same, fix or not.
+- "N loop closures referenced excluded stations and were skipped". The tie's
+  target is a START nothing hangs off, which the importer keeps no trace of,
+  so it cannot tell it from a station the exclusion filter removed.
+
+Both blame filtering the user never did. The importer would need to keep the
+file's START ids (`TmlFile` is an IPC type, so that is not a local change) to
+count the ties in its entrance bucket instead; tracked as a follow-up.
 
 ### No two STARTs on one point
 

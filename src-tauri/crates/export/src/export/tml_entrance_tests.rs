@@ -283,7 +283,7 @@ fn the_fix_shape_round_trips_to_the_same_stations() {
             "every datum is written: {notes:?}"
         );
         let parsed = crate::parsers::tml::parse_tml(&path).unwrap();
-        let (configs, closures, _) =
+        let (configs, closures, warnings) =
             crate::parsers::tml::convert_tml_to_import_configs(&parsed, false, true).unwrap();
         let sections: Vec<(Option<String>, Vec<(f64, f64)>)> = configs
             .iter()
@@ -292,11 +292,11 @@ fn the_fix_shape_round_trips_to_the_same_stations() {
                 (c.name.clone(), legs)
             })
             .collect();
-        (sections, closures.len())
+        ((sections, closures.len()), warnings)
     };
 
-    let with_fixes = read_back(&three_entrance_cave(true));
-    let without = read_back(&three_entrance_cave(false));
+    let (with_fixes, fix_warnings) = read_back(&three_entrance_cave(true));
+    let (without, plain_warnings) = read_back(&three_entrance_cave(false));
     assert_eq!(
         with_fixes, without,
         "the fix rows add no station and no leg"
@@ -308,6 +308,20 @@ fn the_fix_shape_round_trips_to_the_same_stations() {
             .map(|(_, legs)| legs.len())
             .sum::<usize>(),
         11
+    );
+    // What the receipt says about the two fixes. Each tie hangs off a
+    // mid-chain row, so the parser splits it into a one-row branch that holds
+    // only the CLOSURE and is dropped empty (true of any mid-chain closure),
+    // and the tie's target, a START nothing hangs off, lands in the
+    // excluded-stations bucket. Both blame filtering that never happened;
+    // see docs/ariane-export.md.
+    assert!(plain_warnings.is_empty(), "{plain_warnings:?}");
+    assert_eq!(
+        fix_warnings,
+        [
+            "2 sections had no shots after filtering and were dropped",
+            "2 loop closures referenced excluded stations and were skipped",
+        ]
     );
 }
 
