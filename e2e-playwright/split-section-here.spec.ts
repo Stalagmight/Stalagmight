@@ -151,7 +151,7 @@ test.describe('Split Section Here (#335)', () => {
       'Main-B is tied to Main-A only by loop closures, so the split turns one of them into a merge and moves ' +
         'Main-B 0.10m to close it.'
     );
-    await expect(page.getByTestId('split-here-closure-removed')).toHaveText(
+    await expect(page.getByTestId('split-here-closure-removed-2')).toHaveText(
       `Loop closure ${section.id}:4 to ${section.id}:1 is removed: its two stations become one point.`
     );
     // Still the user's call.

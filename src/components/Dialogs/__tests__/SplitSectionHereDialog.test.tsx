@@ -207,7 +207,7 @@ describe('SplitSectionHereDialog', () => {
     expect(screen.getByTestId('split-here-closure-move')).toHaveTextContent(
       'Main-B is tied to Main-A only by a loop closure, so the split turns it into a merge and moves Main-B 0.10m to close it.'
     );
-    expect(screen.queryByTestId('split-here-closure-removed')).toBeNull();
+    expect(screen.queryAllByTestId(/^split-here-closure-removed-/)).toHaveLength(0);
     expect(warning).toBeInTheDocument();
   });
 
@@ -225,9 +225,10 @@ describe('SplitSectionHereDialog', () => {
     expect(screen.getByTestId('split-here-closure-move')).toHaveTextContent(
       'Main-B is tied to Main-A only by loop closures, so the split turns one of them into a merge and moves Main-B 0.10m to close it.'
     );
-    const removed = screen.getAllByTestId('split-here-closure-removed');
-    expect(removed).toHaveLength(1);
-    expect(removed[0]).toHaveTextContent('Loop closure 1:0 to 3:3 is removed: its two stations become one point.');
+    expect(screen.getAllByTestId(/^split-here-closure-removed-/)).toHaveLength(1);
+    expect(screen.getByTestId('split-here-closure-removed-2')).toHaveTextContent(
+      'Loop closure 1:0 to 3:3 is removed: its two stations become one point.'
+    );
     expect(screen.getByTestId('split-here-confirm')).toBeEnabled();
   });
 
@@ -246,7 +247,7 @@ describe('SplitSectionHereDialog', () => {
     expect(screen.getByTestId('split-here-closure-move')).toHaveTextContent(
       'Main-A is tied to Main-B only by loop closures, so the split turns 2 of them into merges and moves Main-A'
     );
-    expect(screen.getAllByTestId('split-here-closure-removed').map((p) => p.textContent)).toEqual([
+    expect(screen.getAllByTestId(/^split-here-closure-removed-/).map((p) => p.textContent)).toEqual([
       'Loop closure 3:3 to 5:0 is removed: its two stations become one point.',
       'Loop closure 6:0 to 3:3 is removed: its two stations become one point.',
     ]);
@@ -261,7 +262,7 @@ describe('SplitSectionHereDialog', () => {
     render(<SplitSectionHereDialog />);
     await screen.findByTestId('split-here-closure-warning');
     expect(screen.queryByTestId('split-here-closure-move')).toBeNull();
-    expect(screen.getByTestId('split-here-closure-removed')).toHaveTextContent(
+    expect(screen.getByTestId('split-here-closure-removed-2')).toHaveTextContent(
       'Loop closure 1:0 to 3:3 is removed: its two stations become one point.'
     );
   });

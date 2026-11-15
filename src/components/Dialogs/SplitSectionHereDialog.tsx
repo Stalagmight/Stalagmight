@@ -262,7 +262,10 @@ export default function SplitSectionHereDialog() {
           >
             {moveNote && <p data-testid="split-here-closure-move">{moveNote}</p>}
             {removed.map((closure) => (
-              <p key={closure.closure_id.toString()} data-testid="split-here-closure-removed">
+              <p
+                key={closure.closure_id.toString()}
+                data-testid={`split-here-closure-removed-${closure.closure_id.toString()}`}
+              >
                 Loop closure <StationId station={closure.station_a} /> to <StationId station={closure.station_b} /> is
                 removed: its two stations become one point.
               </p>
