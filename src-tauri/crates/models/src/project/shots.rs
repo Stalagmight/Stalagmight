@@ -1344,11 +1344,12 @@ impl Project {
             .ok_or_else(|| format!("Shot {shot_id} not found in section {section_id}"))?;
 
         let impact = self.preview_delete_shot(section_id, shot_id)?;
-        // Which closures are orphans ALREADY, before this removal touches
-        // anything - see the conversion below for what that is for. Must be taken
-        // here, ahead of the first mutation (the retains just below), or a closure
-        // this removal orphans would be mistaken for one that arrived orphaned.
-        let preexisting_orphans = self.orphan_closure_ids();
+        // Which closures the sweep would act on ALREADY (orphans, and closures
+        // between merged stations), before this removal touches anything - see
+        // the conversion below for what that is for. Must be taken here, ahead of
+        // the first mutation (the retains just below), or a closure this removal
+        // orphans would be mistaken for one that arrived orphaned.
+        let preexisting_orphans = self.swept_closure_ids();
         let removed_station = impact.removed_station;
         // The deleted station's canonical key (still resolvable - the shot is
         // removed below). Stored refs are canonical, so key equality is sound.
@@ -1529,7 +1530,10 @@ impl Project {
         // loop-ness hung off a merge that was. The forward user delete loses
         // nothing: `execute()`'s `can_orphan_closures` epilogue still sweeps the
         // whole project after `Command::DeleteShot`.
-        minted.extend(self.convert_closures_orphaned_since(&preexisting_orphans));
+        minted.extend(
+            self.convert_closures_orphaned_since(&preexisting_orphans)
+                .minted,
+        );
 
         // After removing a shot, stations after the deletion point (index > pos)
         // shift by -displacement in section-local coordinates.  We must decide
@@ -1642,10 +1646,10 @@ impl Project {
                 "Shot {shot_id} is not the only shot of section {section_id}"
             ));
         }
-        // Which closures are orphans ALREADY, before this inverse touches
-        // anything - see the conversion below. Taken ahead of the retains, which
-        // are this function's first mutation.
-        let preexisting_orphans = self.orphan_closure_ids();
+        // Which closures the sweep would act on ALREADY, before this inverse
+        // touches anything - see the conversion below. Taken ahead of the
+        // retains, which are this function's first mutation.
+        let preexisting_orphans = self.swept_closure_ids();
         // Refs on the station the append created. There are none when the undo
         // follows its own `CreateShot` (anything anchored there would have been
         // pushed above this entry and undone first), but a ref whose anchoring
@@ -1699,7 +1703,9 @@ impl Project {
         // rigid one, though, which can leave the new merge drifted, so THAT case -
         // and only that case - cascades, exactly as the sibling does. Nothing
         // converted is the overwhelmingly common case and stays offset-neutral.
-        let minted = self.convert_closures_orphaned_since(&preexisting_orphans);
+        let minted = self
+            .convert_closures_orphaned_since(&preexisting_orphans)
+            .minted;
         if !minted.is_empty() {
             // Settled before the cascade, as the sibling does and for the same
             // reason (#464): the cascade is seeded with this section, so a merge

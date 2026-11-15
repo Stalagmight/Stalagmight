@@ -248,7 +248,8 @@ impl AppState {
         }
     }
 
-    /// Convert any sole-bridge loop closures in the open project to merges.
+    /// Convert any sole-bridge loop closures in the open project to merges, and
+    /// remove any closure between merged stations (#738).
     fn convert_orphan_closures_in_open_project(&self) {
         let mut guard = match self.project.lock() {
             Ok(g) => g,
@@ -257,10 +258,11 @@ impl AppState {
         let Some(project) = guard.as_mut() else {
             return;
         };
-        let converted = project.convert_orphan_closures_to_merges();
-        if converted > 0 {
+        let sweep = project.sweep_orphan_closures();
+        if sweep.converted > 0 || !sweep.removed.is_empty() {
             tracing::info!(
-                converted,
+                converted = sweep.converted,
+                removed = sweep.removed.len(),
                 purpose = "enforce closures-are-loops invariant",
                 "Converted sole-bridge loop closures to merges after a removal"
             );

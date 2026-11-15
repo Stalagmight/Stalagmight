@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::ShotId;
+use crate::{ClosurePair, ShotId};
 
 /// Where Split Section Here cuts a section.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
@@ -36,6 +36,8 @@ pub enum SplitSide {
 /// A loop closure from before the cut to past it, with nothing else tying the
 /// two halves, is left as their only tie. A closure must close a loop, so the
 /// split turns it into a merge, which moves one half by the loop's misclosure.
+/// A second closure that tied the same two points is then a closure between
+/// merged stations, which closes nothing, and the split removes it (#738).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 pub struct SplitPreview {
     /// How many loop closures the split turns into merges.
@@ -44,6 +46,12 @@ pub struct SplitPreview {
     pub moved_side: Option<SplitSide>,
     /// How far it moves, in metres (0 when nothing moves).
     pub moved_m: f64,
+    /// The loop closures the split removes because their two stations become
+    /// one point (one merge group), in the order the split removes them.
+    /// Named by their stations BEFORE the split, the ids the user created them
+    /// with. The preview runs the split's own sweep on a copy, so this is
+    /// exactly what the split removes.
+    pub removed_closures: Vec<ClosurePair>,
 }
 
 /// The choices the Split Section Here dialog sends.

@@ -13,8 +13,8 @@ use crate::{ClosureStrategy, LoopClosure, SectionId, StationKey, StationMerge, S
 use super::union_find::UnionFind;
 use super::Project;
 
-/// The two section-level relations the orphan-closure sweep asks about, built
-/// once per sweep and extended as closures are promoted to merges (#597):
+/// The relations the orphan-closure sweep asks about, built once per sweep and
+/// extended as closures are promoted to merges (#597):
 ///
 /// - `connected`: stations joined through shots and RESOLVABLE merges, closures
 ///   excluded - the orphan predicate. Every station of a section is joined to
@@ -24,12 +24,18 @@ use super::Project;
 ///   `merge_would_double_anchor`, with each component flagged when a resolvable
 ///   zero datum sits in it. A stored id naming no live section still gets a
 ///   slot (`merge_slot`), since the adjacency walk passes through it.
+/// - `points`: the one STATION-level relation (#738) - stations joined by
+///   resolvable merges, the merge groups [`Project::are_stations_merged`]
+///   walks. Every resolved merge and closure endpoint gets a slot
+///   (`point_slot`); nothing else is ever asked about.
 pub(crate) struct StationComponents {
     section_slot: HashMap<SectionId, usize>,
     merge_slot: HashMap<SectionId, usize>,
     connected: UnionFind,
     merge_component: UnionFind,
     anchored: Vec<bool>,
+    point_slot: HashMap<StationRef, usize>,
+    points: UnionFind,
 }
 
 impl StationComponents {
@@ -47,18 +53,39 @@ impl StationComponents {
                 merge_slot.entry(id).or_insert(next);
             }
         }
+        // Every merge and closure endpoint, resolved once.
+        let resolve_pair = |a: &StationKey, b: &StationKey| -> Option<(StationRef, StationRef)> {
+            Some((project.resolve_key(a)?, project.resolve_key(b)?))
+        };
+        let merge_ends: Vec<Option<(StationRef, StationRef)>> = project
+            .station_merges
+            .iter()
+            .map(|m| resolve_pair(&m.station_a, &m.station_b))
+            .collect();
+        let mut point_slot: HashMap<StationRef, usize> = HashMap::new();
+        let closure_ends = project
+            .loop_closures
+            .iter()
+            .filter_map(|c| resolve_pair(&c.station_a, &c.station_b));
+        for (a, b) in merge_ends.iter().flatten().copied().chain(closure_ends) {
+            for at in [a, b] {
+                let next = point_slot.len();
+                point_slot.entry(at).or_insert(next);
+            }
+        }
         let mut components = Self {
             connected: UnionFind::new(section_slot.len()),
             merge_component: UnionFind::new(merge_slot.len()),
             anchored: vec![false; merge_slot.len()],
             section_slot,
             merge_slot,
+            points: UnionFind::new(point_slot.len()),
+            point_slot,
         };
-        for merge in &project.station_merges {
-            if project.resolve_key(&merge.station_a).is_some()
-                && project.resolve_key(&merge.station_b).is_some()
-            {
-                components.union_connected(merge.station_a.section_id, merge.station_b.section_id);
+        for (merge, ends) in project.station_merges.iter().zip(&merge_ends) {
+            if let Some((a, b)) = *ends {
+                components.union_connected(a.section_id, b.section_id);
+                components.union_points(a, b);
             }
             components.union_merge(merge.station_a.section_id, merge.station_b.section_id);
         }
@@ -94,10 +121,30 @@ impl StationComponents {
         ra != rb && self.anchored[ra] && self.anchored[rb]
     }
 
+    /// Whether two RESOLVED stations are one point: the same station, or one
+    /// merge group - [`Project::are_stations_merged`], in O(α) instead of a
+    /// walk per question.
+    fn one_point(&mut self, a: StationRef, b: StationRef) -> bool {
+        if a == b {
+            return true;
+        }
+        match (self.point_slot.get(&a), self.point_slot.get(&b)) {
+            (Some(&a), Some(&b)) => self.points.find(a) == self.points.find(b),
+            _ => false,
+        }
+    }
+
     /// Record a merge just added between two resolved stations.
     fn join(&mut self, a: StationRef, b: StationRef) {
         self.union_connected(a.section_id, b.section_id);
         self.union_merge(a.section_id, b.section_id);
+        self.union_points(a, b);
+    }
+
+    fn union_points(&mut self, a: StationRef, b: StationRef) {
+        if let (Some(&a), Some(&b)) = (self.point_slot.get(&a), self.point_slot.get(&b)) {
+            self.points.union(a, b);
+        }
     }
 
     fn union_connected(&mut self, a: SectionId, b: SectionId) {
@@ -150,6 +197,30 @@ pub(crate) struct MintedMerge {
     anchor: StationKey,
     /// The endpoint that has to reach it.
     moving: StationKey,
+}
+
+/// What one pass of [`Project::convert_closures_orphaned_since`] did.
+#[derive(Debug, Default)]
+pub(crate) struct ClosureSweep {
+    /// One per closure promoted to a merge, in promotion order; the caller
+    /// owes them [`Project::settle_minted_merges`].
+    pub(crate) minted: Vec<MintedMerge>,
+    /// The closures removed because their two stations are one point (#738),
+    /// in `loop_closures` order, as they were stored.
+    pub(crate) removed: Vec<LoopClosure>,
+}
+
+/// What the whole-project orphan-closure sweep did
+/// ([`Project::sweep_orphan_closures`]).
+#[derive(Debug, Clone, Default)]
+pub struct OrphanClosureSweep {
+    /// How many closures it turned into merges.
+    pub converted: usize,
+    /// The closures it removed because their two stations are one point: the
+    /// same station, or one merge group (#738). In `loop_closures` order, as
+    /// they were stored, so a caller can name them by the stations they had
+    /// before the edit that ran the sweep.
+    pub removed: Vec<LoopClosure>,
 }
 
 /// One beyond-invariant merge, as the fixpoint fingerprint records it: the two
@@ -816,7 +887,9 @@ impl Project {
         self.rebuild_shot_uuid_index();
         // Normalize any closure that is really a sole-bridge attachment into a
         // merge before solving, so a file persisted in that state (e.g. a section
-        // stranded by an older delete) opens correctly.
+        // stranded by an older delete) opens correctly - and drop any closure
+        // between two merged stations, which a split could leave before #738
+        // (silently, as the promotion is: see `convert_orphan_closures_to_merges`).
         // De-duplicate shot UUIDs BEFORE re-anchoring: if a section persisted two
         // shots sharing a UUID, canonicalizing a positional Index(i) ref to
         // AfterShot(uuid) would later resolve to the FIRST match, silently moving
@@ -879,7 +952,7 @@ impl Project {
     /// problem, not this one).
     ///
     /// The single definition of the predicate: the sweep below scans with it, and
-    /// [`Self::orphan_closure_ids`] snapshots with it, so a mutation path's
+    /// [`Self::swept_closure_ids`] snapshots with it, so a mutation path's
     /// before-set and the sweep that follows can never disagree about what an
     /// orphan is.
     ///
@@ -899,15 +972,51 @@ impl Project {
         !components.connected(a, b)
     }
 
-    /// The ids of every closure that is orphaned RIGHT NOW. A mutation path takes
-    /// this before it mutates and hands it to
+    /// The other question the sweep asks of a closure (#738): are its two
+    /// stations already ONE point - the same station, or one merge group
+    /// ([`Self::are_stations_merged`])? Such a closure closes no loop. Its
+    /// misclosure is a stored number the geometry no longer has (the merge holds
+    /// the two stations together), the solve can only skip it, and it still
+    /// counts as a loop in the project stats and keeps the Closures Computed View
+    /// on. Every path that makes a closure refuses this pair
+    /// ([`Self::create_loop_closure`], the shot-removal rewire); the one way to
+    /// reach it is a promotion merging the two ends of a closure that tied the
+    /// same two points as the promoted one - the same loop recorded twice, which
+    /// a closure is allowed to be. Converting it would add nothing (the two
+    /// stations are merged already), so the sweep REMOVES it.
+    ///
+    /// A closure with an endpoint that no longer resolves is not one point: a
+    /// dangling ref is integrity's problem, as for [`Self::is_orphan_closure`].
+    /// Same single-definition rule: the sweep and [`Self::swept_closure_ids`]
+    /// both ask it here.
+    fn closure_ends_are_one_point(
+        &self,
+        closure: &LoopClosure,
+        components: &mut StationComponents,
+    ) -> bool {
+        let (Some(a), Some(b)) = (
+            self.resolve_key(&closure.station_a),
+            self.resolve_key(&closure.station_b),
+        ) else {
+            return false;
+        };
+        components.one_point(a, b)
+    }
+
+    /// The ids of every closure the sweep would act on RIGHT NOW: the orphans
+    /// ([`Self::is_orphan_closure`]) and the closures whose two stations are one
+    /// point ([`Self::closure_ends_are_one_point`]). A mutation path takes this
+    /// before it mutates and hands it to
     /// [`Self::convert_closures_orphaned_since`] afterwards; see that function for
     /// why an inverse needs the distinction.
-    pub(crate) fn orphan_closure_ids(&self) -> HashSet<u64> {
+    pub(crate) fn swept_closure_ids(&self) -> HashSet<u64> {
         let mut components = StationComponents::new(self);
         self.loop_closures
             .iter()
-            .filter(|c| self.is_orphan_closure(c, &mut components))
+            .filter(|c| {
+                self.closure_ends_are_one_point(c, &mut components)
+                    || self.is_orphan_closure(c, &mut components)
+            })
             .map(|c| c.id)
             .collect()
     }
@@ -916,30 +1025,49 @@ impl Project {
     /// a closure's two endpoints are no longer connected through the survey
     /// (shots + merges) independently of the closure, the closure is the *sole*
     /// connection between them - that is a merge, not a loop - so convert it.
+    /// And if its two stations are already one point (one merge group), it
+    /// closes nothing, so remove it (#738).
     ///
-    /// Iterative: when two closures bridge the same pair, the first becomes the
-    /// merge and the second is then a genuine (redundant) loop and is kept.
-    /// Returns the number converted. (Issue #8 - a shot deletion can strand a
-    /// section so its only attachment is a closure.)
+    /// Iterative: when two closures tie the same two points, the first becomes
+    /// the merge and the second, whose two stations that merge has just made one
+    /// point, is removed. Two closures that tie the same two SECTIONS at
+    /// different stations leave the second a genuine loop, kept. Returns the
+    /// number converted; [`Self::sweep_orphan_closures`] also says what it
+    /// removed. (Issue #8 - a shot deletion can strand a section so its only
+    /// attachment is a closure.)
     ///
-    /// Whole-project sweep: every orphan it finds is converted, no matter what
-    /// made it one. That is right for a load, a Repair and a forward command -
-    /// and wrong inside an inverse, which is what
-    /// [`Self::convert_closures_orphaned_since`] exists for.
+    /// Whole-project sweep: every orphan it finds is converted, and every closure
+    /// between merged stations removed, no matter what made it one. That is right
+    /// for a load, a Repair and a forward command - and wrong inside an inverse,
+    /// which is what [`Self::convert_closures_orphaned_since`] exists for. On the
+    /// load it is silent, as the promotions always were: the project opens in
+    /// the state the app may hold, the sweep logs each removal, and the file
+    /// settles on the next save.
     pub fn convert_orphan_closures_to_merges(&mut self) -> usize {
-        let minted = self.convert_closures_orphaned_since(&HashSet::new());
-        let converted = minted.len();
+        self.sweep_orphan_closures().converted
+    }
+
+    /// [`Self::convert_orphan_closures_to_merges`], saying what it did: how many
+    /// closures it turned into merges and which closures it removed because
+    /// their two stations are one point. Split Section Here's preview runs it on
+    /// a copy to name the closures the split removes, and the split runs it for
+    /// real, so the dialog and the edit cannot disagree.
+    pub fn sweep_orphan_closures(&mut self) -> OrphanClosureSweep {
+        let sweep = self.convert_closures_orphaned_since(&HashSet::new());
         // Settled immediately: this entry point's callers - the load, Repair and
         // `execute()`'s epilogue - change no geometry between the conversion and
         // the re-solve that follows it, so "now" IS final geometry for them.
-        self.settle_minted_merges(&minted);
-        converted
+        self.settle_minted_merges(&sweep.minted);
+        OrphanClosureSweep {
+            converted: sweep.minted.len(),
+            removed: sweep.removed,
+        }
     }
 
-    /// [`Self::convert_orphan_closures_to_merges`] restricted to the orphans a
-    /// mutation JUST created: `preexisting` is the [`Self::orphan_closure_ids`]
-    /// snapshot the caller took before mutating, and every id in it is left as a
-    /// closure.
+    /// [`Self::convert_orphan_closures_to_merges`] restricted to what a mutation
+    /// JUST caused: `preexisting` is the [`Self::swept_closure_ids`] snapshot the
+    /// caller took before mutating, and every id in it is left alone - neither
+    /// converted nor removed.
     ///
     /// An inverse must not do more than invert (#413, the orphan-closure
     /// observation in `fuzz_undo_tests.rs`'s header). A
@@ -951,31 +1079,59 @@ impl Project {
     /// state no snapshot ever held. Scoping by *what this mutation orphaned*
     /// keeps the pre-existing orphan exactly as recorded while still converting
     /// the closures the removal genuinely stranded - including ones nowhere near
-    /// the removed station, whose loop-ness hung off a merge that was.
+    /// the removed station, whose loop-ness hung off a merge that was. The same
+    /// goes for a closure between merged stations (#738): one this mutation's
+    /// own promotions make is removed, one the history recorded (restored by an
+    /// undo from before that rule) is left as recorded.
     ///
     /// Returns the [`MintedMerge`]s the conversion created, which the caller
     /// owes [`Self::settle_minted_merges`] once its own geometry is final: a
     /// promoted closure carries the loop's real misclosure into an edge that says
     /// the two endpoints coincide, and the promotion - not whatever cascades next
-    /// - has to pay for that (#464 defects B and C).
+    /// - has to pay for that (#464 defects B and C). And the closures it removed.
     #[must_use = "a promotion that is never settled leaves a merge asserting a coincidence \
                   the geometry does not have - call settle_minted_merges"]
     pub(crate) fn convert_closures_orphaned_since(
         &mut self,
         preexisting: &HashSet<u64>,
-    ) -> Vec<MintedMerge> {
-        let mut minted = Vec::new();
+    ) -> ClosureSweep {
+        let mut sweep = ClosureSweep::default();
         let mut components = StationComponents::new(self);
         // One forward pass. It decides exactly what restarting the scan from the
         // first closure after every conversion did: a conversion only ADDS
         // connectivity, so a closure that was not an orphan stays not one, and a
         // refused one (left as a closure) is never reconsidered either way.
+        //
+        // The one-point question is asked first, of every closure, so a closure
+        // an earlier promotion in this pass merged the two ends of is removed
+        // when the pass reaches it (#738). Only a LATER closure can be. A closure
+        // the pass kept as a loop had its two ends in one connected component,
+        // and so their merge groups; a promotion only ever joins two components
+        // that were NOT connected, and once joined they are, so no promotion can
+        // leave that component and come back into it. A closure the pass kept
+        // because promoting it would double-anchor sits between two anchored
+        // merge components, and any chain of promotions joining those ends in
+        // one merge group would end in a promotion refused for the same reason.
+        // One pass therefore leaves no closure between merged stations outside
+        // `preexisting`.
         let mut idx = 0;
         while idx < self.loop_closures.len() {
             let closure = &self.loop_closures[idx];
-            if preexisting.contains(&closure.id)
-                || !self.is_orphan_closure(closure, &mut components)
-            {
+            if preexisting.contains(&closure.id) {
+                idx += 1;
+                continue;
+            }
+            if self.closure_ends_are_one_point(closure, &mut components) {
+                let removed = self.loop_closures.remove(idx);
+                tracing::info!(
+                    closure_id = removed.id,
+                    purpose = "a loop closure between merged stations closes no loop",
+                    "Removed a loop closure whose two stations are one point"
+                );
+                sweep.removed.push(removed);
+                continue;
+            }
+            if !self.is_orphan_closure(closure, &mut components) {
                 idx += 1;
                 continue;
             }
@@ -1033,9 +1189,9 @@ impl Project {
                     merged_at: Utc::now(),
                 });
             }
-            minted.push(plan);
+            sweep.minted.push(plan);
         }
-        minted
+        sweep
     }
 
     /// Every merge whose endpoints are at least [`Self::MERGE_ALIGNMENT_INVARIANT_M`]

@@ -118,6 +118,7 @@ pub use gas::{
 pub use gauge::HeldGauge;
 pub use integrity::{IntegrityViolation, ViolationSeverity};
 pub use merge_topology::MergeTopology;
+pub use offsets::OrphanClosureSweep;
 pub use reverse::{reverse_shots, shot_run_displacement};
 pub use shots::MIN_SPLIT_CHILD_LENGTH_M;
 pub use uuid_unique::{
@@ -147,7 +148,7 @@ pub struct StationPair {
     pub station_b: StationRef,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 pub struct ClosurePair {
     pub closure_id: u64,
     pub station_a: StationRef,

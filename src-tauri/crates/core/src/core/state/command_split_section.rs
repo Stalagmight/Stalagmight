@@ -4,8 +4,8 @@ use super::command_delete_split::section_budget_refusal;
 use super::AppState;
 use crate::core::{Command, CommandResult};
 use crate::models::{
-    Coordinates, Project, SectionId, ShotId, SplitAt, SplitPreview, SplitSectionOptions, SplitSide,
-    StationRef, MIN_SPLIT_CHILD_LENGTH_M,
+    ClosurePair, Coordinates, LoopClosure, OrphanClosureSweep, Project, SectionId, ShotId, SplitAt,
+    SplitPreview, SplitSectionOptions, SplitSide, StationKey, StationRef, MIN_SPLIT_CHILD_LENGTH_M,
 };
 
 /// Below this a half "did not move" in [`AppState::split_section_preview`]:
@@ -106,14 +106,16 @@ impl AppState {
     /// Make the validated `cut` in `project`: split the shot first when the
     /// cut lands inside one, split the section, and turn every loop closure
     /// the cut left as a sole tie into a merge (issue #8, as the
-    /// delete-and-split path does: a closure must close a loop). Returns the
-    /// second half's id and how many closures became merges.
+    /// delete-and-split path does: a closure must close a loop), removing any
+    /// closure those merges leave between merged stations (#738). Returns the
+    /// second half's id and what that sweep did. The split and its preview
+    /// both run this, so the dialog names exactly what the split changes.
     fn apply_cut(
         project: &mut Project,
         section_id: SectionId,
         cut: Cut,
         options: &SplitSectionOptions,
-    ) -> Result<(SectionId, usize), String> {
+    ) -> Result<(SectionId, OrphanClosureSweep), String> {
         let station_index = match cut {
             Cut::Station(station_index) => station_index,
             Cut::InShot {
@@ -126,7 +128,7 @@ impl AppState {
             }
         };
         let second = project.split_section_at_station(section_id, station_index, options)?;
-        Ok((second, project.convert_orphan_closures_to_merges()))
+        Ok((second, project.sweep_orphan_closures()))
     }
 
     /// What Split Section Here would do beyond the cut, without doing it: the
@@ -138,7 +140,9 @@ impl AppState {
     /// and merge by hand, with the same move, and keeping the closure is not an
     /// option: every load and every later edit converts a sole-tie closure
     /// (docs/closures.md). So the dialog shows the move before the user
-    /// confirms. A refused split returns its reason.
+    /// confirms, and names any closure the split removes because that merge
+    /// makes its two stations one point (#738). A refused split returns its
+    /// reason.
     pub fn split_section_preview(
         &self,
         section_id: SectionId,
@@ -156,7 +160,7 @@ impl AppState {
                 copy.compute_station_raw_coords(start),
                 copy.compute_station_raw_coords(StationRef::new(section_id, last)),
             );
-            let (second, converted) = Self::apply_cut(&mut copy, section_id, cut, options)?;
+            let (second, sweep) = Self::apply_cut(&mut copy, section_id, cut, options)?;
             let second_last = copy
                 .get_section(second)
                 .map_or(0, |section| section.shots.len() as u32);
@@ -178,11 +182,46 @@ impl AppState {
                 (Some(SplitSide::A), moved_a)
             };
             Ok(SplitPreview {
-                closures_to_merges: u32::try_from(converted).unwrap_or(u32::MAX),
+                closures_to_merges: u32::try_from(sweep.converted).unwrap_or(u32::MAX),
                 moved_side,
                 moved_m,
+                removed_closures: sweep
+                    .removed
+                    .iter()
+                    .map(|closure| Self::named_before_the_split(project, &copy, closure))
+                    .collect(),
             })
         })
+    }
+
+    /// A closure the split removed, named by its stations BEFORE the split
+    /// (`before`, the open project), the ids the user created it with: a cut
+    /// moves the stations past it to the second half, and a cut along a shot
+    /// renumbers them too. Closure ids survive the split, so the closure is
+    /// found by id; an end that does not resolve there falls back to where it
+    /// resolved after the split (`after`, the copy the split ran on), which a
+    /// removed closure always does (the sweep only removes resolved ones).
+    fn named_before_the_split(
+        before: &Project,
+        after: &Project,
+        closure: &LoopClosure,
+    ) -> ClosurePair {
+        let stored = before
+            .loop_closures
+            .iter()
+            .find(|c| c.id == closure.id)
+            .unwrap_or(closure);
+        let end = |before_key: &StationKey, after_key: &StationKey| {
+            before
+                .resolve_key(before_key)
+                .or_else(|| after.resolve_key(after_key))
+                .unwrap_or_else(|| StationRef::new(after_key.section_id, 0))
+        };
+        ClosurePair {
+            closure_id: closure.id,
+            station_a: end(&stored.station_a, &closure.station_a),
+            station_b: end(&stored.station_b, &closure.station_b),
+        }
     }
 
     /// Every refusal of Split Section Here, read-only and in the order the
