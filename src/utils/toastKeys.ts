@@ -25,6 +25,11 @@ export const TOAST_KEYS = {
   MERGE_ERROR: 'merge-error',
   /** A successful project merge whose CommandResult carries a warning (e.g. #448 entrance-elevation no-clobber). */
   MERGE_WARNING: 'merge-warning',
+  /**
+   * A delete with shift removed loop closures it left spanning a single shot
+   * (#737). One toast lists every closure the delete removed.
+   */
+  CLOSURE_REMOVED: 'closure-removed',
   GEOMETRY_COMPUTE_FAILED: 'geometry-compute-failed',
   ANCHORED_IDS_ERROR: 'anchored-ids-error',
   MOVE_COMMENT_EMPTY: 'move-comment-empty',

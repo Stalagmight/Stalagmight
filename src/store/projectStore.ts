@@ -17,6 +17,8 @@ import {
   READ_ONLY_EDIT_NOTICE,
 } from '../utils/editErrors';
 import { hasEligibleClosures } from '../utils/closures';
+import { notifyRemovedClosures } from '../utils/closureRemovalToast';
+import { useAdjustmentReportStore } from './adjustmentReportStore';
 import { afterSurveyEdit, applyEditAftermath, beforeSurveyEdit, type SurveyEdit } from '../utils/reverseAftermath';
 import { useUIStore } from './uiStore';
 import { surfaceSaveFailure } from '../utils/saveFeedback';
@@ -1895,11 +1897,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   deleteShot: async (sectionId: SectionId, shotId: ShotId) => {
-    return executeCommand(
+    return notifyRemovedClosures(await executeCommand(
       'delete_shot',
       { sectionId, shotId },
       { purpose: 'delete shot from section', fields: { sectionId, shotId } }
-    );
+    ));
   },
 
   deleteShotAndSplit: async (sectionId: SectionId, shotId: ShotId, nameA: string, nameB: string) => {
@@ -1933,11 +1935,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   deleteShotRangeShift: async (sectionId: SectionId, startShotId: ShotId, endShotId: ShotId) => {
-    return executeCommand(
+    return notifyRemovedClosures(await executeCommand(
       'delete_shot_range_shift',
       { sectionId, startShotId, endShotId },
       { purpose: 'delete shot range and close gap', fields: { sectionId, startShotId, endShotId } }
-    );
+    ));
   },
 
   setShotKind: async (sectionId: SectionId, shotId: ShotId, kind: ShotKind) => {
@@ -2031,6 +2033,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         ? surveyDataWithAdjustedStations(surveyData, adjusted)
         : surveyDataFromLegacy(project.sections, adjusted);
       set({ stationsAdjusted: adjusted, surveyDataAdjusted, adjustedLoading: false });
+      // What this solve left out (#737); a failed part also has a Warnings entry.
+      void useAdjustmentReportStore.getState().load(adjusted, get().refreshWarnings);
       return true;
     } catch (e) {
       console.warn('Failed to load adjusted geometry:', e);

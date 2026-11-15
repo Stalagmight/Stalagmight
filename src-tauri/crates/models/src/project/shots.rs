@@ -824,6 +824,59 @@ impl Project {
         start_shot_id: ShotId,
         end_shot_id: ShotId,
     ) -> Result<DeleteShotRangeImpact, String> {
+        let mut impact =
+            self.preview_delete_shot_range_relationships(section_id, start_shot_id, end_shot_id)?;
+        if Self::gap_close_is_offered(&impact) {
+            impact.closures_removed_across_one_shot = self
+                .preview_gap_close_closure_removals(
+                    section_id,
+                    impact.start_pos as usize,
+                    impact.end_pos as usize,
+                )
+                .ok();
+        }
+        Ok(impact)
+    }
+
+    /// [`Self::preview_delete_shot_range`] for a caller that owns a copy of
+    /// the project it can give up (the IPC command clones the open project
+    /// anyway): the gap-close prediction runs on that copy instead of cloning
+    /// it again.
+    pub fn into_preview_delete_shot_range(
+        self,
+        section_id: SectionId,
+        start_shot_id: ShotId,
+        end_shot_id: ShotId,
+    ) -> Result<DeleteShotRangeImpact, String> {
+        let mut impact =
+            self.preview_delete_shot_range_relationships(section_id, start_shot_id, end_shot_id)?;
+        if Self::gap_close_is_offered(&impact) {
+            impact.closures_removed_across_one_shot = self
+                .into_gap_close_closure_removals(
+                    section_id,
+                    impact.start_pos as usize,
+                    impact.end_pos as usize,
+                )
+                .ok();
+        }
+        Ok(impact)
+    }
+
+    /// Only a gap-close that is actually offered gets a prediction (#737).
+    fn gap_close_is_offered(impact: &DeleteShotRangeImpact) -> bool {
+        !impact.shift_blocked && impact.kind != RangeDeleteKind::WholeSection
+    }
+
+    /// [`Self::preview_delete_shot_range`] without the gap-close closure
+    /// prediction, which simulates the whole gap-close on a clone. The range
+    /// delete itself only needs the shift-blocked verdict before it runs that
+    /// same gap-close for real, so it asks this and does not pay twice.
+    pub fn preview_delete_shot_range_relationships(
+        &self,
+        section_id: SectionId,
+        start_shot_id: ShotId,
+        end_shot_id: ShotId,
+    ) -> Result<DeleteShotRangeImpact, String> {
         let section = self
             .get_section(section_id)
             .ok_or_else(|| format!("Section {section_id} not found"))?;
@@ -1053,6 +1106,7 @@ impl Project {
             shift_blocked_reasons,
             removed_datums,
             removed_comments,
+            closures_removed_across_one_shot: None,
         })
     }
 

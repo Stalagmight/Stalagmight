@@ -570,8 +570,17 @@ fn undo_of_remove_loop_closure_restores_the_original_order() {
         "first CreateLoopClosure failed: {:?}",
         first.error
     );
+    // A second, independent loop: a side passage C off A:1, closed to B:1. (A:1
+    // to B:1 directly would tie the two ends of the one shot A:0-A:1 - A:0 is
+    // tied to B:1 by the first closure - which creation refuses since #737.)
+    let c = create_section(&state, "C", vec![shot(45.0, 5.0)]);
+    let side = state.execute(Command::MergeStations {
+        station_a: StationRef::new(c, 0),
+        station_b: StationRef::new(a, 1),
+    });
+    assert!(side.success, "MergeStations failed: {:?}", side.error);
     let second = state.execute(Command::CreateLoopClosure {
-        station_a: StationRef::new(a, 1),
+        station_a: StationRef::new(c, 1),
         station_b: StationRef::new(b, 1),
         closure_strategy: ClosureStrategy::default(),
     });

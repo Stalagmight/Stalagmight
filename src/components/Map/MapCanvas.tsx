@@ -62,6 +62,7 @@ import { getMapThemeColors } from '../../utils/themeColors';
 import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { MapTopLeftOverlay } from './MapTopLeftOverlay';
+import { useCurrentAdjustmentReport } from '../../hooks/useCurrentAdjustmentReport';
 import { useIssueRenderInput } from './useIssueDisplay';
 import { useSpeleoStore, selectSpeleoReadOnly } from '../../store/speleoStore';
 import { useNetworkStore } from '../../store/networkStore';
@@ -394,6 +395,8 @@ function MapCanvas() {
   // comparison and `scripts/check-readonly-gates.mjs`'s exact-count allow-list for
   // this file stays put. NOT an editability gate - that is `useEditingBlocked()`.
   const closureAdjustedView = geometryMode === 'closureAdjusted';
+  // What the adjusted geometry on screen left out (#737), for the notice.
+  const adjustmentReport = useCurrentAdjustmentReport();
   // T2b: a remote SpeleoDB project opened without the write lock shows a
   // top-left read-only badge, mirroring the closure-adjusted view-only badge.
   const speleoReadOnly = useSpeleoStore(selectSpeleoReadOnly);
@@ -1442,6 +1445,7 @@ function MapCanvas() {
             stationB: targetStation,
             preview: result.preview,
             reason: result.reason,
+            closureRefusal: result.closure_refusal,
             ...extra,
           });
         } else {
@@ -4121,6 +4125,9 @@ function MapCanvas() {
         // closure-adjusted geometry), and it is the only progress signal there -
         // so the indicator is gated on the solve, not on the notice.
         showClosureComputing={closureAdjustedView && !placementMode && adjustedLoading}
+        // Wherever the adjusted geometry is drawn (Plan/Export too): a part
+        // shown measured or a closure skipped changes what the user is looking at.
+        adjustmentReport={closureAdjustedView && !placementMode ? adjustmentReport : null}
       />
 
       {/* Placement mode indicator */}

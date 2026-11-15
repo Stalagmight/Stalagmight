@@ -9,8 +9,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
     ClosureStrategy, CombineCandidate, CombineJoinEnds, CombineJoinKind, CombinePick,
-    CombineSectionsOptions, GpsCoordinates, KeptMovesReason, Project, SectionData, SectionEnd,
-    SectionId, ShotData, StationRef, TornTieKind, TornTieReason,
+    CombineSectionsOptions, GpsCoordinates, KeptMovesReason, LoopClosure, Project, SectionData,
+    SectionEnd, SectionId, ShotData, StationRef, TornTieKind, TornTieReason,
 };
 
 fn shot(azimuth: f64, length: f64) -> ShotData {
@@ -281,17 +281,39 @@ fn a_pair_meeting_twice_at_a_station_is_offered_once_by_its_best_join() {
         .merge_stations(StationRef::new(far, 0), StationRef::new(l, 0))
         .unwrap();
     // Far's end is merged to K's end, and a closure ties K's end to Far's
-    // start (and so to L's start, merged there).
+    // start (and so to L's start, merged there). With Far's end merged to K's
+    // end, that closure joins the two ends of Far's one shot, which
+    // `create_loop_closure` refuses (#737); before the merge the two are not
+    // connected, so it cannot be made first either. A project saved before
+    // #737 (or a Combine / Add .stalx) can still hold it, so it is planted
+    // as such a project would carry it - a closure the solve skips.
     project
         .merge_stations(StationRef::new(k, 1), StationRef::new(far, 1))
         .unwrap();
-    project
-        .create_loop_closure(
-            StationRef::new(k, 1),
-            StationRef::new(far, 0),
-            ClosureStrategy::Batch,
-        )
-        .unwrap();
+    let (station_a, station_b) = (
+        project.key_for_ref(StationRef::new(k, 1)).unwrap(),
+        project.key_for_ref(StationRef::new(far, 0)).unwrap(),
+    );
+    project.normalize_next_closure_id();
+    let id = project.next_closure_id;
+    project.next_closure_id += 1;
+    project.loop_closures.push(LoopClosure {
+        id,
+        station_a,
+        station_b,
+        path_length: 1.4,
+        misclosure_distance: 1.4,
+        error_percentage: 100.0,
+        horizontal_misclosure: 1.4,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::Batch,
+        is_aligned: false,
+    });
+    assert_eq!(
+        project.closures_across_one_shot().len(),
+        1,
+        "setup: the planted closure spans Far's one shot"
+    );
     let both_ends: Vec<_> = project
         .combine_candidates(StationRef::new(k, 1))
         .into_iter()
@@ -709,7 +731,7 @@ fn tie(project: &mut Project, a: StationRef, b: StationRef) {
         .max()
         .unwrap_or(0)
         + 1;
-    project.loop_closures.push(crate::LoopClosure {
+    project.loop_closures.push(LoopClosure {
         id,
         station_a,
         station_b,
@@ -1436,4 +1458,307 @@ fn replay_a_combine_chain() {
             project.reverse_section(rest.trim_end_matches(')').parse().unwrap(), true);
         }
     }
+}
+
+// ---- The anchor rule and closures across one shot (#737) ---------------------
+
+/// How the passage X that links K's end to O's start is tied to O.
+#[derive(Clone, Copy, Debug)]
+enum XToO {
+    /// X's last station merged to O's start: the combine tears a merge.
+    Merge,
+    /// X's last station snapped (a `Move` closure) to O's start: the combine
+    /// turns the snapped closure into an ordinary one.
+    Snapped,
+}
+
+/// K runs 10 m east. A passage X, merged at K's end, reaches 0.4 m further
+/// east (one shot, or two that go north and come back); O starts where X ends
+/// and runs 5 m east. K's end and O's start are tied by a legacy proportional
+/// closure (one the solve does not take), so the station menu offers them as a
+/// closure join that closes by a 0.4 m shift, and nothing else in the survey
+/// is solved: whether the closure-adjusted view solves the joined survey
+/// depends only on the tie the combine turns into a closure.
+fn passage_join(x_shots: u32, x_to_o: XToO) -> (Project, SectionId, SectionId) {
+    let mut project = Project::new("Passage".to_string(), None);
+    let k = add(&mut project, "K", vec![shot(90.0, 10.0)]);
+    let x_path = if x_shots == 1 {
+        vec![shot(90.0, 0.4)]
+    } else {
+        // North 1 m, then back down to 0.4 m east of the start.
+        vec![
+            shot(0.0, 1.0),
+            shot(158.198_590_513_648_2, 1.077_032_961_426_9),
+        ]
+    };
+    let x = add(&mut project, "X", x_path);
+    let o = add(&mut project, "O", vec![shot(90.0, 5.0)]);
+    project
+        .merge_stations(StationRef::new(x, 0), StationRef::new(k, 1))
+        .unwrap();
+    let x_end = StationRef::new(x, x_shots);
+    match x_to_o {
+        XToO::Merge => {
+            project
+                .merge_stations(x_end, StationRef::new(o, 0))
+                .unwrap();
+        }
+        XToO::Snapped => {
+            let at = xy(&project, x_end);
+            place(&mut project, o, 0, at);
+        }
+    }
+    // The legacy join closure, as a file from before the deferred strategies
+    // were disabled carries it.
+    let id = project.next_closure_id;
+    project.next_closure_id += 1;
+    project.loop_closures.push(LoopClosure {
+        id,
+        station_a: project.key_for_ref(StationRef::new(k, 1)).unwrap(),
+        station_b: project.key_for_ref(StationRef::new(o, 0)).unwrap(),
+        path_length: 0.4,
+        misclosure_distance: 0.4,
+        error_percentage: 100.0,
+        horizontal_misclosure: 0.4,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::ProportionalByLength,
+        is_aligned: false,
+    });
+    if let XToO::Snapped = x_to_o {
+        let snapped = project
+            .create_loop_closure(x_end, StationRef::new(o, 0), ClosureStrategy::Move)
+            .unwrap();
+        assert!(snapped.is_aligned, "setup: X's end sits on O's start");
+    }
+    assert!(
+        project.adjustment_anchors_for_tests().is_empty(),
+        "setup: nothing in the survey is solved before the combine"
+    );
+    (project, k, o)
+}
+
+/// Combine K and O at the closure join, keeping `kept`, and report whether
+/// the closure-adjusted view solves the result (what `plan_adjustment_anchors`
+/// does on the combined project) and the plan the station menu offered.
+fn combine_at_the_join(
+    project: &Project,
+    k: SectionId,
+    o: SectionId,
+    keep_o: bool,
+) -> (crate::CombinePlan, bool, Project) {
+    let Some(candidate) = project
+        .combine_candidates(StationRef::new(k, 1))
+        .into_iter()
+        .find(|c| [c.section_a, c.section_b] == [k, o] || [c.section_a, c.section_b] == [o, k])
+    else {
+        panic!("the menu offers K and O");
+    };
+    assert_eq!(candidate.join_kind, CombineJoinKind::Closure);
+    let keeping_k = candidate.section_a == k;
+    let plan = if keep_o == keeping_k {
+        candidate.plan_keeping_b
+    } else {
+        candidate.plan_keeping_a
+    };
+    assert!(plan.shift_m > 0.39, "setup: the join closes by a shift");
+    let (kept, other, join) = if keep_o {
+        (
+            o,
+            k,
+            CombineJoinEnds {
+                kept: SectionEnd::Start,
+                other: SectionEnd::End,
+            },
+        )
+    } else {
+        (
+            k,
+            o,
+            CombineJoinEnds {
+                kept: SectionEnd::End,
+                other: SectionEnd::Start,
+            },
+        )
+    };
+    let mut combined = project.clone();
+    combined
+        .combine_sections(kept, other, &options(Some(join)))
+        .unwrap();
+    let solves = !combined.adjustment_anchors_for_tests().is_empty();
+    (plan, solves, combined)
+}
+
+/// The #743 review, point 1. #735 moves the kept side instead of the
+/// other when the other holds the closure-adjusted view's anchor - but only
+/// where that view solves the joined survey: it solves a closure there now,
+/// or the combine turns a tie into one it will solve. Nothing is solved here
+/// now (the join's closure is a legacy one the solve does not take), and the
+/// only closure the combine makes is the tie it tears between X and O, so the
+/// joined survey is solved exactly when that closure is a real loop:
+///
+/// - (a) X one shot, merged to O: the torn merge becomes a closure between the
+///   two ends of X's one shot, which the solve skips - the view shows the
+///   joined survey measured, so the plain rule holds (the other section moves);
+/// - (b) X one shot, snapped to O: the snapped closure the combine makes
+///   ordinary also spans X's one shot - same verdict;
+/// - controls: X two shots, merged or snapped - the closure closes a real loop,
+///   the view solves it, and the anchor rule holds (keeping O, the kept side
+///   moves because K holds the anchor).
+///
+/// Each verdict is checked against `plan_adjustment_anchors` on the project
+/// the combine actually produces. Before the fix the tie-derived half of the
+/// rule did not apply the skip, and (a) moved the kept side.
+#[test]
+fn the_anchor_rule_follows_the_solve_of_the_closure_the_combine_makes() {
+    for (x_shots, x_to_o) in [
+        (1, XToO::Merge),
+        (1, XToO::Snapped),
+        (2, XToO::Merge),
+        (2, XToO::Snapped),
+    ] {
+        let what = format!("X {x_shots} shot(s), {x_to_o:?}");
+        let (project, k, o) = passage_join(x_shots, x_to_o);
+        assert_eq!(
+            project.adjustment_anchor_for_tests(k).map(|a| a.section_id),
+            Some(k),
+            "{what}: setup: K (the lowest id) holds the anchor"
+        );
+        // Keeping K: O moves whatever the view does (K holds the anchor).
+        let (plan, _, _) = combine_at_the_join(&project, k, o, false);
+        assert_eq!(plan.moving_section, Some(o), "{what}");
+        assert_eq!(plan.kept_moves_because, None, "{what}");
+        // Keeping O: the anchor rule moves O only where the view solves.
+        let (plan, solves, combined) = combine_at_the_join(&project, k, o, true);
+        assert_eq!(solves, x_shots == 2, "{what}: setup of the shape");
+        let skipped = combined.closures_across_one_shot();
+        assert_eq!(
+            skipped.len(),
+            usize::from(x_shots == 1),
+            "{what}: {skipped:?}"
+        );
+        if solves {
+            assert_eq!(plan.moving_section, Some(o), "{what}");
+            assert_eq!(
+                plan.kept_moves_because,
+                Some(KeptMovesReason::AdjustmentAnchor),
+                "{what}"
+            );
+        } else {
+            assert_eq!(
+                plan.moving_section,
+                Some(k),
+                "{what}: the view shows the joined survey measured, so the other section moves"
+            );
+            assert_eq!(plan.kept_moves_because, None, "{what}");
+        }
+    }
+}
+
+/// The #743 review, point 4. K runs three shots east; O starts 0.4 m
+/// past K's end and is tied to it only by a legacy closure join (one the solve
+/// does not take). K also carries a Batch closure: across its first shot only
+/// (K:0-K:1, which the solve skips) or across two shots (K:0-K:2, a real loop,
+/// the control). Where the component's only eligible closure is skipped:
+///
+/// - `adjustment_anchor_of` names the same station as for the control and as
+///   for the survey without that closure (it ignores the skip set);
+/// - `plan_adjustment_anchors` gives the component no anchor (nothing to solve);
+/// - Combine treats it as not adjusted: keeping O, the plain rule moves K.
+///
+/// In the control the view solves, so keeping O moves O (K holds the anchor).
+#[test]
+fn a_component_whose_only_closure_is_skipped_keeps_its_anchor_but_is_not_adjusted() {
+    let build = |closure_end: Option<u32>| {
+        let mut project = Project::new("Skipped".to_string(), None);
+        let k = add(
+            &mut project,
+            "K",
+            vec![shot(90.0, 10.0), shot(90.0, 10.0), shot(90.0, 10.0)],
+        );
+        let o = add(&mut project, "O", vec![shot(90.0, 5.0)]);
+        let k_end = xy(&project, StationRef::new(k, 3));
+        place(&mut project, o, 0, (k_end.0 + 0.4, k_end.1));
+        let mut plant = |a: StationRef, b: StationRef, strategy: ClosureStrategy| {
+            let id = project.next_closure_id;
+            project.next_closure_id += 1;
+            project.loop_closures.push(LoopClosure {
+                id,
+                station_a: project.key_for_ref(a).unwrap(),
+                station_b: project.key_for_ref(b).unwrap(),
+                path_length: 1.0,
+                misclosure_distance: 0.4,
+                error_percentage: 1.0,
+                horizontal_misclosure: 0.4,
+                vertical_misclosure: 0.0,
+                strategy,
+                is_aligned: false,
+            });
+        };
+        plant(
+            StationRef::new(k, 3),
+            StationRef::new(o, 0),
+            ClosureStrategy::ProportionalByLength,
+        );
+        if let Some(end) = closure_end {
+            plant(
+                StationRef::new(k, 0),
+                StationRef::new(k, end),
+                ClosureStrategy::Batch,
+            );
+        }
+        (project, k, o)
+    };
+    let (skipped, k, o) = build(Some(1));
+    let (control, ..) = build(Some(2));
+    let (without, ..) = build(None);
+    let component = skipped.get_connected_section_ids(k);
+    assert_eq!(component, HashSet::from([k, o]));
+    assert_eq!(skipped.closures_across_one_shot().len(), 1, "setup");
+    assert!(control.closures_across_one_shot().is_empty(), "setup");
+
+    // The anchor station ignores the skip set.
+    let anchor = skipped.adjustment_anchor_of(&component);
+    assert_eq!(anchor, control.adjustment_anchor_of(&component));
+    assert_eq!(anchor, without.adjustment_anchor_of(&component));
+    assert_eq!(anchor.map(|a| a.section_id), Some(k));
+
+    // The solve plans no anchor where its only closure is skipped.
+    assert!(skipped.adjustment_anchors_for_tests().is_empty());
+    assert_eq!(
+        control.adjustment_anchors_for_tests(),
+        vec![anchor.unwrap()]
+    );
+
+    // Combine at the closure join, keeping O.
+    let keeping_o = |project: &Project| {
+        let candidate = project
+            .combine_candidates(StationRef::new(k, 3))
+            .into_iter()
+            .find(|c| c.section_a == o || c.section_b == o)
+            .unwrap();
+        assert_eq!(candidate.join_kind, CombineJoinKind::Closure);
+        if candidate.section_a == o {
+            candidate.plan_keeping_a
+        } else {
+            candidate.plan_keeping_b
+        }
+    };
+    let plain = keeping_o(&skipped);
+    assert!(plain.shift_m > 0.39, "setup: the join closes by a shift");
+    assert_eq!(
+        plain.moving_section,
+        Some(k),
+        "not adjusted: the other section moves"
+    );
+    assert_eq!(plain.kept_moves_because, None);
+    let held = keeping_o(&control);
+    assert_eq!(
+        held.moving_section,
+        Some(o),
+        "adjusted: K holds the anchor, O moves"
+    );
+    assert_eq!(
+        held.kept_moves_because,
+        Some(KeptMovesReason::AdjustmentAnchor)
+    );
 }

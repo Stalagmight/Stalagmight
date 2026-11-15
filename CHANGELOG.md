@@ -15,6 +15,10 @@ Update this file every time a new version is tagged.
 
 - **Export is in the menu** - Export left the top switcher: open it from the menu or with Ctrl+E, and leave it with Close export (or Ctrl+E, or Escape), which returns to the workspace you came from. It opens the Export workspace with its live preview; the separate Export dialog is gone. While an export is being written, the workspace stays open and other actions wait for it
 
+### Fixed
+
+- **A loop closure across one shot no longer undoes the Closures Computed View** - a closure between two stations at the ends of one shot (directly, or through merges and other closures) made the closure solve fail, and the whole connected survey, other loops included, silently fell back to its measured positions in the Closures Computed View, Plan and Export. Such a closure would squeeze that shot to zero length, even when another passage also joins its two stations: the Create Loop Closure dialog now says so and offers no Create, and the import refuses it too. One already in a project is skipped by the solve, so the rest of the survey is adjusted again, and the Warnings tab lists it on its shot with Remove this loop closure. Deleting shots with shift no longer leaves one behind: a closure the delete shortens to a single shot is removed with it, the Delete Shots dialog lists it before you confirm and a warning says which afterwards (both by the stations you created it with), and one Undo brings both back. When part of the survey still cannot be adjusted (for example a closure tying two zero datums together), a notice above the map says so, and once that view has been computed a warning in the Warnings tab says which part and why, instead of only the log ([#737](https://github.com/Stalagmight/Stalagmight/issues/737))
+
 ## [0.5.4] - 2026-11-14
 
 ### Added
