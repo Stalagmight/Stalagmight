@@ -50,9 +50,9 @@ use std::collections::{HashMap, HashSet};
 
 use crate::angle::normalize_azimuth;
 use crate::{
-    ClosurePair, ClosuresBeforeEdit, CombineJoinEnds, CombinePick, CombineRemovedClosure,
-    CombineRemovedKind, CombineSectionsOptions, SectionEnd, SectionId, Shot, ShotData, StationKey,
-    StationRef,
+    ClosurePair, ClosuresBeforeEdit, CombineJoinEnds, CombineOutcome, CombinePick,
+    CombineRemovedClosure, CombineRemovedKind, CombineReplacedClosure, CombineSectionsOptions,
+    LoopClosure, SectionEnd, SectionId, Shot, ShotData, StationKey, StationRef,
 };
 
 use super::combine_plan::{JoinPoint, Tie, TieId, TiePlan};
@@ -205,17 +205,54 @@ impl Project {
     /// Returns the ties it removed because, combined, the loop closure each
     /// is or would become joins the two ends of one shot (#746): the plan's
     /// `dropped` list, the one the dialog showed, named by the stations they
-    /// had before the combine.
+    /// had before the combine. [`Self::combine_sections_reporting`] also
+    /// returns the closures it replaced (#749).
     pub fn combine_sections(
         &mut self,
         kept: SectionId,
         other: SectionId,
         options: &CombineSectionsOptions,
     ) -> Result<Vec<CombineRemovedClosure>, String> {
+        self.combine_sections_reporting(kept, other, options)
+            .map(|outcome| outcome.removed_across_one_shot)
+    }
+
+    /// [`Self::combine_sections`], returning both lists the dialog showed:
+    /// the ties removed across one shot (#746), and the closures the
+    /// combine's dedupe dropped for a closure the solve takes on the same two
+    /// stations while not one itself (#749), as the plan's `replaced` list
+    /// names them. What the dedupe really dropped is checked against the
+    /// plan: a miss is a `debug_assert!` failure in a debug build, and in a
+    /// release build an error in the log, with what really happened
+    /// returned.
+    pub fn combine_sections_reporting(
+        &mut self,
+        kept: SectionId,
+        other: SectionId,
+        options: &CombineSectionsOptions,
+    ) -> Result<CombineOutcome, String> {
         let setup = self.combine_setup(kept, other, options.join)?;
         // For the check after the join that the plan's prediction left no
         // closure across one shot behind.
         let closures_before = self.closures_before_edit();
+        // Every closure's stations before the combine, by id (the first, in
+        // a file that repeats one), to name what the dedupe replaces; only
+        // where it can replace anything.
+        let stations_before: HashMap<u64, (StationRef, StationRef)> =
+            if self.combine_may_replace(kept, other) {
+                let mut stations = HashMap::new();
+                for c in &self.loop_closures {
+                    if let (Some(a), Some(b)) = (
+                        self.resolve_key(&c.station_a),
+                        self.resolve_key(&c.station_b),
+                    ) {
+                        stations.entry(c.id).or_insert((a, b));
+                    }
+                }
+                stations
+            } else {
+                HashMap::new()
+            };
         // Shared shot identities first (a no-op when the command already
         // renewed them), so the held gauge below names shots by the identity
         // they keep.
@@ -223,7 +260,9 @@ impl Project {
         // Before anything moves, including the reverse below.
         let component_gauges = self.hold_component_gauges(&[kept, other]);
         let (remeasure, torn_into) = self.prepare_combine(&setup);
-        self.join_sections(kept, other, &setup, options)?;
+        let deduped = self.join_sections(kept, other, &setup, options)?;
+        let replaced = Self::name_replaced(&deduped, &stations_before, &torn_into);
+        Self::check_replaced_as_planned(&replaced, &setup.ties.replaced);
         // The component's lowest id may now be a third section's (the other
         // section's id is retired): hold the component at the station the
         // adjustment held before. After the parity toggle, which a held
@@ -243,7 +282,34 @@ impl Project {
         removed
             .extend(self.remove_unpredicted_closures_across_one_shot(&closures_before, &torn_into));
         self.touch();
-        Ok(removed)
+        Ok(CombineOutcome {
+            removed_across_one_shot: removed,
+            replaced,
+        })
+    }
+
+    /// The backstop to the plan's `replaced` list (#749): the closures the
+    /// dedupe dropped for one the solve takes are the ones the dialog listed.
+    /// Both come from the one rule (`closure_dedupe`), so a difference is the
+    /// plan's model of the combined closure list missing something: a
+    /// `debug_assert!` failure in a debug build, an error in the log in a
+    /// release build (the combine returns what really happened).
+    fn check_replaced_as_planned(
+        replaced: &[CombineReplacedClosure],
+        planned: &[CombineReplacedClosure],
+    ) {
+        debug_assert_eq!(
+            replaced, planned,
+            "combine replaced closures its plan did not predict"
+        );
+        if replaced != planned {
+            tracing::error!(
+                replaced = replaced.len(),
+                planned = planned.len(),
+                purpose = "list exactly the closures a combine replaces",
+                "Combine replaced closures its plan did not predict"
+            );
+        }
     }
 
     /// The backstop to the plan's prediction (#746): any closure the combined
@@ -352,13 +418,16 @@ impl Project {
     }
 
     /// Join the shots and the two join stations (see the module docs).
+    ///
+    /// Returns what the closure dedupe dropped for a closure the solve takes
+    /// (`Project::dedupe_closures_in`).
     fn join_sections(
         &mut self,
         kept: SectionId,
         other: SectionId,
         setup: &CombineSetup,
         options: &CombineSectionsOptions,
-    ) -> Result<(), String> {
+    ) -> Result<Vec<(LoopClosure, LoopClosure)>, String> {
         let (kept_end, other_end) = (setup.kept_end, setup.other_end);
         if kept_end == other_end && !self.reverse_section(other, options.swap_lr) {
             return Err(format!("Section {other} not found"));
@@ -440,7 +509,7 @@ impl Project {
             })
             .collect();
         let unmoved = self.rekey_station_refs(&homes, "combine sections");
-        self.dedupe_closures_in(kept);
+        let deduped = self.dedupe_closures_in(kept);
         self.dedupe_merges_in(kept);
         self.keep_gauge_on_station(kept, gauge as usize, gauge_capture.as_ref());
         if parity_flip {
@@ -460,7 +529,7 @@ impl Project {
                 );
             });
         }
-        Ok(())
+        Ok(deduped)
     }
 
     /// Make the two join stations one, while the structure is still the old
@@ -587,143 +656,4 @@ impl Project {
         let mut keep = keep.into_iter();
         self.station_merges.retain(|_| keep.next().unwrap_or(true));
     }
-
-    /// Drop loop closures onto `section_id` that the combine made identical
-    /// (same two stations): a duplicate would count the same loop twice. Of
-    /// each set it keeps the first closure the solve takes
-    /// ([`Self::closure_is_eligible`]), or the first one when the solve takes
-    /// none of them, and drops the others by position (a file can repeat an
-    /// id). Each kept closure stays where it was in `loop_closures`.
-    ///
-    /// Why an eligible one wins (#749): the plan's model of the joined survey
-    /// (`joined_sweep`, which the anchor rule and the across-one-shot removal
-    /// read) sweeps every closure before this dedupe, eligible ones only, in
-    /// vector order. A combine can put a tie it tears (a merge made a `Batch`
-    /// closure, appended last) on the same two stations as a closure the
-    /// solve does not take (a legacy proportional one, or a `Move` snap) that
-    /// comes first. Keeping the first then dropped the only closure the solve
-    /// would have joined there: the plan moved a side for a solved survey
-    /// that the Closures Computed View then showed unadjusted.
-    ///
-    /// With this rule the stations the solve joins are the same with or
-    /// without the dropped closures, so the plan's model holds after the
-    /// dedupe too: a dropped ineligible closure never takes part in the
-    /// solve, and a dropped eligible one comes after an eligible closure on
-    /// the same two stations, which either joined them already (the later one
-    /// changes nothing) or collapsed a shot between their two groups, in
-    /// which case the later one collapses one too or finds them joined by
-    /// something in between - it never joins anything itself. Connectivity
-    /// and the held gauges see the same pair either way. What can go with a
-    /// dropped snapped (aligned) closure is its rigidity and depth
-    /// co-location, which the plan never models after the join; keeping the
-    /// first, as before #749, dropped it whenever the eligible one came
-    /// first.
-    pub(super) fn dedupe_closures_in(&mut self, section_id: SectionId) {
-        // Each pair's closure kept so far, by position.
-        let mut kept: HashMap<(StationRef, StationRef), usize> = HashMap::new();
-        let mut dropped = vec![false; self.loop_closures.len()];
-        for (index, closure) in self.loop_closures.iter().enumerate() {
-            if closure.station_a.section_id != section_id
-                && closure.station_b.section_id != section_id
-            {
-                continue;
-            }
-            let (Some(a), Some(b)) = (
-                self.resolve_key(&closure.station_a),
-                self.resolve_key(&closure.station_b),
-            ) else {
-                continue;
-            };
-            let pair = if a <= b { (a, b) } else { (b, a) };
-            let Some(&first) = kept.get(&pair) else {
-                kept.insert(pair, index);
-                continue;
-            };
-            let eligible = |at: usize| {
-                self.loop_closures
-                    .get(at)
-                    .is_some_and(|c| Self::closure_is_eligible(c.strategy))
-            };
-            let replace = !eligible(first) && eligible(index);
-            #[cfg(test)]
-            count_closure_dedupe(&self.loop_closures, first, index, replace);
-            let (keep, drop) = if replace {
-                (index, first)
-            } else {
-                (first, index)
-            };
-            kept.insert(pair, keep);
-            if let Some(slot) = dropped.get_mut(drop) {
-                *slot = true;
-            }
-        }
-        if !dropped.contains(&true) {
-            return;
-        }
-        let mut dropped = dropped.into_iter();
-        self.loop_closures
-            .retain(|_| !dropped.next().unwrap_or(false));
-    }
-}
-
-/// What [`Project::dedupe_closures_in`] decided on this thread, so the
-/// combine sweeps can report how often they reach each case (#749).
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct ClosureDedupes {
-    /// Both closures of the pair the solve takes, or neither: the first kept.
-    pub same_eligibility: usize,
-    /// The solve takes only the later one, which is kept (#749): the rule
-    /// before #749 kept the first.
-    pub eligible_after_ineligible: usize,
-    /// The solve takes only the first one, which is kept, as before.
-    pub eligible_before_ineligible: usize,
-    /// Of the two above, the dropped closure was snapped (aligned).
-    pub snapped_dropped_for_eligible: usize,
-}
-
-#[cfg(test)]
-thread_local! {
-    pub(crate) static CLOSURE_DEDUPES: std::cell::Cell<ClosureDedupes> =
-        const { std::cell::Cell::new(ClosureDedupes {
-            same_eligibility: 0,
-            eligible_after_ineligible: 0,
-            eligible_before_ineligible: 0,
-            snapped_dropped_for_eligible: 0,
-        }) };
-}
-
-/// Count one decision of [`Project::dedupe_closures_in`] between the pair's
-/// closure kept so far (`first`) and a later one on the same two stations.
-#[cfg(test)]
-fn count_closure_dedupe(
-    closures: &[crate::LoopClosure],
-    first: usize,
-    later: usize,
-    replace: bool,
-) {
-    let (Some(first), Some(later)) = (closures.get(first), closures.get(later)) else {
-        return;
-    };
-    let (first_eligible, later_eligible) = (
-        Project::closure_is_eligible(first.strategy),
-        Project::closure_is_eligible(later.strategy),
-    );
-    CLOSURE_DEDUPES.with(|cell| {
-        let mut counts = cell.get();
-        if first_eligible == later_eligible {
-            counts.same_eligibility += 1;
-        } else {
-            let dropped = if replace { first } else { later };
-            if replace {
-                counts.eligible_after_ineligible += 1;
-            } else {
-                counts.eligible_before_ineligible += 1;
-            }
-            if dropped.is_aligned {
-                counts.snapped_dropped_for_eligible += 1;
-            }
-        }
-        cell.set(counts);
-    });
 }

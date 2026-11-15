@@ -36,6 +36,7 @@ use crate::config::ClosureAdjustmentConfig;
 
 mod adjustment_report;
 mod classify;
+mod closure_dedupe;
 mod closure_shots;
 mod combine_candidate;
 mod combine_plan;

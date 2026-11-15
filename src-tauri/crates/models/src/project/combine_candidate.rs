@@ -540,6 +540,7 @@ impl Project {
             azimuth_rotation_deg: None,
             join_offset_change_m: None,
             closures_removed_across_one_shot: None,
+            closures_replaced: None,
         };
         if touch.blocked.is_some() {
             return (empty, None);
