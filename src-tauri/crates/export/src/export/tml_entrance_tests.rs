@@ -404,3 +404,76 @@ fn an_unmerged_piece_with_a_closure_back_keeps_its_own_start_position() {
         surveyed.y
     );
 }
+
+/// A datum built the way persistence loads one: no `GpsCoordinates::new`
+/// validation, so any f64 can arrive.
+fn raw_datum(project: &mut Project, sr: StationRef, latitude: f64, longitude: f64) {
+    project.zero_datums.push(ZeroDatum {
+        station_ref: sr.into(),
+        gps: GpsCoordinates {
+            latitude,
+            longitude,
+            depth_reference: 0.0,
+        },
+        accuracy_m: None,
+    });
+}
+
+fn starts_are_on_the_globe(shots: &[ExportShot]) -> bool {
+    shots
+        .iter()
+        .filter(|s| s.shot_type == "START")
+        .all(|s| s.latitude.abs() <= 90.0 && s.longitude.abs() <= 180.0)
+}
+
+#[test]
+fn a_fix_gps_off_the_globe_is_unwritten() {
+    let mut project = three_entrance_cave(false);
+    raw_datum(&mut project, StationRef::new(2, 2), f64::INFINITY, -87.0);
+    raw_datum(&mut project, StationRef::new(2, 1), 500.0, -87.0);
+    raw_datum(&mut project, StationRef::new(1, 2), 20.0, 1e300);
+    assert_eq!(
+        project.gps_fix_datums().len(),
+        3,
+        "fixture rot: all three must be GPS fixes, or this proves nothing"
+    );
+
+    for profile in [TmlProfile::User, TmlProfile::SpeleoDbSidecar] {
+        let (shots, unwritten) = export(&project, profile);
+        assert_eq!(unwritten, 3, "{profile:?}: every bad fix is counted");
+        assert_eq!(
+            shots.iter().filter(|s| s.shot_type == "START").count(),
+            1,
+            "{profile:?}: only the placement START"
+        );
+        assert!(shots.iter().all(|s| s.shot_type != "CLOSURE"));
+        assert!(starts_are_on_the_globe(&shots));
+    }
+}
+
+#[test]
+fn an_entrance_datum_off_the_globe_is_unwritten_and_its_start_is_surveyed() {
+    let mut project = Project::new("Bad entrance".to_string(), None);
+    for name in ["Main", "Detached"] {
+        project.add_section(SectionData {
+            name: Some(name.to_string()),
+            color: "#3366ff".to_string(),
+            shots: shots(2, 90.0),
+            ..Default::default()
+        });
+    }
+    project.section_offsets.insert(1, (100.0, 50.0));
+    datum(&mut project, StationRef::new(0, 0), PLACEMENT);
+    raw_datum(&mut project, StationRef::new(1, 0), 500.0, -87.0);
+
+    for profile in [TmlProfile::User, TmlProfile::SpeleoDbSidecar] {
+        let (shots, unwritten) = export(&project, profile);
+        assert_eq!(unwritten, 1, "{profile:?}");
+        assert!(starts_are_on_the_globe(&shots));
+        let (east, north) = local_of(start_of(&shots, "Detached"));
+        assert!(
+            (east - 100.0).abs() < 1e-3 && (north - 50.0).abs() < 1e-3,
+            "{profile:?}: the START falls back to its surveyed spot, got {east},{north}"
+        );
+    }
+}

@@ -225,8 +225,12 @@ its own GPS:
 Datums claim Ariane nodes in list order, so the placement datum always claims
 its node first. A datum is **unwritten**, and the export returns the
 `gps-anchors-not-written` note, when it no longer resolves, when its station
-has no row in the file, or when an earlier datum already holds the same node
-(two GPS positions for one point cannot be carried).
+has no row in the file, when an earlier datum already holds the same node
+(two GPS positions for one point cannot be carried), or when its GPS is not a
+point on the globe (not finite, or outside |lat| <= 90, |lon| <= 180). A
+loaded `.stalx` can carry such a value, since persistence builds the struct
+without `GpsCoordinates::new`'s checks. Such a datum claims no node, and an
+entrance it stood on is placed like a datum-less one.
 
 The SpeleoDB sidecar leaves the fix STARTs out. Its converter drops CLOSURE
 rows, so a fix START would reach the map preview as a lone anchor with nothing
@@ -256,9 +260,10 @@ survey, closed back onto it, and then unmerged leaves exactly that shape.
 Such a START now carries the GPS of where the raw survey puts its station:
 its local metres converted with `local_to_gps` against the frame datum, which
 is what local `(0, 0)` means. Two STARTs therefore share coordinates only when
-the survey puts them on the same point. The frame datum's coordinates remain
-the fallback for a START whose station has no raw position. A project with no
-datum at all still writes every START at `0,0`.
+the survey puts them on the same point. The frame
+datum's coordinates remain the fallback for a START whose station has no raw
+position. A project with no datum at all, or whose frame datum's GPS is not a
+point on the globe, still writes every START at `0,0`.
 
 A parentless shot whose type is **not** START is an orphan root. Ariane
 tolerates it in isolation, but a file containing both an orphan root and any

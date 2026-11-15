@@ -138,6 +138,11 @@ pub(super) fn stamp_starts(
     let mut on_start: HashMap<i64, usize> = HashMap::new();
     let mut claimed: HashSet<i64> = HashSet::new();
     for (index, datum) in project.zero_datums.iter().enumerate() {
+        // A GPS Ariane cannot place is unwritten, and claims no node: a
+        // crafted file reaches here without `GpsCoordinates::new`'s checks.
+        if !is_placeable(&datum.gps) {
+            continue;
+        }
         let node = project
             .resolve_key(&datum.station_ref)
             .and_then(|sr| station_to_ariane.get(&(sr.section_id, sr.station_index)));
@@ -169,21 +174,26 @@ pub(super) fn stamp_starts(
         .zero_datums
         .iter()
         .position(|d| std::ptr::eq(d, frame));
+    // A frame whose own GPS cannot be placed anchors nothing: its STARTs stay
+    // at 0,0, as in a project with no datum, and the datums count unwritten.
+    let frame_gps = Some(&frame.gps).filter(|gps| is_placeable(gps));
     for shot in shots.iter_mut().filter(|s| s.shot_type == "START") {
         let (latitude, longitude) = if let Some(&index) = on_start.get(&shot.id) {
             gps.written.insert(index);
             let own = &project.zero_datums[index].gps;
             (own.latitude, own.longitude)
-        } else if let Some(surveyed) = start_station
-            .get(&shot.id)
-            .and_then(|&(section_id, station)| surveyed_gps(project, frame, section_id, station))
-        {
+        } else if let Some(surveyed) = frame_gps.and_then(|origin| {
+            let &(section_id, station) = start_station.get(&shot.id)?;
+            surveyed_gps(project, origin, StationRef::new(section_id, station))
+        }) {
             surveyed
-        } else {
+        } else if let Some(origin) = frame_gps {
             // Last resort, for a START whose station has no raw position: the
             // frame datum's coordinates, which are then on file through it.
             gps.written.extend(frame_index);
-            (frame.gps.latitude, frame.gps.longitude)
+            (origin.latitude, origin.longitude)
+        } else {
+            continue;
         };
         (shot.latitude, shot.longitude) = match profile {
             TmlProfile::User => (latitude, longitude),
@@ -201,18 +211,27 @@ pub(super) fn stamp_starts(
 }
 
 /// Where the RAW survey puts a station, as GPS. Raw local metres are relative to
-/// the frame datum (local `(0, 0)` is its GPS), and Ariane runs its own loop
-/// solve, so the measurements are what it should start from.
+/// the frame datum (local `(0, 0)` is its GPS, `origin`), and Ariane runs its
+/// own loop solve, so the measurements are what it should start from.
 fn surveyed_gps(
     project: &Project,
-    frame: &ZeroDatum,
-    section_id: SectionId,
-    station: u32,
+    origin: &GpsCoordinates,
+    station: StationRef,
 ) -> Option<(f64, f64)> {
-    let local = project.compute_station_raw_coords(StationRef::new(section_id, station))?;
-    let frame_gps: &GpsCoordinates = &frame.gps;
-    local_to_gps(local.x, local.y, frame_gps)
-        .filter(|(lat, lon)| lat.is_finite() && lon.is_finite())
+    let local = project.compute_station_raw_coords(station)?;
+    local_to_gps(local.x, local.y, origin)
+        .filter(|&(latitude, longitude)| in_range(latitude, longitude))
+}
+
+/// Whether Ariane can place `gps`: finite, and on the globe. A loaded project
+/// can carry anything here, since persistence builds the struct directly.
+fn is_placeable(gps: &GpsCoordinates) -> bool {
+    in_range(gps.latitude, gps.longitude)
+}
+
+fn in_range(latitude: f64, longitude: f64) -> bool {
+    // A range check is false for NaN and for either infinity.
+    (-90.0..=90.0).contains(&latitude) && (-180.0..=180.0).contains(&longitude)
 }
 
 impl DatumGps {
@@ -246,14 +265,15 @@ impl DatumGps {
             );
             self.fixes.clear();
         }
+        // Built once: the rows appended below are never looked up, so the
+        // indices stay valid while `shots` grows.
+        let index_by_id: HashMap<i64, usize> =
+            shots.iter().enumerate().map(|(i, s)| (s.id, i)).collect();
         for (node, index) in std::mem::take(&mut self.fixes) {
             let gps = &project.zero_datums[index].gps;
-            let Some(row) = shots.iter().find(|s| s.id == node) else {
+            let Some(row) = index_by_id.get(&node).map(|&i| &shots[i]) else {
                 continue;
             };
-            if !(gps.latitude.is_finite() && gps.longitude.is_finite()) {
-                continue;
-            }
             let mut start = start_shot(
                 next_id,
                 row.section.clone(),
@@ -287,7 +307,7 @@ impl DatumGps {
                 unwritten,
                 "Ariane stores GPS on START rows only; {unwritten} GPS anchor(s) were not \
                  written: a datum that no longer resolves, whose station has no row in this \
-                 file, whose GPS is not a number, or that shares its station with an earlier \
+                 file, whose GPS is not a point on the globe, or that shares its station with an earlier \
                  datum (datums part-way through the survey are also left out of the \
                  SpeleoDB sidecar, and of a file with a shot that has no parent station)."
             );
