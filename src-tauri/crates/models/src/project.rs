@@ -126,7 +126,9 @@ pub use classify::ClassifyScope;
 pub use closure_shots::{
     closure_across_one_shot_refusal, station_id_label, ClosureAcrossOneShot, ClosuresBeforeEdit,
 };
-pub use combine_candidate::{COMBINE_DEPTH_NOTICE_M, COMBINE_TOLERANCE_M, MAX_COMBINE_PARTNERS};
+pub use combine_candidate::{
+    section_label, COMBINE_DEPTH_NOTICE_M, COMBINE_TOLERANCE_M, MAX_COMBINE_PARTNERS,
+};
 pub use datum_placement::DatumLayout;
 pub use datum_roles::{
     datum_gap_threshold_m, DatumGap, ZeroDatumPreview, DATUM_GAP_WARN_BASE_M,

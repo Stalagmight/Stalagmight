@@ -63,6 +63,27 @@ describe('combinePreviewAll', () => {
       { section_id: 7, station_index: 0 },
     ]);
   });
+
+  it('rings the stations of every tie the combine removes across one shot too (#746)', () => {
+    const at = (section_id: number, station_index: number) => ({ section_id, station_index });
+    const candidate = {
+      section_a: 1,
+      section_b: 4,
+      station_a: at(1, 3),
+      station_b: at(4, 0),
+      plan_keeping_a: {
+        kept: 1,
+        torn_ties: [],
+        closures_removed_across_one_shot: [{ station_a: at(7, 1), station_b: at(4, 0), kind: 'merge' }],
+      },
+      plan_keeping_b: {
+        kept: 4,
+        torn_ties: [],
+        closures_removed_across_one_shot: [{ station_a: at(1, 2), station_b: at(1, 0), kind: 'loop_closure' }],
+      },
+    } as unknown as CombineCandidate;
+    expect(combinePreviewAll([candidate]).stations).toEqual([at(1, 3), at(4, 0), at(7, 1), at(1, 2), at(1, 0)]);
+  });
 });
 
 describe('formatRotation', () => {

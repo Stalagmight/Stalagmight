@@ -1731,6 +1731,17 @@ it, for the section it shows as kept, before the user confirms:
   again. When both sides are anchored by zero datums, the moving side's merge
   towards its own datum becomes a closure too (a closure may tie two anchored
   groups; a merge may not).
+- **Ties across one shot are removed.** A tie that, combined, would be a loop
+  closure joining the two ends of one shot (for example the merge at the far
+  end of a one-shot passage merged to both join stations) would only be skipped
+  by the Closures Computed View, so the combine removes it instead (#746).
+  Before the confirm the dialog says how many connections it removes, outside
+  the folded Details, and Details list each under "This connection is
+  removed:" (or "These N connections are removed:"), each with why: as a loop
+  closure it would join the two ends of one shot. A warning toast names them
+  afterwards, each station with its section's name, and the one Undo brings
+  them back. A closure that already joined the two ends of one shot is left
+  alone.
 - **Bearings convert.** The combined section has one north reference, the kept
   one's: the other section's stored azimuths turn by the difference, so every
   station stays where it is.
