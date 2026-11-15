@@ -7,6 +7,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use super::combine_sections::{ClosureDedupes, CLOSURE_DEDUPES};
 use crate::{
     ClosureStrategy, CombineCandidate, CombineJoinEnds, CombineJoinKind, CombinePick,
     CombineRemovedClosure, CombineRemovedKind, CombineSectionsOptions, GpsCoordinates,
@@ -14,7 +15,7 @@ use crate::{
     StationRef, TornTieKind, TornTieReason,
 };
 
-fn shot(azimuth: f64, length: f64) -> ShotData {
+pub(super) fn shot(azimuth: f64, length: f64) -> ShotData {
     ShotData {
         azimuth_in: azimuth,
         azimuth_out: azimuth,
@@ -23,7 +24,7 @@ fn shot(azimuth: f64, length: f64) -> ShotData {
     }
 }
 
-fn add(project: &mut Project, name: &str, shots: Vec<ShotData>) -> SectionId {
+pub(super) fn add(project: &mut Project, name: &str, shots: Vec<ShotData>) -> SectionId {
     project
         .add_section(SectionData {
             name: Some(name.to_string()),
@@ -34,7 +35,7 @@ fn add(project: &mut Project, name: &str, shots: Vec<ShotData>) -> SectionId {
         .id
 }
 
-fn options(join: Option<CombineJoinEnds>) -> CombineSectionsOptions {
+pub(super) fn options(join: Option<CombineJoinEnds>) -> CombineSectionsOptions {
     CombineSectionsOptions {
         name: "Joined".to_string(),
         color: "#abcdef".to_string(),
@@ -45,12 +46,12 @@ fn options(join: Option<CombineJoinEnds>) -> CombineSectionsOptions {
     }
 }
 
-fn xy(project: &Project, at: StationRef) -> (f64, f64) {
+pub(super) fn xy(project: &Project, at: StationRef) -> (f64, f64) {
     let c = project.compute_station_raw_coords(at).unwrap();
     (c.x, c.y)
 }
 
-fn dist(a: (f64, f64), b: (f64, f64)) -> f64 {
+pub(super) fn dist(a: (f64, f64), b: (f64, f64)) -> f64 {
     (a.0 - b.0).hypot(a.1 - b.1)
 }
 
@@ -698,7 +699,7 @@ fn network(seed: u64) -> Project {
 }
 
 /// Every station's closure-adjusted position (the Plan and Export geometry).
-fn adjusted(project: &Project) -> HashMap<StationRef, (f64, f64)> {
+pub(super) fn adjusted(project: &Project) -> HashMap<StationRef, (f64, f64)> {
     project
         .compute_adjusted_station_coordinates(&crate::config::ClosureAdjustmentConfig::default())
         .into_iter()
@@ -795,7 +796,7 @@ fn root(forest: &mut HashMap<SectionId, SectionId>, x: SectionId) -> SectionId {
 }
 
 /// The invariants after one combine (`what` names it in a failure).
-fn check_combined(
+pub(super) fn check_combined(
     before: &Project,
     after: &Project,
     candidate: &CombineCandidate,
@@ -1054,7 +1055,7 @@ fn check_combined(
 /// across one shot that was not there before. (A miss of the plan's model is
 /// also a panic inside the combine, from its backstop.) Returns how many it
 /// removed.
-fn check_removed_across_one_shot(
+pub(super) fn check_removed_across_one_shot(
     before: &Project,
     after: &Project,
     plan: &crate::CombinePlan,
@@ -1343,6 +1344,26 @@ struct SweepStats {
     with_branches: usize,
 }
 
+/// Start counting this thread's closure dedupes (#749) from zero.
+fn reset_closure_dedupes() {
+    CLOSURE_DEDUPES.with(|counts| counts.set(ClosureDedupes::default()));
+}
+
+/// This thread's closure dedupes since [`reset_closure_dedupes`], as a
+/// report line.
+fn closure_dedupes_report() -> String {
+    let counts = CLOSURE_DEDUPES.with(std::cell::Cell::get);
+    format!(
+        "closure dedupes: {} of one eligibility (first kept), {} eligible kept over an earlier \
+         ineligible one (#749), {} eligible kept over a later ineligible one, {} snapped \
+         dropped for an eligible one",
+        counts.same_eligibility,
+        counts.eligible_after_ineligible,
+        counts.eligible_before_ineligible,
+        counts.snapped_dropped_for_eligible
+    )
+}
+
 /// Every combine the station menu offers in `project`, keeping either
 /// section, each run on a copy and checked against every invariant.
 fn combine_every_offered(project: &Project, seed: u64, stats: &mut SweepStats) {
@@ -1422,6 +1443,7 @@ fn every_offered_combine_in_random_networks_keeps_the_invariants() {
     let seeds = env("STALAGMIGHT_COMBINE_SEEDS", 120);
     let first = env("STALAGMIGHT_COMBINE_FIRST_SEED", 0);
     let mut stats = SweepStats::default();
+    reset_closure_dedupes();
     for seed in first..first + seeds {
         combine_every_offered(&network(seed), seed, &mut stats);
     }
@@ -1438,8 +1460,9 @@ fn every_offered_combine_in_random_networks_keeps_the_invariants() {
     eprintln!(
         "combine sweep seeds {first}..{}: {combined} combines, {torn} torn ties, {dropped} \
          ties removed across one shot, {shifted} shifted, {kept_moved} kept side moved, \
-         {with_branches} moved with attached sections",
-        first + seeds
+         {with_branches} moved with attached sections; {}",
+        first + seeds,
+        closure_dedupes_report()
     );
     // The sweep reaches what it is for (seeds 0..120: 6176 combines, 2342
     // torn ties, 1032 shifts, 292 with the kept side moving, 235 moving
@@ -1565,17 +1588,19 @@ fn every_offered_combine_around_a_passage_keeps_the_invariants() {
     let seeds = env("STALAGMIGHT_COMBINE_PASSAGE_SEEDS", 60);
     let first = env("STALAGMIGHT_COMBINE_PASSAGE_FIRST_SEED", 0);
     let mut stats = SweepStats::default();
+    reset_closure_dedupes();
     for seed in first..first + seeds {
         combine_every_offered(&passage_network(seed), seed, &mut stats);
     }
     eprintln!(
         "combine passage sweep seeds {first}..{}: {} combines, {} torn ties, {} ties removed \
-         across one shot ({:?})",
+         across one shot ({:?}); {}",
         first + seeds,
         stats.combined,
         stats.torn,
         stats.dropped,
-        stats.dropped_kinds
+        stats.dropped_kinds,
+        closure_dedupes_report()
     );
     if seeds < 50 {
         return;
@@ -1652,6 +1677,7 @@ fn combine_chains(make: fn(u64) -> Project, env_prefix: &str, label: &str) -> us
         .collect();
     let (mut combines, mut splits, mut reverses) = (0usize, 0usize, 0usize);
     let (mut swept_away, mut probed, mut dropped) = (0usize, 0usize, 0usize);
+    reset_closure_dedupes();
     for seed in first..first + seeds {
         let mut rng = Rng(seed.wrapping_mul(0xA24B_AED4_963E_E407) | 1);
         let mut project = make(seed);
@@ -1797,8 +1823,10 @@ fn combine_chains(make: fn(u64) -> Project, env_prefix: &str, label: &str) -> us
     eprintln!(
         "{label} seeds {first}..{}: {combines} combines, {splits} splits, {reverses} \
          reverses, {swept_away} closures between merged stations removed, {dropped} ties \
-         removed across one shot, {probed} merges of a closure's two ends tried (all refused)",
-        first + seeds
+         removed across one shot, {probed} merges of a closure's two ends tried (all refused); \
+         {}",
+        first + seeds,
+        closure_dedupes_report()
     );
     if seeds >= 20 {
         assert!(combines > seeds as usize, "only {combines} combines");
@@ -1966,7 +1994,36 @@ fn replay_a_combine_chain() {
     // "29;combine(0:Start, 1:End);split(0 at 1);reverse(4)", replayed with the
     // plan, ties and gauge printed before each combine. A seed written "p29"
     // starts from `passage_network(29)` (the passage chains).
-    let spec = std::env::var("STALAGMIGHT_COMBINE_CHAIN_REPLAY").unwrap();
+    replay_chain(
+        &std::env::var("STALAGMIGHT_COMBINE_CHAIN_REPLAY").unwrap(),
+        true,
+    );
+}
+
+/// Chains the long campaigns failed on, each the trail its failure printed
+/// (see [`replay_a_combine_chain`]). It pins the shape while the generators
+/// keep their streams; a generator change can turn one into a different
+/// chain, and the hand-built regression of each issue stays.
+const CHAINS_THE_CAMPAIGNS_FAILED_ON: &[&str] = &[
+    // #749: a merge the last combine tears lands on the same two stations as
+    // a legacy closure; the closure the solve takes must stay.
+    "p929;combine(4:End, 5:Start);combine(0:Start, 2:Start);reverse(3);reverse(0);\
+     combine(4:End, 0:Start);combine(3:End, 4:Start)",
+];
+
+/// [`CHAINS_THE_CAMPAIGNS_FAILED_ON`], replayed with every combine checked
+/// as the chains check it.
+#[test]
+fn chains_the_campaigns_failed_on_keep_the_invariants() {
+    for spec in CHAINS_THE_CAMPAIGNS_FAILED_ON {
+        replay_chain(spec, false);
+    }
+}
+
+/// Replay the chain `spec` ("seed;op;op;..."), checking every combine like
+/// the chains do; `verbose` prints the plan, the ties and the gauge before
+/// each combine.
+fn replay_chain(spec: &str, verbose: bool) {
     let mut parts = spec.split(';');
     let seed = parts.next().unwrap().trim();
     let mut project = match seed.strip_prefix('p') {
@@ -1982,7 +2039,9 @@ fn replay_a_combine_chain() {
     };
     for op in parts {
         let op = op.trim();
-        eprintln!("== {op}");
+        if verbose {
+            eprintln!("== {op}");
+        }
         if let Some(rest) = op.strip_prefix("combine(") {
             let rest = rest.trim_end_matches(')');
             let (k, o) = rest.split_once(", ").unwrap();
@@ -1999,38 +2058,14 @@ fn replay_a_combine_chain() {
             } else {
                 &c.plan_keeping_b
             };
-            let comp = project.get_connected_section_ids(k);
-            eprintln!(
-                "  kind {:?} plan {:?} anchor {:?} datums {:?}",
-                c.join_kind,
-                plan,
-                project.adjustment_anchor_of(&comp),
-                project
-                    .zero_datums
-                    .iter()
-                    .map(|d| project.resolve_key(&d.station_ref))
-                    .collect::<Vec<_>>()
-            );
-            for m in project.station_merges.iter() {
-                eprintln!(
-                    "  merge {:?} - {:?}",
-                    project.resolve_key(&m.station_a),
-                    project.resolve_key(&m.station_b)
-                );
+            if verbose {
+                print_chain_step(&project, &c, plan, k);
             }
-            for cl in &project.loop_closures {
-                eprintln!(
-                    "  closure {:?} - {:?} aligned {} {:?}",
-                    project.resolve_key(&cl.station_a),
-                    project.resolve_key(&cl.station_b),
-                    cl.is_aligned,
-                    cl.strategy
-                );
-            }
-            eprintln!("  held {:?}", project.held_gauges);
             let mut after = project.clone();
             let removed = after.combine_sections(k, o, &options(Some(join))).unwrap();
-            eprintln!("  removed across one shot {removed:?}");
+            if verbose {
+                eprintln!("  removed across one shot {removed:?}");
+            }
             check_removed_across_one_shot(&project, &after, plan, &removed, op);
             check_combined(&project, &after, &c, k, op, &[]);
             project = after;
@@ -2053,6 +2088,45 @@ fn replay_a_combine_chain() {
             project.reverse_section(rest.trim_end_matches(')').parse().unwrap(), true);
         }
     }
+}
+
+/// What [`replay_chain`] prints before a combine: the plan, the anchor, the
+/// datums, every merge and closure, and the held gauges.
+fn print_chain_step(
+    project: &Project,
+    c: &CombineCandidate,
+    plan: &crate::CombinePlan,
+    k: SectionId,
+) {
+    let comp = project.get_connected_section_ids(k);
+    eprintln!(
+        "  kind {:?} plan {:?} anchor {:?} datums {:?}",
+        c.join_kind,
+        plan,
+        project.adjustment_anchor_of(&comp),
+        project
+            .zero_datums
+            .iter()
+            .map(|d| project.resolve_key(&d.station_ref))
+            .collect::<Vec<_>>()
+    );
+    for m in &project.station_merges {
+        eprintln!(
+            "  merge {:?} - {:?}",
+            project.resolve_key(&m.station_a),
+            project.resolve_key(&m.station_b)
+        );
+    }
+    for cl in &project.loop_closures {
+        eprintln!(
+            "  closure {:?} - {:?} aligned {} {:?}",
+            project.resolve_key(&cl.station_a),
+            project.resolve_key(&cl.station_b),
+            cl.is_aligned,
+            cl.strategy
+        );
+    }
+    eprintln!("  held {:?}", project.held_gauges);
 }
 
 // ---- The anchor rule and closures across one shot (#737) ---------------------
