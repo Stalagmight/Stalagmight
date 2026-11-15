@@ -24,6 +24,41 @@ pub enum WarningSeverity {
 /// station to fix it. (See issue #57.)
 pub const MULTIPLE_DATUMS_PER_MERGE_COMPONENT: &str = "multiple_datums_per_merge_component";
 
+/// Warning code for a loop closure that ties the two ends of one shot together
+/// (#737). The Closures Computed View skips it, so it closes nothing; one
+/// warning per such closure, attached to the shot it spans and carrying the
+/// closure's id ([`ProjectWarning::closure_id`]) so the Resolve view can offer
+/// "Remove closure".
+///
+/// An **error**, so it is not ignorable: the closure is a real defect in the
+/// data (it would squeeze a surveyed shot to zero length), not a tolerance the
+/// surveyor may wave off, and ignoring it would leave a closure that silently
+/// does nothing. It is also deterministic - a pure function of the saved data,
+/// whatever view is open - so it can gate like any other error. The fix is to
+/// remove it (or close the loop at two stations that are not the ends of a
+/// single shot) - exactly like the over-anchoring error above.
+pub const CLOSURE_ACROSS_ONE_SHOT: &str = "CLOSURE_ACROSS_ONE_SHOT";
+
+/// Warning code for a part of the survey the closure-adjusted solve could not
+/// adjust, so the Closures Computed View (and Plan / Export) shows it measured
+/// (#737). Read from the solve the app last ran on the current project, never
+/// computed by the warnings pass itself.
+///
+/// **Advisory** (a warning, so it may be ignored), unlike
+/// [`CLOSURE_ACROSS_ONE_SHOT`]. Two reasons. It exists only while the memoized
+/// solve matches the current version, so any edit drops it until the computed
+/// view, Plan or Export solves again: as an error it would make everything that
+/// counts errors - the SpeleoDB upload gate, the map's issue colouring - depend
+/// on which view the user opened last. And the measured data it is about is
+/// fine; only the derived adjusted view is degraded, and the in-view notice
+/// says so wherever that view is drawn.
+pub const CLOSURE_ADJUSTMENT_FAILED: &str = "CLOSURE_ADJUSTMENT_FAILED";
+
+/// `CommandResult` warning code for a loop closure a delete-with-shift removed
+/// because, after the delete, it tied the two ends of one shot together
+/// (#737). The frontend shows each one as a toast.
+pub const CLOSURE_REMOVED_ACROSS_ONE_SHOT: &str = "CLOSURE_REMOVED_ACROSS_ONE_SHOT";
+
 /// Canonical severity for a validation warning code - the SINGLE source of truth
 /// shared by `Validator::validate_shot`, the project-level over-anchoring check,
 /// the issue-severity map coloring, and the resolve/ignore gate. Errors are
@@ -38,9 +73,11 @@ pub fn severity_for_code(code: &str) -> WarningSeverity {
         | "NEGATIVE_LRUD"
         | "NON_FINITE_VALUE"
         | "LENGTH_BELOW_DEPTH_CHANGE"
-        | MULTIPLE_DATUMS_PER_MERGE_COMPONENT => WarningSeverity::Error,
+        | MULTIPLE_DATUMS_PER_MERGE_COMPONENT
+        | CLOSURE_ACROSS_ONE_SHOT => WarningSeverity::Error,
         // SHORT_SHOT, LONG_SHOT, LARGE_DEPTH_CHANGE, AZIMUTH_DEVIATION,
-        // PITCH_DEVIATION and INCLINATION_DEPTH_MISMATCH are advisory; an
+        // PITCH_DEVIATION, INCLINATION_DEPTH_MISMATCH and
+        // CLOSURE_ADJUSTMENT_FAILED (see its docs) are advisory; an
         // unknown code defaults to advisory so a future warning is ignorable
         // until classified.
         _ => WarningSeverity::Warning,
@@ -90,4 +127,11 @@ pub struct ProjectWarning {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub datum_refs: Option<Vec<StationRef>>,
+    /// For `CLOSURE_ACROSS_ONE_SHOT` only: the `LoopClosure::id` of the closure
+    /// the warning is about. Two such closures can span the same shot, so it is
+    /// part of the warning's identity, and it is what "Remove closure" removes.
+    /// `number` in TS (ids are small counters, well under 2^53).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub closure_id: Option<u64>,
 }

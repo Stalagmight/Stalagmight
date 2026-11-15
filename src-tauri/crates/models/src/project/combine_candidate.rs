@@ -36,7 +36,7 @@ use crate::{
     SectionId, StationKey, StationRef, FEATURE_ID_STRIDE,
 };
 
-use super::combine_plan::{JoinPoint, Tie, TiePlan};
+use super::combine_plan::{ClosureFacts, JoinPoint, Tie, TiePlan};
 use super::station_rekey::value_naming;
 use super::Project;
 
@@ -147,6 +147,9 @@ pub(crate) struct EndTable {
     /// junction's station query plans two choices of kept section for every
     /// partner, and each plan reads all of them.
     ties: std::cell::OnceCell<Vec<Tie>>,
+    /// The loop-closure facts the anchor rule reads, once per query and only
+    /// when a shifting plan needs them (#737; [`ClosureFacts`]).
+    closure_facts: ClosureFacts,
 }
 
 #[cfg(test)]
@@ -179,6 +182,7 @@ impl EndTable {
             by_end,
             cells,
             ties: std::cell::OnceCell::new(),
+            closure_facts: ClosureFacts::default(),
         }
     }
 
@@ -541,7 +545,7 @@ impl Project {
             return (empty, None);
         };
         let rigid = table.ties.get_or_init(|| self.rigid_ties());
-        let Ok(ties) = self.plan_ties(&join, gap, rigid) else {
+        let Ok(ties) = self.plan_ties(&join, gap, rigid, &table.closure_facts) else {
             return (empty, None);
         };
         let (Some(k), Some(o)) = (self.get_section(join.kept), self.get_section(join.other)) else {

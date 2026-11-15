@@ -2018,6 +2018,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return state?.stations ?? [];
           }
 
+          case 'get_adjustment_report': {
+            // What the closure-adjusted view left out (#737). The mock solves
+            // nothing, so it skips nothing and nothing fails - unless a spec
+            // plants a report on window.__MOCK_ADJUSTMENT_REPORT__.
+            const planted = (window as unknown as Record<string, unknown>).__MOCK_ADJUSTMENT_REPORT__;
+            return planted ?? { skipped_closures: [], failures: [] };
+          }
+
           case 'get_station_distances_from': {
             // Distance-gradient field (#34). No real graph in the mock - synthesize
             // distances from each station's mock x-coordinate (origin at x=0) so the

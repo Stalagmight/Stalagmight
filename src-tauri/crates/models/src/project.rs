@@ -34,11 +34,14 @@ use super::{Coordinates, GpsCoordinates, Shot, ShotUpdates, Station};
 #[cfg(test)]
 use crate::config::ClosureAdjustmentConfig;
 
+mod adjustment_report;
 mod classify;
+mod closure_shots;
 mod combine_candidate;
 mod combine_plan;
 mod combine_sections;
 mod connectivity;
+mod gap_close;
 mod gauge;
 mod mutations;
 mod shots;
@@ -56,6 +59,19 @@ mod uuid_unique;
 
 #[cfg(test)]
 mod anchor_fuzz;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod closure_shots_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::print_stderr,
+    reason = "timing test: it prints what it measures, and panics on a broken setup"
+)]
+mod combine_bench;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
@@ -87,7 +103,13 @@ mod component_gauge_tests;
 )]
 mod split_section_tests;
 
+pub use adjustment_report::{
+    AdjustedStations, AdjustmentFailure, AdjustmentFailureReport, AdjustmentReport, SkippedClosure,
+};
 pub use classify::ClassifyScope;
+pub use closure_shots::{
+    closure_across_one_shot_refusal, station_id_label, ClosureAcrossOneShot, ClosuresBeforeEdit,
+};
 pub use combine_candidate::{COMBINE_DEPTH_NOTICE_M, COMBINE_TOLERANCE_M, MAX_COMBINE_PARTNERS};
 pub use gas::{
     CylRole, Cylinder, Diver, GasReachField, PlanMode, PlanSegment, RouteLeg, RouteProfilePoint,
@@ -269,6 +291,17 @@ pub struct DeleteShotRangeImpact {
     /// annotation disappears.
     #[serde(default)]
     pub removed_comments: Vec<StationRef>,
+    /// Loop closures the GAP-CLOSE would remove because, once the range is
+    /// gone, they would tie the two ends of one shot together (#737) - e.g.
+    /// closure A:1-A:5 with shots 1..=3 gap-closed would become A:1-A:2. Named
+    /// by their stations BEFORE the delete, the ids the user created them with.
+    /// Predicted by running the very gap-close the command runs on a clone
+    /// ([`Project::preview_gap_close_closure_removals`]), so preview and
+    /// execution cannot disagree. `None` when no gap-close is offered (the
+    /// whole section, or a blocked shift), or when it could not be simulated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub closures_removed_across_one_shot: Option<Vec<ClosurePair>>,
 }
 
 /// A complete cave survey project

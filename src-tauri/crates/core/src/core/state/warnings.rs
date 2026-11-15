@@ -3,7 +3,8 @@ use std::collections::HashSet;
 
 use crate::core::{Validator, WarningSeverity};
 use crate::models::{
-    Project, ProjectWarning, SectionId, ShotData, ShotId, MULTIPLE_DATUMS_PER_MERGE_COMPONENT,
+    severity_for_code, station_id_label, Project, ProjectWarning, SectionId, ShotData, ShotId,
+    CLOSURE_ACROSS_ONE_SHOT, CLOSURE_ADJUSTMENT_FAILED, MULTIPLE_DATUMS_PER_MERGE_COMPONENT,
 };
 use crate::persistence::Database;
 
@@ -62,6 +63,9 @@ impl AppState {
         project: &Project,
         db: Option<&Database>,
     ) -> Vec<ProjectWarning> {
+        // Read before anything else, so the config lock is never taken while a
+        // caller holds the project lock (#737; see `cached_adjustment_failures`).
+        let adjusted_config_hash = self.current_adjusted_config_hash();
         // Load resolved (ignored) warnings. Suppression is keyed by the shot's
         // stable UUID (issue #57): an ignore stays bound to the same shot even
         // after inserts/deletes/reorders renumber `shot_id`. Pre-v8 rows that
@@ -238,6 +242,7 @@ impl AppState {
                         shot_uuid: shot.uuid.clone(),
                         datum_station_index: None,
                         datum_refs: None,
+                        closure_id: None,
                     });
                 }
             }
@@ -287,13 +292,25 @@ impl AppState {
                 // generic error force-false above also covers it: it clears only
                 // when a datum is actually removed (then this warning is no longer
                 // generated at all), never via a stray resolved row.
-                severity: crate::models::severity_for_code(MULTIPLE_DATUMS_PER_MERGE_COMPONENT),
+                severity: severity_for_code(MULTIPLE_DATUMS_PER_MERGE_COMPONENT),
                 is_resolved: false,
                 shot_uuid: shot.uuid.clone(),
                 datum_station_index: Some(first.station_index),
                 datum_refs: Some(component.clone()),
+                closure_id: None,
             });
         }
+
+        all_warnings.extend(Self::closure_across_one_shot_warnings(project));
+        // Advisory, so an ignore on its shot is honoured like any warning's.
+        all_warnings.extend(
+            self.adjustment_failure_warnings(project, adjusted_config_hash)
+                .into_iter()
+                .map(|mut w| {
+                    w.is_resolved = is_resolved_for(&w.shot_uuid, w.section_id, w.shot_id, &w.code);
+                    w
+                }),
+        );
 
         // Sort by resolved (unresolved first), then severity (errors first), then by section and shot
         all_warnings.sort_by(|a, b| {
@@ -310,6 +327,94 @@ impl AppState {
         });
 
         all_warnings
+    }
+
+    /// One error per loop closure that ties the two ends of one shot together
+    /// (#737), attached to the shot it spans: the Closures Computed View skips
+    /// such a closure, and without this the user would only see the loop stay
+    /// open. Carries the closure id so the Resolve view can remove exactly it.
+    /// Never ignorable (`severity_for_code`), and cheap: one union-find pass.
+    fn closure_across_one_shot_warnings(project: &Project) -> Vec<ProjectWarning> {
+        project
+            .closures_across_one_shot()
+            .into_iter()
+            .filter_map(|skipped| {
+                let (section_id, shot_index) = skipped.collapsed_shot;
+                let shot = project.get_section(section_id)?.shots.get(shot_index)?;
+                Some(ProjectWarning {
+                    section_id,
+                    shot_id: shot.id,
+                    shot_index,
+                    code: CLOSURE_ACROSS_ONE_SHOT.to_string(),
+                    message: format!(
+                        "Shot {section_id}:{} has both ends joined by loop closure {} to {}, which would squeeze the shot to zero length, so the Closures Computed View skips that closure. Remove the closure, or close the loop at two stations that are not the ends of a single shot.",
+                        shot_index + 1,
+                        station_id_label(skipped.station_a),
+                        station_id_label(skipped.station_b),
+                    ),
+                    severity: severity_for_code(CLOSURE_ACROSS_ONE_SHOT),
+                    is_resolved: false,
+                    shot_uuid: shot.uuid.clone(),
+                    datum_station_index: None,
+                    datum_refs: None,
+                    closure_id: Some(skipped.closure_id),
+                })
+            })
+            .collect()
+    }
+
+    /// One advisory warning per component the last closure-adjusted solve of
+    /// THIS project version could not adjust (#737). Read from the memoized
+    /// solve only ([`Self::cached_adjustment_failures`]) - the warnings pass
+    /// never runs the solve - so it appears once the Closures Computed View,
+    /// Plan or Export has solved the current version (the frontend refreshes
+    /// warnings then), and an edit drops it until the next solve. That is why
+    /// it is advisory, not an error (see `CLOSURE_ADJUSTMENT_FAILED`). The
+    /// primary surface is the notice drawn with the adjusted view itself; this
+    /// entry is where the user reads which part and why.
+    ///
+    /// Attached to the shot at the solve's anchor station (station 0 -> shot 0,
+    /// station i -> shot i-1, like the over-anchoring error), falling back to
+    /// the first shot of the component.
+    fn adjustment_failure_warnings(
+        &self,
+        project: &Project,
+        config_hash: u64,
+    ) -> Vec<ProjectWarning> {
+        self.cached_adjustment_failures(project, config_hash)
+            .iter()
+            .filter_map(|failure| {
+                let anchor_shot = project.get_section(failure.anchor.section_id).and_then(|s| {
+                    let index = (failure.anchor.station_index as usize).saturating_sub(1);
+                    s.shots.get(index).map(|shot| (s.id, index, shot))
+                });
+                let (section_id, shot_index, shot) = anchor_shot.or_else(|| {
+                    failure.section_ids.iter().find_map(|id| {
+                        let section = project.get_section(*id)?;
+                        section.shots.first().map(|shot| (section.id, 0, shot))
+                    })
+                })?;
+                let sections = failure.section_ids.len();
+                Some(ProjectWarning {
+                    section_id,
+                    shot_id: shot.id,
+                    shot_index,
+                    code: CLOSURE_ADJUSTMENT_FAILED.to_string(),
+                    message: format!(
+                        "Shot {section_id}:{} is in a part of the survey ({sections} {}) the Closures Computed View could not adjust, so that part is shown as measured: {}",
+                        shot_index + 1,
+                        if sections == 1 { "section" } else { "sections" },
+                        failure.user_reason(),
+                    ),
+                    severity: severity_for_code(CLOSURE_ADJUSTMENT_FAILED),
+                    is_resolved: false,
+                    shot_uuid: shot.uuid.clone(),
+                    datum_station_index: None,
+                    datum_refs: None,
+                    closure_id: None,
+                })
+            })
+            .collect()
     }
 
     /// Pin the position-keyed ignores of JUST-reversed sections to the physical shot

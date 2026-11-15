@@ -524,6 +524,9 @@ pub const EVENT_NAMES: &[&str] = &[
     "display-state.geometryMode:closureAdjusted",
     // Lazy IPC query that returns the closure-adjusted station coordinates.
     "command.get_adjusted_stations",
+    // What the closure-adjusted view left out: closures skipped because they
+    // span one shot, and components shown measured because the solve failed (#737).
+    "command.get_adjustment_report",
     // Per-station along-cave distance query backing the distance-gradient overlay.
     "command.get_station_distances_from",
     // Data-table spreadsheet editing: persisted view config + raw-table browsing
@@ -1179,7 +1182,9 @@ mod tests {
         //   + 3 Import from MNemo over USB (#725): command.list_mnemo_ports,
         //       command.pull_mnemo, command.cancel_mnemo_pull = 725.
         //   + 4 the full per-dialog set for mnemo-import = 729.
-        assert_eq!(EVENT_NAMES.len(), 729);
+        //   + 1 the closure-adjusted view's report of what it left out (#737):
+        //       command.get_adjustment_report = 730.
+        assert_eq!(EVENT_NAMES.len(), 730);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

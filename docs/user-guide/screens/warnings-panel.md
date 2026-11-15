@@ -49,6 +49,13 @@ readings disagree.
   Next**.
 - Errors can only be fixed. Warnings can also be ignored with **Ignore (keep
   value, don't warn again)**.
+- Two entries are about loop closures, not readings. A closure that joins the
+  two ends of one shot (an error) would squeeze that shot to zero length, so the
+  Closures Computed View skips it: **Remove this loop closure** fixes it, **Go
+  to closure station** shows it in **Details**. A part of the survey the Closures
+  Computed View could not adjust is shown there as measured (a warning, listed
+  after that view, Plan or Export has been computed); the message says why,
+  **Go to station** takes you to it, and it can be ignored.
 - Under **Show resolved**, resolved warnings are struck through. **Mark
   unresolved** brings one back.
 - The map coloring and labels on this tab can be turned off in Settings:
