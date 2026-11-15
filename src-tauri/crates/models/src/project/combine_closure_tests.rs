@@ -1153,13 +1153,12 @@ fn check_no_merge_folds_a_closure(project: &Project, what: &str) -> usize {
                 }
                 tried += 1;
                 let mut after = project.clone();
-                if after.merge_stations(x, y).is_ok() {
-                    panic!(
-                        "{what}: merge_stations({x:?}, {y:?}) merged the two ends of closure {} \
-                         ({a:?} - {b:?})",
-                        closure.id
-                    );
-                }
+                assert!(
+                    after.merge_stations(x, y).is_err(),
+                    "{what}: merge_stations({x:?}, {y:?}) merged the two ends of closure {} \
+                     ({a:?} - {b:?})",
+                    closure.id
+                );
             }
         }
     }

@@ -1230,7 +1230,7 @@ impl Project {
                     .and_then(|p| p.get(i))
                     .and_then(|&position| before.closures.get(position))
                     .filter(|entry| entry.id == closure.id);
-                let same_id = by_id.get(&closure.id).map(Vec::as_slice).unwrap_or(&[]);
+                let same_id = by_id.get(&closure.id).map_or(&[][..], Vec::as_slice);
                 let entry = at_position.or_else(|| match same_id {
                     [only] => Some(*only),
                     many => many

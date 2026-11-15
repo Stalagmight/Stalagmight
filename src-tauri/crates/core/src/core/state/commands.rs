@@ -275,18 +275,16 @@ impl AppState {
                 "Converted sole-bridge loop closures to merges after a removal"
             );
         }
-        match before {
-            Some(before) => super::command_shot::report_swept_closures(
+        if let Some(before) = before {
+            return super::command_shot::report_swept_closures(
                 project,
                 before,
                 &sweep,
                 "after a removal",
-            ),
-            None => {
-                sweep.log_removed("batch");
-                Vec::new()
-            }
+            );
         }
+        sweep.log_removed("batch");
+        Vec::new()
     }
 
     /// [`Project::closures_before_sweep`] of the open project, if one is open.
