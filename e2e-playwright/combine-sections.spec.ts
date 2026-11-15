@@ -210,6 +210,8 @@ test.describe('Combine Sections', () => {
     await combineWith(page, 'West');
 
     await expect(page.getByTestId('combine-closure-join')).toContainText('East and West meet here across a loop closure');
+    // The torn merge stays as a closure: nothing is removed (#746).
+    await expect(page.getByTestId('combine-removed-summary')).toHaveCount(0);
     await openDetails(page);
     await expect(page.getByTestId('combine-note-torn')).toContainText('This connection becomes a loop closure:');
     await expect(page.locator('[data-testid^="combine-torn-tie-"]')).toHaveCount(1);
@@ -234,6 +236,74 @@ test.describe('Combine Sections', () => {
       return { merges: project.station_merges.length, closures: project.loop_closures.length };
     });
     expect(ties).toEqual({ merges: 0, closures: 1 });
+  });
+
+  test('lists the merge it removes across one shot before the confirm, then says so in a toast (#746)', async ({ page }) => {
+    // Main's end and Beyond's start are tied by a loop closure (the join);
+    // the one-shot Squeeze is merged to both. Combined, Main's end and
+    // Beyond's start are one point, so the merge of Squeeze's end and
+    // Beyond's start would be a loop closure across Squeeze's one shot.
+    const [main, squeeze, beyond] = await seed(page, [
+      { name: 'Main', count: 1 },
+      { name: 'Squeeze', count: 1 },
+      { name: 'Beyond', count: 1 },
+    ]);
+    const mainEnd = { section_id: main!.id, station_index: 1 };
+    const beyondStart = { section_id: beyond!.id, station_index: 0 };
+    await merge(page, mainEnd, { section_id: squeeze!.id, station_index: 0 });
+    await merge(page, { section_id: squeeze!.id, station_index: 1 }, beyondStart);
+    const closed = await page.evaluate(
+      ({ a, b }) => (window as any).__E2E_TEST__.projectStore.getState().createLoopClosure(a, b, 'Batch'),
+      { a: mainEnd, b: beyondStart }
+    );
+    expect(closed).toMatchObject({ success: true });
+
+    await openContextMenu(page, { type: 'station', ref: mainEnd });
+    await page.getByRole('button', { name: 'Combine Sections...' }).hover();
+    await page.getByTestId('context-menu-submenu').getByRole('button', { name: 'Main with Beyond' }).click();
+    await expect(page.getByTestId('combine-sections-dialog')).toBeVisible();
+
+    // Said before the confirm with Details still folded.
+    await expect(page.getByTestId('combine-details')).not.toHaveAttribute('open', '');
+    await expect(page.getByTestId('combine-removed-summary')).toBeVisible();
+    await expect(page.getByTestId('combine-removed-summary')).toHaveText(
+      'Combining removes 1 connection that would join the two ends of one shot (see Details).'
+    );
+    await openDetails(page);
+    const removed = page.locator('[data-testid^="combine-removed-tie-"]');
+    await expect(removed).toHaveCount(1);
+    await expect(removed).toContainText(': as a loop closure it would join the two ends of one shot.');
+    await expect(page.getByTestId('combine-note-removed')).toContainText('This connection is removed:');
+    await expect(removed.getByTestId(`combine-tie-station-${squeeze!.id}-1`)).toBeVisible();
+    await expect(removed.getByTestId(`combine-tie-station-${beyond!.id}-0`)).toBeVisible();
+    await expect(page.getByTestId('combine-removed-why')).toContainText(
+      'Such a closure would squeeze that shot to zero length'
+    );
+    // Not also listed as a connection that becomes a loop closure.
+    await expect(page.getByTestId('combine-note-torn')).toHaveCount(0);
+    await page.getByTestId('combine-confirm').click();
+    await waitForNoDialogs(page);
+
+    const toast = page.getByTestId('toast').filter({
+      hasText: `Removed the merge of Squeeze ${squeeze!.id}:1 and Beyond ${beyond!.id}:0: combining the sections left its two stations at the two ends of one shot.`,
+    });
+    await expect(toast).toHaveCount(1);
+    expect(await sectionShape(page)).toEqual([
+      ['Main', 2],
+      ['Squeeze', 1],
+    ]);
+    const merges = () =>
+      page.evaluate(() => (window as any).__E2E_TEST__.projectStore.getState().project.station_merges.length as number);
+    expect(await merges()).toBe(1);
+
+    // One undo brings Beyond back with its merge.
+    await undo(page);
+    await expect.poll(() => sectionShape(page)).toEqual([
+      ['Main', 1],
+      ['Squeeze', 1],
+      ['Beyond', 1],
+    ]);
+    expect(await merges()).toBe(2);
   });
 
   test('keeps its row, disabled, where no other section ends; none on a mid station', async ({ page }) => {

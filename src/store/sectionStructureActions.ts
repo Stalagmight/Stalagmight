@@ -3,6 +3,7 @@ import type { SectionId } from '../types/project';
 import type { SplitAt } from '../types/ipc/SplitAt';
 import type { SplitSectionOptions } from '../types/ipc/SplitSectionOptions';
 import type { CombineSectionsOptions } from '../types/ipc/CombineSectionsOptions';
+import { notifyRemovedClosures } from '../utils/closureRemovalToast';
 
 /** `projectStore`'s own command runner: invoke, then refresh and mark dirty on success. */
 type ExecuteCommand = (
@@ -19,7 +20,11 @@ type ExecuteCommand = (
  */
 export interface SectionStructureActions {
   splitSection: (sectionId: SectionId, at: SplitAt, options: SplitSectionOptions) => Promise<CommandResult>;
-  /** Combine `other` into `kept`; `kept`'s id, direction and shot ids survive. */
+  /**
+   * Combine `other` into `kept`; `kept`'s id, direction and shot ids survive.
+   * Toasts the ties it removed because as closures they would join the two
+   * ends of one shot (#746), which the dialog listed before the confirm.
+   */
   combineSections: (kept: SectionId, other: SectionId, options: CombineSectionsOptions) => Promise<CommandResult>;
 }
 
@@ -27,7 +32,13 @@ export function createSectionStructureActions(executeCommand: ExecuteCommand): S
   return {
     splitSection: (sectionId, at, options) =>
       executeCommand('split_section', { sectionId, at, options }, { purpose: 'split section', fields: { sectionId } }),
-    combineSections: (kept, other, options) =>
-      executeCommand('combine_sections', { kept, other, options }, { purpose: 'combine sections', fields: { kept, other } }),
+    combineSections: async (kept, other, options) =>
+      notifyRemovedClosures(
+        await executeCommand(
+          'combine_sections',
+          { kept, other, options },
+          { purpose: 'combine sections', fields: { kept, other } }
+        )
+      ),
   };
 }

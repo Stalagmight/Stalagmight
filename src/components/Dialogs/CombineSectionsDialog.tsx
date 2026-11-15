@@ -237,6 +237,15 @@ export default function CombineSectionsDialog() {
             })}
           </p>
         )}
+        {/* Outside the folded Details: the user is told before confirming that
+            a merge or closure of theirs goes (#746); Details names each one. */}
+        {!isStale && (plan?.closures_removed_across_one_shot?.length ?? 0) > 0 && (
+          <p className="text-sm" data-testid="combine-removed-summary">
+            {t('dialogs.combineSections.removedSummary', {
+              count: plan?.closures_removed_across_one_shot?.length ?? 0,
+            })}
+          </p>
+        )}
 
         <div className="flex items-center justify-between gap-2 text-sm">
           <span data-testid="combine-kept-label">

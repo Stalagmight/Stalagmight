@@ -117,7 +117,9 @@ fn end_index(section: &Section, end: SectionEnd) -> u32 {
     }
 }
 
-fn label(section: &Section) -> String {
+/// A section as the user knows it: its name, or "Section N" when it has none
+/// (the label the Combine dialog and its refusals use).
+pub fn section_label(section: &Section) -> String {
     section
         .name
         .clone()
@@ -339,8 +341,8 @@ impl Project {
             return Some(format!(
                 "{} and {} are each placed by their own zero datum: merge them first, so the \
                  later datum becomes a GPS fix",
-                label(a),
-                label(b)
+                section_label(a),
+                section_label(b)
             ));
         }
         let budget = FEATURE_ID_STRIDE.saturating_sub(1) as usize;
@@ -363,8 +365,8 @@ impl Project {
             format!(
                 "{} has used up its shot numbers for this session: keep {}, or save and \
                  reopen",
-                label(kept),
-                label(other)
+                section_label(kept),
+                section_label(other)
             )
         })
     }
@@ -416,8 +418,8 @@ impl Project {
         let touch = self.pairing_touch(pairing, &table).unwrap_or_else(|| {
             Touch::refused(format!(
                 "{} and {} do not meet at those ends",
-                label(k),
-                label(o)
+                section_label(k),
+                section_label(o)
             ))
         });
         self.candidate_for(pairing, touch, &table)
@@ -538,6 +540,7 @@ impl Project {
             torn_ties: Vec::new(),
             azimuth_rotation_deg: None,
             join_offset_change_m: None,
+            closures_removed_across_one_shot: None,
         };
         if touch.blocked.is_some() {
             return (empty, None);
@@ -741,8 +744,8 @@ impl Project {
                 Touch::refused(format!(
                     "{} and {} do not meet at an end station: merge or close a loop between \
                      two of their ends first",
-                    label(a),
-                    label(b)
+                    section_label(a),
+                    section_label(b)
                 )),
             )
         });
