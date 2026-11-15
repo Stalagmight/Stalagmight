@@ -218,7 +218,11 @@ pub(super) fn stamp_starts(
     // The SpeleoDB sidecar leaves the fixes out: its converter drops CLOSURE
     // rows, so a fix START would reach the map preview as a lone anchor with
     // nothing hanging off it - no gain, and a shape nobody has checked there.
-    if profile == TmlProfile::SpeleoDbSidecar {
+    //
+    // So does a file whose frame GPS cannot be placed: the frame's entrance
+    // stays at 0,0, and a fix START at its real GPS tied into that survey would
+    // have Ariane bend it across the globe to reach it.
+    if profile == TmlProfile::SpeleoDbSidecar || frame_gps.is_none() {
         gps.fixes.clear();
     }
     gps
@@ -325,7 +329,8 @@ impl DatumGps {
                  written: a datum that no longer resolves, whose station has no row in this \
                  file, whose GPS is not a point on the globe, or that shares its station with an earlier \
                  datum (datums part-way through the survey are also left out of the \
-                 SpeleoDB sidecar, and of a file with a shot that has no parent station)."
+                 SpeleoDB sidecar, of a file with a shot that has no parent station, and of \
+                 a file whose frame datum's GPS is not a point on the globe)."
             );
         }
         unwritten

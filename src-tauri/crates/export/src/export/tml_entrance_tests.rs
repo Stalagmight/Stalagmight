@@ -622,7 +622,10 @@ fn a_mid_section_closure_does_not_move_the_reimport_declination_epoch() {
     let path = dir.path().join("dated.tml");
     export_tml(&project, &path).unwrap();
     let parsed = crate::parsers::tml::parse_tml(&path).unwrap();
-    assert!(parsed.use_magnetic_azimuth, "fixture rot: needs a magnetic file");
+    assert!(
+        parsed.use_magnetic_azimuth,
+        "fixture rot: needs a magnetic file"
+    );
     assert!(
         parsed.sections.len() > 1,
         "fixture rot: the closures must re-import as branch sections"
@@ -643,5 +646,31 @@ fn a_mid_section_closure_does_not_move_the_reimport_declination_epoch() {
             "{:?}",
             config.name
         );
+    }
+}
+
+#[test]
+fn a_frame_gps_off_the_globe_leaves_the_fixes_out() {
+    // The frame's entrance stays at 0,0. A fix START at its real GPS, tied into
+    // the same survey, would have Ariane bend it across the globe.
+    let mut project = three_entrance_cave(false);
+    project.zero_datums[0].gps.latitude = 95.0;
+    datum(&mut project, StationRef::new(2, 2), FIX_MID_SECTION);
+    assert_eq!(
+        project.gps_fix_datums().len(),
+        1,
+        "fixture rot: the datum on L2 must be a GPS fix"
+    );
+
+    for profile in [TmlProfile::User, TmlProfile::SpeleoDbSidecar] {
+        let (shots, unwritten) = export(&project, profile);
+        assert_eq!(unwritten, 2, "{profile:?}: the frame and the fix");
+        assert!(
+            shots.iter().all(|s| s.shot_type != "CLOSURE"),
+            "{profile:?}"
+        );
+        let starts: Vec<&ExportShot> = shots.iter().filter(|s| s.shot_type == "START").collect();
+        assert_eq!(starts.len(), 1, "{profile:?}: only the frame's entrance");
+        assert_eq!((starts[0].latitude, starts[0].longitude), (0.0, 0.0));
     }
 }
