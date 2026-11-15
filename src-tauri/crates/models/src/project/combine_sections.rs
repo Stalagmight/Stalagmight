@@ -231,13 +231,24 @@ impl Project {
         other: SectionId,
         options: &CombineSectionsOptions,
     ) -> Result<CombineOutcome, String> {
+        // The steps below find closures by id (the join's own, the ties
+        // `tear_ties` removes, the names of what the dedupe replaces), as
+        // the plan finds them by position: unique ids make the two agree,
+        // and the load gives a repeated one a fresh id (`assign_closure_ids`).
+        debug_assert!(
+            {
+                let mut ids = HashSet::with_capacity(self.loop_closures.len());
+                self.loop_closures.iter().all(|c| ids.insert(c.id))
+            },
+            "combine sections: two loop closures share an id"
+        );
         let setup = self.combine_setup(kept, other, options.join)?;
         // For the check after the join that the plan's prediction left no
         // closure across one shot behind.
         let closures_before = self.closures_before_edit();
-        // Every closure's stations before the combine, by id (the first, in
-        // a file that repeats one), to name what the dedupe replaces; only
-        // where it can replace anything.
+        // Every closure's stations before the combine, by id (unique: the
+        // load gives a repeated one a fresh id, `assign_closure_ids`), to name
+        // what the dedupe replaces; only where it can replace anything.
         let stations_before: HashMap<u64, (StationRef, StationRef)> =
             if self.combine_may_replace(kept, other) {
                 let mut stations = HashMap::new();

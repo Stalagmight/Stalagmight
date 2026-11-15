@@ -241,7 +241,7 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
   appended last) can land on a legacy closure's stations, or a snapped one's.
   `dedupe_closures_in` keeps the first closure of each set the solve takes
   (`Batch` / `LeastSquaresWeighted`), or the first one when it takes none,
-  and drops the others by position (a file can repeat an id). That is what
+  and drops the others by position, the way the plan counts them. That is what
   the plan's model of the joined survey (`joined_sweep`) assumes: it counts
   every eligible closure before the dedupe, so with the eligible one kept
   the stations the solve joins are the same before and after it, and the
@@ -267,7 +267,13 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
   in a release build). Duplicates the solve treats alike go silently: nothing
   changes for the view. A replacement keeps the connection, so there is no
   summary line outside Details and no toast, unlike a removal across one
-  shot.
+  shot. The combine finds closures by id (its join's own, the ties
+  `tear_ties` removes, the names of what it replaced) where the plan goes by
+  position, so the two agree only while ids are unique. A file keeps a
+  closure's id in `loop_closures.closure_id`, which nothing keeps unique, so
+  the load gives the later of two closures with one id a fresh id
+  (`assign_closure_ids`, as it does an id of 0), and a debug build asserts
+  unique ids when a combine starts.
 - **A loop closure is a join.** Two section ends tied by a closure are, by the
   survey's own statement, one point, apart by the misclosure. Combining there
   moves one side by the misclosure (the other section and what is merged to

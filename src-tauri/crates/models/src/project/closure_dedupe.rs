@@ -8,7 +8,8 @@
 //! appended last) can land on a legacy closure's stations, or on a snapped
 //! one's. Of each such set the first closure the solve takes
 //! ([`Project::closure_is_eligible`]) stays, or the first one when the solve
-//! takes none of them; the others go, by position (a file can repeat an id).
+//! takes none of them; the others go, by position, the way the plan counts
+//! them.
 //!
 //! Why an eligible one wins: the plan's model of the joined survey
 //! (`joined_sweep`, which the anchor rule and the across-one-shot removal

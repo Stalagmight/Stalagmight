@@ -15,7 +15,7 @@ use crate::{
 
 /// Plant a loop closure between `a` and `b` as a file can carry it: any
 /// strategy (the app creates no legacy one any more), any alignment, and
-/// `id` (a file can repeat one), measured off the current geometry.
+/// `id`, measured off the current geometry.
 fn plant(
     project: &mut Project,
     (a, b): (StationRef, StationRef),
@@ -193,9 +193,11 @@ fn the_closure_dedupe_keeps_the_first_closure_the_solve_takes() {
     }
 }
 
-/// The dedupe drops by position: a file can repeat a closure id, and before
-/// #749 dropping a legacy duplicate by its id also took a `Batch` closure
-/// sharing that id, so neither was left on the pair.
+/// The dedupe drops by position, the way the plan counts: before #749 it
+/// dropped by id, so a legacy duplicate sharing an id with a `Batch` closure
+/// took that one too, and neither was left on the pair. A loaded project
+/// has no repeated id (`assign_closure_ids`), but the dedupe does not rely
+/// on that.
 #[test]
 fn the_closure_dedupe_drops_by_position_so_a_repeated_id_keeps_its_twin() {
     let mut project = Project::new("Repeated id".to_string(), None);
@@ -225,6 +227,35 @@ fn the_closure_dedupe_drops_by_position_so_a_repeated_id_keeps_its_twin() {
         closures_between(&project, ends.0, ends.1),
         vec![(5, BATCH, false)]
     );
+}
+
+/// A file can repeat a closure id (`closure_id` is no key), and the edits
+/// that find a closure by id (a combine's join, `tear_ties`) would find the
+/// wrong one or both: the load gives the later of two the same id a fresh
+/// one, as it does an id of 0, and keeps every other id.
+#[test]
+fn the_load_gives_a_repeated_closure_id_a_fresh_one() {
+    let mut project = Project::new("Repeated id".to_string(), None);
+    let s = add(
+        &mut project,
+        "S",
+        vec![shot(90.0, 10.0), shot(0.0, 10.0), shot(270.0, 9.0)],
+    );
+    let at = |i| StationRef::new(s, i);
+    plant(&mut project, (at(0), at(2)), LEGACY, false, 5);
+    plant(&mut project, (at(0), at(3)), BATCH, false, 0);
+    plant(&mut project, (at(1), at(3)), BATCH, false, 5);
+    plant(&mut project, (at(0), at(1)), BATCH, false, 7);
+    plant(&mut project, (at(2), at(3)), BATCH, false, 5);
+    project.next_closure_id = 1;
+    project.assign_closure_ids();
+    let ids: Vec<u64> = project.loop_closures.iter().map(|c| c.id).collect();
+    assert_eq!(ids, vec![5, 8, 9, 7, 10]);
+    assert_eq!(project.next_closure_id, 11);
+    // Idempotent: a second load changes nothing.
+    project.assign_closure_ids();
+    let again: Vec<u64> = project.loop_closures.iter().map(|c| c.id).collect();
+    assert_eq!(again, ids);
 }
 
 // ---- Through a combine ----------------------------------------------------
