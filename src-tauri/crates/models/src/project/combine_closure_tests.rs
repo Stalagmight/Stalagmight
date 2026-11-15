@@ -1098,6 +1098,21 @@ fn check_structure_muting(after: &Project, what: &str, mute: &[String]) {
     }
 }
 
+/// Every closure a sweep removed had its two stations in one merge group by
+/// then (#738) - asked of the BFS `are_stations_merged`, not of the sweep's
+/// own union-find.
+fn check_removed_were_merged(after: &Project, removed: &[LoopClosure], what: &str) {
+    for closure in removed {
+        let a = after.resolve_key(&closure.station_a).unwrap();
+        let b = after.resolve_key(&closure.station_b).unwrap();
+        assert!(
+            after.are_stations_merged(a, b),
+            "{what}: the sweep removed closure {} between {a:?} and {b:?}, which are not merged",
+            closure.id
+        );
+    }
+}
+
 /// Every combine the station menu offers in random networks, keeping either
 /// section: refused only for two zero datums, and every invariant holds.
 ///
@@ -1227,6 +1242,7 @@ fn chains_of_combines_splits_and_reverses_keep_the_invariants() {
         .filter(|m| !m.is_empty())
         .collect();
     let (mut combines, mut splits, mut reverses) = (0usize, 0usize, 0usize);
+    let mut swept_away = 0usize;
     for seed in first..first + seeds {
         let mut rng = Rng(seed.wrapping_mul(0xA24B_AED4_963E_E407) | 1);
         let mut project = network(seed);
@@ -1321,8 +1337,12 @@ fn chains_of_combines_splits_and_reverses_keep_the_invariants() {
                         continue;
                     }
                     // What the split command runs next: a closure across the
-                    // cut that was the halves' only tie is a merge now.
-                    after.convert_orphan_closures_to_merges();
+                    // cut that was the halves' only tie is a merge now, and
+                    // one that merge leaves between merged stations is gone
+                    // (#738) - only such a one.
+                    let sweep = after.sweep_orphan_closures();
+                    check_removed_were_merged(&after, &sweep.removed, &what);
+                    swept_away += sweep.removed.len();
                     check_structure_muting(&after, &what, &mute);
                     project = after;
                     trail.push(op);
@@ -1358,7 +1378,7 @@ fn chains_of_combines_splits_and_reverses_keep_the_invariants() {
     }
     eprintln!(
         "combine chains seeds {first}..{}: {combines} combines, {splits} splits, {reverses} \
-         reverses",
+         reverses, {swept_away} closures between merged stations removed",
         first + seeds
     );
     if seeds >= 20 {
@@ -1367,6 +1387,155 @@ fn chains_of_combines_splits_and_reverses_keep_the_invariants() {
             splits > 0 && reverses > 0,
             "splits {splits}, reverses {reverses}"
         );
+    }
+}
+
+/// The orphan-closure sweep on random networks with extra ties to merged
+/// points (#738): a station tied twice to one point through two members of
+/// its merge group (the same loop recorded twice, which the Merge tool and
+/// Combine both allow), a tie between two stations already merged (what a
+/// file from before #738 can hold), a random tie, and then, mostly, a split
+/// at a random station that can leave such ties as a half's only ones.
+///
+/// Whatever the sweep removes had its two stations merged; it leaves no
+/// closure between merged stations; every closure it takes is accounted for
+/// (converted, with exactly one new merge each, or removed); running it again
+/// changes nothing; two runs on one project agree; and the structure holds.
+///
+/// `STALAGMIGHT_SWEEP_SEEDS` (default 200) from
+/// `STALAGMIGHT_SWEEP_FIRST_SEED` (default 0).
+#[test]
+fn the_sweep_removes_exactly_the_closures_between_merged_stations() {
+    let env = |name: &str, default: u64| -> u64 {
+        std::env::var(name)
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(default)
+    };
+    let seeds = env("STALAGMIGHT_SWEEP_SEEDS", 200);
+    let first = env("STALAGMIGHT_SWEEP_FIRST_SEED", 0);
+    let ids = |closures: &[LoopClosure]| closures.iter().map(|c| c.id).collect::<Vec<_>>();
+    let (mut removed, mut converted, mut both) = (0usize, 0usize, 0usize);
+    for seed in first..first + seeds {
+        let mut rng = Rng(seed.wrapping_mul(0xD1B5_4A32_D192_ED03) | 1);
+        let mut project = network(seed);
+        let mut trail: Vec<String> = Vec::new();
+        for _ in 0..=rng.below(3) {
+            let all = every_station(&project);
+            let mut merged: Vec<StationRef> = project
+                .station_merges
+                .iter()
+                .flat_map(|m| [m.station_a.clone(), m.station_b.clone()])
+                .filter_map(|key| project.resolve_key(&key))
+                .collect();
+            merged.sort_by_key(|at| (at.section_id, at.station_index));
+            merged.dedup();
+            let x = all[rng.below(all.len())];
+            let Some(&m) = merged.get(rng.below(merged.len())) else {
+                let y = all[rng.below(all.len())];
+                tie(&mut project, x, y);
+                trail.push(format!("tie {x:?} {y:?}"));
+                continue;
+            };
+            let point: Vec<StationRef> = merged
+                .iter()
+                .copied()
+                .filter(|&at| project.are_stations_merged(m, at))
+                .collect();
+            let (g, h) = (point[rng.below(point.len())], point[rng.below(point.len())]);
+            match rng.below(3) {
+                0 => {
+                    tie(&mut project, x, g);
+                    tie(&mut project, h, x);
+                    trail.push(format!("twice {x:?} to {g:?} {h:?}"));
+                }
+                1 => {
+                    tie(&mut project, g, h);
+                    trail.push(format!("merged {g:?} {h:?}"));
+                }
+                _ => {
+                    let y = all[rng.below(all.len())];
+                    tie(&mut project, x, y);
+                    trail.push(format!("tie {x:?} {y:?}"));
+                }
+            }
+        }
+        if rng.below(4) > 0 {
+            let long: Vec<SectionId> = project
+                .sections
+                .iter()
+                .filter(|s| s.shots.len() >= 2)
+                .map(|s| s.id)
+                .collect();
+            if let Some(&id) = long.get(rng.below(long.len())) {
+                let shots = project.get_section(id).unwrap().shots.len();
+                let at = 1 + rng.below(shots - 1) as u32;
+                let options = crate::SplitSectionOptions {
+                    name_a: format!("S{id}a"),
+                    name_b: format!("S{id}b"),
+                    color_a: "#123456".to_string(),
+                    color_b: "#654321".to_string(),
+                    comment_side: crate::SplitSide::A,
+                    datum_side: crate::SplitSide::A,
+                };
+                if project.split_section_at_station(id, at, &options).is_ok() {
+                    trail.push(format!("split({id} at {at})"));
+                }
+            }
+        }
+        let what = format!("sweep seed {seed} after [{}]", trail.join(", "));
+        let before = project.clone();
+        let mut twin = project.clone();
+
+        let sweep = project.sweep_orphan_closures();
+
+        check_removed_were_merged(&project, &sweep.removed, &what);
+        for closure in &project.loop_closures {
+            if let (Some(a), Some(b)) = (
+                project.resolve_key(&closure.station_a),
+                project.resolve_key(&closure.station_b),
+            ) {
+                assert!(
+                    !project.are_stations_merged(a, b),
+                    "{what}: closure {} left between merged {a:?} and {b:?}",
+                    closure.id
+                );
+            }
+        }
+        assert_eq!(
+            before.loop_closures.len(),
+            project.loop_closures.len() + sweep.converted + sweep.removed.len(),
+            "{what}"
+        );
+        assert_eq!(
+            project.station_merges.len(),
+            before.station_merges.len() + sweep.converted,
+            "{what}: one merge per promotion, none per removal"
+        );
+        let again = project.sweep_orphan_closures();
+        assert_eq!((again.converted, again.removed.len()), (0, 0), "{what}");
+        let twin_sweep = twin.sweep_orphan_closures();
+        assert_eq!(twin_sweep.converted, sweep.converted, "{what}");
+        assert_eq!(ids(&twin_sweep.removed), ids(&sweep.removed), "{what}");
+        assert_eq!(
+            ids(&twin.loop_closures),
+            ids(&project.loop_closures),
+            "{what}"
+        );
+        check_structure(&project, &what);
+
+        removed += sweep.removed.len();
+        converted += sweep.converted;
+        both += usize::from(sweep.converted > 0 && !sweep.removed.is_empty());
+    }
+    eprintln!(
+        "sweep seeds {first}..{}: {converted} converted, {removed} removed, {both} sweeps that \
+         did both",
+        first + seeds
+    );
+    if seeds >= 100 {
+        assert!(removed > 0, "nothing was ever removed");
+        assert!(both > 0, "never a promotion and a removal in one sweep");
     }
 }
 
