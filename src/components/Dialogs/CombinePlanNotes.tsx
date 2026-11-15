@@ -8,7 +8,7 @@ import type { CombineRemovedKind } from '../../types/ipc/CombineRemovedKind';
 import type { CombineReplacedKind } from '../../types/ipc/CombineReplacedKind';
 import type { SectionId, StationRef } from '../../types/project';
 import { formatLength } from '../../utils/formatStats';
-import { combineMoveShown, formatRotation } from '../../utils/combineSections';
+import { combineMoveIsSmall, combineMoveShown, formatRotation } from '../../utils/combineSections';
 
 interface CombinePlanNotesProps {
   candidate: CombineCandidate;
@@ -52,15 +52,20 @@ export function CombinePlanNotes({
   const notes: Array<{ key: string; text: string }> = [];
 
   // A move within the side-by-side tolerance (#740) is planned exactly but
-  // not listed: see `combineMoveShown`.
+  // listed only when it changes a tie: see `combineMoveShown`.
   if (plan.moving_section !== null && combineMoveShown(plan)) {
     const moving = sectionName(plan.moving_section);
+    const key = combineMoveIsSmall(plan)
+      ? 'moveSideBySide'
+      : candidate.join_kind === 'closure'
+        ? 'moveClosure'
+        : 'moveGap';
     notes.push({
       key: 'move',
-      text: t(
-        candidate.join_kind === 'closure' ? 'dialogs.combineSections.moveClosure' : 'dialogs.combineSections.moveGap',
-        { moving, distance: distance(plan.shift_m) }
-      ),
+      text: t(`dialogs.combineSections.${key}`, {
+        moving,
+        distance: formatLength(plan.shift_m, lengthUnit, combineMoveIsSmall(plan) ? 4 : 2),
+      }),
     });
     const attached = plan.moved_sections.filter((id) => id !== plan.moving_section);
     if (attached.length > 0) {

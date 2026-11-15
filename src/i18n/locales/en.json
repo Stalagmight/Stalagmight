@@ -1729,6 +1729,7 @@
       "changesTitle": "Combining also changes:",
       "moveClosure": "{{moving}} moves {{distance}} horizontally so the two ends meet, closing the loop here.",
       "moveGap": "{{moving}} moves {{distance}} horizontally so the two ends meet exactly.",
+      "moveSideBySide": "{{moving}} moves {{distance}} horizontally, the gap between the two ends side by side, so they meet exactly.",
       "movesWith_one": "{{names}} is attached to it and moves with it.",
       "movesWith_other": "{{names}} are attached to it and move with it.",
       "keptMoves": "{{kept}} is the one that moves, because a zero datum holds {{other}} in place.",

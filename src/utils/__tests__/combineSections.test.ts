@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  combineMoveIsSmall,
   combineMoveShown,
   combinePreview,
   combinePreviewAll,
@@ -143,15 +144,29 @@ describe('formatRotation', () => {
 });
 
 describe('combineMoveShown', () => {
-  const plan = (moving_section: number | null, shift_m: number) =>
-    ({ kept: 1, moving_section, moved_sections: moving_section === null ? [] : [moving_section], shift_m }) as
-      unknown as CombinePlan;
+  const tie = { station_a: { section_id: 4, station_index: 0 }, station_b: { section_id: 9, station_index: 1 } };
+  const plan = (moving_section: number | null, shift_m: number, torn = 0) =>
+    ({
+      kept: 1,
+      moving_section,
+      moved_sections: moving_section === null ? [] : [moving_section],
+      shift_m,
+      torn_ties: Array.from({ length: torn }, () => ({ ...tie, kind: 'snapped_closure', reason: 'loop' })),
+    }) as unknown as CombinePlan;
 
-  it('lists a move past the side-by-side tolerance only (#740)', () => {
+  it('lists a move past the side-by-side tolerance, or a smaller one that tears a tie (#740)', () => {
     expect(combineMoveShown(plan(null, 0))).toBe(false);
+    expect(combineMoveShown(plan(null, 0, 1))).toBe(false);
     expect(combineMoveShown(plan(4, 0.0006))).toBe(false);
     expect(combineMoveShown(plan(4, 0.001))).toBe(false);
+    expect(combineMoveShown(plan(4, 0.0006, 1))).toBe(true);
     expect(combineMoveShown(plan(4, 0.0011))).toBe(true);
     expect(combineMoveShown(plan(4, 0.4))).toBe(true);
+  });
+
+  it('words a listed move within the tolerance as side by side (#740)', () => {
+    expect(combineMoveIsSmall(plan(4, 0.0006, 1))).toBe(true);
+    expect(combineMoveIsSmall(plan(4, 0.001, 1))).toBe(true);
+    expect(combineMoveIsSmall(plan(4, 0.0011))).toBe(false);
   });
 });

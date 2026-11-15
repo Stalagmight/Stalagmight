@@ -587,7 +587,7 @@ describe('CombineSectionsDialog', () => {
     );
   });
 
-  it('lists no move for side-by-side ends, which move a side by under 1 mm (#740)', () => {
+  it('lists a side-by-side move under 1 mm only where it changes a tie (#740)', () => {
     const tie = {
       station_a: { section_id: 5, station_index: 2 },
       station_b: { section_id: 9, station_index: 1 },
@@ -617,18 +617,21 @@ describe('CombineSectionsDialog', () => {
       { id: 7, name: 'Side', color: '#333333', direction: 'in', shots: shots(1) },
     ];
     render(<CombineSectionsDialog />);
-    for (const id of ['combine-note-move', 'combine-note-move-with', 'combine-note-kept-moves', 'combine-closure-join']) {
+    // Keeping Main-A the plan tears a tie, whose reason is the move: the move
+    // is listed beside it, to 0.1 mm, with what moves along.
+    expect(screen.getByTestId('combine-note-move')).toHaveTextContent(
+      'Main-B moves 0.0006m horizontally, the gap between the two ends side by side, so they meet exactly.'
+    );
+    expect(screen.getByTestId('combine-note-move-with')).toHaveTextContent('Side');
+    expect(screen.getAllByTestId(/^combine-torn-tie-/)).toHaveLength(1);
+    expect(screen.getByTestId('combine-torn-why')).toHaveTextContent("The loop's misclosure moves to the new closure");
+
+    // Keeping Main-B nothing is torn: a move that small is not listed, and
+    // nothing claims a side stays either.
+    fireEvent.click(screen.getByTestId('combine-swap-kept'));
+    for (const id of ['combine-note-move', 'combine-note-move-with', 'combine-note-kept-moves', 'combine-note-torn']) {
       expect(screen.queryByTestId(id)).toBeNull();
     }
-    // The torn tie is still listed, with the reason that holds whatever moves.
-    expect(screen.getAllByTestId(/^combine-torn-tie-/)).toHaveLength(1);
-    expect(screen.getByTestId('combine-torn-why')).toHaveTextContent(
-      'Otherwise the combined section would be tied to itself.'
-    );
-
-    fireEvent.click(screen.getByTestId('combine-swap-kept'));
-    expect(screen.queryByTestId('combine-note-move')).toBeNull();
-    expect(screen.queryByTestId('combine-note-kept-moves')).toBeNull();
   });
 
   it('lists converted bearings, the kept quality and offset, renewed shot ids and crossings', () => {
