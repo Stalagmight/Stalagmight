@@ -235,6 +235,32 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
   combine made identical to another one. An UNALIGNED closure between the two
   sections elsewhere stays: it becomes a closure inside one section, which the
   least-squares solve adjusts like any other.
+- **Of closures made identical, the one the solve takes stays (#749).**
+  Once the two join stations are one, two closures can tie the same two
+  stations: a tie the combine tears (a merge becomes a `Batch` closure,
+  appended last) can land on a legacy closure's stations, or a snapped one's.
+  `dedupe_closures_in` keeps the first closure of each set the solve takes
+  (`Batch` / `LeastSquaresWeighted`), or the first one when it takes none,
+  and drops the others by position (a file can repeat an id). That is what
+  the plan's model of the joined survey (`joined_sweep`) assumes: it counts
+  every eligible closure before the dedupe, so with the eligible one kept
+  the stations the solve joins are the same before and after it, and the
+  anchor rule's verdict and the across-one-shot removal still hold. Keeping
+  the first one instead let a legacy closure the solve ignores push out the
+  torn merge's closure: the plan had moved the kept side for a solved
+  survey, the Closures Computed View then showed it unadjusted, and the
+  dialog's "This connection becomes a loop closure" was false. A dropped
+  snap takes its rigidity and its depth co-location with it: its two
+  stations stay on one point horizontally (a snap the combine does not tear
+  has both ends on the side that moves, or both on the side that stays), but
+  each now reads its own depth in the measured survey instead of their
+  average, and a later edit's offset cascade no longer carries one with the
+  other. Keeping the first closure did the same whenever the ordinary one
+  came first; with the snap first it dropped the ordinary closure instead,
+  which the plan had counted. The kept closure holds the two on one point in
+  the Closures Computed View, which the snap alone did not. The dialog lists
+  no closure the dedupe drops: the connection it lists as becoming a loop
+  closure is the one that stays.
 - **A loop closure is a join.** Two section ends tied by a closure are, by the
   survey's own statement, one point, apart by the misclosure. Combining there
   moves one side by the misclosure (the other section and what is merged to

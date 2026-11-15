@@ -1728,7 +1728,12 @@ it, for the section it shows as kept, before the user confirms:
   moves there, and the closures the combine made or stretched are measured
   again. When both sides are anchored by zero datums, the moving side's merge
   towards its own datum becomes a closure too (a closure may tie two anchored
-  groups; a merge may not).
+  groups; a merge may not). Where two loop closures end up tying the same two
+  stations, one stays: the first that the Closures Computed View adjusts (the
+  first of them when it adjusts none), so a legacy (proportional or equal) or
+  snapped closure there gives way to an ordinary one, such as the closure a
+  torn merge becomes (#749). A snapped closure that gives way no longer
+  averages its two stations' depths.
 - **Ties across one shot are removed.** A tie that, combined, would be a loop
   closure joining the two ends of one shot (for example the merge at the far
   end of a one-shot passage merged to both join stations) would only be skipped
