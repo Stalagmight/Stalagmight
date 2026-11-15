@@ -256,6 +256,13 @@ impl Project {
         before: &ClosuresBeforeEdit,
     ) -> Vec<CombineRemovedClosure> {
         let missed = self.closures_newly_across_one_shot(before);
+        // The tripwire: the plan's prediction and the combine must agree, and
+        // a silent difference is what the dialog listing exists to prevent.
+        #[cfg(test)]
+        assert!(
+            missed.is_empty(),
+            "combine left closures across one shot its plan did not predict: {missed:?}"
+        );
         if missed.is_empty() {
             return Vec::new();
         }
@@ -266,28 +273,14 @@ impl Project {
         );
         let ids: HashSet<u64> = missed.iter().map(|c| c.closure_id).collect();
         self.loop_closures.retain(|c| !ids.contains(&c.id));
-        let removed: Vec<CombineRemovedClosure> = missed
+        missed
             .iter()
             .map(|c| CombineRemovedClosure {
                 station_a: c.station_a,
                 station_b: c.station_b,
                 kind: CombineRemovedKind::LoopClosure,
             })
-            .collect();
-        #[cfg(test)]
-        #[expect(
-            clippy::panic,
-            reason = "tripwire: the plan's prediction and the combine must agree, and a \
-                      silent difference is what the dialog listing exists to prevent"
-        )]
-        {
-            if !removed.is_empty() {
-                panic!(
-                    "combine left closures across one shot its plan did not predict: {missed:?}"
-                );
-            }
-        }
-        removed
+            .collect()
     }
 
     /// Everything that has to give before the join (see the module docs).
