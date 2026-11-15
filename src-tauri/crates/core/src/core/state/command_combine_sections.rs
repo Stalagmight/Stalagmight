@@ -3,26 +3,33 @@
 
 use super::AppState;
 use crate::core::{Command, CommandResult, ValidationWarning, WarningSeverity};
+use std::collections::HashMap;
+
 use crate::models::{
-    station_id_label, CombineCandidate, CombineRemovedClosure, CombineRemovedKind,
+    section_label, station_id_label, CombineCandidate, CombineRemovedClosure, CombineRemovedKind,
     CombineSectionsOptions, SectionId, SectionUpdates, StationRef, CLOSURE_REMOVED_ACROSS_ONE_SHOT,
 };
 
 /// The warnings a combine reports for the ties it removed because, combined,
 /// the loop closure each is or would become joins the two ends of one shot
-/// (#746). Named by the stations they had BEFORE the combine, as the Combine
-/// dialog listed them; the frontend shows them in one toast with the other
-/// removed-closure warnings (`notifyRemovedClosures`).
+/// (#746). Named as the Combine dialog listed them, by the stations they had
+/// BEFORE the combine, each with its section's name then (`labels`, taken
+/// before the combine): the other section is gone afterwards, and the kept
+/// one may be renamed, so a bare "2:0" would name a section the user cannot
+/// find. The frontend shows them in one toast with the other removed-closure
+/// warnings (`notifyRemovedClosures`).
 pub(super) fn combine_removed_warnings(
     removed: &[CombineRemovedClosure],
+    labels: &HashMap<SectionId, String>,
 ) -> Vec<ValidationWarning> {
+    let station = |at: StationRef| match labels.get(&at.section_id) {
+        Some(name) => format!("{name} {}", station_id_label(at)),
+        None => station_id_label(at),
+    };
     removed
         .iter()
         .map(|removed| {
-            let (a, b) = (
-                station_id_label(removed.station_a),
-                station_id_label(removed.station_b),
-            );
+            let (a, b) = (station(removed.station_a), station(removed.station_b));
             let what = match removed.kind {
                 CombineRemovedKind::Merge => format!("the merge of {a} and {b}"),
                 CombineRemovedKind::SnappedClosure => {
@@ -139,6 +146,13 @@ impl AppState {
             let Some(project) = proj_guard.as_mut() else {
                 return CommandResult::failure("No project open".to_string());
             };
+            // Every section's name as it is now, for the warnings below: they
+            // name stations as they were before the combine.
+            let labels: HashMap<SectionId, String> = project
+                .sections
+                .iter()
+                .map(|s| (s.id, section_label(s)))
+                .collect();
             let removed = match project.combine_sections(kept, other, &options) {
                 Ok(removed) => removed,
                 Err(e) => {
@@ -162,7 +176,7 @@ impl AppState {
                     "Combine removed a loop closure that would span a single shot"
                 );
             }
-            warnings = combine_removed_warnings(&removed);
+            warnings = combine_removed_warnings(&removed, &labels);
             project.touch();
         }
 

@@ -5684,7 +5684,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const removedTies = mockCombineRemovals(joinStations[0]!, joinStations[1]!);
             const isRemoved = (m: { station_a: Ref; station_b: Ref }) =>
               removedTies.some((r) => sameRef(r.station_a, m.station_a) && sameRef(r.station_b, m.station_b));
-            const label = (r: Ref) => `${r.section_id}:${r.station_index}`;
+            // Each station with its section's name before the combine, as the
+            // backend names them (the other section is gone afterwards).
+            const label = (r: Ref) => {
+              const name = sections.find((x) => x.id === r.section_id)?.name?.trim();
+              return `${name ? name : `Section ${r.section_id}`} ${r.section_id}:${r.station_index}`;
+            };
             const removedWarnings = removedTies.map((r) => ({
               code: 'CLOSURE_REMOVED_ACROSS_ONE_SHOT',
               message: `Removed the merge of ${label(r.station_a)} and ${label(r.station_b)}: combining the sections left its two stations at the two ends of one shot.`,

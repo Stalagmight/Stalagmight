@@ -76,16 +76,16 @@ describe('notifyRemovedClosures', () => {
     const r = result({
       warnings: [
         removed(
-          'Removed the merge of 1:1 and 2:0: combining the sections left its two stations at the two ends of one shot.'
+          'Removed the merge of Squeeze 1:1 and Beyond 2:0: combining the sections left its two stations at the two ends of one shot.'
         ),
-        removed('Removed loop closure 0:1 to 2:0: combining the sections left its two stations at the two ends of one shot.'),
+        removed('Removed loop closure Main 0:1 to Beyond 2:0: combining the sections left its two stations at the two ends of one shot.'),
       ],
     });
     expect(notifyRemovedClosures(r)).toBe(r);
     expect(showToast).toHaveBeenCalledTimes(1);
     expect(showToast).toHaveBeenCalledWith(
-      'Removed the merge of 1:1 and 2:0: combining the sections left its two stations at the two ends of one shot. ' +
-        'Removed loop closure 0:1 to 2:0: combining the sections left its two stations at the two ends of one shot.',
+      'Removed the merge of Squeeze 1:1 and Beyond 2:0: combining the sections left its two stations at the two ends of one shot. ' +
+        'Removed loop closure Main 0:1 to Beyond 2:0: combining the sections left its two stations at the two ends of one shot.',
       TOAST_KEYS.CLOSURE_REMOVED,
       'warning',
     );

@@ -20,7 +20,7 @@ const options: CombineSectionsOptions = {
 };
 
 const message =
-  'Removed the merge of 1:1 and 2:0: combining the sections left its two stations at the two ends of one shot.';
+  'Removed the merge of Squeeze 1:1 and Beyond 2:0: combining the sections left its two stations at the two ends of one shot.';
 
 describe('combineSections', () => {
   const showToast = vi.fn();

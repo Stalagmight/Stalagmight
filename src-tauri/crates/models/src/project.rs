@@ -116,7 +116,9 @@ pub use classify::ClassifyScope;
 pub use closure_shots::{
     closure_across_one_shot_refusal, station_id_label, ClosureAcrossOneShot, ClosuresBeforeEdit,
 };
-pub use combine_candidate::{COMBINE_DEPTH_NOTICE_M, COMBINE_TOLERANCE_M, MAX_COMBINE_PARTNERS};
+pub use combine_candidate::{
+    section_label, COMBINE_DEPTH_NOTICE_M, COMBINE_TOLERANCE_M, MAX_COMBINE_PARTNERS,
+};
 pub use gas::{
     CylRole, Cylinder, Diver, GasReachField, PlanMode, PlanSegment, RouteLeg, RouteProfilePoint,
     TankMaterial, Team,

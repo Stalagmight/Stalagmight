@@ -1236,13 +1236,18 @@ fn a_combine_removes_the_merge_it_would_tear_across_one_shot() {
         (o, SectionEnd::Start),
         &[(a, b, CombineRemovedKind::Merge)],
     );
+    // Each station with its section's name: O is gone after the combine.
+    let name = |at: StationRef| {
+        let section = if at.section_id == x { "X" } else { "O" };
+        format!("{section} {}", crate::models::station_id_label(at))
+    };
     assert_eq!(
         warnings,
         vec![format!(
             "Removed the merge of {} and {}: combining the sections left its two stations at \
              the two ends of one shot.",
-            crate::models::station_id_label(a),
-            crate::models::station_id_label(b)
+            name(a),
+            name(b)
         )]
     );
     assert_eq!(state.get_project_state().unwrap().station_merges.len(), 1);
@@ -1297,9 +1302,10 @@ fn a_combine_removes_a_closure_its_join_puts_across_one_shot() {
     );
     assert_eq!(
         warnings,
+        // By the names before the combine: K is "Joined" now, O is gone.
         vec![format!(
-            "Removed loop closure {k}:1 to {o}:0: combining the sections left its two stations \
-             at the two ends of one shot."
+            "Removed loop closure K {k}:1 to O {o}:0: combining the sections left its two \
+             stations at the two ends of one shot."
         )]
     );
     let project = state.get_project_state().unwrap();

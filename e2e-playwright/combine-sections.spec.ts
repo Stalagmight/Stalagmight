@@ -285,7 +285,7 @@ test.describe('Combine Sections', () => {
     await waitForNoDialogs(page);
 
     const toast = page.getByTestId('toast').filter({
-      hasText: `Removed the merge of ${squeeze!.id}:1 and ${beyond!.id}:0: combining the sections left its two stations at the two ends of one shot.`,
+      hasText: `Removed the merge of Squeeze ${squeeze!.id}:1 and Beyond ${beyond!.id}:0: combining the sections left its two stations at the two ends of one shot.`,
     });
     await expect(toast).toHaveCount(1);
     expect(await sectionShape(page)).toEqual([

@@ -257,12 +257,15 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
   So can an ordinary closure the join alone puts there. The solve would only
   skip such a closure, so the combine removes it instead, inside its one
   project snapshot pair (one Undo restores it with the rest), and reports each
-  as a `CLOSURE_REMOVED_ACROSS_ONE_SHOT` warning ("Removed the merge of 1:1
-  and 2:0: combining the sections left its two stations at the two ends of
-  one shot."), shown in the shared removed-closure toast. The plan names them
-  before the confirm (`CombinePlan.closures_removed_across_one_shot`, each by
-  its stations before the combine and as what it was); the dialog lists them
-  under Details, and leaves them out of the ties that become closures. The
+  as a `CLOSURE_REMOVED_ACROSS_ONE_SHOT` warning ("Removed the merge of X 1:1
+  and O 2:0: combining the sections left its two stations at the two ends of
+  one shot.", each station with its section's name before the combine, since
+  the other section is gone afterwards), shown in the shared removed-closure
+  toast. The plan names them before the confirm
+  (`CombinePlan.closures_removed_across_one_shot`, each by its stations before
+  the combine and as what it was). The dialog says how many outside the folded
+  Details, so a user who never opens them is still told, and lists each under
+  Details, apart from the ties that become closures. The
   dialog and the combine read the one plan: `Project::joined_across_one_shot`
   runs the joined survey's across-one-shot sweep (`joined_sweep`, the model
   the anchor rule's `joined_survey_is_solved` also reads) over the plan's torn
@@ -271,7 +274,10 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
   joined survey solved. A closure that already joined the two ends of one shot
   before the combine is left alone (it has its own warning), as Delete with
   shift leaves one. After the join, `closures_newly_across_one_shot` is the
-  backstop: anything the plan missed is removed too (and is a test failure).
+  backstop: anything the plan missed is a `debug_assert!` failure in a debug
+  build (every test, fuzzer and debug app build); a release build removes it
+  too, logs an error and names it by the tie of this combine it came from, or
+  by its own stations before the combine.
   Unlike a split, a combine runs no orphan-closure sweep: it joins two sections
   and never strands one on a lone closure.
 
