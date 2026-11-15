@@ -1,7 +1,24 @@
 use super::AppState;
-use crate::models::{ConnectivityResult, SectionId, StationRef};
+use crate::models::{ConnectivityResult, GpsCoordinates, SectionId, StationRef, ZeroDatumPreview};
 
 impl AppState {
+    /// What setting a zero datum with `coordinates` on `station_ref` would do
+    /// (read-only, NOT a Command): its role, and for a GPS fix the gap between
+    /// the GPS and the surveyed position (#741). `Ok(None)` when the station does
+    /// not exist; `Err` when no project is open or the GPS is invalid.
+    pub fn preview_zero_datum(
+        &self,
+        station_ref: StationRef,
+        coordinates: GpsCoordinates,
+    ) -> Result<Option<ZeroDatumPreview>, String> {
+        GpsCoordinates::validate(
+            coordinates.latitude,
+            coordinates.longitude,
+            coordinates.depth_reference,
+        )?;
+        self.with_project(|project| Ok(project.preview_zero_datum(station_ref, &coordinates)))
+    }
+
     /// Check merge connectivity between two stations (read-only)
     pub fn check_merge_connectivity(
         &self,
@@ -43,30 +60,13 @@ impl AppState {
             None
         };
 
-        // Check zero datum constraints (merge-only rigid groups)
-        let merged_a = project.get_merged_section_ids(station_a.section_id);
-        let a_has_zd = project
-            .zero_datums
-            .iter()
-            .any(|zd| merged_a.contains(&zd.station_ref.section_id));
-        let merged_b = project.get_merged_section_ids(station_b.section_id);
-        let b_has_zd = project
-            .zero_datums
-            .iter()
-            .any(|zd| merged_b.contains(&zd.station_ref.section_id));
-
-        // Determine can_merge and reason with zero datum priority
+        // Two placed sections MAY merge (#741): the group whose placement datum
+        // is later in the list moves to meet the merge, and that datum becomes a
+        // GPS fix. So zero datums no longer decide `can_merge`; only a loop does.
         let (can_merge, reason) = if connected {
             // Already connected - merging would create a survey loop
             (false, Some("Creates survey loop".to_string()))
-        } else if a_has_zd && b_has_zd {
-            // Both sections have fixed coordinates - cannot merge
-            (
-                false,
-                Some("Both sections have fixed coordinates".to_string()),
-            )
         } else {
-            // Not connected and zero datum check passed - merge allowed
             (true, None)
         };
 

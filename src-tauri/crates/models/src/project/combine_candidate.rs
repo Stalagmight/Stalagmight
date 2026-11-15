@@ -333,7 +333,8 @@ impl Project {
     fn combine_blocked_reason(&self, a: &Section, b: &Section) -> Option<String> {
         if self.carries_zero_datum(a.id) && self.carries_zero_datum(b.id) {
             return Some(format!(
-                "{} and {} each carry a zero datum: a section can hold only one",
+                "{} and {} are each placed by their own zero datum: merge them first, so the \
+                 later datum becomes a GPS fix",
                 label(a),
                 label(b)
             ));

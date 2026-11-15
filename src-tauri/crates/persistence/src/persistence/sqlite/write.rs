@@ -4,6 +4,7 @@ use rusqlite::params;
 
 use crate::models::Project;
 
+use super::datum_extras::{write_zero_datums, CREATE_DATUM_EXTRAS, RECREATE_DATUM_EXTRAS};
 use super::shot_credits::{
     write_credit_rows, write_recorded_legacy, CREATE_CREDIT_TABLES, RECREATE_CREDIT_TABLES,
 };
@@ -37,6 +38,9 @@ impl Database {
         // rewritten whole by every save, so recreated rather than emptied.
         tx.execute_batch(RECREATE_CREDIT_TABLES)?;
         tx.execute_batch(CREATE_CREDIT_TABLES)?;
+        // Zero datum fixes and accuracies: no bump either, see `datum_extras`.
+        tx.execute_batch(RECREATE_DATUM_EXTRAS)?;
+        tx.execute_batch(CREATE_DATUM_EXTRAS)?;
 
         // Clear existing data (delete children before parents for foreign key compliance)
         // NOTE: speleo_link is intentionally NOT cleared here (see save_speleo_link
@@ -232,26 +236,10 @@ impl Database {
             )?;
         }
 
-        // Save zero datums
-        for zd in &project.zero_datums {
-            let Some(sr) = project.resolve_key(&zd.station_ref) else {
-                tracing::warn!(
-                    purpose = "skip dangling zero datum on save",
-                    "Dropping a zero datum whose station no longer resolves"
-                );
-                continue;
-            };
-            tx.execute(
-                "INSERT INTO zero_datums (section_id, station_index, latitude, longitude, depth_reference) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![
-                    sr.section_id,
-                    sr.station_index,
-                    zd.gps.latitude,
-                    zd.gps.longitude,
-                    zd.gps.depth_reference
-                ],
-            )?;
-        }
+        // Save zero datums: placement datums to `zero_datums`, GPS fixes and
+        // accuracies to `zero_datum_extras` (`datum_extras`). After the shots,
+        // whose written uuids the extras record.
+        write_zero_datums(&tx, project)?;
 
         // Save section offsets
         for (section_id, (offset_x, offset_y)) in &project.section_offsets {

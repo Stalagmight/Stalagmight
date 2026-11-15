@@ -666,6 +666,85 @@ fn the_frame_datum_anchors_its_component_even_when_it_is_not_the_lowest() {
         .all(|p| p.anchor == Some(frame)));
 }
 
+/// `full_project` plus a separate Loose section whose placement datum (its
+/// first in list order) is at Loose 2, followed by a GPS fix at Loose 0: a
+/// LOWER station than its placement datum (#741).
+fn project_with_a_fix() -> (Project, u32) {
+    let mut project = full_project();
+    let loose = project.add_section(descending("Loose", 1.0, 2)).id;
+    project.ensure_shot_uuids();
+    let datum = |project: &Project, index, lat| stalagmight_models::ZeroDatum {
+        station_ref: project.key_for_ref(StationRef::new(loose, index)).unwrap(),
+        gps: GpsCoordinates::new(lat, -87.4, 0.0).unwrap(),
+        accuracy_m: Some(3.0),
+    };
+    let placement = datum(&project, 2, 20.6);
+    let fix = datum(&project, 0, 20.7);
+    project.zero_datums.extend([placement, fix]);
+    (project, loose)
+}
+
+/// A GPS fix never anchors its component, even when it is the component's
+/// lowest datum station: the placement datum (first in list order) does.
+#[test]
+fn a_gps_fix_never_anchors_its_component() {
+    let (project, loose) = project_with_a_fix();
+    let dir = TempDir::new().unwrap();
+    let path = save(&dir, &project);
+
+    let survey = read_file_with(&path, &ReadOptions::default().with_stations(true)).unwrap();
+
+    let at = |section_id, index| StationId { section_id, index };
+    let main = survey.sections[0].id;
+    assert_eq!(survey.frame_datum, Some(at(main, 0)));
+    assert_eq!(
+        survey
+            .zero_datums
+            .iter()
+            .map(|d| d.station)
+            .collect::<Vec<_>>(),
+        vec![at(main, 0), at(loose, 0), at(loose, 2)],
+        "every datum is listed, the fix included"
+    );
+    for p in survey.stations.unwrap() {
+        let expected = if p.station.section_id == loose {
+            at(loose, 2)
+        } else {
+            at(main, 0)
+        };
+        assert_eq!(p.anchor, Some(expected), "{:?}", p.station);
+    }
+}
+
+/// `zero_datum_extras` rows are counted before the load builds them, like
+/// every other capped table: a hostile upload could fill it with rows that name
+/// no station.
+#[test]
+fn zero_datum_extras_are_counted_against_their_own_cap() {
+    let dir = TempDir::new().unwrap();
+    let path = save(&dir, &project_with_a_fix().0);
+    let options = ReadOptions::default().count_limits(CountLimits::default().zero_datum_extras(2));
+
+    let err = read_file_with(&path, &options).unwrap_err();
+
+    assert!(
+        matches!(
+            err,
+            ReadError::TooComplex {
+                what: Limit::ZeroDatumExtras,
+                count: 3,
+                max: 2
+            }
+        ),
+        "{err}"
+    );
+    assert!(read_file_with(
+        &path,
+        &ReadOptions::default().count_limits(CountLimits::default().zero_datum_extras(3))
+    )
+    .is_ok());
+}
+
 #[test]
 #[expect(clippy::panic, reason = "the panic is the input under test")]
 fn a_panic_during_the_read_becomes_an_internal_error() {

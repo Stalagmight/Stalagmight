@@ -4,7 +4,7 @@ use crate::core::CommentHolder;
 use crate::core::{
     Command, CommandResult, IntegrityCheckResult, IntegrityRepairResult, ReversedSection, UndoData,
 };
-use crate::models::{Project, SectionData, SectionId, StationKey, ViolationSeverity};
+use crate::models::{DatumLayout, Project, SectionData, SectionId, ViolationSeverity};
 #[cfg(test)]
 use crate::models::{ShotData, ShotId, ShotUpdates};
 
@@ -267,20 +267,32 @@ impl AppState {
         }
     }
 
-    /// The open project's frame-defining datum station, or `None` with no project
-    /// and none with no resolvable datum. Read BEFORE a command runs; handed back
-    /// to [`Self::renormalize_frame_if_changed`] after it.
-    pub(super) fn frame_datum_key(&self) -> Option<StationKey> {
+    /// The open project's datums and their roles (an empty layout with no
+    /// project). Read BEFORE a command runs; handed back to
+    /// [`Self::settle_datum_layout`] after it.
+    pub(super) fn datum_layout(&self) -> DatumLayout {
         let guard = match self.project.lock() {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
         };
-        guard.as_ref().and_then(Project::frame_datum_key)
+        guard
+            .as_ref()
+            .map(Project::datum_layout)
+            .unwrap_or_default()
     }
 
-    /// If the command that just ran changed WHICH station defines the
-    /// georeference frame, translate the survey onto the new origin
+    /// Settle the datums after the command that just ran
+    /// ([`Project::settle_datum_layout`]): a datum that has just become its
+    /// piece's placement datum (a GPS fix promoted by a remove, an unmerge or a
+    /// split, #741) places that piece on its GPS against the frame in effect
+    /// before the command; then, if the command changed WHICH station defines
+    /// the georeference frame, the survey is translated onto the new origin
     /// ([`Project::renormalize_frame`], #469 item 1).
+    ///
+    /// Run once per command. `execute_batch` settles inside its own snapshot
+    /// pair, so `execute()` skips its epilogue call for a `Batch`: a second
+    /// call with the same `before` would place a promoted datum against a
+    /// frame that is no longer the origin.
     ///
     /// Derived, not hooked. At least six routes can promote a different datum to
     /// first - `remove_zero_datum`, `cleanup_section_references` on a
@@ -358,7 +370,7 @@ impl AppState {
     /// is laid out by its own sources' datums (#682), not by the open project's
     /// frame, so a fire here would translate one onto the other. Pinned by
     /// `merge_projects_does_not_renormalise_the_open_project`.
-    pub(super) fn renormalize_frame_if_changed(&self, before: Option<StationKey>) {
+    pub(super) fn settle_datum_layout(&self, before: &DatumLayout) {
         let mut guard = match self.project.lock() {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
@@ -366,7 +378,7 @@ impl AppState {
         let Some(project) = guard.as_mut() else {
             return;
         };
-        project.renormalize_frame_if_changed(before);
+        project.settle_datum_layout(before);
     }
 
     /// True iff the open project currently holds a Critical integrity violation.
@@ -515,7 +527,6 @@ impl AppState {
         // all reversible by restoring this snapshot. (capture locks the project
         // internally, so take it with no guard held.)
         let before_snapshot = self.capture_project_snapshot().ok();
-        let demoted;
         {
             let mut guard = match self.project.lock() {
                 Ok(g) => g,
@@ -540,7 +551,7 @@ impl AppState {
             // them). The check is here because the alternative is asserting that no
             // future repair step can promote a datum - which is exactly the kind of
             // claim the derive-don't-hook rule exists to avoid having to make.
-            let frame_before = project.frame_datum_key();
+            let datums_before = project.datum_layout();
             // Drop dangling refs/orphans and re-mint duplicate shot UUIDs.
             let repaired = project.repair_structural_integrity();
             // A cross-section repeat is healed by renaming, exactly as a load
@@ -553,23 +564,10 @@ impl AppState {
                 self.load_renamed_shots
                     .store(true, std::sync::atomic::Ordering::Relaxed);
             }
-            // Demote any merge that bridges two independently datum-anchored
-            // groups back to a loop closure. It must run BEFORE the conversion
-            // and the re-solve: it is the one repair `resolve_offsets` cannot do
-            // (an over-constrained merge can never be satisfied, only removed),
-            // and undoing the promotion first means the conversion below sees the
-            // healed topology. Explicit-repair only - never on load.
-            demoted = project.demote_double_anchoring_merges();
-            // Turn any sole-bridge closure into a merge (a closure is only a
-            // loop), then re-derive offsets. Repair is an explicit "fix my
-            // project" action, so use the zero-trust re-solve that never honors a
-            // persisted offset. The closure just demoted is NOT re-promoted here:
-            // the converter's own double-anchor guard sees the same two anchored
-            // halves and leaves it alone.
             project.convert_orphan_closures_to_merges();
             // Same order as execute()'s epilogue: renormalise onto the new frame
             // before the solve that lands on it.
-            project.renormalize_frame_if_changed(frame_before);
+            project.settle_datum_layout(&datums_before);
             project.resolve_offsets();
             // Repair does not go through `reconcile_geometry`, so it carries the
             // closure re-measure itself, last and off the geometry the re-solve
@@ -605,12 +603,7 @@ impl AppState {
             }
         }
         IntegrityRepairResult {
-            // Demotions are already inside the before→after delta: each demoted
-            // merge was, by construction, a counted `merge_misaligned` violation
-            // that the demotion clears. The floor only guarantees that an explicit
-            // repair action can never be reported to the user as "0 fixed" if the
-            // rest of the violation set churns in the same pass.
-            fixed: before.saturating_sub(after).max(demoted) as u32,
+            fixed: before.saturating_sub(after) as u32,
             remaining: after as u32,
             changed,
         }
@@ -689,8 +682,9 @@ impl AppState {
         // The station that currently defines the georeference frame, read before
         // dispatch so the epilogue can tell whether this command changed it
         // (#469, item 1). Cheap: a walk of `zero_datums` (a handful) with a
-        // `resolve_key` each.
-        let frame_before = self.frame_datum_key();
+        // `resolve_key` each. The roles come with it, so the epilogue can also
+        // tell which datums became placement datums (#741).
+        let datums_before = self.datum_layout();
 
         // Snapshot before a ref-removing/renumbering command so a result that
         // introduces dangling references can be rejected and rolled back -
@@ -795,7 +789,8 @@ impl AppState {
             Command::SetZeroDatum {
                 station_ref,
                 coordinates,
-            } => self.set_zero_datum(*station_ref, *coordinates),
+                accuracy_m,
+            } => self.set_zero_datum(*station_ref, *coordinates, *accuracy_m),
             Command::RemoveZeroDatum { station_ref } => self.remove_zero_datum(*station_ref),
             Command::SetStationComment {
                 station_ref,
@@ -879,9 +874,12 @@ impl AppState {
         // `affects_geometry` exactly as the reconcile below is: that classification
         // is what excludes the lifecycle commands, and OpenProject in particular,
         // where "the frame station changed" means a DIFFERENT PROJECT is open and
-        // renormalising would translate a file the user just loaded.
-        if result.success && cmd.affects_geometry() {
-            self.renormalize_frame_if_changed(frame_before);
+        // renormalising would translate a file the user just loaded. The same
+        // call first places any piece whose GPS fix this command promoted to
+        // placement (#741). A batch settles inside `execute_batch`, so that its
+        // snapshot pair holds the result; settling twice is not idempotent.
+        if result.success && cmd.affects_geometry() && !matches!(cmd, Command::Batch { .. }) {
+            self.settle_datum_layout(&datums_before);
         }
 
         // Treat section offsets as derived: after any structural command,
@@ -1122,7 +1120,7 @@ impl AppState {
         // FUTURE shape - a promotion by some later member of an allowlist that is
         // the kind of thing that grows. This is the only placement that stays
         // correct when it does.
-        let frame_before = self.frame_datum_key();
+        let datums_before = self.datum_layout();
 
         // Capture pre-batch snapshot for rollback on partial failure and undo
         let before_snapshot = match self.capture_project_snapshot() {
@@ -1181,7 +1179,7 @@ impl AppState {
         if commands.iter().any(Command::affects_geometry) {
             // Same order as `execute()`'s epilogue: renormalise onto the new frame
             // first, then reconcile the geometry that lands on it (#469, item 1).
-            self.renormalize_frame_if_changed(frame_before);
+            self.settle_datum_layout(&datums_before);
             self.reconcile_geometry();
         }
 

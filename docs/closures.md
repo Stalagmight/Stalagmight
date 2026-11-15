@@ -19,8 +19,12 @@ own vocabulary; only the two UI labels were renamed.)
   `toolbar_only` / `off` the two pills are label-only. The mode is persisted per the display
   settings ("remember last used"); default is the Raw Data View. (The stored enum values stay
   `measured` / `closureAdjusted`.) The adjusted option is disabled when
-  the project has no closures eligible for the solve (`Batch` / `LeastSquaresWeighted`); `Move`
-  closures are already coincident, so a project with only those shows the option disabled.
+  the project has neither a closure eligible for the solve (`Batch` / `LeastSquaresWeighted`)
+  nor a GPS fix (a later zero datum in an already placed piece, #741, which the solve pulls the
+  survey toward); `Move` closures are already coincident, so a project with only those shows
+  the option disabled. One helper decides this everywhere - the Display option, the auto-revert
+  to the Raw Data View, and whether the adjusted geometry is fetched at all:
+  `hasAdjustmentInputs` (`src/utils/closures.ts`).
 - Closure-adjusted coordinates are derived by running the weighted least-squares solve on a
   **throwaway clone** of the project (`Project::compute_adjusted_station_coordinates`) and
   returning only the resulting coordinates - the live project's shots/offsets are untouched.
@@ -110,11 +114,13 @@ gap no cascade, realign or Repair will close.
 Two rules, both in `models/project/offsets.rs`:
 
 - **`plan_merge_promotion`** decides whether the promotion may happen at all, and
-  which side moves. The one refusal is over-anchoring - an edge fusing two
-  independently zero-datum-anchored groups puts two GPS anchors in one rigid
-  component. A refused closure STAYS a closure (re-anchored, if the deletion moved
-  its endpoint), which is legitimate between two anchored groups and is what the
-  over-anchoring detector reports. **Distance is never a refusal**: the loader
+  which side moves. The one refusal is an edge fusing two groups that are each
+  placed by their own zero datum: promoting it would translate a GPS-placed group by
+  the closure's misclosure. A refused closure STAYS a closure (re-anchored, if the
+  deletion moved its endpoint), which is legitimate between two placed groups. An
+  explicit user merge of two placed groups is allowed; the group whose placement
+  datum is later in the list moves and that datum becomes a GPS fix (#741).
+  **Distance is never a refusal**: the loader
   converts unconditionally, so declining on geometry would leave memory and disk
   disagreeing about what the relationship is.
 - **`settle_minted_merges`** translates the movable side's whole rigid group onto
@@ -181,7 +187,8 @@ The adjustment path uses `shortest_path_shots_merges`:
 - Co-located groups are based on merges + loop closures (current behavior treats all closures as co-locating).
 - When building targets, steps that stay inside the same co-located group are skipped.
 
-Key behaviors:
+Key behaviors (a "zero datum" here is a PLACEMENT datum; GPS fixes, #741, are ignored by
+this path and never anchor it):
 - If one endpoint’s co-located group contains a zero datum, that side is treated as the anchor and the path is oriented from anchored -> unanchored.
 - If a zero-datum station lies **on** the loop path (via merges) **and is not an endpoint**,
   it becomes the anchor and the correction is split across both legs (anchor -> A, anchor -> B).
@@ -210,16 +217,21 @@ Common error conditions:
 
 The Closures Computed View solves with **only** `LeastSquaresWeighted`. It runs
 non-destructively on a throwaway clone (`Project::compute_adjusted_station_coordinates`),
-once per connected component that has eligible closures, anchored on a zero datum when present
-and otherwise on a deterministic default anchor (the lexicographically smallest
+once per connected component that has eligible closures or a GPS fix, anchored on a zero datum
+when present and otherwise on a deterministic default anchor (the lexicographically smallest
 `(section_id, station_index)` station in the component, via `default_anchor_for_component`).
 Eligible closures are `Batch` + `LeastSquaresWeighted` (`Move` closures are already coincident).
 
 Algorithm overview (unchanged math; the only change is *where* it writes - a clone, not the
 live project):
 - Build constraint groups where stations connected via merges **or closures** are in the same group.
-- If a group contains a zero datum, it is fixed; multiple zero datums in a single group is an error.
-- If no zero datum exists in the component, the anchor station's group is fixed.
+- If a group contains a **placement** datum, it is fixed at its raw position. Two placement
+  datums in one group (only possible when a closure ties the two datum stations themselves) is
+  an error, and the component falls back to raw geometry.
+- **GPS fixes** (#741; a later datum in an already placed merge component, see
+  `project/datum_roles.rs`) enter as observations, not as fixed groups. See "GPS fixes" below.
+- If neither a placement datum nor a hard fix exists in the component, the anchor station's
+  group is fixed.
 - For each shot, build weighted constraints in X/Y using section quality and base sigmas from config:
   - `base_sigma_length_m`
   - `base_sigma_azimuth_deg`
@@ -228,7 +240,44 @@ live project):
   Conjugate Gradient solver (see [performance.md](performance.md) for algorithm details).
 - Update the clone's shot vectors from solved group coordinates and apply section-level
   translations to keep merged stations aligned, then compute coordinates from the clone.
-- Zero datum positions are verified to remain fixed; any movement is an error.
+- Placement datum positions are verified to remain fixed; any movement is an error. A GPS fix
+  is expected to move.
+
+### GPS fixes
+
+A GPS fix pulls its station toward `gps_to_local(fix.gps, frame.gps)`, the GPS position in the
+frame's local metres. It is the observation `p = gps` on each horizontal axis with weight
+`1 / accuracy^2` (`ZeroDatum::effective_accuracy_m`, read as a per-axis 1-sigma; the default is
+0, a hard fix, below):
+one diagonal term and one right-hand-side term on its group's unknown. Shots use the same units,
+so the two compare directly. A shot's per-axis variance is
+`(sin(az) * sigma_len)^2 + (len * cos(az) * sigma_az)^2` across x (cos and sin swapped for y),
+with `sigma_len = base_sigma_length_m * quality` and `sigma_az = base_sigma_azimuth_deg * quality`,
+and variances add along a traverse.
+
+What a soft fix means at the default config (0.05 m, 1 deg), taking an accuracy of 5 m as the
+example: a level 500 m traverse of 10 m shots is trusted to about 0.35 m along its length and
+1.23 m across it, far tighter than a 5 m GPS. A fix 40 m off across that traverse moves its
+station only about 2.3 m toward the GPS; the rest of the gap stays visible. That is why the
+default is a hard fix: only a hard fix, or larger base sigmas, puts the station on its GPS.
+
+- **Accuracy 0 is a hard fix** (anything under 1 mm counts), and it is the default: its group is
+  fixed AT the GPS position, the way a placement datum fixes its group at its raw one. A
+  non-finite or negative stored accuracy is not a measurement and falls back to the default, so
+  it pins the fix too (read as a weight, an infinite accuracy would make the fix pull nothing).
+  A stored accuracy outside 0 to 1000 m reads as the default on load as well.
+- **A fixed group ignores a fix.** A fix in the placement datum's own group (merged onto it) is
+  the same point and cannot hold both positions; the placement wins. Between two hard fixes in
+  one group, the first in list order wins.
+- **Fixes count as pinned for the spur prune.** A fix at the end of a passage is a second
+  observation of it, so its shots take the solved positions instead of being skipped as a spur.
+- **Horizontal only.** Depths never move, and the fix's elevation (`depth_reference`) is never
+  read.
+- **No closure needed.** `adjust_least_squares` accepts an empty closure list, so a component
+  whose only reason to adjust is a GPS fix is solved the same way.
+
+Tests: `project/lsq_fix_tests.rs` (two entrances joined by a 500 m traverse, the GPS 40 m off,
+checked against the closed-form series-spring answer).
 
 ## Co-location and Move Tools
 

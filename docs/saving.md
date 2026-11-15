@@ -114,6 +114,37 @@ save cannot then drop the rows for good (#717). All three
 tables are project data and ride in SpeleoDB pushes. See
 `persistence/sqlite/shot_credits.rs`.
 
+## Zero datum fixes
+
+A merge-connected survey can hold several zero datums (#741). Their roles are
+derived from list order, never stored: the first datum of a component places
+it, every later one is a GPS fix. `zero_datums` keeps exactly what an older
+build expects, the placement datums (at most one per merge component) in list
+order, so SpeleoDB's reader (exactly v18, explicit column lists) and older
+builds see nothing new. GPS fixes and accuracies live in a side table with no
+schema bump, `zero_datum_extras (position, section_id, station_index,
+shot_uuid, in_zero_datums, latitude, longitude, depth_reference, accuracy_m)`:
+one row per saved datum, placement and fix alike, keyed by its place in the
+list. `in_zero_datums` says whether its GPS is the `zero_datums` row at that
+station (a placement datum) or the row's own (a fix); `accuracy_m` is NULL for
+the default; `shot_uuid` is the uuid of the shot ending at the station (NULL
+for station 0). The rows are written only when the project has a fix or a
+stored accuracy, so a file without them reads from `zero_datums` alone, which
+is the migration for every older file.
+
+An older build drops the table on its next save (it writes a fresh file), so it
+loses the fixes and accuracies and keeps the placements. A save into the live
+connection (the SpeleoDB rename path), a repair or another tool can instead
+rewrite `zero_datums` and the shots in place and leave the table beside them.
+So the table is used only while its placement rows name exactly the
+`zero_datums` stations; otherwise it is ignored as a whole, with a warning, and
+the project loads as that older build saw it. A row whose `shot_uuid` no longer
+matches its station is skipped. Corrupt rows are skipped and counted, an
+unusable accuracy reads as the default, and a table of another shape or with
+more rows than the file has stations is ignored: never a failed open. SQLite
+failing for a reason of its own still fails the open, as for the credit
+tables. See `persistence/sqlite/datum_extras.rs`.
+
 ## Save Pipeline
 
 ### Backend (`save_project` in `project_io.rs`)

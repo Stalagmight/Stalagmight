@@ -384,6 +384,11 @@ pub enum UndoData {
         station_ref: StationRef,
         /// Previous GPS coordinates, None if there was no previous datum
         previous_gps: Option<GpsCoordinates>,
+        /// Previous accuracy of that datum (#741). `None` is the default
+        /// accuracy, and also what a legacy persisted entry carries (written
+        /// before accuracy existed, so the datum had the default).
+        #[serde(default)]
+        previous_accuracy_m: Option<f64>,
         /// Where the datum sat in `Project::zero_datums` when it was captured,
         /// so undo of `RemoveZeroDatum` re-inserts it there instead of
         /// appending (#413, finding 17 - finding 4's defect one collection
@@ -1394,10 +1399,12 @@ mod tests {
             Command::SetZeroDatum {
                 station_ref: StationRef::new(1, 0),
                 coordinates: gps,
+                accuracy_m: None,
             },
             UndoData::ZeroDatumInfo {
                 station_ref: StationRef::new(1, 0),
                 previous_gps: Some(GpsCoordinates::new(40.0, -70.0, 50.0).unwrap()),
+                previous_accuracy_m: None,
                 position: Some(0),
                 previous_offsets: offsets,
             },
@@ -2234,10 +2241,12 @@ mod tests {
                 command: Command::SetZeroDatum {
                     station_ref: StationRef::new(1, 0),
                     coordinates: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+                    accuracy_m: None,
                 },
                 undo_data: UndoData::ZeroDatumInfo {
                     station_ref: StationRef::new(1, 0),
                     previous_gps: None,
+                    previous_accuracy_m: None,
                     position: None,
                     previous_offsets: HashMap::new(),
                 },

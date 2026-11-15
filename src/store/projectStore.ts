@@ -16,7 +16,7 @@ import {
   isReverifyDivergedError,
   READ_ONLY_EDIT_NOTICE,
 } from '../utils/editErrors';
-import { hasEligibleClosures } from '../utils/closures';
+import { hasAdjustmentInputs } from '../utils/closures';
 import { afterSurveyEdit, applyEditAftermath, beforeSurveyEdit, type SurveyEdit } from '../utils/reverseAftermath';
 import { useUIStore } from './uiStore';
 import { surfaceSaveFailure } from '../utils/saveFeedback';
@@ -440,7 +440,13 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   removeLoopClosure: (closureId: bigint) => Promise<CommandResult>;
   updateStationComment: (stationRef: StationRef, comment: string | null) => Promise<CommandResult>;
   moveComment: (source: CommentHolder, target: CommentHolder, swap: boolean) => Promise<CommandResult>;
-  setZeroDatum: (stationRef: StationRef, coordinates: GpsCoordinates, options?: { fitToBounds?: boolean }) => Promise<CommandResult>;
+  /** `accuracyM`: the GPS accuracy in metres (#741); 0 is a hard pin, and
+   *  omitted means the backend default (0). */
+  setZeroDatum: (
+    stationRef: StationRef,
+    coordinates: GpsCoordinates,
+    options?: { fitToBounds?: boolean; accuracyM?: number }
+  ) => Promise<CommandResult>;
   removeZeroDatum: (stationRef: StationRef) => Promise<CommandResult>;
   moveSection: (sectionId: SectionId, offset: Coordinates) => Promise<CommandResult>;
   moveSegment: (sectionId: SectionId, offset: Coordinates) => Promise<CommandResult>;
@@ -2000,9 +2006,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     // No-op (no project, or a fetch already in flight): not a failure.
     if (!project || adjustedLoading) return true;
 
-    // No eligible closures → the adjusted view is identical to measured; reuse
-    // the measured set directly and skip the backend round-trip.
-    if (!hasEligibleClosures(project.loop_closures)) {
+    // No eligible closure and no GPS fix → the adjusted view is identical to
+    // measured; reuse the measured set directly and skip the backend round-trip.
+    if (!hasAdjustmentInputs(project)) {
       set({ stationsAdjusted: stations, surveyDataAdjusted: surveyData });
       return true;
     }
@@ -2053,12 +2059,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     );
   },
 
-  setZeroDatum: async (stationRef: StationRef, coordinates: GpsCoordinates, options?: { fitToBounds?: boolean }) => {
+  setZeroDatum: async (stationRef, coordinates, options) => {
     // Detect first zero datum before the IPC call changes state
     const isFirstDatum = (get().project?.zero_datums.length ?? 0) === 0;
+    const accuracyM = options?.accuracyM;
     const result = await executeCommand(
       'set_zero_datum',
-      { stationRef, coordinates },
+      accuracyM === undefined ? { stationRef, coordinates } : { stationRef, coordinates, accuracyM },
       { purpose: 'anchor survey to GPS coordinates', fields: { stationRef } }
     );
     if (result.success && options?.fitToBounds !== false) {

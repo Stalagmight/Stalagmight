@@ -486,7 +486,8 @@ impl AppState {
                     // Collect anchor station indices on this section.
                     // An anchor is any station whose absolute position is
                     // constrained by an immovable external relationship:
-                    //   - zero datums on this section (always anchors)
+                    //   - placement zero datums on this section (always
+                    //     anchors; a GPS fix pins nothing in raw geometry, #741)
                     //   - merges / aligned closures where the PARTNER can
                     //     independently reach a datum (without going through
                     //     this section).  A merge to a free-floating section
@@ -494,12 +495,10 @@ impl AppState {
                     //     follow when this section's geometry changes.
                     let mut anchor_indices: Vec<u32> = Vec::new();
 
-                    // Zero datums
-                    for zd in &project.zero_datums {
-                        if zd.station_ref.section_id == sid {
-                            if let Some(sr) = project.resolve_key(&zd.station_ref) {
-                                anchor_indices.push(sr.station_index);
-                            }
+                    // Placement zero datums
+                    for sr in project.placement_datum_refs() {
+                        if sr.section_id == sid {
+                            anchor_indices.push(sr.station_index);
                         }
                     }
                     // Station merges (only datum-backed partners)
@@ -579,11 +578,12 @@ impl AppState {
                     if blocked_sections.contains(&sid) {
                         continue;
                     }
+                    // The section's PLACEMENT datum: holding a GPS fix still
+                    // would drag its whole placed group by the edit (#741).
                     let datum_sr = project
-                        .zero_datums
-                        .iter()
-                        .find(|zd| zd.station_ref.section_id == sid)
-                        .and_then(|zd| project.resolve_key(&zd.station_ref));
+                        .placement_datum_refs()
+                        .into_iter()
+                        .find(|sr| sr.section_id == sid);
                     if let Some(sr) = datum_sr {
                         if let Some(coords) = project.compute_station_raw_coords(sr) {
                             tracing::debug!(
@@ -1001,7 +1001,7 @@ impl AppState {
                     station_index,
                 } => {
                     let station_ref = StationRef::new(section_id, *station_index);
-                    let result = self.set_zero_datum(station_ref, *coordinates);
+                    let result = self.set_zero_datum(station_ref, *coordinates, None);
                     if !result.success {
                         self.rollback_project(&before_snapshot);
                         return CommandResult::failure(format!(
@@ -1035,6 +1035,7 @@ impl AppState {
                     batch_commands.push(Command::SetZeroDatum {
                         station_ref,
                         coordinates: *coordinates,
+                        accuracy_m: None,
                     });
                 }
 

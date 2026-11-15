@@ -141,7 +141,8 @@ impl AppState {
             Command::SetZeroDatum {
                 station_ref,
                 coordinates,
-            } => self.set_zero_datum(*station_ref, *coordinates),
+                accuracy_m,
+            } => self.set_zero_datum(*station_ref, *coordinates, *accuracy_m),
             Command::RemoveZeroDatum { station_ref } => self.remove_zero_datum(*station_ref),
             Command::MoveSection { section_id, offset } => self.move_section(*section_id, *offset),
             Command::MoveSegment { section_id, offset } => self.move_segment(*section_id, *offset),

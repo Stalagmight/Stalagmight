@@ -79,6 +79,16 @@ impl Project {
         // depth_in, depth_out, pitch_in, pitch_out are intentionally left unchanged
     }
 
+    /// Does `component` (a set of sections) hold a GPS-fix zero datum? Such a
+    /// component is solved in the Closures Computed View even without an
+    /// eligible closure, since the fix itself pulls the survey (#741).
+    pub(crate) fn component_has_gps_fix(&self, component: &HashSet<SectionId>) -> bool {
+        self.gps_fix_datums().iter().any(|zd| {
+            self.resolve_key(&zd.station_ref)
+                .is_some_and(|sr| component.contains(&sr.section_id))
+        })
+    }
+
     pub fn adjust_loop_closures(
         &mut self,
         anchor_station: StationRef,
@@ -90,12 +100,14 @@ impl Project {
         }
 
         let component = self.get_connected_section_ids(anchor_station.section_id);
+        // Only PLACEMENT datums must stay where they are: a GPS fix (#741) is
+        // exactly what the solve pulls the survey toward, so its station moves.
         let zero_datum_set: HashSet<StationRef> = self
-            .zero_datums
-            .iter()
-            .filter(|zd| component.contains(&zd.station_ref.section_id))
-            .filter_map(|zd| self.resolve_key(&zd.station_ref))
+            .placement_datum_refs()
+            .into_iter()
+            .filter(|sr| component.contains(&sr.section_id))
             .collect();
+        let has_gps_fix = self.component_has_gps_fix(&component);
 
         debug!(
             anchor_station = ?anchor_station,
@@ -125,7 +137,9 @@ impl Project {
             .cloned()
             .collect();
 
-        if closures.is_empty() {
+        // A GPS fix is an observation of its own, so a component holding one is
+        // solved even without an eligible closure (#741).
+        if closures.is_empty() && !has_gps_fix {
             warn!(
                 anchor_station = ?anchor_station,
                 method = ?method,
@@ -144,7 +158,7 @@ impl Project {
             }
         }
 
-        // Verify zero datums remain fixed
+        // Verify placement zero datums remain fixed
         for (zd, before) in &zero_datum_coords {
             let after = self
                 .compute_station_raw_coords(*zd)
@@ -208,8 +222,10 @@ impl Project {
         station_ref: StationRef,
         delta: Coordinates,
     ) -> Result<(), String> {
+        // Placement datums only: the distribution ignores GPS fixes (#741), so
+        // moving a fix's station is expected and not an alarm.
         if self
-            .zero_datums
+            .placement_datums()
             .iter()
             .any(|zd| self.key_is_ref(&zd.station_ref, station_ref))
             && Self::coords_norm(delta) > 1e-9
@@ -346,11 +362,11 @@ impl Project {
         }
         let root_for =
             |station: StationRef| station_to_group.get(&station).copied().unwrap_or(station);
-        let mut zero_datum_set: HashSet<StationRef> = self
-            .zero_datums
-            .iter()
-            .filter_map(|zd| self.resolve_key(&zd.station_ref))
-            .collect();
+        // Only PLACEMENT datums anchor the distribution (#741, settled): a GPS fix
+        // never moves raw geometry, so it is neither an anchor here nor a reason
+        // to refuse ("Multiple zero datum stations in closure path").
+        let mut zero_datum_set: HashSet<StationRef> =
+            self.placement_datum_refs().into_iter().collect();
         if let Some(extra) = extra_fixed {
             zero_datum_set.extend(extra.iter().copied());
         }

@@ -410,6 +410,7 @@ impl AppState {
                 UndoData::ZeroDatumInfo {
                     station_ref: *station_ref,
                     previous_gps: previous.map(|(_, zd)| zd.gps),
+                    previous_accuracy_m: previous.and_then(|(_, zd)| zd.accuracy_m),
                     position: previous.map(|(position, _)| position),
                     previous_offsets,
                 }

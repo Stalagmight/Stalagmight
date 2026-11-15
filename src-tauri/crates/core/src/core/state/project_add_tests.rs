@@ -121,6 +121,7 @@ fn source_alpha() -> Project {
     p.store_zero_datum_without_repositioning(
         StationRef::new(a0, 0),
         GpsCoordinates::new(20.5, -87.3, 0.0).unwrap(),
+        None,
     )
     .unwrap();
     p.loop_closures.push(closure(
@@ -168,6 +169,7 @@ fn source_bravo() -> Project {
     p.store_zero_datum_without_repositioning(
         StationRef::new(b0, 0),
         GpsCoordinates::new(20.6, -87.4, 1.5).unwrap(),
+        None,
     )
     .unwrap();
     p.loop_closures.push(closure(
@@ -349,6 +351,7 @@ fn open_target(dir: &Path, georeferenced: bool) -> (AppState, PathBuf) {
             .store_zero_datum_without_repositioning(
                 StationRef::new(t0, 0),
                 GpsCoordinates::new(TARGET_FRAME.0, TARGET_FRAME.1, 0.0).unwrap(),
+                None,
             )
             .unwrap();
     }
@@ -881,6 +884,7 @@ fn a_datum_less_add_overlapping_the_host_gets_a_placement_suggestion() {
     host.store_zero_datum_without_repositioning(
         StationRef::new(h0, 0),
         GpsCoordinates::new(TARGET_FRAME.0, TARGET_FRAME.1, 0.0).unwrap(),
+        None,
     )
     .unwrap();
     let host_path = save_to(temp.path(), "host.stalx", &host);
@@ -1231,22 +1235,25 @@ fn a_source_refused_after_the_append_is_rolled_back_exactly() {
     let before = canonical_snapshot(&state, false);
     let depth = undo_depth(&state);
 
-    let mut two_datums = source_bravo();
-    let b0 = two_datums.sections[0].id;
-    two_datums.zero_datums.push(ZeroDatum {
+    // A datum the copy cannot store: its accuracy is out of range. (A second
+    // datum in one section used to be the trigger; since #741 it is a GPS fix
+    // and copies fine.) In memory, because the accuracy is what makes it bad.
+    let mut bad_datum = source_bravo();
+    let b0 = bad_datum.sections[0].id;
+    bad_datum.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(b0, 2).into(),
         gps: GpsCoordinates::new(20.7, -87.5, 0.0).unwrap(),
-        accuracy_m: None,
+        accuracy_m: Some(-1.0),
     });
-    let two_datums = save_to(temp.path(), "two-datums.stalx", &two_datums);
-    let refused = add(&state, &two_datums);
+    let refused = {
+        let mut guard = state.project.lock().unwrap();
+        super::project_add::append_in_memory(guard.as_mut().unwrap(), bad_datum)
+    };
     assert!(
         refused
-            .error
-            .as_deref()
-            .is_some_and(|e| e.starts_with("Failed to copy zero datum from source project Bravo")),
-        "{:?}",
-        refused.error
+            .as_ref()
+            .is_err_and(|e| e.contains("Failed to copy zero datum from source project Bravo")),
+        "{refused:?}"
     );
     assert_same_project(&state, &before, false, "the append error rolled back");
     assert_eq!(undo_depth(&state), depth, "the refused add pushed nothing");
@@ -1391,18 +1398,19 @@ fn a_refused_add_spends_no_ids_and_keeps_the_modification_time() {
     }
     let before = allocators();
 
-    let mut two_datums = source_bravo();
-    let b0 = two_datums.sections[0].id;
-    two_datums.zero_datums.push(ZeroDatum {
+    // A datum the copy cannot store (accuracy out of range, #741).
+    let mut bad_datum = source_bravo();
+    let b0 = bad_datum.sections[0].id;
+    bad_datum.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(b0, 2).into(),
         gps: GpsCoordinates::new(20.7, -87.5, 0.0).unwrap(),
-        accuracy_m: None,
+        accuracy_m: Some(-1.0),
     });
-    let two_datums = save_to(temp.path(), "two-datums.stalx", &two_datums);
-    assert!(
-        !add(&state, &two_datums).success,
-        "the append error refuses"
-    );
+    let refused = {
+        let mut guard = state.project.lock().unwrap();
+        super::project_add::append_in_memory(guard.as_mut().unwrap(), bad_datum)
+    };
+    assert!(refused.is_err(), "the append error refuses");
     assert_eq!(allocators(), before, "the append error spent nothing");
 
     let mut infinite = Project::new("Infinite".to_string(), None);
@@ -1523,6 +1531,7 @@ fn georeferenced(name: &str, prefix: &str, latitude: f64) -> Project {
     p.store_zero_datum_without_repositioning(
         StationRef::new(id, 0),
         GpsCoordinates::new(latitude, -87.3, 0.0).unwrap(),
+        None,
     )
     .unwrap();
     p

@@ -1026,7 +1026,7 @@ fn a_section_through_the_join_stays_merged_as_a_crossing() {
 }
 
 #[test]
-fn zero_datums_on_both_sides_block() {
+fn placement_datums_on_both_sides_block() {
     // Co-located, each rigid group anchored.
     let (mut project, k, o) = pair(SectionEnd::End, SectionEnd::Start, false, 0.0);
     project
@@ -1039,7 +1039,8 @@ fn zero_datums_on_both_sides_block() {
     });
     assert!(blocked(&project, k, o).contains("zero datum"));
 
-    // Both join stations carry one.
+    // Both join stations carry one, but the join is merged: one merge
+    // component, so the second datum is a GPS fix (#741) and holds nothing.
     let (mut project, k, o) = pair(SectionEnd::End, SectionEnd::Start, true, 0.0);
     for station in [StationRef::new(k, 2), StationRef::new(o, 0)] {
         project.zero_datums.push(ZeroDatum {
@@ -1048,7 +1049,11 @@ fn zero_datums_on_both_sides_block() {
             accuracy_m: None,
         });
     }
-    assert!(blocked(&project, k, o).contains("zero datum"));
+    assert_eq!(
+        blocked(&project, k, o),
+        "",
+        "a GPS fix does not block a combine"
+    );
 }
 
 /// Join stations moved by different manual offsets: the joined station keeps

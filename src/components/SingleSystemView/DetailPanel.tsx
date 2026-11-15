@@ -199,10 +199,10 @@ type WarningFlow =
   | { kind: 'summary'; resolved: number; skipped: number; remaining: number };
 
 // Identity of a warning for queue stepping + live-set rehydration. Include the
-// datum index for over-anchoring warnings: two separate over-anchored components
-// can put their representative on the SAME shot (e.g. stations 0 and 1 both map to
-// shot 0), sharing sectionId/shotId/code but differing by datum - without this they
-// collapse and the resolve flow would act on the wrong datum (issue #57 / Codex).
+// datum index for datum warnings (`datum_gps_gap`, #741): two GPS fixes can map to
+// the SAME shot (e.g. stations 0 and 1 both map to shot 0), sharing
+// sectionId/shotId/code but differing by datum - without this they collapse and
+// the resolve flow would act on the wrong datum (issue #57 / Codex).
 function WarningsContent({ warnings, project, onWarningClick }: WarningsContentProps) {
   const { t } = useTranslation();
   const { unresolveWarning } = useProjectStore(

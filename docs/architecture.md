@@ -292,7 +292,16 @@ components included, so that datum's station lands on the origin
 (`Project::renormalize_frame`, issue #469). The add does it inside
 `Project::set_zero_datum` (the subsequent-datum placement reads that invariant, and
 the import loop and redo never reach an epilogue); every other promotion does it in
-the forward epilogue. It runs forward only:
+the forward epilogue. That epilogue (`Project::settle_datum_layout`, against a
+`DatumLayout` read before the command) first places any piece whose GPS fix the
+command promoted to placement datum (a remove, an unmerge, a delete that splits a
+merge component, #741): the piece is translated so the promoted datum sits at
+`gps_to_local(its gps, frame.gps)`, against the frame in effect before the
+command, exactly as `set_zero_datum` places a subsequent datum. Only then does it
+re-frame. Without the placement, a promoted fix would keep its piece off its GPS by
+the fix's gap, and re-framing onto it would carry every other piece off its GPS by
+the same gap. A `Batch` settles once, inside `execute_batch`'s snapshot pair. It
+runs forward only:
 `resolve_offsets`' cascade never re-derives a seed's offset, so a whole-project
 translation is a no-op for the load path, and every affected command's undo restores
 the recorded map rather than re-deriving a frame.

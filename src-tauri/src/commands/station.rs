@@ -1,7 +1,9 @@
 use tauri::State;
 
 use crate::core::{AppState, Command, CommandResult, CommentHolder};
-use crate::models::{ClosureStrategy, ConnectivityResult, Coordinates, GpsCoordinates, StationRef};
+use crate::models::{
+    ClosureStrategy, ConnectivityResult, Coordinates, GpsCoordinates, StationRef, ZeroDatumPreview,
+};
 
 /// Check merge connectivity between two stations (read-only, NOT a Command)
 #[tauri::command]
@@ -107,25 +109,52 @@ pub(crate) fn unmerge_station_pair_impl(
     })
 }
 
-/// Set zero datum for a station
+/// Set zero datum for a station. `accuracy_m` is the GPS horizontal accuracy
+/// in metres (JS sends `accuracyM`); omitted or `null` means the default. On a
+/// merge component that is already placed the datum is stored as a GPS fix and
+/// nothing moves (#741).
 #[tauri::command]
 pub fn set_zero_datum(
     state: State<AppState>,
     station_ref: StationRef,
     coordinates: GpsCoordinates,
+    accuracy_m: Option<f64>,
 ) -> CommandResult {
-    set_zero_datum_impl(state.inner(), station_ref, coordinates)
+    set_zero_datum_impl(state.inner(), station_ref, coordinates, accuracy_m)
 }
 
 pub(crate) fn set_zero_datum_impl(
     state: &AppState,
     station_ref: StationRef,
     coordinates: GpsCoordinates,
+    accuracy_m: Option<f64>,
 ) -> CommandResult {
     state.execute(Command::SetZeroDatum {
         station_ref,
         coordinates,
+        accuracy_m,
     })
+}
+
+/// What setting a zero datum with `coordinates` on `station_ref` would do, for
+/// the Edit Station dialog (read-only, NOT a Command): the role the datum would
+/// have, and for a GPS fix the gap to the surveyed position (#741). `None` when
+/// the station does not exist.
+#[tauri::command]
+pub fn preview_zero_datum(
+    state: State<AppState>,
+    station_ref: StationRef,
+    coordinates: GpsCoordinates,
+) -> Result<Option<ZeroDatumPreview>, String> {
+    preview_zero_datum_impl(state.inner(), station_ref, coordinates)
+}
+
+pub(crate) fn preview_zero_datum_impl(
+    state: &AppState,
+    station_ref: StationRef,
+    coordinates: GpsCoordinates,
+) -> Result<Option<ZeroDatumPreview>, String> {
+    state.preview_zero_datum(station_ref, coordinates)
 }
 
 /// Remove zero datum from a station

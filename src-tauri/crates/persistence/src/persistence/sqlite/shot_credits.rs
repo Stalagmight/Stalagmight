@@ -498,7 +498,7 @@ pub(super) fn is_schema_error(error: &rusqlite::Error) -> bool {
 }
 
 /// SQLite's extended result code behind `error`, if SQLite raised it.
-fn extended_code(error: &rusqlite::Error) -> Option<i32> {
+pub(super) fn extended_code(error: &rusqlite::Error) -> Option<i32> {
     match error {
         rusqlite::Error::SqliteFailure(failure, _)
         | rusqlite::Error::SqlInputError { error: failure, .. } => Some(failure.extended_code),

@@ -46,7 +46,10 @@ The approaches differ, but every one of these tools lets a cave carry more than 
    measurements: the extra datum does not move anything there, and the gap is shown instead.
 2. **The fix is weighted.** GPS usually comes from a smartwatch, followed by a direct shot to the
    line, so it is good to a few metres, not to centimetres. Each datum gets a horizontal accuracy,
-   default 5 m. An accuracy of 0 is a hard pin.
+   default 0, a hard pin: the computed survey goes exactly through the GPS. A soft
+   default was measured and rejected: with 5 m, a fix 40 m off over a 500 m traverse
+   moved the survey only about 2.4 m, because the solve trusts the survey to about
+   a metre over that distance. A user who wants a softer fix types an accuracy.
 3. **The UI keeps the name "Zero Datum".** When the cave already has one, the Edit Station
    dialog explains what this one will do instead of refusing.
 4. **Sanity warning.** Warn, without blocking, when the gap between the surveyed position and
@@ -67,6 +70,15 @@ The approaches differ, but every one of these tools lets a cave carry more than 
   feeds the Computed View solve and the gap check.
 - Roles are derived, never stored. Merging two placed pieces, splitting a piece by an unmerge
   or a delete, and undo all re-derive them, with no promote or demote bookkeeping.
+- **A promoted datum places its piece on its GPS** (project owner's decision). When a command
+  makes a datum the placement datum of its piece that was not one before (a fix promoted by
+  removing the placement datum, an unmerge, or a delete that splits the piece), the piece is
+  translated so that datum sits at `gps_to_local(datum.gps, frame.gps)`, exactly as
+  `set_zero_datum` places a subsequent datum. The arithmetic uses the frame in effect before the
+  command; when the command also changed the frame, the usual re-frame follows. Every command
+  epilogue does this through one call, `Project::settle_datum_layout`
+  (`crates/models/src/project/datum_placement.rs`), and the undo of every command that can
+  promote restores a whole-project snapshot.
 
 ### Persistence: older readers keep a safe view
 
@@ -117,10 +129,13 @@ The approaches differ, but every one of these tools lets a cave carry more than 
 - **Edit Station dialog.** When the station's piece is already placed, the checkbox stays "Set
   as Zero Datum". The dialog then says this datum will bend the computed survey to fit its GPS,
   and shows the gap and the warning (decision 4) as soon as GPS is entered.
-- **Accuracy field** in metres, default 5.
+- **Accuracy field** in metres, default 0 (goes exactly through the GPS).
 - **Map.** A GPS fix is drawn like a zero datum. Optionally, a thin line from the surveyed
   position to the GPS position, in Raw Data View only.
-- **Warnings tab.** One entry per GPS fix whose gap exceeds the threshold.
+- **Warnings tab.** One entry per GPS fix whose gap exceeds the threshold. It hangs off the shot
+  that arrives at the fix station (`datum_gps_gap`); a fix on a section's first station uses
+  shot 0 under its own code (`datum_gps_gap_start`), so fixes on stations 0 and 1 are ignored
+  independently. A fix on a section with no shots has no row (it is logged).
 
 ## Consumers to audit
 
@@ -152,10 +167,12 @@ check, export and Plan mode read the fixes.
   - Raw Data View is unchanged;
   - the gap is 40 m;
   - with a hard fix the Computed View puts the fix station on its GPS;
-  - with a 5 m accuracy it lands in between, closer to the GPS.
+  - with a 5 m accuracy it lands in between, at the closed-form position.
 - Merging two placed pieces succeeds, and the later datum becomes a fix. Undo restores both
   placements.
-- Unmerging restores the fix to a placement datum, and the detached piece stays where it was.
+- Unmerging restores the fix to a placement datum, and the detached piece moves onto its GPS.
+  Removing the frame datum of a piece that holds a fix puts the fix on the origin and every other
+  separately placed piece on its own GPS. Undo restores both.
 - Save and load round trip. An older-format file without the new table loads unchanged. The
   `zero_datums` rows written never hold two per component.
 - Sanity warning boundary: just under and just over 15 m + 2%.
@@ -170,7 +187,8 @@ them and implementation started:
 1. **Derived roles in one list.** Not a separate list of GPS fixes.
 2. **The destructive closure distribution strategies ignore fixes.** Only
    placement datums anchor them.
-3. **5 m default accuracy.** Depth never takes a GPS fix's elevation into
+3. **Default accuracy 0, a hard pin** (changed from 5 m after the solve was
+   measured; see decision 2). Depth never takes a GPS fix's elevation into
    account; the solve stays horizontal.
 
 ## Implementation tracks
@@ -185,8 +203,11 @@ and the wire fields. `component_datum_refs` returns placement datums only.
 | Model | guards, merge and unmerge, cascade, closure distribution, move tools, integrity, warnings, preview command | 1 |
 | Persistence | the new table, load and save | 1 |
 | Frontend | Edit Station dialog, accuracy field, gap, warnings tab, map | 1 |
-| Solve | weighted fixes in the Closures Computed View | 2 |
-| Entrances | Plan mode and Ariane export | 3 |
+| Solve | weighted fixes in the Closures Computed View | 1 |
+| Entrances | Plan mode and Ariane export | 2 |
+
+The solve was folded into PR 1: without it, PR 1 alone would pin a fix at its
+surveyed position in the Computed View.
 
 ## Related
 

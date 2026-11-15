@@ -166,24 +166,27 @@ impl AppState {
         &self,
         station_ref: StationRef,
         gps: GpsCoordinates,
+        accuracy_m: Option<f64>,
     ) -> CommandResult {
-        self.with_project_mut(|project| match project.set_zero_datum(station_ref, gps) {
-            Ok(_) => {
-                tracing::info!(
-                    ?station_ref,
-                    purpose = "anchor survey to GPS coordinates",
-                    "Zero datum set"
-                );
-                CommandResult::success()
-            }
-            Err(e) => {
-                tracing::warn!(
-                    ?station_ref,
-                    error = %e,
-                    purpose = "anchor survey to GPS coordinates",
-                    "Failed to set zero datum"
-                );
-                CommandResult::failure(e)
+        self.with_project_mut(|project| {
+            match project.set_zero_datum_with_accuracy(station_ref, gps, accuracy_m) {
+                Ok(_) => {
+                    tracing::info!(
+                        ?station_ref,
+                        purpose = "anchor survey to GPS coordinates",
+                        "Zero datum set"
+                    );
+                    CommandResult::success()
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        ?station_ref,
+                        error = %e,
+                        purpose = "anchor survey to GPS coordinates",
+                        "Failed to set zero datum"
+                    );
+                    CommandResult::failure(e)
+                }
             }
         })
     }

@@ -62,6 +62,8 @@ impl StationComponents {
             }
             components.union_merge(merge.station_a.section_id, merge.station_b.section_id);
         }
+        // Any resolvable datum marks its merge component placed: the first one in
+        // list order is that component's placement datum (#741).
         for datum in &project.zero_datums {
             if let Some(station) = project.resolve_key(&datum.station_ref) {
                 if let Some(&i) = components.merge_slot.get(&station.section_id) {
@@ -168,10 +170,10 @@ type ResidualGap = ((SectionId, u32), (SectionId, u32), u64);
 ///
 /// * `structure` hashes every input to solvability that is NOT geometry - the
 ///   section set, the merge edges, the closure edges (id, endpoints, aligned
-///   flag, strategy) and the zero-datum anchors. Dropping one of two datums from
-///   an over-anchored component makes the gap healable without moving a single
-///   station, so a fingerprint blind to structure would keep skipping the heal
-///   that has just become possible;
+///   flag, strategy) and the zero-datum list in order (the order decides which
+///   datum places each group, #741). A structural edit can make a gap healable
+///   without moving a single station, so a fingerprint blind to structure
+///   would keep skipping the heal that has just become possible;
 /// * `residual` is the beyond-invariant merge set itself, compared by identity:
 ///   a pair that appears, a pair that goes, or a gap that differs by one ULP all
 ///   miss. That is what stands in for a geometry hook - not the stronger claim
@@ -320,13 +322,14 @@ impl Project {
     /// which side has to move for the claim to be true?
     ///
     /// `None` REFUSES the promotion, and there is exactly one reason: it would
-    /// place two zero datums in one rigid merge group. That is the state
-    /// [`Self::merge_would_double_anchor`] names and
-    /// [`Self::over_anchored_merge_components`] reports, and it is unrepairable
-    /// rather than merely wrong - `cascade_bfs` pre-loads every datum-bearing
-    /// section as authoritative and never traverses an edge into one, so the gap
-    /// survives every cascade, realign and Repair (issue #464 defect A, where it
-    /// was 59 km).
+    /// fuse two groups that are each placed by their own zero datum
+    /// ([`Self::merge_would_double_anchor`]). Since #741 such a component is
+    /// valid - the later placement datum becomes a GPS fix - and an explicit
+    /// [`Self::merge_stations`] may create one. An automatic promotion may not:
+    /// paying for the coincidence would translate one GPS-placed group by the
+    /// misclosure between the two, a move nobody asked for, while the closure
+    /// that stays records that misclosure honestly (issue #464 defect A measured
+    /// 59 km).
     ///
     /// GEOMETRY is never a reason to refuse. A closure whose endpoints stopped
     /// being connected IS a merge - the load path, Repair and every forward
@@ -336,9 +339,9 @@ impl Project {
     /// memory and disk would disagree from then on. The distance is what the
     /// translation is FOR.
     ///
-    /// The movable side is picked exactly as [`Self::merge_stations`] picks it:
-    /// the datum-anchored side is the anchor, and with neither anchored `a`'s
-    /// group moves. `movable` comes back EMPTY when the two endpoints are already
+    /// The movable side is picked as [`Self::merge_stations`] picks it when at
+    /// most one side is placed: the datum-anchored side is the anchor, and with
+    /// neither anchored `a`'s group moves. `movable` comes back EMPTY when the two endpoints are already
     /// in one merge group - the gap is then a cyclic misclosure inside a rigid
     /// group, which no rigid translation can reduce - so the promotion still
     /// happens and settling it is a no-op.
@@ -461,15 +464,14 @@ impl Project {
     ///   [`Self::check_closure_alignment`], since `INVARIANT <= TOLERANCE` is an
     ///   enforced ordering.
     /// * **DOUBLE-ANCHORING**, asked with [`Self::merge_would_double_anchor`] -
-    ///   the same refusal [`Self::plan_merge_promotion`] makes, for the same
-    ///   reason. Aligning a closure between two independently zero-datum-anchored
-    ///   merge components mints precisely the rigid edge #464 exists to refuse:
-    ///   `cascade_bfs` pre-loads every datum-bearing section as authoritative and
-    ///   never traverses an edge into one, so nothing could ever satisfy it.
-    ///   Refusing keeps the pair a SOFT closure, which is legitimate between two
-    ///   anchored groups and costs no geometry - unlike a promotion, an alignment
-    ///   never translates anything, so there is nothing to pay and nothing to
-    ///   settle.
+    ///   the same refusal [`Self::plan_merge_promotion`] makes. Aligning a closure
+    ///   between two independently placed merge components mints a rigid edge
+    ///   between two sections `cascade_bfs` pre-loads as authoritative (each holds
+    ///   a placement datum), so it never traverses it and nothing could ever
+    ///   satisfy it. Refusing keeps the pair a SOFT closure, which is legitimate
+    ///   between two placed groups and costs no geometry - unlike a promotion, an
+    ///   alignment never translates anything, so there is nothing to pay and
+    ///   nothing to settle.
     ///
     /// # Why every term is blind to `is_aligned`
     ///
@@ -743,11 +745,10 @@ impl Project {
     /// One authoritative anchor section per connected merge group, preferring a
     /// zero-datum section so the realign keeps the group pinned to GPS.
     pub(super) fn realign_seeds(&self) -> Vec<SectionId> {
-        let datum_sections: HashSet<SectionId> = self
-            .zero_datums
-            .iter()
-            .map(|z| z.station_ref.section_id)
-            .collect();
+        // Placement datums only: a GPS fix's section is not authoritative to the
+        // cascade (#741), so seeding from it would pin it against its own
+        // placement datum and tear the merge between them.
+        let datum_sections: HashSet<SectionId> = self.placement_datum_sections();
         // The graph `get_connected_section_ids` walks (every merge and every
         // closure, by stored section id), built once: that walk rescans every
         // edge per visited section, which made this O(sections x edges) (#602).
@@ -1145,9 +1146,9 @@ impl Project {
     ///
     /// ## The fixpoint skip
     ///
-    /// Not every beyond-invariant gap is healable. An over-anchored component
-    /// (two zero datums in one rigid merge group) and a cyclic merge misclosure
-    /// both leave a residual the cascade cannot reduce: the solve runs, changes
+    /// Not every beyond-invariant gap is healable. A cyclic merge misclosure (or a
+    /// merge both of whose ends are authoritative) leaves a residual the cascade
+    /// cannot reduce: the solve runs, changes
     /// nothing, and the gate is non-empty again on the next command - so this
     /// function used to re-solve the WHOLE project after every keystroke-scale
     /// edit, forever, and each of those re-solves also overrode the exact offsets

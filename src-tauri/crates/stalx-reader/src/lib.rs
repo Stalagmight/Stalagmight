@@ -124,6 +124,9 @@ pub struct CountLimits {
     pub shot_credits: usize,
     /// Distinct credited people (`credit_people`).
     pub credit_people: usize,
+    /// Zero datum GPS fixes and accuracies (`zero_datum_extras`, one row per
+    /// datum). A row may name no station, so the table is capped on its own.
+    pub zero_datum_extras: usize,
 }
 
 impl Default for CountLimits {
@@ -137,6 +140,8 @@ impl Default for CountLimits {
             station_names: 2_100_000,
             shot_credits: 2_000_000,
             credit_people: 2_000_000,
+            // At most one datum per station, like `station_names`.
+            zero_datum_extras: 2_100_000,
         }
     }
 }
@@ -183,6 +188,12 @@ impl CountLimits {
         self.credit_people = max;
         self
     }
+
+    #[must_use]
+    pub fn zero_datum_extras(mut self, max: usize) -> Self {
+        self.zero_datum_extras = max;
+        self
+    }
 }
 
 /// Which [`CountLimits`] cap a file exceeded.
@@ -203,6 +214,8 @@ pub enum Limit {
     ShotCredits,
     /// [`CountLimits::credit_people`].
     CreditPeople,
+    /// [`CountLimits::zero_datum_extras`].
+    ZeroDatumExtras,
 }
 
 impl std::fmt::Display for Limit {
@@ -215,6 +228,7 @@ impl std::fmt::Display for Limit {
             Self::StationNames => "station names",
             Self::ShotCredits => "shot credits",
             Self::CreditPeople => "credited people",
+            Self::ZeroDatumExtras => "zero datum fixes",
         })
     }
 }
@@ -471,6 +485,11 @@ fn check_row_counts(conn: &rusqlite::Connection, limits: CountLimits) -> Result<
         ("station_names", Limit::StationNames, limits.station_names),
         ("shot_credits", Limit::ShotCredits, limits.shot_credits),
         ("credit_people", Limit::CreditPeople, limits.credit_people),
+        (
+            "zero_datum_extras",
+            Limit::ZeroDatumExtras,
+            limits.zero_datum_extras,
+        ),
     ] {
         let exists: i64 = conn
             .query_row(

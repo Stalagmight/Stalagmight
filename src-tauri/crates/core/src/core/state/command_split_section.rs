@@ -49,7 +49,7 @@ impl AppState {
         };
         // This path bypasses `execute()`, so it carries its own frame check
         // (#469): moving a datum to the second half can re-define the frame.
-        let frame_before = self.frame_datum_key();
+        let datums_before = self.datum_layout();
         let undo_name_b = options.name_b.trim().to_string();
 
         let second_id = {
@@ -74,7 +74,7 @@ impl AppState {
             }
         };
 
-        self.renormalize_frame_if_changed(frame_before);
+        self.settle_datum_layout(&datums_before);
         self.reconcile_geometry();
 
         let after_snapshot = match self.capture_after_snapshot_or_rollback(&before_snapshot) {

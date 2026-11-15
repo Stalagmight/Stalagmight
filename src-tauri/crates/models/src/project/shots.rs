@@ -111,11 +111,9 @@ impl Project {
         station_ref: StationRef,
         excluded_shot: Option<(SectionId, usize)>,
     ) -> bool {
-        let zero_datum_set: HashSet<StationRef> = self
-            .zero_datums
-            .iter()
-            .filter_map(|zd| self.resolve_key(&zd.station_ref))
-            .collect();
+        // Placement datums only: a GPS fix (#741) does not pin raw geometry, so
+        // a side that reaches only a fix is free to shift.
+        let zero_datum_set: HashSet<StationRef> = self.placement_datum_refs().into_iter().collect();
         if zero_datum_set.contains(&station_ref) {
             return true;
         }
@@ -186,16 +184,16 @@ impl Project {
     /// this partner", because [`Self::cascade_connection_offsets`]'s first phase
     /// - and the merge-alignment invariant the app asserts - are merge-only.
     fn has_merge_datum_path_excluding(&self, start: SectionId, excluded: SectionId) -> bool {
+        // Placement datums only, the cascade's authoritative set: a GPS fix
+        // (#741) and a dangling datum (#174) anchor nothing.
+        let placed = self.placement_datum_sections();
         let mut visited: HashSet<SectionId> = HashSet::new();
         let mut queue = vec![start];
         while let Some(current) = queue.pop() {
             if current == excluded || !visited.insert(current) {
                 continue;
             }
-            if self.zero_datums.iter().any(|zd| {
-                // A dangling datum (key no longer resolves) does not anchor (#174).
-                zd.station_ref.section_id == current && self.resolve_key(&zd.station_ref).is_some()
-            }) {
+            if placed.contains(&current) {
                 return true;
             }
             for m in &self.station_merges {
@@ -245,12 +243,12 @@ impl Project {
     /// misclosure the insert really created - which is the state the epilogue's
     /// re-solve converged to anyway, one asserted-impossible intermediate later.
     ///
-    /// Both sides anchored means the merge component holds two datums (the
-    /// subtrees behind a head merge and a tail merge are disjoint in a forest),
-    /// which is the over-anchoring [`Self::over_anchored_merge_components`]
-    /// reports and which NO choice of section offset can satisfy. The head is
-    /// kept, deterministically, rather than tearing the head merge for a tail
-    /// that cannot be satisfied either.
+    /// Only PLACEMENT datums count (#741): a GPS fix never moves raw geometry,
+    /// so the side carrying one is free to move like any other. Both sides
+    /// placed cannot happen through merges alone (a merge component has one
+    /// placement datum, and the subtrees behind a head merge and a tail merge
+    /// are disjoint in a forest); it can through the closure tie-break below.
+    /// The head is then kept, deterministically.
     fn anchored_sides_of_edit(
         &self,
         section_id: SectionId,
@@ -266,7 +264,7 @@ impl Project {
             self.resolve_key(key).map(|sr| sr.station_index > boundary)
         };
         let (mut head, mut tail) = (false, false);
-        for zd in &self.zero_datums {
+        for zd in self.placement_datums() {
             if let Some(is_tail) = side(&zd.station_ref) {
                 *(if is_tail { &mut tail } else { &mut head }) = true;
             }
@@ -1151,10 +1149,10 @@ impl Project {
         end_pos: usize,
         removed: &HashSet<StationRef>,
     ) -> bool {
+        // Placement datums only, as for the single-shot check above (#741).
         let datum_set: HashSet<StationRef> = self
-            .zero_datums
-            .iter()
-            .filter_map(|zd| self.resolve_key(&zd.station_ref))
+            .placement_datum_refs()
+            .into_iter()
             .filter(|sr| !removed.contains(sr))
             .collect();
         if datum_set.contains(&station) {

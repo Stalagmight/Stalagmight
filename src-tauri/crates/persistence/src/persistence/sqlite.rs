@@ -548,6 +548,7 @@ pub struct Database {
     conn: Connection,
 }
 
+mod datum_extras;
 mod integrity;
 mod newer_schema;
 mod open;
@@ -664,6 +665,14 @@ mod newer_schema_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod station_names_tests;
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod datum_extras_tests;
 
 #[cfg(test)]
 #[expect(

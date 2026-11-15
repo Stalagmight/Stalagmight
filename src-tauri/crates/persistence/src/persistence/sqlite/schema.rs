@@ -5,6 +5,7 @@ use rusqlite::{params, Connection, MAIN_DB};
 
 use crate::models::FEATURE_ID_STRIDE;
 
+use super::datum_extras::CREATE_DATUM_EXTRAS;
 use super::shot_credits::CREATE_CREDIT_TABLES;
 use super::station_texts::CREATE_STATION_NAMES;
 use super::{Database, SCHEMA_VERSION, UNDO_FORMAT_SAFE_VERSION};
@@ -1653,6 +1654,12 @@ impl Database {
         self.conn.execute(CREATE_STATION_NAMES, [])?;
         // Per-shot survey credit - no bump either, see `shot_credits`.
         self.conn.execute_batch(CREATE_CREDIT_TABLES)?;
+        // Zero datum GPS fixes and accuracies (#741) - no bump either, see
+        // `datum_extras`: one row per saved datum, in list order (`position`),
+        // with its station, the uuid of the shot ending there, whether its GPS
+        // is the `zero_datums` row (placement) or the row's own (fix), and its
+        // accuracy. `zero_datums` itself keeps only the placement datums.
+        self.conn.execute_batch(CREATE_DATUM_EXTRAS)?;
 
         Ok(())
     }

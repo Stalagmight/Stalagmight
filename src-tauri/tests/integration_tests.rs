@@ -12,8 +12,8 @@ use chrono::Utc;
 use stalagmight_lib::config::{CacheConfig, Config, ValidationConfig};
 use stalagmight_lib::core::{Command, PersistStack, UndoData, UndoEntry, UndoStack, Validator};
 use stalagmight_lib::models::{
-    ClosureStrategy, Coordinates, GpsCoordinates, LoopClosure, Project, Section, SectionData,
-    SectionUpdates, Shot, ShotData, ShotKind, ShotUpdates, StationMerge, StationRef,
+    ClosureStrategy, Coordinates, DatumRole, GpsCoordinates, LoopClosure, Project, Section,
+    SectionData, SectionUpdates, Shot, ShotData, ShotKind, ShotUpdates, StationMerge, StationRef,
 };
 use stalagmight_lib::persistence::Database;
 use std::collections::{HashMap, HashSet};
@@ -615,6 +615,7 @@ fn test_undo_zero_datum() {
         // The index the datum sat at in `Project::zero_datums`, so undo of a
         // removal puts it back THERE instead of appending (#413, finding 17).
         position: Some(1),
+        previous_accuracy_m: Some(2.5),
         previous_offsets: offsets,
     };
 
@@ -627,11 +628,13 @@ fn test_undo_zero_datum() {
             station_ref,
             previous_gps,
             position,
+            previous_accuracy_m,
             previous_offsets,
         } => {
             assert_eq!(station_ref, StationRef::new(0, 0));
             assert!(previous_gps.is_none());
             assert_eq!(position, Some(1));
+            assert_eq!(previous_accuracy_m, Some(2.5));
             assert_eq!(previous_offsets.get(&0), Some(&Some((10.0, 20.0))));
         }
         _ => panic!("Wrong undo data type"),
@@ -677,6 +680,7 @@ fn test_comprehensive_undo_types() {
                 depth_reference: 5.0,
             }),
             position: None,
+            previous_accuracy_m: None,
             previous_offsets: HashMap::new(),
         },
         UndoData::ProjectSnapshot("{}".to_string()),
@@ -1411,7 +1415,7 @@ fn test_zero_datum_removal() {
 
 /// Test: Connected stations reject multiple zero datums
 #[test]
-fn test_connected_zero_datum_rejection() {
+fn test_connected_zero_datum_becomes_gps_fix() {
     let mut project = create_test_project();
 
     project.add_section(create_section_with_shots(
@@ -1431,18 +1435,31 @@ fn test_connected_zero_datum_rejection() {
         )
         .unwrap();
 
-    // Try to set another zero datum on connected station (same section)
-    let result = project.set_zero_datum(
-        StationRef::new(0, 1),
-        GpsCoordinates {
-            latitude: 46.0,
-            longitude: -123.0,
-            depth_reference: 10.0,
-        },
+    let before = project
+        .compute_station_raw_coords(StationRef::new(0, 1))
+        .unwrap();
+
+    // A second datum in the same piece is accepted as a GPS fix (#741)...
+    project
+        .set_zero_datum(
+            StationRef::new(0, 1),
+            GpsCoordinates {
+                latitude: 45.0001,
+                longitude: -122.0,
+                depth_reference: 10.0,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        project.datum_roles(),
+        vec![Some(DatumRole::Placement), Some(DatumRole::GpsFix)]
     );
 
-    // Should fail - station 0:1 is connected to 0:0 which has a datum
-    assert!(result.is_err());
+    // ...and does not move the Raw Data View.
+    let after = project
+        .compute_station_raw_coords(StationRef::new(0, 1))
+        .unwrap();
+    assert!((before.x - after.x).abs() < 1e-9 && (before.y - after.y).abs() < 1e-9);
 }
 
 // ============================================================================
