@@ -107,6 +107,56 @@ classified `can_orphan_closures`, and inside the shot-removal paths themselves
 (`Project::convert_closures_orphaned_since`, scoped to what that removal orphaned so
 an inverse does no more than invert).
 
+**A closure between merged stations is removed** by the same sweep: one whose two
+stations are one point - the same station (a closure from a station to itself, which
+used to be kept), or one merge group (`are_stations_merged`). It closes no loop. The
+solve can only skip it, its stored misclosure is a gap the geometry no longer has, and
+it would still count as a loop in the project stats and keep the Closures Computed
+View on. Converting it would add nothing, so it goes.
+
+Which edits can make one:
+
+- **Not** creating a closure: Create Loop Closure and the import's batch refuse a
+  merged pair, and so does the shot-removal rewire.
+- **Not** a merge: `merge_stations` refuses a merge inside one rigid component, and a
+  closure between two components is either a sole bridge (which every sweep promotes)
+  or ties two zero-datum-anchored components, which a merge may not join. Tests try
+  every merge of a closure's two ends, and of their merge groups, on random networks
+  and after every step of the combine/split/reverse chain fuzzer
+  (`check_no_merge_folds_a_closure`): all are refused.
+- **A promotion**: two closures that tie a station to the same point record one loop
+  twice (the Merge tool and Combine Sections both allow that), and once the sweep
+  promotes one, the other ties that point to itself (#738).
+- A file, or an undo history, written before #738.
+
+One forward pass is enough: the sweep keeps a station-level merge union-find, extended
+on every promotion, and asks each closure "one point?" before "orphan?"; a promotion
+only joins components that were not connected, so it cannot merge the ends of a
+closure the pass has already kept. Every fate is decided in place and the list is
+compacted once, so a file holding 50 000 such closures (the most the stalx-reader
+accepts) opens in linear time. `Project::sweep_orphan_closures` reports what it
+removed and where each one sat; it logs nothing itself, since the split preview runs
+it on a copy - the callers that keep the result log one line with the count.
+
+- **On load** it is silent, exactly as the promotion is: the project opens without
+  the closure and the log says how many went. The file settles on the next save: an
+  explicit Save writes it, while autosave only runs after an edit.
+- **Inside a command** it is part of that command's undo unit: Split Section Here,
+  the delete-and-split commands, the deletes, unmerges and Remove Zero Datum through
+  `execute()`'s epilogue, Batch and Repair all record a before/after snapshot pair
+  around it, so one Undo brings the closure back. Each of those commands except Batch
+  and Repair also reports it: a `CLOSURE_REMOVED_MERGED_ENDS` warning per closure,
+  named by the stations it had BEFORE the edit (`Project::closures_before_sweep`,
+  matched by position, else a unique id, else id and stored ends, since a file can
+  repeat an id), which the frontend shows in the closure-removal toast: "Removed loop
+  closure 1:0 to 0:3: another loop closure became a merge, which made its two
+  stations one point." (or "...: its two stations were already one point." for one
+  the edit did not cause). Split Section Here says it in its dialog instead.
+- **The scoped sweep** an inverse runs (the shot-removal paths) snapshots
+  `Project::swept_closure_ids` first - orphans and closures already between merged
+  stations - and leaves those as recorded; it removes only what its own promotions
+  make redundant.
+
 The two statements are not equivalent, and the difference is the whole of issue #464:
 
 | | loop closure | station merge |
@@ -170,6 +220,15 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
   the user deleting the closure, splitting and merging by hand, with the same
   move. Instead the Split dialog shows which half moves and how far before the
   user confirms (`AppState::split_section_preview`, the split run on a copy).
+  When a second closure tied that half to the same point, the merge leaves it
+  between merged stations and the split removes it (#738); the dialog lists
+  each one by the station ids it was created with ("Loop closure 1:0 to 0:3 is
+  removed: its two stations become one point."), read off the same sweep on
+  the copy, so it names exactly what the split removes. A closure that already
+  tied a point to itself before the split (an undo can restore one from a
+  history recorded before #738) is removed by the same sweep and listed apart
+  ("...: its two stations are already one point."); it tied nothing, so it does
+  not change how the dialog describes the halves.
 - **Combine Sections** re-keys a closure on either join station onto the one
   joined station, drops any closure across the join point (whatever its
   length, it would tie the joined station to itself), and drops a closure the

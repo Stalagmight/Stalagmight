@@ -4,8 +4,8 @@ use super::command_delete_split::section_budget_refusal;
 use super::AppState;
 use crate::core::{Command, CommandResult};
 use crate::models::{
-    Coordinates, Project, SectionId, ShotId, SplitAt, SplitPreview, SplitSectionOptions, SplitSide,
-    StationRef, MIN_SPLIT_CHILD_LENGTH_M,
+    Coordinates, OrphanClosureSweep, Project, RemovedClosure, SectionId, ShotId, SplitAt,
+    SplitPreview, SplitSectionOptions, SplitSide, StationRef, MIN_SPLIT_CHILD_LENGTH_M,
 };
 
 /// Below this a half "did not move" in [`AppState::split_section_preview`]:
@@ -63,9 +63,12 @@ impl AppState {
             // shot split shortens the tail before it inserts the head, so any
             // failure rolls back to the snapshot.
             match Self::apply_cut(project, section_id, cut, &options) {
-                Ok((id, _)) => {
+                Ok(outcome) => {
+                    // Logged here, not in the sweep: the preview runs the same
+                    // cut on a copy, and its removals never happen.
+                    outcome.sweep.log_removed("split section");
                     project.touch();
-                    id
+                    outcome.second
                 }
                 Err(e) => {
                     let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
@@ -106,14 +109,23 @@ impl AppState {
     /// Make the validated `cut` in `project`: split the shot first when the
     /// cut lands inside one, split the section, and turn every loop closure
     /// the cut left as a sole tie into a merge (issue #8, as the
-    /// delete-and-split path does: a closure must close a loop). Returns the
-    /// second half's id and how many closures became merges.
+    /// delete-and-split path does: a closure must close a loop), removing any
+    /// closure those merges leave between merged stations (#738). Returns the
+    /// second half's id, what that sweep did, and the closures it removed,
+    /// named by their stations before the cut and told apart by whether the cut
+    /// made them redundant or they already were (the whole-project sweep also
+    /// takes a closure between merged stations that an undo restored from a
+    /// history recorded before #738). The split and its preview both run this,
+    /// so the dialog names exactly what the split changes.
     fn apply_cut(
         project: &mut Project,
         section_id: SectionId,
         cut: Cut,
         options: &SplitSectionOptions,
-    ) -> Result<(SectionId, usize), String> {
+    ) -> Result<CutOutcome, String> {
+        // Before anything changes. The cut adds and drops no closure, so the
+        // sweep's positions match these entries one to one.
+        let before = project.closures_before_sweep();
         let station_index = match cut {
             Cut::Station(station_index) => station_index,
             Cut::InShot {
@@ -126,7 +138,13 @@ impl AppState {
             }
         };
         let second = project.split_section_at_station(section_id, station_index, options)?;
-        Ok((second, project.convert_orphan_closures_to_merges()))
+        let sweep = project.sweep_orphan_closures();
+        let removed = project.removed_closures_named(&before, &sweep);
+        Ok(CutOutcome {
+            second,
+            sweep,
+            removed,
+        })
     }
 
     /// What Split Section Here would do beyond the cut, without doing it: the
@@ -138,7 +156,9 @@ impl AppState {
     /// and merge by hand, with the same move, and keeping the closure is not an
     /// option: every load and every later edit converts a sole-tie closure
     /// (docs/closures.md). So the dialog shows the move before the user
-    /// confirms. A refused split returns its reason.
+    /// confirms, and names any closure the split removes because that merge
+    /// makes its two stations one point (#738). A refused split returns its
+    /// reason.
     pub fn split_section_preview(
         &self,
         section_id: SectionId,
@@ -156,7 +176,11 @@ impl AppState {
                 copy.compute_station_raw_coords(start),
                 copy.compute_station_raw_coords(StationRef::new(section_id, last)),
             );
-            let (second, converted) = Self::apply_cut(&mut copy, section_id, cut, options)?;
+            let CutOutcome {
+                second,
+                sweep,
+                removed,
+            } = Self::apply_cut(&mut copy, section_id, cut, options)?;
             let second_last = copy
                 .get_section(second)
                 .map_or(0, |section| section.shots.len() as u32);
@@ -178,9 +202,19 @@ impl AppState {
                 (Some(SplitSide::A), moved_a)
             };
             Ok(SplitPreview {
-                closures_to_merges: u32::try_from(converted).unwrap_or(u32::MAX),
+                closures_to_merges: u32::try_from(sweep.converted).unwrap_or(u32::MAX),
                 moved_side,
                 moved_m,
+                removed_closures: removed
+                    .iter()
+                    .filter(|r| !r.already_one_point)
+                    .map(|r| r.pair)
+                    .collect(),
+                removed_already_one_point: removed
+                    .iter()
+                    .filter(|r| r.already_one_point)
+                    .map(|r| r.pair)
+                    .collect(),
             })
         })
     }
@@ -267,6 +301,16 @@ impl AppState {
         }
         Ok(cut)
     }
+}
+
+/// What [`AppState::apply_cut`] did.
+struct CutOutcome {
+    /// The second half's id.
+    second: SectionId,
+    /// The sweep that followed the cut.
+    sweep: OrphanClosureSweep,
+    /// The closures it removed, named for the user.
+    removed: Vec<RemovedClosure>,
 }
 
 /// Where a validated split cuts: at an existing station, or inside a shot,

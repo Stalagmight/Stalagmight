@@ -68,7 +68,7 @@ impl AppState {
         let undo_section_b_name = name_b.clone();
 
         // Step 2: Get split data and perform the operation
-        let new_section_id = {
+        let (new_section_id, swept_warnings) = {
             let Ok(mut proj_guard) = self.project.lock() else {
                 return CommandResult::failure("Failed to lock project".to_string());
             };
@@ -76,6 +76,8 @@ impl AppState {
             let Some(project) = proj_guard.as_mut() else {
                 return CommandResult::failure("No project open".to_string());
             };
+            // Before anything changes, to name what the orphan sweep removes (#738).
+            let closures_before = project.closures_before_sweep();
 
             let Some(section) = project.get_section(section_id) else {
                 return CommandResult::failure(format!("Section {section_id} not found"));
@@ -273,10 +275,16 @@ impl AppState {
             // adjustment held before; before the orphan sweep, which only
             // turns a closure edge into a merge edge.
             project.restore_component_gauges(&component_gauges);
-            project.convert_orphan_closures_to_merges();
+            let sweep = project.sweep_orphan_closures();
+            let swept_warnings = super::command_shot::report_swept_closures(
+                project,
+                &closures_before,
+                &sweep,
+                "delete shot and split",
+            );
 
             project.touch();
-            new_id
+            (new_id, swept_warnings)
         };
 
         // This custom path bypasses execute()'s reconcile; re-derive offsets here
@@ -324,7 +332,9 @@ impl AppState {
             "Delete shot and split section completed"
         );
 
-        CommandResult::success().with_section_id(new_section_id)
+        CommandResult::success()
+            .with_section_id(new_section_id)
+            .with_warnings(swept_warnings)
     }
 
     /// Delete a contiguous *interior* range of shots and split the section into
@@ -366,13 +376,15 @@ impl AppState {
         let frame_before = self.frame_datum_key();
         let undo_section_b_name = name_b.clone();
 
-        let new_section_id = {
+        let (new_section_id, swept_warnings) = {
             let Ok(mut proj_guard) = self.project.lock() else {
                 return CommandResult::failure("Failed to lock project".to_string());
             };
             let Some(project) = proj_guard.as_mut() else {
                 return CommandResult::failure("No project open".to_string());
             };
+            // Before anything changes, to name what the orphan sweep removes (#738).
+            let closures_before = project.closures_before_sweep();
             let Some(section) = project.get_section(section_id) else {
                 return CommandResult::failure(format!("Section {section_id} not found"));
             };
@@ -554,9 +566,15 @@ impl AppState {
             // adjustment held before; before the orphan sweep, which only
             // turns a closure edge into a merge edge.
             project.restore_component_gauges(&component_gauges);
-            project.convert_orphan_closures_to_merges();
+            let sweep = project.sweep_orphan_closures();
+            let swept_warnings = super::command_shot::report_swept_closures(
+                project,
+                &closures_before,
+                &sweep,
+                "delete shot range and split",
+            );
             project.touch();
-            new_id
+            (new_id, swept_warnings)
         };
 
         // Custom path bypasses execute()'s reconcile; re-derive offsets here.
@@ -595,7 +613,9 @@ impl AppState {
             purpose = "split section after deleting shot range",
             "Delete shot range and split section completed"
         );
-        CommandResult::success().with_section_id(new_section_id)
+        CommandResult::success()
+            .with_section_id(new_section_id)
+            .with_warnings(swept_warnings)
     }
 
     /// Delete a contiguous range of shots by gap-closing (shifting) - the
@@ -878,7 +898,7 @@ impl AppState {
         // mutation we roll back from before_snapshot. `command_lock` is held for the
         // whole call, so no other command can observe or interleave with the window
         // between this scope and the after-snapshot below.
-        {
+        let swept_warnings = {
             let Ok(mut proj_guard) = self.project.lock() else {
                 return CommandResult::failure("Failed to lock project".to_string());
             };
@@ -886,6 +906,8 @@ impl AppState {
             let Some(project) = proj_guard.as_mut() else {
                 return CommandResult::failure("No project open".to_string());
             };
+            // Before anything changes, to name what the orphan sweep removes (#738).
+            let closures_before = project.closures_before_sweep();
 
             // Validate section exists
             let Some(section) = project.get_section(section_id) else {
@@ -980,7 +1002,13 @@ impl AppState {
                 let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
                 return CommandResult::failure("No project after mutation".to_string());
             };
-            project.convert_orphan_closures_to_merges();
+            let sweep = project.sweep_orphan_closures();
+            let swept_warnings = super::command_shot::report_swept_closures(
+                project,
+                &closures_before,
+                &sweep,
+                "delete last shot and section",
+            );
 
             tracing::info!(
                 section_id,
@@ -988,7 +1016,8 @@ impl AppState {
                 purpose = "remove single-shot section",
                 "Deleted last shot and removed section"
             );
-        }
+            swept_warnings
+        };
 
         // This custom path bypasses execute()'s epilogue; re-derive offsets here
         // (after the orphan-closure conversion above) so a closure that just became
@@ -1020,6 +1049,6 @@ impl AppState {
         // Set-only; no-op for local-only.
         self.mark_remote_forward_edit();
 
-        CommandResult::success()
+        CommandResult::success().with_warnings(swept_warnings)
     }
 }

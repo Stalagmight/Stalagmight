@@ -5491,10 +5491,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           case 'split_section_preview': {
             // Nothing in the mock's survey ties the halves by a loop closure alone, so a split
-            // moves nothing. A spec can set `__MOCK_SPLIT_PREVIEW__` to show the warning.
+            // moves and removes nothing. A spec can set `__MOCK_SPLIT_PREVIEW__` to show the
+            // warning (a half that moves, closures the split removes).
             const win = window as unknown as Record<string, unknown>;
             return (
-              win.__MOCK_SPLIT_PREVIEW__ ?? { closures_to_merges: 0, moved_side: null, moved_m: 0 }
+              win.__MOCK_SPLIT_PREVIEW__ ?? {
+                closures_to_merges: 0,
+                moved_side: null,
+                moved_m: 0,
+                removed_closures: [],
+                removed_already_one_point: [],
+              }
             );
           }
 
