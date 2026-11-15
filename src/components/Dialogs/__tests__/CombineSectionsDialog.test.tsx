@@ -396,8 +396,9 @@ describe('CombineSectionsDialog', () => {
     render(<CombineSectionsDialog />);
     // Not a torn tie: the plan names it only as removed.
     expect(screen.queryByTestId('combine-note-torn')).toBeNull();
+    expect(screen.getByTestId('combine-note-removed')).toHaveTextContent(/^This connection is removed:/);
     expect(screen.getAllByTestId(/^combine-removed-tie-/).map(tieText)).toEqual([
-      'The merge of [section Section 9] [station 9:1] and [section Main-B] [station 5:0] is removed: as a loop ' +
+      'The merge of [section Section 9] [station 9:1] and [section Main-B] [station 5:0] : as a loop ' +
         'closure it would join the two ends of one shot.',
     ]);
     expect(screen.getByTestId('combine-removed-why')).toHaveTextContent(
@@ -406,10 +407,11 @@ describe('CombineSectionsDialog', () => {
     );
 
     fireEvent.click(screen.getByTestId('combine-swap-kept'));
+    expect(screen.getByTestId('combine-note-removed')).toHaveTextContent(/^These 2 connections are removed:/);
     expect(screen.getAllByTestId(/^combine-removed-tie-/).map(tieText)).toEqual([
-      'The snapped closure between [section Section 9] [station 9:1] and [section Main-B] [station 5:0] is removed: ' +
+      'The snapped closure between [section Section 9] [station 9:1] and [section Main-B] [station 5:0] : ' +
         'as an ordinary closure it would join the two ends of one shot.',
-      'Loop closure [section Main-A] [station 2:1] to [section Main-B] [station 5:0] is removed: it would join the ' +
+      'Loop closure [section Main-A] [station 2:1] to [section Main-B] [station 5:0] : it would join the ' +
         'two ends of one shot.',
     ]);
     expect(screen.getByTestId('combine-removed-why')).toHaveTextContent(

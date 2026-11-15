@@ -264,7 +264,8 @@ test.describe('Combine Sections', () => {
     await openDetails(page);
     const removed = page.locator('[data-testid^="combine-removed-tie-"]');
     await expect(removed).toHaveCount(1);
-    await expect(removed).toContainText('is removed: as a loop closure it would join the two ends of one shot.');
+    await expect(removed).toContainText(': as a loop closure it would join the two ends of one shot.');
+    await expect(page.getByTestId('combine-note-removed')).toContainText('This connection is removed:');
     await expect(removed.getByTestId(`combine-tie-station-${squeeze!.id}-1`)).toBeVisible();
     await expect(removed.getByTestId(`combine-tie-station-${beyond!.id}-0`)).toBeVisible();
     await expect(page.getByTestId('combine-removed-why')).toContainText(

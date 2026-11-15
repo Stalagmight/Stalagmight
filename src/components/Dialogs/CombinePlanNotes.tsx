@@ -184,7 +184,8 @@ export function CombinePlanNotes({
         )}
         {removed.length > 0 && (
           <li data-testid="combine-note-removed">
-            <ul className="list-[circle] pl-5 space-y-0.5">
+            {t('dialogs.combineSections.removedTitle', { count: removed.length })}
+            <ul className="list-[circle] pl-5 mt-1 space-y-0.5">
               {removed.map((tie) => {
                 const id = tieId(tie.station_a, tie.station_b);
                 return (
