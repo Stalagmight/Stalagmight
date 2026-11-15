@@ -113,6 +113,31 @@ pub struct TornTie {
     pub reason: TornTieReason,
 }
 
+/// What a tie the combine removes was before the combine (#746).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum CombineRemovedKind {
+    /// A station merge the combine would tear into a loop closure.
+    Merge,
+    /// A snapped (`Move`) closure the combine would make an ordinary one.
+    SnappedClosure,
+    /// A loop closure already there.
+    LoopClosure,
+}
+
+/// A tie the combine removes because, once combined, the loop closure it is
+/// or becomes would join the two ends of one shot and squeeze that shot to
+/// zero length (#746, the Combine half of #737). The Closures Computed View
+/// would only skip it, so the combine removes it in the same undo step, as
+/// Delete with shift does. Named by its stations as they are BEFORE the
+/// combine, the ids the user knows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct CombineRemovedClosure {
+    pub station_a: StationRef,
+    pub station_b: StationRef,
+    pub kind: CombineRemovedKind,
+}
+
 /// Why the kept section's side is the one that moves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -153,6 +178,13 @@ pub struct CombinePlan {
     /// the one the joined station keeps (the fixed side's), when more than
     /// 1 mm; `None` otherwise.
     pub join_offset_change_m: Option<f64>,
+    /// The ties the combine removes because the loop closure they are or
+    /// become would join the two ends of one shot (#746): exactly what the
+    /// combine removes, from the same plan. `torn_ties` leaves them out.
+    /// Absent when there are none (and for a blocked choice).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub closures_removed_across_one_shot: Option<Vec<CombineRemovedClosure>>,
 }
 
 /// Whether two sections can be combined, and where. Read-only: answered by

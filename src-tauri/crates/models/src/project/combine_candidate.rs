@@ -537,6 +537,7 @@ impl Project {
             torn_ties: Vec::new(),
             azimuth_rotation_deg: None,
             join_offset_change_m: None,
+            closures_removed_across_one_shot: None,
         };
         if touch.blocked.is_some() {
             return (empty, None);

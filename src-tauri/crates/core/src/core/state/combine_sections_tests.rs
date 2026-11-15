@@ -1086,3 +1086,223 @@ fn undoing_a_prepend_does_not_keep_the_gauge_pair_it_made() {
     assert!(state.redo().success);
     assert_eq!(snapshot(&state), after);
 }
+
+/// Combine at K's end and O's start (`kept`/`other` with their join ends),
+/// through the command, after checking the station menu's plan for that
+/// choice names `listed` as the ties it removes across one shot (#746).
+/// Returns the command's removed-closure warnings; asserts the combine left
+/// no closure across one shot, and that one Undo restores the project
+/// byte-for-byte and Redo re-applies it.
+fn combine_removing(
+    state: &AppState,
+    at: StationRef,
+    (kept, kept_end): (SectionId, crate::models::SectionEnd),
+    (other, other_end): (SectionId, crate::models::SectionEnd),
+    listed: &[(StationRef, StationRef, crate::models::CombineRemovedKind)],
+) -> Vec<String> {
+    let candidate = state
+        .combine_candidates(at)
+        .unwrap()
+        .into_iter()
+        .find(|c| {
+            let ends = [(c.section_a, c.end_a), (c.section_b, c.end_b)];
+            ends.contains(&(kept, kept_end)) && ends.contains(&(other, other_end))
+        })
+        .unwrap();
+    let plan = if candidate.section_a == kept {
+        candidate.plan_keeping_a
+    } else {
+        candidate.plan_keeping_b
+    };
+    let named: Vec<_> = plan
+        .closures_removed_across_one_shot
+        .unwrap_or_default()
+        .iter()
+        .map(|r| (r.station_a, r.station_b, r.kind))
+        .collect();
+    assert_eq!(
+        named, listed,
+        "the dialog lists the ties the combine removes"
+    );
+    let before = snapshot(state);
+
+    let result = state.execute_combine_sections(
+        kept,
+        other,
+        CombineSectionsOptions {
+            join: Some(crate::models::CombineJoinEnds {
+                kept: kept_end,
+                other: other_end,
+            }),
+            ..options()
+        },
+    );
+    assert!(result.success, "{:?}", result.error);
+    let project = state.get_project_state().unwrap();
+    assert!(
+        project.closures_across_one_shot().is_empty(),
+        "{:?}",
+        project.closures_across_one_shot()
+    );
+    let after = snapshot(state);
+
+    assert!(state.undo().success);
+    assert_eq!(
+        snapshot(state),
+        before,
+        "one undo restores the removed tie too"
+    );
+    assert!(state.redo().success);
+    assert_eq!(snapshot(state), after, "redo removes it again");
+    result
+        .warnings
+        .iter()
+        .map(|w| {
+            assert_eq!(w.code, crate::models::CLOSURE_REMOVED_ACROSS_ONE_SHOT);
+            assert_eq!(w.severity, crate::core::WarningSeverity::Warning);
+            w.message.clone()
+        })
+        .collect()
+}
+
+/// #746, the issue's shape (a): K 10 m east; a passage X merged at K's end,
+/// one shot 0.4 m further east; O 5 m east from X's end, merged there; K's
+/// end and O's start tied by a legacy closure, as a file from before the
+/// deferred strategies carries it. Combining K and O there tears the merge of
+/// X's end and O's start into a closure across X's one shot: the combine
+/// removes it inside its one undo step and says so.
+#[test]
+fn a_combine_removes_the_merge_it_would_tear_across_one_shot() {
+    use crate::models::{CombineRemovedKind, SectionEnd};
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Passage".to_string(),
+        location: None,
+    });
+    let k = create(&state, "K", vec![shot(90.0, 10.0)]);
+    let x = create(&state, "X", vec![shot(90.0, 0.4)]);
+    let o = create(&state, "O", vec![shot(90.0, 5.0)]);
+    for (a, b) in [
+        (StationRef::new(k, 1), StationRef::new(x, 0)),
+        (StationRef::new(x, 1), StationRef::new(o, 0)),
+    ] {
+        let merged = state.execute(Command::MergeStations {
+            station_a: a,
+            station_b: b,
+        });
+        assert!(merged.success, "{:?}", merged.error);
+    }
+    {
+        let mut guard = state.project.lock().unwrap();
+        let project = guard.as_mut().unwrap();
+        let id = project.next_closure_id;
+        project.next_closure_id += 1;
+        let (station_a, station_b) = (
+            project.key_for_ref(StationRef::new(k, 1)).unwrap(),
+            project.key_for_ref(StationRef::new(o, 0)).unwrap(),
+        );
+        project.loop_closures.push(crate::models::LoopClosure {
+            id,
+            station_a,
+            station_b,
+            path_length: 0.4,
+            misclosure_distance: 0.4,
+            error_percentage: 100.0,
+            horizontal_misclosure: 0.4,
+            vertical_misclosure: 0.0,
+            strategy: crate::models::ClosureStrategy::ProportionalByLength,
+            is_aligned: false,
+        });
+    }
+    let merge = state.get_project_state().unwrap().station_merges[1].clone();
+    let project = state.get_project_state().unwrap();
+    let (a, b) = (
+        project.resolve_key(&merge.station_a).unwrap(),
+        project.resolve_key(&merge.station_b).unwrap(),
+    );
+    assert_eq!(
+        [a, b]
+            .iter()
+            .filter(|s| [x, o].contains(&s.section_id))
+            .count(),
+        2,
+        "setup: the second merge is X's end to O's start"
+    );
+
+    let warnings = combine_removing(
+        &state,
+        StationRef::new(k, 1),
+        (k, SectionEnd::End),
+        (o, SectionEnd::Start),
+        &[(a, b, CombineRemovedKind::Merge)],
+    );
+    assert_eq!(
+        warnings,
+        vec![format!(
+            "Removed the merge of {} and {}: combining the sections left its two stations at \
+             the two ends of one shot.",
+            crate::models::station_id_label(a),
+            crate::models::station_id_label(b)
+        )]
+    );
+    assert_eq!(state.get_project_state().unwrap().station_merges.len(), 1);
+}
+
+/// #746, an ordinary closure the join alone puts across one shot. K runs two
+/// shots east; O starts on K's end (co-located, not merged) and loops back
+/// north, west and south onto K's start, merged there; a `Batch` closure
+/// ties K's middle station to O's start. Combined at K's end, O's start is
+/// K's end and the closure spans K's last shot: the combine removes it, and
+/// the merge that would tie the combined section to itself tears into a
+/// closure around the real loop.
+#[test]
+fn a_combine_removes_a_closure_its_join_puts_across_one_shot() {
+    use crate::models::{CombineRemovedKind, SectionEnd};
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Loop".to_string(),
+        location: None,
+    });
+    let k = create(&state, "K", vec![shot(90.0, 5.0), shot(90.0, 5.0)]);
+    let o = create(
+        &state,
+        "O",
+        vec![shot(0.0, 4.0), shot(270.0, 10.0), shot(180.0, 4.0)],
+    );
+    for command in [
+        Command::MergeStations {
+            station_a: StationRef::new(k, 0),
+            station_b: StationRef::new(o, 3),
+        },
+        Command::CreateLoopClosure {
+            station_a: StationRef::new(k, 1),
+            station_b: StationRef::new(o, 0),
+            closure_strategy: crate::models::ClosureStrategy::Batch,
+        },
+    ] {
+        let result = state.execute(command);
+        assert!(result.success, "{:?}", result.error);
+    }
+
+    let warnings = combine_removing(
+        &state,
+        StationRef::new(k, 2),
+        (k, SectionEnd::End),
+        (o, SectionEnd::Start),
+        &[(
+            StationRef::new(k, 1),
+            StationRef::new(o, 0),
+            CombineRemovedKind::LoopClosure,
+        )],
+    );
+    assert_eq!(
+        warnings,
+        vec![format!(
+            "Removed loop closure {k}:1 to {o}:0: combining the sections left its two stations \
+             at the two ends of one shot."
+        )]
+    );
+    let project = state.get_project_state().unwrap();
+    assert!(project.station_merges.is_empty());
+    assert_eq!(project.loop_closures.len(), 1, "the torn merge's closure");
+}

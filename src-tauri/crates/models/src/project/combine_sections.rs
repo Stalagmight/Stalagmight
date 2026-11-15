@@ -50,11 +50,11 @@ use std::collections::{HashMap, HashSet};
 
 use crate::angle::normalize_azimuth;
 use crate::{
-    CombineJoinEnds, CombinePick, CombineSectionsOptions, SectionEnd, SectionId, Shot, ShotData,
-    StationKey, StationRef,
+    ClosuresBeforeEdit, CombineJoinEnds, CombinePick, CombineRemovedClosure, CombineRemovedKind,
+    CombineSectionsOptions, SectionEnd, SectionId, Shot, ShotData, StationKey, StationRef,
 };
 
-use super::combine_plan::{JoinPoint, TiePlan};
+use super::combine_plan::{JoinPoint, Tie, TiePlan};
 use super::gauge::captured_gauge;
 use super::reverse::shot_run_displacement;
 use super::station_rekey::take_naming;
@@ -200,13 +200,21 @@ impl Project {
     /// failures left (a section vanishing mid-way) are unreachable, but this
     /// does not roll back: `execute_combine_sections` restores its snapshot
     /// on any `Err`.
+    ///
+    /// Returns the ties it removed because, combined, the loop closure each
+    /// is or would become joins the two ends of one shot (#746): the plan's
+    /// `dropped` list, the one the dialog showed, named by the stations they
+    /// had before the combine.
     pub fn combine_sections(
         &mut self,
         kept: SectionId,
         other: SectionId,
         options: &CombineSectionsOptions,
-    ) -> Result<(), String> {
+    ) -> Result<Vec<CombineRemovedClosure>, String> {
         let setup = self.combine_setup(kept, other, options.join)?;
+        // For the check after the join that the plan's prediction left no
+        // closure across one shot behind.
+        let closures_before = self.closures_before_edit();
         // Shared shot identities first (a no-op when the command already
         // renewed them), so the held gauge below names shots by the identity
         // they keep.
@@ -221,8 +229,65 @@ impl Project {
         // station named by one shot reads.
         self.restore_component_gauges(&component_gauges);
         self.remeasure_closures(&remeasure);
+        let mut removed: Vec<CombineRemovedClosure> = setup
+            .ties
+            .dropped
+            .iter()
+            .map(|(tie, kind)| CombineRemovedClosure {
+                station_a: tie.a,
+                station_b: tie.b,
+                kind: *kind,
+            })
+            .collect();
+        removed.extend(self.remove_unpredicted_closures_across_one_shot(&closures_before));
         self.touch();
-        Ok(())
+        Ok(removed)
+    }
+
+    /// The backstop to the plan's prediction (#746): any closure the combined
+    /// project skips now but did not before the combine is one the plan's
+    /// model of the joined survey missed. It is removed all the same, so a
+    /// combine never leaves a NEW closure across one shot, and named by its
+    /// stations before the combine. Loud, because the dialog did not list it:
+    /// that is the preview/execution drift this exists to catch (tests fail on
+    /// it).
+    fn remove_unpredicted_closures_across_one_shot(
+        &mut self,
+        before: &ClosuresBeforeEdit,
+    ) -> Vec<CombineRemovedClosure> {
+        let missed = self.closures_newly_across_one_shot(before);
+        if missed.is_empty() {
+            return Vec::new();
+        }
+        tracing::error!(
+            missed = missed.len(),
+            purpose = "never leave a closure across one shot behind a combine",
+            "Combine left closures across one shot its plan did not predict; removing them"
+        );
+        let ids: HashSet<u64> = missed.iter().map(|c| c.closure_id).collect();
+        self.loop_closures.retain(|c| !ids.contains(&c.id));
+        let removed: Vec<CombineRemovedClosure> = missed
+            .iter()
+            .map(|c| CombineRemovedClosure {
+                station_a: c.station_a,
+                station_b: c.station_b,
+                kind: CombineRemovedKind::LoopClosure,
+            })
+            .collect();
+        #[cfg(test)]
+        #[expect(
+            clippy::panic,
+            reason = "tripwire: the plan's prediction and the combine must agree, and a \
+                      silent difference is what the dialog listing exists to prevent"
+        )]
+        {
+            if !removed.is_empty() {
+                panic!(
+                    "combine left closures across one shot its plan did not predict: {missed:?}"
+                );
+            }
+        }
+        removed
     }
 
     /// Everything that has to give before the join (see the module docs).
@@ -243,7 +308,11 @@ impl Project {
         }
         self.loop_closures
             .retain(|c| !setup.join_closures.contains(&c.id));
-        let mut remeasure: HashSet<u64> = self.tear_ties(&setup.ties.torn).into_iter().collect();
+        let dropped: Vec<Tie> = setup.ties.dropped.iter().map(|(tie, _)| *tie).collect();
+        let mut remeasure: HashSet<u64> = self
+            .tear_ties(&setup.ties.torn, &dropped)
+            .into_iter()
+            .collect();
         if !setup.ties.moved.is_empty() {
             let moved: HashSet<SectionId> = setup.ties.moved.iter().copied().collect();
             // A closure with one end on the side that moves changes length.
