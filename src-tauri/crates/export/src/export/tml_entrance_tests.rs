@@ -198,9 +198,15 @@ fn an_orphan_with_a_fix_and_no_closures_still_exports() {
     assert_eq!(unwritten, 1, "the left-out fix is reported");
 
     let dir = tempfile::TempDir::new().unwrap();
-    let notes = export_tml(&project, &dir.path().join("cave.tml"))
-        .expect("an orphan with no closure must still export, as it did before fixes");
-    assert!(notes.iter().any(|n| n == "gps-anchors-not-written"));
+    let exported = export_tml(&project, &dir.path().join("cave.tml"));
+    assert!(
+        exported.is_ok(),
+        "an orphan with no closure must still export, as it did before fixes: {exported:?}"
+    );
+    assert!(exported
+        .unwrap()
+        .iter()
+        .any(|n| n == "gps-anchors-not-written"));
 
     // A real closure still takes the refusal, and it names the user's closures.
     let mut closed = project;
