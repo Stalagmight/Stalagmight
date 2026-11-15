@@ -54,17 +54,18 @@ use stalagmight_lib::models::{
     AdjustmentFailureReport, AdjustmentReport, AlongLineResult, AzimuthReference, ClosurePair,
     ClosurePreview, ClosureRef, ClosureStrategy, ClosureUpdate, CombineCandidate, CombineJoinEnds,
     CombineJoinKind, CombinePick, CombinePlan, CombineRemovedClosure, CombineRemovedKind,
-    CombineSectionsOptions, ConnectivityResult, Coordinates, CorrectionSource, CreditEdit,
-    CreditTargets, CreditedPerson, CylRole, Cylinder, DeleteShotImpact, DeleteShotRangeImpact,
-    DistanceField, DivePlan, DivePlanMeta, DivePlanSnapshot, Diver, ExistingShotUpdate,
-    FrozenShotRef, GasReachField, GpsBounds, GpsCoordinates, ImportPlacement, ImportSectionConfig,
-    KeptMovesReason, LoopClosureWire, MarkedPoint, NorthReference, PathShot, Person, PlanAnchorSet,
-    PlanMode, PlanSegment, Project, ProjectMetadata, ProjectStats, ProjectWarning, RangeDeleteKind,
-    RouteLeg, RouteProfilePoint, RulerEndpoint, Section, SectionCreditSummary, SectionData,
-    SectionEnd, SectionRelationships, SectionStats, SectionUpdates, Shot, ShotData, ShotKind,
-    ShotUpdates, SkippedClosure, SpeleoLink, SplitAt, SplitPreview, SplitSectionOptions, SplitSide,
-    Station, StationMergeWire, StationPair, StationRef, SurveyCredit, SurveyDirection,
-    TankMaterial, Team, TornTie, TornTieKind, TornTieReason, UnrecognisedShotKind, ZeroDatumWire,
+    CombineReplacedClosure, CombineReplacedKind, CombineSectionsOptions, ConnectivityResult,
+    Coordinates, CorrectionSource, CreditEdit, CreditTargets, CreditedPerson, CylRole, Cylinder,
+    DeleteShotImpact, DeleteShotRangeImpact, DistanceField, DivePlan, DivePlanMeta,
+    DivePlanSnapshot, Diver, ExistingShotUpdate, FrozenShotRef, GasReachField, GpsBounds,
+    GpsCoordinates, ImportPlacement, ImportSectionConfig, KeptMovesReason, LoopClosureWire,
+    MarkedPoint, NorthReference, PathShot, Person, PlanAnchorSet, PlanMode, PlanSegment, Project,
+    ProjectMetadata, ProjectStats, ProjectWarning, RangeDeleteKind, RouteLeg, RouteProfilePoint,
+    RulerEndpoint, Section, SectionCreditSummary, SectionData, SectionEnd, SectionRelationships,
+    SectionStats, SectionUpdates, Shot, ShotData, ShotKind, ShotUpdates, SkippedClosure,
+    SpeleoLink, SplitAt, SplitPreview, SplitSectionOptions, SplitSide, Station, StationMergeWire,
+    StationPair, StationRef, SurveyCredit, SurveyDirection, TankMaterial, Team, TornTie,
+    TornTieKind, TornTieReason, UnrecognisedShotKind, ZeroDatumWire,
 };
 use stalagmight_lib::parsers::compass::{CompassFile, CompassSurveySummary, InvalidShotCounts};
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};
@@ -255,6 +256,8 @@ fn main() {
     export::<CombinePlan>(&out_dir);
     export::<CombineRemovedClosure>(&out_dir);
     export::<CombineRemovedKind>(&out_dir);
+    export::<CombineReplacedClosure>(&out_dir);
+    export::<CombineReplacedKind>(&out_dir);
     export::<TornTie>(&out_dir);
     export::<TornTieKind>(&out_dir);
     export::<TornTieReason>(&out_dir);
@@ -574,6 +577,8 @@ fn main() {
         "CombinePlan",
         "CombineRemovedClosure",
         "CombineRemovedKind",
+        "CombineReplacedClosure",
+        "CombineReplacedKind",
         "TornTie",
         "TornTieKind",
         "TornTieReason",
