@@ -549,6 +549,9 @@ pub struct Database {
 }
 
 mod integrity;
+// The #706 fuzzer's live-connection probe; see the module doc.
+#[cfg(any(test, feature = "test-support"))]
+mod live_scan;
 mod newer_schema;
 mod open;
 mod read;
@@ -562,10 +565,13 @@ mod undo;
 mod warnings;
 mod write;
 
+#[cfg(any(test, feature = "test-support"))]
+pub use live_scan::LiveScan;
 /// How many `resolved_warnings` rows a carry-over will examine (#517). Exported
 /// so a caller's test can size a fixture against the real ceiling instead of
 /// hard-coding a copy of it.
 pub use newer_schema::NewerSchema;
+pub use repair::same_file_on_disk;
 pub use schema_guard::{
     check_schema, declares_virtual_table, refused_schema_object, RefusedSchemaObject,
 };
