@@ -9,8 +9,9 @@
  * claim entrance topology either: entrance-hood is merge-derived in the exporter
  * while this dialog classifies by zero-datum reachability - two predicates that
  * disagree in both directions (see the comment above the AlertDialog in
- * ExportControls.tsx). So the copy states only the true consequence - the export
- * is not georeferenced - and it must (a) name the real fix (Set Zero Datum, via
+ * ExportControls.tsx). So the copy states only the true consequence - no GPS
+ * reading places those sections, which export at the spot the map shows (#741) -
+ * and it must (a) name the real fix (Set Zero Datum, via
  * the station context menu), and (b) distinguish "nothing in this project is
  * anchored" from "some sections aren't" - from the ACTUAL unanchored-section
  * count, not from `zero_datums.length` (a datum whose station no longer resolves

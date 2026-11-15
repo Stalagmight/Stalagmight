@@ -1694,15 +1694,15 @@
       "notes": {
         "azimuth-rotated-to-true": "Bearings rotated to true north for Ariane",
         "azimuth-mixed-unresolved": "Some sections have no declination - Ariane will re-correct all",
-        "gps-anchors-not-written": "Some GPS anchors could not be placed on a station in the file and were not written"
+        "gps-anchors-not-written": "Some zero datums could not be written to the file"
       }
     },
     "tmlUnanchoredWarning": {
       "titleAllUnanchored": "No section is connected to a zero datum",
       "titlePartial": "Some sections aren't connected to a zero datum",
       "bodyAllUnanchored": "No section in this project is connected to a zero datum, so the exported file will not be georeferenced - Ariane will not know where in the world the survey sits. Nothing is discarded: every section and shot still exports. Cancel this dialog, then right-click a station in Survey mode and choose \"Set Zero Datum\" to anchor the survey, or continue to export without georeferencing.",
-      "bodyPartial_one": "{{count}} of {{total}} sections is not connected to a zero datum and will export without georeferencing. Nothing is discarded: every section and shot still exports. Cancel this dialog, then right-click a station in Survey mode and choose \"Set Zero Datum\" to connect it, or continue to export as-is.",
-      "bodyPartial_other": "{{count}} of {{total}} sections are not connected to a zero datum and will export without georeferencing. Nothing is discarded: every section and shot still exports. Cancel this dialog, then right-click a station in Survey mode and choose \"Set Zero Datum\" to connect them, or continue to export as-is.",
+      "bodyPartial_one": "{{count}} of {{total}} sections is not connected to a zero datum, so no GPS reading places it: it will export at the spot the map shows. Nothing is discarded: every section and shot still exports. Cancel this dialog, then right-click a station in Survey mode and choose \"Set Zero Datum\" to connect it, or continue to export as-is.",
+      "bodyPartial_other": "{{count}} of {{total}} sections are not connected to a zero datum, so no GPS reading places them: they will export at the spot the map shows. Nothing is discarded: every section and shot still exports. Cancel this dialog, then right-click a station in Survey mode and choose \"Set Zero Datum\" to connect them, or continue to export as-is.",
       "listHeading": "Sections without a zero datum connection",
       "sectionFallbackName": "Section {{id}}"
     },
