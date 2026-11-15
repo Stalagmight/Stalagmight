@@ -4,6 +4,7 @@ import { DetailLink } from '../common/DetailLink';
 import type { LengthUnit } from '../../types/config';
 import type { CombineCandidate } from '../../types/ipc/CombineCandidate';
 import type { CombinePlan } from '../../types/ipc/CombinePlan';
+import type { CombineRemovedKind } from '../../types/ipc/CombineRemovedKind';
 import type { SectionId, StationRef } from '../../types/project';
 import { formatLength } from '../../utils/formatStats';
 import { formatRotation } from '../../utils/combineSections';
@@ -24,10 +25,12 @@ interface CombinePlanNotesProps {
 /**
  * Everything a combine changes besides joining the shots, for the kept
  * section the dialog currently shows (the backend's `CombinePlan`): the side
- * that moves and how far, the ties that become loop closures, converted
- * bearings, the quality and manual offset the combined section keeps, shot
- * identities that are renewed, and sections that pass through the join. The
- * user reads all of it before confirming; nothing here is a refusal.
+ * that moves and how far, the ties that become loop closures, the ties
+ * removed because as closures they would join the two ends of one shot
+ * (#746), converted bearings, the quality and manual offset the combined
+ * section keeps, shot identities that are renewed, and sections that pass
+ * through the join. The user reads all of it before confirming; nothing here
+ * is a refusal.
  */
 export function CombinePlanNotes({
   candidate,
@@ -122,7 +125,16 @@ export function CombinePlanNotes({
     });
   }
 
-  if (notes.length === 0 && plan.torn_ties.length === 0) return null;
+  // The plan the combine itself runs names these (#746): exactly what it removes.
+  const removed = plan.closures_removed_across_one_shot ?? [];
+  const tieId = (a: StationRef, b: StationRef) =>
+    `${a.section_id}-${a.station_index}-${b.section_id}-${b.station_index}`;
+  const ends = (a: StationRef, b: StationRef) => ({
+    a: <TieEnd at={a} sectionName={sectionName} stationLabel={stationLabel} />,
+    b: <TieEnd at={b} sectionName={sectionName} stationLabel={stationLabel} />,
+  });
+
+  if (notes.length === 0 && plan.torn_ties.length === 0 && removed.length === 0) return null;
   return (
     <div className="space-y-2 text-sm" data-testid="combine-plan-notes">
       <div className="text-text-secondary">{t('dialogs.combineSections.changesTitle')}</div>
@@ -137,7 +149,7 @@ export function CombinePlanNotes({
             {t('dialogs.combineSections.tornTitle', { count: plan.torn_ties.length })}
             <ul className="list-[circle] pl-5 mt-1 space-y-0.5">
               {plan.torn_ties.map((tie) => {
-                const id = `${tie.station_a.section_id}-${tie.station_a.station_index}-${tie.station_b.section_id}-${tie.station_b.station_index}`;
+                const id = tieId(tie.station_a, tie.station_b);
                 const key = tie.kind === 'merge' ? 'tornMerge' : 'tornSnapped';
                 // The datum side is the end that does not move with the moving section.
                 const held = [tie.station_a, tie.station_b].find(
@@ -145,13 +157,7 @@ export function CombinePlanNotes({
                 );
                 return (
                   <li key={id} data-testid={`combine-torn-tie-${id}`}>
-                    <Trans
-                      i18nKey={`dialogs.combineSections.${key}`}
-                      components={{
-                        a: <TieEnd at={tie.station_a} sectionName={sectionName} stationLabel={stationLabel} />,
-                        b: <TieEnd at={tie.station_b} sectionName={sectionName} stationLabel={stationLabel} />,
-                      }}
-                    />
+                    <Trans i18nKey={`dialogs.combineSections.${key}`} components={ends(tie.station_a, tie.station_b)} />
                     {tie.reason === 'zero_datum' && held && (
                       <>
                         {' '}
@@ -176,10 +182,37 @@ export function CombinePlanNotes({
             )}
           </li>
         )}
+        {removed.length > 0 && (
+          <li data-testid="combine-note-removed">
+            <ul className="list-[circle] pl-5 space-y-0.5">
+              {removed.map((tie) => {
+                const id = tieId(tie.station_a, tie.station_b);
+                return (
+                  <li key={id} data-testid={`combine-removed-tie-${id}`}>
+                    <Trans
+                      i18nKey={`dialogs.combineSections.${REMOVED_KEY[tie.kind]}`}
+                      components={ends(tie.station_a, tie.station_b)}
+                    />
+                  </li>
+                );
+              })}
+            </ul>
+            <span className="block mt-1 text-text-secondary" data-testid="combine-removed-why">
+              {t('dialogs.combineSections.removedWhy', { count: removed.length })}
+            </span>
+          </li>
+        )}
       </ul>
     </div>
   );
 }
+
+/** The dialog line for each kind of tie the combine removes (#746). */
+const REMOVED_KEY: Record<CombineRemovedKind, string> = {
+  merge: 'removedMerge',
+  snapped_closure: 'removedSnapped',
+  loop_closure: 'removedClosure',
+};
 
 /** A section as a link pill (name and id), selecting it on click. */
 function SectionPill({ id, name }: { id: SectionId; name: string }) {

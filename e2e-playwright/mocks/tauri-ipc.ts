@@ -627,6 +627,33 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // Joins a split left co-located but unmerged, `[first half end, second
       // half start]`: what the real backend finds by position.
       let colocatedJoins: Array<[{ section_id: number; station_index: number }, { section_id: number; station_index: number }]> = [];
+      // The ties a combine at `keptJoin` / `otherJoin` removes because, combined,
+      // they would be a loop closure across one shot (#746). A narrow model of
+      // the real plan's sweep, for the issue's shape: a one-shot passage X
+      // merged to the kept join station at one end and to the other section's
+      // join station at the other. The join makes the two one point, so the
+      // merge at the other section's end (the side that moves here) would tear
+      // into a closure across X's one shot. The candidate query lists exactly
+      // what `combine_sections` removes: both call this.
+      const mockCombineRemovals = (
+        keptJoin: { section_id: number; station_index: number },
+        otherJoin: { section_id: number; station_index: number },
+      ) => {
+        type Ref = { section_id: number; station_index: number };
+        const merges = (currentProject?.station_merges ?? []) as Array<{ station_a: Ref; station_b: Ref }>;
+        const sections = (currentProject?.sections ?? []) as Array<{ id: number; shots: unknown[] }>;
+        const same = (x: Ref, y: Ref) => x.section_id === y.section_id && x.station_index === y.station_index;
+        const merged = (x: Ref, y: Ref) =>
+          merges.some((m) => (same(m.station_a, x) && same(m.station_b, y)) || (same(m.station_a, y) && same(m.station_b, x)));
+        return merges.flatMap((m) => {
+          const passage = same(m.station_a, otherJoin) ? m.station_b : same(m.station_b, otherJoin) ? m.station_a : null;
+          if (!passage || [keptJoin.section_id, otherJoin.section_id].includes(passage.section_id)) return [];
+          const x = sections.find((s) => s.id === passage.section_id);
+          if (x?.shots.length !== 1) return [];
+          const far = { section_id: x.id, station_index: 1 - passage.station_index };
+          return merged(far, keptJoin) ? [{ station_a: m.station_a, station_b: m.station_b, kind: 'merge' as const }] : [];
+        });
+      };
       (window as unknown as Record<string, unknown>).__MOCK_GET_UNDO_REDO_CALLS__ = () => [...undoRedoCalls];
       (window as unknown as Record<string, unknown>).__MOCK_RESET_UNDO_REDO_CALLS__ = () => {
         undoRedoCalls = [];
@@ -5478,16 +5505,21 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               // Nothing moves within the backend's 1 mm tolerance.
               // Horizontal, as the backend's chain gap is.
               const shift = closure ? (closure.horizontal_misclosure ?? closure.misclosure_distance ?? 0) : 0;
-              const plan = (kept: number, other: number) => ({
-                kept,
-                moving_section: shift > 0.001 ? other : null,
-                kept_moves_because: null,
-                moved_sections: shift > 0.001 ? [other] : [],
-                shift_m: shift > 0.001 ? shift : 0,
-                torn_ties: torn,
-                azimuth_rotation_deg: null,
-                join_offset_change_m: null,
-              });
+              const plan = (kept: number, other: number) => {
+                const [keptJoin, otherJoin] = kept === a.section_id ? [a, b] : [b, a];
+                const removed = mockCombineRemovals(keptJoin, otherJoin);
+                return {
+                  kept,
+                  moving_section: shift > 0.001 ? other : null,
+                  kept_moves_because: null,
+                  moved_sections: shift > 0.001 ? [other] : [],
+                  shift_m: shift > 0.001 ? shift : 0,
+                  torn_ties: torn,
+                  azimuth_rotation_deg: null,
+                  join_offset_change_m: null,
+                  ...(removed.length > 0 ? { closures_removed_across_one_shot: removed } : {}),
+                };
+              };
               return {
                 section_a: a.section_id,
                 section_b: b.section_id,
@@ -5647,6 +5679,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               return ids.has(kept.id) && ids.has(other.id) && ids.size === 2 && !isJoin(m.station_a, m.station_b);
             };
             const tornMerges = merges.filter(between);
+            // What the dialog listed as removed across one shot (#746): gone,
+            // and one warning each, named by the stations before the combine.
+            const removedTies = mockCombineRemovals(joinStations[0]!, joinStations[1]!);
+            const isRemoved = (m: { station_a: Ref; station_b: Ref }) =>
+              removedTies.some((r) => sameRef(r.station_a, m.station_a) && sameRef(r.station_b, m.station_b));
+            const label = (r: Ref) => `${r.section_id}:${r.station_index}`;
+            const removedWarnings = removedTies.map((r) => ({
+              code: 'CLOSURE_REMOVED_ACROSS_ONE_SHOT',
+              message: `Removed the merge of ${label(r.station_a)} and ${label(r.station_b)}: combining the sections left its two stations at the two ends of one shot.`,
+              severity: 'warning',
+            }));
             if (currentProject) {
               const nextClosureId = loopClosures.reduce((max, c) => Math.max(max, Number(c.id ?? 0)), 0) + 1;
               currentProject.loop_closures = [
@@ -5673,14 +5716,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             sections.splice(sections.indexOf(other), 1);
             if (currentProject) {
               currentProject.station_merges = merges.filter(
-                (m) => !between(m) && m.station_a.section_id !== other.id && m.station_b.section_id !== other.id
+                (m) => !between(m) && !isRemoved(m) && m.station_a.section_id !== other.id && m.station_b.section_id !== other.id
               ) as typeof currentProject.station_merges;
             }
             colocatedJoins = colocatedJoins.filter(([a, b]) => a.section_id !== other.id && b.section_id !== other.id);
             // The backend touches the project, as every edit does (the ruler and the reach
             // field reset on modified_at); the undo snapshot keeps the value from before.
             if (currentProject) currentProject.modified_at = new Date(Date.now() + 1).toISOString();
-            return { success: true, section_id: kept.id, section_ids: [kept.id], warnings: [], error: null };
+            return { success: true, section_id: kept.id, section_ids: [kept.id], warnings: removedWarnings, error: null };
           }
 
           case 'preview_delete_shot_range': {
