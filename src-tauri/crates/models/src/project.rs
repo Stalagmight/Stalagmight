@@ -36,6 +36,7 @@ use crate::config::ClosureAdjustmentConfig;
 
 mod adjustment_report;
 mod classify;
+mod closure_dedupe;
 mod closure_shots;
 mod combine_candidate;
 mod combine_plan;
@@ -87,6 +88,13 @@ mod combine_bench;
               print what they covered and the replay prints each step"
 )]
 mod combine_closure_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::panic,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod combine_dedupe_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
@@ -837,9 +845,18 @@ impl Project {
         }
     }
 
-    /// Assign sequential IDs to any loop closures that have id=0 (legacy projects),
-    /// and re-derive the alignment claims the file carries.
+    /// Assign sequential IDs to any loop closures that have id=0 (legacy projects)
+    /// or an id an earlier closure already has, and re-derive the alignment
+    /// claims the file carries.
     /// Updates `next_closure_id` to be greater than all existing IDs.
+    ///
+    /// A file stores a closure's id in `loop_closures.closure_id`, a column
+    /// nothing keeps unique (the table's key is its own row id), so a crafted
+    /// or hand-edited file can repeat one. Every edit that finds a closure by
+    /// its id (a combine taking out its join's closure, `tear_ties`, the
+    /// closures a combine names) would then find the wrong one or both, so
+    /// the later of two closures with one id gets a fresh id here, as an id
+    /// of 0 does.
     ///
     /// The alignment half used to FORCE `is_aligned = true` on every
     /// [`ClosureStrategy::Move`] closure on every open, which is why fixing the
@@ -856,11 +873,15 @@ impl Project {
         if self.next_closure_id <= max_id {
             self.next_closure_id = max_id + 1;
         }
-        // Assign IDs to any closures with id=0
+        // Assign IDs to any closures with id=0, or with an id an earlier
+        // closure already has. A fresh id is above every existing one, so it
+        // never collides with a later closure's.
+        let mut seen: HashSet<u64> = HashSet::with_capacity(self.loop_closures.len());
         for lc in &mut self.loop_closures {
-            if lc.id == 0 {
+            if lc.id == 0 || !seen.insert(lc.id) {
                 lc.id = self.next_closure_id;
                 self.next_closure_id += 1;
+                seen.insert(lc.id);
             }
         }
         self.remeasure_closure_alignment();

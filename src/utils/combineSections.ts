@@ -50,7 +50,8 @@ export function combinePreview(candidate: CombineCandidate): { sections: Section
 /**
  * The map preview for a picker of candidates at one junction: every section
  * involved, the join, and the stations of every tie the combine would turn
- * into a loop closure or remove (#746), for either kept section.
+ * into a loop closure or remove (#746), and of every closure it would
+ * replace with what takes its place (#749), for either kept section.
  */
 export function combinePreviewAll(candidates: CombineCandidate[]): { sections: SectionId[]; stations: StationRef[] } {
   const sections = new Set<SectionId>();
@@ -63,6 +64,9 @@ export function combinePreviewAll(candidates: CombineCandidate[]): { sections: S
     for (const plan of [c.plan_keeping_a, c.plan_keeping_b]) {
       for (const tie of [...(plan?.torn_ties ?? []), ...(plan?.closures_removed_across_one_shot ?? [])]) {
         [tie.station_a, tie.station_b].forEach(ring);
+      }
+      for (const replaced of plan?.closures_replaced ?? []) {
+        [replaced.station_a, replaced.station_b, replaced.by_station_a, replaced.by_station_b].forEach(ring);
       }
     }
   }

@@ -84,6 +84,45 @@ describe('combinePreviewAll', () => {
     } as unknown as CombineCandidate;
     expect(combinePreviewAll([candidate]).stations).toEqual([at(1, 3), at(4, 0), at(7, 1), at(1, 2), at(1, 0)]);
   });
+
+  it('rings the stations of every closure the combine replaces, and of what takes its place (#749)', () => {
+    const at = (section_id: number, station_index: number) => ({ section_id, station_index });
+    const candidate = {
+      section_a: 1,
+      section_b: 4,
+      station_a: at(1, 1),
+      station_b: at(4, 0),
+      plan_keeping_a: {
+        kept: 1,
+        torn_ties: [],
+        closures_replaced: [
+          {
+            station_a: at(4, 2),
+            station_b: at(4, 0),
+            kind: 'legacy_closure',
+            by_station_a: at(1, 1),
+            by_station_b: at(4, 2),
+            by_kind: 'merge',
+          },
+        ],
+      },
+      plan_keeping_b: {
+        kept: 4,
+        torn_ties: [],
+        closures_replaced: [
+          {
+            station_a: at(4, 3),
+            station_b: at(1, 0),
+            kind: 'snapped_closure',
+            by_station_a: at(4, 3),
+            by_station_b: at(1, 1),
+            by_kind: 'loop_closure',
+          },
+        ],
+      },
+    } as unknown as CombineCandidate;
+    expect(combinePreviewAll([candidate]).stations).toEqual([at(1, 1), at(4, 0), at(4, 2), at(4, 3), at(1, 0)]);
+  });
 });
 
 describe('formatRotation', () => {

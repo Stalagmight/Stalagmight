@@ -153,8 +153,8 @@ impl AppState {
                 .iter()
                 .map(|s| (s.id, section_label(s)))
                 .collect();
-            let removed = match project.combine_sections(kept, other, &options) {
-                Ok(removed) => removed,
+            let outcome = match project.combine_sections_reporting(kept, other, &options) {
+                Ok(outcome) => outcome,
                 Err(e) => {
                     // The model re-checks before it mutates, so this is
                     // reachable only if the project changed under the check
@@ -167,7 +167,7 @@ impl AppState {
             // sections and never strands a section on a lone closure. The
             // closures it would leave across one shot it removes itself, from
             // the plan the dialog listed them from (#746).
-            for tie in &removed {
+            for tie in &outcome.removed_across_one_shot {
                 tracing::info!(
                     station_a = ?tie.station_a,
                     station_b = ?tie.station_b,
@@ -176,7 +176,22 @@ impl AppState {
                     "Combine removed a loop closure that would span a single shot"
                 );
             }
-            warnings = combine_removed_warnings(&removed, &labels);
+            // A closure replaced by one the Closures Computed View adjusts on
+            // the same two stations (#749): the dialog listed it, and the
+            // connection stays, so no toast; the log says which.
+            for replaced in &outcome.replaced {
+                tracing::info!(
+                    station_a = ?replaced.station_a,
+                    station_b = ?replaced.station_b,
+                    kind = ?replaced.kind,
+                    by_station_a = ?replaced.by_station_a,
+                    by_station_b = ?replaced.by_station_b,
+                    by_kind = ?replaced.by_kind,
+                    purpose = "keep the closure the solve takes when a combine makes two identical",
+                    "Combine replaced a loop closure with one on the same two stations"
+                );
+            }
+            warnings = combine_removed_warnings(&outcome.removed_across_one_shot, &labels);
             project.touch();
         }
 

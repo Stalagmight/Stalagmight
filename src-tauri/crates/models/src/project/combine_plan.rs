@@ -41,8 +41,9 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    ClosureStrategy, CombinePlan, CombineRemovedClosure, CombineRemovedKind, KeptMovesReason,
-    LoopClosure, SectionId, StationRef, TornTie, TornTieKind, TornTieReason,
+    ClosureStrategy, CombinePlan, CombineRemovedClosure, CombineRemovedKind,
+    CombineReplacedClosure, KeptMovesReason, LoopClosure, SectionId, StationRef, TornTie,
+    TornTieKind, TornTieReason,
 };
 
 use super::closure_shots::Knots;
@@ -66,13 +67,16 @@ pub(crate) struct Tie {
 }
 
 /// A loop closure with its two resolved stations and whether the solve takes
-/// its strategy, for the anchor rule's solve check.
+/// its strategy, for the anchor rule's solve check, and its strategy and
+/// alignment, for naming one the combine replaces (#749).
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ResolvedClosure {
     pub id: u64,
     pub a: StationRef,
     pub b: StationRef,
     pub eligible: bool,
+    pub strategy: ClosureStrategy,
+    pub aligned: bool,
 }
 
 /// What the anchor rule reads about loop closures, worked out once per
@@ -168,6 +172,11 @@ pub(crate) struct TiePlan {
     /// before the combine. The dialog lists exactly these and the combine
     /// removes exactly these: both read this plan.
     pub dropped: Vec<(Tie, CombineRemovedKind)>,
+    /// The closures the combine drops for one the solve takes on the same
+    /// two stations while it is not one itself (#749), each with the one
+    /// that replaces it (`closure_dedupe.rs`). The dialog lists exactly
+    /// these, and the combine checks it replaced exactly these.
+    pub replaced: Vec<CombineReplacedClosure>,
 }
 
 type Adjacency = HashMap<SectionId, Vec<(SectionId, TieId)>>;
@@ -391,11 +400,19 @@ impl Project {
             .into_iter()
             .filter(|t| !dropped.iter().any(|(d, _)| d.id == t.id))
             .collect();
+        // What the combine's closure dedupe will drop for a closure the solve
+        // takes (#749), from the same rule, on the closures this plan leaves.
+        let replaced = if self.combine_may_replace(join.kept, join.other) {
+            Self::closures_replaced(join, facts.closures(self), &torn_ties, &dropped)
+        } else {
+            Vec::new()
+        };
         if !shifting {
             return Ok(TiePlan {
                 torn: torn_ties,
                 kept_offset_wins: true,
                 dropped,
+                replaced,
                 ..TiePlan::default()
             });
         }
@@ -412,6 +429,7 @@ impl Project {
             kept_moves_because,
             kept_offset_wins: moving == join.other,
             dropped,
+            replaced,
         })
     }
 
@@ -425,6 +443,8 @@ impl Project {
                     a: self.resolve_key(&c.station_a)?,
                     b: self.resolve_key(&c.station_b)?,
                     eligible: Self::closure_is_eligible(c.strategy),
+                    strategy: c.strategy,
+                    aligned: c.is_aligned,
                 })
             })
             .collect()
@@ -690,6 +710,7 @@ impl Project {
                     })
                     .collect()
             }),
+            closures_replaced: (!plan.replaced.is_empty()).then(|| plan.replaced.clone()),
         }
     }
 

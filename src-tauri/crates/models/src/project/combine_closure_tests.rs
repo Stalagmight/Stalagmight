@@ -7,6 +7,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use super::closure_dedupe::{ClosureDedupes, CLOSURE_DEDUPES};
 use crate::{
     ClosureStrategy, CombineCandidate, CombineJoinEnds, CombineJoinKind, CombinePick,
     CombineRemovedClosure, CombineRemovedKind, CombineSectionsOptions, GpsCoordinates,
@@ -14,7 +15,7 @@ use crate::{
     StationRef, TornTieKind, TornTieReason,
 };
 
-fn shot(azimuth: f64, length: f64) -> ShotData {
+pub(super) fn shot(azimuth: f64, length: f64) -> ShotData {
     ShotData {
         azimuth_in: azimuth,
         azimuth_out: azimuth,
@@ -23,7 +24,7 @@ fn shot(azimuth: f64, length: f64) -> ShotData {
     }
 }
 
-fn add(project: &mut Project, name: &str, shots: Vec<ShotData>) -> SectionId {
+pub(super) fn add(project: &mut Project, name: &str, shots: Vec<ShotData>) -> SectionId {
     project
         .add_section(SectionData {
             name: Some(name.to_string()),
@@ -34,7 +35,7 @@ fn add(project: &mut Project, name: &str, shots: Vec<ShotData>) -> SectionId {
         .id
 }
 
-fn options(join: Option<CombineJoinEnds>) -> CombineSectionsOptions {
+pub(super) fn options(join: Option<CombineJoinEnds>) -> CombineSectionsOptions {
     CombineSectionsOptions {
         name: "Joined".to_string(),
         color: "#abcdef".to_string(),
@@ -45,12 +46,12 @@ fn options(join: Option<CombineJoinEnds>) -> CombineSectionsOptions {
     }
 }
 
-fn xy(project: &Project, at: StationRef) -> (f64, f64) {
+pub(super) fn xy(project: &Project, at: StationRef) -> (f64, f64) {
     let c = project.compute_station_raw_coords(at).unwrap();
     (c.x, c.y)
 }
 
-fn dist(a: (f64, f64), b: (f64, f64)) -> f64 {
+pub(super) fn dist(a: (f64, f64), b: (f64, f64)) -> f64 {
     (a.0 - b.0).hypot(a.1 - b.1)
 }
 
@@ -698,7 +699,7 @@ fn network(seed: u64) -> Project {
 }
 
 /// Every station's closure-adjusted position (the Plan and Export geometry).
-fn adjusted(project: &Project) -> HashMap<StationRef, (f64, f64)> {
+pub(super) fn adjusted(project: &Project) -> HashMap<StationRef, (f64, f64)> {
     project
         .compute_adjusted_station_coordinates(&crate::config::ClosureAdjustmentConfig::default())
         .into_iter()
@@ -795,7 +796,7 @@ fn root(forest: &mut HashMap<SectionId, SectionId>, x: SectionId) -> SectionId {
 }
 
 /// The invariants after one combine (`what` names it in a failure).
-fn check_combined(
+pub(super) fn check_combined(
     before: &Project,
     after: &Project,
     candidate: &CombineCandidate,
@@ -1003,6 +1004,29 @@ fn check_combined(
         }
         CombineJoinKind::Merged => {}
     }
+    // Where each station of the two sections is in the combined one.
+    let home = |at: StationRef| -> StationRef {
+        if at.section_id == kept {
+            StationRef::new(kept, at.station_index + offset)
+        } else if at.section_id == other {
+            let along = if reversed {
+                no - at.station_index
+            } else {
+                at.station_index
+            };
+            StationRef::new(
+                kept,
+                if kept_end == SectionEnd::End {
+                    nk + along
+                } else {
+                    along
+                },
+            )
+        } else {
+            at
+        }
+    };
+    check_eligible_ties_kept(before, after, candidate, kept, &home, what);
     let (was, was_ok) = adjusted_checked(&tied);
     let (now, now_ok) = adjusted_checked(&with_snaps(after));
     assert!(
@@ -1010,27 +1034,6 @@ fn check_combined(
         "{what}: the closure-adjusted view solved before the combine and fails after it"
     );
     if before.get_connected_section_ids(kept).contains(&other) && was_ok && now_ok {
-        let home = |at: StationRef| -> StationRef {
-            if at.section_id == kept {
-                StationRef::new(kept, at.station_index + offset)
-            } else if at.section_id == other {
-                let along = if reversed {
-                    no - at.station_index
-                } else {
-                    at.station_index
-                };
-                StationRef::new(
-                    kept,
-                    if kept_end == SectionEnd::End {
-                        nk + along
-                    } else {
-                        along
-                    },
-                )
-            } else {
-                at
-            }
-        };
         let tolerance = 1e-4;
         for (at, p) in &was {
             let Some(q) = now.get(&home(*at)) else {
@@ -1047,6 +1050,180 @@ fn check_combined(
     check_structure_muting(after, what, mute);
 }
 
+/// #749, after every combine the sweeps make: every two stations the plan's
+/// model of the joined survey (`joined_sweep`) ties by a closure the solve
+/// takes still have one between them after the combine, at their new
+/// stations: each eligible closure that is not a join tie (the combine
+/// removes those, and the model skips them) and each tie the plan tears into
+/// a `Batch` closure, except the ones the plan lists as removed across one
+/// shot. A dedupe that kept a legacy or snapped closure over the eligible one
+/// on the same two stations fails here, whether or not the anchor rule read
+/// it. `home` maps a station of the two sections to the combined one.
+fn check_eligible_ties_kept(
+    before: &Project,
+    after: &Project,
+    candidate: &CombineCandidate,
+    kept: SectionId,
+    home: &dyn Fn(StationRef) -> StationRef,
+    what: &str,
+) {
+    let (plan, other, join_k, join_o) = if kept == candidate.section_a {
+        (
+            &candidate.plan_keeping_a,
+            candidate.section_b,
+            candidate.station_a,
+            candidate.station_b,
+        )
+    } else {
+        (
+            &candidate.plan_keeping_b,
+            candidate.section_a,
+            candidate.station_b,
+            candidate.station_a,
+        )
+    };
+    let merged = candidate.join_kind == CombineJoinKind::Merged;
+    let group_k = before.get_merge_group(join_k);
+    let join = super::combine_plan::JoinPoint {
+        kept,
+        other,
+        join_k,
+        join_o,
+        group_o: if merged {
+            group_k.clone()
+        } else {
+            before.get_merge_group(join_o)
+        },
+        group_k,
+        merged,
+    };
+    let ordered = |a: StationRef, b: StationRef| {
+        let key = |s: StationRef| (s.section_id, s.station_index);
+        if key(a) <= key(b) {
+            (a, b)
+        } else {
+            (b, a)
+        }
+    };
+    let removed: HashSet<(StationRef, StationRef)> = plan
+        .closures_removed_across_one_shot
+        .iter()
+        .flatten()
+        .map(|r| ordered(r.station_a, r.station_b))
+        .collect();
+    let tied_after: HashSet<(StationRef, StationRef)> = after
+        .loop_closures
+        .iter()
+        .filter(|c| Project::closure_is_eligible(c.strategy))
+        .filter_map(|c| {
+            Some(ordered(
+                after.resolve_key(&c.station_a)?,
+                after.resolve_key(&c.station_b)?,
+            ))
+        })
+        .collect();
+    let eligible_before = before
+        .loop_closures
+        .iter()
+        .filter(|c| Project::closure_is_eligible(c.strategy))
+        .filter_map(|c| {
+            Some((
+                before.resolve_key(&c.station_a)?,
+                before.resolve_key(&c.station_b)?,
+            ))
+        })
+        .filter(|(a, b)| !join.is_join_tie(*a, *b));
+    let torn = plan.torn_ties.iter().map(|t| (t.station_a, t.station_b));
+    for (a, b) in eligible_before.chain(torn) {
+        if removed.contains(&ordered(a, b)) {
+            continue;
+        }
+        let (x, y) = (home(a), home(b));
+        assert!(
+            tied_after.contains(&ordered(x, y)),
+            "{what}: no closure the solve takes is left between {x:?} and {y:?} (was {a:?} - \
+             {b:?})"
+        );
+    }
+}
+
+/// #749, after every combine the sweeps make: the plan the menu offered
+/// names exactly the closures the combine replaced (an empty list absent),
+/// each a closure the solve does not take that was there before on the
+/// stations named, of the kind named, and gone after; and the one that
+/// replaces it was what it is named as before the combine (a merge, a snapped
+/// closure the plan tears, or a loop closure the solve takes). (A miss of the
+/// plan's model is also a panic inside the combine, from its backstop.)
+/// Returns how many it replaced.
+pub(super) fn check_replaced(
+    before: &Project,
+    after: &Project,
+    plan: &crate::CombinePlan,
+    replaced: &[crate::CombineReplacedClosure],
+    what: &str,
+) -> usize {
+    assert_eq!(
+        plan.closures_replaced.clone().unwrap_or_default(),
+        replaced,
+        "{what}: the dialog lists exactly what the combine replaces"
+    );
+    assert_ne!(
+        plan.closures_replaced.as_ref().map(Vec::len),
+        Some(0),
+        "{what}: an empty list is absent"
+    );
+    let same = |project: &Project,
+                c: &crate::StationKey,
+                d: &crate::StationKey,
+                a: StationRef,
+                b: StationRef| {
+        matches!(
+            (project.resolve_key(c), project.resolve_key(d)),
+            (Some(x), Some(y)) if (x, y) == (a, b) || (y, x) == (a, b)
+        )
+    };
+    for r in replaced {
+        let gone: Vec<&LoopClosure> = before
+            .loop_closures
+            .iter()
+            .filter(|c| {
+                !Project::closure_is_eligible(c.strategy)
+                    && super::closure_dedupe::replaced_kind(c.strategy, c.is_aligned) == r.kind
+                    && same(before, &c.station_a, &c.station_b, r.station_a, r.station_b)
+            })
+            .collect();
+        assert!(
+            !gone.is_empty(),
+            "{what}: {r:?} is not a closure of the project before"
+        );
+        assert!(
+            gone.iter()
+                .all(|g| !after.loop_closures.iter().any(|c| c.id == g.id
+                    && c.strategy == g.strategy
+                    && c.is_aligned == g.is_aligned)),
+            "{what}: {r:?} is still there"
+        );
+        let (a, b) = (r.by_station_a, r.by_station_b);
+        let by = match r.by_kind {
+            CombineRemovedKind::Merge => before
+                .station_merges
+                .iter()
+                .any(|m| same(before, &m.station_a, &m.station_b, a, b)),
+            CombineRemovedKind::SnappedClosure => plan.torn_ties.iter().any(|t| {
+                t.kind == TornTieKind::SnappedClosure
+                    && ((t.station_a, t.station_b) == (a, b)
+                        || (t.station_b, t.station_a) == (a, b))
+            }),
+            CombineRemovedKind::LoopClosure => before.loop_closures.iter().any(|c| {
+                Project::closure_is_eligible(c.strategy)
+                    && same(before, &c.station_a, &c.station_b, a, b)
+            }),
+        };
+        assert!(by, "{what}: {r:?} names a replacement that was not there");
+    }
+    replaced.len()
+}
+
 /// #746, after every combine the sweeps make: the plan the menu offered names
 /// exactly the ties the combine removed, each named by stations it had before
 /// the combine and as what it was then (a merge, a snapped closure, an
@@ -1054,7 +1231,7 @@ fn check_combined(
 /// across one shot that was not there before. (A miss of the plan's model is
 /// also a panic inside the combine, from its backstop.) Returns how many it
 /// removed.
-fn check_removed_across_one_shot(
+pub(super) fn check_removed_across_one_shot(
     before: &Project,
     after: &Project,
     plan: &crate::CombinePlan,
@@ -1341,6 +1518,28 @@ struct SweepStats {
     shifted: usize,
     kept_moved: usize,
     with_branches: usize,
+    replaced: usize,
+    replaced_kinds: HashSet<String>,
+}
+
+/// Start counting this thread's closure dedupes (#749) from zero.
+fn reset_closure_dedupes() {
+    CLOSURE_DEDUPES.with(|counts| counts.set(ClosureDedupes::default()));
+}
+
+/// This thread's closure dedupes since [`reset_closure_dedupes`], as a
+/// report line.
+fn closure_dedupes_report() -> String {
+    let counts = CLOSURE_DEDUPES.with(std::cell::Cell::get);
+    format!(
+        "closure dedupes: {} of one eligibility (first kept), {} eligible kept over an earlier \
+         ineligible one (#749), {} eligible kept over a later ineligible one, {} snapped \
+         dropped for an eligible one",
+        counts.same_eligibility,
+        counts.eligible_after_ineligible,
+        counts.eligible_before_ineligible,
+        counts.snapped_dropped_for_eligible
+    )
 }
 
 /// Every combine the station menu offers in `project`, keeping either
@@ -1374,8 +1573,8 @@ fn combine_every_offered(project: &Project, seed: u64, stats: &mut SweepStats) {
                 };
                 let what = format!("seed {seed} {end:?} keep {kept} other {other}");
                 let mut after = project.clone();
-                let removed = after
-                    .combine_sections(
+                let outcome = after
+                    .combine_sections_reporting(
                         kept,
                         other,
                         &options(Some(CombineJoinEnds {
@@ -1384,6 +1583,7 @@ fn combine_every_offered(project: &Project, seed: u64, stats: &mut SweepStats) {
                         })),
                     )
                     .unwrap_or_else(|e| panic!("{what}: {e}"));
+                let removed = outcome.removed_across_one_shot;
                 let plan = if kept == candidate.section_a {
                     &candidate.plan_keeping_a
                 } else {
@@ -1391,6 +1591,10 @@ fn combine_every_offered(project: &Project, seed: u64, stats: &mut SweepStats) {
                 };
                 stats.dropped +=
                     check_removed_across_one_shot(project, &after, plan, &removed, &what);
+                stats.replaced += check_replaced(project, &after, plan, &outcome.replaced, &what);
+                stats
+                    .replaced_kinds
+                    .extend(outcome.replaced.iter().map(|r| format!("{:?}", r.kind)));
                 stats
                     .dropped_kinds
                     .extend(removed.iter().map(|r| format!("{:?}", r.kind)));
@@ -1422,6 +1626,7 @@ fn every_offered_combine_in_random_networks_keeps_the_invariants() {
     let seeds = env("STALAGMIGHT_COMBINE_SEEDS", 120);
     let first = env("STALAGMIGHT_COMBINE_FIRST_SEED", 0);
     let mut stats = SweepStats::default();
+    reset_closure_dedupes();
     for seed in first..first + seeds {
         combine_every_offered(&network(seed), seed, &mut stats);
     }
@@ -1433,13 +1638,17 @@ fn every_offered_combine_in_random_networks_keeps_the_invariants() {
         shifted,
         kept_moved,
         with_branches,
+        replaced,
+        replaced_kinds,
         ..
     } = stats;
     eprintln!(
         "combine sweep seeds {first}..{}: {combined} combines, {torn} torn ties, {dropped} \
          ties removed across one shot, {shifted} shifted, {kept_moved} kept side moved, \
-         {with_branches} moved with attached sections",
-        first + seeds
+         {with_branches} moved with attached sections, {replaced} closures replaced (#749, \
+         {replaced_kinds:?}); {}",
+        first + seeds,
+        closure_dedupes_report()
     );
     // The sweep reaches what it is for (seeds 0..120: 6176 combines, 2342
     // torn ties, 1032 shifts, 292 with the kept side moving, 235 moving
@@ -1565,17 +1774,21 @@ fn every_offered_combine_around_a_passage_keeps_the_invariants() {
     let seeds = env("STALAGMIGHT_COMBINE_PASSAGE_SEEDS", 60);
     let first = env("STALAGMIGHT_COMBINE_PASSAGE_FIRST_SEED", 0);
     let mut stats = SweepStats::default();
+    reset_closure_dedupes();
     for seed in first..first + seeds {
         combine_every_offered(&passage_network(seed), seed, &mut stats);
     }
     eprintln!(
         "combine passage sweep seeds {first}..{}: {} combines, {} torn ties, {} ties removed \
-         across one shot ({:?})",
+         across one shot ({:?}), {} closures replaced (#749, {:?}); {}",
         first + seeds,
         stats.combined,
         stats.torn,
         stats.dropped,
-        stats.dropped_kinds
+        stats.dropped_kinds,
+        stats.replaced,
+        stats.replaced_kinds,
+        closure_dedupes_report()
     );
     if seeds < 50 {
         return;
@@ -1652,6 +1865,8 @@ fn combine_chains(make: fn(u64) -> Project, env_prefix: &str, label: &str) -> us
         .collect();
     let (mut combines, mut splits, mut reverses) = (0usize, 0usize, 0usize);
     let (mut swept_away, mut probed, mut dropped) = (0usize, 0usize, 0usize);
+    let mut replaced = 0usize;
+    reset_closure_dedupes();
     for seed in first..first + seeds {
         let mut rng = Rng(seed.wrapping_mul(0xA24B_AED4_963E_E407) | 1);
         let mut project = make(seed);
@@ -1703,8 +1918,8 @@ fn combine_chains(make: fn(u64) -> Project, env_prefix: &str, label: &str) -> us
                     let op = format!("combine({kept}:{kept_end:?}, {other}:{other_end:?})");
                     let what = what(&op, &trail);
                     let mut after = project.clone();
-                    let removed = after
-                        .combine_sections(
+                    let outcome = after
+                        .combine_sections_reporting(
                             kept,
                             other,
                             &options(Some(CombineJoinEnds {
@@ -1719,8 +1934,14 @@ fn combine_chains(make: fn(u64) -> Project, env_prefix: &str, label: &str) -> us
                     } else {
                         &candidate.plan_keeping_b
                     };
-                    dropped +=
-                        check_removed_across_one_shot(&project, &after, plan, &removed, &what);
+                    dropped += check_removed_across_one_shot(
+                        &project,
+                        &after,
+                        plan,
+                        &outcome.removed_across_one_shot,
+                        &what,
+                    );
+                    replaced += check_replaced(&project, &after, plan, &outcome.replaced, &what);
                     probed += check_no_merge_folds_a_closure(&after, &what);
                     project = after;
                     trail.push(op);
@@ -1797,8 +2018,10 @@ fn combine_chains(make: fn(u64) -> Project, env_prefix: &str, label: &str) -> us
     eprintln!(
         "{label} seeds {first}..{}: {combines} combines, {splits} splits, {reverses} \
          reverses, {swept_away} closures between merged stations removed, {dropped} ties \
-         removed across one shot, {probed} merges of a closure's two ends tried (all refused)",
-        first + seeds
+         removed across one shot, {replaced} closures replaced (#749), {probed} merges of a \
+         closure's two ends tried (all refused); {}",
+        first + seeds,
+        closure_dedupes_report()
     );
     if seeds >= 20 {
         assert!(combines > seeds as usize, "only {combines} combines");
@@ -1966,7 +2189,92 @@ fn replay_a_combine_chain() {
     // "29;combine(0:Start, 1:End);split(0 at 1);reverse(4)", replayed with the
     // plan, ties and gauge printed before each combine. A seed written "p29"
     // starts from `passage_network(29)` (the passage chains).
-    let spec = std::env::var("STALAGMIGHT_COMBINE_CHAIN_REPLAY").unwrap();
+    let replaced = replay_chain(
+        &std::env::var("STALAGMIGHT_COMBINE_CHAIN_REPLAY").unwrap(),
+        true,
+    );
+    eprintln!("replaced over the chain: {replaced:?}");
+}
+
+/// Chains the long campaigns failed on, each the trail its failure printed
+/// (see [`replay_a_combine_chain`]). It pins the shape while the generators
+/// keep their streams; a generator change can turn one into a different
+/// chain, and the hand-built regression of each issue stays.
+const CHAINS_THE_CAMPAIGNS_FAILED_ON: &[&str] = &[
+    // #749: a merge the last combine tears lands on the same two stations as
+    // a legacy closure; the closure the solve takes must stay.
+    "p929;combine(4:End, 5:Start);combine(0:Start, 2:Start);reverse(3);reverse(0);\
+     combine(4:End, 0:Start);combine(3:End, 4:Start)",
+    // #749 again, found by `check_eligible_ties_kept` with the rule before
+    // #749: the last combine drops the eligible one of two closures on 5:4
+    // and 5:1.
+    "p334;combine(1:End, 6:End);split(2 at 1);reverse(2);split(1 at 2);\
+     combine(8:Start, 1:End);combine(2:Start, 7:Start);combine(5:End, 8:End);\
+     split(3 at 1);reverse(0);combine(0:Start, 9:End);combine(5:Start, 4:Start)",
+];
+
+/// [`CHAINS_THE_CAMPAIGNS_FAILED_ON`], replayed with every combine checked
+/// as the chains check it. Each is pinned for a closure its last combine
+/// replaces (#749), so each must still replace one, and between them a
+/// legacy closure: neither the sweeps nor the chains reach that kind in
+/// their default seed ranges.
+#[test]
+fn chains_the_campaigns_failed_on_keep_the_invariants() {
+    let mut kinds = HashSet::new();
+    for spec in CHAINS_THE_CAMPAIGNS_FAILED_ON {
+        let replaced = replay_chain(spec, false);
+        assert!(!replaced.is_empty(), "{spec}: replaced no closure");
+        kinds.extend(replaced.iter().map(|r| format!("{:?}", r.kind)));
+    }
+    assert!(
+        kinds.contains("LegacyClosure"),
+        "no legacy closure replaced: {kinds:?}"
+    );
+}
+
+/// The seeds of the two sweeps (`network`, `passage_network`) whose combines
+/// replace a closure (#749): in 1,000 seeds of either only these do, so the
+/// default seed ranges reach none. Each replaces a snap with the ordinary
+/// closure a torn snap becomes, some with the snap first in the list, where
+/// the rule before #749 kept the snap and dropped the closure the plan
+/// counted (`check_eligible_ties_kept` fails then).
+const SEEDS_THAT_REPLACE_A_CLOSURE: &[u64] = &[350, 519, 619];
+
+/// Every offered combine of [`SEEDS_THAT_REPLACE_A_CLOSURE`], checked as the
+/// sweeps check it, must replace closures, and some with the closure that
+/// stays coming later in the list (the case the rule before #749 got wrong).
+#[test]
+fn the_sweep_seeds_that_replace_a_closure_keep_the_invariants() {
+    let mut stats = SweepStats::default();
+    reset_closure_dedupes();
+    for &seed in SEEDS_THAT_REPLACE_A_CLOSURE {
+        combine_every_offered(&network(seed), seed, &mut stats);
+        combine_every_offered(&passage_network(seed), seed, &mut stats);
+    }
+    let counts = CLOSURE_DEDUPES.with(std::cell::Cell::get);
+    eprintln!(
+        "seeds {SEEDS_THAT_REPLACE_A_CLOSURE:?}: {} combines, {} closures replaced ({:?}); {}",
+        stats.combined,
+        stats.replaced,
+        stats.replaced_kinds,
+        closure_dedupes_report()
+    );
+    assert!(
+        stats.replaced_kinds.contains("SnappedClosure"),
+        "no snap replaced: {:?}",
+        stats.replaced_kinds
+    );
+    assert!(
+        counts.eligible_after_ineligible > 0 && counts.snapped_dropped_for_eligible > 0,
+        "{counts:?}"
+    );
+}
+
+/// Replay the chain `spec` ("seed;op;op;..."), checking every combine like
+/// the chains do; `verbose` prints the plan, the ties and the gauge before
+/// each combine. Returns every closure its combines replaced (#749).
+fn replay_chain(spec: &str, verbose: bool) -> Vec<crate::CombineReplacedClosure> {
+    let mut all_replaced = Vec::new();
     let mut parts = spec.split(';');
     let seed = parts.next().unwrap().trim();
     let mut project = match seed.strip_prefix('p') {
@@ -1982,7 +2290,9 @@ fn replay_a_combine_chain() {
     };
     for op in parts {
         let op = op.trim();
-        eprintln!("== {op}");
+        if verbose {
+            eprintln!("== {op}");
+        }
         if let Some(rest) = op.strip_prefix("combine(") {
             let rest = rest.trim_end_matches(')');
             let (k, o) = rest.split_once(", ").unwrap();
@@ -1999,40 +2309,29 @@ fn replay_a_combine_chain() {
             } else {
                 &c.plan_keeping_b
             };
-            let comp = project.get_connected_section_ids(k);
-            eprintln!(
-                "  kind {:?} plan {:?} anchor {:?} datums {:?}",
-                c.join_kind,
-                plan,
-                project.adjustment_anchor_of(&comp),
-                project
-                    .zero_datums
-                    .iter()
-                    .map(|d| project.resolve_key(&d.station_ref))
-                    .collect::<Vec<_>>()
-            );
-            for m in project.station_merges.iter() {
-                eprintln!(
-                    "  merge {:?} - {:?}",
-                    project.resolve_key(&m.station_a),
-                    project.resolve_key(&m.station_b)
-                );
+            if verbose {
+                print_chain_step(&project, &c, plan, k);
             }
-            for cl in &project.loop_closures {
-                eprintln!(
-                    "  closure {:?} - {:?} aligned {} {:?}",
-                    project.resolve_key(&cl.station_a),
-                    project.resolve_key(&cl.station_b),
-                    cl.is_aligned,
-                    cl.strategy
-                );
-            }
-            eprintln!("  held {:?}", project.held_gauges);
             let mut after = project.clone();
-            let removed = after.combine_sections(k, o, &options(Some(join))).unwrap();
-            eprintln!("  removed across one shot {removed:?}");
-            check_removed_across_one_shot(&project, &after, plan, &removed, op);
+            let outcome = after
+                .combine_sections_reporting(k, o, &options(Some(join)))
+                .unwrap();
+            if verbose {
+                eprintln!(
+                    "  removed across one shot {:?}, replaced {:?}",
+                    outcome.removed_across_one_shot, outcome.replaced
+                );
+            }
+            check_removed_across_one_shot(
+                &project,
+                &after,
+                plan,
+                &outcome.removed_across_one_shot,
+                op,
+            );
+            check_replaced(&project, &after, plan, &outcome.replaced, op);
             check_combined(&project, &after, &c, k, op, &[]);
+            all_replaced.extend(outcome.replaced);
             project = after;
         } else if let Some(rest) = op.strip_prefix("split(") {
             let (id, at) = rest.trim_end_matches(')').split_once(" at ").unwrap();
@@ -2053,6 +2352,46 @@ fn replay_a_combine_chain() {
             project.reverse_section(rest.trim_end_matches(')').parse().unwrap(), true);
         }
     }
+    all_replaced
+}
+
+/// What [`replay_chain`] prints before a combine: the plan, the anchor, the
+/// datums, every merge and closure, and the held gauges.
+fn print_chain_step(
+    project: &Project,
+    c: &CombineCandidate,
+    plan: &crate::CombinePlan,
+    k: SectionId,
+) {
+    let comp = project.get_connected_section_ids(k);
+    eprintln!(
+        "  kind {:?} plan {:?} anchor {:?} datums {:?}",
+        c.join_kind,
+        plan,
+        project.adjustment_anchor_of(&comp),
+        project
+            .zero_datums
+            .iter()
+            .map(|d| project.resolve_key(&d.station_ref))
+            .collect::<Vec<_>>()
+    );
+    for m in &project.station_merges {
+        eprintln!(
+            "  merge {:?} - {:?}",
+            project.resolve_key(&m.station_a),
+            project.resolve_key(&m.station_b)
+        );
+    }
+    for cl in &project.loop_closures {
+        eprintln!(
+            "  closure {:?} - {:?} aligned {} {:?}",
+            project.resolve_key(&cl.station_a),
+            project.resolve_key(&cl.station_b),
+            cl.is_aligned,
+            cl.strategy
+        );
+    }
+    eprintln!("  held {:?}", project.held_gauges);
 }
 
 // ---- The anchor rule and closures across one shot (#737) ---------------------

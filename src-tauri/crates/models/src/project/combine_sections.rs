@@ -50,9 +50,9 @@ use std::collections::{HashMap, HashSet};
 
 use crate::angle::normalize_azimuth;
 use crate::{
-    ClosurePair, ClosuresBeforeEdit, CombineJoinEnds, CombinePick, CombineRemovedClosure,
-    CombineRemovedKind, CombineSectionsOptions, SectionEnd, SectionId, Shot, ShotData, StationKey,
-    StationRef,
+    ClosurePair, ClosuresBeforeEdit, CombineJoinEnds, CombineOutcome, CombinePick,
+    CombineRemovedClosure, CombineRemovedKind, CombineReplacedClosure, CombineSectionsOptions,
+    LoopClosure, SectionEnd, SectionId, Shot, ShotData, StationKey, StationRef,
 };
 
 use super::combine_plan::{JoinPoint, Tie, TieId, TiePlan};
@@ -205,17 +205,65 @@ impl Project {
     /// Returns the ties it removed because, combined, the loop closure each
     /// is or would become joins the two ends of one shot (#746): the plan's
     /// `dropped` list, the one the dialog showed, named by the stations they
-    /// had before the combine.
+    /// had before the combine. [`Self::combine_sections_reporting`] also
+    /// returns the closures it replaced (#749).
     pub fn combine_sections(
         &mut self,
         kept: SectionId,
         other: SectionId,
         options: &CombineSectionsOptions,
     ) -> Result<Vec<CombineRemovedClosure>, String> {
+        self.combine_sections_reporting(kept, other, options)
+            .map(|outcome| outcome.removed_across_one_shot)
+    }
+
+    /// [`Self::combine_sections`], returning both lists the dialog showed:
+    /// the ties removed across one shot (#746), and the closures the
+    /// combine's dedupe dropped for a closure the solve takes on the same two
+    /// stations while not one itself (#749), as the plan's `replaced` list
+    /// names them. What the dedupe really dropped is checked against the
+    /// plan: a miss is a `debug_assert!` failure in a debug build, and in a
+    /// release build an error in the log, with what really happened
+    /// returned.
+    pub fn combine_sections_reporting(
+        &mut self,
+        kept: SectionId,
+        other: SectionId,
+        options: &CombineSectionsOptions,
+    ) -> Result<CombineOutcome, String> {
+        // The steps below find closures by id (the join's own, the ties
+        // `tear_ties` removes, the names of what the dedupe replaces), as
+        // the plan finds them by position: unique ids make the two agree,
+        // and the load gives a repeated one a fresh id (`assign_closure_ids`).
+        debug_assert!(
+            {
+                let mut ids = HashSet::with_capacity(self.loop_closures.len());
+                self.loop_closures.iter().all(|c| ids.insert(c.id))
+            },
+            "combine sections: two loop closures share an id"
+        );
         let setup = self.combine_setup(kept, other, options.join)?;
         // For the check after the join that the plan's prediction left no
         // closure across one shot behind.
         let closures_before = self.closures_before_edit();
+        // Every closure's stations before the combine, by id (unique: the
+        // load gives a repeated one a fresh id, `assign_closure_ids`), to name
+        // what the dedupe replaces; only where it can replace anything.
+        let stations_before: HashMap<u64, (StationRef, StationRef)> =
+            if self.combine_may_replace(kept, other) {
+                let mut stations = HashMap::new();
+                for c in &self.loop_closures {
+                    if let (Some(a), Some(b)) = (
+                        self.resolve_key(&c.station_a),
+                        self.resolve_key(&c.station_b),
+                    ) {
+                        stations.entry(c.id).or_insert((a, b));
+                    }
+                }
+                stations
+            } else {
+                HashMap::new()
+            };
         // Shared shot identities first (a no-op when the command already
         // renewed them), so the held gauge below names shots by the identity
         // they keep.
@@ -223,7 +271,9 @@ impl Project {
         // Before anything moves, including the reverse below.
         let component_gauges = self.hold_component_gauges(&[kept, other]);
         let (remeasure, torn_into) = self.prepare_combine(&setup);
-        self.join_sections(kept, other, &setup, options)?;
+        let deduped = self.join_sections(kept, other, &setup, options)?;
+        let replaced = Self::name_replaced(&deduped, &stations_before, &torn_into);
+        Self::check_replaced_as_planned(&replaced, &setup.ties.replaced);
         // The component's lowest id may now be a third section's (the other
         // section's id is retired): hold the component at the station the
         // adjustment held before. After the parity toggle, which a held
@@ -243,7 +293,34 @@ impl Project {
         removed
             .extend(self.remove_unpredicted_closures_across_one_shot(&closures_before, &torn_into));
         self.touch();
-        Ok(removed)
+        Ok(CombineOutcome {
+            removed_across_one_shot: removed,
+            replaced,
+        })
+    }
+
+    /// The backstop to the plan's `replaced` list (#749): the closures the
+    /// dedupe dropped for one the solve takes are the ones the dialog listed.
+    /// Both come from the one rule (`closure_dedupe`), so a difference is the
+    /// plan's model of the combined closure list missing something: a
+    /// `debug_assert!` failure in a debug build, an error in the log in a
+    /// release build (the combine returns what really happened).
+    fn check_replaced_as_planned(
+        replaced: &[CombineReplacedClosure],
+        planned: &[CombineReplacedClosure],
+    ) {
+        debug_assert_eq!(
+            replaced, planned,
+            "combine replaced closures its plan did not predict"
+        );
+        if replaced != planned {
+            tracing::error!(
+                replaced = replaced.len(),
+                planned = planned.len(),
+                purpose = "list exactly the closures a combine replaces",
+                "Combine replaced closures its plan did not predict"
+            );
+        }
     }
 
     /// The backstop to the plan's prediction (#746): any closure the combined
@@ -352,13 +429,16 @@ impl Project {
     }
 
     /// Join the shots and the two join stations (see the module docs).
+    ///
+    /// Returns what the closure dedupe dropped for a closure the solve takes
+    /// (`Project::dedupe_closures_in`).
     fn join_sections(
         &mut self,
         kept: SectionId,
         other: SectionId,
         setup: &CombineSetup,
         options: &CombineSectionsOptions,
-    ) -> Result<(), String> {
+    ) -> Result<Vec<(LoopClosure, LoopClosure)>, String> {
         let (kept_end, other_end) = (setup.kept_end, setup.other_end);
         if kept_end == other_end && !self.reverse_section(other, options.swap_lr) {
             return Err(format!("Section {other} not found"));
@@ -440,7 +520,7 @@ impl Project {
             })
             .collect();
         let unmoved = self.rekey_station_refs(&homes, "combine sections");
-        self.dedupe_closures_in(kept);
+        let deduped = self.dedupe_closures_in(kept);
         self.dedupe_merges_in(kept);
         self.keep_gauge_on_station(kept, gauge as usize, gauge_capture.as_ref());
         if parity_flip {
@@ -460,7 +540,7 @@ impl Project {
                 );
             });
         }
-        Ok(())
+        Ok(deduped)
     }
 
     /// Make the two join stations one, while the structure is still the old
@@ -586,30 +666,5 @@ impl Project {
         }
         let mut keep = keep.into_iter();
         self.station_merges.retain(|_| keep.next().unwrap_or(true));
-    }
-
-    /// Drop loop closures inside `section_id` that the combine made identical
-    /// (same two stations), keeping the first: a duplicate would count the
-    /// same loop twice in the adjustment.
-    fn dedupe_closures_in(&mut self, section_id: SectionId) {
-        let mut seen: HashSet<(StationRef, StationRef)> = HashSet::new();
-        let duplicates: HashSet<u64> = self
-            .loop_closures
-            .iter()
-            .filter(|c| {
-                c.station_a.section_id == section_id || c.station_b.section_id == section_id
-            })
-            .filter_map(|c| {
-                let (a, b) = (
-                    self.resolve_key(&c.station_a)?,
-                    self.resolve_key(&c.station_b)?,
-                );
-                let pair = if a <= b { (a, b) } else { (b, a) };
-                (!seen.insert(pair)).then_some(c.id)
-            })
-            .collect();
-        if !duplicates.is_empty() {
-            self.loop_closures.retain(|c| !duplicates.contains(&c.id));
-        }
     }
 }

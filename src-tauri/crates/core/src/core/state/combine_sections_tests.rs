@@ -1312,3 +1312,197 @@ fn a_combine_removes_a_closure_its_join_puts_across_one_shot() {
     assert!(project.station_merges.is_empty());
     assert_eq!(project.loop_closures.len(), 1, "the torn merge's closure");
 }
+
+/// #749, the smallest survey, through the command and a saved file. B
+/// (created first, so its start is where the Closures Computed View holds
+/// the survey) runs 10 m east, 9.6 m back west and 5 m north; a legacy
+/// closure (one the solve does not take, as a file from before the deferred
+/// strategies carries it) ties B:2, 0.4 m east of B's start, back to B's
+/// start. A runs one shot 4 m south, its end merged to B:2. Combining A's end
+/// with B's start keeps A, which moves 0.4 m onto B's start, and tears the
+/// merge into a `Batch` closure on the legacy closure's two stations. That
+/// closure is the one left there, so the view solves the joined survey as
+/// the plan said it would, held where B's start was, and the plan lists the
+/// legacy closure as replaced by the torn merge's; one Undo restores the
+/// project byte for byte, Redo re-applies it, and a save and a reopen keep
+/// it. No warning: the connection stays.
+#[test]
+fn a_combine_keeps_the_closure_the_solve_takes_over_a_legacy_one() {
+    use crate::models::{
+        ClosureStrategy, CombineJoinEnds, KeptMovesReason, LoopClosure, SectionEnd,
+    };
+    let temp = tempfile::TempDir::new().unwrap();
+    let path = temp.path().join("legacy-loop.stalx");
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Legacy loop".to_string(),
+        location: None,
+    });
+    let b = create(
+        &state,
+        "B",
+        vec![shot(90.0, 10.0), shot(270.0, 9.6), shot(0.0, 5.0)],
+    );
+    let a = create(&state, "A", vec![shot(180.0, 4.0)]);
+    assert!(b < a);
+    let merged = state.execute(Command::MergeStations {
+        station_a: StationRef::new(a, 1),
+        station_b: StationRef::new(b, 2),
+    });
+    assert!(merged.success, "{:?}", merged.error);
+    let legacy = {
+        let mut guard = state.project.lock().unwrap();
+        let project = guard.as_mut().unwrap();
+        let id = project.next_closure_id;
+        project.next_closure_id += 1;
+        let (station_a, station_b) = (
+            project.key_for_ref(StationRef::new(b, 2)).unwrap(),
+            project.key_for_ref(StationRef::new(b, 0)).unwrap(),
+        );
+        project.loop_closures.push(LoopClosure {
+            id,
+            station_a,
+            station_b,
+            path_length: 19.6,
+            misclosure_distance: 0.4,
+            error_percentage: 0.4 / 19.6 * 100.0,
+            horizontal_misclosure: 0.4,
+            vertical_misclosure: 0.0,
+            strategy: ClosureStrategy::ProportionalByLength,
+            is_aligned: false,
+        });
+        id
+    };
+    // As a file carries it: saved, reopened, still the legacy closure.
+    assert!(
+        state
+            .execute(Command::SaveProject {
+                path: Some(path.clone())
+            })
+            .success
+    );
+    assert!(state.execute(Command::CloseProject).success);
+    assert!(state.open_project(path).success, "reopen");
+    let project = state.get_project_state().unwrap();
+    assert_eq!(
+        project
+            .loop_closures
+            .iter()
+            .map(|c| (c.id, c.strategy))
+            .collect::<Vec<_>>(),
+        vec![(legacy, ClosureStrategy::ProportionalByLength)]
+    );
+    let b0 = project
+        .compute_station_raw_coords(StationRef::new(b, 0))
+        .unwrap();
+
+    let candidate = state
+        .combine_candidates(StationRef::new(a, 1))
+        .unwrap()
+        .into_iter()
+        .find(|c| [c.section_a, c.section_b] == [b, a])
+        .unwrap();
+    let plan = candidate.plan_keeping_b;
+    assert_eq!(candidate.section_b, a);
+    assert_eq!(plan.moving_section, Some(a));
+    assert_eq!(
+        plan.kept_moves_because,
+        Some(KeptMovesReason::AdjustmentAnchor)
+    );
+    assert_eq!(plan.torn_ties.len(), 1, "the merge becomes a loop closure");
+    // The dialog lists the legacy closure the torn merge's closure replaces.
+    assert_eq!(
+        plan.closures_replaced,
+        Some(vec![crate::models::CombineReplacedClosure {
+            station_a: StationRef::new(b, 2),
+            station_b: StationRef::new(b, 0),
+            kind: crate::models::CombineReplacedKind::LegacyClosure,
+            by_station_a: StationRef::new(a, 1),
+            by_station_b: StationRef::new(b, 2),
+            by_kind: crate::models::CombineRemovedKind::Merge,
+        }])
+    );
+    let before = snapshot(&state);
+
+    let result = state.execute_combine_sections(
+        a,
+        b,
+        CombineSectionsOptions {
+            join: Some(CombineJoinEnds {
+                kept: SectionEnd::End,
+                other: SectionEnd::Start,
+            }),
+            ..options()
+        },
+    );
+    assert!(result.success, "{:?}", result.error);
+    assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+    // B's stations follow A's two: B:0 is the joined A:1, B:2 is A:3.
+    let check = |state: &AppState, what: &str| {
+        let project = state.get_project_state().unwrap();
+        assert!(project.station_merges.is_empty(), "{what}");
+        let left: Vec<_> = project
+            .loop_closures
+            .iter()
+            .map(|c| {
+                let mut ends = [
+                    project.resolve_key(&c.station_a).unwrap(),
+                    project.resolve_key(&c.station_b).unwrap(),
+                ];
+                ends.sort_by_key(|s| s.station_index);
+                (c.id == legacy, c.strategy, ends)
+            })
+            .collect();
+        assert_eq!(
+            left,
+            vec![(
+                false,
+                ClosureStrategy::Batch,
+                [StationRef::new(a, 1), StationRef::new(a, 3)]
+            )],
+            "{what}: the torn merge's closure, not the legacy one"
+        );
+        let adjusted =
+            project.compute_adjusted_stations(&crate::config::ClosureAdjustmentConfig::default());
+        assert!(adjusted.failures.is_empty(), "{what}");
+        let at = |index: u32| {
+            let s = adjusted
+                .stations
+                .iter()
+                .find(|s| s.station_ref == StationRef::new(a, index))
+                .unwrap();
+            (s.coordinates.x, s.coordinates.y)
+        };
+        let (joined, b2) = (at(1), at(3));
+        assert!(
+            (joined.0 - b0.x).hypot(joined.1 - b0.y) < 1e-6,
+            "{what}: held where B's start was"
+        );
+        assert!(
+            (joined.0 - b2.0).hypot(joined.1 - b2.1) < 1e-6,
+            "{what}: the Closures Computed View closes the loop"
+        );
+    };
+    check(&state, "combine");
+    let after = snapshot(&state);
+
+    assert!(state.undo().success);
+    assert_eq!(
+        snapshot(&state),
+        before,
+        "one undo restores the legacy closure"
+    );
+    assert!(state.redo().success);
+    assert_eq!(snapshot(&state), after);
+    check(&state, "redo");
+
+    assert!(state.execute(Command::SaveProject { path: None }).success);
+    assert!(state.execute(Command::CloseProject).success);
+    assert!(
+        state
+            .open_project(temp.path().join("legacy-loop.stalx"))
+            .success,
+        "reopen"
+    );
+    check(&state, "reopen");
+}

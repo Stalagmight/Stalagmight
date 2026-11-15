@@ -72,6 +72,8 @@ export * from './ipc/CombineJoinKind';
 export * from './ipc/CombinePlan';
 export * from './ipc/CombineRemovedClosure';
 export * from './ipc/CombineRemovedKind';
+export * from './ipc/CombineReplacedClosure';
+export * from './ipc/CombineReplacedKind';
 export * from './ipc/TornTie';
 export * from './ipc/TornTieKind';
 export * from './ipc/TornTieReason';

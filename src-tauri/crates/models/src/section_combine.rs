@@ -113,7 +113,8 @@ pub struct TornTie {
     pub reason: TornTieReason,
 }
 
-/// What a tie the combine removes was before the combine (#746).
+/// What a tie the combine removes (#746), or the loop closure that replaces
+/// one the combine drops (#749), was before the combine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum CombineRemovedKind {
@@ -136,6 +137,49 @@ pub struct CombineRemovedClosure {
     pub station_a: StationRef,
     pub station_b: StationRef,
     pub kind: CombineRemovedKind,
+}
+
+/// What a loop closure the combine drops for another on the same two
+/// stations was (#749): one the Closures Computed View does not adjust.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum CombineReplacedKind {
+    /// An older kind of closure (proportional or equal distribution), which
+    /// the Closures Computed View does not adjust.
+    LegacyClosure,
+    /// A snapped (aligned) closure: its two stations moved as one and shared
+    /// one depth.
+    SnappedClosure,
+    /// A closure a snap made whose two stations have moved apart since (no
+    /// longer aligned): neither snapped nor adjusted.
+    FormerSnap,
+}
+
+/// A loop closure the combine drops because, combined, another loop closure
+/// ties the same two stations and only that one is adjusted by the Closures
+/// Computed View (#749): the combine keeps the one it adjusts. Both are named
+/// by their stations as they are BEFORE the combine, the replacing one with
+/// what it was then (a merge or snapped closure the combine tears, or a loop
+/// closure already there). Two closures the view treats alike keep the first
+/// silently; nothing changes for the view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct CombineReplacedClosure {
+    pub station_a: StationRef,
+    pub station_b: StationRef,
+    pub kind: CombineReplacedKind,
+    pub by_station_a: StationRef,
+    pub by_station_b: StationRef,
+    pub by_kind: CombineRemovedKind,
+}
+
+/// What `Project::combine_sections_reporting` did besides the join, for the
+/// command to report: the ties it removed across one shot (#746) and the
+/// closures it replaced (#749), each as the plan the dialog showed named
+/// them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CombineOutcome {
+    pub removed_across_one_shot: Vec<CombineRemovedClosure>,
+    pub replaced: Vec<CombineReplacedClosure>,
 }
 
 /// Why the kept section's side is the one that moves.
@@ -185,6 +229,13 @@ pub struct CombinePlan {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub closures_removed_across_one_shot: Option<Vec<CombineRemovedClosure>>,
+    /// The loop closures the combine drops because a closure the Closures
+    /// Computed View adjusts ends up on the same two stations (#749): exactly
+    /// what the combine replaces, from the same plan. Absent when there are
+    /// none (and for a blocked choice).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub closures_replaced: Option<Vec<CombineReplacedClosure>>,
 }
 
 /// Whether two sections can be combined, and where. Read-only: answered by
