@@ -122,8 +122,8 @@ impl StationComponents {
     }
 
     /// Whether two RESOLVED stations are one point: the same station, or one
-    /// merge group - [`Project::are_stations_merged`], in O(α) instead of a
-    /// walk per question.
+    /// merge group - [`Project::are_stations_merged`], in near-constant time
+    /// instead of a walk per question.
     fn one_point(&mut self, a: StationRef, b: StationRef) -> bool {
         if a == b {
             return true;

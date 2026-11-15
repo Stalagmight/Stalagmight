@@ -1671,7 +1671,13 @@ them). A loop closure from
 before the cut to past it, with nothing else tying the halves, is left as their
 only tie, which the split turns into a merge (a closure must close a loop),
 moving one half by the loop's misclosure; the dialog says which half moves and
-how far before the user confirms (`split_section_preview`). One undo step.
+how far before the user confirms (`split_section_preview`). A second closure
+that tied that half to the same point would then tie the point to itself (its
+two stations are merged), so the split removes it (#738), and the dialog lists
+each one by the station ids it was created with: "Loop closure 1:0 to 0:3 is
+removed: its two stations become one point." One undo step brings back every
+closure. A project file that already holds a closure between merged stations
+opens without it ([closures.md](closures.md)).
 
 **Combine Sections** (an end station's context menu, or **Combine 2 Sections...**
 in the section menu when exactly two sections are selected): the two chosen

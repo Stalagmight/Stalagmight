@@ -107,6 +107,31 @@ classified `can_orphan_closures`, and inside the shot-removal paths themselves
 (`Project::convert_closures_orphaned_since`, scoped to what that removal orphaned so
 an inverse does no more than invert).
 
+**A closure between merged stations is removed** by the same sweep: one whose two
+stations are one point - the same station, or one merge group (`are_stations_merged`).
+It closes no loop. The solve can only skip it, its stored misclosure is a gap the
+geometry no longer has, and it would still count as a loop in the project stats and
+keep the Closures Computed View on. No edit makes one directly (Create Loop Closure
+and the shot-removal rewire refuse the pair), but a promotion can: two closures that
+tie a station to the same point record one loop twice (the Merge tool and Combine
+Sections both allow that), and once the sweep promotes one, the other ties that point
+to itself (#738). Converting it would add nothing, so it goes. One forward pass is
+enough: the sweep keeps a station-level merge union-find, extended on every promotion,
+and asks each closure "one point?" before "orphan?"; a promotion only joins components
+that were not connected, so it cannot merge the ends of a closure the pass has already
+kept. `Project::sweep_orphan_closures` reports what it removed.
+
+- **On load** it is silent, exactly as the promotion is: the project opens without
+  the closure, the log says so, and the file settles on the next save.
+- **Inside a command** it is part of that command's undo unit: Split Section Here,
+  the delete-and-split commands, the deletes, unmerges and Remove Zero Datum through
+  `execute()`'s epilogue, Batch and Repair all record a before/after snapshot pair
+  around it, so one Undo brings the closure back.
+- **The scoped sweep** an inverse runs (the shot-removal paths) snapshots
+  `Project::swept_closure_ids` first - orphans and closures already between merged
+  stations - and leaves those as recorded; it removes only what its own promotions
+  make redundant.
+
 The two statements are not equivalent, and the difference is the whole of issue #464:
 
 | | loop closure | station merge |
@@ -170,6 +195,11 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
   the user deleting the closure, splitting and merging by hand, with the same
   move. Instead the Split dialog shows which half moves and how far before the
   user confirms (`AppState::split_section_preview`, the split run on a copy).
+  When a second closure tied that half to the same point, the merge leaves it
+  between merged stations and the split removes it (#738); the dialog lists
+  each one by the station ids it was created with ("Loop closure 1:0 to 0:3 is
+  removed: its two stations become one point."), read off the same sweep on
+  the copy, so it names exactly what the split removes.
 - **Combine Sections** re-keys a closure on either join station onto the one
   joined station, drops any closure across the join point (whatever its
   length, it would tie the joined station to itself), and drops a closure the
