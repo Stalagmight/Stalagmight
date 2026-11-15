@@ -1675,9 +1675,13 @@ how far before the user confirms (`split_section_preview`). A second closure
 that tied that half to the same point would then tie the point to itself (its
 two stations are merged), so the split removes it (#738), and the dialog lists
 each one by the station ids it was created with: "Loop closure 1:0 to 0:3 is
-removed: its two stations become one point." One undo step brings back every
-closure. A project file that already holds a closure between merged stations
-opens without it ([closures.md](closures.md)).
+removed: its two stations become one point." A closure that already tied a
+point to itself goes too, listed as "...: its two stations are already one
+point." One undo step brings back every closure. The delete-and-split commands,
+Delete Shot, Delete Section, Unmerge and Remove Zero Datum remove such closures
+the same way and say so in a toast, by the station ids they were created with.
+A project file that already holds a closure between merged stations, or from a
+station to itself, opens without it ([closures.md](closures.md)).
 
 **Combine Sections** (an end station's context menu, or **Combine 2 Sections...**
 in the section menu when exactly two sections are selected): the two chosen

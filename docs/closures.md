@@ -144,7 +144,14 @@ it on a copy - the callers that keep the result log one line with the count.
 - **Inside a command** it is part of that command's undo unit: Split Section Here,
   the delete-and-split commands, the deletes, unmerges and Remove Zero Datum through
   `execute()`'s epilogue, Batch and Repair all record a before/after snapshot pair
-  around it, so one Undo brings the closure back.
+  around it, so one Undo brings the closure back. Each of those commands except Batch
+  and Repair also reports it: a `CLOSURE_REMOVED_MERGED_ENDS` warning per closure,
+  named by the stations it had BEFORE the edit (`Project::closures_before_sweep`,
+  matched by position, else a unique id, else id and stored ends, since a file can
+  repeat an id), which the frontend shows in the closure-removal toast: "Removed loop
+  closure 1:0 to 0:3: another loop closure became a merge, which made its two
+  stations one point." (or "...: its two stations were already one point." for one
+  the edit did not cause). Split Section Here says it in its dialog instead.
 - **The scoped sweep** an inverse runs (the shot-removal paths) snapshots
   `Project::swept_closure_ids` first - orphans and closures already between merged
   stations - and leaves those as recorded; it removes only what its own promotions
@@ -217,7 +224,11 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
   between merged stations and the split removes it (#738); the dialog lists
   each one by the station ids it was created with ("Loop closure 1:0 to 0:3 is
   removed: its two stations become one point."), read off the same sweep on
-  the copy, so it names exactly what the split removes.
+  the copy, so it names exactly what the split removes. A closure that already
+  tied a point to itself before the split (an undo can restore one from a
+  history recorded before #738) is removed by the same sweep and listed apart
+  ("...: its two stations are already one point."); it tied nothing, so it does
+  not change how the dialog describes the halves.
 - **Combine Sections** re-keys a closure on either join station onto the one
   joined station, drops any closure across the join point (whatever its
   length, it would tie the joined station to itself), and drops a closure the
