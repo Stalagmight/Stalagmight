@@ -84,6 +84,11 @@ export default function EditStationDialog() {
       : null,
     isZeroDatum
   );
+  // The accuracy only weighs a GPS fix (#741): a placement datum puts its piece
+  // on its GPS whatever it says. So the field shows only for a stored fix or a
+  // datum the preview says will be one; otherwise its stored value is kept and
+  // nothing is sent.
+  const showAccuracy = (preview?.role ?? storedDatum?.role) === 'GpsFix';
 
   // Initialize form state from station data
   useEffect(() => {
@@ -150,13 +155,14 @@ export default function EditStationDialog() {
       const wasZeroDatum = station.is_zero_datum;
       const willBeZeroDatum = isZeroDatum;
 
-      if (willBeZeroDatum && accuracy === null) {
+      if (willBeZeroDatum && showAccuracy && accuracy === null) {
         setError(t('dialogs.editStation.accuracyInvalid', { max: MAX_DATUM_ACCURACY_M }));
         return;
       }
       // Send an accuracy only when the user changed it; otherwise keep what is
       // stored, which may be none at all.
-      const accuracyM = accuracy === null ? undefined : datumAccuracyToSend(accuracy, storedDatum?.accuracy_m);
+      const accuracyM =
+        !showAccuracy || accuracy === null ? undefined : datumAccuracyToSend(accuracy, storedDatum?.accuracy_m);
       const accuracyOptions = accuracyM === undefined ? {} : { accuracyM };
 
       if (!wasZeroDatum && willBeZeroDatum) {
@@ -198,7 +204,7 @@ export default function EditStationDialog() {
         const oldLon = station.gps_coordinates?.longitude;
 
         const gpsChanged = gpsCoords.latitude !== oldLat || gpsCoords.longitude !== oldLon;
-        if (gpsChanged || accuracy !== storedAccuracy) {
+        if (gpsChanged || (showAccuracy && accuracy !== storedAccuracy)) {
           const result = await setZeroDatum(
             stationRef,
             {
@@ -249,7 +255,7 @@ export default function EditStationDialog() {
   const isDirty = station ? (
     isZeroDatum !== station.is_zero_datum ||
     gpsInput !== originalGpsInput ||
-    (isZeroDatum && accuracyInput.trim() !== String(storedAccuracy)) ||
+    (isZeroDatum && showAccuracy && accuracyInput.trim() !== String(storedAccuracy)) ||
     comment !== (station.comment ?? '')
   ) : false;
 
@@ -374,30 +380,34 @@ export default function EditStationDialog() {
                 {(preview?.role ?? storedDatum?.role) !== 'GpsFix' &&
                   ' Other stations will have their GPS calculated relative to this datum.'}
               </p>
-              <div className="flex items-center gap-2 pt-2">
-                <label htmlFor="station-datum-accuracy" className="text-sm text-text-secondary shrink-0">
-                  {t('dialogs.editStation.accuracyLabel')}
-                </label>
-                <input
-                  id="station-datum-accuracy"
-                  type="number"
-                  inputMode="decimal"
-                  min={0}
-                  max={MAX_DATUM_ACCURACY_M}
-                  step="any"
-                  value={accuracyInput}
-                  onChange={(e) => setAccuracyInput(e.target.value)}
-                  aria-invalid={accuracy === null}
-                  className="w-24 px-2 py-1.5 bg-background border border-border rounded text-sm"
-                  data-testid="station-datum-accuracy-input"
-                />
-              </div>
-              {accuracy === null ? (
-                <div className="text-xs text-error pl-1" data-testid="station-datum-accuracy-error">
-                  {t('dialogs.editStation.accuracyInvalid', { max: MAX_DATUM_ACCURACY_M })}
-                </div>
-              ) : (
-                <p className="text-xs text-text-secondary">{t('dialogs.editStation.accuracyHint')}</p>
+              {showAccuracy && (
+                <>
+                  <div className="flex items-center gap-2 pt-2">
+                    <label htmlFor="station-datum-accuracy" className="text-sm text-text-secondary shrink-0">
+                      {t('dialogs.editStation.accuracyLabel')}
+                    </label>
+                    <input
+                      id="station-datum-accuracy"
+                      type="number"
+                      inputMode="decimal"
+                      min={0}
+                      max={MAX_DATUM_ACCURACY_M}
+                      step="any"
+                      value={accuracyInput}
+                      onChange={(e) => setAccuracyInput(e.target.value)}
+                      aria-invalid={accuracy === null}
+                      className="w-24 px-2 py-1.5 bg-background border border-border rounded text-sm"
+                      data-testid="station-datum-accuracy-input"
+                    />
+                  </div>
+                  {accuracy === null ? (
+                    <div className="text-xs text-error pl-1" data-testid="station-datum-accuracy-error">
+                      {t('dialogs.editStation.accuracyInvalid', { max: MAX_DATUM_ACCURACY_M })}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-text-secondary">{t('dialogs.editStation.accuracyHint')}</p>
+                  )}
+                </>
               )}
               {storedDatum && (
                 <p className="text-xs text-text-secondary pt-1" data-testid="station-datum-role">
