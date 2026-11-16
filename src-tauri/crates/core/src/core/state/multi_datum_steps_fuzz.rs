@@ -596,6 +596,7 @@ pub(super) fn apply(state: &AppState, origin: &GpsCoordinates, op: &Op, p: &Proj
             station_ref: at,
             coordinates: gps,
             accuracy_m: acc,
+            entrance: None,
         })
     };
     let datum_at = |k: usize| {
