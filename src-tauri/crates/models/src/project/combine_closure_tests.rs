@@ -1063,6 +1063,7 @@ pub(super) fn check_combined(
         }
     };
     check_eligible_ties_kept(before, after, candidate, kept, &home, what);
+    check_torn_reasons(after, plan, kept, other, what);
     // The Closures Computed View solves shots, merges and closures, never a
     // manual offset (a hand move, #755), and once it solves a closure in a
     // survey with a station moved by hand it can put that station off what a
@@ -1138,6 +1139,63 @@ fn hand_move_in_solved_survey(project: &Project) -> bool {
         let component = project.get_connected_section_ids(at.section_id);
         project.component_has_eligible_closure(&component, &skipped)
     })
+}
+
+/// The reason the plan gives each torn tie holds after the combine, which
+/// is what the dialog says of it. One torn for a loop closes one through the
+/// combined section: its two ends share a merge component (an end on the
+/// other section is on the kept one now). One torn for a zero datum tears
+/// on a shift, and the dialog names its end that does not move as held and
+/// "staying where it is": exactly one end is off `moved_sections`, on a
+/// third section (so its id holds), whose part carries a zero datum and
+/// that nothing rigid ties to the combined section any more. A snap a
+/// moving side tears into a part a datum merge is torn from is torn for the
+/// datum, not for a loop (#756).
+fn check_torn_reasons(
+    after: &Project,
+    plan: &crate::CombinePlan,
+    kept: SectionId,
+    other: SectionId,
+    what: &str,
+) {
+    for tie in &plan.torn_ties {
+        if tie.reason != TornTieReason::ZeroDatum {
+            let home = |s: SectionId| if s == other { kept } else { s };
+            let (a, b) = (
+                home(tie.station_a.section_id),
+                home(tie.station_b.section_id),
+            );
+            assert!(
+                after.get_merged_section_ids(a).contains(&b),
+                "{what}: {tie:?} is torn for a loop and closes none"
+            );
+            continue;
+        }
+        assert!(
+            plan.moving_section.is_some(),
+            "{what}: {tie:?} with no move"
+        );
+        let staying: Vec<StationRef> = [tie.station_a, tie.station_b]
+            .into_iter()
+            .filter(|at| !plan.moved_sections.contains(&at.section_id))
+            .collect();
+        let [held] = staying[..] else {
+            panic!("{what}: {tie:?} has {} ends that stay", staying.len());
+        };
+        assert!(
+            held.section_id != kept && held.section_id != other,
+            "{what}: {tie:?} is held on a combined section"
+        );
+        let part = after.get_rigid_connected_section_ids(held.section_id);
+        assert!(
+            !part.contains(&kept),
+            "{what}: {tie:?} leaves the held part rigidly tied to the combined section"
+        );
+        assert!(
+            part.iter().any(|s| after.carries_zero_datum(*s)),
+            "{what}: {tie:?} names a part no zero datum holds"
+        );
+    }
 }
 
 /// #749, after every combine the sweeps make: every two stations the plan's
@@ -1640,6 +1698,9 @@ struct SweepStats {
     /// snaps between those and the rest of their side the plans tear.
     joined_moved: usize,
     apart_torn: usize,
+    /// Snapped closures a moving side tears into a part a zero datum holds,
+    /// which tear for that datum (#756).
+    datum_snaps_moved: usize,
 }
 
 /// Does `plan` move a side by a residual within the tolerance: side-by-side
@@ -1754,6 +1815,14 @@ fn combine_every_offered(project: &Project, seed: u64, stats: &mut SweepStats) {
                         })
                         .count();
                 }
+                stats.datum_snaps_moved += plan
+                    .torn_ties
+                    .iter()
+                    .filter(|t| {
+                        t.reason == TornTieReason::ZeroDatum
+                            && t.kind == TornTieKind::SnappedClosure
+                    })
+                    .count();
                 check_combined(project, &after, &candidate, kept, &what, &[]);
                 stats.combined += 1;
             }
@@ -1793,27 +1862,33 @@ fn every_offered_combine_in_random_networks_keeps_the_invariants() {
         replaced,
         replaced_kinds,
         residual_moved,
+        datum_snaps_moved,
         ..
     } = stats;
     eprintln!(
         "combine sweep seeds {first}..{}: {combined} combines, {torn} torn ties, {dropped} \
          ties removed across one shot, {shifted} shifted, {kept_moved} kept side moved, \
          {with_branches} moved with attached sections, {residual_moved} moved by a residual \
-         within the tolerance (#740), {replaced} closures replaced (#749, {replaced_kinds:?}); \
-         {}",
+         within the tolerance (#740), {replaced} closures replaced (#749, {replaced_kinds:?}), \
+         {datum_snaps_moved} snaps a moving side tore for a zero datum (#756); {}",
         first + seeds,
         closure_dedupes_report()
     );
     // The sweep reaches what it is for (seeds 0..120: 6176 combines, 2342
     // torn ties, 1032 shifts, 292 with the kept side moving, 235 moving
-    // attached sections; master at #747 gives the same). Not asked of a
-    // handful of seeds (a rerun of one).
+    // attached sections; master at #747 gives the same; 88 snaps a moving
+    // side tore for a zero datum, #756). Not asked of a handful of seeds (a
+    // rerun of one).
     if seeds < 50 {
         return;
     }
     assert!(combined > seeds as usize, "only {combined} combines");
     assert!(torn > 0, "no tie was ever torn");
     assert!(shifted > 0, "no side ever moved");
+    assert!(
+        datum_snaps_moved > 0,
+        "no moving side ever tore a snap for a zero datum"
+    );
     assert!(kept_moved > 0, "the kept side never moved");
     assert!(
         with_branches > 0,
@@ -2075,7 +2150,7 @@ fn every_offered_combine_beside_a_side_by_side_pair_keeps_the_invariants() {
     eprintln!(
         "combine side-by-side sweep seeds {first}..{}: {} combines, {} torn ties, {} moved by a \
          residual within the tolerance (#740): {} of them the kept side, {} with attached \
-         sections, {} tearing a tie; {}",
+         sections, {} tearing a tie; {} snaps a moving side tore for a zero datum (#756); {}",
         first + seeds,
         stats.combined,
         stats.torn,
@@ -2083,6 +2158,7 @@ fn every_offered_combine_beside_a_side_by_side_pair_keeps_the_invariants() {
         stats.residual_kept_moved,
         stats.residual_with_branches,
         stats.residual_torn,
+        stats.datum_snaps_moved,
         closure_dedupes_report()
     );
     if seeds < 20 {
@@ -2098,6 +2174,10 @@ fn every_offered_combine_beside_a_side_by_side_pair_keeps_the_invariants() {
         "nothing ever moved with a residual"
     );
     assert!(stats.residual_torn > 0, "a residual never tore a tie");
+    assert!(
+        stats.datum_snaps_moved > 0,
+        "no moving side ever tore a snap for a zero datum"
+    );
 }
 
 /// A hand move (a manual station offset, #755) of about `size` metres in a
