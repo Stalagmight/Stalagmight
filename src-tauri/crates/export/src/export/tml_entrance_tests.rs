@@ -463,6 +463,7 @@ fn raw_datum(project: &mut Project, sr: StationRef, latitude: f64, longitude: f6
             depth_reference: 0.0,
         },
         accuracy_m: None,
+        entrance: None,
     });
 }
 
