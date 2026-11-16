@@ -10,7 +10,7 @@
 
 use chrono::Utc;
 
-use super::combine_closure_tests::{add, check_combined, dist, options, shot, xy};
+use super::combine_closure_tests::{add, adjusted, check_combined, dist, options, shot, xy};
 use crate::{
     ClosureStrategy, CombineJoinEnds, CombineJoinKind, GpsCoordinates, LoopClosure, Project,
     SectionEnd, SectionId, ShotData, StationMerge, StationRef, TornTieKind, TornTieReason,
@@ -850,6 +850,144 @@ fn closures_whose_ends_the_hand_move_moves_apart_are_measured_again() {
                     "branch {branch}: {a:?}-{b:?} {field} {stored}, measured {want}"
                 );
             }
+        }
+    }
+}
+
+/// The Closures Computed View across a combine at two join stations moved
+/// by hand by different amounts, with a branch merged at one, every expected
+/// position worked out here rather than read off the plan (#759).
+///
+/// K runs 20 m east from the origin and holds the view (lowest id, station
+/// 0); L closes a loop on K's first shot (north 1 m, east 10.2 m, south 1 m,
+/// a loop closure to K:1), so the view solves K's survey. O runs 8 m north
+/// from K's end and T 6 m east from O's start, merged there as shown. K's
+/// end is moved (0.2, -0.1) by hand and O's start (-0.15, 0.25). Either O's
+/// start is side by side with K's end (their chain positions on one point,
+/// unmerged) or merged to it (one point as shown, so their chain positions
+/// are the hand moves' difference apart).
+///
+/// Keeping K, the rules say: K's side holds the view's station, so O's side
+/// moves; the joined station keeps K's hand move; O's stations follow O's
+/// chain from K's end. Side by side, the chain gap is 0, so O's far end
+/// stays, and T, merged at the dropped station, moves with the joined
+/// station by the shown gap. Merged, O moves by the chain gap and T, one
+/// point with the joined station, stays. The view then holds K and L where
+/// it held them, shows the joined station where it showed K's end, hangs O
+/// off the joined station's adjusted chain position, and keeps T on it.
+#[test]
+fn a_combine_at_two_hand_moved_join_stations_moves_the_view_as_worked_out() {
+    let (hand_k, hand_o) = ((0.2, -0.1), (-0.15, 0.25));
+    for merged in [false, true] {
+        let what = if merged {
+            "merged join"
+        } else {
+            "side by side"
+        };
+        let mut project = Project::new("Two hand moves".to_string(), None);
+        let k = add(&mut project, "K", vec![shot(90.0, 10.0), shot(90.0, 10.0)]);
+        let l = add(
+            &mut project,
+            "L",
+            vec![shot(0.0, 1.0), shot(90.0, 10.2), shot(180.0, 1.0)],
+        );
+        let o = add(&mut project, "O", vec![shot(0.0, 8.0)]);
+        let t = add(&mut project, "T", vec![shot(90.0, 6.0)]);
+        project
+            .merge_stations(StationRef::new(k, 0), StationRef::new(l, 0))
+            .unwrap();
+        project
+            .create_loop_closure(
+                StationRef::new(l, 3),
+                StationRef::new(k, 1),
+                ClosureStrategy::Batch,
+            )
+            .unwrap();
+        let (k_end, o_start) = (StationRef::new(k, 2), StationRef::new(o, 0));
+        hand_move(&mut project, k_end, (hand_k.0, hand_k.1, 0.0));
+        hand_move(&mut project, o_start, (hand_o.0, hand_o.1, 0.0));
+        let shown_k = (20.0 + hand_k.0, hand_k.1);
+        assert!(dist(xy(&project, k_end), shown_k) < 1e-9, "{what}");
+        if merged {
+            place(&mut project, o, 0, shown_k);
+            project.merge_stations(k_end, o_start).unwrap();
+        } else {
+            place(&mut project, o, 0, (20.0 + hand_o.0, hand_o.1));
+        }
+        let shown_o = xy(&project, o_start);
+        place(&mut project, t, 0, shown_o);
+        project
+            .merge_stations(o_start, StationRef::new(t, 0))
+            .unwrap();
+
+        let before = adjusted(&project);
+        // The view before: K's survey solved, held at K's start.
+        assert!(
+            dist(before[&StationRef::new(k, 0)], (0.0, 0.0)) < 1e-9,
+            "{what}"
+        );
+        let k1 = before[&StationRef::new(k, 1)];
+        assert!(
+            dist(k1, (10.0, 0.0)) > 1e-3,
+            "{what}: the loop is not adjusted"
+        );
+        // K's end is a spur off K:1: its adjusted chain is K:1's plus 10 m east.
+        let joined_shown = (k1.0 + 10.0 + hand_k.0, k1.1 + hand_k.1);
+        assert!(dist(before[&k_end], joined_shown) < 1e-9, "{what}");
+
+        let candidate = project.combine_candidate_for_sections(k, o).unwrap();
+        let plan = &candidate.plan_keeping_a;
+        assert_eq!(candidate.section_a, k, "{what}");
+        assert_eq!(plan.moving_section, Some(o), "{what}: O's side moves");
+        let mut after = project.clone();
+        after.combine_sections(k, o, &options(None)).unwrap();
+        check_combined(&project, &after, &candidate, k, what, &[]);
+
+        // The Raw Data View, worked out.
+        let raw = |at: StationRef| xy(&after, at);
+        let (o_far, t_start, t_far) = (
+            StationRef::new(k, 3),
+            StationRef::new(t, 0),
+            StationRef::new(t, 1),
+        );
+        let t_at = if merged { shown_o } else { shown_k };
+        for (at, want) in [
+            (StationRef::new(k, 0), (0.0, 0.0)),
+            (StationRef::new(k, 1), (10.0, 0.0)),
+            (k_end, shown_k),
+            (o_far, (20.0, 8.0)),
+            (t_start, t_at),
+            (t_far, (t_at.0 + 6.0, t_at.1)),
+        ] {
+            assert!(
+                dist(raw(at), want) < 1e-9,
+                "{what}: {at:?} is at {:?} in the Raw Data View, not {want:?}",
+                raw(at)
+            );
+        }
+
+        // The Closures Computed View, worked out from the one before.
+        let now = adjusted(&after);
+        let joined_chain = (k1.0 + 10.0, k1.1);
+        let mut want: Vec<(StationRef, (f64, f64))> = vec![
+            (k_end, joined_shown),
+            (o_far, (joined_chain.0, joined_chain.1 + 8.0)),
+            (t_start, joined_shown),
+            (t_far, (joined_shown.0 + 6.0, joined_shown.1)),
+        ];
+        for i in 0..=1 {
+            want.push((StationRef::new(k, i), before[&StationRef::new(k, i)]));
+        }
+        for i in 0..=3 {
+            want.push((StationRef::new(l, i), before[&StationRef::new(l, i)]));
+        }
+        for (at, want) in want {
+            assert!(
+                dist(now[&at], want) < 1e-9,
+                "{what}: {at:?} is at {:?} in the Closures Computed View, {:.6} m off {want:?}",
+                now[&at],
+                dist(now[&at], want)
+            );
         }
     }
 }
