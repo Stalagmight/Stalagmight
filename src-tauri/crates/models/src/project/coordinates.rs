@@ -493,8 +493,8 @@ impl Project {
         })
     }
 
-    /// The station the closure-adjusted view holds `component` at: a zero
-    /// datum in it when present, otherwise a deterministic default (the
+    /// The station the closure-adjusted view holds `component` at: a placement
+    /// zero datum in it when present, otherwise a deterministic default (the
     /// component's held gauge, or the lowest section id's gauge station) so
     /// the gauge is reproducible across reloads. The one rule the solve
     /// ([`Self::plan_adjustment_anchors`]) and the edits that must not move
@@ -503,10 +503,11 @@ impl Project {
         &self,
         component: &HashSet<SectionId>,
     ) -> Option<StationRef> {
-        self.zero_datums
-            .iter()
-            .find(|zd| component.contains(&zd.station_ref.section_id))
-            .and_then(|zd| self.resolve_key(&zd.station_ref))
+        // A PLACEMENT datum (#741): a GPS fix is pulled by the solve, never
+        // held, so it cannot be the station the component is held at.
+        self.placement_datum_refs()
+            .into_iter()
+            .find(|sr| component.contains(&sr.section_id))
             .or_else(|| self.default_anchor_for_component(component))
     }
 
@@ -544,8 +545,12 @@ impl Project {
             }
 
             // A closure the solve skips (it spans one shot, #737) gives the
-            // component nothing to solve, so it does not earn a snapshot.
-            if !self.component_has_eligible_closure(&component, skipped) {
+            // component nothing to solve, so it does not earn a snapshot. A GPS
+            // fix is an observation the solve fits, so a component holding one
+            // is adjusted even with no eligible closure (#741).
+            if !self.component_has_eligible_closure(&component, skipped)
+                && !self.component_has_gps_fix(&component)
+            {
                 continue;
             }
 
@@ -607,10 +612,12 @@ impl Project {
     /// is told (#737) instead of finding one line in the log.
     pub fn compute_adjusted_stations(&self, config: &ClosureAdjustmentConfig) -> AdjustedStations {
         // Fast path: nothing to adjust → adjusted == measured (skip the clone).
+        // A GPS fix (#741) is something to adjust too.
         if !self
             .loop_closures
             .iter()
             .any(|lc| Self::closure_is_eligible(lc.strategy))
+            && self.gps_fix_datums().is_empty()
         {
             return AdjustedStations {
                 stations: self.compute_station_coordinates(),

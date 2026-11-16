@@ -518,21 +518,45 @@ impl Database {
     }
 
     /// List backup files for a given project path.
+    ///
+    /// A backup is a file named after the project plus a suffix with `.backup`
+    /// in it, or ending in `.tmp`: `cave.stalx.backup`, `cave.stalx.backup.1`,
+    /// `cave.stalx.tmp`. Only the suffix decides, so a project whose own name
+    /// contains `.backup` (`cave.backup.stalx`) is never offered as a backup of
+    /// itself, and neither is its safety copy `cave.backup.stalx.pre-restore`
+    /// (#720). SQLite's `-journal`, `-wal` and `-shm` files are not databases
+    /// and are never offered, and neither is a file that is empty or does not
+    /// start with SQLite's header: a restore would only refuse it.
     pub fn list_backups(path: &Path) -> Vec<BackupInfo> {
         let mut backups = Vec::new();
         let Some(parent) = path.parent() else {
             return backups;
         };
-        let stem = path.file_name().unwrap_or_default().to_string_lossy();
+        let own_name = path.file_name().unwrap_or_default().to_string_lossy();
 
         if let Ok(entries) = std::fs::read_dir(parent) {
             for entry in entries.flatten() {
                 let name = entry.file_name().to_string_lossy().to_string();
-                // Match patterns: file.stalx.backup, file.stalx.backup.1, file.stalx.tmp
-                let is_backup = name.starts_with(&*stem)
-                    && (name.contains(".backup") || name.to_ascii_lowercase().ends_with(".tmp"));
+                let Some(suffix) = name.strip_prefix(&*own_name) else {
+                    continue;
+                };
+                let suffix = suffix.to_ascii_lowercase();
+                let is_sidecar = ["-journal", "-wal", "-shm"]
+                    .iter()
+                    .any(|sidecar| suffix.ends_with(sidecar));
+                let is_backup = !suffix.is_empty()
+                    && !is_sidecar
+                    && (suffix.contains(".backup")
+                        || suffix
+                            .rsplit_once('.')
+                            .is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("tmp")))
+                    && !same_file_on_disk(&entry.path(), path);
                 if is_backup {
-                    if let Ok(meta) = entry.metadata() {
+                    let file_meta = std::fs::metadata(entry.path())
+                        .ok()
+                        .filter(std::fs::Metadata::is_file)
+                        .filter(|_| starts_like_a_database(&entry.path()));
+                    if let Some(meta) = file_meta {
                         backups.push(BackupInfo {
                             path: entry.path().display().to_string(),
                             size_bytes: meta.len(),
@@ -634,6 +658,38 @@ impl Database {
     }
 }
 
+/// The first 16 bytes of every SQLite database file.
+const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
+
+/// Whether the file at `path` starts with SQLite's header. A cheap filter for
+/// the backup list, not a check that the file opens.
+fn starts_like_a_database(path: &Path) -> bool {
+    use std::io::Read as _;
+    let mut header = [0u8; 16];
+    std::fs::File::open(path)
+        .and_then(|mut file| file.read_exact(&mut header))
+        .is_ok_and(|()| &header == SQLITE_HEADER)
+}
+
+/// The same file on disk: the same canonical path, or (on Unix) the same inode,
+/// which also catches a hard link under another name. What the backup list and
+/// a restore (#720) mean by "the project itself".
+pub fn same_file_on_disk(a: &Path, b: &Path) -> bool {
+    if let (Ok(ca), Ok(cb)) = (a.canonicalize(), b.canonicalize()) {
+        if ca == cb {
+            return true;
+        }
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        if let (Ok(ma), Ok(mb)) = (std::fs::metadata(a), std::fs::metadata(b)) {
+            return ma.dev() == mb.dev() && ma.ino() == mb.ino();
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 #[expect(
     clippy::expect_used,
@@ -645,6 +701,110 @@ impl Database {
 )]
 mod tests {
     use super::{Database, Path};
+
+    /// The file names `list_backups` offers for `dir/project`, sorted.
+    fn offered(dir: &Path, project: &str) -> Vec<String> {
+        let mut names: Vec<String> = Database::list_backups(&dir.join(project))
+            .into_iter()
+            .map(|b| {
+                Path::new(&b.path)
+                    .file_name()
+                    .expect("a backup path names a file")
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// Files that start like a SQLite database, which is all `list_backups`
+    /// looks at besides the name.
+    fn touch(dir: &Path, names: &[&str]) {
+        for name in names {
+            std::fs::write(dir.join(name), b"SQLite format 3\0 and the rest")
+                .expect("write a test file");
+        }
+    }
+
+    /// [#720] An empty file, or one that is not a SQLite database, is never
+    /// offered: a restore would only refuse it.
+    #[test]
+    fn a_backup_that_is_not_a_database_is_not_offered() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        touch(dir.path(), &["cave.stalx", "cave.stalx.backup.2"]);
+        std::fs::write(dir.path().join("cave.stalx.backup"), b"").expect("empty file");
+        std::fs::write(dir.path().join("cave.stalx.backup.1"), b"a text file").expect("text file");
+        std::fs::write(dir.path().join("cave.stalx.tmp"), b"SQLite format").expect("short file");
+
+        assert_eq!(offered(dir.path(), "cave.stalx"), ["cave.stalx.backup.2"]);
+    }
+
+    /// [#720 F3] Backups are named after the project plus a suffix; the
+    /// project, its safety copy, SQLite's sidecars, other projects and folders
+    /// are not backups.
+    #[test]
+    fn list_backups_offers_only_the_projects_backups() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        touch(
+            dir.path(),
+            &[
+                "cave.stalx",
+                "cave.stalx.backup",
+                "cave.stalx.backup.1",
+                "cave.stalx.tmp",
+                "cave.stalx.pre-restore",
+                "cave.stalx-journal",
+                "cave.stalx.backup-journal",
+                "cave.stalx.tmp-journal",
+                "cave.stalx-wal",
+                "cave.stalx-shm",
+                "cave2.stalx",
+                ".cave.stalx.restore-abc.stalx",
+            ],
+        );
+        std::fs::create_dir(dir.path().join("cave.stalx.backup.folder")).expect("mkdir");
+
+        assert_eq!(
+            offered(dir.path(), "cave.stalx"),
+            ["cave.stalx.backup", "cave.stalx.backup.1", "cave.stalx.tmp"]
+        );
+    }
+
+    /// [#720 F3] A project whose own name contains `.backup` was offered as
+    /// its own backup, and so was its safety copy.
+    #[test]
+    fn a_project_named_like_a_backup_is_not_its_own_backup() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        touch(
+            dir.path(),
+            &[
+                "cave.backup.stalx",
+                "cave.backup.stalx.backup",
+                "cave.backup.stalx.pre-restore",
+            ],
+        );
+
+        assert_eq!(
+            offered(dir.path(), "cave.backup.stalx"),
+            ["cave.backup.stalx.backup"]
+        );
+    }
+
+    /// [#720 F3] Nor under another name for the same file.
+    #[cfg(unix)]
+    #[test]
+    fn a_hard_link_to_the_project_is_not_its_backup() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        touch(dir.path(), &["cave.stalx", "cave.stalx.backup"]);
+        std::fs::hard_link(
+            dir.path().join("cave.stalx"),
+            dir.path().join("cave.stalx.backup.1"),
+        )
+        .expect("hard link");
+
+        assert_eq!(offered(dir.path(), "cave.stalx"), ["cave.stalx.backup"]);
+    }
 
     #[test]
     fn fatal_tables_are_a_subset_of_local_tables() {

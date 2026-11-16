@@ -30,6 +30,7 @@ import type { Shot } from './ipc/Shot';
 import type { ShotKind } from './ipc/ShotKind';
 import type { Station } from './ipc/Station';
 import type { StationRef } from './ipc/StationRef';
+import type { DatumRole } from './ipc/DatumRole';
 import type { ClosureRef } from './ipc/ClosureRef';
 import type { GpsCoordinates } from './ipc/GpsCoordinates';
 import type { AzimuthReference } from './ipc/AzimuthReference';
@@ -200,6 +201,9 @@ export function stationKindRank(mask: number): 0 | 1 | 2 {
 }
 /** Bit position of the `is_zero_datum` flag in `stationFlags`. */
 export const STATION_FLAG_IS_ZERO_DATUM = 0b01;
+/** Set, beside {@link STATION_FLAG_IS_ZERO_DATUM}, on a zero datum whose role is
+ *  a GPS fix (#741): it does not place its piece, so the map draws it hollow. */
+export const STATION_FLAG_IS_GPS_FIX = 0b10;
 
 /** Convert a `Float32Array` slot back to `number | null`, using NaN as
  *  the null sentinel - matches the encoding in `loadProjectBinary.ts`. */
@@ -353,6 +357,34 @@ export function findStationGlobalIndex(
     }
   }
   return null;
+}
+
+/**
+ * `data` with {@link STATION_FLAG_IS_GPS_FIX} set on exactly the stations whose
+ * wire datum is a GPS fix. The role is the backend's (`ZeroDatum.role`); this
+ * only finds the stations. Returns `data` itself when no flag changes, else a
+ * copy with its own `stationFlags`, so a renderer keyed on identity sees it.
+ */
+export function withGpsFixFlags(
+  data: SurveyData,
+  zeroDatums: ReadonlyArray<{ station_ref: StationRef; role: DatumRole }>,
+): SurveyData {
+  const fixes = new Set<number>();
+  for (const zd of zeroDatums) {
+    if (zd.role !== 'GpsFix') continue;
+    const g = findStationGlobalIndex(data, zd.station_ref.section_id, zd.station_ref.station_index);
+    if (g !== null) fixes.add(g);
+  }
+  let flags: Uint8Array | null = null;
+  for (let g = 0; g < data.stationCount; g++) {
+    const current = data.stationFlags[g]!;
+    const wanted = fixes.has(g) ? current | STATION_FLAG_IS_GPS_FIX : current & ~STATION_FLAG_IS_GPS_FIX;
+    if (wanted !== current) {
+      flags ??= data.stationFlags.slice();
+      flags[g] = wanted;
+    }
+  }
+  return flags ? { ...data, stationFlags: flags } : data;
 }
 
 /**

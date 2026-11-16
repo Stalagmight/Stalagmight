@@ -418,7 +418,9 @@ edits, as a multi-cell edit or find/replace does.
   datum's station lands on local (0,0), free-floating components included, which
   preserves every station's real-world position (and, for the add, every relative
   position) and changes only the local coordinates
-  (`Project::renormalize_frame`, issue #469)
+  (`Project::renormalize_frame`, issue #469). When the promoted datum was a GPS
+  fix (#741), its piece is first moved onto its GPS against the old frame, so
+  every piece stays on its own GPS through the re-frame
 - **GPS coordinates**: WGS84 (latitude, longitude, depth reference)
 - **Azimuth**: degrees (0-360), stored **as measured**. The stored number is
   never rotated: each section declares what its readings refer to
@@ -483,7 +485,8 @@ These are derived from shot data, not stored:
   surveyed, so counting it would double-count (#689). Shot count includes every
   shot.
 - Loop closure errors
-- Penetration distance (maximum line distance from zero datum)
+- Penetration distance (maximum line distance from the nearest entrance zero datum; a GPS fix
+  mid-passage is not an entrance unless ticked as one, #741)
 
 ---
 
@@ -1681,6 +1684,12 @@ built anywhere in this flow; it is tracked as an enhancement in #524.
 3. All section offsets are recalculated
 4. Undo restores previous GPS coordinates
 
+Changing only the accuracy of a datum (its GPS unchanged) moves nothing, for a
+placement datum and a GPS fix alike; only a new GPS reading re-places a piece.
+A station holds at most one zero datum: setting one on a station that already
+holds a datum under another identity is refused, and re-setting a datum
+updates it in place.
+
 **Removing a Zero Datum:**
 1. Right-click the zero datum station → "Set Zero Datum", untick "Set as Zero
    Datum", and click Save
@@ -1760,7 +1769,13 @@ it, for the section it shows as kept, before the user confirms:
   ends meet. The kept side moves instead when a zero datum holds the other side
   and not the kept one, or, with no datum deciding, when the other side holds
   the station the Closures Computed View holds the survey at: moving it would
-  shift the whole cave in Plan and Export. The dialog says which and why.
+  shift the whole cave in Plan and Export. The dialog says which and why. Ends
+  side by side move a side by their residual under 1 mm the same way, with
+  everything merged to it, so merged stations stay one point and reopening
+  the project moves nothing (#740). The dialog lists a move that small only
+  when it turns a tie into a loop closure (a snap from the moving side, or,
+  with zero datums on both sides, the moving section's merge), so the tie's
+  listed reason has its cause beside it.
 - **Ties become loop closures.** A merge or snapped (aligned) closure that
   would tie the combined section to itself, or keep the moving side tied to what
   stays, becomes an ordinary loop closure between the same two stations: the
@@ -1768,19 +1783,42 @@ it, for the section it shows as kept, before the user confirms:
   moves there, and the closures the combine made or stretched are measured
   again. When both sides are anchored by zero datums, the moving side's merge
   towards its own datum becomes a closure too (a closure may tie two anchored
-  groups; a merge may not).
+  groups; a merge may not). Where two loop closures end up tying the same two
+  stations, one stays: the first that the Closures Computed View adjusts (the
+  first of them when it adjusts none), so a legacy (proportional or equal) or
+  snapped closure there gives way to an ordinary one, such as the closure a
+  torn merge becomes (#749). A snapped closure that gives way no longer
+  averages its two stations' depths. Details lists each closure that gives
+  way and what takes its place ("This closure is replaced:"); two closures
+  the Closures Computed View treats alike keep the first without a word.
+- **Ties across one shot are removed.** A tie that, combined, would be a loop
+  closure joining the two ends of one shot (for example the merge at the far
+  end of a one-shot passage merged to both join stations) would only be skipped
+  by the Closures Computed View, so the combine removes it instead (#746).
+  Before the confirm the dialog says how many connections it removes, outside
+  the folded Details, and Details list each under "This connection is
+  removed:" (or "These N connections are removed:"), each with why: as a loop
+  closure it would join the two ends of one shot. A warning toast names them
+  afterwards, each station with its section's name, and the one Undo brings
+  them back. A closure that already joined the two ends of one shot is left
+  alone.
 - **Bearings convert.** The combined section has one north reference, the kept
   one's: the other section's stored azimuths turn by the difference, so every
   station stays where it is.
 - The kept section's quality factor wins; the fixed side's manual offset on the
-  join station wins (the dialog says how far the other moves); shots of the
+  join station wins (the dialog says how far the other moves), and a section
+  merged at the other join station, on a join that is not merged, moves with
+  the joined station (its side's shift plus the difference of the two
+  offsets), so it stays merged to it (#755; the dialog lists it); shots of the
   other section that share an identity (uuid) with the kept one's get new ones;
   a depth gap between unmerged join stations is reported, whatever its size
   (the joined station takes the average); a section with no shots is absorbed
   at its one station.
 
-Refused, with the reason in the menu row: both sections carrying a zero datum on
-one of their own stations (the combined section would hold two), sections that
+Refused, with the reason in the menu row: both sections placed by their own zero
+datum on one of their own stations (merge them first, so the later datum becomes
+a GPS fix), the two join stations each holding a zero datum (the combined
+station would hold two; remove one first), sections that
 meet nowhere (merge two of their ends, or create a loop closure between them,
 first), more than 99,999 shots, and a kept section that has used up its shot
 numbers for the session. A section is never combined with itself. Every shot
@@ -2392,6 +2430,32 @@ function useNetworkStatus() {
 3. Export Salvageable Data
 4. Cancel
 
+#### Restore from Backup
+The dialog offers the files beside the project named after it plus a suffix
+that contains `.backup` or ends in `.tmp` (`cave.stalx.backup`,
+`cave.stalx.backup.1`, `cave.stalx.tmp`), and only those that start with
+SQLite's header. It never offers the project itself (nor, on Unix, a hard
+link to it), its
+`.pre-restore` copy, SQLite's `-journal`/`-wal`/`-shm` files, or an empty file
+(#720).
+
+A restore never writes into a file in place, and a restore that is refused or
+fails changes nothing:
+- Refused while the project, its `<project>.stalx.pre-restore` or the backup is
+  open in the app, or while a project is being opened; when the backup is the
+  project itself; when the backup does not open as a project (empty, not a
+  project, damaged too); when an armed journal or a WAL with frames sits beside
+  the backup, the project or the `.pre-restore` copy; when one of those files,
+  or such a sidecar, is not a regular file; and when the project or the backup
+  was saved by a newer version.
+- Otherwise the backup is copied beside the project and opened as a project
+  first. The previous `.pre-restore` copy is set aside, a copy of the project
+  replaces it, and the backup copy replaces the project, each by rename. If the
+  last step fails, the previous `.pre-restore` copy goes back. On Unix the
+  restored file keeps the project's permission bits.
+- The dialog never offers the `.pre-restore` copy. Restoring it directly (over
+  IPC) swaps the two files back.
+
 #### Backup Before Repair
 Always create backup before attempting repair:
 ```rust
@@ -2907,7 +2971,7 @@ The dropdown also closes when pressing Ctrl+Z or Ctrl+Y (global undo/redo shortc
 | Recorded inclination disagrees with length/depth (> inclination_depth_diff_threshold, default 15°) | Warning | "Shot {section_id}:{position} recorded inclination {pitch}° disagrees with the {computed}° implied by its length and depth change (exceeds {threshold}° threshold)" |
 | Non-finite field value | Error | "Shot {section_id}:{position} has non-finite value(s) in: {fields}" |
 | Inclination outside -90 to 90 degrees | Error | "Shot {section_id}:{position} has an out-of-range pitch_{in/out}: {value}° (must be between -90° and 90°)" |
-| Merge group anchored by two or more zero datums | Error | "This merge group is anchored by {n} zero datums ({anchors}). Two or more GPS anchors over-constrain one rigid group; keep one and remove the others." |
+| GPS fix far from its surveyed position (gap > 15 m + 2% of the survey distance from the placement datum of its piece) | Warning | "The GPS position of this zero datum is {gap} m from where the survey puts it (bearing {bearing} degrees), more than the {threshold} m expected. ..." Ignore covers that GPS reading only: a new GPS on the datum brings the warning back, and undoing that change brings the Ignore back. |
 | Duplicate station merge | Error | "These stations are already merged" |
 
 ---

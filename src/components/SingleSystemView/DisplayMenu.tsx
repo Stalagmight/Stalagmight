@@ -41,7 +41,7 @@ import {
 import { getThemeColor } from '../../utils/themeColors';
 import { getContrastColor } from '../../utils/colors';
 import { setSource } from '../../utils/telemetry';
-import { hasEligibleClosures } from '../../utils/closures';
+import { hasAdjustmentInputs } from '../../utils/closures';
 import { hasStationNames } from '../../types/survey-data';
 import { useOnboardingStep } from '../../hooks/useOnboardingStep';
 
@@ -256,9 +256,9 @@ export default function DisplayMenu({
   );
 
   // The closure-adjusted view only differs from measured when the project has at
-  // least one closure eligible for the solve (Batch / LeastSquaresWeighted);
-  // otherwise the option is disabled (it would render identical geometry).
-  const hasClosures = useProjectStore((s) => hasEligibleClosures(s.project?.loop_closures ?? []));
+  // least one closure eligible for the solve (Batch / LeastSquaresWeighted) or a
+  // GPS fix (#741); otherwise the option is disabled (identical geometry).
+  const hasClosures = useProjectStore((s) => (s.project ? hasAdjustmentInputs(s.project) : false));
   const hasNames = useProjectStore((s) => hasStationNames(s.surveyData));
 
   const selectColorMode = (mode: ColorMode) => {

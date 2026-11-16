@@ -178,13 +178,15 @@ describe('computeIssueScores: levels, switched-off errors, average', () => {
     expect(merged.station[3]).toBe(0.688);
   });
 
-  it('average mode does not average away an over-anchored datum', () => {
+  it('average mode does not average away a datum warning on its station', () => {
     const avg = issueScaleFrom(T, {}, [], 'average');
     const datumError: ProjectWarning = {
-      ...warn(1, 101, 'error', { code: 'multiple_datums_per_merge_component' }),
-      datumRefs: [{ section_id: 2, station_index: 1 }],
+      ...warn(2, 201, 'error', { code: 'datum_gps_gap' }),
+      datumStationIndex: 1,
     };
-    const s = scores(fixture(), [datumError], avg);
+    // Station 4 (2:1) is merged with station 0, so its average also takes in
+    // pristine shot 101 - only the datum raise keeps it at 3.
+    const s = scores(fixture({ merged: [[0, 4]] }), [datumError], avg);
     expect(s.station[4]).toBe(3);
   });
 });
@@ -220,17 +222,12 @@ describe('computeIssueScores: stations', () => {
     expect(scores(data, [warn(1, 101, 'error')]).station[2]).toBe(0);
   });
 
-  it('over-anchoring colours every datum station, not just the representative shot', () => {
-    const w: ProjectWarning = {
-      ...warn(1, 101, 'error', { code: 'multiple_datums_per_merge_component' }),
-      datumRefs: [
-        { section_id: 1, station_index: 0 },
-        { section_id: 2, station_index: 0 },
-      ],
-    };
+  it('a GPS gap warning colours the fix station it names, not only its shot', () => {
+    // Attached to shot 101 (stations 0-1) but naming station 1:2, which only
+    // pristine shot 102 touches.
+    const w: ProjectWarning = { ...warn(1, 101, 'warning', { code: 'datum_gps_gap' }), datumStationIndex: 2 };
     const s = scores(fixture(), [w]);
-    expect(s.station[0]).toBe(3);
-    expect(s.station[3]).toBe(3);
+    expect(s.station[2]).toBe(1);
   });
 });
 

@@ -18,7 +18,15 @@ import {
 } from '../displayColor';
 import { closureErrorScore, issueScoreColor } from '../issueColor';
 import { defaultIssueLevels } from '../issueScale';
-import { surveyDataFromLegacy } from '../../../../types/survey-data';
+import {
+  STATION_FLAG_IS_GPS_FIX,
+  STATION_FLAG_IS_ZERO_DATUM,
+  surveyDataFromLegacy,
+  withGpsFixFlags,
+} from '../../../../types/survey-data';
+import type { DatumRole } from '../../../../types/ipc/DatumRole';
+import { makeColorResolvers } from '../customRender/colorResolvers';
+import { packCssColor } from '../customRender/colorPack';
 import { getMapThemeColors } from '../../../../utils/themeColors';
 import { getDepthColor } from '../../../../utils/colors';
 import type { Section } from '../../../../types/ipc/Section';
@@ -196,11 +204,64 @@ describe('resolveStationDisplayColor / resolveStationStrokeColor', () => {
   });
 
   it('stroke: theme stroke in flat mode; zero-datum ring in depth mode', () => {
-    expect(resolveStationStrokeColor(false, ctxFor(false))).toBe(theme.strokeColor);
-    expect(resolveStationStrokeColor(true, ctxFor(false))).toBe(theme.strokeColor);
-    expect(resolveStationStrokeColor(true, ctxFor(true))).toBe(theme.zeroDatum);
-    expect(resolveStationStrokeColor(false, ctxFor(true))).toBe(theme.strokeColor);
+    expect(resolveStationStrokeColor(0, ctxFor(false))).toBe(theme.strokeColor);
+    expect(resolveStationStrokeColor(STATION_FLAG_IS_ZERO_DATUM, ctxFor(false))).toBe(theme.strokeColor);
+    expect(resolveStationStrokeColor(STATION_FLAG_IS_ZERO_DATUM, ctxFor(true))).toBe(theme.zeroDatum);
+    expect(resolveStationStrokeColor(0, ctxFor(true))).toBe(theme.strokeColor);
   });
+});
+
+describe('GPS fix marker (#741)', () => {
+  const ctxFor = (showDepthGradient: boolean): DisplayColorContext => ({
+    showDepthGradient,
+    depthRange,
+    themeColors: theme,
+    showIssueSeverity: false,
+  });
+  /** Two placed datums, 1:0 and 2:0; the backend's role for 2:0 is `role`. */
+  const dataWith = (role: DatumRole) => {
+    const { sections, stations } = fixture();
+    stations[3] = { ...stations[3]!, is_zero_datum: true };
+    return withGpsFixFlags(surveyDataFromLegacy(sections, stations), [
+      { station_ref: { section_id: 1, station_index: 0 }, role: 'Placement' },
+      { station_ref: { section_id: 2, station_index: 0 }, role },
+    ]);
+  };
+
+  it('flags exactly the stations whose wire role is a GPS fix', () => {
+    const fix = dataWith('GpsFix');
+    const flagged = [...fix.stationFlags.keys()].filter((g) => (fix.stationFlags[g]! & STATION_FLAG_IS_GPS_FIX) !== 0);
+    expect(flagged).toEqual([findStationGlobal(fix, 2, 0)]);
+    const placed = dataWith('Placement');
+    expect(placed.stationFlags.every((f) => (f & STATION_FLAG_IS_GPS_FIX) === 0)).toBe(true);
+  });
+
+  it('leaves the data untouched when nothing is a fix', () => {
+    const { sections, stations } = fixture();
+    const data = surveyDataFromLegacy(sections, stations);
+    expect(withGpsFixFlags(data, [{ station_ref: { section_id: 1, station_index: 0 }, role: 'Placement' }])).toBe(data);
+  });
+
+  for (const depth of [false, true]) {
+    it(`draws a fix as a hollow zero-datum ring, unlike the placement datum (depth ${depth})`, () => {
+      const fix = dataWith('GpsFix');
+      const g = findStationGlobal(fix, 2, 0);
+      const ctx = ctxFor(depth);
+      expect(resolveStationDisplayColor(fix, '#00ff00', g, ctx)).toBe(theme.background);
+      expect(resolveStationStrokeColor(fix.stationFlags[g]!, ctx)).toBe(theme.zeroDatum);
+      // The renderer's packed bytes follow the same rule.
+      const resolvers = makeColorResolvers(fix, ctx);
+      expect(resolvers.fillForStation(g)).toEqual(packCssColor(theme.background));
+      expect(resolvers.strokeForStation(g)).toEqual(packCssColor(theme.zeroDatum));
+
+      // The same station as a placement datum is solid: never the background.
+      const placed = dataWith('Placement');
+      const fill = resolveStationDisplayColor(placed, '#00ff00', g, ctx);
+      expect(fill).not.toBe(theme.background);
+      if (!depth) expect(fill).toBe(theme.zeroDatum);
+      expect(placed.stationFlags[g]! & STATION_FLAG_IS_ZERO_DATUM).not.toBe(0);
+    });
+  }
 });
 
 describe('Survey Issues gradient (issue scores)', () => {

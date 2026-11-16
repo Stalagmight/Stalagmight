@@ -114,6 +114,54 @@ save cannot then drop the rows for good (#717). All three
 tables are project data and ride in SpeleoDB pushes. See
 `persistence/sqlite/shot_credits.rs`.
 
+## Zero datum fixes
+
+A merge-connected survey can hold several zero datums (#741). Their roles are
+derived from list order, never stored: the first datum of a component places
+it, every later one is a GPS fix. `zero_datums` keeps exactly what an older
+build expects, the placement datums (at most one per merge component) in list
+order, so SpeleoDB's reader (exactly v18, explicit column lists) and older
+builds see nothing new. GPS fixes and accuracies live in a side table with no
+schema bump, `zero_datum_extras (position, section_id, station_index,
+shot_uuid, in_zero_datums, latitude, longitude, depth_reference, accuracy_m,
+start_shot_uuid)`: one row per saved datum, placement and fix alike, keyed by
+its place in the list. `in_zero_datums` says whether its GPS is the
+`zero_datums` row at that station (a placement datum) or the row's own (a fix);
+`accuracy_m` is NULL for the default; `shot_uuid` is the uuid of the shot
+ending at the station (NULL for station 0), and `start_shot_uuid`, for station
+0 only, the uuid of the section's first shot, the one starting there. The rows are written only when the project has a fix or a
+stored accuracy, so a file without them reads from `zero_datums` alone, which
+is the migration for every older file.
+
+An older build drops the table on its next save (it writes a fresh file), so it
+loses the fixes and accuracies and keeps the placements. Neither build can tell
+afterwards, so a save of a project that holds a fix or a stored accuracy
+(`holds_datum_extras`, the same test the writer uses) carries the
+`OLDER_BUILDS_DROP_GPS_FIXES` warning, and the frontend shows it as a warning
+toast once per project per session (`src/utils/gpsFixSaveNotice.ts`). A save into the live
+connection (the SpeleoDB rename path), a repair or another tool can instead
+rewrite `zero_datums` and the shots in place and leave the table beside them.
+So the table is used only while its placement rows name exactly the
+`zero_datums` stations; otherwise it is ignored as a whole, with a warning, and
+the project loads as that older build saw it. A row whose `shot_uuid` no longer
+matches its station is skipped, and so is a station 0 row whose
+`start_shot_uuid` is no longer the section's first shot (a writer reversed the
+section in place, or put a shot before its start). A station 0 row without
+`start_shot_uuid` (written before the column existed) is checked by its section
+alone. Corrupt rows are skipped and counted, an
+unusable accuracy reads as the default, and a table of another shape or with
+more rows than the file has stations is ignored: never a failed open. SQLite
+failing for a reason of its own still fails the open, as for the credit
+tables. See `persistence/sqlite/datum_extras.rs`.
+
+No build writes two datums on one station: setting a datum on a station that
+holds one is refused, and Combine refuses a join that would fold two datums
+onto one station. A row that names a station already holding a datum is
+therefore skipped on load. Opening a file moves no station: an older file
+whose merge was torn between two datum-placed pieces has that merge turned
+back into a loop closure before the offset re-solve (see
+[closures.md](closures.md)).
+
 ## Save Pipeline
 
 ### Backend (`save_project` in `project_io.rs`)
@@ -291,6 +339,15 @@ Undo and redo stacks are persisted to the SQLite database synchronously on each 
 - Serialization uses gzip compression
 - A save rewrites the WHOLE persisted stack, every time - it has to, because the pipeline above builds a fresh temp file and renames it over the target, so anything a save skips is gone (#303). The byte budget is therefore a latency bound as much as a storage one; see [Undo/Redo](undo-redo.md)
 - On project open, persisted stacks are restored from the database
+- A whole-project snapshot (`ProjectSnapshot`, `ProjectSnapshotPair`) mirrors the
+  `zero_datum_extras` split (#741): its `zero_datums` holds the placement and
+  dangling datums only, and each GPS fix rides beside it under
+  `zero_datum_fixes` with its place in the whole list. An older build reads a
+  persisted snapshot as a plain `Project` and ignores that key, so an Undo there
+  restores the placements alone, never two datums in one merge component; this
+  build merges the fixes back in list order (`core/undo/snapshot_fixes.rs`). A
+  snapshot without the key, including one written before it, restores its
+  `zero_datums` as they are. Fixes that cannot be read refuse the restore.
 - See [Undo/Redo](undo-redo.md) for the full undo system documentation, including the hybrid SpeleoDB mode and when the stack is cleared
 
 ## CommandResult.saved_path

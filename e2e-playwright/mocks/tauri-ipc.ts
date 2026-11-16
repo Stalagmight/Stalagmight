@@ -315,6 +315,83 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         return { ...project, sections };
       };
 
+      // #741: a zero datum's ROLE is derived, never stored (backend
+      // `datum_roles.rs`): the first datum (list order) of each merge-connected
+      // group of sections places that group, every later one in the group is a GPS
+      // fix. Sections join through station merges.
+      type MockStationRef = { section_id: number; station_index: number };
+      const mockDatumRole = (
+        project: { station_merges?: unknown[]; zero_datums?: unknown[] },
+        ref: MockStationRef
+      ): 'Placement' | 'GpsFix' => {
+        const parent = new Map<number, number>();
+        const root = (s: number): number => {
+          let r = s;
+          while (parent.has(r)) r = parent.get(r)!;
+          return r;
+        };
+        const merges = (project.station_merges ?? []) as Array<{ station_a: MockStationRef; station_b: MockStationRef }>;
+        for (const m of merges) {
+          const a = root(m.station_a.section_id);
+          const b = root(m.station_b.section_id);
+          if (a !== b) parent.set(a, b);
+        }
+        const group = root(ref.section_id);
+        const datums = (project.zero_datums ?? []) as Array<{ station_ref: MockStationRef }>;
+        const placing = datums.find((d) => root(d.station_ref.section_id) === group);
+        if (!placing) return 'Placement';
+        const same =
+          placing.station_ref.section_id === ref.section_id && placing.station_ref.station_index === ref.station_index;
+        return same ? 'Placement' : 'GpsFix';
+      };
+      // #741: whether a datum is an ENTRANCE, resolved like the backend
+      // (`datum_entrance.rs`): a placement datum always is; a GPS fix follows
+      // its stored `entrance` answer, else is one on its section's first or
+      // last station.
+      const mockDatumIsEntrance = (
+        project: { sections?: unknown[] },
+        ref: MockStationRef,
+        role: 'Placement' | 'GpsFix',
+        entrance: boolean | undefined
+      ): boolean => {
+        if (role === 'Placement') return true;
+        if (entrance !== undefined) return entrance;
+        const section = ((project.sections ?? []) as Array<{ id: number; shots?: unknown[] }>).find(
+          (s) => s.id === ref.section_id
+        );
+        return ref.station_index === 0 || ref.station_index === (section?.shots?.length ?? 0);
+      };
+      /** A GPS fix's gap. The mock has no geometry, so it is canned; a spec can
+       *  override it through `window.__MOCK_DATUM_GAP__`. */
+      const mockDatumGap = (): unknown =>
+        (window as unknown as Record<string, unknown>).__MOCK_DATUM_GAP__ ?? {
+          gap_m: 40,
+          bearing_deg: 45,
+          survey_distance_m: 1400,
+          threshold_m: 43,
+          exceeds_threshold: false,
+        };
+      /** Stamp each datum's derived role, entrance flag and, for a GPS fix, its
+       *  gap on an (already cloned) wire project, as `Project::zero_datums_wire` does. */
+      const withDatumRoles = <P extends { station_merges?: unknown[]; zero_datums?: unknown[]; sections?: unknown[] } | null>(project: P): P => {
+        if (!project) return project;
+        for (const d of (project.zero_datums ?? []) as Array<{
+          station_ref: MockStationRef;
+          role?: 'Placement' | 'GpsFix';
+          entrance?: boolean;
+          is_entrance?: boolean;
+          gap?: unknown;
+        }>) {
+          d.role = mockDatumRole(project, d.station_ref);
+          d.is_entrance = mockDatumIsEntrance(project, d.station_ref, d.role, d.entrance);
+          // The stored answer is backend-only; the wire carries the resolved flag.
+          delete d.entrance;
+          if (d.role === 'GpsFix') d.gap = mockDatumGap();
+          else delete d.gap;
+        }
+        return project;
+      };
+
       // #310: live plan pins are kept as opaque ANCHORS beside their positional refs, so a
       // survey edit that renumbers stations doesn't silently retarget them. The real backend
       // names a station by the shots on either side of it (core/state/dive_plan.rs's
@@ -633,6 +710,33 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // Joins a split left co-located but unmerged, `[first half end, second
       // half start]`: what the real backend finds by position.
       let colocatedJoins: Array<[{ section_id: number; station_index: number }, { section_id: number; station_index: number }]> = [];
+      // The ties a combine at `keptJoin` / `otherJoin` removes because, combined,
+      // they would be a loop closure across one shot (#746). A narrow model of
+      // the real plan's sweep, for the issue's shape: a one-shot passage X
+      // merged to the kept join station at one end and to the other section's
+      // join station at the other. The join makes the two one point, so the
+      // merge at the other section's end (the side that moves here) would tear
+      // into a closure across X's one shot. The candidate query lists exactly
+      // what `combine_sections` removes: both call this.
+      const mockCombineRemovals = (
+        keptJoin: { section_id: number; station_index: number },
+        otherJoin: { section_id: number; station_index: number },
+      ) => {
+        type Ref = { section_id: number; station_index: number };
+        const merges = (currentProject?.station_merges ?? []) as Array<{ station_a: Ref; station_b: Ref }>;
+        const sections = (currentProject?.sections ?? []) as Array<{ id: number; shots: unknown[] }>;
+        const same = (x: Ref, y: Ref) => x.section_id === y.section_id && x.station_index === y.station_index;
+        const merged = (x: Ref, y: Ref) =>
+          merges.some((m) => (same(m.station_a, x) && same(m.station_b, y)) || (same(m.station_a, y) && same(m.station_b, x)));
+        return merges.flatMap((m) => {
+          const passage = same(m.station_a, otherJoin) ? m.station_b : same(m.station_b, otherJoin) ? m.station_a : null;
+          if (!passage || [keptJoin.section_id, otherJoin.section_id].includes(passage.section_id)) return [];
+          const x = sections.find((s) => s.id === passage.section_id);
+          if (x?.shots.length !== 1) return [];
+          const far = { section_id: x.id, station_index: 1 - passage.station_index };
+          return merged(far, keptJoin) ? [{ station_a: m.station_a, station_b: m.station_b, kind: 'merge' as const }] : [];
+        });
+      };
       (window as unknown as Record<string, unknown>).__MOCK_GET_UNDO_REDO_CALLS__ = () => [...undoRedoCalls];
       (window as unknown as Record<string, unknown>).__MOCK_RESET_UNDO_REDO_CALLS__ = () => {
         undoRedoCalls = [];
@@ -2044,7 +2148,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               // showed the populated count. A deep clone keeps every consumer's
               // ref-identity check honest, not just the sections one. (Caused ~50
               // full-suite failures; smoke seeds once, so it never hit this.)
-              project: currentProject ? withShotCredit(structuredClone(currentProject)) : currentProject,
+              project: currentProject ? withDatumRoles(withShotCredit(structuredClone(currentProject))) : currentProject,
               stations: mockStations,
               stats: {
                 section_count: currentProject?.sections.length ?? 0,
@@ -2074,8 +2178,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // What the closure-adjusted view left out (#737). The mock solves
             // nothing, so it skips nothing and nothing fails - unless a spec
             // plants a report on window.__MOCK_ADJUSTMENT_REPORT__.
+            // A planted report may predate `far_gps_fixes` (#741); default it.
             const planted = (window as unknown as Record<string, unknown>).__MOCK_ADJUSTMENT_REPORT__;
-            return planted ?? { skipped_closures: [], failures: [] };
+            const empty = { skipped_closures: [], failures: [], far_gps_fixes: [] };
+            return planted ? { ...empty, ...(planted as object) } : empty;
           }
 
           case 'get_station_distances_from': {
@@ -4139,13 +4245,27 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           case 'set_zero_datum': {
             console.log('[Mock IPC] set_zero_datum called with:', args);
-            // Update currentProject's zero_datums to reflect the change
+            {
+              const win = window as unknown as Record<string, unknown>;
+              const calls = (win.__MOCK_SET_ZERO_DATUM_CALLS__ as unknown[]) ?? [];
+              calls.push(args ?? null);
+              win.__MOCK_SET_ZERO_DATUM_CALLS__ = calls;
+            }
+            // Update currentProject's zero_datums to reflect the change. Like the
+            // backend (#741), a second datum in a connected survey is accepted: it
+            // becomes a GPS fix. The role is derived on read (withDatumRoles).
             if (currentProject && args) {
               const stationRef = args.stationRef as { section_id: number; station_index: number };
               const coordinates = args.coordinates as { latitude: number; longitude: number; depth_reference: number };
+              // Optional accuracy in metres; absent means the backend default.
+              const accuracyM = typeof args.accuracyM === 'number' ? args.accuracyM : undefined;
+              // Optional entrance answer; absent keeps the stored one (#741).
+              const entrance = typeof args.entrance === 'boolean' ? args.entrance : undefined;
               const datums = currentProject.zero_datums as Array<{
                 station_ref: { section_id: number; station_index: number };
                 gps: { latitude: number; longitude: number; depth_reference: number };
+                accuracy_m?: number;
+                entrance?: boolean;
               }>;
               // Update in-place if exists, otherwise push
               const existing = datums.find(
@@ -4155,16 +4275,48 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               );
               if (existing) {
                 existing.gps = coordinates;
+                if (accuracyM === undefined) delete existing.accuracy_m;
+                else existing.accuracy_m = accuracyM;
+                if (entrance !== undefined) existing.entrance = entrance;
               } else {
                 // In-place mutation (same array identity) is load-bearing for the
                 // deep-clone reactivity guard: datum-closure-reactivity.spec.ts only
                 // catches a shallow-clone regression because the fresh array identity
                 // comes from get_project_state's structuredClone, NOT from this write.
                 // If this is ever changed to fresh-copy zero_datums, update that spec.
-                datums.push({ station_ref: stationRef, gps: coordinates });
+                datums.push({
+                  station_ref: stationRef,
+                  gps: coordinates,
+                  ...(accuracyM === undefined ? {} : { accuracy_m: accuracyM }),
+                  ...(entrance === undefined ? {} : { entrance }),
+                });
               }
             }
             return { success: true, section_ids: [] };
+          }
+
+          case 'preview_zero_datum': {
+            // #741: read-only. The role comes from the same derivation as the wire
+            // roles, and a GPS fix gets the same canned gap (mockDatumGap).
+            const win = window as unknown as Record<string, unknown>;
+            const calls = (win.__MOCK_PREVIEW_ZERO_DATUM_CALLS__ as unknown[]) ?? [];
+            calls.push(args ?? null);
+            win.__MOCK_PREVIEW_ZERO_DATUM_CALLS__ = calls;
+            if (!currentProject || !args) return null;
+            const stationRef = args.stationRef as MockStationRef;
+            const section = (currentProject.sections as Array<{ id: number; shots?: unknown[] }>).find(
+              (s) => s.id === stationRef.section_id
+            );
+            if (!section || stationRef.station_index > (section.shots?.length ?? 0)) return null;
+            const role = mockDatumRole(currentProject, stationRef);
+            const stored = (currentProject.zero_datums as Array<{ station_ref: MockStationRef; entrance?: boolean }>).find(
+              (d) =>
+                d.station_ref.section_id === stationRef.section_id &&
+                d.station_ref.station_index === stationRef.station_index
+            );
+            const is_entrance = mockDatumIsEntrance(currentProject, stationRef, role, stored?.entrance);
+            if (role === 'Placement') return { role, is_entrance };
+            return { role, gap: mockDatumGap(), is_entrance };
           }
 
           case 'remove_zero_datum': {
@@ -5616,19 +5768,26 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 .filter((m) => pair.has(m.station_a.section_id) && pair.has(m.station_b.section_id) && m.station_a.section_id !== m.station_b.section_id)
                 .filter((m) => !((same(m.station_a, a) && same(m.station_b, b)) || (same(m.station_a, b) && same(m.station_b, a))))
                 .map((m) => ({ station_a: m.station_a, station_b: m.station_b, kind: 'merge', reason: 'loop' }));
-              // Nothing moves within the backend's 1 mm tolerance.
+              // The mock's co-located ends coincide exactly, so only a closure
+              // join moves a side (the backend also moves one by a side-by-side
+              // residual under 1 mm, #740, which the dialog does not list).
               // Horizontal, as the backend's chain gap is.
               const shift = closure ? (closure.horizontal_misclosure ?? closure.misclosure_distance ?? 0) : 0;
-              const plan = (kept: number, other: number) => ({
-                kept,
-                moving_section: shift > 0.001 ? other : null,
-                kept_moves_because: null,
-                moved_sections: shift > 0.001 ? [other] : [],
-                shift_m: shift > 0.001 ? shift : 0,
-                torn_ties: torn,
-                azimuth_rotation_deg: null,
-                join_offset_change_m: null,
-              });
+              const plan = (kept: number, other: number) => {
+                const [keptJoin, otherJoin] = kept === a.section_id ? [a, b] : [b, a];
+                const removed = mockCombineRemovals(keptJoin, otherJoin);
+                return {
+                  kept,
+                  moving_section: shift > 0.001 ? other : null,
+                  kept_moves_because: null,
+                  moved_sections: shift > 0.001 ? [other] : [],
+                  shift_m: shift > 0.001 ? shift : 0,
+                  torn_ties: torn,
+                  azimuth_rotation_deg: null,
+                  join_offset_change_m: null,
+                  ...(removed.length > 0 ? { closures_removed_across_one_shot: removed } : {}),
+                };
+              };
               return {
                 section_a: a.section_id,
                 section_b: b.section_id,
@@ -5788,6 +5947,22 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               return ids.has(kept.id) && ids.has(other.id) && ids.size === 2 && !isJoin(m.station_a, m.station_b);
             };
             const tornMerges = merges.filter(between);
+            // What the dialog listed as removed across one shot (#746): gone,
+            // and one warning each, named by the stations before the combine.
+            const removedTies = mockCombineRemovals(joinStations[0]!, joinStations[1]!);
+            const isRemoved = (m: { station_a: Ref; station_b: Ref }) =>
+              removedTies.some((r) => sameRef(r.station_a, m.station_a) && sameRef(r.station_b, m.station_b));
+            // Each station with its section's name before the combine, as the
+            // backend names them (the other section is gone afterwards).
+            const label = (r: Ref) => {
+              const name = sections.find((x) => x.id === r.section_id)?.name?.trim();
+              return `${name ? name : `Section ${r.section_id}`} ${r.section_id}:${r.station_index}`;
+            };
+            const removedWarnings = removedTies.map((r) => ({
+              code: 'CLOSURE_REMOVED_ACROSS_ONE_SHOT',
+              message: `Removed the merge of ${label(r.station_a)} and ${label(r.station_b)}: combining the sections left its two stations at the two ends of one shot.`,
+              severity: 'warning',
+            }));
             if (currentProject) {
               const nextClosureId = loopClosures.reduce((max, c) => Math.max(max, Number(c.id ?? 0)), 0) + 1;
               currentProject.loop_closures = [
@@ -5814,14 +5989,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             sections.splice(sections.indexOf(other), 1);
             if (currentProject) {
               currentProject.station_merges = merges.filter(
-                (m) => !between(m) && m.station_a.section_id !== other.id && m.station_b.section_id !== other.id
+                (m) => !between(m) && !isRemoved(m) && m.station_a.section_id !== other.id && m.station_b.section_id !== other.id
               ) as typeof currentProject.station_merges;
             }
             colocatedJoins = colocatedJoins.filter(([a, b]) => a.section_id !== other.id && b.section_id !== other.id);
             // The backend touches the project, as every edit does (the ruler and the reach
             // field reset on modified_at); the undo snapshot keeps the value from before.
             if (currentProject) currentProject.modified_at = new Date(Date.now() + 1).toISOString();
-            return { success: true, section_id: kept.id, section_ids: [kept.id], warnings: [], error: null };
+            return { success: true, section_id: kept.id, section_ids: [kept.id], warnings: removedWarnings, error: null };
           }
 
           case 'preview_delete_shot_range': {

@@ -1278,6 +1278,8 @@ fn test_save_load_zero_datums() {
             longitude: -93.987_654_321_098_76, // 14 decimal places
             depth_reference: 123.456_789,
         },
+        accuracy_m: None,
+        entrance: None,
     };
 
     let zd2 = ZeroDatum {
@@ -1287,6 +1289,8 @@ fn test_save_load_zero_datums() {
             longitude: 151.209_876_543_210_98,
             depth_reference: -15.5,
         },
+        accuracy_m: None,
+        entrance: None,
     };
 
     project.zero_datums.push(zd1);
@@ -3213,6 +3217,8 @@ fn test_save_load_complex_project_round_trip() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(section_a, 0).into(),
         gps: GpsCoordinates::new(45.5, -90.3, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
     // Add loop closure
@@ -3362,6 +3368,12 @@ fn test_list_backups_empty_when_no_backups() {
     assert!(backups.is_empty());
 }
 
+/// Bytes that start like a SQLite database: `list_backups` skips any file that
+/// does not (#720), and these tests are about the names.
+fn sqlite_like(tag: &[u8]) -> Vec<u8> {
+    [b"SQLite format 3\0".as_slice(), tag].concat()
+}
+
 #[test]
 fn test_list_backups_finds_backup_files() {
     let temp_dir = TempDir::new().unwrap();
@@ -3369,12 +3381,28 @@ fn test_list_backups_finds_backup_files() {
     std::fs::write(&db_path, b"original").unwrap();
 
     // Create backup-named files
-    std::fs::write(temp_dir.path().join("project.stalx.backup"), b"backup0").unwrap();
-    std::fs::write(temp_dir.path().join("project.stalx.backup.1"), b"backup1").unwrap();
+    std::fs::write(
+        temp_dir.path().join("project.stalx.backup"),
+        sqlite_like(b"backup0"),
+    )
+    .unwrap();
+    std::fs::write(
+        temp_dir.path().join("project.stalx.backup.1"),
+        sqlite_like(b"backup1"),
+    )
+    .unwrap();
     // A .tmp file for the same stem
-    std::fs::write(temp_dir.path().join("project.stalx.tmp"), b"tmp").unwrap();
+    std::fs::write(
+        temp_dir.path().join("project.stalx.tmp"),
+        sqlite_like(b"tmp"),
+    )
+    .unwrap();
     // Unrelated file should not appear
-    std::fs::write(temp_dir.path().join("other.stalx.backup"), b"other").unwrap();
+    std::fs::write(
+        temp_dir.path().join("other.stalx.backup"),
+        sqlite_like(b"other"),
+    )
+    .unwrap();
 
     let backups = Database::list_backups(&db_path);
     // Should find 3 matching files (project.stalx.backup, .backup.1, .tmp)
@@ -3392,9 +3420,17 @@ fn test_list_backups_sorted_newest_first() {
     std::fs::write(&db_path, b"original").unwrap();
 
     // Create files with slightly different timestamps
-    std::fs::write(temp_dir.path().join("project.stalx.backup"), b"old").unwrap();
+    std::fs::write(
+        temp_dir.path().join("project.stalx.backup"),
+        sqlite_like(b"old"),
+    )
+    .unwrap();
     std::thread::sleep(std::time::Duration::from_millis(50));
-    std::fs::write(temp_dir.path().join("project.stalx.backup.1"), b"newer").unwrap();
+    std::fs::write(
+        temp_dir.path().join("project.stalx.backup.1"),
+        sqlite_like(b"newer"),
+    )
+    .unwrap();
 
     let backups = Database::list_backups(&db_path);
     assert_eq!(backups.len(), 2);

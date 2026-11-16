@@ -1922,6 +1922,7 @@ pub fn run() {
             commands::station::unmerge_stations,
             commands::station::unmerge_station_pair,
             commands::station::set_zero_datum,
+            commands::station::preview_zero_datum,
             commands::station::remove_zero_datum,
             commands::station::set_station_comment,
             commands::station::set_station_name,

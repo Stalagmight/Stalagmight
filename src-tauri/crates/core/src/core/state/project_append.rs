@@ -132,7 +132,9 @@ pub(super) fn append_project(
 }
 
 /// Translate the copied sections so a georeferenced source lands at its GPS
-/// position: its first resolvable datum's station goes to that datum's local
+/// position: its first resolvable datum's station (the source's frame, and a
+/// placement datum in the target too: the copy's datums are appended after the
+/// target's and its merges stay inside the copy, #741) goes to that datum's local
 /// position in the target's frame (`frame_before`, the target's frame datum
 /// before this copy), or to the origin when the target had no frame (the copied
 /// datum then BECOMES the frame).
@@ -339,7 +341,7 @@ fn copy_zero_datums(
             };
             let new_station_ref = StationRef::new(new_section_id, src_sr.station_index);
             target
-                .store_zero_datum_without_repositioning(new_station_ref, zd.gps)
+                .store_zero_datum_without_repositioning(new_station_ref, zd.gps, zd.accuracy_m)
                 .map_err(|e| {
                     format!(
                         "Failed to copy zero datum from source project {}: {}",

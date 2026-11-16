@@ -1,5 +1,5 @@
 use super::*;
-use crate::{ClosureStrategy, ShotKind};
+use crate::{ClosureStrategy, DatumRole, ShotKind};
 
 fn shot(azimuth_in: f64, azimuth_out: f64, length: f64, depth_in: f64, depth_out: f64) -> ShotData {
     ShotData {
@@ -10,6 +10,26 @@ fn shot(azimuth_in: f64, azimuth_out: f64, length: f64, depth_in: f64, depth_out
         depth_out,
         ..Default::default()
     }
+}
+
+/// Resolvable zero datums grouped by merge-connected component, keeping only
+/// the components holding more than one. Before #741 a non-empty result was an
+/// error state; now it means a component carries GPS fixes. Tests use it to
+/// say which datums a merge brought together.
+fn datums_sharing_a_merge_component(project: &Project) -> Vec<Vec<StationRef>> {
+    let mut groups: Vec<(HashSet<SectionId>, Vec<StationRef>)> = Vec::new();
+    for sr in project.all_datum_refs() {
+        if let Some(group) = groups.iter_mut().find(|(s, _)| s.contains(&sr.section_id)) {
+            group.1.push(sr);
+        } else {
+            groups.push((project.get_merged_section_ids(sr.section_id), vec![sr]));
+        }
+    }
+    groups
+        .into_iter()
+        .map(|(_, refs)| refs)
+        .filter(|refs| refs.len() > 1)
+        .collect()
 }
 
 /// Rewrite the first merge in place, for the integrity tests that need a forged
@@ -340,6 +360,8 @@ fn station_ref_traversals_cover_every_bearing_collection() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 1).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     project
         .station_offsets
@@ -464,6 +486,8 @@ fn section_has_zero_datum_with_connected_merges() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(c, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 5.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
     assert!(project.section_has_zero_datum(a));
@@ -656,7 +680,7 @@ fn set_zero_datum_first_datum_translates_every_component() {
 /// datum added while only a dangling one is stored lands on the origin, not at
 /// `gps_to_local(its gps, the dangling one's gps)`.
 ///
-/// A dangling datum is dropped by `Project::datum_to_wire` before the frontend
+/// A dangling datum is dropped by `Project::zero_datums_wire` before the frontend
 /// ever sees it, and `Project::frame_datum_key` skips it, so the map's
 /// `gpsOrigin`, the data table's GPS column and the Ariane export all read the
 /// first resolvable one. `set_zero_datum` used to read `zero_datums.first()`
@@ -694,6 +718,8 @@ fn set_zero_datum_ignores_a_dangling_datum_when_choosing_the_frame() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationKey::new(a, StationAnchor::AfterShot("no-such-uuid".to_string())),
         gps: dangling_gps,
+        accuracy_m: None,
+        entrance: None,
     });
     assert_eq!(
         project.resolve_key(&project.zero_datums[0].station_ref),
@@ -1038,7 +1064,7 @@ fn store_zero_datum_without_repositioning_does_not_modify_offsets() {
     let station_ref = StationRef::new(section_id, 0);
     let gps = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
     project
-        .store_zero_datum_without_repositioning(station_ref, gps)
+        .store_zero_datum_without_repositioning(station_ref, gps, None)
         .unwrap();
 
     // Offset should remain unchanged
@@ -1065,6 +1091,8 @@ fn coordinate_computation_no_global_datum_subtraction() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(section_id, 1).into(),
         gps: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
     // Compute coordinates
@@ -1402,79 +1430,55 @@ fn merge_stations_transitive_datum_propagation() {
 // === Duplicate datum validation tests ===
 
 #[test]
-fn set_zero_datum_rejects_duplicate_in_same_section() {
-    // Cannot set two datums on different stations in the same section
-    let mut project = Project::new("DuplicateSameSection".to_string(), None);
-    let section_id = project
-        .add_section(SectionData {
-            shots: vec![
-                shot(0.0, 0.0, 10.0, 0.0, 0.0),
-                shot(0.0, 0.0, 10.0, 0.0, 0.0),
-            ],
-            ..Default::default()
-        })
-        .id;
-
-    // Set first datum on station 0
-    let gps = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
-    project
-        .set_zero_datum(StationRef::new(section_id, 0), gps)
-        .unwrap();
-
-    // Attempt to set second datum on station 1 (same section) - should fail
-    let result = project.set_zero_datum(StationRef::new(section_id, 1), gps);
-    assert!(
-        result.is_err(),
-        "Should reject duplicate datum in same section"
+fn a_second_datum_in_a_merge_connected_group_is_a_gps_fix() {
+    // Since #741 a second datum in a placed merge group is stored as a GPS fix,
+    // in the same section, through a direct merge, or three merges away, and it
+    // never moves raw geometry. (This replaces the old refusal.)
+    let mut project = Project::new("FixInGroup".to_string(), None);
+    let mk = |project: &mut Project| {
+        project
+            .add_section(SectionData {
+                shots: vec![
+                    shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                    shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                ],
+                ..Default::default()
+            })
+            .id
+    };
+    let (a, b, c, d) = (
+        mk(&mut project),
+        mk(&mut project),
+        mk(&mut project),
+        mk(&mut project),
     );
-    let err = result.unwrap_err();
-    assert!(
-        err.contains("already has a zero datum"),
-        "Error should mention existing datum: {err}"
-    );
-}
-
-#[test]
-fn set_zero_datum_rejects_duplicate_in_connected_group() {
-    // Cannot set datum on a station connected through merges to another datum station
-    let mut project = Project::new("DuplicateConnected".to_string(), None);
-
-    // Create two sections
-    let a = project
-        .add_section(SectionData {
-            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
-            ..Default::default()
-        })
-        .id;
-    let b = project
-        .add_section(SectionData {
-            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
-            ..Default::default()
-        })
-        .id;
-
-    // Merge B.0 to A.1
-    project.station_merges.push(StationMerge {
-        station_a: StationRef::new(a, 1).into(),
-        station_b: StationRef::new(b, 0).into(),
-        merged_at: Utc::now(),
-    });
-
-    // Set first datum on section A
+    for (x, y) in [(a, b), (b, c), (c, d)] {
+        project.station_merges.push(StationMerge {
+            station_a: StationRef::new(x, 2).into(),
+            station_b: StationRef::new(y, 0).into(),
+            merged_at: Utc::now(),
+        });
+    }
     let gps = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
     project.set_zero_datum(StationRef::new(a, 0), gps).unwrap();
+    let offsets = project.section_offsets.clone();
 
-    // Attempt to set second datum on section B (connected through merge) - should fail
-    let result = project.set_zero_datum(StationRef::new(b, 1), gps);
-    assert!(
-        result.is_err(),
-        "Should reject duplicate datum in connected group"
-    );
-    let err = result.unwrap_err();
-    assert!(
-        err.contains("already has a zero datum"),
-        "Error should mention existing datum: {err}"
-    );
+    for station in [
+        StationRef::new(a, 1),
+        StationRef::new(b, 2),
+        StationRef::new(d, 2),
+    ] {
+        project
+            .set_zero_datum(station, GpsCoordinates::new(45.001, -90.0, 0.0).unwrap())
+            .expect("a datum in a placed group is a GPS fix");
+        assert_eq!(project.section_offsets, offsets, "nothing moves");
+        assert_eq!(
+            project.datum_role(project.zero_datums.last().unwrap()),
+            Some(DatumRole::GpsFix)
+        );
+    }
+    assert_eq!(project.placement_datum_refs(), vec![StationRef::new(a, 0)]);
+    assert_eq!(project.zero_datums.len(), 4);
 }
 
 #[test]
@@ -1510,50 +1514,6 @@ fn set_zero_datum_allows_disconnected_groups() {
         "Disconnected groups should each allow their own datum"
     );
     assert_eq!(project.zero_datums.len(), 2);
-}
-
-#[test]
-fn set_zero_datum_rejects_across_multi_hop_merge_chain() {
-    // Mirrors the reported topology: a far station (like 37:7) is merge-connected to
-    // the datum (like 0:0) through a CHAIN of merges, not a direct one. The guard
-    // must walk the whole merge component, so a second datum on the far end is
-    // rejected.
-    let mut project = Project::new("Chain".to_string(), None);
-    let mk = |project: &mut Project| {
-        project
-            .add_section(SectionData {
-                shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
-                ..Default::default()
-            })
-            .id
-    };
-    let (a, b, c, d) = (
-        mk(&mut project),
-        mk(&mut project),
-        mk(&mut project),
-        mk(&mut project),
-    );
-
-    // Chain A - B - C - D, each merge joining one section's end to the next's start.
-    for (x, y) in [(a, b), (b, c), (c, d)] {
-        project.station_merges.push(StationMerge {
-            station_a: StationRef::new(x, 1).into(),
-            station_b: StationRef::new(y, 0).into(),
-            merged_at: Utc::now(),
-        });
-    }
-
-    let gps = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
-    project.set_zero_datum(StationRef::new(a, 0), gps).unwrap();
-
-    // D is three hops from A's datum but in the same merge component → reject.
-    let result = project.set_zero_datum(StationRef::new(d, 1), gps);
-    assert!(
-        result.is_err(),
-        "a second datum on the far end of a merge chain must be rejected"
-    );
-    assert!(result.unwrap_err().contains("already has a zero datum"));
-    assert_eq!(project.zero_datums.len(), 1);
 }
 
 #[test]
@@ -1614,7 +1574,7 @@ fn convert_orphan_closures_leaves_double_anchored_groups_unconverted() {
         "the bridge closure must be retained"
     );
     assert!(
-        project.over_anchored_merge_components().is_empty(),
+        datums_sharing_a_merge_component(&project).is_empty(),
         "the two datums must stay in separate merge components"
     );
     // The retained bridge must NOT be flagged as an orphan-that-should-be-a-merge:
@@ -1641,12 +1601,11 @@ fn convert_orphan_closures_leaves_double_anchored_groups_unconverted() {
 }
 
 #[test]
-fn detects_two_datums_in_one_merge_component() {
-    // The "≤1 datum per merge component" invariant must be DETECTABLE after the
-    // fact, so a file written by an older build (or any unguarded path) is flagged
-    // rather than silently mis-solved. Force the violation by pushing datums
-    // directly, then assert both the detector and the integrity pass catch it.
-    let mut project = Project::new("OverAnchored".to_string(), None);
+fn two_datums_in_one_merge_component_are_a_placement_and_a_fix() {
+    // Since #741 several datums in one merge-connected component are valid: the
+    // first in list order places the group, the rest are GPS fixes. Nothing is
+    // flagged, and removing the placement datum promotes the fix.
+    let mut project = Project::new("TwoDatums".to_string(), None);
     let a = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
@@ -1668,27 +1627,31 @@ fn detects_two_datums_in_one_merge_component() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(b, 0).into(),
         gps: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
-    let over = project.over_anchored_merge_components();
-    assert_eq!(over.len(), 1, "both datums share one merge component");
-    assert_eq!(over[0].len(), 2);
-
+    assert_eq!(
+        project.datum_roles(),
+        vec![Some(DatumRole::Placement), Some(DatumRole::GpsFix)]
+    );
+    assert_eq!(project.placement_datum_refs(), vec![StationRef::new(a, 0)]);
     assert!(
         project
             .check_structural_integrity()
             .iter()
-            .any(|v| v.category == "multiple_datums_per_merge_component"),
-        "the integrity pass must flag the over-anchored component"
+            .all(|v| !v.category.contains("datum")),
+        "a fix is not a structural violation"
     );
 
-    // Removing one datum restores the invariant.
-    assert!(project.remove_zero_datum(StationRef::new(b, 0)));
-    assert!(project.over_anchored_merge_components().is_empty());
+    assert!(project.remove_zero_datum(StationRef::new(a, 0)));
+    assert_eq!(project.datum_roles(), vec![Some(DatumRole::Placement)]);
 }
 
 /// The damage a past bug left in saved files: two independently GPS-anchored
@@ -1729,10 +1692,14 @@ fn double_anchored_bridge_project() -> (Project, SectionId, SectionId, SectionId
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(c, 0).into(),
         gps: GpsCoordinates::new(45.001, -90.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
     // The bogus promotion: what should have stayed a loop closure.
@@ -1746,360 +1713,7 @@ fn double_anchored_bridge_project() -> (Project, SectionId, SectionId, SectionId
 }
 
 #[test]
-fn repair_demotes_a_double_anchoring_bridge_merge() {
-    let (mut project, _a, b, c) = double_anchored_bridge_project();
-
-    // Precondition: this is exactly the pair of symptoms a damaged file shows,
-    // and re-solving offsets cannot clear either of them.
-    assert_eq!(project.resolve_offsets(), 0, "the tear is unsolvable");
-    assert_eq!(
-        project.check_merge_alignment().len(),
-        1,
-        "the bogus merge reports as misaligned"
-    );
-    assert_eq!(
-        project.over_anchored_merge_components().len(),
-        1,
-        "both datums sit in one merge component"
-    );
-
-    assert_eq!(project.demote_double_anchoring_merges(), 1);
-
-    assert_eq!(
-        project.station_merges.len(),
-        1,
-        "only the legitimate A-B merge survives"
-    );
-    assert!(
-        !project.are_stations_merged(StationRef::new(b, 2), StationRef::new(c, 0)),
-        "the over-constraining merge is gone"
-    );
-    assert!(
-        project.are_stations_in_closure(StationRef::new(b, 2), StationRef::new(c, 0)),
-        "an equivalent loop closure records the same coincidence"
-    );
-    let closure = project
-        .loop_closures
-        .last()
-        .expect("the demotion pushed a closure");
-    assert!(
-        !closure.is_aligned,
-        "an aligned closure would re-impose the constraint just removed"
-    );
-    assert!(closure.id > 0, "the closure gets a real monotonic id");
-
-    // Both symptoms clear, and the solve is now achievable.
-    project.resolve_offsets();
-    assert!(
-        project.check_merge_alignment().is_empty(),
-        "no merge is left torn open"
-    );
-    assert!(
-        project.over_anchored_merge_components().is_empty(),
-        "each datum is back in its own merge component"
-    );
-    assert!(
-        project
-            .check_structural_integrity()
-            .iter()
-            .all(|v| v.category != "multiple_datums_per_merge_component"),
-        "the over-anchoring warning is cleared"
-    );
-}
-
-#[test]
-fn demoted_closure_measures_the_merge_free_path() {
-    // The merge being demoted is itself a zero-cost pathfinding edge between
-    // the two stations being measured. Metrics taken while it still exists ride
-    // that edge and persist path_length = 0 / error_percentage = 0 on the
-    // replacement closure. Give the survey a real detour - soft closures
-    // through a fourth section - and the demoted closure must carry the
-    // detour's surveyed length instead.
-    let (mut project, _a, b, c) = double_anchored_bridge_project();
-    let d = project
-        .add_section(SectionData {
-            shots: vec![
-                shot(0.0, 0.0, 10.0, 0.0, 0.0),
-                shot(0.0, 0.0, 10.0, 0.0, 0.0),
-            ],
-            ..Default::default()
-        })
-        .id;
-    project.ensure_shot_uuids();
-    let detour = |id: u64, from: StationRef, to: StationRef| LoopClosure {
-        id,
-        station_a: from.into(),
-        station_b: to.into(),
-        path_length: 1.0,
-        misclosure_distance: 0.0,
-        error_percentage: 0.0,
-        horizontal_misclosure: 0.0,
-        vertical_misclosure: 0.0,
-        strategy: ClosureStrategy::default(),
-        is_aligned: false,
-    };
-    project
-        .loop_closures
-        .push(detour(1, StationRef::new(b, 1), StationRef::new(d, 0)));
-    project
-        .loop_closures
-        .push(detour(2, StationRef::new(d, 2), StationRef::new(c, 1)));
-
-    assert_eq!(project.demote_double_anchoring_merges(), 1);
-
-    let closure = project
-        .loop_closures
-        .last()
-        .expect("the demotion pushed a closure");
-    assert!(
-        closure.path_length > 0.0,
-        "the metric must not ride the merge being demoted (got {})",
-        closure.path_length
-    );
-    assert!(
-        closure.error_percentage > 0.0,
-        "a metres-wide misclosure over a real path is a nonzero error (got {})",
-        closure.error_percentage
-    );
-}
-
-#[test]
-fn repair_leaves_legitimate_merges_alone() {
-    // (a) A torn merge whose two halves stay connected through a HEALTHY merge.
-    // A:0 and C:0 both sit at world (0,0), so that parallel merge is aligned and
-    // is not going anywhere: it keeps A+B+C one rigid component whether or not
-    // the torn B:2 = C:0 bridge survives. Dropping the torn merge therefore heals
-    // nothing, and demotion (which exists to SEPARATE two anchored halves) must
-    // leave it alone. Note the contrast with two torn merges bridging the same
-    // halves - see `parallel_torn_bridges_are_all_demoted` - where neither is
-    // load-bearing and both have to go.
-    let (mut project, a, _b, c) = double_anchored_bridge_project();
-    project.station_merges.push(StationMerge {
-        station_a: StationRef::new(a, 0).into(),
-        station_b: StationRef::new(c, 0).into(),
-        merged_at: Utc::now(),
-    });
-    assert_eq!(
-        project.check_merge_alignment().len(),
-        1,
-        "only the bogus bridge is torn open; the parallel A:0 = C:0 merge measures 0 m"
-    );
-    assert_eq!(
-        project.demote_double_anchoring_merges(),
-        0,
-        "a torn merge with an intact parallel merge path is redundant, not over-constraining"
-    );
-    assert_eq!(project.station_merges.len(), 3, "every merge is intact");
-    assert!(project.loop_closures.is_empty(), "no closure was invented");
-
-    // (b) A sole bridge whose FAR half carries no datum. That is an ordinary
-    // single-anchor group with drift, which resolve_offsets can and does heal by
-    // moving the unanchored half - demoting it would destroy a real connection.
-    let (mut project, _a, _b, c) = double_anchored_bridge_project();
-    assert!(project.remove_zero_datum(StationRef::new(c, 0)));
-    assert_eq!(
-        project.demote_double_anchoring_merges(),
-        0,
-        "a bridge to an unanchored group is a legitimate merge"
-    );
-    assert_eq!(project.station_merges.len(), 2, "every merge is intact");
-    assert!(project.loop_closures.is_empty(), "no closure was invented");
-    project.resolve_offsets();
-    assert!(
-        project.check_merge_alignment().is_empty(),
-        "and the ordinary solver heals it, which is why demotion must not fire"
-    );
-}
-
-#[test]
-fn parallel_torn_bridges_are_all_demoted() {
-    // Two bogus merges welding the SAME two anchored halves together. Judging a
-    // candidate with only itself excluded makes them shield each other: each one
-    // looks redundant because the other still joins B to C, so neither is demoted
-    // and the project stays torn forever. Judging the whole torn set at once asks
-    // the question that matters - are these halves welded together only by merges
-    // the solver cannot satisfy? - and both go.
-    //
-    // B:1 is world (0,30) and C:1 is (0,10), so the second bridge is a 20 m tear
-    // needing no extra geometry.
-    let (mut project, _a, b, c) = double_anchored_bridge_project();
-    project.station_merges.push(StationMerge {
-        station_a: StationRef::new(b, 1).into(),
-        station_b: StationRef::new(c, 1).into(),
-        merged_at: Utc::now(),
-    });
-    assert_eq!(
-        project.check_merge_alignment().len(),
-        2,
-        "both cross-component merges are torn open"
-    );
-
-    assert_eq!(project.demote_double_anchoring_merges(), 2);
-
-    assert_eq!(
-        project.station_merges.len(),
-        1,
-        "only the legitimate A-B merge survives"
-    );
-    assert!(!project.are_stations_merged(StationRef::new(b, 2), StationRef::new(c, 0)));
-    assert!(!project.are_stations_merged(StationRef::new(b, 1), StationRef::new(c, 1)));
-    assert!(
-        project.are_stations_in_closure(StationRef::new(b, 2), StationRef::new(c, 0)),
-        "each demoted merge leaves an equivalent loop closure"
-    );
-    assert!(project.are_stations_in_closure(StationRef::new(b, 1), StationRef::new(c, 1)));
-    assert_eq!(project.loop_closures.len(), 2);
-
-    project.resolve_offsets();
-    assert!(
-        project.check_merge_alignment().is_empty(),
-        "no merge is left torn open"
-    );
-    assert!(
-        project.over_anchored_merge_components().is_empty(),
-        "each datum is back in its own merge component"
-    );
-}
-
-#[test]
-fn demotion_softens_an_existing_aligned_closure_over_the_same_pair() {
-    // The pair can already carry a loop closure, in which case the demotion
-    // invents no second one. But an `is_aligned: true` closure is a RIGID edge to
-    // the offset solver, so leaving it as-is would re-impose exactly the
-    // over-constraint the demotion just removed, and its stored metrics were
-    // measured while the merge welded the pair together. Both must be corrected in
-    // place, under the closure's existing id.
-    let (mut project, _a, b, c) = double_anchored_bridge_project();
-    project.loop_closures.push(LoopClosure {
-        id: 7,
-        station_a: StationRef::new(b, 2).into(),
-        station_b: StationRef::new(c, 0).into(),
-        // Junk: what a measurement taken across the merge recorded.
-        path_length: 123.0,
-        misclosure_distance: 0.0,
-        error_percentage: 0.0,
-        horizontal_misclosure: 0.0,
-        vertical_misclosure: 0.0,
-        strategy: ClosureStrategy::Batch,
-        is_aligned: true,
-    });
-
-    assert_eq!(project.demote_double_anchoring_merges(), 1);
-
-    assert_eq!(
-        project.station_merges.len(),
-        1,
-        "only the legitimate A-B merge survives"
-    );
-    assert!(!project.are_stations_merged(StationRef::new(b, 2), StationRef::new(c, 0)));
-    assert_eq!(
-        project.loop_closures.len(),
-        1,
-        "the existing closure is corrected, not duplicated"
-    );
-    let closure = &project.loop_closures[0];
-    assert_eq!(closure.id, 7, "it keeps its id - same closure, corrected");
-    assert!(
-        !closure.is_aligned,
-        "an aligned closure would re-impose the constraint just removed"
-    );
-    assert!(
-        closure.misclosure_distance > 0.0,
-        "the metrics are restamped from the merge-free measurement (got {})",
-        closure.misclosure_distance
-    );
-    assert!(closure.horizontal_misclosure > 0.0);
-    // path_length is restamped too. The measurement excludes the surviving
-    // closure itself - left in, it is a zero-cost shortcut over exactly this
-    // pair and the answer would be 0. With it excluded the halves have no
-    // other link, so Dijkstra finds no path and the documented fallback (sum
-    // of the reachable sections' lengths: A + B = 40 m) kicks in. 123 -> 40
-    // therefore proves both the restamp and the exclusion; the detour variant
-    // below proves a real route is used when one exists.
-    assert_eq!(closure.path_length, 40.0);
-
-    assert!(
-        project.check_closure_alignment().is_empty(),
-        "and the softened closure is no longer a stale aligned one"
-    );
-    project.resolve_offsets();
-    assert!(
-        project.over_anchored_merge_components().is_empty(),
-        "each datum is back in its own merge component"
-    );
-}
-
-#[test]
-fn softened_closure_measures_the_closure_free_path() {
-    // Companion to `demoted_closure_measures_the_merge_free_path`, for the
-    // already-closed branch: the surviving closure is itself a zero-cost
-    // pathfinding edge over exactly the pair being measured, so measuring with
-    // it still in the list would stamp path_length = 0 / error 0% no matter how
-    // long the real detour is. The demotion must pull the direct closure out,
-    // measure, and restamp it - here the detour through section D is the only
-    // real path, so a nonzero path_length proves the exclusion happened.
-    let (mut project, _a, b, c) = double_anchored_bridge_project();
-    let d = project
-        .add_section(SectionData {
-            shots: vec![
-                shot(0.0, 0.0, 10.0, 0.0, 0.0),
-                shot(0.0, 0.0, 10.0, 0.0, 0.0),
-            ],
-            ..Default::default()
-        })
-        .id;
-    project.ensure_shot_uuids();
-    let detour = |id: u64, from: StationRef, to: StationRef| LoopClosure {
-        id,
-        station_a: from.into(),
-        station_b: to.into(),
-        path_length: 1.0,
-        misclosure_distance: 0.0,
-        error_percentage: 0.0,
-        horizontal_misclosure: 0.0,
-        vertical_misclosure: 0.0,
-        strategy: ClosureStrategy::default(),
-        is_aligned: false,
-    };
-    project
-        .loop_closures
-        .push(detour(1, StationRef::new(b, 1), StationRef::new(d, 0)));
-    project
-        .loop_closures
-        .push(detour(2, StationRef::new(d, 2), StationRef::new(c, 1)));
-    // The pre-existing closure on the demoted pair itself, with junk metrics a
-    // merge-era measurement would have recorded.
-    let mut direct = detour(7, StationRef::new(b, 2), StationRef::new(c, 0));
-    direct.is_aligned = true;
-    project.loop_closures.push(direct);
-
-    assert_eq!(project.demote_double_anchoring_merges(), 1);
-
-    assert_eq!(
-        project.loop_closures.len(),
-        3,
-        "the existing closure is corrected, not duplicated"
-    );
-    let closure = project
-        .loop_closures
-        .iter()
-        .find(|lc| lc.id == 7)
-        .expect("the direct closure survives under its own id");
-    assert!(!closure.is_aligned);
-    assert!(
-        closure.path_length > 0.0,
-        "the metric must not ride the closure being softened (got {})",
-        closure.path_length
-    );
-    assert!(
-        closure.error_percentage > 0.0,
-        "a metres-wide misclosure over a real path is a nonzero error (got {})",
-        closure.error_percentage
-    );
-}
-
-#[test]
-fn unmeasurable_geometry_is_never_demoted_or_flagged() {
+fn unmeasurable_geometry_is_never_flagged() {
     // Non-finite (NaN/inf) shot geometry makes every distance derived from it
     // NaN, and `NaN < TOL` and `NaN >= TOL` are BOTH false. Left unguarded, the
     // three consumers of `endpoint_gap` would each answer by accident: the two
@@ -2141,45 +1755,9 @@ fn unmeasurable_geometry_is_never_demoted_or_flagged() {
         project.check_closure_alignment().is_empty(),
         "broken geometry is not evidence that an aligned closure has drifted open"
     );
-    assert_eq!(
-        project.demote_double_anchoring_merges(),
-        0,
-        "and no merge is deleted on the strength of a distance that does not exist"
-    );
     assert_eq!(project.station_merges.len(), 2, "both merges are intact");
     assert!(project.are_stations_merged(StationRef::new(a, 2), StationRef::new(b, 0)));
     assert!(project.are_stations_merged(StationRef::new(b, 2), StationRef::new(c, 0)));
-}
-
-#[test]
-fn demoted_closure_is_not_re_promoted_by_orphan_conversion() {
-    // The demotion and `convert_orphan_closures_to_merges` run in the same Repair
-    // pass, and the converter's job is turning sole-bridge closures INTO merges -
-    // exactly what was just undone. Its double-anchor guard must see the same two
-    // anchored halves and leave the demoted closure alone, or Repair would
-    // ping-pong the same edge forever.
-    let (mut project, _a, _b, _c) = double_anchored_bridge_project();
-    assert_eq!(project.demote_double_anchoring_merges(), 1);
-
-    assert_eq!(
-        project.convert_orphan_closures_to_merges(),
-        0,
-        "the converter must not re-promote the closure it was just handed"
-    );
-    assert_eq!(project.loop_closures.len(), 1, "the closure survives");
-    assert_eq!(project.station_merges.len(), 1, "no merge was recreated");
-    assert!(
-        project
-            .check_orphan_closures()
-            .iter()
-            .all(|v| v.category != "orphan_closure"),
-        "and it is not flagged as an orphan Repair can never convert"
-    );
-
-    // Idempotent: a second Repair finds nothing left to demote.
-    assert_eq!(project.demote_double_anchoring_merges(), 0);
-    assert_eq!(project.loop_closures.len(), 1);
-    assert_eq!(project.station_merges.len(), 1);
 }
 
 // ===========================================================================
@@ -2235,75 +1813,6 @@ fn a_closure_is_born_with_a_measured_claim() {
         vec![true, false, false],
         "the recorded closures carry what was measured"
     );
-}
-
-#[test]
-fn the_re_measure_never_re_promotes_what_repair_demoted() {
-    // Repair's demotion and the per-command re-measure both run over the same
-    // project, and the re-measure is the one that can set `is_aligned` back to
-    // TRUE. If it went on geometry alone, the two would fight: Repair softens the
-    // edge precisely so the two anchored halves stop being one rigid component,
-    // and the next geometry command would rigidify it again the moment anything
-    // pulled the endpoints together. The double-anchor term is what makes that
-    // impossible, and it is asked of the MERGE graph, so no closure flag can
-    // change the answer.
-    let (mut project, _a, b, c) = double_anchored_bridge_project();
-    // The pair already carries the one kind of closure the re-measure governs.
-    project.loop_closures.push(LoopClosure {
-        id: 7,
-        station_a: StationRef::new(b, 2).into(),
-        station_b: StationRef::new(c, 0).into(),
-        path_length: 123.0,
-        misclosure_distance: 0.0,
-        error_percentage: 0.0,
-        horizontal_misclosure: 0.0,
-        vertical_misclosure: 0.0,
-        strategy: ClosureStrategy::Move,
-        is_aligned: true,
-    });
-
-    assert_eq!(project.demote_double_anchoring_merges(), 1);
-    assert!(
-        !project.loop_closures[0].is_aligned,
-        "setup: Repair softens the closure over the demoted pair"
-    );
-
-    // What Repair itself does next, in order.
-    project.resolve_offsets();
-    assert_eq!(
-        project.remeasure_closure_alignment(),
-        0,
-        "the re-measure must not re-impose the constraint Repair removed"
-    );
-
-    // And now the part geometry alone would get wrong: slide C's rigid group so
-    // the two endpoints are exactly one point. The claim is now TRUE and still
-    // must not be made, because the edge would weld two independently
-    // GPS-anchored merge components into one - the #464 refusal.
-    project.adjust_rigid_group_offsets(c, 0.0, 40.0);
-    let (local, station_offsets) = (
-        project.section_local_coords(),
-        project.resolved_station_offsets(),
-    );
-    let gap = project
-        .endpoint_gap(
-            &StationRef::new(b, 2).into(),
-            &StationRef::new(c, 0).into(),
-            &local,
-            &station_offsets,
-        )
-        .expect("both endpoints resolve")
-        .2;
-    assert!(
-        gap < Project::MERGE_ALIGNMENT_INVARIANT_M,
-        "setup: the endpoints are coincident now (gap {gap})"
-    );
-    assert_eq!(
-        project.remeasure_closure_alignment(),
-        0,
-        "a coincident pair bridging two anchored groups is still not alignable"
-    );
-    assert!(!project.loop_closures[0].is_aligned);
 }
 
 #[test]
@@ -2365,105 +1874,6 @@ fn the_re_measure_leaves_a_legacy_baked_alignment_alone() {
 }
 
 #[test]
-fn set_zero_datum_error_includes_section_name() {
-    // Error message should include section name if available
-    let mut project = Project::new("NamedSection".to_string(), None);
-    let section_id = project
-        .add_section(SectionData {
-            name: Some("Main Passage".to_string()),
-            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
-            ..Default::default()
-        })
-        .id;
-
-    // Set first datum
-    let gps = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
-    project
-        .set_zero_datum(StationRef::new(section_id, 0), gps)
-        .unwrap();
-
-    // Attempt duplicate
-    let result = project.set_zero_datum(StationRef::new(section_id, 1), gps);
-    let err = result.unwrap_err();
-
-    // Error should include section name
-    assert!(
-        err.contains("Main Passage"),
-        "Error should include section name: {err}"
-    );
-}
-
-#[test]
-fn set_zero_datum_error_includes_station_number() {
-    // Error message should include station numbers (0-indexed to match canonical IDs)
-    let mut project = Project::new("StationNumbers".to_string(), None);
-    let section_id = project
-        .add_section(SectionData {
-            shots: vec![
-                shot(0.0, 0.0, 10.0, 0.0, 0.0),
-                shot(0.0, 0.0, 10.0, 0.0, 0.0),
-            ],
-            ..Default::default()
-        })
-        .id;
-
-    // Set first datum on station 0
-    let gps = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
-    project
-        .set_zero_datum(StationRef::new(section_id, 0), gps)
-        .unwrap();
-
-    // Attempt to set on station 2
-    let result = project.set_zero_datum(StationRef::new(section_id, 2), gps);
-    let err = result.unwrap_err();
-
-    // Error should reference stations with 0-indexed format (e.g., "Section 0 #2")
-    assert!(err.contains("#2"), "New station should include #2: {err}");
-    assert!(
-        err.contains("#0"),
-        "Existing datum station should include #0: {err}"
-    );
-}
-
-#[test]
-fn set_zero_datum_validation_runs_before_state_changes() {
-    // Validation should reject before any section offsets are modified
-    let mut project = Project::new("NoStateChange".to_string(), None);
-    let section_id = project
-        .add_section(SectionData {
-            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
-            ..Default::default()
-        })
-        .id;
-
-    // Set first datum
-    let gps = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
-    project
-        .set_zero_datum(StationRef::new(section_id, 0), gps)
-        .unwrap();
-
-    // Record state before failed attempt
-    let offset_before = project.section_offsets.get(&section_id).copied();
-    let datums_count_before = project.zero_datums.len();
-
-    // Attempt duplicate (should fail)
-    let result = project.set_zero_datum(StationRef::new(section_id, 1), gps);
-    assert!(result.is_err());
-
-    // State should be unchanged
-    let offset_after = project.section_offsets.get(&section_id).copied();
-    assert_eq!(
-        offset_before, offset_after,
-        "Section offset should not change on validation failure"
-    );
-    assert_eq!(
-        datums_count_before,
-        project.zero_datums.len(),
-        "Zero datums count should not change"
-    );
-}
-
-#[test]
 fn set_zero_datum_allows_resetting_same_station() {
     // Re-setting datum on the same station (updating GPS) should succeed
     let mut project = Project::new("ResetSame".to_string(), None);
@@ -2489,73 +1899,6 @@ fn set_zero_datum_allows_resetting_same_station() {
     assert_eq!(project.zero_datums.len(), 1);
     assert_eq!(project.zero_datums[0].gps.latitude, 46.0);
 }
-
-#[test]
-fn store_zero_datum_without_repositioning_validates_duplicate() {
-    // The store-only helper should also validate for duplicates
-    let mut project = Project::new("StoreOnlyValidation".to_string(), None);
-    let section_id = project
-        .add_section(SectionData {
-            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
-            ..Default::default()
-        })
-        .id;
-
-    // Set first datum normally
-    let gps = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
-    project
-        .set_zero_datum(StationRef::new(section_id, 0), gps)
-        .unwrap();
-
-    // Attempt store-only on different station - should fail
-    let result =
-        project.store_zero_datum_without_repositioning(StationRef::new(section_id, 1), gps);
-    assert!(
-        result.is_err(),
-        "Store-only should also validate for duplicates"
-    );
-}
-
-#[test]
-fn find_connected_zero_datum_uses_station_connectivity() {
-    // Validation should use station-level connectivity (through shots within section)
-    // not just section-level connectivity
-    let mut project = Project::new("StationConnectivity".to_string(), None);
-
-    // Single section with multiple stations - all connected through shots
-    let section_id = project
-        .add_section(SectionData {
-            shots: vec![
-                shot(0.0, 0.0, 10.0, 0.0, 0.0),
-                shot(0.0, 0.0, 10.0, 0.0, 0.0),
-                shot(0.0, 0.0, 10.0, 0.0, 0.0),
-            ],
-            ..Default::default()
-        })
-        .id;
-
-    // Set datum on station 1 (middle)
-    let gps = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
-    project
-        .set_zero_datum(StationRef::new(section_id, 1), gps)
-        .unwrap();
-
-    // Station 0 is connected to station 1 through shot 0
-    let result_0 = project.set_zero_datum(StationRef::new(section_id, 0), gps);
-    assert!(
-        result_0.is_err(),
-        "Station 0 should be connected to datum at station 1"
-    );
-
-    // Station 3 is connected to station 1 through shots 1 and 2
-    let result_3 = project.set_zero_datum(StationRef::new(section_id, 3), gps);
-    assert!(
-        result_3.is_err(),
-        "Station 3 should be connected to datum at station 1"
-    );
-}
-
-// === Loop closure tests ===
 
 #[test]
 fn create_loop_closure_creates_correct_values() {
@@ -4738,6 +4081,8 @@ fn build_project_with_relationships() -> (Project, SectionId, SectionId, Section
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
     (project, a, b, c)
@@ -5428,6 +4773,8 @@ fn calculate_penetration_with_zero_datum() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(section_id, 0).into(),
         gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
     // Compute stations
@@ -5521,6 +4868,8 @@ fn compute_distances_from_zero_datum_roots_matches_penetration() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(section_id, 0).into(),
         gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
     let stations = project.compute_station_coordinates();
@@ -5693,6 +5042,8 @@ fn reachability_includes_non_aligned_closures() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     // A1 <-> B0 via a NON-aligned closure (is_aligned = false).
     project.loop_closures.push(LoopClosure {
@@ -5744,6 +5095,8 @@ fn distance_field_uses_coordinate_distances() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
     let mut stations = project.compute_station_coordinates();
@@ -6127,6 +5480,8 @@ fn distribute_closure_with_zero_datum_mid_path() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 1).into(),
         gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
     // Record A:1 position before distribution
@@ -6169,40 +5524,34 @@ fn distribute_closure_with_zero_datum_mid_path() {
 
 #[test]
 fn distribute_closure_both_anchored_fails() {
+    // Two pieces, each placed by its own datum on a closure endpoint, and no
+    // survey between them: both endpoints are anchored, so nothing may move.
     let mut project = Project::new("DistributeBothAnchored".to_string(), None);
-
-    // Section A: 1 shot going north
     let a = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
-
-    // Section B: 1 shot going south, slightly different length
     let b = project
         .add_section(SectionData {
             shots: vec![shot(180.0, 180.0, 9.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
-
-    // Merge A:0 with B:0
-    project
-        .merge_stations(StationRef::new(a, 0), StationRef::new(b, 0))
-        .unwrap();
-
-    // Set zero datums on both closure endpoints
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 1).into(),
         gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(b, 1).into(),
         gps: GpsCoordinates::new(0.0, 0.01, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
-    // Should fail because both endpoints are anchored
     let result = project.test_distribute_closure_error(
         StationRef::new(a, 1),
         StationRef::new(b, 1),
@@ -6211,6 +5560,60 @@ fn distribute_closure_both_anchored_fails() {
     assert!(
         result.is_err(),
         "Should fail when both endpoints are anchored to zero datums"
+    );
+}
+
+#[test]
+fn distribute_closure_ignores_a_gps_fix_endpoint() {
+    // Same loop merged at its start: the second datum is then a GPS fix of the
+    // one merge component (#741), and the destructive distribution ignores fixes
+    // (settled for #741), so the loop is distributed from the placement datum.
+    let mut project = Project::new("DistributeFix".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(180.0, 180.0, 9.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    project
+        .merge_stations(StationRef::new(a, 0), StationRef::new(b, 0))
+        .unwrap();
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(a, 1).into(),
+        gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
+    });
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(b, 1).into(),
+        gps: GpsCoordinates::new(0.0, 0.01, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
+    });
+    assert_eq!(project.datum_roles()[1], Some(DatumRole::GpsFix));
+    let held = project
+        .compute_station_raw_coords(StationRef::new(a, 1))
+        .unwrap();
+
+    project
+        .test_distribute_closure_error(
+            StationRef::new(a, 1),
+            StationRef::new(b, 1),
+            ClosureStrategy::ProportionalByLength,
+        )
+        .expect("a GPS fix does not anchor the distribution");
+    let after = project
+        .compute_station_raw_coords(StationRef::new(a, 1))
+        .unwrap();
+    assert!(
+        (held.x - after.x).abs() < 1e-9 && (held.y - after.y).abs() < 1e-9,
+        "the placement datum stays put"
     );
 }
 
@@ -7554,9 +6957,11 @@ fn compute_adjusted_closes_datumless_loop_deterministically() {
 /// failure does not abort the whole solve) plus the snapshot/restore that keeps
 /// a failed component on measured geometry rather than leaking a partial solve.
 ///
-/// The failure is forced by injecting a second zero datum into one component's
-/// constraint group (bypassing the single-datum-per-component API guard), which
-/// makes `adjust_loop_closures` return `Err`.
+/// The failure is forced by tying two PLACEMENT datum stations together with a
+/// loop closure: a third section placed by its own datum, closed onto the first
+/// component's datum station. One constraint group then holds two fixed
+/// positions, which makes `adjust_loop_closures` return `Err`. (Before #741 a
+/// second datum in one merge group did this; that is a GPS fix now, and valid.)
 #[test]
 fn compute_adjusted_failed_component_falls_back_sibling_still_adjusts() {
     // Helper: a misclosing two-section loop (origin merged, ~0.2 m open at the far end).
@@ -7593,7 +6998,8 @@ fn compute_adjusted_failed_component_falls_back_sibling_still_adjusts() {
     }
 
     let mut project = Project::new("MixedComponents".to_string(), None);
-    // Component 1 - will FAIL (two datums forced into the origin constraint group).
+    // Component 1 - will FAIL (two placement datums tied into the origin
+    // constraint group by a closure).
     let (a, b) = looped(&mut project);
     project
         .set_zero_datum(
@@ -7601,11 +7007,25 @@ fn compute_adjusted_failed_component_falls_back_sibling_still_adjusts() {
             GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
         )
         .unwrap();
-    let dup_key = project.key_for_ref(StationRef::new(b, 0)).unwrap();
-    project.zero_datums.push(ZeroDatum {
-        station_ref: dup_key,
-        gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
-    });
+    let e = project
+        .add_section(SectionData {
+            shots: vec![shot(180.0, 180.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    project
+        .set_zero_datum(
+            StationRef::new(e, 0),
+            GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+        )
+        .unwrap();
+    project
+        .create_loop_closure(
+            StationRef::new(e, 0),
+            StationRef::new(a, 0),
+            ClosureStrategy::Batch,
+        )
+        .unwrap();
     // Component 2 - disconnected from the first, with a single datum; SUCCEEDS.
     let (c, d) = looped(&mut project);
     project
@@ -7676,6 +7096,8 @@ fn is_shot_frozen_single_datum_dead_end() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(sec, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 5.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
     let frozen = project.compute_frozen_shots();
@@ -7721,10 +7143,14 @@ fn is_shot_frozen_loop_with_two_datums() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 5.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(b, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 5.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
     let frozen = project.compute_frozen_shots();
@@ -7774,6 +7200,8 @@ fn is_shot_frozen_loop_with_aligned_closure() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 5.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
     // Add aligned closure: A:2 <-> B:2
@@ -7843,6 +7271,8 @@ fn is_shot_frozen_unaligned_closure_not_traversed() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 5.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
     // Unaligned closure: A:2 <-> B:2
@@ -7945,10 +7375,14 @@ fn update_shot_rejects_frozen_geometry() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 5.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(b, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 5.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
     // Verify shots are frozen
@@ -8260,7 +7694,7 @@ fn merge_stations_rejects_already_merged_pair() {
 }
 
 #[test]
-fn merge_stations_rejects_both_datums() {
+fn merge_stations_between_two_placed_groups_moves_the_later_one() {
     let mut project = Project::new("MergeBothDatums".to_string(), None);
     let a = project
         .add_section(SectionData {
@@ -8284,15 +7718,24 @@ fn merge_stations_rejects_both_datums() {
     project
         .set_zero_datum(
             StationRef::new(b, 0),
-            GpsCoordinates::new(1.0, 1.0, 0.0).unwrap(),
+            GpsCoordinates::new(0.0001, 0.0001, 0.0).unwrap(),
         )
         .unwrap();
+    let a_offset = project.section_offset(a);
 
-    let result = project.merge_stations(StationRef::new(a, 1), StationRef::new(b, 1));
-    assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .contains("Both stations are connected to zero datums"));
+    project
+        .merge_stations(StationRef::new(b, 1), StationRef::new(a, 1))
+        .expect("two placed groups may merge (#741)");
+    assert_eq!(
+        project.section_offset(a),
+        a_offset,
+        "the earlier datum's group stays"
+    );
+    assert!(project.check_merge_alignment().is_empty());
+    assert_eq!(
+        project.datum_roles(),
+        vec![Some(DatumRole::Placement), Some(DatumRole::GpsFix)]
+    );
 }
 
 // =====================================================================
@@ -8907,6 +8350,8 @@ fn realign_without_a_hold_ignores_a_dangling_first_datum() {
             StationAnchor::AfterShot("no-such-uuid".to_string()),
         ),
         gps: GpsCoordinates::new(20.25, -87.5, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     assert!(
         project
@@ -10062,6 +9507,8 @@ fn lsq_with_zero_datum_fixes_that_group() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(45.0, 10.0, 100.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
     let closure = LoopClosure {
@@ -10239,10 +9686,14 @@ fn lsq_long_chain_per_shot_changes_are_small() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 200).into(),
         gps: GpsCoordinates::new(45.0, 10.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(b, 0).into(),
         gps: GpsCoordinates::new(45.01, 10.01, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
     // Large offsets stress-test the solver: absolute coordinates are 500-1800m
@@ -10404,10 +9855,14 @@ fn lsq_realistic_topology_preserves_geometry() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 364).into(),
         gps: GpsCoordinates::new(50.0, 50.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(b, 0).into(),
         gps: GpsCoordinates::new(49.99, 50.013, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
     // Save original shots for section A
@@ -10544,10 +9999,14 @@ fn lsq_spur_shots_are_not_modified() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 100).into(),
         gps: GpsCoordinates::new(45.0, 10.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(b, 0).into(),
         gps: GpsCoordinates::new(45.01, 10.01, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
     // Large offsets to stress the solver
@@ -10810,6 +10269,8 @@ fn check_closure_alignment_sees_drift_that_merge_check_cannot() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     // Merge A2 <-> B0 and align (B0 lands on A2).
     project
@@ -10875,6 +10336,8 @@ fn cascade_solves_deep_chain_past_old_iteration_cap() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(last, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     // Knock every section out of alignment, then re-solve from scratch.
     for &id in &ids {
@@ -11270,6 +10733,8 @@ fn redrive_offsets_after_load_heals_persisted_drift() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     project
         .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
@@ -11413,6 +10878,8 @@ fn section_has_zero_datum_ignores_dangling_datum() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationKey::new(a, StationAnchor::AfterShot("ghost".to_string())),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
     assert!(
@@ -11453,6 +10920,8 @@ fn has_datum_path_excluding_ignores_dangling_datum() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationKey::new(a, StationAnchor::AfterShot("ghost".to_string())),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     assert!(
         !project.has_datum_path_excluding(a, b),
@@ -11492,6 +10961,8 @@ fn realign_after_shot_edit_ignores_dangling_datum() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationKey::new(a, StationAnchor::AfterShot("ghost".to_string())),
         gps: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     let before = project.section_offset(b);
     project.realign_after_shot_edit(b, None);
@@ -11534,6 +11005,8 @@ fn rigid_group_has_datum_ignores_dangling_datum() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationKey::new(a, StationAnchor::AfterShot("ghost".to_string())),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     assert!(
         !project.rigid_group_has_datum(a),
@@ -11571,10 +11044,14 @@ fn cascade_connection_offsets_ignores_dangling_datum() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(b, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     project.zero_datums.push(ZeroDatum {
         station_ref: StationKey::new(a, StationAnchor::AfterShot("ghost".to_string())),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     // Drift A off the merge; precondition: misaligned.
     project.adjust_section_offset(a, 7.0, -3.0);
@@ -11610,6 +11087,8 @@ fn check_merge_alignment_detects_and_realign_fixes_drift() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     // Merge A1 <-> B0 (merge_stations computes the aligning offset).
     project
@@ -11661,6 +11140,8 @@ fn realign_corrects_sub_tolerance_offset_drift() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     project
         .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
@@ -11759,18 +11240,19 @@ fn the_self_heal_gate_is_never_looser_than_the_alignment_invariant() {
 /// A merge component holding a gap the offset solver CANNOT close, plus one
 /// bystander it can move.
 ///
-/// A and B are merged and each carries its own zero datum - two GPS anchors in
-/// one rigid group. `set_zero_datum`/`merge_stations` guard against building that
-/// interactively, so it is assembled by pushing the datums directly, which is how
-/// it actually arrives: a file written before the guards, or a repair. The
-/// cascade marks every datum section authoritative and therefore reaches the A=B
-/// merge from both sides and adjusts neither, so the 2 cm gap opened below
-/// survives every re-solve, forever.
+/// A carries the zero datum. B is merged onto A twice - B:0 = A:1, and B:2 =
+/// A:1 again, B's two shots out and back closing 2 cm short - a cyclic merge
+/// misclosure. `merge_stations` refuses a merge inside one rigid group, so the
+/// second merge is pushed directly, which is how it actually arrives: a file
+/// written by an older build, or a repair. The cascade aligns B through the
+/// first merge it reaches and never revisits it, so the 2 cm on the second
+/// survives every re-solve, forever. (Before #741 this fixture used two datums
+/// in one rigid group; that is valid now, and heals.)
 ///
 /// C hangs off the same component with no datum of its own, so it IS something
 /// the cascade moves - the bystander that shows whether a re-solve ran.
 fn over_anchored_irreducible_gap() -> (Project, SectionId, SectionId, SectionId) {
-    let mut project = Project::new("Overanchored".to_string(), None);
+    let mut project = Project::new("Irreducible".to_string(), None);
     let a = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
@@ -11779,7 +11261,12 @@ fn over_anchored_irreducible_gap() -> (Project, SectionId, SectionId, SectionId)
         .id;
     let b = project
         .add_section(SectionData {
-            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            shots: vec![
+                shot(90.0, 90.0, 5.0, 0.0, 0.0),
+                // Back 2 cm short of where it started: past the 1 cm invariant
+                // the self-heal gates on, under the 5 cm the user is told about.
+                shot(270.0, 270.0, 4.98, 0.0, 0.0),
+            ],
             ..Default::default()
         })
         .id;
@@ -11790,7 +11277,7 @@ fn over_anchored_irreducible_gap() -> (Project, SectionId, SectionId, SectionId)
         })
         .id;
     project.ensure_shot_uuids();
-    // Both merges start exactly aligned - merge_stations computes the offset.
+    // Both tree merges start exactly aligned - merge_stations computes the offset.
     project
         .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
         .unwrap();
@@ -11800,14 +11287,14 @@ fn over_anchored_irreducible_gap() -> (Project, SectionId, SectionId, SectionId)
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
-    project.zero_datums.push(ZeroDatum {
-        station_ref: StationRef::new(b, 0).into(),
-        gps: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(b, 2).into(),
+        station_b: StationRef::new(a, 1).into(),
+        merged_at: Utc::now(),
     });
-    // Pull B 2 cm off the merge: past the 1 cm invariant the self-heal gates on,
-    // under the 5 cm the user is told about.
-    project.adjust_section_offset(b, 0.0, -0.02);
     (project, a, b, c)
 }
 
@@ -11880,10 +11367,10 @@ fn realign_merges_skips_a_residual_the_solver_has_proven_irreducible() {
 fn realign_merges_re_solves_once_the_residual_becomes_healable() {
     // The other half of the contract: a structural edit can make an irreducible
     // residual healable WITHOUT moving a station or changing a single gap bit, so
-    // the fingerprint carries the structure too. Dropping one of the two anchors is
-    // exactly that edit - the component becomes solvable and the next realign must
-    // do the work.
-    let (mut project, _a, b, c) = over_anchored_irreducible_gap();
+    // the fingerprint carries the structure too. Dropping the merge the cascade
+    // aligned B through is exactly that edit - B is then aligned through the
+    // torn one, and the next realign must do the work.
+    let (mut project, a, b, c) = over_anchored_irreducible_gap();
     assert_eq!(project.realign_merges(), 0);
     assert!(project.realign_fixpoint.is_some());
     project.adjust_section_offset(c, 0.003, 0.0);
@@ -11895,13 +11382,14 @@ fn realign_merges_re_solves_once_the_residual_becomes_healable() {
         "precondition: the skip is armed"
     );
 
-    assert!(project.remove_zero_datum(StationRef::new(b, 0)));
+    let (unmerged, _) = project.unmerge_stations(StationRef::new(a, 1), StationRef::new(b, 0));
+    assert!(unmerged);
     project.realign_merges();
     assert!(
         project
             .merge_alignment_beyond(Project::MERGE_ALIGNMENT_INVARIANT_M)
             .is_empty(),
-        "with one anchor left the cascade can pull the merge together - and must \
+        "with the cycle gone the cascade can pull the merge together - and must \
          not be skipped for a fingerprint recorded while it could not"
     );
     assert!(
@@ -11964,15 +11452,13 @@ fn realign_merges_still_skips_for_an_edit_in_a_disjoint_component() {
     // irreducible gap does not make every later edit pay a whole-project
     // re-solve. An edit in a component that shares nothing with the residual
     // must still hit it.
-    let (mut project, _a, b, _c) = over_anchored_irreducible_gap();
+    let (mut project, _a, _b, _c) = over_anchored_irreducible_gap();
     // A second, healthy component: D anchored by its own datum, E merged onto
     // it. Built BEFORE the fixpoint is recorded - adding a section is a
     // structural change, and the structure hash would (correctly) reject a
-    // fingerprint taken before it. Built while the A=B gap is CLOSED, too:
-    // `merge_stations` runs `debug_assert_merge_alignment`, which a test build
-    // panics on for the very residual this project is about, so the helper's
-    // 2 cm is backed out and re-applied around the new component.
-    project.adjust_section_offset(b, 0.0, 0.02);
+    // fingerprint taken before it. The merge is recorded directly, already
+    // aligned: `merge_stations` runs `debug_assert_merge_alignment`, which a
+    // test build panics on for the very residual this project is about.
     let d = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
@@ -11986,14 +11472,18 @@ fn realign_merges_still_skips_for_an_edit_in_a_disjoint_component() {
         })
         .id;
     project.ensure_shot_uuids();
-    project
-        .merge_stations(StationRef::new(d, 1), StationRef::new(e, 0))
-        .unwrap();
+    project.set_section_offset(e, (0.0, 5.0));
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(d, 1).into(),
+        station_b: StationRef::new(e, 0).into(),
+        merged_at: Utc::now(),
+    });
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(d, 0).into(),
         gps: GpsCoordinates::new(46.0, -91.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
-    project.adjust_section_offset(b, 0.0, -0.02);
 
     assert_eq!(project.realign_merges(), 0);
     assert!(project.realign_fixpoint.is_some(), "precondition: armed");
@@ -12110,6 +11600,8 @@ fn integrity_fixture() -> (Project, SectionId, SectionId) {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 5.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     project.loop_closures.push(LoopClosure {
         id: 1,
@@ -12194,6 +11686,8 @@ fn deleting_shot_converts_orphaned_bridge_closure_to_merge() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     project.record_station_merge(StationMerge {
         station_a: StationRef::new(a, 2).into(),
@@ -12908,7 +12402,7 @@ fn deleting_a_shot_never_promotes_two_closures_that_together_double_anchor() {
         );
         assert_eq!(impact.closure_to_merge[0].station_a, StationRef::new(t, 0));
         assert_every_merge_is_aligned(&project, "single promotion");
-        assert!(project.over_anchored_merge_components().is_empty());
+        assert!(datums_sharing_a_merge_component(&project).is_empty());
     }
 
     let (mut project, s, t, u, v) = chained_double_anchor_closure_fixture();
@@ -12964,9 +12458,9 @@ fn deleting_a_shot_never_promotes_two_closures_that_together_double_anchor() {
     // rigid group ended up holding two GPS anchors.
     assert_every_merge_is_aligned(&project, "after the chained delete");
     assert!(
-        project.over_anchored_merge_components().is_empty(),
+        datums_sharing_a_merge_component(&project).is_empty(),
         "the delete welded two anchored components: {:?}",
-        project.over_anchored_merge_components()
+        datums_sharing_a_merge_component(&project)
     );
 
     // ...and the refusal is STABLE: the whole-project sweep and the loader both
@@ -12976,7 +12470,7 @@ fn deleting_a_shot_never_promotes_two_closures_that_together_double_anchor() {
     assert_eq!(project.loop_closures.len(), 1);
     assert_eq!(project.station_merges.len(), 1);
     assert_every_merge_is_aligned(&project, "after a reload");
-    assert!(project.over_anchored_merge_components().is_empty());
+    assert!(datums_sharing_a_merge_component(&project).is_empty());
 }
 
 /// A genuine loop over two sections, with a real misclosure, whose other leg is
@@ -13146,6 +12640,8 @@ fn repair_structural_integrity_drops_dangling_refs_and_keeps_valid() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(9999, 0).into(),
         gps: GpsCoordinates::new(1.0, 2.0, 3.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     project.section_offsets.insert(9999, (1.0, 1.0));
 
@@ -14851,12 +14347,15 @@ fn project_ipc_serializes_validation_field() {
 // === Replacement-merge guards (Project::replacement_merge_allowed) ===
 //
 // A deletion that tears a merge group apart stitches the surviving components
-// back together through an ARBITRARILY picked pair. These four cover the states
-// where that stitch must NOT happen, because it would mint exactly what the
-// integrity machinery elsewhere exists to undo.
+// back together through an ARBITRARILY picked pair. Most of these cover the
+// states where that stitch must NOT happen, because it would mint exactly what
+// the integrity machinery elsewhere exists to undo. Two halves that each hold a
+// zero datum are NOT such a state since #741: the stitch keeps the group the
+// user merged, with a placement datum and a GPS fix.
 
 /// Build `a - middle - b`: two sections merged into ONE station of a middle
-/// section, each outer section carrying its own zero datum. Returns the ids.
+/// section, each outer section carrying its own zero datum, every merged pair
+/// coincident (a:1 = middle:0 = b:0 at the origin). Returns the ids.
 fn bridged_double_anchored_groups(project: &mut Project) -> (SectionId, SectionId, SectionId) {
     let a = project
         .add_section(SectionData {
@@ -14890,15 +14389,20 @@ fn bridged_double_anchored_groups(project: &mut Project) -> (SectionId, SectionI
         merged_at: Utc::now(),
     });
 
-    // One datum per outer group. Together they over-anchor the bridged group -
-    // the pre-existing invalid state the deletion is about to heal.
+    project.set_section_offset(a, (0.0, -1.0));
+
+    // One datum per outer group: a placement datum (on a) and a GPS fix (on b).
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(b, 1).into(),
         gps: GpsCoordinates::new(11.0, 21.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
     (a, middle, b)
@@ -14917,17 +14421,18 @@ fn merge_exists_between_sections(project: &Project, x: SectionId, y: SectionId) 
 }
 
 #[test]
-fn deleting_the_bridge_between_anchored_groups_does_not_reweld_them() {
+fn deleting_the_bridge_between_datum_holding_groups_restitches_them() {
     let mut project = Project::new("BridgeDelete".to_string(), None);
     let (a, middle, b) = bridged_double_anchored_groups(&mut project);
-
-    // Precondition: the bridge really does put both datums in one merge
-    // component, and both outer groups really are joined through it.
     assert_eq!(
-        project.over_anchored_merge_components().len(),
+        datums_sharing_a_merge_component(&project).len(),
         1,
-        "fixture must start over-anchored, or the guard has nothing to prevent"
+        "fixture: both datums share the bridged merge component"
     );
+    let before: Vec<_> = [StationRef::new(a, 0), StationRef::new(b, 1)]
+        .iter()
+        .map(|sr| project.compute_station_raw_coords(*sr).unwrap())
+        .collect();
 
     // The `delete_section` sequence (command_section.rs).
     project.preserve_connections_for_section_deletion(middle);
@@ -14935,32 +14440,29 @@ fn deleting_the_bridge_between_anchored_groups_does_not_reweld_them() {
     project.remove_section(middle);
 
     assert!(
-        !merge_exists_between_sections(&project, a, b),
-        "the deletion must not weld two independently anchored components together: {:?}",
+        merge_exists_between_sections(&project, a, b),
+        "the coincident pair is re-stitched, keeping the group the user merged (#741): {:?}",
         project.station_merges
     );
     assert!(
         project.loop_closures.is_empty(),
-        "no soft closure may be invented for an arbitrarily picked pair either: {:?}",
+        "no soft closure may be invented for an arbitrarily picked pair: {:?}",
         project.loop_closures
     );
-    assert!(
-        project.over_anchored_merge_components().is_empty(),
-        "each half now holds its own datum, so the deletion healed the over-anchoring: {:?}",
-        project.over_anchored_merge_components()
+    assert_eq!(
+        project.datum_roles(),
+        vec![Some(DatumRole::Placement), Some(DatumRole::GpsFix)]
     );
-
-    // Both halves survive, still anchored and structurally intact.
-    assert!(project.get_section(a).is_some() && project.get_section(b).is_some());
-    let datum_refs: Vec<StationRef> = project
-        .zero_datums
+    let after: Vec<_> = [StationRef::new(a, 0), StationRef::new(b, 1)]
         .iter()
-        .filter_map(|zd| project.resolve_key(&zd.station_ref))
+        .map(|sr| project.compute_station_raw_coords(*sr).unwrap())
         .collect();
-    assert!(
-        datum_refs.contains(&StationRef::new(a, 0)) && datum_refs.contains(&StationRef::new(b, 1)),
-        "both datums must survive: {datum_refs:?}"
-    );
+    for (x, y) in before.iter().zip(&after) {
+        assert!(
+            (x.x - y.x).abs() < 1e-9 && (x.y - y.y).abs() < 1e-9,
+            "nothing moves"
+        );
+    }
 }
 
 #[test]
@@ -15096,9 +14598,9 @@ fn replacement_stitch_skips_rigidly_connected_components() {
 }
 
 #[test]
-fn removed_station_stitch_does_not_reweld_anchored_groups() {
+fn removed_station_stitch_restitches_datum_holding_groups() {
     // The station-removal site (`preserve_connections_for_removed_stations`),
-    // reached by an interior range delete, must apply the same guard.
+    // reached by an interior range delete, applies the same guard.
     let mut project = Project::new("RemovedStations".to_string(), None);
     let (a, middle, b) = bridged_double_anchored_groups(&mut project);
 
@@ -15107,8 +14609,8 @@ fn removed_station_stitch_does_not_reweld_anchored_groups() {
     project.cleanup_removed_station_references(&removed);
 
     assert!(
-        !merge_exists_between_sections(&project, a, b),
-        "removing the bridging station must not weld the two anchored halves: {:?}",
+        merge_exists_between_sections(&project, a, b),
+        "removing the bridging station re-stitches the two halves: {:?}",
         project.station_merges
     );
     assert!(
@@ -15116,14 +14618,11 @@ fn removed_station_stitch_does_not_reweld_anchored_groups() {
         "no closure may be invented in the merge's place: {:?}",
         project.loop_closures
     );
-    assert!(
-        project.over_anchored_merge_components().is_empty(),
-        "both halves are now independently anchored"
-    );
+    assert_eq!(datums_sharing_a_merge_component(&project).len(), 1);
 }
 
 #[test]
-fn delete_shot_preview_and_execution_agree_on_the_skipped_stitch() {
+fn delete_shot_preview_and_execution_agree_on_the_stitch() {
     // The single-shot path PREVIEWS the replacement merges in the dialog and then
     // replays that exact list, so a guard that only fired at execution time would
     // make the dialog promise a merge the delete never creates.
@@ -15160,10 +14659,14 @@ fn delete_shot_preview_and_execution_agree_on_the_skipped_stitch() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(p, 1).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(q, 1).into(),
         gps: GpsCoordinates::new(11.0, 21.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
     let shot_id = project.get_section(bridge).unwrap().shots[0].id;
@@ -15173,9 +14676,11 @@ fn delete_shot_preview_and_execution_agree_on_the_skipped_stitch() {
         StationRef::new(bridge, 0),
         "the delete must remove the bridging station"
     );
-    assert!(
-        preview.replacement_merges.is_empty(),
-        "the dialog must not promise a merge welding two anchored components: {:?}",
+    assert_eq!(
+        preview.replacement_merges.len(),
+        1,
+        "the coincident P and Q starts are re-stitched even though each side holds a \
+         datum (#741): {:?}",
         preview.replacement_merges
     );
 
@@ -15186,11 +14691,14 @@ fn delete_shot_preview_and_execution_agree_on_the_skipped_stitch() {
         "preview and execution must plan the same replacement merges"
     );
     assert!(
-        !merge_exists_between_sections(&project, p, q),
-        "and the executed delete must create none: {:?}",
+        merge_exists_between_sections(&project, p, q),
+        "and the executed delete creates exactly that merge: {:?}",
         project.station_merges
     );
-    assert!(project.over_anchored_merge_components().is_empty());
+    assert_eq!(
+        project.datum_roles(),
+        vec![Some(DatumRole::Placement), Some(DatumRole::GpsFix)]
+    );
 }
 
 /// Pins `ariane_elevation_or_absent`'s real boundary: the filter is
@@ -15248,6 +14756,8 @@ fn suggest_orphan_placements_finds_intra_import_suggestion_on_first_import() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(anchored, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
     let suggestions = project.suggest_orphan_placements(
@@ -15294,6 +14804,8 @@ fn suggest_orphan_placements_never_pairs_a_pre_existing_orphan_with_a_pre_existi
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(pre_anchor, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
     // A later, unrelated import that offers no anchored target of its own -
@@ -15342,6 +14854,8 @@ fn suggest_orphan_placements_still_suggests_a_pre_existing_orphan_against_a_newl
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(new_target, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
     let suggestions = project.suggest_orphan_placements(
@@ -15382,6 +14896,8 @@ fn suggest_orphan_placements_places_a_newly_imported_orphan_onto_a_pre_existing_
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(pre_anchor, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     let new_orphan = project
         .add_section(SectionData {
@@ -15437,6 +14953,8 @@ fn suggest_orphan_placements_never_suggests_two_floating_components_onto_each_ot
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(elsewhere, 0).into(),
         gps: GpsCoordinates::new(1.0, 2.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
     let a = project
@@ -15546,6 +15064,8 @@ fn count_unanchored_sections_treats_a_datum_reached_through_a_merge_as_anchored(
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 1).into(),
         gps: GpsCoordinates::new(1.0, 2.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
     // The datum lives on A alone, but the merge means B's rigid group is
@@ -15574,6 +15094,8 @@ fn count_unanchored_sections_is_scoped_to_the_newly_imported_component() {
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(new_anchored, 0).into(),
         gps: GpsCoordinates::new(1.0, 2.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
     assert_eq!(
@@ -15625,6 +15147,8 @@ fn two_anchored_components_with_orphan_closures(n: usize, closures: usize) -> Pr
         project.zero_datums.push(ZeroDatum {
             station_ref: StationKey::new(ids[0], StationAnchor::SectionStart),
             gps: GpsCoordinates::new(lat, -87.4, 0.0).unwrap(),
+            accuracy_m: None,
+            entrance: None,
         });
     }
     for i in 0..closures {
@@ -15956,13 +15480,11 @@ fn resolve_offsets_before_602(project: &mut Project) -> usize {
     before.saturating_sub(project.check_merge_alignment().len())
 }
 
-/// The pre-#602 seed choice, verbatim: one walk per unvisited section.
+/// The pre-#602 seed choice: one walk per unvisited section. Verbatim except
+/// for #741's rule, which changed WHICH datums seed (placement datums only, a
+/// GPS fix anchors nothing), not how the walk finds them.
 fn realign_seeds_before_602(project: &Project) -> Vec<SectionId> {
-    let datum_sections: HashSet<SectionId> = project
-        .zero_datums
-        .iter()
-        .map(|z| z.station_ref.section_id)
-        .collect();
+    let datum_sections: HashSet<SectionId> = project.placement_datum_sections();
     let mut seeds = Vec::new();
     let mut visited: HashSet<SectionId> = HashSet::new();
     for section in &project.sections {
@@ -16060,6 +15582,8 @@ fn datum_at(key: StationKey, lat: f64) -> ZeroDatum {
     ZeroDatum {
         station_ref: key,
         gps: GpsCoordinates::new(lat, -87.4, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     }
 }
 

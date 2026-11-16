@@ -18,7 +18,7 @@ import { isMutatingTool, shouldResetNavigationTool, toolCursor } from '../../uti
 import { mapGestureMode } from '../../utils/mapGestures';
 import { attachDragReleaseForwarder } from '../../utils/mapDragRelease';
 import { wheelZoomRateForLevels, ZOOM_LEVELS_PER_NOTCH_DEFAULT } from '../../utils/zoomRate';
-import { hasEligibleClosures } from '../../utils/closures';
+import { hasAdjustmentInputs } from '../../utils/closures';
 import { useShallow } from 'zustand/react/shallow';
 import {
   getEffectiveShowJumps,
@@ -1438,8 +1438,13 @@ function MapCanvas() {
           ? { onBeforeConfirm: moveCallbacks.onBeforeConfirm, onCancel: moveCallbacks.onCancel, preCommands: moveCallbacks.preCommands }
           : {};
         if (result.can_merge) {
-          openDialog('merge', { stationA: originStation, stationB: targetStation, ...extra });
-        } else if (result.connected || result.reason === 'Both sections have fixed coordinates') {
+          openDialog('merge', {
+            stationA: originStation,
+            stationB: targetStation,
+            datumShift: result.datum_shift,
+            ...extra,
+          });
+        } else if (result.connected) {
           openDialog('closure', {
             stationA: originStation,
             stationB: targetStation,
@@ -2334,10 +2339,10 @@ function MapCanvas() {
     }
   }, [geometryMode, project, surveyDataAdjusted, adjustedLoading, loadAdjustedGeometry, setGeometryMode, showToast, t]);
 
-  // The adjusted view is meaningless without an eligible closure: revert to
-  // measured if the last adjustable closure is removed while it is active.
+  // The adjusted view is meaningless without an eligible closure or a GPS fix
+  // (#741): revert to measured if the last one is removed while it is active.
   useEffect(() => {
-    if (geometryMode === 'closureAdjusted' && project && !hasEligibleClosures(project.loop_closures)) {
+    if (geometryMode === 'closureAdjusted' && project && !hasAdjustmentInputs(project)) {
       setGeometryMode('measured');
     }
   }, [geometryMode, project, setGeometryMode]);

@@ -90,7 +90,7 @@ kept section it shows, from `CombinePlan`):
 
 | Condition | What the combine does |
 |---|---|
-| The two ends are tied by a loop closure, or apart by more than 1 mm (a torn merge, a co-located residual) | The moving side shifts by the gap (see "Across loops") |
+| The two ends are tied by a loop closure, or apart by more than 1 mm (a torn merge), or side by side within it (a co-located residual, #740, 2026-11-15) | The moving side shifts by the gap (see "Across loops"); the dialog lists a move past 1 mm only |
 | Still rigidly tied once the join is gone (merge or snapped closure, directly or through other sections) | That tie becomes a `Batch` loop closure, the one nearest the moving section. An unaligned closure stays as a loop to adjust inside the section |
 | Different stored north references | The other section's azimuths turn by the correction difference and it takes the kept reference, so every station stays put. A declared reference equal to the project default is still converted (by 0): the combined section follows the default from now on |
 | Different quality | The kept section's wins |
@@ -111,9 +111,13 @@ loop is closed by a closure (snapped ones are rigid, the rest are soft).
   group). The combine folds them into the joined station. A tie that reaches a
   station of either section other than its join station is not one: that
   section comes back to the join point, and the tie is a loop.
-- **The moving side.** With a gap over the 1 mm tolerance, one side moves,
-  with everything still merged to it: a side a zero datum holds stays;
-  between two free sides, the one holding the closure-adjusted view's anchor
+- **The moving side.** With a gap at the join, one side moves, with
+  everything still merged to it. Until #740 (2026-11-15) only a gap over the
+  1 mm tolerance did: a side-by-side residual under it moved the other
+  section alone (the combined section hangs it off the kept join station)
+  and left what was merged to it behind. Now any gap past float dust
+  (`Project::OFFSET_DUST_M` in each axis) moves a side, by these rules: a
+  side a zero datum holds stays; between two free sides, the one holding the closure-adjusted view's anchor
   (`Project::adjustment_anchor_of`: a datum in the survey, else its gauge
   station, the rule the solve uses) stays, or Plan and Export would shift the
   whole cave by the gap (reported after #726: keeping the higher id across a

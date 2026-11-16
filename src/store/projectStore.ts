@@ -16,7 +16,7 @@ import {
   isReverifyDivergedError,
   READ_ONLY_EDIT_NOTICE,
 } from '../utils/editErrors';
-import { hasEligibleClosures } from '../utils/closures';
+import { hasAdjustmentInputs } from '../utils/closures';
 import { notifyRemovedClosures } from '../utils/closureRemovalToast';
 import { useAdjustmentReportStore } from './adjustmentReportStore';
 import { afterSurveyEdit, applyEditAftermath, beforeSurveyEdit, type SurveyEdit } from '../utils/reverseAftermath';
@@ -63,7 +63,7 @@ export interface ImportReceiptProvenance {
 import type { CreateProjectFullResult } from '../types/loading';
 import type { UnrecognisedShotKind } from '../types/ipc/UnrecognisedShotKind';
 import type { SurveyData } from '../types/survey-data';
-import { emptySurveyData, surveyDataFromLegacy, surveyDataWithAdjustedStations } from '../types/survey-data';
+import { emptySurveyData, surveyDataFromLegacy, surveyDataWithAdjustedStations, withGpsFixFlags } from '../types/survey-data';
 import { createProjectConfigActions, type ProjectConfigActions } from './projectConfigActions';
 import { createProjectShotActions, type ProjectShotActions } from './projectShotActions';
 import { createSectionStructureActions, type SectionStructureActions } from './sectionStructureActions';
@@ -444,7 +444,10 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   /** Set or clear a station's name; `null`/blank removes it (backend trims + cleans). */
   updateStationName: (stationRef: StationRef, name: string | null) => Promise<CommandResult>;
   moveComment: (source: CommentHolder, target: CommentHolder, swap: boolean) => Promise<CommandResult>;
-  setZeroDatum: (stationRef: StationRef, coordinates: GpsCoordinates, options?: { fitToBounds?: boolean }) => Promise<CommandResult>;
+  /** `accuracyM`: the GPS accuracy in metres (#741); 0 is a hard pin, and
+   *  omitted means the backend default (0). `entrance`: the user's answer to
+   *  "is this station an entrance?"; omitted keeps the stored answer. */
+  setZeroDatum: (stationRef: StationRef, coordinates: GpsCoordinates, options?: { fitToBounds?: boolean; accuracyM?: number; entrance?: boolean }) => Promise<CommandResult>;
   removeZeroDatum: (stationRef: StationRef) => Promise<CommandResult>;
   moveSection: (sectionId: SectionId, offset: Coordinates) => Promise<CommandResult>;
   moveSegment: (sectionId: SectionId, offset: Coordinates) => Promise<CommandResult>;
@@ -1516,7 +1519,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // Build the SoA layout alongside the legacy shapes for the
         // duration of the Phase-A migration. After Phase A.6 this is
         // the only shape stored; project loses .sections[i].shots.
-        const surveyData = surveyDataFromLegacy(state.project.sections, state.stations);
+        const surveyData = withGpsFixFlags(surveyDataFromLegacy(state.project.sections, state.stations), state.project.zero_datums);
         set({
           project: state.project,
           projectTreeGeneration: nextProjectTreeGeneration(),
@@ -1952,11 +1955,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
   // Station operations
   mergeStations: async (stationA: StationRef, stationB: StationRef) => {
-    return executeCommand(
+    return notifyRemovedClosures(await executeCommand(
       'merge_stations',
       { stationA, stationB },
       { purpose: 'connect survey sections', fields: { stationA, stationB } }
-    );
+    ));
   },
 
   unmergeStations: async (stationRef: StationRef) => {
@@ -2004,9 +2007,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     // No-op (no project, or a fetch already in flight): not a failure.
     if (!project || adjustedLoading) return true;
 
-    // No eligible closures → the adjusted view is identical to measured; reuse
-    // the measured set directly and skip the backend round-trip.
-    if (!hasEligibleClosures(project.loop_closures)) {
+    // No eligible closure and no GPS fix → the adjusted view is identical to
+    // measured; reuse the measured set directly and skip the backend round-trip.
+    if (!hasAdjustmentInputs(project)) {
       set({ stationsAdjusted: stations, surveyDataAdjusted: surveyData });
       return true;
     }
@@ -2029,9 +2032,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // rebuild only the station columns, so entering/restoring the adjusted view
       // never force-materializes the lazy `section.shots` getters (#mem). Fall
       // back to the full legacy walk only if the measured SoA is somehow absent.
-      const surveyDataAdjusted = surveyData
-        ? surveyDataWithAdjustedStations(surveyData, adjusted)
-        : surveyDataFromLegacy(project.sections, adjusted);
+      const adjustedData = surveyData ? surveyDataWithAdjustedStations(surveyData, adjusted) : surveyDataFromLegacy(project.sections, adjusted);
+      const surveyDataAdjusted = withGpsFixFlags(adjustedData, project.zero_datums);
       set({ stationsAdjusted: adjusted, surveyDataAdjusted, adjustedLoading: false });
       // What this solve left out (#737); a failed part also has a Warnings entry.
       void useAdjustmentReportStore.getState().load(adjusted, get().refreshWarnings);
@@ -2062,12 +2064,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     );
   },
 
-  setZeroDatum: async (stationRef: StationRef, coordinates: GpsCoordinates, options?: { fitToBounds?: boolean }) => {
+  setZeroDatum: async (stationRef, coordinates, options) => {
     // Detect first zero datum before the IPC call changes state
     const isFirstDatum = (get().project?.zero_datums.length ?? 0) === 0;
+    const { accuracyM, entrance } = options ?? {};
     const result = await executeCommand(
       'set_zero_datum',
-      { stationRef, coordinates },
+      { stationRef, coordinates, ...(accuracyM === undefined ? {} : { accuracyM }), ...(entrance === undefined ? {} : { entrance }) },
       { purpose: 'anchor survey to GPS coordinates', fields: { stationRef } }
     );
     if (result.success && options?.fitToBounds !== false) {

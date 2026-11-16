@@ -1,3 +1,4 @@
+use super::command_shot::OnePointCause;
 use super::AppState;
 #[cfg(test)]
 use crate::core::CommentHolder;
@@ -6,7 +7,7 @@ use crate::core::{
     ValidationWarning,
 };
 use crate::models::{
-    ClosuresBeforeSweep, Project, SectionData, SectionId, StationKey, ViolationSeverity,
+    ClosuresBeforeSweep, DatumLayout, Project, SectionData, SectionId, ViolationSeverity,
 };
 #[cfg(test)]
 use crate::models::{ShotData, ShotId, ShotUpdates};
@@ -156,6 +157,14 @@ impl AppState {
             can_dangle_refs: false,
             can_orphan_closures: true,
         };
+        // Same flags again, for a third reason: a merge ADDS connectivity, so it
+        // strands nothing, but since #741 it may join two placed pieces tied by
+        // an inert closure, and then that closure's two ends are one point. The
+        // sweep removes and reports it (#738), inside the merge's undo pair.
+        const MERGE: CommandIntegrity = CommandIntegrity {
+            can_dangle_refs: false,
+            can_orphan_closures: true,
+        };
         match cmd {
             // Lifecycle + pure metadata edits: touch no geometry and no refs.
             // RepairIntegrity never runs through execute() (it records its own
@@ -227,13 +236,14 @@ impl AppState {
             // argument as finding 10, one command further out).
             RemoveZeroDatum { .. } => REMOVE_DATUM,
 
+            MergeStations { .. } => MERGE,
+
             // Everything else keeps references valid and cannot strand a closure.
             // Whether it also needs geometry reconciliation is the separate,
             // exhaustive Command::affects_geometry classification.
             ReverseSection { .. }
             | CreateSection { .. }
             | UpdateShot { .. }
-            | MergeStations { .. }
             | CreateLoopClosure { .. }
             | RemoveLoopClosure { .. }
             // ADDING an anchor moves the guard the other way - it can only turn a
@@ -257,11 +267,13 @@ impl AppState {
     /// Convert any sole-bridge loop closures in the open project to merges, and
     /// remove any closure between merged stations (#738). With `before` (the
     /// capture a command took before it ran), the removed closures come back as
-    /// warnings named by the stations they had before it; without it (a Batch,
-    /// whose members report nothing of their own) they are only logged.
+    /// warnings named by the stations they had before it, saying `cause` made
+    /// them one point; without it they are only logged (`execute()`'s epilogue
+    /// for a Batch, whose `execute_batch` already swept and reported).
     fn convert_orphan_closures_in_open_project(
         &self,
         before: Option<&ClosuresBeforeSweep>,
+        cause: OnePointCause,
     ) -> Vec<ValidationWarning> {
         let mut guard = match self.project.lock() {
             Ok(g) => g,
@@ -284,6 +296,7 @@ impl AppState {
                 before,
                 &sweep,
                 "after a removal",
+                cause,
             );
         }
         sweep.log_removed("batch");
@@ -299,20 +312,32 @@ impl AppState {
         guard.as_ref().map(Project::closures_before_sweep)
     }
 
-    /// The open project's frame-defining datum station, or `None` with no project
-    /// and none with no resolvable datum. Read BEFORE a command runs; handed back
-    /// to [`Self::renormalize_frame_if_changed`] after it.
-    pub(super) fn frame_datum_key(&self) -> Option<StationKey> {
+    /// The open project's datums and their roles (an empty layout with no
+    /// project). Read BEFORE a command runs; handed back to
+    /// [`Self::settle_datum_layout`] after it.
+    pub(super) fn datum_layout(&self) -> DatumLayout {
         let guard = match self.project.lock() {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
         };
-        guard.as_ref().and_then(Project::frame_datum_key)
+        guard
+            .as_ref()
+            .map(Project::datum_layout)
+            .unwrap_or_default()
     }
 
-    /// If the command that just ran changed WHICH station defines the
-    /// georeference frame, translate the survey onto the new origin
+    /// Settle the datums after the command that just ran
+    /// ([`Project::settle_datum_layout`]): a datum that has just become its
+    /// piece's placement datum (a GPS fix promoted by a remove, an unmerge or a
+    /// split, #741) places that piece on its GPS against the frame in effect
+    /// before the command; then, if the command changed WHICH station defines
+    /// the georeference frame, the survey is translated onto the new origin
     /// ([`Project::renormalize_frame`], #469 item 1).
+    ///
+    /// Run once per command. `execute_batch` settles inside its own snapshot
+    /// pair, so `execute()` skips its epilogue call for a `Batch`: a second
+    /// call with the same `before` would place a promoted datum against a
+    /// frame that is no longer the origin.
     ///
     /// Derived, not hooked. At least six routes can promote a different datum to
     /// first - `remove_zero_datum`, `cleanup_section_references` on a
@@ -390,7 +415,7 @@ impl AppState {
     /// is laid out by its own sources' datums (#682), not by the open project's
     /// frame, so a fire here would translate one onto the other. Pinned by
     /// `merge_projects_does_not_renormalise_the_open_project`.
-    pub(super) fn renormalize_frame_if_changed(&self, before: Option<StationKey>) {
+    pub(super) fn settle_datum_layout(&self, before: &DatumLayout) {
         let mut guard = match self.project.lock() {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
@@ -398,7 +423,7 @@ impl AppState {
         let Some(project) = guard.as_mut() else {
             return;
         };
-        project.renormalize_frame_if_changed(before);
+        project.settle_datum_layout(before);
     }
 
     /// True iff the open project currently holds a Critical integrity violation.
@@ -560,6 +585,16 @@ impl AppState {
                     changed: false,
                 };
             };
+            // Demote any torn merge that bridges two independently datum-placed
+            // groups back to a loop closure, as the open path does (#741 D6):
+            // left a merge, the re-solve below would heal it by moving the
+            // later group off its GPS. FIRST: the demoted closure gives the
+            // later datum back its own piece, which it already placed, so the
+            // layout read below must see it as a placement datum or the settle
+            // would re-place it. Before the conversion too, so that sees the
+            // healed topology; the converter's double-anchor guard leaves the
+            // new closure alone.
+            demoted = project.demote_double_anchoring_merges();
             // The frame-defining datum station before the repair. Repair never runs
             // through `execute()`, so it carries its own frame check (#469, item 1).
             //
@@ -572,7 +607,7 @@ impl AppState {
             // them). The check is here because the alternative is asserting that no
             // future repair step can promote a datum - which is exactly the kind of
             // claim the derive-don't-hook rule exists to avoid having to make.
-            let frame_before = project.frame_datum_key();
+            let datums_before = project.datum_layout();
             // Drop dangling refs/orphans and re-mint duplicate shot UUIDs.
             let repaired = project.repair_structural_integrity();
             // A cross-section repeat is healed by renaming, exactly as a load
@@ -585,23 +620,10 @@ impl AppState {
                 self.load_renamed_shots
                     .store(true, std::sync::atomic::Ordering::Relaxed);
             }
-            // Demote any merge that bridges two independently datum-anchored
-            // groups back to a loop closure. It must run BEFORE the conversion
-            // and the re-solve: it is the one repair `resolve_offsets` cannot do
-            // (an over-constrained merge can never be satisfied, only removed),
-            // and undoing the promotion first means the conversion below sees the
-            // healed topology. Explicit-repair only - never on load.
-            demoted = project.demote_double_anchoring_merges();
-            // Turn any sole-bridge closure into a merge (a closure is only a
-            // loop), then re-derive offsets. Repair is an explicit "fix my
-            // project" action, so use the zero-trust re-solve that never honors a
-            // persisted offset. The closure just demoted is NOT re-promoted here:
-            // the converter's own double-anchor guard sees the same two anchored
-            // halves and leaves it alone.
             project.convert_orphan_closures_to_merges();
             // Same order as execute()'s epilogue: renormalise onto the new frame
             // before the solve that lands on it.
-            project.renormalize_frame_if_changed(frame_before);
+            project.settle_datum_layout(&datums_before);
             project.resolve_offsets();
             // Repair does not go through `reconcile_geometry`, so it carries the
             // closure re-measure itself, last and off the geometry the re-solve
@@ -637,11 +659,9 @@ impl AppState {
             }
         }
         IntegrityRepairResult {
-            // Demotions are already inside the before→after delta: each demoted
-            // merge was, by construction, a counted `merge_misaligned` violation
-            // that the demotion clears. The floor only guarantees that an explicit
-            // repair action can never be reported to the user as "0 fixed" if the
-            // rest of the violation set churns in the same pass.
+            // Each demoted merge was a counted `merge_misaligned` violation that
+            // the demotion clears; the floor keeps an explicit repair from
+            // reporting "0 fixed" if the rest of the set churns in the same pass.
             fixed: before.saturating_sub(after).max(demoted) as u32,
             remaining: after as u32,
             changed,
@@ -721,8 +741,9 @@ impl AppState {
         // The station that currently defines the georeference frame, read before
         // dispatch so the epilogue can tell whether this command changed it
         // (#469, item 1). Cheap: a walk of `zero_datums` (a handful) with a
-        // `resolve_key` each.
-        let frame_before = self.frame_datum_key();
+        // `resolve_key` each. The roles come with it, so the epilogue can also
+        // tell which datums became placement datums (#741).
+        let datums_before = self.datum_layout();
 
         // Snapshot before a ref-removing/renumbering command so a result that
         // introduces dangling references can be rejected and rolled back -
@@ -745,11 +766,13 @@ impl AppState {
         let pre_had_critical = integrity_snapshot.is_some() && self.project_has_critical();
         // What the epilogue's orphan sweep needs to name the closures it removes
         // by the stations they had before this command (#738).
-        let closures_before = if integrity.can_orphan_closures {
-            self.closures_before_sweep_in_open_project()
-        } else {
-            None
-        };
+        // A Batch takes its own inside `execute_batch`, where its sweep runs.
+        let closures_before =
+            if integrity.can_orphan_closures && !matches!(cmd, Command::Batch { .. }) {
+                self.closures_before_sweep_in_open_project()
+            } else {
+                None
+            };
 
         let mut result = match &cmd {
             Command::CreateProject { name, location } => {
@@ -834,7 +857,9 @@ impl AppState {
             Command::SetZeroDatum {
                 station_ref,
                 coordinates,
-            } => self.set_zero_datum(*station_ref, *coordinates),
+                accuracy_m,
+                entrance,
+            } => self.set_zero_datum(*station_ref, *coordinates, *accuracy_m, *entrance),
             Command::RemoveZeroDatum { station_ref } => self.remove_zero_datum(*station_ref),
             Command::SetStationComment {
                 station_ref,
@@ -910,7 +935,10 @@ impl AppState {
         // merge is solved immediately (#8). Scoped to removal commands so a move
         // still leaves an inert closure independent.
         if result.success && integrity.can_orphan_closures {
-            let swept = self.convert_orphan_closures_in_open_project(closures_before.as_ref());
+            let swept = self.convert_orphan_closures_in_open_project(
+                closures_before.as_ref(),
+                OnePointCause::of(&cmd),
+            );
             result.warnings.extend(swept);
         }
 
@@ -922,9 +950,12 @@ impl AppState {
         // `affects_geometry` exactly as the reconcile below is: that classification
         // is what excludes the lifecycle commands, and OpenProject in particular,
         // where "the frame station changed" means a DIFFERENT PROJECT is open and
-        // renormalising would translate a file the user just loaded.
-        if result.success && cmd.affects_geometry() {
-            self.renormalize_frame_if_changed(frame_before);
+        // renormalising would translate a file the user just loaded. The same
+        // call first places any piece whose GPS fix this command promoted to
+        // placement (#741). A batch settles inside `execute_batch`, so that its
+        // snapshot pair holds the result; settling twice is not idempotent.
+        if result.success && cmd.affects_geometry() && !matches!(cmd, Command::Batch { .. }) {
+            self.settle_datum_layout(&datums_before);
         }
 
         // Treat section offsets as derived: after any structural command,
@@ -1179,7 +1210,23 @@ impl AppState {
         // FUTURE shape - a promotion by some later member of an allowlist that is
         // the kind of thing that grows. This is the only placement that stays
         // correct when it does.
-        let frame_before = self.frame_datum_key();
+        let datums_before = self.datum_layout();
+        // What the sweep below needs to name the closures it removes (#738); a
+        // batched merge of two placed pieces can make a closure's ends one
+        // point (#741), e.g. the Merge dialog's snap-to-merge batch.
+        let closures_before = commands
+            .iter()
+            .any(|c| Self::command_integrity(c).can_orphan_closures)
+            .then(|| self.closures_before_sweep_in_open_project())
+            .flatten();
+        let batch_cause = if commands
+            .iter()
+            .any(|c| OnePointCause::of(c) == OnePointCause::Merge)
+        {
+            OnePointCause::Merge
+        } else {
+            OnePointCause::Promotion
+        };
 
         // Capture pre-batch snapshot for rollback on partial failure and undo
         let before_snapshot = match self.capture_project_snapshot() {
@@ -1234,11 +1281,13 @@ impl AppState {
         // metadata (the asymmetric-undo hazard that keeps SetStationComment and
         // SetStationName INERT). The outer execute() epilogue applies the same gate
         // to the Batch command, so the two passes agree.
-        self.convert_orphan_closures_in_open_project(None);
+        all_warnings.extend(
+            self.convert_orphan_closures_in_open_project(closures_before.as_ref(), batch_cause),
+        );
         if commands.iter().any(Command::affects_geometry) {
             // Same order as `execute()`'s epilogue: renormalise onto the new frame
             // first, then reconcile the geometry that lands on it (#469, item 1).
-            self.renormalize_frame_if_changed(frame_before);
+            self.settle_datum_layout(&datums_before);
             self.reconcile_geometry();
         }
 

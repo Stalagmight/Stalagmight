@@ -29,6 +29,7 @@ import { countUnresolvedErrors } from '../../utils/validation';
 import { shotCredit } from '../../utils/sectionCredit';
 import { CreditDetail, MultiShotDetail, sectionCredits, useSelectedShots } from './CreditDetail';
 import { CenterLocateIcon, DetailRow, StatCard } from './DetailPanelParts';
+import { StationDatumDetail } from './StationDatumDetail';
 import { warningKey, warningMessageTestId, warningOpenShotTestId, warningResolveTestId, warningUndoResolveTestId } from '../../utils/testId';
 
 export default function DetailPanel() {
@@ -199,10 +200,10 @@ type WarningFlow =
   | { kind: 'summary'; resolved: number; skipped: number; remaining: number };
 
 // Identity of a warning for queue stepping + live-set rehydration. Include the
-// datum index for over-anchoring warnings: two separate over-anchored components
-// can put their representative on the SAME shot (e.g. stations 0 and 1 both map to
-// shot 0), sharing sectionId/shotId/code but differing by datum - without this they
-// collapse and the resolve flow would act on the wrong datum (issue #57 / Codex).
+// datum index for datum warnings (`datum_gps_gap`, #741): two GPS fixes can map to
+// the SAME shot (e.g. stations 0 and 1 both map to shot 0), sharing
+// sectionId/shotId/code but differing by datum - without this they collapse and
+// the resolve flow would act on the wrong datum (issue #57 / Codex).
 function WarningsContent({ warnings, project, onWarningClick }: WarningsContentProps) {
   const { t } = useTranslation();
   const { unresolveWarning } = useProjectStore(
@@ -782,21 +783,11 @@ function StationDetail({ station }: { station: Station }) {
           )}
 
           {station.is_zero_datum && (
-            <div className="pt-2 border-t border-border">
-              <span className="text-warning">&#9733; {t('detailPanel.station.zeroDatum')}</span>
-              {station.gps_coordinates && (
-                <div className="mt-2 text-sm">
-                  <DetailRow
-                    label={t('detailPanel.labels.latitude')}
-                    value={formatFixed(station.gps_coordinates.latitude, undefined, precision.gps)}
-                  />
-                  <DetailRow
-                    label={t('detailPanel.labels.longitude')}
-                    value={formatFixed(station.gps_coordinates.longitude, undefined, precision.gps)}
-                  />
-                </div>
-              )}
-            </div>
+            <StationDatumDetail
+              datum={project?.zero_datums.find((d) => sameStationRef(d.station_ref, station.station_ref))}
+              gps={station.gps_coordinates}
+              gpsPrecision={precision.gps}
+            />
           )}
 
           {station.merged_with.length > 0 && (

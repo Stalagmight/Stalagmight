@@ -41,7 +41,8 @@ use super::station_rekey::value_naming;
 use super::Project;
 
 /// How far apart (metres) the two join stations may be and still count as the
-/// same point; also the bound on how far the other section moves.
+/// same point (side by side); also the bound on how far a co-located join
+/// moves a side, which it does by the residual (#740, `combine_plan.rs`).
 pub const COMBINE_TOLERANCE_M: f64 = 0.001;
 
 /// Above this depth gap (metres) between two co-located, unmerged join
@@ -117,7 +118,9 @@ fn end_index(section: &Section, end: SectionEnd) -> u32 {
     }
 }
 
-fn label(section: &Section) -> String {
+/// A section as the user knows it: its name, or "Section N" when it has none
+/// (the label the Combine dialog and its refusals use).
+pub fn section_label(section: &Section) -> String {
     section
         .name
         .clone()
@@ -322,7 +325,7 @@ impl Project {
         loose_ends.dedup();
         Some(Touch {
             kind,
-            blocked: self.combine_blocked_reason(section_a, section_b),
+            blocked: self.combine_blocked_reason(section_a, section_b, [at_a, at_b]),
             group_a,
             group_b,
             branches,
@@ -331,15 +334,35 @@ impl Project {
         })
     }
 
-    /// Why combining `a` and `b` is refused wherever they meet, or `None`.
-    /// Everything else that stands in the way is changed, and the plan says
-    /// what (`combine_plan.rs`).
-    fn combine_blocked_reason(&self, a: &Section, b: &Section) -> Option<String> {
+    /// Why combining `a` and `b` at their join stations `join` (one of each)
+    /// is refused, or `None`. Everything else that stands in the way is
+    /// changed, and the plan says what (`combine_plan.rs`).
+    fn combine_blocked_reason(
+        &self,
+        a: &Section,
+        b: &Section,
+        join: [StationRef; 2],
+    ) -> Option<String> {
+        // The two join stations become ONE station of the combined section, and
+        // a station holds at most one datum (#741 D2): a placement datum and a
+        // GPS fix folded onto one station key would lose the fix on the next
+        // save, and Remove Zero Datum would clear both at once.
+        if join.iter().all(|at| self.station_holds_datum(*at)) {
+            return Some(format!(
+                "{} #{} and {} #{} each hold a zero datum, and combining makes them one \
+                 station: remove one of the two datums first",
+                section_label(a),
+                join[0].station_index,
+                section_label(b),
+                join[1].station_index
+            ));
+        }
         if self.carries_zero_datum(a.id) && self.carries_zero_datum(b.id) {
             return Some(format!(
-                "{} and {} each carry a zero datum: a section can hold only one",
-                label(a),
-                label(b)
+                "{} and {} are each placed by their own zero datum: merge them first, so the \
+                 later datum becomes a GPS fix",
+                section_label(a),
+                section_label(b)
             ));
         }
         let budget = FEATURE_ID_STRIDE.saturating_sub(1) as usize;
@@ -362,8 +385,8 @@ impl Project {
             format!(
                 "{} has used up its shot numbers for this session: keep {}, or save and \
                  reopen",
-                label(kept),
-                label(other)
+                section_label(kept),
+                section_label(other)
             )
         })
     }
@@ -415,8 +438,8 @@ impl Project {
         let touch = self.pairing_touch(pairing, &table).unwrap_or_else(|| {
             Touch::refused(format!(
                 "{} and {} do not meet at those ends",
-                label(k),
-                label(o)
+                section_label(k),
+                section_label(o)
             ))
         });
         self.candidate_for(pairing, touch, &table)
@@ -537,6 +560,9 @@ impl Project {
             torn_ties: Vec::new(),
             azimuth_rotation_deg: None,
             join_offset_change_m: None,
+            closures_removed_across_one_shot: None,
+            closures_replaced: None,
+            moved_with_joined_station: None,
         };
         if touch.blocked.is_some() {
             return (empty, None);
@@ -544,8 +570,22 @@ impl Project {
         let Some((join, gap)) = self.join_point(pairing, touch, kept, table) else {
             return (empty, None);
         };
+        // The same gap as shown: each join station with its manual offset
+        // (#755). The two differ only where the hand moves differ.
+        let hand = |at| {
+            value_naming(self, &self.station_offsets, at)
+                .copied()
+                .unwrap_or_default()
+        };
+        let (hand_k, hand_o): ((f64, f64, f64), (f64, f64, f64)) =
+            (hand(join.join_k), hand(join.join_o));
+        let shown = if (hand_k.0, hand_k.1) == (hand_o.0, hand_o.1) {
+            gap
+        } else {
+            (gap.0 + hand_k.0 - hand_o.0, gap.1 + hand_k.1 - hand_o.1)
+        };
         let rigid = table.ties.get_or_init(|| self.rigid_ties());
-        let Ok(ties) = self.plan_ties(&join, gap, rigid, &table.closure_facts) else {
+        let Ok(ties) = self.plan_ties(&join, (gap, shown), rigid, &table.closure_facts) else {
             return (empty, None);
         };
         let (Some(k), Some(o)) = (self.get_section(join.kept), self.get_section(join.other)) else {
@@ -740,8 +780,8 @@ impl Project {
                 Touch::refused(format!(
                     "{} and {} do not meet at an end station: merge or close a loop between \
                      two of their ends first",
-                    label(a),
-                    label(b)
+                    section_label(a),
+                    section_label(b)
                 )),
             )
         });

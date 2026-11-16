@@ -117,8 +117,8 @@ The cog beside the Survey Issues legend (`IssueLegend.tsx` ->
 - **Color a shot by** - **Worst error** (the maximum score) or **Average** (the
   mean *palette position* of the shot's errors, so one error at Max and one at
   Min give the warn color). Stations combine the shots touching them, and their
-  merge group, the same way. A datum of an over-anchored group is raised to the
-  end color after that, so it is never averaged away.
+  merge group, the same way. A GPS fix whose gap warning fires (#741) is raised to
+  the end color after that, so it is never averaged away.
 - **Errors** - one row per error (azimuth in vs out, inclination in vs out,
   inclination vs depth change, length vs depth change, loop closure): an on /
   off switch and a levels slider. **Min**, **Warn** and **Max** map to scores
