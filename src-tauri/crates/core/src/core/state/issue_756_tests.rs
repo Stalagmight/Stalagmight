@@ -216,6 +216,8 @@ fn a_snap_into_a_part_a_zero_datum_holds_tears_for_the_datum_through_the_command
                 longitude: -87.0,
                 depth_reference: 0.0,
             },
+            accuracy_m: None,
+            entrance: None,
         });
         assert!(set.success, "{:?}", set.error);
     };
