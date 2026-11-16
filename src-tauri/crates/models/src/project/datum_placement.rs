@@ -36,58 +36,80 @@ use crate::{gps_to_local, DatumRole, GpsCoordinates, StationKey, StationRef, Zer
 pub struct DatumLayout {
     /// The frame datum's station and GPS.
     frame: Option<(StationKey, GpsCoordinates)>,
-    /// Every datum in list order, with the role it had (`None`: dangling).
-    datums: Vec<(StationKey, GpsCoordinates, Option<DatumRole>)>,
+    /// Every datum in list order.
+    datums: Vec<DatumWas>,
+}
+
+/// One datum as it was before a command.
+#[derive(Debug, Clone)]
+struct DatumWas {
+    key: StationKey,
+    gps: GpsCoordinates,
+    /// The role it had (`None`: dangling).
+    role: Option<DatumRole>,
+    /// Its station's horizontal position (`None`: dangling).
+    at: Option<(f64, f64)>,
+}
+
+/// Within the offset dust of each other: the same place.
+fn same_place(a: Option<(f64, f64)>, b: Option<(f64, f64)>) -> bool {
+    matches!((a, b), (Some(a), Some(b))
+        if (a.0 - b.0).abs() <= Project::OFFSET_DUST_M && (a.1 - b.1).abs() <= Project::OFFSET_DUST_M)
 }
 
 impl DatumLayout {
-    /// Whether `zd` was a GPS fix or a dangling datum before, and not a
-    /// placement datum. `after` is every datum's station and GPS now.
+    /// Whether `zd`, whose station is now `at`, was a GPS fix or a dangling
+    /// datum before, and not a placement datum. `after` is every datum's
+    /// station and GPS now.
     ///
-    /// A datum is recognised, in this order, by:
-    /// 1. its station key AND its GPS, unchanged;
-    /// 2. its GPS alone, against an earlier datum whose key and GPS no longer
-    ///    appear together (a split, a combine or a shot delete re-keyed it onto
-    ///    another station). Matching the GPS of an earlier datum that is still
-    ///    there would mistake a fix for a twin datum it was copied from;
-    /// 3. its station key alone (its GPS was edited in place).
+    /// Datums have no identity of their own, so one is recognised by the
+    /// first of these that finds an earlier datum:
+    /// 1. the same station key, GPS and position: untouched;
+    /// 2. the same GPS and position, against an earlier datum whose key and
+    ///    GPS no longer appear together: re-keyed where it stands (a split, or
+    ///    a shot delete);
+    /// 3. the same station key and GPS: moved (a merge, a combine);
+    /// 4. the same GPS, against an earlier datum whose key and GPS no longer
+    ///    appear together: re-keyed and moved (a combine);
+    /// 5. the same station key: its GPS was edited in place.
     ///
-    /// A key alone must not win over a re-keyed GPS: deleting a section's first
-    /// shot drops the datum on its first station and re-anchors the next
-    /// station's datum onto that key, and the promoted datum would otherwise
-    /// pass for the placement datum it replaced. A datum that matches no
-    /// earlier one is new (its command placed it already).
-    fn was_unplaced(&self, zd: &ZeroDatum, after: &[(StationKey, GpsCoordinates)]) -> bool {
-        let unplaced = |found: Vec<&(StationKey, GpsCoordinates, Option<DatumRole>)>| {
-            (!found.is_empty()).then(|| {
-                found
-                    .iter()
-                    .all(|(_, _, role)| *role != Some(DatumRole::Placement))
-            })
+    /// Key and GPS alone are not enough. Deleting a section's first shot drops
+    /// the datum on its first station and re-anchors the next station's datum
+    /// onto that key, and a GPS copied from another datum matches that datum
+    /// too: either way the promoted datum would pass for the placement datum
+    /// it replaced. The position settles it, since neither moves a station. A
+    /// datum that matches no earlier one is new (its command placed it
+    /// already).
+    fn was_unplaced(
+        &self,
+        zd: &ZeroDatum,
+        at: Option<(f64, f64)>,
+        after: &[(StationKey, GpsCoordinates)],
+    ) -> bool {
+        let gone = |was: &DatumWas| {
+            !after
+                .iter()
+                .any(|(k, g)| *k == was.key && same_gps(g, &was.gps))
         };
-        let same = self
-            .datums
+        let same_key = |was: &DatumWas| was.key == zd.station_ref;
+        let same_fix = |was: &DatumWas| same_gps(&was.gps, &zd.gps);
+        let same_at = |was: &DatumWas| same_place(was.at, at);
+        let tiers: [&dyn Fn(&DatumWas) -> bool; 5] = [
+            &|was| same_key(was) && same_fix(was) && same_at(was),
+            &|was| same_fix(was) && same_at(was) && gone(was),
+            &|was| same_key(was) && same_fix(was),
+            &|was| same_fix(was) && gone(was),
+            &|was| same_key(was),
+        ];
+        tiers
             .iter()
-            .filter(|(key, gps, _)| *key == zd.station_ref && same_gps(gps, &zd.gps))
-            .collect();
-        let rekeyed = || {
-            self.datums
-                .iter()
-                .filter(|(key, gps, _)| {
-                    same_gps(gps, &zd.gps)
-                        && !after.iter().any(|(k, g)| k == key && same_gps(g, gps))
-                })
-                .collect()
-        };
-        let edited = || {
-            self.datums
-                .iter()
-                .filter(|(key, _, _)| *key == zd.station_ref)
-                .collect()
-        };
-        unplaced(same)
-            .or_else(|| unplaced(rekeyed()))
-            .or_else(|| unplaced(edited()))
+            .find_map(|tier| {
+                let mut found = self.datums.iter().filter(|was| tier(was)).peekable();
+                found
+                    .peek()
+                    .is_some()
+                    .then(|| found.all(|was| was.role != Some(DatumRole::Placement)))
+            })
             .unwrap_or(false)
     }
 
@@ -109,7 +131,8 @@ pub(super) fn same_gps(a: &GpsCoordinates, b: &GpsCoordinates) -> bool {
 
 impl Project {
     /// The datums as they are now, for [`Self::settle_datum_layout`] after a
-    /// command. Cheap: a walk of `zero_datums` with a `resolve_key` each.
+    /// command. Cheap: a walk of `zero_datums` with a `resolve_key` and a
+    /// walk to the station each.
     pub fn datum_layout(&self) -> DatumLayout {
         DatumLayout {
             frame: self
@@ -119,9 +142,20 @@ impl Project {
                 .zero_datums
                 .iter()
                 .zip(self.datum_roles())
-                .map(|(zd, role)| (zd.station_ref.clone(), zd.gps, role))
+                .map(|(zd, role)| DatumWas {
+                    key: zd.station_ref.clone(),
+                    gps: zd.gps,
+                    role,
+                    at: self.datum_position(zd),
+                })
                 .collect(),
         }
+    }
+
+    /// The horizontal position of `zd`'s station, `None` when it dangles.
+    fn datum_position(&self, zd: &ZeroDatum) -> Option<(f64, f64)> {
+        let at = self.compute_station_raw_coords(self.resolve_key(&zd.station_ref)?)?;
+        Some((at.x, at.y))
     }
 
     /// Place every piece whose placement datum changed in a command, then
@@ -146,7 +180,7 @@ impl Project {
             let promoted: Vec<(StationRef, GpsCoordinates)> = self
                 .placement_datums()
                 .into_iter()
-                .filter(|zd| before.was_unplaced(zd, &after))
+                .filter(|zd| before.was_unplaced(zd, self.datum_position(zd), &after))
                 .filter_map(|zd| Some((self.resolve_key(&zd.station_ref)?, zd.gps)))
                 .collect();
             for (station_ref, gps) in promoted {

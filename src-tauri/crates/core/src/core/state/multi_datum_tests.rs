@@ -931,3 +931,38 @@ fn removing_the_frame_promotes_a_fix_that_shares_its_gps() {
 
     assert_undo_redo_round_trip(&state, &before);
 }
+
+#[test]
+fn deleting_the_first_shot_promotes_a_next_station_fix_with_the_frames_gps() {
+    // The entrance GPS copied onto A:1 as well: once A's first shot is
+    // deleted, the fix sits on A's start with the very key and GPS the frame
+    // had. It is still the fix (its station did not move), so it places A on
+    // that GPS: A:1, now A:0, moves 50 m south onto the origin.
+    let (state, a, _b) = two_entrances();
+    set_datum(&state, StationRef::new(a, 1), origin(), None);
+    let (c, c_gps) = placed_piece(&state);
+    let before = project(&state);
+    let first = before.get_section(a).unwrap().shots[0].id;
+
+    let r = state.execute(Command::DeleteShot {
+        section_id: a,
+        shot_id: first,
+    });
+    assert!(r.success, "{:?}", r.error);
+
+    let p = project(&state);
+    assert_near(
+        xy_of(&p, StationRef::new(a, 0)),
+        (0.0, 0.0),
+        1e-6,
+        "the promoted fix on the origin",
+    );
+    assert_near(
+        xy_of(&p, StationRef::new(c, 0)),
+        gps_to_local(&c_gps, &origin()),
+        0.01,
+        "C on its GPS",
+    );
+
+    assert_undo_redo_round_trip(&state, &before);
+}
