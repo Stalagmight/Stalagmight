@@ -63,18 +63,17 @@ fn same_place(a: Option<(f64, f64)>, b: Option<(f64, f64)>) -> bool {
 
 impl DatumLayout {
     /// Whether `zd`, whose station is now `at`, was a GPS fix or a dangling
-    /// datum before, and not a placement datum. `after` is every datum's
-    /// station and GPS now.
+    /// datum before, and not a placement datum. `after` is every datum now.
     ///
     /// Datums have no identity of their own, so one is recognised by the
     /// first of these that finds an earlier datum:
     /// 1. the same station key, GPS and position: untouched;
-    /// 2. the same GPS and position, against an earlier datum whose key and
-    ///    GPS no longer appear together: re-keyed where it stands (a split, or
-    ///    a shot delete);
+    /// 2. the same GPS and position, against an earlier datum that is gone (no
+    ///    datum now has its key and its stored GPS, accuracy and Entrance
+    ///    answer): re-keyed where it stands (a split, or a shot delete);
     /// 3. the same station key and GPS: moved (a merge, a combine);
-    /// 4. the same GPS, against an earlier datum whose key and GPS no longer
-    ///    appear together: re-keyed and moved (a combine);
+    /// 4. the same GPS, against an earlier datum that is gone: re-keyed and
+    ///    moved (a combine);
     /// 5. the same station key: its GPS was edited in place.
     ///
     /// Key and GPS alone are not enough. Deleting a section's first shot drops
@@ -83,22 +82,24 @@ impl DatumLayout {
     /// too: either way the promoted datum would pass for the placement datum
     /// it replaced. The position settles it, since neither moves a station.
     ///
+    /// Gone compares the whole stored value, not the GPS alone: a combine can
+    /// re-key a datum onto the key of another with the very same GPS (copied
+    /// coordinates), and that one would otherwise pass for still there.
+    ///
     /// When one tier finds earlier datums of both roles (a GPS copied from a
     /// placement datum, both re-keyed and moved by a combine), the stored
     /// accuracy and Entrance answer narrow it. If that still leaves both
     /// roles, the datum counts as unplaced: placing it moves nothing when its
     /// piece already sits on that GPS. A datum that matches no earlier one is
     /// new (its command placed it already).
-    fn was_unplaced(
-        &self,
-        zd: &ZeroDatum,
-        at: Option<(f64, f64)>,
-        after: &[(StationKey, GpsCoordinates)],
-    ) -> bool {
+    fn was_unplaced(&self, zd: &ZeroDatum, at: Option<(f64, f64)>, after: &[ZeroDatum]) -> bool {
         let gone = |was: &DatumWas| {
-            !after
-                .iter()
-                .any(|(k, g)| *k == was.key && same_gps(g, &was.gps))
+            !after.iter().any(|now| {
+                now.station_ref == was.key
+                    && same_gps(&now.gps, &was.gps)
+                    && now.accuracy_m.map(f64::to_bits) == was.accuracy
+                    && now.entrance == was.entrance
+            })
         };
         let same_key = |was: &DatumWas| was.key == zd.station_ref;
         let same_fix = |was: &DatumWas| same_gps(&was.gps, &zd.gps);
@@ -198,15 +199,10 @@ impl Project {
         // With no frame before, nothing was placed relative to anything, and
         // the re-frame below is the whole answer.
         if let Some((_, frame_gps)) = before.frame {
-            let after: Vec<(StationKey, GpsCoordinates)> = self
-                .zero_datums
-                .iter()
-                .map(|zd| (zd.station_ref.clone(), zd.gps))
-                .collect();
             let promoted: Vec<(StationRef, GpsCoordinates)> = self
                 .placement_datums()
                 .into_iter()
-                .filter(|zd| before.was_unplaced(zd, self.datum_position(zd), &after))
+                .filter(|zd| before.was_unplaced(zd, self.datum_position(zd), &self.zero_datums))
                 .filter_map(|zd| Some((self.resolve_key(&zd.station_ref)?, zd.gps)))
                 .collect();
             for (station_ref, gps) in promoted {

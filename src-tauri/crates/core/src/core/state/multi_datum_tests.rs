@@ -8,7 +8,8 @@ use std::collections::HashMap;
 use super::AppState;
 use crate::core::Command;
 use crate::models::{
-    gps_to_local, local_to_gps, DatumRole, GpsCoordinates, Project, SectionId, ShotData,
+    gps_to_local, local_to_gps, ClosureStrategy, CombineJoinEnds, CombinePick,
+    CombineSectionsOptions, DatumRole, GpsCoordinates, Project, SectionEnd, SectionId, ShotData,
     StationRef, SurveyDirection, DATUM_GPS_GAP, DATUM_GPS_GAP_START,
 };
 
@@ -963,6 +964,79 @@ fn deleting_the_first_shot_promotes_a_next_station_fix_with_the_frames_gps() {
         0.01,
         "C on its GPS",
     );
+
+    assert_undo_redo_round_trip(&state, &before);
+}
+
+#[test]
+fn a_combine_that_re_keys_a_twin_onto_the_fixs_key_still_promotes_the_fix() {
+    // X hangs off A with a fix on its start, 30 m east of where X:0 is. Y is a
+    // separate piece placed at Y:1 by the very same GPS (copied coordinates)
+    // at another accuracy, and a closure ties X:0 to Y:0. Combining X:Start
+    // with Y:Start moves X onto Y (its merge to A tears for the frame) and
+    // puts Y's stations first, so Y:1's datum takes X's start key, which the
+    // fix had, with the fix's GPS. The fix comes first in the list, so it is
+    // the combined piece's placement datum now and must sit on its GPS.
+    let (state, a, _b) = two_entrances();
+    let x = create_section(&state, "X", north_shots(2, 20.0));
+    let r = state.execute(Command::MergeStations {
+        station_a: StationRef::new(x, 2),
+        station_b: StationRef::new(a, 2),
+    });
+    assert!(r.success, "{:?}", r.error);
+    let twin = gps_at(30.0, 60.0);
+    set_datum(&state, StationRef::new(x, 0), twin, Some(5.0));
+    let y = create_section(&state, "Y", north_shots(1, 20.0));
+    set_datum(&state, StationRef::new(y, 1), twin, Some(0.5));
+    let r = state.execute(Command::CreateLoopClosure {
+        station_a: StationRef::new(x, 0),
+        station_b: StationRef::new(y, 0),
+        closure_strategy: ClosureStrategy::Batch,
+    });
+    assert!(r.success, "{:?}", r.error);
+    let before = project(&state);
+    assert_eq!(
+        before.datum_roles(),
+        vec![
+            Some(DatumRole::Placement),
+            Some(DatumRole::GpsFix),
+            Some(DatumRole::Placement)
+        ]
+    );
+
+    let r = state.execute_combine_sections(
+        x,
+        y,
+        CombineSectionsOptions {
+            name: "XY".to_string(),
+            color: "#abcdef".to_string(),
+            swap_lr: true,
+            comment_pick: CombinePick::Kept,
+            name_pick: CombinePick::Kept,
+            join: Some(CombineJoinEnds {
+                kept: SectionEnd::Start,
+                other: SectionEnd::Start,
+            }),
+        },
+    );
+    assert!(r.success, "{:?}", r.error);
+
+    let p = project(&state);
+    // The fix (accuracy 5) places the combined piece, Y's datum is its fix.
+    let roles: Vec<(Option<f64>, Option<DatumRole>)> = p
+        .zero_datums
+        .iter()
+        .map(|zd| zd.accuracy_m)
+        .zip(p.datum_roles())
+        .collect();
+    assert_eq!(
+        roles[1..],
+        [
+            (Some(5.0), Some(DatumRole::Placement)),
+            (Some(0.5), Some(DatumRole::GpsFix))
+        ]
+    );
+    assert_placements_on_their_gps(&state, "after the combine");
 
     assert_undo_redo_round_trip(&state, &before);
 }

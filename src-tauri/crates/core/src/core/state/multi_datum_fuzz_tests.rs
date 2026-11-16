@@ -108,7 +108,8 @@ const EXACT_M: f64 = 1e-9;
 /// No longer muted, and pinned in `multi_datum_tests.rs`: `promoted-twin-gps`
 /// (a fix with the bit-identical GPS of the removed placement datum) and
 /// `datum-key-reused` (Delete Shot re-anchoring a fix onto the removed
-/// datum's key), both fixed in `DatumLayout::was_unplaced`; and
+/// datum's key, or a combine re-keying a placement onto the key of its twin
+/// fix), both fixed in `DatumLayout::was_unplaced`; and
 /// `datum-twin-station` (Combine Sections joining two stations that each
 /// hold a datum), now refused; and `hard-fix-no-unknowns` (a hard fix in a
 /// component with no unknown left), now applied.
@@ -1319,6 +1320,10 @@ const PINNED_CHAINS: &[&str] = &[
     // promoted-twin-gps after a combine that re-keys and moves both twins: only
     // the stored accuracy tells them apart.
     "1026755;closure(3:2,3:3);acc(0,1000.0);undo;closure(4:1,0:0);split(3,2,a);twin(5:0,1,-);acc(0,0.0);closure(2:2,1:2);addshot(5,0,83.26639828096893,9.85053026440123,28.642278304656077,28.880991248958054);unmerge(0:0,3:0);unmerge(1:0,2:1);addshot(6,-1,255.74044991586703,19.905929536886184,1.2756380852736882,0.0);datum(4:3,24.901653430245844,29.355911207344825,0.0);merge(0:0,2:1);rm(2);datum(1:2,-45.864378812639124,11.359789645079355,50.0);combine(5:start,4:start)",
+    // datum-key-reused: a combine re-keys a placement datum onto the key of
+    // its twin fix (one GPS, another accuracy), which becomes the placement:
+    // only the stored accuracy shows the fix's old key is gone.
+    "50028990;split(4,2,b);acc(0,0.0);datum(3:4,-10.355085626613327,-38.63552075781107,1000.0);datum(2:2,45.046864107381886,43.49016961757878,50.0);addshot(0,end,241.82506602311437,12.181044570237113,10.15784749770614,6.664029904480876);datum(3:3,-28.281957111543417,-33.37293276249461,0.5);reopen;unmerge(0:0,1:0);undo;split(0,1,b);acc(3,50.0);datum(5:0,0.0,0.0,50.0);reopen;undo;delshot(3,4);acc(2,-);undo;twin(4:0,1,5.0);closure(4:2,6:0);merge(4:2,3:0);reopen;combine(0:start,2:start);twin(5:1,4,0.5);datum(0:3,-18.54270846695945,37.349707765143265,0.5);split(1,1,b);closure(3:0,3:0);undo;undo;rm(0);datum(0:0,-70.10296390335284,-51.46255498275887,5.0);undo;datum(6:0,11.025626281126955,2.450822161617217,50.0);closure(4:1,0:4);datum(4:2,27.224552254542683,-43.394823892024185,5.0);closure(4:0,5:0);addshot(6,0,93.8038739660679,10.717179406412239,28.31985522332138,25.400500444955643);merge(3:3,0:4);twin(3:0,5,1000.0);rm(0);combine(4:start,5:start)",
     // datum-twin-station: Combine joining two datum stations is refused.
     "350;combine(0:start,3:start)",
     // hard-fix-no-unknowns: every group held, the hard fix still applied.
