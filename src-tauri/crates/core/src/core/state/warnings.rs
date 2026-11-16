@@ -250,7 +250,7 @@ impl AppState {
 
         // Project-level: one advisory warning per GPS-fix zero datum whose GPS is
         // further from its surveyed position than 15 m plus 2% of the survey
-        // distance to the nearest other datum (#741 decision 4). Attached to the
+        // distance from its piece's placement datum (#741 decision 4). Attached to the
         // fix's adjacent shot, so it keys and ignores like any per-shot warning,
         // and each fix gets a (shot, code) pair of its own: station i -> shot i-1
         // under DATUM_GPS_GAP, station 0 -> shot 0 under DATUM_GPS_GAP_START, so

@@ -53,8 +53,10 @@ The approaches differ, but every one of these tools lets a cave carry more than 
 3. **The UI keeps the name "Zero Datum".** When the cave already has one, the Edit Station
    dialog explains what this one will do instead of refusing.
 4. **Sanity warning.** Warn, without blocking, when the gap between the surveyed position and
-   the GPS is larger than **15 m + 2% of the survey distance to the nearest other datum**.
-   Example: 1.4 km away gives 43 m.
+   the GPS is larger than **15 m + 2% of the survey distance from the placement datum of the
+   datum's piece**, measured along shots and merges. The raw position is carried from that
+   datum, so that is the survey whose error the allowance covers; another fix nearby, or a
+   loop closure back to the datum, does not shorten it. Example: 1.4 km away gives 43 m.
 5. **Every datum is an entrance**, for Plan mode's "Start from entrance" and for Ariane export.
 
 ## Design

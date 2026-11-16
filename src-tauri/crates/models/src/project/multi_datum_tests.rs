@@ -538,10 +538,12 @@ fn push_fix(project: &mut Project, sr: StationRef, gps: GpsCoordinates) {
 }
 
 #[test]
-fn each_fix_measures_its_survey_distance_to_its_own_nearest_other_datum() {
+fn each_fix_measures_its_survey_distance_from_its_placement_datum() {
     // A 400 m line L (40 shots of 10 m) placed at L:0, with fixes at L:10,
     // L:30 and L:31, and a 40 m branch merged at L:22 with a fix at its end.
-    let mut project = Project::new("NearestDatum".to_string(), None);
+    // Every distance runs back to L:0, the datum the raw positions are
+    // carried from, however close another fix is (#741 U5).
+    let mut project = Project::new("PlacementDistance".to_string(), None);
     let line = north_line(&mut project, 40, 10.0);
     let branch = north_line(&mut project, 4, 10.0);
     project.ensure_shot_uuids();
@@ -555,9 +557,9 @@ fn each_fix_measures_its_survey_distance_to_its_own_nearest_other_datum() {
         .unwrap();
     let fixes = [
         (StationRef::new(line, 10), 100.0),
-        (StationRef::new(line, 30), 10.0),
-        (StationRef::new(line, 31), 10.0),
-        (StationRef::new(branch, 4), 120.0),
+        (StationRef::new(line, 30), 300.0),
+        (StationRef::new(line, 31), 310.0),
+        (StationRef::new(branch, 4), 260.0),
     ];
     for (i, (sr, _)) in fixes.iter().enumerate() {
         push_fix(&mut project, *sr, gps_at(i as f64, 100.0 * i as f64));
@@ -612,10 +614,12 @@ fn gap_check_cost_does_not_multiply_with_the_number_of_fixes() {
     let gaps = project.gps_fix_gaps();
     let elapsed = started.elapsed();
     assert_eq!(gaps.len(), 4000);
-    // Each fix is one 2 m shot from the next datum along the chain.
-    assert!(gaps
-        .values()
-        .all(|g| (g.survey_distance_m.unwrap() - 2.0).abs() < 1e-9));
+    // Each fix is measured back along the chain to the placement datum.
+    for (sr, g) in &gaps {
+        let s = sections.iter().position(|id| *id == sr.section_id).unwrap();
+        let expected = (s as f64 * 50.0 + f64::from(sr.station_index)) * 2.0;
+        assert!((g.survey_distance_m.unwrap() - expected).abs() < 1e-6);
+    }
     assert!(
         elapsed < std::time::Duration::from_secs(5),
         "gps_fix_gaps over 4000 fixes took {elapsed:?}"
@@ -679,4 +683,63 @@ fn a_gps_fix_still_pulls_a_component_whose_only_closure_spans_one_shot() {
         x0.abs() < 1e-6 && y0.abs() < 1e-6,
         "the placement datum moved"
     );
+}
+
+#[test]
+fn a_second_consistent_fix_does_not_shrink_the_first_fixs_threshold() {
+    // 2010 m north, placed at A:0. A fix at A:200 (2000 m along) 40 m off its
+    // survey is inside 15 m + 2% of 2000 m = 55 m. A second fix 10 m further on,
+    // off by the same 40 m, agrees with it: neither threshold may fall to
+    // 15 m + 2% of the 10 m between them (#741 U5).
+    let mut project = Project::new("TwoFixes".to_string(), None);
+    let a = north_line(&mut project, 201, 10.0);
+    project.ensure_shot_uuids();
+    project
+        .set_zero_datum(StationRef::new(a, 0), origin())
+        .unwrap();
+    let first = StationRef::new(a, 200);
+    project.set_zero_datum(first, gps_at(40.0, 2000.0)).unwrap();
+    let one = project.gps_fix_gaps()[&first];
+    assert!((one.threshold_m - 55.0).abs() < 1e-6, "{one:?}");
+    assert!(!one.exceeds_threshold);
+
+    project
+        .set_zero_datum(StationRef::new(a, 201), gps_at(40.0, 2010.0))
+        .unwrap();
+    let gaps = project.gps_fix_gaps();
+    assert_eq!(gaps.len(), 2);
+    assert_eq!(gaps[&first], one, "the first fix's gap is unchanged");
+    let second = gaps[&StationRef::new(a, 201)];
+    assert!((second.threshold_m - 55.2).abs() < 1e-6, "{second:?}");
+    assert!(!second.exceeds_threshold);
+}
+
+#[test]
+fn a_loop_closure_is_no_shortcut_for_the_gap_threshold() {
+    // A 300 m line placed at A:0 whose far end is closed back onto A:0 by a
+    // loop closure: the raw position of A:30 is still carried 300 m along the
+    // shots, so its threshold is 15 m + 2% of 300 m, not the 15 m a zero-cost
+    // closure edge back to the datum would give.
+    let mut project = Project::new("Loop".to_string(), None);
+    let a = north_line(&mut project, 30, 10.0);
+    project.ensure_shot_uuids();
+    project
+        .set_zero_datum(StationRef::new(a, 0), origin())
+        .unwrap();
+    project
+        .create_loop_closure(
+            StationRef::new(a, 0),
+            StationRef::new(a, 30),
+            ClosureStrategy::Batch,
+        )
+        .unwrap();
+    let gap = project
+        .datum_gap(StationRef::new(a, 30), &gps_at(20.0, 300.0))
+        .unwrap();
+    assert!(
+        (gap.survey_distance_m.unwrap() - 300.0).abs() < 1e-6,
+        "{gap:?}"
+    );
+    assert!((gap.threshold_m - 21.0).abs() < 1e-6);
+    assert!(!gap.exceeds_threshold);
 }

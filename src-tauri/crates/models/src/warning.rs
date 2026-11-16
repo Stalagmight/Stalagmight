@@ -18,8 +18,8 @@ pub enum WarningSeverity {
 }
 
 /// Warning code for a GPS-fix zero datum whose GPS position is further from
-/// its surveyed position than 15 m plus 2% of the survey distance to the
-/// nearest other datum (#741 decision 4). A sanity check, not a blocker: the
+/// its surveyed position than 15 m plus 2% of the survey distance from the
+/// placement datum of its piece (#741 decision 4). A sanity check, not a blocker: the
 /// survey or the GPS may be off, and the surveyor may know the gap is real, so
 /// it is an advisory **warning** and ignorable. One row per such fix.
 ///
