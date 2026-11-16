@@ -218,87 +218,155 @@ const PINNED_VIEW: [(u32, u32, [u64; 3]); 17] = [
     (
         0,
         0,
-        [0xc05c519ce0ae287e, 0xc05edb399dfc8d32, 0x4009333333333333],
+        [
+            0xc05c_519c_e0ae_287e,
+            0xc05e_db39_9dfc_8d32,
+            0x4009_3333_3333_3333,
+        ],
     ),
     (
         0,
         1,
-        [0xc05c1ad482ddc13d, 0xc05d1fdc06213303, 0x4010888888888889],
+        [
+            0xc05c_1ad4_82dd_c13d,
+            0xc05d_1fdc_0621_3303,
+            0x4010_8888_8888_8889,
+        ],
     ),
     (
         0,
         2,
-        [0xc05b2d9330d1c962, 0xc05d1f37ed2a68e1, 0x4017bbbbbbbbbbbc],
+        [
+            0xc05b_2d93_30d1_c962,
+            0xc05d_1f37_ed2a_68e1,
+            0x4017_bbbb_bbbb_bbbc,
+        ],
     ),
     (
         0,
         3,
-        [0xc05b18af6e9c9b22, 0xc05ea71a2eee64b8, 0x401199999999999a],
+        [
+            0xc05b_18af_6e9c_9b22,
+            0xc05e_a71a_2eee_64b8,
+            0x4011_9999_9999_999a,
+        ],
     ),
     (
         0,
         4,
-        [0xc05c519ce0ae287e, 0xc05edb399dfc8d32, 0x4009333333333333],
+        [
+            0xc05c_519c_e0ae_287e,
+            0xc05e_db39_9dfc_8d32,
+            0x4009_3333_3333_3333,
+        ],
     ),
     (
         1,
         0,
-        [0xc05b2d9330d1c962, 0xc05d1f37ed2a68e1, 0x4017bbbbbbbbbbbc],
+        [
+            0xc05b_2d93_30d1_c962,
+            0xc05d_1f37_ed2a_68e1,
+            0x4017_bbbb_bbbb_bbbc,
+        ],
     ),
     (
         1,
         1,
-        [0xc05b02cbc3c5aad0, 0xc05b8a08b0a153cf, 0x401ddddddddddddd],
+        [
+            0xc05b_02cb_c3c5_aad0,
+            0xc05b_8a08_b0a1_53cf,
+            0x401d_dddd_dddd_dddd,
+        ],
     ),
     (
         1,
         2,
-        [0xc05ab04d87501d0c, 0xc05c124037481428, 0x4020333333333333],
+        [
+            0xc05a_b04d_8750_1d0c,
+            0xc05c_1240_3748_1428,
+            0x4020_3333_3333_3333,
+        ],
     ),
     (
         1,
         3,
-        [0xc05c1ad482ddc13d, 0xc05d1fdc06213303, 0x4010888888888889],
+        [
+            0xc05c_1ad4_82dd_c13d,
+            0xc05d_1fdc_0621_3303,
+            0x4010_8888_8888_8889,
+        ],
     ),
     (
         2,
         0,
-        [0xc05b02cbc3c5aad0, 0xc05b8a08b0a153cf, 0x401ddddddddddddd],
+        [
+            0xc05b_02cb_c3c5_aad0,
+            0xc05b_8a08_b0a1_53cf,
+            0x401d_dddd_dddd_dddd,
+        ],
     ),
     (
         2,
         1,
-        [0xc05be5f932080218, 0xc05b06df7b5026c5, 0x4022000000000000],
+        [
+            0xc05b_e5f9_3208_0218,
+            0xc05b_06df_7b50_26c5,
+            0x4022_0000_0000_0000,
+        ],
     ),
     (
         2,
         2,
-        [0xc05c4dbe62756c09, 0xc05aafcca42972f7, 0x4023333333333333],
+        [
+            0xc05c_4dbe_6275_6c09,
+            0xc05a_afcc_a429_72f7,
+            0x4023_3333_3333_3333,
+        ],
     ),
     (
         3,
         0,
-        [0xbfe9b449f6ba2117, 0xc023cd87cffdfa5a, 0x3ff0cccccccccccd],
+        [
+            0xbfe9_b449_f6ba_2117,
+            0xc023_cd87_cffd_fa5a,
+            0x3ff0_cccc_cccc_cccd,
+        ],
     ),
     (
         3,
         1,
-        [0x3cfb800000000000, 0x3d00000000000000, 0x4000000000000000],
+        [
+            0x3cfb_8000_0000_0000,
+            0x3d00_0000_0000_0000,
+            0x4000_0000_0000_0000,
+        ],
     ),
     (
         3,
         2,
-        [0x40244953deb8326c, 0xbff02bf9667f41f9, 0x4004000000000000],
+        [
+            0x4024_4953_deb8_326c,
+            0xbff0_2bf9_667f_41f9,
+            0x4004_0000_0000_0000,
+        ],
     ),
     (
         3,
         3,
-        [0x40227ace7f40f3dd, 0xc025517dac61d617, 0x3ffccccccccccccd],
+        [
+            0x4022_7ace_7f40_f3dd,
+            0xc025_517d_ac61_d617,
+            0x3ffc_cccc_cccc_cccd,
+        ],
     ),
     (
         3,
         4,
-        [0xbfe9b449f6ba2110, 0xc023cd87cffdfa5e, 0x3ff0cccccccccccd],
+        [
+            0xbfe9_b449_f6ba_2110,
+            0xc023_cd87_cffd_fa5e,
+            0x3ff0_cccc_cccc_cccd,
+        ],
     ),
 ];
 
@@ -652,8 +720,7 @@ fn a_hand_move_at_a_merge_on_a_loop_keeps_the_merge_closed_in_the_view() {
 /// on one point.
 #[test]
 fn a_hand_move_on_a_closure_end_is_closed_with_the_loop() {
-    let (without, [a, ..]) = pinned_survey();
-    let mut with = without.clone();
+    let (mut with, [a, ..]) = pinned_survey();
     plant(&mut with, StationRef::new(a, 4), (0.3, 0.1, 0.0));
     let v = view(&with);
     assert!(
@@ -668,8 +735,7 @@ fn a_hand_move_on_a_closure_end_is_closed_with_the_loop() {
 /// Raw Data View shows it, and the rest is solved around it.
 #[test]
 fn a_hand_move_on_the_held_station_holds_the_survey_where_it_is_shown() {
-    let (without, [a, ..]) = pinned_survey();
-    let mut with = without.clone();
+    let (mut with, [a, ..]) = pinned_survey();
     plant(&mut with, StationRef::new(a, 0), (-0.2, 0.35, 0.0));
     assert_view_is_the_solve(&with, "held station");
 }
