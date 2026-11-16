@@ -371,9 +371,13 @@ impl Project {
             .all(|v| v.is_finite());
         // The two join stations' hand moves (manual offsets) differ (#755): the
         // joined station keeps one, so the other join station lands on it by
-        // the gap as shown. A merged join's stations are one point already,
-        // and all that is merged there are join ties, which never move.
-        let carried = finite && !join.merged && beyond_dust((shown.0 - gap.0, shown.1 - gap.1));
+        // the gap as shown. Exactly: `shown` is `gap` itself when the two
+        // agree, and whether anything moves is decided on the gap it moves by
+        // below, so what is merged there lands on the joined station whenever
+        // anything moves and stays within float dust of it otherwise. A merged
+        // join's stations are one point already, and all that is merged there
+        // are join ties, which never move.
+        let carried = finite && !join.merged && shown != gap;
         // What is merged at a join station (a third section) moves with the
         // joined station when that station's hand move is dropped, so a side
         // moves when the gap as shown is past dust too, even with none in the
@@ -455,13 +459,21 @@ impl Project {
         };
         // What is merged there moves with the joined station: each third
         // section still merged at it once the plan's ties tear, and what hangs
-        // off it, never through the moving section (merges form a forest, so
-        // that is all of it).
-        let joined: HashSet<SectionId> = if carried && shifting {
+        // off it, never through the moving section. Merges form a forest
+        // (`merge_stations` refuses a loop), so that is all of it; but nothing
+        // breaks a merge loop an older or hand-edited file holds, and a part
+        // merged at the dropped station that is also merged to the moving
+        // section at another station cannot follow both. It stays with its
+        // side, and its merge at the join becomes a loop closure carrying the
+        // two hand moves' difference as its misclosure, as a loop the combine
+        // closes through the combined section does.
+        let (joined, looped): (HashSet<SectionId>, HashSet<TieId>) = if carried && shifting {
             let adjacency = adjacency_without(&torn);
             let side = reach(&adjacency, moving, fixed);
+            let kept_merges = || merges.iter().filter(|t| !torn.contains(&t.id));
             let mut joined = HashSet::new();
-            for tie in merges.iter().filter(|t| !torn.contains(&t.id)) {
+            let mut looped = HashSet::new();
+            for tie in kept_merges() {
                 let partner = if tie.a == dropped_at {
                     tie.b
                 } else if tie.b == dropped_at {
@@ -469,21 +481,35 @@ impl Project {
                 } else {
                     continue;
                 };
-                if partner.section_id != moving && partner.section_id != fixed {
-                    joined.extend(reach(&adjacency, partner.section_id, moving));
+                if partner.section_id == moving || partner.section_id == fixed {
+                    continue;
+                }
+                let part = reach(&adjacency, partner.section_id, moving);
+                let back = kept_merges().any(|t| {
+                    (part.contains(&t.a.section_id)
+                        && t.b.section_id == moving
+                        && t.b != dropped_at)
+                        || (part.contains(&t.b.section_id)
+                            && t.a.section_id == moving
+                            && t.a != dropped_at)
+                });
+                if back {
+                    looped.insert(tie.id);
+                } else {
+                    joined.extend(part);
                 }
             }
             joined.retain(|s| side.contains(s) && *s != moving && *s != fixed);
-            joined
+            (joined, looped)
         } else {
-            HashSet::new()
+            (HashSet::new(), HashSet::new())
         };
         // The other section's side, picked only to carry what is merged at its
-        // join station, with nothing left there to carry (none there, or its
-        // merge torn to close a loop): nothing moves after all. (The kept side
-        // picked goes on moving, by the float dust of the chain gap: the plan
-        // then says the joined station keeps the other's hand move, which it
-        // does.)
+        // join station, with nothing left there to carry (none there, its
+        // merge torn to close a loop, or one of a merge loop): nothing moves
+        // after all. (The kept side picked goes on moving, by the float dust
+        // of the chain gap: the plan then says the joined station keeps the
+        // other's hand move, which it does.)
         let idle = shifting && !gap_moves && picked == join.other && joined.is_empty();
         let (shifting, moving, fixed, mut torn, held_by_datum, kept_moves_because) = if idle {
             let torn = loop_ties(join.other, join.kept);
@@ -498,6 +524,7 @@ impl Project {
                 kept_moves_because,
             )
         };
+        torn.extend(looped);
         let side = reach(&adjacency_without(&torn), moving, fixed);
         // Snapped closures: one across the two sides closes a loop through the
         // combined section, and any from a side that moves stops being snapped.
@@ -550,9 +577,13 @@ impl Project {
             Vec::new()
         };
         if !shifting {
+            // Nothing moves only with the other section picked (the plain
+            // rule, or idle above), so the joined station keeps the kept one's
+            // hand move, as it always did.
+            debug_assert_eq!(picked, join.other, "a still plan picked the kept side");
             return Ok(TiePlan {
                 torn: torn_ties,
-                kept_offset_wins: picked == join.other,
+                kept_offset_wins: true,
                 dropped,
                 replaced,
                 dropped_hand_move,

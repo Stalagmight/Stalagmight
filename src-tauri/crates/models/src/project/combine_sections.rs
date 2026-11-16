@@ -423,21 +423,32 @@ impl Project {
         if let Some((_, toward)) = setup.ties.dropped_hand_move {
             moves.extend(setup.ties.joined_moved.iter().map(|id| (*id, toward)));
         }
-        if !moves.is_empty() {
-            // A closure whose two ends move apart changes length.
-            let by = |id: &SectionId| moves.get(id).copied().unwrap_or((0.0, 0.0));
+        // A closure whose two ends move apart changes length: each end moves
+        // with its section, except the join station whose hand move is
+        // dropped, which lands on the joined station by its own move, also
+        // when its section does not move at all.
+        let dropped = setup.ties.dropped_hand_move;
+        let station_move = |project: &Project, key: &StationKey| -> (f64, f64) {
+            match (dropped, project.resolve_key(key)) {
+                (Some((station, toward)), Some(at)) if at == station => toward,
+                _ => moves.get(&key.section_id).copied().unwrap_or((0.0, 0.0)),
+            }
+        };
+        if !moves.is_empty() || dropped.is_some() {
             remeasure.extend(
                 self.loop_closures
                     .iter()
-                    .filter(|c| by(&c.station_a.section_id) != by(&c.station_b.section_id))
+                    .filter(|c| {
+                        station_move(self, &c.station_a) != station_move(self, &c.station_b)
+                    })
                     .map(|c| c.id),
             );
-            let mut ids: Vec<SectionId> = moves.keys().copied().collect();
-            ids.sort_unstable();
-            for id in ids {
-                let (dx, dy) = moves[&id];
-                self.adjust_section_offset(id, dx, dy);
-            }
+        }
+        let mut ids: Vec<SectionId> = moves.keys().copied().collect();
+        ids.sort_unstable();
+        for id in ids {
+            let (dx, dy) = moves[&id];
+            self.adjust_section_offset(id, dx, dy);
         }
         (remeasure, torn_into)
     }
