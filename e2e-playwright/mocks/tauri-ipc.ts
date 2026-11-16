@@ -5627,7 +5627,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 .filter((m) => pair.has(m.station_a.section_id) && pair.has(m.station_b.section_id) && m.station_a.section_id !== m.station_b.section_id)
                 .filter((m) => !((same(m.station_a, a) && same(m.station_b, b)) || (same(m.station_a, b) && same(m.station_b, a))))
                 .map((m) => ({ station_a: m.station_a, station_b: m.station_b, kind: 'merge', reason: 'loop' }));
-              // Nothing moves within the backend's 1 mm tolerance.
+              // The mock's co-located ends coincide exactly, so only a closure
+              // join moves a side (the backend also moves one by a side-by-side
+              // residual under 1 mm, #740, which the dialog does not list).
               // Horizontal, as the backend's chain gap is.
               const shift = closure ? (closure.horizontal_misclosure ?? closure.misclosure_distance ?? 0) : 0;
               const plan = (kept: number, other: number) => {

@@ -41,7 +41,8 @@ use super::station_rekey::value_naming;
 use super::Project;
 
 /// How far apart (metres) the two join stations may be and still count as the
-/// same point; also the bound on how far the other section moves.
+/// same point (side by side); also the bound on how far a co-located join
+/// moves a side, which it does by the residual (#740, `combine_plan.rs`).
 pub const COMBINE_TOLERANCE_M: f64 = 0.001;
 
 /// Above this depth gap (metres) between two co-located, unmerged join
@@ -560,6 +561,8 @@ impl Project {
             azimuth_rotation_deg: None,
             join_offset_change_m: None,
             closures_removed_across_one_shot: None,
+            closures_replaced: None,
+            moved_with_joined_station: None,
         };
         if touch.blocked.is_some() {
             return (empty, None);
@@ -567,8 +570,22 @@ impl Project {
         let Some((join, gap)) = self.join_point(pairing, touch, kept, table) else {
             return (empty, None);
         };
+        // The same gap as shown: each join station with its manual offset
+        // (#755). The two differ only where the hand moves differ.
+        let hand = |at| {
+            value_naming(self, &self.station_offsets, at)
+                .copied()
+                .unwrap_or_default()
+        };
+        let (hand_k, hand_o): ((f64, f64, f64), (f64, f64, f64)) =
+            (hand(join.join_k), hand(join.join_o));
+        let shown = if (hand_k.0, hand_k.1) == (hand_o.0, hand_o.1) {
+            gap
+        } else {
+            (gap.0 + hand_k.0 - hand_o.0, gap.1 + hand_k.1 - hand_o.1)
+        };
         let rigid = table.ties.get_or_init(|| self.rigid_ties());
-        let Ok(ties) = self.plan_ties(&join, gap, rigid, &table.closure_facts) else {
+        let Ok(ties) = self.plan_ties(&join, (gap, shown), rigid, &table.closure_facts) else {
             return (empty, None);
         };
         let (Some(k), Some(o)) = (self.get_section(join.kept), self.get_section(join.other)) else {

@@ -1729,7 +1729,13 @@ it, for the section it shows as kept, before the user confirms:
   ends meet. The kept side moves instead when a zero datum holds the other side
   and not the kept one, or, with no datum deciding, when the other side holds
   the station the Closures Computed View holds the survey at: moving it would
-  shift the whole cave in Plan and Export. The dialog says which and why.
+  shift the whole cave in Plan and Export. The dialog says which and why. Ends
+  side by side move a side by their residual under 1 mm the same way, with
+  everything merged to it, so merged stations stay one point and reopening
+  the project moves nothing (#740). The dialog lists a move that small only
+  when it turns a tie into a loop closure (a snap from the moving side, or,
+  with zero datums on both sides, the moving section's merge), so the tie's
+  listed reason has its cause beside it.
 - **Ties become loop closures.** A merge or snapped (aligned) closure that
   would tie the combined section to itself, or keep the moving side tied to what
   stays, becomes an ordinary loop closure between the same two stations: the
@@ -1737,7 +1743,14 @@ it, for the section it shows as kept, before the user confirms:
   moves there, and the closures the combine made or stretched are measured
   again. When both sides are anchored by zero datums, the moving side's merge
   towards its own datum becomes a closure too (a closure may tie two anchored
-  groups; a merge may not).
+  groups; a merge may not). Where two loop closures end up tying the same two
+  stations, one stays: the first that the Closures Computed View adjusts (the
+  first of them when it adjusts none), so a legacy (proportional or equal) or
+  snapped closure there gives way to an ordinary one, such as the closure a
+  torn merge becomes (#749). A snapped closure that gives way no longer
+  averages its two stations' depths. Details lists each closure that gives
+  way and what takes its place ("This closure is replaced:"); two closures
+  the Closures Computed View treats alike keep the first without a word.
 - **Ties across one shot are removed.** A tie that, combined, would be a loop
   closure joining the two ends of one shot (for example the merge at the far
   end of a one-shot passage merged to both join stations) would only be skipped
@@ -1753,7 +1766,10 @@ it, for the section it shows as kept, before the user confirms:
   one's: the other section's stored azimuths turn by the difference, so every
   station stays where it is.
 - The kept section's quality factor wins; the fixed side's manual offset on the
-  join station wins (the dialog says how far the other moves); shots of the
+  join station wins (the dialog says how far the other moves), and a section
+  merged at the other join station, on a join that is not merged, moves with
+  the joined station (its side's shift plus the difference of the two
+  offsets), so it stays merged to it (#755; the dialog lists it); shots of the
   other section that share an identity (uuid) with the kept one's get new ones;
   a depth gap between unmerged join stations is reported, whatever its size
   (the joined station takes the average); a section with no shots is absorbed

@@ -5,9 +5,15 @@ import type { LengthUnit } from '../../types/config';
 import type { CombineCandidate } from '../../types/ipc/CombineCandidate';
 import type { CombinePlan } from '../../types/ipc/CombinePlan';
 import type { CombineRemovedKind } from '../../types/ipc/CombineRemovedKind';
+import type { CombineReplacedKind } from '../../types/ipc/CombineReplacedKind';
 import type { SectionId, StationRef } from '../../types/project';
 import { formatLength } from '../../utils/formatStats';
-import { formatRotation } from '../../utils/combineSections';
+import {
+  COMBINE_SIDE_BY_SIDE_M,
+  combineMoveIsSmall,
+  combineMoveShown,
+  formatRotation,
+} from '../../utils/combineSections';
 
 interface CombinePlanNotesProps {
   candidate: CombineCandidate;
@@ -25,12 +31,14 @@ interface CombinePlanNotesProps {
 /**
  * Everything a combine changes besides joining the shots, for the kept
  * section the dialog currently shows (the backend's `CombinePlan`): the side
- * that moves and how far, the ties that become loop closures, the ties
+ * that moves and how far (and what moves with the joined station instead,
+ * #755), the ties that become loop closures, the ties
  * removed because as closures they would join the two ends of one shot
- * (#746), converted bearings, the quality and manual offset the combined
- * section keeps, shot identities that are renewed, and sections that pass
- * through the join. The user reads all of it before confirming; nothing here
- * is a refusal.
+ * (#746), the closures replaced by a loop closure on the same two stations
+ * that the Closures Computed View adjusts (#749), converted bearings, the
+ * quality and manual offset the combined section keeps, shot identities that
+ * are renewed, and sections that pass through the join. The user reads all of
+ * it before confirming; nothing here is a refusal.
  */
 export function CombinePlanNotes({
   candidate,
@@ -49,14 +57,21 @@ export function CombinePlanNotes({
   const listNames = (ids: SectionId[]) => ids.map(sectionName).join(', ');
   const notes: Array<{ key: string; text: string }> = [];
 
-  if (plan.moving_section !== null) {
+  // A move within the side-by-side tolerance (#740) is planned exactly but
+  // listed only when it changes a tie: see `combineMoveShown`.
+  if (plan.moving_section !== null && combineMoveShown(plan)) {
     const moving = sectionName(plan.moving_section);
+    const key = combineMoveIsSmall(plan)
+      ? 'moveSideBySide'
+      : candidate.join_kind === 'closure'
+        ? 'moveClosure'
+        : 'moveGap';
     notes.push({
       key: 'move',
-      text: t(
-        candidate.join_kind === 'closure' ? 'dialogs.combineSections.moveClosure' : 'dialogs.combineSections.moveGap',
-        { moving, distance: distance(plan.shift_m) }
-      ),
+      text: t(`dialogs.combineSections.${key}`, {
+        moving,
+        distance: formatLength(plan.shift_m, lengthUnit, combineMoveIsSmall(plan) ? 4 : 2),
+      }),
     });
     const attached = plan.moved_sections.filter((id) => id !== plan.moving_section);
     if (attached.length > 0) {
@@ -109,6 +124,21 @@ export function CombinePlanNotes({
       }),
     });
   }
+  // What is merged at the join station whose hand move the joined station
+  // does not keep moves with the joined station (#755), listed as a move of
+  // the side is: under the side-by-side tolerance only beside a torn tie.
+  const joined = plan.moved_with_joined_station;
+  if (joined && (joined.shift_m > COMBINE_SIDE_BY_SIDE_M || plan.torn_ties.length > 0)) {
+    notes.push({
+      key: 'joined-moves',
+      text: t('dialogs.combineSections.joinedMoves', {
+        names: listNames(joined.sections),
+        count: joined.sections.length,
+        station: stationLabel(joined.station),
+        distance: formatLength(joined.shift_m, lengthUnit, joined.shift_m <= COMBINE_SIDE_BY_SIDE_M ? 4 : 2),
+      }),
+    });
+  }
   if (candidate.repeated_shot_ids > 0) {
     notes.push({
       key: 'repeated-ids',
@@ -127,6 +157,8 @@ export function CombinePlanNotes({
 
   // The plan the combine itself runs names these (#746): exactly what it removes.
   const removed = plan.closures_removed_across_one_shot ?? [];
+  // And these (#749): exactly the closures it replaces.
+  const replaced = plan.closures_replaced ?? [];
   const tieId = (a: StationRef, b: StationRef) =>
     `${a.section_id}-${a.station_index}-${b.section_id}-${b.station_index}`;
   const ends = (a: StationRef, b: StationRef) => ({
@@ -134,7 +166,9 @@ export function CombinePlanNotes({
     b: <TieEnd at={b} sectionName={sectionName} stationLabel={stationLabel} />,
   });
 
-  if (notes.length === 0 && plan.torn_ties.length === 0 && removed.length === 0) return null;
+  if (notes.length === 0 && plan.torn_ties.length === 0 && removed.length === 0 && replaced.length === 0) {
+    return null;
+  }
   return (
     <div className="space-y-2 text-sm" data-testid="combine-plan-notes">
       <div className="text-text-secondary">{t('dialogs.combineSections.changesTitle')}</div>
@@ -174,7 +208,7 @@ export function CombinePlanNotes({
             {plan.torn_ties.some((tie) => tie.reason === 'loop') && (
               <span className="block mt-1 text-text-secondary" data-testid="combine-torn-why">
                 {t(
-                  plan.moving_section !== null
+                  combineMoveShown(plan)
                     ? 'dialogs.combineSections.tornWhyMoves'
                     : 'dialogs.combineSections.tornWhyStays'
                 )}
@@ -203,6 +237,31 @@ export function CombinePlanNotes({
             </span>
           </li>
         )}
+        {replaced.length > 0 && (
+          <li data-testid="combine-note-replaced">
+            {t('dialogs.combineSections.replacedTitle', { count: replaced.length })}
+            <ul className="list-[circle] pl-5 mt-1 space-y-0.5">
+              {replaced.map((closure, index) => {
+                const id = tieId(closure.station_a, closure.station_b);
+                return (
+                  <li key={`${id}-${index}`} data-testid={`combine-replaced-tie-${id}`}>
+                    <Trans
+                      i18nKey={`dialogs.combineSections.${REPLACED_KEY[closure.kind]}`}
+                      components={ends(closure.station_a, closure.station_b)}
+                    />{' '}
+                    <Trans
+                      i18nKey={`dialogs.combineSections.${REPLACED_BY_KEY[closure.by_kind]}`}
+                      components={ends(closure.by_station_a, closure.by_station_b)}
+                    />
+                  </li>
+                );
+              })}
+            </ul>
+            <span className="block mt-1 text-text-secondary" data-testid="combine-replaced-why">
+              {t('dialogs.combineSections.replacedWhy', { count: replaced.length })}
+            </span>
+          </li>
+        )}
       </ul>
     </div>
   );
@@ -213,6 +272,20 @@ const REMOVED_KEY: Record<CombineRemovedKind, string> = {
   merge: 'removedMerge',
   snapped_closure: 'removedSnapped',
   loop_closure: 'removedClosure',
+};
+
+/** The dialog line for each kind of closure the combine replaces (#749). */
+const REPLACED_KEY: Record<CombineReplacedKind, string> = {
+  legacy_closure: 'replacedLegacy',
+  snapped_closure: 'replacedSnapped',
+  former_snap: 'replacedFormerSnap',
+};
+
+/** What replaces it, as what it was before the combine (#749). */
+const REPLACED_BY_KEY: Record<CombineRemovedKind, string> = {
+  merge: 'replacedByMerge',
+  snapped_closure: 'replacedBySnapped',
+  loop_closure: 'replacedByClosure',
 };
 
 /** A section as a link pill (name and id), selecting it on click. */
