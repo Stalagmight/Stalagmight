@@ -96,23 +96,28 @@ const HELD_TOL_M: f64 = 1e-6 + 1e-8;
 const EXACT_M: f64 = 1e-9;
 
 /// Failure classes that are open bugs, muted unless
-/// `STALAGMIGHT_DATUM_FUZZ_MUTE` is set:
+/// `STALAGMIGHT_DATUM_FUZZ_MUTE` is set. The replay after each reaches it
+/// with the generators as they are (a generator change can turn it into a
+/// different chain):
 ///
 /// - `promoted-twin-gps`: a promoted fix whose GPS is bit-identical to a
 ///   datum that was a placement before the command is not placed on its GPS
 ///   (`DatumLayout::was_unplaced` matches datums by GPS as well as by key).
+///   `"701;twin(0:3,1,0.0);rm(0)"`.
 /// - `datum-twin-station`: Combine Sections at a station holding two datums
 ///   leaves two datums on one station; a reload keeps one.
+///   `"350;combine(0:start,3:start)"`.
 /// - `hard-fix-no-unknowns`: a hard fix in a component with no unknown left
-///   is never applied in the computed view (`lsq.rs`, `if n == 0`).
+///   is never applied in the computed view (`lsq.rs`, `if n == 0`). `"112"`.
 /// - `datum-key-reused`: Delete Shot on the first shot of a section drops the
 ///   datum on station 0 and re-anchors a datum from `AfterShot(first shot)`
 ///   onto `SectionStart`, the removed datum's key. `settle_datum_layout`
 ///   recognises datums by key, so the survivor (a GPS fix promoted to
 ///   placement, or the new frame) is neither placed nor re-framed onto.
+///   `"54;delshot(1,0)"`.
 /// - `frame-gps-edit`: giving the frame datum a new GPS keeps its station on
 ///   the origin and moves nothing else, so every other placed piece is off
-///   its own GPS by the edit. Present on master before #741.
+///   its own GPS by the edit. Present on master before #741. `"11"`.
 const KNOWN_OPEN: &[&str] = &[
     "promoted-twin-gps",
     "datum-twin-station",
@@ -573,9 +578,10 @@ impl Chain {
 // The checks
 // ---------------------------------------------------------------------------
 
-/// A placement datum now shares its GPS (lat/lon bits) with a datum that
-/// was a placement before under another key, and is not that datum re-keyed
-/// (the other one is still there, or this one was a fix before):
+/// A datum that was not a placement before (a fix, or under a key no datum
+/// had) is one now, and shares its GPS (lat/lon bits) with a datum that was
+/// a placement before under another key, without being that datum re-keyed
+/// (the other one is still there, or this one was a fix):
 /// `DatumLayout::was_unplaced` matches datums by GPS as well as by key, so
 /// it takes this one for the placement it twins and never places it.
 fn promoted_twin(before: &Snap, p: &Project) -> bool {
@@ -585,10 +591,11 @@ fn promoted_twin(before: &Snap, p: &Project) -> bool {
         .filter(|(_, role)| *role == Some(DatumRole::Placement))
         .any(|(zd, _)| {
             let bits = gps_bits(&zd.gps);
-            let was_fix = before
-                .datums
-                .iter()
-                .any(|d| d.key == zd.station_ref && d.role != Some(DatumRole::Placement));
+            let mine = || before.datums.iter().filter(|d| d.key == zd.station_ref);
+            if mine().any(|d| d.role == Some(DatumRole::Placement)) {
+                return false;
+            }
+            let was_fix = mine().any(|d| d.role == Some(DatumRole::GpsFix));
             before.datums.iter().any(|d| {
                 d.key != zd.station_ref
                     && d.gps[..2] == bits[..2]

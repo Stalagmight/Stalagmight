@@ -64,6 +64,9 @@ use crate::models::{
 ///   fix (a reordered `zero_datum_extras`, or a later merge) is saved into
 ///   `zero_datum_extras`, whose reader validates, and dropped on the next
 ///   open.
+///
+/// Seeds 279 and 17 reach them first (`STALAGMIGHT_DATUM_FILE_FUZZ_FIRST_SEED`
+/// with `_SEEDS=1` and `_MUTE=` set empty).
 const KNOWN_OPEN: &[&str] = &["zero-datums-nonfinite-gps", "invalid-gps-resave"];
 
 const ACCURACIES: [Option<f64>; 6] = [

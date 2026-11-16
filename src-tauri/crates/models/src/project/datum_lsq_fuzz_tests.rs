@@ -109,6 +109,9 @@ fn env_u64(name: &str, default: u64) -> u64 {
 ///   applied: `adjust_least_squares` returns at `if n == 0` before it
 ///   rewrites a shot, so the Closures Computed View shows the raw survey,
 ///   the fix off its GPS and any closure between held groups unapplied.
+///   `STALAGMIGHT_DATUM_LSQ_FUZZ_REPLAY=19` prints the smallest network the
+///   sweep reaches it on: a one-shot section, placement datum at station 0,
+///   hard fix at station 1.
 const KNOWN_OPEN: &[&str] = &["hard-fix-no-unknowns"];
 
 /// The mute list: `name`'s comma-separated classes when it is set, else
