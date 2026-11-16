@@ -816,7 +816,11 @@ fn an_ignored_gap_comes_back_when_the_datum_gps_changes() {
     set_datum(&state, fix, gps_at(150.0, 500.0), Some(3.0));
     assert_eq!(ignored(&state), vec![false]);
     assert!(state.undo().success);
-    assert_eq!(ignored(&state), vec![true], "undo restores the ignored reading");
+    assert_eq!(
+        ignored(&state),
+        vec![true],
+        "undo restores the ignored reading"
+    );
     assert!(state.redo().success);
     assert_eq!(ignored(&state), vec![false]);
 
