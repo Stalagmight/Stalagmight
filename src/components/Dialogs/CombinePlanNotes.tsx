@@ -140,6 +140,12 @@ export function CombinePlanNotes({
   const replaced = plan.closures_replaced ?? [];
   const tieId = (a: StationRef, b: StationRef) =>
     `${a.section_id}-${a.station_index}-${b.section_id}-${b.station_index}`;
+  // A tie torn for a zero datum is the merge of one of the two sections (the
+  // one that moves, or with nothing to move the one whose merge tears, #754)
+  // to a section on its datum side: the held end is on neither of the two.
+  const otherId = candidate.section_a === keptId ? candidate.section_b : candidate.section_a;
+  const heldEnd = (a: StationRef, b: StationRef) =>
+    [a, b].find((s) => s.section_id !== keptId && s.section_id !== otherId);
   const ends = (a: StationRef, b: StationRef) => ({
     a: <TieEnd at={a} sectionName={sectionName} stationLabel={stationLabel} />,
     b: <TieEnd at={b} sectionName={sectionName} stationLabel={stationLabel} />,
@@ -164,10 +170,7 @@ export function CombinePlanNotes({
               {plan.torn_ties.map((tie) => {
                 const id = tieId(tie.station_a, tie.station_b);
                 const key = tie.kind === 'merge' ? 'tornMerge' : 'tornSnapped';
-                // The datum side is the end that does not move with the moving section.
-                const held = [tie.station_a, tie.station_b].find(
-                  (s) => !plan.moved_sections.includes(s.section_id)
-                );
+                const held = heldEnd(tie.station_a, tie.station_b);
                 return (
                   <li key={id} data-testid={`combine-torn-tie-${id}`}>
                     <Trans i18nKey={`dialogs.combineSections.${key}`} components={ends(tie.station_a, tie.station_b)} />

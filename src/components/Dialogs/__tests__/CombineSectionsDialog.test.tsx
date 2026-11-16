@@ -634,6 +634,33 @@ describe('CombineSectionsDialog', () => {
     }
   });
 
+  it('with nothing to move, names the section a zero datum holds for a merge torn for it (#754)', () => {
+    const tie = (a: [number, number], b: [number, number]) => ({
+      station_a: { section_id: a[0], station_index: a[1] },
+      station_b: { section_id: b[0], station_index: b[1] },
+      kind: 'merge',
+      reason: 'zero_datum',
+    });
+    // Two surveys from one entrance, each with its own datum: nothing moves,
+    // and Main-A's merge to Section 9 (D, its datum side) becomes a loop
+    // closure. The merge names Main-A first, as the Merge tool stored it.
+    const plan = (kept: number) => quietPlan(kept, { torn_ties: [tie([2, 0], [9, 0])] });
+    dialogData = {
+      candidate: candidate({ plan_keeping_a: plan(2), plan_keeping_b: plan(5) }),
+    };
+    render(<CombineSectionsDialog />);
+    for (const swap of [false, true]) {
+      if (swap) fireEvent.click(screen.getByTestId('combine-swap-kept'));
+      expect(screen.getAllByTestId(/^combine-torn-tie-/).map(tieText)).toEqual([
+        'The merge of [section Main-A] [station 2:0] and [section Section 9] [station 9:0] [section Section 9] is held by a zero datum and stays where it is.',
+      ]);
+      // Nothing moves, and the tie tears for the datum, not to open a loop.
+      for (const id of ['combine-note-move', 'combine-note-move-with', 'combine-note-kept-moves', 'combine-torn-why']) {
+        expect(screen.queryByTestId(id)).toBeNull();
+      }
+    }
+  });
+
   it('lists converted bearings, the kept quality and offset, renewed shot ids and crossings', () => {
     sections = creditedSections().map((s) => ({ ...s, quality: s.id === 2 ? 1 : 2 }));
     dialogData = {
