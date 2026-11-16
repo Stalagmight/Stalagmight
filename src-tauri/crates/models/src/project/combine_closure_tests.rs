@@ -1044,6 +1044,62 @@ pub(super) fn check_combined(
         }
         CombineJoinKind::Merged => {}
     }
+    // The joined station keeps the hand move of one join station, the fixed
+    // side's (#755), and the view holds every merge and closure as shown
+    // (#759), the join's tie included: so the "before" view gives the
+    // dropped join station that hand move too, and both views hold the two
+    // sides together at the same chain positions. What is merged or tied at
+    // the dropped station follows it in the view, as it follows the joined
+    // station in the survey. That moves the dropped station as shown, off
+    // what is merged to it, so the offsets are solved again as a reload
+    // does, with the station the view holds the join's survey at kept where
+    // it is shown.
+    let real_solved = |view: &Project| {
+        let skipped: HashSet<u64> = view
+            .closures_across_one_shot()
+            .into_iter()
+            .map(|c| c.closure_id)
+            .collect();
+        view.component_has_eligible_closure(&view.get_connected_section_ids(kept), &skipped)
+    };
+    let fixed_join = if dropped_at == k_join { o_join } else { k_join };
+    if carried {
+        let component = tied.get_connected_section_ids(kept);
+        let held = tied.adjustment_anchor_of(&component);
+        // Where the view really solves the survey, the side holding that
+        // station stays and keeps its hand move: dropping it would shift
+        // the whole adjusted survey by the hand moves' difference.
+        assert!(
+            held != Some(dropped_at) || !real_solved(before),
+            "{what}: the joined station drops the hand move of {dropped_at:?}, where the \
+             closure-adjusted view holds the survey"
+        );
+        let dropped_keys: Vec<crate::StationKey> = tied
+            .station_offsets
+            .keys()
+            .filter(|key| tied.resolve_key(key) == Some(dropped_at))
+            .cloned()
+            .collect();
+        for key in dropped_keys {
+            tied.station_offsets.remove(&key);
+        }
+        if let (Some(key), Some(hand)) = (
+            tied.key_for_ref(dropped_at),
+            before.station_offset_for_ref(fixed_join),
+        ) {
+            tied.station_offsets.insert(key, hand);
+        }
+        let shown = held.map(|at| xy(&tied, at));
+        tied.resolve_offsets();
+        if let (Some(at), Some(was)) = (held, shown) {
+            let now = xy(&tied, at);
+            if dist(was, now) > 0.0 {
+                for id in &component {
+                    tied.adjust_section_offset(*id, was.0 - now.0, was.1 - now.1);
+                }
+            }
+        }
+    }
     // Where each station of the two sections is in the combined one.
     let home = |at: StationRef| -> StationRef {
         if at.section_id == kept {
@@ -1068,33 +1124,12 @@ pub(super) fn check_combined(
     };
     check_eligible_ties_kept(before, after, candidate, kept, &home, what);
     check_torn_reasons(after, plan, kept, other, what);
-    // The Closures Computed View solves shots, merges and closures, never a
-    // manual offset (a hand move, #755), and once it solves a closure in a
-    // survey with a station moved by hand it can put that station off what a
-    // merge or a closure ties to it, or shift its whole section by the hand
-    // move and pull the section's merges apart, combine or not: a view issue
-    // of its own, so the view is not compared where it solves a survey with
-    // a hand move in it, before (the tie at a co-located join included) or
-    // after.
-    //
     // Where the view solves the survey neither before nor after, it shows
     // the measured geometry both times, which the checks above already hold
-    // to the plan: a side moves there by the plan's shift (a merged join's
-    // residual where a join station was moved by hand, #740), and that is no
-    // move of a closure-adjusted survey.
+    // to the plan.
     let after_view = with_snaps(after);
-    let solved = |view: &Project| {
-        let skipped: HashSet<u64> = view
-            .closures_across_one_shot()
-            .into_iter()
-            .map(|c| c.closure_id)
-            .collect();
-        view.component_has_eligible_closure(&view.get_connected_section_ids(kept), &skipped)
-    };
-    if !(solved(&tied) || solved(&after_view))
-        || hand_move_in_solved_survey(&tied)
-        || hand_move_in_solved_survey(&after_view)
-    {
+    let solved = real_solved;
+    if !(solved(&tied) || solved(&after_view)) {
         check_structure_muting(after, what, mute);
         return;
     }
@@ -1105,44 +1140,53 @@ pub(super) fn check_combined(
         "{what}: the closure-adjusted view solved before the combine and fails after it"
     );
     if before.get_connected_section_ids(kept).contains(&other) && was_ok && now_ok {
+        // The plan keeps the station the view holds the survey at only
+        // where the view really solves it (snaps not counted): where it
+        // does not, the app shows the measured geometry, and the plan may
+        // move the side holding that station, by a residual or the chain
+        // gap of a merged join moved by hand (#740, #755). The view with
+        // the snaps counted then follows that station, as one piece.
+        let component = tied.get_connected_section_ids(kept);
+        let follows = if solved(before) || solved(after) {
+            (0.0, 0.0)
+        } else {
+            tied.adjustment_anchor_of(&component)
+                .map_or((0.0, 0.0), |at| {
+                    let (was, now) = (xy(&tied, at), xy(&after_view, home(at)));
+                    (now.0 - was.0, now.1 - was.1)
+                })
+        };
+        let hand_moved = tied
+            .station_offsets
+            .iter()
+            .filter(|(_, h)| h.0 != 0.0 || h.1 != 0.0)
+            .filter_map(|(key, _)| tied.resolve_key(key))
+            .any(|at| component.contains(&at.section_id));
+        if hand_moved {
+            HAND_MOVED_VIEWS.with(|counts| {
+                let (n, c) = counts.get();
+                counts.set((n + 1, c + usize::from(carried)));
+            });
+        }
         let tolerance = 1e-4;
         for (at, p) in &was {
             let Some(q) = now.get(&home(*at)) else {
                 continue;
             };
+            let d = if component.contains(&at.section_id) {
+                follows
+            } else {
+                (0.0, 0.0)
+            };
             assert!(
-                dist(*p, *q) < tolerance,
+                dist((p.0 + d.0, p.1 + d.1), *q) < tolerance,
                 "{what}: the closure-adjusted {at:?} moved {:.4} m",
-                dist(*p, *q)
+                dist((p.0 + d.0, p.1 + d.1), *q)
             );
         }
     }
 
     check_structure_muting(after, what, mute);
-}
-
-/// Does a manual station offset (a hand move, #755) sit in a survey the
-/// Closures Computed View solves: a connected component with a closure the
-/// solve takes (not one it skips across one shot)?
-fn hand_move_in_solved_survey(project: &Project) -> bool {
-    let hand_moved: Vec<StationRef> = project
-        .station_offsets
-        .iter()
-        .filter(|(_, offset)| **offset != (0.0, 0.0, 0.0))
-        .filter_map(|(key, _)| project.resolve_key(key))
-        .collect();
-    if hand_moved.is_empty() {
-        return false;
-    }
-    let skipped: HashSet<u64> = project
-        .closures_across_one_shot()
-        .into_iter()
-        .map(|c| c.closure_id)
-        .collect();
-    hand_moved.iter().any(|at| {
-        let component = project.get_connected_section_ids(at.section_id);
-        project.component_has_eligible_closure(&component, &skipped)
-    })
 }
 
 /// The reason the plan gives each torn tie holds after the combine, which
@@ -1776,6 +1820,20 @@ fn moves_a_residual(plan: &crate::CombinePlan) -> bool {
 /// Start counting this thread's closure dedupes (#749) from zero.
 fn reset_closure_dedupes() {
     CLOSURE_DEDUPES.with(|counts| counts.set(ClosureDedupes::default()));
+    HAND_MOVED_VIEWS.with(|counts| counts.set((0, 0)));
+}
+
+thread_local! {
+    /// Combines whose closure-adjusted views were compared with a station
+    /// moved by hand in the survey the view solves (#759), and those of
+    /// them at two join stations moved by hand by different amounts.
+    static HAND_MOVED_VIEWS: std::cell::Cell<(usize, usize)> =
+        const { std::cell::Cell::new((0, 0)) };
+}
+
+/// This thread's [`HAND_MOVED_VIEWS`] since [`reset_closure_dedupes`].
+fn hand_moved_views() -> (usize, usize) {
+    HAND_MOVED_VIEWS.with(std::cell::Cell::get)
 }
 
 /// This thread's closure dedupes since [`reset_closure_dedupes`], as a
@@ -2418,7 +2476,8 @@ fn every_offered_combine_at_a_hand_moved_join_keeps_the_invariants() {
          moved by hand by different amounts (#755), {} of them with sections merged at the \
          join, {} moving sections with the joined station ({} snaps torn between those and \
          their side), {} torn ties, {} moved by a residual within the tolerance, {} kept side \
-         moved; {}",
+         moved, {} closure-adjusted views compared with a hand move in the solved survey \
+         (#759; {} of them at join stations moved by hand by different amounts); {}",
         first + seeds,
         stats.combined,
         stats.hand_moved,
@@ -2428,12 +2487,18 @@ fn every_offered_combine_at_a_hand_moved_join_keeps_the_invariants() {
         stats.torn,
         stats.residual_moved,
         stats.kept_moved,
+        hand_moved_views().0,
+        hand_moved_views().1,
         closure_dedupes_report()
     );
     if seeds < 20 {
         return;
     }
     assert!(stats.hand_moved > 0, "no join was ever moved by hand");
+    assert!(
+        hand_moved_views().1 > 0,
+        "no closure-adjusted view was compared at join stations moved by hand differently"
+    );
     assert!(
         stats.hand_moved_with_branches > 0,
         "no hand-moved join ever had a section merged to it"
@@ -2465,6 +2530,16 @@ fn chains_at_a_hand_moved_join_keep_the_invariants() {
         "STALAGMIGHT_COMBINE_HAND_CHAIN",
         "combine hand-moved chains",
     );
+    let seeds = std::env::var("STALAGMIGHT_COMBINE_HAND_CHAIN_SEEDS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(40);
+    if seeds >= 20 {
+        assert!(
+            hand_moved_views().0 > 0,
+            "no closure-adjusted view was compared with a hand move in the solved survey"
+        );
+    }
 }
 
 /// The chains of [`chains_of_combines_splits_and_reverses_keep_the_invariants`]
@@ -2702,8 +2777,10 @@ fn combine_chains(make: fn(u64) -> Project, env_prefix: &str, label: &str) -> us
          reverses, {swept_away} closures between merged stations removed, {dropped} ties \
          removed across one shot, {residual_moved} moved by a residual within the tolerance \
          (#740), {replaced} closures replaced (#749), {probed} merges of a closure's two ends \
-         tried (all refused); {}",
+         tried (all refused), {} closure-adjusted views compared with a hand move in the solved \
+         survey (#759); {}",
         first + seeds,
+        hand_moved_views().0,
         closure_dedupes_report()
     );
     if seeds >= 20 {
