@@ -324,6 +324,7 @@ fn network(seed: u64) -> Network {
                 station_ref: key,
                 gps,
                 accuracy_m: ACCURACIES[rng.below(ACCURACIES.len())],
+                entrance: None,
             });
         }
     }
@@ -697,6 +698,7 @@ fn check_consistent_fix(
         station_ref: key,
         gps,
         accuracy_m: ACCURACIES[rng.below(ACCURACIES.len())],
+        entrance: None,
     });
     if with_fix.datum_roles().last() != Some(&Some(DatumRole::GpsFix)) {
         return Ok(false);

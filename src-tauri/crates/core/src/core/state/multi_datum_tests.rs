@@ -846,7 +846,6 @@ fn an_ignored_gap_comes_back_when_the_datum_gps_changes() {
     assert_eq!(ignored(&state), vec![false]);
 }
 
-
 /// A separately placed piece C, 300 m west and 120 m north of the first
 /// entrance's GPS.
 fn placed_piece(state: &AppState) -> (SectionId, GpsCoordinates) {

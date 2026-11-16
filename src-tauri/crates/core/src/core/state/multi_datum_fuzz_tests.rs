@@ -38,8 +38,8 @@
 //!   bit-identical to a datum that was a placement before; a datum
 //!   re-anchored onto the key of a datum the step removed (both fixed, see
 //!   [`KNOWN_OPEN`]); a new GPS on the frame datum (known open).
-//! - `datum-twin-station`: two datums resolve to one station. Known open
-//!   (Combine Sections at a station holding two datums).
+//! - `datum-twin-station`: two datums resolve to one station (Combine
+//!   Sections joining two datum stations; now refused).
 //! - `hard-fix-off-gps` / `hard-fix-no-unknowns`: in the Closures Computed
 //!   View, a hard fix the solve holds is not on its GPS (rule derived from
 //!   `lsq.rs`; see `held_groups`). `-no-unknowns`: its component has no
@@ -100,9 +100,6 @@ const EXACT_M: f64 = 1e-9;
 /// with the generators as they are (a generator change can turn it into a
 /// different chain):
 ///
-/// - `datum-twin-station`: Combine Sections at a station holding two datums
-///   leaves two datums on one station; a reload keeps one.
-///   `"350;combine(0:start,3:start)"`.
 /// - `hard-fix-no-unknowns`: a hard fix in a component with no unknown left
 ///   is never applied in the computed view (`lsq.rs`, `if n == 0`). `"112"`.
 /// - `frame-gps-edit`: giving the frame datum a new GPS keeps its station on
@@ -112,12 +109,10 @@ const EXACT_M: f64 = 1e-9;
 /// No longer muted, and pinned in `multi_datum_tests.rs`: `promoted-twin-gps`
 /// (a fix with the bit-identical GPS of the removed placement datum) and
 /// `datum-key-reused` (Delete Shot re-anchoring a fix onto the removed
-/// datum's key), both fixed in `DatumLayout::was_unplaced`.
-const KNOWN_OPEN: &[&str] = &[
-    "datum-twin-station",
-    "hard-fix-no-unknowns",
-    "frame-gps-edit",
-];
+/// datum's key), both fixed in `DatumLayout::was_unplaced`; and
+/// `datum-twin-station` (Combine Sections joining two stations that each
+/// hold a datum), now refused.
+const KNOWN_OPEN: &[&str] = &["hard-fix-no-unknowns", "frame-gps-edit"];
 
 fn env_u64(name: &str, default: u64) -> u64 {
     std::env::var(name)
