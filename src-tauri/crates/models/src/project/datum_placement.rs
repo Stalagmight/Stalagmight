@@ -46,15 +46,63 @@ impl DatumLayout {
     }
 
     /// Whether `zd` was a GPS fix or a dangling datum before, and not a
-    /// placement datum. A datum is recognised by its station key, or by its GPS
-    /// when a split or a combine re-keyed it onto another section; a datum
-    /// that matches no earlier one is new (its command placed it already).
-    fn was_unplaced(&self, zd: &ZeroDatum) -> bool {
-        let matches = |(key, gps, _): &&(StationKey, GpsCoordinates, Option<DatumRole>)| {
-            *key == zd.station_ref || same_gps(gps, &zd.gps)
+    /// placement datum. `after` is every datum's station and GPS now.
+    ///
+    /// A datum is recognised, in this order, by:
+    /// 1. its station key AND its GPS, unchanged;
+    /// 2. its GPS alone, against an earlier datum whose key and GPS no longer
+    ///    appear together (a split, a combine or a shot delete re-keyed it onto
+    ///    another station). Matching the GPS of an earlier datum that is still
+    ///    there would mistake a fix for a twin datum it was copied from;
+    /// 3. its station key alone (its GPS was edited in place).
+    ///
+    /// A key alone must not win over a re-keyed GPS: deleting a section's first
+    /// shot drops the datum on its first station and re-anchors the next
+    /// station's datum onto that key, and the promoted datum would otherwise
+    /// pass for the placement datum it replaced. A datum that matches no
+    /// earlier one is new (its command placed it already).
+    fn was_unplaced(&self, zd: &ZeroDatum, after: &[(StationKey, GpsCoordinates)]) -> bool {
+        let unplaced = |found: Vec<&(StationKey, GpsCoordinates, Option<DatumRole>)>| {
+            (!found.is_empty()).then(|| {
+                found
+                    .iter()
+                    .all(|(_, _, role)| *role != Some(DatumRole::Placement))
+            })
         };
-        let mut earlier = self.datums.iter().filter(matches).peekable();
-        earlier.peek().is_some() && earlier.all(|(_, _, role)| *role != Some(DatumRole::Placement))
+        let same = self
+            .datums
+            .iter()
+            .filter(|(key, gps, _)| *key == zd.station_ref && same_gps(gps, &zd.gps))
+            .collect();
+        let rekeyed = || {
+            self.datums
+                .iter()
+                .filter(|(key, gps, _)| {
+                    same_gps(gps, &zd.gps)
+                        && !after.iter().any(|(k, g)| k == key && same_gps(g, gps))
+                })
+                .collect()
+        };
+        let edited = || {
+            self.datums
+                .iter()
+                .filter(|(key, _, _)| *key == zd.station_ref)
+                .collect()
+        };
+        unplaced(same)
+            .or_else(|| unplaced(rekeyed()))
+            .or_else(|| unplaced(edited()))
+            .unwrap_or(false)
+    }
+
+    /// Whether the frame datum is not the one it was: another station, or
+    /// another GPS (a promoted datum re-keyed onto the old frame's key).
+    fn frame_changed(&self, now: Option<&ZeroDatum>) -> bool {
+        match (&self.frame, now) {
+            (_, None) => false,
+            (None, Some(_)) => true,
+            (Some((key, gps)), Some(zd)) => zd.station_ref != *key || !same_gps(&zd.gps, gps),
+        }
     }
 }
 
@@ -94,17 +142,29 @@ impl Project {
         // With no frame before, nothing was placed relative to anything, and
         // the re-frame below is the whole answer.
         if let Some((_, frame_gps)) = before.frame {
+            let after: Vec<(StationKey, GpsCoordinates)> = self
+                .zero_datums
+                .iter()
+                .map(|zd| (zd.station_ref.clone(), zd.gps))
+                .collect();
             let promoted: Vec<(StationRef, GpsCoordinates)> = self
                 .placement_datums()
                 .into_iter()
-                .filter(|zd| before.was_unplaced(zd))
+                .filter(|zd| before.was_unplaced(zd, &after))
                 .filter_map(|zd| Some((self.resolve_key(&zd.station_ref)?, zd.gps)))
                 .collect();
             for (station_ref, gps) in promoted {
                 moved |= self.place_group_at(station_ref, gps_to_local(&gps, &frame_gps));
             }
         }
-        self.renormalize_frame_if_changed(before.frame_key()) || moved
+        // Compared by key AND GPS: a promoted datum can inherit the old
+        // frame's key (see `DatumLayout::was_unplaced`), and the frame has
+        // still changed. Re-framing is measured, so an unchanged frame is a
+        // no-op anyway.
+        if before.frame_changed(self.frame_datum()) {
+            moved |= self.renormalize_frame();
+        }
+        moved
     }
 
     /// Translate `station_ref`'s rigid group so the station sits at `target`,
