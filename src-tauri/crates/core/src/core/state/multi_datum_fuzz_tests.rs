@@ -1307,6 +1307,37 @@ fn datum_command_chains_keep_every_invariant() {
     );
 }
 
+/// Chains the farm or a local sweep once failed on, replayed on every run so
+/// the fixed mechanism stays fixed (format: `STALAGMIGHT_DATUM_FUZZ_REPLAY`).
+const PINNED_CHAINS: &[&str] = &[
+    // datum-key-reused: Delete Shot re-anchors a fix onto the removed datum's key.
+    "54;delshot(1,0)",
+    // promoted-twin-gps: a fix with the removed placement datum's exact GPS.
+    "701;twin(0:3,1,0.0);rm(0)",
+    // datum-key-reused with a twin GPS: only the station position tells them apart.
+    "1138;merge(0:1,1:4);acc(0,-);unmerge(2:2,3:1);delsec(1);combine(3:start,4:start);delsec(2);acc(0,-);split(3,2,b);datum(3:1,20.953755677079684,-16.914921358435627,5.0);merge(5:0,0:1);datum(5:0,16.04357755301331,-1.7832103357017155,0.5);merge(5:0,0:3);addshot(0,-1,44.39334284186008,6.11431610947411,1.0519934908613826,0.0);merge(0:2,3:1);reopen;twin(5:1,2,1000.0);split(0,1,b);unmerge(5:0,6:1);unmerge(6:1,3:1);rm(0);delshot(5,0)",
+    // promoted-twin-gps after a combine that re-keys and moves both twins: only
+    // the stored accuracy tells them apart.
+    "1026755;closure(3:2,3:3);acc(0,1000.0);undo;closure(4:1,0:0);split(3,2,a);twin(5:0,1,-);acc(0,0.0);closure(2:2,1:2);addshot(5,0,83.26639828096893,9.85053026440123,28.642278304656077,28.880991248958054);unmerge(0:0,3:0);unmerge(1:0,2:1);addshot(6,-1,255.74044991586703,19.905929536886184,1.2756380852736882,0.0);datum(4:3,24.901653430245844,29.355911207344825,0.0);merge(0:0,2:1);rm(2);datum(1:2,-45.864378812639124,11.359789645079355,50.0);combine(5:start,4:start)",
+    // datum-twin-station: Combine joining two datum stations is refused.
+    "350;combine(0:start,3:start)",
+    // hard-fix-no-unknowns: every group held, the hard fix still applied.
+    "112",
+];
+
+#[test]
+fn pinned_datum_chains_keep_every_invariant() {
+    for spec in PINNED_CHAINS {
+        let mut parts = spec.split(';').filter(|s| !s.trim().is_empty());
+        let seed: u64 = parts.next().unwrap().trim().parse().unwrap();
+        let ops: Vec<Op> = parts.map(parse_op).collect();
+        let mut stats = Stats::default();
+        if let Err(e) = chain_outcome(seed, 0, Some(&ops), false, &[], &mut stats) {
+            panic!("pinned chain {seed}: {e}");
+        }
+    }
+}
+
 /// Replay one chain from its trail, printing each step and the datums after
 /// it: `STALAGMIGHT_DATUM_FUZZ_REPLAY="seed;op;op;..."`.
 #[test]

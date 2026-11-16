@@ -49,6 +49,10 @@ struct DatumWas {
     role: Option<DatumRole>,
     /// Its station's horizontal position (`None`: dangling).
     at: Option<(f64, f64)>,
+    /// Its stored accuracy (bits) and Entrance answer: what else tells two
+    /// datums with one GPS apart.
+    accuracy: Option<u64>,
+    entrance: Option<bool>,
 }
 
 /// Within the offset dust of each other: the same place.
@@ -77,9 +81,14 @@ impl DatumLayout {
     /// the datum on its first station and re-anchors the next station's datum
     /// onto that key, and a GPS copied from another datum matches that datum
     /// too: either way the promoted datum would pass for the placement datum
-    /// it replaced. The position settles it, since neither moves a station. A
-    /// datum that matches no earlier one is new (its command placed it
-    /// already).
+    /// it replaced. The position settles it, since neither moves a station.
+    ///
+    /// When one tier finds earlier datums of both roles (a GPS copied from a
+    /// placement datum, both re-keyed and moved by a combine), the stored
+    /// accuracy and Entrance answer narrow it. If that still leaves both
+    /// roles, the datum counts as unplaced: placing it moves nothing when its
+    /// piece already sits on that GPS. A datum that matches no earlier one is
+    /// new (its command placed it already).
     fn was_unplaced(
         &self,
         zd: &ZeroDatum,
@@ -101,14 +110,23 @@ impl DatumLayout {
             &|was| same_fix(was) && gone(was),
             &|was| same_key(was),
         ];
+        let same_value = |was: &&DatumWas| {
+            was.accuracy == zd.accuracy_m.map(f64::to_bits) && was.entrance == zd.entrance
+        };
         tiers
             .iter()
             .find_map(|tier| {
-                let mut found = self.datums.iter().filter(|was| tier(was)).peekable();
-                found
-                    .peek()
-                    .is_some()
-                    .then(|| found.all(|was| was.role != Some(DatumRole::Placement)))
+                let found: Vec<&DatumWas> = self.datums.iter().filter(|was| tier(was)).collect();
+                if found.is_empty() {
+                    return None;
+                }
+                let narrowed: Vec<&DatumWas> = found.iter().copied().filter(same_value).collect();
+                let found = if narrowed.is_empty() { found } else { narrowed };
+                Some(
+                    !found
+                        .iter()
+                        .all(|was| was.role == Some(DatumRole::Placement)),
+                )
             })
             .unwrap_or(false)
     }
@@ -152,6 +170,8 @@ impl Project {
                     gps: zd.gps,
                     role,
                     at: self.datum_position(zd),
+                    accuracy: zd.accuracy_m.map(f64::to_bits),
+                    entrance: zd.entrance,
                 })
                 .collect(),
         }
