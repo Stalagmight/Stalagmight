@@ -132,6 +132,15 @@ export default function CombineSectionsDialog() {
       )?.name
     );
   const plan = candidate ? combinePlanFor(candidate, keptId) : undefined;
+  // The branches that stay merged at the join: one whose merge there the
+  // plan turns into a loop closure (a zero datum holds it, #754) is listed
+  // with the torn ties instead, so it is not also said to "stay attached".
+  const tornAway = new Set(
+    (plan?.torn_ties ?? [])
+      .filter((tie) => tie.kind === 'merge')
+      .flatMap((tie) => [tie.station_a.section_id, tie.station_b.section_id])
+  );
+  const attachedBranches = (candidate?.branches ?? []).filter((id) => !tornAway.has(id));
   const keptShots = (keepB ? candidate?.shot_count_b : candidate?.shot_count_a) ?? 0;
   const otherShots = (keepB ? candidate?.shot_count_a : candidate?.shot_count_b) ?? 0;
   const summary = t('dialogs.combineSections.summary', {
@@ -324,11 +333,11 @@ export default function CombineSectionsDialog() {
               </p>
             )}
 
-            {candidate && candidate.branches.length > 0 && (
+            {attachedBranches.length > 0 && (
               <p className="text-text-secondary" data-testid="combine-branches-note">
                 {t('dialogs.combineSections.branchesNote', {
-                  names: listNames(candidate.branches),
-                  count: candidate.branches.length,
+                  names: listNames(attachedBranches),
+                  count: attachedBranches.length,
                 })}
               </p>
             )}

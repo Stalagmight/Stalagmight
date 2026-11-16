@@ -356,7 +356,7 @@ describe('CombineSectionsDialog', () => {
     );
     expect(screen.getAllByTestId(/^combine-torn-tie-/).map(tieText)).toEqual([
       'The snapped closure between [section Main-A] [station 2:0] and [section Section 9] [station 9:0]',
-      'The merge of [section Main-B] [station 5:2] and [section Section 8] [station 8:0] [section Section 8] is held by a zero datum and stays where it is.',
+      'The merge of [section Main-B] [station 5:2] and [section Section 8] [station 8:0] . [section Section 8] is held by a zero datum and stays where it is.',
     ]);
     // Hovering a station pill rings it on the map; clicking selects it.
     fireEvent.mouseEnter(screen.getAllByTestId('combine-tie-station-5-2')[0]!);
@@ -572,6 +572,36 @@ describe('CombineSectionsDialog', () => {
     expect(screen.getAllByTestId(/^combine-replaced-tie-/)).toHaveLength(1);
   });
 
+  it('does not say a branch stays attached when its merge at the join becomes a loop closure (#754)', () => {
+    const torn = {
+      station_a: { section_id: 2, station_index: 0 },
+      station_b: { section_id: 7, station_index: 0 },
+      kind: 'merge',
+      reason: 'zero_datum',
+      held: { section_id: 7, station_index: 0 },
+      between_datums: false,
+    };
+    dialogData = {
+      candidate: candidate({
+        branches: [7, 8],
+        plan_keeping_a: quietPlan(2, { torn_ties: [torn] }),
+        plan_keeping_b: quietPlan(5),
+      }),
+    };
+    sections = [
+      ...creditedSections(),
+      { id: 7, name: 'Dee', color: '#333333', direction: 'in', shots: shots(1) },
+      { id: 8, name: 'Tee', color: '#444444', direction: 'in', shots: shots(1) },
+    ];
+    render(<CombineSectionsDialog />);
+    // Keeping Main-A, Dee's merge at the join tears: only Tee stays attached.
+    expect(screen.getByTestId('combine-branches-note')).toHaveTextContent(/^Tee stays attached at the join/);
+    expect(screen.getByTestId('combine-note-torn')).toHaveTextContent(/Dee7 is held by a zero datum/);
+    // Keeping Main-B nothing tears: both stay attached.
+    fireEvent.click(screen.getByTestId('combine-swap-kept'));
+    expect(screen.getByTestId('combine-branches-note')).toHaveTextContent(/^Dee, Tee stay attached at the join/);
+  });
+
   it('says the kept side moves when the other side holds the Closures Computed View in place', () => {
     dialogData = {
       candidate: candidate({
@@ -682,8 +712,8 @@ describe('CombineSectionsDialog', () => {
     for (const swap of [false, true]) {
       if (swap) fireEvent.click(screen.getByTestId('combine-swap-kept'));
       expect(screen.getAllByTestId(/^combine-torn-tie-/).map(tieText)).toEqual([
-        'The merge of [section Main-A] [station 2:0] and [section Section 9] [station 9:0] [section Section 9] is held by a zero datum and stays where it is.',
-        'The snapped closure between [section Section 7] [station 7:1] and [section Section 9] [station 9:2] [section Section 9] is held by a zero datum and stays where it is.',
+        'The merge of [section Main-A] [station 2:0] and [section Section 9] [station 9:0] . [section Section 9] is held by a zero datum and stays where it is.',
+        'The snapped closure between [section Section 7] [station 7:1] and [section Section 9] [station 9:2] . [section Section 9] is held by a zero datum and stays where it is.',
       ]);
       // Nothing moves, and the ties tear for the datum, not to open a loop;
       // the closures join no two datums, so nothing says the view cannot
@@ -713,7 +743,7 @@ describe('CombineSectionsDialog', () => {
     };
     render(<CombineSectionsDialog />);
     expect(screen.getAllByTestId(/^combine-torn-tie-/).map(tieText)).toEqual([
-      'The merge of [section Main-A] [station 2:0] and [section Section 9] [station 9:0] [section Section 9] is held by a zero datum and stays where it is. Its two stations are then held by two zero datums, so the Closures Computed View will show this part of the survey as measured until one of them is removed.',
+      'The merge of [section Main-A] [station 2:0] and [section Section 9] [station 9:0] . [section Section 9] is held by a zero datum and stays where it is. Its two stations are then held by two zero datums, so the Closures Computed View will show this part of the survey as measured until one of them is removed.',
     ]);
     expect(screen.getByTestId('combine-torn-measured-2-0-9-0')).toBeInTheDocument();
     // The tie says it; the part does not say it again.
