@@ -1711,9 +1711,17 @@ fn a_hand_moved_join_station_keeps_its_branch_through_undo_and_a_reopen() {
     assert!((joined.shift_m - 0.3).abs() < 1e-9, "{}", joined.shift_m);
     let before = snapshot(&state);
     let was = shown_stations(&state);
+    // The combine alone, without the command's repair after it.
+    let mut planned = project.clone();
+    planned.combine_sections(k, o, &options()).unwrap();
 
     let result = state.execute_combine_sections(k, o, options());
     assert!(result.success, "{:?}", result.error);
+    assert_eq!(
+        state.get_project_state().unwrap().section_offsets,
+        planned.section_offsets,
+        "the repair after the edit moved a section: the combine left a merge open"
+    );
     let now: std::collections::HashMap<StationRef, (f64, f64)> =
         shown_stations(&state).into_iter().collect();
     let dist = |a: (f64, f64), b: (f64, f64)| (a.0 - b.0).hypot(a.1 - b.1);
