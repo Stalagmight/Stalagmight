@@ -63,7 +63,7 @@ export interface ImportReceiptProvenance {
 import type { CreateProjectFullResult } from '../types/loading';
 import type { UnrecognisedShotKind } from '../types/ipc/UnrecognisedShotKind';
 import type { SurveyData } from '../types/survey-data';
-import { emptySurveyData, surveyDataFromLegacy, surveyDataWithAdjustedStations } from '../types/survey-data';
+import { emptySurveyData, surveyDataFromLegacy, surveyDataWithAdjustedStations, withGpsFixFlags } from '../types/survey-data';
 import { createProjectConfigActions, type ProjectConfigActions } from './projectConfigActions';
 import { createProjectShotActions, type ProjectShotActions } from './projectShotActions';
 import { createSectionStructureActions, type SectionStructureActions } from './sectionStructureActions';
@@ -1516,7 +1516,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // Build the SoA layout alongside the legacy shapes for the
         // duration of the Phase-A migration. After Phase A.6 this is
         // the only shape stored; project loses .sections[i].shots.
-        const surveyData = surveyDataFromLegacy(state.project.sections, state.stations);
+        const surveyData = withGpsFixFlags(
+          surveyDataFromLegacy(state.project.sections, state.stations),
+          state.project.zero_datums
+        );
         set({
           project: state.project,
           projectTreeGeneration: nextProjectTreeGeneration(),
@@ -2029,9 +2032,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // rebuild only the station columns, so entering/restoring the adjusted view
       // never force-materializes the lazy `section.shots` getters (#mem). Fall
       // back to the full legacy walk only if the measured SoA is somehow absent.
-      const surveyDataAdjusted = surveyData
-        ? surveyDataWithAdjustedStations(surveyData, adjusted)
-        : surveyDataFromLegacy(project.sections, adjusted);
+      const surveyDataAdjusted = withGpsFixFlags(
+        surveyData
+          ? surveyDataWithAdjustedStations(surveyData, adjusted)
+          : surveyDataFromLegacy(project.sections, adjusted),
+        project.zero_datums
+      );
       set({ stationsAdjusted: adjusted, surveyDataAdjusted, adjustedLoading: false });
       // What this solve left out (#737); a failed part also has a Warnings entry.
       void useAdjustmentReportStore.getState().load(adjusted, get().refreshWarnings);
