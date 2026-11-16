@@ -30,7 +30,7 @@ beforeAll(() => {
 beforeEach(() => {
   useUIStore.setState({ appMode: 'survey', geometryMode: 'measured', placementMode: null, dataTableFullScreen: false });
   useUIStore.setState({ exportReturnMode: null });
-  useProjectStore.setState({ project: { file_path: '/synthetic.stalx', sections: [], zero_datums: [] } as never });
+  useProjectStore.setState({ project: { file_path: '/synthetic.stalx', sections: [], zero_datums: [], loop_closures: [] } as never });
 });
 
 function renderToolbar(): void {
