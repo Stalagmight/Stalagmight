@@ -2737,6 +2737,9 @@
       "dismiss": "Dismiss"
     }
   },
+  "saveNotices": {
+    "olderVersionsDropGpsFixes": "Older app versions drop this file's GPS fixes and accuracies on save"
+  },
   "updateBanner": {
     "available": "Stalagmight {{version}} is available",
     "download": "Download",
