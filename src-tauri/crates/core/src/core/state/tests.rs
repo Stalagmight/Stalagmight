@@ -23471,13 +23471,13 @@ fn repair_open_project_integrity_reports_fixed_and_remaining() {
 }
 
 #[test]
-fn repair_command_heals_a_merge_between_two_datum_holding_groups() {
+fn repair_command_demotes_a_merge_between_two_datum_holding_groups() {
     // End-to-end through the Repair action on what a past bug left in saved
     // files: a RIGID merge bridging two groups that each hold a zero datum,
-    // torn 500 m open. Before #741 Repair demoted the merge to a closure. Now
-    // the later datum is a GPS fix, which the re-solve does not hold, so Repair
-    // closes the merge instead and keeps it. Fully synthetic: three sections
-    // built by command, welded by hand.
+    // torn 500 m open. Repair demotes the merge to a loop closure and moves
+    // nothing (#741 D6): closing the merge instead would move the later group
+    // 500 m off its GPS. Fully synthetic: three sections built by command,
+    // welded by hand.
     let state = AppState::new().unwrap();
     state.execute(Command::CreateProject {
         name: "Damaged".to_string(),
@@ -23533,6 +23533,13 @@ fn repair_command_heals_a_merge_between_two_datum_holding_groups() {
         before, 1,
         "seeded one torn merge, and two datums are no violation"
     );
+    let xy_before: Vec<_> = state
+        .get_project_state()
+        .unwrap()
+        .compute_station_coordinates()
+        .into_iter()
+        .map(|s| (s.station_ref, s.coordinates.x, s.coordinates.y))
+        .collect();
 
     let result = state.repair_open_project_integrity();
     assert!(result.fixed >= 1, "the torn merge is fixed, got {result:?}");
@@ -23546,14 +23553,21 @@ fn repair_command_heals_a_merge_between_two_datum_holding_groups() {
 
     let guard = state.project.lock().unwrap();
     let project = guard.as_ref().unwrap();
-    assert_eq!(project.station_merges.len(), 2, "both merges survive");
-    assert!(project.loop_closures.is_empty(), "nothing was demoted");
+    assert_eq!(project.station_merges.len(), 1, "the torn merge went");
+    assert_eq!(project.loop_closures.len(), 1, "as a closure");
+    assert!(!project.loop_closures[0].is_aligned);
     assert!(project.check_merge_alignment().is_empty());
+    let xy_after: Vec<_> = project
+        .compute_station_coordinates()
+        .into_iter()
+        .map(|s| (s.station_ref, s.coordinates.x, s.coordinates.y))
+        .collect();
+    assert_eq!(xy_before, xy_after, "Repair moved nothing");
     assert_eq!(
         project.datum_roles(),
         vec![
             Some(crate::models::DatumRole::Placement),
-            Some(crate::models::DatumRole::GpsFix)
+            Some(crate::models::DatumRole::Placement)
         ]
     );
 }

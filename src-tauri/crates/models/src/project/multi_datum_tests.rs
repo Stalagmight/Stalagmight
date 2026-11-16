@@ -426,42 +426,92 @@ fn over_anchored_legacy_file() -> (Project, SectionId, SectionId, SectionId) {
 }
 
 #[test]
-fn an_old_over_anchored_file_loads_with_a_fix_and_no_torn_merge() {
+fn an_old_over_anchored_file_opens_with_nothing_moved() {
+    // The open path re-solves offsets; left a merge, the torn B:2 = C:0 would
+    // be healed by moving C (whose datum is the later one, so a GPS fix) 40 m
+    // off its GPS. Opening a file moves nothing (#741 D6): the merge becomes
+    // the loop closure it should have stayed, and each piece keeps its datum.
     let (mut project, a, b, c) = over_anchored_legacy_file();
     assert_eq!(
         project.check_merge_alignment().len(),
         1,
         "setup: torn on disk"
     );
-    let a_before: Vec<_> = (0..=2)
-        .map(|i| xy(&project, StationRef::new(a, i)))
-        .collect();
+    let before = raw_xy(&project);
 
     project.redrive_offsets_after_load();
 
-    assert!(
-        project.check_merge_alignment().is_empty(),
-        "the later datum is a fix, so the load re-solve closes the merge"
-    );
-    assert_eq!(project.station_merges.len(), 2, "no merge was cut");
+    assert_same_xy(&before, &raw_xy(&project));
+    assert_eq!(project.station_merges.len(), 1, "only the torn merge went");
+    assert!(project.check_merge_alignment().is_empty());
+    assert_eq!(project.loop_closures.len(), 1);
+    let closure = &project.loop_closures[0];
+    assert!(!closure.is_aligned, "a soft closure moves nothing");
+    let ends = [
+        project.resolve_key(&closure.station_a),
+        project.resolve_key(&closure.station_b),
+    ];
+    assert!(ends.contains(&Some(StationRef::new(b, 2))));
+    assert!(ends.contains(&Some(StationRef::new(c, 0))));
+    assert!((closure.misclosure_distance - 40.0).abs() < 1e-6);
     assert_eq!(
         project.datum_roles(),
-        vec![Some(DatumRole::Placement), Some(DatumRole::GpsFix)]
+        vec![Some(DatumRole::Placement), Some(DatumRole::Placement)],
+        "each piece is placed by its own datum again"
     );
-    let a_after: Vec<_> = (0..=2)
-        .map(|i| xy(&project, StationRef::new(a, i)))
-        .collect();
-    assert_eq!(
-        a_before, a_after,
-        "the placement datum's piece does not move"
-    );
-    let (cx, cy) = xy(&project, StationRef::new(c, 0));
-    let (bx, by) = xy(&project, StationRef::new(b, 2));
-    assert!((cx - bx).abs() < 1e-9 && (cy - by).abs() < 1e-9);
+    assert_eq!(xy(&project, StationRef::new(a, 0)), (0.0, 0.0));
     assert!(project
         .check_structural_integrity()
         .iter()
         .all(|v| !v.category.contains("datum")));
+
+    // Opening again changes nothing more.
+    let settled = raw_xy(&project);
+    project.redrive_offsets_after_load();
+    assert_same_xy(&settled, &raw_xy(&project));
+    assert_eq!(project.loop_closures.len(), 1);
+}
+
+#[test]
+fn an_old_aligned_group_with_two_datums_opens_unchanged_with_a_fix() {
+    // An older file whose merged group holds two datums but no torn merge (the
+    // second piece already sat on the first): nothing moves on open, nothing is
+    // demoted, and the later datum derives as a GPS fix that reports its gap.
+    let (mut project, _a, b, c) = over_anchored_legacy_file();
+    project.set_section_offset(c, (0.0, 40.0));
+    assert!(project.check_merge_alignment().is_empty(), "setup: aligned");
+    let before = raw_xy(&project);
+
+    project.redrive_offsets_after_load();
+
+    assert_same_xy(&before, &raw_xy(&project));
+    assert_eq!(project.station_merges.len(), 2);
+    assert!(project.loop_closures.is_empty());
+    assert_eq!(
+        project.datum_roles(),
+        vec![Some(DatumRole::Placement), Some(DatumRole::GpsFix)]
+    );
+    let gaps = project.gps_fix_gaps();
+    let gap = gaps[&StationRef::new(c, 0)];
+    assert_eq!(xy(&project, StationRef::new(b, 2)), (0.0, 40.0));
+    assert!((gap.gap_m - 38.0).abs() < 1e-3, "{gap:?}");
+}
+
+#[test]
+fn a_torn_merge_whose_far_half_holds_no_datum_still_heals_on_open() {
+    // The demotion is for two datum-placed halves only: an ordinary piece
+    // with drift (no datum of its own) is pulled back onto its merge, as it
+    // always was.
+    let (mut project, _a, b, c) = over_anchored_legacy_file();
+    project.zero_datums.truncate(1);
+    project.redrive_offsets_after_load();
+    assert_eq!(project.station_merges.len(), 2, "nothing demoted");
+    assert!(project.loop_closures.is_empty());
+    assert!(project.check_merge_alignment().is_empty());
+    assert_eq!(
+        xy(&project, StationRef::new(c, 0)),
+        xy(&project, StationRef::new(b, 2))
+    );
 }
 
 #[test]
