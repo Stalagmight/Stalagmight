@@ -340,7 +340,19 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
   datum there holds it), a side moves to carry them even when the chain gap
   is float dust, and a snap between them and the rest of the side is torn,
   as the two move apart; with nothing left merged at the dropped station
-  once the plan's ties tear, nothing moves for it. The dialog lists them
+  once the plan's ties tear, nothing moves for it. Whether the hand moves
+  differ is exact (the gap as shown is the chain gap itself when they
+  agree), and a side moves to carry them when the gap as shown is past
+  float dust, so what is merged there lands on the joined station whenever
+  anything moves and stays within the dust otherwise. Merges form a forest
+  (`merge_stations` refuses a loop), but nothing breaks a merge loop an
+  older or hand-edited file holds: a part merged at the dropped station and
+  also to the moving section at another station cannot follow both, so it
+  stays with its side, and its merge at the join becomes a loop closure
+  carrying the hand moves' difference. A closure whose two ends move apart
+  is measured again, each end moving with its section except the dropped
+  join station, which moves by its own move onto the joined station, also
+  when its section does not move. The dialog lists them
   beside the "keeps K's, so O's end moves" note (under the side-by-side
   tolerance only beside a torn tie, as a move of the side). A merged join
   needs none of this: everything merged there is a join tie, one point with
@@ -349,11 +361,12 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
   way: exact in the Raw Data View, but this view solves shots, merges and
   closures, never manual offsets, so a folded hand move would enter every
   loop through its station and move other stations here. (This view's own
-  handling of a manual offset is off as it is: once it solves a closure in
-  a survey with a station moved by hand, it can put that station off what a
-  merge or a closure ties to it, or shift the station's whole section by the
-  hand move and pull its merges apart, combine or not; so the sweeps do not
-  compare this view where a hand move is.)
+  handling of a manual offset is off as it is, combine or not: it holds the
+  survey at its anchor station as shown, hand move included, while it
+  solves offset-free shots, so a hand move on that station shifts the whole
+  adjusted survey by it, and where the solved part is a tree, the sections
+  merged to the anchored one come apart from it. The sweeps compare this
+  view only where it solves no survey with a hand move in it.)
 - **Nothing is left across one shot (#746).** Once the two join stations are
   one, a tie the combine tears (a merge, or a snap made ordinary) can join the
   two ends of one shot: a one-shot passage X merged to both join stations,
