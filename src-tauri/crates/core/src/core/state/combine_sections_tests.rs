@@ -1638,3 +1638,150 @@ fn a_side_by_side_combine_keeps_merged_stations_together_through_a_reopen() {
         assert!(apart(*p, *q) < 1e-9, "the reopen moved {a:?}");
     }
 }
+
+/// #754 through the command, as the issue found it in the app: D carries a
+/// zero datum at its start (the frame, at the origin) with K merged there,
+/// and O's own datum on the same GPS position puts O's start exactly on D's,
+/// side by side with K's. Combining K with O moves nothing and turns K's
+/// merge to D into a loop closure for D's datum (listed in the plan first),
+/// so the two datums stay in two merge groups: the integrity check and the
+/// project warnings are clean. One Undo restores the project byte for byte,
+/// Redo re-applies it, and a save and a reopen keep it as it is. Before #754
+/// the plan listed nothing and the combine left both datums in one merge
+/// group.
+#[test]
+fn a_combine_at_a_shared_entrance_keeps_the_datums_in_two_merge_groups() {
+    use crate::models::{
+        CombineJoinEnds, CombineJoinKind, SectionEnd, TornTieKind, TornTieReason,
+        MULTIPLE_DATUMS_PER_MERGE_COMPONENT,
+    };
+    let temp = tempfile::TempDir::new().unwrap();
+    let path = temp.path().join("entrance.stalx");
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Entrance".to_string(),
+        location: None,
+    });
+    let d = create(&state, "D", vec![shot(0.0, 5.0)]);
+    let k = create(&state, "K", vec![shot(90.0, 10.0)]);
+    let o = create(&state, "O", vec![shot(270.0, 10.0)]);
+    let gps = GpsCoordinates {
+        latitude: 20.0,
+        longitude: -87.0,
+        depth_reference: 0.0,
+    };
+    let datum = |at: StationRef| {
+        let result = state.execute(Command::SetZeroDatum {
+            station_ref: at,
+            coordinates: gps,
+        });
+        assert!(result.success, "{:?}", result.error);
+    };
+    datum(StationRef::new(d, 0));
+    let merged = state.execute(Command::MergeStations {
+        station_a: StationRef::new(k, 0),
+        station_b: StationRef::new(d, 0),
+    });
+    assert!(merged.success, "{:?}", merged.error);
+    datum(StationRef::new(o, 0));
+    let at = |state: &AppState, station: StationRef| {
+        station_positions(state)
+            .into_iter()
+            .find(|(s, _)| *s == station)
+            .unwrap()
+            .1
+    };
+    assert!(
+        apart(
+            at(&state, StationRef::new(k, 0)),
+            at(&state, StationRef::new(o, 0))
+        ) < 1e-9,
+        "setup: O's start lands on K's"
+    );
+
+    let candidate = state.combine_candidate_for_sections(k, o).unwrap().unwrap();
+    assert_eq!(candidate.join_kind, CombineJoinKind::CoLocated);
+    assert_eq!(candidate.blocked_reason, None);
+    for plan in [&candidate.plan_keeping_a, &candidate.plan_keeping_b] {
+        assert_eq!(plan.moving_section, None);
+        assert_eq!(plan.torn_ties.len(), 1, "{plan:?}");
+        let torn = plan.torn_ties[0];
+        assert_eq!(torn.kind, TornTieKind::Merge);
+        assert_eq!(torn.reason, TornTieReason::ZeroDatum);
+        assert_eq!(
+            (torn.station_a, torn.station_b),
+            (StationRef::new(k, 0), StationRef::new(d, 0))
+        );
+    }
+    let positions = station_positions(&state);
+    let before = snapshot(&state);
+
+    let result = state.execute_combine_sections(
+        k,
+        o,
+        CombineSectionsOptions {
+            join: Some(CombineJoinEnds {
+                kept: SectionEnd::Start,
+                other: SectionEnd::Start,
+            }),
+            ..options()
+        },
+    );
+    assert!(result.success, "{:?}", result.error);
+    let check = |state: &AppState, what: &str| {
+        let project = state.get_project_state().unwrap();
+        let violations = project.check_structural_integrity();
+        assert!(violations.is_empty(), "{what}: {violations:?}");
+        assert!(
+            project.over_anchored_merge_components().is_empty(),
+            "{what}"
+        );
+        assert!(
+            state
+                .compute_project_warnings(&project, None)
+                .iter()
+                .all(|w| w.code != MULTIPLE_DATUMS_PER_MERGE_COMPONENT),
+            "{what}: a two-datum warning"
+        );
+        assert!(project.station_merges.is_empty(), "{what}: K's merge to D");
+        assert_eq!(
+            project.loop_closures.len(),
+            1,
+            "{what}: the closure it became"
+        );
+        // Nothing moved: D stays, and O's stations are K's now (O reversed
+        // onto K's start: O 1 is K 0, O 0 is K 1).
+        for (station, was) in [
+            (StationRef::new(d, 0), StationRef::new(d, 0)),
+            (StationRef::new(d, 1), StationRef::new(d, 1)),
+            (StationRef::new(k, 0), StationRef::new(o, 1)),
+            (StationRef::new(k, 1), StationRef::new(k, 0)),
+            (StationRef::new(k, 2), StationRef::new(k, 1)),
+        ] {
+            let was = positions.iter().find(|(s, _)| *s == was).unwrap().1;
+            assert!(
+                apart(at(state, station), was) < 1e-9,
+                "{what}: {station:?} moved"
+            );
+        }
+    };
+    check(&state, "combine");
+    let after = snapshot(&state);
+
+    assert!(state.undo().success);
+    assert_eq!(snapshot(&state), before, "one undo restores it all");
+    assert!(state.redo().success);
+    assert_eq!(snapshot(&state), after);
+    check(&state, "redo");
+
+    assert!(
+        state
+            .execute(Command::SaveProject {
+                path: Some(path.clone())
+            })
+            .success
+    );
+    assert!(state.execute(Command::CloseProject).success);
+    assert!(state.open_project(path).success, "reopen");
+    check(&state, "reopen");
+}
