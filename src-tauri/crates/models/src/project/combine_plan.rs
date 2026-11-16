@@ -445,14 +445,46 @@ impl Project {
                 None,
             )
         };
-        // The side whose join station's hand move the joined station drops.
-        // The other section's, picked only to carry what is merged at its join
-        // station with none there (all of it at the kept one, which keeps its
-        // hand move): nothing moves after all. (The kept side picked is left
-        // moving, by the float dust of the chain gap: the plan then says the
-        // joined station keeps the other's hand move, which it does.)
+        // The side whose join station's hand move the joined station drops,
+        // and that station.
         let picked = moving;
-        let idle = shifting && !gap_moves && picked == join.other && !third(&join.group_o);
+        let dropped_at = if picked == join.kept {
+            join.join_k
+        } else {
+            join.join_o
+        };
+        // What is merged there moves with the joined station: each third
+        // section still merged at it once the plan's ties tear, and what hangs
+        // off it, never through the moving section (merges form a forest, so
+        // that is all of it).
+        let joined: HashSet<SectionId> = if carried && shifting {
+            let adjacency = adjacency_without(&torn);
+            let side = reach(&adjacency, moving, fixed);
+            let mut joined = HashSet::new();
+            for tie in merges.iter().filter(|t| !torn.contains(&t.id)) {
+                let partner = if tie.a == dropped_at {
+                    tie.b
+                } else if tie.b == dropped_at {
+                    tie.a
+                } else {
+                    continue;
+                };
+                if partner.section_id != moving && partner.section_id != fixed {
+                    joined.extend(reach(&adjacency, partner.section_id, moving));
+                }
+            }
+            joined.retain(|s| side.contains(s) && *s != moving && *s != fixed);
+            joined
+        } else {
+            HashSet::new()
+        };
+        // The other section's side, picked only to carry what is merged at its
+        // join station, with nothing left there to carry (none there, or its
+        // merge torn to close a loop): nothing moves after all. (The kept side
+        // picked goes on moving, by the float dust of the chain gap: the plan
+        // then says the joined station keeps the other's hand move, which it
+        // does.)
+        let idle = shifting && !gap_moves && picked == join.other && joined.is_empty();
         let (shifting, moving, fixed, mut torn, held_by_datum, kept_moves_because) = if idle {
             let torn = loop_ties(join.other, join.kept);
             (false, join.other, join.kept, torn, Vec::new(), None)
@@ -471,43 +503,9 @@ impl Project {
         // combined section, and any from a side that moves stops being snapped.
         let snaps = snaps_torn(moving, fixed, &torn, shifting);
         torn.extend(snaps);
-        // The join station whose hand move is dropped: the picked side's (the
-        // other section's when nothing moves), and its move onto the joined
-        // station as shown.
-        let dropped_at = if picked == join.kept {
-            join.join_k
-        } else {
-            join.join_o
-        };
-        let dropped_hand_move = carried.then(|| {
-            let toward = if dropped_at == join.join_o {
-                shown
-            } else {
-                (-shown.0, -shown.1)
-            };
-            (dropped_at, toward)
-        });
-        // What is merged there moves with the joined station: each third
-        // section merged at it, and what hangs off it, never through the
-        // moving section (merges form a forest, so that is all of it).
-        let mut joined: HashSet<SectionId> = HashSet::new();
-        if carried && shifting {
-            let adjacency = adjacency_without(&torn);
-            for tie in merges.iter().filter(|t| !torn.contains(&t.id)) {
-                let partner = if tie.a == dropped_at {
-                    tie.b
-                } else if tie.b == dropped_at {
-                    tie.a
-                } else {
-                    continue;
-                };
-                if partner.section_id != moving && partner.section_id != fixed {
-                    joined.extend(reach(&adjacency, partner.section_id, moving));
-                }
-            }
-            joined.retain(|s| side.contains(s) && *s != moving && *s != fixed);
-            // A snap between them and the rest of the side: the two move
-            // apart now.
+        // A snap between what moves with the joined station and the rest of
+        // the side: the two move apart now.
+        if !joined.is_empty() {
             let apart: HashSet<TieId> = ties
                 .iter()
                 .filter(|t| matches!(t.id, TieId::Closure(_)) && !join.is_join_tie(t.a, t.b))
@@ -520,6 +518,15 @@ impl Project {
                 .collect();
             torn.extend(apart);
         }
+        // The dropped station's move onto the joined station as shown.
+        let dropped_hand_move = carried.then(|| {
+            let toward = if dropped_at == join.join_o {
+                shown
+            } else {
+                (-shown.0, -shown.1)
+            };
+            (dropped_at, toward)
+        });
 
         let torn_ties: Vec<Tie> = ties
             .iter()
