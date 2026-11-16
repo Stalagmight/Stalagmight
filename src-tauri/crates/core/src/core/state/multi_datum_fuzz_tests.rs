@@ -102,7 +102,8 @@ const EXACT_M: f64 = 1e-9;
 ///
 /// - `frame-gps-edit`: giving the frame datum a new GPS keeps its station on
 ///   the origin and moves nothing else, so every other placed piece is off
-///   its own GPS by the edit. Present on master before #741. `"11"`.
+///   its own GPS by the edit. Present on master before #741; tracked in
+///   #769, unmute it there. `"11"`.
 ///
 /// No longer muted, and pinned in `multi_datum_tests.rs`: `promoted-twin-gps`
 /// (a fix with the bit-identical GPS of the removed placement datum) and

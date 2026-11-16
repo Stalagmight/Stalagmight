@@ -61,7 +61,8 @@ use crate::models::{
 ///   `zero_datum_extras`, whose reader validates, and dropped on the next
 ///   open. The file reader keeps `zero_datums` GPS as stored on purpose (Add
 ///   refuses such a source, the outside reader reports it), so this is a
-///   damaged-file case. Seed 17 reaches it first
+///   damaged-file case, tracked in #770 (unmute it there). Seed 17 reaches it
+///   first
 ///   (`STALAGMIGHT_DATUM_FILE_FUZZ_FIRST_SEED` with `_SEEDS=1` and `_MUTE=`
 ///   set empty).
 ///
