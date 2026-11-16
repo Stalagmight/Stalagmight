@@ -1226,6 +1226,12 @@
     "mergeProjects": {
       "warningToast": "Merge complete - {{message}}"
     },
+    "mergeStations": {
+      "datumShift": "{{piece}} is placed by its own GPS. It moves {{distance}} m to meet the other piece, and its zero datum at {{station}} becomes a GPS fix.",
+      "datumShiftAfterMove": "{{piece}} is placed by its own GPS. The merge moves it to meet the other piece, and its zero datum at {{station}} becomes a GPS fix.",
+      "pieceMore_one": "{{name}} and 1 more section",
+      "pieceMore_other": "{{name}} and {{count}} more sections"
+    },
     "importBlocked": {
       "title": "Importing DMP",
       "body": "Switch to Survey mode for import since Plan and Export modes are read-only.",

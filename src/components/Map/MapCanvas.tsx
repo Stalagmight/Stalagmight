@@ -1437,7 +1437,12 @@ function MapCanvas() {
           ? { onBeforeConfirm: moveCallbacks.onBeforeConfirm, onCancel: moveCallbacks.onCancel, preCommands: moveCallbacks.preCommands }
           : {};
         if (result.can_merge) {
-          openDialog('merge', { stationA: originStation, stationB: targetStation, ...extra });
+          openDialog('merge', {
+            stationA: originStation,
+            stationB: targetStation,
+            datumShift: result.datum_shift,
+            ...extra,
+          });
         } else if (result.connected) {
           openDialog('closure', {
             stationA: originStation,
