@@ -147,3 +147,84 @@ fn the_entrance_answer_round_trips_through_serde_and_is_absent_by_default() {
     assert_eq!(back[1].entrance, Some(true));
     assert_eq!(back[0].entrance, None);
 }
+
+/// Distance from the entrances, by station index along the line, for the
+/// gradient's entrance default.
+fn gradient(project: &Project) -> Vec<Option<f64>> {
+    let stations = project.compute_station_coordinates();
+    project.distance_field_from(&stations, None).distances
+}
+
+#[test]
+fn a_mid_passage_fix_is_not_a_root_of_penetration_or_the_distance_gradient() {
+    let (mut project, a) = line();
+    let stations = project.compute_station_coordinates();
+    assert!((project.calculate_penetration(&stations) - 300.0).abs() < 1e-6);
+
+    // A radiolocation fix at station 3 (150 m in) leaves both unchanged.
+    fix(&mut project, StationRef::new(a, 3), None);
+    let stations = project.compute_station_coordinates();
+    assert!((project.calculate_penetration(&stations) - 300.0).abs() < 1e-6);
+    let mid = gradient(&project)[3].unwrap();
+    assert!((mid - 150.0).abs() < 1e-6, "{mid}");
+
+    // Ticked as an entrance, it becomes a root: the far end is 150 m from it.
+    assert!(project.set_zero_datum_entrance(StationRef::new(a, 3), Some(true)));
+    let stations = project.compute_station_coordinates();
+    assert!((project.calculate_penetration(&stations) - 150.0).abs() < 1e-6);
+    assert!(gradient(&project)[3].unwrap().abs() < 1e-6);
+}
+
+#[test]
+fn a_fix_at_the_far_end_is_a_root_unless_the_user_says_otherwise() {
+    let (mut project, a) = line();
+    fix(&mut project, StationRef::new(a, 6), None);
+    let stations = project.compute_station_coordinates();
+    assert!((project.calculate_penetration(&stations) - 150.0).abs() < 1e-6);
+
+    assert!(project.set_zero_datum_entrance(StationRef::new(a, 6), Some(false)));
+    let stations = project.compute_station_coordinates();
+    assert!((project.calculate_penetration(&stations) - 300.0).abs() < 1e-6);
+}
+
+#[test]
+fn start_from_entrance_does_not_start_at_a_mid_passage_fix() {
+    use super::gas::{CylRole, Cylinder, Diver, TankMaterial};
+    use crate::config::GasConfig;
+
+    let (mut project, a) = line();
+    fix(&mut project, StationRef::new(a, 3), None);
+    let diver = Diver::new(20.0, None).unwrap();
+    let tank = Cylinder::new(
+        1000.0,
+        300.0,
+        300.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let gas_at = |project: &Project, i: u32| {
+        let field = project.compute_gas_reach_field(
+            None,
+            None,
+            &diver,
+            std::slice::from_ref(&tank),
+            &GasConfig::default(),
+        );
+        let at = field
+            .station_refs
+            .iter()
+            .position(|r| *r == StationRef::new(a, i))
+            .unwrap();
+        field.gas_to_reach[at].unwrap()
+    };
+    assert!(
+        gas_at(&project, 0).abs() < 1e-9,
+        "the placement datum is a root"
+    );
+    assert!(gas_at(&project, 3) > 0.0, "the mid-passage fix is not");
+
+    assert!(project.set_zero_datum_entrance(StationRef::new(a, 3), Some(true)));
+    assert!(gas_at(&project, 3).abs() < 1e-9, "ticked, it is");
+}
