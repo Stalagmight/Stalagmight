@@ -42,7 +42,9 @@
 //!   on one of their own stations is the combine refused: the combined section
 //!   would hold two.
 //!   Moving M's side tears every snapped closure from it to anything that
-//!   stays, so those become ordinary closures too.
+//!   stays, so those become ordinary closures too. One into a part a datum
+//!   merge is torn from tears for that datum, as the merge does (#756): the
+//!   datum holds the part where it is.
 //! - **Hand moves at the join (#755).** A manual station offset moves one
 //!   station as shown and nothing beyond it, and the joined station keeps
 //!   only one: the fixed side's. When the two join stations' offsets differ,
@@ -179,7 +181,10 @@ pub(crate) struct TiePlan {
     /// The ties that become ordinary loop closures.
     pub torn: Vec<Tie>,
     /// Which of `torn` tear because a zero datum holds the section on their
-    /// far side (the rest close a loop through the combined section).
+    /// far side (the rest close a loop through the combined section): the
+    /// moving section's merges to its datum sides, and the snaps the move
+    /// tears into those parts (#756). Only a shift tears them, so the far
+    /// side is the one that does not move.
     pub held_by_datum: Vec<TieId>,
     /// Why the kept section's side moves, when it does.
     pub kept_moves_because: Option<KeptMovesReason>,
@@ -518,7 +523,7 @@ impl Project {
         // of the chain gap: the plan then says the joined station keeps the
         // other's hand move, which it does.)
         let idle = shifting && !gap_moves && picked == join.other && joined.is_empty();
-        let (shifting, moving, fixed, mut torn, held_by_datum, kept_moves_because) = if idle {
+        let (shifting, moving, fixed, mut torn, mut held_by_datum, kept_moves_because) = if idle {
             let torn = loop_ties(join.other, join.kept);
             (false, join.other, join.kept, torn, Vec::new(), None)
         } else {
@@ -532,10 +537,35 @@ impl Project {
             )
         };
         torn.extend(looped);
-        let side = reach(&adjacency_without(&torn), moving, fixed);
+        let adjacency = adjacency_without(&torn);
+        let side = reach(&adjacency, moving, fixed);
         // Snapped closures: one across the two sides closes a loop through the
         // combined section, and any from a side that moves stops being snapped.
         let snaps = snaps_torn(moving, fixed, &torn, shifting);
+        // One the move tears into a part a datum merge is torn from tears
+        // for that datum, like the merge (#756): the datum holds the part
+        // where it is, and no loop through the combined section closes there.
+        if !held_by_datum.is_empty() {
+            let mut held_parts: HashSet<SectionId> = HashSet::new();
+            for tie in ties.iter().filter(|t| held_by_datum.contains(&t.id)) {
+                let far = if tie.a.section_id == moving {
+                    tie.b
+                } else {
+                    tie.a
+                };
+                if !held_parts.contains(&far.section_id) {
+                    held_parts.extend(reach(&adjacency, far.section_id, moving));
+                }
+            }
+            held_by_datum.extend(
+                ties.iter()
+                    .filter(|t| snaps.contains(&t.id))
+                    .filter(|t| {
+                        held_parts.contains(&t.a.section_id) || held_parts.contains(&t.b.section_id)
+                    })
+                    .map(|t| t.id),
+            );
+        }
         torn.extend(snaps);
         // A snap between what moves with the joined station and the rest of
         // the side: the two move apart now.

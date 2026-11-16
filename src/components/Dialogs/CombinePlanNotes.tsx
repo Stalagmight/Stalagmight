@@ -194,7 +194,8 @@ export function CombinePlanNotes({
                     <Trans i18nKey={`dialogs.combineSections.${key}`} components={ends(tie.station_a, tie.station_b)} />
                     {tie.reason === 'zero_datum' && held && (
                       <>
-                        {' '}
+                        {/* The tie, then the held section as its own sentence. */}
+                        {'. '}
                         <Trans
                           i18nKey="dialogs.combineSections.tornHeld"
                           components={{ held: <SectionPill id={held.section_id} name={sectionName(held.section_id)} /> }}

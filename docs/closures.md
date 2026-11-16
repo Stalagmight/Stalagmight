@@ -310,11 +310,18 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
   (`project/combine_plan.rs`): merges form a forest, so on each path at most
   one merge tears, the one nearest the moving section; a snapped (aligned)
   closure across the two sides, or from a side that moves, is demoted to
-  `Batch` the same way. The loop's misclosure moves to the torn tie. Nothing
-  the combine makes is a sole bridge (the torn tie's ends stay connected
-  through the combined section, or tie two anchored groups, whose promotion is
-  refused), so a reload converts nothing back; the randomised sweep in
-  `combine_closure_tests.rs` checks exactly that.
+  `Batch` the same way. The loop's misclosure moves to the torn tie. With
+  zero datums on both sides, the moving section's merges to its datum sides
+  tear too, for the datum (`TornTieReason::ZeroDatum`; the dialog names the
+  end that does not move as held), and so does a snap the move tears into
+  such a part (#756): the datum is why that part stays, not a loop the
+  combine closes. It used to give the loop reason, so the dialog said the
+  loop's misclosure moves to the new closure. Nothing the combine makes is a
+  sole bridge (the torn tie's ends stay connected through the combined
+  section, or tie two anchored groups, whose promotion is refused), so a
+  reload converts nothing back; the randomised sweep in
+  `combine_closure_tests.rs` checks exactly that, and that each torn tie's
+  reason holds on the combined survey (`check_torn_reasons`).
 - **A side-by-side residual moves a side too (#740).** Two ends side by
   side (unmerged, within `COMBINE_TOLERANCE_M`, 1 mm) are apart by a
   residual, and so are merged ends whose join station was moved by hand (a

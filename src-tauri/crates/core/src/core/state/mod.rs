@@ -160,6 +160,12 @@ mod issue_737_tests;
 )]
 mod issue_738_tests;
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod issue_756_tests;
+#[cfg(test)]
 mod metamorphic_undo_tests;
 #[cfg(test)]
 #[expect(
