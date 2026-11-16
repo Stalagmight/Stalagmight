@@ -4,4 +4,4 @@ import type { CombineReplacedClosure } from "./CombineReplacedClosure";
 import type { KeptMovesReason } from "./KeptMovesReason";
 import type { TornTie } from "./TornTie";
 
-export interface CombinePlan { kept: number, moving_section: number | null, kept_moves_because: KeptMovesReason | null, moved_sections: Array<number>, shift_m: number, torn_ties: Array<TornTie>, azimuth_rotation_deg: number | null, join_offset_change_m: number | null, closures_removed_across_one_shot?: Array<CombineRemovedClosure>, closures_replaced?: Array<CombineReplacedClosure>, }
+export interface CombinePlan { kept: number, moving_section: number | null, kept_moves_because: KeptMovesReason | null, moved_sections: Array<number>, shift_m: number, torn_ties: Array<TornTie>, adjustment_blocked_by_datums: boolean, azimuth_rotation_deg: number | null, join_offset_change_m: number | null, closures_removed_across_one_shot?: Array<CombineRemovedClosure>, closures_replaced?: Array<CombineReplacedClosure>, }

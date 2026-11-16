@@ -50,13 +50,23 @@
 //!   merges from M to its datum sides tear exactly as for a shift, from the
 //!   same M (the other section, unless it carries a datum itself): the rule
 //!   does not depend on the gap, and the dialog lists them before the
-//!   confirm. A merged join, or a loop between the two sections, already
-//!   has both sides in one merge group, where one datum at most holds them.
-//!   When both datums sit on the torn merge's own two stations, the closure
-//!   ties them to one point and the closure-adjusted view cannot solve that
-//!   part (it reports it), exactly as after a shift; the tear is kept rather
-//!   than a refusal, which would have to hold at every gap and per kept
-//!   section.
+//!   confirm. So do the snaps from the combined section's side to a part a
+//!   datum merge is torn from: the offset cascade solves through a snap as
+//!   through a merge, so it would keep the two datums in one rigid group (a
+//!   shift tears them because their side moves).
+//!   In a project the app keeps sound only a side-by-side join reaches this:
+//!   merged ends, or two sections tied by merges elsewhere, have both sides
+//!   in one merge group, which `merge_stations` and `set_zero_datum` keep to
+//!   one datum. A file can still hold two datums in one merge group (the
+//!   integrity check reports it); a merged join there reaches the rule too,
+//!   and its tear leaves the two datums in two groups.
+//!   When the closure a tie becomes, or one the join leaves, puts two datums
+//!   in one solve group (both surveys' datums at the entrance, the torn
+//!   merge between them), the closure-adjusted view cannot solve that part,
+//!   exactly as after a shift: the plan marks the tie (`between_datums`) and
+//!   the part (`adjustment_blocked_by_datums`) for the dialog. The tear is
+//!   kept rather than a refusal, which would have to hold at every gap and
+//!   per kept section.
 
 use std::collections::{HashMap, HashSet};
 
@@ -177,8 +187,17 @@ pub(crate) struct TiePlan {
     /// The ties that become ordinary loop closures.
     pub torn: Vec<Tie>,
     /// Which of `torn` tear because a zero datum holds the section on their
-    /// far side (the rest close a loop through the combined section).
-    pub held_by_datum: Vec<TieId>,
+    /// far side (the rest close a loop through the combined section), each
+    /// with its station on that held side.
+    pub held_by_datum: Vec<(TieId, StationRef)>,
+    /// Which of `torn` end up, as closures, in a solve group holding two zero
+    /// datums: the Closures Computed View cannot adjust the part they are in
+    /// (#754).
+    pub between_datums: HashSet<TieId>,
+    /// Whether any solve group of the combined part holds two zero datums
+    /// once combined (through a torn tie or a closure the join leaves there):
+    /// the Closures Computed View then adjusts none of that part (#754).
+    pub adjustment_blocked_by_datums: bool,
     /// Why the kept section's side moves, when it does.
     pub kept_moves_because: Option<KeptMovesReason>,
     /// Whether the joined station keeps the kept section's manual offset
@@ -355,7 +374,7 @@ impl Project {
         let shifting = gap.0.is_finite()
             && gap.1.is_finite()
             && (gap.0.abs() > Self::OFFSET_DUST_M || gap.1.abs() > Self::OFFSET_DUST_M);
-        let (moving, fixed, mut torn, held_by_datum, kept_moves_because) = if shifting {
+        let (moving, fixed, mut torn, datum_ties, kept_moves_because) = if shifting {
             // What the closure-adjusted view holds the survey at: the side that
             // holds it must stay, or the whole cave shifts there by the gap.
             // Only when that view adjusts the joined survey: it solves a
@@ -412,8 +431,8 @@ impl Project {
             // datums tear here too, from the same section (the other one,
             // unless it carries a datum itself): one group holds one datum,
             // and the rule does not depend on the gap. Two datum sections at
-            // least, or one datum holds both sides only through a loop the
-            // combine opens (a free side is left then).
+            // least: one datum alone can hold both sides only through a loop
+            // the combine opens, which leaves a free side.
             let (moving, fixed, torn, held, _) = Self::tear_datum_sides(
                 join,
                 &loop_ties,
@@ -434,11 +453,33 @@ impl Project {
                 None,
             )
         };
+        // A tie torn for a datum is a merge of M's: its other end is held.
+        let mut held_by_datum: Vec<(TieId, StationRef)> = datum_ties
+            .iter()
+            .filter_map(|id| ties.iter().find(|t| t.id == *id))
+            .map(|t| (t.id, if t.a.section_id == moving { t.b } else { t.a }))
+            .collect();
         let side = reach(&adjacency_without(&torn), moving, fixed);
         // Snapped closures: one across the two sides closes a loop through the
         // combined section, and any from a side that moves stops being snapped.
         let snaps = snaps_torn(moving, fixed, &torn, shifting);
         torn.extend(snaps);
+        // With nothing moving, a snap from the combined section's side to a
+        // part a datum merge was torn from would still tie the two datums
+        // into one rigid group (the offset cascade solves through a snap as
+        // through a merge): it tears for the datum too. With a gap the move
+        // tears it already.
+        if !shifting && !held_by_datum.is_empty() {
+            let snaps = self.snaps_to_datum_parts(
+                join,
+                ties,
+                &adjacency_without(&torn),
+                (moving, fixed),
+                &held_by_datum,
+            );
+            torn.extend(snaps.iter().map(|(id, _)| *id));
+            held_by_datum.extend(snaps);
+        }
 
         let torn_ties: Vec<Tie> = ties
             .iter()
@@ -449,11 +490,15 @@ impl Project {
         // removed instead (#746). The anchor verdict above does not change for
         // it: a closure that collapses a shot is one the joined survey's solve
         // skips, so it never made that survey "solved".
-        let dropped = self.joined_across_one_shot(join, ties, &torn_ties, facts);
+        let (dropped, knots) = self.joined_across_one_shot(join, ties, &torn_ties, facts);
         let torn_ties: Vec<Tie> = torn_ties
             .into_iter()
             .filter(|t| !dropped.iter().any(|(d, _)| d.id == t.id))
             .collect();
+        let (between_datums, adjustment_blocked_by_datums) = knots.map_or_else(
+            || (HashSet::new(), false),
+            |mut knots| self.ties_between_datums(&mut knots, join, &torn_ties),
+        );
         // What the combine's closure dedupe will drop for a closure the solve
         // takes (#749), from the same rule, on the closures this plan leaves.
         let replaced = if self.combine_may_replace(join.kept, join.other) {
@@ -465,6 +510,8 @@ impl Project {
             return Ok(TiePlan {
                 torn: torn_ties,
                 held_by_datum,
+                between_datums,
+                adjustment_blocked_by_datums,
                 kept_offset_wins: true,
                 dropped,
                 replaced,
@@ -481,6 +528,8 @@ impl Project {
             shift: (gap.0 * sign, gap.1 * sign),
             torn: torn_ties,
             held_by_datum,
+            between_datums,
+            adjustment_blocked_by_datums,
             kept_moves_because,
             kept_offset_wins: moving == join.other,
             dropped,
@@ -513,7 +562,8 @@ impl Project {
     /// closures `tear_ties` appends. Calls `visit` with each closure the solve
     /// would see, in that order, and whether it would skip it (it collapses a
     /// shot); a skipped one unites nothing, as in the real sweep. Stops when
-    /// `visit` returns false. `O(n)`.
+    /// `visit` returns false. Returns the knots as far as it got: after a
+    /// full sweep, the solve's groups of the combined project. `O(n)`.
     ///
     /// The one model of the joined survey the anchor rule
     /// ([`Self::joined_survey_is_solved`]) and the closures the combine
@@ -526,7 +576,7 @@ impl Project {
         torn: &HashSet<TieId>,
         snaps: &HashSet<TieId>,
         mut visit: impl FnMut(Tie, bool) -> bool,
-    ) {
+    ) -> Knots {
         let mut knots = Knots::new(self);
         let merges = || ties.iter().filter(|t| matches!(t.id, TieId::Merge(_)));
         for tie in merges().filter(|t| !torn.contains(&t.id)) {
@@ -554,14 +604,15 @@ impl Project {
                 b: closure.b,
             };
             if !sweep(&mut knots, tie) {
-                return;
+                return knots;
             }
         }
         for tie in merges().filter(|t| torn.contains(&t.id)) {
             if !sweep(&mut knots, *tie) {
-                return;
+                return knots;
             }
         }
+        knots
     }
 
     /// Would the closure-adjusted view solve the survey this combine joins,
@@ -581,7 +632,7 @@ impl Project {
         snaps: &HashSet<TieId>,
     ) -> bool {
         let mut solved = false;
-        self.joined_sweep(join, ties, closures, torn, snaps, |tie, skipped| {
+        let _ = self.joined_sweep(join, ties, closures, torn, snaps, |tie, skipped| {
             solved = !skipped
                 && component.contains(&tie.a.section_id)
                 && component.contains(&tie.b.section_id);
@@ -602,17 +653,19 @@ impl Project {
     ///
     /// Nothing changes for the sweep when no tie tears and the join stations
     /// are already one point (merged), or when no closure is solved at all:
-    /// then this is empty without the `O(n)` sweep.
+    /// then this is empty without the `O(n)` sweep. Also returns the sweep's
+    /// knots when it ran (always, when a tie tears): the combined project's
+    /// solve groups, for [`Self::ties_between_datums`].
     fn joined_across_one_shot(
         &self,
         join: &JoinPoint,
         ties: &[Tie],
         torn_ties: &[Tie],
         facts: &ClosureFacts,
-    ) -> Vec<(Tie, CombineRemovedKind)> {
+    ) -> (Vec<(Tie, CombineRemovedKind)>, Option<Knots>) {
         let closures = facts.closures(self);
         if torn_ties.is_empty() && (join.merged || !closures.iter().any(|c| c.eligible)) {
-            return Vec::new();
+            return (Vec::new(), None);
         }
         let torn: HashSet<TieId> = torn_ties
             .iter()
@@ -626,7 +679,7 @@ impl Project {
             .collect();
         let skipped_now = facts.skipped(self);
         let mut dropped = Vec::new();
-        self.joined_sweep(join, ties, closures, &torn, &snaps, |tie, skipped| {
+        let knots = self.joined_sweep(join, ties, closures, &torn, &snaps, |tie, skipped| {
             if skipped {
                 let kind = match tie.id {
                     TieId::Merge(_) => Some(CombineRemovedKind::Merge),
@@ -643,7 +696,84 @@ impl Project {
             }
             true
         });
-        dropped
+        (dropped, Some(knots))
+    }
+
+    /// The torn ties whose closure, in the combined project, sits in a solve
+    /// group (`knots`, a full [`Self::joined_sweep`]) holding two zero datums
+    /// or more, and whether any group of the combined part does: the solve
+    /// refuses such a group ("Multiple zero datums in a single constraint
+    /// group"), so the Closures Computed View shows that part measured. The
+    /// issue's shape (#754): both surveys' datums at the entrance, the torn
+    /// merge between them. `O(datums)` unless a group holds two.
+    fn ties_between_datums(
+        &self,
+        knots: &mut Knots,
+        join: &JoinPoint,
+        torn: &[Tie],
+    ) -> (HashSet<TieId>, bool) {
+        let mut datums: HashMap<usize, Vec<SectionId>> = HashMap::new();
+        for datum in &self.zero_datums {
+            if let Some(at) = self.resolve_key(&datum.station_ref) {
+                if let Some(knot) = knots.knot_of(at) {
+                    datums.entry(knot).or_default().push(at.section_id);
+                }
+            }
+        }
+        datums.retain(|_, sections| sections.len() >= 2);
+        if datums.is_empty() {
+            return (HashSet::new(), false);
+        }
+        let between = torn
+            .iter()
+            .filter(|t| knots.knot_of(t.a).is_some_and(|k| datums.contains_key(&k)))
+            .map(|t| t.id)
+            .collect();
+        // The combined part: everything connected to either section now
+        // (a part a datum merge is torn from stays tied by its closure).
+        let mut part = self.get_connected_section_ids(join.kept);
+        part.extend(self.get_connected_section_ids(join.other));
+        let blocked = datums
+            .values()
+            .any(|sections| sections.iter().any(|s| part.contains(s)));
+        (between, blocked)
+    }
+
+    /// The snapped closures that would still tie a part a datum merge was
+    /// torn from (`held_by_datum`) to the combined section's side (M's side
+    /// or F's, over `adjacency`, the merges left), each with its station on
+    /// the held part: with nothing moving, the no-move datum tear tears
+    /// them too (#754).
+    fn snaps_to_datum_parts(
+        &self,
+        join: &JoinPoint,
+        ties: &[Tie],
+        adjacency: &Adjacency,
+        (moving, fixed): (SectionId, SectionId),
+        held_by_datum: &[(TieId, StationRef)],
+    ) -> Vec<(TieId, StationRef)> {
+        let mut combined = reach(adjacency, moving, fixed);
+        combined.extend(reach(adjacency, fixed, moving));
+        let mut held_parts: HashSet<SectionId> = HashSet::new();
+        for (_, at) in held_by_datum {
+            if !held_parts.contains(&at.section_id) {
+                held_parts.extend(reach(adjacency, at.section_id, moving));
+            }
+        }
+        ties.iter()
+            .filter(|t| matches!(t.id, TieId::Closure(_)) && !join.is_join_tie(t.a, t.b))
+            .filter(|t| !held_by_datum.iter().any(|(id, _)| *id == t.id))
+            .filter_map(|t| {
+                let (a, b) = (t.a.section_id, t.b.section_id);
+                if combined.contains(&a) && held_parts.contains(&b) {
+                    Some((t.id, t.b))
+                } else if held_parts.contains(&a) && combined.contains(&b) {
+                    Some((t.id, t.a))
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     /// Which side moves when the join has to close by a shift, and the merges
@@ -768,21 +898,31 @@ impl Project {
             kept_moves_because: plan.kept_moves_because,
             moved_sections: plan.moved.clone(),
             shift_m: plan.shift.0.hypot(plan.shift.1),
+            adjustment_blocked_by_datums: plan.adjustment_blocked_by_datums,
             torn_ties: plan
                 .torn
                 .iter()
-                .map(|tie| TornTie {
-                    station_a: tie.a,
-                    station_b: tie.b,
-                    kind: match tie.id {
-                        TieId::Merge(_) => TornTieKind::Merge,
-                        TieId::Closure(_) => TornTieKind::SnappedClosure,
-                    },
-                    reason: if plan.held_by_datum.contains(&tie.id) {
-                        TornTieReason::ZeroDatum
-                    } else {
-                        TornTieReason::Loop
-                    },
+                .map(|tie| {
+                    let held = plan
+                        .held_by_datum
+                        .iter()
+                        .find(|(id, _)| *id == tie.id)
+                        .map(|(_, at)| *at);
+                    TornTie {
+                        station_a: tie.a,
+                        station_b: tie.b,
+                        kind: match tie.id {
+                            TieId::Merge(_) => TornTieKind::Merge,
+                            TieId::Closure(_) => TornTieKind::SnappedClosure,
+                        },
+                        reason: if held.is_some() {
+                            TornTieReason::ZeroDatum
+                        } else {
+                            TornTieReason::Loop
+                        },
+                        held,
+                        between_datums: plan.between_datums.contains(&tie.id),
+                    }
                 })
                 .collect(),
             azimuth_rotation_deg,

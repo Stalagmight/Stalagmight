@@ -3,4 +3,4 @@ import type { StationRef } from "./StationRef";
 import type { TornTieKind } from "./TornTieKind";
 import type { TornTieReason } from "./TornTieReason";
 
-export interface TornTie { station_a: StationRef, station_b: StationRef, kind: TornTieKind, reason: TornTieReason, }
+export interface TornTie { station_a: StationRef, station_b: StationRef, kind: TornTieKind, reason: TornTieReason, held: StationRef | null, between_datums: boolean, }

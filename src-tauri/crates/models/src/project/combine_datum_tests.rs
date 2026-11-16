@@ -5,18 +5,21 @@
 //! to its datum side becomes a loop closure, the same one a shift would tear:
 //! the other section's, unless it carries a datum itself. Every join end,
 //! either section kept, a datum on the join section itself or on a section
-//! merged to it (at the join or at the far end); one datum alone tears
-//! nothing; a merged join never unites two datum groups. Each combine is
+//! merged to it (at the join or at the far end); a snap to the datum side
+//! tears too; one datum alone tears nothing; a merged join never unites two
+//! datum groups, and repairs a file holding two in one. The plan says when
+//! the closure a tie becomes, or one the join leaves, ties two datums into
+//! one solve group the Closures Computed View cannot adjust. Each combine is
 //! checked against every invariant the sweeps hold a combine to
-//! (`combine_closure_tests::check_combined`), the datums staying apart
-//! included.
+//! (`combine_closure_tests::check_combined`), the datums staying apart in
+//! merge and rigid groups and the planned refusal included.
 
 use super::combine_closure_tests::{
-    add, check_combined, check_datums_stay_apart, dist, options, shot, xy,
+    add, check_combined, check_datums_stay_apart, dist, options, refused_for_datums, shot, xy,
 };
 use crate::{
-    ClosureStrategy, CombineJoinEnds, CombineJoinKind, CombinePlan, GpsCoordinates, Project,
-    SectionEnd, SectionId, StationRef, TornTieKind, TornTieReason, ZeroDatum,
+    ClosureStrategy, CombineJoinEnds, CombineJoinKind, CombinePlan, GpsCoordinates, LoopClosure,
+    Project, SectionEnd, SectionId, StationRef, TornTie, TornTieKind, TornTieReason, ZeroDatum,
 };
 
 fn gps() -> GpsCoordinates {
@@ -271,14 +274,19 @@ fn datums_on_both_sides_of_one_point_tear_one_merge_and_move_nothing() {
                         let mut want = [tears, datum_side];
                         want.sort_unstable();
                         assert_eq!(sections, want, "{what}");
-                        // The torn merge is a closure now, between the same
-                        // two stations (the combined section's one is K's).
-                        assert!(after.over_anchored_merge_components().is_empty(), "{what}");
                         let datum_end = if torn.station_a.section_id == datum_side {
                             torn.station_a
                         } else {
                             torn.station_b
                         };
+                        // The plan names the held end; D's datum is on D 1,
+                        // not on the tie, so the closure joins no two datums.
+                        assert_eq!(torn.held, Some(datum_end), "{what}");
+                        assert!(!torn.between_datums, "{what}");
+                        assert!(!plan.adjustment_blocked_by_datums, "{what}");
+                        // The torn merge is a closure now, between the same
+                        // two stations (the combined section's one is K's).
+                        assert!(after.over_anchored_merge_components().is_empty(), "{what}");
                         assert!(
                             after.loop_closures.iter().any(|c| {
                                 c.strategy == ClosureStrategy::Batch
@@ -384,8 +392,12 @@ fn one_datum_at_a_shared_point_tears_nothing() {
 /// is refused before any combine (`set_zero_datum`, `merge_stations`), and
 /// the combine of a merged join with one datum (on D, merged at the join or
 /// at K's far end) tears nothing. A file can still hold two datums in one
-/// merge group (the integrity check reports it): combining there adds no
-/// datum to any group, whichever section is kept.
+/// merge group (the integrity check reports it), and then the merged join
+/// reaches the both-held rule too: with D merged at K's far end, K's merge
+/// to D becomes a loop closure for D's datum, whichever section is kept,
+/// and the combine leaves the two datums in two groups (a repair). With D
+/// merged at the join itself that merge folds into the joined station, so
+/// nothing tears and the one over-anchored group stays as it was.
 #[test]
 fn a_merged_join_never_unites_two_datum_groups() {
     for k_held in [Held::MergedAtTheJoin, Held::MergedAtTheFarEnd] {
@@ -433,12 +445,246 @@ fn a_merged_join_never_unites_two_datum_groups() {
             ),
         ] {
             let what = format!("merged, forced, K held {k_held:?}, keep {kept}");
+            let candidate = forced
+                .combine_candidate_joining(kept, other, Some(join))
+                .unwrap();
+            assert_eq!(candidate.blocked_reason, None, "{what}");
+            let plan = if candidate.section_a == kept {
+                &candidate.plan_keeping_a
+            } else {
+                &candidate.plan_keeping_b
+            };
             let mut after = forced.clone();
             after
                 .combine_sections(kept, other, &options(Some(join)))
                 .unwrap_or_else(|err| panic!("{what}: {err}"));
             check_datums_stay_apart(&forced, &after, &what);
-            assert!(after.over_anchored_merge_components().len() <= 1, "{what}");
+            assert_eq!(plan.moving_section, None, "{what}");
+            let d = e.dk.unwrap();
+            if k_held == Held::MergedAtTheFarEnd {
+                let merge = &forced.station_merges[0];
+                assert_eq!(
+                    plan.torn_ties,
+                    vec![TornTie {
+                        station_a: forced.resolve_key(&merge.station_a).unwrap(),
+                        station_b: forced.resolve_key(&merge.station_b).unwrap(),
+                        kind: TornTieKind::Merge,
+                        reason: TornTieReason::ZeroDatum,
+                        held: Some(StationRef::new(d, 0)),
+                        between_datums: false,
+                    }],
+                    "{what}"
+                );
+                assert!(after.over_anchored_merge_components().is_empty(), "{what}");
+            } else {
+                assert!(plan.torn_ties.is_empty(), "{what}: {plan:?}");
+                assert_eq!(after.over_anchored_merge_components().len(), 1, "{what}");
+            }
+        }
+    }
+}
+
+/// The issue's shape exactly: D's datum on D 0, K merged there, O's datum on
+/// O 0 at the same GPS position. The closure K's merge to D becomes ties the
+/// two datum stations to one point, a solve group the Closures Computed View
+/// refuses: the plan marks the tie and the plan (the dialog says so), and
+/// the solve after the combine does refuse that part. The same shape 0.5 mm
+/// apart tears the same merge with the same marks, and moves K.
+#[test]
+fn a_closure_between_the_two_entrance_datums_is_marked_unadjustable() {
+    for residual in [0.0, 0.0005] {
+        let mut project = Project::new("Entrance".to_string(), None);
+        let d = add(&mut project, "D", vec![shot(0.0, 5.0)]);
+        let k = add(&mut project, "K", vec![shot(90.0, 10.0)]);
+        let o = add(&mut project, "O", vec![shot(270.0, 10.0)]);
+        project
+            .set_zero_datum(StationRef::new(d, 0), gps())
+            .unwrap();
+        project
+            .merge_stations(StationRef::new(k, 0), StationRef::new(d, 0))
+            .unwrap();
+        place(&mut project, o, 0, (residual, 0.0));
+        hold(&mut project, StationRef::new(o, 0));
+        let e = Entrance {
+            project,
+            k,
+            o,
+            k_end: SectionEnd::Start,
+            o_end: SectionEnd::Start,
+            dk: Some(d),
+            d_o: None,
+        };
+        for kept in [k, o] {
+            let what = format!("residual {residual}, keep {kept}");
+            let (plan, after) = combine(&e, kept, &what);
+            assert_eq!(plan.moving_section, (residual > 0.0).then_some(k), "{what}");
+            assert_eq!(
+                plan.torn_ties,
+                vec![TornTie {
+                    station_a: StationRef::new(k, 0),
+                    station_b: StationRef::new(d, 0),
+                    kind: TornTieKind::Merge,
+                    reason: TornTieReason::ZeroDatum,
+                    held: Some(StationRef::new(d, 0)),
+                    between_datums: true,
+                }],
+                "{what}"
+            );
+            assert!(plan.adjustment_blocked_by_datums, "{what}");
+            assert!(refused_for_datums(&after, kept), "{what}");
+            assert!(after.over_anchored_merge_components().is_empty(), "{what}");
+        }
+    }
+}
+
+/// The join itself can put two datums in one solve group, through a closure
+/// already there: D's datum on D 0, tied to K 0 by an ordinary loop closure
+/// (two anchored groups may be tied so), O's datum on O 0 beside K 0, and K
+/// and O joined into a loop by X. Combining K with O tears only the loop's
+/// merge, but the joined station puts both datums in the closure's group:
+/// the plan says the part cannot be adjusted though no torn tie is marked,
+/// so the dialog does not claim the view adjusts the loop's new closure.
+#[test]
+fn the_join_can_leave_two_datums_in_one_solve_group_through_a_closure() {
+    let mut project = Project::new("Entrance".to_string(), None);
+    let k = add(&mut project, "K", vec![shot(90.0, 10.0)]);
+    let o = add(&mut project, "O", vec![shot(270.0, 10.0)]);
+    let x = add(&mut project, "X", vec![shot(270.0, 20.0)]);
+    let d = add(&mut project, "D", vec![shot(0.0, 5.0)]);
+    let origin = xy(&project, StationRef::new(k, 0));
+    place(&mut project, o, 0, origin);
+    place(&mut project, d, 0, origin);
+    let k_end = xy(&project, StationRef::new(k, 1));
+    place(&mut project, x, 0, k_end);
+    project
+        .merge_stations(StationRef::new(x, 0), StationRef::new(k, 1))
+        .unwrap();
+    project
+        .merge_stations(StationRef::new(o, 1), StationRef::new(x, 1))
+        .unwrap();
+    let (station_a, station_b) = (
+        project.key_for_ref(StationRef::new(k, 0)).unwrap(),
+        project.key_for_ref(StationRef::new(d, 0)).unwrap(),
+    );
+    project.loop_closures.push(LoopClosure {
+        id: 1,
+        station_a,
+        station_b,
+        path_length: 0.0,
+        misclosure_distance: 0.0,
+        error_percentage: 0.0,
+        horizontal_misclosure: 0.0,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::Batch,
+        is_aligned: false,
+    });
+    hold(&mut project, StationRef::new(d, 0));
+    hold(&mut project, StationRef::new(o, 0));
+    assert!(project.over_anchored_merge_components().is_empty());
+    assert!(!refused_for_datums(&project, k), "setup: adjustable before");
+    let e = Entrance {
+        project,
+        k,
+        o,
+        k_end: SectionEnd::Start,
+        o_end: SectionEnd::Start,
+        dk: None,
+        d_o: None,
+    };
+    for kept in [k, o] {
+        let what = format!("keep {kept}");
+        let (plan, after) = combine(&e, kept, &what);
+        assert_eq!(plan.moving_section, None, "{what}");
+        assert_eq!(plan.torn_ties.len(), 1, "{what}: {plan:?}");
+        let torn = plan.torn_ties[0];
+        assert_eq!(torn.reason, TornTieReason::Loop, "{what}");
+        assert!(!torn.between_datums && torn.held.is_none(), "{what}");
+        assert!(plan.adjustment_blocked_by_datums, "{what}");
+        assert!(refused_for_datums(&after, kept), "{what}");
+    }
+}
+
+/// K merged to D at the entrance, and a snapped closure from K's side to D
+/// (closing the loop K, D exactly; from K itself or from B, merged to K): it
+/// is a rigid edge the offset cascade solves through like a merge, so with
+/// nothing moving it would keep D's datum and O's in one rigid group. It
+/// tears for D's datum like the merge, the plan naming D's end as held, and
+/// a shift (0.5 mm) tears the same two ties.
+#[test]
+fn a_snap_to_the_datum_side_tears_with_the_merge_when_nothing_moves() {
+    for via_b in [false, true] {
+        for residual in [0.0, 0.0005] {
+            let mut project = Project::new("Entrance".to_string(), None);
+            let d = add(&mut project, "D", vec![shot(0.0, 5.0), shot(90.0, 10.0)]);
+            let k = add(&mut project, "K", vec![shot(90.0, 10.0), shot(0.0, 5.0)]);
+            let o = add(&mut project, "O", vec![shot(270.0, 10.0)]);
+            let origin = xy(&project, StationRef::new(d, 0));
+            place(&mut project, k, 0, origin);
+            project
+                .merge_stations(StationRef::new(k, 0), StationRef::new(d, 0))
+                .unwrap();
+            let snap_from = if via_b {
+                let b = add(&mut project, "B", vec![shot(0.0, 5.0)]);
+                let at = xy(&project, StationRef::new(k, 1));
+                place(&mut project, b, 0, at);
+                project
+                    .merge_stations(StationRef::new(b, 0), StationRef::new(k, 1))
+                    .unwrap();
+                StationRef::new(b, 1)
+            } else {
+                StationRef::new(k, 2)
+            };
+            project
+                .create_loop_closure(snap_from, StationRef::new(d, 2), ClosureStrategy::Move)
+                .unwrap();
+            assert!(project.loop_closures[0].is_aligned, "setup: snapped");
+            place(&mut project, o, 0, (origin.0 + residual, origin.1));
+            hold(&mut project, StationRef::new(d, 1));
+            hold(&mut project, StationRef::new(o, 0));
+            let e = Entrance {
+                project,
+                k,
+                o,
+                k_end: SectionEnd::Start,
+                o_end: SectionEnd::Start,
+                dk: Some(d),
+                d_o: None,
+            };
+            for kept in [k, o] {
+                let what = format!("via B {via_b}, residual {residual}, keep {kept}");
+                let (plan, after) = combine(&e, kept, &what);
+                let mut torn: Vec<_> = plan
+                    .torn_ties
+                    .iter()
+                    .map(|t| (t.kind, t.station_a, t.station_b, t.held))
+                    .collect();
+                torn.sort_by_key(|t| t.0 == TornTieKind::SnappedClosure);
+                let moved = residual > 0.0;
+                assert_eq!(
+                    torn,
+                    vec![
+                        (
+                            TornTieKind::Merge,
+                            StationRef::new(k, 0),
+                            StationRef::new(d, 0),
+                            Some(StationRef::new(d, 0)),
+                        ),
+                        (
+                            TornTieKind::SnappedClosure,
+                            snap_from,
+                            StationRef::new(d, 2),
+                            // A shift tears the snap because its side moves.
+                            (!moved).then_some(StationRef::new(d, 2)),
+                        ),
+                    ],
+                    "{what}"
+                );
+                assert!(
+                    !after.get_rigid_connected_section_ids(k).contains(&d),
+                    "{what}: D is still rigidly tied to the combined section"
+                );
+                assert!(after.loop_closures.iter().all(|c| !c.is_aligned), "{what}");
+            }
         }
     }
 }

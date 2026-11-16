@@ -762,6 +762,8 @@ fn a_second_rigid_tie_becomes_a_loop_closure() {
             station_b: StationRef::new(c, 1),
             kind: TornTieKind::Merge,
             reason: TornTieReason::Loop,
+            held: None,
+            between_datums: false,
         }]
     );
     project.combine_sections(k, o, &options()).unwrap();

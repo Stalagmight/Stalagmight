@@ -9,8 +9,10 @@
 //! - the other section's shots that share an identity (uuid) with the kept
 //!   section's get new ones (`renew_shared_shot_uuids`, a heal the command
 //!   runs before it records the undo step);
-//! - rigid ties that would tie the combined section to itself, or hold the
-//!   moving side, become ordinary loop closures;
+//! - rigid ties that would tie the combined section to itself, hold the
+//!   moving side, or, with zero datums holding both sides, tie them into one
+//!   merge or rigid group (whether or not a side moves, #754), become
+//!   ordinary loop closures;
 //! - the moving side (the other section and what is still merged to it, or
 //!   the kept side when a zero datum or the closure-adjusted view's anchor
 //!   holds the other; see `combine_plan.rs`) moves by the gap at the

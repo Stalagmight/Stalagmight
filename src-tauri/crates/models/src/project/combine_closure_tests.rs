@@ -1031,6 +1031,7 @@ pub(super) fn check_combined(
     };
     check_eligible_ties_kept(before, after, candidate, kept, &home, what);
     check_datums_stay_apart(before, after, what);
+    check_datum_refusal_planned(before, after, plan, other, what);
     let (was, was_ok) = adjusted_checked(&tied);
     let (now, now_ok) = adjusted_checked(&with_snaps(after));
     assert!(
@@ -1056,15 +1057,41 @@ pub(super) fn check_combined(
 
 /// #754, after every combine the sweeps make: no two zero datums share a
 /// merge group that did not share one before, so a combine never increases
-/// the over-anchored merge groups (`over_anchored_merge_components`). The
-/// joined station unites the two sides' merge groups whether or not a side
-/// moves, so the plan must tear the merges to one side's datums when datums
-/// hold both, also with nothing to move (two surveys from one entrance).
-/// Datums are matched by their place in `zero_datums`, which a combine keeps:
-/// it refuses two sections that each carry one, and re-keys the other's.
-/// Asked of the merge groups directly, so a project that starts over-anchored
-/// is held to the same rule (its group may not gain a datum).
+/// the over-anchored merge groups (`over_anchored_merge_components`), nor a
+/// rigid group (merges and snapped closures, which the offset cascade solves
+/// through alike). The joined station unites the two sides' groups whether
+/// or not a side moves, so the plan must tear the merges, and with nothing
+/// to move the snaps, to one side's datums when datums hold both (two
+/// surveys from one entrance). Datums are matched by their place in
+/// `zero_datums`, which a combine keeps: it refuses two sections that each
+/// carry one, and re-keys the other's. Asked of the groups directly, so a
+/// project that starts over-anchored is held to the same rule (its group
+/// may not gain a datum).
 pub(super) fn check_datums_stay_apart(before: &Project, after: &Project, what: &str) {
+    check_datums_stay_apart_in(
+        before,
+        after,
+        what,
+        "merge",
+        Project::get_merged_section_ids,
+    );
+    check_datums_stay_apart_in(
+        before,
+        after,
+        what,
+        "rigid",
+        Project::get_rigid_connected_section_ids,
+    );
+}
+
+/// [`check_datums_stay_apart`] for one kind of group, `group` naming it.
+fn check_datums_stay_apart_in(
+    before: &Project,
+    after: &Project,
+    what: &str,
+    kind: &str,
+    group: fn(&Project, SectionId) -> HashSet<SectionId>,
+) {
     assert_eq!(
         before.zero_datums.len(),
         after.zero_datums.len(),
@@ -1080,21 +1107,68 @@ pub(super) fn check_datums_stay_apart(before: &Project, after: &Project, what: &
     let (was, now) = (sections(before), sections(after));
     for (i, a) in now.iter().enumerate() {
         let Some(a) = a else { continue };
-        let group = after.get_merged_section_ids(*a);
+        let together = group(after, *a);
         for (j, b) in now.iter().enumerate().skip(i + 1) {
-            if !b.is_some_and(|b| group.contains(&b)) {
+            if !b.is_some_and(|b| together.contains(&b)) {
                 continue;
             }
             let together_before = match (was[i], was[j]) {
-                (Some(x), Some(y)) => before.get_merged_section_ids(x).contains(&y),
+                (Some(x), Some(y)) => group(before, x).contains(&y),
                 _ => false,
             };
             assert!(
                 together_before,
-                "{what}: zero datums {i} and {j} are in one merge group now, two before: {:?}",
+                "{what}: zero datums {i} and {j} are in one {kind} group now, two before: {:?}",
                 after.over_anchored_merge_components()
             );
         }
+    }
+}
+
+/// The solve's refusal of a group holding two zero datums.
+const MULTIPLE_DATUMS: &str = "Multiple zero datums in a single constraint group";
+
+/// Does the closure-adjusted solve refuse the component of `section` in
+/// `project` for two zero datums in one group?
+pub(super) fn refused_for_datums(project: &Project, section: SectionId) -> bool {
+    project
+        .compute_adjusted_stations(&crate::config::ClosureAdjustmentConfig::default())
+        .failures
+        .iter()
+        .any(|f| f.error == MULTIPLE_DATUMS && f.section_ids.contains(&section))
+}
+
+/// #754, after every combine the sweeps make: the plan says exactly when
+/// the combined part's closure solve is refused for two zero datums in one
+/// group (`adjustment_blocked_by_datums`, which the dialog reads before it
+/// says the Closures Computed View adjusts a closure), unless that part was
+/// refused before the combine too; and a torn tie it marks `between_datums`
+/// is one of those.
+pub(super) fn check_datum_refusal_planned(
+    before: &Project,
+    after: &Project,
+    plan: &crate::CombinePlan,
+    other: SectionId,
+    what: &str,
+) {
+    let kept = plan.kept;
+    let refused = refused_for_datums(after, kept);
+    if plan.adjustment_blocked_by_datums {
+        assert!(
+            refused,
+            "{what}: the plan says the solve refuses, it does not"
+        );
+    } else if refused {
+        assert!(
+            refused_for_datums(before, kept) || refused_for_datums(before, other),
+            "{what}: the solve refuses two datums the plan did not foresee"
+        );
+    }
+    for tie in &plan.torn_ties {
+        assert!(
+            !tie.between_datums || plan.adjustment_blocked_by_datums,
+            "{what}: {tie:?} between datums in a part the plan calls adjustable"
+        );
     }
 }
 
@@ -1593,6 +1667,11 @@ struct SweepStats {
     /// closure for a zero datum: datums on both sides of two ends on one
     /// point, a shared entrance (#754).
     datum_torn_in_place: usize,
+    /// Of those, the snapped closures torn for a datum with nothing moving.
+    datum_snaps_in_place: usize,
+    /// Combines whose plan says a solve group of the combined part holds two
+    /// zero datums, so the Closures Computed View cannot adjust it (#754).
+    blocked_by_datums: usize,
 }
 
 /// Does `plan` move nothing and still tear a tie for a zero datum (#754)?
@@ -1698,6 +1777,16 @@ fn combine_every_offered(project: &Project, seed: u64, stats: &mut SweepStats) {
                     stats.residual_torn += usize::from(!plan.torn_ties.is_empty());
                 }
                 stats.datum_torn_in_place += usize::from(tears_for_a_datum_in_place(plan));
+                stats.datum_snaps_in_place += plan
+                    .torn_ties
+                    .iter()
+                    .filter(|t| {
+                        plan.moving_section.is_none()
+                            && t.reason == TornTieReason::ZeroDatum
+                            && t.kind == TornTieKind::SnappedClosure
+                    })
+                    .count();
+                stats.blocked_by_datums += usize::from(plan.adjustment_blocked_by_datums);
                 check_combined(project, &after, &candidate, kept, &what, &[]);
                 stats.combined += 1;
             }
@@ -1913,18 +2002,11 @@ fn every_offered_combine_around_a_passage_keeps_the_invariants() {
 /// sometimes a zero datum holds O's side. Its own stream: `network`'s seeds
 /// keep their shapes.
 ///
-/// One seed in three is a shared entrance instead (#754), from a stream of
-/// its own so the other draws keep their seeds: O's end sits exactly on P
-/// (float dust apart, so the combine moves nothing), P's merge component is
-/// held by a zero datum (a random station of it, when the network put none
-/// there) and O's side by its own, unless the connector ties O into P's
-/// component. Two surveys from one entrance, each with its datum: the
-/// combine must tear one side's merge to its datum even with nothing to move.
+/// One seed in three also gets a shared entrance on top ([`plant_entrance`],
+/// #754), from a stream of its own so the draws above keep their seeds.
 fn side_by_side_network(seed: u64) -> Project {
     let mut project = network(seed);
     let mut rng = Rng(seed.wrapping_mul(0x8CB9_2BA7_2F3D_8DD7) | 1);
-    let mut entrance_rng = Rng(seed.wrapping_mul(0x5851_F42D_4C95_7F2D) | 1);
-    let entrance = entrance_rng.below(3) == 0;
     let ends: Vec<StationRef> = project
         .sections
         .iter()
@@ -1947,7 +2029,6 @@ fn side_by_side_network(seed: u64) -> Project {
         rng.range(0.02e-3, 0.95e-3),
         rng.range(0.0, std::f64::consts::TAU),
     );
-    let residual = if entrance { 0.0 } else { residual };
     let at = xy(&project, p);
     place(
         &mut project,
@@ -1991,30 +2072,73 @@ fn side_by_side_network(seed: u64) -> Project {
     };
     // Held where it is (`set_zero_datum` would move O's side onto the GPS
     // position, and with it the residual), as `network` holds T.
-    if entrance && !project.section_has_zero_datum(p.section_id) {
-        let component = project.get_merged_section_ids(p.section_id);
-        let all: Vec<StationRef> = every_station(&project)
-            .into_iter()
-            .filter(|at| component.contains(&at.section_id))
-            .collect();
-        let d = all[entrance_rng.below(all.len())];
-        if let Some(station_ref) = project.key_for_ref(d) {
-            project.zero_datums.push(crate::ZeroDatum {
-                station_ref,
-                gps: gps(),
-            });
-        }
+    if rng.below(4) == 0 && !project.section_has_zero_datum(held.section_id) {
+        hold_at(&mut project, held);
     }
-    if (rng.below(4) == 0 || entrance) && !project.section_has_zero_datum(held.section_id) {
-        if let Some(station_ref) = project.key_for_ref(held) {
-            project.zero_datums.push(crate::ZeroDatum {
-                station_ref,
-                gps: gps(),
-            });
-        }
+    let mut entrance = Rng(seed.wrapping_mul(0x5851_F42D_4C95_7F2D) | 1);
+    if entrance.below(3) == 0 {
+        plant_entrance(&mut project, &ends, &mut entrance);
     }
     project.redrive_offsets_after_load();
     project
+}
+
+/// Hold `at` with a zero datum where it is.
+fn hold_at(project: &mut Project, at: StationRef) {
+    if let Some(station_ref) = project.key_for_ref(at) {
+        project.zero_datums.push(crate::ZeroDatum {
+            station_ref,
+            gps: gps(),
+        });
+    }
+}
+
+/// A shared entrance (#754) at a random section end P of `ends`: a section
+/// E whose end sits exactly on P (float dust apart, so a combine there moves
+/// nothing), held by its own zero datum (on that end, on a branch merged
+/// there, or on a branch at its far end), with P's merge component held by
+/// another (on P's own point, or anywhere in it) when nothing holds it yet.
+/// Two surveys from one entrance, each with its datum: a combine there must
+/// tear one side's merge to its datum, and its snaps, even with nothing to
+/// move, and the dialog must say when the two datums end up tied by a
+/// closure the Closures Computed View cannot adjust.
+fn plant_entrance(project: &mut Project, ends: &[StationRef], rng: &mut Rng) {
+    let p = ends[rng.below(ends.len())];
+    let e = add(project, "E", random_shots(rng));
+    let e_shots = project.get_section(e).unwrap().shots.len() as u32;
+    let (near, far) = if rng.below(2) == 0 {
+        (StationRef::new(e, 0), StationRef::new(e, e_shots))
+    } else {
+        (StationRef::new(e, e_shots), StationRef::new(e, 0))
+    };
+    let at = xy(project, p);
+    place(project, e, near.station_index, at);
+    let e_held = match rng.below(3) {
+        0 => near,
+        branch => {
+            let root = if branch == 1 { near } else { far };
+            let b = add(project, "EB", random_shots(rng));
+            let at = xy(project, root);
+            place(project, b, 0, at);
+            let _ = project.merge_stations(StationRef::new(b, 0), root);
+            StationRef::new(b, 1)
+        }
+    };
+    if !project.section_has_zero_datum(p.section_id) {
+        let at_p = if rng.below(2) == 0 {
+            project.get_merge_group(p).into_iter().collect::<Vec<_>>()
+        } else {
+            let component = project.get_merged_section_ids(p.section_id);
+            every_station(project)
+                .into_iter()
+                .filter(|at| component.contains(&at.section_id))
+                .collect()
+        };
+        let mut at_p = at_p;
+        at_p.sort_by_key(|at| (at.section_id, at.station_index));
+        hold_at(project, at_p[rng.below(at_p.len())]);
+    }
+    hold_at(project, e_held);
 }
 
 /// #740 on random surveys: every combine the station menu offers in
@@ -2045,7 +2169,8 @@ fn every_offered_combine_beside_a_side_by_side_pair_keeps_the_invariants() {
         "combine side-by-side sweep seeds {first}..{}: {} combines, {} torn ties, {} moved by a \
          residual within the tolerance (#740): {} of them the kept side, {} with attached \
          sections, {} tearing a tie; {} moving nothing and tearing a merge for a zero datum \
-         (#754); {}",
+         (#754), {} snaps torn so, {} leaving a part the Closures Computed View cannot adjust \
+         for two datums; {}",
         first + seeds,
         stats.combined,
         stats.torn,
@@ -2054,6 +2179,8 @@ fn every_offered_combine_beside_a_side_by_side_pair_keeps_the_invariants() {
         stats.residual_with_branches,
         stats.residual_torn,
         stats.datum_torn_in_place,
+        stats.datum_snaps_in_place,
+        stats.blocked_by_datums,
         closure_dedupes_report()
     );
     if seeds < 20 {
@@ -2062,6 +2189,14 @@ fn every_offered_combine_beside_a_side_by_side_pair_keeps_the_invariants() {
     assert!(
         stats.datum_torn_in_place > 0,
         "no combine at a shared entrance tore a merge for a zero datum"
+    );
+    assert!(
+        stats.datum_snaps_in_place > 0,
+        "no combine at a shared entrance tore a snap for a zero datum"
+    );
+    assert!(
+        stats.blocked_by_datums > 0,
+        "no plan said two datums keep the Closures Computed View from adjusting"
     );
     assert!(stats.residual_moved > 0, "no residual ever moved a side");
     assert!(

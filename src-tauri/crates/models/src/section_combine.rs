@@ -97,20 +97,31 @@ pub enum TornTieReason {
     /// It would tie the combined section to itself: the loop the combine
     /// closes now closes here.
     Loop,
-    /// A zero datum holds the section on its far side, which stays while the
-    /// moving side moves.
+    /// A zero datum holds the section on its far side, which stays where it
+    /// is, while another holds the combined section's side: a rigid tie
+    /// between them would put two datums in one rigid group. With a gap the
+    /// moving side moves off it; with none nothing moves (#754).
     ZeroDatum,
 }
 
 /// A rigid tie the combine turns into an ordinary loop closure, because it
-/// would otherwise tie the combined section to itself or hold the moving side
-/// in place. Named by its stations as they are before the combine.
+/// would otherwise tie the combined section to itself, hold the moving side
+/// in place, or tie two sides zero datums hold into one rigid group. Named by
+/// its stations as they are before the combine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 pub struct TornTie {
     pub station_a: StationRef,
     pub station_b: StationRef,
     pub kind: TornTieKind,
     pub reason: TornTieReason,
+    /// For a tie torn for a zero datum: its station on the side that datum
+    /// holds, which stays where it is. `None` for a loop.
+    pub held: Option<StationRef>,
+    /// Once combined, the solve group of the closure this tie becomes holds
+    /// two zero datums (the two surveys' datums at one entrance, #754): the
+    /// Closures Computed View cannot adjust the part it is in and shows it
+    /// measured until one datum is removed.
+    pub between_datums: bool,
 }
 
 /// What a tie the combine removes (#746), or the loop closure that replaces
@@ -217,6 +228,11 @@ pub struct CombinePlan {
     /// Rigid ties that become ordinary loop closures, so the combined section
     /// is not tied to itself and the moving side is free to move.
     pub torn_ties: Vec<TornTie>,
+    /// Once combined, a solve group of the combined part holds two zero
+    /// datums (through a torn tie, or a closure the join leaves there): the
+    /// Closures Computed View cannot adjust that part and shows it measured,
+    /// so it adjusts none of its loop closures (#754).
+    pub adjustment_blocked_by_datums: bool,
     /// Degrees added to the other section's stored bearings so they read
     /// against the kept section's north reference (the combined section has
     /// one); `None` when the two references agree.

@@ -538,6 +538,7 @@ impl Project {
             moved_sections: Vec::new(),
             shift_m: 0.0,
             torn_ties: Vec::new(),
+            adjustment_blocked_by_datums: false,
             azimuth_rotation_deg: None,
             join_offset_change_m: None,
             closures_removed_across_one_shot: None,

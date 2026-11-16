@@ -282,6 +282,14 @@ impl Knots {
             self.unite_roots(ra, rb);
         }
     }
+
+    /// The knot `station` is in, as its root slot (`None` when the station
+    /// does not exist): two stations share a knot exactly when their roots
+    /// are equal.
+    pub(crate) fn knot_of(&mut self, station: StationRef) -> Option<usize> {
+        let slot = self.slot(station)?;
+        Some(self.find(slot))
+    }
 }
 
 impl Project {
