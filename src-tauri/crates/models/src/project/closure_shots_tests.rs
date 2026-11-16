@@ -785,6 +785,7 @@ fn the_new_wire_fields_are_omitted_when_absent_and_declared_optional() {
         can_merge: false,
         reason: None,
         closure_refusal: None,
+        datum_shift: None,
     };
     let absent = serde_json::to_value(&connectivity).unwrap();
     assert!(absent.get("closure_refusal").is_none(), "{absent}");

@@ -134,6 +134,7 @@ describe('MapTopLeftOverlay', () => {
         adjustmentReport={{
           skipped_closures: [],
           failures: [{ anchor: { section_id: 0, station_index: 0 }, section_ids: [0], reason: 'x' }],
+          far_gps_fixes: [],
         }}
       />
     );
@@ -166,6 +167,7 @@ describe('MapTopLeftOverlay', () => {
     const report = (over: Partial<AdjustmentReport>): AdjustmentReport => ({
       skipped_closures: [],
       failures: [],
+      far_gps_fixes: [],
       ...over,
     });
 

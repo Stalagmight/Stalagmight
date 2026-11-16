@@ -8,6 +8,7 @@ use ts_rs::TS;
 use crate::{SectionId, Station, StationRef};
 
 use super::closure_shots::ClosureAcrossOneShot;
+use super::Project;
 
 /// One component the closure-adjusted solve could not adjust; it is shown
 /// with its measured geometry instead.
@@ -104,13 +105,55 @@ impl From<&AdjustmentFailure> for AdjustmentFailureReport {
     }
 }
 
+/// A GPS fix whose GPS is further from its surveyed position than the gap
+/// check expects (#741). The Closures Computed View, and so Plan and Export,
+/// bend the survey onto it, so the notice above the map names it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
+pub struct FarGpsFix {
+    /// The fix's station.
+    pub station: StationRef,
+    /// [`crate::DatumGap::gap_m`].
+    pub gap_m: f64,
+    /// [`crate::DatumGap::threshold_m`], which `gap_m` exceeds.
+    pub threshold_m: f64,
+}
+
 /// What the Closures Computed View left out, for the notice above the map
 /// (`get_adjustment_report`).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
 pub struct AdjustmentReport {
     /// Closures skipped because they span one shot (cheap; always current).
     pub skipped_closures: Vec<SkippedClosure>,
     /// Components whose solve failed. Only from a solve of the current
     /// project; empty when none has run since the last edit.
     pub failures: Vec<AdjustmentFailureReport>,
+    /// GPS fixes that fail the gap check, largest gap first
+    /// ([`Project::far_gps_fixes`]). Always current.
+    #[serde(default)]
+    pub far_gps_fixes: Vec<FarGpsFix>,
+}
+
+impl Project {
+    /// Every GPS fix whose gap exceeds its threshold
+    /// ([`crate::DatumGap::exceeds_threshold`]), largest gap first, ties by
+    /// station. The computed view is bent onto each of them.
+    pub fn far_gps_fixes(&self) -> Vec<FarGpsFix> {
+        let mut far: Vec<FarGpsFix> = self
+            .gps_fix_gaps()
+            .into_iter()
+            .filter(|(_, gap)| gap.exceeds_threshold)
+            .map(|(station, gap)| FarGpsFix {
+                station,
+                gap_m: gap.gap_m,
+                threshold_m: gap.threshold_m,
+            })
+            .collect();
+        far.sort_by(|a, b| {
+            b.gap_m
+                .total_cmp(&a.gap_m)
+                .then_with(|| a.station.section_id.cmp(&b.station.section_id))
+                .then_with(|| a.station.station_index.cmp(&b.station.station_index))
+        });
+        far
+    }
 }
