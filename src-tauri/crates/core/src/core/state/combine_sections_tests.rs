@@ -1725,7 +1725,7 @@ fn a_hand_moved_join_station_keeps_its_branch_through_undo_and_a_reopen() {
     let before = snapshot(&state);
     let was = shown_stations(&state);
     // The combine alone, without the command's repair after it.
-    let mut planned = project.clone();
+    let mut planned = project;
     planned.combine_sections(k, o, &options()).unwrap();
 
     let result = state.execute_combine_sections(k, o, options());
