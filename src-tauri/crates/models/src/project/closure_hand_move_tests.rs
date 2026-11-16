@@ -214,8 +214,8 @@ fn view_bits(project: &Project) -> Vec<(u32, u32, [u64; 3])> {
     out
 }
 
-/// The view of [`pinned_survey`] as 63050ac1c computed it, bit for bit (`x`,
-/// `y`, `z` per station): a survey without a hand move solves exactly as
+/// The view of [`pinned_survey`] as 63050ac1c computed it on Linux, as raw
+/// bits (`x`, `y`, `z` per station): a survey without a hand move solves as
 /// before #759.
 const PINNED_VIEW: [(u32, u32, [u64; 3]); 17] = [
     (
@@ -375,28 +375,37 @@ const PINNED_VIEW: [(u32, u32, [u64; 3]); 17] = [
 
 /// No hand move, no change: the fix for #759 only acts where a station
 /// carries a manual offset, so a survey without one keeps the Closures
-/// Computed View it had, to the last bit.
+/// Computed View it had. On the Linux the values were pinned on (where CI
+/// runs `cargo test`) it is the same to the last bit; the comparison allows
+/// 1e-12 m, a few ulps at these magnitudes, because `sin` and `cos` come
+/// from the platform's libm and may round the last bit differently on macOS
+/// or Windows (`scripts/test.ps1`). Any real change to the solve moves a
+/// station by far more.
 #[test]
-fn a_survey_without_a_hand_move_keeps_its_closures_computed_view_bit_for_bit() {
+fn a_survey_without_a_hand_move_keeps_its_closures_computed_view() {
     let (p, _) = pinned_survey();
     assert!(p.station_offsets.is_empty());
     let now = view_bits(&p);
     assert_eq!(now.len(), PINNED_VIEW.len());
     for (got, want) in now.iter().zip(PINNED_VIEW.iter()) {
-        assert_eq!(
-            got,
-            want,
-            "{}:{} is at ({}, {}, {}) in the Closures Computed View, was ({}, {}, {})",
+        assert_eq!((got.0, got.1), (want.0, want.1));
+        let (g, w) = (got.2.map(f64::from_bits), want.2.map(f64::from_bits));
+        let off = (0..3).map(|k| (g[k] - w[k]).abs()).fold(0.0, f64::max);
+        assert!(
+            off <= 1e-12,
+            "{}:{} is at {g:?} in the Closures Computed View, was {w:?} ({off:.3e} m off)",
             got.0,
             got.1,
-            f64::from_bits(got.2[0]),
-            f64::from_bits(got.2[1]),
-            f64::from_bits(got.2[2]),
-            f64::from_bits(want.2[0]),
-            f64::from_bits(want.2[1]),
-            f64::from_bits(want.2[2]),
         );
     }
+}
+
+/// What the Closures Computed View solve did with a project: how many
+/// connected surveys it adjusted, and the sections of those it failed on
+/// (shown as measured instead).
+struct ViewSolve {
+    adjusted: usize,
+    failed: HashSet<SectionId>,
 }
 
 /// Union-find root of `x` in `parent`.
@@ -424,7 +433,10 @@ fn root(parent: &mut HashMap<StationRef, StationRef>, x: StationRef) -> StationR
 ///   cancel, axis by axis, with the solve's own weights, a soft GPS fix
 ///   pulling its group's shown point toward its GPS by its weight;
 /// - a survey the view does not solve, or fails to, is shown as measured.
-fn assert_view_is_the_solve(project: &Project, what: &str) {
+///
+/// Returns what the solve did: the surveys it adjusted and the sections of
+/// those it failed on (which this check skips, so a caller compares them).
+fn assert_view_is_the_solve(project: &Project, what: &str) -> ViewSolve {
     let config = ClosureAdjustmentConfig::default();
     let adjusted = project.compute_adjusted_stations(&config);
     let view: HashMap<StationRef, (f64, f64)> = adjusted
@@ -448,12 +460,14 @@ fn assert_view_is_the_solve(project: &Project, what: &str) {
         .map(|c| c.closure_id)
         .collect();
     let mut solved: HashSet<SectionId> = HashSet::new();
+    let mut adjusted_surveys = 0;
     for anchor in project.adjustment_anchors_for_tests() {
         let component = project.get_connected_section_ids(anchor.section_id);
         if component.iter().any(|id| failed.contains(id)) {
             continue;
         }
         solved.extend(component.iter().copied());
+        adjusted_surveys += 1;
         let inside = |at: &StationRef| component.contains(&at.section_id);
         let mut parent: HashMap<StationRef, StationRef> = HashMap::new();
         let ties = project
@@ -620,6 +634,10 @@ fn assert_view_is_the_solve(project: &Project, what: &str) {
             dist(view[&at], xy(project, at)) < 1e-9,
             "{what}: {at:?} is in a survey the view does not adjust, but not shown as measured"
         );
+    }
+    ViewSolve {
+        adjusted: adjusted_surveys,
+        failed,
     }
 }
 
@@ -883,24 +901,25 @@ fn random_hand(rng: &mut Rng) -> (f64, f64, f64) {
 /// Up to two GPS fixes (#741) on random stations of placed pieces (merge
 /// components holding a placement datum), each a few metres off where the
 /// survey shows its station: hard (the default accuracy, or 0) or soft (5 cm
-/// to 3 m). Returns how many hard and soft fixes it planted.
-fn plant_gps_fixes(project: &mut Project, rng: &mut Rng) -> (usize, usize) {
+/// to 3 m). Nothing is added to `project`: [`add_datums`] adds them to it
+/// and to its hand-moved copies alike.
+fn choose_gps_fixes(project: &Project, rng: &mut Rng) -> Vec<ZeroDatum> {
     let Some(frame) = project.frame_datum().map(|zd| zd.gps) else {
-        return (0, 0);
+        return Vec::new();
     };
-    let datums: HashSet<StationRef> = project.all_datum_refs().into_iter().collect();
+    let mut taken: HashSet<StationRef> = project.all_datum_refs().into_iter().collect();
     let candidates: Vec<StationRef> = every_station(project)
         .into_iter()
-        .filter(|at| !datums.contains(at))
+        .filter(|at| !taken.contains(at))
         .filter(|at| project.placement_datum_index(at.section_id).is_some())
         .collect();
-    let (mut hard, mut soft) = (0, 0);
+    let mut fixes = Vec::new();
     if candidates.is_empty() {
-        return (0, 0);
+        return fixes;
     }
     for _ in 0..rng.below(3) {
         let at = candidates[rng.below(candidates.len())];
-        if project.all_datum_refs().contains(&at) {
+        if !taken.insert(at) {
             continue;
         }
         let shown = xy(project, at);
@@ -916,19 +935,20 @@ fn plant_gps_fixes(project: &mut Project, rng: &mut Rng) -> (usize, usize) {
             1 => Some(0.0),
             _ => Some(rng.range(0.05, 3.0)),
         };
-        if accuracy_m.is_some_and(|a| a > 0.0) {
-            soft += 1;
-        } else {
-            hard += 1;
-        }
-        project.zero_datums.push(ZeroDatum {
+        fixes.push(ZeroDatum {
             station_ref: project.key_for_ref(at).unwrap(),
             gps: GpsCoordinates::new(lat, lon, 0.0).unwrap(),
             accuracy_m,
             entrance: None,
         });
     }
-    (hard, soft)
+    fixes
+}
+
+/// Add `datums` to `project` and settle it as opening the file does.
+fn add_datums(project: &mut Project, datums: &[ZeroDatum]) {
+    project.zero_datums.extend(datums.iter().cloned());
+    project.redrive_offsets_after_load();
 }
 
 /// Every station a merge or a closure (of any strategy) names, or a zero
@@ -975,6 +995,7 @@ fn hand_moves_anywhere_keep_the_closures_computed_view_the_solve() {
     let seeds = env("STALAGMIGHT_HAND_VIEW_SEEDS", 150);
     let first = env("STALAGMIGHT_HAND_VIEW_FIRST_SEED", 0);
     let (mut surveys, mut solved, mut nudged, mut tied_moved) = (0usize, 0usize, 0usize, 0usize);
+    let (mut failed_before, mut solved_with_hand_moves) = (0usize, 0usize);
     let (mut hard_fixes, mut soft_fixes, mut fix_moved) = (0usize, 0usize, 0usize);
     for seed in first..first + seeds {
         for (kind, make) in [
@@ -982,11 +1003,24 @@ fn hand_moves_anywhere_keep_the_closures_computed_view_the_solve() {
             ("passage", passage_network),
             ("side by side", side_by_side_network),
         ] {
-            let mut base = make(seed);
+            // A file that carries hand moves was written by an older version,
+            // which lined merged sections up on each hand-moved station as it
+            // was moved, before #741's GPS fixes existed (a fix's section is
+            // held by the offset cascade, so a hand move planted beside one
+            // later tears the merge, and opening the file turns that merge
+            // into a closure). So the hand moves go on the survey first, and
+            // the same fixes onto it and onto the copy without them.
+            let net = make(seed);
             let mut rng = Rng(seed.wrapping_mul(0xA076_1D64_78BD_642F) | 1);
-            let (hard, soft) = plant_gps_fixes(&mut base, &mut rng);
+            let chosen = choose_gps_fixes(&net, &mut rng);
+            let hard = chosen
+                .iter()
+                .filter(|zd| zd.accuracy_m.is_none_or(|a| a == 0.0))
+                .count();
             hard_fixes += hard;
-            soft_fixes += soft;
+            soft_fixes += chosen.len() - hard;
+            let mut base = net.clone();
+            add_datums(&mut base, &chosen);
             let fixes: Vec<StationRef> = base
                 .gps_fix_datums()
                 .iter()
@@ -997,11 +1031,21 @@ fn hand_moves_anywhere_keep_the_closures_computed_view_the_solve() {
             let held: Vec<StationRef> = base.adjustment_anchors_for_tests();
             let what = format!("{kind} seed {seed}");
             surveys += 1;
-            solved += usize::from(!held.is_empty());
-            assert_view_is_the_solve(&base, &format!("{what}, before any hand move"));
+            let before = assert_view_is_the_solve(&base, &format!("{what}, before any hand move"));
+            solved += before.adjusted;
+            failed_before += usize::from(!before.failed.is_empty());
+            // A hand move adjusts nothing the solve takes (shots, ties), so it
+            // never turns a part the solve adjusts into one it fails on.
+            let no_new_failure = |now: &ViewSolve, what: &str| {
+                let new: Vec<&SectionId> = now.failed.difference(&before.failed).collect();
+                assert!(
+                    new.is_empty(),
+                    "{what}: the solve fails with the hand moves on sections {new:?}"
+                );
+            };
 
-            // Anywhere, the held stations included.
-            let mut with = base.clone();
+            // Anywhere, the held stations and the fixes included.
+            let mut with = net.clone();
             for _ in 0..=rng.below(4) {
                 let at = if !fixes.is_empty() && rng.below(4) == 0 {
                     fixes[rng.below(fixes.len())]
@@ -1014,7 +1058,10 @@ fn hand_moves_anywhere_keep_the_closures_computed_view_the_solve() {
                 fix_moved += usize::from(fixes.contains(&at));
                 plant(&mut with, at, random_hand(&mut rng));
             }
-            assert_view_is_the_solve(&with, &what);
+            add_datums(&mut with, &chosen);
+            let now = assert_view_is_the_solve(&with, &what);
+            no_new_failure(&now, &what);
+            solved_with_hand_moves += now.adjusted;
 
             // On stations nothing ties: a nudge of each alone.
             let free: Vec<StationRef> = stations
@@ -1036,11 +1083,13 @@ fn hand_moves_anywhere_keep_the_closures_computed_view_the_solve() {
             }
             nudged += moved.len();
             assert_only_nudged(&with, &base, &moved, &what);
-            assert_view_is_the_solve(&with, &what);
+            no_new_failure(&assert_view_is_the_solve(&with, &what), &what);
         }
     }
     eprintln!(
-        "hand-moved views seeds {first}..{}: {surveys} surveys ({solved} the view solves), \
+        "hand-moved views seeds {first}..{}: {surveys} surveys ({solved} parts the view adjusts \
+         before any hand move, {solved_with_hand_moves} with them; {failed_before} surveys with \
+         a part the solve fails on before any hand move), \
          {hard_fixes} hard and {soft_fixes} soft GPS fixes planted, {tied_moved} hand moves on \
          a merged, tied or datum station ({fix_moved} on a GPS fix), {nudged} on a free one",
         first + seeds
