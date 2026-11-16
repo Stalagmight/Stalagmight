@@ -12,8 +12,9 @@
 //!    Without this the piece stays where the old placement put it, off its own
 //!    GPS by the fix's gap, and when the removed datum was the frame every
 //!    other separately placed piece ends up off its GPS by that gap too.
-//! 2. When the frame changed, the whole survey is translated onto the new
-//!    frame ([`Project::renormalize_frame_if_changed`]).
+//! 2. When the frame changed (another station, or the same key on another
+//!    datum's GPS), the whole survey is translated onto the new frame
+//!    ([`Project::renormalize_frame`]).
 //!
 //! Step 1 measures against the frame that was in effect BEFORE the command,
 //! because until step 2 runs every stored coordinate is still read against it.
@@ -40,11 +41,6 @@ pub struct DatumLayout {
 }
 
 impl DatumLayout {
-    /// The station that defined the frame.
-    pub fn frame_key(&self) -> Option<StationKey> {
-        self.frame.as_ref().map(|(key, _)| key.clone())
-    }
-
     /// Whether `zd` was a GPS fix or a dangling datum before, and not a
     /// placement datum. `after` is every datum's station and GPS now.
     ///
