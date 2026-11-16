@@ -100,6 +100,23 @@ The approaches differ, but every one of these tools lets a cave carry more than 
   - the integrity check (`integrity.rs:674`).
 - `over_anchored_merge_components` and its load warning are retired, or reduced to the
   sanity-warning check.
+- **Opening a file moves nothing** (review D6). An older file whose merged group holds two
+  datums and a merge torn between them (each half pinned by its own datum) has that merge
+  turned back into an unaligned loop closure when it opens, and by Repair, before the offset
+  re-solve: each piece keeps its own datum as its placement datum and nothing moves. Left a
+  merge, the re-solve would move the later piece off its GPS by the whole tear. Joining the
+  pieces is then an explicit merge, which moves the later piece and can be undone. Chosen
+  over a new "move onto GPS" Repair because it is the old Repair's behaviour, needs no new
+  action, and never moves a piece the user did not ask to move. A legacy group with two
+  datums and no torn merge loads unchanged; the later datum is a fix and reports its gap.
+- **A station holds at most one datum** (review D2). Setting a datum on a station another
+  datum already sits on (under another key) is refused; re-setting a datum updates it in
+  place. Combine refuses a join whose two join stations each hold a datum, since the
+  combined station would hold both: the save keeps one, and Remove Zero Datum clears both.
+- **An accuracy-only edit moves nothing** (review D5). Re-setting a datum with the GPS it
+  already holds only updates its accuracy, whatever its role; a promoted fix is placed on
+  its GPS by `settle_datum_layout`, so after a remove, an unmerge, a delete or a Repair no
+  placement datum is left off its GPS.
 - Each GPS fix gets a **gap**: the horizontal distance and bearing from its surveyed position
   to `gps_to_local(fix.gps, frame.gps)`.
 
@@ -137,7 +154,11 @@ The approaches differ, but every one of these tools lets a cave carry more than 
 - **Warnings tab.** One entry per GPS fix whose gap exceeds the threshold. It hangs off the shot
   that arrives at the fix station (`datum_gps_gap`); a fix on a section's first station uses
   shot 0 under its own code (`datum_gps_gap_start`), so fixes on stations 0 and 1 are ignored
-  independently. A fix on a section with no shots has no row (it is logged).
+  independently. A fix on a section with no shots has no row (it is logged). An Ignore is
+  stored under the code plus the datum's GPS (`datum_gap_ignore_code`), so it covers that
+  GPS reading only: a new GPS brings the warning back, and undoing the change brings the
+  Ignore back with the old GPS (review U2). Keyed rather than cleared, because the ignores
+  live in the file's `resolved_warnings` table, outside the undo history.
 
 ## Consumers to audit
 

@@ -145,6 +145,14 @@ more rows than the file has stations is ignored: never a failed open. SQLite
 failing for a reason of its own still fails the open, as for the credit
 tables. See `persistence/sqlite/datum_extras.rs`.
 
+No build writes two datums on one station: setting a datum on a station that
+holds one is refused, and Combine refuses a join that would fold two datums
+onto one station. A row that names a station already holding a datum is
+therefore skipped on load. Opening a file moves no station: an older file
+whose merge was torn between two datum-placed pieces has that merge turned
+back into a loop closure before the offset re-solve (see
+[closures.md](closures.md)).
+
 ## Save Pipeline
 
 ### Backend (`save_project` in `project_io.rs`)
