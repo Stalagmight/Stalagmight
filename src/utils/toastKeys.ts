@@ -81,6 +81,11 @@ export const TOAST_KEYS = {
   EXPORT_NOTE: 'export-note',
   WARNING_RESOLVE: 'warning-resolve',
   ZERO_DATUM_INCOMPLETE: 'zero-datum-incomplete',
+  /**
+   * A save wrote GPS fixes or stored accuracies, which an older version of the
+   * app drops when it saves the file (#741). Shown once per project per session.
+   */
+  OLDER_VERSIONS_DROP_GPS_FIXES: 'older-versions-drop-gps-fixes',
 
   // SpeleoDB
   SPELEODB_UNLINKED_COPY: 'speleodb-unlinked-copy',

@@ -123,10 +123,7 @@ pub(super) fn write_zero_datums(tx: &Transaction<'_>, project: &Project) -> Resu
         ])?;
     }
 
-    let needed = saved
-        .iter()
-        .any(|(_, datum, is_fix)| *is_fix || datum.accuracy_m.is_some());
-    if !needed {
+    if !holds_datum_extras(project) {
         return Ok(());
     }
     let mut uuid_of =
@@ -165,6 +162,22 @@ pub(super) fn write_zero_datums(tx: &Transaction<'_>, project: &Project) -> Resu
         ])?;
     }
     Ok(())
+}
+
+/// Whether saving `project` writes `zero_datum_extras` rows: it holds a GPS
+/// fix, or a datum with a stored accuracy (dangling datums are not saved, so
+/// they do not count). That is exactly what an older build drops when it
+/// saves the file, which is why the save reports it (#741).
+pub fn holds_datum_extras(project: &Project) -> bool {
+    project
+        .zero_datums
+        .iter()
+        .zip(project.datum_roles())
+        .any(|(datum, role)| match role {
+            Some(DatumRole::GpsFix) => true,
+            Some(DatumRole::Placement) => datum.accuracy_m.is_some(),
+            None => false,
+        })
 }
 
 /// The project's zero datums: `base` (the `zero_datums` rows, in table order,

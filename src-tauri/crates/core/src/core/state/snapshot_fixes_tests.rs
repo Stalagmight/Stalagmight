@@ -204,3 +204,42 @@ fn the_history_preview_of_a_removed_fix_still_shows_its_coordinates() {
         .collect();
     assert_eq!(rows[1], ("Latitude", "20.200000"), "{rows:?}");
 }
+
+/// Whether a save of `state` reports that older builds drop its fixes.
+fn save_reports_fixes(state: &AppState, dir: &tempfile::TempDir, name: &str) -> bool {
+    let r = state.execute(Command::SaveProject {
+        path: Some(dir.path().join(name)),
+    });
+    assert!(r.success, "{:?}", r.error);
+    r.warnings
+        .iter()
+        .any(|w| w.code == super::project_io::OLDER_BUILDS_DROP_GPS_FIXES)
+}
+
+/// D1: an older build drops `zero_datum_extras` on its next save, so a save
+/// of a file that holds GPS fixes, or a stored accuracy, says so. A project
+/// with neither has nothing to lose and is told nothing.
+#[test]
+fn a_save_reports_that_older_builds_drop_fixes_and_accuracies() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let (state, _) = surveyed();
+    assert!(save_reports_fixes(&state, &dir, "fixes.stalx"), "fixes");
+
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Placed".to_string(),
+        location: None,
+    });
+    let a = create_section(&state, "A");
+    set_datum(&state, StationRef::new(a, 0), 20.1, None);
+    assert!(
+        !save_reports_fixes(&state, &dir, "placed.stalx"),
+        "a placement with the default accuracy"
+    );
+    set_datum(&state, StationRef::new(a, 0), 20.1, Some(3.0));
+    assert!(
+        save_reports_fixes(&state, &dir, "accuracy.stalx"),
+        "a stored accuracy"
+    );
+}

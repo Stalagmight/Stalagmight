@@ -134,7 +134,11 @@ stored accuracy, so a file without them reads from `zero_datums` alone, which
 is the migration for every older file.
 
 An older build drops the table on its next save (it writes a fresh file), so it
-loses the fixes and accuracies and keeps the placements. A save into the live
+loses the fixes and accuracies and keeps the placements. Neither build can tell
+afterwards, so a save of a project that holds a fix or a stored accuracy
+(`holds_datum_extras`, the same test the writer uses) carries the
+`OLDER_BUILDS_DROP_GPS_FIXES` warning, and the frontend shows it as a warning
+toast once per project per session (`src/utils/gpsFixSaveNotice.ts`). A save into the live
 connection (the SpeleoDB rename path), a repair or another tool can instead
 rewrite `zero_datums` and the shots in place and leave the table beside them.
 So the table is used only while its placement rows name exactly the

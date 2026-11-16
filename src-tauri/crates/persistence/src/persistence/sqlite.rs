@@ -566,6 +566,7 @@ mod undo;
 mod warnings;
 mod write;
 
+pub use datum_extras::holds_datum_extras;
 #[cfg(any(test, feature = "test-support"))]
 pub use live_scan::LiveScan;
 /// How many `resolved_warnings` rows a carry-over will examine (#517). Exported

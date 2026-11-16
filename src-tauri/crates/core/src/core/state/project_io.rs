@@ -4,6 +4,10 @@ use crate::models::{Project, SectionId};
 use crate::persistence::Database;
 use std::path::{Path, PathBuf};
 
+/// `CommandResult` warning code of a save whose file holds GPS fixes or stored
+/// accuracies, which an older build drops when it saves the file (#741).
+pub(crate) const OLDER_BUILDS_DROP_GPS_FIXES: &str = "OLDER_BUILDS_DROP_GPS_FIXES";
+
 /// What a failed save actually was, once the error chain and the destination
 /// have both been consulted. Each variant except `Other` carries a marker the
 /// frontend keys on to pick the remediation it shows.
@@ -518,6 +522,8 @@ impl AppState {
         // also what a snapshot restore consults so an undo of an entry recorded
         // BEFORE this save cannot revert them (#413, finding 11).
         apply_save_heals(project);
+        // [#741] Decided on the healed project the file is written from.
+        let older_builds_drop_fixes = crate::persistence::holds_datum_extras(project);
 
         // Don't let geometric corruption persist silently: a release-mode warning
         // when drifted merges are about to be written. (The frontend re-checks
@@ -1090,6 +1096,7 @@ impl AppState {
             let mut result =
                 CommandResult::success().with_unlinked_copy_path(save_path.display().to_string());
             Self::warn_history_dropped(&mut result, history_dropped);
+            Self::warn_older_builds_drop_fixes(&mut result, older_builds_drop_fixes);
             return result;
         }
 
@@ -1180,6 +1187,7 @@ impl AppState {
                 // disabled until the project is reopened (issue #57 / Codex).
                 let mut result = CommandResult::success();
                 Self::warn_history_dropped(&mut result, history_dropped);
+                Self::warn_older_builds_drop_fixes(&mut result, older_builds_drop_fixes);
                 result.warnings.push(crate::core::ValidationWarning {
                     code: "DATABASE_NOT_REOPENED".to_string(),
                     message: "File saved, but database could not be reopened. Some features may not work until the project is reopened.".to_string(),
@@ -1213,7 +1221,24 @@ impl AppState {
         );
         let mut result = CommandResult::success().with_path(save_path_str);
         Self::warn_history_dropped(&mut result, history_dropped);
+        Self::warn_older_builds_drop_fixes(&mut result, older_builds_drop_fixes);
         result
+    }
+
+    /// [#741] The saved file holds GPS fixes or stored accuracies, in the side
+    /// table `zero_datum_extras`. A build from before it writes a fresh file
+    /// without that table on its next save, so it drops them, and neither
+    /// build can tell afterwards. Reported on every such save; the frontend
+    /// shows it once per project per session. Not the `"SYSTEM"` code, which
+    /// belongs to the deferred-save contract.
+    fn warn_older_builds_drop_fixes(result: &mut CommandResult, holds: bool) {
+        if holds {
+            result.warnings.push(crate::core::ValidationWarning {
+                code: OLDER_BUILDS_DROP_GPS_FIXES.to_owned(),
+                message: "Older versions of the app drop this project's GPS fixes and accuracies when they save it.".to_owned(),
+                severity: crate::core::WarningSeverity::Warning,
+            });
+        }
     }
 
     fn warn_history_dropped(result: &mut CommandResult, dropped: bool) {
