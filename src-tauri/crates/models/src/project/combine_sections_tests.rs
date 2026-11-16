@@ -2019,3 +2019,32 @@ fn a_side_by_side_combine_keeps_merged_stations_together() {
         "reopening moved the combined section {moved:.6} m"
     );
 }
+
+/// #754: D carries a zero datum at its start and K is merged there; O's own
+/// datum, on the same GPS position, puts O's start exactly on D's, side by
+/// side with K's start. Combining K with O must not leave D's and O's datums
+/// in one merge group.
+#[test]
+fn a_combine_at_a_shared_entrance_leaves_one_datum_per_merge_group() {
+    let mut project = Project::new("Entrance".to_string(), None);
+    let d = add(&mut project, "D", vec![shot(0.0, 5.0)]);
+    let k = add(&mut project, "K", vec![shot(90.0, 10.0)]);
+    let o = add(&mut project, "O", vec![shot(270.0, 10.0)]);
+    project
+        .set_zero_datum(StationRef::new(d, 0), gps())
+        .unwrap();
+    project
+        .merge_stations(StationRef::new(d, 0), StationRef::new(k, 0))
+        .unwrap();
+    project
+        .set_zero_datum(StationRef::new(o, 0), gps())
+        .unwrap();
+    let gap = dist(
+        xy(&project, StationRef::new(k, 0)),
+        xy(&project, StationRef::new(o, 0)),
+    );
+    assert!(gap < 1e-9, "setup: the two starts are {gap} m apart");
+    project.combine_sections(k, o, &options()).unwrap();
+    let violations = project.check_structural_integrity();
+    assert!(violations.is_empty(), "{violations:?}");
+}

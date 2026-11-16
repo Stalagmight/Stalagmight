@@ -43,6 +43,15 @@
 //!   would hold two.
 //!   Moving M's side tears every snapped closure from it to anything that
 //!   stays, so those become ordinary closures too.
+//! - **Both sides held, nothing moving (#754).** Two surveys from one
+//!   entrance, each with its own zero datum on the same GPS position, put the
+//!   two join stations on one point (a gap of float dust), so nothing moves.
+//!   The joined station still unites the two sides' merge groups, so the
+//!   merges from M to its datum sides tear exactly as for a shift, from the
+//!   same M (the other section, unless it carries a datum itself): the rule
+//!   does not depend on the gap, and the dialog lists them before the
+//!   confirm. A merged join, or a loop between the two sections, already
+//!   has both sides in one merge group, where one datum at most holds them.
 
 use std::collections::{HashMap, HashSet};
 
@@ -387,6 +396,27 @@ impl Project {
                 &datum_sections,
                 anchor,
             )?
+        } else if datum_sections.len() >= 2
+            && Self::free_sides(join, &loop_ties, &adjacency_without, &anchored, None).is_empty()
+        {
+            // Nothing moves, but zero datums hold both sides (#754): two
+            // surveys from one entrance, each with its own datum on the same
+            // GPS position, put the two join stations on one point. The
+            // joined station unites the two sides' merge groups whether or
+            // not anything moves, so the merges a shift would tear for the
+            // datums tear here too, from the same section (the other one,
+            // unless it carries a datum itself): one group holds one datum,
+            // and the rule does not depend on the gap. Two datum sections at
+            // least, or one datum holds both sides only through a loop the
+            // combine opens (a free side is left then).
+            let (moving, fixed, torn, held, _) = Self::tear_datum_sides(
+                join,
+                &loop_ties,
+                &adjacency_without,
+                &anchored,
+                &datum_sections,
+            )?;
+            (moving, fixed, torn, held, None)
         } else {
             // Nothing moves (the two join stations are one point already, to
             // float dust): only the loops the combine would close inside one
@@ -429,6 +459,7 @@ impl Project {
         if !shifting {
             return Ok(TiePlan {
                 torn: torn_ties,
+                held_by_datum,
                 kept_offset_wins: true,
                 dropped,
                 replaced,
@@ -619,7 +650,8 @@ impl Project {
     /// - otherwise the other section's side moves.
     ///
     /// With both sides held by datums, the moving section (one that carries
-    /// no datum itself) also tears its merges towards its datum sides.
+    /// no datum itself) also tears its merges towards its datum sides
+    /// ([`Self::tear_datum_sides`]).
     fn pick_moving_side(
         join: &JoinPoint,
         loop_ties: &dyn Fn(SectionId, SectionId) -> HashSet<TieId>,
@@ -628,17 +660,7 @@ impl Project {
         datum_sections: &HashSet<SectionId>,
         anchor: Option<SectionId>,
     ) -> Result<MovingSide, String> {
-        let sides = [(join.other, join.kept), (join.kept, join.other)];
-        // The sides no zero datum holds, in preference order.
-        let mut free: Vec<(SectionId, SectionId, HashSet<TieId>, bool)> = Vec::new();
-        for (m, f) in sides {
-            let torn = loop_ties(m, f);
-            let side = reach(&adjacency_without(&torn), m, f);
-            if !anchored(&side) {
-                let holds_anchor = anchor.is_some_and(|a| side.contains(&a));
-                free.push((m, f, torn, holds_anchor));
-            }
-        }
+        let mut free = Self::free_sides(join, loop_ties, adjacency_without, anchored, anchor);
         let pick = free
             .iter()
             .position(|(_, _, _, holds)| !holds)
@@ -653,7 +675,48 @@ impl Project {
             });
             return Ok((m, f, torn, Vec::new(), because));
         }
-        for (m, f) in sides {
+        Self::tear_datum_sides(join, loop_ties, adjacency_without, anchored, datum_sections)
+    }
+
+    /// The sides no zero datum holds, in preference order (the other
+    /// section's first): each as the section that would move, the one that
+    /// stays, the merges that tear to open the loops the combine closes, and
+    /// whether the side holds `anchor`. Empty when datums hold both sides.
+    fn free_sides(
+        join: &JoinPoint,
+        loop_ties: &dyn Fn(SectionId, SectionId) -> HashSet<TieId>,
+        adjacency_without: &dyn Fn(&HashSet<TieId>) -> Adjacency,
+        anchored: &dyn Fn(&HashSet<SectionId>) -> bool,
+        anchor: Option<SectionId>,
+    ) -> Vec<(SectionId, SectionId, HashSet<TieId>, bool)> {
+        let mut free = Vec::new();
+        for (m, f) in [(join.other, join.kept), (join.kept, join.other)] {
+            let torn = loop_ties(m, f);
+            let side = reach(&adjacency_without(&torn), m, f);
+            if !anchored(&side) {
+                let holds_anchor = anchor.is_some_and(|a| side.contains(&a));
+                free.push((m, f, torn, holds_anchor));
+            }
+        }
+        free
+    }
+
+    /// Both sides held by zero datums: the section whose merges tear (the
+    /// other one, unless it carries a datum itself, then the kept one), the
+    /// one that stays, its loop ties and its merges towards its datum sides,
+    /// which are the ties that tear for a datum. A closure may tie two
+    /// anchored groups; a merge may not, and the joined station unites the
+    /// two sides' merge groups. The plan moves that section by the gap when
+    /// there is one, and nothing when there is none (#754): the same ties
+    /// tear either way. `Err` is the refusal: both sections carry a datum.
+    fn tear_datum_sides(
+        join: &JoinPoint,
+        loop_ties: &dyn Fn(SectionId, SectionId) -> HashSet<TieId>,
+        adjacency_without: &dyn Fn(&HashSet<TieId>) -> Adjacency,
+        anchored: &dyn Fn(&HashSet<SectionId>) -> bool,
+        datum_sections: &HashSet<SectionId>,
+    ) -> Result<MovingSide, String> {
+        for (m, f) in [(join.other, join.kept), (join.kept, join.other)] {
             if datum_sections.contains(&m) {
                 continue;
             }
