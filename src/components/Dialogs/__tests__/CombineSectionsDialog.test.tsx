@@ -659,6 +659,66 @@ describe('CombineSectionsDialog', () => {
     expect(screen.getByTestId('combine-note-passing')).toHaveTextContent('Main-B passes through the join');
   });
 
+  it('lists what moves with the joined station right after the hand-move note (#755)', () => {
+    sections = [...creditedSections(), { id: 7, name: 'Side', color: '#333333', direction: 'in', shots: shots(1) }];
+    const joined = (shift_m: number) => ({
+      station: { section_id: 5, station_index: 0 },
+      sections: [7],
+      shift_m,
+    });
+    dialogData = {
+      candidate: candidate({
+        branches: [7],
+        plan_keeping_a: quietPlan(2, {
+          moving_section: 5,
+          moved_sections: [5],
+          join_offset_change_m: 0.3,
+          moved_with_joined_station: joined(0.3),
+        }),
+        plan_keeping_b: quietPlan(5, { moved_with_joined_station: joined(0.0006) }),
+      }),
+    };
+    render(<CombineSectionsDialog />);
+    expect(screen.getByTestId('combine-note-joined-moves')).toHaveTextContent(
+      'Side is merged at 5:0 and moves 0.30m with the joined station, so it stays merged to it.'
+    );
+    const order = Array.from(screen.getByTestId('combine-plan-notes').querySelectorAll('li')).map((li) =>
+      li.getAttribute('data-testid')
+    );
+    expect(order.indexOf('combine-note-joined-moves')).toBe(order.indexOf('combine-note-offset') + 1);
+    // Under the side-by-side tolerance, with no tie torn, it is not listed,
+    // as a move of the side is not.
+    fireEvent.click(screen.getByTestId('combine-swap-kept'));
+    expect(screen.queryByTestId('combine-note-joined-moves')).toBeNull();
+  });
+
+  it('lists a joined move under 1 mm beside the tie it tears (#755)', () => {
+    sections = [...creditedSections(), { id: 7, name: 'Side', color: '#333333', direction: 'in', shots: shots(1) }];
+    dialogData = {
+      candidate: candidate({
+        branches: [7],
+        plan_keeping_a: quietPlan(2, {
+          moving_section: 5,
+          moved_sections: [5],
+          torn_ties: [
+            {
+              station_a: { section_id: 7, station_index: 1 },
+              station_b: { section_id: 5, station_index: 1 },
+              kind: 'snapped_closure',
+              reason: 'loop',
+            },
+          ],
+          moved_with_joined_station: { station: { section_id: 5, station_index: 0 }, sections: [7], shift_m: 0.0006 },
+        }),
+      }),
+    };
+    render(<CombineSectionsDialog />);
+    expect(screen.getByTestId('combine-note-joined-moves')).toHaveTextContent(
+      'Side is merged at 5:0 and moves 0.0006m with the joined station, so it stays merged to it.'
+    );
+    expect(screen.getByTestId('combine-note-torn')).toBeInTheDocument();
+  });
+
   it('folds everything informational under Details, closed until opened', () => {
     dialogData = { candidate: candidate({ branches: [7], depth_difference_m: 0.3 }) };
     sections = [...creditedSections(), { id: 7, name: 'Side', color: '#333333', direction: 'in', shots: shots(1) }];

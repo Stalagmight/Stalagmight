@@ -8,7 +8,12 @@ import type { CombineRemovedKind } from '../../types/ipc/CombineRemovedKind';
 import type { CombineReplacedKind } from '../../types/ipc/CombineReplacedKind';
 import type { SectionId, StationRef } from '../../types/project';
 import { formatLength } from '../../utils/formatStats';
-import { combineMoveIsSmall, combineMoveShown, formatRotation } from '../../utils/combineSections';
+import {
+  COMBINE_SIDE_BY_SIDE_M,
+  combineMoveIsSmall,
+  combineMoveShown,
+  formatRotation,
+} from '../../utils/combineSections';
 
 interface CombinePlanNotesProps {
   candidate: CombineCandidate;
@@ -26,7 +31,8 @@ interface CombinePlanNotesProps {
 /**
  * Everything a combine changes besides joining the shots, for the kept
  * section the dialog currently shows (the backend's `CombinePlan`): the side
- * that moves and how far, the ties that become loop closures, the ties
+ * that moves and how far (and what moves with the joined station instead,
+ * #755), the ties that become loop closures, the ties
  * removed because as closures they would join the two ends of one shot
  * (#746), the closures replaced by a loop closure on the same two stations
  * that the Closures Computed View adjusts (#749), converted bearings, the
@@ -115,6 +121,21 @@ export function CombinePlanNotes({
         fixed: fixedName,
         moving: movedName,
         distance: distance(plan.join_offset_change_m),
+      }),
+    });
+  }
+  // What is merged at the join station whose hand move the joined station
+  // does not keep moves with the joined station (#755), listed as a move of
+  // the side is: under the side-by-side tolerance only beside a torn tie.
+  const joined = plan.moved_with_joined_station;
+  if (joined && (joined.shift_m > COMBINE_SIDE_BY_SIDE_M || plan.torn_ties.length > 0)) {
+    notes.push({
+      key: 'joined-moves',
+      text: t('dialogs.combineSections.joinedMoves', {
+        names: listNames(joined.sections),
+        count: joined.sections.length,
+        station: stationLabel(joined.station),
+        distance: formatLength(joined.shift_m, lengthUnit, joined.shift_m <= COMBINE_SIDE_BY_SIDE_M ? 4 : 2),
       }),
     });
   }

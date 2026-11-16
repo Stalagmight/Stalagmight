@@ -1737,6 +1737,8 @@
       "rotationZero": "{{other}}'s bearings keep their values and follow {{kept}}'s north reference from now on.",
       "quality": "The combined section keeps {{kept}}'s quality factor ({{keptQuality}}); {{other}}'s was {{otherQuality}}.",
       "offset": "The two join stations were moved by hand by different amounts. The joined station keeps {{fixed}}'s, so {{moving}}'s end moves {{distance}}.",
+      "joinedMoves_one": "{{names}} is merged at {{station}} and moves {{distance}} with the joined station, so it stays merged to it.",
+      "joinedMoves_other": "{{names}} are merged at {{station}} and move {{distance}} with the joined station, so they stay merged to it.",
       "repeatedIds_one": "{{count}} of {{other}}'s shots has the same identity as one of {{kept}}'s, and gets a new one.",
       "repeatedIds_other": "{{count}} of {{other}}'s shots have the same identity as shots of {{kept}}, and get new ones.",
       "passingNote_one": "{{names}} passes through the join and stays merged to the joined station, a crossing.",

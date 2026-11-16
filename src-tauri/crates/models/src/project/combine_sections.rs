@@ -15,7 +15,9 @@
 //!   the kept side when a zero datum or the closure-adjusted view's anchor
 //!   holds the other; see `combine_plan.rs`) moves by the gap at the
 //!   join: a loop closure's misclosure, or a co-located or merged pair's
-//!   residual.
+//!   residual; what is merged at its join station moves with the joined
+//!   station instead, when the two join stations were moved by hand by
+//!   different amounts (#755).
 //!
 //! Then the join. The KEPT section keeps its id, its shot ids, its direction,
 //! its station 0 orientation and (unless it is the side that moves) its exact
@@ -31,7 +33,8 @@
 //!   the joined station to itself), go;
 //! - a comment or name both carry is kept once if identical, otherwise per
 //!   the dialog's choice (kept, other, or both joined);
-//! - the fixed side's manual offset (or none) wins, the other's is dropped;
+//! - the fixed side's manual offset (or none) wins, the other's is dropped
+//!   (and what is merged to the other moved onto the joined station, above);
 //! - a zero datum on either (never both) and closures to other stations move
 //!   onto the joined station.
 //!
@@ -408,22 +411,44 @@ impl Project {
             .into_iter()
             .collect();
         let mut remeasure: HashSet<u64> = torn_into.keys().copied().collect();
-        if !setup.ties.moved.is_empty() {
-            let moved: HashSet<SectionId> = setup.ties.moved.iter().copied().collect();
-            // A closure with one end on the side that moves changes length.
+        // Each section that moves, by how much: the moving side by the shift,
+        // what is merged at the join station whose hand move is dropped by
+        // that station's move onto the joined station (#755).
+        let mut moves: HashMap<SectionId, (f64, f64)> = setup
+            .ties
+            .moved
+            .iter()
+            .map(|id| (*id, setup.ties.shift))
+            .collect();
+        if let Some((_, toward)) = setup.ties.dropped_hand_move {
+            moves.extend(setup.ties.joined_moved.iter().map(|id| (*id, toward)));
+        }
+        // A closure whose two ends move apart changes length: each end moves
+        // with its section, except the join station whose hand move is
+        // dropped, which lands on the joined station by its own move, also
+        // when its section does not move at all.
+        let dropped = setup.ties.dropped_hand_move;
+        let station_move = |project: &Project, key: &StationKey| -> (f64, f64) {
+            match (dropped, project.resolve_key(key)) {
+                (Some((station, toward)), Some(at)) if at == station => toward,
+                _ => moves.get(&key.section_id).copied().unwrap_or((0.0, 0.0)),
+            }
+        };
+        if !moves.is_empty() || dropped.is_some() {
             remeasure.extend(
                 self.loop_closures
                     .iter()
                     .filter(|c| {
-                        moved.contains(&c.station_a.section_id)
-                            != moved.contains(&c.station_b.section_id)
+                        station_move(self, &c.station_a) != station_move(self, &c.station_b)
                     })
                     .map(|c| c.id),
             );
-            let (dx, dy) = setup.ties.shift;
-            for id in &setup.ties.moved {
-                self.adjust_section_offset(*id, dx, dy);
-            }
+        }
+        let mut ids: Vec<SectionId> = moves.keys().copied().collect();
+        ids.sort_unstable();
+        for id in ids {
+            let (dx, dy) = moves[&id];
+            self.adjust_section_offset(id, dx, dy);
         }
         (remeasure, torn_into)
     }

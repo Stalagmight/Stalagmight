@@ -70,6 +70,7 @@ export * from './ipc/CombineSectionsOptions';
 export * from './ipc/CombineJoinEnds';
 export * from './ipc/CombineJoinKind';
 export * from './ipc/CombinePlan';
+export * from './ipc/CombineJoinedMove';
 export * from './ipc/CombineRemovedClosure';
 export * from './ipc/CombineRemovedKind';
 export * from './ipc/CombineReplacedClosure';

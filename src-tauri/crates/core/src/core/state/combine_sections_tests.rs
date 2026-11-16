@@ -1638,3 +1638,165 @@ fn a_side_by_side_combine_keeps_merged_stations_together_through_a_reopen() {
         assert!(apart(*p, *q) < 1e-9, "the reopen moved {a:?}");
     }
 }
+
+/// Every station of every section, as shown.
+fn shown_stations(state: &AppState) -> Vec<(StationRef, (f64, f64))> {
+    let project = state.get_project_state().unwrap();
+    project
+        .sections
+        .iter()
+        .flat_map(|s| (0..=s.shots.len() as u32).map(move |i| StationRef::new(s.id, i)))
+        .map(|at| {
+            let c = project.compute_station_raw_coords(at).unwrap();
+            (at, (c.x, c.y))
+        })
+        .collect()
+}
+
+/// #755 through the command, with the hand move read from a file as an
+/// older one carries it (no command makes a manual station offset): K's end
+/// and O's start side by side, O's start moved 0.3 m east and 0.2 m down by
+/// hand, T merged to it. The joined station keeps K's hand move (none), so
+/// the plan moves T with it by the 0.3 m; the command's result is exactly
+/// that, with T on the joined station (the repair after the edit has
+/// nothing to move) and no shot changed, one Undo restores every byte and
+/// Redo repeats it, and a save and a reopen move nothing.
+#[test]
+fn a_hand_moved_join_station_keeps_its_branch_through_undo_and_a_reopen() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let path = temp.path().join("hand-moved.stalx");
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Hand moved".to_string(),
+        location: None,
+    });
+    // Level shots, each section at its own depth: K 2 m, O 3 m, T 5 m.
+    let level = |azimuth: f64, length: f64, depth: f64| ShotData {
+        depth_in: depth,
+        depth_out: depth,
+        ..shot(azimuth, length)
+    };
+    let k = create(&state, "K", vec![level(90.0, 10.0, 2.0)]);
+    let o = create(&state, "O", vec![level(90.0, 10.0, 3.0)]);
+    let t = create(&state, "T", vec![level(0.0, 5.0, 5.0)]);
+    {
+        let mut guard = state.project.lock().unwrap();
+        let project = guard.as_mut().unwrap();
+        project.set_section_offset(o, (10.0, 0.0));
+        project.set_section_offset(t, (10.3, 0.0));
+        let key = project.key_for_ref(StationRef::new(o, 0)).unwrap();
+        project.station_offsets.insert(key, (0.3, 0.0, 0.2));
+    }
+    let merged = state.execute(Command::MergeStations {
+        station_a: StationRef::new(o, 0),
+        station_b: StationRef::new(t, 0),
+    });
+    assert!(merged.success, "{:?}", merged.error);
+    assert!(
+        state
+            .execute(Command::SaveProject {
+                path: Some(path.clone())
+            })
+            .success
+    );
+    assert!(state.execute(Command::CloseProject).success);
+    assert!(state.open_project(path.clone()).success, "reopen");
+
+    let project = state.get_project_state().unwrap();
+    assert_eq!(
+        project.station_offset_for_ref(StationRef::new(o, 0)),
+        Some((0.3, 0.0, 0.2)),
+        "the hand move comes from the file"
+    );
+    let depth = |project: &crate::models::Project, at: StationRef| {
+        project.compute_station_raw_coords(at).unwrap().z
+    };
+    // O's start and T's read the average of their two readings, O's start
+    // plus its hand move in depth.
+    assert!((depth(&project, StationRef::new(o, 0)) - 4.2).abs() < 1e-9);
+    assert!((depth(&project, StationRef::new(t, 0)) - 4.0).abs() < 1e-9);
+    let candidate = project.combine_candidate_for_sections(k, o).unwrap();
+    let plan = &candidate.plan_keeping_a;
+    assert_eq!(plan.moved_sections, vec![o]);
+    assert!(plan.shift_m < 1e-9, "the chain gap is 0: {}", plan.shift_m);
+    let joined = plan.moved_with_joined_station.clone().unwrap();
+    assert_eq!(joined.sections, vec![t], "T moves with the joined station");
+    assert!((joined.shift_m - 0.3).abs() < 1e-9, "{}", joined.shift_m);
+    let before = snapshot(&state);
+    let was = shown_stations(&state);
+    // The combine alone, without the command's repair after it.
+    let mut planned = project;
+    planned.combine_sections(k, o, &options()).unwrap();
+
+    let result = state.execute_combine_sections(k, o, options());
+    assert!(result.success, "{:?}", result.error);
+    assert_eq!(
+        state.get_project_state().unwrap().section_offsets,
+        planned.section_offsets,
+        "the repair after the edit moved a section: the combine left a merge open"
+    );
+    let now: std::collections::HashMap<StationRef, (f64, f64)> =
+        shown_stations(&state).into_iter().collect();
+    let dist = |a: (f64, f64), b: (f64, f64)| (a.0 - b.0).hypot(a.1 - b.1);
+    // K stays, O's start lands on K's end and its far end stays, T moves the
+    // 0.3 m with the joined station and stays on it.
+    for (at, want) in [
+        (StationRef::new(k, 0), (0.0, 0.0)),
+        (StationRef::new(k, 1), (10.0, 0.0)),
+        (StationRef::new(k, 2), (20.0, 0.0)),
+        (StationRef::new(t, 0), (10.0, 0.0)),
+        (StationRef::new(t, 1), (10.0, 5.0)),
+    ] {
+        assert!(dist(now[&at], want) < 1e-9, "{at:?} at {:?}", now[&at]);
+    }
+    let was: std::collections::HashMap<StationRef, (f64, f64)> = was.into_iter().collect();
+    let t0 = StationRef::new(t, 0);
+    assert!(
+        (dist(now[&t0], was[&t0]) - joined.shift_m).abs() < 1e-9,
+        "T moved as planned, no more"
+    );
+    let combined = state.get_project_state().unwrap();
+    assert!(
+        combined.station_offsets.is_empty(),
+        "the joined station keeps K's hand move: none"
+    );
+    let lengths: Vec<f64> = combined.sections[0]
+        .shots
+        .iter()
+        .map(|s| s.length)
+        .collect();
+    assert_eq!(lengths, vec![10.0, 10.0], "no shot changes");
+    // The joined station and T read the average of the three readings there
+    // (K's, O's, T's); the joined station keeps K's hand move in depth, none,
+    // so O's 0.2 m goes with the rest of its hand move.
+    let joined_depth = (2.0 + 3.0 + 5.0) / 3.0;
+    for at in [StationRef::new(k, 1), t0] {
+        let now = depth(&combined, at);
+        assert!((now - joined_depth).abs() < 1e-9, "{at:?} at depth {now}");
+    }
+    assert!(combined.check_structural_integrity().is_empty());
+    let after = snapshot(&state);
+
+    assert!(state.undo().success);
+    assert_eq!(snapshot(&state), before, "one undo restores every byte");
+    assert!(state.redo().success);
+    assert_eq!(snapshot(&state), after, "redo repeats every byte");
+
+    let shown = shown_stations(&state);
+    assert!(state.execute(Command::SaveProject { path: None }).success);
+    assert!(state.execute(Command::CloseProject).success);
+    assert!(state.open_project(path).success, "reopen after the combine");
+    let reopened: std::collections::HashMap<StationRef, (f64, f64)> =
+        shown_stations(&state).into_iter().collect();
+    for (at, p) in shown {
+        assert!(dist(reopened[&at], p) < 1e-9, "the reopen moved {at:?}");
+    }
+    let reopened = state.get_project_state().unwrap();
+    for at in [StationRef::new(k, 1), t0] {
+        let now = depth(&reopened, at);
+        assert!(
+            (now - joined_depth).abs() < 1e-9,
+            "reopened, {at:?} at depth {now}"
+        );
+    }
+}

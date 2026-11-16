@@ -43,11 +43,27 @@
 //!   would hold two.
 //!   Moving M's side tears every snapped closure from it to anything that
 //!   stays, so those become ordinary closures too.
+//! - **Hand moves at the join (#755).** A manual station offset moves one
+//!   station as shown and nothing beyond it, and the joined station keeps
+//!   only one: the fixed side's. When the two join stations' offsets differ,
+//!   the side that moves goes by the chain gap (the combined section hangs
+//!   the other section's stations off the kept join station's chain), but
+//!   the join station whose offset is dropped lands on the joined station as
+//!   shown, which is the gap between the two as shown away. The sections
+//!   merged at that station (on a join that is not merged) stay merged to
+//!   the joined station, so they move with it, by that gap, and not with the
+//!   side: otherwise the offset solve closed the merge later, the in-session
+//!   repair past 1 cm and a reopen below it, moving them unannounced. They
+//!   are still on the moving side for the anchor rule (a datum there holds
+//!   that side); a snap between them and the rest of the side is torn, as
+//!   the two now move apart. Nothing is folded into the shots: the
+//!   Closures Computed View solves shots, merges and closures, never manual
+//!   offsets, so it does not move for any of this.
 
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    ClosureStrategy, CombinePlan, CombineRemovedClosure, CombineRemovedKind,
+    ClosureStrategy, CombineJoinedMove, CombinePlan, CombineRemovedClosure, CombineRemovedKind,
     CombineReplacedClosure, KeptMovesReason, LoopClosure, SectionId, StationRef, TornTie,
     TornTieKind, TornTieReason,
 };
@@ -183,6 +199,15 @@ pub(crate) struct TiePlan {
     /// that replaces it (`closure_dedupe.rs`). The dialog lists exactly
     /// these, and the combine checks it replaced exactly these.
     pub replaced: Vec<CombineReplacedClosure>,
+    /// The join station whose manual offset the joined station does not keep
+    /// (the moving side's; the other section's when nothing moves), and how
+    /// far it moves to land on the joined station as shown, when the two
+    /// join stations' offsets differ on a join that is not merged (#755).
+    pub dropped_hand_move: Option<(StationRef, (f64, f64))>,
+    /// The sections merged at that station, and what hangs off them: they
+    /// move with the joined station, by its move above, not by `shift`.
+    /// Not in `moved`.
+    pub joined_moved: Vec<SectionId>,
 }
 
 type Adjacency = HashMap<SectionId, Vec<(SectionId, TieId)>>;
@@ -252,12 +277,13 @@ impl Project {
     /// Plan the shift and the torn ties for joining `join`, whose join stations'
     /// chain positions are `gap` apart (the kept one minus the other one: the
     /// translation that brings the other section's join station onto the kept
-    /// one's), against `ties` ([`Self::rigid_ties`]). `Err` is the refusal:
-    /// both sections carry a zero datum.
+    /// one's) and, as shown (with their manual offsets), `shown` apart, against
+    /// `ties` ([`Self::rigid_ties`]). `Err` is the refusal: both sections carry
+    /// a zero datum.
     pub(crate) fn plan_ties(
         &self,
         join: &JoinPoint,
-        gap: (f64, f64),
+        (gap, shown): ((f64, f64), (f64, f64)),
         ties: &[Tie],
         facts: &ClosureFacts,
     ) -> Result<TiePlan, String> {
@@ -338,10 +364,34 @@ impl Project {
         // Float dust stays where it is: a gap within `OFFSET_DUST_M` in each
         // axis, the bound under which the offset solve corrects nothing, so
         // merged or truly coincident ends join as they always did.
-        let shifting = gap.0.is_finite()
-            && gap.1.is_finite()
-            && (gap.0.abs() > Self::OFFSET_DUST_M || gap.1.abs() > Self::OFFSET_DUST_M);
-        let (moving, fixed, mut torn, held_by_datum, kept_moves_because) = if shifting {
+        let beyond_dust =
+            |v: (f64, f64)| v.0.abs() > Self::OFFSET_DUST_M || v.1.abs() > Self::OFFSET_DUST_M;
+        let finite = [gap.0, gap.1, shown.0, shown.1]
+            .iter()
+            .all(|v| v.is_finite());
+        // The two join stations' hand moves (manual offsets) differ (#755): the
+        // joined station keeps one, so the other join station lands on it by
+        // the gap as shown. Exactly: `shown` is `gap` itself when the two
+        // agree, and whether anything moves is decided on the gap it moves by
+        // below, so what is merged there lands on the joined station whenever
+        // anything moves and stays within float dust of it otherwise. A merged
+        // join's stations are one point already, and all that is merged there
+        // are join ties, which never move.
+        let carried = finite && !join.merged && shown != gap;
+        // What is merged at a join station (a third section) moves with the
+        // joined station when that station's hand move is dropped, so a side
+        // moves when the gap as shown is past dust too, even with none in the
+        // chain: the anchor rule picks which, as for a shift.
+        let third = |group: &HashSet<StationRef>| {
+            group
+                .iter()
+                .any(|at| at.section_id != join.kept && at.section_id != join.other)
+        };
+        let carries_branches =
+            carried && beyond_dust(shown) && (third(&join.group_k) || third(&join.group_o));
+        let gap_moves = finite && beyond_dust(gap);
+        let shifting = gap_moves || (finite && carries_branches);
+        let (moving, fixed, torn, held_by_datum, kept_moves_because) = if shifting {
             // What the closure-adjusted view holds the survey at: the side that
             // holds it must stay, or the whole cave shifts there by the gap.
             // Only when that view adjusts the joined survey: it solves a
@@ -399,11 +449,111 @@ impl Project {
                 None,
             )
         };
+        // The side whose join station's hand move the joined station drops,
+        // and that station.
+        let picked = moving;
+        let dropped_at = if picked == join.kept {
+            join.join_k
+        } else {
+            join.join_o
+        };
+        // What is merged there moves with the joined station: each third
+        // section still merged at it once the plan's ties tear, and what hangs
+        // off it, never through the moving section. Merges form a forest
+        // (`merge_stations` refuses a loop), so that is all of it; but nothing
+        // breaks a merge loop an older or hand-edited file holds, and a part
+        // merged at the dropped station that is also merged to the moving
+        // section at another station cannot follow both. It stays with its
+        // side, and its merge at the join becomes a loop closure carrying the
+        // two hand moves' difference as its misclosure, as a loop the combine
+        // closes through the combined section does.
+        let (joined, looped): (HashSet<SectionId>, HashSet<TieId>) = if carried && shifting {
+            let adjacency = adjacency_without(&torn);
+            let side = reach(&adjacency, moving, fixed);
+            let kept_merges = || merges.iter().filter(|t| !torn.contains(&t.id));
+            let mut joined = HashSet::new();
+            let mut looped = HashSet::new();
+            for tie in kept_merges() {
+                let partner = if tie.a == dropped_at {
+                    tie.b
+                } else if tie.b == dropped_at {
+                    tie.a
+                } else {
+                    continue;
+                };
+                if partner.section_id == moving || partner.section_id == fixed {
+                    continue;
+                }
+                let part = reach(&adjacency, partner.section_id, moving);
+                let back = kept_merges().any(|t| {
+                    (part.contains(&t.a.section_id)
+                        && t.b.section_id == moving
+                        && t.b != dropped_at)
+                        || (part.contains(&t.b.section_id)
+                            && t.a.section_id == moving
+                            && t.a != dropped_at)
+                });
+                if back {
+                    looped.insert(tie.id);
+                } else {
+                    joined.extend(part);
+                }
+            }
+            joined.retain(|s| side.contains(s) && *s != moving && *s != fixed);
+            (joined, looped)
+        } else {
+            (HashSet::new(), HashSet::new())
+        };
+        // The other section's side, picked only to carry what is merged at its
+        // join station, with nothing left there to carry (none there, its
+        // merge torn to close a loop, or one of a merge loop): nothing moves
+        // after all. (The kept side picked goes on moving, by the float dust
+        // of the chain gap: the plan then says the joined station keeps the
+        // other's hand move, which it does.)
+        let idle = shifting && !gap_moves && picked == join.other && joined.is_empty();
+        let (shifting, moving, fixed, mut torn, held_by_datum, kept_moves_because) = if idle {
+            let torn = loop_ties(join.other, join.kept);
+            (false, join.other, join.kept, torn, Vec::new(), None)
+        } else {
+            (
+                shifting,
+                moving,
+                fixed,
+                torn,
+                held_by_datum,
+                kept_moves_because,
+            )
+        };
+        torn.extend(looped);
         let side = reach(&adjacency_without(&torn), moving, fixed);
         // Snapped closures: one across the two sides closes a loop through the
         // combined section, and any from a side that moves stops being snapped.
         let snaps = snaps_torn(moving, fixed, &torn, shifting);
         torn.extend(snaps);
+        // A snap between what moves with the joined station and the rest of
+        // the side: the two move apart now.
+        if !joined.is_empty() {
+            let apart: HashSet<TieId> = ties
+                .iter()
+                .filter(|t| matches!(t.id, TieId::Closure(_)) && !join.is_join_tie(t.a, t.b))
+                .filter(|t| {
+                    let (a, b) = (t.a.section_id, t.b.section_id);
+                    (joined.contains(&a) && side.contains(&b) && !joined.contains(&b))
+                        || (joined.contains(&b) && side.contains(&a) && !joined.contains(&a))
+                })
+                .map(|t| t.id)
+                .collect();
+            torn.extend(apart);
+        }
+        // The dropped station's move onto the joined station as shown.
+        let dropped_hand_move = carried.then(|| {
+            let toward = if dropped_at == join.join_o {
+                shown
+            } else {
+                (-shown.0, -shown.1)
+            };
+            (dropped_at, toward)
+        });
 
         let torn_ties: Vec<Tie> = ties
             .iter()
@@ -427,15 +577,25 @@ impl Project {
             Vec::new()
         };
         if !shifting {
+            // Nothing moves only with the other section picked (the plain
+            // rule, or idle above), so the joined station keeps the kept one's
+            // hand move, as it always did.
+            debug_assert_eq!(picked, join.other, "a still plan picked the kept side");
             return Ok(TiePlan {
                 torn: torn_ties,
                 kept_offset_wins: true,
                 dropped,
                 replaced,
+                dropped_hand_move,
                 ..TiePlan::default()
             });
         }
-        let mut moved: Vec<SectionId> = side.into_iter().filter(|s| *s != moving).collect();
+        let mut moved: Vec<SectionId> = side
+            .into_iter()
+            .filter(|s| *s != moving && !joined.contains(s))
+            .collect();
+        let mut joined_moved: Vec<SectionId> = joined.into_iter().collect();
+        joined_moved.sort_unstable();
         moved.sort_unstable();
         moved.insert(0, moving);
         let sign = if moving == join.other { 1.0 } else { -1.0 };
@@ -449,6 +609,8 @@ impl Project {
             kept_offset_wins: moving == join.other,
             dropped,
             replaced,
+            dropped_hand_move,
+            joined_moved,
         })
     }
 
@@ -730,6 +892,16 @@ impl Project {
                     .collect()
             }),
             closures_replaced: (!plan.replaced.is_empty()).then(|| plan.replaced.clone()),
+            moved_with_joined_station: match plan.dropped_hand_move {
+                Some((station, (dx, dy))) if !plan.joined_moved.is_empty() => {
+                    Some(CombineJoinedMove {
+                        station,
+                        sections: plan.joined_moved.clone(),
+                        shift_m: dx.hypot(dy),
+                    })
+                }
+                _ => None,
+            },
         }
     }
 

@@ -2019,3 +2019,45 @@ fn a_side_by_side_combine_keeps_merged_stations_together() {
         "reopening moved the combined section {moved:.6} m"
     );
 }
+
+/// #755: K's end and O's start side by side, O's start moved 0.6 mm east by
+/// hand (a manual offset) and T merged to it. The joined station keeps K's
+/// offset (none) and drops O's; T moved only with O's side, by the chain gap
+/// (0), and was left 0.6 mm from the station it is merged to, which a reopen
+/// then closed. T moves with the joined station now.
+#[test]
+fn a_hand_moved_join_station_keeps_its_branch_merged() {
+    let mut project = Project::new("Offset".to_string(), None);
+    let k = add(&mut project, "K", vec![shot(90.0, 10.0)]);
+    let o = add(&mut project, "O", vec![shot(90.0, 10.0)]);
+    let t = add(&mut project, "T", vec![shot(0.0, 5.0)]);
+    project.set_section_offset(o, (10.0, 0.0));
+    let key = project.key_for_ref(StationRef::new(o, 0)).unwrap();
+    project.station_offsets.insert(key, (0.0006, 0.0, 0.0));
+    project.set_section_offset(t, (10.0006, 0.0));
+    project
+        .merge_stations(StationRef::new(o, 0), StationRef::new(t, 0))
+        .unwrap();
+    let gap = dist(
+        xy(&project, StationRef::new(k, 1)),
+        xy(&project, StationRef::new(t, 0)),
+    );
+    assert!((gap - 0.0006).abs() < 1e-9, "setup: {gap} m");
+    project.combine_sections(k, o, &options()).unwrap();
+    // O's start is K's station 1 now, still merged to T's start.
+    let joined = dist(
+        xy(&project, StationRef::new(k, 1)),
+        xy(&project, StationRef::new(t, 0)),
+    );
+    let mut reopened = project.clone();
+    reopened.redrive_offsets_after_load();
+    let moved = [StationRef::new(k, 0), StationRef::new(t, 1)]
+        .into_iter()
+        .map(|at| dist(xy(&project, at), xy(&reopened, at)))
+        .fold(0.0, f64::max);
+    assert!(
+        joined < 1e-6,
+        "merged stations {joined:.6} m apart after the combine"
+    );
+    assert!(moved < 1e-6, "reopening moved a station {moved:.6} m");
+}
