@@ -119,6 +119,12 @@ mod combine_sections_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod combine_snap_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
     clippy::panic,
     reason = "test module: panics on a failed assumption are the point"
 )]

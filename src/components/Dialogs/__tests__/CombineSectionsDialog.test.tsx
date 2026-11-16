@@ -352,7 +352,7 @@ describe('CombineSectionsDialog', () => {
     );
     expect(screen.getAllByTestId(/^combine-torn-tie-/).map(tieText)).toEqual([
       'The snapped closure between [section Main-A] [station 2:0] and [section Section 9] [station 9:0]',
-      'The merge of [section Main-B] [station 5:2] and [section Section 8] [station 8:0] [section Section 8] is held by a zero datum and stays where it is.',
+      'The merge of [section Main-B] [station 5:2] and [section Section 8] [station 8:0] . [section Section 8] is held by a zero datum and stays where it is.',
     ]);
     // Hovering a station pill rings it on the map; clicking selects it.
     fireEvent.mouseEnter(screen.getAllByTestId('combine-tie-station-5-2')[0]!);
@@ -632,6 +632,89 @@ describe('CombineSectionsDialog', () => {
     for (const id of ['combine-note-move', 'combine-note-move-with', 'combine-note-kept-moves', 'combine-note-torn']) {
       expect(screen.queryByTestId(id)).toBeNull();
     }
+  });
+
+  /** A tie the plan tears, between `a` and `b`, for `reason`. */
+  const tornTie = (kind: string, a: [number, number], b: [number, number], reason: string) => ({
+    station_a: { section_id: a[0], station_index: a[1] },
+    station_b: { section_id: b[0], station_index: b[1] },
+    kind,
+    reason,
+  });
+
+  it('on a shift, names the section a zero datum holds for a snap torn for it, and claims no loop (#756)', () => {
+    // Zero datums hold both sides and Main-B moves across the loop closure:
+    // its merge to Section 9 (D, its datum side) becomes a loop closure, and
+    // so does its snap into D, because D's datum keeps D where it is. The
+    // dialog names the end that does not move (D's, here first on the snap,
+    // as the snap dialog stores it). Neither tears to open a loop the combine
+    // closes, so no paragraph says the loop's misclosure moves to it.
+    const shift = (kept: number, torn: unknown[]) =>
+      quietPlan(kept, {
+        moving_section: 5,
+        kept_moves_because: kept === 5 ? 'zero_datum' : null,
+        moved_sections: [5],
+        shift_m: 11.5,
+        torn_ties: torn,
+      });
+    dialogData = {
+      candidate: candidate({
+        join_kind: 'closure',
+        plan_keeping_a: shift(2, [
+          tornTie('merge', [5, 2], [9, 0], 'zero_datum'),
+          tornTie('snapped_closure', [9, 1], [5, 1], 'zero_datum'),
+        ]),
+        // The snap alone torn for the datum.
+        plan_keeping_b: shift(5, [tornTie('snapped_closure', [9, 1], [5, 1], 'zero_datum')]),
+      }),
+    };
+    render(<CombineSectionsDialog />);
+    expect(screen.getByTestId('combine-note-move')).toHaveTextContent(
+      'Main-B moves 11.50m horizontally so the two ends meet, closing the loop here.'
+    );
+    expect(screen.getAllByTestId(/^combine-torn-tie-/).map(tieText)).toEqual([
+      'The merge of [section Main-B] [station 5:2] and [section Section 9] [station 9:0] . [section Section 9] is held by a zero datum and stays where it is.',
+      'The snapped closure between [section Section 9] [station 9:1] and [section Main-B] [station 5:1] . [section Section 9] is held by a zero datum and stays where it is.',
+    ]);
+    expect(screen.queryByTestId('combine-torn-why')).toBeNull();
+    fireEvent.click(screen.getByTestId('combine-swap-kept'));
+    expect(screen.getAllByTestId(/^combine-torn-tie-/).map(tieText)).toEqual([
+      'The snapped closure between [section Section 9] [station 9:1] and [section Main-B] [station 5:1] . [section Section 9] is held by a zero datum and stays where it is.',
+    ]);
+    expect(screen.queryByTestId('combine-torn-why')).toBeNull();
+  });
+
+  it('keeps the loop paragraph for a loop tie beside a snap torn for a zero datum (#756)', () => {
+    // Main-B moves: its snap into D tears for D's datum, and its snap across
+    // to Section 7 (merged to Main-A) closes a loop through the combined
+    // section. Only the snap into D says D is held; the paragraph under the
+    // list, about the loop, stays.
+    dialogData = {
+      candidate: candidate({
+        join_kind: 'closure',
+        plan_keeping_a: quietPlan(2, {
+          moving_section: 5,
+          moved_sections: [5],
+          shift_m: 11.5,
+          torn_ties: [
+            tornTie('snapped_closure', [5, 1], [9, 1], 'zero_datum'),
+            tornTie('snapped_closure', [5, 0], [7, 1], 'loop'),
+          ],
+        }),
+      }),
+    };
+    sections = [
+      ...creditedSections(),
+      { id: 7, name: 'Side', color: '#333333', direction: 'in', shots: shots(1) },
+    ];
+    render(<CombineSectionsDialog />);
+    expect(screen.getAllByTestId(/^combine-torn-tie-/).map(tieText)).toEqual([
+      'The snapped closure between [section Main-B] [station 5:1] and [section Section 9] [station 9:1] . [section Section 9] is held by a zero datum and stays where it is.',
+      'The snapped closure between [section Main-B] [station 5:0] and [section Side] [station 7:1]',
+    ]);
+    expect(screen.getByTestId('combine-torn-why').textContent).toBe(
+      "The loop's misclosure moves to the new closure, and the Closures Computed View adjusts it like any other loop."
+    );
   });
 
   it('lists converted bearings, the kept quality and offset, renewed shot ids and crossings', () => {
