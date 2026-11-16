@@ -1199,7 +1199,7 @@ export default function DmpNewImportDialog({
         if (current === excluded) continue;
         if (visited.has(current)) continue;
         visited.add(current);
-        if (project.zero_datums.some((zd) => zd.station_ref.section_id === current)) {
+        if (project.zero_datums.some((zd) => zd.role === 'Placement' && zd.station_ref.section_id === current)) {
           return true;
         }
         for (const m of project.station_merges) {
@@ -1240,7 +1240,7 @@ export default function DmpNewImportDialog({
     const anchors: number[] = [];
 
     for (const zd of project.zero_datums) {
-      if (zd.station_ref.section_id === sid) anchors.push(zd.station_ref.station_index);
+      if (zd.role === 'Placement' && zd.station_ref.section_id === sid) anchors.push(zd.station_ref.station_index);
     }
     for (const m of project.station_merges) {
       if (m.station_a.section_id === sid && hasDatumPathExcluding(m.station_b.section_id, sid)) {

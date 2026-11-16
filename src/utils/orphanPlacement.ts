@@ -42,7 +42,8 @@ export function mergeOptionsOf(s: OrphanPlacementSuggestion, orphanShotCount: nu
 
 /**
  * Whether the existing survey the repeat overlays is tied down at both ends: a
- * zero datum, or a merge / aligned closure leading to one without passing back
+ * placement zero datum (a GPS fix pins nothing in raw geometry, #741, as in the
+ * backend's import check), or a merge / aligned closure leading to one without passing back
  * through the target, at or before the repeat AND after it. Rewriting its
  * readings would then bend survey that is fixed at both ends, so the dialog
  * allows Keep existing only.
@@ -62,7 +63,7 @@ export function isRepeatDoublyAnchored(suggestion: OrphanPlacementSuggestion, pr
       if (current === excluded) continue;
       if (visited.has(current)) continue;
       visited.add(current);
-      if (project.zero_datums.some((zd) => zd.station_ref.section_id === current)) {
+      if (project.zero_datums.some((zd) => zd.role === 'Placement' && zd.station_ref.section_id === current)) {
         return true;
       }
       for (const m of project.station_merges) {
@@ -100,7 +101,7 @@ export function isRepeatDoublyAnchored(suggestion: OrphanPlacementSuggestion, pr
   // Collect anchor station indices on the target section
   const anchors: number[] = [];
   for (const zd of project.zero_datums) {
-    if (zd.station_ref.section_id === sid) anchors.push(zd.station_ref.station_index);
+    if (zd.role === 'Placement' && zd.station_ref.section_id === sid) anchors.push(zd.station_ref.station_index);
   }
   for (const m of project.station_merges) {
     if (m.station_a.section_id === sid && hasDatumPathExcluding(m.station_b.section_id, sid)) {
