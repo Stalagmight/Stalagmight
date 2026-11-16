@@ -321,6 +321,37 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
   merged stations on one point and a reload that moves nothing, and
   `side_by_side_network` plants such residuals, which the other generators,
   placing every section exactly, never reach.
+- **What is merged at a hand-moved join station moves with the joined
+  station (#755).** A manual station offset (a hand move, from an older or
+  hand-edited file; Move Station has folded its moves into the shots since
+  long before Combine, but Split Section Here, Append Project and Undo carry
+  one on) moves one station as shown and nothing beyond it, and the joined
+  station keeps one: the fixed side's. Where the two join stations' offsets
+  differ, the side that moves still goes by the chain gap, but the join
+  station whose offset is dropped lands on the joined station as shown, the
+  gap between the two as shown away from where it was. On a join that is not
+  merged, the sections merged at that station, and what hangs off them, move
+  with the joined station by that gap, not with their side (`plan_ties`,
+  `TiePlan.joined_moved`, `CombinePlan.moved_with_joined_station`). They
+  used to move with their side and were left behind by the difference, and
+  the in-session repair (`realign_merges`, past 1 cm) or a reopen
+  (`redrive_offsets_after_load`, below it) closed the merge later, moving
+  them unannounced. They still belong to their side for the anchor rule (a
+  datum there holds it), a side moves to carry them even when the chain gap
+  is float dust, and a snap between them and the rest of the side is torn,
+  as the two move apart; with nothing left merged at the dropped station
+  once the plan's ties tear, nothing moves for it. The dialog lists them
+  beside the "keeps K's, so O's end moves" note (under the side-by-side
+  tolerance only beside a torn tie, as a move of the side). A merged join
+  needs none of this: everything merged there is a join tie, one point with
+  the joined station, and the #740 residual above carries the rest. Folding
+  the two hand moves into the shots (as Move Station does) was the other
+  way: exact in the Raw Data View, but this view solves shots, merges and
+  closures, never manual offsets, so a folded hand move would enter every
+  loop through its station and move other stations here. (This view's own
+  handling of a manual offset on a station a merge or closure ties is off as
+  it is: once it solves a closure in that survey it puts the station off
+  what is tied to it, combine or not, so the sweeps do not compare it there.)
 - **Nothing is left across one shot (#746).** Once the two join stations are
   one, a tie the combine tears (a merge, or a snap made ordinary) can join the
   two ends of one shot: a one-shot passage X merged to both join stations,

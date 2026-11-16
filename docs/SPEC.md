@@ -1757,7 +1757,10 @@ it, for the section it shows as kept, before the user confirms:
   one's: the other section's stored azimuths turn by the difference, so every
   station stays where it is.
 - The kept section's quality factor wins; the fixed side's manual offset on the
-  join station wins (the dialog says how far the other moves); shots of the
+  join station wins (the dialog says how far the other moves), and a section
+  merged at the other join station, on a join that is not merged, moves with
+  the joined station (its side's shift plus the difference of the two
+  offsets), so it stays merged to it (#755; the dialog lists it); shots of the
   other section that share an identity (uuid) with the kept one's get new ones;
   a depth gap between unmerged join stations is reported, whatever its size
   (the joined station takes the average); a section with no shots is absorbed
