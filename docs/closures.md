@@ -289,6 +289,38 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
   through the combined section, or tie two anchored groups, whose promotion is
   refused), so a reload converts nothing back; the randomised sweep in
   `combine_closure_tests.rs` checks exactly that.
+- **A side-by-side residual moves a side too (#740).** Two ends side by
+  side (unmerged, within `COMBINE_TOLERANCE_M`, 1 mm) are apart by a
+  residual, and so are merged ends whose join station was moved by hand (a
+  manual station offset puts their chain positions apart). The combined
+  section hangs the other section's stations off the kept join station, so
+  one side moves by the residual whatever the plan says. The plan used to
+  move nothing under the tolerance: the other section alone moved, the
+  sections merged to it stayed, merged stations ended up as much as 1 mm
+  apart, and the reopen's offset solve (`redrive_offsets_after_load`, seeded
+  at each component's datum or lowest id) moved the combined section to close
+  them; where the combine tore a merge into a closure the solve takes, this
+  view on the other side moved by the residual. Now any residual past float
+  dust (`Project::OFFSET_DUST_M` in each axis, the bound under which the
+  offset solve corrects nothing) takes the shifting path of `plan_ties`: the
+  anchor rule picks the side, what is merged to it moves along, a snapped
+  closure from it is demoted, and with both sides held the moving section's
+  merges to its datum sides tear, exactly as for a shift. Dust (truly
+  coincident or merged ends) joins as before. Re-solving the offsets after the
+  combine instead would seed each component at its datum or lowest id, not
+  at the side the anchor rule keeps, and would heal drift anywhere else in
+  the project too: the plan could not say what moves. The dialog lists a
+  move under 1 mm only when the plan tears a tie (`combineMoveShown`): a
+  snap from the moving side made ordinary, or the moving section's merge
+  torn with both sides held by datums. Their listed reason is the move, so
+  the move is listed beside them, to 0.1 mm ("moveSideBySide"); otherwise
+  "moves 0.00m" next to "Side by side here" would be noise. The
+  `COMBINE_SIDE_BY_SIDE_M` copy of the tolerance in `combineSections.ts` is
+  pinned to `COMBINE_TOLERANCE_M` by a tripwire test. The sweeps check
+  the plan against the result to 1e-6 (a plan that moves nothing, to dust),
+  merged stations on one point and a reload that moves nothing, and
+  `side_by_side_network` plants such residuals, which the other generators,
+  placing every section exactly, never reach.
 - **Nothing is left across one shot (#746).** Once the two join stations are
   one, a tie the combine tears (a merge, or a snap made ordinary) can join the
   two ends of one shot: a one-shot passage X merged to both join stations,

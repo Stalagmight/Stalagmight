@@ -41,7 +41,8 @@ use super::station_rekey::value_naming;
 use super::Project;
 
 /// How far apart (metres) the two join stations may be and still count as the
-/// same point; also the bound on how far the other section moves.
+/// same point (side by side); also the bound on how far a co-located join
+/// moves a side, which it does by the residual (#740, `combine_plan.rs`).
 pub const COMBINE_TOLERANCE_M: f64 = 0.001;
 
 /// Above this depth gap (metres) between two co-located, unmerged join

@@ -587,6 +587,53 @@ describe('CombineSectionsDialog', () => {
     );
   });
 
+  it('lists a side-by-side move under 1 mm only where it changes a tie (#740)', () => {
+    const tie = {
+      station_a: { section_id: 5, station_index: 2 },
+      station_b: { section_id: 9, station_index: 1 },
+      kind: 'merge',
+      reason: 'loop',
+    };
+    dialogData = {
+      candidate: candidate({
+        // The plan names the side that moves by the 0.6 mm residual, what
+        // moves with it and why, exactly as for a shift.
+        plan_keeping_a: quietPlan(2, {
+          moving_section: 5,
+          moved_sections: [5, 7],
+          shift_m: 0.0006,
+          torn_ties: [tie],
+        }),
+        plan_keeping_b: quietPlan(5, {
+          moving_section: 5,
+          kept_moves_because: 'adjustment_anchor',
+          moved_sections: [5],
+          shift_m: 0.0006,
+        }),
+      }),
+    };
+    sections = [
+      ...creditedSections(),
+      { id: 7, name: 'Side', color: '#333333', direction: 'in', shots: shots(1) },
+    ];
+    render(<CombineSectionsDialog />);
+    // Keeping Main-A the plan tears a tie, whose reason is the move: the move
+    // is listed beside it, to 0.1 mm, with what moves along.
+    expect(screen.getByTestId('combine-note-move')).toHaveTextContent(
+      'Main-B moves 0.0006m horizontally, the gap between the two ends side by side, so they meet exactly.'
+    );
+    expect(screen.getByTestId('combine-note-move-with')).toHaveTextContent('Side');
+    expect(screen.getAllByTestId(/^combine-torn-tie-/)).toHaveLength(1);
+    expect(screen.getByTestId('combine-torn-why')).toHaveTextContent("The loop's misclosure moves to the new closure");
+
+    // Keeping Main-B nothing is torn: a move that small is not listed, and
+    // nothing claims a side stays either.
+    fireEvent.click(screen.getByTestId('combine-swap-kept'));
+    for (const id of ['combine-note-move', 'combine-note-move-with', 'combine-note-kept-moves', 'combine-note-torn']) {
+      expect(screen.queryByTestId(id)).toBeNull();
+    }
+  });
+
   it('lists converted bearings, the kept quality and offset, renewed shot ids and crossings', () => {
     sections = creditedSections().map((s) => ({ ...s, quality: s.id === 2 ? 1 : 2 }));
     dialogData = {

@@ -1975,3 +1975,47 @@ fn a_depth_gap_at_an_unmerged_join_is_reported_never_refused() {
     );
     assert_eq!(candidate.depth_difference_m, None);
 }
+
+/// #740: two section ends side by side within the tolerance (0.6 mm apart,
+/// not merged). The combine re-hangs the other section from the kept end, so
+/// it moves by the residual, and what is merged to it must move with it: the
+/// merged pair stays one point, and a reopen moves nothing.
+#[test]
+fn a_side_by_side_combine_keeps_merged_stations_together() {
+    let mut project = Project::new("Residual".to_string(), None);
+    let m = add(&mut project, "M", vec![shot(0.0, 10.0)]);
+    let o = add(&mut project, "O", vec![shot(90.0, 10.0)]);
+    let k = add(&mut project, "K", vec![shot(90.0, 10.0)]);
+    project
+        .merge_stations(StationRef::new(o, 1), StationRef::new(m, 0))
+        .unwrap();
+    project.set_section_offset(k, (-20.0006, 0.0));
+    let gap = dist(
+        xy(&project, StationRef::new(k, 1)),
+        xy(&project, StationRef::new(o, 0)),
+    );
+    assert!(
+        gap > 1e-4 && gap < 1e-3,
+        "setup: the ends are {gap} m apart"
+    );
+    project.combine_sections(k, o, &options()).unwrap();
+    // O's far end is K's station 2 now, merged to M's start.
+    let joined = dist(
+        xy(&project, StationRef::new(k, 2)),
+        xy(&project, StationRef::new(m, 0)),
+    );
+    let mut reopened = project.clone();
+    reopened.redrive_offsets_after_load();
+    let moved = dist(
+        xy(&project, StationRef::new(k, 0)),
+        xy(&reopened, StationRef::new(k, 0)),
+    );
+    assert!(
+        joined < 1e-6,
+        "merged stations {joined:.6} m apart after the combine"
+    );
+    assert!(
+        moved < 1e-6,
+        "reopening moved the combined section {moved:.6} m"
+    );
+}

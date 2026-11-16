@@ -1506,3 +1506,135 @@ fn a_combine_keeps_the_closure_the_solve_takes_over_a_legacy_one() {
     );
     check(&state, "reopen");
 }
+
+/// Every station's measured position, in section and station order.
+fn station_positions(state: &AppState) -> Vec<(StationRef, (f64, f64))> {
+    let project = state.get_project_state().unwrap();
+    project
+        .sections
+        .iter()
+        .flat_map(|s| (0..=s.shots.len() as u32).map(move |i| StationRef::new(s.id, i)))
+        .map(|at| {
+            let c = project.compute_station_raw_coords(at).unwrap();
+            (at, (c.x, c.y))
+        })
+        .collect()
+}
+
+fn apart(a: (f64, f64), b: (f64, f64)) -> f64 {
+    (a.0 - b.0).hypot(a.1 - b.1)
+}
+
+/// #740 through the command, as the issue found it in the app: M runs north
+/// from the origin with O (east) merged to its start by O's end, and K
+/// (east), moved by -20.0006 m (Adjust Position), ends 0.6 mm short of O's
+/// start: side by side, not merged. Combining there keeping K moves O by the
+/// residual, with M merged to it, so O's far end (K's station 2 now) stays
+/// on M's start and K stays put. One Undo restores the project byte for
+/// byte, Redo re-applies it, and a save and a reopen move nothing. Before
+/// #740 the plan moved nothing, the merged pair ended 0.6 mm apart, and the
+/// reopen moved K by 0.6 mm.
+#[test]
+fn a_side_by_side_combine_keeps_merged_stations_together_through_a_reopen() {
+    use crate::models::{CombineJoinEnds, CombineJoinKind, Coordinates, SectionEnd};
+    let temp = tempfile::TempDir::new().unwrap();
+    let path = temp.path().join("side-by-side.stalx");
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Side by side".to_string(),
+        location: None,
+    });
+    let m = create(&state, "M", vec![shot(0.0, 10.0)]);
+    let o = create(&state, "O", vec![shot(90.0, 10.0)]);
+    let k = create(&state, "K", vec![shot(90.0, 10.0)]);
+    let merged = state.execute(Command::MergeStations {
+        station_a: StationRef::new(o, 1),
+        station_b: StationRef::new(m, 0),
+    });
+    assert!(merged.success, "{:?}", merged.error);
+    let moved = state.execute(Command::MoveSection {
+        section_id: k,
+        offset: Coordinates::new(-20.0006, 0.0, 0.0),
+    });
+    assert!(moved.success, "{:?}", moved.error);
+    let at = |state: &AppState, station: StationRef| {
+        station_positions(state)
+            .into_iter()
+            .find(|(s, _)| *s == station)
+            .unwrap()
+            .1
+    };
+    let gap = apart(
+        at(&state, StationRef::new(k, 1)),
+        at(&state, StationRef::new(o, 0)),
+    );
+    assert!(
+        (gap - 0.0006).abs() < 1e-9,
+        "setup: the ends are {gap} m apart"
+    );
+
+    let candidate = state.combine_candidate_for_sections(k, o).unwrap().unwrap();
+    assert_eq!(candidate.join_kind, CombineJoinKind::CoLocated);
+    let plan = if candidate.section_a == k {
+        candidate.plan_keeping_a
+    } else {
+        candidate.plan_keeping_b
+    };
+    assert_eq!(plan.moving_section, Some(o));
+    assert_eq!(plan.moved_sections, vec![o, m]);
+    assert!((plan.shift_m - 0.0006).abs() < 1e-9, "{}", plan.shift_m);
+    let k0 = at(&state, StationRef::new(k, 0));
+    let before = snapshot(&state);
+
+    let result = state.execute_combine_sections(
+        k,
+        o,
+        CombineSectionsOptions {
+            join: Some(CombineJoinEnds {
+                kept: SectionEnd::End,
+                other: SectionEnd::Start,
+            }),
+            ..options()
+        },
+    );
+    assert!(result.success, "{:?}", result.error);
+    let check = |state: &AppState, what: &str| {
+        assert!(
+            apart(
+                at(state, StationRef::new(k, 2)),
+                at(state, StationRef::new(m, 0))
+            ) < 1e-9,
+            "{what}: the merged pair is one point"
+        );
+        assert!(
+            apart(at(state, StationRef::new(k, 0)), k0) < 1e-12,
+            "{what}: K stays"
+        );
+    };
+    check(&state, "combine");
+    let combined = station_positions(&state);
+    let after = snapshot(&state);
+
+    assert!(state.undo().success);
+    assert_eq!(snapshot(&state), before, "one undo restores it all");
+    assert!(state.redo().success);
+    assert_eq!(snapshot(&state), after);
+    check(&state, "redo");
+
+    assert!(
+        state
+            .execute(Command::SaveProject {
+                path: Some(path.clone())
+            })
+            .success
+    );
+    assert!(state.execute(Command::CloseProject).success);
+    assert!(state.open_project(path).success, "reopen");
+    check(&state, "reopen");
+    let reopened = station_positions(&state);
+    assert_eq!(reopened.len(), combined.len());
+    for ((a, p), (b, q)) in combined.iter().zip(&reopened) {
+        assert_eq!(a, b);
+        assert!(apart(*p, *q) < 1e-9, "the reopen moved {a:?}");
+    }
+}

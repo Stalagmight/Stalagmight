@@ -22,6 +22,12 @@
 //!   F's side becomes an ordinary one for the same reason.
 //! - **The shift.** Two ends tied by a loop closure are apart by its
 //!   misclosure; M's side (M and everything still merged to it) moves by it.
+//!   Two side-by-side ends (within the tolerance) or merged ends whose chain
+//!   positions differ are apart by a residual, which moves M's side the same
+//!   way (#740): the combined section hangs the other section's stations off
+//!   the kept join station, so one side moves by the residual whatever the
+//!   plan says, and what is merged to it must follow. Only float dust is
+//!   left in place.
 //!   M is the other section, unless its side is held by a zero datum and the
 //!   kept section's is not, or (no datum deciding) M's side holds the station
 //!   the closure-adjusted view holds the survey at
@@ -47,7 +53,6 @@ use crate::{
 };
 
 use super::closure_shots::Knots;
-use super::combine_candidate::COMBINE_TOLERANCE_M;
 use super::Project;
 
 /// A rigid tie: a merge (by its index in `station_merges`) or a snapped,
@@ -147,8 +152,9 @@ impl JoinPoint {
 /// What `combine_sections` changes before it joins the shots.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct TiePlan {
-    /// The section whose side moves, when the ends are more than the
-    /// tolerance apart.
+    /// The section whose side moves, when the two join stations are apart at
+    /// all: past the tolerance, or side by side within it (#740). `None` only
+    /// for a gap of float dust (`Project::OFFSET_DUST_M` in each axis).
     pub moving: Option<SectionId>,
     /// The sections that move, the moving section first.
     pub moved: Vec<SectionId>,
@@ -321,8 +327,20 @@ impl Project {
 
         // A non-finite gap never reaches here (`pairing_touch` refuses
         // non-finite ends); checked again so a shift can never write one.
-        let shifting =
-            gap.0.is_finite() && gap.1.is_finite() && gap.0.hypot(gap.1) > COMBINE_TOLERANCE_M;
+        //
+        // Any gap moves a side, not only one past the tolerance (#740). The
+        // combined section hangs the other section's stations off the kept
+        // join station, so a side-by-side residual left out of the plan moved
+        // the other section alone: a residual away from what is merged to it,
+        // and a reopen (whose offset solve closes merges) then moved the
+        // combined section. The residual is carried exactly like a shift, so
+        // the anchor rule picks the side and what is merged to it moves along.
+        // Float dust stays where it is: a gap within `OFFSET_DUST_M` in each
+        // axis, the bound under which the offset solve corrects nothing, so
+        // merged or truly coincident ends join as they always did.
+        let shifting = gap.0.is_finite()
+            && gap.1.is_finite()
+            && (gap.0.abs() > Self::OFFSET_DUST_M || gap.1.abs() > Self::OFFSET_DUST_M);
         let (moving, fixed, mut torn, held_by_datum, kept_moves_because) = if shifting {
             // What the closure-adjusted view holds the survey at: the side that
             // holds it must stay, or the whole cave shifts there by the gap.
@@ -370,8 +388,9 @@ impl Project {
                 anchor,
             )?
         } else {
-            // Nothing moves (beyond the tolerance the join already allows):
-            // only the loops the combine would close inside one section tear.
+            // Nothing moves (the two join stations are one point already, to
+            // float dust): only the loops the combine would close inside one
+            // section tear.
             (
                 join.other,
                 join.kept,
