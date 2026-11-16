@@ -15,7 +15,7 @@ export const CLOSURE_REMOVED_ACROSS_ONE_SHOT = 'CLOSURE_REMOVED_ACROSS_ONE_SHOT'
  * The `CommandResult` warning code an edit reports for each loop closure its
  * orphan-closure sweep removed because the closure's two stations are one point
  * (#738; `CLOSURE_REMOVED_MERGED_ENDS` in the Rust models): the delete, split,
- * unmerge and remove-datum commands.
+ * unmerge and remove-datum commands, and a merge of two placed pieces (#741).
  */
 export const CLOSURE_REMOVED_MERGED_ENDS = 'CLOSURE_REMOVED_MERGED_ENDS';
 

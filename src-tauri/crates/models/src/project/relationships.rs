@@ -238,16 +238,21 @@ impl Project {
     /// Every "replacement merge" site stitches a torn merge group back together
     /// through an ARBITRARILY picked surviving pair. Left unguarded that mints
     /// exactly the states the rest of the integrity machinery exists to repair:
-    /// a rigid merge welding two independently anchored components (what
-    /// [`Self::demote_double_anchoring_merges`] has to demote), a merge sharing a
-    /// station pair with a loop closure (what [`Self::create_loop_closure`]
-    /// refuses to create), or a redundant merge across sections an aligned
-    /// closure already holds rigid (what [`Self::merge_stations`] refuses
-    /// interactively).
+    /// a merge sharing a station pair with a loop closure (what
+    /// [`Self::create_loop_closure`] refuses to create), a redundant merge across
+    /// sections an aligned closure already holds rigid (what
+    /// [`Self::merge_stations`] refuses interactively), or a merge between two
+    /// stations that are not in the same place.
+    ///
+    /// Re-stitching two halves that each hold a zero datum is ALLOWED (#741).
+    /// They were one merge component before the deletion (a placement datum and
+    /// a GPS fix), the pair is coincident (guard 4), so nothing moves, and the
+    /// roles re-derive exactly as they were. Refusing it would split a cave the
+    /// user merged on purpose into two pieces.
     ///
     /// `doomed` is the set of stations the deletion is about to remove, and
-    /// `planned` the replacement merges already accepted in this batch. Guards 3
-    /// and 4 ask about the graph that REMAINS: every site runs BEFORE the doomed
+    /// `planned` the replacement merges already accepted in this batch. Guard 3
+    /// asks about the graph that REMAINS: every site runs BEFORE the doomed
     /// stations' own merges are dropped, so reading the live graph would see the
     /// very connection the deletion is about to sever and answer "already
     /// connected" for every candidate - and a batch that adds pair after pair
@@ -288,14 +293,7 @@ impl Project {
         {
             return false;
         }
-        // 4. Both halves survive independently anchored. Welding them is the
-        //    over-constraint `over_anchored_merge_components` reports; each half
-        //    holds its own position through its own datum, so creating NOTHING
-        //    lets the deletion heal a file that was already over-anchored.
-        if self.would_double_anchor_after_removal(a.section_id, b.section_id, doomed, planned) {
-            return false;
-        }
-        // 5. The two stations are not in the same place. A merge ASSERTS they
+        // 4. The two stations are not in the same place. A merge ASSERTS they
         //    are (`debug_assert_merge_alignment`), and unlike a closure promotion
         //    - which converts a relationship the surveyor recorded, and so pays
         //    for the coincidence by translating the movable side
@@ -413,9 +411,9 @@ impl Project {
     /// the `planned` replacement merges are in place?
     ///
     /// Post-deletion twin of [`Self::merge_would_double_anchor`], down to the
-    /// merges-ONLY component definition it and
-    /// [`Self::over_anchored_merge_components`] share - so the guard and the
-    /// detector that would flag the result cannot disagree.
+    /// merges-ONLY component definition. Asked before a deletion PROMOTES a
+    /// closure to a merge, which (like every automatic promotion) must not fuse
+    /// two placed groups.
     pub(crate) fn would_double_anchor_after_removal(
         &self,
         a: SectionId,

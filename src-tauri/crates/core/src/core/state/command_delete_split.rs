@@ -63,7 +63,7 @@ impl AppState {
         // `execute()`, so it carries its own frame check (#469, item 1). Deleting
         // the shot the primary datum is anchored to drops that datum and promotes
         // the next one, which re-defines what every stored coordinate means.
-        let frame_before = self.frame_datum_key();
+        let datums_before = self.datum_layout();
 
         let undo_section_b_name = name_b.clone();
 
@@ -281,6 +281,7 @@ impl AppState {
                 &closures_before,
                 &sweep,
                 "delete shot and split",
+                super::command_shot::OnePointCause::Promotion,
             );
 
             project.touch();
@@ -291,7 +292,7 @@ impl AppState {
         // (after the orphan-closure conversion above) and before the after-snapshot
         // so undo/redo and the saved file reflect the normalized topology. The
         // frame check runs first, in the same order as execute()'s epilogue.
-        self.renormalize_frame_if_changed(frame_before);
+        self.settle_datum_layout(&datums_before);
         self.reconcile_geometry();
 
         // Step 7: Take AFTER snapshot
@@ -373,7 +374,7 @@ impl AppState {
             Err(result) => return result,
         };
         // Same frame check as the single-shot split above (#469, item 1).
-        let frame_before = self.frame_datum_key();
+        let datums_before = self.datum_layout();
         let undo_section_b_name = name_b.clone();
 
         let (new_section_id, swept_warnings) = {
@@ -572,13 +573,14 @@ impl AppState {
                 &closures_before,
                 &sweep,
                 "delete shot range and split",
+                super::command_shot::OnePointCause::Promotion,
             );
             project.touch();
             (new_id, swept_warnings)
         };
 
         // Custom path bypasses execute()'s reconcile; re-derive offsets here.
-        self.renormalize_frame_if_changed(frame_before);
+        self.settle_datum_layout(&datums_before);
         self.reconcile_geometry();
 
         let after_snapshot = match self.capture_after_snapshot_or_rollback(&before_snapshot) {
@@ -681,7 +683,7 @@ impl AppState {
         };
 
         // Same frame check as the split paths above (#469, item 1).
-        let frame_before = self.frame_datum_key();
+        let datums_before = self.datum_layout();
 
         let (result_section, removed_closures) = {
             let Ok(mut proj_guard) = self.project.lock() else {
@@ -825,7 +827,7 @@ impl AppState {
             (section_id, removed_closures)
         };
 
-        self.renormalize_frame_if_changed(frame_before);
+        self.settle_datum_layout(&datums_before);
         self.reconcile_geometry();
 
         let after_snapshot = match self.capture_after_snapshot_or_rollback(&before_snapshot) {
@@ -892,7 +894,7 @@ impl AppState {
 
         // Same frame check as the split paths above (#469, item 1). This path
         // removes a whole SECTION, so it can drop the primary datum outright.
-        let frame_before = self.frame_datum_key();
+        let datums_before = self.datum_layout();
 
         // Step 2: Validate and mutate in a single lock scope. On any failure after
         // mutation we roll back from before_snapshot. `command_lock` is held for the
@@ -1008,6 +1010,7 @@ impl AppState {
                 &closures_before,
                 &sweep,
                 "delete last shot and section",
+                super::command_shot::OnePointCause::Promotion,
             );
 
             tracing::info!(
@@ -1024,7 +1027,7 @@ impl AppState {
         // a rigid merge is solved immediately, and before the after-snapshot so
         // undo/redo and the saved file reflect the normalized topology. The frame
         // check runs first, in the same order as execute()'s epilogue.
-        self.renormalize_frame_if_changed(frame_before);
+        self.settle_datum_layout(&datums_before);
         self.reconcile_geometry();
 
         // Step 6: Take the AFTER snapshot.

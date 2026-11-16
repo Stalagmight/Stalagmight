@@ -409,7 +409,9 @@ keeps every name on its physical station.
   datum's station lands on local (0,0), free-floating components included, which
   preserves every station's real-world position (and, for the add, every relative
   position) and changes only the local coordinates
-  (`Project::renormalize_frame`, issue #469)
+  (`Project::renormalize_frame`, issue #469). When the promoted datum was a GPS
+  fix (#741), its piece is first moved onto its GPS against the old frame, so
+  every piece stays on its own GPS through the re-frame
 - **GPS coordinates**: WGS84 (latitude, longitude, depth reference)
 - **Azimuth**: degrees (0-360), stored **as measured**. The stored number is
   never rotated: each section declares what its readings refer to
@@ -474,7 +476,8 @@ These are derived from shot data, not stored:
   surveyed, so counting it would double-count (#689). Shot count includes every
   shot.
 - Loop closure errors
-- Penetration distance (maximum line distance from zero datum)
+- Penetration distance (maximum line distance from the nearest entrance zero datum; a GPS fix
+  mid-passage is not an entrance unless ticked as one, #741)
 
 ---
 
@@ -1641,6 +1644,12 @@ built anywhere in this flow; it is tracked as an enhancement in #524.
 3. All section offsets are recalculated
 4. Undo restores previous GPS coordinates
 
+Changing only the accuracy of a datum (its GPS unchanged) moves nothing, for a
+placement datum and a GPS fix alike; only a new GPS reading re-places a piece.
+A station holds at most one zero datum: setting one on a station that already
+holds a datum under another identity is refused, and re-setting a datum
+updates it in place.
+
 **Removing a Zero Datum:**
 1. Right-click the zero datum station → "Set Zero Datum", untick "Set as Zero
    Datum", and click Save
@@ -1766,8 +1775,10 @@ it, for the section it shows as kept, before the user confirms:
   (the joined station takes the average); a section with no shots is absorbed
   at its one station.
 
-Refused, with the reason in the menu row: both sections carrying a zero datum on
-one of their own stations (the combined section would hold two), sections that
+Refused, with the reason in the menu row: both sections placed by their own zero
+datum on one of their own stations (merge them first, so the later datum becomes
+a GPS fix), the two join stations each holding a zero datum (the combined
+station would hold two; remove one first), sections that
 meet nowhere (merge two of their ends, or create a loop closure between them,
 first), more than 99,999 shots, and a kept section that has used up its shot
 numbers for the session. A section is never combined with itself. Every shot
@@ -2920,7 +2931,7 @@ The dropdown also closes when pressing Ctrl+Z or Ctrl+Y (global undo/redo shortc
 | Recorded inclination disagrees with length/depth (> inclination_depth_diff_threshold, default 15°) | Warning | "Shot {section_id}:{position} recorded inclination {pitch}° disagrees with the {computed}° implied by its length and depth change (exceeds {threshold}° threshold)" |
 | Non-finite field value | Error | "Shot {section_id}:{position} has non-finite value(s) in: {fields}" |
 | Inclination outside -90 to 90 degrees | Error | "Shot {section_id}:{position} has an out-of-range pitch_{in/out}: {value}° (must be between -90° and 90°)" |
-| Merge group anchored by two or more zero datums | Error | "This merge group is anchored by {n} zero datums ({anchors}). Two or more GPS anchors over-constrain one rigid group; keep one and remove the others." |
+| GPS fix far from its surveyed position (gap > 15 m + 2% of the survey distance from the placement datum of its piece) | Warning | "The GPS position of this zero datum is {gap} m from where the survey puts it (bearing {bearing} degrees), more than the {threshold} m expected. ..." Ignore covers that GPS reading only: a new GPS on the datum brings the warning back, and undoing that change brings the Ignore back. |
 | Duplicate station merge | Error | "These stations are already merged" |
 
 ---

@@ -323,6 +323,8 @@ fn zero_datums_are_stable_across_export_import_cycles() {
                 }
                 .into(),
                 gps: GpsCoordinates::new(latitude, longitude, 0.0).unwrap(),
+                accuracy_m: None,
+                entrance: None,
             });
         }
         project
@@ -415,6 +417,8 @@ fn zero_datums_are_stable_across_export_import_cycles() {
         }
         .into(),
         gps: GpsCoordinates::new(20.31, -87.42, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     let once = import_cycle(&original, dir.path(), "mid-datum-once");
     let after_first = anchor_set(&once);

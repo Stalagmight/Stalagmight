@@ -548,6 +548,7 @@ pub struct Database {
     conn: Connection,
 }
 
+mod datum_extras;
 mod integrity;
 // The #706 fuzzer's live-connection probe; see the module doc.
 #[cfg(any(test, feature = "test-support"))]
@@ -565,6 +566,7 @@ mod undo;
 mod warnings;
 mod write;
 
+pub use datum_extras::holds_datum_extras;
 #[cfg(any(test, feature = "test-support"))]
 pub use live_scan::LiveScan;
 /// How many `resolved_warnings` rows a carry-over will examine (#517). Exported
@@ -670,6 +672,20 @@ mod newer_schema_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod station_names_tests;
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod datum_entrance_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod datum_extras_tests;
 
 #[cfg(test)]
 #[expect(

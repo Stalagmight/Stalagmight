@@ -1,6 +1,8 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import { createSaveProjectAction } from '../projectSaveActions';
 import { useProjectStore } from '../projectStore';
+import { useUIStore } from '../uiStore';
+import { OLDER_BUILDS_DROP_GPS_FIXES, resetOlderVersionsNoticeForTests } from '../../utils/gpsFixSaveNotice';
 const ipc = vi.hoisted(() => vi.fn());
 vi.mock('../../utils/ipc', () => ({ invokeIpc: ipc }));
 function deferred<T>() {
@@ -62,4 +64,18 @@ it('rechecks ownership after an asynchronous undo-state refresh', async () => {
   pending.resolve();
   await operation;
   expect(useProjectStore.getState().isDirty).toBe(true);
+});
+it('tells once per project that older versions drop its GPS fixes (#741)', async () => {
+  resetOlderVersionsNoticeForTests();
+  const showToast = vi.fn();
+  useUIStore.setState({ showToast } as never);
+  ipc.mockResolvedValue({
+    success: true,
+    saved_path: '/a.stalx',
+    warnings: [{ code: OLDER_BUILDS_DROP_GPS_FIXES, message: 'x', severity: 'warning' }],
+  });
+  await save();
+  await save(undefined, true);
+  expect(showToast).toHaveBeenCalledTimes(1);
+  expect(showToast.mock.calls[0]?.[2]).toBe('warning');
 });

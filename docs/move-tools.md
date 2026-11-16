@@ -73,6 +73,19 @@ When hovering in Move Segment mode, the connected section IDs are resolved async
 
 A station is immovable if it is a zero-datum or transitively reachable from one via merges and **aligned** loop closures. Computed in `MapCanvas` via BFS when Move Station or Move Shot is active. Returns `Set<string>` of `"sectionId:stationIndex"` keys.
 
+"Zero datum" here means EVERY datum, placement datum and GPS fix alike (#741). A GPS fix
+station is immovable like any datum station, although a fix never places raw geometry:
+
+- Moving it would rewrite the shots around it and so silently change the gap between the survey
+  and the fix's GPS, which the gap warning reports and the Closures Computed View solve pulls
+  across. The fix is a measurement of where that station is; dragging the station away from it
+  is not an edit of the survey the user can see.
+- The two sides agree on one set. The frontend seeds its BFS from the per-station
+  `is_zero_datum` flag, which `Project::compute_station_coordinates` sets for every resolvable
+  datum, fixes included; the backend's `move_station` (`command_move.rs`) refuses a non-zero
+  offset on any station `zero_datums` names ("Cannot move a zero datum station"). Exempting
+  fixes on one side only would let the map offer a drag the backend refuses.
+
 Visual feedback:
 - Immovable stations and shots with immovable endpoints are dimmed (0.25 opacity via `feature-state: anchored`)
 - Hover does not show pointer cursor

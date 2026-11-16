@@ -85,6 +85,19 @@ mod crash_property_tests;
 mod credit_tests;
 #[cfg(test)]
 #[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod datum_entrance_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod datum_ui_tests;
+#[cfg(test)]
+#[expect(
     clippy::expect_used,
     clippy::panic,
     clippy::print_stderr,
@@ -155,6 +168,14 @@ mod issue_756_tests;
 #[cfg(test)]
 mod metamorphic_undo_tests;
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::float_cmp,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod multi_datum_tests;
+#[cfg(test)]
 mod open_undo_bugs_tests;
 #[cfg(test)]
 #[expect(
@@ -197,6 +218,15 @@ mod reverse_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod shot_uuid_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::panic,
+    clippy::float_cmp,
+    clippy::indexing_slicing,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod snapshot_fixes_tests;
 #[cfg(test)]
 #[expect(
     clippy::expect_used,

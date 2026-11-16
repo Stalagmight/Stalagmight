@@ -10,7 +10,7 @@ use super::{
     ShotData, ShotId, StationAnchor, StationKey, StationMerge, StationMergeWire, StationRef,
     ZeroDatum,
 };
-use super::{LoopClosureWire, ZeroDatumWire};
+use super::{DatumRole, LoopClosureWire, ZeroDatumWire};
 
 // Re-export the sibling module so the relocated `suggest_orphan_placements` (now in
 // the `distance` child) keeps resolving `super::placement_suggest` - its `super` is
@@ -19,12 +19,16 @@ use super::placement_suggest;
 
 mod closure;
 mod coordinates;
+mod datum_entrance;
+mod datum_placement;
+mod datum_roles;
 mod distance;
 // Crate-visible only so the `.plnx` load path can reach the engine's segment-speed bounds
 // (`MIN/MAX_SEGMENT_SPEED_M_PER_MIN`) and rank stored speeds on the same domain the engine
 // honours (#317). Everything else in here stays behind the `pub use` list below.
 pub mod gas;
 mod lsq;
+mod merge_datum_shift;
 mod pathfinding;
 
 // Used only by the `tests` module via `use super::*`; production code in this
@@ -50,6 +54,7 @@ mod split_section;
 mod station_rekey;
 
 mod integrity;
+mod legacy_anchoring;
 mod merge_topology;
 mod offsets;
 mod relationships;
@@ -132,13 +137,35 @@ mod component_gauge_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod datum_entrance_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod datum_ui_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::float_cmp,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod multi_datum_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
     clippy::float_cmp,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod split_section_tests;
 
 pub use adjustment_report::{
-    AdjustedStations, AdjustmentFailure, AdjustmentFailureReport, AdjustmentReport, SkippedClosure,
+    AdjustedStations, AdjustmentFailure, AdjustmentFailureReport, AdjustmentReport, FarGpsFix,
+    SkippedClosure,
 };
 pub use classify::ClassifyScope;
 pub use closure_shots::{
@@ -147,12 +174,18 @@ pub use closure_shots::{
 pub use combine_candidate::{
     section_label, COMBINE_DEPTH_NOTICE_M, COMBINE_TOLERANCE_M, MAX_COMBINE_PARTNERS,
 };
+pub use datum_placement::DatumLayout;
+pub use datum_roles::{
+    datum_gap_threshold_m, DatumGap, ZeroDatumPreview, DATUM_GAP_WARN_BASE_M,
+    DATUM_GAP_WARN_FRACTION,
+};
 pub use gas::{
     CylRole, Cylinder, Diver, GasReachField, PlanMode, PlanSegment, RouteLeg, RouteProfilePoint,
     TankMaterial, Team,
 };
 pub use gauge::HeldGauge;
 pub use integrity::{IntegrityViolation, ViolationSeverity};
+pub use merge_datum_shift::MergeDatumShift;
 pub use merge_topology::MergeTopology;
 pub use offsets::{log_removed_closures, ClosuresBeforeSweep, OrphanClosureSweep, RemovedClosure};
 pub use reverse::{reverse_shots, shot_run_displacement};
@@ -779,11 +812,7 @@ impl Serialize for ProjectIpc<'_> {
             .iter()
             .filter_map(|m| p.merge_to_wire(m))
             .collect();
-        let zero_datums: Vec<_> = p
-            .zero_datums
-            .iter()
-            .filter_map(|z| p.datum_to_wire(z))
-            .collect();
+        let zero_datums = p.zero_datums_wire();
         let loop_closures: Vec<_> = p
             .loop_closures
             .iter()
@@ -1640,12 +1669,31 @@ impl Project {
         })
     }
 
-    /// Positional wire form of a stored zero datum, or `None` if its ref dangles.
-    pub fn datum_to_wire(&self, zd: &ZeroDatum) -> Option<ZeroDatumWire> {
-        Some(ZeroDatumWire {
-            station_ref: self.resolve_key(&zd.station_ref)?,
-            gps: zd.gps,
-        })
+    /// Positional wire form of every stored zero datum, in list order, with its
+    /// derived role, entrance flag and, for a GPS fix, its gap. A datum whose
+    /// ref dangles is dropped.
+    pub fn zero_datums_wire(&self) -> Vec<ZeroDatumWire> {
+        let gaps = self.gps_fix_gaps();
+        self.zero_datums
+            .iter()
+            .zip(self.datum_roles())
+            .filter_map(|(zd, role)| {
+                let station_ref = self.resolve_key(&zd.station_ref)?;
+                let role = role?;
+                let gap = match role {
+                    DatumRole::GpsFix => gaps.get(&station_ref).copied(),
+                    DatumRole::Placement => None,
+                };
+                Some(ZeroDatumWire {
+                    station_ref,
+                    gps: zd.gps,
+                    accuracy_m: zd.accuracy_m,
+                    role,
+                    is_entrance: self.datum_is_entrance(station_ref, role, zd.entrance),
+                    gap,
+                })
+            })
+            .collect()
     }
 
     /// Positional wire form of a stored loop closure, or `None` if either

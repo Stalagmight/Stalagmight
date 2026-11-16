@@ -271,12 +271,20 @@ impl Project {
         merges.chain(closures).collect()
     }
 
-    /// Does a zero datum sit on one of `section`'s own stations?
+    /// Does any zero datum, placement or GPS fix, resolve to `at`?
+    pub(crate) fn station_holds_datum(&self, at: StationRef) -> bool {
+        self.zero_datums
+            .iter()
+            .any(|datum| self.resolve_key(&datum.station_ref) == Some(at))
+    }
+
+    /// Does a PLACEMENT zero datum sit on one of `section`'s own stations? A
+    /// GPS fix (#741) holds nothing in raw geometry, so a section carrying only
+    /// fixes may move like any other.
     pub(crate) fn carries_zero_datum(&self, section: SectionId) -> bool {
-        self.zero_datums.iter().any(|datum| {
-            self.resolve_key(&datum.station_ref)
-                .is_some_and(|at| at.section_id == section)
-        })
+        self.placement_datum_refs()
+            .iter()
+            .any(|at| at.section_id == section)
     }
 
     /// Plan the shift and the torn ties for joining `join`, whose join stations'
@@ -318,14 +326,10 @@ impl Project {
                 .map(|(_, id)| *id)
                 .collect()
         };
-        // The sections that carry a zero datum on a station of their own, read
-        // once: every anchored-side question below is a lookup in it.
-        let datum_sections: HashSet<SectionId> = self
-            .zero_datums
-            .iter()
-            .filter_map(|datum| self.resolve_key(&datum.station_ref))
-            .map(|at| at.section_id)
-            .collect();
+        // The sections that carry a placement zero datum on a station of their
+        // own, read once: every anchored-side question below is a lookup in it.
+        // GPS fixes do not hold a side (#741).
+        let datum_sections: HashSet<SectionId> = self.placement_datum_sections();
         let anchored =
             |sections: &HashSet<SectionId>| sections.iter().any(|s| datum_sections.contains(s));
         // The snapped closures a plan tears when `moving` moves off `fixed`
@@ -413,8 +417,11 @@ impl Project {
             // because a torn tie can join the two ends of one shot only once
             // the two join stations are one.
             let component = self.get_connected_section_ids(join.kept);
-            let solved_now = self.component_has_eligible_closure(&component, &HashSet::new())
-                && self.component_has_eligible_closure(&component, facts.skipped(self));
+            // A GPS fix is an observation the solve fits on its own (#741), so a
+            // component holding one is adjusted with or without a closure.
+            let solved_now = self.component_has_gps_fix(&component)
+                || (self.component_has_eligible_closure(&component, &HashSet::new())
+                    && self.component_has_eligible_closure(&component, facts.skipped(self)));
             let adjusted = solved_now || {
                 let plain_torn = loop_ties(join.other, join.kept);
                 let plain_snaps = snaps_torn(join.other, join.kept, &plain_torn, true);
@@ -873,8 +880,8 @@ impl Project {
             return Ok((m, f, torn, datum_ties, because));
         }
         Err(
-            "Both sections carry a zero datum on one of their stations: a section can hold \
-             only one"
+            "Both sections are placed by a zero datum on one of their stations: merge them \
+             first, so the later datum becomes a GPS fix"
                 .to_string(),
         )
     }

@@ -422,6 +422,8 @@ fn values_under_a_non_canonical_key_reach_the_copy() {
             longitude: -87.0,
             depth_reference: 0.0,
         },
+        accuracy_m: None,
+        entrance: None,
     });
 
     let second = project

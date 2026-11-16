@@ -75,8 +75,10 @@ export function reachableStationKeySet(field: GasReachField): Set<string> {
  *        where the cave starts; that is the origin a re-pick is meant to move away from.
  * 2. No field yet (the pre-origin click, before an origin exists to solve from) - or both
  *    endpoints tied under rule 1: approximate with straight-line distance to the nearest
- *    zero-datum station, mirroring the engine's own multi-root "entrance" (`zero_datum_roots`,
- *    every zero datum is a root, not just one) without running a graph search client-side. With
+ *    ENTRANCE zero-datum station, mirroring the engine's own multi-root "entrance"
+ *    (`zero_datum_roots`, every entrance datum is a root, not just one) without running a graph
+ *    search client-side. `entrances`, when given, are the datums whose wire `is_entrance` is true
+ *    (#741): a GPS fix mid-passage, such as a radiolocation point, is not a root. With
  *    NO zero datum on the project the engine's own entrance concept is undefined (a project with
  *    no zero datum resolves an empty root set, so nothing is reachable from "the entrance"
  *    either) - in that unreachable edge case this deterministically keeps `a`, the same endpoint
@@ -91,6 +93,7 @@ export function nearestOriginShotEndpoint(
     coordinates: Coordinates;
     is_zero_datum: boolean;
   }>,
+  entrances?: ReadonlyArray<{ station_ref: StationRef; is_entrance: boolean }>,
 ): StationRef {
   if (reachField) {
     const byKey = new Map<string, number | null>();
@@ -107,7 +110,18 @@ export function nearestOriginShotEndpoint(
     }
   }
 
-  const zeroDatums = activeStations.filter((s) => s.is_zero_datum);
+  const entranceKeys = entrances
+    ? new Set(
+        entrances
+          .filter((d) => d.is_entrance)
+          .map((d) => `${d.station_ref.section_id}:${d.station_ref.station_index}`)
+      )
+    : null;
+  const zeroDatums = activeStations.filter(
+    (s) =>
+      s.is_zero_datum &&
+      (entranceKeys === null || entranceKeys.has(`${s.station_ref.section_id}:${s.station_ref.station_index}`))
+  );
   if (zeroDatums.length === 0) return a;
 
   const coordsOf = new Map<string, Coordinates>();

@@ -44,6 +44,7 @@ import {
   shotKindFromFlags,
   SHOT_MARKER_NULL,
   STATION_FLAG_IS_ZERO_DATUM,
+  withGpsFixFlags,
 } from '../types/survey-data';
 import { recordPerfTiming } from './memoryProbe';
 
@@ -451,7 +452,10 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
   //     it's not in the wire format)
   //   - 1 Uint8Array `shotFlags` mapping the wire's u32 marker_or_max
   //     into the Int32Array `shotMarkerIndex` and bit-packed flags
-  const surveyData = buildSurveyData(env, shotsF32, shotsU32, shotsFlags, stationsF64, stationsU32, stationsFlags, shotCommentByIdx, gpsByIdx, mergedByIdx, closuresByIdx, commentByIdx, nameByIdx);
+  const surveyData = withGpsFixFlags(
+    buildSurveyData(env, shotsF32, shotsU32, shotsFlags, stationsF64, stationsU32, stationsFlags, shotCommentByIdx, gpsByIdx, mergedByIdx, closuresByIdx, commentByIdx, nameByIdx),
+    env.project_header.zero_datums
+  );
 
   // Stations: a *lazy* `Station[]` view over `surveyData`, not an eager
   // ~89k-object array. The old eager loop (removed here) materialized one

@@ -28,10 +28,12 @@ const skippedOne: AdjustmentReport = {
     },
   ],
   failures: [],
+  far_gps_fixes: [],
 };
 const failedOne: AdjustmentReport = {
   skipped_closures: [],
   failures: [{ anchor: { section_id: 2, station_index: 0 }, section_ids: [2, 3], reason: 'x' }],
+  far_gps_fixes: [],
 };
 
 function deferred<T>() {

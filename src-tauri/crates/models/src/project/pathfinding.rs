@@ -364,6 +364,10 @@ impl Project {
         Self::reconstruct_path(start, found, &prev)
     }
 
+    /// Shortest shots+merges path from `start` to the nearest PLACEMENT zero
+    /// datum. Only the destructive closure distribution reads it, and only
+    /// placement datums anchor that distribution (#741): a GPS fix never moves
+    /// raw geometry, so it is not a place to distribute from.
     pub(super) fn shortest_path_to_any_zero_datum(
         &self,
         start: StationRef,
@@ -371,11 +375,7 @@ impl Project {
         if self.zero_datums.is_empty() {
             return None;
         }
-        let zero_set: HashSet<StationRef> = self
-            .zero_datums
-            .iter()
-            .filter_map(|zd| self.resolve_key(&zd.station_ref))
-            .collect();
+        let zero_set: HashSet<StationRef> = self.placement_datum_refs().into_iter().collect();
         let (found, prev) =
             self.shortest_path_with_target(start, |node| zero_set.contains(&node))?;
         let path = Self::reconstruct_path(start, found, &prev)?;
@@ -797,17 +797,17 @@ impl Project {
         (dist, riders, pred)
     }
 
-    /// Resolve the project's zero-datum stations to their indices in `stations`.
+    /// Resolve the project's ENTRANCE datum stations to their indices in
+    /// `stations`: the roots of "Start from entrance", penetration and the
+    /// distance gradient. A GPS fix that is not an entrance (a radiolocation
+    /// point mid-passage) is not a root (#741, [`Self::entrance_datum_refs`]).
     pub(super) fn zero_datum_roots(
         &self,
         station_index: &HashMap<StationRef, usize>,
     ) -> Vec<usize> {
-        self.zero_datums
-            .iter()
-            .filter_map(|zd| {
-                self.resolve_key(&zd.station_ref)
-                    .and_then(|sr| station_index.get(&sr).copied())
-            })
+        self.entrance_datum_refs()
+            .into_iter()
+            .filter_map(|sr| station_index.get(&sr).copied())
             .collect()
     }
 }

@@ -586,8 +586,9 @@ impl Project {
     }
 
     /// Check if a specific shot is frozen.
-    /// A shot is frozen when both its endpoints can reach a zero datum station
-    /// (excluding the shot itself) via shots, merges, and aligned closures.
+    /// A shot is frozen when both its endpoints can reach a placement zero datum
+    /// station (excluding the shot itself) via shots, merges, and aligned
+    /// closures. GPS fixes (#741) do not freeze anything.
     pub(crate) fn is_shot_frozen(
         &self,
         section_id: SectionId,
@@ -638,11 +639,9 @@ impl Project {
         let section_lookup = self.build_section_lookup();
         let merge_adj = self.build_merge_adjacency(&section_lookup);
         let closure_adj = self.build_aligned_closure_adjacency(&section_lookup);
-        let datum_stations: HashSet<StationRef> = self
-            .zero_datums
-            .iter()
-            .filter_map(|d| self.resolve_key(&d.station_ref))
-            .collect();
+        // Placement datums only: a GPS fix (#741) never moves raw geometry, so a
+        // shot between a placement datum and a fix is free to edit.
+        let datum_stations: HashSet<StationRef> = self.placement_datum_refs().into_iter().collect();
         self.is_shot_frozen(
             section_id,
             shot_index,
@@ -655,8 +654,9 @@ impl Project {
 
     /// Compute all frozen shots for the project.
     ///
-    /// A shot is frozen when both its endpoints can reach a zero datum station
-    /// (excluding the shot itself) via shots, merges, and aligned closures.
+    /// A shot is frozen when both its endpoints can reach a placement zero datum
+    /// station (excluding the shot itself) via shots, merges, and aligned
+    /// closures. GPS fixes (#741) do not freeze anything.
     ///
     /// Uses Tarjan's bridge-finding algorithm for O(V+E) total complexity instead
     /// of the naive O(shots × BFS) approach.
@@ -668,11 +668,9 @@ impl Project {
         let section_lookup = self.build_section_lookup();
         let merge_adj = self.build_merge_adjacency(&section_lookup);
         let closure_adj = self.build_aligned_closure_adjacency(&section_lookup);
-        let datum_stations: HashSet<StationRef> = self
-            .zero_datums
-            .iter()
-            .filter_map(|d| self.resolve_key(&d.station_ref))
-            .collect();
+        // Placement datums only: a GPS fix (#741) never moves raw geometry, so a
+        // shot between a placement datum and a fix is free to edit.
+        let datum_stations: HashSet<StationRef> = self.placement_datum_refs().into_iter().collect();
 
         // Assign each station a compact integer index
         let mut station_to_idx: HashMap<StationRef, usize> = HashMap::new();

@@ -1046,7 +1046,7 @@ fn test_merge_projects_places_by_datum_and_keeps_station_offsets_datums_and_clos
         .insert(StationRef::new(section_a, 0).into(), (0.5, -0.5, 1.0));
     let gps_a = GpsCoordinates::new(10.0, 20.0, 0.0).unwrap();
     project_a
-        .store_zero_datum_without_repositioning(StationRef::new(section_a, 0), gps_a)
+        .store_zero_datum_without_repositioning(StationRef::new(section_a, 0), gps_a, None)
         .unwrap();
     project_a.loop_closures.push(LoopClosure {
         id: 0,
@@ -1075,7 +1075,7 @@ fn test_merge_projects_places_by_datum_and_keeps_station_offsets_datums_and_clos
         .insert(StationRef::new(section_b, 0).into(), (-1.0, 1.5, 0.0));
     let gps_b = GpsCoordinates::new(-5.0, 40.0, 2.0).unwrap();
     project_b
-        .store_zero_datum_without_repositioning(StationRef::new(section_b, 0), gps_b)
+        .store_zero_datum_without_repositioning(StationRef::new(section_b, 0), gps_b, None)
         .unwrap();
     project_b.loop_closures.push(LoopClosure {
         id: 0,
@@ -1271,6 +1271,7 @@ fn merge_projects_does_not_renormalise_the_open_project() {
         .store_zero_datum_without_repositioning(
             StationRef::new(source_section_a, 0),
             GpsCoordinates::new(20.35, -87.4, 0.0).unwrap(),
+            None,
         )
         .unwrap();
 
@@ -1576,10 +1577,14 @@ fn redo_batch_preserves_double_anchored_bridge_closure() {
             Command::SetZeroDatum {
                 station_ref: StationRef::new(a, 0),
                 coordinates: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+                accuracy_m: None,
+                entrance: None,
             },
             Command::SetZeroDatum {
                 station_ref: StationRef::new(b, 0),
                 coordinates: GpsCoordinates::new(46.0, -74.0, 110.0).unwrap(),
+                accuracy_m: None,
+                entrance: None,
             },
             Command::CreateLoopClosure {
                 station_a: StationRef::new(a, 1),
@@ -2840,6 +2845,8 @@ fn unmerge_converts_orphaned_bridge_closure() {
     state.execute(Command::SetZeroDatum {
         station_ref: StationRef::new(a, 0),
         coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     state.execute(Command::MergeStations {
         station_a: StationRef::new(a, 2),
@@ -3279,6 +3286,8 @@ fn undo_unmerge_restores_converted_closure_and_position() {
     state.execute(Command::SetZeroDatum {
         station_ref: StationRef::new(a, 0),
         coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     state.execute(Command::MergeStations {
         station_a: StationRef::new(a, 2),
@@ -3395,6 +3404,8 @@ fn undo_unmerge_singular_restores_converted_closure_and_position() {
     state.execute(Command::SetZeroDatum {
         station_ref: StationRef::new(a, 0),
         coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     state.execute(Command::MergeStations {
         station_a: StationRef::new(a, 2),
@@ -3488,6 +3499,8 @@ fn undo_merge_restores_aligned_closure_section_outside_merge_groups() {
     state.execute(Command::SetZeroDatum {
         station_ref: StationRef::new(a, 0),
         coordinates: GpsCoordinates::new(45.0, 90.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
     // Inject an ALIGNED loop closure B.1 <-> Z.0 (no merge). Z is reachable from the
@@ -3659,6 +3672,8 @@ fn split_converts_orphaned_bridge_closure_immediately() {
     state.execute(Command::SetZeroDatum {
         station_ref: StationRef::new(a, 0),
         coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     // B hangs off A's last station; a closure A0=B1 closes the loop.
     state.execute(Command::MergeStations {
@@ -3742,6 +3757,8 @@ fn split_section_does_not_promote_a_bridge_closure_across_two_anchored_component
     let r = state.execute(Command::SetZeroDatum {
         station_ref: StationRef::new(a, 0),
         coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     assert!(r.success, "{:?}", r.error);
 
@@ -3757,6 +3774,8 @@ fn split_section_does_not_promote_a_bridge_closure_across_two_anchored_component
     let r = state.execute(Command::SetZeroDatum {
         station_ref: StationRef::new(c, 0),
         coordinates: GpsCoordinates::new(10.001, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     assert!(r.success, "{:?}", r.error);
 
@@ -3808,10 +3827,10 @@ fn split_section_does_not_promote_a_bridge_closure_across_two_anchored_component
         "a merge fusing two anchored components tears apart: {:?}",
         p.check_merge_alignment()
     );
-    assert!(
-        p.over_anchored_merge_components().is_empty(),
-        "the two datums must stay in separate merge components: {:?}",
-        p.over_anchored_merge_components()
+    assert_eq!(
+        p.placement_datum_refs().len(),
+        2,
+        "the two datums must stay in separate merge components, each placing its own"
     );
 }
 
@@ -3907,6 +3926,8 @@ fn redo_insert_shot_keeps_merged_stations_aligned() {
     state.execute(Command::SetZeroDatum {
         station_ref: StationRef::new(a, 0),
         coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     let merge = state.execute(Command::MergeStations {
         station_a: StationRef::new(a, 2),
@@ -4383,10 +4404,14 @@ fn test_delete_shot_rejects_frozen_shot() {
     project.zero_datums.push(crate::models::ZeroDatum {
         station_ref: StationRef::new(sec_a, 0).into(),
         gps: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     project.zero_datums.push(crate::models::ZeroDatum {
         station_ref: StationRef::new(sec_b, 0).into(),
         gps: GpsCoordinates::new(46.0, -74.0, 110.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
     // SELF-VERIFY the chosen shot is genuinely frozen before asserting the
@@ -4492,10 +4517,14 @@ fn test_delete_shot_and_split_rejects_frozen_shot() {
     project.zero_datums.push(crate::models::ZeroDatum {
         station_ref: StationRef::new(sec_a, 0).into(),
         gps: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     project.zero_datums.push(crate::models::ZeroDatum {
         station_ref: StationRef::new(sec_b, 0).into(),
         gps: GpsCoordinates::new(46.0, -74.0, 110.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
     // SELF-VERIFY the interior split shot (index 1) is genuinely frozen.
@@ -4712,6 +4741,8 @@ fn test_split_shot_at_distance_preserves_anchor_on_endpoint_station() {
     project.zero_datums.push(crate::models::ZeroDatum {
         station_ref: endpoint_key.clone(),
         gps: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     project
         .station_comments
@@ -4859,6 +4890,8 @@ fn test_split_shot_at_distance_first_shot_keeps_section_start_anchor() {
     project.zero_datums.push(crate::models::ZeroDatum {
         station_ref: start_key,
         gps: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
     let state = AppState::new().unwrap();
@@ -4987,10 +5020,14 @@ fn test_split_shot_at_distance_rejects_frozen_shot() {
     project.zero_datums.push(crate::models::ZeroDatum {
         station_ref: StationRef::new(sec_a, 0).into(),
         gps: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     project.zero_datums.push(crate::models::ZeroDatum {
         station_ref: StationRef::new(sec_b, 0).into(),
         gps: GpsCoordinates::new(46.0, -74.0, 110.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
     let frozen = project.compute_frozen_shots();
@@ -5378,6 +5415,8 @@ fn delete_shot_does_not_shift_independent_component() {
             .execute(Command::SetZeroDatum {
                 station_ref: StationRef::new(a, 0),
                 coordinates: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+                accuracy_m: None,
+                entrance: None,
             })
             .success
     );
@@ -5386,6 +5425,8 @@ fn delete_shot_does_not_shift_independent_component() {
             .execute(Command::SetZeroDatum {
                 station_ref: StationRef::new(b, 0),
                 coordinates: GpsCoordinates::new(46.0, -74.0, 110.0).unwrap(),
+                accuracy_m: None,
+                entrance: None,
             })
             .success
     );
@@ -5483,6 +5524,8 @@ fn delete_tail_shot_does_not_shift_merged_head_neighbor() {
             .execute(Command::SetZeroDatum {
                 station_ref: StationRef::new(a, 0),
                 coordinates: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+                accuracy_m: None,
+                entrance: None,
             })
             .success
     );
@@ -7149,6 +7192,8 @@ fn test_set_and_remove_zero_datum() {
     let result = state.execute(Command::SetZeroDatum {
         station_ref,
         coordinates: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
     assert!(result.success);
@@ -7650,6 +7695,8 @@ fn test_execute_set_zero_datum_command() {
     let result = state.execute(Command::SetZeroDatum {
         station_ref,
         coordinates: gps,
+        accuracy_m: None,
+        entrance: None,
     });
 
     assert!(result.success);
@@ -7733,6 +7780,8 @@ fn test_undo_set_zero_datum_restores_section_offsets() {
     let result = state.execute(Command::SetZeroDatum {
         station_ref,
         coordinates: gps,
+        accuracy_m: None,
+        entrance: None,
     });
     assert!(result.success);
 
@@ -8074,15 +8123,14 @@ fn test_import_shot_updates_reject_atomically_when_one_is_poisoned() {
 
 #[test]
 fn doubly_anchored_guard_reports_receipt_warning_and_skips_the_shot() {
-    // F12b: a section with zero datums on BOTH sides of a modified shot range
-    // is exactly the case the doubly-anchored guard exists for - the update
-    // must be silently kept (not applied) AND the receipt must say so, not
-    // just log it. The two zero datums are pushed directly onto the project
-    // (bypassing the command layer's "one zero datum per connected group"
-    // guard, which exists to stop a USER from creating this state through the
-    // UI) because the guard under test only cares about the raw
-    // `zero_datums` data, and this is the cheapest fixture that produces it.
-    use crate::models::ZeroDatum;
+    // F12b: a section anchored on BOTH sides of a modified shot range is
+    // exactly the case the doubly-anchored guard exists for - the update must
+    // be silently kept (not applied) AND the receipt must say so, not just log
+    // it. Front anchor: the section's own placement datum. Back anchor: a
+    // legacy ALIGNED closure (a baked `Batch` one, which the re-measure leaves
+    // alone) to a separately placed section. Since #741 a second datum on the
+    // same section would be a GPS fix, which anchors nothing.
+    use crate::models::{LoopClosure, ZeroDatum};
 
     let state = AppState::new().unwrap();
     state.execute(Command::CreateProject {
@@ -8107,19 +8155,48 @@ fn doubly_anchored_guard_reports_receipt_warning_and_skips_the_shot() {
         .section_id
         .unwrap();
 
+    let c = state
+        .execute(Command::CreateSection {
+            name: Some("C".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#333333".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+
     let (mid_shot_id, orig_length) = {
         let mut guard = state.project.lock().unwrap();
         let project = guard.as_mut().unwrap();
         let key_front = project.key_for_ref(StationRef::new(a, 0)).unwrap();
         let key_back = project.key_for_ref(StationRef::new(a, 4)).unwrap();
+        let key_other = project.key_for_ref(StationRef::new(c, 0)).unwrap();
         let gps = GpsCoordinates::new(10.0, 20.0, 0.0).unwrap();
         project.zero_datums.push(ZeroDatum {
             station_ref: key_front,
             gps: gps.clone(),
+            accuracy_m: None,
+            entrance: None,
         });
         project.zero_datums.push(ZeroDatum {
-            station_ref: key_back,
+            station_ref: key_other.clone(),
             gps,
+            accuracy_m: None,
+            entrance: None,
+        });
+        project.loop_closures.push(LoopClosure {
+            id: 900,
+            station_a: key_back,
+            station_b: key_other,
+            path_length: 0.0,
+            misclosure_distance: 0.0,
+            error_percentage: 0.0,
+            horizontal_misclosure: 0.0,
+            vertical_misclosure: 0.0,
+            strategy: ClosureStrategy::Batch,
+            is_aligned: true,
         });
         let shot = &project.sections[0].shots[1];
         (shot.id, shot.length)
@@ -8468,6 +8545,8 @@ fn test_execute_delete_section_command() {
     state.execute(Command::SetZeroDatum {
         station_ref: StationRef::new(section_a_id, 0),
         coordinates: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
     // Verify initial state
@@ -8591,6 +8670,8 @@ fn test_execute_command_no_project_open() {
         Command::SetZeroDatum {
             station_ref: StationRef::new(0, 0),
             coordinates: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+            accuracy_m: None,
+            entrance: None,
         },
     ];
 
@@ -9486,6 +9567,8 @@ fn test_set_zero_datum_update_captures_previous_gps_and_offsets() {
     let result = state.execute(Command::SetZeroDatum {
         station_ref,
         coordinates: gps_a,
+        accuracy_m: None,
+        entrance: None,
     });
     assert!(result.success, "Initial SetZeroDatum should succeed");
 
@@ -9507,6 +9590,8 @@ fn test_set_zero_datum_update_captures_previous_gps_and_offsets() {
     let result = state.execute(Command::SetZeroDatum {
         station_ref,
         coordinates: gps_b,
+        accuracy_m: None,
+        entrance: None,
     });
     assert!(result.success, "Update SetZeroDatum should succeed");
 
@@ -9584,6 +9669,8 @@ fn test_set_zero_datum_update_undo_restores_previous_gps_and_offsets() {
     state.execute(Command::SetZeroDatum {
         station_ref,
         coordinates: gps_a,
+        accuracy_m: None,
+        entrance: None,
     });
 
     // Capture state after initial set (GPS-A applied)
@@ -9615,6 +9702,8 @@ fn test_set_zero_datum_update_undo_restores_previous_gps_and_offsets() {
     let result = state.execute(Command::SetZeroDatum {
         station_ref,
         coordinates: gps_b,
+        accuracy_m: None,
+        entrance: None,
     });
     assert!(result.success);
 
@@ -9700,6 +9789,8 @@ fn test_set_zero_datum_no_change_still_creates_undo_entry() {
     state.execute(Command::SetZeroDatum {
         station_ref,
         coordinates: gps,
+        accuracy_m: None,
+        entrance: None,
     });
 
     // Clear undo stack
@@ -9713,6 +9804,8 @@ fn test_set_zero_datum_no_change_still_creates_undo_entry() {
     let result = state.execute(Command::SetZeroDatum {
         station_ref,
         coordinates: same_gps,
+        accuracy_m: None,
+        entrance: None,
     });
     assert!(result.success, "SetZeroDatum with same GPS should succeed");
 
@@ -11222,8 +11315,9 @@ fn test_delete_shot_undo_redo_still_works() {
 // === Zero datum merge validation tests ===
 
 #[test]
-fn test_check_merge_connectivity_both_zero_datums_blocked() {
-    // Both sections have zero datum → can_merge=false
+fn test_check_merge_connectivity_both_zero_datums_allowed() {
+    // Both sections have a zero datum → can_merge=true since #741: the later
+    // datum becomes a GPS fix and its section moves to meet the merge.
     let state = AppState::new().unwrap();
     state.execute(Command::CreateProject {
         name: "BothZD".to_string(),
@@ -11254,10 +11348,14 @@ fn test_check_merge_connectivity_both_zero_datums_blocked() {
     state.execute(Command::SetZeroDatum {
         station_ref: StationRef::new(a, 0),
         coordinates: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     state.execute(Command::SetZeroDatum {
         station_ref: StationRef::new(b, 0),
         coordinates: GpsCoordinates::new(46.0, -91.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
     let result = state
@@ -11265,17 +11363,14 @@ fn test_check_merge_connectivity_both_zero_datums_blocked() {
         .unwrap();
 
     assert!(
-        !result.can_merge,
-        "Both sections with zero datums should not be mergeable"
+        result.can_merge,
+        "two placed sections may merge; the later datum becomes a GPS fix"
     );
     assert!(
         !result.connected,
         "Unconnected sections should not be connected"
     );
-    assert_eq!(
-        result.reason.as_deref(),
-        Some("Both sections have fixed coordinates"),
-    );
+    assert_eq!(result.reason, None);
 }
 
 #[test]
@@ -11311,6 +11406,8 @@ fn test_check_merge_connectivity_one_zero_datum_allowed() {
     state.execute(Command::SetZeroDatum {
         station_ref: StationRef::new(a, 0),
         coordinates: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
     let result = state
@@ -11463,12 +11560,16 @@ fn test_check_merge_connectivity_both_zd_and_connected() {
     state.execute(Command::SetZeroDatum {
         station_ref: StationRef::new(a, 0),
         coordinates: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
     // Set ZD on B (separate group)
     state.execute(Command::SetZeroDatum {
         station_ref: StationRef::new(b, 0),
         coordinates: GpsCoordinates::new(46.0, -91.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
     // Merge C.0 into A.1 (C joins A's merge group)
@@ -11511,7 +11612,7 @@ fn test_check_merge_connectivity_both_zd_and_connected() {
         result.preview.is_some(),
         "Connected stations should have closure preview"
     );
-    // can_merge must be false (both have ZD - zero datum takes priority)
+    // can_merge must be false: they are already connected
     assert!(
         !result.can_merge,
         "Both sections with ZD should not be mergeable"
@@ -12409,6 +12510,8 @@ fn test_move_segment_blocked_by_datum_over_a_closure_only_link() {
     let datum = state.execute(Command::SetZeroDatum {
         station_ref: StationRef::new(sid_a, 0),
         coordinates: GpsCoordinates::new(24.55, -81.78, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     assert!(datum.success, "datum setup must succeed");
 
@@ -13709,6 +13812,8 @@ fn test_delete_range_interior_shift_blocked_by_tail_datum() {
     state.execute(Command::SetZeroDatum {
         station_ref: StationRef::new(section_id, 3),
         coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     let (s1, s2) = {
         let proj = state.get_project_state().unwrap();
@@ -13772,6 +13877,8 @@ fn test_delete_range_prefix_shift_blocked_by_datum() {
     state.execute(Command::SetZeroDatum {
         station_ref: StationRef::new(section_id, 0),
         coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     let (s0, s1) = {
         let proj = state.get_project_state().unwrap();
@@ -13829,6 +13936,8 @@ fn test_delete_range_preview_surfaces_interior_split_datum() {
     state.execute(Command::SetZeroDatum {
         station_ref: StationRef::new(section_id, 2),
         coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     let (s1, s2) = {
         let proj = state.get_project_state().unwrap();
@@ -14027,6 +14136,8 @@ fn test_delete_range_suffix_shift_keeps_head_with_doomed_tail_anchor() {
     state.execute(Command::SetZeroDatum {
         station_ref: StationRef::new(sec_b, 0),
         coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     assert!(
         state
@@ -14358,6 +14469,8 @@ fn test_delete_range_blocked_interior_impact_describes_split() {
     state.execute(Command::SetZeroDatum {
         station_ref: StationRef::new(sec_a, 3),
         coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     // Merge on the tail boundary A:4 (= end_pos+1 for range [2..=3]) - kept by split.
     assert!(
@@ -14529,6 +14642,8 @@ fn delete_range_shift_leaves_a_promoted_closure_aligned() {
             .execute(Command::SetZeroDatum {
                 station_ref: StationRef::new(sec_x, 0),
                 coordinates: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+                accuracy_m: None,
+                entrance: None,
             })
             .success
     );
@@ -15764,6 +15879,8 @@ fn test_delete_section_undo_restores_relationships() {
     let datum_result = state.execute(Command::SetZeroDatum {
         station_ref: StationRef::new(sec_a, 0),
         coordinates: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     assert!(datum_result.success, "SetZeroDatum should succeed");
 
@@ -15996,6 +16113,8 @@ fn test_insert_before_shifts_zero_datum() {
     let zd_result = state.execute(Command::SetZeroDatum {
         station_ref: StationRef::new(sec_id, 0),
         coordinates: GpsCoordinates::new(45.0, -73.5, 100.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     assert!(zd_result.success);
 
@@ -16293,6 +16412,8 @@ fn test_delete_shot_undo_redo_with_snapshot() {
     let zd_result = state.execute(Command::SetZeroDatum {
         station_ref: StationRef::new(sec_a, 2),
         coordinates: GpsCoordinates::new(45.0, -73.5, 100.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     assert!(zd_result.success);
 
@@ -19217,10 +19338,14 @@ fn test_batch_second_zero_datum_lands_on_the_origin_the_first_established() {
             Command::SetZeroDatum {
                 station_ref: StationRef::new(sec_a, 1),
                 coordinates: gps_a,
+                accuracy_m: None,
+                entrance: None,
             },
             Command::SetZeroDatum {
                 station_ref: StationRef::new(sec_b, 0),
                 coordinates: gps_b,
+                accuracy_m: None,
+                entrance: None,
             },
         ],
     });
@@ -19750,6 +19875,8 @@ fn test_delete_section_cascades_closures_and_offsets() {
     let datum_result = state.execute(Command::SetZeroDatum {
         station_ref: StationRef::new(sec_a, 1),
         coordinates: GpsCoordinates::new(45.0, 10.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     assert!(datum_result.success);
 
@@ -19820,6 +19947,8 @@ fn test_delete_section_undo_restores_merges_and_datums() {
     state.execute(Command::SetZeroDatum {
         station_ref: StationRef::new(sec_a, 0),
         coordinates: GpsCoordinates::new(45.0, 10.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
     // Delete section A
@@ -20802,6 +20931,8 @@ fn test_merge_datum_section_does_not_move() {
     state.execute(Command::SetZeroDatum {
         station_ref: StationRef::new(a, 0),
         coordinates: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
 
     // Capture A's coordinates before merge
@@ -21708,6 +21839,8 @@ fn test_stalx_roundtrip_preserves_merges_closures_offsets() {
     let datum_r = state.execute(Command::SetZeroDatum {
         station_ref: StationRef::new(sec_a, 0),
         coordinates: GpsCoordinates::new(45.5, -73.5, 100.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     assert!(datum_r.success, "set zero datum should succeed");
 
@@ -22360,6 +22493,8 @@ fn test_insert_shot_before_zero_datum_shifts_datum_ref() {
             .execute(Command::SetZeroDatum {
                 station_ref: StationRef::new(sec, 1),
                 coordinates: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+                accuracy_m: None,
+                entrance: None,
             })
             .success
     );
@@ -22588,6 +22723,8 @@ fn test_zero_datum_in_chain_positions_all_sections() {
             .execute(Command::SetZeroDatum {
                 station_ref: StationRef::new(sec_a, 0),
                 coordinates: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+                accuracy_m: None,
+                entrance: None,
             })
             .success
     );
@@ -22643,6 +22780,8 @@ fn test_zero_datum_in_chain_positions_all_sections() {
             .execute(Command::SetZeroDatum {
                 station_ref: StationRef::new(sec_a, 0),
                 coordinates: GpsCoordinates::new(46.0, -74.0, 200.0).unwrap(),
+                accuracy_m: None,
+                entrance: None,
             })
             .success
     );
@@ -22842,6 +22981,8 @@ fn test_merge_chain_survives_save_reopen() {
             .execute(Command::SetZeroDatum {
                 station_ref: StationRef::new(sec_a, 0),
                 coordinates: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+                accuracy_m: None,
+                entrance: None,
             })
             .success
     );
@@ -23389,13 +23530,13 @@ fn repair_open_project_integrity_reports_fixed_and_remaining() {
 }
 
 #[test]
-fn repair_command_demotes_a_double_anchoring_bridge_merge() {
-    // End-to-end through the Repair action on the damage a past bug left in saved
-    // files: a RIGID merge bridging two independently GPS-anchored merge
-    // components. `resolve_offsets` cannot satisfy it (each half is pinned to its
-    // own datum), so before this repair the project reported `merge_misaligned` +
-    // `multiple_datums_per_merge_component` on every check and Repair could never
-    // clear them. Fully synthetic: three sections built by command, welded by hand.
+fn repair_command_demotes_a_merge_between_two_datum_holding_groups() {
+    // End-to-end through the Repair action on what a past bug left in saved
+    // files: a RIGID merge bridging two groups that each hold a zero datum,
+    // torn 500 m open. Repair demotes the merge to a loop closure and moves
+    // nothing (#741 D6): closing the merge instead would move the later group
+    // 500 m off its GPS. Fully synthetic: three sections built by command,
+    // welded by hand.
     let state = AppState::new().unwrap();
     state.execute(Command::CreateProject {
         name: "Damaged".to_string(),
@@ -23429,10 +23570,14 @@ fn repair_command_demotes_a_double_anchoring_bridge_merge() {
         project.zero_datums.push(crate::models::ZeroDatum {
             station_ref: StationRef::new(a, 0).into(),
             gps: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+            accuracy_m: None,
+            entrance: None,
         });
         project.zero_datums.push(crate::models::ZeroDatum {
             station_ref: StationRef::new(c, 0).into(),
             gps: GpsCoordinates::new(45.001, -90.0, 0.0).unwrap(),
+            accuracy_m: None,
+            entrance: None,
         });
         // Park C 500 m away, then weld it to B with the merge the promotion bug
         // created out of what should have stayed a loop closure.
@@ -23445,39 +23590,46 @@ fn repair_command_demotes_a_double_anchoring_bridge_merge() {
     }
 
     let before = state.integrity_violation_messages().len();
-    assert!(
-        before >= 2,
-        "seeded a torn merge AND an over-anchored merge component, got {before}"
+    assert_eq!(
+        before, 1,
+        "seeded one torn merge, and two datums are no violation"
     );
+    let xy_before: Vec<_> = state
+        .get_project_state()
+        .unwrap()
+        .compute_station_coordinates()
+        .into_iter()
+        .map(|s| (s.station_ref, s.coordinates.x, s.coordinates.y))
+        .collect();
 
     let result = state.repair_open_project_integrity();
-    assert!(
-        result.fixed >= 1,
-        "the demotion is reported as a fix, got {result:?}"
-    );
+    assert!(result.fixed >= 1, "the torn merge is fixed, got {result:?}");
     assert!(result.changed, "repair mutated the project");
     assert_eq!(
         result.remaining,
         0,
-        "both symptoms clear: {:?}",
+        "nothing is left: {:?}",
         state.integrity_violation_messages()
     );
 
     let guard = state.project.lock().unwrap();
     let project = guard.as_ref().unwrap();
+    assert_eq!(project.station_merges.len(), 1, "the torn merge went");
+    assert_eq!(project.loop_closures.len(), 1, "as a closure");
+    assert!(!project.loop_closures[0].is_aligned);
+    assert!(project.check_merge_alignment().is_empty());
+    let xy_after: Vec<_> = project
+        .compute_station_coordinates()
+        .into_iter()
+        .map(|s| (s.station_ref, s.coordinates.x, s.coordinates.y))
+        .collect();
+    assert_eq!(xy_before, xy_after, "Repair moved nothing");
     assert_eq!(
-        project.station_merges.len(),
-        1,
-        "only the legitimate A-B merge survives"
-    );
-    assert!(
-        project.are_stations_in_closure(StationRef::new(b, 2), StationRef::new(c, 0)),
-        "the demoted pair is now a loop closure - and it is still one after \
-         convert_orphan_closures_to_merges ran later in the SAME repair pass"
-    );
-    assert!(
-        project.loop_closures.iter().all(|lc| !lc.is_aligned),
-        "an aligned closure would re-impose the constraint the demotion removed"
+        project.datum_roles(),
+        vec![
+            Some(crate::models::DatumRole::Placement),
+            Some(crate::models::DatumRole::Placement)
+        ]
     );
 }
 
@@ -24892,6 +25044,8 @@ fn finding_26_a_shot_edit_does_not_translate_a_group_whose_first_datum_was_remov
             .execute(Command::SetZeroDatum {
                 station_ref: StationRef::new(anchor, 0),
                 coordinates: GpsCoordinates::new(20.30, -87.45, 0.0).unwrap(),
+                accuracy_m: None,
+                entrance: None,
             })
             .success
     );
@@ -24901,6 +25055,8 @@ fn finding_26_a_shot_edit_does_not_translate_a_group_whose_first_datum_was_remov
             .execute(Command::SetZeroDatum {
                 station_ref: StationRef::new(a, 0),
                 coordinates: GpsCoordinates::new(20.20, -87.24, 0.0).unwrap(),
+                accuracy_m: None,
+                entrance: None,
             })
             .success
     );
@@ -25039,6 +25195,8 @@ fn two_merged_sections(state: &AppState) -> (SectionId, SectionId) {
     let datum = state.execute(Command::SetZeroDatum {
         station_ref: StationRef::new(a, 0),
         coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        accuracy_m: None,
+        entrance: None,
     });
     assert!(datum.success, "SetZeroDatum failed: {:?}", datum.error);
     let merged = state.execute(Command::MergeStations {

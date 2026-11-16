@@ -102,6 +102,8 @@ fn hold(project: &mut Project, at: StationRef) {
             longitude: -87.0,
             depth_reference: 0.0,
         },
+        accuracy_m: None,
+        entrance: None,
     });
 }
 

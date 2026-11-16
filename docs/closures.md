@@ -19,8 +19,12 @@ own vocabulary; only the two UI labels were renamed.)
   `toolbar_only` / `off` the two pills are label-only. The mode is persisted per the display
   settings ("remember last used"); default is the Raw Data View. (The stored enum values stay
   `measured` / `closureAdjusted`.) The adjusted option is disabled when
-  the project has no closures eligible for the solve (`Batch` / `LeastSquaresWeighted`); `Move`
-  closures are already coincident, so a project with only those shows the option disabled.
+  the project has neither a closure eligible for the solve (`Batch` / `LeastSquaresWeighted`)
+  nor a GPS fix (a later zero datum in an already placed piece, #741, which the solve pulls the
+  survey toward); `Move` closures are already coincident, so a project with only those shows
+  the option disabled. One helper decides this everywhere - the Display option, the auto-revert
+  to the Raw Data View, and whether the adjusted geometry is fetched at all:
+  `hasAdjustmentInputs` (`src/utils/closures.ts`).
 - Closure-adjusted coordinates are derived by running the weighted least-squares solve on a
   **throwaway clone** of the project (`Project::compute_adjusted_station_coordinates`) and
   returning only the resulting coordinates - the live project's shots/offsets are untouched.
@@ -118,12 +122,17 @@ Which edits can make one:
 
 - **Not** creating a closure: Create Loop Closure and the import's batch refuse a
   merged pair, and so does the shot-removal rewire.
-- **Not** a merge: `merge_stations` refuses a merge inside one rigid component, and a
-  closure between two components is either a sole bridge (which every sweep promotes)
-  or ties two zero-datum-anchored components, which a merge may not join. Tests try
-  every merge of a closure's two ends, and of their merge groups, on random networks
-  and after every step of the combine/split/reverse chain fuzzer
-  (`check_no_merge_folds_a_closure`): all are refused.
+- **A merge of two placed pieces** (#741): `merge_stations` refuses a merge inside one
+  rigid component, and a closure between two components is either a sole bridge (which
+  every sweep promotes) or ties two zero-datum-placed components. Those two MAY merge
+  since #741 (the later placement datum becomes a GPS fix), and a merge at the
+  closure's two ends makes them one point. The merge command runs the sweep
+  (`command_integrity` flags it `can_orphan_closures`), so the closure is removed and
+  reported inside the merge's undo unit; any other closure between the two pieces ties
+  two different points and stays a loop. Tests try every merge of a closure's two ends,
+  and of their merge groups, on random networks and after every step of the
+  combine/split/reverse chain fuzzer (`check_no_merge_folds_a_closure`): each is
+  refused, or joins two placed pieces and the sweep removes exactly that closure.
 - **A promotion**: two closures that tie a station to the same point record one loop
   twice (the Merge tool and Combine Sections both allow that), and once the sweep
   promotes one, the other ties that point to itself (#738).
@@ -142,16 +151,18 @@ it on a copy - the callers that keep the result log one line with the count.
   the closure and the log says how many went. The file settles on the next save: an
   explicit Save writes it, while autosave only runs after an edit.
 - **Inside a command** it is part of that command's undo unit: Split Section Here,
-  the delete-and-split commands, the deletes, unmerges and Remove Zero Datum through
-  `execute()`'s epilogue, Batch and Repair all record a before/after snapshot pair
-  around it, so one Undo brings the closure back. Each of those commands except Batch
-  and Repair also reports it: a `CLOSURE_REMOVED_MERGED_ENDS` warning per closure,
+  the delete-and-split commands, the deletes, unmerges, merges and Remove Zero Datum
+  through `execute()`'s epilogue, Batch and Repair all record a before/after snapshot
+  pair around it, so one Undo brings the closure back. Each of those commands except
+  Repair also reports it (a Batch from its own sweep, so the Merge dialog's
+  snap-to-merge batch reports like a plain merge): a `CLOSURE_REMOVED_MERGED_ENDS` warning per closure,
   named by the stations it had BEFORE the edit (`Project::closures_before_sweep`,
   matched by position, else a unique id, else id and stored ends, since a file can
   repeat an id), which the frontend shows in the closure-removal toast: "Removed loop
   closure 1:0 to 0:3: another loop closure became a merge, which made its two
-  stations one point." (or "...: its two stations were already one point." for one
-  the edit did not cause). Split Section Here says it in its dialog instead.
+  stations one point." ("...: the merge made its two stations one point." after a
+  merge, or "...: its two stations were already one point." for one the edit did not
+  cause). Split Section Here says it in its dialog instead.
 - **The scoped sweep** an inverse runs (the shot-removal paths) snapshots
   `Project::swept_closure_ids` first - orphans and closures already between merged
   stations - and leaves those as recorded; it removes only what its own promotions
@@ -179,11 +190,13 @@ gap no cascade, realign or Repair will close.
 Two rules, both in `models/project/offsets.rs`:
 
 - **`plan_merge_promotion`** decides whether the promotion may happen at all, and
-  which side moves. The one refusal is over-anchoring - an edge fusing two
-  independently zero-datum-anchored groups puts two GPS anchors in one rigid
-  component. A refused closure STAYS a closure (re-anchored, if the deletion moved
-  its endpoint), which is legitimate between two anchored groups and is what the
-  over-anchoring detector reports. **Distance is never a refusal**: the loader
+  which side moves. The one refusal is an edge fusing two groups that are each
+  placed by their own zero datum: promoting it would translate a GPS-placed group by
+  the closure's misclosure. A refused closure STAYS a closure (re-anchored, if the
+  deletion moved its endpoint), which is legitimate between two placed groups. An
+  explicit user merge of two placed groups is allowed; the group whose placement
+  datum is later in the list moves and that datum becomes a GPS fix (#741).
+  **Distance is never a refusal**: the loader
   converts unconditionally, so declining on geometry would leave memory and disk
   disagreeing about what the relationship is.
 - **`settle_minted_merges`** translates the movable side's whole rigid group onto
@@ -198,6 +211,19 @@ group connected) is the opposite case and is governed by
 `replacement_merge_allowed`: nothing is translated, and a pair that is not already
 coincident is simply not stitched. The pair is arbitrary rather than surveyed, so
 moving a group onto it would invent geometry.
+
+A **torn merge between two datum-placed pieces** in a file from an older build (the
+#464 damage: each half pinned by its own zero datum, the merge metres or kilometres
+open) is turned back into the unaligned loop closure it should have stayed, when the
+file opens and by Repair (`demote_double_anchoring_merges`,
+`project/legacy_anchoring.rs`). Since #741 the later datum of a merged group is a GPS
+fix that holds nothing in raw geometry, so the offset re-solve would otherwise heal
+the tear by moving the later piece off its GPS by the whole tear, with no undo. The
+demotion runs before the re-solve and moves nothing: each piece keeps its datum as
+its placement datum, and the misclosure is on the closure. A user who wants the two
+pieces joined merges them, which moves the later piece, can be undone, and makes its
+datum a GPS fix. A legacy group with two datums and no torn merge needs nothing: the
+re-solve moves nothing and the later datum is a fix that reports its gap.
 
 ## Closures across a Split Section Here or a Combine Sections
 
@@ -414,7 +440,8 @@ The adjustment path uses `shortest_path_shots_merges`:
 - Co-located groups are based on merges + loop closures (current behavior treats all closures as co-locating).
 - When building targets, steps that stay inside the same co-located group are skipped.
 
-Key behaviors:
+Key behaviors (a "zero datum" here is a PLACEMENT datum; GPS fixes, #741, are ignored by
+this path and never anchor it):
 - If one endpoint’s co-located group contains a zero datum, that side is treated as the anchor and the path is oriented from anchored -> unanchored.
 - If a zero-datum station lies **on** the loop path (via merges) **and is not an endpoint**,
   it becomes the anchor and the correction is split across both legs (anchor -> A, anchor -> B).
@@ -443,8 +470,8 @@ Common error conditions:
 
 The Closures Computed View solves with **only** `LeastSquaresWeighted`. It runs
 non-destructively on a throwaway clone (`Project::compute_adjusted_station_coordinates`),
-once per connected component that has eligible closures, anchored on a zero datum when present
-and otherwise on a deterministic default anchor (the lexicographically smallest
+once per connected component that has eligible closures or a GPS fix, anchored on a zero datum
+when present and otherwise on a deterministic default anchor (the lexicographically smallest
 `(section_id, station_index)` station in the component, via `default_anchor_for_component`).
 Eligible closures are `Batch` + `LeastSquaresWeighted` (`Move` closures are already coincident).
 
@@ -463,9 +490,15 @@ live project):
   the smaller group, so the sweep is linear in the common case and deterministic.
   `adjust_loop_closures` drops these closures before the solve, so the groups, the
   spur detection and the `is_aligned` marking all see the same set; a component
-  whose only closures are skipped keeps its measured geometry and is not an error.
-- If a group contains a zero datum, it is fixed; multiple zero datums in a single group is an error.
-- If no zero datum exists in the component, the anchor station's group is fixed.
+  whose only closures are skipped keeps its measured geometry and is not an error,
+  unless it has a GPS fix, which still pulls it (#741).
+- If a group contains a **placement** datum, it is fixed at its raw position. Two placement
+  datums in one group (only possible when a closure ties the two datum stations themselves) is
+  an error, and the component falls back to raw geometry.
+- **GPS fixes** (#741; a later datum in an already placed merge component, see
+  `project/datum_roles.rs`) enter as observations, not as fixed groups. See "GPS fixes" below.
+- If neither a placement datum nor a hard fix exists in the component, the anchor station's
+  group is fixed.
 - For each shot, build weighted constraints in X/Y using section quality and base sigmas from config:
   - `base_sigma_length_m`
   - `base_sigma_azimuth_deg`
@@ -474,11 +507,48 @@ live project):
   Conjugate Gradient solver (see [performance.md](performance.md) for algorithm details).
 - Update the clone's shot vectors from solved group coordinates and apply section-level
   translations to keep merged stations aligned, then compute coordinates from the clone.
-- Zero datum positions are verified to remain fixed; any movement is an error.
+- Placement datum positions are verified to remain fixed; any movement is an error. A GPS fix
+  is expected to move.
 
-A component whose solve still fails (for example a closure that ties two zero
-datums into one group: "Multiple zero datums in a single constraint group", which
-creation allows because both sections have fixed coordinates) is rolled back to its
+### GPS fixes
+
+A GPS fix pulls its station toward `gps_to_local(fix.gps, frame.gps)`, the GPS position in the
+frame's local metres. It is the observation `p = gps` on each horizontal axis with weight
+`1 / accuracy^2` (`ZeroDatum::effective_accuracy_m`, read as a per-axis 1-sigma; the default is
+0, a hard fix, below):
+one diagonal term and one right-hand-side term on its group's unknown. Shots use the same units,
+so the two compare directly. A shot's per-axis variance is
+`(sin(az) * sigma_len)^2 + (len * cos(az) * sigma_az)^2` across x (cos and sin swapped for y),
+with `sigma_len = base_sigma_length_m * quality` and `sigma_az = base_sigma_azimuth_deg * quality`,
+and variances add along a traverse.
+
+What a soft fix means at the default config (0.05 m, 1 deg), taking an accuracy of 5 m as the
+example: a level 500 m traverse of 10 m shots is trusted to about 0.35 m along its length and
+1.23 m across it, far tighter than a 5 m GPS. A fix 40 m off across that traverse moves its
+station only about 2.3 m toward the GPS; the rest of the gap stays visible. That is why the
+default is a hard fix: only a hard fix, or larger base sigmas, puts the station on its GPS.
+
+- **Accuracy 0 is a hard fix** (anything under 1 mm counts), and it is the default: its group is
+  fixed AT the GPS position, the way a placement datum fixes its group at its raw one. A
+  non-finite or negative stored accuracy is not a measurement and falls back to the default, so
+  it pins the fix too (read as a weight, an infinite accuracy would make the fix pull nothing).
+  A stored accuracy outside 0 to 1000 m reads as the default on load as well.
+- **A fixed group ignores a fix.** A fix in the placement datum's own group (merged onto it) is
+  the same point and cannot hold both positions; the placement wins. Between two hard fixes in
+  one group, the first in list order wins.
+- **Fixes count as pinned for the spur prune.** A fix at the end of a passage is a second
+  observation of it, so its shots take the solved positions instead of being skipped as a spur.
+- **Horizontal only.** Depths never move, and the fix's elevation (`depth_reference`) is never
+  read.
+- **No closure needed.** `adjust_least_squares` accepts an empty closure list, so a component
+  whose only reason to adjust is a GPS fix is solved the same way.
+
+Tests: `project/lsq_fix_tests.rs` (two entrances joined by a 500 m traverse, the GPS 40 m off,
+checked against the closed-form series-spring answer).
+
+A component whose solve still fails (for example a closure that ties two placement
+zero datums into one group: "Multiple placement zero datums in a single constraint
+group", which creation allows because both sections have fixed coordinates) is rolled back to its
 measured geometry, as before - but it is no longer silent (#737).
 `Project::into_adjusted_stations` returns each failure (anchor, sections, the
 solver's error), `AppState` keeps them beside the memoized adjusted stations, and:

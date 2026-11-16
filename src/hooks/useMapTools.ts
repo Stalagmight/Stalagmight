@@ -18,6 +18,7 @@ import { setSource } from '../utils/telemetry';
 import type { SurveyLayerCallbacks } from '../components/Map/SurveyLayer';
 import { projectParamOnSegment } from '../components/Map/surveyLayer/hitTest';
 import { TOAST_KEYS } from '../utils/toastKeys';
+import { projectIdentityKey } from '../utils/projectIdentity';
 
 /**
  * #395: what a plain Plan-mode select-click does to the gas plan pins.
@@ -40,15 +41,6 @@ function applyGasPlanClick(ref: StationRef): void {
 /** A measure endpoint's 3D coords (meters). For a raw `point` the fields are inline. */
 function endpointCoords(ep: MeasureEndpoint): Coordinates {
   return ep.kind === 'point' ? { x: ep.x, y: ep.y, z: ep.z } : ep.coords;
-}
-
-/** Stable identity for ruler state: a distinct project file - even a duplicate
- *  sharing created_at/modified_at - and any edit (modified_at) yield a different
- *  key, so an in-flight along-line reply can't bleed across them (#26). */
-function projectIdentityKey(
-  project: { created_at?: string; modified_at?: string; file_path?: string | null } | null | undefined
-): string {
-  return `${project?.created_at ?? ''}|${project?.modified_at ?? ''}|${project?.file_path ?? ''}`;
 }
 
 /** Only stations and shot-points have a cave-line position (enable along-line + tint). */
@@ -403,9 +395,10 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           openDialog('merge', {
             stationA,
             stationB,
+            datumShift: result.datum_shift,
           });
-        } else if (result.connected || result.reason === 'Both sections have fixed coordinates') {
-          // Connected (or both sections fixed) - redirect to closure dialog
+        } else if (result.connected) {
+          // Connected - merging would make a loop, so redirect to closure dialog
           setSource('map');
           openDialog('closure', {
             stationA,
@@ -415,7 +408,8 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
             closureRefusal: result.closure_refusal,
           });
         } else {
-          // Not connected and merge blocked (e.g. both sides have zero datums)
+          // Not connected and merge blocked. The backend blocks only a loop
+          // today (zero datums no longer block a merge, #741); kept defensive.
           showToast(result.reason ?? t('map.toasts.mergeNotPossible'), TOAST_KEYS.MERGE_BLOCKED, 'warning');
           clearMergeStations();
         }
@@ -668,7 +662,8 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
                   ref,
                   other,
                   useGasPlanStore.getState().reachField,
-                  activeStations
+                  activeStations,
+                  project?.zero_datums
                 );
                 applyGasPlanClick(nearer);
               }
@@ -799,7 +794,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
       }
     },
     // See handleStationClick: the read `options` fields, not the object (#430).
-    [activeTool, activeStations, addToSelection, applyMeasureClick, buildShotPointEndpoint, clickShotParam, openDialog, options.immovableStationKeys, options.onMoveDragStart, options.querySnapAtPoint, project?.sections, setSelection, showShots, showToast, toggleSelection, showDistanceGradient, setDistanceGradientOrigin, showGasPlan]
+    [activeTool, activeStations, addToSelection, applyMeasureClick, buildShotPointEndpoint, clickShotParam, openDialog, options.immovableStationKeys, options.onMoveDragStart, options.querySnapAtPoint, project?.sections, project?.zero_datums, setSelection, showShots, showToast, toggleSelection, showDistanceGradient, setDistanceGradientOrigin, showGasPlan]
   );
 
   // Handle empty click (no feature) - but use snapped station if available

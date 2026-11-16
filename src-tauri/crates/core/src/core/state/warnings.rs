@@ -3,8 +3,9 @@ use std::collections::HashSet;
 
 use crate::core::{Validator, WarningSeverity};
 use crate::models::{
-    severity_for_code, station_id_label, Project, ProjectWarning, SectionId, ShotData, ShotId,
-    CLOSURE_ACROSS_ONE_SHOT, CLOSURE_ADJUSTMENT_FAILED, MULTIPLE_DATUMS_PER_MERGE_COMPONENT,
+    datum_gap_ignore_code, severity_for_code, station_id_label, DatumGap, Project, ProjectWarning,
+    SectionId, ShotData, ShotId, StationRef, CLOSURE_ACROSS_ONE_SHOT, CLOSURE_ADJUSTMENT_FAILED,
+    DATUM_GPS_GAP, DATUM_GPS_GAP_START,
 };
 use crate::persistence::Database;
 
@@ -248,55 +249,59 @@ impl AppState {
             }
         }
 
-        // Project-level: two or more zero datums in one merge-connected component
-        // over-constrain the rigid group, so the offset cascade tears a merge edge
-        // apart. Emit ONE error per component (not one per datum, which collided on
-        // the (section, shot, code) key - issue #57, finding #4), attached to the
-        // first datum's adjacent shot, carrying the FULL datum list so the Resolve
-        // view can offer "keep this one, remove the others". (Per-shot
-        // ProjectWarning shape: anchor station 0 -> shot 0; station i -> shot i-1.)
-        for component in project.over_anchored_merge_components() {
-            // Attach the warning to the first datum that maps to a real shot. The
-            // first datum may sit at station 0 of an empty section (no shot there);
-            // skipping on it alone would silently drop the whole component's error
-            // even when another datum in the component IS attachable (Codex). Fall
-            // through the component to the first datum with a shot.
-            let representative = component.iter().find_map(|d| {
-                let section = project.get_section(d.section_id)?;
-                let shot_index = if d.station_index == 0 {
-                    0
-                } else {
-                    (d.station_index - 1) as usize
-                };
-                let shot = section.shots.get(shot_index)?;
-                Some((d, section, shot_index, shot))
-            });
-            let Some((first, section, shot_index, shot)) = representative else {
+        // Project-level: one advisory warning per GPS-fix zero datum whose GPS is
+        // further from its surveyed position than 15 m plus 2% of the survey
+        // distance from its piece's placement datum (#741 decision 4). Attached to the
+        // fix's adjacent shot, so it keys and ignores like any per-shot warning,
+        // and each fix gets a (shot, code) pair of its own: station i -> shot i-1
+        // under DATUM_GPS_GAP, station 0 -> shot 0 under DATUM_GPS_GAP_START, so
+        // the fixes on stations 0 and 1 never share an Ignore.
+        // `datum_station_index` names the fix's station for "Go to station". The
+        // gap is the backend's (`Project::gps_fix_gaps`), so every readout of it
+        // agrees.
+        //
+        // A fix on a section with no shots has no shot to hang a row on, and the
+        // warnings list, Ignore and navigation are all shot-keyed, so it gets no
+        // row; it is logged instead of dropped silently.
+        let mut gaps: Vec<_> = project
+            .gps_fix_gaps()
+            .into_iter()
+            .filter(|(_, gap)| gap.exceeds_threshold)
+            .collect();
+        gaps.sort_by_key(|(sr, _)| (sr.section_id, sr.station_index));
+        for (datum, gap) in gaps {
+            let Some(section) = project.get_section(datum.section_id) else {
                 continue;
             };
-            let anchors = component
-                .iter()
-                .map(|r| format!("{}:{}", r.section_id, r.station_index))
-                .collect::<Vec<_>>()
-                .join(", ");
+            let (shot_index, code) = match datum.station_index {
+                0 => (0, DATUM_GPS_GAP_START),
+                i => (i as usize - 1, DATUM_GPS_GAP),
+            };
+            let Some(shot) = section.shots.get(shot_index) else {
+                tracing::warn!(
+                    section_id = section.id,
+                    station_index = datum.station_index,
+                    gap_m = gap.gap_m,
+                    purpose = "report a GPS fix far from its survey",
+                    "GPS fix exceeds the gap threshold but its section has no shot to carry the warning"
+                );
+                continue;
+            };
+            // The Ignore is keyed on the datum's GPS too, so a new GPS reading
+            // brings the warning back (#741 U2, `datum_gap_ignore_code`).
+            let ignore_code = ignore_code_in(project, section.id, shot.id, code);
+            let is_resolved = is_resolved_for(&shot.uuid, section.id, shot.id, &ignore_code);
             all_warnings.push(ProjectWarning {
                 section_id: section.id,
                 shot_id: shot.id,
                 shot_index,
-                message: format!(
-                    "This merge group is anchored by {} zero datums ({anchors}). Two or more GPS anchors over-constrain one rigid group; keep one and remove the others.",
-                    component.len()
-                ),
-                code: MULTIPLE_DATUMS_PER_MERGE_COMPONENT.to_string(),
-                // An error (severity_for_code), so it is never ignorable and the
-                // generic error force-false above also covers it: it clears only
-                // when a datum is actually removed (then this warning is no longer
-                // generated at all), never via a stray resolved row.
-                severity: severity_for_code(MULTIPLE_DATUMS_PER_MERGE_COMPONENT),
-                is_resolved: false,
+                message: datum_gps_gap_message(&gap),
+                code: code.to_string(),
+                severity: severity_for_code(code),
+                is_resolved,
                 shot_uuid: shot.uuid.clone(),
-                datum_station_index: Some(first.station_index),
-                datum_refs: Some(component.clone()),
+                datum_station_index: Some(datum.station_index),
+                datum_refs: None,
                 closure_id: None,
             });
         }
@@ -718,13 +723,24 @@ impl AppState {
     /// pushes it - otherwise it is silently dropped on the next pull. The low-level
     /// [`Self::save_resolved_warning`] accessor stays ungated for the load-time backfill
     /// and tests.
+    ///
+    /// The row is stored under [`Self::ignore_code_for`] its warning: a datum
+    /// gap warning's Ignore names the datum's GPS as well (#741 U2).
     pub fn save_resolved_warning_gated(
         &self,
         warning: &crate::persistence::ResolvedWarning,
     ) -> Result<(), String> {
         self.guard_mutation("Resolve warning")
             .map_err(|f| f.error.unwrap_or_default())?;
-        self.save_resolved_warning(warning)
+        let warning = crate::persistence::ResolvedWarning {
+            warning_code: self.ignore_code_for(
+                warning.section_id,
+                warning.shot_id,
+                &warning.warning_code,
+            ),
+            ..warning.clone()
+        };
+        self.save_resolved_warning(&warning)
             .map_err(|e| e.to_string())?;
         // Dirty-bit flip (#191/#197): set-only; no-op for local-only (no speleo_link).
         self.mark_remote_forward_edit();
@@ -743,10 +759,30 @@ impl AppState {
     ) -> Result<(), String> {
         self.guard_mutation("Unresolve warning")
             .map_err(|f| f.error.unwrap_or_default())?;
-        self.delete_resolved_warning(section_id, shot_id, warning_code, shot_uuid)
+        let warning_code = self.ignore_code_for(section_id, shot_id, warning_code);
+        self.delete_resolved_warning(section_id, shot_id, &warning_code, shot_uuid)
             .map_err(|e| e.to_string())?;
         self.mark_remote_forward_edit();
         Ok(())
+    }
+
+    /// The code an Ignore of `warning_code` on `(section_id, shot_id)` is
+    /// stored and matched under in the open project ([`ignore_code_in`]).
+    /// Takes the project lock, so never call it holding one.
+    pub fn ignore_code_for(
+        &self,
+        section_id: SectionId,
+        shot_id: ShotId,
+        warning_code: &str,
+    ) -> String {
+        let guard = match self.project.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        match guard.as_ref() {
+            Some(project) => ignore_code_in(project, section_id, shot_id, warning_code),
+            None => warning_code.to_string(),
+        }
     }
 
     /// Look up a shot's stable UUID by its `(section_id, shot_id)` identity in
@@ -761,4 +797,45 @@ impl AppState {
         let shot = section.shots.iter().find(|s| s.id == shot_id)?;
         shot.uuid.clone()
     }
+}
+
+/// The code an Ignore of `code` on `(section_id, shot_id)` is stored and
+/// matched under: for a datum gap warning, [`datum_gap_ignore_code`] with the
+/// GPS of the datum on the station the shot carries the warning for (station
+/// 0 for [`DATUM_GPS_GAP_START`], the station the shot arrives at for
+/// [`DATUM_GPS_GAP`]); every other code, or a station that holds no datum,
+/// as it is.
+fn ignore_code_in(project: &Project, section_id: SectionId, shot_id: ShotId, code: &str) -> String {
+    let datum_gps = || {
+        let section = project.get_section(section_id)?;
+        let station_index = match code {
+            DATUM_GPS_GAP_START => 0,
+            DATUM_GPS_GAP => {
+                let shot = section.shots.iter().position(|s| s.id == shot_id)?;
+                u32::try_from(shot + 1).ok()?
+            }
+            _ => return None,
+        };
+        let at = StationRef::new(section_id, station_index);
+        project
+            .zero_datums
+            .iter()
+            .find(|zd| project.resolve_key(&zd.station_ref) == Some(at))
+            .map(|zd| zd.gps)
+    };
+    match datum_gps() {
+        Some(gps) => datum_gap_ignore_code(code, &gps),
+        None => code.to_string(),
+    }
+}
+
+/// The `datum_gps_gap` warning text: the gap in metres, which way the GPS lies
+/// from the surveyed station, and the threshold it exceeds.
+fn datum_gps_gap_message(gap: &DatumGap) -> String {
+    format!(
+        "The GPS position of this zero datum is {:.1} m from where the survey puts it \
+         (bearing {:.0} degrees), more than the {:.1} m expected. Check the GPS reading \
+         and the survey between the datums.",
+        gap.gap_m, gap.bearing_deg, gap.threshold_m
+    )
 }

@@ -433,11 +433,7 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         .iter()
         .filter_map(|m| project.merge_to_wire(m))
         .collect();
-    let zero_datums = project
-        .zero_datums
-        .iter()
-        .filter_map(|zd| project.datum_to_wire(zd))
-        .collect();
+    let zero_datums = project.zero_datums_wire();
     let loop_closures = project
         .loop_closures
         .iter()

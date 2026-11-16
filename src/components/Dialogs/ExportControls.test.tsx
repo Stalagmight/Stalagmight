@@ -52,6 +52,8 @@ const section = (id: number, name: string | null = null): Section =>
 const ZERO_DATUM: ZeroDatum = {
   station_ref: { section_id: 1, station_index: 0 },
   gps: { latitude: 1, longitude: 2, depth_reference: 0 },
+  role: 'Placement',
+  is_entrance: true,
 };
 
 const buildProject = (sections: Section[], zero_datums: ZeroDatum[]): Project =>

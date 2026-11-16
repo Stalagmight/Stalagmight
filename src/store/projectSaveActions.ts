@@ -7,6 +7,7 @@ import i18n from '../i18n';
 import { TOAST_KEYS } from '../utils/toastKeys';
 import { autosaveFailureMessage } from '../utils/saveFeedback';
 import { classifySaveError, isPermissionError } from '../utils/saveErrors';
+import { noticeOlderVersionsDropFixes } from '../utils/gpsFixSaveNotice';
 
 /** Local-save completion belongs to the project and edits that issued it. */
 export function createSaveProjectAction(set: StoreApi<ProjectStore>['setState'], get: () => ProjectStore): ProjectStore['saveProject'] {
@@ -79,6 +80,8 @@ export function createSaveProjectAction(set: StoreApi<ProjectStore>['setState'],
         autosaveFailure: null,
         autosaveFailureKind: null,
       });
+      // The file holds GPS fixes an older version drops on its save (#741).
+      noticeOlderVersionsDropFixes(result, issued.project?.created_at);
       // If the save healed the project in memory (re-minted duplicate UUIDs,
       // dropped orphan section offsets, sanitized non-finite geometry), the
       // frontend's shots/stations are now stale vs the saved file - refresh so the

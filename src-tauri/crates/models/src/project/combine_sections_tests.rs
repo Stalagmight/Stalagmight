@@ -5,10 +5,10 @@ use chrono::Utc;
 
 use crate::{
     AzimuthReference, ClosureStrategy, CombineJoinEnds, CombineJoinKind, CombinePick,
-    CombineSectionsOptions, CorrectionSource, GpsCoordinates, LoopClosure, NorthReference, Person,
-    Project, SectionData, SectionEnd, SectionId, ShotData, SplitSectionOptions, SplitSide,
-    StationKey, StationMerge, StationRef, SurveyCredit, TornTie, TornTieKind, TornTieReason,
-    ZeroDatum,
+    CombineSectionsOptions, CorrectionSource, DatumRole, GpsCoordinates, LoopClosure,
+    NorthReference, Person, Project, SectionData, SectionEnd, SectionId, ShotData,
+    SplitSectionOptions, SplitSide, StationKey, StationMerge, StationRef, SurveyCredit, TornTie,
+    TornTieKind, TornTieReason, ZeroDatum,
 };
 
 fn shot(azimuth: f64, length: f64) -> ShotData {
@@ -1026,7 +1026,7 @@ fn a_section_through_the_join_stays_merged_as_a_crossing() {
 }
 
 #[test]
-fn zero_datums_on_both_sides_block() {
+fn placement_datums_on_both_sides_block() {
     // Co-located, each rigid group anchored.
     let (mut project, k, o) = pair(SectionEnd::End, SectionEnd::Start, false, 0.0);
     project
@@ -1035,18 +1035,66 @@ fn zero_datums_on_both_sides_block() {
     project.zero_datums.push(ZeroDatum {
         station_ref: project.key_for_ref(StationRef::new(o, 3)).unwrap(),
         gps: gps(),
+        accuracy_m: None,
+        entrance: None,
     });
     assert!(blocked(&project, k, o).contains("zero datum"));
 
-    // Both join stations carry one.
+    // A GPS fix elsewhere on the other section does not block a merged join:
+    // one merge component, so the second datum is a fix (#741) and holds
+    // nothing.
     let (mut project, k, o) = pair(SectionEnd::End, SectionEnd::Start, true, 0.0);
-    for station in [StationRef::new(k, 2), StationRef::new(o, 0)] {
-        project.zero_datums.push(ZeroDatum {
-            station_ref: project.key_for_ref(station).unwrap(),
-            gps: gps(),
-        });
-    }
-    assert!(blocked(&project, k, o).contains("zero datum"));
+    project
+        .set_zero_datum(StationRef::new(k, 0), gps())
+        .unwrap();
+    project
+        .set_zero_datum(StationRef::new(o, 3), gps())
+        .unwrap();
+    assert_eq!(
+        project.datum_roles(),
+        vec![Some(DatumRole::Placement), Some(DatumRole::GpsFix)]
+    );
+    assert_eq!(
+        blocked(&project, k, o),
+        "",
+        "a GPS fix does not block a combine"
+    );
+}
+
+#[test]
+fn two_datums_on_the_join_stations_block() {
+    // A placement datum on K's end and a GPS fix on O's start, the merged
+    // join stations: combining would fold both onto ONE station key, where
+    // a save keeps one and Remove Zero Datum clears both (#741 D2).
+    let (mut project, k, o) = pair(SectionEnd::End, SectionEnd::Start, true, 0.0);
+    project
+        .set_zero_datum(StationRef::new(k, 2), gps())
+        .unwrap();
+    project
+        .set_zero_datum(StationRef::new(o, 0), gps())
+        .unwrap();
+    assert_eq!(
+        project.datum_roles(),
+        vec![Some(DatumRole::Placement), Some(DatumRole::GpsFix)]
+    );
+    let reason = blocked(&project, k, o);
+    assert!(reason.contains("each hold a zero datum"), "{reason}");
+    let keys = |p: &Project| -> Vec<_> {
+        p.zero_datums
+            .iter()
+            .map(|zd| zd.station_ref.clone())
+            .collect()
+    };
+    let before = keys(&project);
+    assert!(project.combine_sections(k, o, &options()).is_err());
+    assert_eq!(keys(&project), before, "nothing changed");
+
+    // With either datum removed, the combine goes ahead and the one left
+    // keeps a station of its own.
+    assert!(project.remove_zero_datum(StationRef::new(o, 0)));
+    assert_eq!(blocked(&project, k, o), "");
+    project.combine_sections(k, o, &options()).unwrap();
+    assert_eq!(project.zero_datums.len(), 1);
 }
 
 /// Join stations moved by different manual offsets: the joined station keeps

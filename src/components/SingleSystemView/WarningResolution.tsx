@@ -287,10 +287,9 @@ export function WarningResolution({
 }: WarningResolutionProps) {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
-  const { updateShot, removeZeroDatum, deleteShot, removeLoopClosure, resolveWarning, isShotFrozen } = useProjectStore(
+  const { updateShot, deleteShot, removeLoopClosure, resolveWarning, isShotFrozen } = useProjectStore(
     useShallow((s) => ({
       updateShot: s.updateShot,
-      removeZeroDatum: s.removeZeroDatum,
       deleteShot: s.deleteShot,
       removeLoopClosure: s.removeLoopClosure,
       resolveWarning: s.resolveWarning,
@@ -304,8 +303,9 @@ export function WarningResolution({
     const closure = s.project?.loop_closures.find((lc) => Number(lc.id) === warning.closureId);
     return closure?.station_a;
   });
-  const { setSelection, setDetailPanelTab, triggerCenterOnStation, showToast, setGeometryPreview, triggerZoomToShot } = useUIStore(
+  const { setSelection, setDetailPanelTab, triggerCenterOnStation, showToast, setGeometryPreview, triggerZoomToShot, openDialog } = useUIStore(
     useShallow((s) => ({
+      openDialog: s.openDialog,
       setSelection: s.setSelection,
       setDetailPanelTab: s.setDetailPanelTab,
       triggerCenterOnStation: s.triggerCenterOnStation,
@@ -484,22 +484,18 @@ export function WarningResolution({
           ...maybeIgnore,
         ];
       }
-      case 'multiple_datums_per_merge_component': {
-        // Over-anchoring is a structural error, not a suppressible nuisance
-        // (issue #57): no Ignore. The component is anchored by N zero datums; the
-        // fix is to keep exactly one and remove the other N-1. Offer one "keep"
-        // option per datum, plus a jump to the representative station.
-        const refs = warning.datumRefs ?? [];
-        const keepOptions: ResolutionOption[] = refs.map((r, i) => ({
-          id: `keep-datum-${i}`,
-          label: t('detailPanel.warnings.resolveOptions.keepDatum', { station: `${r.section_id}:${r.station_index}` }),
-          disabled: editingBlocked || refs.length < 2,
-        }));
+      case 'datum_gps_gap':
+      case 'datum_gps_gap_start':
+        // `_start` is the same warning for a fix on station 0, kept as its own
+        // code so its Ignore cannot collide with a fix on station 1 (#741).
+        // A GPS fix whose GPS is further from its surveyed position than the
+        // sanity threshold (#741). Nothing on the shot to fix: look at the
+        // station, or correct the datum's GPS / accuracy in Edit Station.
         return [
-          ...keepOptions,
           { id: 'go-to-station', label: t('detailPanel.warnings.resolveOptions.goToStation'), navigate: true },
+          { id: 'edit-datum', label: t('detailPanel.warnings.resolveOptions.editZeroDatum'), navigate: true, disabled: editingBlocked },
+          ...maybeIgnore,
         ];
-      }
       case 'CLOSURE_ACROSS_ONE_SHOT':
         // A loop closure that ties the two ends of this shot together (#737):
         // the Closures Computed View skips it, so it closes nothing. An error -
@@ -533,7 +529,7 @@ export function WarningResolution({
       default:
         return maybeIgnore;
     }
-  }, [warning.code, warning.severity, warning.datumStationIndex, warning.datumRefs, warning.closureId, closureStation, shot, geometryDisabled, editingBlocked, projectSaved, t, precision]);
+  }, [warning.code, warning.severity, warning.datumStationIndex, warning.closureId, closureStation, shot, geometryDisabled, editingBlocked, projectSaved, t, precision]);
 
   // Default selection: prefer "Average" (the safe azimuth fix) when offered, and
   // for an inclination in/out warning `pitchDeviationDefault` (average, unless
@@ -581,7 +577,7 @@ export function WarningResolution({
   const preview = useMemo<GeometryPreview | null>(() => {
     if (!shot) return null;
     const opt = options.find((o) => o.id === selected);
-    if (!opt || opt.ignore || opt.navigate || opt.id.startsWith('keep-datum') || opt.id === 'remove-closure') return null;
+    if (!opt || opt.ignore || opt.navigate || opt.id === 'remove-closure') return null;
     if (opt.id === 'lrud-abs' || opt.id === 'lrud-clear' || opt.manual === 'lrud') return null;
 
     const stationAt = (stationIndex: number) =>
@@ -714,7 +710,12 @@ export function WarningResolution({
         setSource('detail-panel');
         setSelection({ type: 'station', stationRef: ref });
         triggerCenterOnStation(ref);
-        setDetailPanelTab('details');
+        if (opt.id === 'edit-datum') {
+          // The dialog owns the edit and its own result/close handling.
+          openDialog('edit-station', { stationRef: ref, focusGpsInput: true });
+        } else {
+          setDetailPanelTab('details');
+        }
       }
       return 'navigated'; // jumped to the station; nothing was suppressed or fixed
     }
@@ -725,23 +726,6 @@ export function WarningResolution({
       // executeCommand's catch-all toast.
       const result = await removeLoopClosure(BigInt(warning.closureId));
       return result.success ? 'resolved' : 'failed';
-    }
-
-    if (opt.id.startsWith('keep-datum-')) {
-      // Keep the chosen datum, remove every other anchor in the component so the
-      // group is anchored by exactly one (issue #57, finding #4). Datums are keyed
-      // by station_ref, so removing one never renumbers the others.
-      const refs = warning.datumRefs ?? [];
-      const keepIdx = Number(opt.id.slice('keep-datum-'.length));
-      const toRemove = refs.filter((_, i) => i !== keepIdx);
-      if (toRemove.length === 0) return 'failed';
-      for (const ref of toRemove) {
-        // Failure surfacing is owned by executeCommand's catch-all toast
-        // (docs/notifications.md: one event, one surface).
-        const result = await removeZeroDatum({ section_id: ref.section_id, station_index: ref.station_index });
-        if (!result.success) return 'failed';
-      }
-      return 'resolved';
     }
 
     if (opt.id === 'delete-shot') {

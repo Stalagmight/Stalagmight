@@ -105,14 +105,18 @@ fn a_combine_is_one_undo_step_and_redoes() {
 
 /// A blocked combine is refused before anything happens: nothing changes and
 /// no undo entry is pushed, so the next undo reverts the edit before it.
-/// Both sections carrying a zero datum is the one refusal left besides
-/// sections that do not meet (a section can hold only one datum).
+/// Both sections placed by their own zero datum is the one refusal left
+/// besides sections that do not meet. (Merged at the join, the second datum
+/// would be a GPS fix of one component, which no longer blocks, #741 - so the
+/// join merge is dropped here, leaving the ends coincident and unmerged.)
 #[test]
 fn a_refused_combine_changes_nothing_and_leaves_no_undo_entry() {
     let (state, k, o) = state();
     {
         let mut guard = state.project.lock().unwrap();
         let project = guard.as_mut().unwrap();
+        let (unmerged, _) = project.unmerge_stations(StationRef::new(k, 2), StationRef::new(o, 0));
+        assert!(unmerged);
         for at in [StationRef::new(k, 0), StationRef::new(o, 3)] {
             let station_ref = project.key_for_ref(at).unwrap();
             project.zero_datums.push(crate::models::ZeroDatum {
@@ -122,6 +126,8 @@ fn a_refused_combine_changes_nothing_and_leaves_no_undo_entry() {
                     longitude: -87.0,
                     depth_reference: 0.0,
                 },
+                accuracy_m: None,
+                entrance: None,
             });
         }
     }
@@ -164,6 +170,8 @@ fn a_datum_on_the_other_section_keeps_the_frame() {
             longitude: -87.0,
             depth_reference: 0.0,
         },
+        accuracy_m: None,
+        entrance: None,
     });
     assert!(datum.success, "{:?}", datum.error);
     let merged = state.execute(Command::MergeStations {
@@ -1311,6 +1319,45 @@ fn a_combine_removes_a_closure_its_join_puts_across_one_shot() {
     let project = state.get_project_state().unwrap();
     assert!(project.station_merges.is_empty());
     assert_eq!(project.loop_closures.len(), 1, "the torn merge's closure");
+}
+
+/// A placement datum on K's end and a GPS fix on O's start, the merged join
+/// stations (#741 D2): the combine is refused and changes nothing, so the two
+/// datums never share one station, and Remove Zero Datum on either station
+/// removes that one datum only.
+#[test]
+fn a_combine_that_would_put_two_datums_on_one_station_is_refused() {
+    let (state, k, o) = state();
+    let g1 = GpsCoordinates::new(20.0, -87.0, 0.0).unwrap();
+    let g2 = GpsCoordinates::new(20.0001, -87.0, 0.0).unwrap();
+    for (at, g) in [(StationRef::new(k, 2), g1), (StationRef::new(o, 0), g2)] {
+        let r = state.execute(Command::SetZeroDatum {
+            station_ref: at,
+            coordinates: g,
+            accuracy_m: None,
+            entrance: None,
+        });
+        assert!(r.success, "{:?}", r.error);
+    }
+    let before = snapshot(&state);
+    let result = state.execute_combine_sections(k, o, options());
+    assert!(!result.success);
+    let error = result.error.unwrap_or_default();
+    assert!(error.contains("each hold a zero datum"), "{error}");
+    assert_eq!(snapshot(&state), before, "a refusal changes nothing");
+
+    let r = state.execute(Command::RemoveZeroDatum {
+        station_ref: StationRef::new(o, 0),
+    });
+    assert!(r.success, "{:?}", r.error);
+    let p = state.get_project_state().unwrap();
+    assert_eq!(p.zero_datums.len(), 1, "only the fix went");
+    assert_eq!(
+        p.resolve_key(&p.zero_datums[0].station_ref),
+        Some(StationRef::new(k, 2))
+    );
+    assert!(state.undo().success);
+    assert_eq!(snapshot(&state), before, "undo restores the fix");
 }
 
 /// #749, the smallest survey, through the command and a saved file. B

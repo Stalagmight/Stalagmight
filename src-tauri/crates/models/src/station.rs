@@ -456,10 +456,81 @@ pub struct StationMerge {
 }
 
 /// Zero datum assignment (backend; wire form is [`ZeroDatumWire`]).
+///
+/// One list holds every datum. Its role is derived, never stored
+/// ([`DatumRole`], `Project::datum_roles`): the first resolvable datum of each
+/// merge-connected component PLACES that rigid group, and every later one in
+/// the same component is a GPS FIX that only the Closures Computed View solve
+/// reads (#741).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ZeroDatum {
     pub station_ref: StationKey,
     pub gps: GpsCoordinates,
+    /// Horizontal accuracy of the GPS position in metres. `None` means
+    /// [`DEFAULT_GPS_ACCURACY_M`]; `Some(0.0)` is a hard pin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accuracy_m: Option<f64>,
+    /// The user's answer to "is this station a cave entrance?", or `None` for
+    /// the default rule (`Project::datum_entrances`): a placement datum is
+    /// always an entrance, a GPS fix is one when its station is the first or
+    /// last station of its section (#741).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entrance: Option<bool>,
+}
+
+impl ZeroDatum {
+    /// A datum with the default accuracy and the default entrance rule.
+    pub fn new(station_ref: StationKey, gps: GpsCoordinates) -> Self {
+        Self {
+            station_ref,
+            gps,
+            accuracy_m: None,
+            entrance: None,
+        }
+    }
+
+    /// The accuracy the solve uses: the stored one, or the default.
+    pub fn effective_accuracy_m(&self) -> f64 {
+        self.accuracy_m.unwrap_or(DEFAULT_GPS_ACCURACY_M)
+    }
+}
+
+/// Default horizontal accuracy of a zero datum's GPS, in metres: 0, a hard pin.
+///
+/// The survey bends to go exactly through the GPS, the way Ariane treats every
+/// entrance. A soft default (5 m was measured) barely moves the Closures
+/// Computed View, because the solve trusts a 500 m traverse to about a metre;
+/// a user who wants a softer fix types an accuracy (#741).
+pub const DEFAULT_GPS_ACCURACY_M: f64 = 0.0;
+
+/// Largest horizontal accuracy a zero datum may claim, in metres. A fix worse
+/// than this carries no position worth pulling a survey toward; refusing it
+/// keeps a typo (an extra digit) from entering the solve as a weight.
+pub const MAX_GPS_ACCURACY_M: f64 = 1000.0;
+
+/// Validate a zero datum's accuracy: absent (the default), or a finite number
+/// of metres in `0 ..= MAX_GPS_ACCURACY_M`. `0` is a hard pin.
+pub fn validate_gps_accuracy(accuracy_m: Option<f64>) -> Result<(), String> {
+    match accuracy_m {
+        None => Ok(()),
+        Some(a) if a.is_finite() && (0.0..=MAX_GPS_ACCURACY_M).contains(&a) => Ok(()),
+        Some(a) => Err(format!(
+            "GPS accuracy must be between 0 and {MAX_GPS_ACCURACY_M} m (got {a})"
+        )),
+    }
+}
+
+/// What a zero datum does, derived per merge-connected component (#741).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "bindings/DatumRole.ts")]
+pub enum DatumRole {
+    /// The first resolvable datum of its merge component: it places that rigid
+    /// group in Raw Data View, exactly as a datum always has. The first
+    /// placement datum of the project also defines the frame.
+    Placement,
+    /// A later datum in a component that is already placed. It never moves raw
+    /// geometry; the Closures Computed View solve pulls the survey toward it.
+    GpsFix,
 }
 
 /// Positional wire form of [`StationMerge`] for the frontend (which reasons by
@@ -480,6 +551,23 @@ pub struct StationMergeWire {
 pub struct ZeroDatumWire {
     pub station_ref: StationRef,
     pub gps: GpsCoordinates,
+    /// Stored accuracy in metres; absent means [`DEFAULT_GPS_ACCURACY_M`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub accuracy_m: Option<f64>,
+    /// Derived role in its merge component.
+    pub role: DatumRole,
+    /// Whether the station counts as a cave entrance (Plan mode's "Start
+    /// from entrance", penetration), resolved by the backend from the role,
+    /// the stored override and the default rule, so the frontend never
+    /// re-derives it (#741).
+    pub is_entrance: bool,
+    /// For a GPS fix, how far its GPS is from where the raw survey puts its
+    /// station (`Project::gps_fix_gaps`), so the Details panel shows the
+    /// backend's number. Absent for a placement datum.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub gap: Option<crate::DatumGap>,
 }
 
 /// Strategy for distributing loop closure errors
@@ -856,4 +944,10 @@ pub struct ConnectivityResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub closure_refusal: Option<String>,
+    /// When both stations' pieces are placed by their own zero datum (#741):
+    /// the piece the merge moves, by how much, and the datum that becomes a
+    /// GPS fix. The Merge dialog says so before the user confirms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub datum_shift: Option<crate::MergeDatumShift>,
 }

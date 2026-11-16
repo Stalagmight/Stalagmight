@@ -231,15 +231,15 @@ fn a_closure_from_a_station_to_itself_goes() {
     assert_eq!(ids(&p.loop_closures), [real]);
 }
 
-/// No merge can make a closure's two stations one point (#738): the Merge tool
-/// is not a route to the state the sweep removes. Every closure shape the app
-/// keeps, with each end merged to the other, directly or through the other's
-/// merge group: a loop on one section, two branches off one point tied at
-/// their far ends, and two anchored surveys tied by a closure. `merge_stations`
-/// refuses each - the first two as already connected, the last for its two
-/// zero datums - and nothing changes.
+/// A merge never leaves a closure between merged stations (#738). Every
+/// closure shape the app keeps, with each end merged to the other, directly or
+/// through the other's merge group: a loop on one section and two branches off
+/// one point tied at their far ends are refused as already connected, and
+/// nothing changes. Two anchored surveys tied by a closure MAY merge (#741: the
+/// later placement datum becomes a GPS fix); the merge makes that closure's two
+/// ends one point, and the sweep the merge command runs removes it.
 #[test]
-fn merge_stations_refuses_to_merge_the_two_ends_of_a_closure() {
+fn a_merge_never_leaves_a_closure_between_merged_stations() {
     let (mut p, [r, t, u, v]) = network();
     p.create_loop_closure(st(r, 4), st(r, 0), ClosureStrategy::Batch)
         .unwrap();
@@ -273,10 +273,14 @@ fn merge_stations_refuses_to_merge_the_two_ends_of_a_closure() {
     q.create_loop_closure(st(a, 1), st(b, 1), ClosureStrategy::Batch)
         .unwrap();
     assert_eq!(q.sweep_orphan_closures().converted, 0, "the bridge stays");
-    let before = serde_json::to_string(&q).unwrap();
+    let bridge = q.loop_closures[0].id;
     for (x, y) in [(st(a, 1), st(b, 1)), (st(a, 1), st(c, 0))] {
-        let refused = q.merge_stations(x, y).unwrap_err();
-        assert!(refused.contains("zero datums"), "{x:?} {y:?}: {refused}");
+        let mut merged = q.clone();
+        merged.merge_stations(x, y).unwrap();
+        let sweep = merged.sweep_orphan_closures();
+        assert_eq!(ids(&sweep.removed), [bridge], "{x:?} {y:?}");
+        assert_eq!(sweep.converted, 0, "{x:?} {y:?}");
+        assert!(merged.loop_closures.is_empty(), "{x:?} {y:?}");
+        assert!(merged.are_stations_merged(st(a, 1), st(b, 1)));
     }
-    assert_eq!(serde_json::to_string(&q).unwrap(), before);
 }

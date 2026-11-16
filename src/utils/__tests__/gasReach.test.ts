@@ -232,6 +232,27 @@ describe('nearestOriginShotEndpoint (nearest to the CURRENT origin, not always t
     expect(nearestOriginShotEndpoint(a, b, null, stations)).toBe(b);
   });
 
+  it('with no field loaded, ignores a zero datum that is not an entrance (#741)', () => {
+    const entrance = { section_id: 9, station_index: 0 };
+    const midPassageFix = { section_id: 9, station_index: 4 };
+    const stations = [
+      { station_ref: a, coordinates: { x: 0, y: 0, z: 0 }, is_zero_datum: false },
+      { station_ref: b, coordinates: { x: 10, y: 0, z: 0 }, is_zero_datum: false },
+      // The entrance is nearer a; a radiolocation fix sits right on b.
+      { station_ref: entrance, coordinates: { x: -5, y: 0, z: 0 }, is_zero_datum: true },
+      { station_ref: midPassageFix, coordinates: { x: 10, y: 0, z: 0 }, is_zero_datum: true },
+    ];
+    const datums = [
+      { station_ref: entrance, is_entrance: true },
+      { station_ref: midPassageFix, is_entrance: false },
+    ];
+    expect(nearestOriginShotEndpoint(a, b, null, stations, datums)).toBe(a);
+    // Ticked as an entrance, the fix is nearer b.
+    expect(
+      nearestOriginShotEndpoint(a, b, null, stations, [datums[0]!, { station_ref: midPassageFix, is_entrance: true }])
+    ).toBe(b);
+  });
+
   it('with no zero datum on the project, deterministically keeps the first endpoint', () => {
     const stations = [
       { station_ref: a, coordinates: { x: 0, y: 0, z: 0 }, is_zero_datum: false },

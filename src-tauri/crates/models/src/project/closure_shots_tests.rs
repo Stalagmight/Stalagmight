@@ -697,7 +697,7 @@ fn a_closure_joining_two_datums_is_reported_as_a_failure_and_a_sibling_still_adj
     assert!(failure.section_ids.contains(&failure.anchor.section_id));
     assert_eq!(
         failure.error,
-        "Multiple zero datums in a single constraint group"
+        "Multiple placement zero datums in a single constraint group"
     );
     assert!(
         failure
@@ -727,7 +727,7 @@ fn every_known_solver_error_has_a_plain_reason() {
     };
     for (raw, starts) in [
         (
-            "Multiple zero datums in a single constraint group",
+            "Multiple placement zero datums in a single constraint group",
             "loop closures tie two zero datums",
         ),
         (
@@ -785,6 +785,7 @@ fn the_new_wire_fields_are_omitted_when_absent_and_declared_optional() {
         can_merge: false,
         reason: None,
         closure_refusal: None,
+        datum_shift: None,
     };
     let absent = serde_json::to_value(&connectivity).unwrap();
     assert!(absent.get("closure_refusal").is_none(), "{absent}");

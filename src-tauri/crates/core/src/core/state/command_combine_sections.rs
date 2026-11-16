@@ -131,7 +131,7 @@ impl AppState {
         // This path bypasses `execute()`, so it carries its own frame check
         // (#469): a zero datum on the other section moves to the kept one,
         // which re-keys the frame-defining station.
-        let frame_before = self.frame_datum_key();
+        let datums_before = self.datum_layout();
         let label_updates = SectionUpdates {
             name: Some(Some(options.name.clone())),
             color: Some(options.color.clone()),
@@ -195,7 +195,7 @@ impl AppState {
             project.touch();
         }
 
-        self.renormalize_frame_if_changed(frame_before);
+        self.settle_datum_layout(&datums_before);
         self.reconcile_geometry();
 
         let after_snapshot = match self.capture_after_snapshot_or_rollback(&before_snapshot) {

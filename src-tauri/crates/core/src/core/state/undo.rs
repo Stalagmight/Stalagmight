@@ -376,6 +376,8 @@ impl AppState {
             UndoData::ZeroDatumInfo {
                 station_ref,
                 previous_gps,
+                previous_accuracy_m,
+                previous_entrance,
                 position,
                 previous_offsets,
             } => {
@@ -390,6 +392,11 @@ impl AppState {
 
                             // Stable stored identity for the datum's station.
                             let datum_key = project.key_for_ref(*station_ref);
+                            // The undo history is persisted, so this value can
+                            // come from a crafted file: hold it to the rule every
+                            // write path uses, falling back to the default.
+                            let previous_accuracy_m = &previous_accuracy_m
+                                .filter(|a| crate::models::validate_gps_accuracy(Some(*a)).is_ok());
 
                             // Restore GPS datum state, AT ITS ORIGINAL INDEX when
                             // the datum has to be put back: the removal was a
@@ -405,10 +412,14 @@ impl AppState {
                                     .find(|zd| Some(&zd.station_ref) == datum_key.as_ref())
                                 {
                                     existing.gps = *gps;
+                                    existing.accuracy_m = *previous_accuracy_m;
+                                    existing.entrance = *previous_entrance;
                                 } else if let Some(key) = datum_key {
                                     let datum = crate::models::ZeroDatum {
                                         station_ref: key,
                                         gps: *gps,
+                                        accuracy_m: *previous_accuracy_m,
+                                        entrance: *previous_entrance,
                                     };
                                     match position {
                                         Some(index) => {
