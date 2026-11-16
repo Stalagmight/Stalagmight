@@ -43,8 +43,8 @@
 //! - `hard-fix-off-gps` / `hard-fix-no-unknowns`: in the Closures Computed
 //!   View, a hard fix the solve holds is not on its GPS (rule derived from
 //!   `lsq.rs`; see `held_groups`). `-no-unknowns`: its component has no
-//!   unknown left, and the solve returns at `n == 0` before it rewrites a
-//!   shot. Known open.
+//!   unknown left (fixed: the solve once returned at `n == 0` before it
+//!   rewrote a shot).
 //! - `placement-moved-computed`: a placement datum moved in the computed
 //!   view.
 //! - `depth-moved`: a datum command changed a station's depth (topology
@@ -100,8 +100,6 @@ const EXACT_M: f64 = 1e-9;
 /// with the generators as they are (a generator change can turn it into a
 /// different chain):
 ///
-/// - `hard-fix-no-unknowns`: a hard fix in a component with no unknown left
-///   is never applied in the computed view (`lsq.rs`, `if n == 0`). `"112"`.
 /// - `frame-gps-edit`: giving the frame datum a new GPS keeps its station on
 ///   the origin and moves nothing else, so every other placed piece is off
 ///   its own GPS by the edit. Present on master before #741. `"11"`.
@@ -111,8 +109,9 @@ const EXACT_M: f64 = 1e-9;
 /// `datum-key-reused` (Delete Shot re-anchoring a fix onto the removed
 /// datum's key), both fixed in `DatumLayout::was_unplaced`; and
 /// `datum-twin-station` (Combine Sections joining two stations that each
-/// hold a datum), now refused.
-const KNOWN_OPEN: &[&str] = &["hard-fix-no-unknowns", "frame-gps-edit"];
+/// hold a datum), now refused; and `hard-fix-no-unknowns` (a hard fix in a
+/// component with no unknown left), now applied.
+const KNOWN_OPEN: &[&str] = &["frame-gps-edit"];
 
 fn env_u64(name: &str, default: u64) -> u64 {
     std::env::var(name)

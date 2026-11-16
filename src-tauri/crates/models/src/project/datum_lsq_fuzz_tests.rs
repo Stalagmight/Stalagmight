@@ -13,8 +13,8 @@
 //!   by an earlier hard fix in list order - sits on its GPS, unless its
 //!   component is one the solve reported as failed (shown measured).
 //!   `hard-fix-no-unknowns` is the same failure in a component whose every
-//!   constraint group is held, which the solve returns from before it
-//!   rewrites a single shot.
+//!   constraint group is held (the solve once returned before it rewrote a
+//!   single shot there).
 //! - `placement-moved`: a placement datum's station keeps its raw position.
 //! - `depth-moved`: no computed z differs from the z of the same view with
 //!   every fix removed (the solve is horizontal; a fix's elevation is never
@@ -101,18 +101,11 @@ fn env_u64(name: &str, default: u64) -> u64 {
 
 /// Failure classes this fuzzer found that are open bugs, muted unless
 /// `STALAGMIGHT_DATUM_LSQ_FUZZ_MUTE` says otherwise (set it to an empty
-/// string to run every check):
-///
-/// - `hard-fix-no-unknowns`: a hard fix in a component whose every
-///   constraint group is held (for example a one-shot section with the
-///   placement datum at one end and the hard fix at the other) is never
-///   applied: `adjust_least_squares` returns at `if n == 0` before it
-///   rewrites a shot, so the Closures Computed View shows the raw survey,
-///   the fix off its GPS and any closure between held groups unapplied.
-///   `STALAGMIGHT_DATUM_LSQ_FUZZ_REPLAY=19` prints the smallest network the
-///   sweep reaches it on: a one-shot section, placement datum at station 0,
-///   hard fix at station 1.
-const KNOWN_OPEN: &[&str] = &["hard-fix-no-unknowns"];
+/// string to run every check). None now: `hard-fix-no-unknowns` (a hard fix
+/// in a component whose every constraint group is held was never applied,
+/// `STALAGMIGHT_DATUM_LSQ_FUZZ_REPLAY=19`) is fixed, and pinned by
+/// `lsq_fix_tests::a_hard_fix_one_shot_from_the_placement_datum_reaches_its_gps`.
+const KNOWN_OPEN: &[&str] = &[];
 
 /// The mute list: `name`'s comma-separated classes when it is set, else
 /// `default`.
