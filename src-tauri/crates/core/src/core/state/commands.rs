@@ -737,9 +737,10 @@ impl AppState {
 
         // The station that currently defines the georeference frame, read before
         // dispatch so the epilogue can tell whether this command changed it
-        // (#469, item 1). Cheap: a walk of `zero_datums` (a handful) with a
-        // `resolve_key` each. The roles come with it, so the epilogue can also
-        // tell which datums became placement datums (#741).
+        // (#469, item 1). A walk of `zero_datums` with a `resolve_key` and a
+        // shot walk to the station each. The roles and station positions come
+        // with it, so the epilogue can also tell which datums became placement
+        // datums (#741).
         let datums_before = self.datum_layout();
 
         // Snapshot before a ref-removing/renumbering command so a result that

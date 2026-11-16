@@ -115,6 +115,11 @@ impl DatumLayout {
 
     /// Whether the frame datum is not the one it was: another station, or
     /// another GPS (a promoted datum re-keyed onto the old frame's key).
+    ///
+    /// No frame now (`Some -> None`, the last datum removed) is no change:
+    /// there is nothing to re-frame onto. A first frame (`None -> Some`) is
+    /// one, though [`Project::set_zero_datum`] has already put it on the
+    /// origin, so the measured re-frame is a no-op there.
     fn frame_changed(&self, now: Option<&ZeroDatum>) -> bool {
         match (&self.frame, now) {
             (_, None) => false,
@@ -131,8 +136,8 @@ pub(super) fn same_gps(a: &GpsCoordinates, b: &GpsCoordinates) -> bool {
 
 impl Project {
     /// The datums as they are now, for [`Self::settle_datum_layout`] after a
-    /// command. Cheap: a walk of `zero_datums` with a `resolve_key` and a
-    /// walk to the station each.
+    /// command: a walk of `zero_datums` with a `resolve_key` and a shot walk
+    /// to the station each.
     pub fn datum_layout(&self) -> DatumLayout {
         DatumLayout {
             frame: self
@@ -153,9 +158,10 @@ impl Project {
     }
 
     /// The horizontal position of `zd`'s station, `None` when it dangles.
+    /// The shot walk only: no colocation search, which would cost a pass over
+    /// every merge per datum for a depth this never reads.
     fn datum_position(&self, zd: &ZeroDatum) -> Option<(f64, f64)> {
-        let at = self.compute_station_raw_coords(self.resolve_key(&zd.station_ref)?)?;
-        Some((at.x, at.y))
+        self.compute_station_raw_xy(self.resolve_key(&zd.station_ref)?)
     }
 
     /// Place every piece whose placement datum changed in a command, then

@@ -231,8 +231,10 @@ pub struct ZeroDatum {
     /// this datum (e.g. a datum removed and re-added). For a GPS fix (a later
     /// datum in a merge-connected piece that another datum places, #741) it is
     /// the fix's gap to its GPS, which is expected: a fix does not move the
-    /// stored survey. `None` unless station positions were requested and a
-    /// frame datum exists.
+    /// stored survey. This reader does not say which role a datum has: the
+    /// first datum of a merge-connected piece in the file's `zero_datums`
+    /// order places it, and `zero_datum_extras` holds the fixes. `None` unless
+    /// station positions were requested and a frame datum exists.
     pub residual_m: Option<f64>,
 }
 
