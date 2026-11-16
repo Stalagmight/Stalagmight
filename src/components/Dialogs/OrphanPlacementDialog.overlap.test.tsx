@@ -113,16 +113,17 @@ const section = (id: number, name: string, shots: Shot[]) =>
   ({ id, name, shots, direction: 'in', color: '#4a9eff' }) as unknown as Project['sections'][number];
 
 // Mainline tied down at both ends: its own placement datum at station 0, and
-// at station 5 a merge to a section (9) placed by its own datum. A second datum
-// on Mainline itself would be a GPS fix (#741), which pins nothing in raw
-// geometry, so it would not tie that end down.
+// at station 5 an aligned loop closure to a section (9) placed by its own
+// datum. A closure is not a merge, so section 9 is a piece of its own and its
+// datum a placement. A second datum on Mainline itself would be a GPS fix
+// (#741), which pins nothing in raw geometry, so it would not tie that end down.
 const ANCHORED_AT_BOTH_ENDS = {
   zero_datums: [
     { station_ref: { section_id: 2, station_index: 0 }, role: 'Placement' },
     { station_ref: { section_id: 9, station_index: 0 }, role: 'Placement' },
   ],
-  station_merges: [
-    { station_a: { section_id: 2, station_index: 5 }, station_b: { section_id: 9, station_index: 0 } },
+  loop_closures: [
+    { station_a: { section_id: 2, station_index: 5 }, station_b: { section_id: 9, station_index: 0 }, is_aligned: true },
   ],
 } as unknown as Partial<Project>;
 

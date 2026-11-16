@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { OrphanPlacementSuggestion } from '../../types/commands';
 import type { Project } from '../../types/ipc/Project';
-import type { DatumRole } from '../../types/ipc/DatumRole';
 import { isRepeatDoublyAnchored } from '../orphanPlacement';
 
-// A repeat of shots 2..3 of section 0 (stations 2 to 4), with a datum at
-// each end of the section: station 0 before the repeat, station 6 after it.
+// A repeat of shots 2..3 of section 0 (stations 2 to 4). Section 0 holds its
+// placement datum at station 0, before the repeat; what happens after it
+// (station 6) is what each case varies.
 const suggestion = {
   targetSectionId: 0,
   targetStationIndex: 2,
@@ -13,28 +13,43 @@ const suggestion = {
   direction: 'forward',
 } as unknown as OrphanPlacementSuggestion;
 
-function project(roles: [DatumRole, DatumRole]): Project {
-  const datum = (station_index: number, role: DatumRole) => ({
-    station_ref: { section_id: 0, station_index },
-    gps: { latitude: 20.5, longitude: -87.3, depth_reference: 0 },
-    role,
-    is_entrance: true,
-  });
-  return {
-    zero_datums: [datum(0, roles[0]), datum(6, roles[1])],
-    station_merges: [],
-    loop_closures: [],
-  } as unknown as Project;
+const at = (section_id: number, station_index: number) => ({ section_id, station_index });
+const datum = (section_id: number, station_index: number, role: 'Placement' | 'GpsFix') => ({
+  station_ref: at(section_id, station_index),
+  gps: { latitude: 20.5, longitude: -87.3, depth_reference: 0 },
+  role,
+  is_entrance: role === 'Placement',
+});
+
+function project(over: Partial<Record<'zero_datums' | 'station_merges' | 'loop_closures', unknown[]>>): Project {
+  return { zero_datums: [], station_merges: [], loop_closures: [], ...over } as unknown as Project;
 }
 
 describe('isRepeatDoublyAnchored with GPS fixes (#741)', () => {
-  it('counts two placement datums as anchors at both ends', () => {
-    expect(isRepeatDoublyAnchored(suggestion, project(['Placement', 'Placement']))).toBe(true);
+  it('counts an aligned closure to a separately placed section as the far anchor', () => {
+    const p = project({
+      zero_datums: [datum(0, 0, 'Placement'), datum(9, 0, 'Placement')],
+      loop_closures: [{ station_a: at(0, 6), station_b: at(9, 0), is_aligned: true }],
+    });
+    expect(isRepeatDoublyAnchored(suggestion, p)).toBe(true);
   });
 
   // A GPS fix pins nothing in raw geometry, the rule the backend's import
-  // anchor check uses (placement datums only), so it is no anchor here either.
-  it('does not count a GPS fix as an anchor', () => {
-    expect(isRepeatDoublyAnchored(suggestion, project(['Placement', 'GpsFix']))).toBe(false);
+  // anchor check uses (placement datums only), so it is no anchor here either:
+  // not on the target section itself...
+  it('does not count a GPS fix on the target section', () => {
+    const p = project({ zero_datums: [datum(0, 0, 'Placement'), datum(0, 6, 'GpsFix')] });
+    expect(isRepeatDoublyAnchored(suggestion, p)).toBe(false);
+  });
+
+  // ...nor at the end of a path: section 9 is merged to section 0 at station
+  // 6, so its datum is a GPS fix of section 0's piece, and the only placement
+  // datum it could reach is through section 0 itself.
+  it('does not count a path that reaches only a GPS fix', () => {
+    const p = project({
+      zero_datums: [datum(0, 0, 'Placement'), datum(9, 3, 'GpsFix')],
+      station_merges: [{ station_a: at(0, 6), station_b: at(9, 0) }],
+    });
+    expect(isRepeatDoublyAnchored(suggestion, p)).toBe(false);
   });
 });

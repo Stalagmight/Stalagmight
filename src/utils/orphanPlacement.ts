@@ -53,8 +53,8 @@ export function isRepeatDoublyAnchored(suggestion: OrphanPlacementSuggestion, pr
 
   const sid = suggestion.targetSectionId;
 
-  // BFS: can `start` reach a zero datum via merges + aligned closures
-  // without traversing through `excluded`?
+  // BFS: can `start` reach a placement zero datum via merges + aligned
+  // closures without traversing through `excluded`?
   const hasDatumPathExcluding = (start: number, excluded: number): boolean => {
     const visited = new Set<number>();
     const queue = [start];
