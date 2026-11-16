@@ -8,9 +8,12 @@
 //! the plan is exact, the in-session repair and a reopen move nothing, and
 //! no shot changes.
 
+use chrono::Utc;
+
 use super::combine_closure_tests::{add, check_combined, dist, options, shot, xy};
 use crate::{
-    CombineJoinEnds, CombineJoinKind, GpsCoordinates, Project, SectionEnd, SectionId, StationRef,
+    ClosureStrategy, CombineJoinEnds, CombineJoinKind, GpsCoordinates, LoopClosure, Project,
+    SectionEnd, SectionId, ShotData, StationMerge, StationRef, TornTieKind, TornTieReason,
     ZeroDatum,
 };
 
@@ -45,6 +48,20 @@ fn place(project: &mut Project, id: SectionId, index: u32, target: (f64, f64)) {
     project.adjust_section_offset(id, target.0 - now.0, target.1 - now.1);
 }
 
+/// A shot with depth readings at both ends.
+fn deep(azimuth: f64, length: f64, depth_in: f64, depth_out: f64) -> ShotData {
+    ShotData {
+        depth_in,
+        depth_out,
+        ..shot(azimuth, length)
+    }
+}
+
+/// A station's depth as shown.
+fn depth(project: &Project, at: StationRef) -> f64 {
+    project.compute_station_raw_coords(at).unwrap().z
+}
+
 /// Plant `hand` on `at` as a file carries it (no command makes one).
 fn hand_move(project: &mut Project, at: StationRef, hand: (f64, f64, f64)) {
     if hand != NONE {
@@ -66,8 +83,18 @@ fn join(
     hand_o: (f64, f64, f64),
 ) -> Fixture {
     let mut project = Project::new("Hand moved".to_string(), None);
-    let k = add(&mut project, "K", vec![shot(90.0, 10.0), shot(70.0, 5.0)]);
-    let o = add(&mut project, "O", vec![shot(0.0, 4.0), shot(300.0, 6.0)]);
+    // Every end reads its own depth, so the joined station's average is
+    // checked against the four readings it takes.
+    let k = add(
+        &mut project,
+        "K",
+        vec![deep(90.0, 10.0, 1.0, 2.0), deep(70.0, 5.0, 2.0, 2.5)],
+    );
+    let o = add(
+        &mut project,
+        "O",
+        vec![deep(0.0, 4.0, 3.0, 3.5), deep(300.0, 6.0, 3.5, 4.5)],
+    );
     project.set_section_offset(k, (100.0, -40.0));
     let join_k = StationRef::new(k, end_index(&project, k, k_end));
     let join_o = StationRef::new(o, end_index(&project, o, o_end));
@@ -83,8 +110,8 @@ fn join(
         let target = (chain_k.0 + hand_o.0, chain_k.1 + hand_o.1);
         place(&mut project, o, join_o.station_index, target);
     }
-    let t = add(&mut project, "T", vec![shot(180.0, 3.0)]);
-    let u = add(&mut project, "U", vec![shot(225.0, 2.0)]);
+    let t = add(&mut project, "T", vec![deep(180.0, 3.0, 6.0, 6.5)]);
+    let u = add(&mut project, "U", vec![deep(225.0, 2.0, 8.0, 8.4)]);
     for (branch, at) in [(t, join_o), (u, join_k)] {
         let shown = xy(&project, at);
         place(&mut project, branch, 0, shown);
@@ -403,6 +430,29 @@ fn check_one(
         (fixed_hand != NONE).then_some(fixed_hand),
         "{what}"
     );
+    // Depth: the joined station, T and U are one point and read the average
+    // of the four depth readings there (the shot on each side of the joined
+    // station, T's and U's first); the joined station adds the hand move in
+    // depth it keeps, the fixed side's, and T and U have none.
+    let readings = [
+        join.join_k,
+        join.join_o,
+        StationRef::new(join.t, 0),
+        StationRef::new(join.u, 0),
+    ]
+    .map(|at| project.compute_station_depth(&[at]));
+    let mean = readings.iter().sum::<f64>() / 4.0;
+    for (at, want) in [
+        (joined, mean + fixed_hand.2),
+        (StationRef::new(join.t, 0), mean),
+        (StationRef::new(join.u, 0), mean),
+    ] {
+        let now = depth(&after, at);
+        assert!(
+            (now - want).abs() < 1e-9,
+            "{what}: {at:?} at depth {now}, not {want}"
+        );
+    }
     // No shot changes: the combined section's lengths are the two sections'.
     let mut lengths: Vec<f64> = after
         .get_section(kept)
@@ -449,14 +499,14 @@ fn nothing_merged_at_the_dropped_join_station_moves_nothing() {
         .retain(|m| m.station_a.section_id != t && m.station_b.section_id != t);
     // Z runs along O's second shot: merged at O's far end, snapped at O's
     // station 1 (a loop snap, not Z's only tie).
-    let z = add(&mut join.project, "Z", vec![shot(300.0, 6.0)]);
+    let z = add(&mut join.project, "Z", vec![deep(300.0, 6.0, 3.5, 4.5)]);
     let o1 = StationRef::new(join.o, 1);
     let at = xy(&join.project, o1);
     place(&mut join.project, z, 0, at);
     join.project
         .merge_stations(StationRef::new(join.o, 2), StationRef::new(z, 1))
         .unwrap();
-    let snap = crate::LoopClosure {
+    let snap = LoopClosure {
         id: 90,
         station_a: join.project.key_for_ref(o1).unwrap(),
         station_b: join.project.key_for_ref(StationRef::new(z, 0)).unwrap(),
@@ -465,7 +515,7 @@ fn nothing_merged_at_the_dropped_join_station_moves_nothing() {
         error_percentage: 0.0,
         horizontal_misclosure: 0.0,
         vertical_misclosure: 0.0,
-        strategy: crate::ClosureStrategy::Move,
+        strategy: ClosureStrategy::Move,
         is_aligned: true,
     };
     join.project.loop_closures.push(snap);
@@ -501,4 +551,303 @@ fn nothing_merged_at_the_dropped_join_station_moves_nothing() {
     );
     let mut repaired = after.clone();
     assert_eq!(repaired.realign_merges(), 0);
+}
+
+/// The issue's shape with a section C merged off T (T's far end) and Z
+/// merged off C, Z's far end snapped to O's station 1: T, C and Z move with
+/// the joined station by the 0.3 m while O stays (#755), so the snap between
+/// Z and O can no longer hold and becomes an ordinary loop closure. Nothing
+/// else tears it: Z is on O's side, and O moves by no chain gap.
+#[test]
+fn a_snap_between_what_moves_with_the_joined_station_and_its_side_tears() {
+    let mut project = Project::new("Apart".to_string(), None);
+    let k = add(&mut project, "K", vec![shot(90.0, 10.0)]);
+    let o = add(&mut project, "O", vec![shot(90.0, 10.0)]);
+    let t = add(&mut project, "T", vec![shot(0.0, 5.0)]);
+    let c = add(&mut project, "C", vec![shot(90.0, 9.7)]);
+    let z = add(&mut project, "Z", vec![shot(180.0, 5.0)]);
+    project.set_section_offset(o, (10.0, 0.0));
+    hand_move(&mut project, StationRef::new(o, 0), (0.3, 0.0, 0.0));
+    let chain = [
+        (t, StationRef::new(o, 0)),
+        (c, StationRef::new(t, 1)),
+        (z, StationRef::new(c, 1)),
+    ];
+    for (branch, at) in chain {
+        let shown = xy(&project, at);
+        place(&mut project, branch, 0, shown);
+        project
+            .merge_stations(at, StationRef::new(branch, 0))
+            .unwrap();
+    }
+    let (z1, o1) = (StationRef::new(z, 1), StationRef::new(o, 1));
+    assert!(dist(xy(&project, z1), xy(&project, o1)) < 1e-9, "setup");
+    project.loop_closures.push(LoopClosure {
+        id: 1,
+        station_a: project.key_for_ref(z1).unwrap(),
+        station_b: project.key_for_ref(o1).unwrap(),
+        path_length: 0.0,
+        misclosure_distance: 0.0,
+        error_percentage: 0.0,
+        horizontal_misclosure: 0.0,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::Move,
+        is_aligned: true,
+    });
+    project.next_closure_id = 2;
+    let candidate = project.combine_candidate_for_sections(k, o).unwrap();
+    let plan = &candidate.plan_keeping_a;
+    assert_eq!(plan.moved_sections, vec![o]);
+    let joined = plan.moved_with_joined_station.clone().unwrap();
+    assert_eq!(joined.sections, vec![t, c, z], "T and what hangs off it");
+    assert!((joined.shift_m - 0.3).abs() < 1e-12);
+    let torn: Vec<_> = plan
+        .torn_ties
+        .iter()
+        .map(|tie| (tie.kind, tie.reason, tie.station_a, tie.station_b))
+        .collect();
+    assert_eq!(
+        torn,
+        vec![(TornTieKind::SnappedClosure, TornTieReason::Loop, z1, o1)]
+    );
+
+    let mut after = project.clone();
+    after.combine_sections(k, o, &options(None)).unwrap();
+    check_combined(&project, &after, &candidate, k, "apart", &[]);
+    for id in [t, c, z] {
+        for i in 0..=1 {
+            let at = StationRef::new(id, i);
+            let (was, now) = (xy(&project, at), xy(&after, at));
+            assert!(dist(now, (was.0 - 0.3, was.1)) < 1e-9, "{at:?} at {now:?}");
+        }
+    }
+    let closure = &after.loop_closures[0];
+    assert!(!closure.is_aligned, "the snap is an ordinary closure now");
+    assert!((closure.horizontal_misclosure - 0.3).abs() < 1e-9);
+    let mut repaired = after.clone();
+    assert_eq!(repaired.realign_merges(), 0);
+    let mut reopened = after.clone();
+    reopened.redrive_offsets_after_load();
+    for (station, was) in every_station(&after) {
+        assert!(
+            dist(xy(&reopened, station), was) < 1e-9,
+            "the reopen moved {station:?}"
+        );
+    }
+}
+
+/// The dust edge (#755): the chain gap 0.9 um east, and O's start moved by
+/// hand so the two join stations as shown are 1.8 um apart (past the 1 um
+/// float dust the offset solve corrects nothing below), or 0.9 um apart the
+/// other way (within it). Past dust, T moves with the joined station and
+/// lands on it exactly; within it nothing moves and T stays within the dust,
+/// as merged ends do. Either way a reopen and the repair move nothing.
+#[test]
+fn hand_moves_at_the_float_dust_edge_leave_nothing_to_heal() {
+    let dust = Project::OFFSET_DUST_M;
+    for (what, hand, carried) in [
+        ("past dust", -0.9 * dust, true),
+        ("within", 1.8 * dust, false),
+    ] {
+        let mut project = Project::new("Dust".to_string(), None);
+        let k = add(&mut project, "K", vec![shot(90.0, 10.0)]);
+        let o = add(&mut project, "O", vec![shot(90.0, 10.0)]);
+        let t = add(&mut project, "T", vec![shot(0.0, 5.0)]);
+        project.set_section_offset(o, (10.0 - 0.9 * dust, 0.0));
+        let o0 = StationRef::new(o, 0);
+        hand_move(&mut project, o0, (hand, 0.0, 0.0));
+        let shown = xy(&project, o0);
+        place(&mut project, t, 0, shown);
+        project.merge_stations(o0, StationRef::new(t, 0)).unwrap();
+        let candidate = project.combine_candidate_for_sections(k, o).unwrap();
+        let plan = &candidate.plan_keeping_a;
+        assert_eq!(
+            plan.moved_with_joined_station
+                .as_ref()
+                .map(|j| j.sections.clone()),
+            carried.then(|| vec![t]),
+            "{what}"
+        );
+        let mut after = project.clone();
+        after.combine_sections(k, o, &options(None)).unwrap();
+        check_combined(&project, &after, &candidate, k, what, &[]);
+        let (joined, t0) = (
+            xy(&after, StationRef::new(k, 1)),
+            xy(&after, StationRef::new(t, 0)),
+        );
+        if carried {
+            assert!(
+                dist(joined, t0) < 1e-12,
+                "{what}: T is {:e} m off",
+                dist(joined, t0)
+            );
+        } else {
+            assert!(
+                (joined.0 - t0.0).abs() <= dust && (joined.1 - t0.1).abs() <= dust,
+                "{what}: T is {:?} off",
+                (joined.0 - t0.0, joined.1 - t0.1)
+            );
+        }
+        let mut repaired = after.clone();
+        assert_eq!(repaired.realign_merges(), 0, "{what}");
+        let mut reopened = after.clone();
+        reopened.redrive_offsets_after_load();
+        for (station, was) in every_station(&after) {
+            assert!(
+                dist(xy(&reopened, station), was) < 1e-12,
+                "{what}: the reopen moved {station:?}"
+            );
+        }
+    }
+}
+
+/// A merge loop, which only an older or hand-edited file holds
+/// (`merge_stations` refuses one, and no load heals it): T runs from O's
+/// start, moved 0.3 m east by hand, to O's far end, and is merged at both.
+/// T cannot move with the joined station and stay on O's far end, so it
+/// stays with O, and its merge at the join becomes a loop closure carrying
+/// the 0.3 m: no merge is left open for the repair or a reopen.
+#[test]
+fn a_merge_loop_at_a_hand_moved_join_tears_there_instead_of_pulling_apart() {
+    let mut project = Project::new("Merge loop".to_string(), None);
+    let k = add(&mut project, "K", vec![shot(90.0, 10.0)]);
+    let o = add(&mut project, "O", vec![shot(90.0, 10.0), shot(90.0, 10.0)]);
+    let t = add(&mut project, "T", vec![shot(90.0, 19.7)]);
+    project.set_section_offset(o, (10.0, 0.0));
+    let o0 = StationRef::new(o, 0);
+    hand_move(&mut project, o0, (0.3, 0.0, 0.0));
+    let shown = xy(&project, o0);
+    place(&mut project, t, 0, shown);
+    project.merge_stations(o0, StationRef::new(t, 0)).unwrap();
+    let (t1, o2) = (StationRef::new(t, 1), StationRef::new(o, 2));
+    assert!(dist(xy(&project, t1), xy(&project, o2)) < 1e-9, "setup");
+    assert!(
+        project.merge_stations(t1, o2).is_err(),
+        "the app refuses the loop"
+    );
+    project.record_station_merge(StationMerge {
+        station_a: project.key_for_ref(t1).unwrap(),
+        station_b: project.key_for_ref(o2).unwrap(),
+        merged_at: Utc::now(),
+    });
+    let mut loaded = project.clone();
+    assert_eq!(
+        loaded.redrive_offsets_after_load(),
+        0,
+        "a reload keeps the loop"
+    );
+    assert_eq!(loaded.station_merges.len(), 2);
+
+    let candidate = project.combine_candidate_for_sections(k, o).unwrap();
+    let plan = &candidate.plan_keeping_a;
+    assert_eq!(plan.moved_with_joined_station, None, "T stays with O");
+    let torn: Vec<_> = plan
+        .torn_ties
+        .iter()
+        .map(|tie| (tie.kind, tie.reason, tie.station_a, tie.station_b))
+        .collect();
+    assert_eq!(
+        torn,
+        vec![(
+            TornTieKind::Merge,
+            TornTieReason::Loop,
+            o0,
+            StationRef::new(t, 0)
+        )]
+    );
+    let mut after = project.clone();
+    after.combine_sections(k, o, &options(None)).unwrap();
+    check_combined(&project, &after, &candidate, k, "merge loop", &[]);
+    assert!(dist(xy(&after, t1), xy(&after, StationRef::new(k, 3))) < 1e-9);
+    let closure = after.loop_closures.last().unwrap();
+    assert!((closure.horizontal_misclosure - 0.3).abs() < 1e-9);
+    let mut repaired = after.clone();
+    assert_eq!(repaired.realign_merges(), 0);
+    let mut reopened = after.clone();
+    reopened.redrive_offsets_after_load();
+    for (station, was) in every_station(&after) {
+        assert!(
+            dist(xy(&reopened, station), was) < 1e-9,
+            "the reopen moved {station:?}"
+        );
+    }
+}
+
+/// A loop closure from the join station whose hand move is dropped (O's
+/// start, 0.3 m) to K's start, and one from T's far end (T moving with the
+/// joined station) to K's station 1: both ends of each move apart, the
+/// first also when O does not move at all (nothing merged at O's start, so
+/// nothing moves). After the combine every closure's figures are what a
+/// fresh measurement gives.
+#[test]
+fn closures_whose_ends_the_hand_move_moves_apart_are_measured_again() {
+    for branch in [false, true] {
+        let mut project = Project::new("Measure".to_string(), None);
+        let k = add(&mut project, "K", vec![shot(90.0, 5.0), shot(90.0, 5.0)]);
+        let o = add(&mut project, "O", vec![shot(90.0, 10.0)]);
+        project.set_section_offset(o, (10.0, 0.0));
+        let o0 = StationRef::new(o, 0);
+        hand_move(&mut project, o0, (0.3, 0.0, 0.0));
+        let mut ends = vec![(o0, StationRef::new(k, 0))];
+        if branch {
+            let t = add(&mut project, "T", vec![shot(0.0, 5.0)]);
+            let shown = xy(&project, o0);
+            place(&mut project, t, 0, shown);
+            project.merge_stations(o0, StationRef::new(t, 0)).unwrap();
+            ends.push((StationRef::new(t, 1), StationRef::new(k, 1)));
+        }
+        // Planted as a file holds them (`create_loop_closure` wants the two
+        // stations connected first), measured as they are.
+        for (id, (a, b)) in ends.into_iter().enumerate() {
+            let m = project.compute_closure_metrics(a, b).unwrap();
+            project.loop_closures.push(LoopClosure {
+                id: id as u64 + 1,
+                station_a: project.key_for_ref(a).unwrap(),
+                station_b: project.key_for_ref(b).unwrap(),
+                path_length: m.path_length,
+                misclosure_distance: m.misclosure_distance,
+                error_percentage: m.error_percentage,
+                horizontal_misclosure: m.horizontal_misclosure,
+                vertical_misclosure: m.vertical_misclosure,
+                strategy: ClosureStrategy::Batch,
+                is_aligned: false,
+            });
+        }
+        project.next_closure_id = 3;
+        let mut after = project.clone();
+        after.combine_sections(k, o, &options(None)).unwrap();
+        // Measured as the combine measures: with no closure to run through.
+        let mut bare = after.clone();
+        bare.loop_closures.clear();
+        for closure in &after.loop_closures {
+            let (a, b) = (
+                after.resolve_key(&closure.station_a).unwrap(),
+                after.resolve_key(&closure.station_b).unwrap(),
+            );
+            let fresh = bare.compute_closure_metrics(a, b).unwrap();
+            for (stored, want, field) in [
+                (closure.path_length, fresh.path_length, "path length"),
+                (
+                    closure.misclosure_distance,
+                    fresh.misclosure_distance,
+                    "misclosure",
+                ),
+                (
+                    closure.horizontal_misclosure,
+                    fresh.horizontal_misclosure,
+                    "horizontal misclosure",
+                ),
+                (
+                    closure.vertical_misclosure,
+                    fresh.vertical_misclosure,
+                    "vertical misclosure",
+                ),
+            ] {
+                assert!(
+                    (stored - want).abs() < 1e-9,
+                    "branch {branch}: {a:?}-{b:?} {field} {stored}, measured {want}"
+                );
+            }
+        }
+    }
 }
