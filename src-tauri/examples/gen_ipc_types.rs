@@ -57,15 +57,15 @@ use stalagmight_lib::models::{
     CombineSectionsOptions, ConnectivityResult, Coordinates, CorrectionSource, CreditEdit,
     CreditTargets, CreditedPerson, CylRole, Cylinder, DatumGap, DatumRole, DeleteShotImpact,
     DeleteShotRangeImpact, DistanceField, DivePlan, DivePlanMeta, DivePlanSnapshot, Diver,
-    ExistingShotUpdate, FrozenShotRef, GasReachField, GpsBounds, GpsCoordinates, ImportPlacement,
-    ImportSectionConfig, KeptMovesReason, LoopClosureWire, MarkedPoint, NorthReference, PathShot,
-    Person, PlanAnchorSet, PlanMode, PlanSegment, Project, ProjectMetadata, ProjectStats,
-    ProjectWarning, RangeDeleteKind, RouteLeg, RouteProfilePoint, RulerEndpoint, Section,
-    SectionCreditSummary, SectionData, SectionEnd, SectionRelationships, SectionStats,
-    SectionUpdates, Shot, ShotData, ShotKind, ShotUpdates, SkippedClosure, SpeleoLink, SplitAt,
-    SplitPreview, SplitSectionOptions, SplitSide, Station, StationMergeWire, StationPair,
-    StationRef, SurveyCredit, SurveyDirection, TankMaterial, Team, TornTie, TornTieKind,
-    TornTieReason, UnrecognisedShotKind, ZeroDatumPreview, ZeroDatumWire,
+    ExistingShotUpdate, FarGpsFix, FrozenShotRef, GasReachField, GpsBounds, GpsCoordinates,
+    ImportPlacement, ImportSectionConfig, KeptMovesReason, LoopClosureWire, MarkedPoint,
+    MergeDatumShift, NorthReference, PathShot, Person, PlanAnchorSet, PlanMode, PlanSegment,
+    Project, ProjectMetadata, ProjectStats, ProjectWarning, RangeDeleteKind, RouteLeg,
+    RouteProfilePoint, RulerEndpoint, Section, SectionCreditSummary, SectionData, SectionEnd,
+    SectionRelationships, SectionStats, SectionUpdates, Shot, ShotData, ShotKind, ShotUpdates,
+    SkippedClosure, SpeleoLink, SplitAt, SplitPreview, SplitSectionOptions, SplitSide, Station,
+    StationMergeWire, StationPair, StationRef, SurveyCredit, SurveyDirection, TankMaterial, Team,
+    TornTie, TornTieKind, TornTieReason, UnrecognisedShotKind, ZeroDatumPreview, ZeroDatumWire,
 };
 use stalagmight_lib::parsers::compass::{CompassFile, CompassSurveySummary, InvalidShotCounts};
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};
@@ -277,6 +277,7 @@ fn main() {
     export::<DatumRole>(&out_dir);
     export::<DatumGap>(&out_dir);
     export::<ZeroDatumPreview>(&out_dir);
+    export::<MergeDatumShift>(&out_dir);
     export::<LoopClosureWire>(&out_dir);
     export::<ClosureRef>(&out_dir);
     export::<ClosureStrategy>(&out_dir);
@@ -294,6 +295,7 @@ fn main() {
     export::<ClosurePreview>(&out_dir);
     export::<ProjectWarning>(&out_dir);
     export::<SkippedClosure>(&out_dir);
+    export::<FarGpsFix>(&out_dir);
     export::<AdjustmentFailureReport>(&out_dir);
     export::<AdjustmentReport>(&out_dir);
     export::<FrozenShotRef>(&out_dir);
@@ -590,6 +592,7 @@ fn main() {
         "DatumRole",
         "DatumGap",
         "ZeroDatumPreview",
+        "MergeDatumShift",
         "LoopClosure",
         "ClosureRef",
         "ClosureStrategy",
@@ -607,6 +610,7 @@ fn main() {
         "ClosurePreview",
         "ProjectWarning",
         "SkippedClosure",
+        "FarGpsFix",
         "AdjustmentFailureReport",
         "AdjustmentReport",
         "FrozenShotRef",

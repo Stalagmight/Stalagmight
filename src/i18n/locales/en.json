@@ -1226,6 +1226,12 @@
     "mergeProjects": {
       "warningToast": "Merge complete - {{message}}"
     },
+    "mergeStations": {
+      "datumShift": "{{piece}} is placed by its own GPS. It moves {{distance}} m to meet the other piece, and its zero datum at {{station}} becomes a GPS fix.",
+      "datumShiftAfterMove": "{{piece}} is placed by its own GPS. The merge moves it to meet the other piece, and its zero datum at {{station}} becomes a GPS fix.",
+      "pieceMore_one": "{{name}} and 1 more section",
+      "pieceMore_other": "{{name}} and {{count}} more sections"
+    },
     "importBlocked": {
       "title": "Importing DMP",
       "body": "Switch to Survey mode for import since Plan and Export modes are read-only.",
@@ -2061,6 +2067,13 @@
       "center": "Center map on station {{id}}",
       "comment": "Comment",
       "zeroDatum": "Zero datum station",
+      "placementDatum": "Placement datum",
+      "placementDatumHint": "Places this part of the survey on its GPS.",
+      "gpsFix": "GPS fix",
+      "gpsFixHint": "Bends the Closures Computed View toward its GPS. It does not move the Raw Data View.",
+      "gpsFixGap": "GPS is {{distance}} m {{direction}} of the surveyed position.",
+      "gpsFixGapExceeds": "That is more than the {{threshold}} m expected. Check the GPS reading and the survey.",
+      "gpsReading": "GPS reading (not the surveyed position)",
       "distanceGradientRoot": "Distance gradient root",
       "mergedWith": "Merged with",
       "connected": "Connected",
@@ -2448,6 +2461,8 @@
       "skippedClosures_other": "{{count}} loop closures skipped: each spans a single shot.",
       "failedParts_one": "Part of the survey could not be adjusted and is shown as measured.",
       "failedParts_other": "{{count}} parts of the survey could not be adjusted and are shown as measured.",
+      "farGpsFixes_one": "Bent to a GPS fix at {{station}}, {{gap}} m from its surveyed position. Check it.",
+      "farGpsFixes_other": "Bent to {{count}} GPS fixes far from their surveyed positions, up to {{gap}} m at {{station}}. Check them.",
       "showWarnings": "Show warnings"
     },
     "toasts": {

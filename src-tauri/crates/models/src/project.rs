@@ -10,7 +10,7 @@ use super::{
     ShotData, ShotId, StationAnchor, StationKey, StationMerge, StationMergeWire, StationRef,
     ZeroDatum,
 };
-use super::{LoopClosureWire, ZeroDatumWire};
+use super::{DatumRole, LoopClosureWire, ZeroDatumWire};
 
 // Re-export the sibling module so the relocated `suggest_orphan_placements` (now in
 // the `distance` child) keeps resolving `super::placement_suggest` - its `super` is
@@ -28,6 +28,7 @@ mod distance;
 // honours (#317). Everything else in here stays behind the `pub use` list below.
 pub mod gas;
 mod lsq;
+mod merge_datum_shift;
 mod pathfinding;
 
 // Used only by the `tests` module via `use super::*`; production code in this
@@ -115,6 +116,13 @@ mod datum_entrance_tests;
 #[expect(
     clippy::unwrap_used,
     clippy::expect_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod datum_ui_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
     clippy::float_cmp,
     reason = "test module: panics on a failed assumption are the point"
 )]
@@ -128,7 +136,8 @@ mod multi_datum_tests;
 mod split_section_tests;
 
 pub use adjustment_report::{
-    AdjustedStations, AdjustmentFailure, AdjustmentFailureReport, AdjustmentReport, SkippedClosure,
+    AdjustedStations, AdjustmentFailure, AdjustmentFailureReport, AdjustmentReport, FarGpsFix,
+    SkippedClosure,
 };
 pub use classify::ClassifyScope;
 pub use closure_shots::{
@@ -148,6 +157,7 @@ pub use gas::{
 };
 pub use gauge::HeldGauge;
 pub use integrity::{IntegrityViolation, ViolationSeverity};
+pub use merge_datum_shift::MergeDatumShift;
 pub use merge_topology::MergeTopology;
 pub use offsets::{log_removed_closures, ClosuresBeforeSweep, OrphanClosureSweep, RemovedClosure};
 pub use reverse::{reverse_shots, shot_run_displacement};
@@ -1619,20 +1629,27 @@ impl Project {
     }
 
     /// Positional wire form of every stored zero datum, in list order, with its
-    /// derived role and entrance flag. A datum whose ref dangles is dropped.
+    /// derived role, entrance flag and, for a GPS fix, its gap. A datum whose
+    /// ref dangles is dropped.
     pub fn zero_datums_wire(&self) -> Vec<ZeroDatumWire> {
+        let gaps = self.gps_fix_gaps();
         self.zero_datums
             .iter()
             .zip(self.datum_roles())
             .filter_map(|(zd, role)| {
                 let station_ref = self.resolve_key(&zd.station_ref)?;
                 let role = role?;
+                let gap = match role {
+                    DatumRole::GpsFix => gaps.get(&station_ref).copied(),
+                    DatumRole::Placement => None,
+                };
                 Some(ZeroDatumWire {
                     station_ref,
                     gps: zd.gps,
                     accuracy_m: zd.accuracy_m,
                     role,
                     is_entrance: self.datum_is_entrance(station_ref, role, zd.entrance),
+                    gap,
                 })
             })
             .collect()

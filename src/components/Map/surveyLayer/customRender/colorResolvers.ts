@@ -10,7 +10,6 @@
  * packed RGBA resolvers keyed by global shot / station index.
  */
 import type { SurveyData, SectionMetadata } from '../../../../types/survey-data';
-import { STATION_FLAG_IS_ZERO_DATUM } from '../../../../types/survey-data';
 import { encodeFeatureId } from '../../../../utils/ids';
 import {
   commentColorForKey,
@@ -123,10 +122,7 @@ export function makeColorResolvers(
     const sectionColor = sectionById.get(sectionId)?.color ?? stationDefault;
     return pack(resolveStationDisplayColor(surveyData, sectionColor, g, colorCtx));
   };
-  const strokeForStation = (g: number): Rgba8 => {
-    const isZeroDatum = (surveyData.stationFlags[g]! & STATION_FLAG_IS_ZERO_DATUM) !== 0;
-    return pack(resolveStationStrokeColor(isZeroDatum, colorCtx));
-  };
+  const strokeForStation = (g: number): Rgba8 => pack(resolveStationStrokeColor(surveyData.stationFlags[g]!, colorCtx));
 
   // Overlay mode draws flat per-shot ramp colors, and move-comment hides the
   // depth sub-layer too (applyOverlayPaint), so in both the depth-endpoint path

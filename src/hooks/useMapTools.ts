@@ -395,6 +395,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           openDialog('merge', {
             stationA,
             stationB,
+            datumShift: result.datum_shift,
           });
         } else if (result.connected) {
           // Connected - merging would make a loop, so redirect to closure dialog

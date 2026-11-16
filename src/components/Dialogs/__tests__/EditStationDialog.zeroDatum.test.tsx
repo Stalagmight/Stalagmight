@@ -146,9 +146,9 @@ describe('EditStationDialog zero datum (#741)', () => {
 
   it('defaults the accuracy to a 0 m hard pin, and stores none for the default', async () => {
     render(<EditStationDialog />);
-    expect(screen.getByTestId('station-datum-accuracy-input')).toHaveValue(0);
-    expect(screen.getByText(/0 puts the computed survey exactly through this GPS\. A larger number .* trusts the GPS less, and the survey wins most of the gap\./)).toBeInTheDocument();
     typeGps('20.5, -87.4');
+    expect(await screen.findByTestId('station-datum-accuracy-input')).toHaveValue(0);
+    expect(screen.getByText(/0 puts the computed survey exactly through this GPS\. A larger number .* trusts the GPS less, and the survey wins most of the gap\./)).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('edit-station-save'));
     // The user never set an accuracy, so none is sent: the backend reads an
     // absent one as the default without writing a side-table row for it.
@@ -181,7 +181,7 @@ describe('EditStationDialog zero datum (#741)', () => {
   it('passes the entered accuracy on save', async () => {
     render(<EditStationDialog />);
     typeGps('20.5, -87.4');
-    fireEvent.change(screen.getByTestId('station-datum-accuracy-input'), { target: { value: '2.5' } });
+    fireEvent.change(await screen.findByTestId('station-datum-accuracy-input'), { target: { value: '2.5' } });
     fireEvent.click(screen.getByTestId('edit-station-save'));
     await waitFor(() => expect(closeDialog).toHaveBeenCalled());
     expect(setZeroDatum).toHaveBeenCalledWith(
@@ -194,7 +194,7 @@ describe('EditStationDialog zero datum (#741)', () => {
   it('refuses a negative, empty or over-1000 m accuracy until it is fixed', async () => {
     render(<EditStationDialog />);
     typeGps('20.5, -87.4');
-    const field = screen.getByTestId('station-datum-accuracy-input');
+    const field = await screen.findByTestId('station-datum-accuracy-input');
     // 5000 is what the backend refuses on save; the field must refuse it first.
     for (const bad of ['-1', '', '5000', '1000.5']) {
       fireEvent.change(field, { target: { value: bad } });
@@ -226,6 +226,36 @@ describe('EditStationDialog zero datum (#741)', () => {
     fireEvent.change(screen.getByTestId('station-datum-accuracy-input'), { target: { value: '3' } });
     fireEvent.click(screen.getByTestId('edit-station-save'));
     await waitFor(() => expect(setZeroDatum).toHaveBeenCalledWith(REF, expect.anything(), { accuracyM: 3 }));
+  });
+
+  it('hides the accuracy of a placement datum, keeps what is stored and sends none', async () => {
+    dialogData = { stationRef: REF };
+    previewZeroDatum.mockResolvedValue({ role: 'Placement' });
+    setProject({ datum: { accuracy_m: 7, role: 'Placement' } });
+    render(<EditStationDialog />);
+    expect(screen.queryByTestId('station-datum-accuracy-input')).not.toBeInTheDocument();
+    typeGps('20.6, -87.4');
+    await waitFor(() => expect(previewZeroDatum).toHaveBeenCalled());
+    await act(async () => {});
+    expect(screen.queryByTestId('station-datum-accuracy-input')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('edit-station-save'));
+    await waitFor(() => expect(closeDialog).toHaveBeenCalled());
+    // The GPS changed, so the datum is re-saved - without an accuracy, which
+    // keeps the stored 7 m for the day the datum becomes a fix.
+    expect(setZeroDatum).toHaveBeenCalledWith(REF, { latitude: 20.6, longitude: -87.4, depth_reference: 4 }, {});
+  });
+
+  it('hides the accuracy of a new datum until the preview says it will be a fix', async () => {
+    previewZeroDatum.mockResolvedValue({ role: 'Placement' });
+    render(<EditStationDialog />);
+    expect(screen.queryByTestId('station-datum-accuracy-input')).not.toBeInTheDocument();
+    typeGps('20.5, -87.4');
+    await waitFor(() => expect(previewZeroDatum).toHaveBeenCalled());
+    await act(async () => {});
+    expect(screen.queryByTestId('station-datum-accuracy-input')).not.toBeInTheDocument();
+    previewZeroDatum.mockResolvedValue(fix());
+    typeGps('20.6, -87.4');
+    expect(await screen.findByTestId('station-datum-accuracy-input')).toHaveValue(0);
   });
 
   it('does not touch an existing datum when neither GPS nor accuracy changed', async () => {

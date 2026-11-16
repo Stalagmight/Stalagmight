@@ -562,6 +562,12 @@ pub struct ZeroDatumWire {
     /// the stored override and the default rule, so the frontend never
     /// re-derives it (#741).
     pub is_entrance: bool,
+    /// For a GPS fix, how far its GPS is from where the raw survey puts its
+    /// station (`Project::gps_fix_gaps`), so the Details panel shows the
+    /// backend's number. Absent for a placement datum.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub gap: Option<crate::DatumGap>,
 }
 
 /// Strategy for distributing loop closure errors
@@ -938,4 +944,10 @@ pub struct ConnectivityResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub closure_refusal: Option<String>,
+    /// When both stations' pieces are placed by their own zero datum (#741):
+    /// the piece the merge moves, by how much, and the datum that becomes a
+    /// GPS fix. The Merge dialog says so before the user confirms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub datum_shift: Option<crate::MergeDatumShift>,
 }

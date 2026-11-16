@@ -361,7 +361,18 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         );
         return ref.station_index === 0 || ref.station_index === (section?.shots?.length ?? 0);
       };
-      /** Stamp each datum's derived role and entrance flag on an (already cloned) wire project. */
+      /** A GPS fix's gap. The mock has no geometry, so it is canned; a spec can
+       *  override it through `window.__MOCK_DATUM_GAP__`. */
+      const mockDatumGap = (): unknown =>
+        (window as unknown as Record<string, unknown>).__MOCK_DATUM_GAP__ ?? {
+          gap_m: 40,
+          bearing_deg: 45,
+          survey_distance_m: 1400,
+          threshold_m: 43,
+          exceeds_threshold: false,
+        };
+      /** Stamp each datum's derived role, entrance flag and, for a GPS fix, its
+       *  gap on an (already cloned) wire project, as `Project::zero_datums_wire` does. */
       const withDatumRoles = <P extends { station_merges?: unknown[]; zero_datums?: unknown[]; sections?: unknown[] } | null>(project: P): P => {
         if (!project) return project;
         for (const d of (project.zero_datums ?? []) as Array<{
@@ -369,11 +380,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           role?: 'Placement' | 'GpsFix';
           entrance?: boolean;
           is_entrance?: boolean;
+          gap?: unknown;
         }>) {
           d.role = mockDatumRole(project, d.station_ref);
           d.is_entrance = mockDatumIsEntrance(project, d.station_ref, d.role, d.entrance);
           // The stored answer is backend-only; the wire carries the resolved flag.
           delete d.entrance;
+          if (d.role === 'GpsFix') d.gap = mockDatumGap();
+          else delete d.gap;
         }
         return project;
       };
@@ -2112,8 +2126,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // What the closure-adjusted view left out (#737). The mock solves
             // nothing, so it skips nothing and nothing fails - unless a spec
             // plants a report on window.__MOCK_ADJUSTMENT_REPORT__.
+            // A planted report may predate `far_gps_fixes` (#741); default it.
             const planted = (window as unknown as Record<string, unknown>).__MOCK_ADJUSTMENT_REPORT__;
-            return planted ?? { skipped_closures: [], failures: [] };
+            const empty = { skipped_closures: [], failures: [], far_gps_fixes: [] };
+            return planted ? { ...empty, ...(planted as object) } : empty;
           }
 
           case 'get_station_distances_from': {
@@ -4207,8 +4223,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           case 'preview_zero_datum': {
             // #741: read-only. The role comes from the same derivation as the wire
-            // roles; the mock has no geometry, so a GPS fix gets a canned gap that
-            // a spec can override through `window.__MOCK_DATUM_GAP__`.
+            // roles, and a GPS fix gets the same canned gap (mockDatumGap).
             const win = window as unknown as Record<string, unknown>;
             const calls = (win.__MOCK_PREVIEW_ZERO_DATUM_CALLS__ as unknown[]) ?? [];
             calls.push(args ?? null);
@@ -4227,14 +4242,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             );
             const is_entrance = mockDatumIsEntrance(currentProject, stationRef, role, stored?.entrance);
             if (role === 'Placement') return { role, is_entrance };
-            const gap = win.__MOCK_DATUM_GAP__ ?? {
-              gap_m: 40,
-              bearing_deg: 45,
-              survey_distance_m: 1400,
-              threshold_m: 43,
-              exceeds_threshold: false,
-            };
-            return { role, gap, is_entrance };
+            return { role, gap: mockDatumGap(), is_entrance };
           }
 
           case 'remove_zero_datum': {

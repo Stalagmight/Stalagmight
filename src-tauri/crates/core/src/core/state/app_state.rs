@@ -641,6 +641,7 @@ impl AppState {
                 .iter()
                 .map(AdjustmentFailureReport::from)
                 .collect(),
+            far_gps_fixes: project.far_gps_fixes(),
         })
     }
 

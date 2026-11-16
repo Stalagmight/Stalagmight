@@ -11,7 +11,7 @@
 import { COMMENT_PALETTE, getDepthColor } from '../../../utils/colors';
 import { scaleHex, type ColorScaleInput } from '../../../utils/palettes';
 import type { MapThemeColors } from '../../../utils/themeColors';
-import { type SurveyData, STATION_FLAG_IS_ZERO_DATUM } from '../../../types/survey-data';
+import { type SurveyData, STATION_FLAG_IS_GPS_FIX, STATION_FLAG_IS_ZERO_DATUM } from '../../../types/survey-data';
 import { issueScoreColor } from './issueColor';
 import type { ResolvedPalette } from '../../../utils/palettes/sample';
 
@@ -194,7 +194,8 @@ export function resolveShotEndpointColors(
   return [base, base];
 }
 
-/** The station's fill color: issue score > depth ramp > zero-datum > section color. */
+/** The station's fill color: issue score > GPS fix (hollow) > depth ramp >
+ *  zero-datum > section color. */
 export function resolveStationDisplayColor(
   data: SurveyData,
   sectionColor: string,
@@ -204,7 +205,11 @@ export function resolveStationDisplayColor(
   if (ctx.showIssueSeverity && ctx.issueScores) {
     return issueScoreColor(ctx.themeColors, ctx.issueScores.stationScore[stationGlobalIdx] ?? 0, ctx.issuePalette);
   }
-  const isZeroDatum = (data.stationFlags[stationGlobalIdx]! & STATION_FLAG_IS_ZERO_DATUM) !== 0;
+  const flags = data.stationFlags[stationGlobalIdx]!;
+  // A GPS fix (#741) is a hollow ring - the map background inside the
+  // zero-datum stroke - so it never reads as the solid placement datum.
+  if ((flags & STATION_FLAG_IS_GPS_FIX) !== 0) return ctx.themeColors.background;
+  const isZeroDatum = (flags & STATION_FLAG_IS_ZERO_DATUM) !== 0;
   if (ctx.showDepthGradient) {
     const z = data.stationCoords[stationGlobalIdx * 3 + 2]!;
     return depthColorFor(z, ctx) ?? sectionColor;
@@ -212,9 +217,12 @@ export function resolveStationDisplayColor(
   return isZeroDatum ? ctx.themeColors.zeroDatum : sectionColor;
 }
 
-/** The station's stroke color (zero-datum ring in depth mode, else theme stroke). */
-export function resolveStationStrokeColor(isZeroDatum: boolean, ctx: DisplayColorContext): string {
-  return ctx.showDepthGradient && isZeroDatum
+/** The station's stroke color from its `stationFlags`: the zero-datum ring for
+ *  a GPS fix (always) and for a placement datum in depth mode, else the theme
+ *  stroke. */
+export function resolveStationStrokeColor(flags: number, ctx: DisplayColorContext): string {
+  if ((flags & STATION_FLAG_IS_GPS_FIX) !== 0) return ctx.themeColors.zeroDatum;
+  return ctx.showDepthGradient && (flags & STATION_FLAG_IS_ZERO_DATUM) !== 0
     ? ctx.themeColors.zeroDatum
     : ctx.themeColors.strokeColor;
 }

@@ -24,11 +24,13 @@ vi.mock('react-i18next', async () => {
       );
   // English plurals the way i18next picks them (`_one` / `_other` by `count`),
   // and `{{count}}` interpolation - enough for the adjustment notice (#737).
-  const t = (key: string, options?: { count?: number }): string => {
+  const t = (key: string, options?: Record<string, unknown>): string => {
     const count = options?.count;
     const plural = count === undefined ? undefined : lookup(`${key}_${count === 1 ? 'one' : 'other'}`);
     const value = typeof plural === 'string' ? plural : lookup(key);
-    return typeof value === 'string' ? value.replace('{{count}}', String(count)) : key;
+    return typeof value === 'string'
+      ? value.replace(/\{\{(\w+)\}\}/g, (_, name: string) => String(options?.[name]))
+      : key;
   };
   // The pills' Resume buttons pull in the SpeleoDB action hook, whose imports
   // initialise i18n - hand it a no-op plugin so that init stays inert here.
@@ -134,6 +136,7 @@ describe('MapTopLeftOverlay', () => {
         adjustmentReport={{
           skipped_closures: [],
           failures: [{ anchor: { section_id: 0, station_index: 0 }, section_ids: [0], reason: 'x' }],
+          far_gps_fixes: [],
         }}
       />
     );
@@ -166,6 +169,7 @@ describe('MapTopLeftOverlay', () => {
     const report = (over: Partial<AdjustmentReport>): AdjustmentReport => ({
       skipped_closures: [],
       failures: [],
+      far_gps_fixes: [],
       ...over,
     });
 
@@ -212,6 +216,31 @@ describe('MapTopLeftOverlay', () => {
         '2 parts of the survey could not be adjusted and are shown as measured.'
       );
       expect(screen.getByTestId('adjustment-notice-skipped')).toBeInTheDocument();
+    });
+
+    it('names the GPS fix the computed view is bent to, and how far off it is (#741)', () => {
+      const fix = (section_id: number, station_index: number, gap_m: number) => ({
+        station: { section_id, station_index },
+        gap_m,
+        threshold_m: 25,
+      });
+      const { rerender } = render(
+        <MapTopLeftOverlay {...baseProps} adjustmentReport={report({ far_gps_fixes: [fix(2, 5, 43.2)] })} />
+      );
+      expect(screen.getByTestId('adjustment-notice-far-gps-fix')).toHaveTextContent(
+        'Bent to a GPS fix at 2:5, 43 m from its surveyed position. Check it.'
+      );
+      expect(screen.queryByTestId('adjustment-notice-skipped')).toBeNull();
+      // The backend sorts the largest gap first; the notice names it.
+      rerender(
+        <MapTopLeftOverlay
+          {...baseProps}
+          adjustmentReport={report({ far_gps_fixes: [fix(3, 1, 80), fix(2, 5, 43.2)] })}
+        />
+      );
+      expect(screen.getByTestId('adjustment-notice-far-gps-fix')).toHaveTextContent(
+        'Bent to 2 GPS fixes far from their surveyed positions, up to 80 m at 3:1. Check them.'
+      );
     });
 
     it('opens the Warnings tab, stacked under the read-only notice rather than over it', async () => {
