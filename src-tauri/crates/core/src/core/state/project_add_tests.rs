@@ -1244,6 +1244,7 @@ fn a_source_refused_after_the_append_is_rolled_back_exactly() {
         station_ref: StationRef::new(b0, 2).into(),
         gps: GpsCoordinates::new(20.7, -87.5, 0.0).unwrap(),
         accuracy_m: Some(-1.0),
+        entrance: None,
     });
     let refused = {
         let mut guard = state.project.lock().unwrap();
@@ -1405,6 +1406,7 @@ fn a_refused_add_spends_no_ids_and_keeps_the_modification_time() {
         station_ref: StationRef::new(b0, 2).into(),
         gps: GpsCoordinates::new(20.7, -87.5, 0.0).unwrap(),
         accuracy_m: Some(-1.0),
+        entrance: None,
     });
     let refused = {
         let mut guard = state.project.lock().unwrap();

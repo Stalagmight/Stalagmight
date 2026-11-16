@@ -46,6 +46,7 @@ fn fixture() -> Fixture {
         station_ref: StationRef::new(section, index).into(),
         gps: GpsCoordinates::new(lat, -87.5, 1.5).unwrap(),
         accuracy_m,
+        entrance: None,
     };
     project.zero_datums = vec![
         datum(a, 0, 20.1, Some(2.0)),

@@ -584,6 +584,7 @@ fn push_fix(project: &mut Project, sr: StationRef, gps: GpsCoordinates) {
         station_ref,
         gps,
         accuracy_m: None,
+        entrance: None,
     });
 }
 

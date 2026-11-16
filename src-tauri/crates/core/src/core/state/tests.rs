@@ -1578,11 +1578,13 @@ fn redo_batch_preserves_double_anchored_bridge_closure() {
                 station_ref: StationRef::new(a, 0),
                 coordinates: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
                 accuracy_m: None,
+                entrance: None,
             },
             Command::SetZeroDatum {
                 station_ref: StationRef::new(b, 0),
                 coordinates: GpsCoordinates::new(46.0, -74.0, 110.0).unwrap(),
                 accuracy_m: None,
+                entrance: None,
             },
             Command::CreateLoopClosure {
                 station_a: StationRef::new(a, 1),
@@ -2844,6 +2846,7 @@ fn unmerge_converts_orphaned_bridge_closure() {
         station_ref: StationRef::new(a, 0),
         coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
     state.execute(Command::MergeStations {
         station_a: StationRef::new(a, 2),
@@ -3284,6 +3287,7 @@ fn undo_unmerge_restores_converted_closure_and_position() {
         station_ref: StationRef::new(a, 0),
         coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
     state.execute(Command::MergeStations {
         station_a: StationRef::new(a, 2),
@@ -3401,6 +3405,7 @@ fn undo_unmerge_singular_restores_converted_closure_and_position() {
         station_ref: StationRef::new(a, 0),
         coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
     state.execute(Command::MergeStations {
         station_a: StationRef::new(a, 2),
@@ -3495,6 +3500,7 @@ fn undo_merge_restores_aligned_closure_section_outside_merge_groups() {
         station_ref: StationRef::new(a, 0),
         coordinates: GpsCoordinates::new(45.0, 90.0, 0.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
 
     // Inject an ALIGNED loop closure B.1 <-> Z.0 (no merge). Z is reachable from the
@@ -3667,6 +3673,7 @@ fn split_converts_orphaned_bridge_closure_immediately() {
         station_ref: StationRef::new(a, 0),
         coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
     // B hangs off A's last station; a closure A0=B1 closes the loop.
     state.execute(Command::MergeStations {
@@ -3751,6 +3758,7 @@ fn split_section_does_not_promote_a_bridge_closure_across_two_anchored_component
         station_ref: StationRef::new(a, 0),
         coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
     assert!(r.success, "{:?}", r.error);
 
@@ -3767,6 +3775,7 @@ fn split_section_does_not_promote_a_bridge_closure_across_two_anchored_component
         station_ref: StationRef::new(c, 0),
         coordinates: GpsCoordinates::new(10.001, 20.0, 0.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
     assert!(r.success, "{:?}", r.error);
 
@@ -3918,6 +3927,7 @@ fn redo_insert_shot_keeps_merged_stations_aligned() {
         station_ref: StationRef::new(a, 0),
         coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
     let merge = state.execute(Command::MergeStations {
         station_a: StationRef::new(a, 2),
@@ -4395,11 +4405,13 @@ fn test_delete_shot_rejects_frozen_shot() {
         station_ref: StationRef::new(sec_a, 0).into(),
         gps: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
     project.zero_datums.push(crate::models::ZeroDatum {
         station_ref: StationRef::new(sec_b, 0).into(),
         gps: GpsCoordinates::new(46.0, -74.0, 110.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
 
     // SELF-VERIFY the chosen shot is genuinely frozen before asserting the
@@ -4506,11 +4518,13 @@ fn test_delete_shot_and_split_rejects_frozen_shot() {
         station_ref: StationRef::new(sec_a, 0).into(),
         gps: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
     project.zero_datums.push(crate::models::ZeroDatum {
         station_ref: StationRef::new(sec_b, 0).into(),
         gps: GpsCoordinates::new(46.0, -74.0, 110.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
 
     // SELF-VERIFY the interior split shot (index 1) is genuinely frozen.
@@ -4728,6 +4742,7 @@ fn test_split_shot_at_distance_preserves_anchor_on_endpoint_station() {
         station_ref: endpoint_key.clone(),
         gps: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
     project
         .station_comments
@@ -4876,6 +4891,7 @@ fn test_split_shot_at_distance_first_shot_keeps_section_start_anchor() {
         station_ref: start_key,
         gps: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
 
     let state = AppState::new().unwrap();
@@ -5005,11 +5021,13 @@ fn test_split_shot_at_distance_rejects_frozen_shot() {
         station_ref: StationRef::new(sec_a, 0).into(),
         gps: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
     project.zero_datums.push(crate::models::ZeroDatum {
         station_ref: StationRef::new(sec_b, 0).into(),
         gps: GpsCoordinates::new(46.0, -74.0, 110.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
 
     let frozen = project.compute_frozen_shots();
@@ -5398,6 +5416,7 @@ fn delete_shot_does_not_shift_independent_component() {
                 station_ref: StationRef::new(a, 0),
                 coordinates: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
                 accuracy_m: None,
+                entrance: None,
             })
             .success
     );
@@ -5407,6 +5426,7 @@ fn delete_shot_does_not_shift_independent_component() {
                 station_ref: StationRef::new(b, 0),
                 coordinates: GpsCoordinates::new(46.0, -74.0, 110.0).unwrap(),
                 accuracy_m: None,
+                entrance: None,
             })
             .success
     );
@@ -5505,6 +5525,7 @@ fn delete_tail_shot_does_not_shift_merged_head_neighbor() {
                 station_ref: StationRef::new(a, 0),
                 coordinates: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
                 accuracy_m: None,
+                entrance: None,
             })
             .success
     );
@@ -7172,6 +7193,7 @@ fn test_set_and_remove_zero_datum() {
         station_ref,
         coordinates: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
 
     assert!(result.success);
@@ -7674,6 +7696,7 @@ fn test_execute_set_zero_datum_command() {
         station_ref,
         coordinates: gps,
         accuracy_m: None,
+        entrance: None,
     });
 
     assert!(result.success);
@@ -7758,6 +7781,7 @@ fn test_undo_set_zero_datum_restores_section_offsets() {
         station_ref,
         coordinates: gps,
         accuracy_m: None,
+        entrance: None,
     });
     assert!(result.success);
 
@@ -8154,11 +8178,13 @@ fn doubly_anchored_guard_reports_receipt_warning_and_skips_the_shot() {
             station_ref: key_front,
             gps: gps.clone(),
             accuracy_m: None,
+            entrance: None,
         });
         project.zero_datums.push(ZeroDatum {
             station_ref: key_other.clone(),
             gps,
             accuracy_m: None,
+            entrance: None,
         });
         project.loop_closures.push(LoopClosure {
             id: 900,
@@ -8520,6 +8546,7 @@ fn test_execute_delete_section_command() {
         station_ref: StationRef::new(section_a_id, 0),
         coordinates: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
 
     // Verify initial state
@@ -8644,6 +8671,7 @@ fn test_execute_command_no_project_open() {
             station_ref: StationRef::new(0, 0),
             coordinates: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
             accuracy_m: None,
+            entrance: None,
         },
     ];
 
@@ -9540,6 +9568,7 @@ fn test_set_zero_datum_update_captures_previous_gps_and_offsets() {
         station_ref,
         coordinates: gps_a,
         accuracy_m: None,
+        entrance: None,
     });
     assert!(result.success, "Initial SetZeroDatum should succeed");
 
@@ -9562,6 +9591,7 @@ fn test_set_zero_datum_update_captures_previous_gps_and_offsets() {
         station_ref,
         coordinates: gps_b,
         accuracy_m: None,
+        entrance: None,
     });
     assert!(result.success, "Update SetZeroDatum should succeed");
 
@@ -9640,6 +9670,7 @@ fn test_set_zero_datum_update_undo_restores_previous_gps_and_offsets() {
         station_ref,
         coordinates: gps_a,
         accuracy_m: None,
+        entrance: None,
     });
 
     // Capture state after initial set (GPS-A applied)
@@ -9672,6 +9703,7 @@ fn test_set_zero_datum_update_undo_restores_previous_gps_and_offsets() {
         station_ref,
         coordinates: gps_b,
         accuracy_m: None,
+        entrance: None,
     });
     assert!(result.success);
 
@@ -9758,6 +9790,7 @@ fn test_set_zero_datum_no_change_still_creates_undo_entry() {
         station_ref,
         coordinates: gps,
         accuracy_m: None,
+        entrance: None,
     });
 
     // Clear undo stack
@@ -9772,6 +9805,7 @@ fn test_set_zero_datum_no_change_still_creates_undo_entry() {
         station_ref,
         coordinates: same_gps,
         accuracy_m: None,
+        entrance: None,
     });
     assert!(result.success, "SetZeroDatum with same GPS should succeed");
 
@@ -11315,11 +11349,13 @@ fn test_check_merge_connectivity_both_zero_datums_allowed() {
         station_ref: StationRef::new(a, 0),
         coordinates: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
     state.execute(Command::SetZeroDatum {
         station_ref: StationRef::new(b, 0),
         coordinates: GpsCoordinates::new(46.0, -91.0, 0.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
 
     let result = state
@@ -11371,6 +11407,7 @@ fn test_check_merge_connectivity_one_zero_datum_allowed() {
         station_ref: StationRef::new(a, 0),
         coordinates: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
 
     let result = state
@@ -11524,6 +11561,7 @@ fn test_check_merge_connectivity_both_zd_and_connected() {
         station_ref: StationRef::new(a, 0),
         coordinates: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
 
     // Set ZD on B (separate group)
@@ -11531,6 +11569,7 @@ fn test_check_merge_connectivity_both_zd_and_connected() {
         station_ref: StationRef::new(b, 0),
         coordinates: GpsCoordinates::new(46.0, -91.0, 0.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
 
     // Merge C.0 into A.1 (C joins A's merge group)
@@ -12472,6 +12511,7 @@ fn test_move_segment_blocked_by_datum_over_a_closure_only_link() {
         station_ref: StationRef::new(sid_a, 0),
         coordinates: GpsCoordinates::new(24.55, -81.78, 0.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
     assert!(datum.success, "datum setup must succeed");
 
@@ -13773,6 +13813,7 @@ fn test_delete_range_interior_shift_blocked_by_tail_datum() {
         station_ref: StationRef::new(section_id, 3),
         coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
     let (s1, s2) = {
         let proj = state.get_project_state().unwrap();
@@ -13837,6 +13878,7 @@ fn test_delete_range_prefix_shift_blocked_by_datum() {
         station_ref: StationRef::new(section_id, 0),
         coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
     let (s0, s1) = {
         let proj = state.get_project_state().unwrap();
@@ -13895,6 +13937,7 @@ fn test_delete_range_preview_surfaces_interior_split_datum() {
         station_ref: StationRef::new(section_id, 2),
         coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
     let (s1, s2) = {
         let proj = state.get_project_state().unwrap();
@@ -14094,6 +14137,7 @@ fn test_delete_range_suffix_shift_keeps_head_with_doomed_tail_anchor() {
         station_ref: StationRef::new(sec_b, 0),
         coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
     assert!(
         state
@@ -14426,6 +14470,7 @@ fn test_delete_range_blocked_interior_impact_describes_split() {
         station_ref: StationRef::new(sec_a, 3),
         coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
     // Merge on the tail boundary A:4 (= end_pos+1 for range [2..=3]) - kept by split.
     assert!(
@@ -14598,6 +14643,7 @@ fn delete_range_shift_leaves_a_promoted_closure_aligned() {
                 station_ref: StationRef::new(sec_x, 0),
                 coordinates: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
                 accuracy_m: None,
+                entrance: None,
             })
             .success
     );
@@ -15834,6 +15880,7 @@ fn test_delete_section_undo_restores_relationships() {
         station_ref: StationRef::new(sec_a, 0),
         coordinates: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
     assert!(datum_result.success, "SetZeroDatum should succeed");
 
@@ -16067,6 +16114,7 @@ fn test_insert_before_shifts_zero_datum() {
         station_ref: StationRef::new(sec_id, 0),
         coordinates: GpsCoordinates::new(45.0, -73.5, 100.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
     assert!(zd_result.success);
 
@@ -16365,6 +16413,7 @@ fn test_delete_shot_undo_redo_with_snapshot() {
         station_ref: StationRef::new(sec_a, 2),
         coordinates: GpsCoordinates::new(45.0, -73.5, 100.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
     assert!(zd_result.success);
 
@@ -19290,11 +19339,13 @@ fn test_batch_second_zero_datum_lands_on_the_origin_the_first_established() {
                 station_ref: StationRef::new(sec_a, 1),
                 coordinates: gps_a,
                 accuracy_m: None,
+                entrance: None,
             },
             Command::SetZeroDatum {
                 station_ref: StationRef::new(sec_b, 0),
                 coordinates: gps_b,
                 accuracy_m: None,
+                entrance: None,
             },
         ],
     });
@@ -19825,6 +19876,7 @@ fn test_delete_section_cascades_closures_and_offsets() {
         station_ref: StationRef::new(sec_a, 1),
         coordinates: GpsCoordinates::new(45.0, 10.0, 0.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
     assert!(datum_result.success);
 
@@ -19896,6 +19948,7 @@ fn test_delete_section_undo_restores_merges_and_datums() {
         station_ref: StationRef::new(sec_a, 0),
         coordinates: GpsCoordinates::new(45.0, 10.0, 0.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
 
     // Delete section A
@@ -20879,6 +20932,7 @@ fn test_merge_datum_section_does_not_move() {
         station_ref: StationRef::new(a, 0),
         coordinates: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
 
     // Capture A's coordinates before merge
@@ -21786,6 +21840,7 @@ fn test_stalx_roundtrip_preserves_merges_closures_offsets() {
         station_ref: StationRef::new(sec_a, 0),
         coordinates: GpsCoordinates::new(45.5, -73.5, 100.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
     assert!(datum_r.success, "set zero datum should succeed");
 
@@ -22439,6 +22494,7 @@ fn test_insert_shot_before_zero_datum_shifts_datum_ref() {
                 station_ref: StationRef::new(sec, 1),
                 coordinates: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
                 accuracy_m: None,
+                entrance: None,
             })
             .success
     );
@@ -22668,6 +22724,7 @@ fn test_zero_datum_in_chain_positions_all_sections() {
                 station_ref: StationRef::new(sec_a, 0),
                 coordinates: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
                 accuracy_m: None,
+                entrance: None,
             })
             .success
     );
@@ -22724,6 +22781,7 @@ fn test_zero_datum_in_chain_positions_all_sections() {
                 station_ref: StationRef::new(sec_a, 0),
                 coordinates: GpsCoordinates::new(46.0, -74.0, 200.0).unwrap(),
                 accuracy_m: None,
+                entrance: None,
             })
             .success
     );
@@ -22924,6 +22982,7 @@ fn test_merge_chain_survives_save_reopen() {
                 station_ref: StationRef::new(sec_a, 0),
                 coordinates: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
                 accuracy_m: None,
+                entrance: None,
             })
             .success
     );
@@ -23512,11 +23571,13 @@ fn repair_command_demotes_a_merge_between_two_datum_holding_groups() {
             station_ref: StationRef::new(a, 0).into(),
             gps: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
             accuracy_m: None,
+            entrance: None,
         });
         project.zero_datums.push(crate::models::ZeroDatum {
             station_ref: StationRef::new(c, 0).into(),
             gps: GpsCoordinates::new(45.001, -90.0, 0.0).unwrap(),
             accuracy_m: None,
+            entrance: None,
         });
         // Park C 500 m away, then weld it to B with the merge the promotion bug
         // created out of what should have stayed a loop closure.
@@ -24984,6 +25045,7 @@ fn finding_26_a_shot_edit_does_not_translate_a_group_whose_first_datum_was_remov
                 station_ref: StationRef::new(anchor, 0),
                 coordinates: GpsCoordinates::new(20.30, -87.45, 0.0).unwrap(),
                 accuracy_m: None,
+                entrance: None,
             })
             .success
     );
@@ -24994,6 +25056,7 @@ fn finding_26_a_shot_edit_does_not_translate_a_group_whose_first_datum_was_remov
                 station_ref: StationRef::new(a, 0),
                 coordinates: GpsCoordinates::new(20.20, -87.24, 0.0).unwrap(),
                 accuracy_m: None,
+                entrance: None,
             })
             .success
     );
@@ -25133,6 +25196,7 @@ fn two_merged_sections(state: &AppState) -> (SectionId, SectionId) {
         station_ref: StationRef::new(a, 0),
         coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
     assert!(datum.success, "SetZeroDatum failed: {:?}", datum.error);
     let merged = state.execute(Command::MergeStations {

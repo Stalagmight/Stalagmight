@@ -54,6 +54,7 @@ fn set_datum(state: &AppState, station_ref: StationRef, gps: GpsCoordinates, acc
         station_ref,
         coordinates: gps,
         accuracy_m: acc,
+        entrance: None,
     });
     assert!(r.success, "{:?}", r.error);
 }
@@ -136,6 +137,7 @@ fn a_gps_fix_through_the_command_stores_its_accuracy_and_undo_restores_both() {
         station_ref: fix,
         coordinates: gps_at(40.0, 500.0),
         accuracy_m: Some(-1.0),
+        entrance: None,
     });
     assert!(!r.success);
     assert_eq!(project(&state).zero_datums.len(), 1);
@@ -586,6 +588,7 @@ fn a_set_zero_datum_command_persisted_before_accuracy_still_loads() {
         station_ref: StationRef::new(3, 2),
         coordinates: origin(),
         accuracy_m: Some(7.5),
+        entrance: None,
     };
     let mut json: serde_json::Value = serde_json::to_value(&cmd).unwrap();
     assert_eq!(json["accuracy_m"], 7.5);

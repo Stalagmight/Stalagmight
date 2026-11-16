@@ -1036,6 +1036,7 @@ fn placement_datums_on_both_sides_block() {
         station_ref: project.key_for_ref(StationRef::new(o, 3)).unwrap(),
         gps: gps(),
         accuracy_m: None,
+        entrance: None,
     });
     assert!(blocked(&project, k, o).contains("zero datum"));
 

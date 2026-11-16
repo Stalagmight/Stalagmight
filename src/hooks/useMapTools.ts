@@ -661,7 +661,8 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
                   ref,
                   other,
                   useGasPlanStore.getState().reachField,
-                  activeStations
+                  activeStations,
+                  project?.zero_datums
                 );
                 applyGasPlanClick(nearer);
               }
@@ -792,7 +793,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
       }
     },
     // See handleStationClick: the read `options` fields, not the object (#430).
-    [activeTool, activeStations, addToSelection, applyMeasureClick, buildShotPointEndpoint, clickShotParam, openDialog, options.immovableStationKeys, options.onMoveDragStart, options.querySnapAtPoint, project?.sections, setSelection, showShots, showToast, toggleSelection, showDistanceGradient, setDistanceGradientOrigin, showGasPlan]
+    [activeTool, activeStations, addToSelection, applyMeasureClick, buildShotPointEndpoint, clickShotParam, openDialog, options.immovableStationKeys, options.onMoveDragStart, options.querySnapAtPoint, project?.sections, project?.zero_datums, setSelection, showShots, showToast, toggleSelection, showDistanceGradient, setDistanceGradientOrigin, showGasPlan]
   );
 
   // Handle empty click (no feature) - but use snapped station if available

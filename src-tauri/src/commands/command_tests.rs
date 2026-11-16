@@ -1565,7 +1565,7 @@ fn test_project_lifecycle_persists_undo_and_state() {
 
         let gps = GpsCoordinates::new(10.0, 20.0, 0.0).unwrap();
         let datum_result =
-            station::set_zero_datum(state(&app), StationRef::new(section_a, 0), gps, None);
+            station::set_zero_datum(state(&app), StationRef::new(section_a, 0), gps, None, None);
         assert_success(&datum_result);
 
         let updates = ShotUpdates {
@@ -4184,7 +4184,7 @@ fn test_set_zero_datum_success() {
         longitude: 2.0,
         depth_reference: 3.0,
     };
-    let result = station::set_zero_datum(state(&app), StationRef::new(0, 0), gps, None);
+    let result = station::set_zero_datum(state(&app), StationRef::new(0, 0), gps, None, None);
     assert_success(&result);
 }
 
@@ -4197,7 +4197,7 @@ fn test_set_zero_datum_fails_invalid_station() {
         longitude: 2.0,
         depth_reference: 3.0,
     };
-    let result = station::set_zero_datum(state(&app), StationRef::new(0, 99), gps, None);
+    let result = station::set_zero_datum(state(&app), StationRef::new(0, 99), gps, None, None);
     assert_failure_contains(&result, "does not exist");
 }
 
@@ -4220,7 +4220,7 @@ fn test_remove_zero_datum_success() {
         longitude: 2.0,
         depth_reference: 3.0,
     };
-    let _ = station::set_zero_datum(state(&app), StationRef::new(0, 0), gps, None);
+    let _ = station::set_zero_datum(state(&app), StationRef::new(0, 0), gps, None, None);
     let result = station::remove_zero_datum(state(&app), StationRef::new(0, 0));
     assert_success(&result);
 }

@@ -481,6 +481,7 @@ fn both_sides_held_tear_the_merge_to_the_moving_sides_datum() {
         station_ref: project.key_for_ref(StationRef::new(b, 1)).unwrap(),
         gps: gps(),
         accuracy_m: None,
+        entrance: None,
     });
     project
         .create_loop_closure(
@@ -676,6 +677,7 @@ fn network(seed: u64) -> Project {
             station_ref: project.key_for_ref(StationRef::new(t, 0)).unwrap(),
             gps: gps(),
             accuracy_m: None,
+            entrance: None,
         });
         let ends: Vec<StationRef> = project
             .sections

@@ -617,6 +617,7 @@ fn test_undo_zero_datum() {
         position: Some(1),
         previous_accuracy_m: Some(2.5),
         previous_offsets: offsets,
+        previous_entrance: None,
     };
 
     // Verify serialization
@@ -630,6 +631,7 @@ fn test_undo_zero_datum() {
             position,
             previous_accuracy_m,
             previous_offsets,
+            ..
         } => {
             assert_eq!(station_ref, StationRef::new(0, 0));
             assert!(previous_gps.is_none());
@@ -682,6 +684,7 @@ fn test_comprehensive_undo_types() {
             position: None,
             previous_accuracy_m: None,
             previous_offsets: HashMap::new(),
+            previous_entrance: None,
         },
         UndoData::ProjectSnapshot("{}".to_string()),
     ];

@@ -423,6 +423,7 @@ fn values_under_a_non_canonical_key_reach_the_copy() {
             depth_reference: 0.0,
         },
         accuracy_m: None,
+        entrance: None,
     });
 
     let second = project

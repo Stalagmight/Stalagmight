@@ -377,6 +377,7 @@ impl AppState {
                 station_ref,
                 previous_gps,
                 previous_accuracy_m,
+                previous_entrance,
                 position,
                 previous_offsets,
             } => {
@@ -412,11 +413,13 @@ impl AppState {
                                 {
                                     existing.gps = *gps;
                                     existing.accuracy_m = *previous_accuracy_m;
+                                    existing.entrance = *previous_entrance;
                                 } else if let Some(key) = datum_key {
                                     let datum = crate::models::ZeroDatum {
                                         station_ref: key,
                                         gps: *gps,
                                         accuracy_m: *previous_accuracy_m,
+                                        entrance: *previous_entrance,
                                     };
                                     match position {
                                         Some(index) => {

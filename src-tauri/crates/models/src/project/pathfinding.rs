@@ -797,17 +797,17 @@ impl Project {
         (dist, riders, pred)
     }
 
-    /// Resolve the project's zero-datum stations to their indices in `stations`.
+    /// Resolve the project's ENTRANCE datum stations to their indices in
+    /// `stations`: the roots of "Start from entrance", penetration and the
+    /// distance gradient. A GPS fix that is not an entrance (a radiolocation
+    /// point mid-passage) is not a root (#741, [`Self::entrance_datum_refs`]).
     pub(super) fn zero_datum_roots(
         &self,
         station_index: &HashMap<StationRef, usize>,
     ) -> Vec<usize> {
-        self.zero_datums
-            .iter()
-            .filter_map(|zd| {
-                self.resolve_key(&zd.station_ref)
-                    .and_then(|sr| station_index.get(&sr).copied())
-            })
+        self.entrance_datum_refs()
+            .into_iter()
+            .filter_map(|sr| station_index.get(&sr).copied())
             .collect()
     }
 }

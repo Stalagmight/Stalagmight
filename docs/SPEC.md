@@ -476,7 +476,8 @@ These are derived from shot data, not stored:
   surveyed, so counting it would double-count (#689). Shot count includes every
   shot.
 - Loop closure errors
-- Penetration distance (maximum line distance from zero datum)
+- Penetration distance (maximum line distance from the nearest entrance zero datum; a GPS fix
+  mid-passage is not an entrance unless ticked as one, #741)
 
 ---
 

@@ -390,6 +390,11 @@ pub enum UndoData {
         /// before accuracy existed, so the datum had the default).
         #[serde(default)]
         previous_accuracy_m: Option<f64>,
+        /// Previous entrance override of that datum (#741). `None` is the
+        /// default rule, and also what a legacy persisted entry carries
+        /// (written before the override existed).
+        #[serde(default)]
+        previous_entrance: Option<bool>,
         /// Where the datum sat in `Project::zero_datums` when it was captured,
         /// so undo of `RemoveZeroDatum` re-inserts it there instead of
         /// appending (#413, finding 17 - finding 4's defect one collection
@@ -1401,6 +1406,7 @@ mod tests {
                 station_ref: StationRef::new(1, 0),
                 coordinates: gps,
                 accuracy_m: None,
+                entrance: None,
             },
             UndoData::ZeroDatumInfo {
                 station_ref: StationRef::new(1, 0),
@@ -1408,6 +1414,7 @@ mod tests {
                 previous_accuracy_m: None,
                 position: Some(0),
                 previous_offsets: offsets,
+                previous_entrance: None,
             },
         );
 
@@ -2243,6 +2250,7 @@ mod tests {
                     station_ref: StationRef::new(1, 0),
                     coordinates: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
                     accuracy_m: None,
+                    entrance: None,
                 },
                 undo_data: UndoData::ZeroDatumInfo {
                     station_ref: StationRef::new(1, 0),
@@ -2250,6 +2258,7 @@ mod tests {
                     previous_accuracy_m: None,
                     position: None,
                     previous_offsets: HashMap::new(),
+                    previous_entrance: None,
                 },
                 timestamp: None,
             },

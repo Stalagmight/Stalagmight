@@ -344,11 +344,36 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           placing.station_ref.section_id === ref.section_id && placing.station_ref.station_index === ref.station_index;
         return same ? 'Placement' : 'GpsFix';
       };
-      /** Stamp each datum's derived role on an (already cloned) wire project. */
-      const withDatumRoles = <P extends { station_merges?: unknown[]; zero_datums?: unknown[] } | null>(project: P): P => {
+      // #741: whether a datum is an ENTRANCE, resolved like the backend
+      // (`datum_entrance.rs`): a placement datum always is; a GPS fix follows
+      // its stored `entrance` answer, else is one on its section's first or
+      // last station.
+      const mockDatumIsEntrance = (
+        project: { sections?: unknown[] },
+        ref: MockStationRef,
+        role: 'Placement' | 'GpsFix',
+        entrance: boolean | undefined
+      ): boolean => {
+        if (role === 'Placement') return true;
+        if (entrance !== undefined) return entrance;
+        const section = ((project.sections ?? []) as Array<{ id: number; shots?: unknown[] }>).find(
+          (s) => s.id === ref.section_id
+        );
+        return ref.station_index === 0 || ref.station_index === (section?.shots?.length ?? 0);
+      };
+      /** Stamp each datum's derived role and entrance flag on an (already cloned) wire project. */
+      const withDatumRoles = <P extends { station_merges?: unknown[]; zero_datums?: unknown[]; sections?: unknown[] } | null>(project: P): P => {
         if (!project) return project;
-        for (const d of (project.zero_datums ?? []) as Array<{ station_ref: MockStationRef; role?: string }>) {
+        for (const d of (project.zero_datums ?? []) as Array<{
+          station_ref: MockStationRef;
+          role?: 'Placement' | 'GpsFix';
+          entrance?: boolean;
+          is_entrance?: boolean;
+        }>) {
           d.role = mockDatumRole(project, d.station_ref);
+          d.is_entrance = mockDatumIsEntrance(project, d.station_ref, d.role, d.entrance);
+          // The stored answer is backend-only; the wire carries the resolved flag.
+          delete d.entrance;
         }
         return project;
       };
@@ -4144,10 +4169,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               const coordinates = args.coordinates as { latitude: number; longitude: number; depth_reference: number };
               // Optional accuracy in metres; absent means the backend default.
               const accuracyM = typeof args.accuracyM === 'number' ? args.accuracyM : undefined;
+              // Optional entrance answer; absent keeps the stored one (#741).
+              const entrance = typeof args.entrance === 'boolean' ? args.entrance : undefined;
               const datums = currentProject.zero_datums as Array<{
                 station_ref: { section_id: number; station_index: number };
                 gps: { latitude: number; longitude: number; depth_reference: number };
                 accuracy_m?: number;
+                entrance?: boolean;
               }>;
               // Update in-place if exists, otherwise push
               const existing = datums.find(
@@ -4159,6 +4187,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 existing.gps = coordinates;
                 if (accuracyM === undefined) delete existing.accuracy_m;
                 else existing.accuracy_m = accuracyM;
+                if (entrance !== undefined) existing.entrance = entrance;
               } else {
                 // In-place mutation (same array identity) is load-bearing for the
                 // deep-clone reactivity guard: datum-closure-reactivity.spec.ts only
@@ -4169,6 +4198,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   station_ref: stationRef,
                   gps: coordinates,
                   ...(accuracyM === undefined ? {} : { accuracy_m: accuracyM }),
+                  ...(entrance === undefined ? {} : { entrance }),
                 });
               }
             }
@@ -4190,7 +4220,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             );
             if (!section || stationRef.station_index > (section.shots?.length ?? 0)) return null;
             const role = mockDatumRole(currentProject, stationRef);
-            if (role === 'Placement') return { role };
+            const stored = (currentProject.zero_datums as Array<{ station_ref: MockStationRef; entrance?: boolean }>).find(
+              (d) =>
+                d.station_ref.section_id === stationRef.section_id &&
+                d.station_ref.station_index === stationRef.station_index
+            );
+            const is_entrance = mockDatumIsEntrance(currentProject, stationRef, role, stored?.entrance);
+            if (role === 'Placement') return { role, is_entrance };
             const gap = win.__MOCK_DATUM_GAP__ ?? {
               gap_m: 40,
               bearing_deg: 45,
@@ -4198,7 +4234,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               threshold_m: 43,
               exceeds_threshold: false,
             };
-            return { role, gap };
+            return { role, gap, is_entrance };
           }
 
           case 'remove_zero_datum': {

@@ -1792,6 +1792,7 @@ pub(super) fn build_project(state: &AppState, rng: &mut Rng, closures: bool) -> 
         station_ref: StationRef::new(ids[0], 0),
         coordinates: GpsCoordinates::new(20.4, -87.3, 0.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
     assert!(datum.success, "SetZeroDatum failed: {:?}", datum.error);
 
@@ -4939,6 +4940,7 @@ impl Fuzzer {
                         station_ref: StationRef::new(section_id, index),
                         coordinates: *coordinates,
                         accuracy_m: None,
+                        entrance: None,
                     }),
                 ))
             }
@@ -5670,6 +5672,7 @@ impl Fuzzer {
             station_ref: StationRef::new(a, 0),
             coordinates: GpsCoordinates::new(21.1, -86.9, 0.0).unwrap(),
             accuracy_m: None,
+            entrance: None,
         });
         self.forced(
             Drawn::new(format!("closures:setZeroDatum({a}/0)"), datum),
@@ -5754,6 +5757,7 @@ impl Fuzzer {
             station_ref: StationRef::new(a, 0),
             coordinates: GpsCoordinates::new(20.9, -87.1, 0.0).unwrap(),
             accuracy_m: None,
+            entrance: None,
         });
         self.forced(
             Drawn::new(format!("closures:setZeroDatum({a}/0)"), datum),
@@ -8344,6 +8348,7 @@ fn measure_adjusted_solve_determinism() {
                 station_ref: StationRef::new(a, 0),
                 coordinates: GpsCoordinates::new(20.4, -87.3, 0.0).unwrap(),
                 accuracy_m: None,
+                entrance: None,
             })
             .success
     );

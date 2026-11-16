@@ -85,6 +85,20 @@ export default function EditStationDialog() {
     isZeroDatum
   );
 
+  // Entrance (#741). The backend resolves whether this datum is an entrance
+  // (the stored datum's `is_entrance`, or the preview's for a new one), so the
+  // dialog never re-derives the rule. A placement datum always is one; for a
+  // GPS fix the user's click is sent only when it differs from that answer.
+  const datumRole = preview?.role ?? storedDatum?.role;
+  const backendEntrance = storedDatum?.is_entrance ?? preview?.is_entrance;
+  const [entranceChoice, setEntranceChoice] = useState<boolean | null>(null);
+  const entranceChecked =
+    datumRole === 'Placement' ? true : (entranceChoice ?? backendEntrance ?? false);
+  const entranceToSend =
+    datumRole === 'GpsFix' && entranceChoice !== null && entranceChoice !== backendEntrance
+      ? entranceChoice
+      : undefined;
+
   // Initialize form state from station data
   useEffect(() => {
     if (station) {
@@ -157,7 +171,10 @@ export default function EditStationDialog() {
       // Send an accuracy only when the user changed it; otherwise keep what is
       // stored, which may be none at all.
       const accuracyM = accuracy === null ? undefined : datumAccuracyToSend(accuracy, storedDatum?.accuracy_m);
-      const accuracyOptions = accuracyM === undefined ? {} : { accuracyM };
+      const accuracyOptions = {
+        ...(accuracyM === undefined ? {} : { accuracyM }),
+        ...(entranceToSend === undefined ? {} : { entrance: entranceToSend }),
+      };
 
       if (!wasZeroDatum && willBeZeroDatum) {
         // Setting new zero datum
@@ -198,7 +215,7 @@ export default function EditStationDialog() {
         const oldLon = station.gps_coordinates?.longitude;
 
         const gpsChanged = gpsCoords.latitude !== oldLat || gpsCoords.longitude !== oldLon;
-        if (gpsChanged || accuracy !== storedAccuracy) {
+        if (gpsChanged || accuracy !== storedAccuracy || entranceToSend !== undefined) {
           const result = await setZeroDatum(
             stationRef,
             {
@@ -250,6 +267,7 @@ export default function EditStationDialog() {
     isZeroDatum !== station.is_zero_datum ||
     gpsInput !== originalGpsInput ||
     (isZeroDatum && accuracyInput.trim() !== String(storedAccuracy)) ||
+    (isZeroDatum && entranceToSend !== undefined) ||
     comment !== (station.comment ?? '')
   ) : false;
 
@@ -406,6 +424,29 @@ export default function EditStationDialog() {
                     ? t('dialogs.editStation.roleGpsFix')
                     : t('dialogs.editStation.rolePlacement')}
                 </p>
+              )}
+              {datumRole && (
+                <div className="pt-2 space-y-1">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="station-datum-entrance"
+                      data-testid="station-datum-entrance-input"
+                      checked={entranceChecked}
+                      disabled={datumRole === 'Placement'}
+                      onChange={(e) => setEntranceChoice(e.target.checked)}
+                      className="w-4 h-4"
+                    />
+                    <label htmlFor="station-datum-entrance" className="text-sm">
+                      {t('dialogs.editStation.entranceLabel')}
+                    </label>
+                  </div>
+                  <p className="text-xs text-text-secondary" data-testid="station-datum-entrance-hint">
+                    {datumRole === 'Placement'
+                      ? t('dialogs.editStation.entrancePlacementHint')
+                      : t('dialogs.editStation.entranceHint')}
+                  </p>
+                </div>
               )}
               {preview?.role === 'GpsFix' && (
                 <div className="mt-2 p-2 rounded bg-accent-10 text-xs space-y-1" data-testid="station-datum-preview">

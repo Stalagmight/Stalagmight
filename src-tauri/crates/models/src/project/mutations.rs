@@ -736,6 +736,7 @@ impl Project {
                 station_ref: datum_key,
                 gps,
                 accuracy_m,
+                entrance: None,
             });
             false
         }

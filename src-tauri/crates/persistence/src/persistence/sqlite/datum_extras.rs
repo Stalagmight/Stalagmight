@@ -25,11 +25,14 @@
 //!     station (a placement datum), 0 for a GPS fix;
 //!   - `latitude`, `longitude`, `depth_reference`: a fix's GPS, NULL for a
 //!     placement datum;
-//!   - `accuracy_m`: the stored accuracy in metres, NULL for the default.
+//!   - `accuracy_m`: the stored accuracy in metres, NULL for the default;
+//!   - `entrance`: the user's answer to "is this station an entrance?", 1 or
+//!     0, NULL for the default rule (`Project::datum_is_entrance`).
 //!
-//! Rows are written only when they add something: a project with no fix and
-//! no stored accuracy writes an empty table and reads back from `zero_datums`
-//! alone, exactly as every file written before this table did.
+//! Rows are written only when they add something: a project with no fix, no
+//! stored accuracy and no entrance answer writes an empty table and reads
+//! back from `zero_datums` alone, exactly as every file written before this
+//! table did.
 //!
 //! An older build drops the table on its next normal save (every save writes a
 //! fresh database from `init_schema` and renames it over the file), so it loses
@@ -49,14 +52,15 @@
 //!   row that moved fails the first check, so the table is ignored. A station
 //!   0 row with no `start_shot_uuid` (the column was added after the table, so
 //!   a table without it, or a NULL, is a row written before it) is checked by
-//!   its section alone, as it was then.
+//!   its section alone, as it was then. A table without `entrance` (also
+//!   added after the table) reads every row as having no answer.
 //!
 //! Nothing the table holds fails the load, as with the credit tables (#717): a
 //! table of another shape (a column missing, more rows than the file has
 //! stations) is ignored with a warning; an unreadable or invalid row is skipped
 //! and counted, never named; an accuracy that is unreadable, or outside the
 //! range the app accepts (`validate_gps_accuracy`: 0 to `MAX_GPS_ACCURACY_M`),
-//! reads as the default.
+//! reads as the default, and so does an entrance answer other than 0 or 1.
 //! SQLite failing for a reason of its own (busy, I/O, corrupt) still fails the
 //! open, so a save cannot then drop the rows for good.
 
@@ -85,7 +89,8 @@ pub(super) const CREATE_DATUM_EXTRAS: &str = "
         longitude REAL,
         depth_reference REAL,
         accuracy_m REAL,
-        start_shot_uuid TEXT
+        start_shot_uuid TEXT,
+        entrance INTEGER
     );
 ";
 
@@ -129,7 +134,7 @@ pub(super) fn write_zero_datums(tx: &Transaction<'_>, project: &Project) -> Resu
     let mut uuid_of =
         tx.prepare("SELECT uuid FROM shots WHERE section_id = ?1 AND sequence_order = ?2")?;
     let mut insert = tx.prepare(
-        "INSERT INTO zero_datum_extras (position, section_id, station_index, shot_uuid, in_zero_datums, latitude, longitude, depth_reference, accuracy_m, start_shot_uuid) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        "INSERT INTO zero_datum_extras (position, section_id, station_index, shot_uuid, in_zero_datums, latitude, longitude, depth_reference, accuracy_m, start_shot_uuid, entrance) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
     )?;
     for (position, (station, datum, is_fix)) in saved.iter().enumerate() {
         // Station 0 ends no shot, so it is anchored by the shot it starts.
@@ -159,13 +164,14 @@ pub(super) fn write_zero_datums(tx: &Transaction<'_>, project: &Project) -> Resu
             gps.map(|g| g.depth_reference),
             datum.accuracy_m,
             start_shot_uuid,
+            datum.entrance.map(i64::from),
         ])?;
     }
     Ok(())
 }
 
 /// Whether saving `project` writes `zero_datum_extras` rows: it holds a GPS
-/// fix, or a datum with a stored accuracy (dangling datums are not saved, so
+/// fix, or a datum with a stored accuracy or entrance answer (dangling datums are not saved, so
 /// they do not count). That is exactly what an older build drops when it
 /// saves the file, which is why the save reports it (#741).
 pub fn holds_datum_extras(project: &Project) -> bool {
@@ -175,7 +181,7 @@ pub fn holds_datum_extras(project: &Project) -> bool {
         .zip(project.datum_roles())
         .any(|(datum, role)| match role {
             Some(DatumRole::GpsFix) => true,
-            Some(DatumRole::Placement) => datum.accuracy_m.is_some(),
+            Some(DatumRole::Placement) => datum.accuracy_m.is_some() || datum.entrance.is_some(),
             None => false,
         })
 }
@@ -217,7 +223,7 @@ pub(super) fn combine(
 
     // What each row becomes: a `base` datum (by index) or a fix of its own.
     enum Entry {
-        Placement(usize, Option<f64>),
+        Placement(usize, Option<f64>, Option<bool>),
         Fix(ZeroDatum),
     }
     let mut entries = Vec::with_capacity(rows.len());
@@ -238,6 +244,10 @@ pub(super) fn combine(
             counts.unreadable_values += 1;
             None
         });
+        let entrance = row.entrance.unwrap_or_else(|()| {
+            counts.unreadable_values += 1;
+            None
+        });
         match row.gps {
             None => {
                 let Some(&i) = index_of.get(&key) else {
@@ -249,7 +259,7 @@ pub(super) fn combine(
                     continue;
                 }
                 seen.insert(key);
-                entries.push(Entry::Placement(i, accuracy_m));
+                entries.push(Entry::Placement(i, accuracy_m, entrance));
             }
             Some(gps) => {
                 // Two datums on one station is not a shape any build writes.
@@ -261,6 +271,7 @@ pub(super) fn combine(
                     station_ref: key,
                     gps,
                     accuracy_m,
+                    entrance,
                 }));
             }
         }
@@ -275,14 +286,14 @@ pub(super) fn combine(
     Ok(entries
         .into_iter()
         .filter_map(|entry| match entry {
-            Entry::Placement(i, accuracy_m) => {
-                base.get_mut(i)
-                    .and_then(Option::take)
-                    .map(|datum| ZeroDatum {
-                        accuracy_m,
-                        ..datum
-                    })
-            }
+            Entry::Placement(i, accuracy_m, entrance) => base
+                .get_mut(i)
+                .and_then(Option::take)
+                .map(|datum| ZeroDatum {
+                    accuracy_m,
+                    entrance,
+                    ..datum
+                }),
             Entry::Fix(datum) => Some(datum),
         })
         .collect())
@@ -310,6 +321,8 @@ struct Row {
     /// `Err` when the stored accuracy is unreadable or one the app would refuse
     /// to store (`validate_gps_accuracy`).
     accuracy_m: Result<Option<f64>, ()>,
+    /// `Err` when the stored entrance answer is neither NULL, 0 nor 1.
+    entrance: Result<Option<bool>, ()>,
 }
 
 fn read_rows(conn: &Connection, sections: &[Section]) -> rusqlite::Result<Read> {
@@ -335,13 +348,20 @@ fn read_rows(conn: &Connection, sections: &[Section]) -> rusqlite::Result<Read> 
         [],
         |row| row.get(0),
     )?;
-    let start = if has_start > 0 {
-        "start_shot_uuid"
-    } else {
-        "NULL"
-    };
+    // Nor does one written before `entrance` existed: its rows read as having
+    // no answer (the default rule).
+    let has_entrance: i64 = conn.query_row(
+        "SELECT count(*) FROM pragma_table_info('zero_datum_extras') WHERE name = 'entrance'",
+        [],
+        |row| row.get(0),
+    )?;
+    let column = |present: i64, name: &'static str| if present > 0 { name } else { "NULL" };
+    let (start, entrance) = (
+        column(has_start, "start_shot_uuid"),
+        column(has_entrance, "entrance"),
+    );
     let mut stmt = conn.prepare(&format!(
-        "SELECT section_id, station_index, shot_uuid, in_zero_datums, latitude, longitude, depth_reference, accuracy_m, {start} FROM zero_datum_extras ORDER BY position",
+        "SELECT section_id, station_index, shot_uuid, in_zero_datums, latitude, longitude, depth_reference, accuracy_m, {start}, {entrance} FROM zero_datum_extras ORDER BY position",
     ))?;
     let iter = stmt.query_map([], |row| {
         Ok(decode(
@@ -351,6 +371,7 @@ fn read_rows(conn: &Connection, sections: &[Section]) -> rusqlite::Result<Read> 
             row.get(3),
             [row.get(4), row.get(5), row.get(6)],
             row.get(7),
+            row.get(9),
         ))
     })?;
     Ok(Read::Rows(iter.collect::<rusqlite::Result<_>>()?))
@@ -364,6 +385,7 @@ fn decode(
     in_zero_datums: rusqlite::Result<i64>,
     gps: [rusqlite::Result<Option<f64>>; 3],
     accuracy_m: rusqlite::Result<Option<f64>>,
+    entrance: rusqlite::Result<Option<i64>>,
 ) -> Option<Row> {
     let [latitude, longitude, depth] = gps;
     let gps = match in_zero_datums.ok()? {
@@ -386,6 +408,12 @@ fn decode(
         Ok(a) if validate_gps_accuracy(a).is_ok() => Ok(a),
         _ => Err(()),
     };
+    let entrance = match entrance {
+        Ok(None) => Ok(None),
+        Ok(Some(0)) => Ok(Some(false)),
+        Ok(Some(1)) => Ok(Some(true)),
+        _ => Err(()),
+    };
     Some(Row {
         section_id: section_id.ok()?,
         station_index: station_index.ok()?,
@@ -393,6 +421,7 @@ fn decode(
         start_shot_uuid: start_shot_uuid.ok()?,
         gps,
         accuracy_m,
+        entrance,
     })
 }
 

@@ -37,6 +37,7 @@ fn set_datum(state: &AppState, station_ref: StationRef, lat: f64, accuracy_m: Op
         station_ref,
         coordinates: gps(lat),
         accuracy_m,
+        entrance: None,
     });
     assert!(r.success, "{:?}", r.error);
 }
@@ -242,4 +243,33 @@ fn a_save_reports_that_older_builds_drop_fixes_and_accuracies() {
         save_reports_fixes(&state, &dir, "accuracy.stalx"),
         "a stored accuracy"
     );
+}
+
+/// A fix's Entrance answer (#741) rides in the split-out fixes, so a restore
+/// brings it back with the fix; the placement's answer stays on it.
+#[test]
+fn a_snapshot_keeps_each_datums_entrance_answer() {
+    let (state, _) = surveyed();
+    let datums = summary(&state.get_project_state().unwrap());
+    // The placement A0 and the fix B3, each re-set with its own GPS and accuracy.
+    for (datum, entrance) in [(datums[0], Some(true)), (datums[1], Some(false))] {
+        let r = state.execute(Command::SetZeroDatum {
+            station_ref: datum.0,
+            coordinates: gps(datum.1),
+            accuracy_m: datum.2,
+            entrance,
+        });
+        assert!(r.success, "{:?}", r.error);
+    }
+    let live = state.get_project_state().unwrap();
+    let answers = |p: &Project| {
+        p.zero_datums
+            .iter()
+            .map(|zd| zd.entrance)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(answers(&live), vec![Some(true), Some(false), None, None]);
+
+    let snapshot = AppState::serialize_project_snapshot(&live).unwrap();
+    assert_eq!(answers(&restored(&snapshot)), answers(&live));
 }

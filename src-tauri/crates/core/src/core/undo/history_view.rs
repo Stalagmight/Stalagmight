@@ -1226,6 +1226,7 @@ mod tests {
                 station_ref: StationRef::new(0, 0),
                 coordinates: GpsCoordinates::new(45.123_456, -73.654_321, 100.0).unwrap(),
                 accuracy_m: None,
+                entrance: None,
             },
             undo_data: UndoData::ZeroDatumInfo {
                 station_ref: StationRef::new(0, 0),
@@ -1233,6 +1234,7 @@ mod tests {
                 previous_accuracy_m: None,
                 position: None,
                 previous_offsets: HashMap::new(),
+                previous_entrance: None,
             },
             timestamp: None,
         };
@@ -1364,6 +1366,7 @@ mod tests {
                 previous_accuracy_m: None,
                 position: Some(0),
                 previous_offsets: HashMap::new(),
+                previous_entrance: None,
             },
             timestamp: None,
         };
@@ -1394,6 +1397,7 @@ mod tests {
             station_ref: key,
             gps: GpsCoordinates::new(45.0, -73.0, 0.0).unwrap(),
             accuracy_m: None,
+            entrance: None,
         });
         project
     }

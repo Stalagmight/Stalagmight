@@ -159,6 +159,12 @@ pub enum Command {
         /// `serde(default)` so undo history persisted before it still loads.
         #[serde(default)]
         accuracy_m: Option<f64>,
+        /// The user's answer to "is this station an entrance?" (#741).
+        /// `None` keeps what the datum already stores (the default rule for
+        /// a new datum); `Some` stores that answer. `serde(default)` so undo
+        /// history persisted before it still loads.
+        #[serde(default)]
+        entrance: Option<bool>,
     },
     RemoveZeroDatum {
         station_ref: StationRef,
@@ -1147,6 +1153,7 @@ mod tests {
                     station_ref: station_a,
                     coordinates: GpsCoordinates::new(1.0, 2.0, 3.0).unwrap(),
                     accuracy_m: None,
+                    entrance: None,
                 },
                 true,
             ),
@@ -1604,6 +1611,7 @@ mod tests {
                     station_ref: station_b,
                     coordinates: gps,
                     accuracy_m: None,
+                    entrance: None,
                 },
                 "Set zero datum at 1:1",
             ),

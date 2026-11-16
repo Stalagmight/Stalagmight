@@ -81,6 +81,7 @@ function setProject(opts: { datum?: Record<string, unknown>; modified?: string }
 const fix = (gap: Partial<NonNullable<ZeroDatumPreview['gap']>> = {}): ZeroDatumPreview => ({
   role: 'GpsFix',
   gap: { gap_m: 40, bearing_deg: 45, survey_distance_m: 1400, threshold_m: 43, exceeds_threshold: false, ...gap },
+  is_entrance: false,
 });
 
 /** A promise resolved by hand, to land replies out of order. */
