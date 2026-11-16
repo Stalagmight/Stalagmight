@@ -27,8 +27,8 @@
 //!   `zero_datums` datum present.
 //! - `nonfinite`: raw coordinates are finite, and so is the Closures Computed
 //!   View. `zero-datums-nonfinite-gps` is a non-finite computed view in a
-//!   file whose `zero_datums` holds a non-finite GPS, which nothing on that
-//!   path validates (known open, muted by default).
+//!   file whose `zero_datums` holds a non-finite GPS (fixed: the solve leaves
+//!   such a fix out).
 //! - `integrity`: `check_structural_integrity` reports nothing, except a
 //!   dangling datum when a `zero_datums` row was pointed at a station its
 //!   section does not have (the legacy table is trusted as the newer truth).
@@ -54,20 +54,21 @@ use crate::models::{
 };
 
 /// Failure classes that are open bugs, muted unless the mute variable is set.
-/// Both come from `zero_datums` being read without validating its GPS:
 ///
-/// - `zero-datums-nonfinite-gps`: a non-finite latitude or longitude reaches
-///   the solve through the frame or a fix and the computed view goes
-///   non-finite.
 /// - `invalid-gps-resave`: a datum `zero_datums` held with a GPS no write
 ///   path accepts (out of range, or non-finite) that the loaded list makes a
 ///   fix (a reordered `zero_datum_extras`, or a later merge) is saved into
 ///   `zero_datum_extras`, whose reader validates, and dropped on the next
-///   open.
+///   open. The file reader keeps `zero_datums` GPS as stored on purpose (Add
+///   refuses such a source, the outside reader reports it), so this is a
+///   damaged-file case. Seed 17 reaches it first
+///   (`STALAGMIGHT_DATUM_FILE_FUZZ_FIRST_SEED` with `_SEEDS=1` and `_MUTE=`
+///   set empty).
 ///
-/// Seeds 279 and 17 reach them first (`STALAGMIGHT_DATUM_FILE_FUZZ_FIRST_SEED`
-/// with `_SEEDS=1` and `_MUTE=` set empty).
-const KNOWN_OPEN: &[&str] = &["zero-datums-nonfinite-gps", "invalid-gps-resave"];
+/// No longer muted: `zero-datums-nonfinite-gps` (seed 279), a non-finite
+/// `zero_datums` GPS reaching the solve as a fix: the solve leaves a fix whose
+/// position is not finite out.
+const KNOWN_OPEN: &[&str] = &["invalid-gps-resave"];
 
 const ACCURACIES: [Option<f64>; 6] = [
     None,

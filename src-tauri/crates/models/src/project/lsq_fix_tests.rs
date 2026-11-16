@@ -389,3 +389,23 @@ fn a_hard_fix_one_shot_from_the_placement_datum_reaches_its_gps() {
     assert_at(&project, start, 0.0, 0.0);
     assert_depths_unchanged(&before, &all_positions(&project));
 }
+
+#[test]
+fn a_fix_whose_gps_is_no_position_is_left_out_of_the_solve() {
+    // A damaged file can hold an infinite latitude. As a hard pin it would
+    // put a NaN position into the solve and turn every station to NaN; it is
+    // no observation, so the computed view solves as if it were not there.
+    let Traverse {
+        mut project,
+        entrance_1,
+        ..
+    } = traverse(Some(0.0));
+    project.zero_datums[1].gps.latitude = f64::INFINITY;
+
+    solve(&mut project, entrance_1, &[]);
+
+    for (at, c) in all_positions(&project) {
+        assert!(c.x.is_finite() && c.y.is_finite(), "{at:?} at {c:?}");
+    }
+    assert_at(&project, entrance_1, 0.0, 0.0);
+}
