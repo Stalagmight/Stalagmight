@@ -1030,6 +1030,7 @@ pub(super) fn check_combined(
         }
     };
     check_eligible_ties_kept(before, after, candidate, kept, &home, what);
+    check_datums_stay_apart(before, after, what);
     let (was, was_ok) = adjusted_checked(&tied);
     let (now, now_ok) = adjusted_checked(&with_snaps(after));
     assert!(
@@ -1051,6 +1052,50 @@ pub(super) fn check_combined(
     }
 
     check_structure_muting(after, what, mute);
+}
+
+/// #754, after every combine the sweeps make: no two zero datums share a
+/// merge group that did not share one before, so a combine never increases
+/// the over-anchored merge groups (`over_anchored_merge_components`). The
+/// joined station unites the two sides' merge groups whether or not a side
+/// moves, so the plan must tear the merges to one side's datums when datums
+/// hold both, also with nothing to move (two surveys from one entrance).
+/// Datums are matched by their place in `zero_datums`, which a combine keeps:
+/// it refuses two sections that each carry one, and re-keys the other's.
+/// Asked of the merge groups directly, so a project that starts over-anchored
+/// is held to the same rule (its group may not gain a datum).
+pub(super) fn check_datums_stay_apart(before: &Project, after: &Project, what: &str) {
+    assert_eq!(
+        before.zero_datums.len(),
+        after.zero_datums.len(),
+        "{what}: a combine keeps every zero datum"
+    );
+    let sections = |project: &Project| -> Vec<Option<SectionId>> {
+        project
+            .zero_datums
+            .iter()
+            .map(|d| project.resolve_key(&d.station_ref).map(|at| at.section_id))
+            .collect()
+    };
+    let (was, now) = (sections(before), sections(after));
+    for (i, a) in now.iter().enumerate() {
+        let Some(a) = a else { continue };
+        let group = after.get_merged_section_ids(*a);
+        for (j, b) in now.iter().enumerate().skip(i + 1) {
+            if !b.is_some_and(|b| group.contains(&b)) {
+                continue;
+            }
+            let together_before = match (was[i], was[j]) {
+                (Some(x), Some(y)) => before.get_merged_section_ids(x).contains(&y),
+                _ => false,
+            };
+            assert!(
+                together_before,
+                "{what}: zero datums {i} and {j} are in one merge group now, two before: {:?}",
+                after.over_anchored_merge_components()
+            );
+        }
+    }
 }
 
 /// #749, after every combine the sweeps make: every two stations the plan's
@@ -1544,6 +1589,19 @@ struct SweepStats {
     residual_kept_moved: usize,
     residual_with_branches: usize,
     residual_torn: usize,
+    /// Combines that moved nothing and still turned a merge into a loop
+    /// closure for a zero datum: datums on both sides of two ends on one
+    /// point, a shared entrance (#754).
+    datum_torn_in_place: usize,
+}
+
+/// Does `plan` move nothing and still tear a tie for a zero datum (#754)?
+fn tears_for_a_datum_in_place(plan: &crate::CombinePlan) -> bool {
+    plan.moving_section.is_none()
+        && plan
+            .torn_ties
+            .iter()
+            .any(|t| t.reason == TornTieReason::ZeroDatum)
 }
 
 /// Does `plan` move a side by a residual within the tolerance: side-by-side
@@ -1639,6 +1697,7 @@ fn combine_every_offered(project: &Project, seed: u64, stats: &mut SweepStats) {
                     stats.residual_with_branches += usize::from(plan.moved_sections.len() > 1);
                     stats.residual_torn += usize::from(!plan.torn_ties.is_empty());
                 }
+                stats.datum_torn_in_place += usize::from(tears_for_a_datum_in_place(plan));
                 check_combined(project, &after, &candidate, kept, &what, &[]);
                 stats.combined += 1;
             }
@@ -1853,9 +1912,19 @@ fn every_offered_combine_around_a_passage_keeps_the_invariants() {
 /// combine then closes a loop, and a merge on it tears), or hangs alone; and
 /// sometimes a zero datum holds O's side. Its own stream: `network`'s seeds
 /// keep their shapes.
+///
+/// One seed in three is a shared entrance instead (#754), from a stream of
+/// its own so the other draws keep their seeds: O's end sits exactly on P
+/// (float dust apart, so the combine moves nothing), P's merge component is
+/// held by a zero datum (a random station of it, when the network put none
+/// there) and O's side by its own, unless the connector ties O into P's
+/// component. Two surveys from one entrance, each with its datum: the
+/// combine must tear one side's merge to its datum even with nothing to move.
 fn side_by_side_network(seed: u64) -> Project {
     let mut project = network(seed);
     let mut rng = Rng(seed.wrapping_mul(0x8CB9_2BA7_2F3D_8DD7) | 1);
+    let mut entrance_rng = Rng(seed.wrapping_mul(0x5851_F42D_4C95_7F2D) | 1);
+    let entrance = entrance_rng.below(3) == 0;
     let ends: Vec<StationRef> = project
         .sections
         .iter()
@@ -1878,6 +1947,7 @@ fn side_by_side_network(seed: u64) -> Project {
         rng.range(0.02e-3, 0.95e-3),
         rng.range(0.0, std::f64::consts::TAU),
     );
+    let residual = if entrance { 0.0 } else { residual };
     let at = xy(&project, p);
     place(
         &mut project,
@@ -1921,7 +1991,21 @@ fn side_by_side_network(seed: u64) -> Project {
     };
     // Held where it is (`set_zero_datum` would move O's side onto the GPS
     // position, and with it the residual), as `network` holds T.
-    if rng.below(4) == 0 && !project.section_has_zero_datum(held.section_id) {
+    if entrance && !project.section_has_zero_datum(p.section_id) {
+        let component = project.get_merged_section_ids(p.section_id);
+        let all: Vec<StationRef> = every_station(&project)
+            .into_iter()
+            .filter(|at| component.contains(&at.section_id))
+            .collect();
+        let d = all[entrance_rng.below(all.len())];
+        if let Some(station_ref) = project.key_for_ref(d) {
+            project.zero_datums.push(crate::ZeroDatum {
+                station_ref,
+                gps: gps(),
+            });
+        }
+    }
+    if (rng.below(4) == 0 || entrance) && !project.section_has_zero_datum(held.section_id) {
         if let Some(station_ref) = project.key_for_ref(held) {
             project.zero_datums.push(crate::ZeroDatum {
                 station_ref,
@@ -1960,7 +2044,8 @@ fn every_offered_combine_beside_a_side_by_side_pair_keeps_the_invariants() {
     eprintln!(
         "combine side-by-side sweep seeds {first}..{}: {} combines, {} torn ties, {} moved by a \
          residual within the tolerance (#740): {} of them the kept side, {} with attached \
-         sections, {} tearing a tie; {}",
+         sections, {} tearing a tie; {} moving nothing and tearing a merge for a zero datum \
+         (#754); {}",
         first + seeds,
         stats.combined,
         stats.torn,
@@ -1968,11 +2053,16 @@ fn every_offered_combine_beside_a_side_by_side_pair_keeps_the_invariants() {
         stats.residual_kept_moved,
         stats.residual_with_branches,
         stats.residual_torn,
+        stats.datum_torn_in_place,
         closure_dedupes_report()
     );
     if seeds < 20 {
         return;
     }
+    assert!(
+        stats.datum_torn_in_place > 0,
+        "no combine at a shared entrance tore a merge for a zero datum"
+    );
     assert!(stats.residual_moved > 0, "no residual ever moved a side");
     assert!(
         stats.residual_kept_moved > 0,
@@ -2064,7 +2154,7 @@ fn combine_chains(make: fn(u64) -> Project, env_prefix: &str, label: &str) -> us
         .collect();
     let (mut combines, mut splits, mut reverses) = (0usize, 0usize, 0usize);
     let (mut swept_away, mut probed, mut dropped) = (0usize, 0usize, 0usize);
-    let (mut replaced, mut residual_moved) = (0usize, 0usize);
+    let (mut replaced, mut residual_moved, mut datum_torn) = (0usize, 0usize, 0usize);
     reset_closure_dedupes();
     for seed in first..first + seeds {
         let mut rng = Rng(seed.wrapping_mul(0xA24B_AED4_963E_E407) | 1);
@@ -2142,6 +2232,7 @@ fn combine_chains(make: fn(u64) -> Project, env_prefix: &str, label: &str) -> us
                     );
                     replaced += check_replaced(&project, &after, plan, &outcome.replaced, &what);
                     residual_moved += usize::from(moves_a_residual(plan));
+                    datum_torn += usize::from(tears_for_a_datum_in_place(plan));
                     probed += check_no_merge_folds_a_closure(&after, &what);
                     project = after;
                     trail.push(op);
@@ -2219,8 +2310,9 @@ fn combine_chains(make: fn(u64) -> Project, env_prefix: &str, label: &str) -> us
         "{label} seeds {first}..{}: {combines} combines, {splits} splits, {reverses} \
          reverses, {swept_away} closures between merged stations removed, {dropped} ties \
          removed across one shot, {residual_moved} moved by a residual within the tolerance \
-         (#740), {replaced} closures replaced (#749), {probed} merges of a closure's two ends \
-         tried (all refused); {}",
+         (#740), {datum_torn} moving nothing and tearing a merge for a zero datum (#754), \
+         {replaced} closures replaced (#749), {probed} merges of a closure's two ends tried \
+         (all refused); {}",
         first + seeds,
         closure_dedupes_report()
     );
