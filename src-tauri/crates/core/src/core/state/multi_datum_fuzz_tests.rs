@@ -34,10 +34,10 @@
 //!   re-frames so far. Most chains sit near the equator, where `eps` stays
 //!   under a micrometre; the others widen with it.
 //! - `promoted-twin-gps`, `datum-key-reused`, `frame-gps-edit`: the same
-//!   failure in a step whose mechanism is a known open finding (see
-//!   [`KNOWN_OPEN`]): a promoted fix with a GPS bit-identical to a datum that
-//!   was a placement before; a datum re-anchored onto the key of a datum the
-//!   step removed; a new GPS on the frame datum.
+//!   failure in a step with a recognised mechanism: a promoted fix with a GPS
+//!   bit-identical to a datum that was a placement before; a datum
+//!   re-anchored onto the key of a datum the step removed (both fixed, see
+//!   [`KNOWN_OPEN`]); a new GPS on the frame datum (known open).
 //! - `datum-twin-station`: two datums resolve to one station. Known open
 //!   (Combine Sections at a station holding two datums).
 //! - `hard-fix-off-gps` / `hard-fix-no-unknowns`: in the Closures Computed
@@ -100,29 +100,22 @@ const EXACT_M: f64 = 1e-9;
 /// with the generators as they are (a generator change can turn it into a
 /// different chain):
 ///
-/// - `promoted-twin-gps`: a promoted fix whose GPS is bit-identical to a
-///   datum that was a placement before the command is not placed on its GPS
-///   (`DatumLayout::was_unplaced` matches datums by GPS as well as by key).
-///   `"701;twin(0:3,1,0.0);rm(0)"`.
 /// - `datum-twin-station`: Combine Sections at a station holding two datums
 ///   leaves two datums on one station; a reload keeps one.
 ///   `"350;combine(0:start,3:start)"`.
 /// - `hard-fix-no-unknowns`: a hard fix in a component with no unknown left
 ///   is never applied in the computed view (`lsq.rs`, `if n == 0`). `"112"`.
-/// - `datum-key-reused`: Delete Shot on the first shot of a section drops the
-///   datum on station 0 and re-anchors a datum from `AfterShot(first shot)`
-///   onto `SectionStart`, the removed datum's key. `settle_datum_layout`
-///   recognises datums by key, so the survivor (a GPS fix promoted to
-///   placement, or the new frame) is neither placed nor re-framed onto.
-///   `"54;delshot(1,0)"`.
 /// - `frame-gps-edit`: giving the frame datum a new GPS keeps its station on
 ///   the origin and moves nothing else, so every other placed piece is off
 ///   its own GPS by the edit. Present on master before #741. `"11"`.
+///
+/// No longer muted, and pinned in `multi_datum_tests.rs`: `promoted-twin-gps`
+/// (a fix with the bit-identical GPS of the removed placement datum) and
+/// `datum-key-reused` (Delete Shot re-anchoring a fix onto the removed
+/// datum's key), both fixed in `DatumLayout::was_unplaced`.
 const KNOWN_OPEN: &[&str] = &[
-    "promoted-twin-gps",
     "datum-twin-station",
     "hard-fix-no-unknowns",
-    "datum-key-reused",
     "frame-gps-edit",
 ];
 

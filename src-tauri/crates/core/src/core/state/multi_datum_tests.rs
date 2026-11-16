@@ -845,3 +845,90 @@ fn an_ignored_gap_comes_back_when_the_datum_gps_changes() {
         .unwrap();
     assert_eq!(ignored(&state), vec![false]);
 }
+
+
+/// A separately placed piece C, 300 m west and 120 m north of the first
+/// entrance's GPS.
+fn placed_piece(state: &AppState) -> (SectionId, GpsCoordinates) {
+    let c = create_section(state, "C", north_shots(2, 20.0));
+    let c_gps = gps_at(-300.0, 120.0);
+    set_datum(state, StationRef::new(c, 0), c_gps, None);
+    (c, c_gps)
+}
+
+#[test]
+fn deleting_the_first_shot_promotes_the_next_stations_fix_onto_its_gps() {
+    // Frame A:0 and a fix on A:1, 30 m east of where the survey puts A:1.
+    // Deleting A's first shot drops the frame and re-anchors the fix onto
+    // A's start, the key the frame had: it must still count as promoted.
+    let (state, a, _b) = two_entrances();
+    let fix_gps = gps_at(30.0, 50.0);
+    set_datum(&state, StationRef::new(a, 1), fix_gps, None);
+    let (c, c_gps) = placed_piece(&state);
+    let before = project(&state);
+    let first = before.get_section(a).unwrap().shots[0].id;
+
+    let r = state.execute(Command::DeleteShot {
+        section_id: a,
+        shot_id: first,
+    });
+    assert!(r.success, "{:?}", r.error);
+
+    let p = project(&state);
+    assert_eq!(p.zero_datums.len(), 2);
+    let frame_gps = p
+        .frame_datum()
+        .map(|zd| (zd.gps.latitude, zd.gps.longitude));
+    assert_eq!(
+        frame_gps,
+        Some((fix_gps.latitude, fix_gps.longitude)),
+        "the fix is the frame now"
+    );
+    assert_near(
+        xy_of(&p, StationRef::new(a, 0)),
+        (0.0, 0.0),
+        1e-6,
+        "the promoted fix on the origin",
+    );
+    assert_near(
+        xy_of(&p, StationRef::new(c, 0)),
+        gps_to_local(&c_gps, &fix_gps),
+        0.01,
+        "C on its GPS",
+    );
+
+    assert_undo_redo_round_trip(&state, &before);
+}
+
+#[test]
+fn removing_the_frame_promotes_a_fix_that_shares_its_gps() {
+    // The fix on B:5 was given the entrance's exact GPS (copied coordinates).
+    // It is a different datum all the same: removing the frame promotes it,
+    // its piece moves onto that GPS and C stays on its own.
+    let (state, a, b) = two_entrances();
+    set_datum(&state, StationRef::new(b, 5), origin(), None);
+    let (c, c_gps) = placed_piece(&state);
+    let before = project(&state);
+    assert_eq!(before.datum_roles()[1], Some(DatumRole::GpsFix));
+
+    let r = state.execute(Command::RemoveZeroDatum {
+        station_ref: StationRef::new(a, 0),
+    });
+    assert!(r.success, "{:?}", r.error);
+
+    let p = project(&state);
+    assert_near(
+        xy_of(&p, StationRef::new(b, 5)),
+        (0.0, 0.0),
+        1e-6,
+        "the promoted fix on the origin",
+    );
+    assert_near(
+        xy_of(&p, StationRef::new(c, 0)),
+        gps_to_local(&c_gps, &origin()),
+        0.01,
+        "C on its GPS",
+    );
+
+    assert_undo_redo_round_trip(&state, &before);
+}
