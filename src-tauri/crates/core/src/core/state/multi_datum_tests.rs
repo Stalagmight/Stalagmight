@@ -234,7 +234,8 @@ fn fixes_on_stations_0_and_1_of_one_section_are_ignored_independently() {
     });
     assert!(saved.success, "{:?}", saved.error);
     // B:0 is surveyed at (0, 250) and B:1 at (0, 300); each GPS is 40 m east,
-    // over the 16 m threshold 50 m of survey from the other fix gives.
+    // over the 20 m and 21 m thresholds 250 m and 300 m of survey from the
+    // placement datum A:0 give.
     set_datum(&state, StationRef::new(b, 0), gps_at(40.0, 250.0), None);
     set_datum(&state, StationRef::new(b, 1), gps_at(40.0, 300.0), None);
 
@@ -258,22 +259,7 @@ fn fixes_on_stations_0_and_1_of_one_section_are_ignored_independently() {
     );
 
     // Ignore station 1's row exactly as the frontend does, from the row.
-    let p = project(&state);
-    let row = state
-        .compute_project_warnings(&p, None)
-        .into_iter()
-        .find(|w| w.datum_station_index == Some(1))
-        .unwrap();
-    state
-        .save_resolved_warning(&crate::persistence::ResolvedWarning {
-            section_id: row.section_id,
-            shot_id: row.shot_id,
-            warning_code: row.code.clone(),
-            resolved_at: chrono::Utc::now(),
-            resolved_comment: None,
-            shot_uuid: row.shot_uuid.clone(),
-        })
-        .unwrap();
+    ignore_datum_row(&state, 1);
     assert_eq!(
         gap_rows(&state),
         vec![
@@ -774,4 +760,81 @@ fn an_accuracy_only_edit_never_moves_a_piece() {
         0.01,
         "a GPS change places the piece",
     );
+}
+
+/// Ignore the datum gap row of `station` through the user-facing resolve path,
+/// from the row as the frontend has it.
+fn ignore_datum_row(state: &AppState, station: u32) {
+    let p = project(state);
+    let row = state
+        .compute_project_warnings(&p, None)
+        .into_iter()
+        .find(|w| w.datum_station_index == Some(station))
+        .unwrap();
+    state
+        .save_resolved_warning_gated(&crate::persistence::ResolvedWarning {
+            section_id: row.section_id,
+            shot_id: row.shot_id,
+            warning_code: row.code.clone(),
+            resolved_at: chrono::Utc::now(),
+            resolved_comment: None,
+            shot_uuid: row.shot_uuid.clone(),
+        })
+        .unwrap();
+}
+
+#[test]
+fn an_ignored_gap_comes_back_when_the_datum_gps_changes() {
+    // An Ignore says "this GPS reading is far off, and I know". A new reading
+    // is not covered by it; undoing the change brings the Ignore back (#741 U2).
+    let (state, _a, b) = two_entrances();
+    let temp = tempfile::TempDir::new().unwrap();
+    let saved = state.execute(Command::SaveProject {
+        path: Some(temp.path().join("ignore.stalx")),
+    });
+    assert!(saved.success, "{:?}", saved.error);
+    let fix = StationRef::new(b, 5);
+    set_datum(&state, fix, gps_at(40.0, 500.0), None);
+    let ignored = |state: &AppState| -> Vec<bool> {
+        let p = project(state);
+        state
+            .compute_project_warnings(&p, None)
+            .into_iter()
+            .filter(|w| w.code == DATUM_GPS_GAP)
+            .map(|w| w.is_resolved)
+            .collect()
+    };
+    assert_eq!(ignored(&state), vec![false]);
+    ignore_datum_row(&state, 5);
+    assert_eq!(ignored(&state), vec![true]);
+
+    // An accuracy-only edit keeps the reading, so the Ignore holds.
+    set_datum(&state, fix, gps_at(40.0, 500.0), Some(3.0));
+    assert_eq!(ignored(&state), vec![true]);
+
+    // A new GPS reading, 150 m off: the warning is back.
+    set_datum(&state, fix, gps_at(150.0, 500.0), Some(3.0));
+    assert_eq!(ignored(&state), vec![false]);
+    assert!(state.undo().success);
+    assert_eq!(ignored(&state), vec![true], "undo restores the ignored reading");
+    assert!(state.redo().success);
+    assert_eq!(ignored(&state), vec![false]);
+
+    // Un-ignoring the reading it was ignored for clears it for good.
+    assert!(state.undo().success);
+    let p = project(&state);
+    let row = state
+        .compute_project_warnings(&p, None)
+        .into_iter()
+        .find(|w| w.code == DATUM_GPS_GAP)
+        .unwrap();
+    state
+        .delete_resolved_warning_gated(
+            row.section_id,
+            row.shot_id,
+            &row.code,
+            row.shot_uuid.as_deref(),
+        )
+        .unwrap();
+    assert_eq!(ignored(&state), vec![false]);
 }

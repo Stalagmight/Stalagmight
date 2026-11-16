@@ -3,8 +3,9 @@ use std::collections::HashSet;
 
 use crate::core::{Validator, WarningSeverity};
 use crate::models::{
-    severity_for_code, station_id_label, DatumGap, Project, ProjectWarning, SectionId, ShotData,
-    ShotId, CLOSURE_ACROSS_ONE_SHOT, CLOSURE_ADJUSTMENT_FAILED, DATUM_GPS_GAP, DATUM_GPS_GAP_START,
+    datum_gap_ignore_code, severity_for_code, station_id_label, DatumGap, Project, ProjectWarning,
+    SectionId, ShotData, ShotId, StationRef, CLOSURE_ACROSS_ONE_SHOT, CLOSURE_ADJUSTMENT_FAILED,
+    DATUM_GPS_GAP, DATUM_GPS_GAP_START,
 };
 use crate::persistence::Database;
 
@@ -286,7 +287,10 @@ impl AppState {
                 );
                 continue;
             };
-            let is_resolved = is_resolved_for(&shot.uuid, section.id, shot.id, code);
+            // The Ignore is keyed on the datum's GPS too, so a new GPS reading
+            // brings the warning back (#741 U2, `datum_gap_ignore_code`).
+            let ignore_code = ignore_code_in(project, section.id, shot.id, code);
+            let is_resolved = is_resolved_for(&shot.uuid, section.id, shot.id, &ignore_code);
             all_warnings.push(ProjectWarning {
                 section_id: section.id,
                 shot_id: shot.id,
@@ -719,13 +723,24 @@ impl AppState {
     /// pushes it - otherwise it is silently dropped on the next pull. The low-level
     /// [`Self::save_resolved_warning`] accessor stays ungated for the load-time backfill
     /// and tests.
+    ///
+    /// The row is stored under [`Self::ignore_code_for`] its warning: a datum
+    /// gap warning's Ignore names the datum's GPS as well (#741 U2).
     pub fn save_resolved_warning_gated(
         &self,
         warning: &crate::persistence::ResolvedWarning,
     ) -> Result<(), String> {
         self.guard_mutation("Resolve warning")
             .map_err(|f| f.error.unwrap_or_default())?;
-        self.save_resolved_warning(warning)
+        let warning = crate::persistence::ResolvedWarning {
+            warning_code: self.ignore_code_for(
+                warning.section_id,
+                warning.shot_id,
+                &warning.warning_code,
+            ),
+            ..warning.clone()
+        };
+        self.save_resolved_warning(&warning)
             .map_err(|e| e.to_string())?;
         // Dirty-bit flip (#191/#197): set-only; no-op for local-only (no speleo_link).
         self.mark_remote_forward_edit();
@@ -744,10 +759,30 @@ impl AppState {
     ) -> Result<(), String> {
         self.guard_mutation("Unresolve warning")
             .map_err(|f| f.error.unwrap_or_default())?;
-        self.delete_resolved_warning(section_id, shot_id, warning_code, shot_uuid)
+        let warning_code = self.ignore_code_for(section_id, shot_id, warning_code);
+        self.delete_resolved_warning(section_id, shot_id, &warning_code, shot_uuid)
             .map_err(|e| e.to_string())?;
         self.mark_remote_forward_edit();
         Ok(())
+    }
+
+    /// The code an Ignore of `warning_code` on `(section_id, shot_id)` is
+    /// stored and matched under in the open project ([`ignore_code_in`]).
+    /// Takes the project lock, so never call it holding one.
+    pub fn ignore_code_for(
+        &self,
+        section_id: SectionId,
+        shot_id: ShotId,
+        warning_code: &str,
+    ) -> String {
+        let guard = match self.project.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        match guard.as_ref() {
+            Some(project) => ignore_code_in(project, section_id, shot_id, warning_code),
+            None => warning_code.to_string(),
+        }
     }
 
     /// Look up a shot's stable UUID by its `(section_id, shot_id)` identity in
@@ -761,6 +796,36 @@ impl AppState {
         let section = project.sections.iter().find(|s| s.id == section_id)?;
         let shot = section.shots.iter().find(|s| s.id == shot_id)?;
         shot.uuid.clone()
+    }
+}
+
+/// The code an Ignore of `code` on `(section_id, shot_id)` is stored and
+/// matched under: for a datum gap warning, [`datum_gap_ignore_code`] with the
+/// GPS of the datum on the station the shot carries the warning for (station
+/// 0 for [`DATUM_GPS_GAP_START`], the station the shot arrives at for
+/// [`DATUM_GPS_GAP`]); every other code, or a station that holds no datum,
+/// as it is.
+fn ignore_code_in(project: &Project, section_id: SectionId, shot_id: ShotId, code: &str) -> String {
+    let datum_gps = || {
+        let section = project.get_section(section_id)?;
+        let station_index = match code {
+            DATUM_GPS_GAP_START => 0,
+            DATUM_GPS_GAP => {
+                let shot = section.shots.iter().position(|s| s.id == shot_id)?;
+                u32::try_from(shot + 1).ok()?
+            }
+            _ => return None,
+        };
+        let at = StationRef::new(section_id, station_index);
+        project
+            .zero_datums
+            .iter()
+            .find(|zd| project.resolve_key(&zd.station_ref) == Some(at))
+            .map(|zd| zd.gps)
+    };
+    match datum_gps() {
+        Some(gps) => datum_gap_ignore_code(code, &gps),
+        None => code.to_string(),
     }
 }
 
