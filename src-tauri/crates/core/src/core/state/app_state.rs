@@ -15,6 +15,7 @@ use crate::persistence::Database;
 use crate::tile_stats::TileFetchStats;
 use crate::tilemap_cache::TilemapCache;
 
+use crate::core::undo::snapshot_fixes;
 use crate::core::{CommandResult, UndoStack};
 
 use super::project_io::{reapply_heals_after_restore, RecordedGauges};
@@ -770,13 +771,21 @@ impl AppState {
     /// `file_path` is the only machine-local field on `Project`: the four transient caches
     /// are `#[serde(skip)]`, and `imported_file_hashes` is content hashes that are meant to
     /// proliferate. A new field of that kind must be added here too.
+    ///
+    /// [#741] GPS fixes leave `zero_datums` here too, for an older build that reads the
+    /// persisted history: see [`snapshot_fixes`]. `restore_snapshot_into_with` merges them
+    /// back.
     pub(super) fn serialize_project_snapshot(project: &Project) -> serde_json::Result<String> {
-        if project.file_path.is_none() {
-            // An unsaved project has nothing to scrub, so skip the clone entirely.
+        let holds_fix = snapshot_fixes::holds_fix(project);
+        if project.file_path.is_none() && !holds_fix {
+            // Nothing to scrub or split, so skip the clone entirely.
             return serde_json::to_string(project);
         }
         let mut scrubbed = project.clone();
         scrubbed.file_path = None;
+        if holds_fix {
+            return snapshot_fixes::serialize_split(&mut scrubbed);
+        }
         serde_json::to_string(&scrubbed)
     }
 
@@ -870,6 +879,21 @@ impl AppState {
                         "Refusing snapshot restore: section id or shot counter outside the shot-id encode bound"
                     );
                     return false;
+                }
+                // [#741] The GPS fixes ride beside `zero_datums`, not in it
+                // (`serialize_project_snapshot`); put them back in list order.
+                // Fixes that cannot be read refuse the restore, as the window
+                // check above does: without them it is not the state recorded.
+                match snapshot_fixes::read_fixes(snapshot) {
+                    Ok(fixes) => snapshot_fixes::merge_fixes(&mut restored.zero_datums, fixes),
+                    Err(e) => {
+                        tracing::error!(
+                            purpose = "restore project snapshot",
+                            reason = %e,
+                            "Refusing snapshot restore: its GPS fixes cannot be read"
+                        );
+                        return false;
+                    }
                 }
                 if !snapshot_has_validation {
                     if let Some(validation) = current_validation {

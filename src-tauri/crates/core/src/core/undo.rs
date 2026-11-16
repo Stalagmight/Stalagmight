@@ -14,6 +14,7 @@ mod budget;
 mod history_credit;
 pub mod history_view;
 mod persistence;
+pub(crate) mod snapshot_fixes;
 mod uuid_remap;
 
 pub use added_content::{extend_unique_hashes, AddedContent, CarriedIgnore};
