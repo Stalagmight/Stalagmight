@@ -1,4 +1,5 @@
 import { invokeIpc } from './ipc';
+import { formatFixed } from '../i18n/format';
 import type { GpsCoordinates, StationRef } from '../types/project';
 import type { ZeroDatumPreview } from '../types/ipc/ZeroDatumPreview';
 
@@ -59,4 +60,9 @@ export function parseDatumAccuracy(raw: string): number | null {
   if (s === '') return null;
   const n = Number(s);
   return Number.isFinite(n) && n >= 0 && n <= MAX_DATUM_ACCURACY_M ? n : null;
+}
+
+/** Metres for a datum gap readout: one decimal under 10 m, whole metres above. */
+export function formatDatumMetres(value: number): string {
+  return formatFixed(value, undefined, value < 10 ? 1 : 0);
 }
