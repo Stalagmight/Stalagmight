@@ -2897,7 +2897,7 @@ fn the_zero_datum_undo_capture_covers_every_section() {
 ///
 /// The redo half pins the same rule from the other side. `redo` re-executes the
 /// command through `execute_without_undo`, which has no epilogue behind it, so a
-/// design that left the re-framing to `AppState`'s `renormalize_frame_if_changed`
+/// design that left the re-framing to `AppState`'s `settle_datum_layout`
 /// would redo onto the pre-renormalisation geometry and the offsets would differ
 /// from the forward result by the full establishing delta.
 #[test]

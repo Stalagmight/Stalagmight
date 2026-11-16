@@ -1,6 +1,6 @@
 use chrono::Utc;
 use std::collections::{HashMap, HashSet, VecDeque};
-use tracing::{debug, info, trace};
+use tracing::{debug, info, trace, warn};
 
 use crate::{
     gps_to_local, ClosurePreview, ClosureStrategy, Coordinates, DatumRole, GpsCoordinates,
@@ -950,7 +950,7 @@ impl Project {
         // with no epilogue (a batch's second datum, the import placement loop,
         // redo's re-execute) are exactly the ones that would otherwise place a
         // second datum against an origin the first one does not sit on.
-        // Idempotent, so the epilogue's own `renormalize_frame_if_changed` is a
+        // Idempotent, so the epilogue's settle step (`settle_datum_layout`) is a
         // measured no-op after this.
         if frame_datum.is_none() {
             self.renormalize_frame();
@@ -1148,6 +1148,14 @@ impl Project {
         };
 
         let (dx, dy) = (-current.x, -current.y);
+        if !dx.is_finite() || !dy.is_finite() {
+            warn!(
+                datum_section = key.section_id,
+                purpose = "renormalise georeference frame",
+                "The frame datum's position is not finite; leaving the survey where it is"
+            );
+            return false;
+        }
         // Dust is not a displacement - the shared bound, see
         // `Project::OFFSET_DUST_M`. This is also what makes a second call a
         // provable no-op rather than a churn of near-zero writes.
@@ -1168,33 +1176,6 @@ impl Project {
             "The frame-defining zero datum changed; translated the survey onto the new origin"
         );
         true
-    }
-
-    /// [`Self::renormalize_frame`], but only when the frame-defining station is a
-    /// DIFFERENT one than `before` named. THE gate - every trigger site routes
-    /// through it so the rule lives in one place.
-    ///
-    /// The AFTER side must be `Some`: `Some -> None` removed the last anchor, so
-    /// there is no frame left to renormalise onto and translating onto nothing
-    /// would move the survey for no reason. `None -> Some` DOES fire - it
-    /// establishes the frame, which is a change of what every stored coordinate
-    /// means, and the answer to that is the same rigid translation as any other
-    /// promotion. [`Self::set_zero_datum`] already performs it inline (it has to:
-    /// its own subsequent-datum arithmetic reads the invariant), so on that route
-    /// this is a measured no-op; the gate covers it anyway rather than asserting
-    /// that no other route can ever establish a frame, which is the claim the
-    /// derive-don't-hook rule exists to avoid having to make.
-    ///
-    /// `before == after` covers the ordinary command and makes a second call after
-    /// a first one a no-op by identity rather than by arithmetic.
-    pub fn renormalize_frame_if_changed(&mut self, before: Option<StationKey>) -> bool {
-        let Some(after) = self.frame_datum_key() else {
-            return false;
-        };
-        if before.as_ref() == Some(&after) {
-            return false;
-        }
-        self.renormalize_frame()
     }
 
     /// The world position of the anchor [`Self::realign_after_shot_edit`] will
