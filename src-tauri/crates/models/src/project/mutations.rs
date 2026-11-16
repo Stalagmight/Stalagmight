@@ -687,9 +687,36 @@ impl Project {
         }
     }
 
+    /// Why a NEW datum may not be stored on `station_ref`, whose stable key is
+    /// `datum_key`: another datum already sits on that station under a
+    /// different key. Re-setting the datum stored under `datum_key` itself is
+    /// always allowed (it updates in place). `None` when it may be stored.
+    ///
+    /// One station holds at most one datum (#741 D2): two would share one
+    /// station key once a Combine or a re-key folds them together, the save
+    /// keeps only one of them, and Remove Zero Datum would clear both at once.
+    fn second_datum_refusal(
+        &self,
+        station_ref: StationRef,
+        datum_key: &StationKey,
+    ) -> Option<String> {
+        if self
+            .zero_datums
+            .iter()
+            .any(|zd| zd.station_ref == *datum_key)
+        {
+            return None;
+        }
+        self.zero_datums
+            .iter()
+            .any(|zd| self.resolve_key(&zd.station_ref) == Some(station_ref))
+            .then(|| "This station already holds a zero datum; edit that one instead".to_string())
+    }
+
     /// Store `gps` and `accuracy_m` on the datum at `datum_key`, in place when one
     /// is there (its list position is its role, so it must not move) or appended.
-    /// Returns whether an existing datum was updated.
+    /// Callers check [`Self::second_datum_refusal`] first. Returns whether an
+    /// existing datum was updated.
     fn store_datum(
         &mut self,
         datum_key: StationKey,
@@ -770,6 +797,27 @@ impl Project {
         let datum_key = self
             .key_for_ref(station_ref)
             .ok_or_else(|| "Cannot set zero datum: station has no stable anchor".to_string())?;
+        if let Some(why) = self.second_datum_refusal(station_ref, &datum_key) {
+            return Err(format!("Cannot set zero datum: {why}"));
+        }
+
+        // Re-setting a stored datum with the GPS it already holds is an
+        // accuracy-only edit (the Edit Station dialog sends the stored GPS back
+        // unchanged): it never moves anything, whatever the role (#741 D5). A
+        // placement datum that sits off its GPS (a file from an older build)
+        // stays where the survey has it; only a GPS change re-places a piece.
+        if self.zero_datums.iter().any(|zd| {
+            zd.station_ref == datum_key && super::datum_placement::same_gps(&zd.gps, &gps)
+        }) {
+            self.store_datum(datum_key, gps, accuracy_m);
+            self.touch();
+            info!(
+                station_ref = ?station_ref,
+                purpose = "edit a zero datum's accuracy",
+                "Zero datum accuracy updated; nothing moved"
+            );
+            return Ok(true);
+        }
 
         if self.role_for_stored_datum(station_ref, &datum_key) == DatumRole::GpsFix {
             let updated_existing = self.store_datum(datum_key, gps, accuracy_m);
@@ -949,6 +997,9 @@ impl Project {
         let datum_key = self
             .key_for_ref(station_ref)
             .ok_or_else(|| "Cannot store zero datum: station has no stable anchor".to_string())?;
+        if let Some(why) = self.second_datum_refusal(station_ref, &datum_key) {
+            return Err(format!("Cannot store zero datum: {why}"));
+        }
 
         debug!(
             station_ref = ?station_ref,

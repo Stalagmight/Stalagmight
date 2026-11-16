@@ -212,6 +212,19 @@ group connected) is the opposite case and is governed by
 coincident is simply not stitched. The pair is arbitrary rather than surveyed, so
 moving a group onto it would invent geometry.
 
+A **torn merge between two datum-placed pieces** in a file from an older build (the
+#464 damage: each half pinned by its own zero datum, the merge metres or kilometres
+open) is turned back into the unaligned loop closure it should have stayed, when the
+file opens and by Repair (`demote_double_anchoring_merges`,
+`project/legacy_anchoring.rs`). Since #741 the later datum of a merged group is a GPS
+fix that holds nothing in raw geometry, so the offset re-solve would otherwise heal
+the tear by moving the later piece off its GPS by the whole tear, with no undo. The
+demotion runs before the re-solve and moves nothing: each piece keeps its datum as
+its placement datum, and the misclosure is on the closure. A user who wants the two
+pieces joined merges them, which moves the later piece, can be undone, and makes its
+datum a GPS fix. A legacy group with two datums and no torn merge needs nothing: the
+re-solve moves nothing and the later datum is a fix that reports its gap.
+
 ## Closures across a Split Section Here or a Combine Sections
 
 None of these edits moves the closure-adjusted survey of a component they keep

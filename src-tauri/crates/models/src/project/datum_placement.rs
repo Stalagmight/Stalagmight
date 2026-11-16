@@ -59,7 +59,7 @@ impl DatumLayout {
 }
 
 /// Bit-for-bit the same stored GPS: identity, not proximity.
-fn same_gps(a: &GpsCoordinates, b: &GpsCoordinates) -> bool {
+pub(super) fn same_gps(a: &GpsCoordinates, b: &GpsCoordinates) -> bool {
     a.latitude.to_bits() == b.latitude.to_bits() && a.longitude.to_bits() == b.longitude.to_bits()
 }
 

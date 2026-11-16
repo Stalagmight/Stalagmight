@@ -51,6 +51,7 @@ mod split_section;
 mod station_rekey;
 
 mod integrity;
+mod legacy_anchoring;
 mod merge_topology;
 mod offsets;
 mod relationships;

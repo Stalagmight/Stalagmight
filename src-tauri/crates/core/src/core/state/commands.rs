@@ -569,6 +569,7 @@ impl AppState {
         // all reversible by restoring this snapshot. (capture locks the project
         // internally, so take it with no guard held.)
         let before_snapshot = self.capture_project_snapshot().ok();
+        let demoted;
         {
             let mut guard = match self.project.lock() {
                 Ok(g) => g,
@@ -581,6 +582,16 @@ impl AppState {
                     changed: false,
                 };
             };
+            // Demote any torn merge that bridges two independently datum-placed
+            // groups back to a loop closure, as the open path does (#741 D6):
+            // left a merge, the re-solve below would heal it by moving the
+            // later group off its GPS. FIRST: the demoted closure gives the
+            // later datum back its own piece, which it already placed, so the
+            // layout read below must see it as a placement datum or the settle
+            // would re-place it. Before the conversion too, so that sees the
+            // healed topology; the converter's double-anchor guard leaves the
+            // new closure alone.
+            demoted = project.demote_double_anchoring_merges();
             // The frame-defining datum station before the repair. Repair never runs
             // through `execute()`, so it carries its own frame check (#469, item 1).
             //
@@ -645,7 +656,10 @@ impl AppState {
             }
         }
         IntegrityRepairResult {
-            fixed: before.saturating_sub(after) as u32,
+            // Each demoted merge was a counted `merge_misaligned` violation that
+            // the demotion clears; the floor keeps an explicit repair from
+            // reporting "0 fixed" if the rest of the set churns in the same pass.
+            fixed: before.saturating_sub(after).max(demoted) as u32,
             remaining: after as u32,
             changed,
         }
