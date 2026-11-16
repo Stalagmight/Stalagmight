@@ -1063,11 +1063,12 @@ pub(super) fn check_combined(
         }
     };
     check_eligible_ties_kept(before, after, candidate, kept, &home, what);
-    // The Closures Computed View puts a station moved by hand (a manual
-    // offset, #755) off the stations merged to it once it solves a closure in
-    // their survey, combine or not: a view issue of its own, so the view is
-    // not compared where one is there.
-    if hand_moved_merge(before) || hand_moved_merge(after) {
+    // The Closures Computed View solves shots, merges and closures, never a
+    // manual offset (a hand move, #755), and puts a station moved by hand off
+    // what a merge or a closure ties to it (and the section around it) once
+    // it solves a closure in their survey, combine or not: a view issue of
+    // its own, so the view is not compared where one is there.
+    if hand_moved_tie(before) || hand_moved_tie(after) {
         check_structure_muting(after, what, mute);
         return;
     }
@@ -1094,15 +1095,27 @@ pub(super) fn check_combined(
     check_structure_muting(after, what, mute);
 }
 
-/// Does a manual station offset (a hand move, #755) sit on a station merged
-/// to another?
-fn hand_moved_merge(project: &Project) -> bool {
+/// Does a manual station offset (a hand move, #755) sit on a station that a
+/// merge or a loop closure ties to another?
+fn hand_moved_tie(project: &Project) -> bool {
+    let tied: HashSet<StationRef> = project
+        .station_merges
+        .iter()
+        .flat_map(|m| [&m.station_a, &m.station_b])
+        .chain(
+            project
+                .loop_closures
+                .iter()
+                .flat_map(|c| [&c.station_a, &c.station_b]),
+        )
+        .filter_map(|key| project.resolve_key(key))
+        .collect();
     project
         .station_offsets
         .iter()
         .filter(|(_, offset)| **offset != (0.0, 0.0, 0.0))
         .filter_map(|(key, _)| project.resolve_key(key))
-        .any(|at| project.get_merge_group(at).len() > 1)
+        .any(|at| tied.contains(&at))
 }
 
 /// #749, after every combine the sweeps make: every two stations the plan's
