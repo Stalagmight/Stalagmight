@@ -2529,16 +2529,12 @@ fn every_offered_combine_at_a_hand_moved_join_keeps_the_invariants() {
 /// `STALAGMIGHT_COMBINE_HAND_CHAIN_STEPS` (default 8) edits each.
 #[test]
 fn chains_at_a_hand_moved_join_keep_the_invariants() {
-    combine_chains(
+    let run = combine_chains(
         hand_moved_network,
         "STALAGMIGHT_COMBINE_HAND_CHAIN",
         "combine hand-moved chains",
     );
-    let seeds = std::env::var("STALAGMIGHT_COMBINE_HAND_CHAIN_SEEDS")
-        .ok()
-        .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or(40);
-    if seeds >= 20 {
+    if run.seeds >= 20 {
         assert!(
             hand_moved_views().0 > 0,
             "no closure-adjusted view was compared with a hand move in the solved survey"
@@ -2587,25 +2583,27 @@ fn chains_of_combines_splits_and_reverses_keep_the_invariants() {
 /// `STALAGMIGHT_COMBINE_PASSAGE_CHAIN_STEPS` (default 8) edits each.
 #[test]
 fn chains_around_a_passage_keep_the_invariants() {
-    let dropped = combine_chains(
+    let run = combine_chains(
         passage_network,
         "STALAGMIGHT_COMBINE_PASSAGE_CHAIN",
         "combine passage chains",
     );
-    let seeds = std::env::var("STALAGMIGHT_COMBINE_PASSAGE_CHAIN_SEEDS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(40u64);
-    if seeds >= 20 {
-        assert!(dropped > 0, "no chain removed a tie across one shot");
+    if run.seeds >= 20 {
+        assert!(run.dropped > 0, "no chain removed a tie across one shot");
     }
+}
+
+/// What [`combine_chains`] ran: how many seeds, and how many ties the
+/// combines removed across one shot (#746).
+struct ChainRun {
+    seeds: u64,
+    dropped: usize,
 }
 
 /// Random chains of combines, splits and reverses from `make(seed)`, with
 /// the seeds, first seed, steps and mutes read from `{env}_SEEDS`,
-/// `{env}_FIRST_SEED`, `{env}_STEPS` and `{env}_MUTE`. Returns how many ties
-/// the combines removed across one shot (#746).
-fn combine_chains(make: fn(u64) -> Project, env_prefix: &str, label: &str) -> usize {
+/// `{env}_FIRST_SEED`, `{env}_STEPS` and `{env}_MUTE`.
+fn combine_chains(make: fn(u64) -> Project, env_prefix: &str, label: &str) -> ChainRun {
     let env = |name: &str, default: u64| -> u64 {
         std::env::var(format!("{env_prefix}_{name}"))
             .ok()
@@ -2794,7 +2792,7 @@ fn combine_chains(make: fn(u64) -> Project, env_prefix: &str, label: &str) -> us
             "splits {splits}, reverses {reverses}"
         );
     }
-    dropped
+    ChainRun { seeds, dropped }
 }
 
 /// The orphan-closure sweep on random networks with extra ties to merged
