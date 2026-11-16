@@ -1644,16 +1644,16 @@ fn a_side_by_side_combine_keeps_merged_stations_together_through_a_reopen() {
 /// and O's own datum on the same GPS position puts O's start exactly on D's,
 /// side by side with K's. Combining K with O moves nothing and turns K's
 /// merge to D into a loop closure for D's datum (listed in the plan first),
-/// so the two datums stay in two merge groups: the integrity check and the
-/// project warnings are clean. One Undo restores the project byte for byte,
-/// Redo re-applies it, and a save and a reopen keep it as it is. Before #754
-/// the plan listed nothing and the combine left both datums in one merge
-/// group.
+/// so the two datums stay in two merge groups: the integrity check is clean
+/// and no warning reports two datums in one group. One Undo restores the
+/// project byte for byte, Redo re-applies it, and a save and a reopen keep it
+/// as it is. Before #754 the plan listed nothing and the combine left both
+/// datums in one merge group (an error in the Warnings tab).
 #[test]
 fn a_combine_at_a_shared_entrance_keeps_the_datums_in_two_merge_groups() {
     use crate::models::{
         CombineJoinEnds, CombineJoinKind, SectionEnd, TornTieKind, TornTieReason,
-        MULTIPLE_DATUMS_PER_MERGE_COMPONENT,
+        CLOSURE_ADJUSTMENT_FAILED, MULTIPLE_DATUMS_PER_MERGE_COMPONENT,
     };
     let temp = tempfile::TempDir::new().unwrap();
     let path = temp.path().join("entrance.stalx");
@@ -1784,4 +1784,37 @@ fn a_combine_at_a_shared_entrance_keeps_the_datums_in_two_merge_groups() {
     assert!(state.execute(Command::CloseProject).success);
     assert!(state.open_project(path).success, "reopen");
     check(&state, "reopen");
+
+    // What is left: the closure ties D's datum station to O's, so the
+    // Closures Computed View cannot adjust that part and shows it measured
+    // (the stations are one point, so nothing differs), with the advisory
+    // warning that says why. A residual past float dust tears the same merge
+    // and leaves the same report (#740); removing one datum clears it.
+    assert!(state.get_adjusted_stations().is_some());
+    let project = state.get_project_state().unwrap();
+    let failed: Vec<String> = state
+        .compute_project_warnings(&project, None)
+        .into_iter()
+        .filter(|w| w.code == CLOSURE_ADJUSTMENT_FAILED)
+        .map(|w| {
+            assert_eq!(w.severity, crate::core::WarningSeverity::Warning);
+            w.message
+        })
+        .collect();
+    assert_eq!(failed.len(), 1, "{failed:?}");
+    assert!(
+        failed[0].contains("tie two zero datums to the same point"),
+        "{failed:?}"
+    );
+    // O's datum is on the combined section's station 1 now.
+    let removed = state.execute(Command::RemoveZeroDatum {
+        station_ref: StationRef::new(k, 1),
+    });
+    assert!(removed.success, "{:?}", removed.error);
+    assert!(state.get_adjusted_stations().is_some());
+    let project = state.get_project_state().unwrap();
+    assert!(state
+        .compute_project_warnings(&project, None)
+        .iter()
+        .all(|w| w.code != CLOSURE_ADJUSTMENT_FAILED));
 }
