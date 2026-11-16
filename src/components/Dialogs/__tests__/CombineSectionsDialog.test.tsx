@@ -352,7 +352,7 @@ describe('CombineSectionsDialog', () => {
     );
     expect(screen.getAllByTestId(/^combine-torn-tie-/).map(tieText)).toEqual([
       'The snapped closure between [section Main-A] [station 2:0] and [section Section 9] [station 9:0]',
-      'The merge of [section Main-B] [station 5:2] and [section Section 8] [station 8:0] [section Section 8] is held by a zero datum and stays where it is.',
+      'The merge of [section Main-B] [station 5:2] and [section Section 8] [station 8:0] . [section Section 8] is held by a zero datum and stays where it is.',
     ]);
     // Hovering a station pill rings it on the map; clicking selects it.
     fireEvent.mouseEnter(screen.getAllByTestId('combine-tie-station-5-2')[0]!);
@@ -673,13 +673,13 @@ describe('CombineSectionsDialog', () => {
       'Main-B moves 11.50m horizontally so the two ends meet, closing the loop here.'
     );
     expect(screen.getAllByTestId(/^combine-torn-tie-/).map(tieText)).toEqual([
-      'The merge of [section Main-B] [station 5:2] and [section Section 9] [station 9:0] [section Section 9] is held by a zero datum and stays where it is.',
-      'The snapped closure between [section Section 9] [station 9:1] and [section Main-B] [station 5:1] [section Section 9] is held by a zero datum and stays where it is.',
+      'The merge of [section Main-B] [station 5:2] and [section Section 9] [station 9:0] . [section Section 9] is held by a zero datum and stays where it is.',
+      'The snapped closure between [section Section 9] [station 9:1] and [section Main-B] [station 5:1] . [section Section 9] is held by a zero datum and stays where it is.',
     ]);
     expect(screen.queryByTestId('combine-torn-why')).toBeNull();
     fireEvent.click(screen.getByTestId('combine-swap-kept'));
     expect(screen.getAllByTestId(/^combine-torn-tie-/).map(tieText)).toEqual([
-      'The snapped closure between [section Section 9] [station 9:1] and [section Main-B] [station 5:1] [section Section 9] is held by a zero datum and stays where it is.',
+      'The snapped closure between [section Section 9] [station 9:1] and [section Main-B] [station 5:1] . [section Section 9] is held by a zero datum and stays where it is.',
     ]);
     expect(screen.queryByTestId('combine-torn-why')).toBeNull();
   });
@@ -709,7 +709,7 @@ describe('CombineSectionsDialog', () => {
     ];
     render(<CombineSectionsDialog />);
     expect(screen.getAllByTestId(/^combine-torn-tie-/).map(tieText)).toEqual([
-      'The snapped closure between [section Main-B] [station 5:1] and [section Section 9] [station 9:1] [section Section 9] is held by a zero datum and stays where it is.',
+      'The snapped closure between [section Main-B] [station 5:1] and [section Section 9] [station 9:1] . [section Section 9] is held by a zero datum and stays where it is.',
       'The snapped closure between [section Main-B] [station 5:0] and [section Side] [station 7:1]',
     ]);
     expect(screen.getByTestId('combine-torn-why').textContent).toBe(
