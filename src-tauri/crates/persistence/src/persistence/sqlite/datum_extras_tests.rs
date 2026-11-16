@@ -312,13 +312,13 @@ fn corrupt_rows_are_skipped_and_the_load_succeeds() {
             .execute_batch(&format!(
                 "
                 -- an unreadable station index
-                INSERT INTO zero_datum_extras VALUES (10, {b}, 'two', NULL, 0, 20.5, -87.5, 0, NULL);
+                INSERT INTO zero_datum_extras VALUES (10, {b}, 'two', NULL, 0, 20.5, -87.5, 0, NULL, NULL);
                 -- a fix with a latitude no GPS has
-                INSERT INTO zero_datum_extras VALUES (11, {c}, 1, (SELECT uuid FROM shots WHERE section_id = {c} AND sequence_order = 0), 0, 200.0, -87.5, 0, NULL);
+                INSERT INTO zero_datum_extras VALUES (11, {c}, 1, (SELECT uuid FROM shots WHERE section_id = {c} AND sequence_order = 0), 0, 200.0, -87.5, 0, NULL, NULL);
                 -- neither a placement nor a fix
-                INSERT INTO zero_datum_extras VALUES (12, {b}, 1, NULL, 7, NULL, NULL, NULL, NULL);
+                INSERT INTO zero_datum_extras VALUES (12, {b}, 1, NULL, 7, NULL, NULL, NULL, NULL, NULL);
                 -- a fix on a section the file does not hold
-                INSERT INTO zero_datum_extras VALUES (13, 999, 0, NULL, 0, 20.6, -87.5, 0, NULL);
+                INSERT INTO zero_datum_extras VALUES (13, 999, 0, NULL, 0, 20.6, -87.5, 0, NULL, NULL);
                 -- an accuracy no GPS has reads as the default
                 UPDATE zero_datum_extras SET accuracy_m = -1.0 WHERE position = 0;
                 "
