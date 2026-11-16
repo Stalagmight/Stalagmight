@@ -1146,19 +1146,42 @@ pub(super) fn check_combined(
     if before.get_connected_section_ids(kept).contains(&other) && was_ok && now_ok {
         // The plan keeps the station the view holds the survey at only
         // where the view really solves it (snaps not counted): where it
-        // does not, the app shows the measured geometry, and the plan may
-        // move the side holding that station, by a residual or the chain
-        // gap of a merged join moved by hand (#740, #755). The view with
-        // the snaps counted then follows that station, as one piece.
+        // does not, the app shows the measured geometry, which the checks
+        // above hold to the plan, and the plan may move the side holding
+        // that station, by a residual or the chain gap of a merged join
+        // moved by hand (#740, #755). The view with the snaps counted then
+        // follows that station as one piece, by exactly the move the plan
+        // gives it: its side's shift, the joined station's move for a part
+        // merged at the dropped station, or, on the dropped station itself,
+        // its chain's move (the "before" view gave it the kept hand move
+        // already). Nothing else may move, and where the view really solves
+        // the survey, nothing may.
         let component = tied.get_connected_section_ids(kept);
-        let follows = if solved(before) || solved(after) {
-            (0.0, 0.0)
-        } else {
-            tied.adjustment_anchor_of(&component)
-                .map_or((0.0, 0.0), |at| {
-                    let (was, now) = (xy(&tied, at), xy(&after_view, home(at)));
-                    (now.0 - was.0, now.1 - was.1)
-                })
+        let follows = match tied.adjustment_anchor_of(&component) {
+            Some(at) if !(solved(before) || solved(after)) => {
+                let (was, now) = (xy(&tied, at), xy(&after_view, home(at)));
+                let follows = (now.0 - was.0, now.1 - was.1);
+                let planned = if carried && at == dropped_at {
+                    let (fixed, dropped) = (hand(fixed_join), hand(dropped_at));
+                    (
+                        toward.0 - (fixed.0 - dropped.0),
+                        toward.1 - (fixed.1 - dropped.1),
+                    )
+                } else if moved.contains(&at.section_id) {
+                    shift
+                } else if joined.contains(&at.section_id) {
+                    toward
+                } else {
+                    (0.0, 0.0)
+                };
+                assert!(
+                    dist(follows, planned) < 1e-6,
+                    "{what}: the view follows {at:?} by {follows:?}, the plan moves it by \
+                     {planned:?}"
+                );
+                follows
+            }
+            _ => (0.0, 0.0),
         };
         let hand_moved = tied
             .station_offsets
