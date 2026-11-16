@@ -123,12 +123,13 @@ build expects, the placement datums (at most one per merge component) in list
 order, so SpeleoDB's reader (exactly v18, explicit column lists) and older
 builds see nothing new. GPS fixes and accuracies live in a side table with no
 schema bump, `zero_datum_extras (position, section_id, station_index,
-shot_uuid, in_zero_datums, latitude, longitude, depth_reference, accuracy_m)`:
-one row per saved datum, placement and fix alike, keyed by its place in the
-list. `in_zero_datums` says whether its GPS is the `zero_datums` row at that
-station (a placement datum) or the row's own (a fix); `accuracy_m` is NULL for
-the default; `shot_uuid` is the uuid of the shot ending at the station (NULL
-for station 0). The rows are written only when the project has a fix or a
+shot_uuid, in_zero_datums, latitude, longitude, depth_reference, accuracy_m,
+start_shot_uuid)`: one row per saved datum, placement and fix alike, keyed by
+its place in the list. `in_zero_datums` says whether its GPS is the
+`zero_datums` row at that station (a placement datum) or the row's own (a fix);
+`accuracy_m` is NULL for the default; `shot_uuid` is the uuid of the shot
+ending at the station (NULL for station 0), and `start_shot_uuid`, for station
+0 only, the uuid of the section's first shot, the one starting there. The rows are written only when the project has a fix or a
 stored accuracy, so a file without them reads from `zero_datums` alone, which
 is the migration for every older file.
 
@@ -139,7 +140,11 @@ rewrite `zero_datums` and the shots in place and leave the table beside them.
 So the table is used only while its placement rows name exactly the
 `zero_datums` stations; otherwise it is ignored as a whole, with a warning, and
 the project loads as that older build saw it. A row whose `shot_uuid` no longer
-matches its station is skipped. Corrupt rows are skipped and counted, an
+matches its station is skipped, and so is a station 0 row whose
+`start_shot_uuid` is no longer the section's first shot (a writer reversed the
+section in place, or put a shot before its start). A station 0 row without
+`start_shot_uuid` (written before the column existed) is checked by its section
+alone. Corrupt rows are skipped and counted, an
 unusable accuracy reads as the default, and a table of another shape or with
 more rows than the file has stations is ignored: never a failed open. SQLite
 failing for a reason of its own still fails the open, as for the credit
