@@ -640,3 +640,138 @@ fn accuracy_survives_the_batch_command_path() {
     assert_eq!(p.zero_datums[1].accuracy_m, Some(2.5));
     assert_eq!(p.datum_roles()[1], Some(DatumRole::GpsFix));
 }
+
+/// How far each PLACEMENT datum's station is from its own GPS, in the
+/// project's current frame.
+fn placement_gaps(p: &Project) -> Vec<(StationRef, f64)> {
+    let frame = p.frame_datum().unwrap().gps;
+    p.placement_datums()
+        .into_iter()
+        .map(|zd| {
+            let sr = p.resolve_key(&zd.station_ref).unwrap();
+            let (gx, gy) = gps_to_local(&zd.gps, &frame);
+            let (x, y) = xy_of(p, sr);
+            (sr, (gx - x).hypot(gy - y))
+        })
+        .collect()
+}
+
+fn assert_placements_on_their_gps(state: &AppState, what: &str) {
+    for (sr, gap) in placement_gaps(&project(state)) {
+        assert!(
+            gap < 0.01,
+            "{what}: placement datum {sr:?} is {gap} m off its GPS"
+        );
+    }
+}
+
+/// Frame A:0, a fix on B:5 40 m east of the survey, and a separate piece C
+/// placed by its own GPS: the shape where a promoted fix used to leave a
+/// placement datum off its GPS (#741 D4/D5).
+fn frame_fix_and_separate_piece() -> (AppState, SectionId, SectionId, SectionId) {
+    let (state, a, b) = two_entrances();
+    set_datum(&state, StationRef::new(b, 5), gps_at(40.0, 500.0), None);
+    let c = create_section(&state, "C", north_shots(2, 20.0));
+    set_datum(&state, StationRef::new(c, 0), gps_at(200.0, 0.0), None);
+    assert_placements_on_their_gps(&state, "setup");
+    (state, a, b, c)
+}
+
+#[test]
+fn no_placement_datum_is_left_off_its_gps_by_a_promotion() {
+    // Remove Zero Datum on the frame.
+    let (state, a, _b, _c) = frame_fix_and_separate_piece();
+    let r = state.execute(Command::RemoveZeroDatum {
+        station_ref: StationRef::new(a, 0),
+    });
+    assert!(r.success, "{:?}", r.error);
+    assert_placements_on_their_gps(&state, "remove");
+
+    // Delete Section on the frame's section.
+    let (state, a, _b, _c) = frame_fix_and_separate_piece();
+    let r = state.execute(Command::DeleteSection { section_id: a });
+    assert!(r.success, "{:?}", r.error);
+    assert_placements_on_their_gps(&state, "delete section");
+
+    // Unmerge: the fix's piece becomes a piece of its own.
+    let (state, a, b, _c) = frame_fix_and_separate_piece();
+    let r = state.execute(Command::UnmergeStationPair {
+        station_a: StationRef::new(a, 5),
+        station_b: StationRef::new(b, 0),
+    });
+    assert!(r.success, "{:?}", r.error);
+    assert_eq!(project(&state).placement_datums().len(), 3);
+    assert_placements_on_their_gps(&state, "unmerge");
+
+    // Repair. Its `repair_structural_integrity` drops only dangling datums,
+    // which hold no role, so it promotes nothing; a damaged merge for it to
+    // drop proves it ran, and the pieces stay on their GPS.
+    let (state, a, _b, _c) = frame_fix_and_separate_piece();
+    {
+        let mut guard = state.project.lock().unwrap();
+        let p = guard.as_mut().unwrap();
+        p.station_merges.push(crate::models::StationMerge {
+            station_a: crate::models::StationKey::new(
+                a,
+                crate::models::StationAnchor::AfterShot("gone".to_string()),
+            ),
+            station_b: StationRef::new(a, 0).into(),
+            merged_at: chrono::Utc::now(),
+        });
+    }
+    let result = state.repair_open_project_integrity();
+    assert!(result.changed && result.fixed >= 1, "{result:?}");
+    assert_eq!(project(&state).placement_datums().len(), 2);
+    assert_placements_on_their_gps(&state, "repair");
+}
+
+#[test]
+fn an_accuracy_only_edit_never_moves_a_piece() {
+    let (state, a, b, c) = frame_fix_and_separate_piece();
+    let fix = StationRef::new(b, 5);
+
+    // Every datum, placement or fix, re-set with its stored GPS and a new
+    // accuracy, as the Edit Station dialog sends it.
+    for sr in [StationRef::new(a, 0), fix, StationRef::new(c, 0)] {
+        let p = project(&state);
+        let before = raw_xy(&p);
+        let gps = p
+            .zero_datums
+            .iter()
+            .find(|zd| p.resolve_key(&zd.station_ref) == Some(sr))
+            .unwrap()
+            .gps;
+        set_datum(&state, sr, gps, Some(7.5));
+        let after = project(&state);
+        assert_same_xy(&before, &raw_xy(&after));
+        let stored = after
+            .zero_datums
+            .iter()
+            .find(|zd| after.resolve_key(&zd.station_ref) == Some(sr))
+            .unwrap();
+        assert_eq!(stored.accuracy_m, Some(7.5), "{sr:?}");
+    }
+
+    // A placement datum an older file left 30 m off its GPS: changing only
+    // its accuracy still moves nothing (re-placing it is a GPS edit's job).
+    {
+        let mut guard = state.project.lock().unwrap();
+        let p = guard.as_mut().unwrap();
+        p.set_section_offset(c, (230.0, 0.0));
+    }
+    let p = project(&state);
+    let before = raw_xy(&p);
+    let c_gps = gps_at(200.0, 0.0);
+    assert!((xy_of(&p, StationRef::new(c, 0)).0 - 230.0).abs() < 1e-9);
+    set_datum(&state, StationRef::new(c, 0), c_gps, Some(2.0));
+    assert_same_xy(&before, &raw_xy(&project(&state)));
+
+    // A GPS edit on that placement datum does re-place its piece.
+    set_datum(&state, StationRef::new(c, 0), gps_at(210.0, 0.0), Some(2.0));
+    assert_near(
+        xy_of(&project(&state), StationRef::new(c, 0)),
+        (210.0, 0.0),
+        0.01,
+        "a GPS change places the piece",
+    );
+}

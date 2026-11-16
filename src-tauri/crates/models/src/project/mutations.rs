@@ -801,6 +801,24 @@ impl Project {
             return Err(format!("Cannot set zero datum: {why}"));
         }
 
+        // Re-setting a stored datum with the GPS it already holds is an
+        // accuracy-only edit (the Edit Station dialog sends the stored GPS back
+        // unchanged): it never moves anything, whatever the role (#741 D5). A
+        // placement datum that sits off its GPS (a file from an older build)
+        // stays where the survey has it; only a GPS change re-places a piece.
+        if self.zero_datums.iter().any(|zd| {
+            zd.station_ref == datum_key && super::datum_placement::same_gps(&zd.gps, &gps)
+        }) {
+            self.store_datum(datum_key, gps, accuracy_m);
+            self.touch();
+            info!(
+                station_ref = ?station_ref,
+                purpose = "edit a zero datum's accuracy",
+                "Zero datum accuracy updated; nothing moved"
+            );
+            return Ok(true);
+        }
+
         if self.role_for_stored_datum(station_ref, &datum_key) == DatumRole::GpsFix {
             let updated_existing = self.store_datum(datum_key, gps, accuracy_m);
             self.touch();
