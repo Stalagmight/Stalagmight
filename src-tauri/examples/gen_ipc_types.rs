@@ -576,6 +576,7 @@ fn main() {
         "CombineJoinEnds",
         "CombineJoinKind",
         "CombinePlan",
+        "CombineJoinedMove",
         "CombineRemovedClosure",
         "CombineRemovedKind",
         "CombineReplacedClosure",
