@@ -2063,16 +2063,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   setZeroDatum: async (stationRef, coordinates, options) => {
     // Detect first zero datum before the IPC call changes state
     const isFirstDatum = (get().project?.zero_datums.length ?? 0) === 0;
-    const accuracyM = options?.accuracyM;
-    const entrance = options?.entrance;
+    const { accuracyM, entrance } = options ?? {};
     const result = await executeCommand(
       'set_zero_datum',
-      {
-        stationRef,
-        coordinates,
-        ...(accuracyM === undefined ? {} : { accuracyM }),
-        ...(entrance === undefined ? {} : { entrance }),
-      },
+      { stationRef, coordinates, ...(accuracyM === undefined ? {} : { accuracyM }), ...(entrance === undefined ? {} : { entrance }) },
       { purpose: 'anchor survey to GPS coordinates', fields: { stationRef } }
     );
     if (result.success && options?.fitToBounds !== false) {
