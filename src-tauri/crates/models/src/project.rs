@@ -98,6 +98,14 @@ mod combine_dedupe_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    clippy::float_cmp,
+    reason = "test module: panics on a failed assumption are the point, and a hand move \
+              planted exactly is compared exactly"
+)]
+mod combine_hand_move_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod combine_residual_tests;

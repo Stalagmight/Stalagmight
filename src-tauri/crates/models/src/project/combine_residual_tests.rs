@@ -362,6 +362,47 @@ fn merged_ends_moved_by_hand_carry_their_residual_too() {
     assert_eq!(reopened.section_offsets, after.section_offsets);
 }
 
+/// The shape above with a section T merged at the hand-moved join station
+/// too (#755): on a merged join everything merged at the join point is one
+/// point with both join stations, so T is a branch that stays exactly where
+/// it is, on the joined station, while O and M move by the residual. Nothing
+/// moves on a reopen, and the in-session repair has nothing to fix.
+#[test]
+fn a_branch_at_merged_ends_moved_by_hand_stays_on_the_joined_station() {
+    let mut pair = side_by_side(SectionEnd::End, SectionEnd::Start, (0.0, 0.0));
+    let (k, o, m) = (pair.k, pair.o, pair.m);
+    let join_k = StationRef::new(k, 2);
+    let key = pair.project.key_for_ref(join_k).unwrap();
+    pair.project
+        .station_offsets
+        .insert(key, (RESIDUAL.0, RESIDUAL.1, 0.0));
+    pair.project
+        .merge_stations(join_k, StationRef::new(o, 0))
+        .unwrap();
+    let t = add(&mut pair.project, "T", vec![shot(180.0, 2.0)]);
+    let at = xy(&pair.project, join_k);
+    place(&mut pair.project, t, 0, at);
+    pair.project
+        .merge_stations(join_k, StationRef::new(t, 0))
+        .unwrap();
+    let candidate = pair.project.combine_candidate_for_sections(k, o).unwrap();
+    assert_eq!(candidate.join_kind, CombineJoinKind::Merged);
+    assert_eq!(candidate.branches, vec![t]);
+    let plan = &candidate.plan_keeping_a;
+    assert_eq!(plan.moved_sections, vec![o, m]);
+    assert_eq!(plan.moved_with_joined_station, None);
+
+    let (_, after) = combine(&pair, k, "a branch at merged ends moved by hand");
+    assert!(moved_by(&pair.project, &after, t) < 1e-12, "T stays");
+    assert!(dist(xy(&after, join_k), xy(&after, StationRef::new(t, 0))) < 1e-12);
+    let mut reopened = after.clone();
+    reopened.redrive_offsets_after_load();
+    assert_eq!(reopened.section_offsets, after.section_offsets);
+    let mut repaired = after.clone();
+    assert_eq!(repaired.realign_merges(), 0);
+    assert_eq!(repaired.section_offsets, after.section_offsets);
+}
+
 /// The residual a plan leaves is float dust, under the bound the offset
 /// solve corrects nothing below (`OFFSET_DUST_M` in each axis), and for that
 /// the combine is exactly what it was before #740: nothing moves but the
