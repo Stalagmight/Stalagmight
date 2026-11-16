@@ -14,6 +14,7 @@ vi.mock('../../utils/ipc', () => ({
 }));
 
 import { useProjectStore } from '../projectStore';
+import { STATION_FLAG_IS_GPS_FIX } from '../../types/survey-data';
 
 const GPS = { latitude: 1, longitude: 2, depth_reference: 0 };
 
@@ -40,6 +41,24 @@ describe('loadAdjustedGeometry with GPS fixes (#741)', () => {
     seed(['Placement', 'GpsFix']);
     await useProjectStore.getState().loadAdjustedGeometry();
     expect(invokeIpcMock).toHaveBeenCalledWith('get_adjusted_stations', undefined, expect.anything());
+  });
+
+  it('flags the fix station on the computed geometry, from the wire role', async () => {
+    seed(['Placement', 'GpsFix']);
+    const station = (station_index: number) => ({
+      station_ref: { section_id: 1, station_index },
+      coordinates: { x: 0, y: station_index, z: 0 },
+      is_zero_datum: true,
+      gps_coordinates: GPS,
+      merged_with: [],
+    });
+    const empty = { skipped_closures: [], failures: [], far_gps_fixes: [] };
+    invokeIpcMock.mockImplementation((cmd: string) =>
+      Promise.resolve(cmd === 'get_adjusted_stations' ? [station(0), station(1)] : empty)
+    );
+    await useProjectStore.getState().loadAdjustedGeometry();
+    const flags = useProjectStore.getState().surveyDataAdjusted?.stationFlags;
+    expect(flags && [...flags].map((f) => (f & STATION_FLAG_IS_GPS_FIX) !== 0)).toEqual([false, true]);
   });
 
   it('still skips the round-trip with only placement datums and no closure', async () => {
