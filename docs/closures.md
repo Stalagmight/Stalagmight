@@ -321,6 +321,29 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
   merged stations on one point and a reload that moves nothing, and
   `side_by_side_network` plants such residuals, which the other generators,
   placing every section exactly, never reach.
+- **Datums on both sides of one point (#754).** Two surveys from one
+  entrance, each with its own zero datum on the same GPS position, put the
+  two join stations on one point: D carries a datum at its start with K
+  merged there, and O's datum puts O's start exactly on D's, side by side
+  with K's. Combining K with O is allowed (neither carries both datums), the
+  gap is float dust, so nothing moves. The both-held rule used to run only
+  when a side moved, and the joined station then united the two sides' merge
+  groups: two datums in one, which the offset solve treats as two fixed
+  points (`multiple_datums_per_merge_component`, an error in the Warnings).
+  Now `plan_ties` runs it with nothing to move too (`tear_datum_sides`, the
+  half of `pick_moving_side` that a shift uses): the merges from the other
+  section (the kept one, when the other carries a datum itself) to its datum
+  sides become `Batch` closures with the zero-datum reason, the same ties a
+  shift or a residual would tear, so the rule does not depend on the gap.
+  The dialog lists them before the confirm ("The merge of K and D", "D is
+  held by a zero datum and stays where it is."), naming as held the end on
+  neither of the two sections, and no move. Only a co-located join reaches
+  this: a closure join is over 1 mm apart (it shifts), and merged ends, or
+  two sections already tied by merges elsewhere, are one merge group
+  already, which `merge_stations` and `set_zero_datum` keep to one datum.
+  The sweeps check that no two datums share a merge group after a combine
+  that did not before (`check_datums_stay_apart`), and `side_by_side_network`
+  plants a shared entrance in one seed of three.
 - **Nothing is left across one shot (#746).** Once the two join stations are
   one, a tie the combine tears (a merge, or a snap made ordinary) can join the
   two ends of one shot: a one-shot passage X merged to both join stations,
