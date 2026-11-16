@@ -85,6 +85,12 @@ mod crash_property_tests;
 mod credit_tests;
 #[cfg(test)]
 #[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod datum_entrance_tests;
+#[cfg(test)]
+#[expect(
     clippy::expect_used,
     clippy::panic,
     clippy::print_stderr,

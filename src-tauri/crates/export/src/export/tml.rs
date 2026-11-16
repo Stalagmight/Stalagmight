@@ -3253,6 +3253,7 @@ mod tests {
             .into(),
             gps: GpsCoordinates::new(20.25, -87.5, 12.0).unwrap(),
             accuracy_m: None,
+            entrance: None,
         });
 
         let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
@@ -3331,6 +3332,7 @@ mod tests {
             ),
             gps: GpsCoordinates::new(DANGLING.0, DANGLING.1, 0.0).unwrap(),
             accuracy_m: None,
+            entrance: None,
         });
         assert!(
             project
@@ -3400,6 +3402,7 @@ mod tests {
             .into(),
             gps: GpsCoordinates::new(20.25, -87.5, 35.0).unwrap(),
             accuracy_m: None,
+            entrance: None,
         });
         assert_eq!(project.surface_elevation, None);
 
@@ -3585,6 +3588,7 @@ mod tests {
                 .into(),
                 gps: GpsCoordinates::new(20.25, -87.5, 0.0).unwrap(),
                 accuracy_m: None,
+                entrance: None,
             });
         }
 
@@ -4113,6 +4117,7 @@ mod tests {
             .into(),
             gps: GpsCoordinates::new(20.0, -87.0, 0.0).unwrap(),
             accuracy_m: None,
+            entrance: None,
         });
 
         let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
@@ -4196,6 +4201,7 @@ mod tests {
             .into(),
             gps: GpsCoordinates::new(20.0, -87.0, 0.0).unwrap(),
             accuracy_m: None,
+            entrance: None,
         });
 
         let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
@@ -4620,6 +4626,7 @@ mod tests {
             .into(),
             gps: GpsCoordinates::new(20.25, -87.5, 0.0).unwrap(),
             accuracy_m: None,
+            entrance: None,
         });
 
         let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
@@ -5287,6 +5294,7 @@ mod tests {
                 .into(),
                 gps: GpsCoordinates::new(latitude, longitude, 0.0).unwrap(),
                 accuracy_m: None,
+                entrance: None,
             });
         }
 
@@ -5362,6 +5370,7 @@ mod tests {
             .into(),
             gps: GpsCoordinates::new(20.25, -87.5, 0.0).unwrap(),
             accuracy_m: None,
+            entrance: None,
         });
         // The detached gallery's datum sits on its MIDDLE station (index 1).
         project.zero_datums.push(ZeroDatum {
@@ -5372,6 +5381,7 @@ mod tests {
             .into(),
             gps: GpsCoordinates::new(20.31, -87.42, 0.0).unwrap(),
             accuracy_m: None,
+            entrance: None,
         });
 
         let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
@@ -5446,6 +5456,7 @@ mod tests {
             .into(),
             gps: GpsCoordinates::new(20.25, -87.5, 0.0).unwrap(),
             accuracy_m: None,
+            entrance: None,
         });
         // The gallery's own anchor sits on its MIDDLE section's first station.
         project.zero_datums.push(ZeroDatum {
@@ -5456,6 +5467,7 @@ mod tests {
             .into(),
             gps: GpsCoordinates::new(20.31, -87.42, 0.0).unwrap(),
             accuracy_m: None,
+            entrance: None,
         });
 
         let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
@@ -5589,6 +5601,7 @@ mod tests {
             .into(),
             gps: GpsCoordinates::new(20.25, -87.5, 0.0).unwrap(),
             accuracy_m: None,
+            entrance: None,
         });
 
         let sidecar = build_export_shots(
@@ -6001,6 +6014,7 @@ mod tests {
             .into(),
             gps: GpsCoordinates::new(20.25, -87.5, 0.0).unwrap(),
             accuracy_m: None,
+            entrance: None,
         });
 
         for profile in [TmlProfile::User, TmlProfile::SpeleoDbSidecar] {
@@ -6031,6 +6045,7 @@ mod tests {
             .into(),
             gps: GpsCoordinates::new(20.25, 0.0, 0.0).unwrap(),
             accuracy_m: None,
+            entrance: None,
         });
 
         let dir = tempfile::TempDir::new().unwrap();
@@ -6087,6 +6102,7 @@ mod tests {
             .into(),
             gps: GpsCoordinates::new(20.25, -87.5, 12.0).unwrap(),
             accuracy_m: None,
+            entrance: None,
         });
         project.ensure_shot_uuids();
         project

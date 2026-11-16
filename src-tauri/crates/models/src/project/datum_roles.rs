@@ -73,6 +73,11 @@ pub struct ZeroDatumPreview {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub gap: Option<DatumGap>,
+    /// Whether the datum would count as an entrance: the stored answer for a
+    /// station that already holds a datum, else the default rule for `role`
+    /// (`Project::datum_is_entrance`), so the dialog's Entrance checkbox
+    /// starts from the backend's answer.
+    pub is_entrance: bool,
 }
 
 impl Project {
@@ -88,12 +93,13 @@ impl Project {
         if !self.station_exists(station_ref) {
             return None;
         }
-        let existing = self
+        let stored = self
             .zero_datums
             .iter()
             .zip(self.datum_roles())
-            .find(|(zd, _)| self.resolve_key(&zd.station_ref) == Some(station_ref))
-            .and_then(|(_, role)| role);
+            .find(|(zd, _)| self.resolve_key(&zd.station_ref) == Some(station_ref));
+        let existing = stored.and_then(|(_, role)| role);
+        let override_entrance = stored.and_then(|(zd, _)| zd.entrance);
         let role = existing.unwrap_or_else(|| {
             if self.component_datum_refs(station_ref.section_id).is_empty() {
                 DatumRole::Placement
@@ -105,7 +111,12 @@ impl Project {
             DatumRole::GpsFix => self.datum_gap(station_ref, gps),
             DatumRole::Placement => None,
         };
-        Some(ZeroDatumPreview { role, gap })
+        let is_entrance = self.datum_is_entrance(station_ref, role, override_entrance);
+        Some(ZeroDatumPreview {
+            role,
+            gap,
+            is_entrance,
+        })
     }
 
     /// Every datum's role, parallel to `zero_datums`; `None` for a datum that
@@ -186,7 +197,7 @@ impl Project {
     }
 
     /// Resolved stations of every resolvable datum, placement and fix alike, in
-    /// list order. For consumers that treat every datum as an entrance.
+    /// list order. Entrance readers use [`Self::entrance_datum_refs`] instead.
     pub fn all_datum_refs(&self) -> Vec<StationRef> {
         self.zero_datums
             .iter()

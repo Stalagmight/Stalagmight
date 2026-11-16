@@ -127,6 +127,7 @@ fn a_refused_combine_changes_nothing_and_leaves_no_undo_entry() {
                     depth_reference: 0.0,
                 },
                 accuracy_m: None,
+                entrance: None,
             });
         }
     }
@@ -170,6 +171,7 @@ fn a_datum_on_the_other_section_keeps_the_frame() {
             depth_reference: 0.0,
         },
         accuracy_m: None,
+        entrance: None,
     });
     assert!(datum.success, "{:?}", datum.error);
     let merged = state.execute(Command::MergeStations {

@@ -470,15 +470,22 @@ pub struct ZeroDatum {
     /// [`DEFAULT_GPS_ACCURACY_M`]; `Some(0.0)` is a hard pin.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accuracy_m: Option<f64>,
+    /// The user's answer to "is this station a cave entrance?", or `None` for
+    /// the default rule (`Project::datum_entrances`): a placement datum is
+    /// always an entrance, a GPS fix is one when its station is the first or
+    /// last station of its section (#741).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entrance: Option<bool>,
 }
 
 impl ZeroDatum {
-    /// A datum with the default accuracy.
+    /// A datum with the default accuracy and the default entrance rule.
     pub fn new(station_ref: StationKey, gps: GpsCoordinates) -> Self {
         Self {
             station_ref,
             gps,
             accuracy_m: None,
+            entrance: None,
         }
     }
 
@@ -550,6 +557,11 @@ pub struct ZeroDatumWire {
     pub accuracy_m: Option<f64>,
     /// Derived role in its merge component.
     pub role: DatumRole,
+    /// Whether the station counts as a cave entrance (Plan mode's "Start
+    /// from entrance", penetration), resolved by the backend from the role,
+    /// the stored override and the default rule, so the frontend never
+    /// re-derives it (#741).
+    pub is_entrance: bool,
 }
 
 /// Strategy for distributing loop closure errors

@@ -3,4 +3,4 @@ import type { DatumRole } from "./DatumRole";
 import type { GpsCoordinates } from "./GpsCoordinates";
 import type { StationRef } from "./StationRef";
 
-export interface ZeroDatum { station_ref: StationRef, gps: GpsCoordinates, accuracy_m?: number, role: DatumRole, }
+export interface ZeroDatum { station_ref: StationRef, gps: GpsCoordinates, accuracy_m?: number, role: DatumRole, is_entrance: boolean, }

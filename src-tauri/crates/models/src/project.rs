@@ -19,6 +19,7 @@ use super::placement_suggest;
 
 mod closure;
 mod coordinates;
+mod datum_entrance;
 mod datum_placement;
 mod datum_roles;
 mod distance;
@@ -103,6 +104,12 @@ mod combine_sections_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod component_gauge_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod datum_entrance_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
@@ -1611,17 +1618,20 @@ impl Project {
     }
 
     /// Positional wire form of every stored zero datum, in list order, with its
-    /// derived role. A datum whose ref dangles is dropped.
+    /// derived role and entrance flag. A datum whose ref dangles is dropped.
     pub fn zero_datums_wire(&self) -> Vec<ZeroDatumWire> {
         self.zero_datums
             .iter()
             .zip(self.datum_roles())
             .filter_map(|(zd, role)| {
+                let station_ref = self.resolve_key(&zd.station_ref)?;
+                let role = role?;
                 Some(ZeroDatumWire {
-                    station_ref: self.resolve_key(&zd.station_ref)?,
+                    station_ref,
                     gps: zd.gps,
                     accuracy_m: zd.accuracy_m,
-                    role: role?,
+                    role,
+                    is_entrance: self.datum_is_entrance(station_ref, role, zd.entrance),
                 })
             })
             .collect()

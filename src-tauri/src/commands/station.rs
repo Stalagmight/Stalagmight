@@ -112,15 +112,24 @@ pub(crate) fn unmerge_station_pair_impl(
 /// Set zero datum for a station. `accuracy_m` is the GPS horizontal accuracy
 /// in metres (JS sends `accuracyM`); omitted or `null` means the default. On a
 /// merge component that is already placed the datum is stored as a GPS fix and
-/// nothing moves (#741).
+/// nothing moves (#741). `entrance` (JS `entrance`) is the user's answer to
+/// "is this station an entrance?"; omitted or `null` keeps the stored answer,
+/// which for a new datum is the default rule.
 #[tauri::command]
 pub fn set_zero_datum(
     state: State<AppState>,
     station_ref: StationRef,
     coordinates: GpsCoordinates,
     accuracy_m: Option<f64>,
+    entrance: Option<bool>,
 ) -> CommandResult {
-    set_zero_datum_impl(state.inner(), station_ref, coordinates, accuracy_m)
+    set_zero_datum_impl(
+        state.inner(),
+        station_ref,
+        coordinates,
+        accuracy_m,
+        entrance,
+    )
 }
 
 pub(crate) fn set_zero_datum_impl(
@@ -128,11 +137,13 @@ pub(crate) fn set_zero_datum_impl(
     station_ref: StationRef,
     coordinates: GpsCoordinates,
     accuracy_m: Option<f64>,
+    entrance: Option<bool>,
 ) -> CommandResult {
     state.execute(Command::SetZeroDatum {
         station_ref,
         coordinates,
         accuracy_m,
+        entrance,
     })
 }
 

@@ -685,6 +685,7 @@ impl Database {
                         depth_reference: depth,
                     },
                     accuracy_m: None,
+                    entrance: None,
                 });
             }
         }

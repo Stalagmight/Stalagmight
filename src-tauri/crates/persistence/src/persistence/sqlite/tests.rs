@@ -1279,6 +1279,7 @@ fn test_save_load_zero_datums() {
             depth_reference: 123.456_789,
         },
         accuracy_m: None,
+        entrance: None,
     };
 
     let zd2 = ZeroDatum {
@@ -1289,6 +1290,7 @@ fn test_save_load_zero_datums() {
             depth_reference: -15.5,
         },
         accuracy_m: None,
+        entrance: None,
     };
 
     project.zero_datums.push(zd1);
@@ -3216,6 +3218,7 @@ fn test_save_load_complex_project_round_trip() {
         station_ref: StationRef::new(section_a, 0).into(),
         gps: GpsCoordinates::new(45.5, -90.3, 0.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
 
     // Add loop closure

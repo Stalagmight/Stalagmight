@@ -233,6 +233,7 @@ pub(super) fn combine(
                     station_ref: key,
                     gps,
                     accuracy_m,
+                    entrance: None,
                 }));
             }
         }

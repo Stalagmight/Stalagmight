@@ -104,6 +104,7 @@ fn traverse(accuracy_m: Option<f64>) -> Traverse {
         station_ref: project.key_for_ref(entrance_2).unwrap(),
         gps: fix_gps,
         accuracy_m,
+        entrance: None,
     });
     assert_eq!(
         project.datum_roles(),
@@ -315,6 +316,7 @@ fn a_fix_in_the_placement_datums_own_group_moves_nothing() {
         station_ref: project.key_for_ref(StationRef::new(d, 0)).unwrap(),
         gps: gps_at(0.0, GAP_NORTH_M),
         accuracy_m: Some(0.0),
+        entrance: None,
     });
     let before = all_positions(&project);
 

@@ -491,6 +491,7 @@ fn draw(state: &AppState, rng: &mut Rng) -> Option<Move> {
                         station_ref: StationRef::new(section_id, index),
                         coordinates,
                         accuracy_m: None,
+                        entrance: None,
                     }),
                 },
                 Err(_) => Move {

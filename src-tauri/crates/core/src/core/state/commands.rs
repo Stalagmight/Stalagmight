@@ -841,7 +841,8 @@ impl AppState {
                 station_ref,
                 coordinates,
                 accuracy_m,
-            } => self.set_zero_datum(*station_ref, *coordinates, *accuracy_m),
+                entrance,
+            } => self.set_zero_datum(*station_ref, *coordinates, *accuracy_m, *entrance),
             Command::RemoveZeroDatum { station_ref } => self.remove_zero_datum(*station_ref),
             Command::SetStationComment {
                 station_ref,
