@@ -606,7 +606,7 @@ fn random_shots(rng: &mut Rng) -> Vec<ShotData> {
         .collect()
 }
 
-fn every_station(project: &Project) -> Vec<StationRef> {
+pub(super) fn every_station(project: &Project) -> Vec<StationRef> {
     project
         .sections
         .iter()
@@ -617,7 +617,7 @@ fn every_station(project: &Project) -> Vec<StationRef> {
 /// A small network: a tree of merged sections, one or two loops back onto
 /// it (snapped exactly, or recorded with a misclosure), sometimes a zero
 /// datum, and sometimes a second anchored network tied on by a closure.
-fn network(seed: u64) -> Project {
+pub(super) fn network(seed: u64) -> Project {
     let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
     let mut project = Project::new(format!("Net {seed}"), None);
     let first = add(&mut project, "S0", random_shots(&mut rng));
@@ -2030,7 +2030,7 @@ fn every_offered_combine_in_random_networks_keeps_the_invariants() {
 /// and no merges close a loop) and X's far end is snapped to O's start, tied
 /// to it by an ordinary closure, or only co-located with it. Its own stream:
 /// `network`'s seeds keep their shapes.
-fn passage_network(seed: u64) -> Project {
+pub(super) fn passage_network(seed: u64) -> Project {
     let mut project = network(seed);
     let mut rng = Rng(seed.wrapping_mul(0xD6E8_FEB8_6659_FD93) | 1);
     let ends: Vec<StationRef> = project
@@ -2164,7 +2164,7 @@ fn every_offered_combine_around_a_passage_keeps_the_invariants() {
 /// combine then closes a loop, and a merge on it tears), or hangs alone; and
 /// sometimes a zero datum holds O's side. Its own stream: `network`'s seeds
 /// keep their shapes.
-fn side_by_side_network(seed: u64) -> Project {
+pub(super) fn side_by_side_network(seed: u64) -> Project {
     let mut project = network(seed);
     let mut rng = Rng(seed.wrapping_mul(0x8CB9_2BA7_2F3D_8DD7) | 1);
     let ends: Vec<StationRef> = project

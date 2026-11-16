@@ -2,16 +2,27 @@
 //! station offset (`station_offsets`), as an older or hand-edited file
 //! carries it. Move Station folds its moves into the shots; Split Section
 //! Here, Append Project and Undo carry an existing one on.
+//!
+//! The view adjusts the measured shots, never a hand move: every station is
+//! shown at its adjusted chain position plus its own hand move, every merge
+//! and every closure the solve takes holds its stations on one point as
+//! shown (as merges are in the Raw Data View, and as a closure's misclosure
+//! is measured), and the station the view holds the survey at stays where
+//! the Raw Data View shows it. [`assert_view_is_the_solve`] checks exactly
+//! that, without solving.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use super::combine_closure_tests::{add, dist, shot, xy};
-use crate::{ClosureStrategy, LoopClosure, Project, StationRef};
+use super::combine_closure_tests::{
+    add, dist, every_station, network, passage_network, shot, side_by_side_network, xy,
+};
+use crate::config::ClosureAdjustmentConfig;
+use crate::{ClosureStrategy, LoopClosure, Project, SectionId, StationRef};
 
 /// Every station's closure-adjusted position (the Plan and Export geometry).
 fn view(project: &Project) -> HashMap<StationRef, (f64, f64)> {
     project
-        .compute_adjusted_station_coordinates(&crate::config::ClosureAdjustmentConfig::default())
+        .compute_adjusted_station_coordinates(&ClosureAdjustmentConfig::default())
         .into_iter()
         .map(|s| (s.station_ref, (s.coordinates.x, s.coordinates.y)))
         .collect()
@@ -104,7 +115,7 @@ fn deep_shot(azimuth: f64, length: f64, depth_in: f64, depth_out: f64) -> crate:
 /// of each strategy the solve takes), a branch merged on a loop and a spur
 /// merged off it, and a second part held by a zero datum with a loop of its
 /// own. Depths vary, so the view's depth is pinned too.
-fn pinned_survey() -> (Project, [crate::SectionId; 4]) {
+fn pinned_survey() -> (Project, [SectionId; 4]) {
     let mut p = Project::new("Pinned".to_string(), None);
     let a = add(
         &mut p,
@@ -182,7 +193,7 @@ fn pinned_survey() -> (Project, [crate::SectionId; 4]) {
 /// Every station's closure-adjusted `x, y, z` as raw bits, in station order.
 fn view_bits(project: &Project) -> Vec<(u32, u32, [u64; 3])> {
     let mut out: Vec<(u32, u32, [u64; 3])> = project
-        .compute_adjusted_station_coordinates(&crate::config::ClosureAdjustmentConfig::default())
+        .compute_adjusted_station_coordinates(&ClosureAdjustmentConfig::default())
         .into_iter()
         .map(|s| {
             (
@@ -314,5 +325,552 @@ fn a_survey_without_a_hand_move_keeps_its_closures_computed_view_bit_for_bit() {
             f64::from_bits(want.2[1]),
             f64::from_bits(want.2[2]),
         );
+    }
+}
+
+/// Union-find root of `x` in `parent`.
+fn root(parent: &mut HashMap<StationRef, StationRef>, x: StationRef) -> StationRef {
+    let up = *parent.get(&x).unwrap_or(&x);
+    if up == x {
+        return x;
+    }
+    let r = root(parent, up);
+    parent.insert(x, r);
+    r
+}
+
+/// The Closures Computed View of `project` is the closure solve with every
+/// station's hand move kept on it, checked without solving:
+///
+/// - each tie group (stations merged, or tied by a closure the solve takes)
+///   is shown on one point;
+/// - the stations the view holds a solved survey at (its zero datums, else
+///   its gauge station) are where the Raw Data View shows them;
+/// - the adjusted chain positions (shown, less each station's own hand move)
+///   fit the measured shots by weighted least squares: for every group the
+///   solve may move, the weighted residuals of the shots pulling on it
+///   cancel, axis by axis, with the solve's own weights;
+/// - a survey the view does not solve, or fails to, is shown as measured.
+fn assert_view_is_the_solve(project: &Project, what: &str) {
+    let config = ClosureAdjustmentConfig::default();
+    let adjusted = project.compute_adjusted_stations(&config);
+    let view: HashMap<StationRef, (f64, f64)> = adjusted
+        .stations
+        .iter()
+        .map(|s| (s.station_ref, (s.coordinates.x, s.coordinates.y)))
+        .collect();
+    let failed: HashSet<SectionId> = adjusted
+        .failures
+        .iter()
+        .flat_map(|f| f.section_ids.iter().copied())
+        .collect();
+    let hand = |at: StationRef| {
+        project
+            .station_offset_for_ref(at)
+            .map_or((0.0, 0.0), |h| (h.0, h.1))
+    };
+    let skipped: HashSet<u64> = project
+        .closures_across_one_shot()
+        .into_iter()
+        .map(|c| c.closure_id)
+        .collect();
+    let mut solved: HashSet<SectionId> = HashSet::new();
+    for anchor in project.adjustment_anchors_for_tests() {
+        let component = project.get_connected_section_ids(anchor.section_id);
+        if component.iter().any(|id| failed.contains(id)) {
+            continue;
+        }
+        solved.extend(component.iter().copied());
+        let inside = |at: &StationRef| component.contains(&at.section_id);
+        let mut parent: HashMap<StationRef, StationRef> = HashMap::new();
+        let ties = project
+            .station_merges
+            .iter()
+            .map(|m| (&m.station_a, &m.station_b))
+            .chain(
+                project
+                    .loop_closures
+                    .iter()
+                    .filter(|c| Project::closure_is_eligible(c.strategy))
+                    .filter(|c| !skipped.contains(&c.id))
+                    .map(|c| (&c.station_a, &c.station_b)),
+            );
+        for (a, b) in ties {
+            if let (Some(a), Some(b)) = (project.resolve_key(a), project.resolve_key(b)) {
+                if inside(&a) && inside(&b) {
+                    let (ra, rb) = (root(&mut parent, a), root(&mut parent, b));
+                    parent.insert(ra, rb);
+                }
+            }
+        }
+        let datums: Vec<StationRef> = project
+            .zero_datums
+            .iter()
+            .filter_map(|z| project.resolve_key(&z.station_ref))
+            .filter(|at| inside(at))
+            .collect();
+        let held = if datums.is_empty() {
+            vec![anchor]
+        } else {
+            datums
+        };
+        let mut fixed: HashSet<StationRef> = HashSet::new();
+        for at in &held {
+            let (shown, measured) = (view[at], xy(project, *at));
+            assert!(
+                dist(shown, measured) < 1e-6,
+                "{what}: the view holds the survey at {at:?}, shown at {measured:?}, but shows \
+                 it at {shown:?}"
+            );
+            fixed.insert(root(&mut parent, *at));
+        }
+        let mut point: HashMap<StationRef, (StationRef, (f64, f64))> = HashMap::new();
+        let mut pull: HashMap<StationRef, ([f64; 2], [f64; 2])> = HashMap::new();
+        for section in project
+            .sections
+            .iter()
+            .filter(|s| component.contains(&s.id))
+        {
+            for i in 0..=section.shots.len() as u32 {
+                let at = StationRef::new(section.id, i);
+                let r = root(&mut parent, at);
+                let (first, p) = *point.entry(r).or_insert((at, view[&at]));
+                assert!(
+                    dist(p, view[&at]) < 1e-6,
+                    "{what}: {at:?} and {first:?} are tied but {:.6} m apart in the view",
+                    dist(p, view[&at])
+                );
+            }
+            let quality = if section.quality.is_finite() && section.quality > 0.0 {
+                section.quality
+            } else {
+                1.0
+            };
+            let sigma_len = config.base_sigma_length_m * quality;
+            let sigma_az = config.base_sigma_azimuth_deg.to_radians() * quality;
+            let reference = project.azimuth_reference_for(section);
+            for (k, s) in section.shots.iter().enumerate() {
+                let (i, j) = (
+                    StationRef::new(section.id, k as u32),
+                    StationRef::new(section.id, k as u32 + 1),
+                );
+                let (ri, rj) = (root(&mut parent, i), root(&mut parent, j));
+                if ri == rj {
+                    continue;
+                }
+                let v = Project::shot_vector_along(s, true, reference);
+                let az = s.average_azimuth_true_rad(reference);
+                let sx = ((az.sin() * sigma_len).powi(2)
+                    + (s.length * az.cos() * sigma_az).powi(2))
+                .sqrt();
+                let sy = ((az.cos() * sigma_len).powi(2)
+                    + (s.length * az.sin() * sigma_az).powi(2))
+                .sqrt();
+                let w = [
+                    if sx > 0.0 { 1.0 / (sx * sx) } else { 0.0 },
+                    if sy > 0.0 { 1.0 / (sy * sy) } else { 0.0 },
+                ];
+                let (pi, pj, hi, hj) = (view[&i], view[&j], hand(i), hand(j));
+                let residual = [
+                    (pj.0 - hj.0) - (pi.0 - hi.0) - v.x,
+                    (pj.1 - hj.1) - (pi.1 - hi.1) - v.y,
+                ];
+                for axis in 0..2 {
+                    let e = pull.entry(rj).or_default();
+                    e.0[axis] += w[axis] * residual[axis];
+                    e.1[axis] += w[axis];
+                    let e = pull.entry(ri).or_default();
+                    e.0[axis] -= w[axis] * residual[axis];
+                    e.1[axis] += w[axis];
+                }
+            }
+        }
+        for (group, (sum, weight)) in &pull {
+            if fixed.contains(group) {
+                continue;
+            }
+            for axis in 0..2 {
+                // The weighted mean of the residuals pulling on the group.
+                let imbalance = if weight[axis] > 0.0 {
+                    (sum[axis] / weight[axis]).abs()
+                } else {
+                    0.0
+                };
+                assert!(
+                    imbalance < 1e-7,
+                    "{what}: the shots pulling on {group:?}'s point are not balanced in the \
+                     view (axis {axis}: {imbalance:.3e} m): it is not the least-squares fit \
+                     of the shots with each station's hand move kept on it"
+                );
+            }
+        }
+    }
+    for at in every_station(project) {
+        if solved.contains(&at.section_id) {
+            continue;
+        }
+        assert!(
+            dist(view[&at], xy(project, at)) < 1e-9,
+            "{what}: {at:?} is in a survey the view does not adjust, but not shown as measured"
+        );
+    }
+}
+
+/// Plant `hand` on `at`, as an older or hand-edited file carries it, and
+/// settle the offsets as opening the file does: what is merged at `at`
+/// follows it as shown.
+fn plant(project: &mut Project, at: StationRef, hand: (f64, f64, f64)) {
+    let key = project.key_for_ref(at).unwrap();
+    project.station_offsets.insert(key, hand);
+    project.redrive_offsets_after_load();
+}
+
+/// `with` and `without` differ only by hand moves on `moved` (each by its
+/// own): the Closures Computed View shows every station of `with` where
+/// `without` shows it, plus `moved`'s hand move on that station.
+fn assert_only_nudged(
+    with: &Project,
+    without: &Project,
+    moved: &HashMap<StationRef, (f64, f64)>,
+    what: &str,
+) {
+    let (a, b) = (view(with), view(without));
+    for (at, p) in &b {
+        let h = moved.get(at).copied().unwrap_or((0.0, 0.0));
+        let want = (p.0 + h.0, p.1 + h.1);
+        assert!(
+            dist(a[at], want) < 1e-9,
+            "{what}: {at:?} is at {:?} in the Closures Computed View, {:.6} m off {want:?}",
+            a[at],
+            dist(a[at], want)
+        );
+    }
+}
+
+/// A hand move on a station of a loop that nothing is merged or tied to:
+/// the view shows it on that station alone, on its adjusted position, as
+/// the Raw Data View shows it on its measured one. (It used to drop it: the
+/// shots beside the station absorbed it.)
+#[test]
+fn a_hand_move_on_a_loop_station_shows_on_that_station_alone() {
+    let (without, [a, ..]) = pinned_survey();
+    let at = StationRef::new(a, 3);
+    let mut with = without.clone();
+    plant(&mut with, at, (0.12, -0.07, 0.0));
+    assert_only_nudged(
+        &with,
+        &without,
+        &HashMap::from([(at, (0.12, -0.07))]),
+        "loop station",
+    );
+    assert_view_is_the_solve(&with, "loop station");
+}
+
+/// A hand move on a spur station (no loop through it, nothing merged
+/// there): the same nudge of that station alone.
+#[test]
+fn a_hand_move_off_a_loop_shows_on_that_station_alone() {
+    let (without, [_, _, c, _]) = pinned_survey();
+    let at = StationRef::new(c, 1);
+    let mut with = without.clone();
+    plant(&mut with, at, (-0.3, 0.2, 0.0));
+    assert_only_nudged(
+        &with,
+        &without,
+        &HashMap::from([(at, (-0.3, 0.2))]),
+        "spur station",
+    );
+    assert_view_is_the_solve(&with, "spur station");
+}
+
+/// A hand move on a merged station where the merge is off any loop: C, a
+/// spur merged at B:1, follows its hand-moved start as shown in the Raw Data
+/// View, and the Closures Computed View moves exactly as the Raw Data View
+/// does: C by the hand move, B's loop not at all, the merge closed.
+#[test]
+fn a_hand_move_at_a_merge_off_a_loop_moves_what_hangs_there_in_both_views() {
+    let (without, [a, b, c, d]) = pinned_survey();
+    for (at, hand) in [
+        // The spur's own end of the merge: the spur follows it.
+        (StationRef::new(c, 0), (0.25, 0.1)),
+        // The loop's end of it: shown off its loop, the spur with it.
+        (StationRef::new(b, 1), (-0.15, 0.05)),
+    ] {
+        let mut with = without.clone();
+        plant(&mut with, at, (hand.0, hand.1, 0.0));
+        let (view_with, view_without) = (view(&with), view(&without));
+        for id in [a, b, c, d] {
+            let n = with.get_section(id).unwrap().shots.len() as u32;
+            for i in 0..=n {
+                let s = StationRef::new(id, i);
+                let (raw_with, raw_without) = (xy(&with, s), xy(&without, s));
+                let measured = (raw_with.0 - raw_without.0, raw_with.1 - raw_without.1);
+                let shown = (
+                    view_with[&s].0 - view_without[&s].0,
+                    view_with[&s].1 - view_without[&s].1,
+                );
+                assert!(
+                    dist(measured, shown) < 1e-9,
+                    "{at:?} moved by hand: {s:?} moved {measured:?} in the Raw Data View and \
+                     {shown:?} in the Closures Computed View"
+                );
+            }
+        }
+        assert!(
+            dist(
+                view_with[&StationRef::new(b, 1)],
+                view_with[&StationRef::new(c, 0)]
+            ) < 1e-9,
+            "{at:?} moved by hand: the merge B:1-C:0 came apart"
+        );
+        assert_view_is_the_solve(&with, "merge off a loop");
+    }
+}
+
+/// A hand move on a merged station where the merge is on a loop: the Raw
+/// Data View lines the merged section up on the station as shown, so the
+/// loop through the merge carries the hand move, and the view closes it with
+/// the rest of the loop's misclosure, holding the merge on one point as
+/// shown and the held station where it is shown.
+#[test]
+fn a_hand_move_at_a_merge_on_a_loop_keeps_the_merge_closed_in_the_view() {
+    let (without, [a, b, ..]) = pinned_survey();
+    for at in [StationRef::new(b, 0), StationRef::new(a, 2)] {
+        let mut with = without.clone();
+        plant(&mut with, at, (0.2, -0.15, 0.0));
+        let v = view(&with);
+        assert!(
+            dist(v[&StationRef::new(a, 2)], v[&StationRef::new(b, 0)]) < 1e-9,
+            "{at:?} moved by hand: the merge A:2-B:0 came apart in the view"
+        );
+        assert_view_is_the_solve(&with, "merge on a loop");
+    }
+}
+
+/// A hand move on a closure's end: the closure's misclosure is measured as
+/// shown, so the view closes it, hand move included, and shows the two ends
+/// on one point.
+#[test]
+fn a_hand_move_on_a_closure_end_is_closed_with_the_loop() {
+    let (without, [a, ..]) = pinned_survey();
+    let mut with = without.clone();
+    plant(&mut with, StationRef::new(a, 4), (0.3, 0.1, 0.0));
+    let v = view(&with);
+    assert!(
+        dist(v[&StationRef::new(a, 4)], v[&StationRef::new(a, 0)]) < 1e-9,
+        "the closure A:4-A:0 is open in the view"
+    );
+    assert_view_is_the_solve(&with, "closure end");
+}
+
+/// A hand move on the station the view holds the survey at (the lowest
+/// section id's station 0, here also a closure's end): it stays where the
+/// Raw Data View shows it, and the rest is solved around it.
+#[test]
+fn a_hand_move_on_the_held_station_holds_the_survey_where_it_is_shown() {
+    let (without, [a, ..]) = pinned_survey();
+    let mut with = without.clone();
+    plant(&mut with, StationRef::new(a, 0), (-0.2, 0.35, 0.0));
+    assert_view_is_the_solve(&with, "held station");
+}
+
+/// A hand move on a zero datum, the station the view holds its survey at:
+/// the datum stays where the Raw Data View shows it, hand move included, and
+/// nothing else of its survey moves.
+#[test]
+fn a_hand_move_on_a_zero_datum_shows_on_the_datum_alone() {
+    let (without, [.., d]) = pinned_survey();
+    let at = StationRef::new(d, 1);
+    let mut with = without.clone();
+    plant(&mut with, at, (0.4, -0.25, 0.0));
+    assert_only_nudged(
+        &with,
+        &without,
+        &HashMap::from([(at, (0.4, -0.25))]),
+        "zero datum",
+    );
+    assert_view_is_the_solve(&with, "zero datum");
+}
+
+/// A hand move in depth: the view's depth of that station moves by it,
+/// exactly as the Raw Data View's does, and nothing else moves, in depth or
+/// horizontally, on a loop, a spur, a closure's end or a datum.
+#[test]
+fn a_hand_move_in_depth_shows_on_that_station_alone() {
+    let (without, [a, _, c, d]) = pinned_survey();
+    let depth = |p: &Project| -> HashMap<StationRef, (f64, f64, f64)> {
+        p.compute_adjusted_station_coordinates(&ClosureAdjustmentConfig::default())
+            .into_iter()
+            .map(|s| {
+                (
+                    s.station_ref,
+                    (s.coordinates.x, s.coordinates.y, s.coordinates.z),
+                )
+            })
+            .collect()
+    };
+    for at in [
+        StationRef::new(a, 3),
+        StationRef::new(c, 2),
+        StationRef::new(a, 4),
+        StationRef::new(d, 1),
+    ] {
+        let mut with = without.clone();
+        plant(&mut with, at, (0.0, 0.0, 0.8));
+        let (now, was) = (depth(&with), depth(&without));
+        for (s, p) in &was {
+            let dz = if *s == at { 0.8 } else { 0.0 };
+            let q = now[s];
+            assert!(
+                (q.0 - p.0).abs() < 1e-12 && (q.1 - p.1).abs() < 1e-12,
+                "{at:?} moved in depth: {s:?} moved horizontally"
+            );
+            assert!(
+                (q.2 - p.2 - dz).abs() < 1e-12,
+                "{at:?} moved 0.8 m in depth: {s:?} is {:.6} m deeper in the view",
+                q.2 - p.2
+            );
+            let raw = with.compute_station_raw_coords(*s).unwrap().z
+                - without.compute_station_raw_coords(*s).unwrap().z;
+            assert!((raw - dz).abs() < 1e-12, "{s:?} in the Raw Data View");
+        }
+    }
+}
+
+/// xorshift64*: deterministic, no dependency.
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 >> 12;
+        self.0 ^= self.0 << 25;
+        self.0 ^= self.0 >> 27;
+        self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+
+    fn below(&mut self, n: usize) -> usize {
+        (self.next() % n.max(1) as u64) as usize
+    }
+
+    fn range(&mut self, lo: f64, hi: f64) -> f64 {
+        lo + (hi - lo) * (self.next() >> 11) as f64 / (1u64 << 53) as f64
+    }
+}
+
+/// A random hand move of 0.02 mm to 0.5 m, in depth one time in three.
+fn random_hand(rng: &mut Rng) -> (f64, f64, f64) {
+    let size = match rng.below(3) {
+        0 => rng.range(0.02e-3, 0.95e-3),
+        1 => rng.range(0.002, 0.05),
+        _ => rng.range(0.1, 0.5),
+    };
+    let bearing = rng.range(0.0, std::f64::consts::TAU);
+    let depth = if rng.below(3) == 0 {
+        rng.range(-size, size)
+    } else {
+        0.0
+    };
+    (size * bearing.sin(), size * bearing.cos(), depth)
+}
+
+/// Every station a merge or a closure (of any strategy) names.
+fn tied_stations(project: &Project) -> HashSet<StationRef> {
+    project
+        .station_merges
+        .iter()
+        .map(|m| (&m.station_a, &m.station_b))
+        .chain(
+            project
+                .loop_closures
+                .iter()
+                .map(|c| (&c.station_a, &c.station_b)),
+        )
+        .flat_map(|(a, b)| [project.resolve_key(a), project.resolve_key(b)])
+        .flatten()
+        .collect()
+}
+
+/// Hand moves anywhere in random surveys (the combine sweeps' networks:
+/// merged branches, snapped and recorded loops, zero datums, side-by-side
+/// ends, legacy closures): one to four stations moved by hand, on a loop, a
+/// spur, a merge, a closure's end, the held station or a datum, then settled
+/// as a file opens. The Closures Computed View is the solve with every hand
+/// move kept on its station ([`assert_view_is_the_solve`]; in a debug build
+/// the merge-alignment assertion after the solve runs too). And a hand move
+/// on a station that nothing ties is a nudge of that station alone: the view
+/// is the one without it, plus the hand move there.
+///
+/// `STALAGMIGHT_HAND_VIEW_SEEDS` (default 150) seeds from
+/// `STALAGMIGHT_HAND_VIEW_FIRST_SEED` (default 0), each over the three
+/// network kinds.
+#[test]
+fn hand_moves_anywhere_keep_the_closures_computed_view_the_solve() {
+    let env = |name: &str, default: u64| -> u64 {
+        std::env::var(name)
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(default)
+    };
+    let seeds = env("STALAGMIGHT_HAND_VIEW_SEEDS", 150);
+    let first = env("STALAGMIGHT_HAND_VIEW_FIRST_SEED", 0);
+    let (mut surveys, mut solved, mut nudged, mut tied_moved) = (0usize, 0usize, 0usize, 0usize);
+    for seed in first..first + seeds {
+        for (kind, make) in [
+            ("network", network as fn(u64) -> Project),
+            ("passage", passage_network),
+            ("side by side", side_by_side_network),
+        ] {
+            let base = make(seed);
+            let mut rng = Rng(seed.wrapping_mul(0xA076_1D64_78BD_642F) | 1);
+            let stations = every_station(&base);
+            let tied = tied_stations(&base);
+            let held: Vec<StationRef> = base.adjustment_anchors_for_tests();
+            let what = format!("{kind} seed {seed}");
+            surveys += 1;
+            solved += usize::from(!held.is_empty());
+
+            // Anywhere, the held stations included.
+            let mut with = base.clone();
+            for _ in 0..=rng.below(4) {
+                let at = if !held.is_empty() && rng.below(4) == 0 {
+                    held[rng.below(held.len())]
+                } else {
+                    stations[rng.below(stations.len())]
+                };
+                tied_moved += usize::from(tied.contains(&at));
+                plant(&mut with, at, random_hand(&mut rng));
+            }
+            assert_view_is_the_solve(&with, &what);
+
+            // On stations nothing ties: a nudge of each alone.
+            let free: Vec<StationRef> = stations
+                .iter()
+                .copied()
+                .filter(|at| !tied.contains(at))
+                .collect();
+            if free.is_empty() {
+                continue;
+            }
+            let mut with = base.clone();
+            let mut moved: HashMap<StationRef, (f64, f64)> = HashMap::new();
+            for _ in 0..=rng.below(3) {
+                let at = free[rng.below(free.len())];
+                let hand = random_hand(&mut rng);
+                let key = with.key_for_ref(at).unwrap();
+                with.station_offsets.insert(key, hand);
+                moved.insert(at, (hand.0, hand.1));
+            }
+            nudged += moved.len();
+            assert_only_nudged(&with, &base, &moved, &what);
+            assert_view_is_the_solve(&with, &what);
+        }
+    }
+    eprintln!(
+        "hand-moved views seeds {first}..{}: {surveys} surveys ({solved} the view solves), \
+         {tied_moved} hand moves on a merged or tied station, {nudged} on a free one",
+        first + seeds
+    );
+    if seeds >= 20 {
+        assert!(solved > 0 && tied_moved > 0 && nudged > 0);
     }
 }
