@@ -743,3 +743,37 @@ fn a_loop_closure_is_no_shortcut_for_the_gap_threshold() {
     assert!((gap.threshold_m - 21.0).abs() < 1e-6);
     assert!(!gap.exceeds_threshold);
 }
+
+#[test]
+fn a_station_holds_at_most_one_datum() {
+    // Re-setting the datum on its own station updates it in place; a second
+    // datum stored on that station under another key is refused, so two
+    // datums never share a station (#741 D2).
+    let (mut project, a, b) = two_entrance_traverse();
+    let fix = StationRef::new(b, 5);
+    project.set_zero_datum(fix, gps_at(40.0, 500.0)).unwrap();
+    project
+        .set_zero_datum_with_accuracy(fix, gps_at(41.0, 500.0), Some(2.0))
+        .unwrap();
+    assert_eq!(project.zero_datums.len(), 2, "updated in place");
+    assert_eq!(project.zero_datums[1].accuracy_m, Some(2.0));
+
+    // A datum held under a positional key (as a load or an append stores it
+    // before re-anchoring) is the same station as the stable key a new set
+    // would mint: the set is refused rather than adding a second datum.
+    project.zero_datums[1].station_ref = StationRef::new(b, 5).into();
+    assert_ne!(
+        project.zero_datums[1].station_ref,
+        project.key_for_ref(fix).unwrap()
+    );
+    let err = project
+        .set_zero_datum(fix, gps_at(42.0, 500.0))
+        .unwrap_err();
+    assert!(err.contains("already holds a zero datum"), "{err}");
+    let err = project
+        .store_zero_datum_without_repositioning(fix, gps_at(42.0, 500.0), None)
+        .unwrap_err();
+    assert!(err.contains("already holds a zero datum"), "{err}");
+    assert_eq!(project.zero_datums.len(), 2);
+    assert!(project.station_exists(StationRef::new(a, 0)));
+}

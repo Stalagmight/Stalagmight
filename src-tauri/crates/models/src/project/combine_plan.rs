@@ -226,6 +226,13 @@ impl Project {
         merges.chain(closures).collect()
     }
 
+    /// Does any zero datum, placement or GPS fix, resolve to `at`?
+    pub(crate) fn station_holds_datum(&self, at: StationRef) -> bool {
+        self.zero_datums
+            .iter()
+            .any(|datum| self.resolve_key(&datum.station_ref) == Some(at))
+    }
+
     /// Does a PLACEMENT zero datum sit on one of `section`'s own stations? A
     /// GPS fix (#741) holds nothing in raw geometry, so a section carrying only
     /// fixes may move like any other.
