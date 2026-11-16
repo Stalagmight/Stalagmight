@@ -677,6 +677,7 @@ fn project_with_a_fix() -> (Project, u32) {
         station_ref: project.key_for_ref(StationRef::new(loose, index)).unwrap(),
         gps: GpsCoordinates::new(lat, -87.4, 0.0).unwrap(),
         accuracy_m: Some(3.0),
+        entrance: None,
     };
     let placement = datum(&project, 2, 20.6);
     let fix = datum(&project, 0, 20.7);

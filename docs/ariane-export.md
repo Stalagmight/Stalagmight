@@ -200,7 +200,7 @@ entrance is a section holding a **placement** datum; a GPS fix never roots one.
 All other sections connect to their parent via `FromID` on their first
 real/reference shot.
 
-### Every datum is an entrance (#741)
+### Every datum is written as a START (#741)
 
 Ariane reads every START's lat/lon as a **hard fix**. When two STARTs disagree
 with the survey between them, it bends the loop to fit and shows the loop
@@ -209,7 +209,11 @@ to the Closures Computed View, except that Ariane is hard where ours is
 weighted by the datum's accuracy.
 
 So every resolvable datum, placement and GPS fix alike, gets a START carrying
-its own GPS:
+its own GPS. That includes a GPS fix whose Entrance box is unticked (for
+example a radiolocation point mid-passage): Ariane has no other way to hold a
+GPS position, so its GPS is kept at the cost of Ariane labelling it START. In
+Stalagmight itself such a fix is not an entrance for Plan mode or penetration.
+
 
 - A datum on an entrance's station is written on that entrance's START.
 - A datum anywhere else - a GPS fix part-way through a section, or at a

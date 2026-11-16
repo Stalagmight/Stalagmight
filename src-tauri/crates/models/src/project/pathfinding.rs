@@ -797,15 +797,15 @@ impl Project {
         (dist, riders, pred)
     }
 
-    /// The entrance roots: every resolvable zero datum's station, as an index in
-    /// `stations`. Placement datums and GPS fixes alike (#741 decision 5): a fix
-    /// is a second GPS-located way into the same cave, so penetration, the
-    /// distance gradient and Plan mode's "Start from entrance" walk from it too.
+    /// Resolve the project's ENTRANCE datum stations to their indices in
+    /// `stations`: the roots of "Start from entrance", penetration and the
+    /// distance gradient. A GPS fix that is not an entrance (a radiolocation
+    /// point mid-passage) is not a root (#741, [`Self::entrance_datum_refs`]).
     pub(super) fn zero_datum_roots(
         &self,
         station_index: &HashMap<StationRef, usize>,
     ) -> Vec<usize> {
-        self.all_datum_refs()
+        self.entrance_datum_refs()
             .into_iter()
             .filter_map(|sr| station_index.get(&sr).copied())
             .collect()

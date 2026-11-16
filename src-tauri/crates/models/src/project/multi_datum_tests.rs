@@ -426,42 +426,92 @@ fn over_anchored_legacy_file() -> (Project, SectionId, SectionId, SectionId) {
 }
 
 #[test]
-fn an_old_over_anchored_file_loads_with_a_fix_and_no_torn_merge() {
+fn an_old_over_anchored_file_opens_with_nothing_moved() {
+    // The open path re-solves offsets; left a merge, the torn B:2 = C:0 would
+    // be healed by moving C (whose datum is the later one, so a GPS fix) 40 m
+    // off its GPS. Opening a file moves nothing (#741 D6): the merge becomes
+    // the loop closure it should have stayed, and each piece keeps its datum.
     let (mut project, a, b, c) = over_anchored_legacy_file();
     assert_eq!(
         project.check_merge_alignment().len(),
         1,
         "setup: torn on disk"
     );
-    let a_before: Vec<_> = (0..=2)
-        .map(|i| xy(&project, StationRef::new(a, i)))
-        .collect();
+    let before = raw_xy(&project);
 
     project.redrive_offsets_after_load();
 
-    assert!(
-        project.check_merge_alignment().is_empty(),
-        "the later datum is a fix, so the load re-solve closes the merge"
-    );
-    assert_eq!(project.station_merges.len(), 2, "no merge was cut");
+    assert_same_xy(&before, &raw_xy(&project));
+    assert_eq!(project.station_merges.len(), 1, "only the torn merge went");
+    assert!(project.check_merge_alignment().is_empty());
+    assert_eq!(project.loop_closures.len(), 1);
+    let closure = &project.loop_closures[0];
+    assert!(!closure.is_aligned, "a soft closure moves nothing");
+    let ends = [
+        project.resolve_key(&closure.station_a),
+        project.resolve_key(&closure.station_b),
+    ];
+    assert!(ends.contains(&Some(StationRef::new(b, 2))));
+    assert!(ends.contains(&Some(StationRef::new(c, 0))));
+    assert!((closure.misclosure_distance - 40.0).abs() < 1e-6);
     assert_eq!(
         project.datum_roles(),
-        vec![Some(DatumRole::Placement), Some(DatumRole::GpsFix)]
+        vec![Some(DatumRole::Placement), Some(DatumRole::Placement)],
+        "each piece is placed by its own datum again"
     );
-    let a_after: Vec<_> = (0..=2)
-        .map(|i| xy(&project, StationRef::new(a, i)))
-        .collect();
-    assert_eq!(
-        a_before, a_after,
-        "the placement datum's piece does not move"
-    );
-    let (cx, cy) = xy(&project, StationRef::new(c, 0));
-    let (bx, by) = xy(&project, StationRef::new(b, 2));
-    assert!((cx - bx).abs() < 1e-9 && (cy - by).abs() < 1e-9);
+    assert_eq!(xy(&project, StationRef::new(a, 0)), (0.0, 0.0));
     assert!(project
         .check_structural_integrity()
         .iter()
         .all(|v| !v.category.contains("datum")));
+
+    // Opening again changes nothing more.
+    let settled = raw_xy(&project);
+    project.redrive_offsets_after_load();
+    assert_same_xy(&settled, &raw_xy(&project));
+    assert_eq!(project.loop_closures.len(), 1);
+}
+
+#[test]
+fn an_old_aligned_group_with_two_datums_opens_unchanged_with_a_fix() {
+    // An older file whose merged group holds two datums but no torn merge (the
+    // second piece already sat on the first): nothing moves on open, nothing is
+    // demoted, and the later datum derives as a GPS fix that reports its gap.
+    let (mut project, _a, b, c) = over_anchored_legacy_file();
+    project.set_section_offset(c, (0.0, 40.0));
+    assert!(project.check_merge_alignment().is_empty(), "setup: aligned");
+    let before = raw_xy(&project);
+
+    project.redrive_offsets_after_load();
+
+    assert_same_xy(&before, &raw_xy(&project));
+    assert_eq!(project.station_merges.len(), 2);
+    assert!(project.loop_closures.is_empty());
+    assert_eq!(
+        project.datum_roles(),
+        vec![Some(DatumRole::Placement), Some(DatumRole::GpsFix)]
+    );
+    let gaps = project.gps_fix_gaps();
+    let gap = gaps[&StationRef::new(c, 0)];
+    assert_eq!(xy(&project, StationRef::new(b, 2)), (0.0, 40.0));
+    assert!((gap.gap_m - 38.0).abs() < 1e-3, "{gap:?}");
+}
+
+#[test]
+fn a_torn_merge_whose_far_half_holds_no_datum_still_heals_on_open() {
+    // The demotion is for two datum-placed halves only: an ordinary piece
+    // with drift (no datum of its own) is pulled back onto its merge, as it
+    // always was.
+    let (mut project, _a, b, c) = over_anchored_legacy_file();
+    project.zero_datums.truncate(1);
+    project.redrive_offsets_after_load();
+    assert_eq!(project.station_merges.len(), 2, "nothing demoted");
+    assert!(project.loop_closures.is_empty());
+    assert!(project.check_merge_alignment().is_empty());
+    assert_eq!(
+        xy(&project, StationRef::new(c, 0)),
+        xy(&project, StationRef::new(b, 2))
+    );
 }
 
 #[test]
@@ -534,14 +584,17 @@ fn push_fix(project: &mut Project, sr: StationRef, gps: GpsCoordinates) {
         station_ref,
         gps,
         accuracy_m: None,
+        entrance: None,
     });
 }
 
 #[test]
-fn each_fix_measures_its_survey_distance_to_its_own_nearest_other_datum() {
+fn each_fix_measures_its_survey_distance_from_its_placement_datum() {
     // A 400 m line L (40 shots of 10 m) placed at L:0, with fixes at L:10,
     // L:30 and L:31, and a 40 m branch merged at L:22 with a fix at its end.
-    let mut project = Project::new("NearestDatum".to_string(), None);
+    // Every distance runs back to L:0, the datum the raw positions are
+    // carried from, however close another fix is (#741 U5).
+    let mut project = Project::new("PlacementDistance".to_string(), None);
     let line = north_line(&mut project, 40, 10.0);
     let branch = north_line(&mut project, 4, 10.0);
     project.ensure_shot_uuids();
@@ -555,9 +608,9 @@ fn each_fix_measures_its_survey_distance_to_its_own_nearest_other_datum() {
         .unwrap();
     let fixes = [
         (StationRef::new(line, 10), 100.0),
-        (StationRef::new(line, 30), 10.0),
-        (StationRef::new(line, 31), 10.0),
-        (StationRef::new(branch, 4), 120.0),
+        (StationRef::new(line, 30), 300.0),
+        (StationRef::new(line, 31), 310.0),
+        (StationRef::new(branch, 4), 260.0),
     ];
     for (i, (sr, _)) in fixes.iter().enumerate() {
         push_fix(&mut project, *sr, gps_at(i as f64, 100.0 * i as f64));
@@ -612,10 +665,12 @@ fn gap_check_cost_does_not_multiply_with_the_number_of_fixes() {
     let gaps = project.gps_fix_gaps();
     let elapsed = started.elapsed();
     assert_eq!(gaps.len(), 4000);
-    // Each fix is one 2 m shot from the next datum along the chain.
-    assert!(gaps
-        .values()
-        .all(|g| (g.survey_distance_m.unwrap() - 2.0).abs() < 1e-9));
+    // Each fix is measured back along the chain to the placement datum.
+    for (sr, g) in &gaps {
+        let s = sections.iter().position(|id| *id == sr.section_id).unwrap();
+        let expected = (s as f64 * 50.0 + f64::from(sr.station_index)) * 2.0;
+        assert!((g.survey_distance_m.unwrap() - expected).abs() < 1e-6);
+    }
     assert!(
         elapsed < std::time::Duration::from_secs(5),
         "gps_fix_gaps over 4000 fixes took {elapsed:?}"
@@ -679,4 +734,97 @@ fn a_gps_fix_still_pulls_a_component_whose_only_closure_spans_one_shot() {
         x0.abs() < 1e-6 && y0.abs() < 1e-6,
         "the placement datum moved"
     );
+}
+
+#[test]
+fn a_second_consistent_fix_does_not_shrink_the_first_fixs_threshold() {
+    // 2010 m north, placed at A:0. A fix at A:200 (2000 m along) 40 m off its
+    // survey is inside 15 m + 2% of 2000 m = 55 m. A second fix 10 m further on,
+    // off by the same 40 m, agrees with it: neither threshold may fall to
+    // 15 m + 2% of the 10 m between them (#741 U5).
+    let mut project = Project::new("TwoFixes".to_string(), None);
+    let a = north_line(&mut project, 201, 10.0);
+    project.ensure_shot_uuids();
+    project
+        .set_zero_datum(StationRef::new(a, 0), origin())
+        .unwrap();
+    let first = StationRef::new(a, 200);
+    project.set_zero_datum(first, gps_at(40.0, 2000.0)).unwrap();
+    let one = project.gps_fix_gaps()[&first];
+    assert!((one.threshold_m - 55.0).abs() < 1e-6, "{one:?}");
+    assert!(!one.exceeds_threshold);
+
+    project
+        .set_zero_datum(StationRef::new(a, 201), gps_at(40.0, 2010.0))
+        .unwrap();
+    let gaps = project.gps_fix_gaps();
+    assert_eq!(gaps.len(), 2);
+    assert_eq!(gaps[&first], one, "the first fix's gap is unchanged");
+    let second = gaps[&StationRef::new(a, 201)];
+    assert!((second.threshold_m - 55.2).abs() < 1e-6, "{second:?}");
+    assert!(!second.exceeds_threshold);
+}
+
+#[test]
+fn a_loop_closure_is_no_shortcut_for_the_gap_threshold() {
+    // A 300 m line placed at A:0 whose far end is closed back onto A:0 by a
+    // loop closure: the raw position of A:30 is still carried 300 m along the
+    // shots, so its threshold is 15 m + 2% of 300 m, not the 15 m a zero-cost
+    // closure edge back to the datum would give.
+    let mut project = Project::new("Loop".to_string(), None);
+    let a = north_line(&mut project, 30, 10.0);
+    project.ensure_shot_uuids();
+    project
+        .set_zero_datum(StationRef::new(a, 0), origin())
+        .unwrap();
+    project
+        .create_loop_closure(
+            StationRef::new(a, 0),
+            StationRef::new(a, 30),
+            ClosureStrategy::Batch,
+        )
+        .unwrap();
+    let gap = project
+        .datum_gap(StationRef::new(a, 30), &gps_at(20.0, 300.0))
+        .unwrap();
+    assert!(
+        (gap.survey_distance_m.unwrap() - 300.0).abs() < 1e-6,
+        "{gap:?}"
+    );
+    assert!((gap.threshold_m - 21.0).abs() < 1e-6);
+    assert!(!gap.exceeds_threshold);
+}
+
+#[test]
+fn a_station_holds_at_most_one_datum() {
+    // Re-setting the datum on its own station updates it in place; a second
+    // datum stored on that station under another key is refused, so two
+    // datums never share a station (#741 D2).
+    let (mut project, a, b) = two_entrance_traverse();
+    let fix = StationRef::new(b, 5);
+    project.set_zero_datum(fix, gps_at(40.0, 500.0)).unwrap();
+    project
+        .set_zero_datum_with_accuracy(fix, gps_at(41.0, 500.0), Some(2.0))
+        .unwrap();
+    assert_eq!(project.zero_datums.len(), 2, "updated in place");
+    assert_eq!(project.zero_datums[1].accuracy_m, Some(2.0));
+
+    // A datum held under a positional key (as a load or an append stores it
+    // before re-anchoring) is the same station as the stable key a new set
+    // would mint: the set is refused rather than adding a second datum.
+    project.zero_datums[1].station_ref = StationRef::new(b, 5).into();
+    assert_ne!(
+        project.zero_datums[1].station_ref,
+        project.key_for_ref(fix).unwrap()
+    );
+    let err = project
+        .set_zero_datum(fix, gps_at(42.0, 500.0))
+        .unwrap_err();
+    assert!(err.contains("already holds a zero datum"), "{err}");
+    let err = project
+        .store_zero_datum_without_repositioning(fix, gps_at(42.0, 500.0), None)
+        .unwrap_err();
+    assert!(err.contains("already holds a zero datum"), "{err}");
+    assert_eq!(project.zero_datums.len(), 2);
+    assert!(project.station_exists(StationRef::new(a, 0)));
 }

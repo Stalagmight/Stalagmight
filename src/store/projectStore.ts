@@ -63,7 +63,7 @@ export interface ImportReceiptProvenance {
 import type { CreateProjectFullResult } from '../types/loading';
 import type { UnrecognisedShotKind } from '../types/ipc/UnrecognisedShotKind';
 import type { SurveyData } from '../types/survey-data';
-import { emptySurveyData, surveyDataFromLegacy, surveyDataWithAdjustedStations } from '../types/survey-data';
+import { emptySurveyData, surveyDataFromLegacy, surveyDataWithAdjustedStations, withGpsFixFlags } from '../types/survey-data';
 import { createProjectConfigActions, type ProjectConfigActions } from './projectConfigActions';
 import { createProjectShotActions, type ProjectShotActions } from './projectShotActions';
 import { createSectionStructureActions, type SectionStructureActions } from './sectionStructureActions';
@@ -443,8 +443,9 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   updateStationComment: (stationRef: StationRef, comment: string | null) => Promise<CommandResult>;
   moveComment: (source: CommentHolder, target: CommentHolder, swap: boolean) => Promise<CommandResult>;
   /** `accuracyM`: the GPS accuracy in metres (#741); 0 is a hard pin, and
-   *  omitted means the backend default (0). */
-  setZeroDatum: (stationRef: StationRef, coordinates: GpsCoordinates, options?: { fitToBounds?: boolean; accuracyM?: number }) => Promise<CommandResult>;
+   *  omitted means the backend default (0). `entrance`: the user's answer to
+   *  "is this station an entrance?"; omitted keeps the stored answer. */
+  setZeroDatum: (stationRef: StationRef, coordinates: GpsCoordinates, options?: { fitToBounds?: boolean; accuracyM?: number; entrance?: boolean }) => Promise<CommandResult>;
   removeZeroDatum: (stationRef: StationRef) => Promise<CommandResult>;
   moveSection: (sectionId: SectionId, offset: Coordinates) => Promise<CommandResult>;
   moveSegment: (sectionId: SectionId, offset: Coordinates) => Promise<CommandResult>;
@@ -1516,7 +1517,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // Build the SoA layout alongside the legacy shapes for the
         // duration of the Phase-A migration. After Phase A.6 this is
         // the only shape stored; project loses .sections[i].shots.
-        const surveyData = surveyDataFromLegacy(state.project.sections, state.stations);
+        const surveyData = withGpsFixFlags(surveyDataFromLegacy(state.project.sections, state.stations), state.project.zero_datums);
         set({
           project: state.project,
           projectTreeGeneration: nextProjectTreeGeneration(),
@@ -2029,9 +2030,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // rebuild only the station columns, so entering/restoring the adjusted view
       // never force-materializes the lazy `section.shots` getters (#mem). Fall
       // back to the full legacy walk only if the measured SoA is somehow absent.
-      const surveyDataAdjusted = surveyData
-        ? surveyDataWithAdjustedStations(surveyData, adjusted)
-        : surveyDataFromLegacy(project.sections, adjusted);
+      const adjustedData = surveyData ? surveyDataWithAdjustedStations(surveyData, adjusted) : surveyDataFromLegacy(project.sections, adjusted);
+      const surveyDataAdjusted = withGpsFixFlags(adjustedData, project.zero_datums);
       set({ stationsAdjusted: adjusted, surveyDataAdjusted, adjustedLoading: false });
       // What this solve left out (#737); a failed part also has a Warnings entry.
       void useAdjustmentReportStore.getState().load(adjusted, get().refreshWarnings);
@@ -2062,10 +2062,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   setZeroDatum: async (stationRef, coordinates, options) => {
     // Detect first zero datum before the IPC call changes state
     const isFirstDatum = (get().project?.zero_datums.length ?? 0) === 0;
-    const accuracyM = options?.accuracyM;
+    const { accuracyM, entrance } = options ?? {};
     const result = await executeCommand(
       'set_zero_datum',
-      accuracyM === undefined ? { stationRef, coordinates } : { stationRef, coordinates, accuracyM },
+      { stationRef, coordinates, ...(accuracyM === undefined ? {} : { accuracyM }), ...(entrance === undefined ? {} : { entrance }) },
       { purpose: 'anchor survey to GPS coordinates', fields: { stationRef } }
     );
     if (result.success && options?.fitToBounds !== false) {

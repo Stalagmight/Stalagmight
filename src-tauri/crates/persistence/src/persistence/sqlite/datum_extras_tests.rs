@@ -46,6 +46,7 @@ fn fixture() -> Fixture {
         station_ref: StationRef::new(section, index).into(),
         gps: GpsCoordinates::new(lat, -87.5, 1.5).unwrap(),
         accuracy_m,
+        entrance: None,
     };
     project.zero_datums = vec![
         datum(a, 0, 20.1, Some(2.0)),
@@ -307,17 +308,19 @@ fn corrupt_rows_are_skipped_and_the_load_succeeds() {
     let path = saved_file(&dir, "corrupt.stalx", &project);
     {
         let db = Database::open_existing(&path).unwrap();
+        // Named, so a column added later needs no edit here.
+        const COLUMNS: &str = "(position, section_id, station_index, shot_uuid, in_zero_datums, latitude, longitude, depth_reference, accuracy_m)";
         db.conn
             .execute_batch(&format!(
                 "
                 -- an unreadable station index
-                INSERT INTO zero_datum_extras VALUES (10, {b}, 'two', NULL, 0, 20.5, -87.5, 0, NULL);
+                INSERT INTO zero_datum_extras {COLUMNS} VALUES (10, {b}, 'two', NULL, 0, 20.5, -87.5, 0, NULL);
                 -- a fix with a latitude no GPS has
-                INSERT INTO zero_datum_extras VALUES (11, {c}, 1, (SELECT uuid FROM shots WHERE section_id = {c} AND sequence_order = 0), 0, 200.0, -87.5, 0, NULL);
+                INSERT INTO zero_datum_extras {COLUMNS} VALUES (11, {c}, 1, (SELECT uuid FROM shots WHERE section_id = {c} AND sequence_order = 0), 0, 200.0, -87.5, 0, NULL);
                 -- neither a placement nor a fix
-                INSERT INTO zero_datum_extras VALUES (12, {b}, 1, NULL, 7, NULL, NULL, NULL, NULL);
+                INSERT INTO zero_datum_extras {COLUMNS} VALUES (12, {b}, 1, NULL, 7, NULL, NULL, NULL, NULL);
                 -- a fix on a section the file does not hold
-                INSERT INTO zero_datum_extras VALUES (13, 999, 0, NULL, 0, 20.6, -87.5, 0, NULL);
+                INSERT INTO zero_datum_extras {COLUMNS} VALUES (13, 999, 0, NULL, 0, 20.6, -87.5, 0, NULL);
                 -- an accuracy no GPS has reads as the default
                 UPDATE zero_datum_extras SET accuracy_m = -1.0 WHERE position = 0;
                 "
@@ -506,4 +509,109 @@ fn a_fix_whose_station_moved_is_skipped() {
             (StationRef::new(a, 2), 20.4, None, Some(DatumRole::GpsFix)),
         ]
     );
+}
+
+/// A: 2 shots, B: 2 shots, merged end to end (A2 = B2). A0 places both, and
+/// B0, the START of B, holds a fix: a station no shot ends at.
+fn start_fix_fixture() -> (Project, SectionId, SectionId) {
+    let mut project = Project::new("Start fix".to_string(), None);
+    let shots = || SectionData {
+        shots: (0..2)
+            .map(|_| ShotData {
+                length: 5.0,
+                azimuth_in: 0.0,
+                azimuth_out: 0.0,
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    };
+    let a = project.add_section(shots()).id;
+    let b = project.add_section(shots()).id;
+    project.ensure_shot_uuids();
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(a, 2).into(),
+        station_b: StationRef::new(b, 2).into(),
+        merged_at: Utc::now(),
+    });
+    project.zero_datums = vec![
+        ZeroDatum::new(
+            StationRef::new(a, 0).into(),
+            GpsCoordinates::new(20.1, -87.5, 0.0).unwrap(),
+        ),
+        ZeroDatum::new(
+            StationRef::new(b, 0).into(),
+            GpsCoordinates::new(20.2, -87.5, 0.0).unwrap(),
+        ),
+    ];
+    (project, a, b)
+}
+
+/// A fix on a section's first station is anchored by the shot that starts
+/// there. When the file's first shot of that section is now another shot (a
+/// writer reversed the section in place, or put a shot before its start), the
+/// row names a different physical station and is skipped.
+#[test]
+fn a_fix_on_station_zero_whose_first_shot_changed_is_skipped() {
+    let dir = TempDir::new().unwrap();
+    let (project, a, b) = start_fix_fixture();
+    let path = saved_file(&dir, "start.stalx", &project);
+    assert_eq!(
+        summary(&load(&path)).len(),
+        2,
+        "premise: the fix on B0 round-trips"
+    );
+    Database::open_existing(&path)
+        .unwrap()
+        .conn
+        .execute(
+            "UPDATE shots SET uuid = 'another-shot' WHERE section_id = ?1 AND sequence_order = 0",
+            [b],
+        )
+        .unwrap();
+
+    assert_eq!(
+        summary(&load(&path)),
+        vec![(
+            StationRef::new(a, 0),
+            20.1,
+            None,
+            Some(DatumRole::Placement)
+        )]
+    );
+}
+
+/// A station 0 row written before `start_shot_uuid` existed (a NULL, or a
+/// table without the column) loads as it did then.
+#[test]
+fn a_station_zero_row_without_its_start_shot_still_loads() {
+    let dir = TempDir::new().unwrap();
+    let (project, a, b) = start_fix_fixture();
+    let expected: Summary = vec![
+        (
+            StationRef::new(a, 0),
+            20.1,
+            None,
+            Some(DatumRole::Placement),
+        ),
+        (StationRef::new(b, 0), 20.2, None, Some(DatumRole::GpsFix)),
+    ];
+    for (name, sql) in [
+        (
+            "null",
+            "UPDATE zero_datum_extras SET start_shot_uuid = NULL;",
+        ),
+        (
+            "column",
+            "ALTER TABLE zero_datum_extras DROP COLUMN start_shot_uuid;",
+        ),
+    ] {
+        let path = saved_file(&dir, &format!("{name}.stalx"), &project);
+        Database::open_existing(&path)
+            .unwrap()
+            .conn
+            .execute_batch(sql)
+            .unwrap();
+        assert_eq!(summary(&load(&path)), expected, "{name}");
+    }
 }

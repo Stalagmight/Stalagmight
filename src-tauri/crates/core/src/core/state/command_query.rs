@@ -84,12 +84,20 @@ impl AppState {
                 .map(crate::models::closure_across_one_shot_refusal)
         };
 
+        // Two placed pieces (#741): which one the merge moves, and how far.
+        let datum_shift = if can_merge {
+            project.merge_datum_shift(station_a, station_b)
+        } else {
+            None
+        };
+
         Ok(ConnectivityResult {
             connected,
             preview,
             can_merge,
             reason,
             closure_refusal,
+            datum_shift,
         })
     }
 

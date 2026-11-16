@@ -212,6 +212,19 @@ group connected) is the opposite case and is governed by
 coincident is simply not stitched. The pair is arbitrary rather than surveyed, so
 moving a group onto it would invent geometry.
 
+A **torn merge between two datum-placed pieces** in a file from an older build (the
+#464 damage: each half pinned by its own zero datum, the merge metres or kilometres
+open) is turned back into the unaligned loop closure it should have stayed, when the
+file opens and by Repair (`demote_double_anchoring_merges`,
+`project/legacy_anchoring.rs`). Since #741 the later datum of a merged group is a GPS
+fix that holds nothing in raw geometry, so the offset re-solve would otherwise heal
+the tear by moving the later piece off its GPS by the whole tear, with no undo. The
+demotion runs before the re-solve and moves nothing: each piece keeps its datum as
+its placement datum, and the misclosure is on the closure. A user who wants the two
+pieces joined merges them, which moves the later piece, can be undone, and makes its
+datum a GPS fix. A legacy group with two datums and no torn merge needs nothing: the
+re-solve moves nothing and the later datum is a fix that reports its gap.
+
 ## Closures across a Split Section Here or a Combine Sections
 
 None of these edits moves the closure-adjusted survey of a component they keep
@@ -248,6 +261,45 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
   combine made identical to another one. An UNALIGNED closure between the two
   sections elsewhere stays: it becomes a closure inside one section, which the
   least-squares solve adjusts like any other.
+- **Of closures made identical, the one the solve takes stays (#749).**
+  Once the two join stations are one, two closures can tie the same two
+  stations: a tie the combine tears (a merge becomes a `Batch` closure,
+  appended last) can land on a legacy closure's stations, or a snapped one's.
+  `dedupe_closures_in` keeps the first closure of each set the solve takes
+  (`Batch` / `LeastSquaresWeighted`), or the first one when it takes none,
+  and drops the others by position, the way the plan counts them. That is what
+  the plan's model of the joined survey (`joined_sweep`) assumes: it counts
+  every eligible closure before the dedupe, so with the eligible one kept
+  the stations the solve joins are the same before and after it, and the
+  anchor rule's verdict and the across-one-shot removal still hold. Keeping
+  the first one instead let a legacy closure the solve ignores push out the
+  torn merge's closure: the plan had moved the kept side for a solved
+  survey, the Closures Computed View then showed it unadjusted, and the
+  dialog's "This connection becomes a loop closure" was false. A dropped
+  snap takes its rigidity and its depth co-location with it: its two
+  stations stay on one point horizontally (a snap the combine does not tear
+  has both ends on the side that moves, or both on the side that stays), but
+  each now reads its own depth in the measured survey instead of their
+  average, and a later edit's offset cascade no longer carries one with the
+  other. Keeping the first closure did the same whenever the ordinary one
+  came first; with the snap first it dropped the ordinary closure instead,
+  which the plan had counted. The kept closure holds the two on one point in
+  the Closures Computed View, which the snap alone did not. The dialog lists,
+  in Details, every closure the solve does not take that the dedupe drops for
+  one it does (`CombinePlan.closures_replaced`), with what takes its place:
+  the plan runs the same `closure_dedupe` rule on its model of the combined
+  closure list (`closure_dedupe.rs`), and the combine reports what it really
+  replaced, a difference being a `debug_assert!` failure (an error in the log
+  in a release build). Duplicates the solve treats alike go silently: nothing
+  changes for the view. A replacement keeps the connection, so there is no
+  summary line outside Details and no toast, unlike a removal across one
+  shot. The combine finds closures by id (its join's own, the ties
+  `tear_ties` removes, the names of what it replaced) where the plan goes by
+  position, so the two agree only while ids are unique. A file keeps a
+  closure's id in `loop_closures.closure_id`, which nothing keeps unique, so
+  the load gives the later of two closures with one id a fresh id
+  (`assign_closure_ids`, as it does an id of 0), and a debug build asserts
+  unique ids when a combine starts.
 - **A loop closure is a join.** Two section ends tied by a closure are, by the
   survey's own statement, one point, apart by the misclosure. Combining there
   moves one side by the misclosure (the other section and what is merged to
@@ -263,6 +315,84 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
   through the combined section, or tie two anchored groups, whose promotion is
   refused), so a reload converts nothing back; the randomised sweep in
   `combine_closure_tests.rs` checks exactly that.
+- **A side-by-side residual moves a side too (#740).** Two ends side by
+  side (unmerged, within `COMBINE_TOLERANCE_M`, 1 mm) are apart by a
+  residual, and so are merged ends whose join station was moved by hand (a
+  manual station offset puts their chain positions apart). The combined
+  section hangs the other section's stations off the kept join station, so
+  one side moves by the residual whatever the plan says. The plan used to
+  move nothing under the tolerance: the other section alone moved, the
+  sections merged to it stayed, merged stations ended up as much as 1 mm
+  apart, and the reopen's offset solve (`redrive_offsets_after_load`, seeded
+  at each component's datum or lowest id) moved the combined section to close
+  them; where the combine tore a merge into a closure the solve takes, this
+  view on the other side moved by the residual. Now any residual past float
+  dust (`Project::OFFSET_DUST_M` in each axis, the bound under which the
+  offset solve corrects nothing) takes the shifting path of `plan_ties`: the
+  anchor rule picks the side, what is merged to it moves along, a snapped
+  closure from it is demoted, and with both sides held the moving section's
+  merges to its datum sides tear, exactly as for a shift. Dust (truly
+  coincident or merged ends) joins as before. Re-solving the offsets after the
+  combine instead would seed each component at its datum or lowest id, not
+  at the side the anchor rule keeps, and would heal drift anywhere else in
+  the project too: the plan could not say what moves. The dialog lists a
+  move under 1 mm only when the plan tears a tie (`combineMoveShown`): a
+  snap from the moving side made ordinary, or the moving section's merge
+  torn with both sides held by datums. Their listed reason is the move, so
+  the move is listed beside them, to 0.1 mm ("moveSideBySide"); otherwise
+  "moves 0.00m" next to "Side by side here" would be noise. The
+  `COMBINE_SIDE_BY_SIDE_M` copy of the tolerance in `combineSections.ts` is
+  pinned to `COMBINE_TOLERANCE_M` by a tripwire test. The sweeps check
+  the plan against the result to 1e-6 (a plan that moves nothing, to dust),
+  merged stations on one point and a reload that moves nothing, and
+  `side_by_side_network` plants such residuals, which the other generators,
+  placing every section exactly, never reach.
+- **What is merged at a hand-moved join station moves with the joined
+  station (#755).** A manual station offset (a hand move, from an older or
+  hand-edited file; Move Station has folded its moves into the shots since
+  long before Combine, but Split Section Here, Append Project and Undo carry
+  one on) moves one station as shown and nothing beyond it, and the joined
+  station keeps one: the fixed side's. Where the two join stations' offsets
+  differ, the side that moves still goes by the chain gap, but the join
+  station whose offset is dropped lands on the joined station as shown, the
+  gap between the two as shown away from where it was. On a join that is not
+  merged, the sections merged at that station, and what hangs off them, move
+  with the joined station by that gap, not with their side (`plan_ties`,
+  `TiePlan.joined_moved`, `CombinePlan.moved_with_joined_station`). They
+  used to move with their side and were left behind by the difference, and
+  the in-session repair (`realign_merges`, past 1 cm) or a reopen
+  (`redrive_offsets_after_load`, below it) closed the merge later, moving
+  them unannounced. They still belong to their side for the anchor rule (a
+  datum there holds it), a side moves to carry them even when the chain gap
+  is float dust, and a snap between them and the rest of the side is torn,
+  as the two move apart; with nothing left merged at the dropped station
+  once the plan's ties tear, nothing moves for it. Whether the hand moves
+  differ is exact (the gap as shown is the chain gap itself when they
+  agree), and a side moves to carry them when the gap as shown is past
+  float dust, so what is merged there lands on the joined station whenever
+  anything moves and stays within the dust otherwise. Merges form a forest
+  (`merge_stations` refuses a loop), but nothing breaks a merge loop an
+  older or hand-edited file holds: a part merged at the dropped station and
+  also to the moving section at another station cannot follow both, so it
+  stays with its side, and its merge at the join becomes a loop closure
+  carrying the hand moves' difference. A closure whose two ends move apart
+  is measured again, each end moving with its section except the dropped
+  join station, which moves by its own move onto the joined station, also
+  when its section does not move. The dialog lists them
+  beside the "keeps K's, so O's end moves" note (under the side-by-side
+  tolerance only beside a torn tie, as a move of the side). A merged join
+  needs none of this: everything merged there is a join tie, one point with
+  the joined station, and the #740 residual above carries the rest. Folding
+  the two hand moves into the shots (as Move Station does) was the other
+  way: exact in the Raw Data View, but this view solves shots, merges and
+  closures, never manual offsets, so a folded hand move would enter every
+  loop through its station and move other stations here. (This view's own
+  handling of a manual offset is off as it is, combine or not: it holds the
+  survey at its anchor station as shown, hand move included, while it
+  solves offset-free shots, so a hand move on that station shifts the whole
+  adjusted survey by it, and where the solved part is a tree, the sections
+  merged to the anchored one come apart from it. The sweeps compare this
+  view only where it solves no survey with a hand move in it.)
 - **Nothing is left across one shot (#746).** Once the two join stations are
   one, a tie the combine tears (a merge, or a snap made ordinary) can join the
   two ends of one shot: a one-shot passage X merged to both join stations,

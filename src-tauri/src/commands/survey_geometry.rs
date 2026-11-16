@@ -403,6 +403,7 @@ mod tests {
             station_ref: StationRef::new(section_id, 3).into(),
             gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
             accuracy_m: None,
+            entrance: None,
         });
 
         let result = get_survey_geometry_for_project(&project);

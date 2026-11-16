@@ -466,6 +466,108 @@ describe('CombineSectionsDialog', () => {
     expect(screen.getByTestId('combine-removed-summary')).toBeInTheDocument();
   });
 
+  it('lists the closures the combine replaces by one the view adjusts on the same two stations (#749)', () => {
+    const at = (s: number, i: number) => ({ section_id: s, station_index: i });
+    const replaced = (
+      a: [number, number],
+      b: [number, number],
+      kind: string,
+      by: [[number, number], [number, number]],
+      byKind: string
+    ) => ({
+      station_a: at(...a),
+      station_b: at(...b),
+      kind,
+      by_station_a: at(...by[0]),
+      by_station_b: at(...by[1]),
+      by_kind: byKind,
+    });
+    dialogData = {
+      candidate: candidate({
+        join_kind: 'closure',
+        plan_keeping_a: quietPlan(2, {
+          moving_section: 2,
+          kept_moves_because: 'adjustment_anchor',
+          moved_sections: [2],
+          shift_m: 0.4,
+          closures_replaced: [replaced([5, 2], [5, 0], 'legacy_closure', [[2, 1], [5, 2]], 'merge')],
+        }),
+        plan_keeping_b: quietPlan(5, {
+          moving_section: 2,
+          moved_sections: [2],
+          shift_m: 0.4,
+          closures_replaced: [
+            replaced([5, 2], [5, 0], 'snapped_closure', [[2, 1], [5, 2]], 'snapped_closure'),
+            replaced([5, 3], [2, 0], 'former_snap', [[5, 3], [2, 1]], 'loop_closure'),
+          ],
+        }),
+      }),
+    };
+    render(<CombineSectionsDialog />);
+    // A replacement keeps the connection, so it is listed in Details only,
+    // with no summary line outside the fold (that is for removals, #746).
+    expect(screen.queryByTestId('combine-removed-summary')).toBeNull();
+    expect(screen.queryByTestId('combine-note-removed')).toBeNull();
+    expect(screen.getByTestId('combine-note-replaced')).toHaveTextContent(/^This closure is replaced:/);
+    expect(screen.getAllByTestId(/^combine-replaced-tie-/).map(tieText)).toEqual([
+      'Loop closure [section Main-B] [station 5:2] to [section Main-B] [station 5:0] , an older kind the ' +
+        'Closures Computed View does not adjust. The merge of [section Main-A] [station 2:1] and ' +
+        '[section Main-B] [station 5:2] becomes a loop closure on the same two stations and takes its place.',
+    ]);
+    expect(screen.getByTestId('combine-replaced-why')).toHaveTextContent(
+      'Two loop closures on the same two stations would count one loop twice, so the combine keeps the one ' +
+        'the Closures Computed View adjusts. Undo brings this one back.'
+    );
+
+    fireEvent.click(screen.getByTestId('combine-swap-kept'));
+    expect(screen.getByTestId('combine-note-replaced')).toHaveTextContent(/^These 2 closures are replaced:/);
+    expect(screen.getAllByTestId(/^combine-replaced-tie-/).map(tieText)).toEqual([
+      'The snapped closure between [section Main-B] [station 5:2] and [section Main-B] [station 5:0] : its ' +
+        'two stations will no longer share one depth. The snapped closure between [section Main-A] ' +
+        '[station 2:1] and [section Main-B] [station 5:2] becomes an ordinary loop closure on the same two ' +
+        'stations and takes its place.',
+      'Loop closure [section Main-B] [station 5:3] to [section Main-A] [station 2:0] , left from a snap whose ' +
+        'stations have since moved apart; the Closures Computed View does not adjust it. Loop closure ' +
+        '[section Main-B] [station 5:3] to [section Main-A] [station 2:1] , already there, ties the same ' +
+        'two stations and takes its place.',
+    ]);
+    expect(screen.getByTestId('combine-replaced-why')).toHaveTextContent('Undo brings these back.');
+  });
+
+  it('says nothing about replaced closures when the combine replaces none (#749)', () => {
+    dialogData = {
+      candidate: candidate({
+        join_kind: 'closure',
+        plan_keeping_a: quietPlan(2, { moving_section: 5, moved_sections: [5], shift_m: 0.4 }),
+      }),
+    };
+    render(<CombineSectionsDialog />);
+    expect(screen.queryByTestId('combine-note-replaced')).toBeNull();
+    expect(screen.queryByTestId('combine-replaced-why')).toBeNull();
+  });
+
+  it('shows the replaced closures even when nothing else changes (#749)', () => {
+    dialogData = {
+      candidate: candidate({
+        plan_keeping_a: quietPlan(2, {
+          closures_replaced: [
+            {
+              station_a: { section_id: 5, station_index: 2 },
+              station_b: { section_id: 5, station_index: 0 },
+              kind: 'legacy_closure',
+              by_station_a: { section_id: 2, station_index: 1 },
+              by_station_b: { section_id: 5, station_index: 2 },
+              by_kind: 'loop_closure',
+            },
+          ],
+        }),
+      }),
+    };
+    render(<CombineSectionsDialog />);
+    expect(screen.getByTestId('combine-plan-notes')).toBeInTheDocument();
+    expect(screen.getAllByTestId(/^combine-replaced-tie-/)).toHaveLength(1);
+  });
+
   it('says the kept side moves when the other side holds the Closures Computed View in place', () => {
     dialogData = {
       candidate: candidate({
@@ -483,6 +585,53 @@ describe('CombineSectionsDialog', () => {
     expect(screen.getByTestId('combine-note-kept-moves')).toHaveTextContent(
       "Main-A is the one that moves: the Closures Computed View holds the survey at a station on Main-B's side"
     );
+  });
+
+  it('lists a side-by-side move under 1 mm only where it changes a tie (#740)', () => {
+    const tie = {
+      station_a: { section_id: 5, station_index: 2 },
+      station_b: { section_id: 9, station_index: 1 },
+      kind: 'merge',
+      reason: 'loop',
+    };
+    dialogData = {
+      candidate: candidate({
+        // The plan names the side that moves by the 0.6 mm residual, what
+        // moves with it and why, exactly as for a shift.
+        plan_keeping_a: quietPlan(2, {
+          moving_section: 5,
+          moved_sections: [5, 7],
+          shift_m: 0.0006,
+          torn_ties: [tie],
+        }),
+        plan_keeping_b: quietPlan(5, {
+          moving_section: 5,
+          kept_moves_because: 'adjustment_anchor',
+          moved_sections: [5],
+          shift_m: 0.0006,
+        }),
+      }),
+    };
+    sections = [
+      ...creditedSections(),
+      { id: 7, name: 'Side', color: '#333333', direction: 'in', shots: shots(1) },
+    ];
+    render(<CombineSectionsDialog />);
+    // Keeping Main-A the plan tears a tie, whose reason is the move: the move
+    // is listed beside it, to 0.1 mm, with what moves along.
+    expect(screen.getByTestId('combine-note-move')).toHaveTextContent(
+      'Main-B moves 0.0006m horizontally, the gap between the two ends side by side, so they meet exactly.'
+    );
+    expect(screen.getByTestId('combine-note-move-with')).toHaveTextContent('Side');
+    expect(screen.getAllByTestId(/^combine-torn-tie-/)).toHaveLength(1);
+    expect(screen.getByTestId('combine-torn-why')).toHaveTextContent("The loop's misclosure moves to the new closure");
+
+    // Keeping Main-B nothing is torn: a move that small is not listed, and
+    // nothing claims a side stays either.
+    fireEvent.click(screen.getByTestId('combine-swap-kept'));
+    for (const id of ['combine-note-move', 'combine-note-move-with', 'combine-note-kept-moves', 'combine-note-torn']) {
+      expect(screen.queryByTestId(id)).toBeNull();
+    }
   });
 
   it('lists converted bearings, the kept quality and offset, renewed shot ids and crossings', () => {
@@ -508,6 +657,66 @@ describe('CombineSectionsDialog', () => {
       "2 of Main-B's shots have the same identity as shots of Main-A, and get new ones."
     );
     expect(screen.getByTestId('combine-note-passing')).toHaveTextContent('Main-B passes through the join');
+  });
+
+  it('lists what moves with the joined station right after the hand-move note (#755)', () => {
+    sections = [...creditedSections(), { id: 7, name: 'Side', color: '#333333', direction: 'in', shots: shots(1) }];
+    const joined = (shift_m: number) => ({
+      station: { section_id: 5, station_index: 0 },
+      sections: [7],
+      shift_m,
+    });
+    dialogData = {
+      candidate: candidate({
+        branches: [7],
+        plan_keeping_a: quietPlan(2, {
+          moving_section: 5,
+          moved_sections: [5],
+          join_offset_change_m: 0.3,
+          moved_with_joined_station: joined(0.3),
+        }),
+        plan_keeping_b: quietPlan(5, { moved_with_joined_station: joined(0.0006) }),
+      }),
+    };
+    render(<CombineSectionsDialog />);
+    expect(screen.getByTestId('combine-note-joined-moves')).toHaveTextContent(
+      'Side is merged at 5:0 and moves 0.30m with the joined station, so it stays merged to it.'
+    );
+    const order = Array.from(screen.getByTestId('combine-plan-notes').querySelectorAll('li')).map((li) =>
+      li.getAttribute('data-testid')
+    );
+    expect(order.indexOf('combine-note-joined-moves')).toBe(order.indexOf('combine-note-offset') + 1);
+    // Under the side-by-side tolerance, with no tie torn, it is not listed,
+    // as a move of the side is not.
+    fireEvent.click(screen.getByTestId('combine-swap-kept'));
+    expect(screen.queryByTestId('combine-note-joined-moves')).toBeNull();
+  });
+
+  it('lists a joined move under 1 mm beside the tie it tears (#755)', () => {
+    sections = [...creditedSections(), { id: 7, name: 'Side', color: '#333333', direction: 'in', shots: shots(1) }];
+    dialogData = {
+      candidate: candidate({
+        branches: [7],
+        plan_keeping_a: quietPlan(2, {
+          moving_section: 5,
+          moved_sections: [5],
+          torn_ties: [
+            {
+              station_a: { section_id: 7, station_index: 1 },
+              station_b: { section_id: 5, station_index: 1 },
+              kind: 'snapped_closure',
+              reason: 'loop',
+            },
+          ],
+          moved_with_joined_station: { station: { section_id: 5, station_index: 0 }, sections: [7], shift_m: 0.0006 },
+        }),
+      }),
+    };
+    render(<CombineSectionsDialog />);
+    expect(screen.getByTestId('combine-note-joined-moves')).toHaveTextContent(
+      'Side is merged at 5:0 and moves 0.0006m with the joined station, so it stays merged to it.'
+    );
+    expect(screen.getByTestId('combine-note-torn')).toBeInTheDocument();
   });
 
   it('folds everything informational under Details, closed until opened', () => {

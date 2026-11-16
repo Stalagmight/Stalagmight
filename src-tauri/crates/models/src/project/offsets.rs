@@ -992,6 +992,10 @@ impl Project {
         // shot-UUID anchor now that shots (with UUIDs) are loaded.
         self.reanchor_station_refs();
         self.sweep_orphan_closures().log_removed("open");
+        // Before the re-solve, which would otherwise heal a merge an older build
+        // tore between two datum-placed pieces by moving the later piece off its
+        // GPS: opening a file moves nothing (#741 D6, `legacy_anchoring`).
+        self.demote_double_anchoring_merges();
         // Zero-trust: never honor a persisted derivable offset - re-solve
         // unconditionally so a sub-tolerance stale offset can't survive the load.
         let healed = self.resolve_offsets();

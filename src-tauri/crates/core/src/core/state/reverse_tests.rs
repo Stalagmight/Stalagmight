@@ -284,6 +284,7 @@ fn reverse_works_on_a_datum_anchored_section_and_keeps_the_datum_in_place() {
                     depth_reference: 0.0,
                 },
                 accuracy_m: None,
+                entrance: None,
             })
             .success
     );

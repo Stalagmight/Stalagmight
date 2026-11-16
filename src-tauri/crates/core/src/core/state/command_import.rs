@@ -1001,7 +1001,7 @@ impl AppState {
                     station_index,
                 } => {
                     let station_ref = StationRef::new(section_id, *station_index);
-                    let result = self.set_zero_datum(station_ref, *coordinates, None);
+                    let result = self.set_zero_datum(station_ref, *coordinates, None, None);
                     if !result.success {
                         self.rollback_project(&before_snapshot);
                         return CommandResult::failure(format!(
@@ -1036,6 +1036,7 @@ impl AppState {
                         station_ref,
                         coordinates: *coordinates,
                         accuracy_m: None,
+                        entrance: None,
                     });
                 }
 

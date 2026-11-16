@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import type { AdjustmentReport } from '../../types/ipc/AdjustmentReport';
 import { AlertTriangleIcon, FitToViewIcon, LockIcon } from '../common/icons';
+import { formatStationId } from '../../utils/formatters';
+import { formatDatumMetres } from '../../utils/zeroDatumPreview';
 import {
   PILL_LABEL_CLS,
   RawDataResumeButton,
@@ -60,8 +62,9 @@ const SHOW_WARNINGS_CLS =
 
 /**
  * What the Closures Computed View left out (#737), as one notice: the loop
- * closures it skips because they span a single shot, and the parts of the
- * survey whose solve failed and are drawn measured. Both have Warnings-tab
+ * closures it skips because they span a single shot, the parts of the survey
+ * whose solve failed and are drawn measured, and the GPS fixes far from their
+ * surveyed positions that it is bent onto (#741). All have Warnings-tab
  * entries, which the button opens. Renders nothing for an empty report.
  */
 function AdjustmentNotice({ report }: { report: AdjustmentReport }) {
@@ -69,7 +72,10 @@ function AdjustmentNotice({ report }: { report: AdjustmentReport }) {
   const openWarningsTab = useUIStore((s) => s.openWarningsTab);
   const skipped = report.skipped_closures.length;
   const failed = report.failures.length;
-  if (skipped === 0 && failed === 0) return null;
+  // The backend decides which fixes qualify and sorts the largest gap first.
+  const far = report.far_gps_fixes;
+  const largest = far[0];
+  if (skipped === 0 && failed === 0 && !largest) return null;
   return (
     <ReadOnlyNotice testId="adjustment-notice" glyph={<AlertTriangleIcon size={13} className="text-warning" />}>
       <span className={`${PILL_LABEL_CLS} flex flex-col`}>
@@ -78,6 +84,15 @@ function AdjustmentNotice({ report }: { report: AdjustmentReport }) {
         )}
         {skipped > 0 && (
           <span data-testid="adjustment-notice-skipped">{t('map.geometry.skippedClosures', { count: skipped })}</span>
+        )}
+        {largest && (
+          <span data-testid="adjustment-notice-far-gps-fix">
+            {t('map.geometry.farGpsFixes', {
+              count: far.length,
+              station: formatStationId(largest.station.section_id, largest.station.station_index),
+              gap: formatDatumMetres(largest.gap_m),
+            })}
+          </span>
         )}
       </span>
       <button type="button" className={SHOW_WARNINGS_CLS} onClick={openWarningsTab} data-testid="adjustment-notice-show-warnings">

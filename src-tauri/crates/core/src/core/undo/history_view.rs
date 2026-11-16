@@ -133,6 +133,10 @@ struct SnapshotPreview {
     sections: Vec<SnapshotSection>,
     #[serde(default)]
     zero_datums: Vec<crate::models::ZeroDatum>,
+    /// The GPS fixes, which a snapshot keeps beside `zero_datums` (#741, see
+    /// `snapshot_fixes`).
+    #[serde(default)]
+    zero_datum_fixes: Vec<super::snapshot_fixes::SnapshotFix>,
 }
 
 /// One section of a [`SnapshotPreview`]: its identity, its name, and the shot
@@ -206,6 +210,7 @@ impl SnapshotPreview {
     ) -> Option<crate::models::GpsCoordinates> {
         self.zero_datums
             .iter()
+            .chain(self.zero_datum_fixes.iter().map(|fix| &fix.datum))
             .find(|zd| self.resolve_key(&zd.station_ref) == Some(station_ref))
             .map(|zd| zd.gps)
     }
@@ -1221,6 +1226,7 @@ mod tests {
                 station_ref: StationRef::new(0, 0),
                 coordinates: GpsCoordinates::new(45.123_456, -73.654_321, 100.0).unwrap(),
                 accuracy_m: None,
+                entrance: None,
             },
             undo_data: UndoData::ZeroDatumInfo {
                 station_ref: StationRef::new(0, 0),
@@ -1228,6 +1234,7 @@ mod tests {
                 previous_accuracy_m: None,
                 position: None,
                 previous_offsets: HashMap::new(),
+                previous_entrance: None,
             },
             timestamp: None,
         };
@@ -1359,6 +1366,7 @@ mod tests {
                 previous_accuracy_m: None,
                 position: Some(0),
                 previous_offsets: HashMap::new(),
+                previous_entrance: None,
             },
             timestamp: None,
         };
@@ -1389,6 +1397,7 @@ mod tests {
             station_ref: key,
             gps: GpsCoordinates::new(45.0, -73.0, 0.0).unwrap(),
             accuracy_m: None,
+            entrance: None,
         });
         project
     }

@@ -344,11 +344,50 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           placing.station_ref.section_id === ref.section_id && placing.station_ref.station_index === ref.station_index;
         return same ? 'Placement' : 'GpsFix';
       };
-      /** Stamp each datum's derived role on an (already cloned) wire project. */
-      const withDatumRoles = <P extends { station_merges?: unknown[]; zero_datums?: unknown[] } | null>(project: P): P => {
+      // #741: whether a datum is an ENTRANCE, resolved like the backend
+      // (`datum_entrance.rs`): a placement datum always is; a GPS fix follows
+      // its stored `entrance` answer, else is one on its section's first or
+      // last station.
+      const mockDatumIsEntrance = (
+        project: { sections?: unknown[] },
+        ref: MockStationRef,
+        role: 'Placement' | 'GpsFix',
+        entrance: boolean | undefined
+      ): boolean => {
+        if (role === 'Placement') return true;
+        if (entrance !== undefined) return entrance;
+        const section = ((project.sections ?? []) as Array<{ id: number; shots?: unknown[] }>).find(
+          (s) => s.id === ref.section_id
+        );
+        return ref.station_index === 0 || ref.station_index === (section?.shots?.length ?? 0);
+      };
+      /** A GPS fix's gap. The mock has no geometry, so it is canned; a spec can
+       *  override it through `window.__MOCK_DATUM_GAP__`. */
+      const mockDatumGap = (): unknown =>
+        (window as unknown as Record<string, unknown>).__MOCK_DATUM_GAP__ ?? {
+          gap_m: 40,
+          bearing_deg: 45,
+          survey_distance_m: 1400,
+          threshold_m: 43,
+          exceeds_threshold: false,
+        };
+      /** Stamp each datum's derived role, entrance flag and, for a GPS fix, its
+       *  gap on an (already cloned) wire project, as `Project::zero_datums_wire` does. */
+      const withDatumRoles = <P extends { station_merges?: unknown[]; zero_datums?: unknown[]; sections?: unknown[] } | null>(project: P): P => {
         if (!project) return project;
-        for (const d of (project.zero_datums ?? []) as Array<{ station_ref: MockStationRef; role?: string }>) {
+        for (const d of (project.zero_datums ?? []) as Array<{
+          station_ref: MockStationRef;
+          role?: 'Placement' | 'GpsFix';
+          entrance?: boolean;
+          is_entrance?: boolean;
+          gap?: unknown;
+        }>) {
           d.role = mockDatumRole(project, d.station_ref);
+          d.is_entrance = mockDatumIsEntrance(project, d.station_ref, d.role, d.entrance);
+          // The stored answer is backend-only; the wire carries the resolved flag.
+          delete d.entrance;
+          if (d.role === 'GpsFix') d.gap = mockDatumGap();
+          else delete d.gap;
         }
         return project;
       };
@@ -2087,8 +2126,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // What the closure-adjusted view left out (#737). The mock solves
             // nothing, so it skips nothing and nothing fails - unless a spec
             // plants a report on window.__MOCK_ADJUSTMENT_REPORT__.
+            // A planted report may predate `far_gps_fixes` (#741); default it.
             const planted = (window as unknown as Record<string, unknown>).__MOCK_ADJUSTMENT_REPORT__;
-            return planted ?? { skipped_closures: [], failures: [] };
+            const empty = { skipped_closures: [], failures: [], far_gps_fixes: [] };
+            return planted ? { ...empty, ...(planted as object) } : empty;
           }
 
           case 'get_station_distances_from': {
@@ -4144,10 +4185,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               const coordinates = args.coordinates as { latitude: number; longitude: number; depth_reference: number };
               // Optional accuracy in metres; absent means the backend default.
               const accuracyM = typeof args.accuracyM === 'number' ? args.accuracyM : undefined;
+              // Optional entrance answer; absent keeps the stored one (#741).
+              const entrance = typeof args.entrance === 'boolean' ? args.entrance : undefined;
               const datums = currentProject.zero_datums as Array<{
                 station_ref: { section_id: number; station_index: number };
                 gps: { latitude: number; longitude: number; depth_reference: number };
                 accuracy_m?: number;
+                entrance?: boolean;
               }>;
               // Update in-place if exists, otherwise push
               const existing = datums.find(
@@ -4159,6 +4203,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 existing.gps = coordinates;
                 if (accuracyM === undefined) delete existing.accuracy_m;
                 else existing.accuracy_m = accuracyM;
+                if (entrance !== undefined) existing.entrance = entrance;
               } else {
                 // In-place mutation (same array identity) is load-bearing for the
                 // deep-clone reactivity guard: datum-closure-reactivity.spec.ts only
@@ -4169,6 +4214,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   station_ref: stationRef,
                   gps: coordinates,
                   ...(accuracyM === undefined ? {} : { accuracy_m: accuracyM }),
+                  ...(entrance === undefined ? {} : { entrance }),
                 });
               }
             }
@@ -4177,8 +4223,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           case 'preview_zero_datum': {
             // #741: read-only. The role comes from the same derivation as the wire
-            // roles; the mock has no geometry, so a GPS fix gets a canned gap that
-            // a spec can override through `window.__MOCK_DATUM_GAP__`.
+            // roles, and a GPS fix gets the same canned gap (mockDatumGap).
             const win = window as unknown as Record<string, unknown>;
             const calls = (win.__MOCK_PREVIEW_ZERO_DATUM_CALLS__ as unknown[]) ?? [];
             calls.push(args ?? null);
@@ -4190,15 +4235,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             );
             if (!section || stationRef.station_index > (section.shots?.length ?? 0)) return null;
             const role = mockDatumRole(currentProject, stationRef);
-            if (role === 'Placement') return { role };
-            const gap = win.__MOCK_DATUM_GAP__ ?? {
-              gap_m: 40,
-              bearing_deg: 45,
-              survey_distance_m: 1400,
-              threshold_m: 43,
-              exceeds_threshold: false,
-            };
-            return { role, gap };
+            const stored = (currentProject.zero_datums as Array<{ station_ref: MockStationRef; entrance?: boolean }>).find(
+              (d) =>
+                d.station_ref.section_id === stationRef.section_id &&
+                d.station_ref.station_index === stationRef.station_index
+            );
+            const is_entrance = mockDatumIsEntrance(currentProject, stationRef, role, stored?.entrance);
+            if (role === 'Placement') return { role, is_entrance };
+            return { role, gap: mockDatumGap(), is_entrance };
           }
 
           case 'remove_zero_datum': {
@@ -5583,7 +5627,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 .filter((m) => pair.has(m.station_a.section_id) && pair.has(m.station_b.section_id) && m.station_a.section_id !== m.station_b.section_id)
                 .filter((m) => !((same(m.station_a, a) && same(m.station_b, b)) || (same(m.station_a, b) && same(m.station_b, a))))
                 .map((m) => ({ station_a: m.station_a, station_b: m.station_b, kind: 'merge', reason: 'loop' }));
-              // Nothing moves within the backend's 1 mm tolerance.
+              // The mock's co-located ends coincide exactly, so only a closure
+              // join moves a side (the backend also moves one by a side-by-side
+              // residual under 1 mm, #740, which the dialog does not list).
               // Horizontal, as the backend's chain gap is.
               const shift = closure ? (closure.horizontal_misclosure ?? closure.misclosure_distance ?? 0) : 0;
               const plan = (kept: number, other: number) => {

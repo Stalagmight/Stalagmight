@@ -2,4 +2,4 @@
 import type { DatumGap } from "./DatumGap";
 import type { DatumRole } from "./DatumRole";
 
-export interface ZeroDatumPreview { role: DatumRole, gap?: DatumGap, }
+export interface ZeroDatumPreview { role: DatumRole, gap?: DatumGap, is_entrance: boolean, }

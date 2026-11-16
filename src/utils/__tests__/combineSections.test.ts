@@ -1,6 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { combinePreview, combinePreviewAll, defaultCombinedName, formatRotation } from '../combineSections';
+import {
+  combineMoveIsSmall,
+  combineMoveShown,
+  combinePreview,
+  combinePreviewAll,
+  defaultCombinedName,
+  formatRotation,
+} from '../combineSections';
 import type { CombineCandidate } from '../../types/ipc/CombineCandidate';
+import type { CombinePlan } from '../../types/ipc/CombinePlan';
 
 describe('defaultCombinedName', () => {
   it('gives the two halves of a split their original name back, whichever is kept', () => {
@@ -84,6 +92,45 @@ describe('combinePreviewAll', () => {
     } as unknown as CombineCandidate;
     expect(combinePreviewAll([candidate]).stations).toEqual([at(1, 3), at(4, 0), at(7, 1), at(1, 2), at(1, 0)]);
   });
+
+  it('rings the stations of every closure the combine replaces, and of what takes its place (#749)', () => {
+    const at = (section_id: number, station_index: number) => ({ section_id, station_index });
+    const candidate = {
+      section_a: 1,
+      section_b: 4,
+      station_a: at(1, 1),
+      station_b: at(4, 0),
+      plan_keeping_a: {
+        kept: 1,
+        torn_ties: [],
+        closures_replaced: [
+          {
+            station_a: at(4, 2),
+            station_b: at(4, 0),
+            kind: 'legacy_closure',
+            by_station_a: at(1, 1),
+            by_station_b: at(4, 2),
+            by_kind: 'merge',
+          },
+        ],
+      },
+      plan_keeping_b: {
+        kept: 4,
+        torn_ties: [],
+        closures_replaced: [
+          {
+            station_a: at(4, 3),
+            station_b: at(1, 0),
+            kind: 'snapped_closure',
+            by_station_a: at(4, 3),
+            by_station_b: at(1, 1),
+            by_kind: 'loop_closure',
+          },
+        ],
+      },
+    } as unknown as CombineCandidate;
+    expect(combinePreviewAll([candidate]).stations).toEqual([at(1, 1), at(4, 0), at(4, 2), at(4, 3), at(1, 0)]);
+  });
 });
 
 describe('formatRotation', () => {
@@ -93,5 +140,33 @@ describe('formatRotation', () => {
     expect(formatRotation(0)).toBe('0.000°');
     expect(formatRotation(0.04)).toBe('+0.040°');
     expect(formatRotation(-0.04)).toBe('-0.040°');
+  });
+});
+
+describe('combineMoveShown', () => {
+  const tie = { station_a: { section_id: 4, station_index: 0 }, station_b: { section_id: 9, station_index: 1 } };
+  const plan = (moving_section: number | null, shift_m: number, torn = 0) =>
+    ({
+      kept: 1,
+      moving_section,
+      moved_sections: moving_section === null ? [] : [moving_section],
+      shift_m,
+      torn_ties: Array.from({ length: torn }, () => ({ ...tie, kind: 'snapped_closure', reason: 'loop' })),
+    }) as unknown as CombinePlan;
+
+  it('lists a move past the side-by-side tolerance, or a smaller one that tears a tie (#740)', () => {
+    expect(combineMoveShown(plan(null, 0))).toBe(false);
+    expect(combineMoveShown(plan(null, 0, 1))).toBe(false);
+    expect(combineMoveShown(plan(4, 0.0006))).toBe(false);
+    expect(combineMoveShown(plan(4, 0.001))).toBe(false);
+    expect(combineMoveShown(plan(4, 0.0006, 1))).toBe(true);
+    expect(combineMoveShown(plan(4, 0.0011))).toBe(true);
+    expect(combineMoveShown(plan(4, 0.4))).toBe(true);
+  });
+
+  it('words a listed move within the tolerance as side by side (#740)', () => {
+    expect(combineMoveIsSmall(plan(4, 0.0006, 1))).toBe(true);
+    expect(combineMoveIsSmall(plan(4, 0.001, 1))).toBe(true);
+    expect(combineMoveIsSmall(plan(4, 0.0011))).toBe(false);
   });
 });

@@ -532,6 +532,7 @@ fn two_merged_sections(state: &AppState) -> (SectionId, SectionId) {
         station_ref: StationRef::new(a, 0),
         coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
     assert!(datum.success, "SetZeroDatum failed: {:?}", datum.error);
     let merged = state.execute(Command::MergeStations {
@@ -891,6 +892,7 @@ fn save_and_reopen_preserves_an_orphan_loop_closure() {
             station_ref: StationRef::new(a, 0),
             coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
             accuracy_m: None,
+            entrance: None,
         });
         assert!(datum.success, "SetZeroDatum failed: {:?}", datum.error);
         for (left, right) in [((a, 1), (bridge, 0)), ((bridge, 1), (b, 0))] {
@@ -1543,6 +1545,7 @@ fn undo_of_remove_zero_datum_restores_the_original_order() {
             station_ref: StationRef::new(section_id, 0),
             coordinates: GpsCoordinates::new(latitude, 20.0, 0.0).unwrap(),
             accuracy_m: None,
+            entrance: None,
         });
         assert!(datum.success, "SetZeroDatum failed: {:?}", datum.error);
     }
@@ -1860,6 +1863,7 @@ fn the_adjusted_solve_is_a_function_of_the_project() {
         station_ref: StationRef::new(a, 0),
         coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
     assert!(datum.success, "SetZeroDatum failed: {:?}", datum.error);
     let merged = state.execute(Command::MergeStations {
@@ -2343,6 +2347,7 @@ fn removing_the_primary_zero_datum_re_anchors_the_datums_it_leaves_behind() {
         station_ref: StationRef::new(origin, 0),
         coordinates: GpsCoordinates::new(20.4, -87.3, 0.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
     assert!(
         first.success,
@@ -2354,6 +2359,7 @@ fn removing_the_primary_zero_datum_re_anchors_the_datums_it_leaves_behind() {
         station_ref: StationRef::new(anchored, 1),
         coordinates: GpsCoordinates::new(20.4358, -87.3479, 0.0).unwrap(),
         accuracy_m: None,
+        entrance: None,
     });
     assert!(
         second.success,
@@ -2454,6 +2460,7 @@ fn undoing_the_edit_that_re_anchored_a_component_puts_it_back() {
                 station_ref: StationRef::new(origin, 0),
                 coordinates: GpsCoordinates::new(20.4, -87.3, 0.0).unwrap(),
                 accuracy_m: None,
+                entrance: None,
             })
             .success,
         "SetZeroDatum (first) failed"
@@ -2464,6 +2471,7 @@ fn undoing_the_edit_that_re_anchored_a_component_puts_it_back() {
                 station_ref: StationRef::new(anchored, 1),
                 coordinates: GpsCoordinates::new(20.4358, -87.3479, 0.0).unwrap(),
                 accuracy_m: None,
+                entrance: None,
             })
             .success,
         "SetZeroDatum (second) failed"
@@ -2543,6 +2551,7 @@ fn deleting_the_primary_datums_station_does_not_silently_move_the_origin() {
                 station_ref: StationRef::new(origin, 0),
                 coordinates: GpsCoordinates::new(20.4, -87.3, 0.0).unwrap(),
                 accuracy_m: None,
+                entrance: None,
             })
             .success,
         "SetZeroDatum (first) failed"
@@ -2553,6 +2562,7 @@ fn deleting_the_primary_datums_station_does_not_silently_move_the_origin() {
                 station_ref: StationRef::new(anchored, 1),
                 coordinates: GpsCoordinates::new(20.4358, -87.3479, 0.0).unwrap(),
                 accuracy_m: None,
+                entrance: None,
             })
             .success,
         "SetZeroDatum (second) failed"
@@ -2686,6 +2696,7 @@ fn promoting_a_zero_datum_keeps_every_station_where_it_is_in_the_world() {
             station_ref: station,
             coordinates: gps,
             accuracy_m: None,
+            entrance: None,
         });
         assert!(set.success, "SetZeroDatum failed: {:?}", set.error);
     }
@@ -2775,6 +2786,7 @@ fn undoing_the_primary_datum_removal_restores_every_section_offset() {
                     station_ref: station,
                     coordinates: gps,
                     accuracy_m: None,
+                    entrance: None,
                 })
                 .success,
             "SetZeroDatum failed"
@@ -2835,6 +2847,7 @@ fn the_zero_datum_undo_capture_covers_every_section() {
                 station_ref: StationRef::new(anchored, 0),
                 coordinates: GpsCoordinates::new(20.4, -87.3, 0.0).unwrap(),
                 accuracy_m: None,
+                entrance: None,
             })
             .success,
         "SetZeroDatum failed"
@@ -2938,6 +2951,7 @@ fn adding_the_first_zero_datum_and_undoing_it_restores_every_section_offset() {
                 station_ref: StationRef::new(anchored, 1),
                 coordinates: GpsCoordinates::new(20.4, -87.3, 0.0).unwrap(),
                 accuracy_m: None,
+                entrance: None,
             })
             .success,
         "SetZeroDatum failed"
@@ -3016,6 +3030,7 @@ fn deleting_the_primary_datums_section_renormalises_the_frame() {
                     station_ref: station,
                     coordinates: gps,
                     accuracy_m: None,
+                    entrance: None,
                 })
                 .success,
             "SetZeroDatum failed"
@@ -3073,6 +3088,7 @@ fn the_delete_last_shot_path_renormalises_the_frame() {
                     station_ref: station,
                     coordinates: gps,
                     accuracy_m: None,
+                    entrance: None,
                 })
                 .success,
             "SetZeroDatum failed"
@@ -3141,6 +3157,7 @@ fn the_renormalised_frame_survives_save_and_reopen() {
                         station_ref: station,
                         coordinates: gps,
                         accuracy_m: None,
+                        entrance: None,
                     })
                     .success,
                 "SetZeroDatum failed"
@@ -3492,6 +3509,7 @@ fn a_coincident_closure_between_two_anchored_groups_is_never_aligned() {
             station_ref: station,
             coordinates: gps,
             accuracy_m: None,
+            entrance: None,
         });
         assert!(datum.success, "SetZeroDatum failed: {:?}", datum.error);
     }
@@ -4268,6 +4286,7 @@ fn a_legacy_remove_zero_datum_entry_still_restores_the_datum_at_its_index() {
                 previous_accuracy_m: None,
                 position: Some(position),
                 previous_offsets: previous_offsets.clone(),
+                previous_entrance: None,
             },
             previous_offsets,
         )
@@ -4329,6 +4348,7 @@ fn detached_anchored_closure() -> (AppState, SectionId, SectionId) {
             station_ref: StationRef::new(section, 0),
             coordinates: GpsCoordinates::new(latitude, 20.0, 0.0).unwrap(),
             accuracy_m: None,
+            entrance: None,
         });
         assert!(datum.success, "SetZeroDatum failed: {:?}", datum.error);
     }

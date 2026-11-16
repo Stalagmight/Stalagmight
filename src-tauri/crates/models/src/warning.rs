@@ -18,8 +18,8 @@ pub enum WarningSeverity {
 }
 
 /// Warning code for a GPS-fix zero datum whose GPS position is further from
-/// its surveyed position than 15 m plus 2% of the survey distance to the
-/// nearest other datum (#741 decision 4). A sanity check, not a blocker: the
+/// its surveyed position than 15 m plus 2% of the survey distance from the
+/// placement datum of its piece (#741 decision 4). A sanity check, not a blocker: the
 /// survey or the GPS may be off, and the surveyor may know the gap is real, so
 /// it is an advisory **warning** and ignorable. One row per such fix.
 ///
@@ -37,6 +37,24 @@ pub const DATUM_GPS_GAP: &str = "datum_gps_gap";
 /// [`DATUM_GPS_GAP`] for a fix on a section's first station (station 0). Same
 /// check and message; only the Ignore key differs.
 pub const DATUM_GPS_GAP_START: &str = "datum_gps_gap_start";
+
+/// The code an Ignore of a [`DATUM_GPS_GAP`] or [`DATUM_GPS_GAP_START`]
+/// warning is stored and matched under: the warning's code plus the datum's
+/// GPS, bit for bit (#741 U2). An Ignore says "this GPS reading is far from
+/// the survey, and I know"; once the GPS changes the reading is a new one,
+/// so the warning comes back, and an undo of that change brings the Ignore
+/// back with the old GPS. Every other code is returned as it is.
+pub fn datum_gap_ignore_code(code: &str, gps: &crate::GpsCoordinates) -> String {
+    if code == DATUM_GPS_GAP || code == DATUM_GPS_GAP_START {
+        format!(
+            "{code}@{:016x}{:016x}",
+            gps.latitude.to_bits(),
+            gps.longitude.to_bits()
+        )
+    } else {
+        code.to_string()
+    }
+}
 
 /// Warning code for a loop closure that ties the two ends of one shot together
 /// (#737). The Closures Computed View skips it, so it closes nothing; one
