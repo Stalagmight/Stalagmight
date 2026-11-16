@@ -998,7 +998,7 @@ fn hand_moves_anywhere_keep_the_closures_computed_view_the_solve() {
             let what = format!("{kind} seed {seed}");
             surveys += 1;
             solved += usize::from(!held.is_empty());
-            assert_view_is_the_solve(&base, &what);
+            assert_view_is_the_solve(&base, &format!("{what}, before any hand move"));
 
             // Anywhere, the held stations included.
             let mut with = base.clone();
