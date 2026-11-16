@@ -1670,9 +1670,15 @@ fn a_hand_moved_join_station_keeps_its_branch_through_undo_and_a_reopen() {
         name: "Hand moved".to_string(),
         location: None,
     });
-    let k = create(&state, "K", vec![shot(90.0, 10.0)]);
-    let o = create(&state, "O", vec![shot(90.0, 10.0)]);
-    let t = create(&state, "T", vec![shot(0.0, 5.0)]);
+    // Level shots, each section at its own depth: K 2 m, O 3 m, T 5 m.
+    let level = |azimuth: f64, length: f64, depth: f64| ShotData {
+        depth_in: depth,
+        depth_out: depth,
+        ..shot(azimuth, length)
+    };
+    let k = create(&state, "K", vec![level(90.0, 10.0, 2.0)]);
+    let o = create(&state, "O", vec![level(90.0, 10.0, 3.0)]);
+    let t = create(&state, "T", vec![level(0.0, 5.0, 5.0)]);
     {
         let mut guard = state.project.lock().unwrap();
         let project = guard.as_mut().unwrap();
@@ -1702,6 +1708,13 @@ fn a_hand_moved_join_station_keeps_its_branch_through_undo_and_a_reopen() {
         Some((0.3, 0.0, 0.2)),
         "the hand move comes from the file"
     );
+    let depth = |project: &crate::models::Project, at: StationRef| {
+        project.compute_station_raw_coords(at).unwrap().z
+    };
+    // O's start and T's read the average of their two readings, O's start
+    // plus its hand move in depth.
+    assert!((depth(&project, StationRef::new(o, 0)) - 4.2).abs() < 1e-9);
+    assert!((depth(&project, StationRef::new(t, 0)) - 4.0).abs() < 1e-9);
     let candidate = project.combine_candidate_for_sections(k, o).unwrap();
     let plan = &candidate.plan_keeping_a;
     assert_eq!(plan.moved_sections, vec![o]);
@@ -1753,6 +1766,14 @@ fn a_hand_moved_join_station_keeps_its_branch_through_undo_and_a_reopen() {
         .map(|s| s.length)
         .collect();
     assert_eq!(lengths, vec![10.0, 10.0], "no shot changes");
+    // The joined station and T read the average of the three readings there
+    // (K's, O's, T's); the joined station keeps K's hand move in depth, none,
+    // so O's 0.2 m goes with the rest of its hand move.
+    let joined_depth = (2.0 + 3.0 + 5.0) / 3.0;
+    for at in [StationRef::new(k, 1), t0] {
+        let now = depth(&combined, at);
+        assert!((now - joined_depth).abs() < 1e-9, "{at:?} at depth {now}");
+    }
     assert!(combined.check_structural_integrity().is_empty());
     let after = snapshot(&state);
 
@@ -1769,5 +1790,13 @@ fn a_hand_moved_join_station_keeps_its_branch_through_undo_and_a_reopen() {
         shown_stations(&state).into_iter().collect();
     for (at, p) in shown {
         assert!(dist(reopened[&at], p) < 1e-9, "the reopen moved {at:?}");
+    }
+    let reopened = state.get_project_state().unwrap();
+    for at in [StationRef::new(k, 1), t0] {
+        let now = depth(&reopened, at);
+        assert!(
+            (now - joined_depth).abs() < 1e-9,
+            "reopened, {at:?} at depth {now}"
+        );
     }
 }
