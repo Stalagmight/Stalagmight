@@ -72,6 +72,11 @@ impl Project {
                     return None;
                 }
                 let (east, north) = gps_to_local(&zd.gps, &frame.gps);
+                // A GPS that is no position (a damaged file) is no observation:
+                // as a pin it would turn the whole component's solve to NaN.
+                if !east.is_finite() || !north.is_finite() {
+                    return None;
+                }
                 let accuracy = match zd.effective_accuracy_m() {
                     a if a.is_finite() && a >= 0.0 => a,
                     _ => DEFAULT_GPS_ACCURACY_M,
