@@ -341,9 +341,19 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
   this: a closure join is over 1 mm apart (it shifts), and merged ends, or
   two sections already tied by merges elsewhere, are one merge group
   already, which `merge_stations` and `set_zero_datum` keep to one datum.
-  The sweeps check that no two datums share a merge group after a combine
-  that did not before (`check_datums_stay_apart`), and `side_by_side_network`
-  plants a shared entrance in one seed of three.
+  Where the two datums sit on the torn merge's own stations (the issue's
+  shape: D's at D 0 and O's on the joined station), the closure ties two
+  zero datums to one point, which the solve below cannot adjust ("Multiple
+  zero datums in a single constraint group"): that part shows measured (the
+  same geometry, since the two stations are one point) with the advisory
+  notice and `CLOSURE_ADJUSTMENT_FAILED` warning, until one datum is
+  removed. A shift tears the same merge with the same result (master did so
+  for any residual past dust), so this is no new state; refusing such a
+  combine instead would have to refuse it at every gap, and per kept
+  section (which section tears depends on it), and was left as a choice for
+  later. The sweeps check that no two datums share a merge group after a
+  combine that did not before (`check_datums_stay_apart`), and
+  `side_by_side_network` plants a shared entrance in one seed of three.
 - **Nothing is left across one shot (#746).** Once the two join stations are
   one, a tie the combine tears (a merge, or a snap made ordinary) can join the
   two ends of one shot: a one-shot passage X merged to both join stations,

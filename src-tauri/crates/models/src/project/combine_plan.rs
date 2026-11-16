@@ -52,6 +52,11 @@
 //!   does not depend on the gap, and the dialog lists them before the
 //!   confirm. A merged join, or a loop between the two sections, already
 //!   has both sides in one merge group, where one datum at most holds them.
+//!   When both datums sit on the torn merge's own two stations, the closure
+//!   ties them to one point and the closure-adjusted view cannot solve that
+//!   part (it reports it), exactly as after a shift; the tear is kept rather
+//!   than a refusal, which would have to hold at every gap and per kept
+//!   section.
 
 use std::collections::{HashMap, HashSet};
 
