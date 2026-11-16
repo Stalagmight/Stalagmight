@@ -359,3 +359,33 @@ fn two_placement_datums_in_one_group_are_refused_not_a_panic() {
     );
     assert!(result.is_err(), "{result:?}");
 }
+
+#[test]
+fn a_hard_fix_one_shot_from_the_placement_datum_reaches_its_gps() {
+    // A single shot: its start holds the placement datum and its end a hard
+    // fix. Both groups are held, so nothing is left to solve, and the shot
+    // between them still has to be rewritten to put the fix on its GPS.
+    let mut project = Project::new("One shot".to_string(), None);
+    let a = add(&mut project, vec![shot(90.0, 5.0, 7.0)]);
+    let (start, end) = (StationRef::new(a, 0), StationRef::new(a, 1));
+    let surveyed = raw(&project, end);
+    let fix_gps = gps_at(surveyed.x, surveyed.y + GAP_NORTH_M);
+    project.zero_datums.push(ZeroDatum::new(
+        project.key_for_ref(start).unwrap(),
+        origin(),
+    ));
+    project.zero_datums.push(ZeroDatum {
+        station_ref: project.key_for_ref(end).unwrap(),
+        gps: fix_gps,
+        accuracy_m: None,
+        entrance: None,
+    });
+    let before = all_positions(&project);
+
+    solve(&mut project, start, &[]);
+
+    let (gx, gy) = gps_to_local(&fix_gps, &origin());
+    assert_at(&project, end, gx, gy);
+    assert_at(&project, start, 0.0, 0.0);
+    assert_depths_unchanged(&before, &all_positions(&project));
+}

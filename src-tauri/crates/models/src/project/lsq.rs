@@ -542,10 +542,12 @@ impl Project {
             }
         }
 
+        // With no unknown left every group is held, by a placement datum, a hard
+        // GPS fix or the anchor. There is nothing to solve, but the shots between
+        // the held groups are still rewritten below: a hard fix one shot from the
+        // placement datum, or two hard fixes, would otherwise never reach their
+        // GPS.
         let n = unknown_index.len();
-        if n == 0 {
-            return Ok(());
-        }
 
         // Sparse assembly for the symmetric positive-definite normal matrix A^T A.
         // The matrix is a weighted graph Laplacian (grounded at the fixed
@@ -742,8 +744,11 @@ impl Project {
         // former full-system PCG, which took O(loop-diameter) iterations - i.e.
         // O(n) iterations on a single long loop, making the solve O(n²) (#81).
         // See `solve_reduced_laplacian`.
-        let (sol_x, sol_y) =
-            Self::solve_reduced_laplacian(n, &diag_x, &diag_y, &atb_x, &atb_y, &adj, &x0_x, &x0_y);
+        let (sol_x, sol_y) = if n == 0 {
+            (Vec::new(), Vec::new())
+        } else {
+            Self::solve_reduced_laplacian(n, &diag_x, &diag_y, &atb_x, &atb_y, &adj, &x0_x, &x0_y)
+        };
 
         // Optimality guard (tests only): the closure adjustment is the minimizer of
         // the weighted misclosure, i.e. the solution of the SPD normal equations
