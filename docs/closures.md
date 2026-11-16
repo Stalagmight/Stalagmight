@@ -349,9 +349,11 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
   way: exact in the Raw Data View, but this view solves shots, merges and
   closures, never manual offsets, so a folded hand move would enter every
   loop through its station and move other stations here. (This view's own
-  handling of a manual offset on a station a merge or closure ties is off as
-  it is: once it solves a closure in that survey it puts the station off
-  what is tied to it, combine or not, so the sweeps do not compare it there.)
+  handling of a manual offset is off as it is: once it solves a closure in
+  a survey with a station moved by hand, it can put that station off what a
+  merge or a closure ties to it, or shift the station's whole section by the
+  hand move and pull its merges apart, combine or not; so the sweeps do not
+  compare this view where a hand move is.)
 - **Nothing is left across one shot (#746).** Once the two join stations are
   one, a tie the combine tears (a merge, or a snap made ordinary) can join the
   two ends of one shot: a one-shot passage X merged to both join stations,
