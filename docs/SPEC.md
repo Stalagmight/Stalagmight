@@ -1739,18 +1739,21 @@ it, for the section it shows as kept, before the user confirms:
   own zero datum on the same GPS position: the joined station would put both
   datums in one merge group (#754). It is the other section's merge, unless
   the other section carries a datum itself, then the kept one's, whatever the
-  gap, and the dialog names the section the datum holds. Where both datums
-  sit on that merge's two stations, the closure ties two zero datums to one
-  point, which the Closures Computed View cannot adjust: it shows that part
-  measured and says so until one datum is removed, as after a shift. Where
-  two loop closures end up tying the same two stations, one stays: the first
-  that the Closures Computed View adjusts (the first of them when it adjusts
-  none), so a legacy (proportional or equal) or snapped closure there gives
-  way to an ordinary one, such as the closure a torn merge becomes (#749). A
-  snapped closure that gives way no longer averages its two stations'
-  depths. Details lists each closure that gives way and what takes its place
-  ("This closure is replaced:"); two closures the Closures Computed View
-  treats alike keep the first without a word.
+  gap, and a snapped closure from the combined side to that datum's side
+  becomes an ordinary one with it; the dialog names the section the datum
+  holds. Where both datums sit on that merge's two stations, the closure ties
+  two zero datums to one point, which the Closures Computed View cannot
+  adjust: it shows that part measured until one datum is removed, as after a
+  shift, and the dialog says so before the confirm (also when a loop closure
+  already there ends up tying the two datums). Where two loop closures end
+  up tying the same two stations, one stays: the first that the Closures
+  Computed View adjusts (the first of them when it adjusts none), so a
+  legacy (proportional or equal) or snapped closure there gives way to an
+  ordinary one, such as the closure a torn merge becomes (#749). A snapped
+  closure that gives way no longer averages its two stations' depths.
+  Details lists each closure that gives way and what takes its place ("This
+  closure is replaced:"); two closures the Closures Computed View treats
+  alike keep the first without a word.
 - **Ties across one shot are removed.** A tie that, combined, would be a loop
   closure joining the two ends of one shot (for example the merge at the far
   end of a one-shot passage merged to both join stations) would only be skipped

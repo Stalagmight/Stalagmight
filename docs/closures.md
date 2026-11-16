@@ -335,25 +335,45 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
   section (the kept one, when the other carries a datum itself) to its datum
   sides become `Batch` closures with the zero-datum reason, the same ties a
   shift or a residual would tear, so the rule does not depend on the gap.
+  So does a snapped closure from the combined section's side to a part such
+  a merge is torn from (`snaps_to_datum_parts`): the offset cascade solves
+  through a snap as through a merge, so it would keep the two datums in one
+  rigid group (and the per-command alignment sweep would then demote it
+  without a word). A shift tears that snap anyway, because its side moves.
   The dialog lists them before the confirm ("The merge of K and D", "D is
-  held by a zero datum and stays where it is."), naming as held the end on
-  neither of the two sections, and no move. Only a co-located join reaches
-  this: a closure join is over 1 mm apart (it shifts), and merged ends, or
-  two sections already tied by merges elsewhere, are one merge group
-  already, which `merge_stations` and `set_zero_datum` keep to one datum.
-  Where the two datums sit on the torn merge's own stations (the issue's
-  shape: D's at D 0 and O's on the joined station), the closure ties two
-  zero datums to one point, which the solve below cannot adjust ("Multiple
-  zero datums in a single constraint group"): that part shows measured (the
-  same geometry, since the two stations are one point) with the advisory
-  notice and `CLOSURE_ADJUSTMENT_FAILED` warning, until one datum is
-  removed. A shift tears the same merge with the same result (master did so
-  for any residual past dust), so this is no new state; refusing such a
-  combine instead would have to refuse it at every gap, and per kept
-  section (which section tears depends on it), and was left as a choice for
-  later. The sweeps check that no two datums share a merge group after a
-  combine that did not before (`check_datums_stay_apart`), and
-  `side_by_side_network` plants a shared entrance in one seed of three.
+  held by a zero datum and stays where it is."), the held station named by
+  the plan (`TornTie.held`), and no move. In a project the app keeps sound
+  only a side-by-side join reaches this: a closure join is over 1 mm apart
+  (it shifts), and merged ends, or two sections already tied by merges
+  elsewhere, have both sides in one merge group, which `merge_stations` and
+  `set_zero_datum` keep to one datum. A file can still hold two datums in
+  one merge group (the integrity check reports it); a merged join there
+  reaches the rule too (both sides held once the join's own merges are left
+  out), and its tear leaves the two datums in two groups, a repair.
+  Where a closure the combine leaves puts two datums in one solve group (the
+  issue's shape: D's datum at D 0 and O's on the joined station, the torn
+  merge between them; or an ordinary closure already tying D 0 to K 0), the
+  solve below cannot adjust that part ("Multiple zero datums in a single
+  constraint group"): it shows measured (the same geometry, since the two
+  stations are one point) with the advisory notice and
+  `CLOSURE_ADJUSTMENT_FAILED` warning, until one datum is removed. A shift
+  tears the same merge with the same result (master did so for any residual
+  past dust), so this is no new state; refusing such a combine instead would
+  have to refuse it at every gap, and per kept section (which section tears
+  depends on it), and was left as a choice for later. The plan says so,
+  from the joined survey's sweep (`ties_between_datums` on its knots, the
+  solve's own groups): `TornTie.between_datums` on the tie ("Its two
+  stations are then held by two zero datums, so the Closures Computed View
+  will show this part of the survey as measured until one of them is
+  removed."), and `CombinePlan.adjustment_blocked_by_datums` for the part,
+  which a note says when no torn tie does, and which drops the claim that
+  the view adjusts the new closure like any other loop from the paragraph
+  under the torn ties. The sweeps check that no two datums share a merge
+  group or a rigid group after a combine that did not before
+  (`check_datums_stay_apart`), and the plan's two marks against the real
+  solve after every combine (`check_datum_refusal_planned`);
+  `side_by_side_network` plants a shared entrance on top of its side-by-side
+  pair in one seed of three (`plant_entrance`).
 - **Nothing is left across one shot (#746).** Once the two join stations are
   one, a tie the combine tears (a merge, or a snap made ordinary) can join the
   two ends of one shot: a one-shot passage X merged to both join stations,
