@@ -133,6 +133,13 @@ export function CombinePlanNotes({
       }),
     });
   }
+  // Two zero datums end up in one group the closure solve refuses (#754).
+  // A torn tie that puts them there says so on its own line; otherwise (a
+  // closure the join leaves there) the part says it here.
+  const measured = plan.adjustment_blocked_by_datums;
+  if (measured && !plan.torn_ties.some((tie) => tie.between_datums)) {
+    notes.push({ key: 'datums-measured', text: t('dialogs.combineSections.datumsMeasured') });
+  }
 
   // The plan the combine itself runs names these (#746): exactly what it removes.
   const removed = plan.closures_removed_across_one_shot ?? [];
@@ -140,12 +147,6 @@ export function CombinePlanNotes({
   const replaced = plan.closures_replaced ?? [];
   const tieId = (a: StationRef, b: StationRef) =>
     `${a.section_id}-${a.station_index}-${b.section_id}-${b.station_index}`;
-  // A tie torn for a zero datum is the merge of one of the two sections (the
-  // one that moves, or with nothing to move the one whose merge tears, #754)
-  // to a section on its datum side: the held end is on neither of the two.
-  const otherId = candidate.section_a === keptId ? candidate.section_b : candidate.section_a;
-  const heldEnd = (a: StationRef, b: StationRef) =>
-    [a, b].find((s) => s.section_id !== keptId && s.section_id !== otherId);
   const ends = (a: StationRef, b: StationRef) => ({
     a: <TieEnd at={a} sectionName={sectionName} stationLabel={stationLabel} />,
     b: <TieEnd at={b} sectionName={sectionName} stationLabel={stationLabel} />,
@@ -170,11 +171,12 @@ export function CombinePlanNotes({
               {plan.torn_ties.map((tie) => {
                 const id = tieId(tie.station_a, tie.station_b);
                 const key = tie.kind === 'merge' ? 'tornMerge' : 'tornSnapped';
-                const held = heldEnd(tie.station_a, tie.station_b);
+                // The plan names the end a zero datum holds (#754).
+                const held = tie.reason === 'zero_datum' ? tie.held : null;
                 return (
                   <li key={id} data-testid={`combine-torn-tie-${id}`}>
                     <Trans i18nKey={`dialogs.combineSections.${key}`} components={ends(tie.station_a, tie.station_b)} />
-                    {tie.reason === 'zero_datum' && held && (
+                    {held && (
                       <>
                         {' '}
                         <Trans
@@ -183,16 +185,24 @@ export function CombinePlanNotes({
                         />
                       </>
                     )}
+                    {tie.between_datums && (
+                      <span data-testid={`combine-torn-measured-${id}`}>
+                        {' '}
+                        {t('dialogs.combineSections.tornBetweenDatums')}
+                      </span>
+                    )}
                   </li>
                 );
               })}
             </ul>
             {plan.torn_ties.some((tie) => tie.reason === 'loop') && (
               <span className="block mt-1 text-text-secondary" data-testid="combine-torn-why">
+                {/* The view adjusts the new closure only where no two zero
+                    datums share a solve group (#754). */}
                 {t(
-                  combineMoveShown(plan)
-                    ? 'dialogs.combineSections.tornWhyMoves'
-                    : 'dialogs.combineSections.tornWhyStays'
+                  `dialogs.combineSections.${combineMoveShown(plan) ? 'tornWhyMoves' : 'tornWhyStays'}${
+                    measured ? 'Measured' : ''
+                  }`
                 )}
               </span>
             )}

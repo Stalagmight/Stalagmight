@@ -5501,7 +5501,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               const torn = merges
                 .filter((m) => pair.has(m.station_a.section_id) && pair.has(m.station_b.section_id) && m.station_a.section_id !== m.station_b.section_id)
                 .filter((m) => !((same(m.station_a, a) && same(m.station_b, b)) || (same(m.station_a, b) && same(m.station_b, a))))
-                .map((m) => ({ station_a: m.station_a, station_b: m.station_b, kind: 'merge', reason: 'loop' }));
+                .map((m) => ({ station_a: m.station_a, station_b: m.station_b, kind: 'merge', reason: 'loop', held: null, between_datums: false }));
               // The mock's co-located ends coincide exactly, so only a closure
               // join moves a side (the backend also moves one by a side-by-side
               // residual under 1 mm, #740, which the dialog does not list).
@@ -5517,6 +5517,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   moved_sections: shift > 0.001 ? [other] : [],
                   shift_m: shift > 0.001 ? shift : 0,
                   torn_ties: torn,
+                  adjustment_blocked_by_datums: false,
                   azimuth_rotation_deg: null,
                   join_offset_change_m: null,
                   ...(removed.length > 0 ? { closures_removed_across_one_shot: removed } : {}),

@@ -89,6 +89,7 @@ function quietPlan(kept: number, overrides: Record<string, unknown> = {}) {
     moved_sections: [],
     shift_m: 0,
     torn_ties: [],
+    adjustment_blocked_by_datums: false,
     azimuth_rotation_deg: null,
     join_offset_change_m: null,
     ...overrides,
@@ -305,6 +306,9 @@ describe('CombineSectionsDialog', () => {
       station_b: { section_id: b[0], station_index: b[1] },
       kind,
       reason,
+      // The plan names the end a zero datum holds: here always b.
+      held: reason === 'zero_datum' ? { section_id: b[0], station_index: b[1] } : null,
+      between_datums: false,
     });
     dialogData = {
       candidate: candidate({
@@ -634,17 +638,43 @@ describe('CombineSectionsDialog', () => {
     }
   });
 
-  it('with nothing to move, names the section a zero datum holds for a merge torn for it (#754)', () => {
-    const tie = (a: [number, number], b: [number, number]) => ({
-      station_a: { section_id: a[0], station_index: a[1] },
-      station_b: { section_id: b[0], station_index: b[1] },
-      kind: 'merge',
-      reason: 'zero_datum',
-    });
+  /** A tie torn for a zero datum holding `held`, as the plan names it. */
+  const datumTie = (
+    kind: string,
+    a: [number, number],
+    b: [number, number],
+    held: [number, number],
+    between_datums = false
+  ) => ({
+    station_a: { section_id: a[0], station_index: a[1] },
+    station_b: { section_id: b[0], station_index: b[1] },
+    kind,
+    reason: 'zero_datum',
+    held: { section_id: held[0], station_index: held[1] },
+    between_datums,
+  });
+  const loopTie = (kind: string, a: [number, number], b: [number, number]) => ({
+    station_a: { section_id: a[0], station_index: a[1] },
+    station_b: { section_id: b[0], station_index: b[1] },
+    kind,
+    reason: 'loop',
+    held: null,
+    between_datums: false,
+  });
+
+  it('with nothing to move, names the section a zero datum holds for a tie torn for it (#754)', () => {
     // Two surveys from one entrance, each with its own datum: nothing moves,
     // and Main-A's merge to Section 9 (D, its datum side) becomes a loop
-    // closure. The merge names Main-A first, as the Merge tool stored it.
-    const plan = (kept: number) => quietPlan(kept, { torn_ties: [tie([2, 0], [9, 0])] });
+    // closure, named Main-A first as the Merge tool stored it; so does a snap
+    // from Section 7 (merged to Main-A) to D. The held end is the one the
+    // plan names, which for the snap is on neither combined section.
+    const plan = (kept: number) =>
+      quietPlan(kept, {
+        torn_ties: [
+          datumTie('merge', [2, 0], [9, 0], [9, 0]),
+          datumTie('snapped_closure', [7, 1], [9, 2], [9, 2]),
+        ],
+      });
     dialogData = {
       candidate: candidate({ plan_keeping_a: plan(2), plan_keeping_b: plan(5) }),
     };
@@ -653,12 +683,99 @@ describe('CombineSectionsDialog', () => {
       if (swap) fireEvent.click(screen.getByTestId('combine-swap-kept'));
       expect(screen.getAllByTestId(/^combine-torn-tie-/).map(tieText)).toEqual([
         'The merge of [section Main-A] [station 2:0] and [section Section 9] [station 9:0] [section Section 9] is held by a zero datum and stays where it is.',
+        'The snapped closure between [section Section 7] [station 7:1] and [section Section 9] [station 9:2] [section Section 9] is held by a zero datum and stays where it is.',
       ]);
-      // Nothing moves, and the tie tears for the datum, not to open a loop.
-      for (const id of ['combine-note-move', 'combine-note-move-with', 'combine-note-kept-moves', 'combine-torn-why']) {
+      // Nothing moves, and the ties tear for the datum, not to open a loop;
+      // the closures join no two datums, so nothing says the view cannot
+      // adjust this part.
+      for (const id of [
+        'combine-note-move',
+        'combine-note-move-with',
+        'combine-note-kept-moves',
+        'combine-torn-why',
+        'combine-note-datums-measured',
+      ]) {
         expect(screen.queryByTestId(id)).toBeNull();
       }
+      expect(screen.queryAllByTestId(/^combine-torn-measured-/)).toHaveLength(0);
     }
+  });
+
+  it('says when the closure a torn tie becomes ties two zero datums, so the part shows measured (#754)', () => {
+    // The issue's shape: both datums at the entrance, the merge between them.
+    dialogData = {
+      candidate: candidate({
+        plan_keeping_a: quietPlan(2, {
+          torn_ties: [datumTie('merge', [2, 0], [9, 0], [9, 0], true)],
+          adjustment_blocked_by_datums: true,
+        }),
+      }),
+    };
+    render(<CombineSectionsDialog />);
+    expect(screen.getAllByTestId(/^combine-torn-tie-/).map(tieText)).toEqual([
+      'The merge of [section Main-A] [station 2:0] and [section Section 9] [station 9:0] [section Section 9] is held by a zero datum and stays where it is. Its two stations are then held by two zero datums, so the Closures Computed View will show this part of the survey as measured until one of them is removed.',
+    ]);
+    expect(screen.getByTestId('combine-torn-measured-2-0-9-0')).toBeInTheDocument();
+    // The tie says it; the part does not say it again.
+    expect(screen.queryByTestId('combine-note-datums-measured')).toBeNull();
+    expect(screen.queryByTestId('combine-torn-why')).toBeNull();
+  });
+
+  it('never says the view adjusts a new closure where two zero datums block it (#754)', () => {
+    const blocked = { adjustment_blocked_by_datums: true };
+    dialogData = {
+      candidate: candidate({
+        // Nothing moves: a loop's merge tears, and the datum merge's closure
+        // ties two datums (a file already holding two datums in one group).
+        plan_keeping_a: quietPlan(2, {
+          ...blocked,
+          torn_ties: [loopTie('merge', [5, 2], [9, 1]), datumTie('merge', [2, 0], [8, 0], [8, 0], true)],
+        }),
+        // A shift: the snap from the moving side tears with the datum merge.
+        plan_keeping_b: quietPlan(5, {
+          ...blocked,
+          moving_section: 5,
+          kept_moves_because: 'zero_datum',
+          moved_sections: [5],
+          shift_m: 0.0005,
+          torn_ties: [loopTie('snapped_closure', [5, 1], [7, 0]), datumTie('merge', [5, 0], [8, 0], [8, 0], true)],
+        }),
+      }),
+    };
+    render(<CombineSectionsDialog />);
+    expect(screen.getByTestId('combine-torn-why').textContent).toBe(
+      'Otherwise the combined section would be tied to itself.'
+    );
+    fireEvent.click(screen.getByTestId('combine-swap-kept'));
+    expect(screen.getByTestId('combine-torn-why').textContent).toBe("The loop's misclosure moves to the new closure.");
+  });
+
+  it('says the part shows measured when the join, not a torn tie, ties two zero datums (#754)', () => {
+    // An ordinary closure already ties D's datum station to Main-A's end,
+    // and Main-B's datum is on the other end: joined, the two datums share
+    // the closure's group. Only the loop's merge tears.
+    dialogData = {
+      candidate: candidate({
+        plan_keeping_a: quietPlan(2, {
+          adjustment_blocked_by_datums: true,
+          torn_ties: [loopTie('merge', [5, 2], [9, 1])],
+        }),
+        plan_keeping_b: quietPlan(5, { torn_ties: [loopTie('merge', [5, 2], [9, 1])] }),
+      }),
+    };
+    render(<CombineSectionsDialog />);
+    expect(screen.getByTestId('combine-note-datums-measured')).toHaveTextContent(
+      'Once combined, a loop closure here ties two zero datums together, so the Closures Computed View will show this part of the survey as measured until one of them is removed.'
+    );
+    expect(screen.getByTestId('combine-torn-why').textContent).toBe(
+      'Otherwise the combined section would be tied to itself.'
+    );
+    // Keeping Main-B nothing blocks the view: the full sentence, no note.
+    fireEvent.click(screen.getByTestId('combine-swap-kept'));
+    expect(screen.queryByTestId('combine-note-datums-measured')).toBeNull();
+    expect(screen.getByTestId('combine-torn-why').textContent).toBe(
+      'Otherwise the combined section would be tied to itself. The Closures Computed View adjusts the closure like any other loop.'
+    );
   });
 
   it('lists converted bearings, the kept quality and offset, renewed shot ids and crossings', () => {

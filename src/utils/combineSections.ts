@@ -91,9 +91,12 @@ export const COMBINE_SIDE_BY_SIDE_M = 0.001;
  * it and why, exactly. On its own a move that small is noise next to "Side by
  * side here", so the dialog lists it only when it changes a tie: a snap from
  * the moving side made ordinary, or (both sides held by zero datums) the
- * moving section's merge torn. Those ties are listed with why, and the why is
- * the move, so the move is listed too (`combineMoveIsSmall` picks its
- * wording). A move past the tolerance is always listed.
+ * moving section's merge torn. A snap's why is the move, so the move is
+ * listed too (`combineMoveIsSmall` picks its wording); a tie torn for a zero
+ * datum says which section the datum holds, and tears with no move at all
+ * when the two ends are one point (#754), so its why is the datum, not the
+ * move. A move past the tolerance is always listed; with no moving section
+ * there is none to list.
  */
 export function combineMoveShown(plan: CombinePlan): boolean {
   return plan.moving_section !== null && (plan.shift_m > COMBINE_SIDE_BY_SIDE_M || plan.torn_ties.length > 0);
