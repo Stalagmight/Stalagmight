@@ -17,7 +17,10 @@ use super::combine_closure_tests::{
     add, dist, every_station, network, passage_network, shot, side_by_side_network, xy,
 };
 use crate::config::ClosureAdjustmentConfig;
-use crate::{ClosureStrategy, LoopClosure, Project, SectionId, StationRef};
+use crate::{
+    gps_to_local, local_to_gps, ClosureStrategy, DatumRole, GpsCoordinates, LoopClosure, Project,
+    SectionId, StationRef, ZeroDatum,
+};
 
 /// Every station's closure-adjusted position (the Plan and Export geometry).
 fn view(project: &Project) -> HashMap<StationRef, (f64, f64)> {
@@ -174,7 +177,7 @@ fn pinned_survey() -> (Project, [SectionId; 4]) {
     p.set_section_offset(d, (100.0, 100.0));
     p.set_zero_datum(
         StationRef::new(d, 1),
-        crate::GpsCoordinates {
+        GpsCoordinates {
             latitude: 20.0,
             longitude: -87.0,
             depth_reference: 0.0,
@@ -412,12 +415,14 @@ fn root(parent: &mut HashMap<StationRef, StationRef>, x: StationRef) -> StationR
 ///
 /// - each tie group (stations merged, or tied by a closure the solve takes)
 ///   is shown on one point;
-/// - the stations the view holds a solved survey at (its zero datums, else
-///   its gauge station) are where the Raw Data View shows them;
+/// - the stations the view holds a solved survey at (its placement zero
+///   datums, else its gauge station) are where the Raw Data View shows them,
+///   and a hard GPS fix (#741) is shown on its GPS;
 /// - the adjusted chain positions (shown, less each station's own hand move)
 ///   fit the measured shots by weighted least squares: for every group the
 ///   solve may move, the weighted residuals of the shots pulling on it
-///   cancel, axis by axis, with the solve's own weights;
+///   cancel, axis by axis, with the solve's own weights, a soft GPS fix
+///   pulling its group's shown point toward its GPS by its weight;
 /// - a survey the view does not solve, or fails to, is shown as measured.
 fn assert_view_is_the_solve(project: &Project, what: &str) {
     let config = ClosureAdjustmentConfig::default();
@@ -471,19 +476,18 @@ fn assert_view_is_the_solve(project: &Project, what: &str) {
                 }
             }
         }
-        let datums: Vec<StationRef> = project
-            .zero_datums
-            .iter()
-            .filter_map(|z| project.resolve_key(&z.station_ref))
+        // Held: the placement datums (#741), else the gauge station, where
+        // the Raw Data View shows them; a hard GPS fix shows its station on
+        // its GPS, unless its group is held already (a placement datum, or
+        // an earlier hard fix, wins).
+        let placements: Vec<StationRef> = project
+            .placement_datum_refs()
+            .into_iter()
             .filter(|at| inside(at))
             .collect();
-        let held = if datums.is_empty() {
-            vec![anchor]
-        } else {
-            datums
-        };
+        let fixes = project.gps_fix_observations(&component);
         let mut fixed: HashSet<StationRef> = HashSet::new();
-        for at in &held {
+        for at in &placements {
             let (shown, measured) = (view[at], xy(project, *at));
             assert!(
                 dist(shown, measured) < 1e-6,
@@ -491,6 +495,27 @@ fn assert_view_is_the_solve(project: &Project, what: &str) {
                  it at {shown:?}"
             );
             fixed.insert(root(&mut parent, *at));
+        }
+        for fix in fixes.iter().filter(|f| f.weight.is_none()) {
+            if fixed.insert(root(&mut parent, fix.station)) {
+                let (shown, gps) = (view[&fix.station], (fix.east, fix.north));
+                assert!(
+                    dist(shown, gps) < 1e-6,
+                    "{what}: the hard GPS fix {:?} is shown at {shown:?}, {:.6} m off its GPS \
+                     {gps:?}",
+                    fix.station,
+                    dist(shown, gps)
+                );
+            }
+        }
+        if fixed.is_empty() {
+            let (shown, measured) = (view[&anchor], xy(project, anchor));
+            assert!(
+                dist(shown, measured) < 1e-6,
+                "{what}: the view holds the survey at {anchor:?}, shown at {measured:?}, but \
+                 shows it at {shown:?}"
+            );
+            fixed.insert(root(&mut parent, anchor));
         }
         let mut point: HashMap<StationRef, (StationRef, (f64, f64))> = HashMap::new();
         let mut pull: HashMap<StationRef, ([f64; 2], [f64; 2])> = HashMap::new();
@@ -552,6 +577,20 @@ fn assert_view_is_the_solve(project: &Project, what: &str) {
                     e.1[axis] += w[axis];
                 }
             }
+        }
+        // A soft GPS fix pulls its group's SHOWN point toward its GPS.
+        for fix in &fixes {
+            let Some(w) = fix.weight else { continue };
+            let r = root(&mut parent, fix.station);
+            if fixed.contains(&r) {
+                continue;
+            }
+            let shown = view[&fix.station];
+            let e = pull.entry(r).or_default();
+            e.0[0] += w * (shown.0 - fix.east);
+            e.0[1] += w * (shown.1 - fix.north);
+            e.1[0] += w;
+            e.1[1] += w;
         }
         for (group, (sum, weight)) in &pull {
             if fixed.contains(group) {
@@ -740,12 +779,14 @@ fn a_hand_move_on_the_held_station_holds_the_survey_where_it_is_shown() {
     assert_view_is_the_solve(&with, "held station");
 }
 
-/// A hand move on a zero datum, the station the view holds its survey at:
-/// the datum stays where the Raw Data View shows it, hand move included, and
-/// nothing else of its survey moves.
+/// A hand move on a placement zero datum (#741), the station the view holds
+/// its survey at: the datum stays where the Raw Data View shows it, hand move
+/// included (opening a file does not place the datum's group again, so that
+/// is off its GPS by the hand move), and nothing else of its survey moves.
 #[test]
 fn a_hand_move_on_a_zero_datum_shows_on_the_datum_alone() {
     let (without, [.., d]) = pinned_survey();
+    assert_eq!(without.datum_roles(), vec![Some(DatumRole::Placement)]);
     let at = StationRef::new(d, 1);
     let mut with = without.clone();
     plant(&mut with, at, (0.4, -0.25, 0.0));
@@ -839,7 +880,59 @@ fn random_hand(rng: &mut Rng) -> (f64, f64, f64) {
     (size * bearing.sin(), size * bearing.cos(), depth)
 }
 
-/// Every station a merge or a closure (of any strategy) names.
+/// Up to two GPS fixes (#741) on random stations of placed pieces (merge
+/// components holding a placement datum), each a few metres off where the
+/// survey shows its station: hard (the default accuracy, or 0) or soft (5 cm
+/// to 3 m). Returns how many hard and soft fixes it planted.
+fn plant_gps_fixes(project: &mut Project, rng: &mut Rng) -> (usize, usize) {
+    let Some(frame) = project.frame_datum().map(|zd| zd.gps) else {
+        return (0, 0);
+    };
+    let datums: HashSet<StationRef> = project.all_datum_refs().into_iter().collect();
+    let candidates: Vec<StationRef> = every_station(project)
+        .into_iter()
+        .filter(|at| !datums.contains(at))
+        .filter(|at| project.placement_datum_index(at.section_id).is_some())
+        .collect();
+    let (mut hard, mut soft) = (0, 0);
+    if candidates.is_empty() {
+        return (0, 0);
+    }
+    for _ in 0..rng.below(3) {
+        let at = candidates[rng.below(candidates.len())];
+        if project.all_datum_refs().contains(&at) {
+            continue;
+        }
+        let shown = xy(project, at);
+        let target = (
+            shown.0 + rng.range(-2.0, 2.0),
+            shown.1 + rng.range(-2.0, 2.0),
+        );
+        let Some((lat, lon)) = local_to_gps(target.0, target.1, &frame) else {
+            continue;
+        };
+        let accuracy_m = match rng.below(4) {
+            0 => None,
+            1 => Some(0.0),
+            _ => Some(rng.range(0.05, 3.0)),
+        };
+        if accuracy_m.is_some_and(|a| a > 0.0) {
+            soft += 1;
+        } else {
+            hard += 1;
+        }
+        project.zero_datums.push(ZeroDatum {
+            station_ref: project.key_for_ref(at).unwrap(),
+            gps: GpsCoordinates::new(lat, lon, 0.0).unwrap(),
+            accuracy_m,
+            entrance: None,
+        });
+    }
+    (hard, soft)
+}
+
+/// Every station a merge or a closure (of any strategy) names, or a zero
+/// datum (a placement datum or a GPS fix) holds.
 fn tied_stations(project: &Project) -> HashSet<StationRef> {
     project
         .station_merges
@@ -853,14 +946,16 @@ fn tied_stations(project: &Project) -> HashSet<StationRef> {
         )
         .flat_map(|(a, b)| [project.resolve_key(a), project.resolve_key(b)])
         .flatten()
+        .chain(project.all_datum_refs())
         .collect()
 }
 
 /// Hand moves anywhere in random surveys (the combine sweeps' networks:
 /// merged branches, snapped and recorded loops, zero datums, side-by-side
-/// ends, legacy closures): one to four stations moved by hand, on a loop, a
-/// spur, a merge, a closure's end, the held station or a datum, then settled
-/// as a file opens. The Closures Computed View is the solve with every hand
+/// ends, legacy closures), with up to two GPS fixes (#741, hard or soft)
+/// planted on placed pieces: one to four stations moved by hand, on a loop,
+/// a spur, a merge, a closure's end, the held station, a placement datum or
+/// a GPS fix, then settled as a file opens. The Closures Computed View is the solve with every hand
 /// move kept on its station ([`assert_view_is_the_solve`]; in a debug build
 /// the merge-alignment assertion after the solve runs too). And a hand move
 /// on a station that nothing ties is a nudge of that station alone: the view
@@ -880,30 +975,43 @@ fn hand_moves_anywhere_keep_the_closures_computed_view_the_solve() {
     let seeds = env("STALAGMIGHT_HAND_VIEW_SEEDS", 150);
     let first = env("STALAGMIGHT_HAND_VIEW_FIRST_SEED", 0);
     let (mut surveys, mut solved, mut nudged, mut tied_moved) = (0usize, 0usize, 0usize, 0usize);
+    let (mut hard_fixes, mut soft_fixes, mut fix_moved) = (0usize, 0usize, 0usize);
     for seed in first..first + seeds {
         for (kind, make) in [
             ("network", network as fn(u64) -> Project),
             ("passage", passage_network),
             ("side by side", side_by_side_network),
         ] {
-            let base = make(seed);
+            let mut base = make(seed);
             let mut rng = Rng(seed.wrapping_mul(0xA076_1D64_78BD_642F) | 1);
+            let (hard, soft) = plant_gps_fixes(&mut base, &mut rng);
+            hard_fixes += hard;
+            soft_fixes += soft;
+            let fixes: Vec<StationRef> = base
+                .gps_fix_datums()
+                .iter()
+                .filter_map(|zd| base.resolve_key(&zd.station_ref))
+                .collect();
             let stations = every_station(&base);
             let tied = tied_stations(&base);
             let held: Vec<StationRef> = base.adjustment_anchors_for_tests();
             let what = format!("{kind} seed {seed}");
             surveys += 1;
             solved += usize::from(!held.is_empty());
+            assert_view_is_the_solve(&base, &what);
 
             // Anywhere, the held stations included.
             let mut with = base.clone();
             for _ in 0..=rng.below(4) {
-                let at = if !held.is_empty() && rng.below(4) == 0 {
+                let at = if !fixes.is_empty() && rng.below(4) == 0 {
+                    fixes[rng.below(fixes.len())]
+                } else if !held.is_empty() && rng.below(4) == 0 {
                     held[rng.below(held.len())]
                 } else {
                     stations[rng.below(stations.len())]
                 };
                 tied_moved += usize::from(tied.contains(&at));
+                fix_moved += usize::from(fixes.contains(&at));
                 plant(&mut with, at, random_hand(&mut rng));
             }
             assert_view_is_the_solve(&with, &what);
@@ -933,10 +1041,141 @@ fn hand_moves_anywhere_keep_the_closures_computed_view_the_solve() {
     }
     eprintln!(
         "hand-moved views seeds {first}..{}: {surveys} surveys ({solved} the view solves), \
-         {tied_moved} hand moves on a merged or tied station, {nudged} on a free one",
+         {hard_fixes} hard and {soft_fixes} soft GPS fixes planted, {tied_moved} hand moves on \
+         a merged, tied or datum station ({fix_moved} on a GPS fix), {nudged} on a free one",
         first + seeds
     );
     if seeds >= 20 {
         assert!(solved > 0 && tied_moved > 0 && nudged > 0);
+        assert!(hard_fixes > 0 && soft_fixes > 0 && fix_moved > 0);
     }
+}
+
+/// The frame's GPS.
+fn origin() -> GpsCoordinates {
+    GpsCoordinates::new(20.5, -87.3, 0.0).unwrap()
+}
+
+/// A survey with a placement datum (the frame) at A's start and a GPS fix
+/// (#741) at A's end: A runs about 50 m east in five shots, C is merged at
+/// A's end and runs 12 m north, and A's end may be moved by `hand`. The
+/// fix's GPS is at `gps` in the frame's local metres, its accuracy
+/// `accuracy_m` (`None`: the default, a hard fix).
+fn fixed_survey(
+    hand: Option<(f64, f64)>,
+    gps: (f64, f64),
+    accuracy_m: Option<f64>,
+) -> (Project, [SectionId; 2]) {
+    let mut p = Project::new("Fix".to_string(), None);
+    let a = add(
+        &mut p,
+        "A",
+        (0..5)
+            .map(|k| shot(80.0 + 4.0 * f64::from(k), 10.0))
+            .collect(),
+    );
+    let c = add(&mut p, "C", vec![shot(10.0, 6.0), shot(350.0, 6.0)]);
+    let end = StationRef::new(a, 5);
+    let at = xy(&p, end);
+    p.set_section_offset(c, at);
+    p.merge_stations(end, StationRef::new(c, 0)).unwrap();
+    p.zero_datums.push(ZeroDatum::new(
+        p.key_for_ref(StationRef::new(a, 0)).unwrap(),
+        origin(),
+    ));
+    let (lat, lon) = local_to_gps(gps.0, gps.1, &origin()).unwrap();
+    p.zero_datums.push(ZeroDatum {
+        station_ref: p.key_for_ref(end).unwrap(),
+        gps: GpsCoordinates::new(lat, lon, 0.0).unwrap(),
+        accuracy_m,
+        entrance: None,
+    });
+    assert_eq!(
+        p.datum_roles(),
+        vec![Some(DatumRole::Placement), Some(DatumRole::GpsFix)]
+    );
+    if let Some(h) = hand {
+        plant(&mut p, end, (h.0, h.1, 0.0));
+    }
+    (p, [a, c])
+}
+
+/// Where A's end is surveyed (its chain position, no hand move).
+fn surveyed_end() -> (f64, f64) {
+    let (p, [a, _]) = fixed_survey(None, (0.0, 0.0), None);
+    xy(&p, StationRef::new(a, 5))
+}
+
+/// A hand move on a hard GPS fix's station (#741, the default accuracy): the
+/// fix holds the station where it is SHOWN, so the view shows it exactly on
+/// its GPS, as the Raw Data View measures the fix's gap from where it shows
+/// the station (`datum_gap`) and as placement puts a datum's station where
+/// it is shown on its GPS. What is merged there stays on it, and the shots
+/// between the placement datum and the fix take the chain gap.
+#[test]
+fn a_hand_move_on_a_hard_gps_fix_shows_the_station_on_its_gps() {
+    let end = surveyed_end();
+    let target = (end.0 + 0.8, end.1 + 1.5);
+    let (p, [a, c]) = fixed_survey(Some((0.3, -0.2)), target, None);
+    let v = view(&p);
+    let fix = p
+        .gps_fix_datums()
+        .first()
+        .map(|zd| gps_to_local(&zd.gps, &origin()))
+        .unwrap();
+    let at = StationRef::new(a, 5);
+    assert!(
+        dist(v[&at], fix) < 1e-9,
+        "A's end is shown at {:?}, {:.6} m off its GPS {fix:?}",
+        v[&at],
+        dist(v[&at], fix)
+    );
+    assert!(
+        dist(v[&at], v[&StationRef::new(c, 0)]) < 1e-9,
+        "the merge at the fix came apart"
+    );
+    assert!(dist(v[&StationRef::new(a, 0)], (0.0, 0.0)) < 1e-9);
+    // The gap the Raw Data View reports is the one the view closes.
+    let gap = p.datum_gap(at, &p.gps_fix_datums()[0].gps).unwrap();
+    let shown = xy(&p, at);
+    assert!((gap.gap_m - dist(shown, fix)).abs() < 1e-6);
+    assert_view_is_the_solve(&p, "hard fix");
+}
+
+/// A hand move on a soft GPS fix's station: the fix pulls the station's
+/// SHOWN position toward its GPS, so the view is the one of the survey
+/// without the hand move whose GPS is moved the other way, plus the hand
+/// move on the station and on what is merged there (it follows the station
+/// as shown in both views). Pulling the chain position instead would give
+/// the view of the unmoved GPS plus the hand move.
+#[test]
+fn a_hand_move_on_a_soft_gps_fix_is_its_gps_moved_the_other_way() {
+    let end = surveyed_end();
+    let target = (end.0 + 0.8, end.1 + 1.5);
+    let hand = (0.3, -0.2);
+    let (with, [a, c]) = fixed_survey(Some(hand), target, Some(0.2));
+    let (without, _) = fixed_survey(None, (target.0 - hand.0, target.1 - hand.1), Some(0.2));
+    let (now, was) = (view(&with), view(&without));
+    let carried = |at: &StationRef| at.section_id == c || *at == StationRef::new(a, 5);
+    for (at, p) in &was {
+        let h = if carried(at) { hand } else { (0.0, 0.0) };
+        let want = (p.0 + h.0, p.1 + h.1);
+        assert!(
+            dist(now[at], want) < 1e-6,
+            "{at:?} is at {:?} in the view, {:.6} m off {want:?}",
+            now[at],
+            dist(now[at], want)
+        );
+    }
+    // The pull is real: the fix moved A's end well off where it is surveyed.
+    let pulled = dist(
+        now[&StationRef::new(a, 5)],
+        xy(&with, StationRef::new(a, 5)),
+    );
+    assert!(
+        pulled > 0.3,
+        "the soft fix pulled A's end only {pulled:.6} m"
+    );
+    assert_view_is_the_solve(&with, "soft fix");
+    assert_view_is_the_solve(&without, "soft fix, no hand move");
 }

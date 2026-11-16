@@ -1054,13 +1054,17 @@ pub(super) fn check_combined(
     // what is merged to it, so the offsets are solved again as a reload
     // does, with the station the view holds the join's survey at kept where
     // it is shown.
+    // Solved as the view and the combine's anchor rule count it: a closure
+    // the solve takes, or a GPS fix (#741).
     let real_solved = |view: &Project| {
         let skipped: HashSet<u64> = view
             .closures_across_one_shot()
             .into_iter()
             .map(|c| c.closure_id)
             .collect();
-        view.component_has_eligible_closure(&view.get_connected_section_ids(kept), &skipped)
+        let component = view.get_connected_section_ids(kept);
+        view.component_has_eligible_closure(&component, &skipped)
+            || view.component_has_gps_fix(&component)
     };
     let fixed_join = if dropped_at == k_join { o_join } else { k_join };
     if carried {
