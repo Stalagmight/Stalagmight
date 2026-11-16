@@ -226,9 +226,13 @@ pub struct ZeroDatum {
     pub depth: f64,
     /// Horizontal disagreement, metres, between where this datum's station sits
     /// in the local frame and where its GPS says it should be relative to the
-    /// frame datum. `Some(~0)` when consistent; a large value means the stored
-    /// offsets no longer honour this datum (e.g. a datum removed and re-added).
-    /// `None` unless station positions were requested and a frame datum exists.
+    /// frame datum. For a datum that places its piece, `Some(~0)` when
+    /// consistent; a large value means the stored offsets no longer honour
+    /// this datum (e.g. a datum removed and re-added). For a GPS fix (a later
+    /// datum in a merge-connected piece that another datum places, #741) it is
+    /// the fix's gap to its GPS, which is expected: a fix does not move the
+    /// stored survey. `None` unless station positions were requested and a
+    /// frame datum exists.
     pub residual_m: Option<f64>,
 }
 
