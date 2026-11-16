@@ -593,8 +593,9 @@ station where it is shown while the shots pulled the rest offset-free: a hand mo
 the held station shifted the whole adjusted survey (Plan and Export too) by it, the
 realignment pulled sections that hang off merges apart from the held one (in a debug
 build: `Merge alignment violated after adjust_loop_closures`), and a hand move on a
-loop station vanished from the view, its shots absorbing it. A survey without a hand
-move solves bit for bit as before. `project/closure_hand_move_tests.rs` checks the
+loop station vanished from the view, its shots absorbing it. Without a hand move the
+observation is the bare vector, as before, so the change leaves such a survey's solve
+as it was (`a_survey_without_a_hand_move_keeps_its_closures_computed_view`). `project/closure_hand_move_tests.rs` checks the
 view against this definition without solving (`assert_view_is_the_solve`: ties on one
 point as shown, held stations and hard fixes where shown or on their GPS, and the
 weighted shot and soft-fix residuals balanced at every free group), on hand moves
