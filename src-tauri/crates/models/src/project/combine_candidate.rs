@@ -542,6 +542,7 @@ impl Project {
             join_offset_change_m: None,
             closures_removed_across_one_shot: None,
             closures_replaced: None,
+            moved_with_joined_station: None,
         };
         if touch.blocked.is_some() {
             return (empty, None);
@@ -549,8 +550,22 @@ impl Project {
         let Some((join, gap)) = self.join_point(pairing, touch, kept, table) else {
             return (empty, None);
         };
+        // The same gap as shown: each join station with its manual offset
+        // (#755). The two differ only where the hand moves differ.
+        let hand = |at| {
+            value_naming(self, &self.station_offsets, at)
+                .copied()
+                .unwrap_or_default()
+        };
+        let (hand_k, hand_o): ((f64, f64, f64), (f64, f64, f64)) =
+            (hand(join.join_k), hand(join.join_o));
+        let shown = if (hand_k.0, hand_k.1) == (hand_o.0, hand_o.1) {
+            gap
+        } else {
+            (gap.0 + hand_k.0 - hand_o.0, gap.1 + hand_k.1 - hand_o.1)
+        };
         let rigid = table.ties.get_or_init(|| self.rigid_ties());
-        let Ok(ties) = self.plan_ties(&join, gap, rigid, &table.closure_facts) else {
+        let Ok(ties) = self.plan_ties(&join, (gap, shown), rigid, &table.closure_facts) else {
             return (empty, None);
         };
         let (Some(k), Some(o)) = (self.get_section(join.kept), self.get_section(join.other)) else {

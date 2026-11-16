@@ -172,6 +172,21 @@ pub struct CombineReplacedClosure {
     pub by_kind: CombineRemovedKind,
 }
 
+/// Sections merged at the join station whose hand move (a manual station
+/// offset, from an older or hand-edited file) the joined station does not
+/// keep (#755): they stay merged to the joined station and move with it,
+/// onto the joined station as shown, which is not the shift of the side
+/// they are on. Named as they are before the combine.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+pub struct CombineJoinedMove {
+    /// The join station whose hand move the joined station does not keep.
+    pub station: StationRef,
+    /// The sections merged at it, and the sections that hang off them.
+    pub sections: Vec<SectionId>,
+    /// How far (metres, horizontal) they move.
+    pub shift_m: f64,
+}
+
 /// What `Project::combine_sections_reporting` did besides the join, for the
 /// command to report: the ties it removed across one shot (#746) and the
 /// closures it replaced (#749), each as the plan the dialog showed named
@@ -210,7 +225,8 @@ pub struct CombinePlan {
     /// Why the kept section's side moves, when it is the one that does.
     pub kept_moves_because: Option<KeptMovesReason>,
     /// Every section that moves, the moving section first, then the sections
-    /// still rigidly attached to it.
+    /// still rigidly attached to it (not those in `moved_with_joined_station`,
+    /// which move by a different amount).
     pub moved_sections: Vec<SectionId>,
     /// How far (metres, horizontal) the moving side moves.
     pub shift_m: f64,
@@ -239,6 +255,12 @@ pub struct CombinePlan {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub closures_replaced: Option<Vec<CombineReplacedClosure>>,
+    /// The sections that move with the joined station because they are merged
+    /// at the join station whose hand move it does not keep (#755). Absent
+    /// when there are none (and for a blocked choice).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub moved_with_joined_station: Option<CombineJoinedMove>,
 }
 
 /// Whether two sections can be combined, and where. Read-only: answered by
