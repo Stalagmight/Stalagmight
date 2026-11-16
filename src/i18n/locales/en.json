@@ -2458,6 +2458,8 @@
       "skippedClosures_other": "{{count}} loop closures skipped: each spans a single shot.",
       "failedParts_one": "Part of the survey could not be adjusted and is shown as measured.",
       "failedParts_other": "{{count}} parts of the survey could not be adjusted and are shown as measured.",
+      "farGpsFixes_one": "Bent to a GPS fix at {{station}}, {{gap}} m from its surveyed position. Check it.",
+      "farGpsFixes_other": "Bent to {{count}} GPS fixes far from their surveyed positions, up to {{gap}} m at {{station}}. Check them.",
       "showWarnings": "Show warnings"
     },
     "toasts": {
