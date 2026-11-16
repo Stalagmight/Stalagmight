@@ -2,7 +2,9 @@
 //! moves into a part a zero datum holds tears because that datum keeps the
 //! part where it is, and the plan says so (the zero-datum reason, so the
 //! dialog names the section that stays) where it used to give the loop
-//! reason.
+//! reason. And why the issue's own
+//! survey, a snapped part held to the rest by loop closures alone, is no
+//! survey the app leaves: a reopen settles it before any combine can see it.
 
 use super::combine_closure_tests::{add, check_combined, dist, options, shot, xy};
 use crate::{
@@ -72,6 +74,92 @@ fn reopen_settles_nothing(project: &Project) -> bool {
         .map(|c| (c.id, c.strategy, c.is_aligned))
         .collect();
     settled(project) == (project.station_merges.len(), closures)
+}
+
+/// The issue's survey (#756): K's end and O's start 5 mm apart, tied by a
+/// loop closure; N merged at K's start, M at O's end; Z snapped to O's
+/// station 1 and merged to W; W tied to M by an ordinary loop closure. No
+/// merge ties Z or W to anything else, and K's side (K, N) is tied to O's
+/// (O, M) by the join closure alone: planted as a file can carry them (the
+/// app snaps only stations already connected).
+fn issue_shape() -> Project {
+    let mut project = Project::new("Strand".to_string(), None);
+    let k = add(&mut project, "K", vec![shot(90.0, 10.0), shot(80.0, 5.0)]);
+    let o = add(&mut project, "O", vec![shot(0.0, 4.0), shot(300.0, 6.0)]);
+    let n = add(&mut project, "N", vec![shot(0.0, 3.0)]);
+    let m = add(&mut project, "M", vec![shot(90.0, 3.0)]);
+    let z = add(&mut project, "Z", vec![shot(180.0, 5.0)]);
+    let w = add(&mut project, "W", vec![shot(90.0, 4.0)]);
+    project.set_section_offset(k, (100.0, -40.0));
+    let k2 = xy(&project, StationRef::new(k, 2));
+    place(&mut project, o, 0, (k2.0 + 0.004, k2.1 - 0.003));
+    let k0 = xy(&project, StationRef::new(k, 0));
+    place(&mut project, n, 0, k0);
+    project
+        .merge_stations(StationRef::new(k, 0), StationRef::new(n, 0))
+        .unwrap();
+    let o2 = xy(&project, StationRef::new(o, 2));
+    place(&mut project, m, 0, o2);
+    project
+        .merge_stations(StationRef::new(o, 2), StationRef::new(m, 0))
+        .unwrap();
+    let o1 = xy(&project, StationRef::new(o, 1));
+    place(&mut project, z, 0, o1);
+    let z1 = xy(&project, StationRef::new(z, 1));
+    place(&mut project, w, 0, z1);
+    project
+        .merge_stations(StationRef::new(w, 0), StationRef::new(z, 1))
+        .unwrap();
+    plant(
+        &mut project,
+        StationRef::new(o, 1),
+        StationRef::new(z, 0),
+        ClosureStrategy::Move,
+        true,
+    );
+    plant(
+        &mut project,
+        StationRef::new(w, 1),
+        StationRef::new(m, 1),
+        ClosureStrategy::Batch,
+        false,
+    );
+    plant(
+        &mut project,
+        StationRef::new(k, 2),
+        StationRef::new(o, 0),
+        ClosureStrategy::Batch,
+        false,
+    );
+    project
+}
+
+/// Why #756 is not reachable in the app: its survey is not one the app
+/// leaves. The snap and the join closure each join two parts no merge ties
+/// (Z and W to O; K's side to O's), and a reopen (`redrive_offsets_after_load`,
+/// the orphan-closure sweep first) makes both merges, after which W's
+/// closure to M closes a true loop. So a project the app opens never holds
+/// the issue's state, Z and W tied to the rest by loop closures alone.
+#[test]
+fn the_issue_survey_is_one_a_reopen_already_settles() {
+    let project = issue_shape();
+    // The snap, W's closure to M, the join closure, in that order.
+    let w_to_m = project.loop_closures[1].id;
+    assert!(!reopen_settles_nothing(&project), "planted unsettled");
+    let (merges, closures) = settled(&project);
+    assert_eq!(
+        merges,
+        project.station_merges.len() + 2,
+        "the snap and the join closure become merges"
+    );
+    assert_eq!(
+        closures,
+        vec![(w_to_m, ClosureStrategy::Batch, false)],
+        "W's closure to M stays"
+    );
+    let mut reopened = project;
+    reopened.redrive_offsets_after_load();
+    assert!(reopen_settles_nothing(&reopened), "a second reopen");
 }
 
 /// The torn ties of `plan`, as (kind, ends sorted, reason, held end), merges
