@@ -170,8 +170,13 @@ the graph.
 The route is the ordered leg list from the origin through every way point to the
 turnaround, populated for any strategy once something is reachable.
 
-**Origin** - a hint. Unset means the zero datums (the entrance); a set origin that
-no longer resolves falls back to them rather than blanking the field.
+**Origin** - a hint. Unset means the entrance zero datums ("Start from entrance");
+a set origin that no longer resolves falls back to them rather than blanking the
+field. A placement datum is always an entrance; a GPS fix is one when it sits on a
+section's first or last station unless the user unticks Entrance in Edit Station,
+and a fix mid-passage (a radiolocation point) is not one unless ticked
+(`Project::entrance_datum_refs`, #741). Penetration and the distance gradient use
+the same roots.
 
 **Endpoint** - a hint: the lead being planned toward. Set it by left-clicking a
 station in Plan, by clicking a turn-frontier dot, or from the station context
