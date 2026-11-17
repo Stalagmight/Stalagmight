@@ -23,17 +23,16 @@ pressure.
    endpoint.
 
 > [!WARNING]
-> Plan mode is an aid, not a dive plan you can trust blindly. In the project's
-> own words, Stalagmight "is meant as an optional informational addition to,
-> but not a replacement for, cave survey training". It has no decompression
-> model, plans one open-circuit diver, and is only as good as the survey under
-> it.
+> Plan mode is an informational aid, not a dive plan to trust blindly, and it
+> does not replace dive planning or gas management training. It has no
+> decompression model, plans one open-circuit diver, and is only as good as
+> the survey under it.
 
 ## Plan mode is read-only
 
 The survey cannot change while you plan. The tools that edit the survey are
-hidden, the Sections tab is hidden, and where the project has loop closures the
-map shows the Closures Computed View. Click **Survey** to go back to editing.
+hidden, the Sections tab is hidden, and where the project has loop closures or
+GPS fixes the map shows the Closures Computed View. Click **Survey** to go back to editing.
 Your plan stays as it is when you switch modes; it is cleared when you open
 another project.
 

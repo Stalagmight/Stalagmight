@@ -98,7 +98,7 @@ The file is written; a note says what it could not carry.
 the stations and shots, but not the GPS fixes as zero datums: their stations
 come back as ordinary stations. The [import report](../screens/import-report.md)
 may also say that some loop closures were skipped and some sections dropped:
-these are the ties to the GPS fixes, not your survey.
+these are usually the ties to the GPS fixes, not your survey.
 
 ## Details
 

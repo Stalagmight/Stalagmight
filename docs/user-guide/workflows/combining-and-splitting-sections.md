@@ -19,7 +19,7 @@ everything back.
    section.
 2. Pick **Combine Section With** *name*... (for example **Combine Section With
    Side Passage...**). Where three or more sections end at the station, pick
-   **Combine Sections...** and then the pair.
+   **Combine Sections...** and then pick the pair from the submenu.
 3. Check the **Combine Sections** dialog and click **Combine**.
 
 Or select two sections in the **Sections** panel (Shift-click the
@@ -90,6 +90,7 @@ The menu item is greyed out, with the reason under it, when:
 - both join stations hold a zero datum: remove one first;
 - the station is merged to the middle of another section, not to its end;
 - rarer limits, such as a combined section of too many shots.
+
 ## Splitting a section
 
 1. Right-click a station in the middle of a section (not its first or last

@@ -75,7 +75,6 @@ still save, and the warning then also shows in the
   and **Save**. Removing the zero datum that places a piece hands that role to
   the next one; see
   [How roles change](../concepts/zero-datums-and-gps-fixes.md#how-roles-change).
-- Changing a GPS later: a placement datum's piece moves to the new GPS, and
-  every other placed piece stays on its own GPS; for a GPS fix nothing moves
-  in the Raw Data View.
+- Changing a GPS later: what moves depends on the zero datum's role; see
+  [How roles change](../concepts/zero-datums-and-gps-fixes.md#how-roles-change).
 - Changing only **Accuracy (m)** or **Entrance** moves nothing.
