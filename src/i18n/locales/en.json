@@ -3311,7 +3311,7 @@
             "title": "Placing the Survey on the Globe",
             "description": "Right-click a station > Set Zero Datum and enter its GPS. The first zero datum of each connected piece places that piece.",
             "descriptionItems": [
-              "More zero datums (other entrances, radiolocation points) become GPS fixes. The Closures Computed View, Plan and map export bend to pass through them.",
+              "More zero datums (other entrances, radiolocation points) become GPS fixes. The Closures Computed View, Plan and map export bend toward them.",
               "Each fix has an Accuracy and an Entrance setting in Edit Station.",
               "A warning shows when a fix is far from where the survey puts it."
             ]
