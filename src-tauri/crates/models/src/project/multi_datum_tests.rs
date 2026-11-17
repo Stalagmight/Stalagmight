@@ -8,8 +8,9 @@ use chrono::Utc;
 
 use crate::config::ClosureAdjustmentConfig;
 use crate::{
-    datum_gap_threshold_m, local_to_gps, ClosureStrategy, DatumRole, GpsCoordinates, Project,
-    SectionData, SectionId, ShotData, StationMerge, StationRef, ZeroDatum, MAX_GPS_ACCURACY_M,
+    datum_gap_threshold_m, gps_to_local, local_to_gps, ClosureStrategy, DatumRole, GpsCoordinates,
+    Project, SectionData, SectionId, ShotData, StationMerge, StationRef, ZeroDatum,
+    MAX_GPS_ACCURACY_M,
 };
 
 /// The first entrance's GPS, and the frame of every survey here.
@@ -851,4 +852,204 @@ fn a_station_holds_at_most_one_datum() {
     assert!(err.contains("already holds a zero datum"), "{err}");
     assert_eq!(project.zero_datums.len(), 2);
     assert!(project.station_exists(StationRef::new(a, 0)));
+}
+
+/// Two unconnected placed pieces (#769): A (frame, datum A:0) runs 200 m
+/// east, C is placed by its own GPS 300 m east and 100 m north of A:0, and
+/// C:3 holds a GPS fix.
+fn frame_and_placed_piece() -> (Project, SectionId, SectionId) {
+    let mut project = Project::new("FramePieces".to_string(), None);
+    let shots = (0..4)
+        .map(|_| ShotData {
+            azimuth_in: 90.0,
+            azimuth_out: 90.0,
+            length: 50.0,
+            ..Default::default()
+        })
+        .collect();
+    let a = project
+        .add_section(SectionData {
+            shots,
+            ..Default::default()
+        })
+        .id;
+    let c = north_line(&mut project, 3, 40.0);
+    project.ensure_shot_uuids();
+    project
+        .set_zero_datum(StationRef::new(a, 0), origin())
+        .unwrap();
+    project
+        .set_zero_datum(StationRef::new(c, 0), gps_at(300.0, 100.0))
+        .unwrap();
+    project
+        .set_zero_datum(StationRef::new(c, 3), gps_at(300.0, 225.0))
+        .unwrap();
+    assert_eq!(
+        project.datum_roles(),
+        vec![
+            Some(DatumRole::Placement),
+            Some(DatumRole::Placement),
+            Some(DatumRole::GpsFix)
+        ]
+    );
+    (project, a, c)
+}
+
+/// Every datum's key and GPS bits.
+fn datum_rows(project: &Project) -> Vec<(String, u64, u64)> {
+    project
+        .zero_datums
+        .iter()
+        .map(|zd| {
+            (
+                format!("{:?}", zd.station_ref),
+                zd.gps.latitude.to_bits(),
+                zd.gps.longitude.to_bits(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_new_frame_gps_re_places_every_other_piece_on_its_own_gps() {
+    let (mut project, a, c) = frame_and_placed_piece();
+    let a_before: Vec<_> = (0..=4)
+        .map(|i| xy(&project, StationRef::new(a, i)))
+        .collect();
+    let c_before: Vec<_> = (0..=3)
+        .map(|i| xy(&project, StationRef::new(c, i)))
+        .collect();
+    let c_gps = project.zero_datums[1].gps;
+    let rows_before = datum_rows(&project);
+
+    // The frame keeps its station and moves 100 m north.
+    let new_frame = gps_at(0.0, 100.0);
+    project
+        .set_zero_datum(StationRef::new(a, 0), new_frame)
+        .unwrap();
+
+    let a_after: Vec<_> = (0..=4)
+        .map(|i| xy(&project, StationRef::new(a, i)))
+        .collect();
+    assert_eq!(a_before, a_after, "the frame's piece stays on the origin");
+    let (ex, ey) = gps_to_local(&c_gps, &new_frame);
+    assert!((ex - 300.0).abs() < 0.01 && ey.abs() < 0.01, "({ex}, {ey})");
+    let (cx, cy) = xy(&project, StationRef::new(c, 0));
+    assert!(
+        (cx - ex).abs() < 1e-6 && (cy - ey).abs() < 1e-6,
+        "C:0 at ({cx}, {cy}), its GPS puts it at ({ex}, {ey})"
+    );
+    // One rigid translation: every shot keeps its vector, and the fix rides
+    // with its piece.
+    let (dx, dy) = (cx - c_before[0].0, cy - c_before[0].1);
+    for (i, (bx, by)) in (0..).zip(&c_before) {
+        let (x, y) = xy(&project, StationRef::new(c, i));
+        assert!(
+            (x - bx - dx).abs() < 1e-9 && (y - by - dy).abs() < 1e-9,
+            "C:{i} moved by ({}, {}), not ({dx}, {dy})",
+            x - bx,
+            y - by
+        );
+    }
+    let rows_after = datum_rows(&project);
+    assert_eq!(rows_after[1..], rows_before[1..], "no other datum changed");
+    assert_eq!(project.zero_datums[0].gps.latitude, new_frame.latitude);
+}
+
+#[test]
+fn an_accuracy_or_entrance_edit_of_the_frame_moves_nothing() {
+    let (mut project, a, c) = frame_and_placed_piece();
+    // C left 5 m off its GPS, as an older file can: only a GPS change
+    // re-places a piece.
+    project.adjust_section_offset(c, 5.0, 0.0);
+    let before = raw_xy(&project);
+    let frame = StationRef::new(a, 0);
+    project
+        .set_zero_datum_with_accuracy(frame, origin(), Some(3.0))
+        .unwrap();
+    assert!(project.set_zero_datum_entrance(frame, Some(true)));
+    assert_same_xy(&before, &raw_xy(&project));
+    assert_eq!(project.zero_datums[0].accuracy_m, Some(3.0));
+}
+
+/// The frame correction for a datum at `gps`: where the new frame puts it,
+/// less where the old one did.
+fn frame_correction(
+    gps: &GpsCoordinates,
+    old: &GpsCoordinates,
+    new: &GpsCoordinates,
+) -> (f64, f64) {
+    let (nx, ny) = gps_to_local(gps, new);
+    let (ox, oy) = gps_to_local(gps, old);
+    (nx - ox, ny - oy)
+}
+
+#[test]
+fn a_new_frame_gps_moves_a_piece_off_its_gps_by_the_correction_and_keeps_its_gap() {
+    let (mut project, a, c) = frame_and_placed_piece();
+    // C left 5 m off its GPS, as an older file can.
+    project.adjust_section_offset(c, 5.0, 0.0);
+    let c_gps = project.zero_datums[1].gps;
+    let c0 = StationRef::new(c, 0);
+    let (bx, by) = xy(&project, c0);
+
+    let new_frame = gps_at(0.0, 2.0);
+    project
+        .set_zero_datum(StationRef::new(a, 0), new_frame)
+        .unwrap();
+
+    let (dx, dy) = frame_correction(&c_gps, &origin(), &new_frame);
+    let (cx, cy) = xy(&project, c0);
+    assert!(
+        (cx - bx - dx).abs() < 1e-9 && (cy - by - dy).abs() < 1e-9,
+        "C:0 moved by ({}, {}), the correction is ({dx}, {dy})",
+        cx - bx,
+        cy - by
+    );
+    let (gx, gy) = gps_to_local(&c_gps, &new_frame);
+    let gap = (cx - gx).hypot(cy - gy);
+    assert!((gap - 5.0).abs() < 1e-6, "C:0 is {gap} m off its GPS");
+}
+
+#[test]
+fn a_new_frame_gps_moves_a_merged_piece_as_one() {
+    let mut project = Project::new("MergedPiece".to_string(), None);
+    let a = north_line(&mut project, 2, 50.0);
+    let c = north_line(&mut project, 3, 40.0);
+    let d = north_line(&mut project, 2, 30.0);
+    project.ensure_shot_uuids();
+    project
+        .merge_stations(StationRef::new(c, 3), StationRef::new(d, 0))
+        .unwrap();
+    project
+        .set_zero_datum(StationRef::new(a, 0), origin())
+        .unwrap();
+    let c_gps = gps_at(-200.0, 50.0);
+    project
+        .set_zero_datum(StationRef::new(c, 0), c_gps)
+        .unwrap();
+    let before = raw_xy(&project);
+
+    let new_frame = gps_at(30.0, -40.0);
+    project
+        .set_zero_datum(StationRef::new(a, 0), new_frame)
+        .unwrap();
+
+    let (dx, dy) = frame_correction(&c_gps, &origin(), &new_frame);
+    let after = raw_xy(&project);
+    for (sr, (bx, by)) in &before {
+        let (ax, ay) = after[sr];
+        let (ex, ey) = if sr.section_id == a {
+            (0.0, 0.0)
+        } else {
+            (dx, dy)
+        };
+        assert!(
+            (ax - bx - ex).abs() < 1e-9 && (ay - by - ey).abs() < 1e-9,
+            "{sr:?} moved by ({}, {}), expected ({ex}, {ey})",
+            ax - bx,
+            ay - by
+        );
+    }
+    assert!(project.check_merge_alignment().is_empty());
 }

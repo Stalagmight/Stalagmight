@@ -306,6 +306,14 @@ runs forward only:
 translation is a no-op for the load path, and every affected command's undo restores
 the recorded map rather than re-deriving a frame.
 
+A new GPS on the frame datum's own station is the converse: the frame station stays
+on the origin, so every other placement datum's piece moves by the frame
+correction, `gps_to_local(its gps, new frame gps) - gps_to_local(its gps, old frame
+gps)`, inside `Project::set_zero_datum` (`Project::place_pieces_on_frame`, #769). A
+piece on its GPS stays on it; one an older file left off its GPS keeps its gap, as
+only a GPS change of its own datum re-places it. GPS fixes ride with their piece,
+and an accuracy-only or Entrance-only edit moves nothing.
+
 ### Database Operations
 
 - Use `Database::open_existing()` for reading (doesn't create files)

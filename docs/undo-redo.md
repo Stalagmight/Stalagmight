@@ -381,6 +381,13 @@ merge group, which would move that group relative to every other component). And
 undoing that add REMOVES the frame again, so this is the arm that has to hold the
 whole map.
 
+A new GPS on the frame datum's own station moves every OTHER placed piece: the
+frame stays on the origin and each other placement datum's piece moves by the
+frame correction, `gps_to_local(its gps, new frame gps) - gps_to_local(its gps, old
+frame gps)` (`Project::place_pieces_on_frame`, #769). The whole-project map
+restores every one of them on undo; redo re-executes the command, which moves them
+again.
+
 The add performs its renormalisation INSIDE `Project::set_zero_datum`, not in the
 epilogue: the subsequent-datum arithmetic reads "the frame datum's station sits at
 (0, 0)" on every call, so the invariant has to hold when the model call returns,

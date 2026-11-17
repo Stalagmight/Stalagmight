@@ -36,8 +36,8 @@
 //! - `promoted-twin-gps`, `datum-key-reused`, `frame-gps-edit`: the same
 //!   failure in a step with a recognised mechanism: a promoted fix with a GPS
 //!   bit-identical to a datum that was a placement before; a datum
-//!   re-anchored onto the key of a datum the step removed (both fixed, see
-//!   [`KNOWN_OPEN`]); a new GPS on the frame datum (known open).
+//!   re-anchored onto the key of a datum the step removed; a new GPS on the
+//!   frame datum (all fixed, see [`KNOWN_OPEN`]).
 //! - `datum-twin-station`: two datums resolve to one station (Combine
 //!   Sections joining two datum stations; now refused).
 //! - `hard-fix-off-gps` / `hard-fix-no-unknowns`: in the Closures Computed
@@ -98,12 +98,7 @@ const EXACT_M: f64 = 1e-9;
 /// Failure classes that are open bugs, muted unless
 /// `STALAGMIGHT_DATUM_FUZZ_MUTE` is set. The replay after each reaches it
 /// with the generators as they are (a generator change can turn it into a
-/// different chain):
-///
-/// - `frame-gps-edit`: giving the frame datum a new GPS keeps its station on
-///   the origin and moves nothing else, so every other placed piece is off
-///   its own GPS by the edit. Present on master before #741; tracked in
-///   #769, unmute it there. `"11"`.
+/// different chain). None today.
 ///
 /// No longer muted, and pinned in `multi_datum_tests.rs`: `promoted-twin-gps`
 /// (a fix with the bit-identical GPS of the removed placement datum) and
@@ -113,8 +108,11 @@ const EXACT_M: f64 = 1e-9;
 /// `DatumLayout::was_unplaced`; and
 /// `datum-twin-station` (Combine Sections joining two stations that each
 /// hold a datum), now refused; and `hard-fix-no-unknowns` (a hard fix in a
-/// component with no unknown left), now applied.
-const KNOWN_OPEN: &[&str] = &["frame-gps-edit"];
+/// component with no unknown left), now applied; and `frame-gps-edit` (a new
+/// GPS on the frame datum left every other placed piece off its own GPS,
+/// #769), now moved by the frame correction in
+/// `Project::place_pieces_on_frame`.
+const KNOWN_OPEN: &[&str] = &[];
 
 fn env_u64(name: &str, default: u64) -> u64 {
     std::env::var(name)
@@ -415,6 +413,7 @@ struct Stats {
     applied: BTreeMap<&'static str, usize>,
     refused: usize,
     frame_changes: usize,
+    frame_gps_edits: usize,
     promotions: usize,
     held_fixes: usize,
     placed_merges: usize,
@@ -938,6 +937,26 @@ impl Chain {
         stats.max_eps = stats.max_eps.max(self.eps);
     }
 
+    /// Count a forward step that gave the frame datum another GPS on its own
+    /// station while another placement datum placed a piece of its own (#769).
+    fn note_frame_gps_edit(prev: &Snap, now: &Project, stats: &mut Stats) {
+        let Some(was) = prev.datums.iter().find(|d| d.at.is_some()) else {
+            return;
+        };
+        let other_piece = prev
+            .datums
+            .iter()
+            .filter(|d| d.role == Some(DatumRole::Placement))
+            .count()
+            > 1;
+        let edited = now
+            .frame_datum()
+            .is_some_and(|zd| zd.station_ref == was.key && gps_bits(&zd.gps)[..2] != was.gps[..2]);
+        if other_piece && edited {
+            stats.frame_gps_edits += 1;
+        }
+    }
+
     fn undo_depth(&self) -> usize {
         self.state.get_undo_stack().len()
     }
@@ -997,6 +1016,7 @@ impl Chain {
         }
         let p1 = project(&self.state);
         let s1 = snap(&p1);
+        Self::note_frame_gps_edit(&s0, &p1, stats);
         self.note(&s0, &p1, stats);
         self.show(&p1);
         self.check_step(op, &p0, &s0, &s1)?;
@@ -1177,6 +1197,7 @@ fn run_chain(
             continue;
         }
         let p1 = project(&chain.state);
+        Chain::note_frame_gps_edit(&snap(&p), &p1, stats);
         chain.note(&snap(&p), &p1, stats);
         chain.show(&p1);
         chain
@@ -1280,8 +1301,9 @@ fn datum_command_chains_keep_every_invariant() {
     }
     eprintln!(
         "datum fuzz seeds {first}..{} x {steps} steps: {} steps, applied {:?}, {} refused, {} \
-         merges of two placed pieces, {} reopens, {} re-frames, {} promotions, {} hard fixes \
-         held, largest re-frame discrepancy {:.3e} m, muted {:?} (mute list {mute:?})",
+         merges of two placed pieces, {} reopens, {} re-frames, {} frame GPS edits with \
+         another placed piece, {} promotions, {} hard fixes held, largest re-frame \
+         discrepancy {:.3e} m, muted {:?} (mute list {mute:?})",
         first + seeds,
         stats.steps,
         stats.applied,
@@ -1289,6 +1311,7 @@ fn datum_command_chains_keep_every_invariant() {
         stats.placed_merges,
         stats.reopens,
         stats.frame_changes,
+        stats.frame_gps_edits,
         stats.promotions,
         stats.held_fixes,
         stats.max_eps,
@@ -1299,6 +1322,10 @@ fn datum_command_chains_keep_every_invariant() {
         assert!(
             stats.promotions > 0 && stats.reopens > 0,
             "no promotion or no reopen"
+        );
+        assert!(
+            stats.frame_gps_edits > 0,
+            "no frame GPS edit with another placed piece"
         );
     }
     assert!(
@@ -1333,6 +1360,9 @@ const PINNED_CHAINS: &[&str] = &[
     "350;combine(0:start,3:start)",
     // hard-fix-no-unknowns: every group held, the hard fix still applied.
     "112",
+    // frame-gps-edit: the setup gives the frame datum a new GPS while another
+    // datum places a piece of its own (#769).
+    "11",
 ];
 
 #[test]
