@@ -771,6 +771,8 @@ impl Project {
     /// - For subsequent datums: the station is positioned at the GPS offset from
     ///   the frame datum, by moving that station's merge-connected group only.
     /// - Re-setting the frame datum's own GPS keeps it at (0, 0): it IS the origin.
+    ///   Every other placement datum's piece is then re-placed against the new
+    ///   frame GPS ([`Self::place_pieces_on_frame`], #769).
     ///
     /// "First" here means the first datum that still RESOLVES, matching
     /// [`Self::frame_datum_key`] and the wire; a dangling datum anchors nothing.
@@ -929,9 +931,19 @@ impl Project {
         self.cascade_connection_offsets(&[station_ref.section_id]);
         self.debug_assert_merge_alignment("set_zero_datum");
 
+        // A new GPS on the frame datum's own station: read before the store
+        // below moves the key.
+        let frame_gps_edit =
+            matches!(&frame_datum, Some((frame_key, _)) if *frame_key == datum_key);
+
         // Store the GPS datum, in place when it exists: its list position is its
         // role (and, for the first one, the frame).
         let updated_existing = self.store_datum(datum_key, gps, accuracy_m);
+
+        // Every other placed piece was laid out against the old frame GPS.
+        if frame_gps_edit {
+            self.place_pieces_on_frame();
+        }
 
         // The survey had no frame and now has one, so local (0, 0) has just
         // acquired a MEANING it did not have: this datum's GPS. Re-frame onto it

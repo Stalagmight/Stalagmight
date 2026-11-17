@@ -1040,3 +1040,61 @@ fn a_combine_that_re_keys_a_twin_onto_the_fixs_key_still_promotes_the_fix() {
 
     assert_undo_redo_round_trip(&state, &before);
 }
+
+#[test]
+fn a_new_frame_gps_re_places_the_other_piece_and_undo_restores_it() {
+    let (state, a, b, c) = frame_fix_and_separate_piece();
+    let before = project(&state);
+    let c_gps = gps_at(200.0, 0.0);
+    let fix_before = xy_of(&before, StationRef::new(b, 5));
+
+    // The frame keeps its station and moves 100 m north (#769).
+    let new_frame = gps_at(0.0, 100.0);
+    set_datum(&state, StationRef::new(a, 0), new_frame, None);
+
+    let after = project(&state);
+    assert_near(
+        xy_of(&after, StationRef::new(a, 0)),
+        (0.0, 0.0),
+        1e-9,
+        "the frame stays on the origin",
+    );
+    assert_near(
+        xy_of(&after, StationRef::new(c, 0)),
+        gps_to_local(&c_gps, &new_frame),
+        1e-6,
+        "C:0 sits on its own GPS in the new frame",
+    );
+    assert_near(
+        xy_of(&after, StationRef::new(b, 5)),
+        fix_before,
+        1e-9,
+        "a GPS fix is no placement",
+    );
+    assert_placements_on_their_gps(&state, "frame GPS edit");
+
+    assert_undo_redo_round_trip(&state, &before);
+    assert_eq!(
+        project(&state).zero_datums[0].gps.latitude,
+        new_frame.latitude
+    );
+}
+
+#[test]
+fn an_entrance_only_edit_of_the_frame_moves_nothing() {
+    let (state, a, _b, c) = frame_fix_and_separate_piece();
+    // C left 30 m off its GPS, as an older file can.
+    {
+        let mut guard = state.project.lock().unwrap();
+        guard.as_mut().unwrap().set_section_offset(c, (230.0, 0.0));
+    }
+    let before = raw_xy(&project(&state));
+    let r = state.execute(Command::SetZeroDatum {
+        station_ref: StationRef::new(a, 0),
+        coordinates: origin(),
+        accuracy_m: None,
+        entrance: Some(true),
+    });
+    assert!(r.success, "{:?}", r.error);
+    assert_same_xy(&before, &raw_xy(&project(&state)));
+}

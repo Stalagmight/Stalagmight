@@ -219,6 +219,31 @@ impl Project {
         moved
     }
 
+    /// Re-place every placement datum's piece other than the frame's at
+    /// `gps_to_local(its gps, frame gps)`, after the frame datum got a new GPS
+    /// on the same station (#769). The frame stays on the origin, so without
+    /// this every other placed piece is off its own GPS by the edit. GPS fixes
+    /// ride with their piece. Returns true when anything moved.
+    pub(super) fn place_pieces_on_frame(&mut self) -> bool {
+        let Some((frame_key, frame_gps)) = self
+            .frame_datum()
+            .map(|zd| (zd.station_ref.clone(), zd.gps))
+        else {
+            return false;
+        };
+        let pieces: Vec<(StationRef, GpsCoordinates)> = self
+            .placement_datums()
+            .into_iter()
+            .filter(|zd| zd.station_ref != frame_key)
+            .filter_map(|zd| Some((self.resolve_key(&zd.station_ref)?, zd.gps)))
+            .collect();
+        let mut moved = false;
+        for (station_ref, gps) in pieces {
+            moved |= self.place_group_at(station_ref, gps_to_local(&gps, &frame_gps));
+        }
+        moved
+    }
+
     /// Translate `station_ref`'s rigid group so the station sits at `target`,
     /// then cascade through aligned closures: the same placement
     /// [`Self::set_zero_datum`] applies to a subsequent datum. Returns true when

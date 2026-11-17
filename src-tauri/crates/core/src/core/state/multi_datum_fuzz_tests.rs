@@ -36,8 +36,8 @@
 //! - `promoted-twin-gps`, `datum-key-reused`, `frame-gps-edit`: the same
 //!   failure in a step with a recognised mechanism: a promoted fix with a GPS
 //!   bit-identical to a datum that was a placement before; a datum
-//!   re-anchored onto the key of a datum the step removed (both fixed, see
-//!   [`KNOWN_OPEN`]); a new GPS on the frame datum (known open).
+//!   re-anchored onto the key of a datum the step removed; a new GPS on the
+//!   frame datum (all fixed, see [`KNOWN_OPEN`]).
 //! - `datum-twin-station`: two datums resolve to one station (Combine
 //!   Sections joining two datum stations; now refused).
 //! - `hard-fix-off-gps` / `hard-fix-no-unknowns`: in the Closures Computed
@@ -98,12 +98,7 @@ const EXACT_M: f64 = 1e-9;
 /// Failure classes that are open bugs, muted unless
 /// `STALAGMIGHT_DATUM_FUZZ_MUTE` is set. The replay after each reaches it
 /// with the generators as they are (a generator change can turn it into a
-/// different chain):
-///
-/// - `frame-gps-edit`: giving the frame datum a new GPS keeps its station on
-///   the origin and moves nothing else, so every other placed piece is off
-///   its own GPS by the edit. Present on master before #741; tracked in
-///   #769, unmute it there. `"11"`.
+/// different chain). None today.
 ///
 /// No longer muted, and pinned in `multi_datum_tests.rs`: `promoted-twin-gps`
 /// (a fix with the bit-identical GPS of the removed placement datum) and
@@ -112,8 +107,10 @@ const EXACT_M: f64 = 1e-9;
 /// fix), both fixed in `DatumLayout::was_unplaced`; and
 /// `datum-twin-station` (Combine Sections joining two stations that each
 /// hold a datum), now refused; and `hard-fix-no-unknowns` (a hard fix in a
-/// component with no unknown left), now applied.
-const KNOWN_OPEN: &[&str] = &["frame-gps-edit"];
+/// component with no unknown left), now applied; and `frame-gps-edit` (a new
+/// GPS on the frame datum left every other placed piece off its own GPS,
+/// #769), now re-placed by `Project::place_pieces_on_frame`.
+const KNOWN_OPEN: &[&str] = &[];
 
 fn env_u64(name: &str, default: u64) -> u64 {
     std::env::var(name)
