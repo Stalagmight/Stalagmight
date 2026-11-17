@@ -23,6 +23,7 @@ import type { DisplaySettings } from '../../types/loading';
 const settingsWith = (overrides: Partial<DisplaySettings>): DisplaySettings => ({
   ...DISPLAY_DEFAULTS,
   geometryMode: 'measured',
+  hiddenSections: [],
   ...overrides,
 });
 

@@ -58,6 +58,8 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     imported_file_hashes: [],
     imported_line_hashes: [],
     next_closure_id: 1n,
+    cave_sections: [],
+    next_cave_section_id: 0,
     validation: {
       warn_shot_length_min: 0,
       warn_shot_length_max: 100,

@@ -62,7 +62,7 @@ use stalagmight_lib::models::{
     Line, LineCreditSummary, LineData, LineEnd, LineRelationships, LineStats, LineUpdates,
     LoopClosureWire, MarkedPoint, MergeDatumShift, NorthReference, PathShot, Person, PlanAnchorSet,
     PlanMode, PlanSegment, Project, ProjectMetadata, ProjectStats, ProjectWarning, RangeDeleteKind,
-    RouteLeg, RouteProfilePoint, RulerEndpoint, Shot, ShotData, ShotKind, ShotUpdates,
+    RouteLeg, RouteProfilePoint, RulerEndpoint, Section, Shot, ShotData, ShotKind, ShotUpdates,
     SkippedClosure, SpeleoLink, SplitAt, SplitLineOptions, SplitPreview, SplitSide, Station,
     StationMergeWire, StationPair, StationRef, SurveyCredit, SurveyDirection, TankMaterial, Team,
     TornTie, TornTieKind, TornTieReason, UnrecognisedShotKind, ZeroDatumPreview, ZeroDatumWire,
@@ -233,6 +233,7 @@ fn main() {
     export::<CorrectionSource>(&out_dir);
     export::<NorthReference>(&out_dir);
     export::<Line>(&out_dir);
+    export::<Section>(&out_dir);
     // Per-shot survey credit (surveyors, explorers, date as people)
     export::<Person>(&out_dir);
     export::<SurveyCredit>(&out_dir);
@@ -553,6 +554,7 @@ fn main() {
         "CorrectionSource",
         "NorthReference",
         "Line",
+        "Section",
         "Person",
         "SurveyCredit",
         "CreditTargets",

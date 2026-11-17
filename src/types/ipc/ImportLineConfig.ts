@@ -5,4 +5,4 @@ import type { Person } from "./Person";
 import type { ShotData } from "./ShotData";
 import type { SurveyDirection } from "./SurveyDirection";
 
-export interface ImportLineConfig { line_index: number, name: string | null, surveyor: string | null, date: string | null, surveyors?: Array<Person>, explorers?: Array<Person>, override_date?: string, color: string, direction: SurveyDirection | null, quality: number, shots: Array<ShotData>, placement: ImportPlacement, station_comments: Array<[number, string]>, station_names: Array<[number, string]>, reverse: boolean, azimuth_reference?: AzimuthReference, }
+export interface ImportLineConfig { line_index: number, name: string | null, surveyor: string | null, date: string | null, surveyors?: Array<Person>, explorers?: Array<Person>, override_date?: string, color: string, direction: SurveyDirection | null, quality: number, shots: Array<ShotData>, placement: ImportPlacement, station_comments: Array<[number, string]>, station_names: Array<[number, string]>, reverse: boolean, azimuth_reference?: AzimuthReference, cave_section?: string, }

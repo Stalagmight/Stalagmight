@@ -33,8 +33,8 @@ use serde_bytes::ByteBuf;
 use crate::core::loading::{DisplaySettings, LoadProjectFullResult};
 use crate::models::{
     AzimuthReference, ClosureRef, FrozenShotRef, GpsCoordinates, LineId, LoopClosureWire, Person,
-    ProjectStats, ProjectWarning, ShotId, StationMergeWire, StationRef, SurveyCredit,
-    SurveyDirection, ZeroDatumWire,
+    ProjectStats, ProjectWarning, Section, SectionId, ShotId, StationMergeWire, StationRef,
+    SurveyCredit, SurveyDirection, ZeroDatumWire,
 };
 
 /// f32 sentinel encoding `None` for nullable numeric fields. `f32::NAN`
@@ -195,6 +195,10 @@ pub struct ProjectHeaderBinary {
     /// Every distinct person any shot credits, once: the table the lines'
     /// [`CreditBinary`] lists index into.
     pub credit_people: Vec<Person>,
+    /// The Sections (#327), in panel order, and the next id, as the JSON
+    /// path's `Project` carries them. Additive: absent reads as none.
+    pub cave_sections: Vec<Section>,
+    pub next_cave_section_id: SectionId,
 }
 
 /// One distinct survey credit of a line, its people as indices into
@@ -222,6 +226,9 @@ pub struct LineHeaderBinary {
     /// The line's distinct shot credits, indexed by
     /// [`LoadProjectFullBinaryResult::shots_credit`].
     pub credits: Vec<CreditBinary>,
+    /// The Section (#327) the line belongs to; `None` is ungrouped. Additive:
+    /// a decoder that predates it reads every line ungrouped.
+    pub cave_section_id: Option<SectionId>,
 }
 
 /// Interns people project-wide and credits per line for the envelope.
@@ -372,6 +379,7 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
             next_shot_id: line.next_shot_id,
             azimuth_reference: line.azimuth_reference,
             credits,
+            cave_section_id: line.section_id,
         });
     }
     if !any_credit {
@@ -474,6 +482,8 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         surface_elevation: project.surface_elevation,
         default_azimuth_reference: project.default_azimuth_reference,
         credit_people: credit_table.people,
+        cave_sections: project.sections,
+        next_cave_section_id: project.next_section_id,
     };
 
     let result = LoadProjectFullBinaryResult {

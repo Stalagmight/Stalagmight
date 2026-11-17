@@ -90,6 +90,7 @@ describe('projectStore.loadProject tool-transient wiring (#275 B1)', () => {
         showShotComments: false,
         gridSpacing: 10,
         geometryMode: 'measured',
+        hiddenSections: [],
       } satisfies DisplaySettings,
     });
 

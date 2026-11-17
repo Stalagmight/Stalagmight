@@ -42,6 +42,7 @@ export * from './ipc/AzimuthReference';
 export * from './ipc/CorrectionSource';
 export * from './ipc/NorthReference';
 export * from './ipc/Line';
+export * from './ipc/Section';
 export * from './ipc/Person';
 export * from './ipc/SurveyCredit';
 export * from './ipc/CreditTargets';

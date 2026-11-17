@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use ts_rs::TS;
 
 use crate::core::events::EventSink;
+use crate::models::SectionId;
 use crate::persistence::{NewerSchema, RefusedSchemaObject};
 
 // ============================================================================
@@ -433,6 +434,11 @@ pub struct DisplaySettings {
     /// project reopened through the typed load path restores the saved mode
     /// ("remember last used") instead of always defaulting to measured.
     pub geometry_mode: String,
+    /// The Sections (#327) hidden on the map, stored under the key
+    /// `hiddenSections` as a JSON array of Section ids. A view setting, not
+    /// an edit: saved through `save_display_setting`, never undone, and
+    /// machine-local (`display_settings` is not pushed to SpeleoDB).
+    pub hidden_sections: Vec<SectionId>,
 }
 
 impl Default for DisplaySettings {
@@ -456,6 +462,7 @@ impl Default for DisplaySettings {
             show_shot_comments: false,
             grid_spacing: 10.0,
             geometry_mode: "measured".to_string(),
+            hidden_sections: Vec::new(),
         }
     }
 }
@@ -500,8 +507,24 @@ impl DisplaySettings {
                 .filter(|s| s.as_str() == "measured" || s.as_str() == "closureAdjusted")
                 .cloned()
                 .unwrap_or_else(|| "measured".to_string()),
+            hidden_sections: parse_hidden_sections(map.get(HIDDEN_SECTIONS_KEY)),
         }
     }
+}
+
+/// The `display_settings` key of the hidden Sections (#327).
+pub const HIDDEN_SECTIONS_KEY: &str = "hiddenSections";
+
+/// The hidden Sections as stored: a JSON array of Section ids. Anything else
+/// (absent, not JSON, not an array of ids) reads as none hidden, and a
+/// repeated id is kept once.
+fn parse_hidden_sections(stored: Option<&String>) -> Vec<SectionId> {
+    let Some(text) = stored else {
+        return Vec::new();
+    };
+    let ids: Vec<SectionId> = serde_json::from_str(text).unwrap_or_default();
+    let mut seen = std::collections::HashSet::new();
+    ids.into_iter().filter(|id| seen.insert(*id)).collect()
 }
 
 // ============================================================================
@@ -1169,6 +1192,29 @@ mod tests {
         let empty = DisplaySettings::from_stored(&HashMap::new());
         assert!(empty.show_shots);
         assert!(!empty.show_shot_comments);
+    }
+
+    #[test]
+    fn hidden_sections_read_as_a_json_array_of_ids() {
+        assert!(DisplaySettings::default().hidden_sections.is_empty());
+        let read = |value: &str| {
+            let mut stored = HashMap::new();
+            stored.insert(HIDDEN_SECTIONS_KEY.to_string(), value.to_string());
+            DisplaySettings::from_stored(&stored).hidden_sections
+        };
+        assert_eq!(read("[3, 1, 3]"), vec![3, 1], "a repeat is kept once");
+        assert!(read("[]").is_empty());
+        assert!(read("not json").is_empty());
+        assert!(read("[\"a\"]").is_empty());
+        assert!(DisplaySettings::from_stored(&HashMap::new())
+            .hidden_sections
+            .is_empty());
+        let wire = serde_json::to_value(DisplaySettings {
+            hidden_sections: vec![2],
+            ..DisplaySettings::default()
+        })
+        .expect("display settings serialize");
+        assert_eq!(wire["hiddenSections"], serde_json::json!([2]));
     }
 
     #[test]

@@ -47,6 +47,7 @@ const displaySettings: DisplaySettings = {
   showShotComments: false,
   gridSpacing: 10,
   geometryMode: 'measured',
+  hiddenSections: [],
 };
 
 /** Resolves the load with the backend's `is_remote` verdict for this project. */
