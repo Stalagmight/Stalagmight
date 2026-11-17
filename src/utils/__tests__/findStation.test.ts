@@ -8,7 +8,8 @@ const station = (line_id: number, station_index: number, name?: string): Station
   is_zero_datum: false,
   gps_coordinates: null,
   merged_with: [],
-  ...(name !== undefined ? { name } : {}),
+  id: 0,
+  name: name ?? '',
 });
 
 describe('findStation', () => {

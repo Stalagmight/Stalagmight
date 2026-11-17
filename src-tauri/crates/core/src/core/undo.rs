@@ -11,6 +11,7 @@ use crate::models::{
 
 mod added_content;
 mod budget;
+mod created_station;
 mod history_credit;
 pub mod history_view;
 mod persistence;
@@ -18,6 +19,7 @@ pub(crate) mod snapshot_fixes;
 mod uuid_remap;
 
 pub use added_content::{extend_unique_hashes, AddedContent, CarriedIgnore};
+pub use created_station::CreatedStation;
 
 /// Serialize a line-offset map in KEY order rather than in `HashMap`
 /// iteration order.
@@ -336,6 +338,15 @@ pub enum UndoData {
         /// written before it existed and for every other insert.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         consumed_legacy: Option<(Option<String>, Option<chrono::NaiveDate>)>,
+        /// The Station ID and name of the station the insert created, so
+        /// the redo gives the re-created station back exactly
+        /// ([`CreatedStation`]).
+        ///
+        /// FORMAT EVOLUTION (additive, no schema bump): absent in entries
+        /// written before Station IDs existed; the redo then names the station
+        /// by the creation rules and the epilogue gives it a fresh id.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        created_station: Option<CreatedStation>,
     },
 
     /// Merge info for unmerging stations
@@ -1770,6 +1781,7 @@ mod tests {
                 uuid: uuid.map(str::to_string),
                 previous_offsets: HashMap::new(),
                 consumed_legacy: None,
+                created_station: None,
             },
             timestamp: None,
         }
@@ -2234,6 +2246,7 @@ mod tests {
                     uuid: None,
                     previous_offsets: HashMap::new(),
                     consumed_legacy: None,
+                    created_station: None,
                 },
                 timestamp: None,
             },

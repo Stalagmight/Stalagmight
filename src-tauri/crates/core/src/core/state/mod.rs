@@ -11,6 +11,7 @@ mod command_shot;
 mod command_split_line;
 mod command_split_shot;
 mod command_station;
+mod command_station_name;
 mod commands;
 mod config;
 mod display_settings;

@@ -561,6 +561,7 @@ mod schema;
 mod schema_guard;
 mod settings;
 mod shot_credits;
+mod station_ids;
 mod station_texts;
 mod undo;
 mod warnings;

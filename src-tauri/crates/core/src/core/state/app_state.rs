@@ -1020,7 +1020,7 @@ impl AppState {
                 poisoned.into_inner()
             }
         };
-        let Some(p) = proj_guard.as_ref() else {
+        let Some(p) = proj_guard.as_mut() else {
             tracing::error!(
                 purpose = "restore project after mutation error",
                 "Project became None after mutation; rolling back"
@@ -1030,6 +1030,11 @@ impl AppState {
                 "No project for after snapshot".to_string(),
             ));
         };
+        // The station-identity epilogue (`settle_station_identities`) for
+        // every command that records a snapshot pair: the after side has to
+        // hold the ids its new stations were given, or the redo would put
+        // back stations without them.
+        super::command_station_name::settle(p);
         match Self::serialize_project_snapshot(p) {
             Ok(json) => Ok(json),
             Err(e) => {

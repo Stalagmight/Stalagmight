@@ -71,6 +71,9 @@ pub(super) fn append_project(
     // The target's georeference BEFORE this copy: a source datum is placed in
     // it, or, when there is none yet, becomes it.
     let frame_before = target.frame_datum().map(|d| d.gps);
+    // Station IDs: the source's own, offset past every id the target has
+    // handed out, so both keep theirs and none collides.
+    let station_id_base = target.next_station_id;
 
     for line in &source.lines {
         let old_line_id = line.id;
@@ -116,6 +119,7 @@ pub(super) fn append_project(
     let shot_uuid_map = carry_shot_identity(target, source, &line_id_map);
 
     copy_offsets_and_comments(target, source, &line_id_map);
+    copy_station_ids(target, source, &line_id_map, station_id_base);
     copy_zero_datums(target, source, &line_id_map)?;
     copy_merges_and_closures(target, source, &line_id_map);
     // Last, so the copy is complete when its datum station is measured.
@@ -297,6 +301,32 @@ fn copy_offsets_and_comments(
             target.station_names.insert(new_key, name.clone());
         }
     }
+}
+
+/// Station IDs, remapped onto the copied lines and offset by `base` (the
+/// target's `next_station_id` before the copy); the target's counter then
+/// moves past every id the source could have handed out. Repeated line names
+/// are left to the normalization that follows every append (the incoming
+/// line is the later holder, so it gets the ` (2)`).
+fn copy_station_ids(
+    target: &mut Project,
+    source: &Project,
+    line_id_map: &HashMap<LineId, LineId>,
+    base: crate::models::StationId,
+) {
+    for (old_key, id) in &source.station_ids {
+        if let Some(new_key) = remap_key(source, line_id_map, old_key, "append station ids") {
+            target.station_ids.insert(new_key, id.saturating_add(base));
+        }
+    }
+    let span = source
+        .station_ids
+        .values()
+        .map(|id| id.saturating_add(1))
+        .max()
+        .unwrap_or(0)
+        .max(source.next_station_id);
+    target.next_station_id = target.next_station_id.max(base.saturating_add(span));
 }
 
 /// A source station key as a transitional positional key in the target, or

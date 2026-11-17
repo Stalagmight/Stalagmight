@@ -35,7 +35,7 @@ function makeStation(station_index: number, x: number, y: number): Station {
     coordinates: { x, y, z: 0 },
     is_zero_datum: false,
     gps_coordinates: null,
-    merged_with: [],
+    merged_with: [], id: 0, name: '',
     closures_with: [],
   };
 }

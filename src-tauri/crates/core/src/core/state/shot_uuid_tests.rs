@@ -1683,6 +1683,7 @@ fn a_legacy_created_shot_redo_append_mints_an_identity() {
             uuid: None,
             previous_offsets: std::collections::HashMap::new(),
             consumed_legacy: None,
+            created_station: None,
         },
         timestamp: None,
     };

@@ -881,6 +881,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // tests can also seed one through __MOCK_SET_STATION_NAME__. The mock
       // never reverses an imported line, so the indexes are used as sent.
       const mockStationNames: Record<string, string> = {};
+      // Every station has a name (seeded from its index) and a Station ID.
+      // The mock derives a stable id from the line and index (the backend
+      // allocates them from a project counter); good enough for a fixture.
+      const mockStationName = (lineId: number, stationIndex: number): string =>
+        mockStationNames[`${lineId}:${stationIndex}`] ?? String(stationIndex);
+      const mockStationId = (lineId: number, stationIndex: number): number =>
+        lineId * 100_000 + stationIndex;
       (window as unknown as Record<string, unknown>).__MOCK_SET_STATION_NAME__ = (
         lineId: number,
         stationIndex: number,
@@ -1421,6 +1428,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 via_station: { line_id: number; station_index: number } | null;
                 is_transitive: boolean;
               }>;
+              id: number;
+              name: string;
             }> = [];
 
             // Collect all line IDs for merged station setup
@@ -1522,6 +1531,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   gps_coordinates: loadDatum ? loadDatum.gps : null,
                   merged_with: mergedWith,
                   ...(closuresWith.length > 0 ? { closures_with: closuresWith } : {}),
+                  // Station identity: the backend gives every station a
+                  // project-unique Station ID and a line-unique name.
+                  id: mockStationId(line.id as number, i),
+                  name: mockStationName(line.id as number, i),
                 });
               }
             }
@@ -1656,6 +1669,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 closures_with?: unknown[];
                 comment?: string | null;
                 name?: string | null;
+                id?: number;
               }>;
               stats: Record<string, unknown>;
               warnings: unknown[];
@@ -1781,6 +1795,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const stationClosuresWith: Array<[number, unknown[]]> = [];
             const stationCommentsArr: Array<[number, string]> = [];
             const stationNamesArr: Array<[number, string]> = [];
+            const stationsIds = new Uint8Array(totalStations * 4);
+            const stationsIdsView = new DataView(stationsIds.buffer);
 
             jsonResult.stations.forEach((station, idx) => {
               const fOff = idx * STATION_FLOAT_STRIDE;
@@ -1796,6 +1812,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               if (station.closures_with?.length) stationClosuresWith.push([idx, station.closures_with]);
               if (station.comment) stationCommentsArr.push([idx, station.comment]);
               if (station.name) stationNamesArr.push([idx, station.name]);
+              stationsIdsView.setUint32(idx * 4, (station.id ?? idx) >>> 0, true);
             });
 
             const envelope = {
@@ -1805,8 +1822,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               // Bumped from 3 to 4 when Ariane collaboration mode was removed:
               // the header no longer carries a `collab` field; 4 to 5 for the
               // #438 north references (a project-level default plus one per
-              // line header); 6 to 7 for per-shot survey credit.
-              version: 7,
+              // line header); 6 to 7 for per-shot survey credit; 7 to 8 for
+              // station identity (dense `stations_ids`, every station named).
+              version: 8,
               loading_id: jsonResult.loadingId,
               // Added to the envelope at v3 alongside the ShotKind bits
               // (`load_binary.rs`): the decoder reads it unvalidated, so omitting
@@ -1883,6 +1901,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               station_closures_with: stationClosuresWith,
               station_comments: stationCommentsArr,
               station_names: stationNamesArr,
+              stations_ids: stationsIds,
               stats: jsonResult.stats,
               warnings: jsonResult.warnings,
               display_settings: jsonResult.displaySettings,
@@ -1965,6 +1984,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 is_transitive: boolean;
               }>;
               comment?: string;
+              id: number;
+              name: string;
             }> = [];
 
             // Collect all line IDs for merged station setup
@@ -2060,7 +2081,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     merged_with: mergedWith,
                     ...(closuresWith.length > 0 ? { closures_with: closuresWith } : {}),
                     ...(storedComment !== undefined ? { comment: storedComment } : {}),
-                    ...(storedName !== undefined ? { name: storedName } : {}),
+                    id: mockStationId(line.id as number, i),
+                    name: storedName ?? String(i),
                   });
                 }
               }
@@ -4275,6 +4297,28 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             } else {
               mockStationComments[key] = comment;
             }
+            return { success: true, line_ids: [] };
+          }
+
+          case 'set_station_name': {
+            const stationRef = args?.stationRef as { line_id: number; station_index: number };
+            const name = String(args?.name ?? '').trim();
+            if (name === '') {
+              return { success: false, error: 'A station name cannot be empty', line_ids: [] };
+            }
+            const line = (currentProject?.lines as Array<{ id: number; name?: string | null; shots: unknown[] }> | undefined)
+              ?.find((l) => l.id === stationRef.line_id);
+            if (!line) return { success: false, error: `Line ${stationRef.line_id} not found`, line_ids: [] };
+            for (let i = 0; i <= line.shots.length; i++) {
+              if (i !== stationRef.station_index && mockStationName(line.id, i) === name) {
+                return {
+                  success: false,
+                  error: `Line "${line.name ?? `Line ${line.id}`}" already has a station named "${name}"`,
+                  line_ids: [],
+                };
+              }
+            }
+            mockStationNames[`${stationRef.line_id}:${stationRef.station_index}`] = name;
             return { success: true, line_ids: [] };
           }
 

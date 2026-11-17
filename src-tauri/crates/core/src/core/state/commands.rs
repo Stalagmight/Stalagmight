@@ -70,6 +70,7 @@ impl AppState {
             | SetZeroDatum { .. }
             | RemoveZeroDatum { .. }
             | SetStationComment { .. }
+            | SetStationName { .. }
             | MoveLine { .. }
             | MoveSegment { .. }
             | MoveStation { .. }
@@ -182,6 +183,9 @@ impl AppState {
             // edit, while their undo (restore the previous comment) does not invert
             // that geometry change - an asymmetric undo.
             | SetStationComment { .. }
+            // A station name is metadata keyed by station identity, exactly
+            // like a comment (see above).
+            | SetStationName { .. }
             | MoveComment { .. }
             | RepairIntegrity
             | UpdateProjectSettings
@@ -806,9 +810,9 @@ impl AppState {
                     .collect(),
             }),
             Command::DeleteLine { line_id } => self.delete_line(*line_id),
-            Command::UpdateLineMetadata { line_id, updates } => {
-                self.update_line(*line_id, updates.clone())
-            }
+            Command::UpdateLineMetadata { line_id, updates } => self
+                .refuse_line_rename(&cmd)
+                .unwrap_or_else(|| self.update_line(*line_id, updates.clone())),
             Command::ReverseLine {
                 line_id,
                 swap_left_right,
@@ -857,6 +861,9 @@ impl AppState {
                 station_ref,
                 comment,
             } => self.set_station_comment(*station_ref, comment.clone()),
+            Command::SetStationName { station_ref, name } => {
+                self.set_station_name(*station_ref, name)
+            }
             Command::MoveLine { line_id, offset } => self.move_line(*line_id, *offset),
             Command::MoveSegment { line_id, offset } => self.move_segment(*line_id, *offset),
             Command::MoveStation {
@@ -954,6 +961,16 @@ impl AppState {
         // `Command::affects_geometry` - so it can't silently heal drift with no undo.
         if result.success && cmd.affects_geometry() {
             self.reconcile_geometry();
+        }
+
+        // Every station a command created gets its Station ID (and, when the
+        // command did not name it, its name) here, BEFORE the undo entry below
+        // is finalized, so the entry records the state with the ids in it.
+        // Lifecycle commands load or create a project that the load path has
+        // already settled; a Batch settles inside `execute_batch`, before its
+        // after-snapshot.
+        if result.success && !Self::is_lifecycle_passthrough(&cmd) {
+            self.settle_station_identities();
         }
 
         // An add finalizes and pushes under ONE `project` guard, bound to the
@@ -1140,6 +1157,8 @@ impl AppState {
                 // Metadata only, and already one step for many shots; a batch
                 // may still group it with other edits of the same action.
                 | Command::EditShotCredit { .. }
+                // A data-table paste of station names is one user action.
+                | Command::SetStationName { .. }
                 // Edit Line's Save renames / recolours a line AND edits its
                 // shots' credit in one user action, so both go in one batch and
                 // come back with one undo.
@@ -1214,8 +1233,12 @@ impl AppState {
 
         for cmd in &commands {
             // Use execute_without_undo to avoid pushing individual undo entries;
-            // the outer Batch command handles undo as a single unit via ProjectSnapshotPair
-            let result = self.execute_without_undo(cmd.clone());
+            // the outer Batch command handles undo as a single unit via ProjectSnapshotPair.
+            // A rename in a batch (Edit Line's Save) is a forward user edit,
+            // checked like a single one.
+            let result = self
+                .refuse_line_rename(cmd)
+                .unwrap_or_else(|| self.execute_without_undo(cmd.clone()));
             if !result.success {
                 // Rollback: restore pre-batch state to avoid partial mutations
                 self.rollback_project(&before_snapshot);

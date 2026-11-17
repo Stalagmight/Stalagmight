@@ -384,6 +384,7 @@ pub(super) fn reapply_heals_after_restore(
     let Some(live) = live else {
         return;
     };
+    adopt_station_identities(restored, live);
     for line in &mut restored.lines {
         if line.gauge_shot_uuid.is_some() {
             continue;
@@ -428,6 +429,30 @@ pub(super) fn reapply_heals_after_restore(
         line.gauge_shot_uuid = healed.gauge_shot_uuid.clone();
         line.gauge_neighbour_uuid = healed.gauge_neighbour_uuid.clone();
     }
+}
+
+/// A snapshot recorded by a build that predates Station IDs carries none (and
+/// may lack names the live project has seeded since). Give every station the
+/// restored state shares with the live one - the same physical station, the
+/// same key - the live station's id and, when the snapshot has none, its
+/// name, and keep the counter above both; the station-identity epilogue mints
+/// the rest. A current snapshot carries its own ids and is left exactly as
+/// recorded.
+fn adopt_station_identities(restored: &mut Project, live: &Project) {
+    if !restored.station_ids.is_empty() || live.station_ids.is_empty() {
+        return;
+    }
+    for (key, id) in &live.station_ids {
+        if restored.resolve_key(key).is_some() {
+            restored.station_ids.insert(key.clone(), *id);
+        }
+    }
+    for (key, name) in &live.station_names {
+        if !restored.station_names.contains_key(key) && restored.resolve_key(key).is_some() {
+            restored.station_names.insert(key.clone(), name.clone());
+        }
+    }
+    restored.next_station_id = restored.next_station_id.max(live.next_station_id);
 }
 
 impl AppState {

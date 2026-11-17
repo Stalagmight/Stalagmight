@@ -75,7 +75,7 @@ function fixture(): { lines: Line[]; stations: Station[] } {
     coordinates: { x, y, z },
     is_zero_datum,
     gps_coordinates: null,
-    merged_with: [],
+    merged_with: [], id: 0, name: '',
     closures_with: [],
   });
   const stations: Station[] = [

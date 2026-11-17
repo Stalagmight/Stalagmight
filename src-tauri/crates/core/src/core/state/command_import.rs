@@ -965,6 +965,13 @@ impl AppState {
                             map.insert(key, text.clone());
                         }
                     }
+                    // A line the file names in part (or rows the user added
+                    // in the wizard) gets the rest by the creation rules; a
+                    // line with no name at all is seeded from the station
+                    // indexes by the station-identity epilogue.
+                    if !config.station_names.is_empty() {
+                        project.fill_station_names(line_id);
+                    }
                 }
             }
 

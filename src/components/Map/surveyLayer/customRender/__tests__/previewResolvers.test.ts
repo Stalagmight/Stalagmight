@@ -38,7 +38,7 @@ function synthetic(lineCount: number, shotsPerLine: number): SurveyData {
     for (let i = 0; i <= shotsPerLine; i++) {
       stations.push({
         station_ref: { line_id: s, station_index: i }, coordinates: { x: i * 4, y: s * 10, z: -((s * 7 + i) % 120) },
-        is_zero_datum: false, gps_coordinates: null, merged_with: [], closures_with: [],
+        is_zero_datum: false, gps_coordinates: null, merged_with: [], id: 0, name: '', closures_with: [],
       });
     }
   }

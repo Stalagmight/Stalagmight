@@ -515,6 +515,9 @@ fn visit_entry(
             for (key, _) in &mut content.station_names {
                 changed |= visit_key(key, f);
             }
+            for (key, _) in &mut content.station_ids {
+                changed |= visit_key(key, f);
+            }
             for datum in &mut content.zero_datums {
                 changed |= visit_key(&mut datum.station_ref, f);
             }

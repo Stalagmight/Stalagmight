@@ -57,6 +57,8 @@ const st = (
   gps_coordinates: null,
   merged_with: [],
   closures_with: [],
+  id: 0,
+  name: String(station_index),
   ...opts,
 });
 

@@ -40,7 +40,7 @@ function surveyData() {
   ];
   const st = (i: number, z: number): Station => ({
     station_ref: { line_id: 1, station_index: i }, coordinates: { x: i * 5, y: 0, z },
-    is_zero_datum: false, gps_coordinates: null, merged_with: [], closures_with: [],
+    is_zero_datum: false, gps_coordinates: null, merged_with: [], id: 0, name: '', closures_with: [],
   });
   return surveyDataFromLegacy(lines, [st(0, 0), st(1, -4), st(2, -10)]);
 }

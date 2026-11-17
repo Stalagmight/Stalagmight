@@ -81,8 +81,12 @@ export interface LoadProjectFullResultWithSoa extends LoadProjectFullResult {
  * envelope is map-encoded (`rmp_serde::to_vec_named`), so a stale reader would
  * find the key absent rather than misalign - the bump is a deliberate fence, not
  * a decode requirement, and it keeps this constant honest about the shape.
+ *
+ * 8 adds station identity: the dense per-station `stations_ids` buffer (u32 LE,
+ * the project-unique Station ID) and a `station_names` list that names every
+ * station.
  */
-const EXPECTED_VERSION = 7;
+const EXPECTED_VERSION = 8;
 /** f32 fields per shot. Mirror of SHOT_FLOAT_FIELDS in Rust. */
 const SHOT_FLOAT_FIELDS = 12;
 /** u32 fields per shot. Mirror of SHOT_UINT_FIELDS in Rust. */
@@ -118,6 +122,8 @@ export interface BinaryEnvelope {
   station_closures_with: Array<[number, ClosureRef[]]>;
   station_comments: Array<[number, string]>;
   station_names: Array<[number, string]>;
+  /** Per-station u32 LE: the project-unique Station ID (v8). */
+  stations_ids: Uint8Array;
   stats: ProjectStats;
   warnings: ProjectWarning[];
   display_settings: DisplaySettings;
@@ -595,6 +601,11 @@ function buildSurveyData(
   // msgpack's decoded Uint8Array which can be reused/recycled.
   const stationCoords = new Float64Array(stationsF64);
   const stationFlagsOut = new Uint8Array(SN);
+  // Copied out of the msgpack buffer for the same reason as the coordinates.
+  const stationIds = new Uint32Array(bytesToUint32(env.stations_ids));
+  if (stationIds.length !== SN) {
+    throw new Error(`stations_ids length mismatch: ${stationIds.length} vs ${SN}`);
+  }
 
   for (let i = 0; i < SN; i++) {
     const uBase = i * STATION_UINT_FIELDS;
@@ -635,6 +646,7 @@ function buildSurveyData(
     stationClosuresWith: stationClosures,
     stationComments,
     stationNames,
+    stationIds,
   };
 }
 

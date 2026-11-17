@@ -8,6 +8,7 @@ use super::datum_extras::{write_zero_datums, CREATE_DATUM_EXTRAS, RECREATE_DATUM
 use super::shot_credits::{
     write_credit_rows, write_recorded_legacy, CREATE_CREDIT_TABLES, RECREATE_CREDIT_TABLES,
 };
+use super::station_ids::{write_station_ids, CREATE_STATION_IDS};
 use super::station_texts::{StationTextTable, CREATE_STATION_NAMES};
 use super::{Database, SCHEMA_VERSION};
 
@@ -34,6 +35,8 @@ impl Database {
         // have it yet. Create it here, inside the transaction, the way the
         // `closure_id` column is ensured below, so the DELETE cannot fail.
         tx.execute(CREATE_STATION_NAMES, [])?;
+        // Station IDs: no bump either (see `station_ids`).
+        tx.execute(CREATE_STATION_IDS, [])?;
         // The per-shot credit tables carry no bump either (see `shot_credits`);
         // rewritten whole by every save, so recreated rather than emptied.
         tx.execute_batch(RECREATE_CREDIT_TABLES)?;
@@ -58,6 +61,7 @@ impl Database {
             DELETE FROM station_offsets;
             DELETE FROM station_comments;
             DELETE FROM station_names;
+            DELETE FROM station_ids;
             DELETE FROM loop_closures;
             DELETE FROM imported_file_hashes;
             DELETE FROM imported_section_hashes;
@@ -279,6 +283,8 @@ impl Database {
                 insert.execute(params![sr.line_id, sr.station_index, text])?;
             }
         }
+        // Save station ids and the allocation counter.
+        write_station_ids(&tx, project)?;
 
         // Save loop closures (with closure_id column)
         // Ensure closure_id column exists

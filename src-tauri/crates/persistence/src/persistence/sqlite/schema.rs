@@ -7,6 +7,7 @@ use crate::models::FEATURE_ID_STRIDE;
 
 use super::datum_extras::CREATE_DATUM_EXTRAS;
 use super::shot_credits::CREATE_CREDIT_TABLES;
+use super::station_ids::CREATE_STATION_IDS;
 use super::station_texts::CREATE_STATION_NAMES;
 use super::{Database, SCHEMA_VERSION, UNDO_FORMAT_SAFE_VERSION};
 
@@ -343,6 +344,8 @@ impl Database {
         // through the fast path never gets here, so the read path tolerates the
         // table's absence instead of relying on this.
         self.conn.execute(CREATE_STATION_NAMES, [])?;
+        // Station IDs: the same, see `station_ids`.
+        self.conn.execute(CREATE_STATION_IDS, [])?;
 
         // Ensure speleo_link table exists (schema v9: SpeleoDB hand-off identity
         // + dirty bit, #189). This CREATE IF NOT EXISTS is what makes the table
@@ -1652,6 +1655,8 @@ impl Database {
         // Station names - see `station_texts` for why this table carries no
         // schema bump.
         self.conn.execute(CREATE_STATION_NAMES, [])?;
+        // Station IDs - no bump either, see `station_ids`.
+        self.conn.execute(CREATE_STATION_IDS, [])?;
         // Per-shot survey credit - no bump either, see `shot_credits`.
         self.conn.execute_batch(CREATE_CREDIT_TABLES)?;
         // Zero datum GPS fixes and accuracies (#741) - no bump either, see

@@ -124,8 +124,12 @@ export interface SurveyData {
   stationMergedWith: Map<number, StationRef[]>;
   stationClosuresWith: Map<number, ClosureRef[]>;
   stationComments: Map<number, string>;
-  /** Station names (e.g. the MNemo station number of a DMP import). */
+  /** Station names, unique within their line (e.g. `"17"`, `"4a"`, or the
+   *  MNemo station number of a DMP import). Every station of a loaded project
+   *  has one, so the map is dense; keyed by global station index. */
   stationNames: Map<number, string>;
+  /** The project-unique Station ID per global station index (dense). */
+  stationIds: Uint32Array;
 }
 
 /**
@@ -295,6 +299,8 @@ export function getStation(data: SurveyData, globalIndex: number): Station {
     is_zero_datum: (data.stationFlags[globalIndex]! & STATION_FLAG_IS_ZERO_DATUM) !== 0,
     gps_coordinates: data.stationGps.get(globalIndex) ?? null,
     merged_with: data.stationMergedWith.get(globalIndex) ?? [],
+    id: data.stationIds[globalIndex] ?? 0,
+    name: '',
   };
   // `closures_with` is optional on the wire and the sparse map only holds
   // non-empty lists, so materialize the absence rather than an empty array -
@@ -304,8 +310,7 @@ export function getStation(data: SurveyData, globalIndex: number): Station {
   if (closures !== undefined) station.closures_with = closures;
   const cmt = data.stationComments.get(globalIndex);
   if (cmt !== undefined) station.comment = cmt;
-  const name = data.stationNames.get(globalIndex);
-  if (name !== undefined) station.name = name;
+  station.name = data.stationNames.get(globalIndex) ?? '';
   return station;
 }
 
@@ -512,6 +517,7 @@ export function surveyDataFromLegacy(
     stationClosuresWith: new Map(),
     stationComments: new Map(),
     stationNames: new Map(),
+    stationIds: new Uint32Array(stations.length),
   };
 
   const nullToNaN = (v: number | null | undefined): number => (v == null ? NaN : v);
@@ -576,6 +582,7 @@ export function surveyDataFromLegacy(
     }
     if (s.comment) data.stationComments.set(i, s.comment);
     if (s.name) data.stationNames.set(i, s.name);
+    data.stationIds[i] = s.id ?? 0;
   });
 
   return data;
@@ -609,6 +616,7 @@ export function surveyDataWithAdjustedStations(
   const stationClosuresWith = new Map<number, ClosureRef[]>();
   const stationComments = new Map<number, string>();
   const stationNames = new Map<number, string>();
+  const stationIds = new Uint32Array(SN);
 
   adjustedStations.forEach((s, i) => {
     stationLineIds[i] = s.station_ref.line_id;
@@ -624,6 +632,7 @@ export function surveyDataWithAdjustedStations(
     if (closuresWith && closuresWith.length > 0) stationClosuresWith.set(i, closuresWith);
     if (s.comment) stationComments.set(i, s.comment);
     if (s.name) stationNames.set(i, s.name);
+    stationIds[i] = s.id ?? 0;
   });
 
   return {
@@ -638,6 +647,7 @@ export function surveyDataWithAdjustedStations(
     stationClosuresWith,
     stationComments,
     stationNames,
+    stationIds,
   };
 }
 
@@ -676,5 +686,6 @@ export function emptySurveyData(): SurveyData {
     stationClosuresWith: new Map(),
     stationComments: new Map(),
     stationNames: new Map(),
+    stationIds: new Uint32Array(0),
   };
 }

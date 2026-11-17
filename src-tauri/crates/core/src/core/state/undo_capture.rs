@@ -46,6 +46,7 @@ impl AppState {
                     .filter(|s| s.shots.is_empty())
                     .filter(|s| s.legacy_surveyor.is_some() || s.legacy_date.is_some())
                     .map(|s| (s.legacy_surveyor.clone(), s.legacy_date)),
+                created_station: None,
             },
 
             // For DeleteLine, capture full project snapshot (before/after pair)
@@ -463,6 +464,19 @@ impl AppState {
                 })
             }
 
+            // A rename is undone by renaming back. Every station of a settled
+            // project has a name; one without (a project a normalization has
+            // not reached) reads as the seed it would get.
+            Command::SetStationName { station_ref, .. } => {
+                let previous = project
+                    .station_name_at(*station_ref)
+                    .map_or_else(|| station_ref.station_index.to_string(), str::to_string);
+                UndoData::InverseCommand(Command::SetStationName {
+                    station_ref: *station_ref,
+                    name: previous,
+                })
+            }
+
             // Move commands use inverse commands
             // MoveLine and MoveSegment both move the whole rigid-connected group
             // (MoveLine delegates to move_segment), so both capture every affected
@@ -559,7 +573,9 @@ impl AppState {
                         // this immediately before it deletes the line, which
                         // is what carries a gauge pair captured by a save that
                         // happened after this push.
-                        identity: crate::models::LineIdentity::of(line),
+                        identity: project
+                            .line_identity(line.id)
+                            .unwrap_or_else(|| crate::models::LineIdentity::of(line)),
                     }
                 } else {
                     undo_data
@@ -633,6 +649,11 @@ impl AppState {
                             uuid: shot.uuid.clone(),
                             previous_offsets,
                             consumed_legacy,
+                            // Read after the station-identity epilogue gave
+                            // the new station its id (`execute`).
+                            created_station: crate::core::CreatedStation::read(
+                                project, *line_id, position,
+                            ),
                         }
                     } else {
                         // The stub could not be completed, so it must not be

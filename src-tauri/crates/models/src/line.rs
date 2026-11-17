@@ -196,6 +196,15 @@ pub struct LineIdentity {
     /// have had anyway before the field existed.
     #[serde(default)]
     pub azimuth_reference: Option<AzimuthReference>,
+    /// Each station's Station ID, by station index, so a re-created line
+    /// keeps its stations' ids. Filled by `Project::line_identity` (the line
+    /// alone does not hold them); empty in a legacy entry, whose redo then
+    /// mints fresh ids.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub station_ids: Vec<Option<crate::StationId>>,
+    /// Each station's name, by station index; empty in a legacy entry.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub station_names: Vec<Option<String>>,
 }
 
 impl LineIdentity {
@@ -207,6 +216,8 @@ impl LineIdentity {
             gauge_shot_uuid: line.gauge_shot_uuid.clone(),
             gauge_neighbour_uuid: line.gauge_neighbour_uuid.clone(),
             azimuth_reference: line.azimuth_reference,
+            station_ids: Vec::new(),
+            station_names: Vec::new(),
         }
     }
 }

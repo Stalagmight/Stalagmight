@@ -71,6 +71,7 @@ fn get_command_type(command: &Command) -> String {
         Command::SetZeroDatum { .. } => "set_zero_datum".to_string(),
         Command::RemoveZeroDatum { .. } => "remove_zero_datum".to_string(),
         Command::SetStationComment { .. } => "set_station_comment".to_string(),
+        Command::SetStationName { .. } => "set_station_name".to_string(),
         Command::MoveLine { .. } => "move_line".to_string(),
         Command::MoveSegment { .. } => "move_segment".to_string(),
         Command::MoveStation { .. } => "move_station".to_string(),

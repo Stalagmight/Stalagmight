@@ -48,7 +48,7 @@ function line(xs: number[]): Station[] {
     coordinates: { x, y: 0, z: 0 },
     is_zero_datum: false,
     gps_coordinates: null,
-    merged_with: [],
+    merged_with: [], id: 0, name: '',
     closures_with: [],
   }));
 }

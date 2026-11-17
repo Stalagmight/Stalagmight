@@ -12,7 +12,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::models::{
-    Line, LineId, LoopClosure, Project, StationKey, StationMerge, ZeroDatum, MAX_LINE_ID,
+    Line, LineId, LoopClosure, Project, StationId, StationKey, StationMerge, ZeroDatum, MAX_LINE_ID,
 };
 
 /// One ignored warning the add carried over from the source file, remapped onto
@@ -72,6 +72,11 @@ pub struct AddedContent {
     /// Station names (#676), keyed like the comments.
     #[serde(default)]
     pub station_names: Vec<(StationKey, String)>,
+    /// Station IDs, keyed like the comments, so a redo gives the added
+    /// stations back their ids. Empty in an entry written before Station IDs
+    /// existed (the epilogue then mints fresh ones).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub station_ids: Vec<(StationKey, StationId)>,
     #[serde(default)]
     pub zero_datums: Vec<ZeroDatum>,
     #[serde(default)]
@@ -194,6 +199,13 @@ impl AddedContent {
         station_offsets.sort_by_key(|(key, _)| (key.line_id, key.to_string()));
         let station_comments = station_texts_in(&project.station_comments, ids);
         let station_names = station_texts_in(&project.station_names, ids);
+        let mut station_ids: Vec<(StationKey, StationId)> = project
+            .station_ids
+            .iter()
+            .filter(|(key, _)| ids.contains(&key.line_id))
+            .map(|(key, id)| (key.clone(), *id))
+            .collect();
+        station_ids.sort_by_key(|(key, _)| (key.line_id, key.to_string()));
         let touches =
             |a: &StationKey, b: &StationKey| ids.contains(&a.line_id) || ids.contains(&b.line_id);
         Self {
@@ -207,6 +219,7 @@ impl AddedContent {
             station_offsets,
             station_comments,
             station_names,
+            station_ids,
             zero_datums: project
                 .zero_datums
                 .iter()
@@ -242,6 +255,7 @@ impl AddedContent {
         self.station_offsets = live.station_offsets;
         self.station_comments = live.station_comments;
         self.station_names = live.station_names;
+        self.station_ids = live.station_ids;
         self.zero_datums = live.zero_datums;
         self.station_merges = live.station_merges;
         self.loop_closures = live.loop_closures;
@@ -273,6 +287,11 @@ impl AddedContent {
             .retain(|key, _| !ids.contains(&key.line_id));
         project
             .station_names
+            .retain(|key, _| !ids.contains(&key.line_id));
+        // `next_station_id` stays, like the line id allocator: a later
+        // command never reuses an id this redo may need again.
+        project
+            .station_ids
             .retain(|key, _| !ids.contains(&key.line_id));
         project
             .zero_datums
@@ -348,6 +367,15 @@ impl AddedContent {
         }
         for (key, name) in &self.station_names {
             project.station_names.insert(key.clone(), name.clone());
+        }
+        // An id another station holds by now (across a reload of a crafted
+        // entry) is left to the epilogue, which keeps ids unique.
+        let held: HashSet<StationId> = project.station_ids.values().copied().collect();
+        for (key, id) in &self.station_ids {
+            if !held.contains(id) {
+                project.station_ids.insert(key.clone(), *id);
+                project.next_station_id = project.next_station_id.max(id.saturating_add(1));
+            }
         }
         project.zero_datums.extend(self.zero_datums.iter().cloned());
         for merge in &self.station_merges {

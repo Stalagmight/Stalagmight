@@ -166,6 +166,14 @@ pub enum Command {
         station_ref: StationRef,
         comment: Option<String>,
     },
+    /// Rename a station. The name is trimmed and must be non-empty and
+    /// unique within the station's line
+    /// ([`crate::models::Project::validate_station_name`]). Metadata only: no
+    /// geometry, no references. Undone by the inverse rename.
+    SetStationName {
+        station_ref: StationRef,
+        name: String,
+    },
 
     // Move commands
     MoveLine {
@@ -712,6 +720,7 @@ impl Command {
             // Who surveyed a shot and when moves no station.
             | Command::EditShotCredit { .. }
             | Command::SetStationComment { .. }
+            | Command::SetStationName { .. }
             | Command::MoveComment { .. }
             | Command::RepairIntegrity
             | Command::UpdateProjectSettings
@@ -909,6 +918,9 @@ impl Command {
                     format!("Remove comment from station {station_ref}")
                 }
             }
+            Command::SetStationName { station_ref, name } => {
+                format!("Rename station {station_ref} to \"{name}\"")
+            }
             Command::MoveLine { line_id, .. } => {
                 format!("Move line {line_id}")
             }
@@ -1015,7 +1027,7 @@ mod tests {
 
         assert_eq!(
             variants.len(),
-            32,
+            33,
             "Command's variant set changed. A removal leaves persisted undo \
              history unloadable at that entry and holed either side of it - keep \
              the tag deserializable, or bump SCHEMA_VERSION and call \
@@ -1153,6 +1165,13 @@ mod tests {
                 Command::SetStationComment {
                     station_ref: station_a,
                     comment: None,
+                },
+                false,
+            ),
+            (
+                Command::SetStationName {
+                    station_ref: station_a,
+                    name: "4a".to_string(),
                 },
                 false,
             ),
@@ -1637,6 +1656,13 @@ mod tests {
                     comment: None,
                 },
                 "Remove comment from station 1:0",
+            ),
+            (
+                Command::SetStationName {
+                    station_ref: station_a,
+                    name: "4a".to_string(),
+                },
+                "Rename station 1:0 to \"4a\"",
             ),
             (
                 Command::MoveStation {

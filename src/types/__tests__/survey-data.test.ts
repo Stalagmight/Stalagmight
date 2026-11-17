@@ -114,7 +114,7 @@ function fixture(): { lines: Line[]; stations: Station[] } {
       coordinates: { x: 0, y: 0, z: 0 },
       is_zero_datum: true,
       gps_coordinates: { latitude: 20.5, longitude: -87.3, depth_reference: 0 },
-      merged_with: [],
+      merged_with: [], id: 0, name: '',
       closures_with: [],
     },
     {
@@ -122,7 +122,7 @@ function fixture(): { lines: Line[]; stations: Station[] } {
       coordinates: { x: 10, y: 0, z: -1 },
       is_zero_datum: false,
       gps_coordinates: null,
-      merged_with: [{ line_id: 2, station_index: 0 }],
+      merged_with: [{ line_id: 2, station_index: 0 }], id: 0, name: '',
       closures_with: [],
       comment: 'junction',
     },
@@ -131,7 +131,7 @@ function fixture(): { lines: Line[]; stations: Station[] } {
       coordinates: { x: 10, y: 5, z: -2 },
       is_zero_datum: false,
       gps_coordinates: null,
-      merged_with: [],
+      merged_with: [], id: 0, name: '',
       closures_with: [],
     },
     {
@@ -139,7 +139,7 @@ function fixture(): { lines: Line[]; stations: Station[] } {
       coordinates: { x: 10, y: 0, z: -1 },  // merged with line 1, index 1
       is_zero_datum: false,
       gps_coordinates: null,
-      merged_with: [{ line_id: 1, station_index: 1 }],
+      merged_with: [{ line_id: 1, station_index: 1 }], id: 0, name: '',
       closures_with: [],
     },
   ];
@@ -485,7 +485,7 @@ describe('SurveyData', () => {
         coordinates: { x: i, y: 0, z: -i },
         is_zero_datum: i === 0,
         gps_coordinates: null,
-        merged_with: [],
+        merged_with: [], id: 0, name: '',
         closures_with: [],
       }));
       stations.push({
@@ -493,7 +493,7 @@ describe('SurveyData', () => {
         coordinates: { x: shots.length, y: 0, z: -shots.length },
         is_zero_datum: false,
         gps_coordinates: null,
-        merged_with: [],
+        merged_with: [], id: 0, name: '',
         closures_with: [],
       });
       return { lines, stations };

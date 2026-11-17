@@ -150,6 +150,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.set_project_name_for_path",
     "command.set_shot_kind",
     "command.set_station_comment",
+    "command.set_station_name",
     "command.set_zero_datum",
     "command.speleodb_done",
     // Retained for telemetry-ID stability; the command was removed (#670). See REMOVED_COMMANDS.
@@ -417,6 +418,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "undo-after.reverse_line",
     "undo-after.set_shot_kind",
     "undo-after.set_station_comment",
+    "undo-after.set_station_name",
     "undo-after.set_zero_datum",
     "undo-after.split_shot_at_distance",
     "undo-after.unmerge_station_pair",

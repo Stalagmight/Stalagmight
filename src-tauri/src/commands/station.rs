@@ -199,6 +199,26 @@ pub(crate) fn set_station_comment_impl(
     })
 }
 
+/// Rename a station. Trimmed; refused when empty or when another station of
+/// the same line holds the name ("Line X already has a station named Y").
+/// Undoable.
+#[tauri::command]
+pub fn set_station_name(
+    state: State<AppState>,
+    station_ref: StationRef,
+    name: String,
+) -> CommandResult {
+    set_station_name_impl(state.inner(), station_ref, name)
+}
+
+pub(crate) fn set_station_name_impl(
+    state: &AppState,
+    station_ref: StationRef,
+    name: String,
+) -> CommandResult {
+    state.execute(Command::SetStationName { station_ref, name })
+}
+
 /// Move or swap a comment between stations/shots atomically (single undo entry)
 #[tauri::command]
 pub fn move_comment(

@@ -72,6 +72,7 @@ impl UndoStack {
                 let refs = content.station_offsets.len()
                     + content.station_comments.len()
                     + content.station_names.len()
+                    + content.station_ids.len()
                     + content.zero_datums.len()
                     + content.station_merges.len()
                     + content.loop_closures.len()

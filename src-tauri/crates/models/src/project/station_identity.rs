@@ -405,6 +405,50 @@ impl Project {
         ))
     }
 
+    /// The identity `line_id` carries right now, with its stations' ids and
+    /// names ([`crate::LineIdentity`]), for an undo entry that re-creates the
+    /// line.
+    pub fn line_identity(&self, line_id: LineId) -> Option<crate::LineIdentity> {
+        let line = self.get_line(line_id)?;
+        let mut identity = crate::LineIdentity::of(line);
+        identity.station_names = self.line_station_names(line_id);
+        identity.station_ids = (0..=line.shots.len() as u32)
+            .map(|index| self.station_id_at(StationRef::new(line_id, index)))
+            .collect();
+        Some(identity)
+    }
+
+    /// Put a re-created line's recorded station ids and names back
+    /// ([`Self::line_identity`]). An id another station holds by now is left
+    /// to the normalization, which keeps ids unique.
+    pub fn restore_line_station_identity(
+        &mut self,
+        line_id: LineId,
+        identity: &crate::LineIdentity,
+    ) {
+        let held: HashSet<StationId> = self.station_ids.values().copied().collect();
+        for (index, id) in identity.station_ids.iter().enumerate() {
+            let (Some(id), Some(key)) =
+                (id, self.key_for_ref(StationRef::new(line_id, index as u32)))
+            else {
+                continue;
+            };
+            if !held.contains(id) {
+                self.station_ids.insert(key, *id);
+                self.next_station_id = self.next_station_id.max(id.saturating_add(1));
+            }
+        }
+        for (index, name) in identity.station_names.iter().enumerate() {
+            let (Some(name), Some(key)) = (
+                name,
+                self.key_for_ref(StationRef::new(line_id, index as u32)),
+            ) else {
+                continue;
+            };
+            self.station_names.insert(key, name.clone());
+        }
+    }
+
     // === Naming new stations ===
 
     /// Name the station an operation just created at `station_index` of

@@ -100,7 +100,13 @@ pub const STATION_UINT_STRIDE: usize = STATION_UINT_FIELDS * 4;
 /// `credits`, and the envelope a `shots_credit` index per shot. A stale
 /// frontend would read the line headers positionally wrong and show every
 /// shot uncredited.
-pub const BINARY_FORMAT_VERSION: u32 = 7;
+///
+/// Bumped 7 → 8 for station identity: the envelope gained the dense
+/// per-station `stations_ids` buffer (u32 LE, the project-unique Station ID)
+/// and `station_names` now lists EVERY station (names are required and
+/// unique per line). A stale frontend would show no Station ID and treat a
+/// station as unnamed.
+pub const BINARY_FORMAT_VERSION: u32 = 8;
 
 #[derive(Serialize)]
 pub struct LoadProjectFullBinaryResult {
@@ -148,10 +154,14 @@ pub struct LoadProjectFullBinaryResult {
     pub station_closures_with: Vec<(u32, Vec<ClosureRef>)>,
     /// Sparse: stations with non-empty `comment`.
     pub station_comments: Vec<(u32, String)>,
-    /// Sparse: stations with a non-empty `name` (e.g. an MNemo station number).
-    /// Dense on a DMP-imported project, but still keyed by station so the
-    /// common unnamed station costs nothing.
+    /// Every station's name, as `(global_station_index, name)`. Dense since
+    /// v8 (every station of a normalized project has one); kept in the pair
+    /// shape so a station the normalization could not key (no shot uuid)
+    /// simply has no entry.
     pub station_names: Vec<(u32, String)>,
+    /// Per-station u32 (LE): the project-unique Station ID, in station order
+    /// (`station_count * 4` bytes).
+    pub stations_ids: ByteBuf,
 
     pub stats: ProjectStats,
     pub warnings: Vec<ProjectWarning>,
@@ -387,7 +397,8 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
     let mut station_merged_with: Vec<(u32, Vec<StationRef>)> = Vec::new();
     let mut station_closures_with: Vec<(u32, Vec<ClosureRef>)> = Vec::new();
     let mut station_comments: Vec<(u32, String)> = Vec::new();
-    let mut station_names: Vec<(u32, String)> = Vec::new();
+    let mut station_names: Vec<(u32, String)> = Vec::with_capacity(station_count);
+    let mut stations_ids: Vec<u8> = Vec::with_capacity(station_count * 4);
 
     for (idx, station) in stations.into_iter().enumerate() {
         let idx_u32 = idx as u32;
@@ -416,10 +427,9 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
                 station_comments.push((idx_u32, comment));
             }
         }
-        if let Some(name) = station.name {
-            if !name.is_empty() {
-                station_names.push((idx_u32, name));
-            }
+        stations_ids.extend_from_slice(&station.id.to_le_bytes());
+        if !station.name.is_empty() {
+            station_names.push((idx_u32, station.name));
         }
     }
 
@@ -496,6 +506,7 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         station_closures_with,
         station_comments,
         station_names,
+        stations_ids: ByteBuf::from(stations_ids),
         stats,
         warnings,
         display_settings,

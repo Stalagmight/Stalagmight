@@ -147,6 +147,9 @@ impl AppState {
                 station_ref,
                 comment,
             } => self.set_station_comment(*station_ref, comment.clone()),
+            Command::SetStationName { station_ref, name } => {
+                self.set_station_name(*station_ref, name)
+            }
             Command::MoveStation {
                 station_ref,
                 offset,
@@ -216,6 +219,9 @@ impl AppState {
         // `resolve_key` falls back to a linear scan) but every AfterShot lookup
         // into this line would pay for it.
         project.reindex_line_shot_uuids(original_id);
+        // The stations' ids and names, as the entry recorded them (empty
+        // for a legacy entry: the epilogue mints and seeds).
+        project.restore_line_station_identity(original_id, identity);
         project.touch();
 
         // Update next_line_id if needed

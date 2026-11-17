@@ -24,7 +24,7 @@ function envelope(creditIdx: number[] | null): BinaryEnvelope {
   }
   const u8 = (a: Float32Array | Uint32Array): Uint8Array => new Uint8Array(a.buffer, a.byteOffset, a.byteLength);
   return {
-    version: 7,
+    version: 8,
     loading_id: 1,
     is_remote: false,
     project_header: {
@@ -79,6 +79,7 @@ function envelope(creditIdx: number[] | null): BinaryEnvelope {
     station_closures_with: [],
     station_comments: [],
     station_names: [],
+    stations_ids: new Uint8Array(0 * 4),
     stats: {} as BinaryEnvelope['stats'],
     warnings: [],
     display_settings: {} as BinaryEnvelope['display_settings'],

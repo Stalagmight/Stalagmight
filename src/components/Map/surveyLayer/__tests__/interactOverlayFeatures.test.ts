@@ -57,7 +57,7 @@ function fixture() {
     coordinates: { x, y, z: 0 },
     is_zero_datum: false,
     gps_coordinates: null,
-    merged_with: [],
+    merged_with: [], id: 0, name: '',
     closures_with: [],
   });
   const stations: Station[] = [st(0, 0, 0), st(1, 10, 0), st(2, 20, 0)];

@@ -43,6 +43,10 @@ impl AppState {
             // sub-tolerance offset change is below realign_merges' threshold, so the
             // `before` snapshot's offsets are preserved exactly there.)
             self.reconcile_geometry();
+            // Station identity is re-settled after every step, like the
+            // geometry: a restored snapshot recorded by an older build carries
+            // no ids, and a step that re-creates stations needs theirs.
+            self.settle_station_identities();
         }
         result
     }
@@ -631,6 +635,7 @@ impl AppState {
             // remote project. Set-only; no-op for local-only.
             self.mark_remote_dirty();
             self.reconcile_geometry();
+            self.settle_station_identities();
         }
         result
     }
@@ -713,6 +718,7 @@ impl AppState {
                 after_shot_uuid,
                 before_shot_uuid,
                 uuid,
+                created_station,
                 ..
             } => {
                 // Redo by re-running the SAME insert the forward command did, with
@@ -913,6 +919,13 @@ impl AppState {
                                     line.legacy_surveyor = None;
                                     line.legacy_date = None;
                                 }
+                                // The created station's Station ID and name, as
+                                // the forward command left them.
+                                if let (Some(station), Some(uuid)) =
+                                    (created_station, uuid.as_deref())
+                                {
+                                    station.restore(project, *line_id, uuid);
+                                }
                                 CommandResult::success()
                             } else {
                                 CommandResult::failure("Failed to redo shot creation".to_string())
@@ -1106,11 +1119,16 @@ impl AppState {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
         };
-        let Some(line) = guard.as_ref().and_then(|p| p.get_line(*line_id)) else {
+        let Some(project) = guard.as_ref() else {
+            return;
+        };
+        let (Some(line), Some(live)) =
+            (project.get_line(*line_id), project.line_identity(*line_id))
+        else {
             return;
         };
         *line_data = line.to_line_data();
-        *identity = LineIdentity::of(line);
+        *identity = live;
     }
 
     /// Re-record an add's content from the live project immediately before its
@@ -1463,6 +1481,7 @@ impl AppState {
                 // The user is left holding that state, so it gets the same
                 // reconcile every completed step gets.
                 self.reconcile_geometry();
+                self.settle_station_identities();
                 return if reversed.is_empty() {
                     failure
                 } else {
@@ -1495,6 +1514,7 @@ impl AppState {
             // bumps through `Project::touch`, so the next read misses and
             // re-solves regardless - measured in the finding's write-up.)
             self.reconcile_geometry();
+            self.settle_station_identities();
         }
 
         // Dirty-bit flip (#191, D-B16): undo_to ran one or more undos. Set-only;
@@ -1552,6 +1572,7 @@ impl AppState {
                     result.error.unwrap_or_else(|| "Unknown error".to_string())
                 ));
                 self.reconcile_geometry();
+                self.settle_station_identities();
                 return if reversed.is_empty() {
                     failure
                 } else {
@@ -1565,6 +1586,7 @@ impl AppState {
             // see `undo_to` for why it is per step and not once after the loop
             // (#413, finding 7).
             self.reconcile_geometry();
+            self.settle_station_identities();
         }
 
         // Dirty-bit flip (#191, D-B16): redo_to ran one or more redos. Set-only;

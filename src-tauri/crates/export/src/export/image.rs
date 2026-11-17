@@ -1468,7 +1468,7 @@ pub fn generate_svg_string_with_stations(
 
         // Pass 4a: one label at every point touched by at least one drawn
         // shot (deg >= 1) - i.e. all stations on drawn passage, deduped by
-        // colocation. The label is the station index, or with names on, the
+        // colocation. The label is the Station ID, or with names on, the
         // station name. Representative station per point = the smallest
         // station index that has a label (deterministic): every station for
         // index labels, only named ones for names, so a merge of an unnamed
@@ -1480,7 +1480,7 @@ pub fn generate_svg_string_with_stations(
             let names: Vec<Option<String>> = if show_station_names {
                 stations
                     .iter()
-                    .map(|s| station_name_label(s.name.as_deref()))
+                    .map(|s| station_name_label(Some(s.name.as_str())))
                     .collect()
             } else {
                 Vec::new()
@@ -1489,7 +1489,9 @@ pub fn generate_svg_string_with_stations(
                 if show_station_names {
                     names[i].clone()
                 } else {
-                    Some(stations[i].station_ref.station_index.to_string())
+                    // The project-unique Station ID, never the positional
+                    // index (which is a session handle, not shown to users).
+                    Some(stations[i].id.to_string())
                 }
             };
             let mut rep: HashMap<usize, usize> = HashMap::new();

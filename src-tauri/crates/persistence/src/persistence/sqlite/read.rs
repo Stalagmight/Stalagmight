@@ -759,6 +759,11 @@ impl Database {
         // Load station comments and names
         let station_comments = self.load_station_texts(StationTextTable::Comments)?;
         let station_names = self.load_station_texts(StationTextTable::Names)?;
+        // Station ids and their counter (tolerant: see `station_ids`). A
+        // missing or low counter is raised above the ids on open
+        // (`Project::ensure_station_identities`).
+        let station_ids = super::station_ids::load_station_ids(&self.conn)?;
+        let next_station_id = super::station_ids::load_next_station_id(&self.conn).unwrap_or(0);
 
         // Per-project validation thresholds (#57). The DB layer has no access to
         // the global config, so legacy projects (no row) fall back to the
@@ -819,6 +824,8 @@ impl Database {
             station_offsets,
             station_comments,
             station_names,
+            station_ids,
+            next_station_id,
             file_path: None,
             next_line_id,
             imported_file_hashes,

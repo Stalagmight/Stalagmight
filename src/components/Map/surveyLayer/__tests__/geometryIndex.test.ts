@@ -70,7 +70,7 @@ function fixture(): { lines: Line[]; stations: Station[] } {
     coordinates: { x, y, z: 0 },
     is_zero_datum: false,
     gps_coordinates: null,
-    merged_with: [],
+    merged_with: [], id: 0, name: '',
     closures_with: [],
   });
   const stations: Station[] = [
@@ -432,7 +432,7 @@ describe('SurveyGeometryIndex.measuredShotSegments (global shot ids)', () => {
   const st = (line_id: number, station_index: number, x: number, y: number): Station => ({
     station_ref: { line_id, station_index },
     coordinates: { x, y, z: 0 },
-    is_zero_datum: false, gps_coordinates: null, merged_with: [], closures_with: [],
+    is_zero_datum: false, gps_coordinates: null, merged_with: [], id: 0, name: '', closures_with: [],
   });
   const stations: Station[] = [
     st(0, 0, 0, 0), st(0, 1, 10, 0), st(0, 2, 10, 10),
@@ -610,7 +610,7 @@ describe('SurveyGeometryIndex.nearestStation rank priority', () => {
   const st = (line_id: number, station_index: number, xPx: number, yPx: number): Station => ({
     station_ref: { line_id, station_index },
     coordinates: { x: m(xPx), y: m(yPx), z: 0 },
-    is_zero_datum: false, gps_coordinates: null, merged_with: [], closures_with: [],
+    is_zero_datum: false, gps_coordinates: null, merged_with: [], id: 0, name: '', closures_with: [],
   });
   /** Each line: station 0 at `at`, station 1 30 px further along its own
    *  direction, out of reach of every probe below. */
@@ -750,7 +750,7 @@ describe('SurveyGeometryIndex.nearestShot rank priority', () => {
   const st = (line_id: number, station_index: number, xPx: number, yPx: number): Station => ({
     station_ref: { line_id, station_index },
     coordinates: { x: m(xPx), y: m(yPx), z: 0 },
-    is_zero_datum: false, gps_coordinates: null, merged_with: [], closures_with: [],
+    is_zero_datum: false, gps_coordinates: null, merged_with: [], id: 0, name: '', closures_with: [],
   });
   /** Each line: one horizontal shot from x 0 to 40 px at height `y`. */
   function build(specs: Array<{ id: number; kind: 'Normal' | 'Jump' | 'Reference'; y: number }>) {

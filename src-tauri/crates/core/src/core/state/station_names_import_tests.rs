@@ -106,7 +106,7 @@ fn imported_names_land_on_their_stations_and_undo_redo_with_the_import() {
         .iter()
         .find(|s| s.station_ref == StationRef::new(line, 2))
         .unwrap();
-    assert_eq!(middle.name.as_deref(), Some("2"));
+    assert_eq!(middle.name, "2");
     assert_eq!(middle.comment.as_deref(), Some("restriction"));
 
     assert!(state.undo().success);

@@ -32,6 +32,10 @@ pub(crate) fn create_line_impl(
     direction: Option<SurveyDirection>,
     shots: Vec<ShotData>,
 ) -> CommandResult {
+    // Line names are required and unique: refused here, on the UI path.
+    if let Some(refusal) = state.refuse_new_line_name(name.as_deref()) {
+        return refusal;
+    }
     state.execute(Command::CreateLine {
         name,
         surveyor,
@@ -177,6 +181,9 @@ pub(crate) fn create_line_and_merge_impl(
     target_station: StationRef,
     closure_strategy: ClosureStrategy,
 ) -> CommandResult {
+    if let Some(refusal) = state.refuse_new_line_name(name.as_deref()) {
+        return refusal;
+    }
     // Use a special internal execution that:
     // 1. Takes a project snapshot for undo
     // 2. Creates the line
