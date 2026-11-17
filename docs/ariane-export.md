@@ -83,8 +83,8 @@ These are written per-shot since Ariane stores section metadata on every shot ro
 | Internal field | TML element | Notes |
 |----------------|-------------|-------|
 | `section.name` | `Section` / `SC` | Falls back to `"Section {id}"` if unnamed |
-| shot credit (#329) | `Explorer` / `EX` | Per ROW, from the shot's own surveyors and explorers. Always the entity-escaped element form `<Explorer>e1, e2</Explorer><Surveyor>s1, s2</Surveyor>` when anyone is credited, a role with nobody left empty (#719): a plain single value is read as a surveyor by this importer but shown as the explorer by Ariane and read as explorers by openspeleo-lib, so only the element form names the role for every reader. `"unknown"` when nobody is credited. Within a role names are joined with `", "`: the import reads every Ariane field as a name list, with no `Last, First` rule. `<` and `>` are dropped from exported names so no name can move people between roles. A `,` or `;` inside one name cannot round-trip (Ariane separates people with commas). The import reads every row back to the same people on the same shot. A START row takes the credit of the shot it leads into. |
-| shot credit date | `Date` / `DT` | Per row, the shot's own survey date; `"2000-01-01"` if unset |
+| shot credit (#329) | `Explorer` / `EX` | Per ROW, from the shot's own surveyors and explorers. Always the entity-escaped element form `<Explorer>e1, e2</Explorer><Surveyor>s1, s2</Surveyor>` when anyone is credited, a role with nobody left empty (#719): a plain single value is read as a surveyor by this importer but shown as the explorer by Ariane and read as explorers by openspeleo-lib, so only the element form names the role for every reader. `"unknown"` when nobody is credited. Within a role names are joined with `", "`: the import reads every Ariane field as a name list, with no `Last, First` rule. `<` and `>` are dropped from exported names so no name can move people between roles. A `,` or `;` inside one name cannot round-trip (Ariane separates people with commas). The import reads every row back to the same people on the same shot. A START row takes the credit of the shot it leads into; a CLOSURE row takes the credit of the row it hangs off. |
+| shot credit date | `Date` / `DT` | Per row, the shot's own survey date; `"2000-01-01"` if unset. A CLOSURE row takes the date of the row it hangs off, see [Loop closures](#loop-closures) |
 | `section.color` (`#RRGGBB`) | `Color` / `CL` | Converted to Ariane format `0xRRGGBBff` |
 
 ### Shot-level fields
@@ -190,10 +190,115 @@ per entrance, matching what Ariane itself writes for multi-entrance caves.
 
 The **root section** and any section left parentless after link resolution (a
 genuinely detached component) each get a synthesized START shot with
-`FromID = -1`, anchored at the project coordinates (every START repeats them -
-an unanchored START lands at lat/lon 0 and the view opens on the Atlantic).
+`FromID = -1`. A START carries the GPS of the datum on its own station; the
+entrance split puts the START on that station. A START with no datum of its own
+carries the GPS of where the raw survey puts its station, relative to the frame
+datum (see [no two STARTs on one point](#no-two-starts-on-one-point)). An
+unanchored START would land at lat/lon 0, and the view would open on the
+Atlantic. A component's
+entrance is a section holding a **placement** datum; a GPS fix never roots one.
 All other sections connect to their parent via `FromID` on their first
 real/reference shot.
+
+### Every datum is written as a START (#741)
+
+Ariane reads every START's lat/lon as a **hard fix**. When two STARTs disagree
+with the survey between them, it bends the loop to fit and shows the loop
+error (measured 2026-11-13 with a synthetic two-entrance file). That is close
+to the Closures Computed View, except that Ariane is hard where ours is
+weighted by the datum's accuracy.
+
+So every resolvable datum, placement and GPS fix alike, gets a START carrying
+its own GPS. That includes a GPS fix whose Entrance box is unticked (for
+example a radiolocation point mid-passage): Ariane has no other way to hold a
+GPS position, so its GPS is kept at the cost of Ariane labelling it START. In
+Stalagmight itself such a fix is not an entrance for Plan mode or penetration.
+
+
+- A datum on an entrance's station is written on that entrance's START.
+- A datum anywhere else - a GPS fix part-way through a section, or at a
+  section's first station that a merge aliases onto its parent - gets a
+  **zero-length START of its own at its GPS, tied to the fix station by a
+  zero-length CLOSURE** (`FromID` = the fix station's row,
+  `ClosureToID` = the new START). That is the shape Ariane's own files use for
+  a loop that ends on an entrance, and it adds no station: the START is a leaf
+  and the CLOSURE carries no length. Both are minted after every other row and
+  take the section name, colour, date and people of the row the tie hangs off
+  (the row that ends at the fix station; for a station a merge aliases onto
+  its parent, the parent's row). The START sits at that row's depth.
+
+Datums claim Ariane nodes in list order, so the placement datum always claims
+its node first. A datum is **unwritten**, and the export returns the
+`gps-anchors-not-written` note, when it no longer resolves, when its station
+has no row in the file, when an earlier datum already holds the same node
+(two GPS positions for one point cannot be carried), or when its GPS is not a
+point on the globe (not finite, or outside |lat| <= 90, |lon| <= 180). A
+loaded `.stalx` can carry such a value, since persistence builds the struct
+without `GpsCoordinates::new`'s checks. Such a datum claims no node, and an
+entrance it stood on is placed like a datum-less one.
+
+The SpeleoDB sidecar leaves the fix STARTs out. Its converter drops CLOSURE
+rows, so a fix START would reach the map preview as a lone anchor with nothing
+hanging off it. The sidecar counts the fixes as unwritten in its log.
+
+A file whose frame datum's GPS is not a point on the globe leaves the fixes
+out too, and counts them unwritten. That frame's entrance stays at `0,0`, and
+a fix START at its real GPS tied into the same survey would have Ariane bend
+the survey across the globe to reach it.
+
+A file that holds an orphan root (see below) also leaves every fix out and
+counts it unwritten. Ariane blanks its map for an orphan alongside **any**
+CLOSURE row, and a fix's tie is one; nothing shows a CLOSURE onto a START is
+exempt. Writing the fixes would turn a file that drew into a blank one, or
+have the orphan guard refuse it over closures the user never made.
+
+On re-import, the in-repo importer drops START rows and skips a closure whose
+target is a START with no section hanging off it, so the fix rows come back as
+the same stations and legs. The fix's GPS is not read back as a datum. The
+import receipt carries up to two counted warnings, each one line for all the
+fixes together:
+
+- "N loop closures referenced excluded stations and were skipped", with `N`
+  the number of fixes. The tie's target is a START nothing hangs off, which
+  the importer keeps no trace of, so it cannot tell it from a station the
+  exclusion filter removed.
+- "N sections had no shots after filtering and were dropped", with `N` the
+  number of fixes part-way along a section. Such a tie hangs off a row the
+  next row also hangs off, which the parser reads as a branch: a one-row
+  section holding only the CLOSURE, dropped empty. Any loop closure from a
+  station part-way along a section does the same, fix or not. A fix at the
+  end of a section continues that section and raises no such line.
+
+Both blame filtering the user never did. The importer would need to keep the
+file's START ids (`TmlFile` is an IPC type, so that is not a local change) to
+count the ties in its entrance bucket instead; tracked as a follow-up.
+
+### No two STARTs on one point
+
+Two STARTs with the same lat/lon are pinned on top of each other, and Ariane
+collapses any loop between them (`Err=100%`, measured 2026-11-13). A START with
+no datum of its own used to repeat the frame datum's coordinates, so Ariane,
+and a re-import of the file, put a datum-less piece of survey on top of the
+frame's entrance, wherever the map showed it.
+
+The app does not let such a piece keep a loop closure back to the survey: after
+every command and on load, a closure that is the only link between two pieces
+becomes a merge (`convert_orphan_closures_to_merges`), so "merge, close the loop,
+unmerge" ends with the piece merged again. The collapse is therefore reachable
+only from a project built outside the app, but the misplaced piece is not: any separate
+piece with no datum of its own exported onto the frame's entrance.
+
+Such a START now carries the GPS of where the raw survey puts its station:
+its raw offset from the frame datum's station, converted with `local_to_gps`
+against the frame datum. That station is meant to sit at local `(0, 0)`, but
+a legacy project need not hold that, so the offset is taken from the
+station's raw position rather than from the origin. Two STARTs therefore
+share coordinates only when the survey puts them on the same point. The frame
+datum's coordinates remain the fallback for a START whose station has no raw
+position. A project with no datum at all still writes every START at `0,0`.
+When the frame datum's GPS is not a point on the globe, every START without a
+placeable datum of its own stays at `0,0` and the GPS fixes are left out (see
+above).
 
 A parentless shot whose type is **not** START is an orphan root. Ariane
 tolerates it in isolation, but a file containing both an orphan root and any
@@ -220,12 +325,20 @@ When a root section is split at a non-zero zero datum, the generated pre-zero se
 
 `loop_closures` are exported as CLOSURE-type shots with `ClosureToID` / `CID` pointing to the target station's Ariane ID. These encode the same loop-closure metadata that Ariane uses internally.
 
+A CLOSURE row carries the date and people of the row it hangs off (its
+`FromID`). A CLOSURE off a station part-way along a section re-imports as a
+one-row branch section of its own, and the importer evaluates the declination
+at the earliest section date in the file. Written undated, the row took the
+`2000-01-01` stand-in, which dragged that epoch back and turned the whole
+re-imported survey (1.8 degrees for a synthetic 2015 survey).
+
 ### ID assignment
 
 IDs are assigned sequentially starting from 0:
 - Root section: START (ID 0), then shots (ID 1, 2, …)
 - Subsequent sections: shots continue the global counter
 - CLOSURE shots are appended at the end
+- Each GPS fix's START and its tying CLOSURE come last, one pair per fix
 
 ## Color Format Conversion
 
@@ -374,6 +487,8 @@ dropped or capped.
 
 - Shape/cross-section geometry (`Shape`/`SH` elements) is not exported (not stored in the internal model)
 - GPS coordinates are not written per-shot: latitude and longitude are `0.0`
-  everywhere except the START shots, which repeat the primary datum's anchor
-  (see Topology); without a primary datum they are `0.0` there too. Only the
-  project-level elevation reference is otherwise set
+  everywhere except the START shots, which carry their own datum's GPS or
+  the GPS of their surveyed position (see Topology); without any datum they
+  are `0.0` there too. Only the project-level elevation reference is otherwise set
+- A GPS fix's accuracy is not exported: Ariane has no field for it and pins
+  every START exactly

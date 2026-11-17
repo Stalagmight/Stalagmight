@@ -606,8 +606,9 @@ export default function ExportControls({
       </div>
 
       {/* Nothing here is ever discarded: `build_export_shots` (src-tauri/src/export/tml.rs)
-          emits every section. The copy deliberately claims only "not georeferenced", never
-          entrance topology: entrance-hood is decided by STATION MERGES (`build_parent_map`
+          emits every section. The copy deliberately claims only that no GPS reading places the
+          listed sections (each exports at the spot the map shows, measured from the frame datum,
+          #741), never entrance topology: entrance-hood is decided by STATION MERGES (`build_parent_map`
           walks project.station_merges only), while this dialog's classifier is zero-datum
           reachability (`get_anchored_section_ids` = merges + aligned closures from each
           datum) - the two predicates disagree in both directions (merged-but-undatumed

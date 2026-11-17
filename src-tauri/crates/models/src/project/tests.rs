@@ -10540,12 +10540,11 @@ fn the_dust_gate_clears_the_residue_at_the_georeference_ceiling() {
     // Dropping the frame-defining datum promotes the far one and renormalises
     // onto it (#469 item 1), which is what puts the chain at ~1e7 m. The two
     // calls are what every command that can drop a datum does around the drop
-    // (`AppState::renormalize_frame_if_changed`); the model has no epilogue of
-    // its own.
-    let frame_before = project.frame_datum_key();
+    // (`AppState::settle_datum_layout`); the model has no epilogue of its own.
+    let layout = project.datum_layout();
     assert!(project.remove_zero_datum(StationRef::new(chain[0], 0)));
     assert!(
-        project.renormalize_frame_if_changed(frame_before),
+        project.settle_datum_layout(&layout),
         "the promotion has to translate the survey - without it this test measures nothing"
     );
 

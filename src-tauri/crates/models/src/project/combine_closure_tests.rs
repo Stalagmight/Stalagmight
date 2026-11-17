@@ -1151,10 +1151,13 @@ fn hand_move_in_solved_survey(project: &Project) -> bool {
 /// other section is on the kept one now). One torn for a zero datum tears
 /// on a shift, and the dialog names its end that does not move as held and
 /// "staying where it is": exactly one end is off `moved_sections`, on a
-/// third section (so its id holds), whose part carries a zero datum and
-/// that nothing rigid ties to the combined section any more. A snap a
-/// moving side tears into a part a datum merge is torn from is torn for the
-/// datum, not for a loop (#756).
+/// third section (so its id holds) that shares no merge component with the
+/// combined section (a tear that did would close a loop), and its part (what the
+/// rigid ties hold it to after the combine, up to the combined section)
+/// carries a zero datum and holds no section that moves. The part may still
+/// reach the combined section through the side that stays, by a snapped
+/// closure the shift leaves alone. A snap a moving side tears into a part a
+/// datum merge is torn from is torn for the datum, not for a loop (#756).
 fn check_torn_reasons(
     after: &Project,
     plan: &crate::CombinePlan,
@@ -1162,6 +1165,12 @@ fn check_torn_reasons(
     other: SectionId,
     what: &str,
 ) {
+    let rigid: Vec<(SectionId, SectionId)> = after
+        .rigid_ties()
+        .into_iter()
+        .map(|t| (t.a.section_id, t.b.section_id))
+        .filter(|(x, y)| x != y)
+        .collect();
     for tie in &plan.torn_ties {
         if tie.reason != TornTieReason::ZeroDatum {
             let home = |s: SectionId| if s == other { kept } else { s };
@@ -1190,10 +1199,35 @@ fn check_torn_reasons(
             held.section_id != kept && held.section_id != other,
             "{what}: {tie:?} is held on a combined section"
         );
-        let part = after.get_rigid_connected_section_ids(held.section_id);
         assert!(
-            !part.contains(&kept),
-            "{what}: {tie:?} leaves the held part rigidly tied to the combined section"
+            !after
+                .get_merged_section_ids(held.section_id)
+                .contains(&kept),
+            "{what}: {tie:?} is torn for a zero datum and closes a loop"
+        );
+        let mut part = HashSet::from([held.section_id]);
+        let mut queue = vec![held.section_id];
+        while let Some(at) = queue.pop() {
+            if at == kept {
+                continue;
+            }
+            for &(x, y) in &rigid {
+                let next = if x == at {
+                    y
+                } else if y == at {
+                    x
+                } else {
+                    continue;
+                };
+                if part.insert(next) {
+                    queue.push(next);
+                }
+            }
+        }
+        part.remove(&kept);
+        assert!(
+            !part.iter().any(|s| plan.moved_sections.contains(s)),
+            "{what}: {tie:?} leaves the held part rigidly tied to a section that moves"
         );
         assert!(
             part.iter().any(|s| after.carries_zero_datum(*s)),
@@ -2855,6 +2889,9 @@ enum PinnedFor {
     /// #740: the last combine moves a side by a residual within the
     /// tolerance.
     Residual,
+    /// The last combine tears a merge for a zero datum into a part a snapped
+    /// closure still ties to the side that stays.
+    HeldBesideASnap,
 }
 
 /// Chains the long campaigns failed on, each the trail its failure printed
@@ -2888,6 +2925,16 @@ const CHAINS_THE_CAMPAIGNS_FAILED_ON: &[(PinnedFor, &str)] = &[
         "1146646;combine(0:End, 5:End);combine(2:End, 4:End);split(1 at 2);\
          combine(2:End, 0:End)",
     ),
+    // The last combine moves the kept 4 off 8, which a datum holds, and 8
+    // still reaches 3 (the side that stays) through a snapped closure 9-6
+    // the shift leaves alone: the torn merge's held part stays rigidly tied
+    // to the combined section, which `check_torn_reasons` refused before.
+    (
+        PinnedFor::HeldBesideASnap,
+        "2221790;split(1 at 1);combine(8:Start, 5:Start);reverse(4);combine(4:Start, 2:End);\
+         combine(8:End, 7:End);split(0 at 1);reverse(8);combine(3:End, 0:Start);reverse(9);\
+         combine(4:Start, 3:End)",
+    ),
 ];
 
 /// [`CHAINS_THE_CAMPAIGNS_FAILED_ON`], replayed with every combine checked
@@ -2913,6 +2960,18 @@ fn chains_the_campaigns_failed_on_keep_the_invariants() {
                 assert!(
                     moves_a_residual(last),
                     "{spec}: the last combine moves no residual: {last:?}"
+                );
+            }
+            PinnedFor::HeldBesideASnap => {
+                let Some(last) = replay.plans.last() else {
+                    panic!("{spec}: no combine");
+                };
+                assert!(
+                    last.kept_moves_because == Some(KeptMovesReason::ZeroDatum)
+                        && last.torn_ties.iter().any(|t| {
+                            t.kind == TornTieKind::Merge && t.reason == TornTieReason::ZeroDatum
+                        }),
+                    "{spec}: the last combine tears no merge for a zero datum: {last:?}"
                 );
             }
         }

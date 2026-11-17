@@ -171,6 +171,22 @@ mod metamorphic_undo_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    clippy::panic,
+    clippy::print_stderr,
+    reason = "fuzz test: panics on a failed property are the point, the sweep prints what it \
+              covered and the replay prints each step"
+)]
+mod multi_datum_fuzz_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::panic,
+    reason = "fuzz test helpers: a trail that does not parse is a broken replay string"
+)]
+mod multi_datum_steps_fuzz;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
     clippy::expect_used,
     clippy::float_cmp,
     reason = "test module: panics on a failed assumption are the point"

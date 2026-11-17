@@ -159,7 +159,7 @@ impl Project {
     /// only need the horizontal position (e.g. merge offset alignment), this
     /// avoids an O(group × merges) traversal per call - the dominant cost when
     /// merging the thousands of stations of a large import.
-    pub(crate) fn compute_station_raw_xy(&self, station_ref: StationRef) -> Option<(f64, f64)> {
+    pub fn compute_station_raw_xy(&self, station_ref: StationRef) -> Option<(f64, f64)> {
         let section = self.get_section(station_ref.section_id)?;
         let (offset_x, offset_y) = self
             .section_offsets

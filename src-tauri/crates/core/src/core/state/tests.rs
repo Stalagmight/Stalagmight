@@ -1199,7 +1199,7 @@ fn test_merge_projects_places_by_datum_and_keeps_station_offsets_datums_and_clos
 /// visible in the offsets, in every station coordinate and in `zero_datums`; and
 /// the sources DO carry datums, so the `None -> Some` transition the widened
 /// gate now admits is genuinely available for it to fire on. Cited by name from
-/// `AppState::renormalize_frame_if_changed`'s doc comment.
+/// `AppState::settle_datum_layout`'s doc comment.
 #[test]
 fn merge_projects_does_not_renormalise_the_open_project() {
     let temp_dir = TempDir::new().unwrap();
@@ -18720,7 +18720,7 @@ fn test_execute_import_sections_zero_datum_placement() {
 /// start, and the datum still ends up on local (0, 0).
 ///
 /// The loop calls `AppState::set_zero_datum` directly rather than going through
-/// `execute()`, so it never reaches the `renormalize_frame_if_changed` epilogue:
+/// `execute()`, so it never reaches the `settle_datum_layout` epilogue:
 /// whatever `Project::set_zero_datum` leaves behind is what the imported project
 /// keeps, and an import whose datum does not sit on the origin hands every later
 /// reader of local metres - the map's `gpsOrigin`, the GPS column, the Ariane
@@ -19262,7 +19262,7 @@ fn a_batch_that_reverses_a_section_after_deleting_it_rolls_back() {
 /// the batch started.
 ///
 /// `execute_batch` runs its sub-commands through `execute_without_undo` and
-/// applies `renormalize_frame_if_changed` ONCE, after the last of them - so the
+/// applies `settle_datum_layout` ONCE, after the last of them - so the
 /// establishing re-frame has to happen inside `Project::set_zero_datum` itself.
 /// Left to the batch epilogue, sub-command two reads "the frame datum's station
 /// sits at (0, 0)" while it does not yet, places B against that origin, and the

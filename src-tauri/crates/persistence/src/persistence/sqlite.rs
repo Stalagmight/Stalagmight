@@ -682,6 +682,14 @@ mod datum_entrance_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    clippy::print_stderr,
+    reason = "fuzz test: panics on a failed property are the point, and the sweep prints what \
+              it covered"
+)]
+mod datum_extras_fuzz_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
     clippy::expect_used,
     reason = "test module: panics on a failed assumption are the point"
 )]

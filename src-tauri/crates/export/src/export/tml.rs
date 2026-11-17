@@ -30,8 +30,12 @@ use crate::models::{normalize_azimuth, Project, SectionId, Shot, StationRef};
 use super::atomic_write::write_atomic;
 use super::tml_azimuth::AzimuthExport;
 use super::tml_topology::{
-    build_parent_map, choose_default_root_section_id, section_datum, station_depth,
+    build_parent_map, choose_default_root_section_id, entrance_datums, station_depth,
 };
+
+#[path = "tml_datums.rs"]
+mod datums;
+use datums::{closure_shot, stamp_starts, start_shot};
 
 // ============================================================================
 // Element-name map (long vs. short)
@@ -583,6 +587,12 @@ fn write_zip(path: &Path, xml: &[u8]) -> Result<()> {
     })
 }
 
+/// A parentless row that is not a START: Ariane reads it as an entrance it
+/// cannot place, and draws an empty map once any CLOSURE row exists.
+fn is_orphan_root(shot: &ExportShot) -> bool {
+    shot.from_id == -1 && shot.shot_type != "START"
+}
+
 /// Refuse to write a chain Ariane would draw as an empty map.
 ///
 /// Ariane reads `FromID = -1` as an entrance and expects `Type = START` there; every
@@ -606,10 +616,7 @@ fn ensure_rooted_chain(shots: &[ExportShot], profile: TmlProfile) -> Result<()> 
         return Ok(());
     }
 
-    let orphans: Vec<&ExportShot> = shots
-        .iter()
-        .filter(|s| s.from_id == -1 && s.shot_type != "START")
-        .collect();
+    let orphans: Vec<&ExportShot> = shots.iter().filter(|s| is_orphan_root(s)).collect();
 
     let Some(first) = orphans.first() else {
         return Ok(());
@@ -780,7 +787,8 @@ fn build_export_shots_with_report(
         .unwrap_or_else(|| choose_default_root_section_id(project));
 
     // Build rooted parent links from station merges.
-    let parent_map = build_parent_map(project, root_section_id);
+    let entrance_datums = entrance_datums(project);
+    let parent_map = build_parent_map(project, root_section_id, &entrance_datums);
     let primary_datum = frame_datum;
 
     let mut next_id: i64 = 0;
@@ -793,12 +801,10 @@ fn build_export_shots_with_report(
     }
 
     let mut blocks: Vec<SectionBlock> = Vec::new();
-    // Map: (section_id, station_index) → ariane_id
+    // Map: (section_id, station_index) → ariane_id. A START's id is the node of
+    // the station it stands on, which is how the GPS pass finds each datum's
+    // own START (#378 item e).
     let mut station_to_ariane: HashMap<(SectionId, u32), i64> = HashMap::new();
-    // Every START and the station it stands on: (ariane id, section, station index).
-    // The GPS pass below resolves each entrance's own datum through this, instead
-    // of stamping one datum onto every START (#378 item e).
-    let mut start_anchors: Vec<(i64, SectionId, u32)> = Vec::new();
 
     for section in &project.sections {
         let is_root = section.id == root_section_id;
@@ -848,14 +854,14 @@ fn build_export_shots_with_report(
 
         // Which datum this entrance's START sits on. The root uses the FRAME datum
         // (see `root_section_id` above); any other entrance uses its own section's
-        // first resolvable datum (#378 item e). GPS lands only on START shots, so
+        // first placement datum (#378 item e, #741). GPS lands only on START shots, so
         // an entrance whose datum is mid-section must SPLIT there - stamping that
         // datum's GPS onto a station-0 START would displace the whole component by
         // the station-to-datum vector, silently.
         let entrance_datum = if is_root {
             primary_datum.filter(|datum| datum.station_ref.section_id == section.id)
         } else if is_entrance {
-            section_datum(project, section.id)
+            entrance_datums.get(&section.id).copied()
         } else {
             None
         };
@@ -887,34 +893,16 @@ fn build_export_shots_with_report(
             let start_id = next_id;
             next_id += 1;
             let start_depth = station_depth(section, split_idx);
-            start_anchors.push((start_id, section.id, split_idx as u32));
 
             let mut root_shots = Vec::new();
-            root_shots.push(ExportShot {
-                id: start_id,
-                uuid: None,
-                from_id: -1,
-                shot_type: "START",
-                section: section_name.clone(),
-                azimuth: 0.0,
-                length: 0.0,
-                depth: start_depth,
-                depth_in: start_depth,
-                depth_in_same_as_prev: false,
-                inclination: 0.0,
-                left: 0.0,
-                right: 0.0,
-                up: 0.0,
-                down: 0.0,
-                comment: Some("START".to_string()),
-                explorer: row_explorer(start_credit(split_idx)),
-                date: row_date(start_credit(split_idx)),
-                color: color.clone(),
-                latitude: 0.0,
-                longitude: 0.0,
-                closure_to_id: -1,
-                locked: true,
-            });
+            root_shots.push(start_shot(
+                start_id,
+                section_name.clone(),
+                start_depth,
+                row_explorer(start_credit(split_idx)),
+                row_date(start_credit(split_idx)),
+                color.clone(),
+            ));
             station_to_ariane.insert((section.id, split_idx as u32), start_id);
 
             // Forward segment: datum station -> original section end.
@@ -1264,7 +1252,6 @@ fn build_export_shots_with_report(
             // The root, and any section not merged into it, each get a START shot
             let start_id = next_id;
             next_id += 1;
-            start_anchors.push((start_id, section.id, 0));
 
             let start_depth = if let Some(first_shot) = section.shots.first() {
                 first_shot.depth_in
@@ -1272,31 +1259,14 @@ fn build_export_shots_with_report(
                 0.0
             };
 
-            shots.push(ExportShot {
-                id: start_id,
-                uuid: None,
-                from_id: -1,
-                shot_type: "START",
-                section: section_name.clone(),
-                azimuth: 0.0,
-                length: 0.0,
-                depth: start_depth,
-                depth_in: start_depth,
-                depth_in_same_as_prev: false,
-                inclination: 0.0,
-                left: 0.0,
-                right: 0.0,
-                up: 0.0,
-                down: 0.0,
-                comment: Some("START".to_string()),
-                explorer: row_explorer(start_credit(0)),
-                date: row_date(start_credit(0)),
-                color: color.clone(),
-                latitude: 0.0,
-                longitude: 0.0,
-                closure_to_id: -1,
-                locked: true,
-            });
+            shots.push(start_shot(
+                start_id,
+                section_name.clone(),
+                start_depth,
+                row_explorer(start_credit(0)),
+                row_date(start_credit(0)),
+                color.clone(),
+            ));
 
             station_to_ariane.insert((section.id, 0), start_id);
         }
@@ -1548,10 +1518,10 @@ fn build_export_shots_with_report(
     // Third pass: generate CLOSURE shots from loop_closures
     // Depth of every Ariane node emitted so far, so a closure can be hung off
     // the node it actually references rather than off its endpoint's section.
-    let node_depth: HashMap<i64, f64> = blocks
+    let node_rows: HashMap<i64, &ExportShot> = blocks
         .iter()
         .flat_map(|b| b.shots.iter())
-        .map(|s| (s.id, s.depth))
+        .map(|s| (s.id, s))
         .collect();
     let mut closure_shots = Vec::new();
     for closure in &project.loop_closures {
@@ -1644,131 +1614,47 @@ fn build_export_shots_with_report(
         //   is minted after every `from_id` in the file has been assigned, so
         //   nothing hangs off it and no position propagates through it.
         //
-        // - `node_depth` is snapshotted BEFORE the geometry repair, so a connector
+        // - `node_rows` is snapshotted BEFORE the geometry repair, so a connector
         //   onto a node the repair later re-hangs names a depth that node no longer
         //   has. The repair re-hangs the connector too if that breaks its own
         //   bound, so the file stays readable either way; what stays stale is the
         //   depth of that leaf, the one value here nobody reads. Refreshing it
         //   would mean rebuilding the closures after the repair - for a phantom.
-        let depth_a = node_depth.get(&from_id).copied().unwrap_or(0.0);
-        let depth_b = node_depth.get(&to_id).copied().unwrap_or(0.0);
+        let depth_b = node_rows.get(&to_id).map_or(0.0, |row| row.depth);
         // The two endpoints are the same physical point surveyed twice, so the
-        // connector's length IS the vertical part of the closure error. Emitting
-        // exactly that keeps `|depth - origin_depth| <= length` true by
-        // construction, and stays honest: a perfectly closed loop still gets 0.
-        let closure_length = (depth_b - depth_a).abs();
+        // connector's length (`closure_shot`) IS the vertical part of the closure
+        // error. Emitting exactly that keeps `|depth - origin_depth| <= length`
+        // true by construction, and stays honest: a perfectly closed loop still
+        // gets 0. The connector also takes the date and people of the row it
+        // hangs off (see `closure_shot`).
 
-        closure_shots.push(ExportShot {
-            id: closure_id,
-            uuid: None,
+        closure_shots.push(closure_shot(
+            closure_id,
             from_id,
-            shot_type: "CLOSURE",
-            section: section_name,
-            azimuth: 0.0,
-            length: closure_length,
-            depth: depth_b,
-            depth_in: depth_a,
-            depth_in_same_as_prev: false,
-            inclination: 0.0,
-            left: 0.0,
-            right: 0.0,
-            up: 0.0,
-            down: 0.0,
-            comment: None,
-            explorer: None,
-            date: None,
+            to_id,
+            section_name,
             color,
-            latitude: 0.0,
-            longitude: 0.0,
-            closure_to_id: to_id,
-            locked: false,
-        });
+            node_rows.get(&from_id).copied(),
+            depth_b,
+        ));
     }
 
     // Flatten all blocks + closure shots
     let mut all_shots: Vec<ExportShot> = blocks.into_iter().flat_map(|b| b.shots).collect();
     all_shots.extend(closure_shots);
 
-    // Final pass: Ariane stores GPS on the START shots.
-    //
-    // There can be more than one - the root, plus any section that never merges into
-    // it. Each entrance carries its OWN datum's GPS when it has one (#378 item e;
-    // the entrance split above put its START on that datum's station), and the
-    // frame datum's otherwise - a START left at 0,0 drops its component on null
-    // island thousands of kilometres from the survey, and a zoom-to-fit then shows
-    // half a hemisphere.
-    let mut unwritten_datums = 0usize;
-    if let Some(primary_datum) = primary_datum {
-        // First-that-resolves per station: a second datum on the SAME station is
-        // a conflict this file shape cannot carry, so it counts as unwritten
-        // below rather than silently aliasing the one that won.
-        let mut datum_by_station: HashMap<(SectionId, u32), usize> = HashMap::new();
-        let mut resolved = 0usize;
-        for (index, datum) in project.zero_datums.iter().enumerate() {
-            if let Some(sr) = project.resolve_key(&datum.station_ref) {
-                resolved += 1;
-                datum_by_station
-                    .entry((sr.section_id, sr.station_index))
-                    .or_insert(index);
-            }
-        }
-        let start_index_by_id: HashMap<i64, usize> = all_shots
-            .iter()
-            .enumerate()
-            .filter(|(_, s)| s.shot_type == "START")
-            .map(|(i, s)| (s.id, i))
-            .collect();
-
-        let mut written_datums: HashSet<usize> = HashSet::new();
-        // The frame datum anchors every entrance that has no datum of its own, so
-        // one fallback stamp writes its coordinates even when its own station
-        // carries no START (e.g. it stopped resolving onto one).
-        let frame_index = project
-            .zero_datums
-            .iter()
-            .position(|d| std::ptr::eq(d, primary_datum));
-        for (start_id, section_id, station_index) in &start_anchors {
-            let own = datum_by_station
-                .get(&(*section_id, *station_index))
-                .copied();
-            let gps = match own {
-                Some(index) => {
-                    written_datums.insert(index);
-                    &project.zero_datums[index].gps
-                }
-                None => {
-                    written_datums.extend(frame_index);
-                    &primary_datum.gps
-                }
-            };
-            let (latitude, longitude) = match profile {
-                TmlProfile::User => (gps.latitude, gps.longitude),
-                TmlProfile::SpeleoDbSidecar => speleodb_anchor(gps.latitude, gps.longitude),
-            };
-            if let Some(&shot_index) = start_index_by_id.get(start_id) {
-                all_shots[shot_index].latitude = latitude;
-                all_shots[shot_index].longitude = longitude;
-            }
-        }
-
-        // More than one datum is representable now, so account per DATUM: one is
-        // unwritten when no START carries its coordinates - it sits mid-way
-        // through a child section, lost its station, or collided with another
-        // datum on the same station.
-        unwritten_datums = project.zero_datums.len() - written_datums.len();
-        if unwritten_datums > 0 {
-            tracing::warn!(
-                datum_count = project.zero_datums.len(),
-                resolved,
-                unwritten = unwritten_datums,
-                "Ariane stores GPS on entrance START stations only; {unwritten_datums} GPS \
-                 anchor(s) were not written. Entrances without their own datum are \
-                 anchored at the frame datum's coordinates."
-            );
-        }
-    }
-
+    // Final pass: GPS, on START rows only. Every datum is an entrance (#741);
+    // see `tml_datums`. The fix rows go in after the geometry repair, at the
+    // depth their station is written at.
+    let datum_gps = stamp_starts(
+        project,
+        primary_datum,
+        &station_to_ariane,
+        &mut all_shots,
+        profile,
+    );
     enforce_ariane_geometry_invariants(&mut all_shots, profile);
+    let unwritten_datums = datum_gps.append_fix_starts(project, &mut all_shots, next_id);
 
     match profile {
         TmlProfile::SpeleoDbSidecar => harden_for_speleodb(&mut all_shots),
@@ -2291,6 +2177,11 @@ fn color_to_ariane(hex: &str) -> String {
 // ============================================================================
 // Tests
 // ============================================================================
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::float_cmp)]
+#[path = "tml_entrance_tests.rs"]
+mod entrance_tests;
 
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::approx_constant)]
@@ -3358,10 +3249,12 @@ mod tests {
         let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
         let starts: Vec<&ExportShot> = shots.iter().filter(|s| s.shot_type == "START").collect();
         assert_eq!(starts.len(), 2, "each detached gallery is its own entrance");
+        // Both galleries start on local (0, 0), so the datum-less one's surveyed
+        // position IS the frame datum's GPS, to within the round trip through
+        // `local_to_gps` (well under a millimetre).
         for start in &starts {
             assert!(
-                (start.latitude - FRAME.0).abs() < f64::EPSILON
-                    && (start.longitude - FRAME.1).abs() < f64::EPSILON,
+                (start.latitude - FRAME.0).abs() < 1e-9 && (start.longitude - FRAME.1).abs() < 1e-9,
                 "START in section {:?} exported at {},{} - the frame datum is at \
                  {},{} and the dangling zero_datums[0] at {},{}",
                 start.section,
@@ -4633,12 +4526,13 @@ mod tests {
         let starts: Vec<&ExportShot> = shots.iter().filter(|s| s.shot_type == "START").collect();
         assert_eq!(starts.len(), 2, "each detached gallery is its own entrance");
 
-        // Every entrance carries the anchor. Leaving the second at 0,0 puts that
-        // gallery on null island, ~9000 km from the rest of the survey.
+        // Every entrance is anchored. Leaving the second at 0,0 puts that
+        // gallery on null island, ~9000 km from the rest of the survey. Both
+        // galleries start on local (0, 0), so the datum-less one's surveyed
+        // position is the datum's GPS, to within the `local_to_gps` round trip.
         for start in &starts {
             assert!(
-                (start.latitude - 20.25).abs() < f64::EPSILON
-                    && (start.longitude - -87.5).abs() < f64::EPSILON,
+                (start.latitude - 20.25).abs() < 1e-9 && (start.longitude - -87.5).abs() < 1e-9,
                 "entrance in section {:?} was left unanchored at {},{}",
                 start.section,
                 start.latitude,

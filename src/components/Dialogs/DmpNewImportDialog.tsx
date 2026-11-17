@@ -1189,8 +1189,9 @@ export default function DmpNewImportDialog({
 
     const sid = currentSuggestion.existingSectionId;
 
-    // BFS: can `start` reach a zero datum via merges + aligned closures
-    // without traversing through `excluded`?
+    // BFS: can `start` reach a placement zero datum via merges + aligned
+    // closures without traversing through `excluded`? A GPS fix pins nothing in
+    // raw geometry (#741), as in the backend's import check.
     const hasDatumPathExcluding = (start: number, excluded: number): boolean => {
       const visited = new Set<number>();
       const queue = [start];
@@ -1199,7 +1200,7 @@ export default function DmpNewImportDialog({
         if (current === excluded) continue;
         if (visited.has(current)) continue;
         visited.add(current);
-        if (project.zero_datums.some((zd) => zd.station_ref.section_id === current)) {
+        if (project.zero_datums.some((zd) => zd.role === 'Placement' && zd.station_ref.section_id === current)) {
           return true;
         }
         for (const m of project.station_merges) {
@@ -1235,12 +1236,13 @@ export default function DmpNewImportDialog({
     }
 
     // Collect anchor station indices on the target section.
-    // Zero datums are always anchors.  Merges/closures are only anchors
-    // if the partner is independently datum-backed.
+    // Placement zero datums are always anchors (a GPS fix is not, #741).
+    // Merges/closures are only anchors if the partner is independently
+    // datum-backed.
     const anchors: number[] = [];
 
     for (const zd of project.zero_datums) {
-      if (zd.station_ref.section_id === sid) anchors.push(zd.station_ref.station_index);
+      if (zd.role === 'Placement' && zd.station_ref.section_id === sid) anchors.push(zd.station_ref.station_index);
     }
     for (const m of project.station_merges) {
       if (m.station_a.section_id === sid && hasDatumPathExcluding(m.station_b.section_id, sid)) {

@@ -486,7 +486,8 @@ station first; Combine may reverse the other section first). Each follows the
 same recipe: take the command lock, call `guard_mutation`, check everything that
 can refuse BEFORE the before-snapshot (so a refusal pushes no entry and changes
 nothing), take the frame-datum key, mutate, roll back to the snapshot on an
-error, `renormalize_frame_if_changed`, `reconcile_geometry`, and push ONE
+error, `settle_datum_layout` (place a promoted datum's piece, re-frame when the
+frame datum changed), `reconcile_geometry`, and push ONE
 `ProjectSnapshotPair`.
 
 The pushed `Command` is only a label: a `Batch` that names the operation in the
