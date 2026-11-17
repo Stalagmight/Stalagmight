@@ -613,7 +613,7 @@ fn a_combine_ties_a_pair_its_dedupe_keeps_where_the_kept_closure_stands() {
         .find(|cand| {
             [cand.section_a, cand.section_b] == [k, o] || [cand.section_a, cand.section_b] == [o, k]
         })
-        .expect("K and O are offered");
+        .unwrap();
     assert!(candidate.blocked_reason.is_none(), "{candidate:?}");
     let plan = if candidate.section_a == k {
         &candidate.plan_keeping_a
@@ -1167,8 +1167,8 @@ fn add_snaps(project: &mut Project, rng: &mut Rng) {
             vec![shot(bearing(pp, end), dist(pp, end))]
         } else {
             let mid = (
-                (pp.0 + end.0) / 2.0 + rng.range(-3.0, 3.0),
-                (pp.1 + end.1) / 2.0 + rng.range(-3.0, 3.0),
+                f64::midpoint(pp.0, end.0) + rng.range(-3.0, 3.0),
+                f64::midpoint(pp.1, end.1) + rng.range(-3.0, 3.0),
             );
             vec![
                 shot(bearing(pp, mid), dist(pp, mid)),

@@ -349,9 +349,9 @@ impl Project {
     /// the knots the solve would use now (current merges and the eligible
     /// and snapped closures it does not skip). Applies whatever the new
     /// closure's strategy: a tie across one shot means nothing for a `Move`
-    /// closure either. `None`
-    /// for a closure that closes a real loop, and for one whose stations are
-    /// already tied together (redundant, but harmless: it is still created).
+    /// closure either. `None` for a closure that closes a real loop, and for
+    /// one whose stations are already tied together (redundant, but harmless:
+    /// it is still created).
     pub fn closure_spans_one_shot(
         &self,
         a: StationRef,
