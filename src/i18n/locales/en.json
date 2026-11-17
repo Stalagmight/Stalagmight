@@ -3298,6 +3298,24 @@
               "Bottom: the shot table. Double-click a row to frame it. Plan shows its gear tables here; Export hides it."
             ]
           },
+          "editShape": {
+            "title": "Editing the Survey's Shape",
+            "description": "Join and cut the survey in Survey mode, in the Raw Data View. One Undo reverses each.",
+            "descriptionItems": [
+              "Merge tool (M): join two stations.",
+              "Right-click a station at a section end > Combine Section With ... (or Combine Sections... where more meet) to join two sections end to end.",
+              "Right-click a middle station > Split Section Here to cut a section in two."
+            ]
+          },
+          "georeference": {
+            "title": "Placing the Survey on the Globe",
+            "description": "Right-click a station > Set Zero Datum and enter its GPS. The first zero datum of each connected piece places that piece.",
+            "descriptionItems": [
+              "More zero datums (other entrances, radiolocation points) become GPS fixes. The Closures Computed View, Plan and map export bend to pass through them.",
+              "Each fix has an Accuracy and an Entrance setting in Edit Station.",
+              "A warning shows when a fix is far from where the survey puts it."
+            ]
+          },
           "done": {
             "title": "That is the tour",
             "description": "This tour runs once. The guides for DMP import and station placement still appear the first time you reach those workflows. Settings > General > Restart onboarding replays all of them."

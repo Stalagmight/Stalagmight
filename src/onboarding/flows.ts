@@ -161,6 +161,25 @@ const workspaceFlow: OnboardingFlowDefinition = {
       interaction: 'locked',
     },
     {
+      // The Merge tool is Survey-only; outside Survey this falls back to a
+      // centered card, like `geometry`.
+      id: 'edit-shape',
+      titleKey: 'onboarding.flows.workspace.steps.editShape.title',
+      descriptionKey: 'onboarding.flows.workspace.steps.editShape.description',
+      descriptionItemsKey: 'onboarding.flows.workspace.steps.editShape.descriptionItems',
+      targetSelector: '[data-testid="tool-merge"]',
+      placement: 'bottom',
+      interaction: 'locked',
+    },
+    {
+      id: 'georeference',
+      titleKey: 'onboarding.flows.workspace.steps.georeference.title',
+      descriptionKey: 'onboarding.flows.workspace.steps.georeference.description',
+      descriptionItemsKey: 'onboarding.flows.workspace.steps.georeference.descriptionItems',
+      placement: 'center',
+      interaction: 'locked',
+    },
+    {
       id: 'done',
       titleKey: 'onboarding.flows.workspace.steps.done.title',
       descriptionKey: 'onboarding.flows.workspace.steps.done.description',
