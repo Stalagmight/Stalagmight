@@ -1513,6 +1513,18 @@ pub(super) fn check_replaced(
 /// across one shot that was not there before. (A miss of the plan's model is
 /// also a panic inside the combine, from its backstop.) Returns how many it
 /// removed.
+/// What the app runs after every command (`AppState::reconcile_geometry`):
+/// re-measure every snapped closure's alignment, re-align drifted merges,
+/// re-measure again. The combine's own across-one-shot handling reads the
+/// flags as they stand before this; since #736 a snap's flag decides what the
+/// solve ties, so a flag the epilogue changes could leave a closure across
+/// one shot that no one listed. Returns how many flags it changed.
+pub(super) fn settle_like_the_epilogue(project: &mut Project) -> usize {
+    let first = project.remeasure_closure_alignment();
+    project.realign_merges();
+    first + project.remeasure_closure_alignment()
+}
+
 pub(super) fn check_removed_across_one_shot(
     before: &Project,
     after: &Project,
@@ -1581,6 +1593,20 @@ pub(super) fn check_removed_across_one_shot(
     assert!(
         skipped_after.is_empty(),
         "{what}: the combine left closures {skipped_after:?} across one shot"
+    );
+    // ... and still none once the command's epilogue has re-measured the
+    // snaps' alignment (#736): the flags it reads decide the knots.
+    let mut settled = after.clone();
+    settle_like_the_epilogue(&mut settled);
+    let settled_after: Vec<u64> = settled
+        .closures_across_one_shot()
+        .iter()
+        .map(|c| c.closure_id)
+        .filter(|id| !skipped_before.contains(id))
+        .collect();
+    assert!(
+        settled_after.is_empty(),
+        "{what}: after the epilogue's re-measure the combine left closures {settled_after:?} across one shot"
     );
     removed.len()
 }
@@ -2750,6 +2776,7 @@ fn combine_chains(make: fn(u64) -> Project, env_prefix: &str, label: &str) -> Ch
                     replaced += check_replaced(&project, &after, plan, &outcome.replaced, &what);
                     residual_moved += usize::from(moves_a_residual(plan));
                     probed += check_no_merge_folds_a_closure(&after, &what);
+                    settle_like_the_epilogue(&mut after);
                     project = after;
                     trail.push(op);
                     combines += 1;
@@ -2790,6 +2817,7 @@ fn combine_chains(make: fn(u64) -> Project, env_prefix: &str, label: &str) -> Ch
                     swept_away += sweep.removed.len();
                     check_structure_muting(&after, &what, &mute);
                     probed += check_no_merge_folds_a_closure(&after, &what);
+                    settle_like_the_epilogue(&mut after);
                     project = after;
                     trail.push(op);
                     splits += 1;
@@ -2815,6 +2843,7 @@ fn combine_chains(make: fn(u64) -> Project, env_prefix: &str, label: &str) -> Ch
                         assert!(dist(p, was[&before_at]) < 1e-6, "{what}: {at:?} moved");
                     }
                     check_structure_muting(&after, &what, &mute);
+                    settle_like_the_epilogue(&mut after);
                     project = after;
                     trail.push(op);
                     reverses += 1;
@@ -3223,6 +3252,7 @@ fn replay_chain(spec: &str, verbose: bool) -> ChainReplay {
             check_combined(&project, &after, &c, k, op, &[]);
             replay.replaced.extend(outcome.replaced);
             replay.plans.push(plan.clone());
+            settle_like_the_epilogue(&mut after);
             project = after;
         } else if let Some(rest) = op.strip_prefix("split(") {
             let (id, at) = rest.trim_end_matches(')').split_once(" at ").unwrap();
