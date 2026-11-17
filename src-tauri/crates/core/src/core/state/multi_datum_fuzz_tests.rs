@@ -1356,6 +1356,10 @@ const PINNED_CHAINS: &[&str] = &[
     // placement datum (one GPS, another accuracy) and the fix becomes the
     // placement: only the stored accuracy says the twin is not the fix.
     "1294806;unmerge(0:1,2:1);reopen;datum(1:0,25.650794071477637,-73.60666169426631,50.0);merge(1:0,3:1);datum(3:3,0.0,0.0,5.0);datum(2:0,19.994246212841716,-36.50338157646604,-);rm(4);twin(2:0,0,-);merge(1:0,3:5);unmerge(1:0,3:1);addshot(3,1,169.26310033886833,19.806523673505293,9.60276030515832,6.003958612032227);rm(0);twin(3:0,3,0.0);split(3,5,a);combine(4:start,3:end);acc(0,-);split(4,5,b);datum(4:2,33.880412148064,5.378012870132235,0.5);undo;delshot(1,0);undo;datum(4:1,-73.71064559461756,42.86751369073772,5.0);datum(5:1,0.27217256649528937,5.768254987005169,-);split(4,2,b);combine(4:start,2:end)",
+    // datum-key-reused (#778): a combine re-keys two twins with one GPS and
+    // one stored accuracy, and the fix becomes the placement datum: nothing
+    // stored tells them apart, only their order in the list.
+    "50081590;unmerge(0:3,1:3);delshot(0,4);datum(1:0,13.24267146086881,-20.05368604646883,-);merge(1:4,1:0);acc(0,0.0);addshot(2,1,17.866115572604944,5.9032088746755855,19.265457069394493,22.74353247521857);split(1,3,b);merge(3:1,1:1);datum(1:2,55.9977495443496,-7.523486185277852,5.0);rm(1);undo;addshot(2,end,311.70366481862885,15.752435002361782,27.23354170456898,31.112966696965994);rm(0);twin(2:4,2,-);undo;datum(3:0,33.266388411108196,84.2336720198981,50.0);datum(2:4,-14.858293515230148,-16.521479181272248,0.5);twin(3:0,5,0.5);datum(2:0,-80.11672339036002,28.213635258484583,5.0);twin(0:0,5,0.5);delsec(2);datum(0:3,-91.83940601821898,-14.350035526455445,0.0);datum(0:0,-16.779784327958737,-51.68504678474291,0.0);undo;closure(3:0,0:4);addshot(3,0,30.355090231295016,13.560162195854868,27.178394127517052,30.28326879909831);reopen;undo;undo;redo;combine(3:start,0:end)",
     // datum-twin-station: Combine joining two datum stations is refused.
     "350;combine(0:start,3:start)",
     // hard-fix-no-unknowns: every group held, the hard fix still applied.
