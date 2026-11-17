@@ -699,7 +699,13 @@ impl Project {
     /// them (nothing checked can join two knots a shot runs between), so the
     /// snap is skipped too and the combine removes it with them, as it would
     /// otherwise outlive the closures it was dropped for and tie the pair
-    /// where it stands.
+    /// where it stands. Not modelled: such a snap that the project skips
+    /// already (it is left alone, as any closure skipped before the combine
+    /// is) and that would not collapse a shot where it stands in the combined
+    /// survey; then it ties its pair there, and what that changes for the
+    /// closures between is left to the combine's backstop. It takes a snap
+    /// across one shot, a later closure on its two stations once joined, and
+    /// that closure squeezing a shot, all at once.
     ///
     /// The one model of the joined survey the anchor rule
     /// ([`Self::joined_survey_is_solved`]) and the closures the combine
