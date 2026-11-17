@@ -166,6 +166,14 @@ mod issue_738_tests;
 )]
 mod issue_756_tests;
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::panic,
+    clippy::print_stdout,
+    reason = "on-demand vector dump: fails loudly, and says where it wrote"
+)]
+mod legacy_disk_vectors_dump;
+#[cfg(test)]
 mod metamorphic_undo_tests;
 #[cfg(test)]
 #[expect(
