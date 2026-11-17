@@ -1855,6 +1855,7 @@ fn test_import_lines_persists_deferred_new_project() {
 
         // Import one origin-placed line through the command.
         let lines = vec![crate::models::ImportLineConfig {
+            cave_section: None,
             reverse: false,
             line_index: 0,
             name: Some("Imported".to_string()),
@@ -2014,6 +2015,7 @@ fn test_import_lines_provenance_params_decorate_receipt() {
         });
 
         let lines = vec![crate::models::ImportLineConfig {
+            cave_section: None,
             reverse: false,
             line_index: 0,
             name: Some("Imported".to_string()),
@@ -2074,6 +2076,7 @@ fn test_import_lines_sanitizes_hostile_zero_datum_line_name() {
 
         let hostile_name = format!("A\u{202e}B{}", "x".repeat(10_000));
         let lines = vec![crate::models::ImportLineConfig {
+            cave_section: None,
             reverse: false,
             line_index: 0,
             name: Some(hostile_name),
@@ -2138,6 +2141,7 @@ fn test_import_lines_without_provenance_params_leaves_receipt_defaults() {
         });
 
         let lines = vec![crate::models::ImportLineConfig {
+            cave_section: None,
             reverse: false,
             line_index: 0,
             name: Some("Imported".to_string()),
@@ -2297,6 +2301,7 @@ fn test_import_lines_deferred_save_failure_warns_no_phantom() {
         // Import one origin-placed line through the command - same shape as the
         // success test, only the save target differs.
         let lines = vec![crate::models::ImportLineConfig {
+            cave_section: None,
             reverse: false,
             line_index: 0,
             name: Some("Imported".to_string()),
@@ -2418,6 +2423,7 @@ fn test_import_lines_deferred_save_permission_denied_humanizes_no_marker_leak() 
         );
 
         let lines = vec![crate::models::ImportLineConfig {
+            cave_section: None,
             reverse: false,
             line_index: 0,
             name: Some("Imported".to_string()),
@@ -2486,6 +2492,7 @@ fn test_import_lines_deferred_save_generic_open_failure_is_not_a_denial() {
             .set_initial_save_deferred_for_tests(true);
 
         let lines = vec![crate::models::ImportLineConfig {
+            cave_section: None,
             reverse: false,
             line_index: 0,
             name: Some("Imported".to_string()),

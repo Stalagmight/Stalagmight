@@ -333,6 +333,7 @@ fn import_reverse_applies_before_placement_and_comments_resolve() {
     // Three shots; a comment on station 0 of the FINAL (reversed) line.
     let result = state.execute_import_lines(
         vec![ImportLineConfig {
+            cave_section: None,
             line_index: 0,
             name: Some("Imported".to_string()),
             surveyor: None,
@@ -411,6 +412,7 @@ fn import_reverse_lands_the_line_in_the_same_place() {
         });
         let result = state.execute_import_lines(
             vec![ImportLineConfig {
+                cave_section: None,
                 line_index: 0,
                 name: Some("Imported".to_string()),
                 surveyor: None,
@@ -509,6 +511,7 @@ fn import_one(reverse: bool, placement: fn(LineId) -> ImportPlacement) -> Vec<Co
 
     let result = state.execute_import_lines(
         vec![ImportLineConfig {
+            cave_section: None,
             line_index: 0,
             name: Some("Imported".to_string()),
             surveyor: None,
@@ -643,6 +646,7 @@ fn import_two(
     });
 
     let config = |line_index: u32, name: &str, shots: Vec<ShotData>, placement| ImportLineConfig {
+        cave_section: None,
         line_index,
         name: Some(name.to_string()),
         surveyor: None,
@@ -907,6 +911,7 @@ fn import_reverse_drops_an_out_of_range_station_comment() {
 
     let result = state.execute_import_lines(
         vec![ImportLineConfig {
+            cave_section: None,
             line_index: 0,
             name: Some("Imported".to_string()),
             surveyor: None,
@@ -1716,6 +1721,7 @@ fn importing_with_the_reverse_toggle_records_the_orientation() {
 
     let result = state.execute_import_lines(
         vec![ImportLineConfig {
+            cave_section: None,
             line_index: 0,
             name: Some("Imported".to_string()),
             surveyor: None,

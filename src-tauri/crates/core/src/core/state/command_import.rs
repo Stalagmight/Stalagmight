@@ -1181,6 +1181,23 @@ impl AppState {
         // lines as corruption, and before the after-snapshot the undo entry
         // records.
         self.reassign_repeated_shot_uuids(&all_line_ids);
+        // Auto-grouping (#327): a config naming a Section joins the project's
+        // Section of that name, created when there is none. Before the
+        // after-snapshot, so one undo takes the Sections with the lines.
+        let section_assignments: Vec<(u32, String)> = lines
+            .iter()
+            .filter_map(|config| {
+                let name = config.cave_section.clone()?;
+                Some((*created_ids.get(&config.line_index)?, name))
+            })
+            .collect();
+        if !section_assignments.is_empty() {
+            if let Ok(mut guard) = self.project.lock() {
+                if let Some(project) = guard.as_mut() {
+                    project.assign_sections_by_name(&section_assignments);
+                }
+            }
+        }
         cascade_guard.disarm();
         let cascade_start = std::time::Instant::now();
         if let Ok(mut proj_guard) = self.project.lock() {

@@ -428,6 +428,14 @@ pub struct ImportLineConfig {
     #[serde(default)]
     #[ts(optional)]
     pub azimuth_reference: Option<AzimuthReference>,
+    /// The Section (#327) to group this line into, by name - the importers'
+    /// auto-grouping (an Ariane section name that fanned out into several
+    /// lines, a Compass survey, a Walls book). The import reuses the
+    /// project's Section of that name, or creates one. `None` (what the
+    /// wizards send) leaves the line ungrouped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub cave_section: Option<String>,
 }
 
 /// Update to apply to an existing line's shot during batch import.

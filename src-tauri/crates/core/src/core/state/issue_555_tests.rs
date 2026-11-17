@@ -70,6 +70,7 @@ fn create_one_line(state: &AppState) -> CommandResult {
 
 fn import_config(index: u32) -> ImportLineConfig {
     ImportLineConfig {
+        cave_section: None,
         reverse: false,
         line_index: index,
         name: Some(format!("Imported {index}")),

@@ -7,8 +7,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::models::{
-    gps_to_local, GpsCoordinates, HeldGauge, LineId, LoopClosure, Project, ShotUuidRemap,
-    StationKey, StationMerge, StationRef,
+    gps_to_local, GpsCoordinates, HeldGauge, LineId, LoopClosure, Project, SectionId,
+    ShotUuidRemap, StationKey, StationMerge, StationRef,
 };
 
 /// What [`append_project`] did beyond the copy itself.
@@ -42,7 +42,8 @@ impl AppendOutcome {
 }
 
 /// Append every line of `source` to `target` with fresh ids, and carry
-/// everything that hangs off those lines: line and station offsets,
+/// everything that hangs off those lines: their Sections (appended, names
+/// deduped), line and station offsets,
 /// station comments, zero datums, station merges, loop closures (id 0, for the
 /// caller's `assign_closure_ids`), each line's resolved north reference and
 /// least-squares gauge (reverse parity and gauge anchors), the entrance
@@ -114,6 +115,7 @@ pub(super) fn append_project(
 
     target.reassign_repeated_shot_uuids(&new_line_ids);
     let shot_uuid_map = carry_shot_identity(target, source, &line_id_map);
+    copy_sections(target, source, &line_id_map);
 
     copy_offsets_and_comments(target, source, &line_id_map);
     copy_zero_datums(target, source, &line_id_map)?;
@@ -249,6 +251,26 @@ fn carry_shot_identity(
     // One per component, whatever the source file held.
     target.normalize_held_gauges();
     renamed
+}
+
+/// Sections (#327): every source Section is appended to the target's with a
+/// fresh id and a name made unique among the target's (`Upper level` beside
+/// the target's own `Upper level` becomes `Upper level (2)`), and every copied
+/// line keeps its membership through the remap. A Section with no copied
+/// line is appended too: it is part of the source's survey.
+fn copy_sections(target: &mut Project, source: &Project, line_id_map: &HashMap<LineId, LineId>) {
+    let mut section_map: HashMap<SectionId, SectionId> = HashMap::new();
+    for section in &source.sections {
+        let name = target.unique_section_name(&section.name);
+        let id = target.add_section(name, section.color.clone());
+        section_map.insert(section.id, id);
+    }
+    for line in &source.lines {
+        let (Some(&copied), Some(section)) = (line_id_map.get(&line.id), line.section_id) else {
+            continue;
+        };
+        target.set_line_section(copied, section_map.get(&section).copied());
+    }
 }
 
 /// Line offsets, station offsets and station comments, remapped.

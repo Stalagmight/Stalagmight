@@ -2578,3 +2578,55 @@ fn the_team_comment_is_every_shots_surveyors_on_the_survey_date() {
         .as_ref()
         .is_some_and(|c| std::sync::Arc::ptr_eq(c, first))));
 }
+
+/// Auto-grouping (#327): every line of a survey in a segment joins a Section
+/// named after the segment's last level - or after the whole path when two
+/// segments end in the same level. A survey with no segment stays ungrouped.
+#[test]
+fn surveys_in_a_segment_are_grouped_into_a_section() {
+    let survey = |name: &str, segment: &str, srv: &str| {
+        let mut warnings = Vec::new();
+        parse_srv_contents(
+            srv,
+            name,
+            name,
+            segment,
+            &WallsUnits::default(),
+            &HashMap::new(),
+            None,
+            true,
+            false,
+            &mut warnings,
+        )
+    };
+    let parsed = ParsedWalls {
+        project_name: "Test".to_string(),
+        book_count: 0,
+        surveys: vec![
+            survey("N1", "Cave/North", "A1 A2 10 90 0\nA2 A3 10 90 0\n"),
+            survey("N2", "Cave/North", "A3 B1 10 0 0\n"),
+            survey("U1", "East/Upper", "B1 C1 10 0 0\n"),
+            survey("U2", "West/Upper", "C1 D1 10 0 0\n"),
+            survey("Loose", "", "D1 E1 10 0 0\n"),
+        ],
+        georef: None,
+        missing_files: Vec::new(),
+        skipped_attachments: 0,
+        warnings: Vec::new(),
+    };
+    let (configs, _, _) =
+        convert_walls_to_import_configs(&parsed, &WallsImportOptions::default()).unwrap();
+    let section_of = |label: &str| {
+        configs
+            .iter()
+            .find(|c| c.name.as_deref().is_some_and(|n| n.contains(label)))
+            .expect("a line per survey")
+            .cave_section
+            .clone()
+    };
+    assert_eq!(section_of("N1").as_deref(), Some("North"));
+    assert_eq!(section_of("N2").as_deref(), Some("North"));
+    assert_eq!(section_of("U1").as_deref(), Some("East/Upper"));
+    assert_eq!(section_of("U2").as_deref(), Some("West/Upper"));
+    assert_eq!(section_of("Loose"), None);
+}

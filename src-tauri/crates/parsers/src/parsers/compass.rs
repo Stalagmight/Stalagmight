@@ -1497,11 +1497,16 @@ pub fn convert_compass_to_import_configs(
         /// The survey's north reference (#438). Per-LINE because Compass
         /// declares the declination per survey and can change mode mid-file.
         azimuth_reference: AzimuthReference,
+        /// The Section the line is grouped into (#327): the survey's name
+        /// when the survey produced two lines or more.
+        section: Option<String>,
     }
     let mut chains: Vec<PendingChain> = Vec::new();
     for kept_survey in &kept {
         let split = split_into_chains(&kept_survey.shots);
         let multi = split.len() > 1;
+        let section = (split.iter().filter(|chain| !chain.is_empty()).count() > 1)
+            .then(|| line_label(kept_survey.survey, false, 0));
         for (chain_idx, chain) in split.iter().enumerate() {
             if chain.is_empty() {
                 continue;
@@ -1547,6 +1552,7 @@ pub fn convert_compass_to_import_configs(
                 surveyor: non_empty(&kept_survey.survey.team),
                 date: kept_survey.survey.date,
                 azimuth_reference: kept_survey.ctx.azimuth_reference,
+                section: section.clone(),
             });
         }
     }
@@ -1734,6 +1740,7 @@ pub fn convert_compass_to_import_configs(
             })
             .collect();
         configs.push(ImportLineConfig {
+            cave_section: chain.section.clone(),
             reverse: false,
             line_index: chain.line_index,
             name: Some(chain.label.clone()),
@@ -3191,6 +3198,53 @@ mod tests {
         assert!(
             err.contains("byte-order mark"),
             "the error must name the mark, got {err:?}"
+        );
+    }
+    /// Auto-grouping (#327): a survey that produced two lines or more puts
+    /// them in a Section named after the survey; a one-line survey stays
+    /// ungrouped.
+    #[test]
+    fn a_survey_split_into_several_lines_becomes_a_section() {
+        let dir = tempfile::tempdir().unwrap();
+        let header = |name: &str| {
+            format!(
+                "Synthetic Cave\r\n\
+                 SURVEY NAME: {name}\r\n\
+                 SURVEY DATE: 7 10 1979\r\n\
+                 SURVEY TEAM:\r\n\
+                 Ann\r\n\
+                 DECLINATION: 0.00  FORMAT: DMMDLRUDLADN  CORRECTIONS: 0.00 0.00 0.00\r\n\
+                 \r\n\
+                 FROM TO LENGTH BEARING INC LEFT UP DOWN RIGHT FLAGS COMMENTS\r\n\
+                 \r\n"
+            )
+        };
+        let dat = format!(
+            "{}A1 A2 10.00 90.00 0.00 1.00 1.00 1.00 1.00\r\n\
+             A2 A3 10.00 90.00 0.00 1.00 1.00 1.00 1.00\r\n\
+             A2 A4 10.00 0.00 0.00 1.00 1.00 1.00 1.00\r\n\x0c\r\n\
+             {}A3 B1 10.00 90.00 0.00 1.00 1.00 1.00 1.00\r\n\
+             B1 B2 10.00 90.00 0.00 1.00 1.00 1.00 1.00\r\n\x0c\r\n",
+            header("Upper"),
+            header("Lower"),
+        );
+        let path = dir.path().join("groups.dat");
+        std::fs::write(&path, dat).unwrap();
+        let parsed = parse_compass(&path).unwrap();
+        let (configs, _, _) =
+            convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
+        let mut grouped: Vec<(String, Option<String>)> = configs
+            .iter()
+            .map(|c| (c.name.clone().unwrap(), c.cave_section.clone()))
+            .collect();
+        grouped.sort();
+        assert_eq!(
+            grouped,
+            [
+                ("Lower".to_string(), None),
+                ("Upper (branch 1)".to_string(), Some("Upper".to_string())),
+                ("Upper (branch 2)".to_string(), Some("Upper".to_string())),
+            ]
         );
     }
 }

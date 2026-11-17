@@ -1410,6 +1410,7 @@ pub fn convert_tml_with_options(
             .collect();
 
         configs.push(ImportLineConfig {
+            cave_section: None,
             reverse: false,
             line_index,
             name: Some(line.name.clone()),
@@ -1434,6 +1435,10 @@ pub fn convert_tml_with_options(
     // When excluded-shot filtering drops entire branches, simplify names
     // like "xxx (branch 1)" back to "xxx" if only one branch survives.
     simplify_lone_branch_names(&mut configs);
+
+    // Auto-grouping (#327): the lines one Ariane section fanned out into join
+    // a Section of that name.
+    group_by_ariane_section(&mut configs);
 
     // Topologically sort configs so that any line referenced by a
     // FromImporting placement is created before its dependent. This handles
@@ -1604,6 +1609,64 @@ fn branch_base(name: &str) -> &str {
         &name[..pos]
     } else {
         name
+    }
+}
+
+/// A config's name with a TRAILING `" (trip N)"` removed, or unchanged - the
+/// suffix [`linearize`] gives the later parts of a run cut where the survey
+/// trip changed. Same rule as [`branch_base`].
+fn trip_base(name: &str) -> &str {
+    let suffix = " (trip ";
+    let Some(pos) = name.rfind(suffix) else {
+        return name;
+    };
+    let inner = &name[pos + suffix.len()..];
+    let Some(number) = inner.strip_suffix(')') else {
+        return name;
+    };
+    if !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()) {
+        &name[..pos]
+    } else {
+        name
+    }
+}
+
+/// The Ariane section name a config's line was made from: its name without
+/// the `" (trip N)"` and `" (branch N)"` suffixes the linearizer adds
+/// (`"Main (branch 2) (trip 3)"` -> `"Main"`).
+fn ariane_section_of(name: &str) -> &str {
+    let mut base = name;
+    loop {
+        let stripped = branch_base(trip_base(base));
+        if stripped.len() == base.len() {
+            return base;
+        }
+        base = stripped;
+    }
+}
+
+/// Group the lines one Ariane section fanned out into (#327): when two or
+/// more configs come from the same section name (`"X"`, `"X (branch 2)"`,
+/// `"X (trip 2)"`), each joins a Section named `"X"`. A section that became
+/// one line stays ungrouped. A name joined from two runs (`"A + B"`, #412)
+/// is its own base.
+fn group_by_ariane_section(configs: &mut [ImportLineConfig]) {
+    let mut counts: HashMap<String, u32> = HashMap::new();
+    for config in configs.iter() {
+        if let Some(name) = config.name.as_deref() {
+            *counts
+                .entry(ariane_section_of(name).trim().to_string())
+                .or_insert(0) += 1;
+        }
+    }
+    for config in configs.iter_mut() {
+        let Some(name) = config.name.as_deref() else {
+            continue;
+        };
+        let base = ariane_section_of(name).trim();
+        if !base.is_empty() && counts.get(base).copied().unwrap_or(0) >= 2 {
+            config.cave_section = Some(base.to_string());
+        }
     }
 }
 
@@ -1926,6 +1989,13 @@ fn convert_shots_to_shot_data(
 // ============================================================================
 // Tests
 // ============================================================================
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: a failed unwrap is the assertion"
+)]
+mod section_group_tests;
 
 #[cfg(test)]
 #[expect(

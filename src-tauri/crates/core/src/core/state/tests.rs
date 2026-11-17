@@ -7985,6 +7985,7 @@ fn test_import_shot_updates_reject_atomically_when_one_is_poisoned() {
     });
 
     let seed = ImportLineConfig {
+        cave_section: None,
         reverse: false,
         line_index: 0,
         name: Some("Existing".to_string()),
@@ -8019,6 +8020,7 @@ fn test_import_shot_updates_reject_atomically_when_one_is_poisoned() {
     let len1 = project.lines[0].shots[1].length;
 
     let incoming = ImportLineConfig {
+        cave_section: None,
         reverse: false,
         line_index: 0,
         name: Some("Incoming".to_string()),
@@ -8162,6 +8164,7 @@ fn doubly_anchored_guard_reports_receipt_warning_and_skips_the_shot() {
     // `existing_shot_updates` outright when `lines` is empty (the DMP
     // wizard always sends updates alongside the lines they belong to).
     let carrier = ImportLineConfig {
+        cave_section: None,
         reverse: false,
         line_index: 0,
         name: Some("Carrier".to_string()),
@@ -8230,6 +8233,7 @@ fn zero_datum_import_placement_sets_receipt_zero_datum_created() {
     });
 
     let config = ImportLineConfig {
+        cave_section: None,
         reverse: false,
         line_index: 0,
         name: Some("GPS Anchor".to_string()),
@@ -8280,6 +8284,7 @@ fn multiple_zero_datum_placements_name_the_first_and_count_the_rest() {
     });
 
     let make = |name: &str, station_index: u32| ImportLineConfig {
+        cave_section: None,
         reverse: false,
         line_index: 0,
         name: Some(name.to_string()),
@@ -8330,6 +8335,7 @@ fn import_with_no_zero_datum_placement_leaves_receipt_field_none() {
     });
 
     let config = ImportLineConfig {
+        cave_section: None,
         reverse: false,
         line_index: 0,
         name: Some("Plain".to_string()),
@@ -17952,6 +17958,7 @@ fn test_execute_import_lines_origin_placement() {
 
     let lines = vec![
         ImportLineConfig {
+            cave_section: None,
             reverse: false,
             line_index: 0,
             name: Some("Import1".to_string()),
@@ -17970,6 +17977,7 @@ fn test_execute_import_lines_origin_placement() {
             surveyors: None,
         },
         ImportLineConfig {
+            cave_section: None,
             reverse: false,
             line_index: 1,
             name: Some("Import2".to_string()),
@@ -18030,6 +18038,7 @@ fn test_execute_import_lines_unresolvable_closure_is_skipped_on_receipt() {
     });
 
     let lines = vec![ImportLineConfig {
+        cave_section: None,
         reverse: false,
         line_index: 0,
         name: Some("Import1".to_string()),
@@ -18102,6 +18111,7 @@ fn imported_shot_kinds_survive_an_undo_redo_round_trip() {
         ..test_shot_data(4.0)
     };
     let lines = vec![ImportLineConfig {
+        cave_section: None,
         line_index: 0,
         name: Some("Imported".to_string()),
         surveyor: None,
@@ -18161,6 +18171,7 @@ fn importing_a_second_file_leaves_existing_shot_kinds_alone() {
     });
 
     let config = |name: &str, shots: Vec<ShotData>| ImportLineConfig {
+        cave_section: None,
         line_index: 0,
         name: Some(name.to_string()),
         surveyor: None,
@@ -18258,6 +18269,7 @@ fn test_execute_import_lines_rejects_non_finite_shot_update() {
     });
 
     let seed = ImportLineConfig {
+        cave_section: None,
         reverse: false,
         line_index: 0,
         name: Some("Existing".to_string()),
@@ -18290,6 +18302,7 @@ fn test_execute_import_lines_rejects_non_finite_shot_update() {
     let clean_length = project.lines[0].shots[0].length;
 
     let poisoned = ImportLineConfig {
+        cave_section: None,
         reverse: false,
         line_index: 0,
         name: Some("Incoming".to_string()),
@@ -18356,6 +18369,7 @@ fn test_execute_import_lines_from_importing_placement() {
 
     let lines = vec![
         ImportLineConfig {
+            cave_section: None,
             reverse: false,
             line_index: 0,
             name: Some("First".to_string()),
@@ -18374,6 +18388,7 @@ fn test_execute_import_lines_from_importing_placement() {
             surveyors: None,
         },
         ImportLineConfig {
+            cave_section: None,
             reverse: false,
             line_index: 1,
             name: Some("Second".to_string()),
@@ -18434,6 +18449,7 @@ fn test_execute_import_lines_from_existing_placement() {
     let existing_id = state.get_project_state().unwrap().lines[0].id;
 
     let lines = vec![ImportLineConfig {
+        cave_section: None,
         reverse: false,
         line_index: 0,
         name: Some("Imported".to_string()),
@@ -18481,6 +18497,7 @@ fn test_execute_import_lines_manual_with_offset() {
     });
 
     let lines = vec![ImportLineConfig {
+        cave_section: None,
         reverse: false,
         line_index: 0,
         name: Some("Manual".to_string()),
@@ -18541,6 +18558,7 @@ fn test_execute_import_lines_zero_datum_placement() {
 
     let gps = GpsCoordinates::new(10.0, 20.0, 5.0).unwrap();
     let lines = vec![ImportLineConfig {
+        cave_section: None,
         reverse: false,
         line_index: 0,
         name: Some("GPS Line".to_string()),
@@ -18602,6 +18620,7 @@ fn test_execute_import_lines_zero_datum_placement_at_non_origin_station() {
     let gps = GpsCoordinates::new(10.0, 20.0, 5.0).unwrap();
     let imported_shot = test_shot_data(5.0);
     let lines = vec![ImportLineConfig {
+        cave_section: None,
         reverse: false,
         line_index: 0,
         name: Some("GPS Line".to_string()),
@@ -18675,6 +18694,7 @@ fn test_execute_import_lines_rollback_on_failure() {
     // First line succeeds, second fails (merge to nonexistent existing line)
     let lines = vec![
         ImportLineConfig {
+            cave_section: None,
             reverse: false,
             line_index: 0,
             name: Some("GoodLine".to_string()),
@@ -18693,6 +18713,7 @@ fn test_execute_import_lines_rollback_on_failure() {
             surveyors: None,
         },
         ImportLineConfig {
+            cave_section: None,
             reverse: false,
             line_index: 1,
             name: Some("BadLine".to_string()),
@@ -18763,6 +18784,7 @@ fn test_execute_import_lines_no_project() {
 
     let state = AppState::new().unwrap();
     let lines = vec![ImportLineConfig {
+        cave_section: None,
         reverse: false,
         line_index: 0,
         name: Some("Test".to_string()),
@@ -18814,6 +18836,7 @@ fn test_execute_import_lines_manual_snap_placement() {
     let existing_id = state.get_project_state().unwrap().lines[0].id;
 
     let lines = vec![ImportLineConfig {
+        cave_section: None,
         reverse: false,
         line_index: 0,
         name: Some("Snapped".to_string()),
@@ -19996,6 +20019,7 @@ fn kb5_import_overlap_interpolation_integration() {
 
     let result_002 = state.execute_import_lines(
         vec![ImportLineConfig {
+            cave_section: None,
             reverse: false,
             line_index: 0,
             name: Some("002".to_string()),
@@ -20104,6 +20128,7 @@ fn kb5_import_overlap_interpolation_integration() {
     // Import 001 merged to 002 at station 182, with existing shot updates
     let result_001 = state.execute_import_lines(
         vec![ImportLineConfig {
+            cave_section: None,
             reverse: false,
             line_index: 0,
             name: Some("001".to_string()),
@@ -23915,6 +23940,7 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
             "execute_import_lines",
             &state.execute_import_lines(
                 vec![ImportLineConfig {
+                    cave_section: None,
                     reverse: false,
                     line_index: 0,
                     name: Some("Imp".to_string()),
