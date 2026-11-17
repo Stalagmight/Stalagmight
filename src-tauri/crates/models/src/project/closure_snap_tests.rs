@@ -569,6 +569,107 @@ fn two_datums_tied_through_a_snap_are_a_reported_failure() {
     assert!(gap_in(&old.stations, st(d, 1), st(a, 0)) > 30.0);
 }
 
+/// Combine Sections' model of the joined survey (`joined_sweep`) with a snap
+/// its dedupe drops (#736): K's end and O's start side by side at the
+/// origin, Z merged at O's far end and back to the origin, where Z's end is
+/// snapped onto O's start (X). A `Batch` closure C ties O's second station to
+/// Z's end, and a later `Batch` closure E ties K's end to Z's end (both as an
+/// older file carries them). Joined, X and E tie the same two stations, and
+/// the dedupe keeps E: the pair is tied where E stands, after C, so C joins
+/// O:1 to Z's end and E then squeezes O's first shot. A model that tied the
+/// pair where X stands would skip C instead and miss E; the plan removes E,
+/// and X with it (it would otherwise outlive E and tie the pair where it
+/// stands), and the combine leaves no closure across one shot it did not
+/// list.
+#[test]
+fn a_combine_ties_a_pair_its_dedupe_keeps_where_the_kept_closure_stands() {
+    let mut p = Project::new("Dedupe".to_string(), None);
+    let k = add(&mut p, "K", vec![shot(90.0, 10.0)]);
+    p.set_section_offset(k, (-10.0, 0.0));
+    let o = add(&mut p, "O", vec![shot(0.0, 10.0), shot(90.0, 10.0)]);
+    let z = add(&mut p, "Z", vec![shot(225.0, 200f64.sqrt())]);
+    let at = xy(&p, st(o, 2));
+    p.set_section_offset(z, at);
+    p.merge_stations(st(o, 2), st(z, 0)).unwrap();
+    let x = p
+        .create_loop_closure(st(o, 0), st(z, 1), ClosureStrategy::Move)
+        .unwrap();
+    assert!(x.is_aligned, "setup");
+    let c = plant(&mut p, st(o, 1), st(z, 1), ClosureStrategy::Batch, false);
+    let e = plant(&mut p, st(k, 1), st(z, 1), ClosureStrategy::Batch, false);
+    // Before the combine C squeezes O's first shot through the snap; E is a
+    // real (tiny) loop.
+    let skipped: Vec<u64> = p
+        .closures_across_one_shot()
+        .iter()
+        .map(|s| s.closure_id)
+        .collect();
+    assert_eq!(skipped, vec![c]);
+    let candidate = p
+        .combine_candidates_at_point(st(k, 1))
+        .into_iter()
+        .find(|cand| {
+            [cand.section_a, cand.section_b] == [k, o] || [cand.section_a, cand.section_b] == [o, k]
+        })
+        .expect("K and O are offered");
+    assert!(candidate.blocked_reason.is_none(), "{candidate:?}");
+    let plan = if candidate.section_a == k {
+        &candidate.plan_keeping_a
+    } else {
+        &candidate.plan_keeping_b
+    };
+    let removed: Vec<_> = plan
+        .closures_removed_across_one_shot
+        .clone()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|r| (r.station_a, r.station_b, r.kind))
+        .collect();
+    assert_eq!(
+        removed,
+        vec![
+            (st(k, 1), st(z, 1), crate::CombineRemovedKind::LoopClosure),
+            (
+                st(o, 0),
+                st(z, 1),
+                crate::CombineRemovedKind::SnappedClosure
+            ),
+        ],
+        "{plan:?}"
+    );
+    let mut after = p.clone();
+    let end = |cand_end| crate::CombineJoinEnds {
+        kept: cand_end,
+        other: if candidate.section_a == k {
+            candidate.end_b
+        } else {
+            candidate.end_a
+        },
+    };
+    let kept_end = if candidate.section_a == k {
+        candidate.end_a
+    } else {
+        candidate.end_b
+    };
+    // In a debug build the combine's backstop asserts that it left no
+    // closure across one shot its plan did not list.
+    let outcome = after
+        .combine_sections_reporting(
+            k,
+            o,
+            &super::combine_closure_tests::options(Some(end(kept_end))),
+        )
+        .unwrap();
+    assert_eq!(outcome.removed_across_one_shot.len(), 2);
+    assert!(after.closures_across_one_shot().is_empty());
+    assert!(after.loop_closures.iter().any(|lc| lc.id == c));
+    assert!(!after
+        .loop_closures
+        .iter()
+        .any(|lc| lc.id == e || lc.id == x.id));
+    assert!(view_of(&after).1.is_empty());
+}
+
 fn deep(azimuth: f64, length: f64, depth_in: f64, depth_out: f64) -> ShotData {
     ShotData {
         depth_in,
