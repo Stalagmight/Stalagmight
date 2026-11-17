@@ -173,10 +173,15 @@ export default function EditStationDialog() {
         setError(t('dialogs.editStation.accuracyInvalid', { max: MAX_DATUM_ACCURACY_M }));
         return;
       }
-      // Send an accuracy only when the user changed it; otherwise keep what is
-      // stored, which may be none at all.
-      const accuracyM =
-        !showAccuracy || accuracy === null ? undefined : datumAccuracyToSend(accuracy, storedDatum?.accuracy_m);
+      // Send the stored accuracy back unless the user changed it, which may be
+      // none at all. The backend stores what it is sent (nothing means the
+      // default), so a placement datum, whose field is hidden, still sends
+      // its stored value: it applies again the day the datum becomes a fix.
+      const accuracyM = !showAccuracy
+        ? storedDatum?.accuracy_m
+        : accuracy === null
+          ? undefined
+          : datumAccuracyToSend(accuracy, storedDatum?.accuracy_m);
       const accuracyOptions = {
         ...(accuracyM === undefined ? {} : { accuracyM }),
         ...(entranceToSend === undefined ? {} : { entrance: entranceToSend }),

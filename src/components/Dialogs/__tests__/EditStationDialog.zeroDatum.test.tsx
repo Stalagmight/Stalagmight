@@ -228,7 +228,7 @@ describe('EditStationDialog zero datum (#741)', () => {
     await waitFor(() => expect(setZeroDatum).toHaveBeenCalledWith(REF, expect.anything(), { accuracyM: 3 }));
   });
 
-  it('hides the accuracy of a placement datum, keeps what is stored and sends none', async () => {
+  it('hides the accuracy of a placement datum and sends its stored value back', async () => {
     dialogData = { stationRef: REF };
     previewZeroDatum.mockResolvedValue({ role: 'Placement' });
     setProject({ datum: { accuracy_m: 7, role: 'Placement' } });
@@ -240,8 +240,25 @@ describe('EditStationDialog zero datum (#741)', () => {
     expect(screen.queryByTestId('station-datum-accuracy-input')).not.toBeInTheDocument();
     fireEvent.click(screen.getByTestId('edit-station-save'));
     await waitFor(() => expect(closeDialog).toHaveBeenCalled());
-    // The GPS changed, so the datum is re-saved - without an accuracy, which
-    // keeps the stored 7 m for the day the datum becomes a fix.
+    // The GPS changed, so the datum is re-saved with its stored 7 m: the
+    // backend stores what it is sent, so sending none would wipe it.
+    expect(setZeroDatum).toHaveBeenCalledWith(
+      REF,
+      { latitude: 20.6, longitude: -87.4, depth_reference: 4 },
+      { accuracyM: 7 }
+    );
+  });
+
+  it('sends no accuracy for a placement datum that never stored one', async () => {
+    dialogData = { stationRef: REF };
+    previewZeroDatum.mockResolvedValue({ role: 'Placement' });
+    setProject({ datum: { role: 'Placement' } });
+    render(<EditStationDialog />);
+    typeGps('20.6, -87.4');
+    await waitFor(() => expect(previewZeroDatum).toHaveBeenCalled());
+    await act(async () => {});
+    fireEvent.click(screen.getByTestId('edit-station-save'));
+    await waitFor(() => expect(closeDialog).toHaveBeenCalled());
     expect(setZeroDatum).toHaveBeenCalledWith(REF, { latitude: 20.6, longitude: -87.4, depth_reference: 4 }, {});
   });
 
