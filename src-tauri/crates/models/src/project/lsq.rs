@@ -487,9 +487,11 @@ impl Project {
                 .copied()
                 .collect();
             // Two placement datums are in different merge components by
-            // construction, so they share a group only when a closure ties the
-            // two datum stations themselves. The group cannot sit at both raw
-            // positions; refusing leaves the component in Raw Data View.
+            // construction, so they share a group only when closures tie the
+            // two datum stations together - directly, through a chain of
+            // closures, or through a snapped closure (#736). The group cannot
+            // sit at both raw positions; refusing leaves the component in Raw
+            // Data View.
             if datum_members.len() > 1 {
                 return Err(
                     "Multiple placement zero datums in a single constraint group".to_string(),

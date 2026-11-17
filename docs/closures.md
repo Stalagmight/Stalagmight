@@ -558,7 +558,7 @@ Export pulled the pair apart (0.25 m in the issue's square).
   preview name a snap they leave across one shot.
 
 Tests: `project/closure_snap_tests.rs` (the issue's square, one test per case above, a
-snap-free survey pinned bit for bit to the view before #736, and a seeded sweep of snaps
+snap-free survey pinned to the view before #736 within 1e-12 m, and a seeded sweep of snaps
 over the combine sweeps' networks with hand moves and GPS fixes, checked by
 `assert_view_is_the_solve`).
 

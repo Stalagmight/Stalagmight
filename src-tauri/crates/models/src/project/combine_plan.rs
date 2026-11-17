@@ -702,10 +702,14 @@ impl Project {
     /// where it stands. Not modelled: such a snap that the project skips
     /// already (it is left alone, as any closure skipped before the combine
     /// is) and that would not collapse a shot where it stands in the combined
-    /// survey; then it ties its pair there, and what that changes for the
-    /// closures between is left to the combine's backstop. It takes a snap
-    /// across one shot, a later closure on its two stations once joined, and
-    /// that closure squeezing a shot, all at once.
+    /// survey; then it ties its pair there, and a closure that this leaves
+    /// across one shot is one the plan did not list. The combine's backstop
+    /// (`remove_unpredicted_closures_across_one_shot`) then removes it and
+    /// logs an error in a release build, so the Combine dialog did not name
+    /// it, and fails its `debug_assert!` in a debug build. It takes a snap
+    /// across one shot (only a file from before #737 can hold one), a later
+    /// closure on its two stations once joined, and that closure squeezing a
+    /// shot, all at once; no sweep has produced it.
     ///
     /// The one model of the joined survey the anchor rule
     /// ([`Self::joined_survey_is_solved`]) and the closures the combine
