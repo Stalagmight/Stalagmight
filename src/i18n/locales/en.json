@@ -3348,7 +3348,7 @@
             "title": "Click to Place, Hover to Snap",
             "description": "Click the map to drop the section; position can be refined later. Hovering near an existing station snaps and merges the two at placement time.",
             "descriptionItems": [
-              "Drag to pan, scroll to zoom.",
+              "Ctrl+drag or middle-drag to pan, scroll to zoom.",
               "Once this guide closes, Esc reopens the placement options and metadata."
             ]
           }

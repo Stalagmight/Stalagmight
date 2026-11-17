@@ -518,22 +518,10 @@ function renderStepIllustration(
         </div>
         <div className="pt-2 text-xs text-text-secondary">
           {/*
-            The primary gesture (#409): the map pans on a plain left-drag under
-            every tool, which is why the Pan tool is off the toolbar by default.
+            Only rendered during placement, where a plain drag does not pan
+            (mapGestureMode hands the press to placement): Ctrl+drag and
+            middle-drag are the gestures that pan there.
           */}
-          <div className="flex items-end justify-center gap-2">
-            <div className="flex w-6 flex-col items-center">
-              <span className="mb-1.5 whitespace-nowrap text-center text-[11px] leading-none">Left click</span>
-              {renderMouseIcon('h-8 w-7', 'left')}
-            </div>
-            <span className="mb-2 whitespace-nowrap">+ drag</span>
-          </div>
-          {/* The alternatives still work, and still pan while a tool owns the left button. */}
-          <div className="my-1 flex items-center gap-2">
-            <span className="h-0 flex-1 border-t border-border" />
-            <span>or</span>
-            <span className="h-0 flex-1 border-t border-border" />
-          </div>
           <div className="grid grid-cols-[1fr_auto_1fr] items-end">
             <div className="col-start-1 flex items-end justify-center gap-2">
               <span className="inline-flex h-7 min-w-[2.7rem] items-center justify-center rounded-md border border-border bg-background-50 px-2 font-semibold text-text-primary">
