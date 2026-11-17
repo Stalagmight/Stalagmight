@@ -968,15 +968,16 @@ fn deleting_the_first_shot_promotes_a_next_station_fix_with_the_frames_gps() {
     assert_undo_redo_round_trip(&state, &before);
 }
 
-#[test]
-fn a_combine_that_re_keys_a_twin_onto_the_fixs_key_still_promotes_the_fix() {
-    // X hangs off A with a fix on its start, 30 m east of where X:0 is. Y is a
-    // separate piece placed at Y:1 by the very same GPS (copied coordinates)
-    // at another accuracy, and a closure ties X:0 to Y:0. Combining X:Start
-    // with Y:Start moves X onto Y (its merge to A tears for the frame) and
-    // puts Y's stations first, so Y:1's datum takes X's start key, which the
-    // fix had, with the fix's GPS. The fix comes first in the list, so it is
-    // the combined piece's placement datum now and must sit on its GPS.
+/// A survey with two datums on one GPS (copied coordinates): X hangs off A
+/// with a GPS fix on X:0 at `fix_acc`, 30 m east of where X:0 is, and Y is a
+/// separate piece placed at Y:`twin_at` by the very same GPS at `twin_acc`. A
+/// closure ties X:`closure_at` to Y:0. Returns the state, X and Y.
+fn fix_and_twin(
+    fix_acc: Option<f64>,
+    twin_acc: Option<f64>,
+    twin_at: u32,
+    closure_at: u32,
+) -> (AppState, SectionId, SectionId) {
     let (state, a, _b) = two_entrances();
     let x = create_section(&state, "X", north_shots(2, 20.0));
     let r = state.execute(Command::MergeStations {
@@ -985,44 +986,47 @@ fn a_combine_that_re_keys_a_twin_onto_the_fixs_key_still_promotes_the_fix() {
     });
     assert!(r.success, "{:?}", r.error);
     let twin = gps_at(30.0, 60.0);
-    set_datum(&state, StationRef::new(x, 0), twin, Some(5.0));
+    set_datum(&state, StationRef::new(x, 0), twin, fix_acc);
     let y = create_section(&state, "Y", north_shots(1, 20.0));
-    set_datum(&state, StationRef::new(y, 1), twin, Some(0.5));
+    set_datum(&state, StationRef::new(y, twin_at), twin, twin_acc);
     let r = state.execute(Command::CreateLoopClosure {
-        station_a: StationRef::new(x, 0),
+        station_a: StationRef::new(x, closure_at),
         station_b: StationRef::new(y, 0),
         closure_strategy: ClosureStrategy::Batch,
     });
     assert!(r.success, "{:?}", r.error);
-    let before = project(&state);
     assert_eq!(
-        before.datum_roles(),
+        project(&state).datum_roles(),
         vec![
             Some(DatumRole::Placement),
             Some(DatumRole::GpsFix),
             Some(DatumRole::Placement)
         ]
     );
+    (state, x, y)
+}
 
-    let r = state.execute_combine_sections(
-        x,
-        y,
-        CombineSectionsOptions {
-            name: "XY".to_string(),
-            color: "#abcdef".to_string(),
-            swap_lr: true,
-            comment_pick: CombinePick::Kept,
-            name_pick: CombinePick::Kept,
-            join: Some(CombineJoinEnds {
-                kept: SectionEnd::Start,
-                other: SectionEnd::Start,
-            }),
-        },
-    );
-    assert!(r.success, "{:?}", r.error);
+fn combine_options(name: &str, join: CombineJoinEnds) -> CombineSectionsOptions {
+    CombineSectionsOptions {
+        name: name.to_string(),
+        color: "#abcdef".to_string(),
+        swap_lr: true,
+        comment_pick: CombinePick::Kept,
+        name_pick: CombinePick::Kept,
+        join: Some(join),
+    }
+}
 
-    let p = project(&state);
-    // The fix (accuracy 5) places the combined piece, Y's datum is its fix.
+/// After a twin combine: the fix (still second in the list) places the
+/// combined piece, the twin (third) is its fix, every placement datum sits
+/// on its GPS, and undo/redo round-trips.
+fn assert_the_fix_places_the_combined_piece(
+    state: &AppState,
+    before: &Project,
+    fix_acc: Option<f64>,
+    twin_acc: Option<f64>,
+) {
+    let p = project(state);
     let roles: Vec<(Option<f64>, Option<DatumRole>)> = p
         .zero_datums
         .iter()
@@ -1032,13 +1036,53 @@ fn a_combine_that_re_keys_a_twin_onto_the_fixs_key_still_promotes_the_fix() {
     assert_eq!(
         roles[1..],
         [
-            (Some(5.0), Some(DatumRole::Placement)),
-            (Some(0.5), Some(DatumRole::GpsFix))
+            (fix_acc, Some(DatumRole::Placement)),
+            (twin_acc, Some(DatumRole::GpsFix))
         ]
     );
-    assert_placements_on_their_gps(&state, "after the combine");
+    assert_placements_on_their_gps(state, "after the combine");
+    assert_undo_redo_round_trip(state, before);
+}
 
-    assert_undo_redo_round_trip(&state, &before);
+/// Combining X:Start with Y:Start moves X onto Y (its merge to A tears for
+/// the frame) and puts Y's stations first, so Y:1's datum takes X's start
+/// key, which the fix had, with the fix's GPS. The fix comes first in the
+/// list, so it is the combined piece's placement datum now and must sit on
+/// its GPS.
+fn combine_re_keying_the_twin_onto_the_fixs_key(fix_acc: Option<f64>, twin_acc: Option<f64>) {
+    let (state, x, y) = fix_and_twin(fix_acc, twin_acc, 1, 0);
+    let before = project(&state);
+    let join = CombineJoinEnds {
+        kept: SectionEnd::Start,
+        other: SectionEnd::Start,
+    };
+    let r = state.execute_combine_sections(x, y, combine_options("XY", join));
+    assert!(r.success, "{:?}", r.error);
+    assert_the_fix_places_the_combined_piece(&state, &before, fix_acc, twin_acc);
+}
+
+/// The mirror: here the FIX takes the key its twin placement datum had.
+/// Joining Y:Start to X:End keeps Y and puts X's stations first, so X:0 (the
+/// fix) becomes the combined start, Y's old start key, and Y:0's datum moves
+/// on. The fix comes first in the list, so it is the combined piece's
+/// placement datum now and must sit on its GPS.
+fn combine_re_keying_the_fix_onto_its_twins_key(fix_acc: Option<f64>, twin_acc: Option<f64>) {
+    let (state, x, y) = fix_and_twin(fix_acc, twin_acc, 0, 2);
+    let before = project(&state);
+    let twin_key = before.zero_datums[2].station_ref.clone();
+    let join = CombineJoinEnds {
+        kept: SectionEnd::Start,
+        other: SectionEnd::End,
+    };
+    let r = state.execute_combine_sections(y, x, combine_options("YX", join));
+    assert!(r.success, "{:?}", r.error);
+    assert_eq!(project(&state).zero_datums[1].station_ref, twin_key);
+    assert_the_fix_places_the_combined_piece(&state, &before, fix_acc, twin_acc);
+}
+
+#[test]
+fn a_combine_that_re_keys_a_twin_onto_the_fixs_key_still_promotes_the_fix() {
+    combine_re_keying_the_twin_onto_the_fixs_key(Some(5.0), Some(0.5));
 }
 
 #[test]
@@ -1101,78 +1145,21 @@ fn an_entrance_only_edit_of_the_frame_moves_nothing() {
 
 #[test]
 fn a_combine_that_re_keys_the_fix_onto_its_twins_key_still_promotes_the_fix() {
-    // The mirror of the test above: here the FIX takes the key its twin
-    // placement datum had. X hangs off A with a fix on its start. Y is a
-    // separate piece placed at Y:0 by the very same GPS at another accuracy.
-    // Joining Y:Start to X:End keeps Y and puts X's stations first, so X:0
-    // (the fix) becomes the combined start, Y's old start key, and Y:0's
-    // datum moves on. The fix comes first in the list, so it is the combined
-    // piece's placement datum now and must sit on its GPS.
-    let (state, a, _b) = two_entrances();
-    let x = create_section(&state, "X", north_shots(2, 20.0));
-    let r = state.execute(Command::MergeStations {
-        station_a: StationRef::new(x, 2),
-        station_b: StationRef::new(a, 2),
-    });
-    assert!(r.success, "{:?}", r.error);
-    let twin = gps_at(30.0, 60.0);
-    set_datum(&state, StationRef::new(x, 0), twin, Some(5.0));
-    let y = create_section(&state, "Y", north_shots(1, 20.0));
-    set_datum(&state, StationRef::new(y, 0), twin, Some(0.5));
-    let r = state.execute(Command::CreateLoopClosure {
-        station_a: StationRef::new(x, 2),
-        station_b: StationRef::new(y, 0),
-        closure_strategy: ClosureStrategy::Batch,
-    });
-    assert!(r.success, "{:?}", r.error);
-    let before = project(&state);
-    assert_eq!(
-        before.datum_roles(),
-        vec![
-            Some(DatumRole::Placement),
-            Some(DatumRole::GpsFix),
-            Some(DatumRole::Placement)
-        ]
-    );
-    let twin_key = before.zero_datums[2].station_ref.clone();
+    combine_re_keying_the_fix_onto_its_twins_key(Some(5.0), Some(0.5));
+}
 
-    let r = state.execute_combine_sections(
-        y,
-        x,
-        CombineSectionsOptions {
-            name: "YX".to_string(),
-            color: "#abcdef".to_string(),
-            swap_lr: true,
-            comment_pick: CombinePick::Kept,
-            name_pick: CombinePick::Kept,
-            join: Some(CombineJoinEnds {
-                kept: SectionEnd::Start,
-                other: SectionEnd::End,
-            }),
-        },
-    );
-    assert!(r.success, "{:?}", r.error);
+/// #778: twins with one stored value (no accuracy typed on either), so
+/// nothing stored tells them apart; only the list order does.
+#[test]
+fn twins_with_one_stored_value_a_combine_re_keying_the_twin_still_promotes_the_fix() {
+    combine_re_keying_the_twin_onto_the_fixs_key(None, None);
+    combine_re_keying_the_twin_onto_the_fixs_key(Some(2.0), Some(2.0));
+}
 
-    let p = project(&state);
-    // The fix (accuracy 5) took the twin's old key and places the combined
-    // piece; Y's datum is its fix.
-    assert_eq!(p.zero_datums[1].station_ref, twin_key);
-    let roles: Vec<(Option<f64>, Option<DatumRole>)> = p
-        .zero_datums
-        .iter()
-        .map(|zd| zd.accuracy_m)
-        .zip(p.datum_roles())
-        .collect();
-    assert_eq!(
-        roles[1..],
-        [
-            (Some(5.0), Some(DatumRole::Placement)),
-            (Some(0.5), Some(DatumRole::GpsFix))
-        ]
-    );
-    assert_placements_on_their_gps(&state, "after the combine");
-
-    assert_undo_redo_round_trip(&state, &before);
+#[test]
+fn twins_with_one_stored_value_a_combine_re_keying_the_fix_still_promotes_the_fix() {
+    combine_re_keying_the_fix_onto_its_twins_key(None, None);
+    combine_re_keying_the_fix_onto_its_twins_key(Some(2.0), Some(2.0));
 }
 
 #[test]

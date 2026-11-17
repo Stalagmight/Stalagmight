@@ -61,34 +61,123 @@ fn same_place(a: Option<(f64, f64)>, b: Option<(f64, f64)>) -> bool {
         if (a.0 - b.0).abs() <= Project::OFFSET_DUST_M && (a.1 - b.1).abs() <= Project::OFFSET_DUST_M)
 }
 
+/// How many ranks [`likeness`] has: five tiers, each split by the stored value.
+const RANKS: usize = 10;
+
+/// How alike an earlier datum and a current one are, as a rank from 0 (the
+/// strongest) to `RANKS - 1`, or `None` when neither the station key nor the
+/// GPS ties them. The tiers, strongest first:
+/// 0. the same station key, GPS and position: untouched;
+/// 1. the same GPS and position: re-keyed where it stands (a split, or a
+///    shot delete that re-anchors the next station's datum onto the
+///    removed one's key);
+/// 2. the same station key and GPS: moved (a merge, a combine);
+/// 3. the same GPS: re-keyed and moved (a combine);
+/// 4. the same station key: its GPS was edited in place.
+///
+/// Within a tier the same stored accuracy and Entrance answer ranks first: a
+/// command that moves or re-keys a datum does not edit it, but a Batch, which
+/// settles once for several commands, can do both.
+fn likeness(was: &DatumWas, now: &DatumWas) -> Option<usize> {
+    let tier = match (
+        same_gps(&was.gps, &now.gps),
+        was.key == now.key,
+        same_place(was.at, now.at),
+    ) {
+        (true, true, true) => 0,
+        (true, false, true) => 1,
+        (true, true, false) => 2,
+        (true, false, false) => 3,
+        (false, true, _) => 4,
+        (false, false, _) => return None,
+    };
+    let same_value = was.accuracy == now.accuracy && was.entrance == now.entrance;
+    Some(2 * tier + usize::from(!same_value))
+}
+
+/// Pairs of each rank in an alignment, strongest rank first: compared
+/// lexicographically, so one more pair of a stronger rank outweighs any
+/// number of weaker ones.
+type Score = [u32; RANKS];
+
+/// What an alignment does with an earlier datum and a current one.
+#[derive(Clone, Copy)]
+enum Step {
+    /// They are one datum.
+    Pair,
+    /// The earlier one is gone (removed by the command).
+    Dropped,
+    /// The current one is new (appended by the command).
+    Added,
+}
+
+/// The best order-preserving pairing of `before` earlier datums with `after`
+/// current ones, `rank(i, j)` being [`likeness`]: the most pairs of rank 0,
+/// then of rank 1, and so on. Returns, for each current datum, the earlier
+/// datum it is, or `None` for a new one.
+///
+/// On a tie it pairs rather than drop, and drops rather than add: a command
+/// appends a new datum at the end of the list, so a current datum is left
+/// new only when no earlier one explains it as well.
+///
+/// `O(before * after)` time and steps (one byte each).
+pub(super) fn align(
+    before: usize,
+    after: usize,
+    rank: impl Fn(usize, usize) -> Option<usize>,
+) -> Vec<Option<usize>> {
+    let mut steps = vec![Step::Added; before * after];
+    // `next[j]` is the best score of earlier datums `i + 1..` against current
+    // ones `j..`: an alignment of the suffixes, built from the end.
+    let mut next: Vec<Score> = vec![[0; RANKS]; after + 1];
+    for i in (0..before).rev() {
+        let mut row: Vec<Score> = vec![[0; RANKS]; after + 1];
+        for j in (0..after).rev() {
+            let mut best = (next[j], Step::Dropped);
+            if let Some(r) = rank(i, j) {
+                let mut paired = next[j + 1];
+                paired[r] += 1;
+                if paired >= best.0 {
+                    best = (paired, Step::Pair);
+                }
+            }
+            if row[j + 1] > best.0 {
+                best = (row[j + 1], Step::Added);
+            }
+            row[j] = best.0;
+            steps[i * after + j] = best.1;
+        }
+        next = row;
+    }
+    let mut earlier = vec![None; after];
+    let (mut i, mut j) = (0, 0);
+    while i < before && j < after {
+        match steps[i * after + j] {
+            Step::Pair => {
+                earlier[j] = Some(i);
+                i += 1;
+                j += 1;
+            }
+            Step::Dropped => i += 1,
+            Step::Added => j += 1,
+        }
+    }
+    earlier
+}
+
 impl DatumLayout {
-    /// Whether `zd`, whose station is now `at`, was a GPS fix or a dangling
-    /// datum before, and not a placement datum. `after` is every datum now.
+    /// The datums of `now` (this project's layout after a command, `self`
+    /// the one before it) that are placement datums now and were GPS fixes
+    /// or dangling datums before, by index into `zero_datums`.
     ///
-    /// Datums have no identity of their own, so one is recognised by the
-    /// first of these that finds an earlier datum:
-    /// 1. the same station key, GPS and position: untouched;
-    /// 2. the same GPS and position, against an earlier datum that is gone (no
-    ///    datum now has its key and its stored GPS, accuracy and Entrance
-    ///    answer): re-keyed where it stands (a split, or a shot delete);
-    /// 3. the same station key and GPS: moved (a merge, a combine);
-    /// 4. the same GPS, against an earlier datum that is gone: re-keyed and
-    ///    moved (a combine);
-    /// 5. the same station key: its GPS was edited in place.
-    ///
-    /// Tiers 1 to 4 are tried twice: first asking also for the same stored
-    /// accuracy and Entrance answer, then without. A command that moves or
-    /// re-keys a datum never edits it, and an edit never re-keys one, so in
-    /// one command the first pass finds a moved or re-keyed datum, and an
-    /// earlier datum with another stored value is a different one. That tells
-    /// twins apart: two datums with one GPS (copied coordinates) and
-    /// different accuracies, one re-keyed by a combine onto the key the other
-    /// had. The second pass is for a Batch, which settles once for several
-    /// commands and so can edit a datum and re-key it in one window.
-    ///
-    /// Twins with the same stored value stay indistinguishable when one is
-    /// re-keyed onto the other's key: key, GPS and value all match the twin,
-    /// and only the positions of the whole set could tell them apart.
+    /// Datums carry no id, but their order in the list is their identity: a
+    /// command edits a datum in place, removes it, or appends a new one, and
+    /// never reorders the list (the order is what gives each datum its role,
+    /// [`Project::datum_roles`]). So the datums that survive a command keep
+    /// their order, and the earlier and current lists are matched by the best
+    /// order-preserving alignment ([`align`] over [`likeness`]). That tells
+    /// twins apart (two datums with one GPS, copied coordinates) that a
+    /// combine re-keys one onto the other's key, even with one stored value.
     ///
     /// Key and GPS alone are not enough. Deleting a section's first shot drops
     /// the datum on its first station and re-anchors the next station's datum
@@ -96,54 +185,36 @@ impl DatumLayout {
     /// too: either way the promoted datum would pass for the placement datum
     /// it replaced. The position settles it, since neither moves a station.
     ///
-    /// Gone compares the whole stored value, not the GPS alone: a combine can
-    /// re-key a datum onto the key of another with the very same GPS (copied
-    /// coordinates), and that one would otherwise pass for still there.
-    ///
-    /// When one tier still finds earlier datums of both roles (twins with
-    /// the same stored value, both re-keyed and moved by a combine), the datum
-    /// counts as unplaced: placing it moves nothing when its piece already
-    /// sits on that GPS. A datum that matches no earlier one is new (its
-    /// command placed it already).
-    fn was_unplaced(&self, zd: &ZeroDatum, at: Option<(f64, f64)>, after: &[ZeroDatum]) -> bool {
-        let gone = |was: &DatumWas| {
-            !after.iter().any(|now| {
-                now.station_ref == was.key
-                    && same_gps(&now.gps, &was.gps)
-                    && now.accuracy_m.map(f64::to_bits) == was.accuracy
-                    && now.entrance == was.entrance
+    /// A placement datum paired with an earlier placement datum still counts
+    /// as unplaced when an earlier datum the alignment dropped, not a
+    /// placement datum, is as alike: placing it moves nothing when its piece
+    /// already sits on that GPS. A datum that matches no earlier one is new
+    /// (its command placed it already).
+    fn unplaced(&self, now: &DatumLayout) -> Vec<usize> {
+        let rank = |i: usize, j: usize| likeness(&self.datums[i], &now.datums[j]);
+        let earlier = align(self.datums.len(), now.datums.len(), rank);
+        let mut paired = vec![false; self.datums.len()];
+        for i in earlier.iter().flatten() {
+            paired[*i] = true;
+        }
+        let placement = |was: &DatumWas| was.role == Some(DatumRole::Placement);
+        now.datums
+            .iter()
+            .zip(&earlier)
+            .enumerate()
+            .filter(|(_, (datum, _))| placement(datum))
+            .filter(|(j, (_, was))| {
+                was.is_some_and(|i| {
+                    !placement(&self.datums[i])
+                        || (0..self.datums.len()).any(|other| {
+                            !paired[other]
+                                && !placement(&self.datums[other])
+                                && rank(other, *j).is_some_and(|r| Some(r) <= rank(i, *j))
+                        })
+                })
             })
-        };
-        let same_key = |was: &DatumWas| was.key == zd.station_ref;
-        let same_fix = |was: &DatumWas| same_gps(&was.gps, &zd.gps);
-        let same_value = |was: &DatumWas| {
-            was.accuracy == zd.accuracy_m.map(f64::to_bits) && was.entrance == zd.entrance
-        };
-        let same_at = |was: &DatumWas| same_place(was.at, at);
-        let tiers: [&dyn Fn(&DatumWas) -> bool; 4] = [
-            &|was| same_key(was) && same_fix(was) && same_at(was),
-            &|was| same_fix(was) && same_at(was) && gone(was),
-            &|was| same_key(was) && same_fix(was),
-            &|was| same_fix(was) && gone(was),
-        ];
-        // Whether the earlier datums `matches` finds were not all placement
-        // datums; `None` when it finds none.
-        let unplaced = |matches: &dyn Fn(&DatumWas) -> bool| {
-            let found: Vec<&DatumWas> = self.datums.iter().filter(|was| matches(was)).collect();
-            (!found.is_empty()).then(|| {
-                !found
-                    .iter()
-                    .all(|was| was.role == Some(DatumRole::Placement))
-            })
-        };
-        [true, false]
-            .into_iter()
-            .flat_map(|by_value| tiers.iter().map(move |tier| (by_value, tier)))
-            .find_map(|(by_value, tier)| {
-                unplaced(&|was: &DatumWas| tier(was) && (!by_value || same_value(was)))
-            })
-            .or_else(|| unplaced(&same_key))
-            .unwrap_or(false)
+            .map(|(j, _)| j)
+            .collect()
     }
 
     /// Whether the frame datum is not the one it was: another station, or
@@ -213,11 +284,13 @@ impl Project {
         // With no frame before, nothing was placed relative to anything, and
         // the re-frame below is the whole answer.
         if let Some((_, frame_gps)) = before.frame {
-            let promoted: Vec<(StationRef, GpsCoordinates)> = self
-                .placement_datums()
+            let promoted: Vec<(StationRef, GpsCoordinates)> = before
+                .unplaced(&self.datum_layout())
                 .into_iter()
-                .filter(|zd| before.was_unplaced(zd, self.datum_position(zd), &self.zero_datums))
-                .filter_map(|zd| Some((self.resolve_key(&zd.station_ref)?, zd.gps)))
+                .filter_map(|j| {
+                    let zd = self.zero_datums.get(j)?;
+                    Some((self.resolve_key(&zd.station_ref)?, zd.gps))
+                })
                 .collect();
             for (station_ref, gps) in promoted {
                 moved |= self.place_group_at(
@@ -228,7 +301,7 @@ impl Project {
             }
         }
         // Compared by key AND GPS: a promoted datum can inherit the old
-        // frame's key (see `DatumLayout::was_unplaced`), and the frame has
+        // frame's key (see `DatumLayout::unplaced`), and the frame has
         // still changed. Re-framing is measured, so an unchanged frame is a
         // no-op anyway.
         if before.frame_changed(self.frame_datum()) {
