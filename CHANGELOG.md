@@ -7,6 +7,10 @@ Update this file every time a new version is tagged.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Closures Computed View keeps a snapped station on the station it was snapped to** - when Move Station drops a station onto one it is already connected to, the Raw Data View holds the two together, but the Closures Computed View, and so Plan and Export, could pull them apart (by a quarter of a metre in a small square loop) whenever another loop closure in the same survey was adjusted. That view now keeps every snapped pair on one point, as it keeps merged stations, and also adjusts a loop that only closes through a snapped pair. A loop closure that, through a snapped pair, would squeeze a single shot to zero length is now refused when you create it, and one already in a project is skipped and listed in the Warnings tab like any other loop closure across one shot. A loop closure that ties two zero datums together through a snapped pair now leaves that part of the survey as measured, with a notice, as a loop closure between the two datums always did. A survey without a snapped pair is adjusted exactly as before ([#736](https://github.com/Stalagmight/Stalagmight/issues/736))
+
 ## [0.5.5] - 2026-11-17
 
 ### Added
