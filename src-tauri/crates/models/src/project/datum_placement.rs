@@ -76,6 +76,20 @@ impl DatumLayout {
     ///    moved (a combine);
     /// 5. the same station key: its GPS was edited in place.
     ///
+    /// Tiers 1 to 4 are tried twice: first asking also for the same stored
+    /// accuracy and Entrance answer, then without. A command that moves or
+    /// re-keys a datum never edits it, and an edit never re-keys one, so in
+    /// one command the first pass finds a moved or re-keyed datum, and an
+    /// earlier datum with another stored value is a different one. That tells
+    /// twins apart: two datums with one GPS (copied coordinates) and
+    /// different accuracies, one re-keyed by a combine onto the key the other
+    /// had. The second pass is for a Batch, which settles once for several
+    /// commands and so can edit a datum and re-key it in one window.
+    ///
+    /// Twins with the same stored value stay indistinguishable when one is
+    /// re-keyed onto the other's key: key, GPS and value all match the twin,
+    /// and only the positions of the whole set could tell them apart.
+    ///
     /// Key and GPS alone are not enough. Deleting a section's first shot drops
     /// the datum on its first station and re-anchors the next station's datum
     /// onto that key, and a GPS copied from another datum matches that datum
@@ -86,12 +100,11 @@ impl DatumLayout {
     /// re-key a datum onto the key of another with the very same GPS (copied
     /// coordinates), and that one would otherwise pass for still there.
     ///
-    /// When one tier finds earlier datums of both roles (a GPS copied from a
-    /// placement datum, both re-keyed and moved by a combine), the stored
-    /// accuracy and Entrance answer narrow it. If that still leaves both
-    /// roles, the datum counts as unplaced: placing it moves nothing when its
-    /// piece already sits on that GPS. A datum that matches no earlier one is
-    /// new (its command placed it already).
+    /// When one tier still finds earlier datums of both roles (twins with
+    /// the same stored value, both re-keyed and moved by a combine), the datum
+    /// counts as unplaced: placing it moves nothing when its piece already
+    /// sits on that GPS. A datum that matches no earlier one is new (its
+    /// command placed it already).
     fn was_unplaced(&self, zd: &ZeroDatum, at: Option<(f64, f64)>, after: &[ZeroDatum]) -> bool {
         let gone = |was: &DatumWas| {
             !after.iter().any(|now| {
@@ -103,32 +116,33 @@ impl DatumLayout {
         };
         let same_key = |was: &DatumWas| was.key == zd.station_ref;
         let same_fix = |was: &DatumWas| same_gps(&was.gps, &zd.gps);
+        let same_value = |was: &DatumWas| {
+            was.accuracy == zd.accuracy_m.map(f64::to_bits) && was.entrance == zd.entrance
+        };
         let same_at = |was: &DatumWas| same_place(was.at, at);
-        let tiers: [&dyn Fn(&DatumWas) -> bool; 5] = [
+        let tiers: [&dyn Fn(&DatumWas) -> bool; 4] = [
             &|was| same_key(was) && same_fix(was) && same_at(was),
             &|was| same_fix(was) && same_at(was) && gone(was),
             &|was| same_key(was) && same_fix(was),
             &|was| same_fix(was) && gone(was),
-            &|was| same_key(was),
         ];
-        let same_value = |was: &&DatumWas| {
-            was.accuracy == zd.accuracy_m.map(f64::to_bits) && was.entrance == zd.entrance
-        };
-        tiers
-            .iter()
-            .find_map(|tier| {
-                let found: Vec<&DatumWas> = self.datums.iter().filter(|was| tier(was)).collect();
-                if found.is_empty() {
-                    return None;
-                }
-                let narrowed: Vec<&DatumWas> = found.iter().copied().filter(same_value).collect();
-                let found = if narrowed.is_empty() { found } else { narrowed };
-                Some(
-                    !found
-                        .iter()
-                        .all(|was| was.role == Some(DatumRole::Placement)),
-                )
+        // Whether the earlier datums `matches` finds were not all placement
+        // datums; `None` when it finds none.
+        let unplaced = |matches: &dyn Fn(&DatumWas) -> bool| {
+            let found: Vec<&DatumWas> = self.datums.iter().filter(|was| matches(was)).collect();
+            (!found.is_empty()).then(|| {
+                !found
+                    .iter()
+                    .all(|was| was.role == Some(DatumRole::Placement))
             })
+        };
+        [true, false]
+            .into_iter()
+            .flat_map(|by_value| tiers.iter().map(move |tier| (by_value, tier)))
+            .find_map(|(by_value, tier)| {
+                unplaced(&|was: &DatumWas| tier(was) && (!by_value || same_value(was)))
+            })
+            .or_else(|| unplaced(&same_key))
             .unwrap_or(false)
     }
 
