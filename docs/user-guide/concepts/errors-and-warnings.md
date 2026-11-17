@@ -31,11 +31,18 @@ projects:
 
 - Errors: zero or negative length, azimuth or inclination out of range,
   negative LRUD, a value that is not a number, length shorter than the depth
-  change, more than one zero datum on connected sections.
+  change, a loop closure that joins the two ends of one shot.
 - Warnings: length shorter or longer than the limits, a large depth change,
   azimuth in and out too far apart, inclination in and out too far apart,
-  inclination that disagrees with the depth change.
+  inclination that disagrees with the depth change, a
+  [GPS fix](zero-datums-and-gps-fixes.md) far from where the survey puts its
+  station, a part of the survey the Closures Computed View could not adjust.
+- Several zero datums on connected sections are not an error: the first one
+  places the survey and the others are GPS fixes.
 - Errors can only be fixed. Warnings can also be ignored.
+- A GPS fix is far when its GPS position and its surveyed position are more
+  than 15 m apart, plus 2% of the survey distance back to the zero datum that
+  places the survey. That limit is fixed, not a project setting.
 
 ## How far over
 

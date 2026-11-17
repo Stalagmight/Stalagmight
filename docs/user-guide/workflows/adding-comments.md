@@ -7,7 +7,7 @@ order: 8
 # Adding comments
 
 1. In the [survey view](../screens/survey-view.md), pick **Comment** in the
-   toolbar.
+   toolbar (`C`).
 2. Click the station or shot to comment on.
 3. Type the comment and press **Enter**.
 
@@ -18,8 +18,8 @@ order: 8
 1. **Comment** is active.
 2. The station clicked.
 3. The comment. **Shift+Enter** starts a new line.
-4. Cancel (also **Esc**).
-5. Save (also **Enter**, or clicking anywhere else).
+4. **Cancel** (also **Esc**).
+5. **Save comment** (also **Enter**, or clicking anywhere else).
 
 ### Details
 
@@ -27,4 +27,6 @@ order: 8
   Clearing the text removes the comment.
 - The [Display menu](../screens/display-menu.md) has **Station comments** and
   **Shot comments** to show them on the map.
-- The small arrow on **Comment** switches to **Move comment**.
+- The small arrow on **Comment** switches to **Move comment** (`Shift+C`).
+- Comments are edited in Survey mode, in the Raw Data View. Plan and Export
+  have no **Comment** tool, and it is disabled in the Closures Computed View.

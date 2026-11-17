@@ -14,7 +14,9 @@ What the map shows. Opened by **Display** in the top right of the
 1. **Color**, one at a time:
    - **Section**: each section in its own color.
    - **Depth**: color by depth.
-   - **Distance**: color by distance along the cave from the entrance. Click a
+   - **Distance**: color by distance along the cave from the entrances: the
+     zero datums marked
+     [Entrance](../concepts/zero-datums-and-gps-fixes.md#entrance). Click a
      station to measure from there instead.
    - **Survey Issues**: each shot by how far its readings disagree: green
      where they agree, yellow at a warning threshold, red at three times it or
@@ -33,7 +35,8 @@ What the map shows. Opened by **Display** in the top right of the
 5. **Geometry**:
    - **Raw Data View**: the survey as measured.
    - **Closures Computed View**: corrected by the
-     [loop closures](../workflows/closing-a-loop.md). Read-only.
+     [loop closures](../workflows/closing-a-loop.md) and bent through any
+     [GPS fixes](../concepts/zero-datums-and-gps-fixes.md). Read-only.
 
 ## Details
 
@@ -43,8 +46,10 @@ What the map shows. Opened by **Display** in the top right of the
   shows each station's name, such as the MNemo station number from a `.dmp`
   import, and stations without a name get no label. It is unavailable when
   the project has no station names.
-- **Closures Computed View** is unavailable when there are no loop closures to
-  adjust. Edit in the **Raw Data View**.
+- **Closures Computed View** is unavailable when there are no loop closures
+  and no GPS fixes to adjust. Edit in the **Raw Data View**.
+- **Distance** needs at least one zero datum: with none, no station is
+  reachable from an entrance and nothing is colored.
 - **Errors** labels: a value that rounds to zero is left out, and so is one
   whose warning you ignored. ΔL appears only on shots steeper than 15°; on a
   flatter shot a small inclination error would change it by metres. Where labels

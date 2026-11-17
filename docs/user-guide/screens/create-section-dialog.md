@@ -1,6 +1,6 @@
 ---
 title: Import / Create Section dialog
-description: "The Import / Create Section dialog: enter a section's name, surveyor, date and color, then its shots, including length, azimuth, depths and LRUD."
+description: "The Import / Create Section dialog: enter a section's name, surveyors, explorers, survey date and color, then its shots with length, azimuth and depths."
 order: 4
 ---
 
@@ -13,13 +13,22 @@ the [survey view](survey-view.md).
 
 1. **Close**: nothing created.
 2. **Section Name**
-3. **Surveyor**
-4. **Date**: when the line was surveyed.
-5. **Color**: the section's color on the map.
 6. **Shots**: one row per shot.
 7. **Choose visible columns**, including the extra columns hidden by default:
    LRUD, and azimuth and inclination per end of the shot.
 8. Enlarge the table.
+
+The picture shows an older layout (callouts 3 to 5). The fields between the
+name and the shots are now:
+
+- **Survey date**: when the line was surveyed. Empty by default (**No date**);
+  the **Clear date** button beside a date empties it again.
+- **Color**: the section's color on the map.
+- **Surveyors** and **Explorers**: lists of people. Type a name and press
+  **Enter** (or `;`) to add it. Suggestions come from the project, from names
+  you entered before and, for a SpeleoDB project, from its collaborators.
+
+The surveyors, explorers and survey date go on every shot you enter here.
 
 ![Shots table, scrolled down](../images/create-section-shots.png)
 
@@ -51,7 +60,10 @@ the [survey view](survey-view.md).
 - After **Create Section**, placing the section on an existing station merges
   the two.
 - Shift+click on a **J/R** cell steps backwards.
-- Name, surveyor and date are optional. Color starts as the next unused section
+- Name, people and date are optional. Color starts as the next unused section
   color.
+- Surveyors and explorers start with the people of the last section you
+  created or imported with the MNemo import since the app started.
 - The length unit is shown in the column header.
 - You can paste rows copied from a spreadsheet into the table.
+- In a read-only view the dialog says a section cannot be created.
