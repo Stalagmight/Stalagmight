@@ -720,6 +720,7 @@ impl Project {
             .keys()
             .chain(self.station_comments.keys())
             .chain(self.station_names.keys())
+            .chain(self.station_ids.keys())
             .filter(|&k| is_removed(self, k))
             .cloned()
             .collect();
@@ -727,6 +728,7 @@ impl Project {
             self.station_offsets.remove(&k);
             self.station_comments.remove(&k);
             self.station_names.remove(&k);
+            self.station_ids.remove(&k);
         }
     }
 
@@ -750,8 +752,9 @@ impl Project {
         // Remove station comments referencing this line
         self.station_comments.retain(|sr, _| sr.line_id != line_id);
 
-        // Remove station names referencing this line
+        // Remove station names and ids referencing this line
         self.station_names.retain(|sr, _| sr.line_id != line_id);
+        self.station_ids.retain(|sr, _| sr.line_id != line_id);
 
         // Remove zero datums referencing this line
         self.zero_datums

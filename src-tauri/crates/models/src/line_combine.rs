@@ -45,7 +45,10 @@ pub struct CombineLinesOptions {
     pub swap_lr: bool,
     /// What the joined station keeps when both join stations have a comment.
     pub comment_pick: CombinePick,
-    /// What the joined station keeps when both join stations have a name.
+    /// IGNORED: the joined station keeps the kept line's name (station
+    /// names are unique per line, so there is no choice to make). Kept, with
+    /// its shape, so a caller that still sends it and an older build reading
+    /// the options both keep working.
     pub name_pick: CombinePick,
     /// Which ends to join, as the candidate the dialog showed named them.
     /// Needed when the two lines meet at more than one place (a loop of
@@ -300,7 +303,9 @@ pub struct CombineCandidate {
     /// differ (the dialog then asks which to keep).
     pub comment_a: Option<String>,
     pub comment_b: Option<String>,
-    /// The join stations' names, set only when both have one and they differ.
+    /// ALWAYS `None` now: the joined station keeps the kept line's name, so
+    /// there is no name choice for the dialog to offer. Kept on the wire so
+    /// the dialog's type stays stable until it drops the field.
     pub station_name_a: Option<String>,
     pub station_name_b: Option<String>,
     /// How far apart in depth (metres) the two join stations are, when they

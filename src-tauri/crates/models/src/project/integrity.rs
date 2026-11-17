@@ -145,6 +145,7 @@ impl Project {
                 "loop closure" => (ViolationSeverity::Critical, "dangling_closure_ref"),
                 "zero datum" => (ViolationSeverity::Critical, "dangling_zero_datum_ref"),
                 "station offset" => (ViolationSeverity::Warning, "orphan_station_offset"),
+                "station id" => (ViolationSeverity::Warning, "orphan_station_id"),
                 _ => (ViolationSeverity::Warning, "orphan_station_comment"),
             };
             let mut subject = label.to_string();
@@ -256,6 +257,7 @@ impl Project {
         self.station_offsets.retain(|key, _| key_valid(key));
         self.station_comments.retain(|key, _| key_valid(key));
         self.station_names.retain(|key, _| key_valid(key));
+        self.station_ids.retain(|key, _| key_valid(key));
 
         self.touch();
 

@@ -76,47 +76,33 @@ fn deleting_an_interior_shot_drops_only_the_station_it_removes() {
 }
 
 #[test]
-fn inserting_shots_leaves_the_new_station_unnamed() {
+fn inserting_shots_names_the_new_station_by_the_creation_rules() {
     let (mut project, id) = named_line(2);
 
     let first = shot_id(&project, id, 0);
     project
         .insert_shot_before(id, first, shot(0.0, 5.0), None, None)
         .unwrap();
-    // A prepend puts a new station in front; the old start keeps "0".
-    assert_eq!(
-        names(&project, id),
-        vec![None, Some("0".into()), Some("1".into()), Some("2".into())]
-    );
+    // A prepend puts a new station in front, named the next free number of
+    // the old start's family; the old start keeps "0".
+    assert_eq!(names(&project, id), some(&["3", "0", "1", "2"]));
 
     // An interior insert after the shot ending at "1": the new station sits
-    // between "1" and "2".
+    // between "1" and "2" and takes "1" plus the first free letter.
     let after = shot_id(&project, id, 1);
     project
         .insert_shot_after(id, after, shot(0.0, 5.0), None, None)
         .unwrap();
-    assert_eq!(
-        names(&project, id),
-        vec![
-            None,
-            Some("0".into()),
-            Some("1".into()),
-            None,
-            Some("2".into())
-        ]
-    );
+    assert_eq!(names(&project, id), some(&["3", "0", "1", "1a", "2"]));
 }
 
 #[test]
-fn splitting_a_shot_adds_one_unnamed_station() {
+fn splitting_a_shot_names_the_station_it_adds_after_its_from_station() {
     let (mut project, id) = named_line(2);
     let first = shot_id(&project, id, 0);
     project.split_shot_at_distance(id, first, 4.0).unwrap();
 
-    assert_eq!(
-        names(&project, id),
-        vec![Some("0".into()), None, Some("1".into()), Some("2".into())]
-    );
+    assert_eq!(names(&project, id), some(&["0", "0a", "1", "2"]));
 }
 
 #[test]
@@ -178,13 +164,16 @@ fn computed_stations_carry_their_name_beside_their_comment() {
             .find(|s| s.station_ref == StationRef::new(id, index))
             .unwrap()
     };
-    assert_eq!(station(0).name, None);
-    assert_eq!(station(1).name.as_deref(), Some("1"));
+    assert_eq!(station(0).name, "");
+    assert_eq!(station(1).name, "1");
     assert_eq!(station(1).comment.as_deref(), Some("restriction"));
-    assert_eq!(station(2).name.as_deref(), Some("2"));
+    assert_eq!(station(2).name, "2");
     assert_eq!(station(2).comment, None);
 
-    // Off the wire when absent, so unnamed stations cost nothing per refresh.
-    let wire = serde_json::to_value(station(0)).unwrap();
-    assert!(!wire.as_object().unwrap().contains_key("name"), "{wire}");
+    // Every station carries its name and Station ID on the wire.
+    project.ensure_station_identities();
+    let stations = project.compute_station_coordinates();
+    let wire = serde_json::to_value(&stations[0]).unwrap();
+    assert_eq!(wire["name"], "0", "{wire}");
+    assert!(wire.as_object().unwrap().contains_key("id"), "{wire}");
 }

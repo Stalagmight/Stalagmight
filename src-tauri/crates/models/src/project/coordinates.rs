@@ -1102,12 +1102,16 @@ impl Project {
         );
         let t_phase = std::time::Instant::now();
 
-        // Assign station comments and names through one ref -> position index.
-        // Names cover nearly every station of a DMP import, so the per-entry scan
-        // over all stations the comments used to do would be quadratic here
-        // (~8e9 comparisons on an 89k-station project). Stations are unique per
-        // ref - each line contributes `0..=shots.len()` once.
-        if !self.station_comments.is_empty() || !self.station_names.is_empty() {
+        // Assign station comments, names and ids through one ref -> position
+        // index. Names and ids cover every station once the project is
+        // normalized, so the per-entry scan over all stations the comments used
+        // to do would be quadratic here (~8e9 comparisons on an 89k-station
+        // project). Stations are unique per ref - each line contributes
+        // `0..=shots.len()` once.
+        if !self.station_comments.is_empty()
+            || !self.station_names.is_empty()
+            || !self.station_ids.is_empty()
+        {
             let position: HashMap<StationRef, usize> = stations
                 .iter()
                 .enumerate()
@@ -1120,13 +1124,18 @@ impl Project {
             }
             for (key, name) in &self.station_names {
                 if let Some(&i) = self.resolve_key(key).and_then(|sr| position.get(&sr)) {
-                    stations[i].name = Some(name.clone());
+                    stations[i].name.clone_from(name);
+                }
+            }
+            for (key, id) in &self.station_ids {
+                if let Some(&i) = self.resolve_key(key).and_then(|sr| position.get(&sr)) {
+                    stations[i].id = *id;
                 }
             }
         }
         tracing::debug!(
             ms = t_phase.elapsed().as_millis() as u64,
-            "compute_station_coordinates: station comments and names"
+            "compute_station_coordinates: station comments, names and ids"
         );
 
         *stations_out = stations;

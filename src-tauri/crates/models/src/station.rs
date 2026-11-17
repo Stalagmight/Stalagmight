@@ -3,6 +3,16 @@ use ts_rs::TS;
 
 use super::LineId;
 
+/// A station's project-unique, never-reused integer identity: the Station ID
+/// the user sees (the Station detail field, the Data table column, the
+/// "Station IDs" map and image-export label). Allocated from
+/// [`crate::Project::next_station_id`] in line order, station order, by
+/// [`crate::Project::ensure_station_identities`]; carried with its physical
+/// station through every structural edit by the same `StationKey` walkers that
+/// carry `station_names`. Never shown as the positional `line:index` handle,
+/// which stays an internal session address.
+pub type StationId = u32;
+
 /// Reference to a station using line_id:station_index format
 ///
 /// Ordered lexicographically by `(line_id, station_index)` - the field order
@@ -395,13 +405,16 @@ pub struct Station {
     /// User comment for this station
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
-    /// Station name (e.g. the MNemo station number from a DMP import). Not
-    /// unique - shown next to the positional id, except in the opt-in Station
-    /// names map label and image-export option, which are exclusive with the
-    /// id labels. Off the wire when absent: `get_project_state` serializes
-    /// every station.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
+    /// The station's project-unique Station ID ([`StationId`]).
+    #[serde(default)]
+    pub id: StationId,
+    /// The station's name, unique within its line (e.g. `"17"`, `"A3"`, or
+    /// the MNemo station number a DMP import recorded). Every station has one
+    /// once the project is normalized ([`crate::Project::ensure_station_identities`]);
+    /// empty only for a station the normalization could not key (a shot
+    /// without a uuid), which a loaded project never has.
+    #[serde(default)]
+    pub name: String,
 }
 
 impl Station {
@@ -414,7 +427,8 @@ impl Station {
             merged_with: Vec::new(),
             closures_with: None,
             comment: None,
-            name: None,
+            id: 0,
+            name: String::new(),
         }
     }
 
@@ -427,7 +441,8 @@ impl Station {
             merged_with: Vec::new(),
             closures_with: None,
             comment: None,
-            name: None,
+            id: 0,
+            name: String::new(),
         }
     }
 

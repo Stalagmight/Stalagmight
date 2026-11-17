@@ -648,7 +648,9 @@ impl Project {
             _ => (None, None),
         };
         let (comment_a, comment_b) = differing(&self.station_comments);
-        let (station_name_a, station_name_b) = differing(&self.station_names);
+        // Never a choice any more: the joined station keeps the kept line's
+        // name (names are unique per line; see `combine_lines`).
+        let (station_name_a, station_name_b) = (None, None);
         let merged = touch.kind == CombineJoinKind::Merged;
         let (plan_keeping_a, _) = self.plan_keeping(pairing, &touch, a.id, table);
         let (plan_keeping_b, _) = self.plan_keeping(pairing, &touch, b.id, table);

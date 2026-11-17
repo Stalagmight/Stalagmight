@@ -1,0 +1,613 @@
+//! Station identity: every station has a name unique within its line and a
+//! project-unique Station ID, and every line a project-unique name.
+//!
+//! The names and ids live in `Project::station_names` / `Project::station_ids`,
+//! `StationKey`-keyed maps carried through every structural edit by the same
+//! walkers as `station_comments` (`for_each_station_ref`, `map_station_refs`,
+//! the reverse remap, the prepend/first-shot fixups, `station_rekey`). An
+//! operation that creates a station names it by the creation rules
+//! ([`Project::name_new_station`]); ids are only ever allocated here, by
+//! [`Project::ensure_station_identities`], the one normalization entry point.
+//! It runs at the load boundary, after an import or an Add/Merge, after every
+//! mutating command and after every undo/redo step, and it never touches the
+//! name or id of a station that already has a valid one.
+
+use std::collections::{HashMap, HashSet};
+
+use crate::{LineId, ShotId, StationAnchor, StationId, StationKey, StationRef};
+
+use super::station_naming::{
+    dedupe_line_name, fill_line_station_names, name_after_end, name_before_start,
+    name_with_free_letter, plan_combine_prefixes, seed_line_name, settle_line_station_names,
+};
+use super::{station_key_order, Project};
+
+/// What one [`Project::ensure_station_identities`] pass changed.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct IdentityHeal {
+    /// Stations that got a new Station ID (no id, or an id an earlier station
+    /// already held).
+    pub ids_allocated: usize,
+    /// Stored ids dropped because their station is gone, or because another
+    /// key of the same station holds one.
+    pub ids_dropped: usize,
+    /// Stations that got a seeded name.
+    pub names_seeded: usize,
+    /// Stations renamed because an earlier station of their line holds the
+    /// name.
+    pub names_deduped: usize,
+    /// Lines that got a seeded or a de-duplicated name.
+    pub line_names: usize,
+}
+
+impl IdentityHeal {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// Resolves stored keys against the current shots in O(1), without
+/// allocating, for the whole-project passes below (`Project::resolve_key`
+/// clones the uuid on its cache lookup).
+struct KeyResolver<'a> {
+    /// `(line, shot uuid)` -> the station after that shot. First occurrence
+    /// wins, as in `resolve_key`.
+    after: HashMap<(LineId, &'a str), u32>,
+    /// Shot count per line.
+    shots: HashMap<LineId, u32>,
+}
+
+impl<'a> KeyResolver<'a> {
+    fn new(lines: &'a [crate::Line]) -> Self {
+        let total: usize = lines.iter().map(|l| l.shots.len()).sum();
+        let mut after = HashMap::with_capacity(total);
+        let mut shots = HashMap::with_capacity(lines.len());
+        for line in lines {
+            shots.insert(line.id, line.shots.len() as u32);
+            for (i, shot) in line.shots.iter().enumerate() {
+                if let Some(uuid) = shot.uuid.as_deref() {
+                    after.entry((line.id, uuid)).or_insert(i as u32 + 1);
+                }
+            }
+        }
+        Self { after, shots }
+    }
+
+    /// The station `key` names and whether `key` is its canonical form.
+    fn resolve(&self, key: &StationKey) -> Option<(u32, bool)> {
+        let count = *self.shots.get(&key.line_id)?;
+        match &key.anchor {
+            StationAnchor::LineStart => Some((0, true)),
+            StationAnchor::AfterShot(uuid) => self
+                .after
+                .get(&(key.line_id, uuid.as_str()))
+                .map(|index| (*index, true)),
+            StationAnchor::Index(index) => (*index <= count).then_some((*index, false)),
+        }
+    }
+}
+
+/// The canonical key of every station of `line` that has one, in station
+/// order: `LineStart`, then `AfterShot(uuid)` for each shot with a uuid that
+/// no earlier shot of the line holds (a repeated uuid's second station cannot
+/// be keyed apart from the first).
+fn canonical_keys(line: &crate::Line) -> Vec<(u32, StationKey)> {
+    let mut out = Vec::with_capacity(line.shots.len() + 1);
+    out.push((0, StationKey::new(line.id, StationAnchor::LineStart)));
+    let mut seen: HashSet<&str> = HashSet::with_capacity(line.shots.len());
+    for (i, shot) in line.shots.iter().enumerate() {
+        if let Some(uuid) = shot.uuid.as_deref() {
+            if seen.insert(uuid) {
+                out.push((
+                    i as u32 + 1,
+                    StationKey::new(line.id, StationAnchor::AfterShot(uuid.to_string())),
+                ));
+            }
+        }
+    }
+    out
+}
+
+/// Number of stations the canonical walk keys, assuming no repeated uuid
+/// (the fast checks fall to the full pass when that is wrong).
+fn keyable_stations(lines: &[crate::Line]) -> usize {
+    lines
+        .iter()
+        .map(|l| 1 + l.shots.iter().filter(|s| s.uuid.is_some()).count())
+        .sum()
+}
+
+/// A stored map split by [`entries_by_station`]: the one entry per station,
+/// the dangling entries, and how many entries lost to another key of their
+/// station.
+type ByStation<V> = (
+    HashMap<(LineId, u32), (StationKey, V)>,
+    Vec<(StationKey, V)>,
+    usize,
+);
+
+/// For each station, the one stored entry of `map` that names it: the
+/// canonical key when present, else the lowest key. Dangling keys and the
+/// losing keys of a station are returned apart.
+fn entries_by_station<V>(resolver: &KeyResolver<'_>, map: HashMap<StationKey, V>) -> ByStation<V> {
+    let mut by_station: HashMap<(LineId, u32), (StationKey, V, bool)> =
+        HashMap::with_capacity(map.len());
+    let mut dangling = Vec::new();
+    let mut losers = 0;
+    for (key, value) in map {
+        let Some((index, canonical)) = resolver.resolve(&key) else {
+            dangling.push((key, value));
+            continue;
+        };
+        let slot = (key.line_id, index);
+        let replace = match by_station.get(&slot) {
+            None => true,
+            Some((held, _, held_canonical)) => {
+                losers += 1;
+                (canonical && !held_canonical)
+                    || (canonical == *held_canonical
+                        && station_key_order(&key) < station_key_order(held))
+            }
+        };
+        if replace {
+            by_station.insert(slot, (key, value, canonical));
+        }
+    }
+    let by_station = by_station
+        .into_iter()
+        .map(|(slot, (key, value, _))| (slot, (key, value)))
+        .collect();
+    (by_station, dangling, losers)
+}
+
+impl Project {
+    /// THE normalization entry point for station and line identity:
+    ///
+    /// - every line gets a non-empty name, unique in the project
+    ///   ([`Self::ensure_line_names`]);
+    /// - every station gets a Station ID: one without (or with an id an earlier
+    ///   station holds, in line order, station order) gets `next_station_id`,
+    ///   allocated in line order, station order, so a file an older build
+    ///   rewrote without the ids re-mints the same ids on every open;
+    /// - every station gets a name: a missing one is seeded from its index,
+    ///   and a name an earlier station of the line holds gets a letter suffix
+    ///   (`5`, `5` -> `5`, `5a`) - see `station_naming`.
+    ///
+    /// A station that already has a valid id and name keeps both. Ids whose
+    /// station is gone are dropped (an id is identity, not data); a name whose
+    /// station is gone is left for the integrity check, like a comment.
+    /// Cheap when nothing is missing: one allocation-free pass over the keys.
+    pub fn ensure_station_identities(&mut self) -> IdentityHeal {
+        let mut heal = IdentityHeal {
+            line_names: self.ensure_line_names(),
+            ..IdentityHeal::default()
+        };
+        if !self.station_ids_settled() {
+            self.settle_station_ids(&mut heal);
+        }
+        if !self.station_names_settled() {
+            self.settle_station_names(&mut heal);
+        }
+        if !heal.is_empty() {
+            tracing::debug!(?heal, "normalized station identities");
+        }
+        heal
+    }
+
+    /// Seed every unnamed line `Line n` (smallest free `n`, in line order)
+    /// and make every repeated line name unique with ` (2)`, ` (3)`, ... on the
+    /// later holder. Returns how many lines it named.
+    pub fn ensure_line_names(&mut self) -> usize {
+        let named = |name: &Option<String>| name.as_ref().is_some_and(|n| !n.trim().is_empty());
+        let mut seen: HashSet<&str> = HashSet::with_capacity(self.lines.len());
+        let settled = self
+            .lines
+            .iter()
+            .all(|line| named(&line.name) && seen.insert(line.name.as_deref().unwrap_or_default()));
+        if settled {
+            return 0;
+        }
+        let mut taken: HashSet<String> = self
+            .lines
+            .iter()
+            .filter(|line| named(&line.name))
+            .filter_map(|line| line.name.clone())
+            .collect();
+        let mut kept: HashSet<String> = HashSet::with_capacity(self.lines.len());
+        let mut changed = 0;
+        // Repeats first, in line order, then the seeds, so a seed never takes
+        // a name a later repeat would have been renamed to.
+        for line in &mut self.lines {
+            let Some(name) = line.name.clone().filter(|n| !n.trim().is_empty()) else {
+                continue;
+            };
+            if !kept.insert(name.clone()) {
+                let fresh = dedupe_line_name(&name, &|n| taken.contains(n));
+                taken.insert(fresh.clone());
+                kept.insert(fresh.clone());
+                line.name = Some(fresh);
+                changed += 1;
+            }
+        }
+        for line in &mut self.lines {
+            if !named(&line.name) {
+                let fresh = seed_line_name(&|n| taken.contains(n));
+                taken.insert(fresh.clone());
+                line.name = Some(fresh);
+                changed += 1;
+            }
+        }
+        changed
+    }
+
+    /// Every station keyed canonically with an id, ids unique, and
+    /// `next_station_id` above them all.
+    fn station_ids_settled(&self) -> bool {
+        if self.station_ids.len() != keyable_stations(&self.lines) {
+            return false;
+        }
+        let resolver = KeyResolver::new(&self.lines);
+        let mut seen: HashSet<StationId> = HashSet::with_capacity(self.station_ids.len());
+        self.station_ids.iter().all(|(key, id)| {
+            matches!(resolver.resolve(key), Some((_, true)))
+                && *id < self.next_station_id
+                && seen.insert(*id)
+        })
+    }
+
+    fn settle_station_ids(&mut self, heal: &mut IdentityHeal) {
+        let map = std::mem::take(&mut self.station_ids);
+        let (by_station, dangling, losers) = {
+            let resolver = KeyResolver::new(&self.lines);
+            entries_by_station(&resolver, map)
+        };
+        heal.ids_dropped += dangling.len() + losers;
+        let mut ids: HashMap<StationKey, StationId> = HashMap::with_capacity(by_station.len());
+        let mut seen: HashSet<StationId> = HashSet::with_capacity(by_station.len());
+        let mut missing: Vec<StationKey> = Vec::new();
+        for line in &self.lines {
+            for (index, key) in canonical_keys(line) {
+                match by_station.get(&(line.id, index)) {
+                    Some((_, id)) if seen.insert(*id) => {
+                        ids.insert(key, *id);
+                    }
+                    _ => missing.push(key),
+                }
+            }
+        }
+        if let Some(max) = seen.iter().max() {
+            self.next_station_id = self.next_station_id.max(max.saturating_add(1));
+        }
+        heal.ids_allocated += missing.len();
+        for key in missing {
+            ids.insert(key, self.next_station_id);
+            self.next_station_id = self.next_station_id.saturating_add(1);
+        }
+        self.station_ids = ids;
+    }
+
+    /// Every station named under its canonical key, no name blank, names
+    /// unique within each line. Keys that do not resolve are ignored.
+    fn station_names_settled(&self) -> bool {
+        let resolver = KeyResolver::new(&self.lines);
+        let mut resolving = 0;
+        let mut unique: HashSet<(LineId, &str)> = HashSet::with_capacity(self.station_names.len());
+        for (key, name) in &self.station_names {
+            match resolver.resolve(key) {
+                None => {}
+                Some((_, true))
+                    if !name.trim().is_empty() && unique.insert((key.line_id, name)) =>
+                {
+                    resolving += 1;
+                }
+                Some(_) => return false,
+            }
+        }
+        resolving == keyable_stations(&self.lines)
+    }
+
+    fn settle_station_names(&mut self, heal: &mut IdentityHeal) {
+        let map = std::mem::take(&mut self.station_names);
+        let (mut by_station, dangling, _) = {
+            let resolver = KeyResolver::new(&self.lines);
+            entries_by_station(&resolver, map)
+        };
+        let mut names: HashMap<StationKey, String> =
+            HashMap::with_capacity(by_station.len() + dangling.len());
+        names.extend(dangling);
+        for line in &self.lines {
+            let keys = canonical_keys(line);
+            let mut slots: Vec<Option<String>> = keys
+                .iter()
+                .map(|(index, _)| by_station.remove(&(line.id, *index)).map(|(_, n)| n))
+                .collect();
+            let (seeded, renamed) = settle_line_station_names(&mut slots);
+            heal.names_seeded += seeded;
+            heal.names_deduped += renamed;
+            for ((_, key), name) in keys.into_iter().zip(slots) {
+                if let Some(name) = name {
+                    names.insert(key, name);
+                }
+            }
+        }
+        self.station_names = names;
+    }
+
+    // === Lookups ===
+
+    /// The Station ID of a positional station, if it has one.
+    pub fn station_id_at(&self, station: StationRef) -> Option<StationId> {
+        let key = self.key_for_ref(station)?;
+        self.station_ids.get(&key).copied()
+    }
+
+    /// The name of a positional station, if it has one.
+    pub fn station_name_at(&self, station: StationRef) -> Option<&str> {
+        let key = self.key_for_ref(station)?;
+        self.station_names.get(&key).map(String::as_str)
+    }
+
+    /// The names of `line_id`'s stations by index (`None` for an unnamed or
+    /// unkeyable station), read through the canonical keys.
+    pub fn line_station_names(&self, line_id: LineId) -> Vec<Option<String>> {
+        let Some(line) = self.get_line(line_id) else {
+            return Vec::new();
+        };
+        let mut out = vec![None; line.shots.len() + 1];
+        for (index, key) in canonical_keys(line) {
+            if let Some(slot) = out.get_mut(index as usize) {
+                *slot = self.station_names.get(&key).cloned();
+            }
+        }
+        out
+    }
+
+    /// The name a line shows the user: its name, or `Line <id>` for a line
+    /// a normalization has not reached yet.
+    pub fn line_label(&self, line_id: LineId) -> Option<String> {
+        let line = self.get_line(line_id)?;
+        Some(
+            line.name
+                .clone()
+                .filter(|n| !n.trim().is_empty())
+                .unwrap_or_else(|| format!("Line {line_id}")),
+        )
+    }
+
+    /// A station as the user reads it, with its line: `Main Line / 17`.
+    /// `None` when the station is not in the project.
+    pub fn station_label(&self, station: StationRef) -> Option<String> {
+        let line = self.line_label(station.line_id)?;
+        let line_ref = self.get_line(station.line_id)?;
+        if station.station_index as usize > line_ref.shots.len() {
+            return None;
+        }
+        let name = self
+            .station_name_at(station)
+            .map_or_else(|| station.station_index.to_string(), str::to_string);
+        Some(format!("{line} / {name}"))
+    }
+
+    /// A shot as the user reads it, with its line: `Main Line: 4 → 5`.
+    /// `None` when the shot is not in the project.
+    pub fn shot_label(&self, line_id: LineId, shot_id: ShotId) -> Option<String> {
+        let line = self.get_line(line_id)?;
+        let index = line.shots.iter().position(|s| s.id == shot_id)? as u32;
+        let name = |i: u32| {
+            self.station_name_at(StationRef::new(line_id, i))
+                .map_or_else(|| i.to_string(), str::to_string)
+        };
+        let label = self.line_label(line_id)?;
+        Some(format!(
+            "{label}: {} \u{2192} {}",
+            name(index),
+            name(index + 1)
+        ))
+    }
+
+    // === Naming new stations ===
+
+    /// Name the station an operation just created at `station_index` of
+    /// `line_id` by the creation rules (`station_naming`): the End rule when it
+    /// is the line's last station, the Prepend rule when it is the first, the
+    /// Mid rule otherwise. A station that already has a name keeps it. Its
+    /// Station ID is allocated by the next [`Self::ensure_station_identities`].
+    pub fn name_new_station(&mut self, line_id: LineId, station_index: u32) {
+        let Some(key) = self.key_for_ref(StationRef::new(line_id, station_index)) else {
+            return;
+        };
+        if self.station_names.contains_key(&key) {
+            return;
+        }
+        let names = self.line_station_names(line_id);
+        let last = names.len().saturating_sub(1) as u32;
+        // A neighbour without a name reads as its seed, as the
+        // normalization would name it.
+        let neighbour = |index: u32| -> String {
+            names
+                .get(index as usize)
+                .cloned()
+                .flatten()
+                .unwrap_or_else(|| index.to_string())
+        };
+        let taken = names.iter().flatten().map(String::as_str);
+        let name = if station_index == 0 {
+            if last == 0 {
+                "0".to_string()
+            } else {
+                name_before_start(&neighbour(1), taken)
+            }
+        } else if station_index == last {
+            name_after_end(&neighbour(station_index - 1), taken)
+        } else {
+            let held: HashSet<&str> = taken.collect();
+            name_with_free_letter(&neighbour(station_index - 1), &|n| held.contains(n))
+        };
+        self.station_names.insert(key, name);
+    }
+
+    /// Fill the unnamed stations of a partly named line by the creation rules
+    /// (`station_naming::fill_line_station_names`): an import whose file names
+    /// some stations, or rows the user added in an import wizard. A line with
+    /// no name at all is left to the seeding rule. Returns how many names it
+    /// filled.
+    pub fn fill_station_names(&mut self, line_id: LineId) -> usize {
+        let mut names = self.line_station_names(line_id);
+        let filled = fill_line_station_names(&mut names);
+        if filled == 0 {
+            return 0;
+        }
+        for (index, name) in names.into_iter().enumerate() {
+            let (Some(name), Some(key)) = (
+                name,
+                self.key_for_ref(StationRef::new(line_id, index as u32)),
+            ) else {
+                continue;
+            };
+            self.station_names.entry(key).or_insert(name);
+        }
+        filled
+    }
+
+    /// Make the names of one line unique: the later holder of a repeated
+    /// name gets a letter suffix. Missing names stay missing (the next
+    /// normalization seeds them). The final safety of a Combine Lines.
+    pub fn uniquify_station_names_in(&mut self, line_id: LineId) {
+        let Some(line) = self.get_line(line_id) else {
+            return;
+        };
+        let keys = canonical_keys(line);
+        let held: Vec<Option<String>> = keys
+            .iter()
+            .map(|(_, key)| self.station_names.get(key).cloned())
+            .collect();
+        let mut slots = held.clone();
+        let (_, renamed) = settle_line_station_names(&mut slots);
+        if renamed == 0 {
+            return;
+        }
+        for (((_, key), before), after) in keys.into_iter().zip(held).zip(slots) {
+            if let (Some(before), Some(after)) = (before, after) {
+                if before != after {
+                    self.station_names.insert(key, after);
+                }
+            }
+        }
+    }
+
+    /// Combine Lines' prefixing (`station_naming::plan_combine_prefixes`):
+    /// rename the station names of `kept` and `other` in place, before the
+    /// join, when the other line's names (its join station `other_join` left
+    /// out) collide with the kept line's or either line is lettered.
+    pub(super) fn prefix_combined_station_names(
+        &mut self,
+        kept: LineId,
+        other: LineId,
+        other_join: StationRef,
+    ) {
+        let kept_names: Vec<String> = self
+            .line_station_names(kept)
+            .into_iter()
+            .flatten()
+            .collect();
+        let other_names: Vec<String> = self
+            .line_station_names(other)
+            .into_iter()
+            .flatten()
+            .collect();
+        let join_name = self.station_name_at(other_join).map(str::to_string);
+        let plan = plan_combine_prefixes(
+            &kept_names.iter().map(String::as_str).collect::<Vec<_>>(),
+            &other_names.iter().map(String::as_str).collect::<Vec<_>>(),
+            join_name.as_deref(),
+        );
+        if plan.kept.is_empty() && plan.other.is_empty() {
+            return;
+        }
+        for (key, name) in &mut self.station_names {
+            let renames = if key.line_id == kept {
+                &plan.kept
+            } else if key.line_id == other {
+                &plan.other
+            } else {
+                continue;
+            };
+            if let Some(renamed) = renames.get(name.as_str()) {
+                name.clone_from(renamed);
+            }
+        }
+    }
+
+    // === User edits ===
+
+    /// Validate a station name the user typed for `station`: trimmed, not
+    /// empty, and not a name another station of its line holds. Returns the
+    /// trimmed name.
+    pub fn validate_station_name(&self, station: StationRef, name: &str) -> Result<String, String> {
+        let line = self
+            .get_line(station.line_id)
+            .ok_or_else(|| format!("Line {} not found", station.line_id))?;
+        if station.station_index as usize > line.shots.len() {
+            return Err("Station not found".to_string());
+        }
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("A station name cannot be empty".to_string());
+        }
+        let names = self.line_station_names(station.line_id);
+        let clash = names
+            .iter()
+            .enumerate()
+            .any(|(i, n)| i as u32 != station.station_index && n.as_deref() == Some(name));
+        if clash {
+            let line_name = self.line_label(station.line_id).unwrap_or_default();
+            return Err(format!(
+                "Line \"{line_name}\" already has a station named \"{name}\""
+            ));
+        }
+        Ok(name.to_string())
+    }
+
+    /// Set a station's name after [`Self::validate_station_name`]. Returns the
+    /// name it replaced.
+    pub fn set_station_name(
+        &mut self,
+        station: StationRef,
+        name: &str,
+    ) -> Result<Option<String>, String> {
+        let name = self.validate_station_name(station, name)?;
+        let key = self
+            .key_for_ref(station)
+            .ok_or_else(|| "Station cannot be named: its shot has no identity".to_string())?;
+        let previous = self.station_names.insert(key, name);
+        self.touch();
+        Ok(previous)
+    }
+
+    /// Validate a line name the user typed: trimmed, not empty, and not the
+    /// name of another line (`except` is the line being renamed). Returns
+    /// the trimmed name.
+    pub fn validate_line_name(&self, name: &str, except: Option<LineId>) -> Result<String, String> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("A line name cannot be empty".to_string());
+        }
+        let taken = self.lines.iter().any(|line| {
+            Some(line.id) != except && line.name.as_deref().map(str::trim) == Some(name)
+        });
+        if taken {
+            return Err(format!("A line named \"{name}\" already exists"));
+        }
+        Ok(name.to_string())
+    }
+
+    /// Offset every Station ID, and `next_station_id`, by `by`. Add .stalx /
+    /// Merge projects shift the incoming project's ids past the target's
+    /// `next_station_id`.
+    pub fn offset_station_ids(&mut self, by: StationId) {
+        for id in self.station_ids.values_mut() {
+            *id = id.saturating_add(by);
+        }
+        self.next_station_id = self.next_station_id.saturating_add(by);
+    }
+}

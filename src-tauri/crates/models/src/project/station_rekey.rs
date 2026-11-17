@@ -45,7 +45,7 @@ impl Project {
     /// positional home) against the CURRENT, already-edited structure. Keys
     /// not in `homes` are untouched.
     ///
-    /// The keyed collections (station offsets, comments, names) are rebuilt by
+    /// The keyed collections (station offsets, comments, names, ids) are rebuilt by
     /// collecting into a `HashMap`, so two of their keys that come out equal
     /// would silently drop one entry. The caller resolves every collision it
     /// expects (the join station of a combine) BEFORE calling this; any left is
@@ -89,6 +89,7 @@ impl Project {
             self.station_offsets.keys().cloned().collect::<HashSet<_>>(),
             self.station_comments.keys().cloned().collect(),
             self.station_names.keys().cloned().collect(),
+            self.station_ids.keys().cloned().collect(),
         ] {
             frozen.extend(frozen_remaps(&keys, &rebuilt));
         }

@@ -169,6 +169,8 @@ impl Project {
         }
         let shot = line.add_shot(data);
         let shot_id = shot.id;
+        let end = line.shots.len() as u32;
+        self.name_new_station(line_id, end);
         self.touch();
         self.get_line(line_id)?.get_shot(shot_id)
     }
@@ -333,6 +335,9 @@ impl Project {
         let line = self.get_line_mut(line_id)?;
         let shot = line.insert_shot_after_with_id(after_shot_id, data, forced_id, forced_uuid)?;
         let shot_id = shot.id;
+        // The new station sits after the new shot (`pos + 1`): the End rule
+        // when that is the line's last station, the Mid rule otherwise.
+        self.name_new_station(line_id, (pos + 2) as u32);
         // Station keys are position-independent: no ref-shifting on insert (the
         // junction the new shot extends from keeps its anchor; shots beyond keep
         // theirs). The new shot's displacement still shifts stations > pos+1 in
@@ -406,6 +411,8 @@ impl Project {
                 }
             });
         }
+        // The new first station: the Prepend rule.
+        self.name_new_station(line_id, 0);
         if dx != 0.0 || dy != 0.0 {
             self.adjust_line_offset(line_id, -dx, -dy);
         }
@@ -479,6 +486,14 @@ impl Project {
             .insert_shot_before_with_id(shot_id, head_data.clone(), None, None)
             .ok_or_else(|| format!("Failed to insert split shot before {shot_id}"))?;
         let new_shot_id = new_shot.id;
+        // The new station sits between the two pieces: the Mid rule (`4 -> 5`
+        // gives `4a`).
+        if let Some(index) = self
+            .get_line(line_id)
+            .and_then(|line| line.shots.iter().position(|s| s.id == new_shot_id))
+        {
+            self.name_new_station(line_id, index as u32 + 1);
+        }
 
         self.debug_assert_merge_alignment("split_shot_at_distance");
         self.touch();
@@ -1378,6 +1393,7 @@ impl Project {
             self.station_offsets.remove(&rk);
             self.station_comments.remove(&rk);
             self.station_names.remove(&rk);
+            self.station_ids.remove(&rk);
             self.zero_datums.retain(|zd| zd.station_ref != rk);
             self.station_merges
                 .retain(|m| m.station_a != rk && m.station_b != rk);
@@ -1684,6 +1700,7 @@ impl Project {
             self.station_offsets.remove(&key);
             self.station_comments.remove(&key);
             self.station_names.remove(&key);
+            self.station_ids.remove(&key);
             self.zero_datums.retain(|zd| zd.station_ref != key);
             // `MergeTopology::retain` invalidates its own adjacency memo, so no
             // explicit cache maintenance is needed here.

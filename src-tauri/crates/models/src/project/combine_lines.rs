@@ -31,8 +31,9 @@
 //! The two join stations become ONE station:
 //! - the join merge, and any loop closure across the join point (it would tie
 //!   the joined station to itself), go;
-//! - a comment or name both carry is kept once if identical, otherwise per
-//!   the dialog's choice (kept, other, or both joined);
+//! - a comment both carry is kept once if identical, otherwise per the
+//!   dialog's choice (kept, other, or both joined); the joined station keeps
+//!   the kept line's name and Station ID (the other's are retired);
 //! - the fixed side's manual offset (or none) wins, the other's is dropped
 //!   (and what is merged to the other moved onto the joined station, above);
 //! - a zero datum on either (never both) and closures to other stations move
@@ -44,6 +45,11 @@
 //! differ the other line's shots keep their own record parity for dive-plan
 //! pins (`Project::counter_parity_shots`). The closures the combine made or
 //! whose ends it moved apart are measured again off the final geometry.
+//!
+//! Station names are unique per line, so when a name of the other line
+//! (its join station aside) is also one of the kept line's, or either line is
+//! lettered already, both lines' names are letter-prefixed first (`A0 A1`,
+//! `B0 B1`; see `station_naming::plan_combine_prefixes` and docs/SPEC.md).
 //!
 //! Credit: survey credit (surveyors, explorers, date) lives on every shot and
 //! travels with it, through the reverse too, so every shot keeps its own
@@ -491,6 +497,9 @@ impl Project {
         };
         let gauge_capture = captured_gauge(source);
 
+        // Letter the two lines' station names when they collide (or either
+        // is lettered already), while each name is still on its own line.
+        self.prefix_combined_station_names(kept, other, join_o);
         // Settle the join first (it touches keyed entries only, never the
         // structure), then resolve every stored key against the structure as
         // it still is, so the kept join station's freshly written key is
@@ -544,6 +553,10 @@ impl Project {
             })
             .collect();
         let unmoved = self.rekey_station_refs(&homes, "combine lines");
+        // The final safety: the prefixing makes the names unique, but a
+        // corner it does not cover (all 26 letters in use) must still not
+        // leave two stations of the line with one name.
+        self.uniquify_station_names_in(kept);
         let deduped = self.dedupe_closures_in(kept);
         self.dedupe_merges_in(kept);
         self.keep_gauge_on_station(kept, gauge as usize, gauge_capture.as_ref());
@@ -612,13 +625,24 @@ impl Project {
             comments.insert(key.clone(), text);
         }
         self.station_comments = comments;
+        // The joined station keeps the kept line's (prefixed) name: names are
+        // unique per line, and the other join station's name is the one the
+        // combine retires (`options.name_pick` no longer applies). Its id,
+        // likewise: the other join station's id is retired with it.
         let mut names = std::mem::take(&mut self.station_names);
         let name_k = take_naming(self, &mut names, join_k);
         let name_o = take_naming(self, &mut names, join_o);
-        if let Some(text) = pick_text(name_k, name_o, options.name_pick, " / ") {
+        if let Some(text) = name_k.or(name_o) {
             names.insert(key.clone(), text);
         }
         self.station_names = names;
+        let mut ids = std::mem::take(&mut self.station_ids);
+        let id_k = take_naming(self, &mut ids, join_k);
+        let id_o = take_naming(self, &mut ids, join_o);
+        if let Some(id) = id_k.or(id_o) {
+            ids.insert(key.clone(), id);
+        }
+        self.station_ids = ids;
         // The fixed side's own offset (or none) wins, so that side stays
         // exactly in place; the plan reports how far the other one moves.
         let mut offsets = std::mem::take(&mut self.station_offsets);

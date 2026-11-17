@@ -987,6 +987,11 @@ impl Project {
         // Upgrade any positional (Index) ref from an older file to the stable
         // shot-UUID anchor now that shots (with UUIDs) are loaded.
         self.reanchor_station_refs();
+        // Station identity, now that every key is canonical: a name for every
+        // station (seeded from its index), a Station ID for every station
+        // (allocated in line order, so a file an older build rewrote without
+        // the ids re-mints the same ones), a unique name for every line.
+        self.ensure_station_identities();
         self.sweep_orphan_closures().log_removed("open");
         // Before the re-solve, which would otherwise heal a merge an older build
         // tore between two datum-placed pieces by moving the later piece off its

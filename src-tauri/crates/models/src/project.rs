@@ -7,7 +7,8 @@ use ts_rs::TS;
 
 use super::{
     AzimuthReference, GpsBounds, Line, LineData, LineId, LineUpdates, LoopClosure, ShotData,
-    ShotId, StationAnchor, StationKey, StationMerge, StationMergeWire, StationRef, ZeroDatum,
+    ShotId, StationAnchor, StationId, StationKey, StationMerge, StationMergeWire, StationRef,
+    ZeroDatum,
 };
 use super::{DatumRole, LoopClosureWire, ZeroDatumWire};
 
@@ -50,6 +51,8 @@ mod gauge;
 mod mutations;
 mod shots;
 mod split_line;
+mod station_identity;
+pub mod station_naming;
 mod station_rekey;
 
 mod integrity;
@@ -206,6 +209,7 @@ pub use merge_topology::MergeTopology;
 pub use offsets::{log_removed_closures, ClosuresBeforeSweep, OrphanClosureSweep, RemovedClosure};
 pub use reverse::{reverse_shots, shot_run_displacement};
 pub use shots::MIN_SPLIT_CHILD_LENGTH_M;
+pub use station_identity::IdentityHeal;
 pub use uuid_unique::{
     live_shot_uuid_for_stored, remap_project_json, reminted_shot_uuid, reminted_shot_uuid_avoiding,
     stored_shot_uuid_matches, ShotUuidRemap, SHOT_UUID_REMINT_NAMESPACE,
@@ -438,25 +442,49 @@ pub struct Project {
     /// Station comments keyed by StationRef
     #[serde(
         default,
-        serialize_with = "serialize_station_texts",
-        deserialize_with = "deserialize_station_texts"
+        serialize_with = "serialize_station_map",
+        deserialize_with = "deserialize_station_map"
     )]
     #[ts(skip)]
     pub station_comments: HashMap<StationKey, String>,
-    /// Station names: a short free-text identifier per station, such as the
-    /// station number an MNemo dump gave it (a DMP import records it here).
-    /// Not unique - MNemo numbers restart at 0 in every line - so it is
-    /// always shown next to the positional `S:I` id, never instead of it.
-    /// Stored in its own `station_names` table so readers that know only the
-    /// v18 tables (OpenSpeleo's Python `stalagmight_lib`, which SpeleoDB maps
-    /// with - see `station_texts` in the persistence crate) are unaffected.
+    /// Station names: the name that identifies a station to the user, such as
+    /// the station number an MNemo dump gave it (a DMP import records it here)
+    /// or `"4a"` for a station inserted after `"4"`. UNIQUE WITHIN ITS LINE
+    /// (not across the project - MNemo numbers restart at 0 in every line), so
+    /// a station reads as `Line name / station name` and a shot as
+    /// `from -> to`. Every station has one once the project is normalized
+    /// ([`Self::ensure_station_identities`] seeds a missing name from the
+    /// station's index and letter-suffixes a repeat). Stored in its own
+    /// `station_names` table so readers that know only the v18 tables
+    /// (OpenSpeleo's Python `stalagmight_lib`, which SpeleoDB maps with - see
+    /// `station_texts` in the persistence crate) are unaffected.
     #[serde(
         default,
-        serialize_with = "serialize_station_texts",
-        deserialize_with = "deserialize_station_texts"
+        serialize_with = "serialize_station_map",
+        deserialize_with = "deserialize_station_map"
     )]
     #[ts(skip)]
     pub station_names: HashMap<StationKey, String>,
+    /// Station IDs: every station's project-unique [`StationId`], keyed and
+    /// walked exactly like `station_names`, so it stays on its physical station
+    /// through inserts, deletes, reverses, splits and combines. Allocated from
+    /// [`Self::next_station_id`] by [`Self::ensure_station_identities`], never
+    /// reused. Stored in its own `station_ids` table (no schema bump, like
+    /// `station_names`).
+    #[serde(
+        default,
+        serialize_with = "serialize_station_map",
+        deserialize_with = "deserialize_station_map"
+    )]
+    #[ts(skip)]
+    pub station_ids: HashMap<StationKey, StationId>,
+    /// The next [`StationId`] to allocate; above every id in `station_ids`.
+    /// Monotonic within one timeline: a snapshot restore puts back the value
+    /// the snapshot was taken with, together with the ids it allocated.
+    /// Persisted in `project_settings` (no schema bump).
+    #[serde(default)]
+    #[ts(skip)]
+    pub next_station_id: StationId,
     /// SHA256 hashes of imported DMP files (for duplicate detection)
     #[serde(default)]
     pub imported_file_hashes: Vec<String>,
@@ -726,8 +754,8 @@ pub struct ProjectStats {
 
 /// # THE DETERMINISTIC-SERIALIZATION RULE FOR THE HASHMAPS
 ///
-/// `line_offsets`, `station_offsets`, `station_comments` and `station_names`
-/// are `HashMap`s,
+/// `line_offsets`, `station_offsets`, `station_comments`, `station_names` and
+/// `station_ids` are `HashMap`s,
 /// and a `HashMap`'s iteration order is a function of its RandomState seed and
 /// its insertion history - NOT of its contents. Emitting them in iteration order
 /// makes the serialized `Project` a function of how the map was built rather
@@ -760,7 +788,7 @@ fn serialize_line_offsets<S: serde::Serializer>(
 /// contents alone. (`StationKey` deliberately has no `Ord` of its own: nothing
 /// else in the model ranks stations, and an order that only serialization needs
 /// belongs next to it.)
-fn station_key_order(key: &StationKey) -> (LineId, u8, &str, u32) {
+pub(crate) fn station_key_order(key: &StationKey) -> (LineId, u8, &str, u32) {
     match &key.anchor {
         StationAnchor::LineStart => (key.line_id, 0, "", 0),
         StationAnchor::AfterShot(uuid) => (key.line_id, 1, uuid.as_str(), 0),
@@ -788,23 +816,23 @@ fn deserialize_station_offsets<'de, D: serde::Deserializer<'de>>(
     Ok(entries.into_iter().collect())
 }
 
-/// Serialize a station-keyed text map (`station_comments`, `station_names`) as
-/// a Vec of (StationKey, String) tuples. Key-ordered - see
+/// Serialize a station-keyed map (`station_comments`, `station_names`,
+/// `station_ids`) as a Vec of (StationKey, value) tuples. Key-ordered - see
 /// [`serialize_line_offsets`].
-fn serialize_station_texts<S: serde::Serializer>(
-    map: &HashMap<StationKey, String>,
+fn serialize_station_map<S: serde::Serializer, V: Serialize>(
+    map: &HashMap<StationKey, V>,
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
-    let mut entries: Vec<(&StationKey, &String)> = map.iter().collect();
+    let mut entries: Vec<(&StationKey, &V)> = map.iter().collect();
     entries.sort_by(|(a, _), (b, _)| station_key_order(a).cmp(&station_key_order(b)));
     entries.serialize(serializer)
 }
 
-/// Deserialize a station-keyed text map from a Vec of (StationKey, String) tuples.
-fn deserialize_station_texts<'de, D: serde::Deserializer<'de>>(
+/// Deserialize a station-keyed map from a Vec of (StationKey, value) tuples.
+fn deserialize_station_map<'de, D: serde::Deserializer<'de>, V: Deserialize<'de>>(
     deserializer: D,
-) -> Result<HashMap<StationKey, String>, D::Error> {
-    let entries: Vec<(StationKey, String)> = Vec::deserialize(deserializer)?;
+) -> Result<HashMap<StationKey, V>, D::Error> {
+    let entries: Vec<(StationKey, V)> = Vec::deserialize(deserializer)?;
     Ok(entries.into_iter().collect())
 }
 
@@ -895,6 +923,8 @@ impl Project {
             station_offsets: HashMap::new(),
             station_comments: HashMap::new(),
             station_names: HashMap::new(),
+            station_ids: HashMap::new(),
+            next_station_id: 0,
             imported_file_hashes: Vec::new(),
             imported_line_hashes: Vec::new(),
             next_closure_id: 1,
@@ -1284,7 +1314,8 @@ impl Project {
     /// removing shots, which changes station indices for all subsequent stations.
     ///
     /// Affects: station_merges, loop_closures, zero_datums, station_offsets,
-    /// station_comments, station_names - all routed through [`Self::map_station_refs`].
+    /// station_comments, station_names, station_ids - all routed through
+    /// [`Self::map_station_refs`].
     /// THE single enumeration of every [`StationKey`]-bearing collection on the
     /// project, for READ access. `check_structural_integrity` and
     /// `reanchor_station_refs` consume this so a newly-added ref-bearing collection
@@ -1309,6 +1340,9 @@ impl Project {
         }
         for k in self.station_names.keys() {
             f("station name", k.clone());
+        }
+        for k in self.station_ids.keys() {
+            f("station id", k.clone());
         }
     }
 
@@ -1338,6 +1372,8 @@ impl Project {
         self.station_comments = comments.into_iter().map(|(k, v)| (f(k), v)).collect();
         let names = std::mem::take(&mut self.station_names);
         self.station_names = names.into_iter().map(|(k, v)| (f(k), v)).collect();
+        let ids = std::mem::take(&mut self.station_ids);
+        self.station_ids = ids.into_iter().map(|(k, v)| (f(k), v)).collect();
     }
 
     fn station_ref_key(station_ref: &StationRef) -> (LineId, u32) {
@@ -1861,6 +1897,13 @@ mod tests;
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod station_names_tests;
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::expect_used)]
+mod station_identity_tests;
+
+#[cfg(test)]
+mod station_naming_tests;
 
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
