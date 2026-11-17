@@ -987,11 +987,11 @@ pub(super) fn check_combined(
     // is the view's own (documented: the two are not merged), not the
     // combine's. So the "before" view ties a co-located join with a closure.
     // A snapped closure is tied by the solve itself (#736), as a merge is, so
-    // both views are compared as the app draws them, snaps included. A snap
-    // the plan tears becomes the ordinary closure the combine makes of it
-    // (`tear_ties`): the side that moves takes its two stations apart by the
-    // shift, and the solve closes that loop from then on, so the "before"
-    // view counts it as that closure.
+    // both views are compared as the app draws them, snaps included. A tie
+    // the plan tears (a snap or a merge) becomes the ordinary closure the
+    // combine makes of it (`tear_ties`, below): the side that moves takes its
+    // two stations apart by the shift, and the solve closes that loop from
+    // then on, so the "before" view counts it as that closure.
     //
     // Likewise a join closure the solve does not tie at all (a legacy one,
     // which the passage sweep plants, or a torn snap) leaves the two join
@@ -1001,24 +1001,6 @@ pub(super) fn check_combined(
     // solve skips (it joins the two ends of one shot) leaves that view
     // unsolved, and the comparison does not apply.
     let mut tied = before.clone();
-    for torn in plan
-        .torn_ties
-        .iter()
-        .filter(|t| t.kind == TornTieKind::SnappedClosure)
-    {
-        for closure in tied.loop_closures.iter_mut().filter(|c| c.is_aligned) {
-            let ends = (
-                before.resolve_key(&closure.station_a),
-                before.resolve_key(&closure.station_b),
-            );
-            if ends == (Some(torn.station_a), Some(torn.station_b))
-                || ends == (Some(torn.station_b), Some(torn.station_a))
-            {
-                closure.strategy = ClosureStrategy::Batch;
-                closure.is_aligned = false;
-            }
-        }
-    }
     match candidate.join_kind {
         CombineJoinKind::CoLocated => tie(&mut tied, candidate.station_a, candidate.station_b),
         CombineJoinKind::Closure => {
@@ -1034,7 +1016,7 @@ pub(super) fn check_combined(
             for closure in tied
                 .loop_closures
                 .iter_mut()
-                .filter(|c| !Project::closure_ties_in_solve(c))
+                .filter(|c| !Project::closure_is_eligible(c.strategy))
             {
                 let ends = (
                     before.resolve_key(&closure.station_a),
@@ -1106,6 +1088,42 @@ pub(super) fn check_combined(
             if dist(was, now) > 0.0 {
                 for id in &component {
                     tied.adjust_section_offset(*id, was.0 - now.0, was.1 - now.1);
+                }
+            }
+        }
+    }
+    // The ties the plan tears become the ordinary closures `tear_ties` makes
+    // of them (a snap in place, a merge as a closure between its two
+    // stations), so the "before" view solves what the combined survey does,
+    // and is adjusted wherever the combined survey is. After the offsets
+    // above are settled, as the combine settles nothing through them.
+    for torn in &plan.torn_ties {
+        let same = |a: Option<StationRef>, b: Option<StationRef>| {
+            (a, b) == (Some(torn.station_a), Some(torn.station_b))
+                || (a, b) == (Some(torn.station_b), Some(torn.station_a))
+        };
+        match torn.kind {
+            TornTieKind::SnappedClosure => {
+                for closure in &mut tied.loop_closures {
+                    let ends = (
+                        before.resolve_key(&closure.station_a),
+                        before.resolve_key(&closure.station_b),
+                    );
+                    if closure.is_aligned && same(ends.0, ends.1) {
+                        closure.strategy = ClosureStrategy::Batch;
+                    }
+                }
+            }
+            TornTieKind::Merge => {
+                let at = tied.station_merges.iter().position(|m| {
+                    same(
+                        tied.resolve_key(&m.station_a),
+                        tied.resolve_key(&m.station_b),
+                    )
+                });
+                if let Some(at) = at {
+                    tied.station_merges.remove(at);
+                    tie(&mut tied, torn.station_a, torn.station_b);
                 }
             }
         }
