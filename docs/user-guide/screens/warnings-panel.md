@@ -49,13 +49,26 @@ readings disagree.
   Next**.
 - Errors can only be fixed. Warnings can also be ignored with **Ignore (keep
   value, don't warn again)**.
-- Two entries are about loop closures, not readings. A closure that joins the
-  two ends of one shot (an error) would squeeze that shot to zero length, so the
-  Closures Computed View skips it: **Remove this loop closure** fixes it, **Go
-  to closure station** shows it in **Details**. A part of the survey the Closures
-  Computed View could not adjust is shown there as measured (a warning, listed
-  after that view, Plan or Export has been computed); the message says why,
-  **Go to station** takes you to it, and it can be ignored.
+- Three entries are not about a shot's readings. They sit on a nearby shot:
+  - A [GPS fix](../concepts/zero-datums-and-gps-fixes.md) far from where the
+    survey puts its station (a warning, listed on a shot next to the fix).
+    The message gives the distance, its bearing and the limit. **Go to
+    station** shows the fix in **Details**, **Edit zero datum** opens the
+    [Edit Station dialog](edit-station-dialog.md) to correct its GPS, and it
+    can be ignored. An ignored one comes back when the zero datum's GPS
+    position changes; undoing that change ignores it again.
+  - A loop closure that joins the two ends of one shot (an error). It would
+    squeeze that shot to zero length, so the Closures Computed View skips it.
+    **Remove this loop closure** fixes it (undoable), **Go to closure
+    station** shows it in **Details**.
+  - A part of the survey the Closures Computed View could not adjust, so it is
+    shown there as measured (a warning, listed once that view, Plan or Export
+    has been computed). The message says why, **Go to station** takes you to
+    it, and it can be ignored.
+- **Edit zero datum** and **Remove this loop closure** are off where editing
+  is off, for example in the Closures Computed View.
+- **Show warnings** in a notice above the map opens this tab, see
+  [Closing a loop](../workflows/closing-a-loop.md#notices-above-the-map).
 - Under **Show resolved**, resolved warnings are struck through. **Mark
   unresolved** brings one back.
 - The map coloring and labels on this tab can be turned off in Settings:

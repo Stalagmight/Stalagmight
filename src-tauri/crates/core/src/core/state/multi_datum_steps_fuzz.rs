@@ -399,9 +399,9 @@ pub(super) fn next_op(
     let datums = p.zero_datums.len();
     let acc = ACCURACIES[rng.below(ACCURACIES.len())];
     let roll = rng.below(100);
-    // A new GPS on the frame datum strands every other placed piece
-    // (`frame-gps-edit`, which ends the chain when muted): mostly re-set only
-    // its accuracy instead.
+    // A new GPS on the frame datum re-places every other placed piece
+    // (`frame-gps-edit`, #769): mostly re-set only its accuracy instead, so
+    // chains keep the layout they built.
     let frame = p
         .zero_datums
         .iter()

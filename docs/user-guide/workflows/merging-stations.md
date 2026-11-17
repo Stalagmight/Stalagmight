@@ -7,7 +7,8 @@ order: 6
 # Merging stations
 
 Joins two sections at a shared station. Useful when a section could not be
-placed from reference shots and was placed by hand.
+placed from reference shots and was placed by hand, or to join two parts of a
+cave that each have their own GPS position.
 
 1. In the [survey view](../screens/survey-view.md), pick **Merge** (`M`) in the
    toolbar.
@@ -33,14 +34,23 @@ go. See the [station context menu](../screens/station-context-menu.md).
 ![Merge Stations dialog](../images/merge-dialog.png)
 
 - **Station A** (2) is the first station clicked, **Station B** (3) the second.
-- **Merge** (5). The first station's section moves onto the second.
+- **Merge** (5). The first station's section moves onto the second, unless a
+  zero datum holds it in place.
 
 ### Details
 
 - After the second click, Stalagmight checks that the merge is possible. If the
-  sections are already connected, or both are fixed, it offers a
-  [loop closure](closing-a-loop.md) instead. Otherwise a notification says why.
-- Which side moves, and when a merge is refused: see the
+  two sections are already connected, on one section or through other merges
+  and closures, it offers a [loop closure](closing-a-loop.md) instead. If the
+  stations are already merged or already joined by a loop closure, a
+  notification says so.
+- Two pieces that each have their own
+  [zero datum](../concepts/zero-datums-and-gps-fixes.md) can be merged. One
+  piece moves to meet the other, and its zero datum becomes a GPS fix: the
+  dialog says which piece and how far. If the GPS fix then lies far from where
+  the survey puts its station, the [Warnings panel](../screens/warnings-panel.md)
+  says so.
+- Which side moves in the other cases: see the
   [Merge Stations dialog](../screens/merge-stations-dialog.md).
 
 ## Unmerging stations

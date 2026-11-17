@@ -7,10 +7,11 @@ order: 5
 # Placement mode
 
 After **Create Section**, the new section follows the pointer. Click the map to
-drop it there.
+drop it there. The [DMP import](dmp-import.md#step-5-place-the-rest-by-hand)
+uses the same mode for sections it could not connect.
 
 It does not need to be accurate: the section can be moved later, or anchored to
-a [zero datum](../concepts/sections-shots-stations.md).
+a [zero datum](../concepts/zero-datums-and-gps-fixes.md).
 
 ![Placement mode](../images/placement-mode.png)
 
@@ -18,10 +19,17 @@ a [zero datum](../concepts/sections-shots-stations.md).
 2. **Esc** goes back to the dialog that started placement, with everything you
    entered. For a hand-entered section that is the
    [Import / Create Section dialog](create-section-dialog.md).
-3. Zoom. The map can also be dragged and scrolled while placing.
+3. Zoom. The scroll wheel zooms too.
+
+## Moving the map while placing
+
+A plain drag does not pan here, because a press is what drops the section. To
+move the map, hold Ctrl and drag, or drag with the middle mouse button.
 
 ## Details
 
-- Pointing at an existing station snaps the section to it. Clicking then merges
-  the two stations.
+- Pointing at an existing station snaps the section to it, and the banner says
+  **Snapped to station**. Clicking then merges the two stations.
+- A right-click does the same as **Esc**. On a touch screen, a **Cancel**
+  button does it.
 - The toolbar is disabled until the section is placed.

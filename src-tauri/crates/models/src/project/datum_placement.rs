@@ -76,6 +76,20 @@ impl DatumLayout {
     ///    moved (a combine);
     /// 5. the same station key: its GPS was edited in place.
     ///
+    /// Tiers 1 to 4 are tried twice: first asking also for the same stored
+    /// accuracy and Entrance answer, then without. A command that moves or
+    /// re-keys a datum never edits it, and an edit never re-keys one, so in
+    /// one command the first pass finds a moved or re-keyed datum, and an
+    /// earlier datum with another stored value is a different one. That tells
+    /// twins apart: two datums with one GPS (copied coordinates) and
+    /// different accuracies, one re-keyed by a combine onto the key the other
+    /// had. The second pass is for a Batch, which settles once for several
+    /// commands and so can edit a datum and re-key it in one window.
+    ///
+    /// Twins with the same stored value stay indistinguishable when one is
+    /// re-keyed onto the other's key: key, GPS and value all match the twin,
+    /// and only the positions of the whole set could tell them apart.
+    ///
     /// Key and GPS alone are not enough. Deleting a section's first shot drops
     /// the datum on its first station and re-anchors the next station's datum
     /// onto that key, and a GPS copied from another datum matches that datum
@@ -86,12 +100,11 @@ impl DatumLayout {
     /// re-key a datum onto the key of another with the very same GPS (copied
     /// coordinates), and that one would otherwise pass for still there.
     ///
-    /// When one tier finds earlier datums of both roles (a GPS copied from a
-    /// placement datum, both re-keyed and moved by a combine), the stored
-    /// accuracy and Entrance answer narrow it. If that still leaves both
-    /// roles, the datum counts as unplaced: placing it moves nothing when its
-    /// piece already sits on that GPS. A datum that matches no earlier one is
-    /// new (its command placed it already).
+    /// When one tier still finds earlier datums of both roles (twins with
+    /// the same stored value, both re-keyed and moved by a combine), the datum
+    /// counts as unplaced: placing it moves nothing when its piece already
+    /// sits on that GPS. A datum that matches no earlier one is new (its
+    /// command placed it already).
     fn was_unplaced(&self, zd: &ZeroDatum, at: Option<(f64, f64)>, after: &[ZeroDatum]) -> bool {
         let gone = |was: &DatumWas| {
             !after.iter().any(|now| {
@@ -103,32 +116,33 @@ impl DatumLayout {
         };
         let same_key = |was: &DatumWas| was.key == zd.station_ref;
         let same_fix = |was: &DatumWas| same_gps(&was.gps, &zd.gps);
+        let same_value = |was: &DatumWas| {
+            was.accuracy == zd.accuracy_m.map(f64::to_bits) && was.entrance == zd.entrance
+        };
         let same_at = |was: &DatumWas| same_place(was.at, at);
-        let tiers: [&dyn Fn(&DatumWas) -> bool; 5] = [
+        let tiers: [&dyn Fn(&DatumWas) -> bool; 4] = [
             &|was| same_key(was) && same_fix(was) && same_at(was),
             &|was| same_fix(was) && same_at(was) && gone(was),
             &|was| same_key(was) && same_fix(was),
             &|was| same_fix(was) && gone(was),
-            &|was| same_key(was),
         ];
-        let same_value = |was: &&DatumWas| {
-            was.accuracy == zd.accuracy_m.map(f64::to_bits) && was.entrance == zd.entrance
-        };
-        tiers
-            .iter()
-            .find_map(|tier| {
-                let found: Vec<&DatumWas> = self.datums.iter().filter(|was| tier(was)).collect();
-                if found.is_empty() {
-                    return None;
-                }
-                let narrowed: Vec<&DatumWas> = found.iter().copied().filter(same_value).collect();
-                let found = if narrowed.is_empty() { found } else { narrowed };
-                Some(
-                    !found
-                        .iter()
-                        .all(|was| was.role == Some(DatumRole::Placement)),
-                )
+        // Whether the earlier datums `matches` finds were not all placement
+        // datums; `None` when it finds none.
+        let unplaced = |matches: &dyn Fn(&DatumWas) -> bool| {
+            let found: Vec<&DatumWas> = self.datums.iter().filter(|was| matches(was)).collect();
+            (!found.is_empty()).then(|| {
+                !found
+                    .iter()
+                    .all(|was| was.role == Some(DatumRole::Placement))
             })
+        };
+        [true, false]
+            .into_iter()
+            .flat_map(|by_value| tiers.iter().map(move |tier| (by_value, tier)))
+            .find_map(|(by_value, tier)| {
+                unplaced(&|was: &DatumWas| tier(was) && (!by_value || same_value(was)))
+            })
+            .or_else(|| unplaced(&same_key))
             .unwrap_or(false)
     }
 
@@ -206,7 +220,11 @@ impl Project {
                 .filter_map(|zd| Some((self.resolve_key(&zd.station_ref)?, zd.gps)))
                 .collect();
             for (station_ref, gps) in promoted {
-                moved |= self.place_group_at(station_ref, gps_to_local(&gps, &frame_gps));
+                moved |= self.place_group_at(
+                    station_ref,
+                    gps_to_local(&gps, &frame_gps),
+                    "place a piece by its promoted datum",
+                );
             }
         }
         // Compared by key AND GPS: a promoted datum can inherit the old
@@ -219,11 +237,53 @@ impl Project {
         moved
     }
 
+    /// Move every placement datum's piece other than the frame's by the frame
+    /// correction, after the frame datum got a new GPS on the same station
+    /// (#769): `gps_to_local(its gps, new frame gps) - gps_to_local(its gps,
+    /// old frame gps)`. The frame stays on the origin, so without this every
+    /// other placed piece is off its own GPS by the edit. A piece on its GPS
+    /// stays on it; one an older file left off its GPS keeps its gap, as an
+    /// accuracy-only edit leaves it. GPS fixes ride with their piece. Returns
+    /// true when anything moved.
+    pub(super) fn place_pieces_on_frame(&mut self, old_frame_gps: &GpsCoordinates) -> bool {
+        let Some((frame_key, frame_gps)) = self
+            .frame_datum()
+            .map(|zd| (zd.station_ref.clone(), zd.gps))
+        else {
+            return false;
+        };
+        let pieces: Vec<(StationRef, (f64, f64))> = self
+            .placement_datums()
+            .into_iter()
+            .filter(|zd| zd.station_ref != frame_key)
+            .filter_map(|zd| {
+                let station_ref = self.resolve_key(&zd.station_ref)?;
+                let current = self.compute_station_raw_coords(station_ref)?;
+                let (new_x, new_y) = gps_to_local(&zd.gps, &frame_gps);
+                let (old_x, old_y) = gps_to_local(&zd.gps, old_frame_gps);
+                Some((
+                    station_ref,
+                    (current.x + new_x - old_x, current.y + new_y - old_y),
+                ))
+            })
+            .collect();
+        let mut moved = false;
+        for (station_ref, target) in pieces {
+            moved |= self.place_group_at(station_ref, target, "move a piece with the frame's GPS");
+        }
+        moved
+    }
+
     /// Translate `station_ref`'s rigid group so the station sits at `target`,
     /// then cascade through aligned closures: the same placement
-    /// [`Self::set_zero_datum`] applies to a subsequent datum. Returns true when
-    /// anything moved.
-    fn place_group_at(&mut self, station_ref: StationRef, target: (f64, f64)) -> bool {
+    /// [`Self::set_zero_datum`] applies to a subsequent datum. `purpose` names
+    /// the caller in the log. Returns true when anything moved.
+    fn place_group_at(
+        &mut self,
+        station_ref: StationRef,
+        target: (f64, f64),
+        purpose: &'static str,
+    ) -> bool {
         let Some(current) = self.compute_station_raw_coords(station_ref) else {
             return false;
         };
@@ -231,8 +291,7 @@ impl Project {
         if !dx.is_finite() || !dy.is_finite() {
             warn!(
                 ?station_ref,
-                purpose = "place a piece by its promoted datum",
-                "Datum placement is not finite; leaving the piece where it is"
+                purpose, "Datum placement is not finite; leaving the piece where it is"
             );
             return false;
         }
@@ -245,8 +304,8 @@ impl Project {
             ?station_ref,
             delta_x = dx,
             delta_y = dy,
-            purpose = "place a piece by its promoted datum",
-            "A datum became its piece's placement datum; moved the piece onto its GPS"
+            purpose,
+            "Moved a piece so its datum station sits on its target"
         );
         true
     }

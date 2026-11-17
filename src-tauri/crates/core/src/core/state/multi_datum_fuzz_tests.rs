@@ -36,8 +36,8 @@
 //! - `promoted-twin-gps`, `datum-key-reused`, `frame-gps-edit`: the same
 //!   failure in a step with a recognised mechanism: a promoted fix with a GPS
 //!   bit-identical to a datum that was a placement before; a datum
-//!   re-anchored onto the key of a datum the step removed (both fixed, see
-//!   [`KNOWN_OPEN`]); a new GPS on the frame datum (known open).
+//!   re-anchored onto the key of a datum the step removed; a new GPS on the
+//!   frame datum (all fixed, see [`KNOWN_OPEN`]).
 //! - `datum-twin-station`: two datums resolve to one station (Combine
 //!   Sections joining two datum stations; now refused).
 //! - `hard-fix-off-gps` / `hard-fix-no-unknowns`: in the Closures Computed
@@ -98,22 +98,21 @@ const EXACT_M: f64 = 1e-9;
 /// Failure classes that are open bugs, muted unless
 /// `STALAGMIGHT_DATUM_FUZZ_MUTE` is set. The replay after each reaches it
 /// with the generators as they are (a generator change can turn it into a
-/// different chain):
-///
-/// - `frame-gps-edit`: giving the frame datum a new GPS keeps its station on
-///   the origin and moves nothing else, so every other placed piece is off
-///   its own GPS by the edit. Present on master before #741; tracked in
-///   #769, unmute it there. `"11"`.
+/// different chain). None today.
 ///
 /// No longer muted, and pinned in `multi_datum_tests.rs`: `promoted-twin-gps`
 /// (a fix with the bit-identical GPS of the removed placement datum) and
 /// `datum-key-reused` (Delete Shot re-anchoring a fix onto the removed
-/// datum's key, or a combine re-keying a placement onto the key of its twin
-/// fix), both fixed in `DatumLayout::was_unplaced`; and
+/// datum's key, or a combine re-keying one of two twins, a placement and a
+/// fix with one GPS, onto the key of the other), both fixed in
+/// `DatumLayout::was_unplaced`; and
 /// `datum-twin-station` (Combine Sections joining two stations that each
 /// hold a datum), now refused; and `hard-fix-no-unknowns` (a hard fix in a
-/// component with no unknown left), now applied.
-const KNOWN_OPEN: &[&str] = &["frame-gps-edit"];
+/// component with no unknown left), now applied; and `frame-gps-edit` (a new
+/// GPS on the frame datum left every other placed piece off its own GPS,
+/// #769), now moved by the frame correction in
+/// `Project::place_pieces_on_frame`.
+const KNOWN_OPEN: &[&str] = &[];
 
 fn env_u64(name: &str, default: u64) -> u64 {
     std::env::var(name)
@@ -414,6 +413,7 @@ struct Stats {
     applied: BTreeMap<&'static str, usize>,
     refused: usize,
     frame_changes: usize,
+    frame_gps_edits: usize,
     promotions: usize,
     held_fixes: usize,
     placed_merges: usize,
@@ -937,6 +937,26 @@ impl Chain {
         stats.max_eps = stats.max_eps.max(self.eps);
     }
 
+    /// Count a forward step that gave the frame datum another GPS on its own
+    /// station while another placement datum placed a piece of its own (#769).
+    fn note_frame_gps_edit(prev: &Snap, now: &Project, stats: &mut Stats) {
+        let Some(was) = prev.datums.iter().find(|d| d.at.is_some()) else {
+            return;
+        };
+        let other_piece = prev
+            .datums
+            .iter()
+            .filter(|d| d.role == Some(DatumRole::Placement))
+            .count()
+            > 1;
+        let edited = now
+            .frame_datum()
+            .is_some_and(|zd| zd.station_ref == was.key && gps_bits(&zd.gps)[..2] != was.gps[..2]);
+        if other_piece && edited {
+            stats.frame_gps_edits += 1;
+        }
+    }
+
     fn undo_depth(&self) -> usize {
         self.state.get_undo_stack().len()
     }
@@ -996,6 +1016,7 @@ impl Chain {
         }
         let p1 = project(&self.state);
         let s1 = snap(&p1);
+        Self::note_frame_gps_edit(&s0, &p1, stats);
         self.note(&s0, &p1, stats);
         self.show(&p1);
         self.check_step(op, &p0, &s0, &s1)?;
@@ -1176,6 +1197,7 @@ fn run_chain(
             continue;
         }
         let p1 = project(&chain.state);
+        Chain::note_frame_gps_edit(&snap(&p), &p1, stats);
         chain.note(&snap(&p), &p1, stats);
         chain.show(&p1);
         chain
@@ -1279,8 +1301,9 @@ fn datum_command_chains_keep_every_invariant() {
     }
     eprintln!(
         "datum fuzz seeds {first}..{} x {steps} steps: {} steps, applied {:?}, {} refused, {} \
-         merges of two placed pieces, {} reopens, {} re-frames, {} promotions, {} hard fixes \
-         held, largest re-frame discrepancy {:.3e} m, muted {:?} (mute list {mute:?})",
+         merges of two placed pieces, {} reopens, {} re-frames, {} frame GPS edits with \
+         another placed piece, {} promotions, {} hard fixes held, largest re-frame \
+         discrepancy {:.3e} m, muted {:?} (mute list {mute:?})",
         first + seeds,
         stats.steps,
         stats.applied,
@@ -1288,6 +1311,7 @@ fn datum_command_chains_keep_every_invariant() {
         stats.placed_merges,
         stats.reopens,
         stats.frame_changes,
+        stats.frame_gps_edits,
         stats.promotions,
         stats.held_fixes,
         stats.max_eps,
@@ -1298,6 +1322,10 @@ fn datum_command_chains_keep_every_invariant() {
         assert!(
             stats.promotions > 0 && stats.reopens > 0,
             "no promotion or no reopen"
+        );
+        assert!(
+            stats.frame_gps_edits > 0,
+            "no frame GPS edit with another placed piece"
         );
     }
     assert!(
@@ -1324,10 +1352,17 @@ const PINNED_CHAINS: &[&str] = &[
     // its twin fix (one GPS, another accuracy), which becomes the placement:
     // only the stored accuracy shows the fix's old key is gone.
     "50028990;split(4,2,b);acc(0,0.0);datum(3:4,-10.355085626613327,-38.63552075781107,1000.0);datum(2:2,45.046864107381886,43.49016961757878,50.0);addshot(0,end,241.82506602311437,12.181044570237113,10.15784749770614,6.664029904480876);datum(3:3,-28.281957111543417,-33.37293276249461,0.5);reopen;unmerge(0:0,1:0);undo;split(0,1,b);acc(3,50.0);datum(5:0,0.0,0.0,50.0);reopen;undo;delshot(3,4);acc(2,-);undo;twin(4:0,1,5.0);closure(4:2,6:0);merge(4:2,3:0);reopen;combine(0:start,2:start);twin(5:1,4,0.5);datum(0:3,-18.54270846695945,37.349707765143265,0.5);split(1,1,b);closure(3:0,3:0);undo;undo;rm(0);datum(0:0,-70.10296390335284,-51.46255498275887,5.0);undo;datum(6:0,11.025626281126955,2.450822161617217,50.0);closure(4:1,0:4);datum(4:2,27.224552254542683,-43.394823892024185,5.0);closure(4:0,5:0);addshot(6,0,93.8038739660679,10.717179406412239,28.31985522332138,25.400500444955643);merge(3:3,0:4);twin(3:0,5,1000.0);rm(0);combine(4:start,5:start)",
+    // datum-key-reused: a combine re-keys a fix onto the key of its twin
+    // placement datum (one GPS, another accuracy) and the fix becomes the
+    // placement: only the stored accuracy says the twin is not the fix.
+    "1294806;unmerge(0:1,2:1);reopen;datum(1:0,25.650794071477637,-73.60666169426631,50.0);merge(1:0,3:1);datum(3:3,0.0,0.0,5.0);datum(2:0,19.994246212841716,-36.50338157646604,-);rm(4);twin(2:0,0,-);merge(1:0,3:5);unmerge(1:0,3:1);addshot(3,1,169.26310033886833,19.806523673505293,9.60276030515832,6.003958612032227);rm(0);twin(3:0,3,0.0);split(3,5,a);combine(4:start,3:end);acc(0,-);split(4,5,b);datum(4:2,33.880412148064,5.378012870132235,0.5);undo;delshot(1,0);undo;datum(4:1,-73.71064559461756,42.86751369073772,5.0);datum(5:1,0.27217256649528937,5.768254987005169,-);split(4,2,b);combine(4:start,2:end)",
     // datum-twin-station: Combine joining two datum stations is refused.
     "350;combine(0:start,3:start)",
     // hard-fix-no-unknowns: every group held, the hard fix still applied.
     "112",
+    // frame-gps-edit: the setup gives the frame datum a new GPS while another
+    // datum places a piece of its own (#769).
+    "11",
 ];
 
 #[test]

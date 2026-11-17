@@ -68,6 +68,14 @@ mod anchor_fuzz;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    clippy::print_stderr,
+    reason = "test module: panics on a failed assumption are the point, and the sweep prints \
+              what it covered"
+)]
+mod closure_hand_move_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod closure_shots_tests;

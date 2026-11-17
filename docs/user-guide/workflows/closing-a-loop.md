@@ -1,14 +1,14 @@
 ---
 title: Closing a loop
-description: "Record a loop closure between two stations that cannot be merged, check its misclosure error, view the adjusted survey, and remove the closure later."
+description: "Record a loop closure between two stations that are already connected, check its misclosure error, view the adjusted survey, and remove it later."
 order: 7
 ---
 
 # Closing a loop
 
-Use the **Merge** tool on two stations that cannot be merged: their sections
-are already connected another way, or both are fixed by a
-[zero datum](../concepts/sections-shots-stations.md). Stalagmight then creates a
+Use the **Merge** tool on two stations whose sections are already connected:
+on one section, or joined through other merges and loop closures. Merging them
+would make a loop, so Stalagmight offers a
 [loop closure](../concepts/sections-shots-stations.md) instead.
 
 1. In the [survey view](../screens/survey-view.md), pick **Merge** (`M`).
@@ -26,8 +26,8 @@ adjusted to its closures, switch to **Plan**, or pick **Closures Computed View**
 in the [Display menu](../screens/display-menu.md).
 
 The two stations must not be the two ends of one shot: closing there would
-squeeze that shot to zero length, so the dialog refuses them, even when another
-passage also joins them.
+squeeze that shot to zero length. The dialog says so and **Create Closure**
+stays off, even when another passage also joins them. Pick other stations.
 
 ## Step details
 
@@ -69,17 +69,44 @@ Closure** in **Details** (4 above) does the same.
 
 A station with more than one closure asks which one to remove.
 
-## When the computed view leaves something out
+## Notices above the map
 
-The **Closures Computed View** skips a closure whose two stations are the two
-ends of one shot (an older project can still have one), and shows a part of the
-survey as measured when its closures cannot be solved, for example a closure
-that ties two zero datums together. A notice beside the read-only label above
-the map says so, and **Show warnings** opens the
-[Warnings panel](../screens/warnings-panel.md), where each one is listed with
-its fix.
+While the map shows the **Closures Computed View**, a notice at the top left
+of the map says when that view is not the whole story. **Show warnings**
+opens the [Warnings panel](../screens/warnings-panel.md), which lists each case
+with its fix.
 
-Deleting shots with shift can shorten a loop to a single shot. The **Delete
-Shots** dialog lists that closure before you confirm, the delete removes it too
-and says so, both naming the closure by the stations you created it with;
-**Undo** brings back both.
+- "1 loop closure skipped: it spans a single shot." A project from an older
+  version, or a file you add, can still have a closure across one shot. The
+  view leaves it out and adjusts the rest of the survey. The Warnings panel
+  lists it as an error with **Remove this loop closure** (switch to the **Raw
+  Data View** first: editing is off in the Closures Computed View).
+- "Part of the survey could not be adjusted and is shown as measured." For
+  example, loop closures tie two zero datums to the same point. The warning in
+  the Warnings panel says which part and why.
+- "Bent to a GPS fix at 2:14, 32 m from its surveyed position. Check it." The
+  view passes through a [GPS fix](../concepts/zero-datums-and-gps-fixes.md)
+  that is far from where the survey puts its station. Check the GPS reading and
+  the survey. The notice stays while the fix is that far, even if you ignore
+  its warning.
+
+## Edits that remove a closure
+
+Some edits would leave a closure that closes nothing. They remove it instead:
+
+- Deleting shots with shift removes a closure the delete shortens to a single
+  shot. The **Delete Shots** dialog lists it before you confirm.
+- [Combining sections](combining-and-splitting-sections.md) removes a tie that
+  would join the two ends of one shot, and splitting a section removes a
+  closure whose two stations become one point. Their dialogs list it before
+  you confirm.
+- Deleting a shot or a section, unmerging, removing a zero datum and merging
+  two placed pieces remove a closure whose two stations become one point.
+
+A warning names each removed closure afterwards, and one **Undo** brings it
+back with the rest of the edit.
+
+An older project in which a merge had been pulled apart between two pieces,
+each placed by its own zero datum, opens with that merge as a loop closure.
+Nothing moves. To join the two pieces, [merge](merging-stations.md) the
+stations again.

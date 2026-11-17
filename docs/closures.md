@@ -391,15 +391,18 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
   needs none of this: everything merged there is a join tie, one point with
   the joined station, and the #740 residual above carries the rest. Folding
   the two hand moves into the shots (as Move Station does) was the other
-  way: exact in the Raw Data View, but this view solves shots, merges and
-  closures, never manual offsets, so a folded hand move would enter every
-  loop through its station and move other stations here. (This view's own
-  handling of a manual offset is off as it is, combine or not: it holds the
-  survey at its anchor station as shown, hand move included, while it
-  solves offset-free shots, so a hand move on that station shifts the whole
-  adjusted survey by it, and where the solved part is a tree, the sections
-  merged to the anchored one come apart from it. The sweeps compare this
-  view only where it solves no survey with a hand move in it.)
+  way: exact in the Raw Data View, but this view adjusts shots, never a
+  manual offset, so a folded hand move would become part of the measured
+  shots, enter every loop through its station and move other stations here.
+  This view holds every merge and closure as shown, the join's tie included
+  ("Manual station offsets" below, #759): where it solves the survey, a
+  combine changes it only through the hand move the joined station drops,
+  which moves what is merged or tied at the dropped station with it (at a
+  merged join, the whole moving side, as the chain gap moves it in the Raw
+  Data View). The sweeps compare this view everywhere: their "before" view
+  gives the dropped join station the hand move the joined station keeps, and
+  they assert that the joined station never drops the hand move of the
+  station a solved survey is held at.
 - **Nothing is left across one shot (#746).** Once the two join stations are
   one, a tie the combine tears (a merge, or a snap made ordinary) can join the
   two ends of one shot: a one-shot passage X merged to both join stations,
@@ -545,6 +548,58 @@ default is a hard fix: only a hard fix, or larger base sigmas, puts the station 
 
 Tests: `project/lsq_fix_tests.rs` (two entrances joined by a 500 m traverse, the GPS 40 m off,
 checked against the closed-form series-spring answer).
+
+### Manual station offsets (hand moves, #759)
+
+A manual station offset (`station_offsets`, a *hand move*) shows ONE station away
+from where its shots put it. Only an older or hand-edited file carries one: Move
+Station folds its moves into the shots, while Split Section Here, Append Project and
+Undo carry an existing one along. The Raw Data View shows each station at its *chain
+position* (section offset plus the shot walk) plus its own hand move, and a merge is
+one point *as shown*: `merge_stations` and the offset cascade line the merged sections
+up on the hand-moved station, so a hand move on a merged station carries what is
+merged there. A closure's misclosure is measured as shown too.
+
+The Closures Computed View keeps that meaning:
+
+- It adjusts the measured shots, never a hand move: every station is shown at its
+  adjusted chain position plus its own hand move (depth included: the solve is
+  horizontal, and a depth hand move is added to its station's depth in both views).
+- Every tie it holds is one point as shown: a merge, as in the Raw Data View, and a
+  closure the solve takes, whose misclosure (hand moves included) it closes.
+- The station it holds a survey at (a placement zero datum, else the gauge station)
+  stays where the Raw Data View shows it, hand move included, and the rest is solved
+  around it. Placement itself puts the datum station AS SHOWN on its GPS
+  (`place_group_at` reads the station's raw coordinates, hand move included).
+- A GPS fix (#741) pulls its station's SHOWN position toward its GPS, hand move
+  included, which is the gap the Raw Data View reports (`datum_gap` measures the
+  station's raw coordinates): a hard fix shows the station exactly on its GPS, and a
+  soft one pulls by its weight. What is merged at the fix station stays on it as
+  shown. Pulling the chain position instead would leave a hand-moved fix station off
+  its GPS by the hand move under a hard fix, and the gap would read zero while the
+  station is shown away from the GPS.
+
+So a hand move on a station that nothing merges or ties is a nudge of that station
+alone in both views; on a merged station it carries what is merged there in both
+views (and a loop through that merge carries it, as the measured geometry does); on a
+closure's end it is part of the misclosure the view closes.
+
+In the solve (`lsq.rs`, `adjust_least_squares`) the unknowns are where the tie groups
+are shown, which is also how the fixed groups, the warm start, the shot update and the
+section realignment read positions. A shot measures its two stations' chain
+positions, so it is observed as its measured vector plus the two stations' hand-move
+difference. Observing the bare vector, as the solve did before #759, pinned the held
+station where it is shown while the shots pulled the rest offset-free: a hand move on
+the held station shifted the whole adjusted survey (Plan and Export too) by it, the
+realignment pulled sections that hang off merges apart from the held one (in a debug
+build: `Merge alignment violated after adjust_loop_closures`), and a hand move on a
+loop station vanished from the view, its shots absorbing it. Without a hand move the
+observation is the bare vector, as before, so the change leaves such a survey's solve
+as it was (`a_survey_without_a_hand_move_keeps_its_closures_computed_view`). `project/closure_hand_move_tests.rs` checks the
+view against this definition without solving (`assert_view_is_the_solve`: ties on one
+point as shown, held stations and hard fixes where shown or on their GPS, and the
+weighted shot and soft-fix residuals balanced at every free group), on hand moves
+planted anywhere in the combine sweeps' networks.
 
 A component whose solve still fails (for example a closure that ties two placement
 zero datums into one group: "Multiple placement zero datums in a single constraint

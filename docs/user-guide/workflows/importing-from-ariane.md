@@ -12,10 +12,17 @@ order: 5
    cave location are optional.
 3. Untick any sections you do not want. Scroll down to check where the survey
    goes and the other options, then click **Import**.
-4. Read the [import report](../screens/import-report.md) and click **Continue
+4. If **Connect Orphaned Sections** opens, accept or skip each suggested
+   connection.
+5. Read the [import report](../screens/import-report.md) and click **Continue
    to map**. Then [check the warnings](fixing-warnings.md).
 
 ## Step details
+
+### 1. Open the file
+
+- An Ariane file always becomes a new project. With a project open, you are
+  asked first: **Close and import** closes it.
 
 ### 2. Create the project
 
@@ -31,18 +38,22 @@ order: 5
 ![Import Ariane Survey dialog](../images/ariane-import.png)
 
 - The outline (2) and the numbers (4) show what will be imported.
-- Untick sections (6) to leave them out.
+- Untick sections (6) to leave them out. The rows also show each section's
+  **Surveyors** and **Explorers**, as read from the file.
 
 ![Import Ariane Survey options](../images/ariane-import-options.png)
 
-- The survey is placed at the zero datum in the file (9) unless you pick
-  otherwise.
+- The survey is placed at the GPS position in the file (9) unless you pick
+  otherwise. This is the first zero datum of the project.
+- A section that starts at another GPS-tagged entrance gets its own zero datum
+  there. See
+  [where each section goes](../screens/ariane-import.md#where-each-section-goes).
 - Comments go on stations, as Ariane shows them, unless you tick 12.
 - Virtual shots (13) become jumps or references by Stalagmight's best guess.
 - See [Import Ariane Survey](../screens/ariane-import.md) for what each option
   does.
 
-### 4. Import report
+### 5. Import report
 
 ![Import report](../images/import-receipt.png)
 

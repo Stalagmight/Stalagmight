@@ -1,6 +1,6 @@
 ---
 title: Sections, shots and stations
-description: "Stalagmight's survey terms: stations, shots and their kinds (permanent, jump, reference), sections, LRUD, merging, loop closures and zero datums."
+description: "Stalagmight's survey terms: stations, shots and their kinds (permanent, jump, reference), sections, LRUD, merging, loop closures, zero datums and GPS fixes."
 order: 1
 ---
 
@@ -26,9 +26,12 @@ order: 1
   shown as a dashed line and does not move the measured survey. The adjusted
   view (in **Plan**, or **Closures Computed View** under **Display**) spreads
   the error around the loop. See [Closing a loop](../workflows/closing-a-loop.md).
-- **Zero datum**: a station tied to a real-world GPS position. Every other
-  station is positioned relative to it. See
-  [Setting a zero datum](../workflows/setting-a-zero-datum.md).
+- **Zero datum**: a station tied to a real-world GPS position. The first one
+  on a connected piece of the survey places that piece, and its other stations
+  are positioned relative to it. A later one on the same piece is a **GPS
+  fix**: it moves nothing in the Raw Data View, and the adjusted view bends
+  the survey through it. See [Zero datums and GPS fixes](zero-datums-and-gps-fixes.md)
+  and [Setting a zero datum](../workflows/setting-a-zero-datum.md).
 
 Add a section with **Add section** and merge stations with **Merge** in the
 [survey view](../screens/survey-view.md). The shot kind is the **J/R** column

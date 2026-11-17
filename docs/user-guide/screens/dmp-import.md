@@ -7,14 +7,19 @@ order: 9
 # DMP import
 
 Imports an MNemo `.dmp` file into the open project, in steps. Opened by
-**Import** in the [survey view](survey-view.md).
+**Import** in the [survey view](survey-view.md), or by **Import...** after
+**Import from MNemo...** reads a device over USB. With no project open, the
+[Create Project for Import dialog](create-project-for-import.md) comes first.
 
 ## Step 1: pick sections
 
 ![DMP import, step 1](../images/dmp-import-step1.png)
 
 1. **Close**: nothing imported.
-2. **Surveyor**: for every imported section.
+2. **Surveyors** and **Explorers**, side by side: the people for every imported
+   section. Type a name and press Enter to add it. They start with the people
+   you used last in this session. (The screenshot shows an older single
+   Surveyor field.)
 3. **Date Override**: one date for every section, instead of the dates in the
    file.
 4. **Select All**, **Select None**, **Invert**
@@ -25,16 +30,18 @@ Imports an MNemo `.dmp` file into the open project, in steps. Opened by
 
 ### Details
 
+- Sections with two or more shots start ticked. A one-shot section starts
+  unticked but can be ticked.
 - Sections already imported into this project are marked **(already imported)**
   and left unticked. A whole file imported before gets a warning at the top.
-- The box at the top shows the file, its number of shots, total length and
-  depth range.
+- The box at the top shows the file, and the number of shots, total length and
+  depth range of the ticked sections.
 - **Direction**: whether the line was surveyed going in or out.
 
 ## Step 2: zero datum (optional)
 
 Only shown when the project has no
-[zero datum](../concepts/sections-shots-stations.md) yet.
+[zero datum](../concepts/zero-datums-and-gps-fixes.md) yet.
 
 ![DMP import, zero datum section](../images/dmp-import-zero-datum.png)
 
@@ -61,18 +68,20 @@ After picking a section in step 2.
 5. The position as read from 4.
 6. **Depth below surface**: optional, in meters, positive below the surface.
 7. **Name**
-8. **Surveyor**
+8. **Surveyors** and **Explorers**, side by side. They start with the people
+   from step 1. (The screenshot shows an older single Surveyor field.)
 9. **Reverse numbering**: number the stations and shots from the other end
    (ticked here). The cave does not move.
 10. **Cancel**: same as 1.
 11. **Back**: to step 2.
-12. **Confirm Zero Datum**: disabled until 4 can be read.
+12. **Confirm Zero Datum**: disabled until 4 can be read and 6 is empty or a
+    number.
 
 Scrolled down, the section's details and shots:
 
 ![DMP import, configure zero datum, shots](../images/dmp-import-zero-datum-shots.png)
 
-13. **Date**
+13. **Survey date** (labelled Date in the screenshot)
 14. **Dir**: surveyed going in or out.
 15. **Color**
 16. **Shot Data**: every shot of the section. Values can be changed here, or
@@ -80,6 +89,12 @@ Scrolled down, the section's details and shots:
 17. A ⚠ in this column marks a shot with a warning. Hover it to read it.
 18. Choose visible columns.
 19. Enlarge the table.
+
+### Details
+
+- MGRS and What3words positions are recognised but can't be converted: enter
+  the position in another format.
+- A note appears under 5 when latitude and longitude look swapped.
 
 ## Step 4: connection wizard
 
@@ -97,8 +112,8 @@ between sections and suggests where each section joins, one at a time.
    whether they run the same way (→) or opposite ways (←).
 6. **Merge at**: pick another station pair, when there is more than one.
 7. **Overlap**: what to do with shots that were surveyed twice, see below.
-8. **Section Settings**: the section's name, surveyor, date, color and
-   direction.
+8. **Section Settings**, folded: click it for the section's name, people,
+   **Reverse numbering**, survey date, direction and color.
 9. **Cancel**: asks whether to keep or remove sections already imported.
 10. **Back**: starts the import over. Sections this wizard already imported are
     removed first, which can be undone.
@@ -107,24 +122,27 @@ between sections and suggests where each section joins, one at a time.
 
 **Overlap**:
 
+- **Interpolate**: keep one copy, averaging the two.
+- **Use import data** (default): keep one copy, with the new values.
+- **Use existing data**: keep one copy, with the values already in the project.
 - **Keep both (reference)**: keep both copies. The new ones become reference
   shots.
-- **Use import data**: keep one copy, with the new values.
-- **Use existing data**: keep one copy, with the values already in the project.
-- **Interpolate**: keep one copy, averaging the two.
 
 ### Details
 
+- When other matches were found, a link such as **Show 2 alternatives** lists
+  them. Click one to use it instead.
 - Scroll down for the section's shot table. Edit it here if needed, or later.
-- **Use import data** and **Interpolate** are greyed out when the existing shots
+- **Interpolate** and **Use import data** are greyed out when the existing shots
   are pinned on both sides, by a zero datum, a merge or a closure.
-- The overlap choice is remembered for the project.
+- With no shots surveyed twice, **Overlap** says so instead of offering a choice.
+- The overlap choice is remembered for later imports.
 
 ## Step 5: place the rest by hand
 
 Sections with no suggested connection, and skipped ones, are placed by clicking
-the map, like [placement mode](placement-mode.md). Sections joined to each other
-move together.
+the map in [placement mode](placement-mode.md), which starts on its own.
+Sections joined to each other move together.
 
 It does not need to be accurate. Move them later, or connect them once the
 survey has the data to do it.
@@ -136,6 +154,9 @@ survey has the data to do it.
 3. Sections already placed, solid.
 4. **Esc**: back to the wizard, for
    [other ways to place them](#step-6-other-placement-options).
+
+A plain drag does not move the map here: pan with Ctrl+drag or a middle-button
+drag, and zoom with the scroll wheel.
 
 ## Step 6: other placement options
 
@@ -150,14 +171,21 @@ still to place.
    where you click. Click another station to change it.
 4. Which segment, and its sections.
 5. **From existing station**: join it to a station already in the project.
-6. **Manual placement**: click the map, as in step 5.
+   Pick the segment's station, then the target **Section** and **Station**.
+6. **Manual placement**: pick the anchor station and click **Place on map**,
+   as in step 5.
 7. **Do not place**: leave this segment out of the import.
 8. **Section Settings**: name and other details.
 9. **Cancel**
 10. **Back**
-11. **Next**
+11. **Next** when **Do not place** is picked, as here. Otherwise
+    **Place segment**.
 
 ### Details
 
 - **Suggested connection** is offered too, when a suggestion for this segment
   was skipped.
+- **Skip (place later)** appears when more than one segment is waiting.
+- After the import, **Connect Orphaned Sections** may open. It suggests where
+  sections that are not tied to a zero datum join ones that are. The
+  [import report](import-report.md) may follow.

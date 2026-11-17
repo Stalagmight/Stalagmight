@@ -11,6 +11,9 @@ How to use Stalagmight. Pages link to each other.
 - [Merging stations](workflows/merging-stations.md)
 - [Closing a loop](workflows/closing-a-loop.md)
 - [Adding comments](workflows/adding-comments.md)
+- [Combining and splitting sections](workflows/combining-and-splitting-sections.md)
+- [Exporting](workflows/exporting.md)
+- [Planning a dive](workflows/planning-a-dive.md)
 
 **Screens**
 - [Start screen](screens/start-screen.md)
@@ -33,6 +36,7 @@ How to use Stalagmight. Pages link to each other.
 **Concepts**
 - [Sections, shots and stations](concepts/sections-shots-stations.md)
 - [Errors and warnings](concepts/errors-and-warnings.md)
+- [Zero datums and GPS fixes](concepts/zero-datums-and-gps-fixes.md)
 
 ## Contributing
 
@@ -43,8 +47,10 @@ How to use Stalagmight. Pages link to each other.
 - A new page goes in the lists above and in its folder's `index.md`, in the
   same position.
 - Screenshots: `images/<what-it-shows>.png`, 1920x1080 window, clean profile (no
-  recent projects, signed out of SpeleoDB). Use example data made for the docs,
-  never a private survey or account details.
+  recent projects, signed out of SpeleoDB). Use the Naharon survey in
+  `e2e/fixtures/naharon_sources/` (its `.dmp` files and `.tml`) wherever the
+  screen allows, including its zero datum position. Never another private
+  survey or account details.
 - Number every interactive element with a callout placed beside it, never on
   top of it. Screen pages list the elements in callout order; other pages refer
   to them as **Name** (n).

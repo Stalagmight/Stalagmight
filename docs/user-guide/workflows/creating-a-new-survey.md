@@ -14,7 +14,7 @@ order: 1
    MNemo), or click **+** next to **Sections** to enter it by hand.
 4. Entering by hand: in the
    [Import / Create Section dialog](../screens/create-section-dialog.md), name
-   the section and set the surveyor, date and color.
+   the section and set its surveyors, explorers, survey date and color.
 5. Enter one row per shot and click **Create Section**.
 6. Click the map to [place the section](../screens/placement-mode.md). Rough
    is fine, it can be moved later.
@@ -22,8 +22,9 @@ order: 1
    its real GPS position.
 8. Check the **Warnings** tab and [fix what it finds](fixing-warnings.md).
 
-Tick **Save project file immediately** to create the file right away. Otherwise
-it is saved once you add data.
+The project file is written the first time the project is saved, usually by
+auto-save shortly after you add data. See
+[when the file is written](../screens/new-project-dialog.md#when-the-file-is-written).
 
 Already have the survey in another program? Use **Open / Import** on the start
 screen instead.
@@ -41,10 +42,11 @@ for the project details.
 
 ![New Project dialog](../images/new-project-dialog.png)
 
-- **Project Name** (2) is required. **Location** (3) is optional.
-- **Save project file immediately** (4): ticked, the `.stalx` file is created
-  as soon as the project opens. Unticked, it is saved only once you add data.
-- **Create Project** (6) opens the new project.
+- **Project Name** (2) is required. **Location (optional)** (3) is optional.
+- **Create Project** (6) opens the new project. No file is written until the
+  first save.
+- The **Save project file immediately** checkbox (4) in the picture is no
+  longer in the dialog.
 
 ### 3. Add data
 
@@ -59,9 +61,13 @@ for the project details.
 
 ![Import / Create Section dialog](../images/create-section-dialog.png)
 
-- **Section Name** (2), **Surveyor** (3) and **Date** (4, when the line was
-  surveyed) are optional.
+- **Section Name** (2) is optional. So are **Surveyors** and **Explorers**
+  (lists of names: type a name and press **Enter**) and **Survey date**, which
+  go on every shot you enter.
 - **Color** (5) is how the section shows on the map.
+- The picture shows an older layout with one **Surveyor** field (3) and a
+  **Date** field (4). See the
+  [dialog page](../screens/create-section-dialog.md) for the current fields.
 
 ### 5. Shots
 
