@@ -389,6 +389,8 @@ impl Project {
         // (#81). The map is owned (no borrow of `self`), so it stays valid across
         // the later `iter_mut` update phase.
         let raw_coords = self.compute_component_raw_coords(component);
+        // Manual station offsets (hand moves): see the observation below.
+        let station_offsets = self.resolved_station_offsets();
 
         let mut parent: HashMap<StationRef, StationRef> = HashMap::new();
         for station in &stations {
@@ -591,7 +593,34 @@ impl Project {
                     continue;
                 }
 
-                let vec = Self::shot_vector_along(shot, true, azimuth_reference);
+                let mut vec = Self::shot_vector_along(shot, true, azimuth_reference);
+                // The unknowns are where the groups are SHOWN: every station
+                // of a group (merged, or tied by a closure) is shown on one
+                // point, as merges are in the Raw Data View and as a
+                // closure's misclosure is measured, and the fixed groups,
+                // the warm start, the shot update and the realignment below
+                // all read positions as shown. A shot measures its two
+                // stations' CHAIN positions, though, each shown at its chain
+                // position plus its own manual offset (a hand move), so the
+                // two groups' points are apart by the shot plus the two
+                // hand moves' difference. The solve adjusts shots, never a
+                // hand move: each station keeps its own on its adjusted
+                // chain position. Observing the bare shot pinned the held
+                // station where it is shown while pulling the rest
+                // offset-free, which shifted the whole adjusted survey by
+                // its hand move and pulled merges apart (#759).
+                let (hand_i, hand_j) = (
+                    station_offsets.get(&station_i),
+                    station_offsets.get(&station_j),
+                );
+                if hand_i.is_some() || hand_j.is_some() {
+                    let (hi, hj) = (
+                        hand_i.copied().unwrap_or_default(),
+                        hand_j.copied().unwrap_or_default(),
+                    );
+                    vec.x += hj.0 - hi.0;
+                    vec.y += hj.1 - hi.1;
+                }
                 let az = shot.average_azimuth_true_rad(azimuth_reference);
                 let len = shot.length;
 
@@ -805,8 +834,6 @@ impl Project {
                 group_coords.insert(*root, Coordinates::new(sol_x[*idx], sol_y[*idx], raw_z));
             }
         }
-
-        let station_offsets = self.resolved_station_offsets();
 
         // Identify spur stations (not on any cycle) by iterative leaf pruning.
         // Spur shots have no redundancy - there's nothing to adjust them against -
