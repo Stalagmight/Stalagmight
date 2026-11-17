@@ -46,8 +46,10 @@ How to use Stalagmight. Pages link to each other.
 - A new page goes in the lists above and in its folder's `index.md`, in the
   same position.
 - Screenshots: `images/<what-it-shows>.png`, 1920x1080 window, clean profile (no
-  recent projects, signed out of SpeleoDB). Use example data made for the docs,
-  never a private survey or account details.
+  recent projects, signed out of SpeleoDB). Use the Naharon survey in
+  `e2e/fixtures/naharon_sources/` (its `.dmp` files and `.tml`) wherever the
+  screen allows, including its zero datum position. Never another private
+  survey or account details.
 - Number every interactive element with a callout placed beside it, never on
   top of it. Screen pages list the elements in callout order; other pages refer
   to them as **Name** (n).
