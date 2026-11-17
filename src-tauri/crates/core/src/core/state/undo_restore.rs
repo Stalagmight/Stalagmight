@@ -164,6 +164,25 @@ impl AppState {
             // and Edit Line's Save run it here. Without this arm the
             // catch-all failed the sub-command and rolled the whole batch back.
             Command::EditShotCredit { targets, edit } => self.edit_shot_credit(targets, edit),
+            // Batchable too (#327); the batch's snapshot pair is their undo.
+            Command::CreateCaveSection {
+                name,
+                color,
+                line_ids,
+            } => self.create_cave_section(name, color, line_ids),
+            Command::UpdateCaveSection {
+                section_id,
+                name,
+                color,
+            } => self.update_cave_section(*section_id, name.as_deref(), color.as_deref()),
+            Command::DeleteCaveSection { section_id } => self.delete_cave_section(*section_id),
+            Command::MoveLinesToCaveSection {
+                line_ids,
+                section_id,
+            } => self.move_lines_to_cave_section(line_ids, *section_id),
+            Command::ApplyCaveSectionColor { section_id } => {
+                self.apply_cave_section_color(*section_id)
+            }
             _ => CommandResult::failure("Command cannot be executed in undo context".to_string()),
         }
     }
@@ -201,7 +220,14 @@ impl AppState {
         }
 
         // Create line with original ID
-        let line = Line::restore_with_identity(original_id, data, identity);
+        let mut line = Line::restore_with_identity(original_id, data, identity);
+        // The recorded Section (#327) only while the project still holds it.
+        if line
+            .section_id
+            .is_some_and(|section| project.section(section).is_none())
+        {
+            line.section_id = None;
+        }
         // Keep line_index_cache in step.  The matching
         // `remove_line` cleared the cache; without this insert
         // every subsequent `get_line` would fall back to the O(N)

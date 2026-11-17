@@ -75,6 +75,7 @@ impl Project {
         let direction = line.direction;
         let quality = line.quality;
         let azimuth_reference = line.azimuth_reference;
+        let section = line.section_id;
         let orientation = self.cut_orientation(line_id);
         let component_gauges = self.hold_component_gauges(&[line_id]);
         let tail: Vec<ShotData> = line.shots[k..].iter().map(Shot::to_shot_data).collect();
@@ -118,6 +119,8 @@ impl Project {
             .id;
         if let Some(second) = self.get_line_mut(second_id) {
             second.azimuth_reference = azimuth_reference;
+            // The second half stays in the line's Section (#327).
+            second.section_id = section;
         }
         self.set_line_offset(second_id, (ox + dx, oy + dy));
         self.reindex_line_shot_uuids(line_id);

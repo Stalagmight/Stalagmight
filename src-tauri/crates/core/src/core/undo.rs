@@ -11,6 +11,8 @@ use crate::models::{
 
 mod added_content;
 mod budget;
+mod cave_sections;
+mod history_cave_section;
 mod history_credit;
 pub mod history_view;
 mod persistence;
@@ -18,6 +20,7 @@ pub(crate) mod snapshot_fixes;
 mod uuid_remap;
 
 pub use added_content::{extend_unique_hashes, AddedContent, CarriedIgnore};
+pub use cave_sections::{CaveSectionChange, CaveSectionMember, CaveSectionsState};
 
 /// Serialize a line-offset map in KEY order rather than in `HashMap`
 /// iteration order.
@@ -477,6 +480,11 @@ pub enum UndoData {
     /// Boxed: the payload is far larger than every other variant.
     AddedProjectContent(Box<AddedContent>),
 
+    /// The Section list and the memberships and colours of the lines a
+    /// Section command (#327) changed, before and after: undo restores the
+    /// first, redo the second. See [`CaveSectionChange`].
+    CaveSections(Box<CaveSectionChange>),
+
     /// No undo data (for commands that can't be undone)
     None,
 }
@@ -572,6 +580,7 @@ impl UndoData {
             UndoData::ProjectSnapshotPair { .. } => "ProjectSnapshotPair",
             UndoData::AddedProjectContent(_) => "AddedProjectContent",
             UndoData::ShotCredits { .. } => "ShotCredits",
+            UndoData::CaveSections(_) => "CaveSections",
             UndoData::None => "None",
         }
     }

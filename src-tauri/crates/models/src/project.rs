@@ -6,8 +6,9 @@ use std::path::PathBuf;
 use ts_rs::TS;
 
 use super::{
-    AzimuthReference, GpsBounds, Line, LineData, LineId, LineUpdates, LoopClosure, ShotData,
-    ShotId, StationAnchor, StationKey, StationMerge, StationMergeWire, StationRef, ZeroDatum,
+    AzimuthReference, GpsBounds, Line, LineData, LineId, LineUpdates, LoopClosure, Section,
+    SectionId, ShotData, ShotId, StationAnchor, StationKey, StationMerge, StationMergeWire,
+    StationRef, ZeroDatum,
 };
 use super::{DatumRole, LoopClosureWire, ZeroDatumWire};
 
@@ -58,6 +59,7 @@ mod merge_topology;
 mod offsets;
 mod relationships;
 mod reverse;
+mod sections;
 mod stats;
 mod union_find;
 mod uuid_unique;
@@ -537,6 +539,26 @@ pub struct Project {
     #[ts(skip)]
     pub held_gauges: Vec<HeldGauge>,
 
+    /// Sections: named groupings of lines (#327), in panel order. Membership
+    /// is on the lines ([`Line::section_id`]). Serialized as `cave_sections`
+    /// (never `sections`, the disk name of the lines, see `disk_names`) and
+    /// omitted when empty, so a project without Sections serializes as before.
+    /// Persisted in the `cave_sections` / `cave_section_lines` side tables.
+    #[serde(
+        default,
+        rename = "cave_sections",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub sections: Vec<Section>,
+    /// Next [`SectionId`] to assign. Not persisted in the file: a load derives
+    /// it from the highest saved id, as it does `next_line_id`.
+    #[serde(
+        default,
+        rename = "next_cave_section_id",
+        skip_serializing_if = "is_zero_section_id"
+    )]
+    pub next_section_id: SectionId,
+
     /// Transient flag (NOT persisted) - when true,
     /// [`Self::cascade_connection_offsets`] returns immediately. Used by
     /// batch importers to skip the per-call O(N) cascade and run a
@@ -591,6 +613,12 @@ pub struct Project {
     #[serde(skip, default)]
     #[ts(skip)]
     pub realign_fixpoint: Option<offsets::RealignFixpoint>,
+}
+
+/// `skip_serializing_if` for [`Project::next_section_id`]: a project that
+/// never had a Section serializes exactly as before.
+fn is_zero_section_id(id: &SectionId) -> bool {
+    *id == 0
 }
 
 /// Apply the Ariane `.tml`/`.tmlu` no-data convention to a raw
@@ -841,9 +869,9 @@ impl Serialize for ProjectIpc<'_> {
         let line_offsets: BTreeMap<LineId, (f64, f64)> =
             p.line_offsets.iter().map(|(k, v)| (*k, *v)).collect();
         // Field set + order MUST stay in lockstep with the generated Project.ts
-        // (17 ts-exported fields). Adding a ts-exported field to `Project`
+        // (19 ts-exported fields). Adding a ts-exported field to `Project`
         // requires adding it here too, or it silently drops off the IPC payload.
-        let mut st = serializer.serialize_struct("Project", 17)?;
+        let mut st = serializer.serialize_struct("Project", 19)?;
         st.serialize_field("name", &p.name)?;
         st.serialize_field("location", &p.location)?;
         st.serialize_field("created_at", &p.created_at)?;
@@ -861,6 +889,9 @@ impl Serialize for ProjectIpc<'_> {
         st.serialize_field("validation", &p.validation)?;
         st.serialize_field("surface_elevation", &p.surface_elevation)?;
         st.serialize_field("default_azimuth_reference", &p.default_azimuth_reference)?;
+        // Always sent, empty or not (the stored serde omits them when empty).
+        st.serialize_field("cave_sections", &p.sections)?;
+        st.serialize_field("next_cave_section_id", &p.next_section_id)?;
         st.end()
     }
 }
@@ -903,6 +934,8 @@ impl Project {
             default_azimuth_reference: None,
             counter_parity_shots: BTreeSet::new(),
             held_gauges: Vec::new(),
+            sections: Vec::new(),
+            next_section_id: 0,
             cascade_deferred: false,
             line_index_cache: HashMap::new(),
             shot_uuid_index: HashMap::new(),

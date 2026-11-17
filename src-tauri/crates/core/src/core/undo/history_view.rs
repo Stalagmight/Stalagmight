@@ -77,6 +77,11 @@ fn get_command_type(command: &Command) -> String {
         Command::MoveComment { .. } => "move_comment".to_string(),
         Command::Batch { .. } => "batch".to_string(),
         Command::UntrackImport { .. } => "untrack_import".to_string(),
+        Command::CreateCaveSection { .. } => "create_cave_section".to_string(),
+        Command::UpdateCaveSection { .. } => "update_cave_section".to_string(),
+        Command::DeleteCaveSection { .. } => "delete_cave_section".to_string(),
+        Command::MoveLinesToCaveSection { .. } => "move_lines_to_cave_section".to_string(),
+        Command::ApplyCaveSectionColor { .. } => "apply_cave_section_color".to_string(),
         Command::MergeProjects { .. } => "merge_projects".to_string(),
         Command::AddProjectFile { .. } => "add_project_file".to_string(),
         Command::RepairIntegrity => "repair_integrity".to_string(),
@@ -972,6 +977,7 @@ pub fn entry_to_history_item(
     UndoHistoryItem {
         index,
         description: super::history_credit::description(entry)
+            .or_else(|| super::history_cave_section::description(entry))
             .unwrap_or_else(|| entry.command.description()),
         timestamp: entry.timestamp.map(|t| t.to_rfc3339()),
         command_type: get_command_type(&entry.command),

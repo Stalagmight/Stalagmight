@@ -1,4 +1,5 @@
 mod app_state;
+mod command_cave_section;
 mod command_combine_lines;
 mod command_comment;
 mod command_credit;

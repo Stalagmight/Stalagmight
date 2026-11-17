@@ -6,7 +6,8 @@ use ts_rs::TS;
 
 use crate::models::{
     shot_display_position, ClosureStrategy, Coordinates, CreditEdit, CreditTargets, GpsCoordinates,
-    LineId, LineUpdates, ShotData, ShotId, ShotKind, ShotUpdates, StationRef, SurveyDirection,
+    LineId, LineUpdates, SectionId, ShotData, ShotId, ShotKind, ShotUpdates, StationRef,
+    SurveyDirection,
 };
 
 /// Identifies either a station or a shot as a comment holder
@@ -206,6 +207,47 @@ pub enum Command {
         file_hashes: Vec<String>,
         /// Line content hashes to forget (`Project::imported_line_hashes`).
         line_hashes: Vec<String>,
+    },
+
+    // Section commands (#327): a Section is a named grouping of lines. The
+    // tags are `*_cave_section` because `create_section` and friends are the
+    // disk tags of the LINE commands (see `disk_names`), and the section id
+    // travels as `cave_section_id` for the same reason. Metadata only: no
+    // geometry, no station reference. Undo restores the recorded Sections and
+    // memberships (`UndoData::CaveSections`).
+    /// Create a Section named `name` with colour `color`, and move `line_ids`
+    /// (possibly none) into it - "New Section" from a selection is one step.
+    CreateCaveSection {
+        name: String,
+        color: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        line_ids: Vec<LineId>,
+    },
+    /// Rename and/or recolour a Section; `None` keeps the field.
+    UpdateCaveSection {
+        #[serde(rename = "cave_section_id")]
+        section_id: SectionId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        color: Option<String>,
+    },
+    /// Delete a Section; its lines become ungrouped. Undo puts the Section
+    /// back at its place in the list with every membership.
+    DeleteCaveSection {
+        #[serde(rename = "cave_section_id")]
+        section_id: SectionId,
+    },
+    /// Move lines into a Section, or out of any (`None`).
+    MoveLinesToCaveSection {
+        line_ids: Vec<LineId>,
+        #[serde(rename = "cave_section_id")]
+        section_id: Option<SectionId>,
+    },
+    /// Give every line of a Section the Section's colour, as one step.
+    ApplyCaveSectionColor {
+        #[serde(rename = "cave_section_id")]
+        section_id: SectionId,
     },
 
     // Batch commands
@@ -510,6 +552,10 @@ pub struct CommandResult {
     /// optional fields above (`skip_serializing_if` + `default`).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub lock_release: Option<LockReleaseOutcome>,
+    /// The Section a `create_cave_section` created (#327), so the frontend
+    /// can select it. Same wire contract as the optional fields above.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub cave_section_id: Option<SectionId>,
 }
 
 /// What one holder-checked release of the open project's lock came to (see
@@ -589,6 +635,7 @@ impl CommandResult {
             reversed_lines: None,
             import_receipt: None,
             lock_release: None,
+            cave_section_id: None,
         }
     }
 
@@ -606,6 +653,7 @@ impl CommandResult {
             reversed_lines: None,
             import_receipt: None,
             lock_release: None,
+            cave_section_id: None,
         }
     }
 
@@ -624,6 +672,13 @@ impl CommandResult {
     /// Attach multiple line IDs to this result (for batch operations).
     pub fn with_line_ids(mut self, line_ids: Vec<u32>) -> Self {
         self.line_ids = line_ids;
+        self
+    }
+
+    /// Attach the id of the Section a command created.
+    #[must_use]
+    pub fn with_cave_section_id(mut self, section_id: SectionId) -> Self {
+        self.cave_section_id = Some(section_id);
         self
     }
 
@@ -717,6 +772,12 @@ impl Command {
             | Command::UpdateProjectSettings
             // Import-dedup bookkeeping is a set of hashes; it moves no station.
             | Command::UntrackImport { .. }
+            // Grouping lines into Sections, and their names and colours.
+            | Command::CreateCaveSection { .. }
+            | Command::UpdateCaveSection { .. }
+            | Command::DeleteCaveSection { .. }
+            | Command::MoveLinesToCaveSection { .. }
+            | Command::ApplyCaveSectionColor { .. }
             | Command::SetSurfaceElevation => false,
             Command::UpdateShot { updates, .. } => updates.touches_geometry(),
             Command::Batch { commands } => commands.iter().any(Command::affects_geometry),
@@ -949,10 +1010,44 @@ impl Command {
             Command::UntrackImport { line_hashes, .. } => {
                 format!("Forget {} imported lines", line_hashes.len())
             }
+            // The entry-level label (`history_cave_section`) names the Section
+            // from the undo record; these are what a bare command can say.
+            Command::CreateCaveSection { name, .. } => {
+                format!("Create section \"{}\"", name.trim())
+            }
+            Command::UpdateCaveSection { name, color, .. } => match (name, color) {
+                (Some(name), _) => format!("Rename section to \"{}\"", name.trim()),
+                (None, Some(_)) => "Change section colour".to_string(),
+                (None, None) => "Update section".to_string(),
+            },
+            Command::DeleteCaveSection { .. } => "Delete section".to_string(),
+            Command::MoveLinesToCaveSection {
+                line_ids,
+                section_id,
+            } => {
+                let lines = lines_label(line_ids.len());
+                if section_id.is_some() {
+                    format!("Move {lines} to a section")
+                } else {
+                    format!("Remove {lines} from their section")
+                }
+            }
+            Command::ApplyCaveSectionColor { .. } => {
+                "Apply section colour to its lines".to_string()
+            }
             Command::RepairIntegrity => "Repair integrity".to_string(),
             Command::UpdateProjectSettings => "Update project settings".to_string(),
             Command::SetSurfaceElevation => "Set entrance elevation".to_string(),
         }
+    }
+}
+
+/// `1 line`, `3 lines`: the count in a Section command's label.
+pub(crate) fn lines_label(count: usize) -> String {
+    if count == 1 {
+        "1 line".to_string()
+    } else {
+        format!("{count} lines")
     }
 }
 
@@ -1015,7 +1110,7 @@ mod tests {
 
         assert_eq!(
             variants.len(),
-            32,
+            37,
             "Command's variant set changed. A removal leaves persisted undo \
              history unloadable at that entry and holed either side of it - keep \
              the tag deserializable, or bump SCHEMA_VERSION and call \
@@ -1214,11 +1309,36 @@ mod tests {
                 },
                 false,
             ),
+            (
+                Command::CreateCaveSection {
+                    name: "S".to_string(),
+                    color: "#123456".to_string(),
+                    line_ids: vec![1],
+                },
+                false,
+            ),
+            (
+                Command::UpdateCaveSection {
+                    section_id: 0,
+                    name: None,
+                    color: None,
+                },
+                false,
+            ),
+            (Command::DeleteCaveSection { section_id: 0 }, false),
+            (
+                Command::MoveLinesToCaveSection {
+                    line_ids: vec![1],
+                    section_id: None,
+                },
+                false,
+            ),
+            (Command::ApplyCaveSectionColor { section_id: 0 }, false),
         ];
 
         assert_eq!(
             cases.len(),
-            30,
+            35,
             "add every new Command variant to this table"
         );
         for (command, expected) in cases {
@@ -1684,6 +1804,52 @@ mod tests {
                     archive_originals: false,
                 },
                 "Merge 2 projects into 'Merged'",
+            ),
+            (
+                Command::CreateCaveSection {
+                    name: " Upper level ".to_string(),
+                    color: "#123456".to_string(),
+                    line_ids: Vec::new(),
+                },
+                "Create section \"Upper level\"",
+            ),
+            (
+                Command::UpdateCaveSection {
+                    section_id: 3,
+                    name: Some("Lower".to_string()),
+                    color: None,
+                },
+                "Rename section to \"Lower\"",
+            ),
+            (
+                Command::UpdateCaveSection {
+                    section_id: 3,
+                    name: None,
+                    color: Some("#000000".to_string()),
+                },
+                "Change section colour",
+            ),
+            (
+                Command::DeleteCaveSection { section_id: 3 },
+                "Delete section",
+            ),
+            (
+                Command::MoveLinesToCaveSection {
+                    line_ids: vec![1, 2, 3],
+                    section_id: Some(3),
+                },
+                "Move 3 lines to a section",
+            ),
+            (
+                Command::MoveLinesToCaveSection {
+                    line_ids: vec![1],
+                    section_id: None,
+                },
+                "Remove 1 line from their section",
+            ),
+            (
+                Command::ApplyCaveSectionColor { section_id: 3 },
+                "Apply section colour to its lines",
             ),
         ];
 

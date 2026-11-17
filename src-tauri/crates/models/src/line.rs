@@ -6,8 +6,9 @@ use std::str::FromStr;
 use ts_rs::TS;
 
 use super::{
-    legacy_people, AzimuthReference, Coordinates, GpsCoordinates, LineCreditSummary, Person, Shot,
-    ShotData, ShotId, ShotKind, ShotUpdates, StationRef, SurveyCredit, FEATURE_ID_STRIDE,
+    legacy_people, AzimuthReference, Coordinates, GpsCoordinates, LineCreditSummary, Person,
+    SectionId, Shot, ShotData, ShotId, ShotKind, ShotUpdates, StationRef, SurveyCredit,
+    FEATURE_ID_STRIDE,
 };
 
 /// Unique identifier for a line
@@ -134,6 +135,17 @@ pub struct Line {
     #[serde(default)]
     #[ts(optional)]
     pub azimuth_reference: Option<AzimuthReference>,
+    /// The [`crate::Section`] (named grouping of lines) this line belongs
+    /// to; `None` is ungrouped. Serialized as `cave_section_id`, never as the
+    /// disk name `section_id` (a LINE id, see `disk_names`), and absent when
+    /// `None` so a project without Sections serializes as before.
+    #[serde(
+        default,
+        rename = "cave_section_id",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional)]
+    pub section_id: Option<SectionId>,
     /// The legacy `sections.surveyor` text this line was READ with, when it
     /// differs from what this build would write for the same people
     /// ([`Self::legacy_surveyor_text`]): a list longer than a role keeps, a
@@ -196,6 +208,15 @@ pub struct LineIdentity {
     /// have had anyway before the field existed.
     #[serde(default)]
     pub azimuth_reference: Option<AzimuthReference>,
+    /// The Section the line belonged to (#327). [`LineData`] cannot carry
+    /// it, so a redo that re-creates a line puts its membership back from
+    /// here. Absent (`None`, ungrouped) on a legacy entry.
+    #[serde(
+        default,
+        rename = "cave_section_id",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub section_id: Option<SectionId>,
 }
 
 impl LineIdentity {
@@ -207,6 +228,7 @@ impl LineIdentity {
             gauge_shot_uuid: line.gauge_shot_uuid.clone(),
             gauge_neighbour_uuid: line.gauge_neighbour_uuid.clone(),
             azimuth_reference: line.azimuth_reference,
+            section_id: line.section_id,
         }
     }
 }
@@ -520,6 +542,7 @@ impl Line {
             gauge_shot_uuid: None,
             gauge_neighbour_uuid: None,
             azimuth_reference: None,
+            section_id: None,
             loaded_legacy_surveyor: None,
         };
 
@@ -616,6 +639,7 @@ impl Line {
         line.gauge_neighbour_uuid
             .clone_from(&identity.gauge_neighbour_uuid);
         line.azimuth_reference = identity.azimuth_reference;
+        line.section_id = identity.section_id;
         line
     }
 
