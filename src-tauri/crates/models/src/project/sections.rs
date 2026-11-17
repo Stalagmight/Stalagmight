@@ -90,7 +90,7 @@ impl Project {
         if !taken.contains(base.as_str()) {
             return base;
         }
-        (2u32..)
+        (2..=u32::MAX)
             .map(|n| format!("{base} ({n})"))
             .find(|candidate| !taken.contains(candidate.as_str()))
             .unwrap_or(base)
@@ -191,7 +191,7 @@ impl Project {
                 current
             };
             let unique = if names.contains(&base) {
-                (2u32..)
+                (2..=u32::MAX)
                     .map(|n| format!("{base} ({n})"))
                     .find(|candidate| {
                         !names.contains(candidate)

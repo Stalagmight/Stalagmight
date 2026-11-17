@@ -621,7 +621,7 @@ fn sections_and_their_history_survive_a_save_and_a_reopen() {
             && r.contains("\"cave_section_id\"")));
 
     ok(state.execute(Command::CloseProject));
-    ok(state.open_project(path.clone()));
+    ok(state.open_project(path));
     assert_eq!(names(&state), ["Upper level"]);
     assert!([a, b, c]
         .iter()

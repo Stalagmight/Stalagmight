@@ -127,6 +127,12 @@ pub struct CountLimits {
     /// Zero datum GPS fixes and accuracies (`zero_datum_extras`, one row per
     /// datum). A row may name no station, so the table is capped on its own.
     pub zero_datum_extras: usize,
+    /// Sections, named groupings of lines (`cave_sections`). Nothing bounds
+    /// them by the lines, so the table is capped on its own.
+    pub cave_sections: usize,
+    /// Line memberships of Sections (`cave_section_lines`, at most one per
+    /// line - `sections` holds the lines).
+    pub cave_section_lines: usize,
 }
 
 impl Default for CountLimits {
@@ -142,6 +148,9 @@ impl Default for CountLimits {
             credit_people: 2_000_000,
             // At most one datum per station, like `station_names`.
             zero_datum_extras: 2_100_000,
+            // No more groups than lines, and one membership per line.
+            cave_sections: 100_000,
+            cave_section_lines: 100_000,
         }
     }
 }
@@ -194,6 +203,18 @@ impl CountLimits {
         self.zero_datum_extras = max;
         self
     }
+
+    #[must_use]
+    pub fn cave_sections(mut self, max: usize) -> Self {
+        self.cave_sections = max;
+        self
+    }
+
+    #[must_use]
+    pub fn cave_section_lines(mut self, max: usize) -> Self {
+        self.cave_section_lines = max;
+        self
+    }
 }
 
 /// Which [`CountLimits`] cap a file exceeded.
@@ -216,6 +237,10 @@ pub enum Limit {
     CreditPeople,
     /// [`CountLimits::zero_datum_extras`].
     ZeroDatumExtras,
+    /// [`CountLimits::cave_sections`].
+    CaveSections,
+    /// [`CountLimits::cave_section_lines`].
+    CaveSectionLines,
 }
 
 impl std::fmt::Display for Limit {
@@ -229,6 +254,8 @@ impl std::fmt::Display for Limit {
             Self::ShotCredits => "shot credits",
             Self::CreditPeople => "credited people",
             Self::ZeroDatumExtras => "zero datum fixes",
+            Self::CaveSections => "line groups (sections)",
+            Self::CaveSectionLines => "line group memberships",
         })
     }
 }
@@ -491,6 +518,12 @@ fn check_row_counts(conn: &rusqlite::Connection, limits: CountLimits) -> Result<
             "zero_datum_extras",
             Limit::ZeroDatumExtras,
             limits.zero_datum_extras,
+        ),
+        ("cave_sections", Limit::CaveSections, limits.cave_sections),
+        (
+            "cave_section_lines",
+            Limit::CaveSectionLines,
+            limits.cave_section_lines,
         ),
     ] {
         let exists: i64 = conn

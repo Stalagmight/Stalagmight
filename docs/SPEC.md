@@ -285,7 +285,8 @@ See [TESTING.md](TESTING.md) for the tiers and which one a test belongs in, and
 | **Shot** | A single survey measurement between two stations. Contains azimuth, length, depth, and optionally LRUD. |
 | **Station** | A point in the cave where a shot measurement is taken. Tied to cave line at physical markers. |
 | **Line** | A group of consecutive shots collected during a single survey session; a continuous run of stations joined by shots. Has metadata (name, colour, direction, quality, azimuth reference); who surveyed it and when is recorded per shot. Called a Section before the rename: the `.stalx` file still stores lines in its `sections` table (see [Persisted names](saving.md#persisted-names-lines-are-sections-on-disk)). |
-| **Sections panel** | The left-dock tab that lists the project's lines. It keeps its name. |
+| **Section** | A named, coloured grouping of lines - a region of the cave such as "Upper level" (#327). Each line belongs to at most one Section; a line in none is ungrouped. Section names are unique in a project. Not to be confused with the old name of a Line: in code a Section is `Section` / `SectionId` / `Project.sections`, serialized as `cave_sections` / `cave_section_id`, stored in the `cave_sections` / `cave_section_lines` tables. |
+| **Sections panel** | The left-dock tab that lists the project's lines, grouped under their Sections (ungrouped lines listed separately). It keeps its name. |
 | **Virtual Shot** | A shot that is not a permanent surveyed leg. Since #27 it is one of two kinds, and the distinction drives gas and penetration. |
 | **Jump** | A virtual shot a diver **swims**: a shortcut between two mainlines. Counts toward gas (at `jump_rmv_multiplier`) and penetration. Drawn faded. |
 | **Reference Shot** | A virtual shot that is **not swimmable**: a tape tie or backsight used to connect lines that aren't physically connected yet. Excluded from gas, penetration and route distance unless `gas.include_reference_legs` is on. Always excluded from survey length, since it repeats passage already surveyed (#689). Drawn fainter than a jump. |
@@ -320,6 +321,7 @@ Project (Cave System)
 │   ├── direction: SurveyDirection
 │   ├── quality: f64
 │   ├── azimuth_reference: Option<AzimuthReference>
+│   ├── section_id: Option<SectionId> (its Section; serde `cave_section_id`)
 │   └── Shots[]
 │       ├── id: u32 (internal, immutable)
 │       ├── uuid: Option<String> (persistent identity, schema v6+, unique across the project)
@@ -338,6 +340,10 @@ Project (Cave System)
 │       ├── kind: ShotKind (Normal | Jump | Reference)
 │       ├── marker_index: Option<u32>
 │       └── temperature: Option<f64> (celsius)
+├── Sections[]   (named groupings of lines, panel order; serde `cave_sections`)
+│   ├── id: SectionId (u32; `next_section_id` allocates, serde `next_cave_section_id`)
+│   ├── name: String (project-unique, never empty)
+│   └── color: String (#rgb / #rrggbb)
 ├── Stations[] (computed from shots)
 │   ├── station_ref: StationRef (line_id:station_index)
 │   ├── coordinates: Coordinates (computed or GPS)
@@ -357,8 +363,46 @@ Project (Cave System)
     ├── surface_elevation: Option<f64>
     ├── default_azimuth_reference: Option<AzimuthReference>
     ├── counter_parity_shots: {shot_uuid} (shots whose record orientation runs against their line's parity after a Combine; dive-plan pins only)
-    └── display toggles (show_stations, show_shots, grid_spacing, geometry_mode, ...)
+    └── display toggles (show_stations, show_shots, grid_spacing, geometry_mode,
+        hiddenSections - the Sections hidden on the map, a view setting, ...)
 ```
+
+#### Sections (groupings of lines, #327)
+
+A Section groups lines for the Sections panel and the map; it holds no survey
+data and changes no geometry or statistics. Rules:
+
+- **Membership**: at most one Section per line. A Split Line Here, and the
+  tail a delete-and-split creates, stay in the line's Section; Combine Lines
+  keeps the kept line's; a deleted line takes its membership with it (undo
+  puts it back). A line created through New Line can go straight into a Section
+  (`create_line`'s `caveSectionId`).
+- **Names**: unique in the project, compared exactly after trimming, never
+  empty, at most 200 characters. A name the user types that is taken is refused
+  ("There is already a section named ..."); automatic paths (imports, Add / Merge)
+  make it unique with ` (2)`, ` (3)`, ...
+- **Commands** (each one undo step, through the read-only gate):
+  `create_cave_section` (name, colour, optional lines - "New Section" from a
+  selection), `update_cave_section` (rename and/or recolour),
+  `delete_cave_section` (its lines become ungrouped; undo restores the Section at
+  its place in the list with every membership), `move_lines_to_cave_section`
+  (into a Section, or out of any), `apply_cave_section_color` (every line of the
+  Section takes its colour). History labels name the Section: `Create section
+  "Upper level"`, `Move 3 lines to section "Upper level"`, `Delete section
+  "Upper level"`.
+- **Show/hide** is a view setting, not an edit: the `hiddenSections` display
+  setting (a JSON array of Section ids), saved like the other display toggles,
+  never undone, and not pushed to SpeleoDB. Hidden lines still count in the
+  statistics.
+- **Auto-grouping on import**: Ariane - the lines one Ariane section name fanned
+  out into (`X`, `X (branch 2)`, `X (trip 2)`) join a Section `X` when there are
+  two or more of them; Compass - the lines of a survey that produced two or more
+  lines join a Section named after the survey; Walls - every line of a survey
+  with a non-empty segment path joins a Section named after the segment's last
+  level (the whole path when two segments of the import end in the same level).
+  An import into a project that already has a Section of that name joins it.
+- **Add .stalx / Merge projects** append the source's Sections with fresh ids and
+  deduped names; the copied lines keep their membership.
 
 The code names (`Line`, `LineId`, `Project.lines`, `line_id`,
 `Project.line_offsets`) stop at the file boundary: the `.stalx` keeps the
