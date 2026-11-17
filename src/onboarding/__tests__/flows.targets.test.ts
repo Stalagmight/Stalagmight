@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import en from '../../i18n/locales/en.json';
-import { ONBOARDING_FLOWS } from '../flows';
+import { TOOLBAR_ITEMS } from '../../components/SingleSystemView/Toolbar';
+import { ONBOARDING_FLOWS, type OnboardingIllustration } from '../flows';
 
 /**
  * Every tour step must point at strings and elements that exist. A missing
@@ -23,6 +24,28 @@ const ATTR = String.raw`(?<![\w\[-])(?:data-testid|testId)=`;
 const LITERAL_ATTR = new RegExp(`${ATTR}(?:"([^"]+)"|'([^']+)'|\\{\\s*(?:"([^"]+)"|'([^']+)')\\s*\\})`, 'g');
 const TEMPLATE_ATTR = new RegExp(`${ATTR}\\{\\s*\`([^\`]+)\`\\s*\\}`, 'g');
 
+/** Selectors allowed to be something other than one `[data-testid="X"]`. None today. */
+const SELECTOR_ALLOWLIST: ReadonlySet<string> = new Set();
+
+/**
+ * Anchors rendered only through a template. Each names the template it comes
+ * from and the finite domain its placeholder ranges over; an anchor must be
+ * `prefix` + a domain member. Anything else needs a literal match.
+ */
+const TEMPLATE_DOMAINS: ReadonlyArray<{ prefix: string; template: string; domain: ReadonlySet<string> }> = [
+  {
+    // Toolbar's ToolButton, rendered only for a standalone toolbar item.
+    prefix: 'tool-',
+    template: 'tool-${tool}',
+    domain: new Set(TOOLBAR_ITEMS.flatMap((item) => (item.kind === 'standalone' ? [item.id] : []))),
+  },
+];
+
+const PLACEMENT_ONLY_ILLUSTRATIONS: ReadonlySet<OnboardingIllustration> = new Set([
+  'map-with-pan-zoom',
+  'mouse-pan-zoom',
+]);
+
 function sourceFiles(dir: string): string[] {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const full = path.join(dir, entry.name);
@@ -31,9 +54,9 @@ function sourceFiles(dir: string): string[] {
   });
 }
 
-function collectTestIds(): { literals: Set<string>; templates: RegExp[] } {
+function collectTestIds(): { literals: Set<string>; templates: Set<string> } {
   const literals = new Set<string>();
-  const templates: RegExp[] = [];
+  const templates = new Set<string>();
   for (const file of sourceFiles(SRC_ROOT)) {
     const source = fs.readFileSync(file, 'utf8');
     for (const m of source.matchAll(LITERAL_ATTR)) {
@@ -41,15 +64,8 @@ function collectTestIds(): { literals: Set<string>; templates: RegExp[] } {
       if (id) literals.add(id);
     }
     for (const m of source.matchAll(TEMPLATE_ATTR)) {
-      const parts = (m[1] ?? '').split(/\$\{[^}]*\}/);
-      if (parts.length === 1) {
-        literals.add(parts[0] ?? '');
-        continue;
-      }
-      // A template with no literal word (`${a}-${b}`) would match almost any id; skip it.
-      if (!/[A-Za-z0-9]/.test(parts.join(''))) continue;
-      const escaped = parts.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-      templates.push(new RegExp(`^${escaped.join('[A-Za-z0-9_.:-]+')}$`));
+      const template = m[1] ?? '';
+      (template.includes('${') ? templates : literals).add(template);
     }
   }
   return { literals, templates };
@@ -82,20 +98,38 @@ describe('onboarding flow targets', () => {
     expect(missing).toEqual([]);
   });
 
-  it('every data-testid anchor is rendered somewhere under src/', () => {
+  it('every anchor is a [data-testid] that is rendered somewhere under src/', () => {
     const { literals, templates } = collectTestIds();
-    const exists = (id: string) => literals.has(id) || templates.some((re) => re.test(id));
-    const selectors = steps.flatMap(({ flow, step }) =>
+    const exists = (id: string) =>
+      literals.has(id) ||
+      TEMPLATE_DOMAINS.some(
+        ({ prefix, template, domain }) =>
+          templates.has(template) && id.startsWith(prefix) && domain.has(id.slice(prefix.length))
+      );
+
+    const failures = steps.flatMap(({ flow, step }) =>
       [step.targetSelector, ...(step.targetSelectors ?? []), step.tooltipTargetSelector]
         .filter((s): s is string => s !== undefined)
-        .map((selector) => ({ where: `${flow.id}/${step.id}`, selector }))
+        .flatMap((selector) => {
+          const where = `${flow.id}/${step.id}`;
+          if (SELECTOR_ALLOWLIST.has(selector)) return [];
+          const id = TESTID_SELECTOR.exec(selector)?.[1];
+          if (id === undefined) return [`${where}: unsupported selector ${selector}`];
+          return exists(id) ? [] : [`${where}: ${id}`];
+        })
     );
-    const checked = selectors.flatMap(({ where, selector }) => {
-      const id = TESTID_SELECTOR.exec(selector)?.[1];
-      return id === undefined ? [] : [{ where, id }];
-    });
 
-    expect(checked.length).toBeGreaterThan(0);
-    expect(checked.filter(({ id }) => !exists(id)).map(({ where, id }) => `${where}: ${id}`)).toEqual([]);
+    expect(failures).toEqual([]);
+  });
+
+  it('shows the placement-only pan illustrations only in the placement flow', () => {
+    // They teach Ctrl+drag / middle-drag because a plain drag places there;
+    // anywhere else a plain drag pans, so the card would be wrong.
+    const misplaced = steps
+      .filter(({ step }) => step.illustration !== undefined && PLACEMENT_ONLY_ILLUSTRATIONS.has(step.illustration))
+      .filter(({ flow }) => flow.id !== 'placement-mode-map')
+      .map(({ flow, step }) => `${flow.id}/${step.id}`);
+
+    expect(misplaced).toEqual([]);
   });
 });
