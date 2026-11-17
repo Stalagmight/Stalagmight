@@ -6,11 +6,12 @@
 
 use std::collections::{HashMap, HashSet};
 
+use super::closure_hand_move_tests::{assert_view_is_the_solve, plant as plant_hand};
 use super::combine_closure_tests::{add, dist, shot, xy};
 use crate::config::ClosureAdjustmentConfig;
 use crate::{
-    local_to_gps, ClosureStrategy, GpsCoordinates, LoopClosure, Project, SectionId, ShotData,
-    Station, StationRef, ZeroDatum,
+    local_to_gps, ClosureStrategy, DatumRole, GpsCoordinates, LoopClosure, Project, SectionId,
+    ShotData, Station, StationRef, ZeroDatum,
 };
 
 /// The parts of `project` the Closures Computed View solves without failing:
@@ -132,6 +133,440 @@ fn adjusted_view_keeps_a_snapped_pair_together() {
         adjusted < 0.01,
         "the closure-adjusted view pulled the snapped pair {adjusted:.3} m apart"
     );
+}
+
+fn st(section: SectionId, index: u32) -> StationRef {
+    StationRef::new(section, index)
+}
+
+/// Every station's closure-adjusted position (the Plan and Export geometry),
+/// and the sections of the parts whose solve failed.
+fn view_of(project: &Project) -> (HashMap<StationRef, (f64, f64)>, HashSet<SectionId>) {
+    let adjusted = project.compute_adjusted_stations(&ClosureAdjustmentConfig::default());
+    let view = adjusted
+        .stations
+        .iter()
+        .map(|s| (s.station_ref, (s.coordinates.x, s.coordinates.y)))
+        .collect();
+    let failed = adjusted
+        .failures
+        .iter()
+        .flat_map(|f| f.section_ids.iter().copied())
+        .collect();
+    (view, failed)
+}
+
+/// `project` as the solve saw it before #736: every snap still in the file,
+/// but tying nothing. Clearing the claim on a copy is exactly that, for the
+/// horizontal solve and its failures: `is_aligned` reaches the solve only
+/// through [`Project::closure_is_snap`] (the raw view's depth co-location
+/// reads it too, and the solve is horizontal).
+pub(super) fn without_snaps(project: &Project) -> Project {
+    let mut copy = project.clone();
+    for closure in &mut copy.loop_closures {
+        if Project::closure_is_snap(closure.strategy, closure.is_aligned) {
+            closure.is_aligned = false;
+        }
+    }
+    copy
+}
+
+/// The issue's square with D's end `short` metres short of A's start, snapped
+/// there by a `Move` closure (aligned while `short` is under 1 cm), and the
+/// diagonal E closed 0.5 m off C's end by a `Batch` closure. Returns the
+/// sections A, B, C, D, E.
+fn square(short: f64) -> (Project, [SectionId; 5]) {
+    let mut p = Project::new("Square".to_string(), None);
+    let a = add(&mut p, "A", vec![shot(90.0, 10.0)]);
+    let b = add(&mut p, "B", vec![shot(0.0, 10.0)]);
+    let c = add(&mut p, "C", vec![shot(270.0, 10.0)]);
+    let d = add(&mut p, "D", vec![shot(180.0, 10.0 - short)]);
+    let e = add(&mut p, "E", vec![shot(315.0, 200f64.sqrt() + 0.5)]);
+    for (x, y) in [
+        ((a, 1), (b, 0)),
+        ((b, 1), (c, 0)),
+        ((c, 1), (d, 0)),
+        ((a, 1), (e, 0)),
+    ] {
+        p.merge_stations(st(x.0, x.1), st(y.0, y.1)).unwrap();
+    }
+    p.create_loop_closure(st(d, 1), st(a, 0), ClosureStrategy::Move)
+        .unwrap();
+    p.create_loop_closure(st(e, 1), st(c, 1), ClosureStrategy::Batch)
+        .unwrap();
+    (p, [a, b, c, d, e])
+}
+
+/// A snap holds its two stations on one point whatever sub-centimetre gap it
+/// carries (#736, decision a): the solve unknown is the GROUP as shown, as
+/// for a merge, so the gap is closed by the shots around the loop like any
+/// misclosure. The stamp's 1 cm bound is what makes a group's members close
+/// enough to be one point; past it the closure is not aligned and the solve
+/// ignores it as before.
+#[test]
+fn a_snap_with_a_sub_centimetre_gap_is_shown_on_one_point() {
+    for short in [0.0, 1e-4, 0.006, 0.0099] {
+        let (p, [a, _, _, d, _]) = square(short);
+        let snap = &p.loop_closures[0];
+        assert!(snap.is_aligned, "{short}: setup");
+        let measured = dist(xy(&p, st(d, 1)), xy(&p, st(a, 0)));
+        assert!((measured - short).abs() < 1e-9, "{short}: setup {measured}");
+        let (view, failed) = view_of(&p);
+        assert!(failed.is_empty(), "{short}: {failed:?}");
+        let apart = dist(view[&st(d, 1)], view[&st(a, 0)]);
+        assert!(apart < 1e-6, "{short}: the snapped pair is {apart} m apart");
+        assert_eq!(assert_snaps_held(&p, &format!("{short}")), 1);
+        assert_view_is_the_solve(&p, &format!("{short}"));
+        // Before #736 the solve pulled the pair apart.
+        let (was, _) = view_of(&without_snaps(&p));
+        assert!(dist(was[&st(d, 1)], was[&st(a, 0)]) > 0.2, "{short}");
+    }
+    // 1 cm out is not a snap: the stamp leaves it a soft record the solve
+    // ignores, and the view is exactly what it was.
+    let (p, _) = square(0.0101);
+    assert!(!p.loop_closures[0].is_aligned);
+    let (now, _) = view_of(&p);
+    let (was, _) = view_of(&without_snaps(&p));
+    assert_eq!(now, was);
+}
+
+/// A snap is nothing to solve on its own: a part whose only closures are
+/// snaps is shown as measured, as before #736.
+#[test]
+fn a_part_with_only_snaps_is_shown_as_measured() {
+    let (mut p, [_, _, _, _, e]) = square(0.004);
+    let batch = p.loop_closures[1].id;
+    p.loop_closures.retain(|c| c.id != batch);
+    assert!(p.adjustment_anchors_for_tests().is_empty());
+    let (view, _) = view_of(&p);
+    for (at, shown) in &view {
+        assert!(dist(*shown, xy(&p, *at)) < 1e-12, "{at:?} moved");
+    }
+    assert!(view.contains_key(&st(e, 1)));
+}
+
+/// A section with a near-vertical shot (4 mm across, 4 m down) on a loop
+/// closed by a `Batch` closure, its two ends snapped (#736, decision c): a
+/// snap across one shot. Creation refuses it; one a file carries is skipped
+/// and reported like any closure across one shot (#737), instead of being
+/// tied and failing the whole part with "inconsistent section translation"
+/// (the solve would keep that shot at its measured 4 mm and put both its
+/// ends on one point).
+#[test]
+fn a_snap_across_a_near_vertical_shot_is_skipped_and_reported() {
+    let mut p = Project::new("Shaft".to_string(), None);
+    let v = add(
+        &mut p,
+        "V",
+        vec![
+            shot(90.0, 10.0),
+            ShotData {
+                depth_in: 0.0,
+                depth_out: 4.0,
+                ..shot(0.0, (16.0f64 + 0.004 * 0.004).sqrt())
+            },
+            ShotData {
+                depth_in: 4.0,
+                depth_out: 4.0,
+                ..shot(0.0, 10.0)
+            },
+        ],
+    );
+    let w = add(
+        &mut p,
+        "W",
+        vec![
+            ShotData {
+                depth_in: 4.0,
+                depth_out: 4.0,
+                ..shot(270.0, 10.0)
+            },
+            ShotData {
+                depth_in: 4.0,
+                depth_out: 0.0,
+                ..shot(180.0, 9.7)
+            },
+        ],
+    );
+    let at = xy(&p, st(v, 3));
+    p.set_section_offset(w, at);
+    p.merge_stations(st(v, 3), st(w, 0)).unwrap();
+    p.create_loop_closure(st(w, 2), st(v, 0), ClosureStrategy::Batch)
+        .unwrap();
+    let refused = p.create_loop_closure(st(v, 1), st(v, 2), ClosureStrategy::Move);
+    assert!(refused.is_err(), "{refused:?}");
+    let snap = plant(&mut p, st(v, 1), st(v, 2), ClosureStrategy::Move, false);
+    assert_eq!(p.remeasure_closure_alignment(), 1);
+    assert!(p.loop_closures.iter().any(|c| c.id == snap && c.is_aligned));
+    let skipped = p.closures_across_one_shot();
+    assert_eq!(skipped.len(), 1, "{skipped:?}");
+    assert_eq!(
+        (skipped[0].closure_id, skipped[0].collapsed_shot),
+        (snap, (v, 1))
+    );
+    let (view, failed) = view_of(&p);
+    assert!(failed.is_empty(), "{failed:?}");
+    assert!(dist(view[&st(w, 2)], view[&st(v, 0)]) < 1e-6);
+    assert_view_is_the_solve(&p, "shaft");
+}
+
+/// A `Batch` closure that, with a snap, would squeeze a shot (#736, decision
+/// c): D's end is snapped onto A's start, so a closure from D's end to A's
+/// end ties the two ends of A's one shot. Creation now refuses it; one a file
+/// carries (created before #736, when snaps tied nothing) is skipped and
+/// reported, and the snap holds. Before #736 the solve took it and pulled
+/// D's end 10 m off A's start in the view.
+#[test]
+fn a_closure_squeezing_a_shot_through_a_snap_is_refused_and_skipped() {
+    let (mut p, [a, _, _, d, _]) = square(0.0);
+    let refused = p.create_loop_closure(st(d, 1), st(a, 1), ClosureStrategy::Batch);
+    assert_eq!(
+        refused.unwrap_err(),
+        super::closure_shots::closure_across_one_shot_refusal((a, 0))
+    );
+    let squeeze = plant(&mut p, st(d, 1), st(a, 1), ClosureStrategy::Batch, false);
+    let skipped = p.closures_across_one_shot();
+    assert_eq!(skipped.len(), 1, "{skipped:?}");
+    assert_eq!(
+        (skipped[0].closure_id, skipped[0].collapsed_shot),
+        (squeeze, (a, 0))
+    );
+    let (view, failed) = view_of(&p);
+    assert!(failed.is_empty(), "{failed:?}");
+    assert!(dist(view[&st(d, 1)], view[&st(a, 0)]) < 1e-6);
+    assert_view_is_the_solve(&p, "squeeze");
+    let (was, _) = view_of(&without_snaps(&p));
+    assert!(dist(was[&st(d, 1)], was[&st(a, 0)]) > 9.0);
+}
+
+/// A section whose end is snapped onto its own start (#736, decision c): the
+/// two ends of one section, on a loop of their own. The snap closes the
+/// loop, so every shot of it is adjusted and the two ends stay on one point;
+/// before #736 the loop was a spur and its shots kept their vectors while
+/// the shot it shares with a solved loop changed, tearing the pair.
+#[test]
+fn a_section_snapped_onto_its_own_start_stays_closed() {
+    let mut p = Project::new("Ring".to_string(), None);
+    let s = add(
+        &mut p,
+        "S",
+        vec![
+            shot(90.0, 10.0),
+            shot(0.0, 10.0),
+            shot(270.0, 10.0),
+            shot(180.0, 9.996),
+        ],
+    );
+    let snap = p
+        .create_loop_closure(st(s, 4), st(s, 0), ClosureStrategy::Move)
+        .unwrap();
+    assert!(snap.is_aligned);
+    let t = add(
+        &mut p,
+        "T",
+        vec![shot(90.0, 10.0), shot(180.0, 10.0), shot(270.0, 9.5)],
+    );
+    let at = xy(&p, st(s, 2));
+    p.set_section_offset(t, at);
+    p.merge_stations(st(s, 2), st(t, 0)).unwrap();
+    p.create_loop_closure(st(t, 3), st(s, 1), ClosureStrategy::Batch)
+        .unwrap();
+    let (view, failed) = view_of(&p);
+    assert!(failed.is_empty(), "{failed:?}");
+    assert!(dist(view[&st(s, 4)], view[&st(s, 0)]) < 1e-6);
+    assert_view_is_the_solve(&p, "ring");
+    let (was, _) = view_of(&without_snaps(&p));
+    assert!(dist(was[&st(s, 4)], was[&st(s, 0)]) > 0.01);
+}
+
+/// The issue's variant (#736, decision d): a `Batch` loop whose only cycle
+/// runs through a snap. P and Q are tied only by the two closures (a state
+/// built directly; the next orphan sweep would make one a merge). Before
+/// #736 the snap was no edge of the spur graph, so the loop was a spur and
+/// kept its 0.3 m; now it is adjusted and the snap holds.
+#[test]
+fn a_batch_loop_closed_only_through_a_snap_is_adjusted() {
+    let mut p = Project::new("Through".to_string(), None);
+    let pp = add(&mut p, "P", vec![shot(90.0, 10.0)]);
+    let q = add(
+        &mut p,
+        "Q",
+        vec![shot(0.0, 10.0), shot(270.0, 10.0), shot(180.0, 9.7)],
+    );
+    let at = xy(&p, st(pp, 1));
+    p.set_section_offset(q, at);
+    plant(&mut p, st(pp, 1), st(q, 0), ClosureStrategy::Move, true);
+    plant(&mut p, st(q, 3), st(pp, 0), ClosureStrategy::Batch, false);
+    let (view, failed) = view_of(&p);
+    assert!(failed.is_empty(), "{failed:?}");
+    assert!(dist(view[&st(q, 3)], view[&st(pp, 0)]) < 1e-6);
+    assert!(dist(view[&st(pp, 1)], view[&st(q, 0)]) < 1e-6);
+    assert_view_is_the_solve(&p, "through");
+    let (was, _) = view_of(&without_snaps(&p));
+    assert!((dist(was[&st(q, 3)], was[&st(pp, 0)]) - 0.3).abs() < 1e-6);
+}
+
+/// A section that hangs off the survey by a snap alone (a state built
+/// directly, like the variant above): all of it is spur, so the solve moves
+/// it as a block through its attachment point, and a snap is one as a merge
+/// is (#736). Before, nothing attached it, it stayed where it was measured,
+/// and the point it is snapped to moved away with its loop's correction.
+#[test]
+fn a_section_hanging_off_a_snap_alone_follows_it() {
+    let (mut p, [_, b, _, _, _]) = square(0.0);
+    let x = add(&mut p, "X", vec![shot(30.0, 6.0), shot(60.0, 4.0)]);
+    let at = xy(&p, st(b, 1));
+    p.set_section_offset(x, at);
+    plant(&mut p, st(x, 0), st(b, 1), ClosureStrategy::Move, true);
+    let (view, failed) = view_of(&p);
+    assert!(failed.is_empty(), "{failed:?}");
+    assert!(dist(view[&st(x, 0)], view[&st(b, 1)]) < 1e-6);
+    // As a block: X's own shots are untouched.
+    let moved = |i: u32| {
+        let (v, m) = (view[&st(x, i)], xy(&p, st(x, i)));
+        (v.0 - m.0, v.1 - m.1)
+    };
+    assert!(dist(moved(0), moved(2)) < 1e-9);
+    assert_view_is_the_solve(&p, "hanging");
+    let (was, _) = view_of(&without_snaps(&p));
+    assert!(dist(was[&st(x, 0)], was[&st(b, 1)]) > 0.05);
+}
+
+/// A legacy aligned closure of a strategy the solve does not take (#736,
+/// decision b). No version wrote one (`create_loop_closure` stamps only
+/// `Move` closures, and the destructive adjust before 0.5.0 marked only the
+/// `Batch` / `LeastSquaresWeighted` closures it solved, which are tied
+/// already), but the Raw Data View holds any aligned closure rigid, so the
+/// solve ties it as a snap too: one definition of a rigid closure.
+#[test]
+fn a_legacy_aligned_closure_of_another_strategy_is_tied_as_a_snap() {
+    let (mut p, [a, _, _, d, _]) = square(0.0);
+    p.loop_closures[0].strategy = ClosureStrategy::ProportionalByLength;
+    assert!(p.loop_closures[0].is_aligned);
+    let (view, failed) = view_of(&p);
+    assert!(failed.is_empty(), "{failed:?}");
+    assert!(dist(view[&st(d, 1)], view[&st(a, 0)]) < 1e-6);
+    // The same pair under `Move` solves to the same view.
+    let (snap, _) = square(0.0);
+    assert_eq!(view, view_of(&snap).0);
+}
+
+/// A placement zero datum on a snapped station, either end (#736, decision
+/// e): the group is held at the datum's raw position, so its partner sits
+/// there too.
+#[test]
+fn a_placement_datum_on_a_snapped_station_holds_its_partner_there() {
+    for on_the_snapped_end in [false, true] {
+        let (mut p, [a, _, _, d, _]) = square(0.003);
+        let held = if on_the_snapped_end {
+            st(d, 1)
+        } else {
+            st(a, 0)
+        };
+        let other = if on_the_snapped_end {
+            st(a, 0)
+        } else {
+            st(d, 1)
+        };
+        p.set_zero_datum(held, origin()).unwrap();
+        assert!(p.loop_closures[0].is_aligned, "setup");
+        let (view, failed) = view_of(&p);
+        assert!(failed.is_empty(), "{failed:?}");
+        assert!(dist(view[&held], xy(&p, held)) < 1e-9, "{held:?} moved");
+        assert!(dist(view[&other], view[&held]) < 1e-6);
+        assert_view_is_the_solve(&p, &format!("datum on {held:?}"));
+    }
+}
+
+/// A GPS fix (#741) on a snapped station (#736, decision e): placed at B's
+/// end, the fix on D's end, 1.5 m off. A hard fix holds the pair on its GPS;
+/// a soft one pulls the pair, as one point, toward it.
+#[test]
+fn a_gps_fix_on_a_snapped_station_moves_the_pair_as_one() {
+    for accuracy_m in [None, Some(2.0)] {
+        let (mut p, [a, b, _, d, _]) = square(0.0);
+        p.set_zero_datum(st(b, 1), origin()).unwrap();
+        let shown = xy(&p, st(d, 1));
+        let gps = (shown.0 + 1.2, shown.1 - 0.9);
+        let (lat, lon) = local_to_gps(gps.0, gps.1, &origin()).unwrap();
+        p.set_zero_datum_with_accuracy(
+            st(d, 1),
+            GpsCoordinates::new(lat, lon, 0.0).unwrap(),
+            accuracy_m,
+        )
+        .unwrap();
+        assert_eq!(
+            p.datum_roles(),
+            vec![Some(DatumRole::Placement), Some(DatumRole::GpsFix)]
+        );
+        let (view, failed) = view_of(&p);
+        assert!(failed.is_empty(), "{failed:?}");
+        assert!(dist(view[&st(d, 1)], view[&st(a, 0)]) < 1e-6);
+        if accuracy_m.is_none() {
+            assert!(dist(view[&st(d, 1)], gps) < 1e-6);
+        } else {
+            assert!(dist(view[&st(d, 1)], gps) < dist(shown, gps));
+        }
+        assert_view_is_the_solve(&p, &format!("fix {accuracy_m:?}"));
+    }
+}
+
+/// A hand move (#759) on a snapped station, settled as a file opens (#736,
+/// decision e): a few millimetres keeps the snap aligned, and the view keeps
+/// the pair on one point AS SHOWN, the hand move kept on its station, as it
+/// keeps a merge.
+#[test]
+fn a_hand_move_on_a_snapped_station_keeps_the_pair_on_one_point_as_shown() {
+    for at_snapped_end in [false, true] {
+        let (mut p, [a, _, _, d, _]) = square(0.0);
+        let at = if at_snapped_end { st(d, 1) } else { st(a, 0) };
+        plant_hand(&mut p, at, (0.003, -0.002, 0.0));
+        assert!(p.loop_closures[0].is_aligned, "setup: 3.6 mm is a snap");
+        let (view, failed) = view_of(&p);
+        assert!(failed.is_empty(), "{failed:?}");
+        assert!(dist(view[&st(d, 1)], view[&st(a, 0)]) < 1e-6);
+        assert_view_is_the_solve(&p, &format!("hand move on {at:?}"));
+    }
+}
+
+/// Two placement zero datums tied into one group through a snap (#736): D's
+/// end snapped onto A's start, a datum at A's start, and a second survey
+/// placed on its own whose datum station a `Batch` closure ties to D's end.
+/// That closure ties the two datums together exactly as a closure between
+/// them directly would, which the solve has always refused ("Multiple
+/// placement zero datums in a single constraint group"): the part is shown
+/// as measured and the failure is reported with its plain reason. Before
+/// #736 the solve put D's end on the second datum and tore the snap by the
+/// distance between the two datums.
+#[test]
+fn two_datums_tied_through_a_snap_are_a_reported_failure() {
+    let (mut p, [a, _, _, d, _]) = square(0.0);
+    p.set_zero_datum(st(a, 0), origin()).unwrap();
+    let y = add(&mut p, "Y", vec![shot(45.0, 8.0)]);
+    let (lat, lon) = local_to_gps(-30.0, 25.0, &origin()).unwrap();
+    p.set_zero_datum(st(y, 0), GpsCoordinates::new(lat, lon, 0.0).unwrap())
+        .unwrap();
+    assert_eq!(p.placement_datum_refs().len(), 2, "setup");
+    p.create_loop_closure(st(d, 1), st(y, 0), ClosureStrategy::Batch)
+        .unwrap();
+    assert!(p.loop_closures[0].is_aligned, "setup");
+    let adjusted = p.compute_adjusted_stations(&ClosureAdjustmentConfig::default());
+    assert_eq!(adjusted.failures.len(), 1, "{:?}", adjusted.failures);
+    assert_eq!(
+        adjusted.failures[0].error,
+        "Multiple placement zero datums in a single constraint group"
+    );
+    assert!(adjusted.failures[0]
+        .user_reason()
+        .contains("tie two zero datums"));
+    // Shown as measured.
+    for s in &adjusted.stations {
+        let shown = (s.coordinates.x, s.coordinates.y);
+        assert!(dist(shown, xy(&p, s.station_ref)) < 1e-9);
+    }
+    let old = without_snaps(&p).compute_adjusted_stations(&ClosureAdjustmentConfig::default());
+    assert!(old.failures.is_empty());
+    assert!(gap_in(&old.stations, st(d, 1), st(a, 0)) > 30.0);
 }
 
 fn deep(azimuth: f64, length: f64, depth_in: f64, depth_out: f64) -> ShotData {
