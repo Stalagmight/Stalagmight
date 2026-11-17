@@ -3273,13 +3273,13 @@
             "description": "An open project is always in one of three modes. Only Survey can edit; Plan and Export are read-only, and mutating tools are hidden there rather than greyed out.",
             "descriptionItems": [
               "Survey: edit geometry, sections, and shots.",
-              "Plan: gas planning over the Closures Computed View.",
-              "Export: frame and export an image of the survey."
+              "Plan: dive and gas planning on the survey.",
+              "Export: a map image (PNG, SVG, PDF) or the survey data (Ariane .tml/.tmlu, CSV, JSON)."
             ]
           },
           "geometry": {
             "title": "Raw Data vs Closures Computed",
-            "description": "Raw Data View shows the raw survey and stays editable. Closures Computed View shows the least-squares solve across loop closures and is read-only. Plan and Export force it. Available only when the project has eligible closures."
+            "description": "Raw Data View shows the raw survey and stays editable. Closures Computed View solves the loop closures and bends the survey through any GPS fixes; it is read-only. It is available once the project has an eligible loop closure or a GPS fix. Plan and Export use it, and show the Raw Data View when there is nothing to adjust."
           },
           "tools": {
             "title": "Tool Palette",
@@ -3291,11 +3291,11 @@
           },
           "docks": {
             "title": "The Three Docks",
-            "description": "The map is the same map in every mode. What surrounds it changes with the mode.",
+            "description": "This is the Survey layout. The map is the same in every mode; Plan and Export change the panels around it.",
             "descriptionItems": [
-              "Left: sections. Double-click one to frame it.",
-              "Right: detail for the selection, or the gas plan in Plan mode.",
-              "Bottom: the shot table. Double-click a row to frame it."
+              "Left: sections (Survey only). Double-click one to frame it.",
+              "Right: detail for the selection. Plan shows the gas plan here, Export the export options.",
+              "Bottom: the shot table. Double-click a row to frame it. Plan shows its gear tables here; Export hides it."
             ]
           },
           "done": {
