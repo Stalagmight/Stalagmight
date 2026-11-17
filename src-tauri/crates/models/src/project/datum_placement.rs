@@ -76,13 +76,19 @@ impl DatumLayout {
     ///    moved (a combine);
     /// 5. the same station key: its GPS was edited in place.
     ///
-    /// Tiers 1 to 4 also ask for the same stored accuracy and Entrance answer.
-    /// A command that moves or re-keys a datum never edits it, and one that
-    /// edits it never moves it, so an earlier datum with another stored value
-    /// is a different datum, and only tier 5 (an edit) may match across it.
-    /// That is what tells twins apart: two datums with one GPS (copied
-    /// coordinates) and different accuracies, one re-keyed by a combine onto
-    /// the key the other had.
+    /// Tiers 1 to 4 are tried twice: first asking also for the same stored
+    /// accuracy and Entrance answer, then without. A command that moves or
+    /// re-keys a datum never edits it, and an edit never re-keys one, so in
+    /// one command the first pass finds a moved or re-keyed datum, and an
+    /// earlier datum with another stored value is a different one. That tells
+    /// twins apart: two datums with one GPS (copied coordinates) and
+    /// different accuracies, one re-keyed by a combine onto the key the other
+    /// had. The second pass is for a Batch, which settles once for several
+    /// commands and so can edit a datum and re-key it in one window.
+    ///
+    /// Twins with the same stored value stay indistinguishable when one is
+    /// re-keyed onto the other's key: key, GPS and value all match the twin,
+    /// and only the positions of the whole set could tell them apart.
     ///
     /// Key and GPS alone are not enough. Deleting a section's first shot drops
     /// the datum on its first station and re-anchors the next station's datum
@@ -109,32 +115,34 @@ impl DatumLayout {
             })
         };
         let same_key = |was: &DatumWas| was.key == zd.station_ref;
-        let same_fix = |was: &DatumWas| {
-            same_gps(&was.gps, &zd.gps)
-                && was.accuracy == zd.accuracy_m.map(f64::to_bits)
-                && was.entrance == zd.entrance
+        let same_fix = |was: &DatumWas| same_gps(&was.gps, &zd.gps);
+        let same_value = |was: &DatumWas| {
+            was.accuracy == zd.accuracy_m.map(f64::to_bits) && was.entrance == zd.entrance
         };
         let same_at = |was: &DatumWas| same_place(was.at, at);
-        let tiers: [&dyn Fn(&DatumWas) -> bool; 5] = [
+        let tiers: [&dyn Fn(&DatumWas) -> bool; 4] = [
             &|was| same_key(was) && same_fix(was) && same_at(was),
             &|was| same_fix(was) && same_at(was) && gone(was),
             &|was| same_key(was) && same_fix(was),
             &|was| same_fix(was) && gone(was),
-            &|was| same_key(was),
         ];
-        tiers
-            .iter()
-            .find_map(|tier| {
-                let found: Vec<&DatumWas> = self.datums.iter().filter(|was| tier(was)).collect();
-                if found.is_empty() {
-                    return None;
-                }
-                Some(
-                    !found
-                        .iter()
-                        .all(|was| was.role == Some(DatumRole::Placement)),
-                )
+        // Whether the earlier datums `matches` finds were not all placement
+        // datums; `None` when it finds none.
+        let unplaced = |matches: &dyn Fn(&DatumWas) -> bool| {
+            let found: Vec<&DatumWas> = self.datums.iter().filter(|was| matches(was)).collect();
+            (!found.is_empty()).then(|| {
+                !found
+                    .iter()
+                    .all(|was| was.role == Some(DatumRole::Placement))
             })
+        };
+        [true, false]
+            .into_iter()
+            .flat_map(|by_value| tiers.iter().map(move |tier| (by_value, tier)))
+            .find_map(|(by_value, tier)| {
+                unplaced(&|was: &DatumWas| tier(was) && (!by_value || same_value(was)))
+            })
+            .or_else(|| unplaced(&same_key))
             .unwrap_or(false)
     }
 

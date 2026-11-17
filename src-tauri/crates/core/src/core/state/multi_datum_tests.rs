@@ -1116,3 +1116,69 @@ fn a_combine_that_re_keys_the_fix_onto_its_twins_key_still_promotes_the_fix() {
 
     assert_undo_redo_round_trip(&state, &before);
 }
+
+#[test]
+fn a_batch_that_edits_a_fix_re_keys_it_and_promotes_it_still_places_it() {
+    // A Batch settles once for all its commands, so one window can both edit
+    // a fix's stored accuracy and re-key it: E is the frame piece, A+B a
+    // second piece placed at A:0 with a fix at B's end 40 m east of where B:2
+    // is. Re-setting the fix's accuracy, reversing B (B:2 becomes B:0) and
+    // deleting A leaves the fix as B's placement datum, on its GPS.
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "BatchFix".to_string(),
+        location: None,
+    });
+    let e = create_section(&state, "E", north_shots(1, 20.0));
+    set_datum(&state, StationRef::new(e, 0), origin(), None);
+    let a = create_section(&state, "A", north_shots(2, 50.0));
+    let b = create_section(&state, "B", north_shots(2, 50.0));
+    let r = state.execute(Command::MergeStations {
+        station_a: StationRef::new(a, 2),
+        station_b: StationRef::new(b, 0),
+    });
+    assert!(r.success, "{:?}", r.error);
+    set_datum(&state, StationRef::new(a, 0), gps_at(300.0, 0.0), None);
+    let fix_gps = gps_at(340.0, 200.0);
+    set_datum(&state, StationRef::new(b, 2), fix_gps, Some(3.0));
+    let before = project(&state);
+    assert_eq!(
+        before.datum_roles(),
+        vec![
+            Some(DatumRole::Placement),
+            Some(DatumRole::Placement),
+            Some(DatumRole::GpsFix)
+        ]
+    );
+
+    let r = state.execute(Command::Batch {
+        commands: vec![
+            Command::SetZeroDatum {
+                station_ref: StationRef::new(b, 2),
+                coordinates: fix_gps,
+                accuracy_m: Some(1.0),
+                entrance: None,
+            },
+            Command::ReverseSection {
+                section_id: b,
+                swap_left_right: false,
+            },
+            Command::DeleteSection { section_id: a },
+        ],
+    });
+    assert!(r.success, "{:?}", r.error);
+
+    let p = project(&state);
+    assert_eq!(
+        p.datum_roles(),
+        vec![Some(DatumRole::Placement), Some(DatumRole::Placement)]
+    );
+    assert_eq!(p.zero_datums[1].accuracy_m, Some(1.0));
+    assert_eq!(
+        p.resolve_key(&p.zero_datums[1].station_ref),
+        Some(StationRef::new(b, 0))
+    );
+    assert_placements_on_their_gps(&state, "after the batch");
+
+    assert_undo_redo_round_trip(&state, &before);
+}
