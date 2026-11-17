@@ -24,8 +24,8 @@ export function useSpeleoTabState(): SpeleoTabState {
 
 const ICON_SIZE = 16;
 
-export function LinesTabIcon() {
-  return <LinesIcon size={ICON_SIZE} data-testid="workspace-tab-lines-icon" />;
+export function SectionsTabIcon() {
+  return <LinesIcon size={ICON_SIZE} data-testid="workspace-tab-sections-icon" />;
 }
 
 /**

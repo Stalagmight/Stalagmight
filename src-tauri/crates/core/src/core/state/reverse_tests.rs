@@ -10,8 +10,8 @@ use std::collections::HashMap;
 use super::{AppState, VirtualShotMode};
 use crate::core::{Command, ReversedLine, UndoData};
 use crate::models::{
-    Coordinates, DivePlanSnapshot, GpsCoordinates, ImportPlacement, ImportLineConfig,
-    MarkedPoint, Project, LineId, LineUpdates, ShotData, StationRef,
+    Coordinates, DivePlanSnapshot, GpsCoordinates, ImportLineConfig, ImportPlacement, LineId,
+    LineUpdates, MarkedPoint, Project, ShotData, StationRef,
 };
 
 /// One expected [`ReversedLine`] entry, so the assertions below read as
@@ -388,10 +388,7 @@ fn import_reverse_applies_before_placement_and_comments_resolve() {
     assert_eq!(project.station_comments.len(), 1);
     let (key, text) = project.station_comments.iter().next().unwrap();
     assert_eq!(text, "file station 0");
-    assert_eq!(
-        project.resolve_key(key),
-        Some(StationRef::new(line.id, 3))
-    );
+    assert_eq!(project.resolve_key(key), Some(StationRef::new(line.id, 3)));
 }
 
 /// Ticking the import toggle changes the numbering, never where the passage
@@ -645,25 +642,24 @@ fn import_two(
         location: None,
     });
 
-    let config =
-        |line_index: u32, name: &str, shots: Vec<ShotData>, placement| ImportLineConfig {
-            line_index,
-            name: Some(name.to_string()),
-            surveyor: None,
-            date: None,
-            color: "#4ecdc4".to_string(),
-            direction: None,
-            quality: 1.0,
-            shots,
-            placement,
-            station_comments: Vec::new(),
-            station_names: Vec::new(),
-            reverse,
-            azimuth_reference: None,
-            explorers: None,
-            override_date: None,
-            surveyors: None,
-        };
+    let config = |line_index: u32, name: &str, shots: Vec<ShotData>, placement| ImportLineConfig {
+        line_index,
+        name: Some(name.to_string()),
+        surveyor: None,
+        date: None,
+        color: "#4ecdc4".to_string(),
+        direction: None,
+        quality: 1.0,
+        shots,
+        placement,
+        station_comments: Vec::new(),
+        station_names: Vec::new(),
+        reverse,
+        azimuth_reference: None,
+        explorers: None,
+        override_date: None,
+        surveyors: None,
+    };
     let result = state.execute_import_lines(
         vec![
             config(0, "Trunk", import_shots(), ImportPlacement::Origin),
@@ -1010,9 +1006,7 @@ fn reverse_re_emits_warnings_computed_from_the_reversed_geometry() {
     let warning = &result.warnings[0];
     assert_eq!(warning.code, "INCLINATION_DEPTH_MISMATCH");
     assert!(
-        warning
-            .message
-            .starts_with(&format!("Shot {line_id}:1 ")),
+        warning.message.starts_with(&format!("Shot {line_id}:1 ")),
         "the mismatched shot is now FIRST, so the warning must name row 1: {}",
         warning.message
     );
@@ -1173,11 +1167,7 @@ fn reverse_keeps_a_position_keyed_ignore_on_its_own_shot() {
         let line = guard.as_ref().unwrap().get_line(line_id).unwrap();
         (
             line.shots.iter().map(|s| s.id).collect(),
-            line
-                .shots
-                .iter()
-                .map(|s| s.uuid.clone().unwrap())
-                .collect(),
+            line.shots.iter().map(|s| s.uuid.clone().unwrap()).collect(),
         )
     };
     assert!(ids.len() >= 3);
@@ -1311,10 +1301,7 @@ fn undo_to_and_redo_to_report_every_reverse_in_the_range() {
 
     let redone = state.redo_to(1);
     assert!(redone.success, "{:?}", redone.error);
-    assert_eq!(
-        redone.reversed_lines,
-        Some(vec![reversed_entry(line, 3)])
-    );
+    assert_eq!(redone.reversed_lines, Some(vec![reversed_entry(line, 3)]));
 }
 
 /// `undo_to`'s aggregate is an ORDERED PER-STEP LOG, not a parity-reduced set:
@@ -1407,10 +1394,7 @@ fn batch_reversing_one_line_twice_reports_nothing_and_leaves_the_plnx_alone() {
         "the numbering never moved, so the saved plan must be untouched"
     );
     assert_eq!(plan.snapshot.endpoint, Some(StationRef::new(line_id, 3)));
-    assert_eq!(
-        plan.snapshot.waypoints,
-        vec![StationRef::new(line_id, 2)]
-    );
+    assert_eq!(plan.snapshot.waypoints, vec![StationRef::new(line_id, 2)]);
     assert_eq!(
         plan.snapshot.marked_points[0].station,
         StationRef::new(line_id, 1)
@@ -1499,13 +1483,7 @@ fn a_null_uuid_warning_row_survives_a_double_reverse_in_one_batch() {
 
     let first_shot_id = {
         let guard = state.project.lock().unwrap();
-        guard
-            .as_ref()
-            .unwrap()
-            .get_line(line_id)
-            .unwrap()
-            .shots[0]
-            .id
+        guard.as_ref().unwrap().get_line(line_id).unwrap().shots[0].id
     };
     state
         .save_resolved_warning(&crate::persistence::ResolvedWarning {

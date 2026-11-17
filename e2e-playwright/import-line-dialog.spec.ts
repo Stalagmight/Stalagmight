@@ -78,7 +78,7 @@ test.describe('Import / Create Line dialog', () => {
 
     const dialog = page.getByTestId('import-line-dialog');
     await expect(dialog.getByTestId('line-name-input')).toBeVisible();
-    await expect(dialog.getByRole('button', { name: /Create Section/i })).toBeVisible();
+    await expect(dialog.getByRole('button', { name: /Create Line/i })).toBeVisible();
     await expect(dialog.getByRole('button', { name: /^Cancel$/i })).toBeVisible();
 
     // Cancel from a clean form closes the dialog.

@@ -12,8 +12,8 @@ use super::project_add::{set_add_window_hook, AddWindow};
 use super::AppState;
 use crate::core::{AddedContent, Command, CommandResult, UndoData, EDIT_DISABLED_CODE};
 use crate::models::{
-    gps_to_local, AzimuthReference, ClosureStrategy, CorrectionSource, GpsCoordinates, LoopClosure,
-    Project, LineData, LineId, ShotData, ShotKind, SpeleoLink, StationMerge, StationRef,
+    gps_to_local, AzimuthReference, ClosureStrategy, CorrectionSource, GpsCoordinates, LineData,
+    LineId, LoopClosure, Project, ShotData, ShotKind, SpeleoLink, StationMerge, StationRef,
     SurveyDirection, ZeroDatum, FEATURE_ID_STRIDE, MAX_LINES_IN_ID_SPACE, MAX_LINE_ID,
 };
 use crate::persistence::{Database, ResolvedWarning};
@@ -238,6 +238,9 @@ fn canonicalize(value: &serde_json::Value) -> serde_json::Value {
 /// are sorted.
 fn canonical_merge_output(merged: &Project, result: &CommandResult) -> String {
     let mut value = serde_json::to_value(merged).unwrap();
+    // In the on-disk vocabulary (see `disk_names`), so the digest pinned before
+    // the Section -> Line rename still holds: the rename moved no merged byte.
+    crate::models::disk_names::to_disk(&mut value);
     if let Some(map) = value.as_object_mut() {
         for key in ["created_at", "modified_at", "file_path", "validation"] {
             map.remove(key);
@@ -432,10 +435,7 @@ fn add_then_undo_restores_the_project_exactly_and_keeps_older_history() {
         recorded.sort_unstable();
         let mut created = result.line_ids;
         created.sort_unstable();
-        assert_eq!(
-            recorded, created,
-            "only the add's own lines are recorded"
-        );
+        assert_eq!(recorded, created, "only the add's own lines are recorded");
         assert_eq!(content.zero_datums.len(), 1);
         assert_eq!(content.station_merges.len(), 1);
         assert_eq!(content.loop_closures.len(), 1);
@@ -757,8 +757,10 @@ fn adding_the_same_stalx_twice_adds_again_with_a_warning() {
     assert!(second.success, "a duplicate is still added");
     assert_eq!(second.line_ids.len(), 3);
     assert!(
-        receipt_warnings(&second).iter().any(|w| w
-            == "'alpha.stalx' was already added to this project; its lines were added again"),
+        receipt_warnings(&second)
+            .iter()
+            .any(|w| w
+                == "'alpha.stalx' was already added to this project; its lines were added again"),
         "{:?}",
         receipt_warnings(&second)
     );
@@ -900,10 +902,8 @@ fn a_datum_less_add_overlapping_the_host_gets_a_placement_suggestion() {
     let added = result.line_ids[0];
     let project = state.get_project_state().unwrap();
     let host_id = project.lines[0].id;
-    let suggestions = project.suggest_orphan_placements(
-        &result.line_ids,
-        &state.get_config().placement_suggestion,
-    );
+    let suggestions = project
+        .suggest_orphan_placements(&result.line_ids, &state.get_config().placement_suggestion);
 
     assert!(
         suggestions
@@ -1783,13 +1783,8 @@ fn a_sources_committed_wal_pages_are_read_by_add_and_merge() {
         std::fs::read(&crashed).unwrap(),
         std::fs::read(wal(&crashed)).unwrap(),
     );
-    let first_length = |project: &Project| {
-        project
-            .get_line(line_named(project, "W"))
-            .unwrap()
-            .shots[0]
-            .length
-    };
+    let first_length =
+        |project: &Project| project.get_line(line_named(project, "W")).unwrap().shots[0].length;
 
     let merged = merge_files(
         temp.path(),
@@ -1861,13 +1856,8 @@ fn a_sources_hot_journal_is_rolled_back_by_add_and_merge() {
         std::fs::read(&clean).unwrap(),
         "the interrupted write really reached the database file"
     );
-    let first_length = |project: &Project| {
-        project
-            .get_line(line_named(project, "J"))
-            .unwrap()
-            .shots[0]
-            .length
-    };
+    let first_length =
+        |project: &Project| project.get_line(line_named(project, "J")).unwrap().shots[0].length;
 
     let merged = merge_files(
         temp.path(),
@@ -1939,11 +1929,7 @@ fn archiving_a_source_moves_its_wal_with_it() {
         .load_project()
         .unwrap();
     assert_eq!(
-        restored
-            .get_line(line_named(&restored, "W"))
-            .unwrap()
-            .shots[0]
-            .length,
+        restored.get_line(line_named(&restored, "W")).unwrap().shots[0].length,
         77.0,
         "the archive still holds the WAL's commit"
     );
@@ -2009,8 +1995,7 @@ fn a_long_merge_source_path_keeps_its_file_name() {
 /// Every shot's record parity in line `id`, in shot order.
 fn record_parities(project: &Project, id: LineId) -> Vec<bool> {
     let line = project.get_line(id).unwrap();
-    line
-        .shots
+    line.shots
         .iter()
         .map(|shot| project.shot_record_parity(line, shot.uuid.as_deref()))
         .collect()
@@ -2073,11 +2058,9 @@ fn add_carries_each_shots_record_parity_from_its_source() {
 /// loop onto K, combined keeping K: T anchors the component, the station O
 /// held is now in K, so it is held in `held_gauges`.
 fn held_gauge_source() -> Project {
-    use crate::models::{ClosureStrategy, CombinePick, CombineLinesOptions};
+    use crate::models::{ClosureStrategy, CombineLinesOptions, CombinePick};
     let mut p = Project::new("Held".to_string(), None);
-    let o = p
-        .add_line(line("O", vec![shot("o-0", 90.0, 10.0, 1.0)]))
-        .id;
+    let o = p.add_line(line("O", vec![shot("o-0", 90.0, 10.0, 1.0)])).id;
     let t = p
         .add_line(line(
             "T",

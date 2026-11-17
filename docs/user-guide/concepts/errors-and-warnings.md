@@ -37,7 +37,7 @@ projects:
   inclination that disagrees with the depth change, a
   [GPS fix](zero-datums-and-gps-fixes.md) far from where the survey puts its
   station, a part of the survey the Closures Computed View could not adjust.
-- Several zero datums on connected sections are not an error: the first one
+- Several zero datums on connected lines are not an error: the first one
   places the survey and the others are GPS fixes.
 - Errors can only be fixed. Warnings can also be ignored.
 - A GPS fix is far when its GPS position and its surveyed position are more

@@ -201,12 +201,8 @@ pub fn suggest_all_placements(
         let import_reference = import.azimuth_reference.unwrap_or(fallback_reference);
 
         // Match against existing project lines
-        let existing_suggestions = suggest_placements(
-            &import.shots,
-            import_reference,
-            existing_lines,
-            ps_config,
-        );
+        let existing_suggestions =
+            suggest_placements(&import.shots, import_reference, existing_lines, ps_config);
         for s in existing_suggestions {
             all.push(CrossLineSuggestion {
                 existing_station_index: s.existing_station_index,
@@ -2468,10 +2464,7 @@ mod tests {
             &PlacementSuggestionConfig::default(),
         );
         assert!(!suggestions.is_empty());
-        assert_eq!(
-            suggestions[0].existing_line_id, 2,
-            "should match line 2"
-        );
+        assert_eq!(suggestions[0].existing_line_id, 2, "should match line 2");
     }
 
     #[test]

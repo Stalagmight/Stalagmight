@@ -468,12 +468,12 @@ test.describe('Theme Switching - Via Settings UI', () => {
     await openSettingsDialog(page);
     await navigateToAppearance(page);
 
-    // In light (day) mode, the day line should show the Active badge
+    // In light (day) mode, the day section should show the Active badge
     await expect(
       page.locator('[data-testid="theme-active-badge-day"]')
     ).toBeVisible();
 
-    // Night line should not have an active badge (night mode is not active)
+    // Night section should not have an active badge (night mode is not active)
     await expect(
       page.locator('[data-testid="theme-active-badge-night"]')
     ).not.toBeVisible();
@@ -486,9 +486,9 @@ test.describe('Theme Switching - Via Settings UI', () => {
     await navigateToAppearance(page);
 
     // Default: night mode active with dark color theme
-    // Click the light color circle in the night line to change night color theme
+    // Click the light color circle in the night section to change night color theme
     const nightLightCircle = page.locator(
-      '[data-testid="theme-line-night"] [data-testid="color-theme-circle-light"]'
+      '[data-testid="theme-section-night"] [data-testid="color-theme-circle-light"]'
     );
     await nightLightCircle.click();
 
@@ -513,9 +513,9 @@ test.describe('Theme Switching - Via Settings UI', () => {
     await openSettingsDialog(page);
     await navigateToAppearance(page);
 
-    // Click the cave color circle in the night line
+    // Click the cave color circle in the night section
     const nightCaveCircle = page.locator(
-      '[data-testid="theme-line-night"] [data-testid="color-theme-circle-cave"]'
+      '[data-testid="theme-section-night"] [data-testid="color-theme-circle-cave"]'
     );
     await nightCaveCircle.click();
 

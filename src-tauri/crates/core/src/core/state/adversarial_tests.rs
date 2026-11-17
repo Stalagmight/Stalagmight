@@ -65,8 +65,8 @@ use super::fuzz_undo_tests::{
 use super::AppState;
 use crate::core::{Command, CommandResult};
 use crate::models::{
-    ClosureStrategy, Coordinates, GpsCoordinates, LineId, LineUpdates, ShotData, ShotId,
-    ShotKind, ShotUpdates, StationRef,
+    ClosureStrategy, Coordinates, GpsCoordinates, LineId, LineUpdates, ShotData, ShotId, ShotKind,
+    ShotUpdates, StationRef,
 };
 // CONFIG ISOLATION. Every test in this module opens with
 // `let _config = isolated_config();`: `AppState::new()` LOADS the global config,
@@ -208,10 +208,7 @@ fn observe(state: &AppState) -> Observed {
             u32::try_from(project.next_closure_id).unwrap_or(u32::MAX),
         );
         for line in &project.lines {
-            allocators.insert(
-                format!("line {}.next_shot_id", line.id),
-                line.next_shot_id,
-            );
+            allocators.insert(format!("line {}.next_shot_id", line.id), line.next_shot_id);
         }
     }
     Observed {
@@ -315,18 +312,14 @@ fn draw(state: &AppState, rng: &mut Rng) -> Option<Move> {
         1 => {
             let other = hostile_shot_id(rng, &live_shots);
             Move {
-                label: format!(
-                    "execute_delete_shot_range_shift(s={line_id}, {shot_id}..{other})"
-                ),
+                label: format!("execute_delete_shot_range_shift(s={line_id}, {shot_id}..{other})"),
                 result: state.execute_delete_shot_range_shift(line_id, shot_id, other),
             }
         }
         2 => {
             let other = hostile_shot_id(rng, &live_shots);
             Move {
-                label: format!(
-                    "execute_delete_shot_range_split(s={line_id}, {shot_id}..{other})"
-                ),
+                label: format!("execute_delete_shot_range_split(s={line_id}, {shot_id}..{other})"),
                 result: state.execute_delete_shot_range_split(
                     line_id,
                     shot_id,

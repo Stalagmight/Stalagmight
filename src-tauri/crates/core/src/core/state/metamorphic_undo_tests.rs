@@ -110,7 +110,7 @@ use super::fuzz_undo_tests::{
 };
 use super::AppState;
 use crate::core::Command;
-use crate::models::{Project, LineId, ShotData, ShotId, ShotUpdates, StationRef};
+use crate::models::{LineId, Project, ShotData, ShotId, ShotUpdates, StationRef};
 // CONFIG ISOLATION. Every test in this module opens with
 // `let _config = isolated_config();`: `AppState::new()` LOADS the global config,
 // and every save reaches `note_recent_project` -> `Config::save()`, which WRITES
@@ -228,10 +228,7 @@ fn allocators(state: &AppState) -> BTreeMap<String, u32> {
         u32::try_from(project.next_closure_id).unwrap_or(u32::MAX),
     );
     for line in &project.lines {
-        out.insert(
-            format!("line {}.next_shot_id", line.id),
-            line.next_shot_id,
-        );
+        out.insert(format!("line {}.next_shot_id", line.id), line.next_shot_id);
     }
     out
 }
@@ -1111,8 +1108,7 @@ const PAIRS: &[Pair] = &[
     // ---------------------------------------------------------------------
     Pair {
         id: "move-out-and-back-is-identity",
-        promise:
-            "MoveLine translates a rigid group by an offset; the negated offset translates \
+        promise: "MoveLine translates a rigid group by an offset; the negated offset translates \
                   it back",
         run: pair_move_out_and_back_is_identity,
     },
@@ -1343,20 +1339,16 @@ fn pair_range_split_of_one_vs_delete_and_split(
     // Strictly interior: both paths refuse a prefix or suffix range.
     let position = 1 + rng.below(ids.len() - 2);
     let target = ids[position];
-    let ranged = twins.left.execute_delete_shot_range_split(
-        line_id,
-        target,
-        target,
-        "A".into(),
-        "B".into(),
-    );
+    let ranged =
+        twins
+            .left
+            .execute_delete_shot_range_split(line_id, target, target, "A".into(), "B".into());
     if !ranged.success {
         return None;
     }
-    let single =
-        twins
-            .right
-            .execute_delete_shot_and_split(line_id, target, "A".into(), "B".into());
+    let single = twins
+        .right
+        .execute_delete_shot_and_split(line_id, target, "A".into(), "B".into());
     if !single.success {
         return Some(Comparison {
             problems: vec![format!(
@@ -1614,11 +1606,7 @@ fn split_options(name: &str, color: &str) -> crate::models::SplitLineOptions {
     }
 }
 
-fn combine_options(
-    name: &str,
-    color: &str,
-    swap_lr: bool,
-) -> crate::models::CombineLinesOptions {
+fn combine_options(name: &str, color: &str, swap_lr: bool) -> crate::models::CombineLinesOptions {
     crate::models::CombineLinesOptions {
         name: name.to_string(),
         color: color.to_string(),
@@ -1644,10 +1632,7 @@ fn split_at_a_free_station(
     credit_shots_distinctly(twins, rng, line_id);
     let project = twins.left.get_project_state()?;
     let line = project.get_line(line_id)?;
-    let (name, color) = (
-        line.name.clone().unwrap_or_default(),
-        line.color.clone(),
-    );
+    let (name, color) = (line.name.clone().unwrap_or_default(), line.color.clone());
     let touched = |at: StationRef| {
         let hit = |key: &crate::models::StationKey| project.resolve_key(key) == Some(at);
         project
@@ -1792,7 +1777,7 @@ fn survey_content(state: &AppState) -> String {
     };
     if let serde_json::Value::Object(map) = &mut value {
         map.remove("next_line_id");
-        if let Some(serde_json::Value::Array(lines)) = map.get_mut("sections") {
+        if let Some(serde_json::Value::Array(lines)) = map.get_mut("lines") {
             for line in lines {
                 if let serde_json::Value::Object(line) = line {
                     for key in ["next_shot_id", "gauge_shot_uuid", "gauge_neighbour_uuid"] {
@@ -1930,9 +1915,7 @@ fn pair_move_out_and_back_is_identity(
     }
     let line_id = targets.lines[rng.below(targets.lines.len())].0;
     let offset = random_offset(rng);
-    let out = twins
-        .right
-        .execute(Command::MoveLine { line_id, offset });
+    let out = twins.right.execute(Command::MoveLine { line_id, offset });
     if !out.success {
         return None;
     }

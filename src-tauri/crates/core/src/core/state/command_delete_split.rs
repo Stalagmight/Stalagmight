@@ -1,7 +1,7 @@
 use super::AppState;
 use crate::core::{Command, CommandResult};
 use crate::models::{
-    Project, LineData, LineId, ShotData, ShotId, StationKey, StationRef, FEATURE_ID_STRIDE,
+    LineData, LineId, Project, ShotData, ShotId, StationKey, StationRef, FEATURE_ID_STRIDE,
     MAX_LINES_IN_ID_SPACE, MAX_LINE_ID,
 };
 
@@ -11,10 +11,7 @@ use crate::models::{
 /// near `create_line` itself. Refused before any path mutates anything: a
 /// split that ran out of ids half-way would leave line A truncated with
 /// nowhere to put its tail.
-pub(super) fn line_budget_refusal(
-    project: &Project,
-    line_id: LineId,
-) -> Option<CommandResult> {
+pub(super) fn line_budget_refusal(project: &Project, line_id: LineId) -> Option<CommandResult> {
     if project.next_line_id <= MAX_LINE_ID {
         return None;
     }
@@ -305,10 +302,7 @@ impl AppState {
         // Use a Batch with both DeleteShot + CreateLine to accurately describe the compound op
         let batch_cmd = Command::Batch {
             commands: vec![
-                Command::DeleteShot {
-                    line_id,
-                    shot_id,
-                },
+                Command::DeleteShot { line_id, shot_id },
                 Command::CreateLine {
                     name: Some(undo_line_b_name),
                     surveyor: None,
@@ -391,8 +385,7 @@ impl AppState {
             };
 
             let n = line.shots.len();
-            let Some(mut start_pos) = line.shots.iter().position(|s| s.id == start_shot_id)
-            else {
+            let Some(mut start_pos) = line.shots.iter().position(|s| s.id == start_shot_id) else {
                 return CommandResult::failure(format!(
                     "Shot {start_shot_id} not found in line {line_id}"
                 ));
@@ -697,8 +690,7 @@ impl AppState {
             };
 
             let n = line.shots.len();
-            let Some(mut start_pos) = line.shots.iter().position(|s| s.id == start_shot_id)
-            else {
+            let Some(mut start_pos) = line.shots.iter().position(|s| s.id == start_shot_id) else {
                 return CommandResult::failure(format!(
                     "Shot {start_shot_id} not found in line {line_id}"
                 ));
@@ -715,8 +707,7 @@ impl AppState {
             // that through delete_line instead.
             if start_pos == 0 && end_pos == n - 1 {
                 return CommandResult::failure(
-                    "Cannot shift-delete an entire line; delete the line instead."
-                        .to_string(),
+                    "Cannot shift-delete an entire line; delete the line instead.".to_string(),
                 );
             }
 
@@ -738,11 +729,9 @@ impl AppState {
             }
             // Without the gap-close closure prediction: this command is about
             // to run that very gap-close for real.
-            if let Ok(impact) = project.preview_delete_shot_range_relationships(
-                line_id,
-                start_shot_id,
-                end_shot_id,
-            ) {
+            if let Ok(impact) =
+                project.preview_delete_shot_range_relationships(line_id, start_shot_id, end_shot_id)
+            {
                 if impact.shift_blocked {
                     let reasons = if impact.shift_blocked_reasons.is_empty() {
                         "Shift geometry is not allowed for this range.".to_string()
@@ -936,13 +925,13 @@ impl AppState {
             // Step 3: Preserve merge/closure connectivity, then clean up line references
             project.preserve_connections_for_line_deletion(line_id);
 
-            project.station_merges.retain(|m| {
-                m.station_a.line_id != line_id && m.station_b.line_id != line_id
-            });
+            project
+                .station_merges
+                .retain(|m| m.station_a.line_id != line_id && m.station_b.line_id != line_id);
 
-            project.loop_closures.retain(|lc| {
-                lc.station_a.line_id != line_id && lc.station_b.line_id != line_id
-            });
+            project
+                .loop_closures
+                .retain(|lc| lc.station_a.line_id != line_id && lc.station_b.line_id != line_id);
 
             // Remove line offsets
             project.remove_line_offset(line_id);
@@ -975,9 +964,7 @@ impl AppState {
                     "remove_line returned None after validation; rolling back"
                 );
                 let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
-                return CommandResult::failure(format!(
-                    "Line {line_id} not found during removal"
-                ));
+                return CommandResult::failure(format!("Line {line_id} not found during removal"));
             }
 
             // Step 5: Enforce the closures-are-loops invariant, like the two split
@@ -1039,10 +1026,7 @@ impl AppState {
         // Step 7: Push single undo entry with ProjectSnapshotPair
         let batch_cmd = Command::Batch {
             commands: vec![
-                Command::DeleteShot {
-                    line_id,
-                    shot_id,
-                },
+                Command::DeleteShot { line_id, shot_id },
                 Command::DeleteLine { line_id },
             ],
         };

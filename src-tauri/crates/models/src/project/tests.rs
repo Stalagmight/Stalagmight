@@ -237,7 +237,7 @@ fn project_serialization_is_key_ordered_and_state_determined() {
             .iter()
             .map(|entry| {
                 let key = &entry[0];
-                let line = key["section_id"].as_u64().expect("line id");
+                let line = key["line_id"].as_u64().expect("line id");
                 // `LineStart` is a bare string, `AfterShot(uuid)` an object.
                 let rank = u8::from(!key["anchor"].is_string());
                 (line, rank)
@@ -1323,19 +1323,11 @@ fn merge_stations_without_datum_aligns_first_line_to_second() {
     assert!((a1_after.x - b0_after.x).abs() < 1e-6);
     assert!((a1_after.y - b0_after.y).abs() < 1e-6);
 
-    let offset_a = project
-        .line_offsets
-        .get(&a)
-        .copied()
-        .unwrap_or((0.0, 0.0));
+    let offset_a = project.line_offsets.get(&a).copied().unwrap_or((0.0, 0.0));
     assert!((offset_a.0).abs() < 1e-6);
     assert!((offset_a.1 + 10.0).abs() < 1e-6);
 
-    let offset_b = project
-        .line_offsets
-        .get(&b)
-        .copied()
-        .unwrap_or((0.0, 0.0));
+    let offset_b = project.line_offsets.get(&b).copied().unwrap_or((0.0, 0.0));
     assert!((offset_b.0).abs() < 1e-6);
     assert!((offset_b.1).abs() < 1e-6);
 }
@@ -4952,13 +4944,7 @@ fn reachability_uses_jump_shot_shortcut() {
             ..Default::default()
         })
         .id;
-    project
-        .lines
-        .iter_mut()
-        .find(|s| s.id == b)
-        .unwrap()
-        .shots[0]
-        .kind = ShotKind::Jump;
+    project.lines.iter_mut().find(|s| s.id == b).unwrap().shots[0].kind = ShotKind::Jump;
 
     // Tie B's endpoints onto A's chain so B0-B1 has an alternate route: B0<->A0
     // via a merge, B1<->A2 via an aligned loop closure (merging an already-
@@ -4996,13 +4982,7 @@ fn reachability_uses_jump_shot_shortcut() {
     // Flipping the SAME fixture to Reference must route the long way instead:
     // a reference tie is a tape measurement, not a swimmable passage. This is
     // the false-shortcut risk #77 left open, now closed by #27.
-    project
-        .lines
-        .iter_mut()
-        .find(|s| s.id == b)
-        .unwrap()
-        .shots[0]
-        .kind = ShotKind::Reference;
+    project.lines.iter_mut().find(|s| s.id == b).unwrap().shots[0].kind = ShotKind::Reference;
     let dist = project.compute_distances_from(&stations, &[pos(b, 0)]);
     assert!(
         (dist[pos(b, 1)] - 20.0).abs() < 1e-6,
@@ -5929,11 +5909,7 @@ fn apply_station_move_station_zero_uses_line_offset() {
         .unwrap();
 
     // Record line offset before
-    let _offset_before = project
-        .line_offsets
-        .get(&a)
-        .copied()
-        .unwrap_or((0.0, 0.0));
+    let _offset_before = project.line_offsets.get(&a).copied().unwrap_or((0.0, 0.0));
 
     // A:0 is at the origin. B:1 is at (0, 10) + (0, -10) = (0, 0) after merge alignment.
     // Both A:0 and B:1 are at (0, 0), so zero misclosure - perfect loop.
@@ -5952,11 +5928,7 @@ fn apply_station_move_station_zero_uses_line_offset() {
     // Now we have A:0 merged to chain, create a closure between A:0's group and C:1
     // A:0=(0,0), C:1 = some other position - distribute will move stations
     // The test verifies that if station 0 needs an XY move, line_offsets is used
-    let _offset_a_before = project
-        .line_offsets
-        .get(&a)
-        .copied()
-        .unwrap_or((0.0, 0.0));
+    let _offset_a_before = project.line_offsets.get(&a).copied().unwrap_or((0.0, 0.0));
 
     // Distribute error - this exercises apply_station_move_internal on various stations
     project
@@ -7224,11 +7196,7 @@ fn is_shot_frozen_loop_with_aligned_closure() {
     // A:0, A:1, B:0, B:1 should be frozen
     let a_frozen: Vec<_> = frozen.iter().filter(|f| f.line_id == a).collect();
     let b_frozen: Vec<_> = frozen.iter().filter(|f| f.line_id == b).collect();
-    assert_eq!(
-        a_frozen.len(),
-        2,
-        "Both shots in line A should be frozen"
-    );
+    assert_eq!(a_frozen.len(), 2, "Both shots in line A should be frozen");
     assert_eq!(
         b_frozen.len(),
         2,
@@ -7236,9 +7204,7 @@ fn is_shot_frozen_loop_with_aligned_closure() {
     );
 
     // Verify B:2 (dead-end branch) is NOT frozen
-    let b2_frozen = frozen
-        .iter()
-        .any(|f| f.line_id == b && f.shot_index == 2);
+    let b2_frozen = frozen.iter().any(|f| f.line_id == b && f.shot_index == 2);
     assert!(!b2_frozen, "Dead-end shot B:2 should NOT be frozen");
 }
 
@@ -8202,13 +8168,7 @@ fn realign_merged_line_keeps_merge_point_aligned() {
         .unwrap();
 
     // Edit shot 2:1 (between 2:1 and 2:2): length 5m → 15m (+10m)
-    let shot_id = project
-        .lines
-        .iter()
-        .find(|s| s.id == sec2)
-        .unwrap()
-        .shots[1]
-        .id;
+    let shot_id = project.lines.iter().find(|s| s.id == sec2).unwrap().shots[1].id;
     project.update_shot(
         sec2,
         shot_id,
@@ -8505,13 +8465,7 @@ fn realign_edit_in_datum_line_propagates_to_merged() {
         .unwrap();
 
     // Edit shot 1:1 (between 1:1 and 1:2): 10m → 20m
-    let shot_id = project
-        .lines
-        .iter()
-        .find(|s| s.id == sec1)
-        .unwrap()
-        .shots[1]
-        .id;
+    let shot_id = project.lines.iter().find(|s| s.id == sec1).unwrap().shots[1].id;
     project.update_shot(
         sec1,
         shot_id,
@@ -9206,14 +9160,8 @@ fn compute_raw_coords_with_line_offset() {
     let c0 = project
         .compute_station_raw_coords(StationRef::new(sec, 0))
         .unwrap();
-    assert!(
-        (c0.x - 100.0).abs() < 1e-9,
-        "x should include line offset"
-    );
-    assert!(
-        (c0.y - 200.0).abs() < 1e-9,
-        "y should include line offset"
-    );
+    assert!((c0.x - 100.0).abs() < 1e-9, "x should include line offset");
+    assert!((c0.y - 200.0).abs() < 1e-9, "y should include line offset");
 }
 
 #[test]
@@ -10051,8 +9999,7 @@ fn lsq_spur_shots_are_not_modified() {
     assert!(result.is_ok(), "LSQ should succeed: {:?}", result);
 
     // Verify spur shots in A (indices 0..29) are exactly unchanged.
-    let new_a_spur: Vec<(f64, f64)> = project.lines.iter().find(|s| s.id == a).unwrap().shots
-        [..30]
+    let new_a_spur: Vec<(f64, f64)> = project.lines.iter().find(|s| s.id == a).unwrap().shots[..30]
         .iter()
         .map(|s| (s.azimuth_in, s.length))
         .collect();
@@ -10483,10 +10430,7 @@ fn the_dust_gate_clears_the_residue_at_the_georeference_ceiling() {
     const CHAIN: usize = 12;
     let chain: Vec<LineId> = (0..CHAIN)
         .map(|i| {
-            #[expect(
-                clippy::cast_precision_loss,
-                reason = "12 line indices, exact in f64"
-            )]
+            #[expect(clippy::cast_precision_loss, reason = "12 line indices, exact in f64")]
             let turn = (i as f64) * 17.0;
             project
                 .add_line(LineData {
@@ -10773,10 +10717,7 @@ fn redrive_dedups_uuids_before_reanchor_preserving_second_duplicate_ref() {
     project.ensure_shot_uuids();
     // Force a duplicate: shots[0] and shots[1] share a UUID, as a corrupt/legacy
     // file could persist. (ensure_unique keeps the first and re-mints the second.)
-    let dup = project.get_line(s).unwrap().shots[0]
-        .uuid
-        .clone()
-        .unwrap();
+    let dup = project.get_line(s).unwrap().shots[0].uuid.clone().unwrap();
     project.get_line_mut(s).unwrap().shots[1].uuid = Some(dup.clone());
 
     // A station offset stored in the legacy positional form at station 2 - the
@@ -11524,17 +11465,11 @@ fn a_whole_rigid_group_translation_is_a_solver_no_op() {
 
     // The move tools' own path, not a hand-rolled loop over the ids.
     project.adjust_rigid_group_offsets(a, 3.0, -2.0);
-    let moved: Vec<(f64, f64)> = [a, b, c]
-        .iter()
-        .map(|s| project.line_offset(*s))
-        .collect();
+    let moved: Vec<(f64, f64)> = [a, b, c].iter().map(|s| project.line_offset(*s)).collect();
 
     let mut solved = project.clone();
     solved.resolve_offsets();
-    let after_solve: Vec<(f64, f64)> = [a, b, c]
-        .iter()
-        .map(|s| solved.line_offset(*s))
-        .collect();
+    let after_solve: Vec<(f64, f64)> = [a, b, c].iter().map(|s| solved.line_offset(*s)).collect();
     assert_eq!(
         moved, after_solve,
         "a full solve after a whole-group translation must change nothing - if this \
@@ -11543,10 +11478,7 @@ fn a_whole_rigid_group_translation_is_a_solver_no_op() {
     );
 
     project.realign_merges();
-    let after_skip: Vec<(f64, f64)> = [a, b, c]
-        .iter()
-        .map(|s| project.line_offset(*s))
-        .collect();
+    let after_skip: Vec<(f64, f64)> = [a, b, c].iter().map(|s| project.line_offset(*s)).collect();
     assert_eq!(
         after_skip, after_solve,
         "so the skipped state and the solved state are the same state"
@@ -12279,8 +12211,7 @@ fn deleting_a_shot_never_promotes_a_closure_that_would_double_anchor() {
 /// carrying two GPS anchors, which is exactly the state defect A is about.
 ///
 /// Returns `(project, s, t, u, v)`.
-fn chained_double_anchor_closure_fixture() -> (Project, LineId, LineId, LineId, LineId)
-{
+fn chained_double_anchor_closure_fixture() -> (Project, LineId, LineId, LineId, LineId) {
     let mut project = Project::new("ChainedDoubleAnchor".to_string(), None);
     let s = project
         .add_line(LineData {
@@ -12739,10 +12670,7 @@ fn check_structural_integrity_flags_and_repairs_duplicate_shot_uuid() {
         })
         .id;
     project.ensure_shot_uuids();
-    let first_uuid = project.get_line(a).unwrap().shots[0]
-        .uuid
-        .clone()
-        .unwrap();
+    let first_uuid = project.get_line(a).unwrap().shots[0].uuid.clone().unwrap();
     // Force shot 1 to collide with shot 0's UUID.
     project.get_line_mut(a).unwrap().shots[1].uuid = Some(first_uuid.clone());
 
@@ -12804,10 +12732,7 @@ fn warm_shot_uuid_index_resolves_duplicate_to_first_occurrence() {
         })
         .id;
     project.ensure_shot_uuids();
-    let first_uuid = project.get_line(a).unwrap().shots[0]
-        .uuid
-        .clone()
-        .unwrap();
+    let first_uuid = project.get_line(a).unwrap().shots[0].uuid.clone().unwrap();
     // Force shot 1 to collide with shot 0's UUID.
     project.get_line_mut(a).unwrap().shots[1].uuid = Some(first_uuid.clone());
 
@@ -14918,16 +14843,12 @@ fn suggest_orphan_placements_places_a_newly_imported_orphan_onto_a_pre_existing_
          line (#674): {suggestions:?}"
     );
     assert!(
-        suggestions
-            .iter()
-            .all(|s| s.orphan_line_id == new_orphan),
+        suggestions.iter().all(|s| s.orphan_line_id == new_orphan),
         "the pre-existing orphan {pre_orphan:?} must not be re-suggested onto \
          the pre-existing anchor (#446): {suggestions:?}"
     );
     assert!(
-        suggestions
-            .iter()
-            .all(|s| s.target_line_id == pre_anchor),
+        suggestions.iter().all(|s| s.target_line_id == pre_anchor),
         "only the anchored line is a target - never the other orphan: {suggestions:?}"
     );
 }

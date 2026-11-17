@@ -12,8 +12,8 @@
 use super::combine_closure_tests::{add, check_combined, dist, options, shot, xy};
 use crate::{
     ClosureStrategy, CombineJoinEnds, CombineJoinKind, CombinePlan, GpsCoordinates,
-    KeptMovesReason, LoopClosure, Project, LineEnd, LineId, StationRef, TornTieKind,
-    TornTieReason, ZeroDatum,
+    KeptMovesReason, LineEnd, LineId, LoopClosure, Project, StationRef, TornTieKind, TornTieReason,
+    ZeroDatum,
 };
 
 /// A residual under the 1 mm tolerance, in both axes: 0.5 mm.

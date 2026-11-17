@@ -30,7 +30,7 @@ use tempfile::TempDir;
 use super::{AppState, VirtualShotMode};
 use crate::core::{Command, CommandResult};
 use crate::models::{
-    ImportPlacement, ImportLineConfig, Project, LineData, ShotData, MAX_LINES_IN_ID_SPACE,
+    ImportLineConfig, ImportPlacement, LineData, Project, ShotData, MAX_LINES_IN_ID_SPACE,
     MAX_LINE_ID,
 };
 use crate::persistence::Database;
@@ -228,8 +228,7 @@ fn assert_split_was_refused(state: &AppState, result: &CommandResult, shots: usi
     );
     let error = result.error.clone().unwrap_or_default();
     assert!(
-        error.contains("split it into two")
-            && error.contains(&MAX_LINES_IN_ID_SPACE.to_string()),
+        error.contains("split it into two") && error.contains(&MAX_LINES_IN_ID_SPACE.to_string()),
         "the refusal must say what it could not do and name the limit, got: {error}"
     );
     let project = state.get_project_state().unwrap();
@@ -263,12 +262,8 @@ fn a_delete_that_splits_a_line_is_refused_when_no_line_id_is_left() {
     let (state, shot_ids) = state_at_full_id_space_with_one_line(5);
     let line_id = state.get_project_state().unwrap().lines[0].id;
 
-    let result = state.execute_delete_shot_and_split(
-        line_id,
-        shot_ids[2],
-        "A".to_string(),
-        "B".to_string(),
-    );
+    let result =
+        state.execute_delete_shot_and_split(line_id, shot_ids[2], "A".to_string(), "B".to_string());
 
     assert_split_was_refused(&state, &result, 5);
 }

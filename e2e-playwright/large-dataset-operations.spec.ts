@@ -108,7 +108,7 @@ test.describe('Large Dataset Operations', () => {
     );
     expect(seededLineCount).toBe(24);
 
-    await page.getByTestId('lines-list').evaluate((el) => {
+    await page.getByTestId('sections-list').evaluate((el) => {
       el.scrollTop = el.scrollHeight;
     });
     await expect(page.getByTestId('line-row-24')).toBeVisible();

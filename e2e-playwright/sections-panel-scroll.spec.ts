@@ -95,7 +95,7 @@ test.describe('Sections panel scrolling', () => {
     }));
     await seedProjectWithLines(page, seeds);
 
-    const list = page.getByTestId('lines-list');
+    const list = page.getByTestId('sections-list');
     await expect(list).toBeVisible();
 
     // The container must have a bounded height with overflowing content. If the
@@ -122,7 +122,7 @@ test.describe('Sections panel scrolling', () => {
     }));
     await seedProjectWithLines(page, seeds);
 
-    const list = page.getByTestId('lines-list');
+    const list = page.getByTestId('sections-list');
     await expect(list).toBeVisible();
 
     const ids = await getLineIds(page);
@@ -156,7 +156,7 @@ test.describe('Sections panel scrolling', () => {
     }));
     await seedProjectWithLines(page, seeds);
 
-    const list = page.getByTestId('lines-list');
+    const list = page.getByTestId('sections-list');
     await expect(list).toBeVisible();
 
     const ids = await getLineIds(page);
@@ -203,7 +203,7 @@ test.describe('Sections panel scrolling', () => {
     }));
     await seedProjectWithLines(page, seeds);
 
-    const list = page.getByTestId('lines-list');
+    const list = page.getByTestId('sections-list');
     await expect(list).toBeVisible();
 
     const ids = await getLineIds(page);
@@ -241,7 +241,7 @@ test.describe('Sections panel scrolling', () => {
     }));
     await seedProjectWithLines(page, seeds);
 
-    const list = page.getByTestId('lines-list');
+    const list = page.getByTestId('sections-list');
     await expect(list).toBeVisible();
 
     const ids = await getLineIds(page);
@@ -277,7 +277,7 @@ test.describe('Sections panel scrolling', () => {
     }));
     await seedProjectWithLines(page, seeds);
 
-    const list = page.getByTestId('lines-list');
+    const list = page.getByTestId('sections-list');
     await expect(list).toBeVisible();
 
     const ids = await getLineIds(page);

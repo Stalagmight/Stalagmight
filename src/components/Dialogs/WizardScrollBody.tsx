@@ -74,7 +74,7 @@ export function WizardScrollBody({ bodyRef, table, children }: WizardScrollBodyP
         <div
           className="flex flex-col p-5"
           style={{ height: bandHeight }}
-          data-testid="wizard-shot-table-line"
+          data-testid="wizard-shot-table-section"
         >
           {table}
         </div>

@@ -28,6 +28,7 @@ import {
 import { useGasPlanStore } from './gasPlanStore';
 import { useExportStore } from './exportStore';
 import { useColorScaleStore } from './colorScaleStore';
+import { displaySettingStorageKey } from './displaySettingKeys';
 
 // Import tool utilities for internal use and re-export for convenience
 import { NON_INTERACTIVE_TOOLS, isNonInteractiveTool } from '../utils/toolUtils';
@@ -106,7 +107,7 @@ import { visitColorPatch, visitEndPatch, visitErrorsPatch, visitToggleColorPatch
 export type PanelMode = 'hover' | 'pin';
 
 /** Identifies one of the three in-project panels (matches telemetry PanelName). */
-export type PanelId = 'lines' | 'detail' | 'data-table';
+export type PanelId = 'sections' | 'detail' | 'data-table';
 
 /**
  * A panel whose SIZE persists. Wider than {@link PanelId}: the import wizards'
@@ -400,14 +401,14 @@ export interface UIStore {
   clearMeasure: () => void;
 
   // Left workspace navigation is session-only and never changes lock ownership.
-  leftWorkspace: 'lines' | 'speleodb';
-  surveyLeftWorkspace: 'lines' | 'speleodb';
-  speleoWorkspaceLine: 'history' | null;
+  leftWorkspace: 'sections' | 'speleodb';
+  surveyLeftWorkspace: 'sections' | 'speleodb';
+  speleoWorkspaceSection: 'history' | null;
   speleoRevealNonce: number;
   speleoOutsideSurvey: boolean;
   leftWorkspaceVisible: boolean;
-  selectLeftWorkspace: (tab: 'lines' | 'speleodb') => void;
-  openSpeleoWorkspace: (line?: 'history') => void;
+  selectLeftWorkspace: (tab: 'sections' | 'speleodb') => void;
+  openSpeleoWorkspace: (section?: 'history') => void;
   resetLeftWorkspace: () => void;
 
   // Panel state
@@ -770,7 +771,7 @@ export interface UIStore {
 export type DisplayToggleKey =
   | 'showStations'
   | 'showShots'
-  | 'showSectionNames'
+  | 'showLineNames'
   | 'showStationLabels'
   | 'showStationNames'
   | 'showShotData'
@@ -855,7 +856,7 @@ const PREPLAN_DISPLAY_KEYS = [
   'showReferenceShots',
   'showJumps',
   'showZeroDatum',
-  'showSectionNames',
+  'showLineNames',
   'showStationLabels',
   'showStationNames',
   'showStationComments',
@@ -971,7 +972,7 @@ function exitFocusMerge(
  * instead of repeating a 3-way ternary. Exported for usePanelReveal.
  */
 export const PANEL_FIELDS = {
-  lines: { open: 'sectionsPanelOpen', mode: 'sectionsPanelMode', width: 'sectionsPanelWidth' },
+  sections: { open: 'sectionsPanelOpen', mode: 'sectionsPanelMode', width: 'sectionsPanelWidth' },
   detail: { open: 'detailPanelOpen', mode: 'detailPanelMode', width: 'detailPanelWidth' },
   'data-table': { open: 'dataTableOpen', mode: 'dataTableMode', width: 'dataTableHeight' },
 } as const satisfies Record<PanelId, { open: string; mode: string; width: string }>;
@@ -982,7 +983,7 @@ export const PANEL_FIELDS = {
  * panel; the wizard map column has no reveal state and so appears only here.
  */
 export const PANEL_WIDTH_FIELDS = {
-  lines: PANEL_FIELDS.lines.width,
+  sections: PANEL_FIELDS.sections.width,
   detail: PANEL_FIELDS.detail.width,
   'data-table': PANEL_FIELDS['data-table'].width,
   'wizard-map': 'wizardMapPanelWidth',
@@ -1216,21 +1217,21 @@ export const useUIStore = create<UIStore>((set) => ({
   clearMeasure: () => set({ ...MEASURE_CLEARED }),
 
   // Panel state
-  leftWorkspace: 'lines',
-  surveyLeftWorkspace: 'lines',
-  speleoWorkspaceLine: null,
+  leftWorkspace: 'sections',
+  surveyLeftWorkspace: 'sections',
+  speleoWorkspaceSection: null,
   speleoRevealNonce: 0,
   speleoOutsideSurvey: false,
   leftWorkspaceVisible: false,
-  resetLeftWorkspace: () => set({ leftWorkspace: 'lines', surveyLeftWorkspace: 'lines', speleoWorkspaceLine: null, speleoOutsideSurvey: false }),
+  resetLeftWorkspace: () => set({ leftWorkspace: 'sections', surveyLeftWorkspace: 'sections', speleoWorkspaceSection: null, speleoOutsideSurvey: false }),
   selectLeftWorkspace: (tab) => set({ leftWorkspace: tab, ...(useUIStore.getState().appMode === 'survey' ? { surveyLeftWorkspace: tab } : {}) }),
-  openSpeleoWorkspace: (line) => {
+  openSpeleoWorkspace: (section) => {
     const state = useUIStore.getState();
     state.exitDataTableFullScreen();
     set({
       leftWorkspace: 'speleodb',
       ...(state.appMode === 'survey' ? { surveyLeftWorkspace: 'speleodb' } : { speleoOutsideSurvey: true }),
-      ...(line ? { speleoWorkspaceLine: line } : {}),
+      ...(section ? { speleoWorkspaceSection: section } : {}),
       speleoRevealNonce: state.speleoRevealNonce + 1,
     });
   },
@@ -1258,7 +1259,7 @@ export const useUIStore = create<UIStore>((set) => ({
   toggleSectionsPanel: () => {
     const s = useUIStore.getState();
     const opening = !s.sectionsPanelOpen;
-    trackPanelToggle('lines', opening);
+    trackPanelToggle('sections', opening);
     // Exiting line-focus via a toggle must restore the OTHER panels' pre-focus
     // open/mode (kept in the snapshot) before savePanelLayout persists live state.
     // Otherwise the focus-forced collapse/pin of the untouched panels would be
@@ -1840,19 +1841,21 @@ export const useUIStore = create<UIStore>((set) => ({
     // Scoped to Plan/Export while there (restored on exit) - don't persist it.
     if (useUIStore.getState().appMode !== 'survey') return;
     // Persist the spacing setting
+    const key = displaySettingStorageKey('gridSpacing');
     invokeIpc(
       'save_display_setting',
-      { key: 'gridSpacing', value: String(spacing) },
-      { purpose: 'persist display setting', fields: { key: 'gridSpacing' } }
+      { key, value: String(spacing) },
+      { purpose: 'persist display setting', fields: { key } }
     ).catch((e) => {
       console.warn('Failed to save grid spacing:', e);
     });
   },
   saveDisplaySetting: async (key, value) => {
     try {
-      await invokeIpc('save_display_setting', { key, value: String(value) }, {
+      const storageKey = displaySettingStorageKey(key);
+      await invokeIpc('save_display_setting', { key: storageKey, value: String(value) }, {
         purpose: 'persist display setting',
-        fields: { key: String(key) },
+        fields: { key: storageKey },
       });
     } catch (e) {
       console.warn('Failed to save display setting:', e);
@@ -1988,10 +1991,11 @@ export const useUIStore = create<UIStore>((set) => ({
     // Distances depend on the active geometry; a stale ruler readout would lie.
     set({ geometryMode: mode, ...MEASURE_CLEARED });
     // Persist for "remember last used" across sessions (string value, like gridSpacing).
+    const key = displaySettingStorageKey('geometryMode');
     invokeIpc(
       'save_display_setting',
-      { key: 'geometryMode', value: mode },
-      { purpose: 'persist display setting', fields: { key: 'geometryMode' } }
+      { key, value: mode },
+      { purpose: 'persist display setting', fields: { key } }
     ).catch((e) => {
       console.warn('Failed to save geometry mode:', e);
     });

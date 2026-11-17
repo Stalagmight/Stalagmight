@@ -41,9 +41,7 @@ impl Project {
     ) -> bool {
         match role {
             DatumRole::Placement => true,
-            DatumRole::GpsFix => {
-                override_entrance.unwrap_or_else(|| self.is_line_end(station_ref))
-            }
+            DatumRole::GpsFix => override_entrance.unwrap_or_else(|| self.is_line_end(station_ref)),
         }
     }
 

@@ -43,7 +43,7 @@ test.describe('Line Adjust Dialog', () => {
     await expect(page.getByTestId('sections-panel')).toBeVisible({ timeout: 5000 });
 
     // Find a line item in the sections panel
-    const lineItem = page.locator('[data-testid^="line-item-"]').filter({ hasText: /Section|Main Passage|Side Tunnel/ }).first();
+    const lineItem = page.locator('[data-testid^="line-item-"]').filter({ hasText: /Line|Main Passage|Side Tunnel/ }).first();
     await expect(lineItem).toBeVisible({ timeout: 5000 });
 
     // Right-click on line to open context menu
@@ -63,7 +63,7 @@ test.describe('Line Adjust Dialog', () => {
 
   test('should have dx and dy input fields', async ({ page }) => {
     // Open the dialog via context menu
-    const lineItem = page.locator('[data-testid^="line-item-"]').filter({ hasText: /Section|Main Passage|Side Tunnel/ }).first();
+    const lineItem = page.locator('[data-testid^="line-item-"]').filter({ hasText: /Line|Main Passage|Side Tunnel/ }).first();
     await lineItem.click({ button: 'right' });
     await page.click('button:has-text("Adjust Position...")');
 
@@ -87,7 +87,7 @@ test.describe('Line Adjust Dialog', () => {
 
   test('should accept numeric input for dx and dy', async ({ page }) => {
     // Open the dialog
-    const lineItem = page.locator('[data-testid^="line-item-"]').filter({ hasText: /Section|Main Passage|Side Tunnel/ }).first();
+    const lineItem = page.locator('[data-testid^="line-item-"]').filter({ hasText: /Line|Main Passage|Side Tunnel/ }).first();
     await lineItem.click({ button: 'right' });
     await page.click('button:has-text("Adjust Position...")');
 
@@ -108,7 +108,7 @@ test.describe('Line Adjust Dialog', () => {
 
   test('should close dialog on Cancel', async ({ page }) => {
     // Open the dialog
-    const lineItem = page.locator('[data-testid^="line-item-"]').filter({ hasText: /Section|Main Passage|Side Tunnel/ }).first();
+    const lineItem = page.locator('[data-testid^="line-item-"]').filter({ hasText: /Line|Main Passage|Side Tunnel/ }).first();
     await lineItem.click({ button: 'right' });
     await page.click('button:has-text("Adjust Position...")');
 
@@ -124,7 +124,7 @@ test.describe('Line Adjust Dialog', () => {
 
   test('should close dialog on Apply', async ({ page }) => {
     // Open the dialog
-    const lineItem = page.locator('[data-testid^="line-item-"]').filter({ hasText: /Section|Main Passage|Side Tunnel/ }).first();
+    const lineItem = page.locator('[data-testid^="line-item-"]').filter({ hasText: /Line|Main Passage|Side Tunnel/ }).first();
     await lineItem.click({ button: 'right' });
     await page.click('button:has-text("Adjust Position...")');
 
@@ -144,7 +144,7 @@ test.describe('Line Adjust Dialog', () => {
 
   test('should display line name in dialog', async ({ page }) => {
     // Open the dialog
-    const lineItem = page.locator('[data-testid^="line-item-"]').filter({ hasText: /Section|Main Passage|Side Tunnel/ }).first();
+    const lineItem = page.locator('[data-testid^="line-item-"]').filter({ hasText: /Line|Main Passage|Side Tunnel/ }).first();
     await lineItem.click({ button: 'right' });
     await page.click('button:has-text("Adjust Position...")');
 
@@ -158,7 +158,7 @@ test.describe('Line Adjust Dialog', () => {
 
   test('should close dialog on Escape key', async ({ page }) => {
     // Open the dialog
-    const lineItem = page.locator('[data-testid^="line-item-"]').filter({ hasText: /Section|Main Passage|Side Tunnel/ }).first();
+    const lineItem = page.locator('[data-testid^="line-item-"]').filter({ hasText: /Line|Main Passage|Side Tunnel/ }).first();
     await lineItem.click({ button: 'right' });
     await page.click('button:has-text("Adjust Position...")');
 
@@ -174,7 +174,7 @@ test.describe('Line Adjust Dialog', () => {
 
   test('should have Apply and Cancel buttons', async ({ page }) => {
     // Open the dialog
-    const lineItem = page.locator('[data-testid^="line-item-"]').filter({ hasText: /Section|Main Passage|Side Tunnel/ }).first();
+    const lineItem = page.locator('[data-testid^="line-item-"]').filter({ hasText: /Line|Main Passage|Side Tunnel/ }).first();
     await lineItem.click({ button: 'right' });
     await page.click('button:has-text("Adjust Position...")');
 
@@ -190,7 +190,7 @@ test.describe('Line Adjust Dialog', () => {
   });
 
   test('applies preview when values change and reverts on cancel', async ({ page }) => {
-    const lineItem = page.locator('[data-testid^="line-item-"]').filter({ hasText: /Section|Main Passage|Side Tunnel/ }).first();
+    const lineItem = page.locator('[data-testid^="line-item-"]').filter({ hasText: /Line|Main Passage|Side Tunnel/ }).first();
     await lineItem.click({ button: 'right' });
     await page.click('button:has-text("Adjust Position...")');
 
@@ -227,7 +227,7 @@ test.describe('Line Adjust Dialog', () => {
       };
     });
 
-    const lineItem = page.locator('[data-testid^="line-item-"]').filter({ hasText: /Section|Main Passage|Side Tunnel/ }).first();
+    const lineItem = page.locator('[data-testid^="line-item-"]').filter({ hasText: /Line|Main Passage|Side Tunnel/ }).first();
     await lineItem.click({ button: 'right' });
     await page.click('button:has-text("Adjust Position...")');
 
@@ -242,7 +242,7 @@ test.describe('Line Adjust Dialog', () => {
   });
 
   test('adjusts a line in the -X direction via typed negative input (#161)', async ({ page }) => {
-    const lineItem = page.locator('[data-testid^="line-item-"]').filter({ hasText: /Section|Main Passage|Side Tunnel/ }).first();
+    const lineItem = page.locator('[data-testid^="line-item-"]').filter({ hasText: /Line|Main Passage|Side Tunnel/ }).first();
     await lineItem.click({ button: 'right' });
     await page.click('button:has-text("Adjust Position...")');
 
@@ -280,7 +280,7 @@ test.describe('Line Adjust Dialog', () => {
   });
 
   test('applies delta when preview already applied', async ({ page }) => {
-    const lineItem = page.locator('[data-testid^="line-item-"]').filter({ hasText: /Section|Main Passage|Side Tunnel/ }).first();
+    const lineItem = page.locator('[data-testid^="line-item-"]').filter({ hasText: /Line|Main Passage|Side Tunnel/ }).first();
     await lineItem.click({ button: 'right' });
     await page.click('button:has-text("Adjust Position...")');
 

@@ -46,9 +46,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::{
-    normalize_azimuth, AzimuthReference, LineId, Shot, ShotData, StationKey, StationRef,
-};
+use crate::{normalize_azimuth, AzimuthReference, LineId, Shot, ShotData, StationKey, StationRef};
 
 use super::Project;
 
@@ -426,7 +424,7 @@ impl Project {
 mod tests {
     use super::*;
     use crate::config::ClosureAdjustmentConfig;
-    use crate::{ClosureStrategy, LoopClosure, LineData, ShotData, Station, StationMerge};
+    use crate::{ClosureStrategy, LineData, LoopClosure, ShotData, Station, StationMerge};
     use chrono::Utc;
 
     fn shot(azimuth: f64, length: f64, depth_in: f64, depth_out: f64) -> ShotData {
@@ -858,10 +856,7 @@ mod tests {
             shot(0.0, 3.0, 0.0, 0.0),
         ]);
         project.rebuild_shot_uuid_index();
-        let first_uuid = project.get_line(id).unwrap().shots[0]
-            .uuid
-            .clone()
-            .unwrap();
+        let first_uuid = project.get_line(id).unwrap().shots[0].uuid.clone().unwrap();
 
         assert!(project.reverse_line(id, false));
 

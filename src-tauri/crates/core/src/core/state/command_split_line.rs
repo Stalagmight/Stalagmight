@@ -4,8 +4,8 @@ use super::command_delete_split::line_budget_refusal;
 use super::AppState;
 use crate::core::{Command, CommandResult};
 use crate::models::{
-    Coordinates, OrphanClosureSweep, Project, RemovedClosure, LineId, ShotId, SplitAt,
-    SplitPreview, SplitLineOptions, SplitSide, StationRef, MIN_SPLIT_CHILD_LENGTH_M,
+    Coordinates, LineId, OrphanClosureSweep, Project, RemovedClosure, ShotId, SplitAt,
+    SplitLineOptions, SplitPreview, SplitSide, StationRef, MIN_SPLIT_CHILD_LENGTH_M,
 };
 
 /// Below this a half "did not move" in [`AppState::split_line_preview`]:
@@ -33,11 +33,7 @@ impl AppState {
             Ok(cut) => cut,
             Err(reason) => return CommandResult::failure(reason),
         };
-        tracing::info!(
-            line_id,
-            ?at,
-            "Executing split_line as single undo unit"
-        );
+        tracing::info!(line_id, ?at, "Executing split_line as single undo unit");
 
         // The shots past the cut move to a new line: position-keyed
         // ignores on them would lapse (see the pin's doc).

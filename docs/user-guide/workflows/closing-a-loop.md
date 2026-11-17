@@ -6,8 +6,8 @@ order: 7
 
 # Closing a loop
 
-Use the **Merge** tool on two stations whose sections are already connected:
-on one section, or joined through other merges and loop closures. Merging them
+Use the **Merge** tool on two stations whose lines are already connected:
+on one line, or joined through other merges and loop closures. Merging them
 would make a loop, so Stalagmight offers a
 [loop closure](../concepts/sections-shots-stations.md) instead.
 
@@ -96,11 +96,11 @@ Some edits would leave a closure that closes nothing. They remove it instead:
 
 - Deleting shots with shift removes a closure the delete shortens to a single
   shot. The **Delete Shots** dialog lists it before you confirm.
-- [Combining sections](combining-and-splitting-sections.md) removes a tie that
-  would join the two ends of one shot, and splitting a section removes a
+- [Combining lines](combining-and-splitting-sections.md) removes a tie that
+  would join the two ends of one shot, and splitting a line removes a
   closure whose two stations become one point. Their dialogs list it before
   you confirm.
-- Deleting a shot or a section, unmerging, removing a zero datum and merging
+- Deleting a shot or a line, unmerging, removing a zero datum and merging
   two placed pieces remove a closure whose two stations become one point.
 
 A warning names each removed closure afterwards, and one **Undo** brings it

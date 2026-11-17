@@ -51,7 +51,7 @@ For a second entrance with its own GPS, or a radiolocation point.
 3. Set **Accuracy (m)**: leave 0 to pin the computed survey exactly to the
    GPS, or enter how far off the reading may be (a smartwatch is roughly 5 m).
 4. Check **Entrance**. It is ticked by default at the first or last station
-   of a section and unticked in the middle of one. Untick it for a point
+   of a line and unticked in the middle of one. Untick it for a point
    inside the cave, such as a radiolocation fix.
 5. **Save**. Nothing moves in the Raw Data View. Switch to the **Closures
    Computed View** in the [Display menu](../screens/display-menu.md) to see

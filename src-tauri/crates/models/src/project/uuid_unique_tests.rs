@@ -208,11 +208,11 @@ fn the_json_rewrite_matches_the_typed_one() {
 #[test]
 fn the_json_rewrite_adds_no_key_and_leaves_positional_refs_alone() {
     let mut value = serde_json::json!({
-        "sections": [{ "id": 1, "shots": [{ "uuid": IDS[0] }] }],
+        "lines": [{ "id": 1, "shots": [{ "uuid": IDS[0] }] }],
         "station_comments": [
-            [{ "section_id": 1, "anchor": { "Index": 1 } }, "positional"],
-            [{ "section_id": 1, "anchor": { "AfterShot": IDS[0] } }, "anchored"],
-            [{ "section_id": 0, "anchor": { "AfterShot": IDS[0] } }, "other line"]
+            [{ "line_id": 1, "anchor": { "Index": 1 } }, "positional"],
+            [{ "line_id": 1, "anchor": { "AfterShot": IDS[0] } }, "anchored"],
+            [{ "line_id": 0, "anchor": { "AfterShot": IDS[0] } }, "other line"]
         ]
     });
     let new = reminted_shot_uuid(1, IDS[0]);
@@ -220,7 +220,7 @@ fn the_json_rewrite_adds_no_key_and_leaves_positional_refs_alone() {
         (line == 1 && old == IDS[0]).then(|| new.clone())
     });
     assert!(changed);
-    assert_eq!(value["sections"][0]["shots"][0]["uuid"], new.as_str());
+    assert_eq!(value["lines"][0]["shots"][0]["uuid"], new.as_str());
     assert_eq!(value["station_comments"][0][0]["anchor"]["Index"], 1);
     assert_eq!(
         value["station_comments"][1][0]["anchor"]["AfterShot"],
@@ -289,8 +289,7 @@ fn record_parities(project: &Project) -> Vec<Vec<bool>> {
         .lines
         .iter()
         .map(|line| {
-            line
-                .shots
+            line.shots
                 .iter()
                 .map(|shot| project.shot_record_parity(line, shot.uuid.as_deref()))
                 .collect()

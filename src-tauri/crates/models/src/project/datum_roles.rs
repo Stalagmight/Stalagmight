@@ -19,7 +19,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::{Project, LineId, StationRef, ZeroDatum};
+use super::{LineId, Project, StationRef, ZeroDatum};
 use crate::station::DatumRole;
 use crate::{gps_to_local, GpsCoordinates};
 

@@ -282,7 +282,7 @@ test.describe('Corruption Recovery Dialog', () => {
   });
 
   test('custom error message is displayed in dialog', async ({ page }) => {
-    await openRecoveryDialog(page, 'UNIQUE constraint violated on table "lines"');
+    await openRecoveryDialog(page, 'UNIQUE constraint violated on table "sections"');
 
     const dialog = page.getByTestId('corruption-recovery-dialog');
     await expect(dialog).toContainText('UNIQUE constraint violated');

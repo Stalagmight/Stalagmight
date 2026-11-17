@@ -21,8 +21,8 @@ use std::time::Instant;
 use serde::Deserialize;
 
 use crate::models::{
-    remap_project_json, reminted_shot_uuid, reminted_shot_uuid_avoiding, LoopClosure, Project,
-    LineData, LineId, ShotUuidRemap, StationAnchor, StationKey,
+    remap_project_json, reminted_shot_uuid, reminted_shot_uuid_avoiding, LineData, LineId,
+    LoopClosure, Project, ShotUuidRemap, StationAnchor, StationKey,
 };
 
 use super::{UndoData, UndoEntry, UndoStack};
@@ -107,16 +107,12 @@ fn reinstalled_ids(data: &UndoData) -> Vec<(LineId, &str)> {
             .lines
             .iter()
             .flat_map(|line| {
-                line
-                    .shots
+                line.shots
                     .iter()
                     .filter_map(move |s| Some((line.id, s.uuid.as_deref()?)))
             })
             .collect(),
-        UndoData::LineSnapshot {
-            line_id,
-            line_data,
-        } => line_data
+        UndoData::LineSnapshot { line_id, line_data } => line_data
             .shots
             .iter()
             .filter_map(|s| Some((*line_id, s.uuid.as_deref()?)))
@@ -157,10 +153,9 @@ impl HistoryIds {
             false
         });
         let mut state: BTreeMap<String, BTreeSet<LineId>> = BTreeMap::new();
-        let note =
-            |state: &mut BTreeMap<String, BTreeSet<LineId>>, line: LineId, uuid: &str| {
-                state.entry(uuid.to_string()).or_default().insert(line);
-            };
+        let note = |state: &mut BTreeMap<String, BTreeSet<LineId>>, line: LineId, uuid: &str| {
+            state.entry(uuid.to_string()).or_default().insert(line);
+        };
         match data {
             UndoData::ProjectSnapshot(json) => {
                 probe_snapshot(json, &mut |line, uuid| note(&mut state, line, uuid));
@@ -430,14 +425,11 @@ fn visit_entry(
         | UndoData::ProjectSnapshotPair { .. }
         | UndoData::None => {}
         UndoData::PreviousValues {
-            line_id,
-            shot_uuid,
-            ..
+            line_id, shot_uuid, ..
         } => changed |= f(*line_id, shot_uuid),
-        UndoData::LineSnapshot {
-            line_id,
-            line_data,
-        } => changed |= visit_line_data(*line_id, line_data, f),
+        UndoData::LineSnapshot { line_id, line_data } => {
+            changed |= visit_line_data(*line_id, line_data, f);
+        }
         UndoData::CreatedLineSnapshot {
             line_id,
             line_data,
@@ -564,10 +556,7 @@ fn visit_closure(
     a || b
 }
 
-fn visit_key(
-    key: &mut StationKey,
-    f: &mut dyn FnMut(LineId, &mut Option<String>) -> bool,
-) -> bool {
+fn visit_key(key: &mut StationKey, f: &mut dyn FnMut(LineId, &mut Option<String>) -> bool) -> bool {
     let StationAnchor::AfterShot(uuid) = &mut key.anchor else {
         return false;
     };

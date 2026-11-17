@@ -472,7 +472,7 @@ Interaction (each runs a cheap oracle sweep after; findings ride the result unde
 | `ipc(command, args?)` | `window.__TAURI__.core.invoke`; e.g. `get_recent_logs_since`, `check_project_integrity`. |
 | `map_view(set?)` | Read or set the MapLibre view (center/zoom/bearing). |
 | `map_click(lngLat, button?)` | Click a visible geographic point through the ordinary or placement path, reject half-open viewport edges, and require the map interaction sequence to advance. |
-| `map_feature_click(featureType, sectionId, shotId?/stationIndex?, button?, verifySelection?)` | Resolve current WebGL geometry by semantic identity, arm a one-use overlap preference, drive the MapLibre pipeline, and prove this click was processed. Selection is also verified by default. |
+| `map_feature_click(featureType, lineId, shotId?/stationIndex?, button?, verifySelection?)` | Resolve current WebGL geometry by semantic identity, arm a one-use overlap preference, drive the MapLibre pipeline, and prove this click was processed. Selection is also verified by default. |
 | `seed(mode, name?, projectName?)` | Open a fixture / fractal fixture (`e2e/fixtures/`), or create a basic empty project. |
 | `driver_script(script, timeoutMs?)` | Node-context async body with `browser`/`ipc`/`evalInApp`/`readStore`/`callAction`/`log` in scope, under the mutex, for tight loops (one MCP call per action is too slow). On timeout the helpers (and the `browser` proxy) are disabled so a still-running body cannot keep driving the app outside the mutex. |
 
@@ -508,8 +508,8 @@ back to back on one session.
 
 | Scenario | What it asserts |
 |---|---|
-| `seed-large-project` | A fractal fixture opens cleanly into a multi-section single-system view. |
-| `undo-redo-churn` | Create N sections, undo N + redo N; the cheap state signature returns to baseline. |
+| `seed-large-project` | A fractal fixture opens cleanly into a multi-line single-system view. |
+| `undo-redo-churn` | Create N lines, undo N + redo N; the cheap state signature returns to baseline. |
 | `undo-redo-fuzz` | Seeded random mutations interleaved with random undo/redo walks; an EXACT normalized `get_project_state` roundtrip at every history depth (see below). |
 | `undo-persistence-fuzz` | Builds an undo stack covering every reachable `UndoData` variant, saves/closes/reopens it, then walks the whole RESTORED history down and back up (see below). |
 | `dialog-cycling` | Opening/closing dialogs leaves no residue and no DOM growth. |
@@ -553,7 +553,7 @@ That leaves the bridge at roughly 6% of a step. Measured on fractal seed 4 x60
 in the store action's own `flushPlanAnchors` + command + `refreshProjectState` +
 `checkProjectIntegrity` chain, 810 ms in the three read-only IPC reads, 132 ms
 canonicalizing, ~390 ms of WebDriver. The action chain is the boundary coverage
-that found the `updateSection` and undo-fails-outright bugs, so it stays; further
+that found the `updateLine` and undo-fails-outright bugs, so it stays; further
 speedup has to come from parallelism, which is what `agent:fuzz-matrix` is for.
 
 The starting point is chosen and cleaned rather than inherited. The scenario
@@ -575,8 +575,8 @@ so it can only ever touch a temp copy.
 | `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS` | INERT. It used to keep a run going past a mismatch that was entirely a classified known bug; every classifier is deleted now that the findings are fixed, so there is nothing left to allow. Still read, and still named in the failure's `reproduce:` line, so a tolerant-looking invocation cannot be mistaken for one that relaxed something. |
 
 Fixture choice is load-bearing, not cosmetic. The fractal fixture has no loop
-closures, no zero datums and a non-null surveyor on all 32 sections; naharon has
-all three plus 13 null-surveyor sections, and half the bugs below are only
+closures, no zero datums and a non-null surveyor on all 32 lines; naharon has
+all three plus 13 null-surveyor lines, and half the bugs below are only
 reachable there.
 
 Three oracles run, not one. The **roundtrip** comparison above; an **absolute
@@ -618,36 +618,36 @@ STALAGMIGHT_FUZZ_STREAM=v3 pnpm agent:scenario undo-redo-fuzz --seed 1 --iterati
 STALAGMIGHT_FUZZ_STREAM=v3 pnpm agent:fuzz-matrix --seeds 1..4 --workers 1 --iterations 40
 ```
 
-`import_sections` and the four `execute_*_import` commands push ONE undo entry
-covering an arbitrary number of new sections, placements, station comments and
+`import_lines` and the four `execute_*_import` commands push ONE undo entry
+covering an arbitrary number of new lines, placements, station comments and
 in-place edits to shots that were already there. That is the widest single
 command in the app, and it is a `ProjectSnapshotPair` - the entry family findings
 8 and 11 both lived in. v3 adds fifteen generators for it
 (`e2e/agent/scenarios/undoRedoFuzzImportActions.ts`), about 24% of a balanced
 run's draws:
 
-- **`importSectionsSynthetic`** - fully synthetic `ImportSectionConfig` batches:
-  0 to 6 sections under a 24-shot cap, all six `ImportPlacement` variants,
+- **`importLinesSynthetic`** - fully synthetic `ImportLineConfig` batches:
+  0 to 6 lines under a 24-shot cap, all six `ImportPlacement` variants,
   duplicate names inside one batch, `reverse`, `station_comments` past the end of
-  a section, and refs the targeting digest says are no longer live (the shape a
-  placement takes when it names a section the run has since deleted).
-- **`importSectionsNonFinite`** - one guarded shot field poisoned. This is really
+  a line, and refs the targeting digest says are no longer live (the shape a
+  placement takes when it names a line the run has since deleted).
+- **`importLinesNonFinite`** - one guarded shot field poisoned. This is really
   the NULL family: `JSON.stringify` spells `NaN` and `Infinity` as `null` on the
   WebDriver bridge exactly as it does on the real `invoke`, which is the whole
   premise of `src/utils/importPayloadGuard.ts`.
-- **`importSectionsWithOverlap`** - `existing_shot_updates`, the DMP wizard's
+- **`importLinesWithOverlap`** - `existing_shot_updates`, the DMP wizard's
   overlap interpolation, aimed at the doubly-anchored range the wizard's
   `useMemo` greys out. The backend refuses it independently
   (`command_import.rs` collects zero datums, datum-backed merges and aligned
-  closures into `anchor_indices` and skips the section when one sits on each
+  closures into `anchor_indices` and skips the line when one sits on each
   side), and that parity is only testable if something sends the payload the UI
   will not.
 - **The four file importers** plus the parse-only `importDmp`, on files built by
   `surveyFileSpecs.ts` / `surveyFileCorrupt.ts` - the same writers
   `import-dialog-fuzz` uses, never a fixture.
 - **The cheap probes** - `calculateFileHash`, `checkDuplicateImport`,
-  `checkSectionHashes`, `suggestImportPlacement`, `saveAfterImport`.
-- **The motif pair** - `createMotifSection` plants a section whose shots are a
+  `checkLineHashes`, `suggestImportPlacement`, `saveAfterImport`.
+- **The motif pair** - `createMotifLine` plants a line whose shots are a
   motif derived from a small integer key, and `probeSuggestMotif` asks
   `suggest_import_placement` for that same motif jittered well inside the
   suggester's cutoffs. Both are pure, so the shrinker can re-derive either half;
@@ -733,9 +733,9 @@ problem rather than a transcription. `Refs::learn`
 (`src-tauri/crates/core/src/core/state/fuzz_undo_tests.rs`) pairs what a
 recorded move created against what the replayed move created POSITIONALLY, with
 `zip` and no length check - sound only because every existing `Op` creates a
-fixed number of entities (at most one section, one shot, one closure; `BatchOp`
+fixed number of entities (at most one line, one shot, one closure; `BatchOp`
 has no creating variant at all). An import creates an arbitrary number in one
-move, and `execute_import_sections` drops sections whose placement does not
+move, and `execute_import_lines` drops lines whose placement does not
 resolve, so a replay that places one fewer would pair a PREFIX, silently, and
 the shrinker would minimize toward the mis-pairing instead of toward the bug.
 Whoever adds it has to give `learn` a checked, arity-aware pairing first.
@@ -753,9 +753,9 @@ lines are kept verbatim as regression checks, and they are GREEN.
 The last one to close was found by this tier after the earlier waves: **finding
 11's residue**. That fix re-applied the save heals to a restored project as a
 CARRY-FORWARD from the live project, so a `ProjectSnapshotPair` recorded before a
-save that RE-CREATES a section (a batch containing a create, a range-split, ...)
+save that RE-CREATES a line (a batch containing a create, a range-split, ...)
 still came back without the gauge anchors the save captured - there was no live
-section to carry them from, and roughly half the seeds on either fixture reached
+line to carry them from, and roughly half the seeds on either fixture reached
 it. `pnpm agent:fuzz-shrink` cut fractal seed 1 x40 to two steps for it:
 `executeBatch(...+crtSec+...)` then `save`. Closed in b9d6b14b by making snapshot
 pairs self-refreshing walls - an undo re-records the entry's `after` half from
@@ -799,7 +799,7 @@ Beyond the main fuzzer's three oracles it adds two of its own: COVERAGE (every
 variant a guaranteed plan step promises must be present on the RESTORED stack)
 and STACK SURVIVAL (both lengths must equal what they were at save time). Six
 `UndoData` variants are reported once per run as out of scope: `MergeInfo`,
-`UnmergeInfo`, `StationMoveInfo`, `ShotSnapshot`, `SectionSnapshot` and
+`UnmergeInfo`, `StationMoveInfo`, `ShotSnapshot`, `LineSnapshot` and
 `ProjectSnapshot` still have restore arms in `undo()` but have no live producer
 left, so a project whose history was stripped can never construct one.
 
@@ -807,7 +807,7 @@ left, so a project whose history was stripped can never construct one.
 |---|---|
 | `STALAGMIGHT_FUZZ_FIXTURE` | Same as the main fuzzer: which `.stalx` to build on, by basename. |
 | `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS` | INERT here too - bug 1, bug 8 and findings 11/12/13 are fixed and their classifiers deleted, so there is nothing to walk past. |
-| `STALAGMIGHT_PERSIST_FUZZ_DELETE_IN_TARGET` | `1` moves the plan's mid-section delete onto the section the shot entries target. That was finding 13's repro, and it used to be terminal: the stale id ran past the renumbered range, the undo failed, and the unwind could not continue. The wedge is fixed, so the flag now walks the whole restored stack (measured: 3 cycles x 19 entries); it stays off by default because the two arrangements are different id-space shapes and the plan's coverage promises are written against the default. |
+| `STALAGMIGHT_PERSIST_FUZZ_DELETE_IN_TARGET` | `1` moves the plan's mid-line delete onto the line the shot entries target. That was finding 13's repro, and it used to be terminal: the stale id ran past the renumbered range, the undo failed, and the unwind could not continue. The wedge is fixed, so the flag now walks the whole restored stack (measured: 3 cycles x 19 entries); it stays off by default because the two arrangements are different id-space shapes and the plan's coverage promises are written against the default. |
 
 It found two new bugs, both written up on issue #413 and both now FIXED
 (b9c9d649), their `open_undo_bugs_tests.rs` tests un-ignored. **Finding 12**:
@@ -816,7 +816,7 @@ WRONG shot - `UndoData::InverseCommand` and `UndoData::PreviousValues { shot_id 
 both named a shot by its in-session id, and `redo_inner`'s catch-all re-executed
 the original command with the same id. It needed no delete, unlike bug 8; one
 insert-before was enough, and nothing about the resulting project looked wrong.
-**Finding 13**: when the section HAS had a shot deleted, the allocator has run
+**Finding 13**: when the line HAS had a shot deleted, the allocator has run
 past the renumbered range, so the stale id missed instead of colliding - the undo
 failed outright, `undo_inner` pushed the entry back, and the history was WEDGED
 with every entry beneath it unreachable.
@@ -1059,9 +1059,9 @@ rather than the absolute depths and counts the re-hangs as a metric.
 
 Closing them let X5 run on that fixture for the first time, and finding 6 is its
 own correction: the chain settles at the THIRD export there, not the second,
-because the first import inherits its section order from the source project
+because the first import inherits its line order from the source project
 rather than deriving it. T3 and T4 are byte-identical, no boundary moves and no
-shot changes section - so X5 now asserts a fixed POINT rather than a fixed index
+shot changes line - so X5 now asserts a fixed POINT rather than a fixed index
 and reports `x5:settledAt:N`.
 
 Both fixtures are green.
@@ -1095,7 +1095,7 @@ makes it affordable as a `#[test]`. See docs/testing-recipes.md for how to run i
 and its soak.
 
 It is not a replacement. It cannot see the projectStore actions or the IPC
-serialization, which is where the `updateSection` double-option bug (finding 5)
+serialization, which is where the `updateLine` double-option bug (finding 5)
 was found and where the undo-fails-outright bug (finding 6) surfaced. Equally it
 sees two things the harness cannot: `station_offsets` / `station_comments`, which
 `ProjectIpc` omits entirely, and the app's own `#[cfg(test)]`
@@ -1151,7 +1151,7 @@ ones) and prints what it restored. It has to happen before `./scenarios` is
 imported - the fuzz scenarios freeze those knobs into module-level constants at
 import time - which is why both `agent:scenario` and `agent:fuzz-shrink` import
 the registry dynamically. A trace recorded by a different scenario, or on a
-different fixture, is REFUSED: the steps carry resolved section and shot ids, so
+different fixture, is REFUSED: the steps carry resolved line and shot ids, so
 replaying them against another project drives moves at ids that do not exist
 there and reports an invented failure (or none) while the operator believes they
 are looking at the recorded one.
@@ -1211,14 +1211,14 @@ Both results are 1-minimal, and both replay deterministically twice. The finding
 12 one is the better demonstration: its minimal list is
 
 ```
-1. createSection(shots=3)
+1. createLine(shots=3)
 2. createShot(s=32,before=3200000)
 3. setShotKind(s=32,shot=3200003,Jump)
 4. save
 ```
 
 which is, step for step, the synthetic Rust test that was written for that
-finding by hand - create a section, insert before the first shot so the ids stop
+finding by hand - create a line, insert before the first shot so the ids stop
 matching positional order, mark a shot whose id will land on a different slot,
 save. The shrinker got there from a 20-step cycle without being told what the bug
 was. Its 20 divergent rejections are the guard doing its job: subsets that still
@@ -1244,7 +1244,7 @@ message are indistinguishable to it. The bug 1 shrink above lands on
 `executeBatch(...)` + `save`, whose failure is really finding 11 (a pre-save
 snapshot pair reverting the save's gauge capture) - `undo-redo-fuzz` has no
 classifier that separates the two, so both read as
-`create-section-redo-drops-gauge-anchors`. The shrinker did exactly what it
+`create-line-redo-drops-gauge-anchors`. The shrinker did exactly what it
 promises; the ambiguity is in the message. Read the minimal action list before
 writing the test, and if it does not look like the bug you started from, that
 ambiguity is the reason. (`undo-persistence-fuzz` names the entry each move

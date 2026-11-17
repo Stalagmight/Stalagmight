@@ -111,7 +111,7 @@ describe('canonicalProjectSnapshot', () => {
     expect(NON_ROLLBACK_PATHS).toEqual([
       'project.modified_at',
       'project.file_path',
-      'project.next_section_id',
+      'project.next_line_id',
       'project.next_closure_id',
       'project.lines.*.next_shot_id',
     ]);

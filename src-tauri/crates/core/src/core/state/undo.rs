@@ -150,21 +150,14 @@ impl AppState {
                 line_values,
             } => self.undo_shot_credits(changes, line_values.as_ref()),
 
-            UndoData::LineSnapshot {
-                line_id,
-                line_data,
-            } => {
+            UndoData::LineSnapshot { line_id, line_data } => {
                 // Restore deleted line. LEGACY ONLY: a live `DeleteLine`
                 // captures a `ProjectSnapshotPair` (which restores the whole
                 // `Line`, identity included), so this arm serves persisted
                 // entries written before that change - and those carry no
                 // identity, so the shots come back with fresh uuids exactly as
                 // they always did.
-                self.restore_line(
-                    *line_id,
-                    line_data.clone(),
-                    &LineIdentity::default(),
-                )
+                self.restore_line(*line_id, line_data.clone(), &LineIdentity::default())
             }
 
             UndoData::CreatedLineSnapshot { line_id, .. } => {
@@ -796,10 +789,9 @@ impl AppState {
                             // two shots one id. The id is in-session only (the
                             // loader renumbers it anyway), so minting a fresh one
                             // costs nothing that a collision would not cost more.
-                            let id_taken =
-                                project.get_line(*line_id).is_some_and(|line| {
-                                    line.shots.iter().any(|s| s.id == *shot_id)
-                                });
+                            let id_taken = project
+                                .get_line(*line_id)
+                                .is_some_and(|line| line.shots.iter().any(|s| s.id == *shot_id));
                             let forced_id = (!id_taken).then_some(*shot_id);
                             let ok = if let Some(before_id) = before_anchor {
                                 project
@@ -833,9 +825,8 @@ impl AppState {
                                 // resolves lands here too, for the same reason: a recorded
                                 // position is a better guess than an id that now names a
                                 // different shot.
-                                let line_len = project
-                                    .get_line(*line_id)
-                                    .map_or(0, |s| s.shots.len());
+                                let line_len =
+                                    project.get_line(*line_id).map_or(0, |s| s.shots.len());
                                 let pos = (*position).min(line_len);
                                 if pos == 0 && line_len > 0 {
                                     // Prepend before the current first shot.
@@ -946,11 +937,8 @@ impl AppState {
                                 if !existing.contains(sid) {
                                     continue;
                                 }
-                                let current = project
-                                    .line_offsets
-                                    .get(sid)
-                                    .copied()
-                                    .unwrap_or((0.0, 0.0));
+                                let current =
+                                    project.line_offsets.get(sid).copied().unwrap_or((0.0, 0.0));
                                 let new_offset = (current.0 + offset.0, current.1 + offset.1);
                                 // Through the same writer the FORWARD move uses
                                 // (`adjust_line_offset`): a redo that lands the
@@ -1303,9 +1291,9 @@ impl AppState {
         // line {s}": this one says the shot's persistent IDENTITY is gone,
         // which is a different fact from an id that no longer resolves, and the
         // fuzz gate tells the two apart by exactly this wording.
-        project.shot_id_by_uuid(line_id, uuid).ok_or_else(|| {
-            format!("Shot {uuid} (addressed by uuid) not found in line {line_id}")
-        })
+        project
+            .shot_id_by_uuid(line_id, uuid)
+            .ok_or_else(|| format!("Shot {uuid} (addressed by uuid) not found in line {line_id}"))
     }
 
     /// `command` with the shot it addresses re-resolved through the uuid its
@@ -1324,14 +1312,10 @@ impl AppState {
         let mut resolved = command.clone();
         match &mut resolved {
             Command::UpdateShot {
-                line_id,
-                shot_id,
-                ..
+                line_id, shot_id, ..
             }
             | Command::SetShotKind {
-                line_id,
-                shot_id,
-                ..
+                line_id, shot_id, ..
             } if *line_id == target_line && *shot_id == recorded_id => {
                 *shot_id = self.resolve_undo_shot(target_line, Some(uuid), recorded_id)?;
             }

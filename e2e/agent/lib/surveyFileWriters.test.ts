@@ -90,7 +90,7 @@ interface MirroredLine {
   shots: MirroredShot[];
 }
 
-/** `parse_line` + `parse_shot`, minus the validation and the pitch flip. */
+/** `parse_section` + `parse_shot`, minus the validation and the pitch flip. */
 function parseLine(bytes: readonly number[]): MirroredLine {
   let cursor = 0;
   const read = (): number => {
@@ -145,7 +145,7 @@ function parseLine(bytes: readonly number[]): MirroredLine {
       }
       shots.push({ shotType, values, markerIndex });
     } catch {
-      // `parse_line` breaks out of the shot loop on the first failure.
+      // `parse_section` breaks out of the shot loop on the first failure.
       cursor = before;
       break;
     }

@@ -282,7 +282,7 @@ test.describe('Data table fullscreen mode', () => {
     await expect(page.getByTestId('data-table-raw-name')).not.toHaveText('');
     await page.getByTestId('data-table-raw-table-menu').click();
     const tableList = page.getByTestId('data-table-raw-table-menu-list');
-    await expect(tableList.getByRole('button')).toHaveText(['project', 'lines', 'shots', 'undo_stack']);
+    await expect(tableList.getByRole('button')).toHaveText(['project', 'sections', 'shots', 'undo_stack']);
     await tableList.getByRole('button', { name: 'shots', exact: true }).click();
     await expect(page.getByTestId('raw-table-view')).toBeVisible();
     await expect(page.getByTestId('data-table-raw-name')).toHaveText('shots');

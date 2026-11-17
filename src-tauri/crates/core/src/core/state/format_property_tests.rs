@@ -256,10 +256,7 @@ fn allocators(state: &AppState) -> BTreeMap<String, u32> {
         u32::try_from(project.next_closure_id).unwrap_or(u32::MAX),
     );
     for line in &project.lines {
-        out.insert(
-            format!("line {}.next_shot_id", line.id),
-            line.next_shot_id,
-        );
+        out.insert(format!("line {}.next_shot_id", line.id), line.next_shot_id);
     }
     out
 }

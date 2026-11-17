@@ -40,7 +40,7 @@ screenshot above:
 - **Entrance**: whether this zero datum is a way into the cave, which Plan
   mode and the **Distance** color start from. Always ticked, and greyed out,
   for the placement datum. For a GPS fix it starts ticked at the first or
-  last station of a section and unticked elsewhere.
+  last station of a line and unticked elsewhere.
 
 **Save** with a new GPS moves the station, and everything connected to it, to
 that position when it is the placement datum of its piece. For the first zero
@@ -66,5 +66,5 @@ fix moves nothing in the Raw Data View. See
 - Not supported: MGRS and What3words (recognised, but not converted), short
   Plus Codes, shortened links (`goo.gl`) and Apple Maps links.
 - For typed coordinates, the detected format is shown next to 4.
-- ID, section, X, Y and depth at the top of the dialog are read-only.
+- ID, line, X, Y and depth at the top of the dialog are read-only.
 - **Save** is unavailable in the Closures Computed View, Plan and Export.

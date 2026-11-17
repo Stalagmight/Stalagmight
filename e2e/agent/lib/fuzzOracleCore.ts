@@ -58,7 +58,7 @@
 export const NON_ROLLBACK_PATHS: readonly string[] = [
   'project.modified_at',
   'project.file_path',
-  'project.next_section_id',
+  'project.next_line_id',
   'project.next_closure_id',
   'project.lines.*.next_shot_id',
 ];
@@ -80,7 +80,7 @@ export function canonicalProjectSnapshot(state: unknown, idAgnostic?: boolean): 
   const dropped: Record<string, true> = {
     'project.modified_at': true,
     'project.file_path': true,
-    'project.next_section_id': true,
+    'project.next_line_id': true,
     'project.next_closure_id': true,
     'project.lines.*.next_shot_id': true,
   };

@@ -165,6 +165,6 @@ test.describe('Auto-Save Status Bar', () => {
     // The footer should show summary stats like "1 line, 1 shot, 10.0 m"
     const footer = page.locator('footer');
     await expect(footer).toBeVisible();
-    await expect(footer).toContainText(/section/i);
+    await expect(footer).toContainText(/line/i);
   });
 });

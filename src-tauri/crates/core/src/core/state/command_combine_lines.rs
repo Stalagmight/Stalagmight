@@ -6,8 +6,8 @@ use crate::core::{Command, CommandResult, ValidationWarning, WarningSeverity};
 use std::collections::HashMap;
 
 use crate::models::{
-    line_label, station_id_label, CombineCandidate, CombineRemovedClosure, CombineRemovedKind,
-    CombineLinesOptions, LineId, LineUpdates, StationRef, CLOSURE_REMOVED_ACROSS_ONE_SHOT,
+    line_label, station_id_label, CombineCandidate, CombineLinesOptions, CombineRemovedClosure,
+    CombineRemovedKind, LineId, LineUpdates, StationRef, CLOSURE_REMOVED_ACROSS_ONE_SHOT,
 };
 
 /// The warnings a combine reports for the ties it removed because, combined,
@@ -91,11 +91,7 @@ impl AppState {
         if let Err(f) = self.guard_mutation("Combine lines") {
             return f;
         }
-        tracing::info!(
-            kept,
-            other,
-            "Executing combine_lines as single undo unit"
-        );
+        tracing::info!(kept, other, "Executing combine_lines as single undo unit");
 
         // Refuse before the snapshot: the check is read-only, so a blocked
         // combine costs no serialization and cannot touch the project.

@@ -117,7 +117,7 @@ export function TmlPlacementStep({
       <div className="text-sm font-medium">{t('dialogs.tmlImport.placement.heading')}</div>
       <div className="text-xs text-text-tertiary">
         {rootLineName
-          ? t('dialogs.tmlImport.placement.appliesTo', { line: rootLineName })
+          ? t('dialogs.tmlImport.placement.appliesTo', { section: rootLineName })
           : t('dialogs.tmlImport.placement.appliesToNothing')}
       </div>
       <div className="space-y-2 p-3 border border-border rounded">

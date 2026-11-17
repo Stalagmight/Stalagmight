@@ -151,7 +151,7 @@ test.describe('Focus Management', () => {
       // to the context menu, whose item unmounts when the dialog opens - so it can
       // no longer be the focus-return target.) Focus the Add-line button, then
       // open the ConfirmDialog while it holds focus so the dialog captures it.
-      const trigger = page.getByTestId('lines-add-button');
+      const trigger = page.getByTestId('sections-add-button');
       await expect(trigger).toBeVisible({ timeout: 5000 });
       await trigger.focus();
       await expect(trigger).toBeFocused();
@@ -173,7 +173,7 @@ test.describe('Focus Management', () => {
       await expect(page.getByTestId('confirm-dialog')).not.toBeVisible({ timeout: 3000 });
 
       // Focus should return to the trigger element.
-      expect(await focusedTestId(page)).toBe('lines-add-button');
+      expect(await focusedTestId(page)).toBe('sections-add-button');
     });
   });
 

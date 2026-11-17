@@ -1186,7 +1186,7 @@ test.describe('Detail Panel Links', () => {
       // Check Line link aria-label
       const lineLink = page.getByTestId(`line-${mainLineId}-link`);
       const lineAriaLabel = await lineLink.getAttribute('aria-label');
-      expect(lineAriaLabel).toMatch(/Select section/i);
+      expect(lineAriaLabel).toMatch(/Select line/i);
     });
 
     test('ARIA live region announces selection changes', async ({ page }) => {

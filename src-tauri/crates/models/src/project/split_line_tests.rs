@@ -4,8 +4,8 @@
 use chrono::NaiveDate;
 
 use crate::{
-    GpsCoordinates, Person, Project, LineData, LineId, ShotData, SplitLineOptions,
-    SplitSide, StationRef, SurveyCredit,
+    GpsCoordinates, LineData, LineId, Person, Project, ShotData, SplitLineOptions, SplitSide,
+    StationRef, SurveyCredit,
 };
 
 fn options(comment_side: SplitSide, datum_side: SplitSide) -> SplitLineOptions {
@@ -483,10 +483,7 @@ fn the_shot_insert_check_is_exact_at_the_cap_and_the_id_window() {
     project.get_line_mut(small).unwrap().next_shot_id = window_end;
     let reason = project.shot_insert_refusal(small).unwrap();
     assert!(reason.contains("used up its shot numbers"), "{reason}");
-    assert!(
-        project.shot_insert_refusal(small + 1).is_some(),
-        "no line"
-    );
+    assert!(project.shot_insert_refusal(small + 1).is_some(), "no line");
 }
 
 /// Each half needs a name: an empty or whitespace-only one is refused before

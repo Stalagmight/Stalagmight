@@ -14,7 +14,7 @@
 use tempfile::TempDir;
 
 use super::AppState;
-use crate::models::{Project, LineData, ShotData};
+use crate::models::{LineData, Project, ShotData};
 use crate::persistence::Database;
 
 const IGNORED_CODE: &str = "SHORT_SHOT";

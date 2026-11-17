@@ -729,7 +729,7 @@ mod tests {
         );
 
         let legacy: Station = serde_json::from_value(serde_json::json!({
-            "station_ref": { "section_id": 1, "station_index": 0 },
+            "station_ref": { "line_id": 1, "station_index": 0 },
             "coordinates": { "x": 0.0, "y": 0.0, "z": 0.0 },
             "is_zero_datum": false,
             "gps_coordinates": null,

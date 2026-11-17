@@ -30,7 +30,7 @@ use compass_data::{
 };
 
 use crate::models::azimuth_reference::{AzimuthReference, CorrectionSource};
-use crate::models::line::{ImportClosure, ImportPlacement, ImportLineConfig};
+use crate::models::line::{ImportClosure, ImportLineConfig, ImportPlacement};
 use crate::models::shot::{ShotData, ShotKind};
 use crate::models::station::GpsCoordinates;
 use crate::parsers::encoding::{read_latin1, reject_bom};
@@ -1797,8 +1797,7 @@ fn topological_sort_configs(configs: &mut Vec<ImportLineConfig>) {
         .iter()
         .map(|c| match &c.placement {
             ImportPlacement::FromImporting {
-                target_line_index,
-                ..
+                target_line_index, ..
             } => pos_of.get(target_line_index).copied(),
             _ => None,
         })

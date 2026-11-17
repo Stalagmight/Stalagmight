@@ -68,7 +68,7 @@ export function CombinePlanNotes({
         : 'moveGap';
     notes.push({
       key: 'move',
-      text: t(`dialogs.combineLines.${key}`, {
+      text: t(`dialogs.combineSections.${key}`, {
         moving,
         distance: formatLength(plan.shift_m, lengthUnit, combineMoveIsSmall(plan) ? 4 : 2),
       }),
@@ -84,7 +84,7 @@ export function CombinePlanNotes({
       // Why the kept side moves: a zero datum holds the other side, or the
       // other side holds the point the Closures Computed View is held at.
       const key = plan.kept_moves_because === 'adjustment_anchor' ? 'keptMovesAnchor' : 'keptMoves';
-      notes.push({ key: 'kept-moves', text: t(`dialogs.combineLines.${key}`, { kept: keptName, other: otherName }) });
+      notes.push({ key: 'kept-moves', text: t(`dialogs.combineSections.${key}`, { kept: keptName, other: otherName }) });
     }
   }
   if (plan.azimuth_rotation_deg !== null) {
@@ -191,7 +191,7 @@ export function CombinePlanNotes({
                 );
                 return (
                   <li key={id} data-testid={`combine-torn-tie-${id}`}>
-                    <Trans i18nKey={`dialogs.combineLines.${key}`} components={ends(tie.station_a, tie.station_b)} />
+                    <Trans i18nKey={`dialogs.combineSections.${key}`} components={ends(tie.station_a, tie.station_b)} />
                     {tie.reason === 'zero_datum' && held && (
                       <>
                         {/* The tie, then the held line as its own sentence. */}
@@ -226,7 +226,7 @@ export function CombinePlanNotes({
                 return (
                   <li key={id} data-testid={`combine-removed-tie-${id}`}>
                     <Trans
-                      i18nKey={`dialogs.combineLines.${REMOVED_KEY[tie.kind]}`}
+                      i18nKey={`dialogs.combineSections.${REMOVED_KEY[tie.kind]}`}
                       components={ends(tie.station_a, tie.station_b)}
                     />
                   </li>
@@ -247,11 +247,11 @@ export function CombinePlanNotes({
                 return (
                   <li key={`${id}-${index}`} data-testid={`combine-replaced-tie-${id}`}>
                     <Trans
-                      i18nKey={`dialogs.combineLines.${REPLACED_KEY[closure.kind]}`}
+                      i18nKey={`dialogs.combineSections.${REPLACED_KEY[closure.kind]}`}
                       components={ends(closure.station_a, closure.station_b)}
                     />{' '}
                     <Trans
-                      i18nKey={`dialogs.combineLines.${REPLACED_BY_KEY[closure.by_kind]}`}
+                      i18nKey={`dialogs.combineSections.${REPLACED_BY_KEY[closure.by_kind]}`}
                       components={ends(closure.by_station_a, closure.by_station_b)}
                     />
                   </li>

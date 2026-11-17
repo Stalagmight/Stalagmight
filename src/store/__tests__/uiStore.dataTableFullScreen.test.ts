@@ -77,8 +77,8 @@ describe('uiStore data-table fullscreen', () => {
   });
 
   it('setRawTableSelection stores and clears the table name', () => {
-    useUIStore.getState().setRawTableSelection('lines');
-    expect(useUIStore.getState().rawTableSelection).toBe('lines');
+    useUIStore.getState().setRawTableSelection('sections');
+    expect(useUIStore.getState().rawTableSelection).toBe('sections');
     useUIStore.getState().setRawTableSelection(null);
     expect(useUIStore.getState().rawTableSelection).toBeNull();
   });

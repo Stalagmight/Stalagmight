@@ -2,9 +2,9 @@ use chrono::Utc;
 use std::collections::{HashMap, HashSet, VecDeque};
 use tracing::debug;
 
-use crate::{LoopClosureWire, LineId, StationKey, StationMerge, StationMergeWire, StationRef};
+use crate::{LineId, LoopClosureWire, StationKey, StationMerge, StationMergeWire, StationRef};
 
-use super::{Project, LineRelationships};
+use super::{LineRelationships, Project};
 
 impl Project {
     /// Query relationships that reference the given line.
@@ -13,18 +13,14 @@ impl Project {
         let merges: Vec<StationMergeWire> = self
             .station_merges
             .iter()
-            .filter(|m| {
-                m.station_a.line_id == line_id || m.station_b.line_id == line_id
-            })
+            .filter(|m| m.station_a.line_id == line_id || m.station_b.line_id == line_id)
             .filter_map(|m| self.merge_to_wire(m))
             .collect();
 
         let closures: Vec<LoopClosureWire> = self
             .loop_closures
             .iter()
-            .filter(|lc| {
-                lc.station_a.line_id == line_id || lc.station_b.line_id == line_id
-            })
+            .filter(|lc| lc.station_a.line_id == line_id || lc.station_b.line_id == line_id)
             .filter_map(|lc| self.closure_to_wire(lc))
             .collect();
 
@@ -103,8 +99,7 @@ impl Project {
 
             // Build components among the external members after removing ALL
             // line stations from the graph
-            let components =
-                self.build_merge_components_excluding_line(&external_members, line_id);
+            let components = self.build_merge_components_excluding_line(&external_members, line_id);
 
             if components.len() > 1 {
                 // Connect each disconnected component to the first one
@@ -130,14 +125,10 @@ impl Project {
                         }
                     }
                     if let Some((a, b)) = found {
-                        if self.replacement_merge_allowed(
-                            a,
-                            b,
-                            &line_stations,
-                            &replacement_merges,
-                        ) && !replacement_merges
-                            .iter()
-                            .any(|(ra, rb)| (*ra == a && *rb == b) || (*ra == b && *rb == a))
+                        if self.replacement_merge_allowed(a, b, &line_stations, &replacement_merges)
+                            && !replacement_merges
+                                .iter()
+                                .any(|(ra, rb)| (*ra == a && *rb == b) || (*ra == b && *rb == a))
                         {
                             replacement_merges.push((a, b));
                         }
@@ -170,9 +161,7 @@ impl Project {
         let closures_to_rewire: Vec<_> = self
             .loop_closures
             .iter()
-            .filter(|lc| {
-                lc.station_a.line_id == line_id || lc.station_b.line_id == line_id
-            })
+            .filter(|lc| lc.station_a.line_id == line_id || lc.station_b.line_id == line_id)
             .map(|lc| (lc.id, lc.station_a.clone(), lc.station_b.clone()))
             .collect();
 
@@ -197,10 +186,8 @@ impl Project {
 
             // Find a merge-group partner on another line to rewire to
             let group = self.get_merge_group(removed_ref);
-            let mut candidates: Vec<StationRef> = group
-                .into_iter()
-                .filter(|s| s.line_id != line_id)
-                .collect();
+            let mut candidates: Vec<StationRef> =
+                group.into_iter().filter(|s| s.line_id != line_id).collect();
             candidates.sort_by_key(Self::station_ref_key);
 
             if let Some(replacement) = candidates.first().copied() {
@@ -450,8 +437,7 @@ impl Project {
         }
 
         for merge in &self.station_merges {
-            if merge.station_a.line_id == excluded_line
-                || merge.station_b.line_id == excluded_line
+            if merge.station_a.line_id == excluded_line || merge.station_b.line_id == excluded_line
             {
                 continue;
             }
@@ -748,29 +734,24 @@ impl Project {
     /// that reference the given line. Call before `remove_line()` to avoid orphans.
     pub fn cleanup_line_references(&mut self, line_id: LineId) {
         // Remove merges referencing this line.
-        self.station_merges.retain(|m| {
-            m.station_a.line_id != line_id && m.station_b.line_id != line_id
-        });
+        self.station_merges
+            .retain(|m| m.station_a.line_id != line_id && m.station_b.line_id != line_id);
 
         // Remove closures referencing this line
-        self.loop_closures.retain(|lc| {
-            lc.station_a.line_id != line_id && lc.station_b.line_id != line_id
-        });
+        self.loop_closures
+            .retain(|lc| lc.station_a.line_id != line_id && lc.station_b.line_id != line_id);
 
         // Remove line offset
         self.remove_line_offset(line_id);
 
         // Remove station offsets referencing this line
-        self.station_offsets
-            .retain(|sr, _| sr.line_id != line_id);
+        self.station_offsets.retain(|sr, _| sr.line_id != line_id);
 
         // Remove station comments referencing this line
-        self.station_comments
-            .retain(|sr, _| sr.line_id != line_id);
+        self.station_comments.retain(|sr, _| sr.line_id != line_id);
 
         // Remove station names referencing this line
-        self.station_names
-            .retain(|sr, _| sr.line_id != line_id);
+        self.station_names.retain(|sr, _| sr.line_id != line_id);
 
         // Remove zero datums referencing this line
         self.zero_datums

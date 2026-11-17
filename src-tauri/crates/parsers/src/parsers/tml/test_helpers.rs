@@ -219,13 +219,7 @@ pub fn tml_shot_xml(id: i64, from_id: i64, shot_type: &str, line: &str) -> Strin
 
 /// A REAL shot with explicit azimuth and length, for the #412
 /// branch-continuation and re-join tests.
-pub fn tml_shot_xml_az_len(
-    id: i64,
-    from_id: i64,
-    line: &str,
-    azimuth: f64,
-    length: f64,
-) -> String {
+pub fn tml_shot_xml_az_len(id: i64, from_id: i64, line: &str, azimuth: f64, length: f64) -> String {
     format!(
         r"<SurveyData>
     <ID>{id}</ID>

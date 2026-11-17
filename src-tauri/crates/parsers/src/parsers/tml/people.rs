@@ -10,7 +10,7 @@
 //! Everything read here is an Ariane NAME LIST ([`NameSource::NameList`]):
 //! names split on `,` and `;` only, so `ds, kb` is two people (#427), never
 //! one `Last, First` person. The plain form goes through the SAME splitter as
-//! a `.stalx` file's legacy `lines.surveyor` column ([`split_roles`]), so
+//! a `.stalx` file's legacy `sections.surveyor` column ([`split_roles`]), so
 //! one text names people in the same roles on both paths: a single value with
 //! no `" / "` is surveyors, which is what every saved file and SpeleoDB's
 //! reader have always made of it.

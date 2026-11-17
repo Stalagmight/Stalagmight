@@ -17,7 +17,7 @@ use std::path::Path;
 use super::{AppState, VirtualShotMode};
 use crate::core::Command;
 use crate::export::tml::{export_tml, export_tml_for_speleodb};
-use crate::models::{Project, LineData, ShotData, StationKey, StationRef};
+use crate::models::{LineData, Project, ShotData, StationKey, StationRef};
 use crate::parsers::tml::{convert_tml_to_import_configs, parse_tml};
 
 // ---------------------------------------------------------------------------
@@ -723,10 +723,7 @@ fn undo_restores_the_imported_identities_rather_than_minting_new_ones() {
     let state = state_with_project();
     import_ariane_file(&state, &source);
     let expected = IDS.map(String::from).to_vec();
-    assert_eq!(
-        line_uuids(&state.get_project_state().unwrap(), 0),
-        expected
-    );
+    assert_eq!(line_uuids(&state.get_project_state().unwrap(), 0), expected);
 
     // Leg 1: delete a shot and undo it. The restored shot must come back with
     // the file's id, not a new one.
@@ -1026,10 +1023,7 @@ fn client_named_identities_are_stripped_at_every_command_door() {
         Some(IDS[1]),
         "CreateLine must not adopt a client-named identity"
     );
-    assert!(
-        new_line.shots[0].uuid.is_some(),
-        "and it still mints one"
-    );
+    assert!(new_line.shots[0].uuid.is_some(), "and it still mints one");
 }
 
 /// The same attack on a SOUND project, with a cross-reference anchored on the
@@ -1370,14 +1364,8 @@ fn the_same_uuid_in_two_lines_of_one_file_stays_in_the_first_line() {
     import_ariane_file(&state, &source);
 
     let project = state.get_project_state().unwrap();
-    assert_eq!(
-        project.lines.len(),
-        2,
-        "the file must import as 2 lines"
-    );
-    let held: Vec<String> = (0..2)
-        .map(|i| line_uuids(&project, i)[0].clone())
-        .collect();
+    assert_eq!(project.lines.len(), 2, "the file must import as 2 lines");
+    let held: Vec<String> = (0..2).map(|i| line_uuids(&project, i)[0].clone()).collect();
     let second = project.lines[1].id;
     assert_eq!(
         held,

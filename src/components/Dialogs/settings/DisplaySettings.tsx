@@ -110,7 +110,7 @@ export function DisplaySettings({
     >
       <h2 className="text-lg font-medium mb-4">{t('settings.display.title')}</h2>
 
-      <SettingsSection title={t('settings.display.sections.interface')} data-testid="line-interface">
+      <SettingsSection title={t('settings.display.sections.interface')} data-testid="section-interface">
         <SettingRow
           label={t('settings.display.uiScale.label')}
           helpText={t('settings.display.uiScale.help')}
@@ -141,7 +141,7 @@ export function DisplaySettings({
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title={t('settings.display.sections.grid')} data-testid="line-grid">
+      <SettingsSection title={t('settings.display.sections.grid')} data-testid="section-grid">
         <SettingRow
           label={t('settings.display.grid.color.label')}
           helpText={t('settings.display.grid.color.help')}
@@ -179,7 +179,7 @@ export function DisplaySettings({
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title={t('settings.display.sections.font')} data-testid="line-font">
+      <SettingsSection title={t('settings.display.sections.font')} data-testid="section-font">
         <SettingRow
           label={t('settings.display.font.size.label')}
           helpText={t('settings.display.font.size.help')}
@@ -219,7 +219,7 @@ export function DisplaySettings({
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title={t('settings.display.sections.measure')} data-testid="line-measure">
+      <SettingsSection title={t('settings.display.sections.measure')} data-testid="section-measure">
         <SettingRow
           label={t('settings.display.measurePathColor.label')}
           helpText={t('settings.display.measurePathColor.help')}
@@ -239,11 +239,11 @@ export function DisplaySettings({
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title={t('settings.display.sections.sectionColors')} data-testid="line-colors-palette">
+      <SettingsSection title={t('settings.display.sections.sectionColors')} data-testid="section-colors-palette">
         <SettingRow
           label={t('settings.display.sectionColors.label')}
           helpText={t('settings.display.sectionColors.help')}
-          isChanged={isFieldChanged(changedFields, 'section_colors.palette')}
+          isChanged={isFieldChanged(changedFields, 'line_colors.palette')}
           data-testid="setting-color-palette"
           onReset={() => onChange({ line_colors: { palette: [...lineColorDefaults.palette] } })}
           isDefault={JSON.stringify(config.line_colors.palette) === JSON.stringify(lineColorDefaults.palette)}

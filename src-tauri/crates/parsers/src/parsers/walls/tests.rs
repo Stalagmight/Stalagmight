@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::Datelike;
 
-use crate::models::line::{ImportClosure, ImportPlacement, ImportLineConfig};
+use crate::models::line::{ImportClosure, ImportLineConfig, ImportPlacement};
 use crate::parsers::encoding::read_latin1;
 
 use super::*;
@@ -2371,11 +2371,9 @@ fn contiguous_self_loop_emits_closure() {
     let srv = "#UNITS meters order=DAV\nA B 10 90 0\nB C 10 0 0\nC A 14 200 0\n";
     let (_configs, closures, _w) = convert_one(parse_srv(srv));
     assert!(
-        closures
-            .iter()
-            .any(|c| c.from_line_index == c.to_line_index
-                && c.from_station_index == 3
-                && c.to_station_index == 0),
+        closures.iter().any(|c| c.from_line_index == c.to_line_index
+            && c.from_station_index == 3
+            && c.to_station_index == 0),
         "an intra-chain loop must emit a same-line closure, got {closures:?}"
     );
 }

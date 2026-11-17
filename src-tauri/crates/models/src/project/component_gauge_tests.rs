@@ -14,8 +14,8 @@
 
 use crate::config::ClosureAdjustmentConfig;
 use crate::{
-    ClosureStrategy, CombinePick, CombineLinesOptions, LoopClosure, Project, LineData,
-    LineId, ShotData, SplitLineOptions, SplitSide, StationRef,
+    ClosureStrategy, CombineLinesOptions, CombinePick, LineData, LineId, LoopClosure, Project,
+    ShotData, SplitLineOptions, SplitSide, StationRef,
 };
 
 use super::gauge::gauge_pair_for_station;
@@ -276,8 +276,7 @@ fn combine_keeps_every_adjusted_station_in_place() {
 /// The record parity of every shot of `line`, in order.
 fn record_parities(project: &Project, line: LineId) -> Vec<bool> {
     let line = project.get_line(line).unwrap();
-    line
-        .shots
+    line.shots
         .iter()
         .map(|shot| project.shot_record_parity(line, shot.uuid.as_deref()))
         .collect()

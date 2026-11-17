@@ -1,5 +1,5 @@
 /**
- * Component test (#579) - the Updates line of General settings: staged
+ * Component test (#579) - the Updates section of General settings: staged
  * change behavior for the update-check toggle and update-track select, the
  * same staged-then-Save pattern the rest of the panel uses (see types.ts's
  * field-builder helpers).
@@ -48,7 +48,7 @@ beforeEach(() => {
   onChange = vi.fn();
 });
 
-describe('GeneralSettings updates line (#579)', () => {
+describe('GeneralSettings updates section (#579)', () => {
   it('marks the row changed and offers reset when update_check_enabled differs from default', () => {
     renderPanel({ update_check_enabled: !defaultConfig.general.update_check_enabled });
     const row = screen.getByTestId('setting-update-check');

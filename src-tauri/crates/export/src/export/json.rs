@@ -182,10 +182,10 @@ mod tests {
         let contents = std::fs::read_to_string(file.path()).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
         assert_eq!(parsed["project"]["name"], "Test");
-        assert_eq!(parsed["sections"][0]["name"], "Main");
-        assert_eq!(parsed["sections"][0]["surveyor"], "Tester");
-        assert_eq!(parsed["sections"][0]["surveyors"][0], "Tester");
-        assert_eq!(parsed["sections"][0]["shots"][0]["surveyors"][0], "Tester");
+        assert_eq!(parsed["lines"][0]["name"], "Main");
+        assert_eq!(parsed["lines"][0]["surveyor"], "Tester");
+        assert_eq!(parsed["lines"][0]["surveyors"][0], "Tester");
+        assert_eq!(parsed["lines"][0]["shots"][0]["surveyors"][0], "Tester");
     }
 
     #[test]
@@ -223,7 +223,7 @@ mod tests {
             "no email leaves: {contents}"
         );
         let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
-        let line = &parsed["sections"][0];
+        let line = &parsed["lines"][0];
         assert_eq!(line["surveyors"], serde_json::json!(["Ann", "Bo"]));
         assert_eq!(line["explorers"], serde_json::json!(["Bo"]));
         assert_eq!(line["surveyor"], "Ann, Bo");
@@ -245,7 +245,7 @@ mod tests {
         let contents = std::fs::read_to_string(file.path()).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
         assert_eq!(parsed["project"]["name"], "Empty");
-        assert!(parsed["sections"].as_array().unwrap().is_empty());
+        assert!(parsed["lines"].as_array().unwrap().is_empty());
     }
 
     #[test]
@@ -276,7 +276,7 @@ mod tests {
         let contents = std::fs::read_to_string(file.path()).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
         assert_eq!(parsed["project"]["name"], "日本語テスト");
-        assert_eq!(parsed["sections"][0]["name"], "Grotte de l'Ours");
+        assert_eq!(parsed["lines"][0]["name"], "Grotte de l'Ours");
     }
 
     #[test]
@@ -306,7 +306,7 @@ mod tests {
 
         let contents = std::fs::read_to_string(file.path()).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
-        let shot = &parsed["sections"][0]["shots"][0];
+        let shot = &parsed["lines"][0]["shots"][0];
         assert_eq!(shot["kind"], "Reference");
     }
 }

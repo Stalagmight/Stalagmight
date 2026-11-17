@@ -75,7 +75,7 @@ export function UnitsSettings({
     >
       <h2 className="text-lg font-medium mb-4">{t('settings.units.title')}</h2>
 
-      <SettingsSection title={t('settings.units.sections.measurement')} data-testid="line-measurement">
+      <SettingsSection title={t('settings.units.sections.measurement')} data-testid="section-measurement">
         <SettingRow
           label={t('settings.units.length.label')}
           helpText={t('settings.units.length.help')}
@@ -140,7 +140,7 @@ export function UnitsSettings({
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title={t('settings.units.sections.precision')} data-testid="line-precision">
+      <SettingsSection title={t('settings.units.sections.precision')} data-testid="section-precision">
         {precisionFields.map(({ key, i18nKey }) => (
           <SettingRow
             key={key}

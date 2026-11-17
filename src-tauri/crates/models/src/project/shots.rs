@@ -2,8 +2,8 @@ use chrono::Utc;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::{
-    LoopClosure, LineId, Shot, ShotData, ShotId, ShotKind, ShotUpdates, StationAnchor,
-    StationKey, StationMerge, StationRef, FEATURE_ID_STRIDE,
+    LineId, LoopClosure, Shot, ShotData, ShotId, ShotKind, ShotUpdates, StationAnchor, StationKey,
+    StationMerge, StationRef, FEATURE_ID_STRIDE,
 };
 
 use super::offsets::MintedMerge;
@@ -301,9 +301,7 @@ impl Project {
                 continue;
             };
             let Some(is_tail) = side(ours) else { continue };
-            if theirs.line_id != line_id
-                && self.has_datum_path_excluding(theirs.line_id, line_id)
-            {
+            if theirs.line_id != line_id && self.has_datum_path_excluding(theirs.line_id, line_id) {
                 *(if is_tail { &mut tail } else { &mut head }) = true;
             }
         }
@@ -333,8 +331,7 @@ impl Project {
         // (#438), matching the walk this compensates.
         let (dx, dy) = Self::shot_displacement(&data, self.azimuth_reference_for_id(line_id));
         let line = self.get_line_mut(line_id)?;
-        let shot =
-            line.insert_shot_after_with_id(after_shot_id, data, forced_id, forced_uuid)?;
+        let shot = line.insert_shot_after_with_id(after_shot_id, data, forced_id, forced_uuid)?;
         let shot_id = shot.id;
         // Station keys are position-independent: no ref-shifting on insert (the
         // junction the new shot extends from keeps its anchor; shots beyond keep
@@ -391,8 +388,7 @@ impl Project {
         // back-shifting the offset.
         let (dx, dy) = Self::shot_displacement(&data, self.azimuth_reference_for_id(line_id));
         let line = self.get_line_mut(line_id)?;
-        let shot =
-            line.insert_shot_before_with_id(before_shot_id, data, forced_id, forced_uuid)?;
+        let shot = line.insert_shot_before_with_id(before_shot_id, data, forced_id, forced_uuid)?;
         let shot_id = shot.id;
         // Prepend is the one insert that shifts identity: the old line-start
         // station is now *after* the new first shot, so re-anchor any ref on this

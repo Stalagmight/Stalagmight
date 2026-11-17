@@ -14,8 +14,8 @@ use std::path::{Path, PathBuf};
 use super::AppState;
 use crate::core::Command;
 use crate::models::{
-    CombinePick, CombineLinesOptions, LineId, ShotData, SplitAt, SplitLineOptions,
-    SplitSide, StationRef,
+    CombineLinesOptions, CombinePick, LineId, ShotData, SplitAt, SplitLineOptions, SplitSide,
+    StationRef,
 };
 
 fn shot(azimuth: f64, length: f64) -> ShotData {
@@ -230,11 +230,8 @@ fn a_split_undone_after_a_reopen_keeps_every_shot_uuid() {
     save_close_reopen(&state, &path);
 
     assert_exact_undo_and_redo_after_reopen(&state, &path, "split", |state| {
-        let result = state.execute_split_line(
-            main,
-            SplitAt::Station { station_index: 1 },
-            split_options(),
-        );
+        let result =
+            state.execute_split_line(main, SplitAt::Station { station_index: 1 }, split_options());
         assert!(result.success, "{:?}", result.error);
     });
 }
@@ -301,11 +298,8 @@ fn a_split_of_an_added_line_undone_after_a_reopen_keeps_every_shot_uuid() {
     save_close_reopen(&state, &path);
 
     assert_exact_undo_and_redo_after_reopen(&state, &path, "split of an added line", |state| {
-        let result = state.execute_split_line(
-            line,
-            SplitAt::Station { station_index: 1 },
-            split_options(),
-        );
+        let result =
+            state.execute_split_line(line, SplitAt::Station { station_index: 1 }, split_options());
         assert!(result.success, "{:?}", result.error);
     });
 }

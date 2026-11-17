@@ -108,9 +108,7 @@ pub struct ShotUuidRemap(BTreeMap<(LineId, String), String>);
 impl ShotUuidRemap {
     /// The new id of `old` in `line_id`, or `None` when it was not renamed.
     pub fn get(&self, line_id: LineId, old: &str) -> Option<&str> {
-        self.0
-            .get(&(line_id, old.to_string()))
-            .map(String::as_str)
+        self.0.get(&(line_id, old.to_string())).map(String::as_str)
     }
 
     pub fn insert(&mut self, line_id: LineId, old: String, new: String) {
@@ -253,8 +251,7 @@ impl Project {
                                 .flat_map(|s| s.shots.iter().filter_map(|shot| shot.uuid.clone()))
                                 .collect()
                         });
-                        let new =
-                            reminted_shot_uuid_avoiding(line_id, old, |c| in_use.contains(c));
+                        let new = reminted_shot_uuid_avoiding(line_id, old, |c| in_use.contains(c));
                         in_use.insert(new.clone());
                         claimed.insert(new.clone(), line_id);
                         remap.insert(line_id, old.to_string(), new);

@@ -43,7 +43,7 @@ function line(): Line {
 }
 
 /**
- * The lines-list row shows each line's length; it must leave out Reference
+ * The sections-list row shows each line's length; it must leave out Reference
  * shots like the project total it sits beside (#689), on both the flat-array
  * path and the legacy `line.shots` fallback.
  */

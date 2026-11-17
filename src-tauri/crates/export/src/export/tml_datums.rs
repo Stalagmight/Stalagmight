@@ -19,7 +19,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::models::{local_to_gps, GpsCoordinates, Project, LineId, StationRef, ZeroDatum};
+use crate::models::{local_to_gps, GpsCoordinates, LineId, Project, StationRef, ZeroDatum};
 
 use super::{speleodb_anchor, ExportShot, TmlProfile};
 

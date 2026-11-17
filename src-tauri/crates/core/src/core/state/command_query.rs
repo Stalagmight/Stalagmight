@@ -102,10 +102,7 @@ impl AppState {
     }
 
     /// Get all line IDs connected through merges and aligned closures (rigid groups).
-    pub fn get_rigid_connected_line_ids(
-        &self,
-        line_id: LineId,
-    ) -> Result<Vec<LineId>, String> {
+    pub fn get_rigid_connected_line_ids(&self, line_id: LineId) -> Result<Vec<LineId>, String> {
         // Serialize with command execution to avoid observing intermediate batch state
         let _cmd_guard = self
             .command_lock
@@ -176,10 +173,8 @@ impl AppState {
             .unwrap_or((0.0, 0.0));
 
         // Group stations by line
-        let mut line_stations: std::collections::HashMap<
-            LineId,
-            Vec<&crate::models::Station>,
-        > = std::collections::HashMap::new();
+        let mut line_stations: std::collections::HashMap<LineId, Vec<&crate::models::Station>> =
+            std::collections::HashMap::new();
         for station in &all_stations {
             if connected.contains(&station.station_ref.line_id) {
                 line_stations

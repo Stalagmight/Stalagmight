@@ -113,18 +113,12 @@ impl PlanAnchor {
         if let Some(&i) = project.shot_uuid_index.get(&(line.id, uuid.to_string())) {
             // Re-check before trusting it, exactly as `Project::resolve_key` does: a stale
             // entry then costs only the scan below and can never resolve to the wrong shot.
-            if line
-                .shots
-                .get(i as usize)
-                .and_then(|sh| sh.uuid.as_deref())
-                == Some(uuid)
-            {
+            if line.shots.get(i as usize).and_then(|sh| sh.uuid.as_deref()) == Some(uuid) {
                 return Some(i as usize);
             }
         }
         let position = |id: &str| {
-            line
-                .shots
+            line.shots
                 .iter()
                 .position(|s| s.uuid.as_deref() == Some(id))
         };
@@ -295,7 +289,8 @@ mod tests {
     use super::*;
 
     fn sample_json() -> String {
-        // A full v1 snapshot as it would be written by the app.
+        // A full v1 snapshot as it would be written by the app, in the
+        // sidecar's on-disk vocabulary (see `disk_names`).
         serde_json::json!({
             "origin": { "section_id": 1, "station_index": 0 },
             "endpoint": { "section_id": 2, "station_index": 5 },
@@ -318,7 +313,7 @@ mod tests {
 
     #[test]
     fn round_trips_through_serde() {
-        let snap: DivePlanSnapshot = serde_json::from_str(&sample_json()).unwrap();
+        let snap: DivePlanSnapshot = crate::disk_names::from_disk_str(&sample_json()).unwrap();
         assert_eq!(snap.origin.unwrap().station_index, 0);
         assert_eq!(snap.endpoint.unwrap().line_id, 2);
         assert_eq!(snap.diver.rmv_l_per_min, 18.0);
@@ -336,7 +331,8 @@ mod tests {
         assert!(!snap.segments[1].on_scooter);
         // Re-serialize and reload: the round trip is lossless for the known fields.
         let again: DivePlanSnapshot =
-            serde_json::from_str(&serde_json::to_string(&snap).unwrap()).unwrap();
+            crate::disk_names::from_disk_str(&crate::disk_names::to_disk_string(&snap).unwrap())
+                .unwrap();
         assert_eq!(again.endpoint.unwrap().station_index, 5);
         assert_eq!(again.waypoints, snap.waypoints);
         assert_eq!(again.marked_points, snap.marked_points);

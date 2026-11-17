@@ -104,10 +104,7 @@ impl Database {
             } else {
                 // The text the line was read with while its people are
                 // unchanged, so a save does not cut or respell it.
-                (
-                    line.legacy_surveyor_to_write(),
-                    line.first_survey_date(),
-                )
+                (line.legacy_surveyor_to_write(), line.first_survey_date())
             };
             let legacy_date = first_date.map(|d| d.to_string());
             // What a shot with no credit row reads back as (`shot_credits`),

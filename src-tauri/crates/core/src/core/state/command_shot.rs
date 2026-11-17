@@ -2,7 +2,7 @@ use super::AppState;
 use crate::core::{CommandResult, ValidationWarning, Validator, WarningSeverity};
 use crate::models::{
     shot_display_position, station_id_label, ClosurePair, ClosuresBeforeEdit, ClosuresBeforeSweep,
-    Project, RemovedClosure, LineId, ShotData, ShotId, ShotKind, ShotUpdates, SurveyCredit,
+    LineId, Project, RemovedClosure, ShotData, ShotId, ShotKind, ShotUpdates, SurveyCredit,
     CLOSURE_REMOVED_ACROSS_ONE_SHOT, CLOSURE_REMOVED_MERGED_ENDS, FEATURE_ID_STRIDE,
 };
 
@@ -181,14 +181,12 @@ impl AppState {
             }
 
             if let Some(before_id) = before_shot_id {
-                line
-                    .shots
+                line.shots
                     .iter()
                     .position(|shot| shot.id == before_id)
                     .unwrap_or(0)
             } else if let Some(after_id) = after_shot_id {
-                line
-                    .shots
+                line.shots
                     .iter()
                     .position(|shot| shot.id == after_id)
                     .map_or(0, |pos| pos + 1)

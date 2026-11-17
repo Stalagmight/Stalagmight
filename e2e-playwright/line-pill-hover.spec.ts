@@ -277,7 +277,7 @@ test.describe('line picker is not dismissed by background auto-scroll', () => {
   test('hovering an off-screen line while the picker is open keeps it open', async ({ page }) => {
     // Park the lines list at the top so the last line's row is off-screen
     // (otherwise scrollIntoView is a no-op and there is nothing to reproduce).
-    const list = page.getByTestId('lines-list');
+    const list = page.getByTestId('sections-list');
     await expect(list).toBeVisible();
     await list.evaluate((el) => {
       el.scrollTop = 0;

@@ -1,8 +1,7 @@
 use super::AppState;
 use crate::core::{CommandResult, Validator};
 use crate::models::{
-    LineData, LineId, LineUpdates, FEATURE_ID_STRIDE, MAX_LINES_IN_ID_SPACE,
-    MAX_LINE_ID,
+    LineData, LineId, LineUpdates, FEATURE_ID_STRIDE, MAX_LINES_IN_ID_SPACE, MAX_LINE_ID,
 };
 
 impl AppState {
@@ -139,8 +138,7 @@ impl AppState {
             let warnings: Vec<_> = project
                 .get_line(line_id)
                 .map(|line| {
-                    line
-                        .shots
+                    line.shots
                         .iter()
                         .enumerate()
                         .flat_map(|(i, shot)| {
@@ -164,11 +162,7 @@ impl AppState {
         })
     }
 
-    pub(super) fn update_line(
-        &self,
-        line_id: LineId,
-        updates: LineUpdates,
-    ) -> CommandResult {
+    pub(super) fn update_line(&self, line_id: LineId, updates: LineUpdates) -> CommandResult {
         self.with_project_mut(|project| {
             if project.update_line(line_id, &updates).is_some() {
                 tracing::debug!(

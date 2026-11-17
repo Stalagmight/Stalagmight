@@ -14,7 +14,7 @@ use super::physics::{
 use super::{is_swim_leg, penetration_budget, required_stages, route_metrics, usable_oc_gas};
 use crate::config::{DpvRig, DpvUnit, GasConfig, ReservePreset, ReserveProfile};
 use crate::{
-    Coordinates, GpsCoordinates, Project, LineData, ShotData, ShotKind, StationRef, ZeroDatum,
+    Coordinates, GpsCoordinates, LineData, Project, ShotData, ShotKind, StationRef, ZeroDatum,
 };
 
 const EPS: f64 = 1e-9;

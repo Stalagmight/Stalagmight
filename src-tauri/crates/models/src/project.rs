@@ -6,9 +6,8 @@ use std::path::PathBuf;
 use ts_rs::TS;
 
 use super::{
-    AzimuthReference, GpsBounds, LoopClosure, Line, LineData, LineId, LineUpdates,
-    ShotData, ShotId, StationAnchor, StationKey, StationMerge, StationMergeWire, StationRef,
-    ZeroDatum,
+    AzimuthReference, GpsBounds, Line, LineData, LineId, LineUpdates, LoopClosure, ShotData,
+    ShotId, StationAnchor, StationKey, StationMerge, StationMergeWire, StationRef, ZeroDatum,
 };
 use super::{DatumRole, LoopClosureWire, ZeroDatumWire};
 
@@ -43,8 +42,8 @@ mod classify;
 mod closure_dedupe;
 mod closure_shots;
 mod combine_candidate;
-mod combine_plan;
 mod combine_lines;
+mod combine_plan;
 mod connectivity;
 mod gap_close;
 mod gauge;
@@ -119,16 +118,16 @@ mod combine_hand_move_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
-    reason = "test module: panics on a failed assumption are the point"
-)]
-mod combine_residual_tests;
-#[cfg(test)]
-#[expect(
-    clippy::unwrap_used,
     clippy::float_cmp,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod combine_lines_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod combine_residual_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
@@ -1016,11 +1015,7 @@ impl Project {
     }
 
     /// Update a line's metadata
-    pub fn update_line(
-        &mut self,
-        line_id: LineId,
-        updates: &LineUpdates,
-    ) -> Option<&Line> {
+    pub fn update_line(&mut self, line_id: LineId, updates: &LineUpdates) -> Option<&Line> {
         if updates.surveyor.is_some() || updates.date.is_some() {
             // The legacy surveyor/date land on every shot; give each an
             // identity first so an undo can address it after a reload.
@@ -1198,8 +1193,7 @@ impl Project {
     /// its entries at once, so every later `resolve_key` into that line pays the
     /// O(shots) scan until something else rebuilds the cache.
     pub fn reindex_line_shot_uuids(&mut self, line_id: LineId) {
-        self.shot_uuid_index
-            .retain(|(sid, _), _| *sid != line_id);
+        self.shot_uuid_index.retain(|(sid, _), _| *sid != line_id);
         let Some(line) = self.get_line(line_id) else {
             return;
         };
@@ -1231,8 +1225,7 @@ impl Project {
     /// passes the (`Copy`) result into the per-shot accessor, so the correction
     /// costs one addition per shot and cannot disagree between two walks.
     pub fn azimuth_reference_for(&self, line: &Line) -> AzimuthReference {
-        line
-            .azimuth_reference
+        line.azimuth_reference
             .or(self.default_azimuth_reference)
             .unwrap_or_default()
     }
@@ -1615,10 +1608,7 @@ impl Project {
                 // authoritative linear scan, so the cache can never resolve to the
                 // wrong station and never needs eager invalidation for safety.
                 if let Some(&i) = self.shot_uuid_index.get(&(key.line_id, uuid.clone())) {
-                    if line
-                        .shots
-                        .get(i as usize)
-                        .and_then(|s| s.uuid.as_deref())
+                    if line.shots.get(i as usize).and_then(|s| s.uuid.as_deref())
                         == Some(uuid.as_str())
                     {
                         return Some(StationRef::new(key.line_id, i + 1));

@@ -1,5 +1,5 @@
 use crate::core::{AddedContent, Command, UndoData};
-use crate::models::{ClosureStrategy, Project, LineId, LineUpdates, ShotId, ShotUpdates};
+use crate::models::{ClosureStrategy, LineId, LineUpdates, Project, ShotId, ShotUpdates};
 
 use super::AppState;
 
@@ -98,10 +98,7 @@ impl AppState {
             // For DeleteShot, capture full project snapshot (before/after pair)
             // because remove_shot shifts station refs - a ShotSnapshot alone cannot
             // restore the original station references.
-            Command::DeleteShot {
-                line_id,
-                shot_id,
-            } => {
+            Command::DeleteShot { line_id, shot_id } => {
                 if let Some(line) = project.get_line(*line_id) {
                     if line.shots.iter().any(|s| s.id == *shot_id) {
                         match AppState::serialize_project_snapshot(project) {
@@ -187,10 +184,7 @@ impl AppState {
             }
             Command::EditShotCredit { .. } => Self::credit_undo_stub(project, cmd),
 
-            Command::UpdateLineMetadata {
-                line_id,
-                updates,
-            } => {
+            Command::UpdateLineMetadata { line_id, updates } => {
                 if let Some(line) = project.get_line(*line_id) {
                     // Capture previous line metadata
                     // surveyor/date are unset here: the arm above takes them.
@@ -239,9 +233,7 @@ impl AppState {
             // save. Persisted `InverseCommand(SetShotKind)` entries still
             // restore through their own arm in `undo_inner`.
             Command::SetShotKind {
-                line_id,
-                shot_id,
-                ..
+                line_id, shot_id, ..
             } => project
                 .get_line(*line_id)
                 .and_then(|line| line.get_shot(*shot_id))
@@ -478,8 +470,7 @@ impl AppState {
             // correct even if the connectivity graph changes later. Filter to existing
             // lines to avoid stale merges/closures referencing deleted lines
             // (matches move_segment()'s own filtering).
-            Command::MoveLine { line_id, offset }
-            | Command::MoveSegment { line_id, offset } => {
+            Command::MoveLine { line_id, offset } | Command::MoveSegment { line_id, offset } => {
                 let existing: std::collections::HashSet<LineId> =
                     project.lines.iter().map(|s| s.id).collect();
                 let connected: Vec<LineId> = project
@@ -600,11 +591,8 @@ impl AppState {
                     let shot_id = line.next_shot_id - 1;
                     // Find the shot by ID to get its actual position (not last() which
                     // would be wrong for mid-line inserts via after_shot_id)
-                    if let Some((position, shot)) = line
-                        .shots
-                        .iter()
-                        .enumerate()
-                        .find(|(_, s)| s.id == shot_id)
+                    if let Some((position, shot)) =
+                        line.shots.iter().enumerate().find(|(_, s)| s.id == shot_id)
                     {
                         // For insert_before: station_shift_from = position (the array position)
                         // For insert_after/append: station_shift_from = position + 1

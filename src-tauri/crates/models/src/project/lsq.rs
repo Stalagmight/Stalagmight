@@ -1,9 +1,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use crate::config::ClosureAdjustmentConfig;
-use crate::{
-    gps_to_local, Coordinates, LoopClosure, LineId, StationRef, DEFAULT_GPS_ACCURACY_M,
-};
+use crate::{gps_to_local, Coordinates, LineId, LoopClosure, StationRef, DEFAULT_GPS_ACCURACY_M};
 
 use super::Project;
 
@@ -57,10 +55,7 @@ impl Project {
     /// back to the default, which is 0, a hard pin. Without the fallback an
     /// infinite accuracy would give the fix a weight of zero, so the fix would
     /// silently stop pulling at all.
-    pub(super) fn gps_fix_observations(
-        &self,
-        component: &HashSet<LineId>,
-    ) -> Vec<FixObservation> {
+    pub(super) fn gps_fix_observations(&self, component: &HashSet<LineId>) -> Vec<FixObservation> {
         let Some(frame) = self.frame_datum() else {
             return Vec::new();
         };
@@ -913,11 +908,7 @@ impl Project {
 
         // Update shots based on solved coordinates
         let azimuth_references = self.azimuth_reference_map();
-        for line in self
-            .lines
-            .iter_mut()
-            .filter(|s| component.contains(&s.id))
-        {
+        for line in self.lines.iter_mut().filter(|s| component.contains(&s.id)) {
             let azimuth_reference = azimuth_references
                 .get(&line.id)
                 .copied()

@@ -18,8 +18,8 @@ use super::combine_closure_tests::{
 };
 use crate::config::ClosureAdjustmentConfig;
 use crate::{
-    gps_to_local, local_to_gps, ClosureStrategy, DatumRole, GpsCoordinates, LoopClosure, Project,
-    LineId, StationRef, ZeroDatum,
+    gps_to_local, local_to_gps, ClosureStrategy, DatumRole, GpsCoordinates, LineId, LoopClosure,
+    Project, StationRef, ZeroDatum,
 };
 
 /// Every station's closure-adjusted position (the Plan and Export geometry).
@@ -533,11 +533,7 @@ fn assert_view_is_the_solve(project: &Project, what: &str) -> ViewSolve {
         }
         let mut point: HashMap<StationRef, (StationRef, (f64, f64))> = HashMap::new();
         let mut pull: HashMap<StationRef, ([f64; 2], [f64; 2])> = HashMap::new();
-        for line in project
-            .lines
-            .iter()
-            .filter(|s| component.contains(&s.id))
-        {
+        for line in project.lines.iter().filter(|s| component.contains(&s.id)) {
             for i in 0..=line.shots.len() as u32 {
                 let at = StationRef::new(line.id, i);
                 let r = root(&mut parent, at);

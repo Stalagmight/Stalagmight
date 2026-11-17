@@ -18,7 +18,7 @@ use ts_rs::TS;
 use crate::models::config::DEFAULT_INCLINATION_DEPTH_DIFF_THRESHOLD;
 use crate::models::shot::implied_pitch_deg;
 use crate::models::{
-    ImportClosure, ImportPlacement, ImportLineConfig, Person, ShotData, ShotKind, SurveyCredit,
+    ImportClosure, ImportLineConfig, ImportPlacement, Person, ShotData, ShotKind, SurveyCredit,
 };
 
 use azimuth::tml_azimuth_reference;
@@ -612,12 +612,8 @@ fn build_raw_shot(
         None => TmlShotType::Real,
     };
 
-    let line = strip_section_description(
-        fields
-            .get("line")
-            .map(String::as_str)
-            .unwrap_or_default(),
-    );
+    let line =
+        strip_section_description(fields.get("line").map(String::as_str).unwrap_or_default());
 
     let color = convert_ariane_color(fields.get("color").map(String::as_str));
 
@@ -939,10 +935,7 @@ fn build_lines(mut raw_shots: Vec<RawShot>) -> (Vec<TmlSection>, Vec<TmlClosure>
 }
 
 /// Extract closure information from CLOSURE-type shots.
-fn extract_closures(
-    lines: &[TmlSection],
-    shot_by_id: &HashMap<i64, &RawShot>,
-) -> Vec<TmlClosure> {
+fn extract_closures(lines: &[TmlSection], shot_by_id: &HashMap<i64, &RawShot>) -> Vec<TmlClosure> {
     // Build reverse index: shot ID → (line_index, station_index)
     let mut id_to_location: HashMap<i64, (usize, usize)> = HashMap::new();
     for (si, line) in lines.iter().enumerate() {
@@ -1307,8 +1300,7 @@ pub fn convert_tml_with_options(
         }
 
         // Convert shots to ShotData, using start_depth for correct rebasing
-        let shot_data =
-            convert_shots_to_shot_data(&line.shots, line.start_depth, include_excluded);
+        let shot_data = convert_shots_to_shot_data(&line.shots, line.start_depth, include_excluded);
 
         // Skip lines that end up with zero shots after filtering
         if shot_data.is_empty() {
@@ -1668,8 +1660,7 @@ fn topological_sort_configs(configs: &mut Vec<ImportLineConfig>) {
         .iter()
         .map(|c| {
             if let ImportPlacement::FromImporting {
-                target_line_index,
-                ..
+                target_line_index, ..
             } = &c.placement
             {
                 pos_of.get(target_line_index).copied()
@@ -3179,11 +3170,7 @@ mod tests {
             "the mainline must survive every T uncut"
         );
         for line in &lines[1..] {
-            assert!(
-                line.name.contains("(branch "),
-                "stub name: {}",
-                line.name
-            );
+            assert!(line.name.contains("(branch "), "stub name: {}", line.name);
             assert_eq!(line.shots.len(), 2, "each stub is two shots");
         }
     }
@@ -3472,10 +3459,7 @@ mod tests {
         assert_eq!(closures.len(), 1);
         let cl = &closures[0];
         // Closure shot 3 is in Sec B, pointing to shot 1 in Sec A
-        assert_eq!(
-            lines[cl.to_line_index].shots[cl.to_station_index].id,
-            1
-        );
+        assert_eq!(lines[cl.to_line_index].shots[cl.to_station_index].id, 1);
     }
 
     #[test]
@@ -4665,7 +4649,7 @@ mod tests {
     #[test]
     #[ignore]
     fn parse_tml_naharon_coordinates() {
-        use crate::models::{ImportPlacement, Project, LineData, StationRef};
+        use crate::models::{ImportPlacement, LineData, Project, StationRef};
 
         let path_str = std::env::var("TML_NAHARON_PATH").unwrap_or_else(|_| {
             "/home/user/tmp/467b76f1-5909-4e00-b96f-c30931ac81db/ariane.tml".into()
@@ -4713,9 +4697,7 @@ mod tests {
                     let offset_x = -current.x;
                     let offset_y = -current.y;
                     if offset_x.abs() > 1e-9 || offset_y.abs() > 1e-9 {
-                        project
-                            .line_offsets
-                            .insert(line_id, (offset_x, offset_y));
+                        project.line_offsets.insert(line_id, (offset_x, offset_y));
                     }
                 }
                 ImportPlacement::FromExisting { .. } => {
@@ -4861,12 +4843,19 @@ mod tests {
                 .iter()
                 .find(|s| s.name.as_deref() == Some(exp.line));
             let Some(line) = line_opt else {
-                eprintln!("  Skipping absolute check: line '{}' not found (parser may have renamed it)", exp.line);
+                eprintln!(
+                    "  Skipping absolute check: line '{}' not found (parser may have renamed it)",
+                    exp.line
+                );
                 continue;
             };
             if exp.station as usize > line.shots.len() {
-                eprintln!("  Skipping absolute check: line '{}' station {} out of range (has {} shots)",
-                    exp.line, exp.station, line.shots.len());
+                eprintln!(
+                    "  Skipping absolute check: line '{}' station {} out of range (has {} shots)",
+                    exp.line,
+                    exp.station,
+                    line.shots.len()
+                );
                 continue;
             }
             let c = project
@@ -4926,7 +4915,11 @@ mod tests {
             "Naharon TML coordinate test passed: {} lines, {} merges, {} total stations verified",
             project.lines.len(),
             project.station_merges.len(),
-            project.lines.iter().map(|s| s.shots.len() + 1).sum::<usize>(),
+            project
+                .lines
+                .iter()
+                .map(|s| s.shots.len() + 1)
+                .sum::<usize>(),
         );
     }
 
@@ -5403,10 +5396,7 @@ mod tests {
         );
         assert_eq!(closures.len(), 1);
         assert_eq!(
-            (
-                closures[0].from_line_index,
-                closures[0].from_station_index
-            ),
+            (closures[0].from_line_index, closures[0].from_station_index),
             (0, 5),
             "the closure's near end is re-indexed against the merged run"
         );
@@ -5633,10 +5623,7 @@ mod tests {
             NaiveDate::from_ymd_opt(2025, 3, 4),
             "the second trip keeps its own date, not the chain head's"
         );
-        assert_ne!(
-            tml.lines[0].color, tml.lines[1].color,
-            "and its own colour"
-        );
+        assert_ne!(tml.lines[0].color, tml.lines[1].color, "and its own colour");
         assert_eq!(tml.lines[0].shots.len(), 2);
         assert_eq!(tml.lines[1].shots.len(), 2);
 
@@ -6322,11 +6309,7 @@ mod tests {
             line_names(&tml)
         );
         assert_eq!(
-            tml.lines[2]
-                .shots
-                .iter()
-                .map(|s| s.id)
-                .collect::<Vec<_>>(),
+            tml.lines[2].shots.iter().map(|s| s.id).collect::<Vec<_>>(),
             vec![20, 21],
             "the stub stays its own branch instead of being absorbed"
         );
@@ -6737,11 +6720,7 @@ mod tests {
                 target_station_index,
             } => {
                 assert_eq!(
-                    (
-                        *import_station,
-                        *target_line_index,
-                        *target_station_index
-                    ),
+                    (*import_station, *target_line_index, *target_station_index),
                     (0, 0, 2),
                     "B attaches at A's final station"
                 );

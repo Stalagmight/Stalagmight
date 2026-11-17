@@ -8,7 +8,7 @@ use rusqlite::types::ValueRef;
 use tempfile::TempDir;
 
 use super::*;
-use crate::models::{Person, LineData, LineId, ShotData, SurveyCredit};
+use crate::models::{LineData, LineId, Person, ShotData, SurveyCredit};
 
 fn shot(length: f64) -> ShotData {
     ShotData {
@@ -86,7 +86,7 @@ fn sql(path: &Path, statements: &str) {
     conn.execute_batch(statements).unwrap();
 }
 
-/// A line's stored `lines.surveyor`.
+/// A line's stored `sections.surveyor`.
 fn legacy_surveyor(db: &Database, id: LineId) -> Option<String> {
     db.conn
         .query_row("SELECT surveyor FROM sections WHERE id = ?1", [id], |r| {
@@ -316,7 +316,7 @@ fn role_names(project: &Project, id: LineId) -> (Vec<String>, Vec<String>) {
     )
 }
 
-/// #718: the exact `lines.surveyor` per case. The plain surveyor list
+/// #718: the exact `sections.surveyor` per case. The plain surveyor list
 /// (today's text) when nobody explored; the Ariane `"explorers / surveyors"`
 /// form when anyone did, with an empty second half when nobody surveyed;
 /// NULL for nobody. A `/` that could join the separator is written `-`, and
@@ -698,10 +698,7 @@ fn shots_added_without_rows_fall_back_while_rows_hold() {
     let id = line_with(&mut project, vec![kept_with_email(), kept_with_email()]);
     project.ensure_shot_uuids();
     let path = save(&dir, "added.stalx", &project);
-    let second = project.get_line(id).unwrap().shots[1]
-        .uuid
-        .clone()
-        .unwrap();
+    let second = project.get_line(id).unwrap().shots[1].uuid.clone().unwrap();
     sql(
         &path,
         &format!(
@@ -1360,7 +1357,7 @@ fn dump(db: &Database, table: &str, skip: &[&str]) -> Vec<Vec<String>> {
 /// The SpeleoDB contract (see `station_texts` and `shot_credits`): its Python
 /// reader accepts exactly v18 and reads these seven tables by explicit column
 /// lists. The same project saved with and without per-shot credit must give
-/// identical rows in every one of them, except `lines.surveyor` and
+/// identical rows in every one of them, except `sections.surveyor` and
 /// `lines.date` - which hold the aggregate, as one plain TEXT value and one
 /// ISO date. The surveyor text is pinned: the surveyors, or the Ariane
 /// `"explorers / surveyors"` form when the line has explorers (#718).
@@ -1472,7 +1469,7 @@ fn credit_leaves_every_table_an_outside_reader_reads_unchanged_but_the_legacy_pa
     assert!(plain_pairs.iter().all(|p| p == &(None, None)));
 }
 
-/// A `lines.surveyor` holding a hundred thousand names (a crafted file:
+/// A `sections.surveyor` holding a hundred thousand names (a crafted file:
 /// nothing but the file size bounds the column) loads promptly, gives each
 /// role at most `MAX_PEOPLE_PER_ROLE` people, and the line's shots SHARE the
 /// one fallback credit instead of a copy each.

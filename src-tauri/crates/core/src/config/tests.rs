@@ -761,7 +761,7 @@ deep_color = "#ff4444"
 shallow_depth = 0.0
 deep_depth = 50.0
 
-[line_colors]
+[section_colors]
 palette = ["#4ecdc4"]
 
 [map]
@@ -829,7 +829,7 @@ log_hit_detection = true
 
     let config: Config = toml::from_str(toml_str).expect("Complete config should parse");
 
-    // Verify map line values
+    // Verify map section values
     assert_eq!(config.map.station.radius, 6.0);
     assert_eq!(config.map.station.hit_area, 12.0);
     assert_eq!(config.map.shot.width, 3.0);
@@ -847,7 +847,7 @@ log_hit_detection = true
 
 #[test]
 fn test_config_parsing_partial_uses_defaults() {
-    // Config with only required lines, missing optional nested configs
+    // Config with only required sections, missing optional nested configs
     let toml_str = r##"
 [general]
 auto_save = true
@@ -873,7 +873,7 @@ deep_color = "#ff4444"
 shallow_depth = 0.0
 deep_depth = 50.0
 
-[line_colors]
+[section_colors]
 palette = ["#4ecdc4"]
 
 [map]
@@ -921,7 +921,7 @@ save = "Ctrl+S"
 
     let config: Config = toml::from_str(toml_str).expect("Partial config should parse");
 
-    // Missing lines should use defaults
+    // Missing sections should use defaults
     assert_eq!(config.map.station.radius, 4.0); // default
     assert_eq!(config.map.station.hit_area, 10.0); // default
     assert_eq!(config.map.shot.width, 2.0); // default
@@ -935,7 +935,7 @@ save = "Ctrl+S"
     // it must still parse, with the tools hidden.
     assert!(!config.map.controls.show_navigation_tools); // default
 
-    // Debug line defaults
+    // Debug section defaults
     assert!(!config.debug.map.show_hitboxes);
     assert!(!config.debug.map.log_hit_detection);
 }
@@ -968,7 +968,7 @@ deep_color = "#ff4444"
 shallow_depth = 0.0
 deep_depth = 50.0
 
-[line_colors]
+[section_colors]
 palette = ["#4ecdc4"]
 
 [map]
@@ -1091,7 +1091,7 @@ fn test_config_serialization_preserves_custom_values() {
 }
 
 #[test]
-fn test_config_serialization_includes_map_line() {
+fn test_config_serialization_includes_map_section() {
     let config = Config::default();
     let serialized = toml::to_string_pretty(&config).expect("Config should serialize");
 
@@ -1137,7 +1137,7 @@ deep_color = "#ff4444"
 shallow_depth = 0.0
 deep_depth = 50.0
 
-[line_colors]
+[section_colors]
 palette = ["#4ecdc4"]
 
 [map]
@@ -1241,7 +1241,7 @@ deep_color = "#ff4444"
 shallow_depth = 0.0
 deep_depth = 50.0
 
-[line_colors]
+[section_colors]
 palette = ["#4ecdc4"]
 
 [map]
@@ -2044,7 +2044,7 @@ fn test_non_default_webkit_memory_survives_save_load_roundtrip() {
 }
 
 #[test]
-fn test_default_webkit_memory_emits_no_line() {
+fn test_default_webkit_memory_emits_no_section() {
     // A DEFAULT webkit_memory must NOT emit a `[webkit_memory]` table (it stays
     // backend-only, out of the frontend-typed serialization) and still round-trips
     // to the default.
@@ -2064,7 +2064,7 @@ fn test_default_webkit_memory_emits_no_line() {
     assert_eq!(
         reloaded.webkit_memory,
         WebkitMemoryConfig::default(),
-        "a config with no [webkit_memory] line loads the default"
+        "a config with no [webkit_memory] section loads the default"
     );
 }
 
@@ -2148,7 +2148,7 @@ fn test_appearance_normalize_valid_themes_unchanged() {
 }
 
 #[test]
-fn test_config_without_appearance_line_loads() {
+fn test_config_without_appearance_section_loads() {
     // Existing config without [appearance] should parse and default to dark
     let toml_str = r##"
 [general]
@@ -2175,7 +2175,7 @@ deep_color = "#ff4444"
 shallow_depth = 0.0
 deep_depth = 50.0
 
-[line_colors]
+[section_colors]
 palette = ["#4ecdc4"]
 
 [map]
@@ -2253,7 +2253,7 @@ deep_color = "#ff4444"
 shallow_depth = 0.0
 deep_depth = 50.0
 
-[line_colors]
+[section_colors]
 palette = ["#4ecdc4"]
 
 [map]
@@ -2897,19 +2897,19 @@ fn test_syntactic_highlighting_defaults_to_full() {
 }
 
 #[test]
-fn test_syntactic_highlighting_missing_line_loads_as_full() {
+fn test_syntactic_highlighting_missing_section_loads_as_full() {
     // A config written before this feature existed has no
-    // [syntactic_highlighting] line; it must load with the opt-out default.
-    // Simulate by serializing a default config and stripping the line.
+    // [syntactic_highlighting] section; it must load with the opt-out default.
+    // Simulate by serializing a default config and stripping the section.
     let mut value = toml::Value::try_from(Config::default()).expect("config to toml value");
     value
         .as_table_mut()
         .expect("config is a table")
         .remove("syntactic_highlighting");
-    let without_line = toml::to_string(&value).expect("re-serialize");
-    assert!(!without_line.contains("syntactic_highlighting"));
+    let without_section = toml::to_string(&value).expect("re-serialize");
+    assert!(!without_section.contains("syntactic_highlighting"));
 
-    let config: Config = toml::from_str(&without_line).expect("legacy config should parse");
+    let config: Config = toml::from_str(&without_section).expect("legacy config should parse");
     assert_eq!(
         config.syntactic_highlighting.level,
         SyntacticHighlightLevel::Full
@@ -3172,10 +3172,10 @@ fn test_panels_config_deserializes_legacy_table_without_reveal_fields() {
 // ========================================================================
 
 #[test]
-fn test_save_to_path_round_trips_settings_across_lines() {
+fn test_save_to_path_round_trips_settings_across_sections() {
     // A SERIALIZATION guard, not an atomicity one - restoring a plain
     // `fs::write` leaves this green, because all it asks is that a normal save
-    // survives a reload across several lines of the config. That is worth
+    // survives a reload across several sections of the config. That is worth
     // pinning on its own (the temp-file+rename rewrite had to not disturb it),
     // but the atomicity claim is carried by
     // `test_save_to_path_leaves_destination_untouched_when_write_cannot_complete`,
@@ -3903,10 +3903,11 @@ fn test_a_config_file_without_the_shot_seen_key_gets_the_credit_columns_hidden()
     );
     std::fs::write(&path, toml::to_string(&document).unwrap()).unwrap();
 
+    // The file's `section_id` column key reads back in this build's vocabulary.
     let loaded = Config::load_from_path(&path).unwrap().panels;
     assert_eq!(
         loaded.data_table_shot_hidden_columns,
-        vec!["section_id", "surveyors", "explorers", "survey_date"]
+        vec!["line_id", "surveyors", "explorers", "survey_date"]
     );
     assert_eq!(loaded.data_table_shot_columns_seen, CREDIT_COLUMNS);
 }
@@ -3982,5 +3983,198 @@ fn test_load_normalizes_a_hand_edited_people_table() {
             name: "Ann".to_string(),
             email: None
         }]
+    );
+}
+
+// ========================================================================
+// Section -> Line rename: `config.toml` keeps the pre-rename names
+// ========================================================================
+
+/// The names a config file written before the Section -> Line rename uses,
+/// spelled out here rather than taken from `toml_names`, so a typo there fails.
+const PRE_RENAME_KEYS: [(&str, &str); 8] = [
+    ("", "section_colors"),
+    ("shortcuts", "toggle_section_labels"),
+    ("panels", "new_section_column_order"),
+    ("panels", "new_section_hidden_columns"),
+    ("panels", "new_section_column_widths"),
+    ("panels", "edit_section_column_order"),
+    ("panels", "edit_section_hidden_columns"),
+    ("panels", "edit_section_column_widths"),
+];
+
+fn toml_table<'a>(document: &'a toml::Value, table: &str) -> &'a toml::value::Table {
+    let root = document.as_table().unwrap();
+    if table.is_empty() {
+        root
+    } else {
+        root[table].as_table().unwrap()
+    }
+}
+
+fn strings(values: &[&str]) -> toml::Value {
+    toml::Value::Array(
+        values
+            .iter()
+            .map(|v| toml::Value::String((*v).to_string()))
+            .collect(),
+    )
+}
+
+#[test]
+fn test_a_config_file_from_before_the_line_rename_loads_every_renamed_setting() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    // What a pre-rename build wrote, built by hand: every renamed key under its
+    // old name, the old column key in the layouts, the old highlighting role.
+    let mut document = toml::Value::try_from(Config::default()).unwrap();
+    let root = document.as_table_mut().unwrap();
+    assert!(root.remove("line_colors").is_some());
+    root.insert(
+        "section_colors".to_string(),
+        toml::Value::try_from(HashMap::from([("palette", vec!["#123456", "#abcdef"])])).unwrap(),
+    );
+    let shortcuts = root["shortcuts"].as_table_mut().unwrap();
+    assert!(shortcuts.remove("toggle_line_labels").is_some());
+    shortcuts.insert("toggle_section_labels".to_string(), strings(&["Ctrl+K"]));
+    let panels = root["panels"].as_table_mut().unwrap();
+    for field in [
+        "new_line_column_order",
+        "new_line_hidden_columns",
+        "new_line_column_widths",
+        "edit_line_column_order",
+        "edit_line_hidden_columns",
+        "edit_line_column_widths",
+    ] {
+        assert!(panels.remove(field).is_some(), "{field}");
+    }
+    panels.insert(
+        "new_section_column_order".to_string(),
+        strings(&["length", "section_id"]),
+    );
+    panels.insert("new_section_hidden_columns".to_string(), strings(&["up"]));
+    panels.insert(
+        "new_section_column_widths".to_string(),
+        toml::Value::try_from(HashMap::from([("section_id", 70)])).unwrap(),
+    );
+    panels.insert(
+        "edit_section_column_order".to_string(),
+        strings(&["comment"]),
+    );
+    panels.insert(
+        "edit_section_hidden_columns".to_string(),
+        strings(&["down"]),
+    );
+    panels.insert(
+        "edit_section_column_widths".to_string(),
+        toml::Value::try_from(HashMap::from([("length", 90)])).unwrap(),
+    );
+    panels.insert(
+        "data_table_shot_hidden_columns".to_string(),
+        strings(&["section_id", "shot_id"]),
+    );
+    root["syntactic_highlighting"]
+        .as_table_mut()
+        .unwrap()
+        .insert(
+            "overrides".to_string(),
+            toml::Value::try_from(HashMap::from([(
+                "default",
+                HashMap::from([("section", "#A335EE"), ("station", "#36b96a")]),
+            )]))
+            .unwrap(),
+        );
+    std::fs::write(&path, toml::to_string(&document).unwrap()).unwrap();
+
+    let loaded = Config::load_from_path(&path).unwrap();
+    assert_eq!(loaded.line_colors.palette, vec!["#123456", "#abcdef"]);
+    assert_eq!(loaded.shortcuts.toggle_line_labels, vec!["Ctrl+K"]);
+    let panels = &loaded.panels;
+    assert_eq!(panels.new_line_column_order, vec!["length", "line_id"]);
+    assert_eq!(panels.new_line_hidden_columns, vec!["up"]);
+    assert_eq!(
+        panels.new_line_column_widths,
+        std::collections::BTreeMap::from([("line_id".to_string(), 70)])
+    );
+    assert_eq!(panels.edit_line_column_order, vec!["comment"]);
+    assert_eq!(panels.edit_line_hidden_columns, vec!["down"]);
+    assert_eq!(
+        panels.edit_line_column_widths,
+        std::collections::BTreeMap::from([("length".to_string(), 90)])
+    );
+    assert!(panels
+        .data_table_shot_hidden_columns
+        .starts_with(&["line_id".to_string(), "shot_id".to_string()]));
+    let roles = &loaded.syntactic_highlighting.overrides["default"];
+    assert_eq!(roles.get("line").map(String::as_str), Some("#A335EE"));
+    assert!(!roles.contains_key("section"));
+}
+
+#[test]
+fn test_a_save_writes_the_pre_rename_names_and_reads_them_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let mut config = Config::default();
+    config.line_colors.palette = vec!["#010203".to_string()];
+    config.shortcuts.toggle_line_labels = vec!["Ctrl+J".to_string()];
+    config.panels.new_line_column_order = vec!["line_id".to_string(), "length".to_string()];
+    config.panels.edit_line_column_widths =
+        std::collections::BTreeMap::from([("line_id".to_string(), 64)]);
+    config.syntactic_highlighting.overrides.insert(
+        "default".to_string(),
+        HashMap::from([("line".to_string(), "#a335ee".to_string())]),
+    );
+    config.save_to_path(&path).unwrap();
+
+    // An older build requires `section_colors`, so a file without it would
+    // reset every setting there: the file keeps the old vocabulary throughout.
+    let written: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    for (table, key) in PRE_RENAME_KEYS {
+        let table = toml_table(&written, table);
+        assert!(table.contains_key(key), "{key} must be written");
+        assert!(
+            !table.contains_key(&key.replace("section", "line")),
+            "{key} must not be written under its new name"
+        );
+    }
+    let panels = toml_table(&written, "panels");
+    assert_eq!(
+        panels["new_section_column_order"],
+        strings(&["section_id", "length"])
+    );
+    assert_eq!(
+        panels["data_table_shot_hidden_columns"].as_array().unwrap()[0],
+        toml::Value::String("section_id".to_string())
+    );
+    assert!(panels["edit_section_column_widths"]
+        .as_table()
+        .unwrap()
+        .contains_key("section_id"));
+    let roles = written["syntactic_highlighting"]["overrides"]["default"]
+        .as_table()
+        .unwrap();
+    assert!(roles.contains_key("section") && !roles.contains_key("line"));
+
+    let loaded = Config::load_from_path(&path).unwrap();
+    assert_eq!(loaded.line_colors.palette, config.line_colors.palette);
+    assert_eq!(
+        loaded.shortcuts.toggle_line_labels,
+        config.shortcuts.toggle_line_labels
+    );
+    assert_eq!(
+        loaded.panels.new_line_column_order,
+        config.panels.new_line_column_order
+    );
+    assert_eq!(
+        loaded.panels.edit_line_column_widths,
+        config.panels.edit_line_column_widths
+    );
+    assert_eq!(
+        loaded.panels.data_table_shot_hidden_columns,
+        config.panels.data_table_shot_hidden_columns
+    );
+    assert_eq!(
+        loaded.syntactic_highlighting.overrides,
+        config.syntactic_highlighting.overrides
     );
 }

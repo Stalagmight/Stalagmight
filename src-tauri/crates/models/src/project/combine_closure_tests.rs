@@ -9,10 +9,10 @@ use std::collections::{HashMap, HashSet};
 
 use super::closure_dedupe::{ClosureDedupes, CLOSURE_DEDUPES};
 use crate::{
-    ClosureStrategy, CombineCandidate, CombineJoinEnds, CombineJoinKind, CombinePick,
-    CombineRemovedClosure, CombineRemovedKind, CombineLinesOptions, GpsCoordinates,
-    KeptMovesReason, LoopClosure, Project, LineData, LineEnd, LineId, ShotData,
-    StationRef, TornTieKind, TornTieReason,
+    ClosureStrategy, CombineCandidate, CombineJoinEnds, CombineJoinKind, CombineLinesOptions,
+    CombinePick, CombineRemovedClosure, CombineRemovedKind, GpsCoordinates, KeptMovesReason,
+    LineData, LineEnd, LineId, LoopClosure, Project, ShotData, StationRef, TornTieKind,
+    TornTieReason,
 };
 
 pub(super) fn shot(azimuth: f64, length: f64) -> ShotData {
@@ -251,11 +251,7 @@ fn the_anchor_counts_only_where_the_closure_adjusted_view_solves() {
         (ClosureStrategy::ProportionalByLength, false),
     ] {
         let (plan, _, o) = plans(strategy, unmerge);
-        assert_eq!(
-            plan.moving_line,
-            Some(o),
-            "{strategy:?} unmerged {unmerge}"
-        );
+        assert_eq!(plan.moving_line, Some(o), "{strategy:?} unmerged {unmerge}");
         assert_eq!(
             plan.kept_moves_because,
             Some(KeptMovesReason::AdjustmentAnchor),
@@ -1245,20 +1241,14 @@ fn check_torn_reasons(
     for tie in &plan.torn_ties {
         if tie.reason != TornTieReason::ZeroDatum {
             let home = |s: LineId| if s == other { kept } else { s };
-            let (a, b) = (
-                home(tie.station_a.line_id),
-                home(tie.station_b.line_id),
-            );
+            let (a, b) = (home(tie.station_a.line_id), home(tie.station_b.line_id));
             assert!(
                 after.get_merged_line_ids(a).contains(&b),
                 "{what}: {tie:?} is torn for a loop and closes none"
             );
             continue;
         }
-        assert!(
-            plan.moving_line.is_some(),
-            "{what}: {tie:?} with no move"
-        );
+        assert!(plan.moving_line.is_some(), "{what}: {tie:?} with no move");
         let staying: Vec<StationRef> = [tie.station_a, tie.station_b]
             .into_iter()
             .filter(|at| !plan.moved_lines.contains(&at.line_id))
@@ -1271,9 +1261,7 @@ fn check_torn_reasons(
             "{what}: {tie:?} is held on a combined line"
         );
         assert!(
-            !after
-                .get_merged_line_ids(held.line_id)
-                .contains(&kept),
+            !after.get_merged_line_ids(held.line_id).contains(&kept),
             "{what}: {tie:?} is torn for a zero datum and closes a loop"
         );
         let mut part = HashSet::from([held.line_id]);
@@ -1597,10 +1585,7 @@ fn check_structure_muting(after: &Project, what: &str, mute: &[String]) {
             after.resolve_key(&merge.station_a).unwrap(),
             after.resolve_key(&merge.station_b).unwrap(),
         );
-        assert_ne!(
-            a.line_id, b.line_id,
-            "{what}: a merge inside one line"
-        );
+        assert_ne!(a.line_id, b.line_id, "{what}: a merge inside one line");
         let (ra, rb) = (point(&mut points, a), point(&mut points, b));
         if ra != rb {
             points.insert(ra, rb);
@@ -2038,10 +2023,7 @@ fn every_offered_combine_in_random_networks_keeps_the_invariants() {
         "no moving side ever tore a snap for a zero datum"
     );
     assert!(kept_moved > 0, "the kept side never moved");
-    assert!(
-        with_branches > 0,
-        "nothing ever moved with the moving line"
-    );
+    assert!(with_branches > 0, "nothing ever moved with the moving line");
     for kind in ["Merged", "CoLocated", "Closure"] {
         assert!(kinds.contains(kind), "no {kind} join in {kinds:?}");
     }
@@ -3223,12 +3205,7 @@ fn replay_chain(spec: &str, verbose: bool) -> ChainReplay {
 
 /// What [`replay_chain`] prints before a combine: the plan, the anchor, the
 /// datums, every merge and closure, and the held gauges.
-fn print_chain_step(
-    project: &Project,
-    c: &CombineCandidate,
-    plan: &crate::CombinePlan,
-    k: LineId,
-) {
+fn print_chain_step(project: &Project, c: &CombineCandidate, plan: &crate::CombinePlan, k: LineId) {
     let comp = project.get_connected_line_ids(k);
     eprintln!(
         "  kind {:?} plan {:?} anchor {:?} datums {:?}",
@@ -3787,9 +3764,7 @@ fn a_closure_the_join_puts_across_one_shot_is_removed() {
                 .combine_candidates_at_point(StationRef::new(k, 2))
                 .into_iter()
                 .find(|c| {
-                    c.line_a != c.line_b
-                        && [k, o].contains(&c.line_a)
-                        && [k, o].contains(&c.line_b)
+                    c.line_a != c.line_b && [k, o].contains(&c.line_a) && [k, o].contains(&c.line_b)
                 })
             else {
                 panic!("{what}: the menu offers K and O");

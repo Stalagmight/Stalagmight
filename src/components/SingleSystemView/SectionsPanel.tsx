@@ -207,7 +207,7 @@ export default function SectionsPanel({ lines }: SectionsPanelProps) {
   // Virtualize the list: only the visible window (plus overscan) mounts, so a
   // 14k-line project no longer builds ~14k <li> subtrees on open. Same
   // scroll idiom as SpreadsheetGrid / DetailPanel's warnings list. The scroll
-  // element is the `lines-list` container, whose scrollTop the hover
+  // element is the `sections-list` container, whose scrollTop the hover
   // save/restore logic and the scroll e2e specs read and write directly.
   const rowVirtualizer = useVirtualizer({
     count: lines.length,
@@ -547,7 +547,7 @@ export default function SectionsPanel({ lines }: SectionsPanelProps) {
       // layer, so nothing about its own DOM says the list can move under it.
       // Naming the scroller here is what lets it close when this list scrolls,
       // while a scroll anywhere else - the map, the data table - leaves it be.
-      scrollScope: '[data-testid="lines-list"]',
+      scrollScope: '[data-testid="sections-list"]',
     });
   }, [openDialog]);
 
@@ -569,13 +569,13 @@ export default function SectionsPanel({ lines }: SectionsPanelProps) {
           variant="ghost"
           tooltip={t('sections.actions.add')}
           aria-label={t('sections.actions.add')}
-          data-testid="lines-add-button"
+          data-testid="sections-add-button"
           disabled={editingBlocked}
         />
       </div>
 
       {/* Line list */}
-      <div ref={listContainerRef} className="flex-1 overflow-auto" data-testid="lines-list">
+      <div ref={listContainerRef} className="flex-1 overflow-auto" data-testid="sections-list">
         {lines.length === 0 ? (
           <div className="p-4 text-center text-text-secondary text-sm">
             {t('sections.empty.message')}
@@ -584,7 +584,7 @@ export default function SectionsPanel({ lines }: SectionsPanelProps) {
               onClick={handleAddLine}
               disabled={editingBlocked}
               className="text-accent hover:underline mt-2 inline-block disabled:opacity-50 disabled:cursor-not-allowed disabled:no-underline"
-              data-testid="lines-empty-add"
+              data-testid="sections-empty-add"
             >
               {t('sections.empty.action')}
             </button>

@@ -71,7 +71,7 @@ export default function ImportReceiptDialog() {
           )}
           {receipt.zero_datum_created != null && (
             <li data-testid="import-receipt-zero-datum-created">
-              {t('dialogs.importReceipt.zeroDatumCreated', { line: receipt.zero_datum_created })}
+              {t('dialogs.importReceipt.zeroDatumCreated', { section: receipt.zero_datum_created })}
             </li>
           )}
         </ul>

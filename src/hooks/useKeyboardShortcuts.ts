@@ -84,7 +84,7 @@ const DISPLAY_TOGGLE_ACTIONS: Partial<Record<ShortcutAction, DisplayToggleKey>> 
   toggle_satellite: 'showSatellite',
   toggle_station_labels: 'showStationLabels',
   toggle_shot_labels: 'showShotData',
-  toggle_line_labels: 'showSectionNames',
+  toggle_line_labels: 'showLineNames',
 };
 
 /**

@@ -53,9 +53,9 @@ use std::collections::{HashMap, HashSet};
 
 use crate::angle::normalize_azimuth;
 use crate::{
-    ClosurePair, ClosuresBeforeEdit, CombineJoinEnds, CombineOutcome, CombinePick,
-    CombineRemovedClosure, CombineRemovedKind, CombineReplacedClosure, CombineLinesOptions,
-    LoopClosure, LineEnd, LineId, Shot, ShotData, StationKey, StationRef,
+    ClosurePair, ClosuresBeforeEdit, CombineJoinEnds, CombineLinesOptions, CombineOutcome,
+    CombinePick, CombineRemovedClosure, CombineRemovedKind, CombineReplacedClosure, LineEnd,
+    LineId, LoopClosure, Shot, ShotData, StationKey, StationRef,
 };
 
 use super::combine_plan::{JoinPoint, Tie, TieId, TiePlan};
@@ -101,8 +101,7 @@ impl Project {
     /// [`Project::counter_parity_shots`]). Flips with every reverse of the
     /// record, wherever the record lives.
     pub fn shot_record_parity(&self, line: &crate::Line, shot_uuid: Option<&str>) -> bool {
-        line.reverse_parity
-            ^ shot_uuid.is_some_and(|uuid| self.counter_parity_shots.contains(uuid))
+        line.reverse_parity ^ shot_uuid.is_some_and(|uuid| self.counter_parity_shots.contains(uuid))
     }
 
     /// Decide the join and the plan for combining `other` into `kept`, or why

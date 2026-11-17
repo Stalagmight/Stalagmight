@@ -12,8 +12,8 @@ use chrono::Utc;
 use stalagmight_lib::config::{CacheConfig, Config, ValidationConfig};
 use stalagmight_lib::core::{Command, PersistStack, UndoData, UndoEntry, UndoStack, Validator};
 use stalagmight_lib::models::{
-    ClosureStrategy, Coordinates, DatumRole, GpsCoordinates, LoopClosure, Project, Line,
-    LineData, LineUpdates, Shot, ShotData, ShotKind, ShotUpdates, StationMerge, StationRef,
+    ClosureStrategy, Coordinates, DatumRole, GpsCoordinates, Line, LineData, LineUpdates,
+    LoopClosure, Project, Shot, ShotData, ShotKind, ShotUpdates, StationMerge, StationRef,
 };
 use stalagmight_lib::persistence::Database;
 use std::collections::{HashMap, HashSet};

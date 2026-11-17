@@ -1121,10 +1121,7 @@ mod tests {
             settings.show_shot_comments,
             "showShotComments should be true"
         );
-        assert!(
-            !settings.show_line_names,
-            "showLineNames should be false"
-        );
+        assert!(!settings.show_line_names, "showLineNames should be false");
         assert!(
             settings.show_station_labels,
             "showStationLabels should be true"
@@ -1267,9 +1264,7 @@ mod tests {
 
     #[test]
     fn load_and_create_results_serialize_project_cross_refs_in_wire_form() {
-        use crate::models::{
-            Project, ProjectStats, LineData, ShotData, StationKey, StationMerge,
-        };
+        use crate::models::{LineData, Project, ProjectStats, ShotData, StationKey, StationMerge};
 
         // A project with one resolvable station merge, stored in the internal
         // StationKey form.

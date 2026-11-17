@@ -11,7 +11,7 @@ How to use Stalagmight. Pages link to each other.
 - [Merging stations](workflows/merging-stations.md)
 - [Closing a loop](workflows/closing-a-loop.md)
 - [Adding comments](workflows/adding-comments.md)
-- [Combining and splitting sections](workflows/combining-and-splitting-sections.md)
+- [Combining and splitting lines](workflows/combining-and-splitting-sections.md)
 - [Exporting](workflows/exporting.md)
 - [Planning a dive](workflows/planning-a-dive.md)
 
@@ -19,7 +19,7 @@ How to use Stalagmight. Pages link to each other.
 - [Start screen](screens/start-screen.md)
 - [New Project dialog](screens/new-project-dialog.md)
 - [Survey view](screens/survey-view.md)
-- [Import / Create Section dialog](screens/create-section-dialog.md)
+- [Import / Create Line dialog](screens/create-section-dialog.md)
 - [Placement mode](screens/placement-mode.md)
 - [Station context menu](screens/station-context-menu.md)
 - [Edit Station dialog](screens/edit-station-dialog.md)
@@ -33,7 +33,7 @@ How to use Stalagmight. Pages link to each other.
 - [Display menu](screens/display-menu.md)
 
 **Concepts**
-- [Sections, shots and stations](concepts/sections-shots-stations.md)
+- [Lines, shots and stations](concepts/sections-shots-stations.md)
 - [Errors and warnings](concepts/errors-and-warnings.md)
 - [Zero datums and GPS fixes](concepts/zero-datums-and-gps-fixes.md)
 

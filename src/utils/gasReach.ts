@@ -16,7 +16,7 @@ import { encodeFeatureId } from './ids';
  * `budget_view`'s `in_range`) - clamp to the ramp's FAR color (dimmed, not
  * greyed - see `GAS_DIM_ALPHA`); only topologically UNCONNECTED stations read grey.
  * This three-way split lets a diver tell "past my turn point or scooter range"
- * (dimmed, colored) apart from "not part of this cave line at all" (grey)
+ * (dimmed, colored) apart from "not part of this cave section at all" (grey)
  * at a glance. These pure helpers keep the transform unit-testable in
  * isolation.
  */

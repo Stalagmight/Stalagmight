@@ -6,8 +6,8 @@ order: 3
 
 # Survey view
 
-The main window of an open project: the map, with **Sections** on the left,
-**Details** on the right and **Data** at the bottom.
+The main window of an open project: the map, with **Sections** (the list of
+lines) on the left, **Details** on the right and **Data** at the bottom.
 
 ![Survey view](../images/survey-view.png)
 
@@ -24,7 +24,7 @@ The main window of an open project: the map, with **Sections** on the left,
 **Tools**
 
 6. **Select** (`S`)
-7. **Merge** (`M`): merge two stations to connect sections. See
+7. **Merge** (`M`): merge two stations to connect lines. See
    [Merging stations](../workflows/merging-stations.md).
 8. **Comment** (`C`): comment on a station or shot. See
    [Adding comments](../workflows/adding-comments.md).
@@ -35,14 +35,14 @@ The main window of an open project: the map, with **Sections** on the left,
 
 **Panels and map**
 
-12. **Add section**: enter a new section by hand in the
-    [Import / Create Section dialog](create-section-dialog.md).
+12. **Add line**: enter a new line by hand in the
+    [Import / Create Line dialog](create-section-dialog.md).
 13. **Import data**: same as 2.
 14. Pin or hide the left panel.
 15. **Fit to view**: zoom to the whole survey (`F`).
 16. Zoom in / out (`=` or `+` / `-`).
 17. Pin or hide the **Details** panel.
-18. **Data**: tables of sections and raw shot data.
+18. **Data**: tables of lines and raw shot data.
 19. **Details**: project statistics or the selected item. **Warnings**: problems
     found in the data, see the [Warnings panel](warnings-panel.md).
 
@@ -84,7 +84,7 @@ SpeleoDB project**.
   the editing tools and **Import** are disabled.
 - An unpinned panel slides out when you hover its edge. `Ctrl+1`, `Ctrl+2` and
   `Ctrl+3` show or hide the left panel, **Details** and **Data**.
-- Status bar: number of sections and shots, total length, save state.
+- Status bar: number of lines and shots, total length, save state.
 - A project without data opens the map on the default location from Settings.
 - Satellite imagery by Esri.
 - Shortcuts can be changed in Settings. On macOS, use `Cmd` for `Ctrl`.

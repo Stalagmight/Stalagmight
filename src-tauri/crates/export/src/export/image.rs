@@ -1134,8 +1134,7 @@ pub fn generate_svg_string_with_stations(
         for line in &project.lines {
             // Per-line stroke override (computed once); `None` inherits the
             // group's black stroke for the monochrome path.
-            let line_stroke =
-                (mode == ColorMode::Line).then(|| sanitize_hex_color(&line.color));
+            let line_stroke = (mode == ColorMode::Line).then(|| sanitize_hex_color(&line.color));
             let mut i = 0;
             while i < line.shots.len() {
                 if line.shots[i].kind.is_virtual() {
@@ -4524,10 +4523,9 @@ mod tests {
     fn station_comments_present_when_seeded() {
         let mut project = three_shot_line_project();
         let line_id = project.lines[0].id;
-        project.station_comments.insert(
-            StationRef::new(line_id, 1).into(),
-            "wet crawl".to_string(),
-        );
+        project
+            .station_comments
+            .insert(StationRef::new(line_id, 1).into(), "wet crawl".to_string());
         let svg = generate_svg_string(
             &project,
             &ExportImageOptions {
@@ -4667,10 +4665,9 @@ mod tests {
     fn station_comments_absent_when_disabled() {
         let mut project = three_shot_line_project();
         let line_id = project.lines[0].id;
-        project.station_comments.insert(
-            StationRef::new(line_id, 1).into(),
-            "wet crawl".to_string(),
-        );
+        project
+            .station_comments
+            .insert(StationRef::new(line_id, 1).into(), "wet crawl".to_string());
         let svg = generate_svg_string(
             &project,
             &ExportImageOptions {
@@ -4718,10 +4715,9 @@ mod tests {
                 ..Default::default()
             })
             .id;
-        project.station_comments.insert(
-            StationRef::new(line_id, 0).into(),
-            "orphaned".to_string(),
-        );
+        project
+            .station_comments
+            .insert(StationRef::new(line_id, 0).into(), "orphaned".to_string());
         let svg = generate_svg_string(
             &project,
             &ExportImageOptions {
@@ -4740,10 +4736,9 @@ mod tests {
     fn station_comments_stay_black_regardless_of_color_mode() {
         let mut project = three_shot_line_project();
         let line_id = project.lines[0].id;
-        project.station_comments.insert(
-            StationRef::new(line_id, 1).into(),
-            "wet crawl".to_string(),
-        );
+        project
+            .station_comments
+            .insert(StationRef::new(line_id, 1).into(), "wet crawl".to_string());
         let svg = generate_svg_string(
             &project,
             &ExportImageOptions {
@@ -4768,10 +4763,9 @@ mod tests {
     fn station_comments_share_collision_space_with_station_labels() {
         let mut project = three_shot_line_project();
         let line_id = project.lines[0].id;
-        project.station_comments.insert(
-            StationRef::new(line_id, 1).into(),
-            "wet crawl".to_string(),
-        );
+        project
+            .station_comments
+            .insert(StationRef::new(line_id, 1).into(), "wet crawl".to_string());
         let svg = generate_svg_string(
             &project,
             &ExportImageOptions {

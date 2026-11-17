@@ -2,7 +2,7 @@
 //! by the user's answer or, by default, when it sits on a line's first or
 //! last station. Synthetic surveys only.
 
-use crate::{local_to_gps, GpsCoordinates, Project, LineData, LineId, ShotData, StationRef};
+use crate::{local_to_gps, GpsCoordinates, LineData, LineId, Project, ShotData, StationRef};
 
 const ORIGIN_LAT: f64 = 20.5;
 const ORIGIN_LON: f64 = -87.25;

@@ -12,8 +12,8 @@ use super::command_shot::closure_removed_message;
 use super::AppState;
 use crate::core::{Command, WarningSeverity};
 use crate::models::{
-    ClosureStrategy, GpsCoordinates, LoopClosure, Project, LineData, LineId, ShotData,
-    ShotId, StationRef, CLOSURE_ACROSS_ONE_SHOT, CLOSURE_ADJUSTMENT_FAILED,
+    ClosureStrategy, GpsCoordinates, LineData, LineId, LoopClosure, Project, ShotData, ShotId,
+    StationRef, CLOSURE_ACROSS_ONE_SHOT, CLOSURE_ADJUSTMENT_FAILED,
     CLOSURE_REMOVED_ACROSS_ONE_SHOT,
 };
 
@@ -788,10 +788,7 @@ fn no_delete_leaves_a_new_closure_across_one_shot() {
         } else {
             let start = 1 + next((n - 2) as u64) as usize;
             let end = (start + next(2) as usize).min(n - 2);
-            let (first, last) = (
-                shot_id(&state, line, start),
-                shot_id(&state, line, end),
-            );
+            let (first, last) = (shot_id(&state, line, start), shot_id(&state, line, end));
             // What the bulk-delete dialog will show, taken before the delete.
             predicted = before
                 .preview_delete_shot_range(line, first, last)

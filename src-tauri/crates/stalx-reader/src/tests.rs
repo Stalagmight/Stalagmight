@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use stalagmight_models::station::{GpsCoordinates, LoopClosure as ModelClosure, StationRef};
 use stalagmight_models::{
-    ClosureStrategy, Project, LineData, ShotData, ShotKind as ModelShotKind, SurveyDirection,
+    ClosureStrategy, LineData, Project, ShotData, ShotKind as ModelShotKind, SurveyDirection,
 };
 use stalagmight_persistence::persistence::Database;
 use tempfile::TempDir;

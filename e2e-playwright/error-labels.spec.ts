@@ -83,7 +83,7 @@ test.describe('Errors labels', () => {
     await page.evaluate(() => {
       const ui = (window as unknown as { __E2E_TEST__?: { uiStore: { getState: () => { toggleDisplay: (k: string) => void } } } })
         .__E2E_TEST__?.uiStore;
-      ui?.getState().toggleDisplay('showSectionNames');
+      ui?.getState().toggleDisplay('showLineNames');
     });
     await setErrorsOn(page);
     await setZoom(page, 15);

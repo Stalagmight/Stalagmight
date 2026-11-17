@@ -2,13 +2,15 @@
 
 The DMP import wizard (`DmpNewImportDialog`) is the primary UI for importing cave survey data from MNemo DMP files. It uses a connection-wizard pattern: the backend pre-computes placement suggestions, the user confirms or adjusts each one, and a batch import executes at the end.
 
+Each MNemo section in the file (a `DmpSection`) becomes one Stalagmight **line**. This page says "DMP section" for the file's unit, "import line" for a DMP section on its way into the project (the code's `importLineIndex`, `ImportLineConfig`), and "line" for what the project holds.
+
 ## Reading the device over USB (#725)
 
 **Import from MNemo...** (both hamburger menus, hidden on Android) reads a
 USB-connected MNemo v2 instead of a file. It does not import anything itself: it
 saves what it read as a `.dmp` and hands that path to `routeOpenedFile`, the same
 route as a `.dmp` picked from disk. The read-only guard, the no-project path
-(`new-project-for-import`), duplicate-section detection and this wizard therefore
+(`new-project-for-import`), duplicate detection and this wizard therefore
 apply unchanged; pulling the device again after each dive brings the earlier
 sections back already unticked, because their content hashes match.
 
@@ -76,11 +78,11 @@ separate follow-up.
 
 | Phase | What happens |
 |-------|-------------|
-| `init` | Import the zero-datum section (if provided), then call `suggest_all_import_placements` for all remaining sections |
+| `init` | Import the zero-datum line (if provided), then call `suggest_all_import_placements` for all remaining import lines |
 | `suggesting` | Present suggestions one at a time; user confirms, edits, or skips each |
-| `manual_placing` | Nothing was suggested for the remaining sections, so they are offered one SEGMENT at a time (`computeUnreachableSegments`) with four choices: reuse a skipped suggestion, attach to an existing section, place on the map by hand, or discard. Entered with `autoStartManualPlacementPending` set, which hides the dialog (`DialogWrapper`'s `hidden`) until the map placement it auto-starts has begun |
-| `placing` | Late import: build batch `ImportSectionConfig[]` for anything manual placement added and call `import_sections` again (overlap treatment already ran on the way out of `suggesting`) |
-| `done` | All sections placed and `onComplete` fires; if any remain unconnected the wizard re-enters `manual_placing` instead |
+| `manual_placing` | Nothing was suggested for the remaining import lines, so they are offered one SEGMENT at a time (`computeUnreachableSegments`) with four choices: reuse a skipped suggestion, attach to an existing line, place on the map by hand, or discard. Entered with `autoStartManualPlacementPending` set, which hides the dialog (`DialogWrapper`'s `hidden`) until the map placement it auto-starts has begun |
+| `placing` | Late import: build batch `ImportLineConfig[]` for anything manual placement added and call `import_lines` again (overlap treatment already ran on the way out of `suggesting`) |
+| `done` | All lines placed and `onComplete` fires; if any remain unconnected the wizard re-enters `manual_placing` instead |
 
 The phase union is declared inline at `DmpNewImportDialog.tsx`'s `phase` state and
 mirrored, for the onboarding tour, as `DmpImportWizardPhase` in `src/store/uiStore.ts`.
@@ -95,7 +97,7 @@ CLOSES the wizard and reopens a fresh instance afterwards, handing the run's
 state across in `SavedManualPlacingState` (`openDialog`'s `dialogData`). The
 new instance is a new component: anything living in a ref of the old one is
 gone unless it rides that struct. `importedReceipts` is one of those (#487) -
-each `import_sections` call returns an `import_receipt`, the wizard banks them
+each `import_lines` call returns an `import_receipt`, the wizard banks them
 all and aggregates them once at completion (`aggregateImportReceipts`), and an
 empty list there aggregates to `undefined`, which App.tsx reads as "no receipt
 to show". A new per-run accumulator has to be added to the struct in the same
@@ -108,24 +110,24 @@ nothing writes any more (`buildSavedState` omits it, and it is the only place
 a saved state is built). Pre-existing, and left in place - it still carries the
 aggregate, so it stays correct if a caller ever sets that field again.
 
-`importedSectionIds` is the other per-run accumulator on that struct, and it
+`importedLineIds` is the other per-run accumulator on that struct, and it
 fails LOUDER when it is not carried: App.tsx gates `suggest_orphan_placements`
-on `newSectionIds?.length`, so an instance that completes with an empty list
+on `newLineIds?.length`, so an instance that completes with an empty list
 skips orphan detection entirely - which is what the manual-placement route used
 to do while the direct route always ran it.
 
 ### Leaving the wizard: Back and Cancel (#394)
 
 Because the imports are eager, both exits have to decide what happens to
-sections that are ALREADY in the project - `connections` does not answer that
+lines that are ALREADY in the project - `connections` does not answer that
 question (it is a client-side record that has imported nothing), so both gates
-read `importedSectionIdsRef` as well.
+read `importedLineIdsRef` as well.
 
 * **Cancel** offers three actions once anything is imported: remove and close,
   keep and close, or continue editing. The copy names the count.
 * **Back** offers no "keep". It returns to a step BEFORE any import, and the
   forward pass re-runs the whole pipeline from the mount effect, so a kept
-  section would simply be imported a second time. Back therefore withdraws
+  line would simply be imported a second time. Back therefore withdraws
   first, and App.tsx hands the zero-datum config the user entered back to
   `zero-datum-config` (`previousZeroDatumConfig` in `dialogData`, consumed as
   `ZeroDatumConfigDialog`'s `initialConfig` prop) so stepping back is an edit
@@ -146,22 +148,22 @@ survives is the dialog's LIVE state - `onBack` is handed the current GPS
 edits (`buildCurrentDraft`), not just what the dialog opened with. App.tsx
 relays that draft into `zero-datum-selection`'s `dialogData`
 (`ZERO_DATUM_CARRY_KEY`, `src/utils/zeroDatumCarry.ts`), and
-`onSelectSection` re-attaches it to the reopened `zero-datum-config` ONLY
-when the re-picked section matches the draft's `sectionIndex`
-(`carryZeroDatumConfig`) - a different section starts blank, because the
+`onSelectLine` re-attaches it to the reopened `zero-datum-config` ONLY
+when the re-picked line matches the draft's `lineIndex`
+(`carryZeroDatumConfig`) - a different line starts blank, because the
 name/GPS/shots answered a different question. It also starts blank on a
 THIRD hop back to `dmp-selection`: `openDialog` replaces `dialogData`
 wholesale (`uiStore.ts`), and neither hop back through it relays the draft
 any further.
 
-The withdrawal is ONE `execute_batch` of `delete_section` - one undo entry for
-one user action. `Command::DeleteSection` is batch-allowed for exactly this
+The withdrawal is ONE `execute_batch` of `delete_line` - one undo entry for
+one user action. `Command::DeleteLine` is batch-allowed for exactly this
 (`AppState::is_batch_allowed`). Four properties it has to keep, each pinned by a
 test:
 
 * **Deduplicated.** The id list is seeded from the saved state and appended to by
   live imports, so one id can appear twice across the map-placement handoff.
-  `execute_batch` is all-or-nothing and a second `delete_section` for one id
+  `execute_batch` is all-or-nothing and a second `delete_line` for one id
   fails "not found", which would roll the whole withdrawal back.
 * **Exclusive with imports.** Neither exit opens while an import is in flight (an
   import banks its ids only on resolution, so a withdrawal decided mid-flight
@@ -170,26 +172,26 @@ test:
   on the wire.
 * **Project-stamped.** The ids travel with the project's `created_at` and the
   withdrawal refuses on a mismatch. Nothing clears `dialogData` when the open
-  project changes, and section ids are small per-project integers, so a stale id
+  project changes, and line ids are small per-project integers, so a stale id
   would otherwise resolve happily against an unrelated survey.
 * **Written through.** In the import-into-NEW-project flow the withdrawal saves,
   because the eager anchor import already resolved that project's deferred first
   save (`finalize_deferred_import`) and the file would otherwise keep the
-  sections that were just removed. Importing into an EXISTING project it only
+  lines that were just removed. Importing into an EXISTING project it only
   marks dirty, exactly as `saveAfterImport` does, so unrelated pending edits are
   not committed behind the user's back. That save is NOT best-effort: a failed
   write keeps the wizard open with the reason, and the next Remove click retries
-  the SAVE (there are no sections left to delete by then), because closing is
+  the SAVE (there are no lines left to delete by then), because closing is
   what makes the removal final from the user's side.
-* **Forgetful.** `Command::UntrackImport` rides the same batch. `import_sections`
-  records the file hash and each section's content hash for duplicate detection,
-  and deleting a section does not touch them - so without this the project still
+* **Forgetful.** `Command::UntrackImport` rides the same batch. `import_lines`
+  records the file hash and each line's content hash for duplicate detection,
+  and deleting a line does not touch them - so without this the project still
   claims the file was imported while none of it remains, and `DmpSelectionDialog`
-  auto-DESELECTS every section it believes is a duplicate: the obvious retry
-  offers nothing to import. In the batch, so one undo restores the sections and
+  auto-DESELECTS every DMP section it believes is a duplicate: the obvious retry
+  offers nothing to import. In the batch, so one undo restores the lines and
   their tracking together. Only the hashes this run sent are forgotten; the file
   hash is per-file, so a file also imported in an earlier session loses its
-  file-level duplicate flag (its per-section flags stand).
+  file-level duplicate flag (its per-line flags stand).
 
 Two residues, both deliberate:
 
@@ -197,7 +199,7 @@ Two residues, both deliberate:
   created it.** Nothing here unlinks a file the user asked for, and the Recent
   Projects entry stays with it.
 * **Undoing the withdrawal from the main window is outside the wizard's
-  knowledge.** The accumulators are cleared when it succeeds, so sections
+  knowledge.** The accumulators are cleared when it succeeds, so lines
   restored by a later undo are ones a re-entered wizard no longer tracks, and a
   second forward pass would import them again. Cheap guards were considered and
   rejected: the wizard is gone by then, and the undo entry is an ordinary one the
@@ -205,34 +207,34 @@ Two residues, both deliberate:
 
 ## Virtual Connections
 
-During the `suggesting` phase, confirmed placements are recorded as **virtual connections** - lightweight client-side records that describe how two sections should be joined. No backend write happens for them until the early import that runs on the transition out of `suggesting`.
+During the `suggesting` phase, confirmed placements are recorded as **virtual connections** - lightweight client-side records that describe how two lines should be joined. No backend write happens for them until the early import that runs on the transition out of `suggesting`.
 
 ```typescript
 type VirtualConnection = {
-  importSectionIndex: number;     // DMP section being placed
+  importLineIndex: number;        // DMP section being placed
   importStationIndex: number;     // Station in that section
   targetType: 'existing' | 'importing';
-  existingSectionId?: number;     // For existing targets
+  existingLineId?: number;        // For existing targets
   existingStationIndex?: number;
   targetImportIndex?: number;     // For import-to-import targets
   targetImportStationIndex?: number;
 };
 ```
 
-**`existing`** connections attach a DMP section to an already-imported project section.
+**`existing`** connections attach a DMP section to an already-imported project line.
 **`importing`** connections attach a DMP section to another DMP section that hasn't been imported yet.
 
 ## Suggestion Scoring
 
-The backend command `suggest_all_import_placements` compares every import section against both existing project sections and other import sections. It produces a flat list of `CrossSectionSuggestion` objects sorted by score, each carrying:
+The backend command `suggest_all_import_placements` compares every import line against both existing project lines and other import lines. It produces a flat list of `CrossLineSuggestion` objects sorted by score, each carrying:
 
-- `importSectionIndex` / `existingStationIndex` - which stations to merge
+- `importLineIndex` / `existingStationIndex` - which stations to merge
 - `matchedShots` / `direction` - how many shots overlapped and in which direction
 - `confidence` - `high` / `medium` / `low` tier
 - `targetType` - `existing` or `importing`
 - `score` - aggregate match score (higher is better)
 
-The wizard picks the top suggestion for each unplaced section and shows alternatives for the same section.
+The wizard picks the top suggestion for each unplaced import line and shows alternatives for the same line.
 
 ## Overlap Handling
 
@@ -256,15 +258,15 @@ All overlap mutation is handled by a single function - `applyAllOverlapTreatment
 
 ```
 handleConfirm → records VirtualConnection + ConfirmedOverlapInfo
-              → saves raw user edits to sectionEditsRef (NO overlap mutation)
+              → saves raw user edits to lineEditsRef (NO overlap mutation)
 
 applyAllOverlapTreatments → processes ALL pool suggestions in one pass
-                          → mutates sectionEditsRef (import-to-import targets)
+                          → mutates lineEditsRef (import-to-import targets)
                           → returns ExistingShotUpdateLocal[] (import-to-existing targets)
 
-buildBatchImport → reads sectionEditsRef → ImportSectionConfig[]
+buildBatchImport → reads lineEditsRef → ImportLineConfig[]
 
-import_sections IPC → sections + existingShotUpdates
+import_lines IPC → lines + existingShotUpdates
 ```
 
 `applyAllOverlapTreatments` walks the full suggestion pool. For each suggestion:
@@ -274,7 +276,7 @@ import_sections IPC → sections + existingShotUpdates
 
 The function handles two target paths:
 
-- **Import-to-import**: Modifies the target import section's edits in `sectionEditsRef` directly (interpolation, import data replacement, or reference marking).
+- **Import-to-import**: Modifies the target import line's edits in `lineEditsRef` directly (interpolation, import data replacement, or reference marking).
 - **Import-to-existing**: Collects `ExistingShotUpdateLocal[]` entries that are sent to the backend alongside the batch import.
 
 ### Interpolation
@@ -287,112 +289,112 @@ When multiple overlap offsets are possible, a dropdown lets the user choose whic
 
 ### Doubly-Anchored Guard
 
-When the target existing section has positional constraints on **both sides** of the overlap shot range, `interpolate` and `import_data` are disabled:
+When the target existing line has positional constraints on **both sides** of the overlap shot range, `interpolate` and `import_data` are disabled:
 
 - The overlap mode dropdown greys out those options (`isTargetDoublyAnchored` useMemo)
 - The current mode auto-switches to `existing_data` if it was set to a blocked mode
-- The backend independently skips `ExistingShotUpdate` entries for doubly-anchored sections as a safety net
+- The backend independently skips `ExistingShotUpdate` entries for doubly-anchored lines as a safety net
 
 **Anchor types** checked on each side of the modified range:
 - Zero datum stations
 - Station merge endpoints
 - Aligned loop closure endpoints (`is_aligned === true`)
 
-**Rationale**: Modifying shots between two positional anchors changes the geometry between them. The backend can compensate for a single anchor via section offset adjustment, but with two anchors on opposite sides of the modification, one constraint will inevitably break (e.g., shifting the offset to keep a zero datum fixed would misalign an aligned closure on the other side).
+**Rationale**: Modifying shots between two positional anchors changes the geometry between them. The backend can compensate for a single anchor via line offset adjustment, but with two anchors on opposite sides of the modification, one constraint will inevitably break (e.g., shifting the offset to keep a zero datum fixed would misalign an aligned closure on the other side).
 
 ## Existing Shot Updates (Backend)
 
-The `import_sections` backend command accepts an optional `existing_shot_updates: Vec<ExistingShotUpdate>` parameter. Each entry specifies a `(section_id, shot_id, ShotUpdates)` triple for modifying shots on existing project sections atomically within the same undo transaction as the batch import.
+The `import_lines` backend command accepts an optional `existing_shot_updates: Vec<ExistingShotUpdate>` parameter. Each entry specifies a `(line_id, shot_id, ShotUpdates)` triple for modifying shots on existing project lines atomically within the same undo transaction as the batch import.
 
 ### Application Order
 
 ```
 1. Snapshot project state (for undo)
-2. Filter out doubly-anchored sections (backend safety net)
+2. Filter out doubly-anchored lines (backend safety net)
 3. Record zero datum anchor positions BEFORE updates
-4. Apply ExistingShotUpdates to existing section shots
-5. Compensate section offsets to keep zero datums fixed
-6. Create new sections + apply placements (FromExisting uses updated geometry)
+4. Apply ExistingShotUpdates to existing line shots
+5. Compensate line offsets to keep zero datums fixed
+6. Create new lines + apply placements (FromExisting uses updated geometry)
 7. Snapshot project state (for redo)
 8. Push undo entry
 ```
 
 ### Zero Datum Stability
 
-After applying shot updates, the backend checks whether any affected section has a zero datum. If so:
+After applying shot updates, the backend checks whether any affected line has a zero datum. If so:
 
 1. The datum station's absolute position was recorded before updates
 2. The new position is computed after updates
-3. The delta is applied (inverted) to the section offset - and to all sections in the same rigid group (`get_merged_section_ids`) - so the datum stays pinned
+3. The delta is applied (inverted) to the line offset - and to all lines in the same rigid group (`get_merged_line_ids`) - so the datum stays pinned
 
-This ensures that modifying overlap shots at indices lower than the zero datum station doesn't shift the section's GPS-anchored position.
+This ensures that modifying overlap shots at indices lower than the zero datum station doesn't shift the line's GPS-anchored position.
 
-## Section Editing
+## Line Editing
 
-Each DMP section can be edited before import:
+Each import line can be edited before import:
 - **Metadata**: name, surveyor, date, color, direction, quality
 - **Shots**: add, delete, insert before/after, modify values
 
-Edit state is stored in `sectionEditsRef` (a `Map<number, SectionEditState>`) and restored when the user revisits a section. The `effectiveShots` derived view applies overlap transformations without mutating the raw edit state.
+Edit state is stored in `lineEditsRef` (a `Map<number, LineEditState>`) and restored when the user revisits a line. The `effectiveShots` derived view applies overlap transformations without mutating the raw edit state.
 
 ## Preview & Segment Context
 
-The `SectionPreview` component shows a 2D plan-view rendering of the import section, the target section, and surrounding context. Context sections appear dimmed behind the main preview.
+The `LinePreview` component shows a 2D plan-view rendering of the import line, the target line, and surrounding context. Context lines appear dimmed behind the main preview.
 
 ### Coordinate Frames
 
 The preview has two coordinate frames:
 
-- **Target frame**: The target section's station 0 is at origin. Target-side context is positioned in this frame directly.
-- **Import frame**: The import section's station 0 is at origin. Import-side context uses this frame and gets an offset applied by `mergedContextSections` to align with the target.
+- **Target frame**: The target line's station 0 is at origin. Target-side context is positioned in this frame directly.
+- **Import frame**: The import line's station 0 is at origin. Import-side context uses this frame and gets an offset applied by `mergedContextLines` to align with the target.
 
 ### Context Gathering
 
 A single `useEffect` computes `segmentContext: { importSide, targetSide }`:
 
-1. **Import-side BFS** - `computeDmpBfsContext(importIdx, ...)` walks `importing`-type virtual connections from the current import section, collecting:
-   - DMP neighbor geometry (positioned relative to the import section)
-   - Existing anchors (positions where DMP sections connect to project sections)
+1. **Import-side BFS** - `computeDmpBfsContext(importIdx, ...)` walks `importing`-type virtual connections from the current import line, collecting:
+   - DMP neighbor geometry (positioned relative to the import line)
+   - Existing anchors (positions where DMP sections connect to project lines)
 
 2. **Target-side handling**:
-   - `existing` target: Fetch `get_segment_geometry(existingSectionId)` from backend. This returns all sections in that segment with shot-line geometry in a coordinate frame centered on the queried section.
+   - `existing` target: Fetch `get_segment_geometry(existingLineId)` from backend. This returns all lines in that segment with shot-line geometry in a coordinate frame centered on the queried line.
    - `importing` target: Run a second BFS from the target DMP section to gather its neighbors and existing anchors.
 
 3. **Existing anchor resolution** - For each `ExistingAnchor` discovered by BFS (either side), fetch `get_segment_geometry` and position the result relative to the anchor point.
 
-4. **Bridge discovery** - `discoverBridgedDmpSections()` finds DMP sections that are connected to existing sections we already have geometry for, but weren't reached by either BFS. This handles the case where DMP sections A and B both connect to existing section X through separate `existing`-type connections but have no direct `importing`-type edge.
+4. **Bridge discovery** - `discoverBridgedDmpSections()` finds DMP sections that are connected to existing lines we already have geometry for, but weren't reached by either BFS. This handles the case where DMP sections A and B both connect to existing line X through separate `existing`-type connections but have no direct `importing`-type edge.
 
 ### Bridge Discovery Algorithm
 
 ```
 For each existing-type connection where the DMP section isn't already shown:
-  1. Look up the existing section's geometry in the geo map
+  1. Look up the existing line's geometry in the geo map
   2. Find the merge station's position in that geometry
   3. Compute the DMP section's offset from the merge alignment
   4. Render the DMP section at that offset
-  5. BFS from the bridged section to find its importing-type neighbors
+  5. BFS from the bridged DMP section to find its importing-type neighbors
   6. Offset all BFS results into the correct frame
 ```
 
 ### Deduplication
 
-A `coveredExistingSectionIds` set tracks which existing section IDs have already been included. The direct target segment is processed first (most natural positioning), then import-side anchors, then bridged sections.
+A `coveredExistingLineIds` set tracks which existing line IDs have already been included. The direct target segment is processed first (most natural positioning), then import-side anchors, then bridged DMP sections.
 
 ## Batch Import
 
 When all suggestions are exhausted (or skipped), the early import runs on the transition out of `suggesting`:
 
-1. `applyAllOverlapTreatments` processes all overlap suggestions → mutates `sectionEditsRef` + returns `ExistingShotUpdateLocal[]`
-2. `buildBatchImport()` constructs the final `ImportSectionConfig[]`:
+1. `applyAllOverlapTreatments` processes all overlap suggestions → mutates `lineEditsRef` + returns `ExistingShotUpdateLocal[]`
+2. `buildBatchImport()` constructs the final `ImportLineConfig[]`:
    1. Build adjacency from `importing`-type connections
-   2. Find anchored sections (zero datum + `existing`-type connections)
+   2. Find anchored import lines (zero datum + `existing`-type connections)
    3. BFS from anchors to determine import order
    4. For disconnected components, search the full suggestion pool for fallback `existing`-type anchors
-   5. Multi-pass emit: retry sections whose `from_importing` target hasn't been emitted yet
+   5. Multi-pass emit: retry lines whose `from_importing` target hasn't been emitted yet
    6. Adjust station indices for deleted overlap shots
-3. IPC call: `import_sections(sections, fileHash, existingShotUpdates)`
+3. IPC call: `import_lines(lines, fileHash, existingShotUpdates)`
 
-Sections unreachable after all passes remain in the wizard's manual segment-placement flow until the user places or discards them.
+Lines unreachable after all passes remain in the wizard's manual segment-placement flow until the user places or discards them.
 
 ## Station Names
 
@@ -415,11 +417,11 @@ a deleted or added row, any edit after import - shifts the positional
   interpolation, data replacement and Reference marking. A row the user adds
   has none.
 - **Into the config.** `stationNamesForEmittedShots`
-  (`src/utils/importSectionConfig.ts`) turns the rows actually sent into
-  `ImportSectionConfig.station_names`: the end of emitted row k is station
+  (`src/utils/importLineConfig.ts`) turns the rows actually sent into
+  `ImportLineConfig.station_names`: the end of emitted row k is station
   k + 1; a start keeps the previous row's number (as an in-app delete keeps the
   surviving start), so a station after an added row stays unnamed; only the
-  start of the first DMP row falls back to its number minus 1. A section whose
+  start of the first DMP row falls back to its number minus 1. A line whose
   first m shots an overlap trim removed therefore starts at m, and the trimmed
   numbers are gone with their stations - one name per station, no aliases.
   Indices are in the emitted, pre-reverse order: the backend mirrors them for a
@@ -440,29 +442,29 @@ a deleted or added row, any edit after import - shifts the positional
 | `VirtualConnection` | `src/utils/segmentContext.ts` | Client-side connection record |
 | `ConfirmedOverlapInfo` | `src/utils/batchImportHelpers.ts` | Merge station choice per confirmed suggestion |
 | `ExistingShotUpdateLocal` | `src/utils/overlapTreatment.ts` | Frontend representation of existing shot modifications |
-| `ExistingShotUpdate` | `src-tauri/crates/models/src/section.rs` | Backend type for atomic existing shot modifications |
-| `ExistingAnchor` | `src/utils/segmentContext.ts` | Position where a DMP section meets an existing section |
-| `ExistingSectionGeoEntry` | `src/utils/segmentContext.ts` | Cached segment geometry with frame offset |
-| `CrossSectionSuggestion` | `src-tauri/crates/models/src/placement_suggest.rs` | Backend suggestion with score/confidence |
-| `SegmentGeometry` | `src-tauri/crates/models/src/section.rs` | Backend segment shot-line data |
-| `ContextSectionGeometry` | `src/components/Dialogs/SectionPreview.tsx` | Shot pairs for preview rendering |
-| `SectionEditState` | `src/utils/batchImportHelpers.ts` | Per-section editable metadata + shots |
+| `ExistingShotUpdate` | `src-tauri/crates/models/src/line.rs` | Backend type for atomic existing shot modifications |
+| `ExistingAnchor` | `src/utils/segmentContext.ts` | Position where a DMP section meets an existing line |
+| `ExistingLineGeoEntry` | `src/utils/segmentContext.ts` | Cached segment geometry with frame offset |
+| `CrossLineSuggestion` | `src-tauri/crates/models/src/placement_suggest.rs` | Backend suggestion with score/confidence |
+| `SegmentGeometry` | `src-tauri/crates/models/src/line.rs` | Backend segment shot-line data |
+| `ContextLineGeometry` | `src/components/Dialogs/LinePreview.tsx` | Shot pairs for preview rendering |
+| `LineEditState` | `src/utils/batchImportHelpers.ts` | Per-line editable metadata + shots |
 
 ## Key Functions
 
 | Function | Location | Purpose |
 |----------|----------|---------|
 | `applyAllOverlapTreatments` | `src/utils/overlapTreatment.ts` | Single-pass overlap mutation for all suggestions |
-| `buildBatchImport` | `src/components/Dialogs/DmpNewImportDialog.tsx` | Construct ordered `ImportSectionConfig[]` for backend |
-| `stationNamesForEmittedShots` | `src/utils/importSectionConfig.ts` | A section's station names (MNemo numbers) from its emitted rows |
+| `buildBatchImport` | `src/components/Dialogs/DmpNewImportDialog.tsx` | Construct ordered `ImportLineConfig[]` for backend |
+| `stationNamesForEmittedShots` | `src/utils/importLineConfig.ts` | A line's station names (MNemo numbers) from its emitted rows |
 | `buildAdjacency` | `src/utils/segmentContext.ts` | Adjacency map from `importing`-type connections |
 | `computeDmpBfsContext` | `src/utils/segmentContext.ts` | BFS collecting DMP neighbor geometry + existing anchors |
 | `stationPositionFromShotLines` | `src/utils/segmentContext.ts` | Extract XY from backend `shot_lines` (station 0 = `[0][0]`, station N = `[N-1][1]`) |
-| `discoverBridgedDmpSections` | `src/utils/segmentContext.ts` | Find DMP sections connected through shared existing sections |
-| `computeStationsFromDmpShots` | `src/components/Dialogs/SectionPreview.tsx` | XY station positions from DMP shot headings + lengths |
+| `discoverBridgedDmpSections` | `src/utils/segmentContext.ts` | Find DMP sections connected through shared existing lines |
+| `computeStationsFromDmpShots` | `src/components/Dialogs/LinePreview.tsx` | XY station positions from DMP shot headings + lengths |
 | `computeOverlapIds` | `src/utils/overlapHelpers.ts` | Set of import shot IDs in the overlap region |
 | `computeActionableIds` | `src/utils/overlapHelpers.ts` | Subset of overlap IDs based on merge station choice |
-| `computeTargetShotIndex` | `src/utils/overlapHelpers.ts` | Map import overlap ID → target section shot index |
+| `computeTargetShotIndex` | `src/utils/overlapHelpers.ts` | Map import overlap ID → target line shot index |
 | `interpolateShots` | `src/utils/overlapHelpers.ts` | Average two shots (circular mean for azimuths) |
 | `reverseTargetShot` | `src/utils/overlapHelpers.ts` | Swap in/out and reverse azimuth by 180° |
 
@@ -470,20 +472,20 @@ a deleted or added row, any edit after import - shifts the positional
 
 | Command | Input | Output | Notes |
 |---------|-------|--------|-------|
-| `suggest_all_import_placements` | `ImportSectionForSuggestion[]` | `CrossSectionSuggestion[]` | Compares against existing + other imports |
-| `get_segment_geometry` | `sectionId` | `SegmentGeometry` | All connected sections' shot-lines, centered on queried section |
-| `import_sections` | `sections, fileHash, existingShotUpdates` | `CommandResult` | Batch import with atomic existing shot updates and undo support |
+| `suggest_all_import_placements` | `ImportLineForSuggestion[]` | `CrossLineSuggestion[]` | Compares against existing + other imports |
+| `get_segment_geometry` | `lineId` | `SegmentGeometry` | All connected lines' shot-lines, centered on queried line |
+| `import_lines` | `lines, fileHash, existingShotUpdates` | `CommandResult` | Batch import with atomic existing shot updates and undo support |
 | `list_mnemo_ports` | none | `MnemoPort[]` | USB serial ports now present, likely MNemos first |
 | `pull_mnemo` | `port` | `MnemoPullResult` or `MnemoError` | Reads the device, saves the `.dmp`; emits `mnemo-pull-progress`; one at a time |
 | `cancel_mnemo_pull` | none | none | Stops a running pull within one read |
 
 ## Backend Safety Guards
 
-The `execute_import_sections` function in `src-tauri/crates/core/src/core/state/command_import.rs` applies two guards before modifying existing section shots:
+The `execute_import_lines` function in `src-tauri/crates/core/src/core/state/command_import.rs` applies two guards before modifying existing line shots:
 
-1. **Doubly-anchored filter**: For each affected section, if the modified shot range is straddled by positional constraints (zero datums, station merges, aligned closures) on both sides, updates for that section are skipped and the skipped shot count is named on the import receipt.
+1. **Doubly-anchored filter**: For each affected line, if the modified shot range is straddled by positional constraints (zero datums, station merges, aligned closures) on both sides, updates for that line are skipped and the skipped shot count is named on the import receipt.
 
-2. **Zero datum offset compensation**: For sections with a zero datum above the modified shots, the section offset (and all sections in the same rigid group) is adjusted after updates to keep the datum station at its original absolute position.
+2. **Zero datum offset compensation**: For lines with a zero datum above the modified shots, the line offset (and all lines in the same rigid group) is adjusted after updates to keep the datum station at its original absolute position.
 
 ## Tests
 
@@ -502,9 +504,9 @@ drives `placementMode.onComplete` in place of a click on the map.
 
 Back/Cancel transactionality:
 `src/components/Dialogs/__tests__/DmpNewImportDialog.transactionality.test.tsx`,
-whose IPC mock keeps a fake project that `import_sections` and `execute_batch`
-really mutate, so "the second pass leaves one section" is measured rather than
-inferred from call counts. That a batch of `delete_section` is ONE undo entry is
-pinned in Rust: `batched_section_deletes_are_one_undo_entry`.
+whose IPC mock keeps a fake project that `import_lines` and `execute_batch`
+really mutate, so "the second pass leaves one line" is measured rather than
+inferred from call counts. That a batch of `delete_line` is ONE undo entry is
+pinned in Rust: `batched_line_deletes_are_one_undo_entry`.
 
 Backend integration test for overlap interpolation: `src-tauri/crates/core/src/core/state/tests.rs` (`kb5_import_overlap_interpolation_integration`, currently `#[ignore]`).

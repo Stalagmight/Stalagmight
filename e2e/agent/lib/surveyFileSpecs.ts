@@ -322,7 +322,7 @@ const DMP_NAME_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
 
 function randomDmpSectionName(rng: Rng, profile: SpecProfile): DmpSectionSpec['name'] {
   if (profile === 'malformed' && chance(rng, 0.3)) {
-    // Bytes that are not valid UTF-8 on their own: `parse_line` falls back to
+    // Bytes that are not valid UTF-8 on their own: `parse_section` falls back to
     // a numeric spelling rather than failing, and that fallback name then flows
     // into the preview, the content hash and the imported line title.
     return [randInt(rng, 128, 255), randInt(rng, 128, 255), randInt(rng, 128, 255)];
@@ -334,7 +334,7 @@ function randomDmpSectionName(rng: Rng, profile: SpecProfile): DmpSectionSpec['n
 /**
  * A DMP file spec.
  *
- * The `valid` profile keeps every field inside what `parse_line` accepts -
+ * The `valid` profile keeps every field inside what `parse_section` accepts -
  * year 2000..2099, month 1..12, day 1..28 (never a day that only exists in some
  * months, so the file parses in February too), hour < 24, minute < 60 - and
  * relies on the corruption catalog for everything past those edges.

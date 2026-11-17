@@ -576,7 +576,7 @@ test.describe('Reverse Line', () => {
 
     await openContextMenu(page, { type: 'line', lineId: ids[0] });
     await expect(page.getByRole('button', { name: 'Reverse Line', exact: true })).toBeVisible();
-    await expect(page.getByRole('button', { name: /Reverse \d+ Sections/ })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /Reverse \d+ Lines/ })).toHaveCount(0);
   });
 
   test('offers only the single entry for a line outside the multi-selection', async ({
@@ -595,7 +595,7 @@ test.describe('Reverse Line', () => {
 
     await openContextMenu(page, { type: 'line', lineId: ids[2] });
     await expect(page.getByRole('button', { name: 'Reverse Line', exact: true })).toBeVisible();
-    await expect(page.getByRole('button', { name: /Reverse \d+ Sections/ })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /Reverse \d+ Lines/ })).toHaveCount(0);
 
     // And it reverses only the line that was right-clicked.
     await page.getByRole('button', { name: 'Reverse Line', exact: true }).click();
@@ -623,7 +623,7 @@ test.describe('Reverse Line', () => {
 
     await openContextMenu(page, { type: 'line', lineId: ids[0] });
     await expect(page.getByRole('button', { name: 'Reverse 2 Lines' })).toBeVisible();
-    await expect(page.getByRole('button', { name: /Reverse 3 Sections/ })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /Reverse 3 Lines/ })).toHaveCount(0);
 
     await page.getByRole('button', { name: 'Reverse 2 Lines' }).click();
     await expect(page.getByTestId('reverse-line-list').locator('li')).toHaveCount(2);

@@ -8,15 +8,15 @@ order: 14
 
 Shows which two stations close the loop, and how far the survey misses. Opens
 instead of the merge dialog when the two stations are already connected, on
-one section or through other merges and loop closures. See
+one line or through other merges and loop closures. See
 [Closing a loop](../workflows/closing-a-loop.md).
 
 ![Create Loop Closure dialog](../images/closure-dialog.png)
 
 1. **Close**: nothing created.
 2. Why a closure is offered: merging would make a loop.
-3. **Station A**: the first station clicked, and its section.
-4. **Station B**: the second station clicked, and its section.
+3. **Station A**: the first station clicked, and its line.
+4. **Station B**: the second station clicked, and its line.
 5. **Error**: misclosure distance (7) as a share of path length (6).
 6. **Path length**: the survey length around the loop.
 7. **Misclosure distance**: how far apart the two stations are. Split into

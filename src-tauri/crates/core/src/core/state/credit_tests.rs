@@ -7,8 +7,8 @@ use chrono::NaiveDate;
 use super::AppState;
 use crate::core::{Command, UndoData};
 use crate::models::{
-    CreditEdit, CreditTargets, ImportPlacement, ImportLineConfig, Person, LineId,
-    LineUpdates, ShotData, ShotId, SurveyCredit,
+    CreditEdit, CreditTargets, ImportLineConfig, ImportPlacement, LineId, LineUpdates, Person,
+    ShotData, ShotId, SurveyCredit,
 };
 
 fn shot(length: f64) -> ShotData {
@@ -533,7 +533,7 @@ fn an_old_snapshot_with_a_line_surveyor_restores_people_onto_shots() {
     let snapshot = state.capture_project_snapshot().unwrap();
     let mut json: serde_json::Value = serde_json::from_str(&snapshot).unwrap();
     // What a build before per-shot credit wrote: line-level text, shots bare.
-    let line = json["sections"]
+    let line = json["lines"]
         .as_array_mut()
         .unwrap()
         .iter_mut()

@@ -31,7 +31,7 @@ stalagmight/
 │   ├── examples/                 # gen_ipc_types (dev-only, feature-gated)
 │   ├── tests/                    # App-crate integration tests
 │   ├── crates/                   # The 7 workspace member crates
-│   │   ├── models/               # Data structures (Project, Section, Shot, geo, app_dirs)
+│   │   ├── models/               # Data structures (Project, Line, Shot, geo, app_dirs)
 │   │   ├── telemetry/            # Anonymous counters + event registry, logging/ (tracing setup)
 │   │   ├── parsers/              # Import parsers: dmp (MNemo, versions 2-5),
 │   │   │                         #   tml (Ariane), compass, gpx, walls/

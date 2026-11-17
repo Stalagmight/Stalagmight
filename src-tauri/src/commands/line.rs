@@ -3,8 +3,8 @@ use tauri::State;
 
 use crate::core::{AppState, Command, CommandResult};
 use crate::models::{
-    ClosureStrategy, CombineCandidate, CombineLinesOptions, Coordinates, LineId,
-    LineRelationships, LineUpdates, ShotData, StationRef, SurveyDirection,
+    ClosureStrategy, CombineCandidate, CombineLinesOptions, Coordinates, LineId, LineRelationships,
+    LineUpdates, ShotData, StationRef, SurveyDirection,
 };
 
 pub use crate::models::{SegmentGeometry, SegmentLineGeometry};
@@ -44,11 +44,7 @@ pub(crate) fn create_line_impl(
 
 /// Update line metadata
 #[tauri::command]
-pub fn update_line(
-    state: State<AppState>,
-    line_id: LineId,
-    updates: LineUpdates,
-) -> CommandResult {
+pub fn update_line(state: State<AppState>, line_id: LineId, updates: LineUpdates) -> CommandResult {
     update_line_impl(state.inner(), line_id, updates)
 }
 
@@ -57,10 +53,7 @@ pub(crate) fn update_line_impl(
     line_id: LineId,
     updates: LineUpdates,
 ) -> CommandResult {
-    state.execute(Command::UpdateLineMetadata {
-        line_id,
-        updates,
-    })
+    state.execute(Command::UpdateLineMetadata { line_id, updates })
 }
 
 /// Delete a line
@@ -101,11 +94,7 @@ pub(crate) fn reverse_line_impl(
 
 /// Move a line by an offset
 #[tauri::command]
-pub fn move_line(
-    state: State<AppState>,
-    line_id: LineId,
-    offset: Coordinates,
-) -> CommandResult {
+pub fn move_line(state: State<AppState>, line_id: LineId, offset: Coordinates) -> CommandResult {
     move_line_impl(state.inner(), line_id, offset)
 }
 
@@ -119,11 +108,7 @@ pub(crate) fn move_line_impl(
 
 /// Move an entire segment (all connected lines) by an offset
 #[tauri::command]
-pub fn move_segment(
-    state: State<AppState>,
-    line_id: LineId,
-    offset: Coordinates,
-) -> CommandResult {
+pub fn move_segment(state: State<AppState>, line_id: LineId, offset: Coordinates) -> CommandResult {
     state.execute(Command::MoveSegment { line_id, offset })
 }
 

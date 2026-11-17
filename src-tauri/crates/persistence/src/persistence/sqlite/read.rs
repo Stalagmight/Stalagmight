@@ -4,10 +4,9 @@ use rusqlite::{params, OptionalExtension};
 use std::collections::{HashMap, HashSet};
 
 use crate::models::{
-    AzimuthReference, ClosureStrategy, CorrectionSource, GpsCoordinates, LoopClosure,
-    MergeTopology, NorthReference, Project, Line, LineData, LineId, Shot, ShotKind,
-    StationKey, StationMerge, SurveyDirection, UnrecognisedShotKind, ZeroDatum, FEATURE_ID_STRIDE,
-    MAX_LINE_ID,
+    AzimuthReference, ClosureStrategy, CorrectionSource, GpsCoordinates, Line, LineData, LineId,
+    LoopClosure, MergeTopology, NorthReference, Project, Shot, ShotKind, StationKey, StationMerge,
+    SurveyDirection, UnrecognisedShotKind, ZeroDatum, FEATURE_ID_STRIDE, MAX_LINE_ID,
 };
 
 use super::station_texts::StationTextTable;
@@ -1342,10 +1341,7 @@ impl Database {
     /// spaces for `resolved_warnings`). Keying on `uuid` would be wrong too:
     /// pre-v6 rows hold NULL on disk and `ensure_shot_uuids()` mints those in
     /// memory only, so it would persist against a transient identity.
-    pub fn persist_backfilled_shot_kinds(
-        &self,
-        kinds: &[(LineId, u32, ShotKind)],
-    ) -> Result<()> {
+    pub fn persist_backfilled_shot_kinds(&self, kinds: &[(LineId, u32, ShotKind)]) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
         {
             let mut stmt = tx.prepare(

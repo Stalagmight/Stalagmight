@@ -6,9 +6,7 @@ use tempfile::TempDir;
 
 use super::{AppState, VirtualShotMode};
 use crate::core::Command;
-use crate::models::{
-    ImportPlacement, ImportLineConfig, Project, LineData, ShotData, StationRef,
-};
+use crate::models::{ImportLineConfig, ImportPlacement, LineData, Project, ShotData, StationRef};
 use crate::persistence::Database;
 
 fn shot(azimuth: f64, length: f64) -> ShotData {

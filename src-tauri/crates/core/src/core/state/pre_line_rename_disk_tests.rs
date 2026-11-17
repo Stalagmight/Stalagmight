@@ -92,7 +92,11 @@ fn every_captured_history_row_reads_and_writes_back_unchanged() {
                 .unwrap_or_else(|| panic!("{stack} row {label:?}: the entry does not parse"));
             let (command_out, data_out) =
                 UndoStack::serialize_entry(&entry).expect("an entry serializes");
-            assert_eq!(deep(&command_out), deep(command_json), "{stack} row {label:?}");
+            assert_eq!(
+                deep(&command_out),
+                deep(command_json),
+                "{stack} row {label:?}"
+            );
             assert_eq!(
                 deep(&data_out),
                 deep(undo_data_json),
@@ -102,7 +106,10 @@ fn every_captured_history_row_reads_and_writes_back_unchanged() {
         }
     }
     assert_eq!(checked_commands, 79, "every captured row is checked");
-    assert!(checked_data >= 45, "only {checked_data} undo-data rows checked");
+    assert!(
+        checked_data >= 45,
+        "only {checked_data} undo-data rows checked"
+    );
 }
 
 #[test]
@@ -110,11 +117,16 @@ fn the_code_vocabulary_differs_from_the_disk_one() {
     // Guards the test above against passing vacuously: if the code still
     // spoke the disk names, the translation would be a no-op.
     let rows = rows();
-    let first = rows["undo"][0]["command_json"].as_str().expect("command_json");
+    let first = rows["undo"][0]["command_json"]
+        .as_str()
+        .expect("command_json");
     let command: Command = disk_names::from_disk_str(first).expect("parses");
     let in_code = serde_json::to_string(&command).expect("serialize");
     assert!(first.contains("create_section"), "{first}");
-    assert!(in_code.contains("create_line") && !in_code.contains("section"), "{in_code}");
+    assert!(
+        in_code.contains("create_line") && !in_code.contains("section"),
+        "{in_code}"
+    );
 }
 
 #[test]

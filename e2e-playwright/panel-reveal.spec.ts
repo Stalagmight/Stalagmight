@@ -4,7 +4,7 @@ import { seedProjectWithLines, waitForMapReady, type LineSeed } from './helpers/
 
 /**
  * E2E tests for the two-mode (hover/pin) panel reveal behavior and opener tabs
- * (Lines / Details / Data). See the panel-reveal plan.
+ * (Sections / Details / Data). See the panel-reveal plan.
  */
 
 async function createProject(page: Page, name: string): Promise<void> {
@@ -90,8 +90,8 @@ test.describe('Panel reveal (hover/pin)', () => {
   });
 
   test('pin mode: close-arrow closes, bar reopens', async ({ page }) => {
-    // Lines starts pinned-open: the tab shows pin (un-pin) + close-arrow.
-    await page.locator('[data-testid="panel-close-lines"]').click();
+    // Sections starts pinned-open: the tab shows pin (un-pin) + close-arrow.
+    await page.locator('[data-testid="panel-close-sections"]').click();
     await expect.poll(async () => (await panelState(page)).sectionsPanelOpen).toBe(false);
     await expect(page.locator('[data-testid="sections-panel-bar"]')).toBeVisible();
     // Pin-mode bar requires a click to reopen (no hover-open).
@@ -100,14 +100,14 @@ test.describe('Panel reveal (hover/pin)', () => {
   });
 
   test('un-pin switches a pinned panel to hover mode', async ({ page }) => {
-    await page.locator('[data-testid="panel-pin-lines"]').click();
+    await page.locator('[data-testid="panel-pin-sections"]').click();
     const s = await panelState(page);
     expect(s.sectionsPanelMode).toBe('hover');
     expect(s.sectionsPanelOpen).toBe(false);
   });
 
   test('hover mode: hovering the bar reveals the floating panel; leaving hides it', async ({ page }) => {
-    await setMode(page, 'lines', 'hover');
+    await setMode(page, 'sections', 'hover');
     await expect(page.locator('[data-testid="sections-panel-bar"]')).toBeVisible();
     // Hovering the edge bar floats the panel in.
     await page.locator('[data-testid="sections-panel-bar"]').hover();

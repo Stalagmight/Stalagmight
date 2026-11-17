@@ -9,7 +9,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use super::{Project, LineId, StationRef};
+use super::{LineId, Project, StationRef};
 
 /// The piece a merge of two placed pieces moves, and how far.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]

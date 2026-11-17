@@ -119,7 +119,7 @@ Stalagmight is a desktop application for processing underwater cave survey data.
 - Reading an MNemo v2 directly over USB into the DMP import (desktop only, read-only on the device) - see [dmp-import.md](dmp-import.md#reading-the-device-over-usb-725)
 - Manual data entry via a spreadsheet interface
 - 2D plan-view map with satellite imagery
-- Section management (create, edit, delete, merge)
+- Line management (create, edit, delete, merge)
 - Jumps and reference shots for virtual survey connections
 - Loop closure detection, plus the non-destructive Closures Computed View ([closures.md](closures.md))
 - Multi-project workspace (Global View)
@@ -152,8 +152,8 @@ In-flight work lives in the GitHub issue tracker rather than a list here
 | Metric | Target |
 |--------|--------|
 | Maximum shots per project | 10,000 |
-| Maximum shots per section | < 100 (typical) |
-| Maximum sections | 200 (50-200 optimized) |
+| Maximum shots per line | < 100 (typical) |
+| Maximum lines | 200 (50-200 optimized) |
 | Startup time | < 3 seconds |
 | Map rendering | 30 FPS minimum |
 
@@ -284,10 +284,11 @@ See [TESTING.md](TESTING.md) for the tiers and which one a test belongs in, and
 |------|------------|
 | **Shot** | A single survey measurement between two stations. Contains azimuth, length, depth, and optionally LRUD. |
 | **Station** | A point in the cave where a shot measurement is taken. Tied to cave line at physical markers. |
-| **Section** | A group of consecutive shots collected during a single survey session. Has metadata (name, surveyor, date). |
+| **Line** | A group of consecutive shots collected during a single survey session; a continuous run of stations joined by shots. Has metadata (name, colour, direction, quality, azimuth reference); who surveyed it and when is recorded per shot. Called a Section before the rename: the `.stalx` file still stores lines in its `sections` table (see [Persisted names](saving.md#persisted-names-lines-are-sections-on-disk)). |
+| **Sections panel** | The left-dock tab that lists the project's lines. It keeps its name. |
 | **Virtual Shot** | A shot that is not a permanent surveyed leg. Since #27 it is one of two kinds, and the distinction drives gas and penetration. |
 | **Jump** | A virtual shot a diver **swims**: a shortcut between two mainlines. Counts toward gas (at `jump_rmv_multiplier`) and penetration. Drawn faded. |
-| **Reference Shot** | A virtual shot that is **not swimmable**: a tape tie or backsight used to connect sections that aren't physically connected yet. Excluded from gas, penetration and route distance unless `gas.include_reference_legs` is on. Always excluded from survey length, since it repeats passage already surveyed (#689). Drawn fainter than a jump. |
+| **Reference Shot** | A virtual shot that is **not swimmable**: a tape tie or backsight used to connect lines that aren't physically connected yet. Excluded from gas, penetration and route distance unless `gas.include_reference_legs` is on. Always excluded from survey length, since it repeats passage already surveyed (#689). Drawn fainter than a jump. |
 | **Zero Datum** | A station with GPS coordinates assigned. The fixed reference point for the coordinate system. |
 | **LRUD** | Left, Right, Up, Down - passage dimension measurements at a station. |
 | **Loop Closure** | When two survey paths meet at the same physical point, creating a loop. |
@@ -310,11 +311,11 @@ Project (Cave System)
 │   ├── location: Option<String>
 │   ├── created_at: DateTime
 │   └── modified_at: DateTime
-├── Sections[]
+├── Lines[]   (the `sections` table on disk)
 │   ├── id: u32 (internal, immutable)
 │   ├── name: Option<String>
-│   ├── surveyor: Option<String>
-│   ├── date: Option<Date>
+│   ├── surveyor: Option<String> (legacy; credit is per shot)
+│   ├── date: Option<Date> (legacy; credit is per shot)
 │   ├── color: Color
 │   ├── direction: SurveyDirection
 │   ├── quality: f64
@@ -338,7 +339,7 @@ Project (Cave System)
 │       ├── marker_index: Option<u32>
 │       └── temperature: Option<f64> (celsius)
 ├── Stations[] (computed from shots)
-│   ├── station_ref: StationRef (section_id:station_index)
+│   ├── station_ref: StationRef (line_id:station_index)
 │   ├── coordinates: Coordinates (computed or GPS)
 │   ├── is_zero_datum: bool
 │   ├── gps_coordinates: Option<GpsCoordinates>
@@ -355,21 +356,28 @@ Project (Cave System)
     ├── validation: ValidationConfig
     ├── surface_elevation: Option<f64>
     ├── default_azimuth_reference: Option<AzimuthReference>
-    ├── counter_parity_shots: {shot_uuid} (shots whose record orientation runs against their section's parity after a Combine; dive-plan pins only)
+    ├── counter_parity_shots: {shot_uuid} (shots whose record orientation runs against their line's parity after a Combine; dive-plan pins only)
     └── display toggles (show_stations, show_shots, grid_spacing, geometry_mode, ...)
 ```
+
+The code names (`Line`, `LineId`, `Project.lines`, `line_id`,
+`Project.line_offsets`) stop at the file boundary: the `.stalx` keeps the
+pre-rename SQL names (`sections`, `section_id`, `section_offsets`, ...) and the
+JSON it stores (undo history, held gauges, the dive-plan sidecar) keeps
+`section_id`-style keys. See
+[Persisted names](saving.md#persisted-names-lines-are-sections-on-disk).
 
 ### 4.2 Station Identification
 
 Stations use a dual-ID system to preserve provenance through merges:
 
 ```
-StationRef = section_id:station_index
+StationRef = line_id:station_index
 
 Examples:
-- 0:0  → First station of section 0
-- 0:15 → 16th station of section 0
-- Merged station: [0:15, 1:0] → Station 15 of section 0 merged with station 0 of section 1
+- 0:0  → First station of line 0
+- 0:15 → 16th station of line 0
+- Merged station: [0:15, 1:0] → Station 15 of line 0 merged with station 0 of line 1
 ```
 
 A station's stored identity is not this index but the shot UUID before it
@@ -385,7 +393,7 @@ A station can also carry a **name**, free text stored apart from the shots and
 keyed to the physical station, so it stays put through those edits. A DMP
 import records each station's MNemo station number there (see
 [dmp-import.md](dmp-import.md#station-names)); names are not unique (MNemo
-restarts at 0 in every section), so the grid, the detail panel and the station
+restarts at 0 in every section it records, so in every imported line), so the grid, the detail panel and the station
 links show a name beside the positional ID (`3:5 · 17`), never instead of it.
 The one place a name stands alone is the opt-in **Station names** map label
 (and the matching image-export option), which labels each named station with
@@ -403,7 +411,7 @@ keeps every name on its physical station.
   (`Project::frame_datum`; a dangling datum is dropped from the wire and anchors
   nothing), so it is a **position in that list** rather than a property of any one
   datum. Anything that promotes a different datum
-  to first (removing the primary one, deleting its station or its section) - or
+  to first (removing the primary one, deleting its station or its line) - or
   ADDS the first datum, which establishes the frame - would re-define what every
   stored coordinate means. It does not: the whole survey is translated so that
   datum's station lands on local (0,0), free-floating components included, which
@@ -414,11 +422,11 @@ keeps every name on its physical station.
   every piece stays on its own GPS through the re-frame
 - **GPS coordinates**: WGS84 (latitude, longitude, depth reference)
 - **Azimuth**: degrees (0-360), stored **as measured**. The stored number is
-  never rotated: each section declares what its readings refer to
-  (`Section::azimuth_reference` - magnetic / true / grid, the correction in
+  never rotated: each line declares what its readings refer to
+  (`Line::azimuth_reference` - magnetic / true / grid, the correction in
   degrees, and where that correction came from) and the correction is added
   when geometry is computed, by the one accessor
-  (`Shot::average_azimuth_true`). A section with no reference resolves to the
+  (`Shot::average_azimuth_true`). A line with no reference resolves to the
   project default, and a project with no default means "nothing recorded",
   correction 0 (#438).
   - **Where the correction comes from, per importer.** Compass records the
@@ -432,15 +440,15 @@ keeps every name on its physical station.
     declination at all and its correction is 0. An Ariane `.tml` reads the
     file's `useMagneticAzimuth` flag; a georeferenced file carrying a survey
     date gets its declination from the bundled IGRF model, evaluated at the
-    **earliest dated section's** date rather than today, so the same file
+    **earliest dated line's** date rather than today, so the same file
     always imports to the same geometry.
   - **Exporting to a format with only one north** (`AzimuthExport::decide`).
-    Every bearing is rewritten to true north when the sections do not all
-    agree, or when they agree on grid north - but only if every section's
+    Every bearing is rewritten to true north when the lines do not all
+    agree, or when they agree on grid north - but only if every line's
     correction is on record. If any one is `Unknown`, nothing is rotated: the
     readings go out exactly as measured and the file declares magnetic. That
-    declaration is reported as misdescribing whichever sections did carry a
-    correction, except where the declared sections were uniformly magnetic, in
+    declaration is reported as misdescribing whichever lines did carry a
+    correction, except where the declared lines were uniformly magnetic, in
     which case it is simply true and nothing is reported. There is no refusal
     path.
 - **Depth**: Positive values = below surface
@@ -459,7 +467,7 @@ When a zero datum is set with GPS coordinates, a coordinate transformation conve
    - Up component is discarded (cave surveys use depth measurements)
 
 3. **Result**: (east, north) offset in meters
-   - These become the local X, Y coordinates for positioning sections
+   - These become the local X, Y coordinates for positioning lines
    - All other stations are computed relative to this origin
 
 The transformation is implemented in `src-tauri/crates/models/src/geo.rs` with:
@@ -471,7 +479,7 @@ The transformation is implemented in `src-tauri/crates/models/src/geo.rs` with:
 These are derived from shot data, not stored:
 
 - Station coordinates (from azimuth, length, depth chain)
-- Section statistics (total length, depth range, shot count). Total length
+- Line statistics (total length, depth range, shot count). Total length
   sums permanent and jump shots only: a reference shot repeats passage already
   surveyed, so counting it would double-count (#689). Shot count includes every
   shot.
@@ -690,13 +698,13 @@ Primary view for survey work.
 │            │                            │                       │
 │ [+] Main   │   ★ ──●──●──●──●          │  Station: 0:15        │
 │ [ ] Side A │        \                   │  Depth: 12.3m         │
-│ [ ] Side B │         ●──●──●            │  Section: Main Line   │
+│ [ ] Side B │         ●──●──●            │  Line: Main Line      │
 │            │                            │                       │
 │ (resize)   │                            │  [Edit] [Delete]      │
 │ (collapse) │                            │                       │
 ├────────────┴────────────────────────────┴───────────────────────┤
 │  Data Table (collapsible)                                       │
-│  Section: [Main Line ▼]                                         │
+│  Line: [Main Line ▼]                                            │
 │  ┌────┬────────┬────────┬───────┬───┬───┬───┬───┬─────────────┐│
 │  │ ID │ Length │ Azimuth│ Depth │ L │ R │ U │ D │ Comment     ││
 │  ├────┼────────┼────────┼───────┼───┼───┼───┼───┼─────────────┤│
@@ -716,15 +724,15 @@ Primary view for survey work.
 
 #### 6.3.1 Detail Panel Hyperlinks
 
-The Detail Panel provides interactive hyperlinks that enable quick navigation between related survey elements (shots, stations, sections).
+The Detail Panel provides interactive hyperlinks that enable quick navigation between related survey elements (shots, stations, lines).
 
 **UI Display ID Format:**
-Detail Panel display IDs (distinct from internal data model IDs) use the format `sectionId:position` where station position is 0-indexed:
+Detail Panel display IDs (distinct from internal data model IDs) use the format `lineId:position` where station position is 0-indexed:
 - Station position = `station_index`
 - Shot position = `shot array index + 1`
-- Section links show `Section <sectionId> - <sectionName>` (or `Section <sectionId> - Unnamed section` if no name); at the default `full` syntactic-highlighting level the link renders as a pill instead: entity symbol, section name, then the section id
+- Line links show `Line <lineId> - <lineName>` (or `Line <lineId> - Unnamed line` if no name); at the default `full` syntactic-highlighting level the link renders as a pill instead: entity symbol, line name, then the line id
 
-**Shot Detail - Connected Section:**
+**Shot Detail - Connected Line:**
 ```
 ┌─ Shot ─────────────────────────────────────────────┐
 │  ID: 2:3                                           │
@@ -733,16 +741,16 @@ Detail Panel display IDs (distinct from internal data model IDs) use the format 
 │  ┌─ Connected ───────────────────────────────────┐ │
 │  │  Start Station: 2:2 (link)                    │ │
 │  │  End Station: 2:3 (link)                      │ │
-│  │  Section: 2: Main Line (link)                 │ │
+│  │  Line: 2: Main Line (link)                    │ │
 │  └───────────────────────────────────────────────┘ │
 └────────────────────────────────────────────────────┘
 ```
 
-**Station Detail - Connected Section:**
+**Station Detail - Connected Line:**
 ```
 ┌─ Station ──────────────────────────────────────────┐
 │  ID: 2:5                                           │
-│  Depth: 12.3m  Section: Main Line                  │
+│  Depth: 12.3m  Line: Main Line                     │
 │                                                    │
 │  ┌─ Loop Closures (collapsible, default expanded) ┐│
 │  │  Closure to 1:3 (link), 1:4 (link)            ││
@@ -754,10 +762,10 @@ Detail Panel display IDs (distinct from internal data model IDs) use the format 
 │  ┌─ Connected ───────────────────────────────────┐ │
 │  │  Previous Shot: 2:5 (link)                    │ │
 │  │  Next Shot: 2:6 (link)                        │ │
-│  │  Section: 2: Main Line (link)                 │ │
+│  │  Line: 2: Main Line (link)                    │ │
 │  └───────────────────────────────────────────────┘ │
 │                                                    │
-│  (Previous/Next hidden at section boundaries)      │
+│  (Previous/Next hidden at line boundaries)         │
 │  (Loop Closures hidden when station has none)      │
 └────────────────────────────────────────────────────┘
 ```
@@ -773,9 +781,9 @@ Detail Panel display IDs (distinct from internal data model IDs) use the format 
 - Metrics from `project.loop_closures` by matching `closure_id`
 - Station links navigate to target station (same behavior as merged station links)
 
-**Section Detail - Endpoints Section:**
+**Line Detail - Endpoints Section:**
 ```
-┌─ Section ──────────────────────────────────────────┐
+┌─ Line ─────────────────────────────────────────────┐
 │  Name: Main Line                                   │
 │  Length: 127.4m  Shots: 42                         │
 │                                                    │
@@ -783,13 +791,13 @@ Detail Panel display IDs (distinct from internal data model IDs) use the format 
 │  │  First Station: 2:0 (link)                    │ │
 │  │  Last Station: 2:42 (link)                    │ │
 │  └───────────────────────────────────────────────┘ │
-│  (Single station sections show only "Station:")    │
+│  (Single station lines show only "Station:")       │
 └────────────────────────────────────────────────────┘
 ```
 
 **Link Behavior:**
 - Click changes selection and updates Detail Panel content
-- Section links also highlight the section in Sections Panel
+- Line links also highlight the line in the Sections Panel
 - Missing targets show warning indicator and are non-clickable
 - Full keyboard accessibility (Tab + Enter)
 - Links use accent color with underline styling
@@ -800,12 +808,12 @@ Shot at array index `i` (0-indexed) connects:
 - End station: `station_index = i + 1` (display position = `i + 1`)
 
 Station at `station_index` has:
-- Previous shot: `section.shots[station_index - 1]` (hidden when `station_index === 0`)
-- Next shot: `section.shots[station_index]` (hidden when `station_index >= section.shots.length`)
+- Previous shot: `line.shots[station_index - 1]` (hidden when `station_index === 0`)
+- Next shot: `line.shots[station_index]` (hidden when `station_index >= line.shots.length`)
 
 #### 6.3.2 Detail Panel Center Button
 
-Each detail view (Shot, Station, Section) includes a center button in the panel header that pans and zooms the map to the selected element.
+Each detail view (Shot, Station, Line) includes a center button in the panel header that pans and zooms the map to the selected element.
 
 **Appearance:**
 - Inline SVG crosshairs icon in panel header
@@ -815,14 +823,14 @@ Each detail view (Shot, Station, Section) includes a center button in the panel 
 **Behavior:**
 - Click pans and zooms map to fit the element
 - Stations/Shots: Uses `easeTo()` with configured `point_zoom` level
-- Sections: Applies 10% margins on all sides (no panel offsets - the map container already excludes the side panels) and always uses `fitBounds()`. A single-station or zero-area section instead uses `easeTo()` at the configured `point_zoom`
+- Lines: Applies 10% margins on all sides (no panel offsets - the map container already excludes the side panels) and always uses `fitBounds()`. A single-station or zero-area line instead uses `easeTo()` at the configured `point_zoom`
 - Full keyboard accessibility (Tab + Enter)
 - Dynamic aria-label: "Center map on [type] [id]"
 
 **Example aria-labels:**
 - Station: "Center map on station 2:5"
 - Shot: "Center map on shot 2:3"
-- Section: "Center map on section 2: Main Line"
+- Line: "Center map on line 2: Main Line"
 
 #### 6.3.3 ARIA Live Announcements
 
@@ -841,7 +849,7 @@ Detail Panel hyperlinks:
 ```
 "Selected [type] [id]"
 ```
-Examples: "Selected station 2:5", "Selected shot 2:3", "Selected section 2: Main Line"
+Examples: "Selected station 2:5", "Selected shot 2:3", "Selected line 2: Main Line"
 
 Data Table shot selection:
 ```
@@ -866,9 +874,9 @@ The Undo and Redo toolbar buttons feature dropdown menus showing recent actions 
 ┌─────────────────────────────────────────────┐
 │  UNDO HISTORY                               │
 ├─────────────────────────────────────────────┤
-│  + Create section "Main Line"    2 min ago  │
+│  + Create line 'Main Line'       2 min ago  │
 │  ✏ Update shot 3                 5 min ago  │
-│  ✕ Delete section "Test"         Jan 12...  │
+│  ✕ Delete line 3                 Jan 12...  │
 │  ⊕ Merge stations                Jan 12...  │
 │  ...                                        │
 └─────────────────────────────────────────────┘
@@ -888,7 +896,7 @@ The Undo and Redo toolbar buttons feature dropdown menus showing recent actions 
 #### Item Display
 
 Each item shows:
-- **Icon**: Inline SVG icon component chosen by command type (`getCommandIcon`, same icon set as the toolbar): plus (create section/shot), pencil (update shot/section metadata), trash (delete section/shot), link (merge) / link-off (unmerge), target (set zero datum) / circle (remove zero datum), move (move station/section) and move-horizontal (move segment), dashed line (set shot kind), layers (batch), dot (default)
+- **Icon**: Inline SVG icon component chosen by command type (`getCommandIcon`, same icon set as the toolbar): plus (create line/shot), pencil (update shot/line metadata), trash (delete line/shot), link (merge) / link-off (unmerge), target (set zero datum) / circle (remove zero datum), move (move station/line) and move-horizontal (move segment), dashed line (set shot kind), layers (batch), dot (default)
 - **Description**: Truncated at ~40 characters with ellipsis
 - **Timestamp**: Smart hybrid format
   - Less than 1 day: relative (e.g., "2 minutes ago")
@@ -958,18 +966,18 @@ defaults from `src-tauri/crates/core/src/config/defaults.rs` and are all rebinda
 | **Measure** | R | Start measurement | Measure from/to a point along the shot | Start measurement | - |
 | **Move Station** | T | Pick up an unanchored station | - | Drop what is being carried | Pan map |
 | **Move Shot** | G | - | Pick up one shot: both endpoints plus any co-located stations | Drop what is being carried | Pan map |
-| **Move Segment** | V | Pick up the whole connected branch (sections joined by merges and aligned closures) | Same, grabbed on a shot | Drop what is being carried, else deselect | Pan map |
+| **Move Segment** | V | Pick up the whole connected branch (lines joined by merges and aligned closures) | Same, grabbed on a shot | Drop what is being carried, else deselect | Pan map |
 | **Comment** | C | Open the comment editor on the station | Open the comment editor on the shot | Close the editor | - |
 | **Move Comment** | Shift+C | Pick up the comment; second click moves it (swap dialog if the target already has one) | Same, for shot comments | Cancel | - |
 
 There is no Draw or Delete tool. Shots are added from the map context menu:
-**Add Shot Before/After** at the ends of a section, or **Insert Station...** on
+**Add Shot Before/After** at the ends of a line, or **Insert Station...** on
 any shot, which splits it in two (also available from the data table's row
 menu). Deletion is select plus Delete/Backspace, or the context menu. The same
-menu restructures sections without deleting anything: **Split Section Here** on
-a mid-section station or a point along a shot, and **Combine Section With
-<name>...** (or, at a junction, **Combine Sections...**) on an end station where
-another section ends (see 7.11).
+menu restructures lines without deleting anything: **Split Line Here** on
+a mid-line station or a point along a shot, and **Combine Line With
+<name>...** (or, at a junction, **Combine Lines...**) on an end station where
+another line ends (see 7.11).
 
 Panning is not a tool either. A plain left-click-drag pans the map under every
 tool in the table except **Zoom**, whose drag draws its zoom box, and in
@@ -990,7 +998,7 @@ The three move tools are documented in detail in [move-tools.md](move-tools.md).
 
 #### Display Toggles (Right-click or menu)
 - Stations (dots)
-- Section names (labels)
+- Line names (labels)
 - Station IDs or Station names (labels; one or the other, never both). Station
   IDs label every station with its index. Station names label each named
   station with its name (e.g. its MNemo station number) and leave unnamed
@@ -1036,7 +1044,7 @@ The three move tools are documented in detail in [move-tools.md](move-tools.md).
 
 | Element | Appearance |
 |---------|------------|
-| Regular shot | Solid colored line (section color) |
+| Regular shot | Solid colored line (line color) |
 | Reference shot | Solid line at reduced opacity (~0.28) |
 | Station | Filled circle |
 | Selected station | Highlighted ring |
@@ -1049,25 +1057,25 @@ The three move tools are documented in detail in [move-tools.md](move-tools.md).
 
 #### DMP Import - Connection Wizard (DmpNewImportDialog)
 
-After section selection, the primary import flow uses a connection wizard that auto-detects overlapping shots between sections and places them with a single batch import. The wizard handles overlap treatment (interpolation, import data, existing data, keep both), doubly-anchored guards to protect closure/datum constraints, and atomic updates to existing section shots. See [DMP Import Wizard](dmp-import.md) for full architecture documentation.
+After line selection, the primary import flow uses a connection wizard that auto-detects overlapping shots between lines and places them with a single batch import. The wizard handles overlap treatment (interpolation, import data, existing data, keep both), doubly-anchored guards to protect closure/datum constraints, and atomic updates to existing line shots. See [DMP Import Wizard](dmp-import.md) for full architecture documentation.
 
-#### DMP Import - Section Selection (DmpSelectionDialog)
+#### DMP Import - Line Selection (DmpSelectionDialog)
 
-After selecting sections, the workflow continues into zero-datum setup (if needed) and the connection/placement wizard.
+Each MNemo section in the file is offered as one line. After selecting lines, the workflow continues into zero-datum setup (if needed) and the connection/placement wizard.
 
-##### Step 1: Section Selection (DmpSelectionDialog)
+##### Step 1: Line Selection (DmpSelectionDialog)
 
 ```
 ┌─ Import DMP File ────────────────────────────────────────────────┐
 │                                                                  │
 │  File: cave_survey_2024.dmp                                     │
-│  Parsed: 3 sections, 156 shots total                            │
+│  Parsed: 3 lines, 156 shots total                               │
 │                                                                  │
-│  Default Values (apply to all sections):                        │
+│  Default Values (apply to all lines):                           │
 │  Surveyor: [J. Smith____________] (remembered for session)      │
 │  Date:     [2024-01-12__________]                               │
 │                                                                  │
-│  ┌─ Sections ───────────────────────────────────────────────────┐│
+│  ┌─ Lines ──────────────────────────────────────────────────────┐│
 │  │ [✓] AAA - Main Line (42 shots, 187.3m)           [Preview]  ││
 │  │ [✓] AAB - Side Passage (28 shots, 94.5m)         [Preview]  ││
 │  │ [ ] ZZZ - Test Data (86 shots, 412.1m)           [Preview]  ││
@@ -1082,13 +1090,13 @@ After selecting sections, the workflow continues into zero-datum setup (if neede
 ```
 
 **Step 1 Behavior:**
-- Select/deselect sections for import
-- Set default surveyor and date (inherited by all sections)
+- Select/deselect lines for import
+- Set default surveyor and date (inherited by all lines)
 - Surveyor remembered for session (not persisted)
 - File hash tracking detects duplicate imports
-- Preview button shows section outline in popup
-- Selection stats update in real-time when sections are checked/unchecked
-- Shows "0 shots | 0.0m | Depth: --" when no sections selected
+- Preview button shows line outline in popup
+- Selection stats update in real-time when lines are checked/unchecked
+- Shows "0 shots | 0.0m | Depth: --" when no lines selected
 
 **Selection Stats Formatting:**
 - Format: `X shots | Y.Ym | Depth: A.A-B.Bm`
@@ -1102,9 +1110,9 @@ After selecting sections, the workflow continues into zero-datum setup (if neede
 ##### Step 2: Connection + Placement Wizard (DmpNewImportDialog)
 
 ```
-┌─ Configure Section: AAA - Main Line ─────────────────────────────┐
+┌─ Configure Line: AAA - Main Line ────────────────────────────────┐
 │                                                                  │
-│  Section: 1 of 2                    [◀ Previous] [Next ▶]       │
+│  Line: 1 of 2                       [◀ Previous] [Next ▶]       │
 │                                                                  │
 │  ┌─ Parameters ─────────┐  ┌─ Preview ──────────────────────────┐│
 │  │ 42 shots | 187.3m |  │  │                                    ││
@@ -1120,7 +1128,7 @@ After selecting sections, the workflow continues into zero-datum setup (if neede
 │  ┌─ Placement ───────────────────────────────────────────────────┐│
 │  │ (●) At Origin (0,0)                                          ││
 │  │ (○) From Existing Station                                    ││
-│  │     Connect [Section ▼] Station [# ▼] → [Start/End ▼]       ││
+│  │     Connect [Line ▼] Station [# ▼] → [Start/End ▼]          ││
 │  │ (○) Manual Placement                                         ││
 │  │     Click on map to position                                 ││
 │  └───────────────────────────────────────────────────────────────┘│
@@ -1139,11 +1147,11 @@ After selecting sections, the workflow continues into zero-datum setup (if neede
 ```
 
 **Step 2 Behavior:**
-- Per-section editing with navigation between sections
-- Parameters panel with section stats at top:
-  - Shows shot count, total length, depth range for current section
+- Per-line editing with navigation between lines
+- Parameters panel with line stats at top:
+  - Shows shot count, total length, depth range for current line
   - Stats reflect current shot table state (including edits and deletions)
-  - Grayed out when section is excluded
+  - Grayed out when line is excluded
   - Subtle separator line below stats
 - Parameters panel: name, surveyor (inherited), date, color, direction
 - Interactive preview with pan/zoom and click-to-select-station
@@ -1151,17 +1159,17 @@ After selecting sections, the workflow continues into zero-datum setup (if neede
   skipped), **From existing station**, **Manual placement** (click on map), **Do
   not place** (skip the segment)
   - GPS placement is not a mode here: if the import needs a zero datum, it is
-    set beforehand via the separate section-selection and configuration
+    set beforehand via the separate line-selection and configuration
     dialogs (§7.10)
 - Shot table with:
   - Azimuth as single column (shows average, edits set both in/out)
   - Warning column (⚠) for azimuth/pitch discrepancies
   - Right-click context menu: insert before/after, delete
   - Keyboard navigation (Tab, Enter, Escape)
-- Section created on "Place segment" click
+- Line created on "Place segment" click
 - Warnings inform but don't block; errors block import
 
-**Section Stats Formatting:**
+**Line Stats Formatting:**
 - Format: `X shots | Y.Ym | Depth: A.A-B.Bm`
 - Units read from project config (length and depth independently)
 - Values converted to feet when config is set to feet (shows `ft` suffix)
@@ -1169,29 +1177,29 @@ After selecting sections, the workflow continues into zero-datum setup (if neede
 - Pipe separators between stats
 - "Depth: --" shown when no depth data available
 - Stats exclude deleted shots (those marked with delete checkbox)
-- ARIA label provides screen reader description (e.g., "Section statistics: 42 shots, 187.3m total length, depth range 3.2-17.8m")
+- ARIA label provides screen reader description (e.g., "Line statistics: 42 shots, 187.3m total length, depth range 3.2-17.8m")
 
 **Design Decisions:**
 | Decision | Rationale |
 |----------|-----------|
-| Sections created on placement | Enables granular undo, immediate persistence |
+| Lines created on placement | Enables granular undo, immediate persistence |
 | Exclusive placement modes | Simpler UX, clearer mental model |
 | Warnings don't block, errors block | Warnings inform, don't impede workflow |
 | Session-only surveyor memory | Respects privacy, not persisted to config |
 | Azimuth as average column | Cleaner table, edit sets both in/out |
 
-##### Create Section Dialog (Manual Entry)
+##### Create Line Dialog (Manual Entry)
 
 For manual entry (no DMP file), use the generic Import dialog with an empty shot table.
 
-#### Reverse Section Dialog (ReverseSectionDialog.tsx)
+#### Reverse Line Dialog (ReverseLineDialog.tsx)
 
-Confirms reversing a section end-to-end, so the far end becomes station 0.
+Confirms reversing a line end-to-end, so the far end becomes station 0.
 
 ```
-┌─ Reverse Section ────────────────────────────────────────────────┐
+┌─ Reverse Line ───────────────────────────────────────────────────┐
 │                                                                  │
-│  Renumber this section end-to-end, so the last station becomes   │
+│  Renumber this line end-to-end, so the last station becomes      │
 │  station 0.                                                      │
 │                                                                  │
 │   • Main Line (station 0 → 14, station 14 → 0)                   │
@@ -1248,8 +1256,9 @@ both readings inside `[0, 360)` put their difference in `(-360, 360)`, so a shot
 that could be misread always has an out-of-range reading, which
 `Validator::validate_shot` reports as `INVALID_AZIMUTH`.
 
-Beyond the shots, `section_offsets` gains the section's old total displacement
-(station 0 is now the far end), and every external station ref in the section -
+Beyond the shots, `line_offsets` (the `section_offsets` table) gains the line's
+old total displacement (station 0 is now the far end), and every external
+station ref in the line -
 merges, loop closures, zero datums, station offsets and comments - is remapped
 to its mirrored station so each relationship stays on its original physical
 station. That list is the complete set of `StationKey`-bearing collections on
@@ -1263,7 +1272,7 @@ merge staging are cleared.
 Pins inside a *saved* `.plnx` need **no** rewriting, because a plan does not name a
 station by its position. It records the two shots a station sits BETWEEN, and a
 reverse does not change what a station sits between - the same pair still names
-the same junction whichever way the section is walked.
+the same junction whichever way the line is walked.
 
 That matters because the old `AfterShot(uuid)` form failed silently: after a
 reverse such an anchor still *resolved*, to the station next door, since the
@@ -1272,8 +1281,8 @@ anchoring shot travelled with its record. Nothing counted as stale, so
 with it the gas plan - had quietly been re-priced against a different pair of
 stations. Every other survey edit leaves an unresolvable ref that fails loudly.
 
-A station at the END of a section has only one neighbouring shot, so its side
-comes from the section's recorded orientation (`reverse_parity`) instead. The one
+A station at the END of a line has only one neighbouring shot, so its side
+comes from the line's recorded orientation (`reverse_parity`) instead. The one
 case that cannot be tracked is splitting that shot: the split keeps the original
 UUID on the shortened tail, so afterwards no shot in the file has that station as
 an endpoint. That is detected via the neighbour's recorded length and reported as
@@ -1282,19 +1291,19 @@ a stale ref for the diver to re-pin, rather than guessed at.
 One other store outside `Project` is settled the same way: position-keyed
 (`NULL`-uuid) `resolved_warnings` rows are pinned to their shot's UUID, because
 the reverse keeps shot *ids* on positions - so the save-time carry-over would
-otherwise re-read the row's `(section_id, shot_id)` as an identity and migrate
+otherwise re-read the row's `(section_id, shot_id)` columns as an identity and migrate
 the ignore onto the mirrored shot.
 
-`CommandResult.reversed_sections` names the sections a command renumbered -
+`CommandResult.reversed_lines` names the lines a command renumbered -
 on the forward reverse, on a batch of them, and on an undo or redo of either
 (undoing a reverse re-reverses the numbering). A reverse keeps every station's
 world position, so there is nothing in the geometry for a consumer to diff; the
 field exists so the frontend mirrors its positional refs exactly instead of
 inferring a reverse from moved stations, an inference that cannot tell a
-reversed section from one that was reversed *and* moved in the same action. It
+reversed line from one that was reversed *and* moved in the same action. It
 is omitted from the payload entirely when nothing was renumbered.
 
-The section's `direction` (In/Out) is metadata and is deliberately **not**
+The line's `direction` (In/Out) is metadata and is deliberately **not**
 flipped - it records how the survey was swum, which a renumbering does not
 change. Nothing in the geometry pipeline reads it.
 
@@ -1302,17 +1311,17 @@ Frozen shots do not block a reverse: the physical line is preserved exactly, so
 the frozen invariant still holds. Undo is a before/after project snapshot pair.
 
 **Entry points.** Sections-panel, map-station and map-shot context menus
-("Reverse Section", plus "Reverse N Sections" when several sections are
-multi-selected), and a button in the Edit Section dialog that is disabled while
+("Reverse Line", plus "Reverse N Lines" when several lines are
+multi-selected), and a button in the Edit Line dialog that is disabled while
 that dialog has unsaved edits.
 
-A multi-section reverse is **one action**: it goes through `execute_batch`, so
-either every selected section reverses or none does, and a single Undo restores
+A multi-line reverse is **one action**: it goes through `execute_batch`, so
+either every selected line reverses or none does, and a single Undo restores
 them all.
 
-**On import.** `ImportSectionConfig.reverse` applies the same transform before
-the section is created. `placement` indices must already address the final
-(reversed) order - only the wizard knows which side of a cross-section
+**On import.** `ImportLineConfig.reverse` applies the same transform before
+the line is created. `placement` indices must already address the final
+(reversed) order - only the wizard knows which side of a line-to-line
 connection this batch renumbers (`src/utils/reversePlacement.ts`) - while
 `station_comments` indices are given in the file's original order and mirrored
 backend-side. Left/right is never swapped on the import path (no dialog to ask).
@@ -1320,26 +1329,26 @@ The toggle is offered by the DMP wizard only; the TML, Compass, Walls and GPX
 importers build their configs with `reverse: false`.
 
 Ticking the toggle changes numbering only, never where the passage lands: the
-section anchor gains the same displacement the in-app reverse applies, because
+line anchor gains the same displacement the in-app reverse applies, because
 station 0 is now the far end. Merge- and datum-based placements re-anchor the
-section anyway; `Origin` and `Manual` position station 0 directly and would
+line anyway; `Origin` and `Manual` position station 0 directly and would
 otherwise land a full end-to-end displacement away.
 
 Both sides of a connection renumber independently. A wizard connection whose
 target is created **by the same batch** has its target index mirrored too - and
 that includes a target the wizard rewrites into a `from_existing` placement
-because it was already created earlier in the run. A connection to a section
+because it was already created earlier in the run. A connection to a line
 that was already in the project keeps the index the user picked.
 
 #### Merge Stations Dialog
 
-Shown when merging two **unconnected** stations (different section groups).
+Shown when merging two **unconnected** stations (different line groups).
 
 ```
 ┌─ Merge Stations ─────────────────────────────────────────────────┐
 │                                                                  │
-│  Station A: Section "Main Line" #14 (depth: 12.3m)              │
-│  Station B: Section "Side Passage" #0 (depth: 12.8m)            │
+│  Station A: Line "Main Line" #14 (depth: 12.3m)                 │
+│  Station B: Line "Side Passage" #0 (depth: 12.8m)               │
 │                                                                  │
 │  Distance between: 2.4m                                          │
 │  Depth difference: 0.5m                                          │
@@ -1348,7 +1357,7 @@ Shown when merging two **unconnected** stations (different section groups).
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-If the two stations are already connected (same section group), MergeStations is rejected and the frontend should show the Closure Dialog instead.
+If the two stations are already connected (same line group), MergeStations is rejected and the frontend should show the Closure Dialog instead.
 
 #### Closure Dialog (ClosureDialog.tsx)
 
@@ -1357,8 +1366,8 @@ Shown when creating a loop closure between two **connected** stations.
 ```
 ┌─ Create Loop Closure ────────────────────────────────────────────┐
 │                                                                  │
-│  Station A: Section "Main Line" #14 (depth: 12.3m)              │
-│  Station B: Section "Side Passage" #0 (depth: 12.8m)            │
+│  Station A: Line "Main Line" #14 (depth: 12.3m)                 │
+│  Station B: Line "Side Passage" #0 (depth: 12.8m)               │
 │                                                                  │
 │  Path length: 156.2m                                             │
 │  Misclosure: 2.4m (1.5%)                                        │
@@ -1396,7 +1405,7 @@ pairs regardless of the dialog. See [closures.md](closures.md#create-loop-closur
 │    [ ] Include shot comments                                    │
 │    [ ] Include station IDs                                      │
 │    [ ] Include station names                                    │
-│    [ ] Include section names                                    │
+│    [ ] Include line names                                       │
 │    [ ] Include shot data (azimuth, length, depth)               │
 │                                                                  │
 │  Resolution: [High (300 DPI) ▼]                                 │
@@ -1421,18 +1430,18 @@ pairs regardless of the dialog. See [closures.md](closures.md#create-loop-closur
 1. User clicks [New Project]
 2. Dialog: Enter name, optional location description
 3. Project created, opens in Single System View
-4. User can now import sections or add manually
+4. User can now import lines or add manually
 
 ### 7.3 Importing DMP File (Wizard Flow)
 
-**Step 1: Section Selection (DmpSelectionDialog)**
+**Step 1: Line Selection (DmpSelectionDialog)**
 
 1. User clicks [Import] or drags .dmp file onto application
-2. DMP parsed, Step 1 dialog opens showing all sections
+2. DMP parsed, Step 1 dialog opens showing each MNemo section as a line
 3. User sets defaults:
    - Default surveyor (remembered for session)
    - Default date
-4. User selects which sections to import (checkboxes)
+4. User selects which lines to import (checkboxes)
 5. If file hash matches previous import, warning shown
 6. User clicks [Continue] to proceed
 
@@ -1440,19 +1449,19 @@ pairs regardless of the dialog. See [closures.md](closures.md#create-loop-closur
 
 Runs only if the project has no zero datum yet:
 
-7. ZeroDatumSelectionDialog shows the selected sections as cards; user picks
-   the one that should carry the datum, or clicks Skip - sections still get
+7. ZeroDatumSelectionDialog shows the selected lines as cards; user picks
+   the one that should carry the datum, or clicks Skip - lines still get
    placed in Step 2 below, just with no real-world GPS anchor until a datum
    is set later (see §7.10)
-8. Picking a section opens ZeroDatumConfigDialog: choose the station, enter
-   its GPS coordinates, and optionally edit the section's metadata and shots
-9. Confirm creates the section with its GPS-derived position and proceeds to
-   the connection wizard for the remaining sections
+8. Picking a line opens ZeroDatumConfigDialog: choose the station, enter
+   its GPS coordinates, and optionally edit the line's metadata and shots
+9. Confirm creates the line with its GPS-derived position and proceeds to
+   the connection wizard for the remaining lines
 
 **Step 2: Connection + Placement Wizard (DmpNewImportDialog)**
 
-10. Step 2 dialog opens with the next selected section
-11. User configures each section:
+10. Step 2 dialog opens with the next selected line
+11. User configures each line:
     - Edit metadata (name, surveyor, date, color, direction)
     - Review/edit shot data in table
     - Azimuth shown as average; editing sets both in/out
@@ -1460,13 +1469,13 @@ Runs only if the project has no zero datum yet:
 12. User selects a placement method (exclusive): Suggested connection (when one
     is offered), From existing station, Manual placement, or Do not place
 13. User clicks [Place segment]
-14. Section created in backend immediately
-15. User navigates to next section or clicks [Done]
-16. Each placed section is auto-saved
+14. Line created in backend immediately
+15. User navigates to next line or clicks [Done]
+16. Each placed line is auto-saved
 
 **Undo/Redo within Import:**
 - Local undo/redo tracks changes within the dialog
-- After placement, section becomes part of project undo stack
+- After placement, the line becomes part of project undo stack
 - Closing app during import prompts confirmation to discard
 
 **Error Handling:**
@@ -1475,7 +1484,7 @@ Runs only if the project has no zero datum yet:
 
 ### 7.4 Manual Data Entry
 
-1. User clicks [New Section] or [+] in Sections Panel
+1. User clicks [New Line] or [+] in Sections Panel
 2. Import Dialog opens with empty table
 3. User enters metadata and shot data row by row
 4. Live preview updates as data entered
@@ -1483,15 +1492,15 @@ Runs only if the project has no zero datum yet:
 6. Same placement flow as DMP import
 7. Auto-saved
 
-### 7.5 Connecting Sections (Merge vs Loop Closure)
+### 7.5 Connecting Lines (Merge vs Loop Closure)
 
 The Merge Tool connects two stations. The behavior depends on whether the stations are already in the same connected group:
 
-**Merging unconnected stations** (different section groups):
+**Merging unconnected stations** (different line groups):
 1. User activates Merge Tool (M)
-2. Selects two stations from different, unconnected section groups
+2. Selects two stations from different, unconnected line groups
 3. MergeDialog appears showing station details and distance
-4. Confirm → Stations merged, sections repositioned to align
+4. Confirm → Stations merged, lines repositioned to align
 
 **Creating a loop closure** (already connected stations):
 1. User activates Merge Tool (M)
@@ -1505,15 +1514,15 @@ The Merge Tool connects two stations. The behavior depends on whether the statio
 6. Closure stations updated with `closures_with` references (direct + transitive)
 7. Detail Panel shows "Loop Closures" section for involved stations
 
-**Connecting Sections with Reference Shots:**
-1. User imports/creates new section with the connection survey
+**Connecting Lines with Reference Shots:**
+1. User imports/creates new line with the connection survey
 2. In data table, user cycles the connecting shots' J/R cell to Reference
    (click cycles blank -> J -> R -> blank; shift-click reverses; the fill
    handle stamps one kind down a whole run)
-3. User places section using "From Station" to connect one end
-4. User uses Merge Tool to connect other end to second section
-5. If sections are unconnected → MergeDialog (simple merge)
-6. If sections are already connected → ClosureDialog (loop closure with error preview)
+3. User places line using "From Station" to connect one end
+4. User uses Merge Tool to connect other end to second line
+5. If lines are unconnected → MergeDialog (simple merge)
+6. If lines are already connected → ClosureDialog (loop closure with error preview)
 7. Reference shots drawn faded (fainter than jumps)
 8. Jumps and references toggle independently in display options
 
@@ -1526,7 +1535,7 @@ The Merge Tool connects two stations. The behavior depends on whether the statio
 
 **Via Data Table:**
 1. User expands Data Table panel
-2. Selects section from dropdown
+2. Selects line from dropdown
 3. Clicks cell, edits value
 4. Map updates in real-time
 5. Auto-saved
@@ -1549,11 +1558,11 @@ The Merge Tool connects two stations. The behavior depends on whether the statio
 1. Select shot, press Delete (or right-click → Delete)
 2. From the map context menu, the data table or the detail panel, the confirm is
    position-aware: an edge shot gets "Are you sure you want to delete this
-   shot?" and is deleted without splitting; a mid-section shot opens the Delete
-   Shot dialog offering [Split Section] or [Shift Geometry]; the last remaining
-   shot removes the whole section
-3. On Split Section, the section splits into two, named "<section>-A" and
-   "<section>-B" by default (both editable)
+   shot?" and is deleted without splitting; a mid-line shot opens the Delete
+   Shot dialog offering [Split Line] or [Shift Geometry]; the last remaining
+   shot removes the whole line
+3. On Split Line, the line splits into two, named "<line>-A" and
+   "<line>-B" by default (both editable)
 4. A delete with shift (a single shot's Shift Geometry, or a range of shots with
    shift) that leaves a loop closure spanning a single shot - e.g. closure A:1-A:4
    after shots 1..2 are gap-closed - removes that closure with the delete. The
@@ -1569,12 +1578,12 @@ The Merge Tool connects two stations. The behavior depends on whether the statio
 opens the Delete Station dialog, whose Delete button is disabled; it tells the
 user to delete the connected shots instead.
 
-**Deleting a Section:**
-1. Right-click section in Sections Panel → Delete
-2. Confirmation: "Are you sure you want to delete this section and all its
+**Deleting a Line:**
+1. Right-click line in Sections Panel → Delete
+2. Confirmation: "Are you sure you want to delete this line and all its
    shots?", plus a list of relationships (merges, closures, offsets, zero
    datums) that will also be removed
-3. Confirm → Section removed
+3. Confirm → Line removed
 
 ### 7.8 Merging Cave Systems
 
@@ -1596,9 +1605,9 @@ user to delete the connected shots instead.
 6. Auto-switch to Single System View
 7. User connects the systems using Merge Tool
 
-### 7.9 Moving Unanchored Sections
+### 7.9 Moving Unanchored Lines
 
-Unanchored sections can be repositioned via the **Section Adjust Dialog** (right-click section → "Adjust Position"). Individual unanchored stations can be moved with the Move Station tool (T).
+Unanchored lines can be repositioned via the **Adjust Line Position** dialog (`LineAdjustDialog`; right-click line → "Adjust Position..."). Individual unanchored stations can be moved with the Move Station tool (T).
 
 ### 7.10 Setting a Zero Datum
 
@@ -1613,35 +1622,35 @@ The zero datum establishes the coordinate system origin and enables GPS-accurate
 3. Click Save
 4. Station marked with the enlarged golden zero-datum station dot
 5. Map auto-zooms to fit survey in new position
-6. All section offsets are recalculated
+6. All line offsets are recalculated
 
 A depth-reference input (meters below surface, alongside lat/lon) is not yet
 built anywhere in this flow; it is tracked as an enhancement in #524.
 
 **Setting Zero Datum during Import:**
 1. If the project has no zero datum yet, the DMP wizard opens
-   ZeroDatumSelectionDialog after section selection: pick which selected
-   section should carry the datum, or Skip - sections still get placed
-   (Origin/From Existing/Manual, per section, in the connection wizard) but
+   ZeroDatumSelectionDialog after line selection: pick which selected
+   line should carry the datum, or Skip - lines still get placed
+   (Origin/From Existing/Manual, per line, in the connection wizard) but
    the survey has no real-world GPS anchor until a datum is set later (see
    §7.3 Step 1b)
-2. Picking a section opens ZeroDatumConfigDialog: choose the station and
+2. Picking a line opens ZeroDatumConfigDialog: choose the station and
    enter its GPS coordinates
-3. Confirm positions that section using the GPS-to-local transformation; the
+3. Confirm positions that line using the GPS-to-local transformation; the
    rest of the import continues through the normal connection wizard
 
 **What Happens Internally:**
 1. GPS coordinates (WGS84) are stored with the station
 2. Coordinates are converted to local ENU meters via geodetic transformation
-3. Section offsets are recalculated to maintain relative positions
+3. Line offsets are recalculated to maintain relative positions
 4. The zero datum station becomes the (0,0) origin of the local coordinate system
-5. Connected sections' positions are preserved through offset tracking
+5. Connected lines' positions are preserved through offset tracking
 
 **Updating an Existing Zero Datum:**
 1. Right-click on the zero datum station → "Set Zero Datum" (reopens the Edit
    Station dialog)
 2. Modify coordinates and confirm
-3. All section offsets are recalculated
+3. All line offsets are recalculated
 4. Undo restores previous GPS coordinates
 
 Changing only the accuracy of a datum (its GPS unchanged) moves nothing, for a
@@ -1660,72 +1669,72 @@ updates it in place.
 
 ---
 
-### 7.11 Splitting and Combining Sections
+### 7.11 Splitting and Combining Lines
 
-**Split Section Here** (station or shot context menu, Survey mode): cuts a
-section in two at a mid-section station, or at a point along a shot (a station
+**Split Line Here** (station or shot context menu, Survey mode): cuts a
+line in two at a mid-line station, or at a point along a shot (a station
 is inserted there first; within 1 cm of a shot end the cut snaps to that end).
-Nothing is deleted. The first half keeps the section id and ends on the split
-station; the second half starts on a co-located copy and copies the section's
+Nothing is deleted. The first half keeps the line id and ends on the split
+station; the second half starts on a co-located copy and copies the line's
 direction, quality and north reference (every shot keeps its own surveyors,
 explorers and date). The two copies are NOT
 merged. Merges on the split station, its name and its manual offset go to both
 copies; its loop closures stay on the first half; the dialog picks the half for
 its comment (A, B or both) and its zero datum (A or B). Names default to
-`<name>-A` / `<name>-B`, each half has a colour picker: A keeps the section's
-colour, B defaults to the colour a new section gets (the next palette colour no
-section uses, never A's). The dialog notes that the halves are not connected
+`<name>-A` / `<name>-B`, each half has a colour picker: A keeps the line's
+colour, B defaults to the colour a new line gets (the next palette colour no
+line uses, never A's). The dialog notes that the halves are not connected
 (merge the two cut stations for routes and gas planning to continue across
 them). A loop closure from
 before the cut to past it, with nothing else tying the halves, is left as their
 only tie, which the split turns into a merge (a closure must close a loop),
 moving one half by the loop's misclosure; the dialog says which half moves and
-how far before the user confirms (`split_section_preview`). A second closure
+how far before the user confirms (`split_line_preview`). A second closure
 that tied that half to the same point would then tie the point to itself (its
 two stations are merged), so the split removes it (#738), and the dialog lists
 each one by the station ids it was created with: "Loop closure 1:0 to 0:3 is
 removed: its two stations become one point." A closure that already tied a
 point to itself goes too, listed as "...: its two stations are already one
 point." One undo step brings back every closure. The delete-and-split commands,
-Delete Shot, Delete Section, Unmerge and Remove Zero Datum remove such closures
+Delete Shot, Delete Line, Unmerge and Remove Zero Datum remove such closures
 the same way and say so in a toast, by the station ids they were created with.
 A project file that already holds a closure between merged stations, or from a
 station to itself, opens without it ([closures.md](closures.md)).
 
-**Combine Sections** (an end station's context menu, or **Combine 2 Sections...**
-in the section menu when exactly two sections are selected): the two chosen
-sections meet end to end and
-become one; other sections there stay attached as branches. They meet when an
+**Combine Lines** (an end station's context menu, or **Combine 2 Lines...**
+in the line menu when exactly two lines are selected): the two chosen
+lines meet end to end and
+become one; other lines there stay attached as branches. They meet when an
 end station of each is the same point: in one merge group; unmerged and
 co-located within 1 mm horizontally (the state a split leaves); or tied by a
 loop closure, the survey's own statement that the two are one point, apart by
-the loop's misclosure. Another section's end merged there stays merged to the
-joined station, now a station in the middle of the combined section; a section
+the loop's misclosure. Another line's end merged there stays merged to the
+joined station, now a station in the middle of the combined line; a line
 merged there at a station in its middle stays merged too (a crossing); one
 ending there unmerged is left as it is, and the dialog says so. The station
-menu offers, by how many sections end at the point: with one other, **Combine
-Section With <name>...**, opening the dialog directly; with three in all,
-**Combine Sections...** and a submenu of every pair ("A with B"); with four or
-more, **Combine Sections...** > "A with..." > the sections A can be combined with.
+menu offers, by how many lines end at the point: with one other, **Combine
+Line With <name>...**, opening the dialog directly; with three in all,
+**Combine Lines...** and a submenu of every pair ("A with B"); with four or
+more, **Combine Lines...** > "A with..." > the lines A can be combined with.
 Each pair says how the two meet (merged, side by side, or across a loop
-closure), or is disabled with its reason; the section named first is the one
+closure), or is disabled with its reason; the line named first is the one
 the dialog keeps by default. The dialog shows the name, colour, the kept
-section and any choices; everything informational (what moves, what becomes a
+line and any choices; everything informational (what moves, what becomes a
 loop closure, branches, depth, direction, credit) is folded under **Details**.
-Two sections that meet at more than one end (a
+Two lines that meet at more than one end (a
 loop of two) join at the end the station menu was opened on; the Sections panel
-picks a merge first, then co-located ends, then a closure. The kept section (the
+picks a merge first, then co-located ends, then a closure. The kept line (the
 lower id by default; the dialog can swap) keeps its id, shot numbers, direction
-and position; the other section is reversed first when the two meet end to end
+and position; the other line is reversed first when the two meet end to end
 or start to start. Every per-shot field travels, and every station reference
 follows its station; the join station keeps one comment and one name (the
 dialog asks when they differ).
 
 Whatever stands in the way changes instead of blocking, and the dialog lists
-it, for the section it shows as kept, before the user confirms:
+it, for the line it shows as kept, before the user confirms:
 
 - **A side moves.** Across a loop closure (or any other gap over 1 mm) the
-  other section, and everything still merged to it, moves by the gap so the two
+  other line, and everything still merged to it, moves by the gap so the two
   ends meet. The kept side moves instead when a zero datum holds the other side
   and not the kept one, or, with no datum deciding, when the other side holds
   the station the Closures Computed View holds the survey at: moving it would
@@ -1734,12 +1743,12 @@ it, for the section it shows as kept, before the user confirms:
   everything merged to it, so merged stations stay one point and reopening
   the project moves nothing (#740). The dialog lists a move that small only
   when it turns a tie into a loop closure (a snap from the moving side, or,
-  with zero datums on both sides, the moving section's merge), so the tie's
+  with zero datums on both sides, the moving line's merge), so the tie's
   listed reason has its cause beside it.
 - **Ties become loop closures.** A merge or snapped (aligned) closure that
-  would tie the combined section to itself, or keep the moving side tied to what
+  would tie the combined line to itself, or keep the moving side tied to what
   stays, becomes an ordinary loop closure between the same two stations: the
-  one nearest the moving section, so the least moves. The loop's misclosure
+  one nearest the moving line, so the least moves. The loop's misclosure
   moves there, and the closures the combine made or stretched are measured
   again. When both sides are anchored by zero datums, the moving side's merge
   towards its own datum becomes a closure too (a closure may tie two anchored
@@ -1759,31 +1768,31 @@ it, for the section it shows as kept, before the user confirms:
   the folded Details, and Details list each under "This connection is
   removed:" (or "These N connections are removed:"), each with why: as a loop
   closure it would join the two ends of one shot. A warning toast names them
-  afterwards, each station with its section's name, and the one Undo brings
+  afterwards, each station with its line's name, and the one Undo brings
   them back. A closure that already joined the two ends of one shot is left
   alone.
-- **Bearings convert.** The combined section has one north reference, the kept
-  one's: the other section's stored azimuths turn by the difference, so every
+- **Bearings convert.** The combined line has one north reference, the kept
+  one's: the other line's stored azimuths turn by the difference, so every
   station stays where it is.
-- The kept section's quality factor wins; the fixed side's manual offset on the
-  join station wins (the dialog says how far the other moves), and a section
+- The kept line's quality factor wins; the fixed side's manual offset on the
+  join station wins (the dialog says how far the other moves), and a line
   merged at the other join station, on a join that is not merged, moves with
   the joined station (its side's shift plus the difference of the two
   offsets), so it stays merged to it (#755; the dialog lists it); shots of the
-  other section that share an identity (uuid) with the kept one's get new ones;
+  other line that share an identity (uuid) with the kept one's get new ones;
   a depth gap between unmerged join stations is reported, whatever its size
-  (the joined station takes the average); a section with no shots is absorbed
+  (the joined station takes the average); a line with no shots is absorbed
   at its one station.
 
-Refused, with the reason in the menu row: both sections placed by their own zero
+Refused, with the reason in the menu row: both lines placed by their own zero
 datum on one of their own stations (merge them first, so the later datum becomes
 a GPS fix), the two join stations each holding a zero datum (the combined
-station would hold two; remove one first), sections that
+station would hold two; remove one first), lines that
 meet nowhere (merge two of their ends, or create a loop closure between them,
-first), more than 99,999 shots, and a kept section that has used up its shot
-numbers for the session. A section is never combined with itself. Every shot
+first), more than 99,999 shots, and a kept line that has used up its shot
+numbers for the session. A line is never combined with itself. Every shot
 keeps its own surveyors, explorers and date; the dialog summarises the combined
-credit. Combining the two halves of a split gives the section back, with
+credit. Combining the two halves of a split gives the line back, with
 whatever was merged at the split station still attached there. One undo step.
 Rules and edge cases: [plans/2026-11-12_merge-split-sections.md](plans/2026-11-12_merge-split-sections.md).
 
@@ -1800,7 +1809,7 @@ labels rather than executable commands: `RepairIntegrity` and
 methods (`repair_project_integrity`, `update_project_settings`), and
 `AppState::execute` rejects them with an error.
 
-The variants cover project lifecycle (create/open/save/close/merge), sections,
+The variants cover project lifecycle (create/open/save/close/merge), lines,
 shots, station merges, loop closures, zero datums, station comments, the move
 operations, and a `Batch` wrapper that applies a list atomically. The
 authoritative list - every variant with its fields - is
@@ -1859,7 +1868,7 @@ interface UndoHistoryItem {
   index: number;           // Position in stack (0 = most recent)
   description: string;     // Human-readable command description
   timestamp: string | null; // ISO 8601 or null for legacy
-  commandType: string;     // For icon mapping: "create_section", etc.
+  commandType: string;     // For icon mapping: "create_line", etc.
   previewData: {           // Diff preview (or null)
     changes: Array<{ field: string; oldValue: string; newValue: string }>;
     additionalChanges: number;
@@ -1931,7 +1940,10 @@ removed keys are ignored (no `deny_unknown_fields`), and the optional blocks
 `import`, `placement_suggestion`, `syntactic_highlighting`, `gas`, `speleodb`)
 default when absent - but the core tables (`general`, `units`, `display`,
 `section_colors`, `map`, `validation`, `export`, `logging`, `shortcuts`) and
-their non-defaulted fields are required. A file that fails to parse is
+their non-defaulted fields are required. (`section_colors` is `line_colors` in
+code: `config.toml` keeps the pre-rename names, translated by
+`src-tauri/crates/core/src/config/toml_names.rs`, so an older build still
+parses the file.) A file that fails to parse is
 discarded whole at startup (`Config::load().unwrap_or_default()` in
 `AppState::new`) - the app runs on the full compiled-in defaults, not a per-key
 merge. The Reload Config path instead surfaces the parse error and keeps the
@@ -1966,7 +1978,7 @@ The sidebar displays 12 settings categories, with a visual separator before the 
 | Appearance | Theme mode (dark/light/auto), day and night color theme selection with preview cards, 10 color themes |
 | Units | Length/depth/angle units, decimal precision |
 | Gas planning | Swim speed, jump RMV multiplier, whether reference legs count toward gas |
-| Display | Grid/font colors, grid spacing, font size, measure-path color, section color palette |
+| Display | Grid/font colors, grid spacing, font size, measure-path color, line color palette |
 | Map | Satellite provider/toggle/GPS origin, zoom settings, pan/zoom controls, station/shot appearance, snap settings, animation settings |
 | Validation | Shot length min/max warnings, depth change warnings, azimuth deviation warnings, in/out difference thresholds |
 | Export | Default image format (PNG/SVG/PDF), default DPI, default layer includes (satellite, grid, labels) |
@@ -2254,8 +2266,8 @@ export function formatDate(date: Date, locale: string): string {
 #### Level of Detail (LOD)
 | Zoom Level | Detail |
 |------------|--------|
-| < 10 | No labels (section names appear at z10, station/shot/comment labels at z14) |
-| 10-14 | Normal paths, section labels only |
+| < 10 | No labels (line names appear at z10, station/shot/comment labels at z14) |
+| 10-14 | Normal paths, line labels only |
 | 14-17 | Full detail, all labels |
 | > 17 | Maximum detail |
 
@@ -2267,11 +2279,11 @@ the collision declutter together with a nested decimation band
 above that zoom - see [map-renderer.md](map-renderer.md). Where labels compete for
 the same space, a real-line label wins over a label that belongs only to jump or
 reference shots, and a jump label wins over a reference one. Station markers
-and shot lines follow the same order: where they coincide or overlap (a jump or
-reference section tied in at a real station, or surveyed along the real line),
+and shot lines follow the same order: where they coincide or overlap (a line of jump or
+reference shots tied in at a real station, or surveyed along the real line),
 the real-line marker or line is drawn on top and takes the hover and the click,
-then jump, then reference. The selection's section (the selected section, or
-the section of the selected station or shot) is drawn above all of them and
+then jump, then reference. The selection's line (the selected line, or
+the line of the selected station or shot) is drawn above all of them and
 takes the hover and the click where it overlaps them; labels keep the rank
 order. Shot
 geometry itself is not simplified: no path simplification, no station merging,
@@ -2501,7 +2513,7 @@ All dialogs must have:
 |-------|-------|---------|
 | **ERROR** | Operation failed, requires attention | "Failed to save project: permission denied" |
 | **WARN** | Suspicious but recoverable | "Shot length 0.05m below threshold" |
-| **INFO** | Normal operations, audit trail | "Command: CreateSection { name: 'Main' }" |
+| **INFO** | Normal operations, audit trail | "Command: CreateLine { name: 'Main' }" |
 | **DEBUG** | Detailed execution info | "Generated undo data: StateDelta with 5 entities" |
 | **TRACE** | Very verbose, performance debugging | "Rendering 45000 line segments" |
 
@@ -2517,8 +2529,8 @@ All dialogs must have:
 Structured JSON for machine parsing:
 
 ```json
-{"timestamp":"2024-01-12T14:32:15.123456Z","level":"INFO","fields":{"message":"Command executed","command":"CreateSection","section_name":"Main Line","shots":24},"target":"stalagmight::commands"}
-{"timestamp":"2024-01-12T14:32:15.125789Z","level":"DEBUG","fields":{"message":"Undo data generated","type":"InverseCommand","inverse":"DeleteSection"},"target":"stalagmight::commands"}
+{"timestamp":"2024-01-12T14:32:15.123456Z","level":"INFO","fields":{"message":"Command executed","command":"CreateLine","line_name":"Main Line","shots":24},"target":"stalagmight::commands"}
+{"timestamp":"2024-01-12T14:32:15.125789Z","level":"DEBUG","fields":{"message":"Undo data generated","type":"InverseCommand","inverse":"DeleteLine"},"target":"stalagmight::commands"}
 {"timestamp":"2024-01-12T14:32:15.130421Z","level":"INFO","fields":{"message":"Project saved","path":"/home/user/caves/sistema.stalx","size_kb":245},"target":"stalagmight::persistence"}
 ```
 
@@ -2533,13 +2545,13 @@ own fields, then `target`; events inside a span also carry `span` / `spans`.
 ```rust
 use tracing::{info, warn, error, debug, trace, instrument};
 
-#[instrument(skip(state), fields(section_id))]
-pub fn create_section(state: &mut State, cmd: CreateSectionCommand) -> Result<Section> {
-    info!(name = ?cmd.name, shots = cmd.shots.len(), "Creating section");
+#[instrument(skip(state), fields(line_id))]
+pub fn create_line(state: &mut State, cmd: CreateLineCommand) -> Result<Line> {
+    info!(name = ?cmd.name, shots = cmd.shots.len(), "Creating line");
 
     // Validation
     if cmd.shots.is_empty() {
-        warn!("Creating section with no shots");
+        warn!("Creating line with no shots");
     }
 
     for (i, shot) in cmd.shots.iter().enumerate() {
@@ -2550,17 +2562,17 @@ pub fn create_section(state: &mut State, cmd: CreateSectionCommand) -> Result<Se
     }
 
     // Execution
-    let section = state.add_section(cmd)?;
-    debug!(section_id = section.id, "Section added to state");
+    let line = state.add_line(cmd)?;
+    debug!(line_id = line.id, "Line added to state");
 
     // Error handling
     if let Err(e) = state.validate_integrity() {
-        error!(error = ?e, "State integrity check failed after section creation");
+        error!(error = ?e, "State integrity check failed after line creation");
         return Err(e);
     }
 
-    info!(section_id = section.id, "Section created successfully");
-    Ok(section)
+    info!(line_id = line.id, "Line created successfully");
+    Ok(line)
 }
 ```
 
@@ -2576,8 +2588,10 @@ interrupted save never leaves a half-written project - see [saving.md](saving.md
 
 The schema is versioned (`SCHEMA_VERSION` in
 `src-tauri/crates/persistence/src/persistence/sqlite.rs`) and migrated forward when an older file is
-opened. Alongside the survey tables (project, sections, shots, station merges,
-zero datums, loop closures, section and station offsets) it holds per-project and
+opened. Alongside the survey tables (project, `sections` with one row per line,
+shots, station merges, zero datums, loop closures, `section_offsets` and
+`station_offsets`; the SQL keeps the pre-rename names, see
+[Persisted names](saving.md#persisted-names-lines-are-sections-on-disk)) it holds per-project and
 display settings, the persisted undo and redo stacks, resolved warnings, import
 hashes, station comments and names, the SpeleoDB link row, and the Unwind chain
 position in `speleo_undo_chain`. Five markers are worth knowing before touching migration
@@ -2607,9 +2621,9 @@ code:
   `save_speleo_undo_watermark` in `persistence/sqlite/settings.rs` also creates
   the watermark table defensively, and the read side probes `sqlite_master`
   first.
-- v17 gives `SectionUpdates`' `name` / `surveyor` / `date` the `double_option` +
+- v17 gives `LineUpdates`' (then `SectionUpdates`) `name` / `surveyor` / `date` the `double_option` +
   `skip_serializing_if` pair `ShotUpdates` has had since v7, so an undo can once
-  again restore a section field that was null before the edit (issue #413
+  again restore a line field that was null before the edit (issue #413
   finding 5). It is the v7 hazard one struct over - a pre-v17 writer serialized
   every untouched nullable field as an explicit `null`, which now reads as "clear
   this field" - so the migration drops the persisted stacks through
@@ -2645,7 +2659,7 @@ Rewrite `pytool_mnemo_lib` parser in Rust. Key structures:
 ```rust
 pub struct DmpFile {
     pub version: u8,  // 2-5
-    pub sections: Vec<DmpSection>,
+    pub lines: Vec<DmpSection>,  // one per MNemo section; each imports as a line
 }
 
 pub struct DmpSection {
@@ -2679,7 +2693,7 @@ pub struct DmpShot {
 }
 ```
 
-The file carries no station numbers: MNemo numbers a section's start 0 and the
+The file carries no station numbers: MNemo numbers a section's (line's) start 0 and the
 end of its N-th shot N, so the importer derives each station's number from the
 shot's position (counting only the shots it imports - an assumption not yet
 checked against a device) and records it as the station's name; see
@@ -2740,7 +2754,7 @@ keeping references as the boundary - tracked separately, not attempted here.
 | Shot stroke-width (thick) | 2.5px | `THICK_PX` - segments whose branching factor reaches `branching_threshold` |
 | Junction trim | 5px | `JUNCTION_TRIM_PX` (2 x thick) - gap where a tied segment meets its parent |
 | Zero-datum star radius | 7px / 3px | `STAR_OUTER_PX` / `STAR_INNER_PX`; the star is the only station marker |
-| Label font-size | 11px | `PEN_LABEL_PX` - shared by every label group (penetration, station, section, shot data, comments) |
+| Label font-size | 11px | `PEN_LABEL_PX` - shared by every label group (penetration, station, line, shot data, comments) |
 | Label halo stroke-width | 3px | `PEN_LABEL_HALO_PX` - white outline so text stays legible over a line |
 | Label offset | 9px | `PEN_LABEL_OFFSET_PX` - anchor point to label centre |
 
@@ -2749,7 +2763,7 @@ depth legend.
 
 **Survey Data (CSV):**
 ```csv
-section_id,section_name,shot_id,length,azimuth_in,azimuth_out,depth_in,depth_out,left,right,up,down,kind,comment
+line_id,line_name,shot_id,length,azimuth_in,azimuth_out,depth_in,depth_out,left,right,up,down,kind,comment
 0,Main Line,0,3.2,45.0,46.2,5.1,5.8,1.2,0.8,2.1,1.5,Permanent,
 0,Main Line,1,4.1,52.3,53.0,5.8,6.2,1.0,1.1,1.8,1.2,Permanent,
 ```
@@ -2761,7 +2775,7 @@ section_id,section_name,shot_id,length,azimuth_in,azimuth_out,depth_in,depth_out
     "name": "Sistema Norte",
     "exported_at": "2024-01-12T14:32:15Z"
   },
-  "sections": [
+  "lines": [
     {
       "id": 0,
       "name": "Main Line",
@@ -2872,7 +2886,7 @@ not live co-editing), and floating/dockable panels.
 | Toggle Satellite | B |
 | Toggle Station IDs | L |
 | Toggle Shot Labels | Shift+L |
-| Toggle Section Labels | Ctrl+L |
+| Toggle Line Labels | Ctrl+L |
 | Toggle Sections Panel | Ctrl+1 |
 | Toggle Detail Panel | Ctrl+2 |
 | Toggle Data Table | Ctrl+3 |
@@ -2918,19 +2932,19 @@ The dropdown also closes when pressing Ctrl+Z or Ctrl+Y (global undo/redo shortc
 
 | Rule | Severity | Message |
 |------|----------|---------|
-| Shot length < 0.3m (default; configurable) | Warning | "Shot {section_id}:{position} length {length}m below minimum threshold {threshold}m" |
-| Shot length > 50m | Warning | "Shot {section_id}:{position} length {length}m above maximum threshold {threshold}m" |
-| Depth change > 10m per shot | Warning | "Shot {section_id}:{position} depth change {change}m exceeds threshold {threshold}m" |
-| Azimuth in/out difference > 20 degrees (default `azimuth_diff_threshold`; configurable) | Warning | "Shot {section_id}:{position} azimuth in/out difference {dev}° exceeds threshold {threshold}°" |
-| Inclination in/out difference > 10 degrees (default `pitch_diff_threshold`; configurable; only when both are recorded and in range) | Warning | "Shot {section_id}:{position} inclination in/out difference {dev}° exceeds threshold {threshold}°" |
-| Zero length shot | Error | "Shot {section_id}:{position} has zero length" |
-| Negative length | Error | "Shot {section_id}:{position} has negative length: {length}m" |
-| Negative LRUD | Error | "Shot {section_id}:{position} has negative {direction} distance: {value}m" |
-| Invalid azimuth | Error | "Shot {section_id}:{position} has invalid azimuth_{in/out}: {value}° (must be 0-360)" |
-| Shot length < depth change | Error | "Shot {section_id}:{position} length {length}m is shorter than its depth change {dz}m (impossible: slope length must be at least the vertical change)" |
-| Recorded inclination disagrees with length/depth (> inclination_depth_diff_threshold, default 15°) | Warning | "Shot {section_id}:{position} recorded inclination {pitch}° disagrees with the {computed}° implied by its length and depth change (exceeds {threshold}° threshold)" |
-| Non-finite field value | Error | "Shot {section_id}:{position} has non-finite value(s) in: {fields}" |
-| Inclination outside -90 to 90 degrees | Error | "Shot {section_id}:{position} has an out-of-range pitch_{in/out}: {value}° (must be between -90° and 90°)" |
+| Shot length < 0.3m (default; configurable) | Warning | "Shot {line_id}:{position} length {length}m below minimum threshold {threshold}m" |
+| Shot length > 50m | Warning | "Shot {line_id}:{position} length {length}m above maximum threshold {threshold}m" |
+| Depth change > 10m per shot | Warning | "Shot {line_id}:{position} depth change {change}m exceeds threshold {threshold}m" |
+| Azimuth in/out difference > 20 degrees (default `azimuth_diff_threshold`; configurable) | Warning | "Shot {line_id}:{position} azimuth in/out difference {dev}° exceeds threshold {threshold}°" |
+| Inclination in/out difference > 10 degrees (default `pitch_diff_threshold`; configurable; only when both are recorded and in range) | Warning | "Shot {line_id}:{position} inclination in/out difference {dev}° exceeds threshold {threshold}°" |
+| Zero length shot | Error | "Shot {line_id}:{position} has zero length" |
+| Negative length | Error | "Shot {line_id}:{position} has negative length: {length}m" |
+| Negative LRUD | Error | "Shot {line_id}:{position} has negative {direction} distance: {value}m" |
+| Invalid azimuth | Error | "Shot {line_id}:{position} has invalid azimuth_{in/out}: {value}° (must be 0-360)" |
+| Shot length < depth change | Error | "Shot {line_id}:{position} length {length}m is shorter than its depth change {dz}m (impossible: slope length must be at least the vertical change)" |
+| Recorded inclination disagrees with length/depth (> inclination_depth_diff_threshold, default 15°) | Warning | "Shot {line_id}:{position} recorded inclination {pitch}° disagrees with the {computed}° implied by its length and depth change (exceeds {threshold}° threshold)" |
+| Non-finite field value | Error | "Shot {line_id}:{position} has non-finite value(s) in: {fields}" |
+| Inclination outside -90 to 90 degrees | Error | "Shot {line_id}:{position} has an out-of-range pitch_{in/out}: {value}° (must be between -90° and 90°)" |
 | GPS fix far from its surveyed position (gap > 15 m + 2% of the survey distance from the placement datum of its piece) | Warning | "The GPS position of this zero datum is {gap} m from where the survey puts it (bearing {bearing} degrees), more than the {threshold} m expected. ..." Ignore covers that GPS reading only: a new GPS on the datum brings the warning back, and undoing that change brings the Ignore back. |
 | Duplicate station merge | Error | "These stations are already merged" |
 
@@ -2958,7 +2972,7 @@ Theme tokens are defined in `src/theme/tokens.ts` as CSS custom properties (`--c
 When `appearance.theme` is set to `"auto"`, the OS `prefers-color-scheme` media query selects between `day_color_theme` and `night_color_theme`.
 
 ```
-Section Colors (auto-assigned):
+Line Colors (auto-assigned):
 #4ecdc4 - Teal
 #ff6b6b - Coral
 #95e1d3 - Mint
@@ -2971,8 +2985,8 @@ Section Colors (auto-assigned):
 Map Colors:
 Grid: #333366
 Zero Datum Station: #ffd700 (Gold; enlarged dot on the map, star in map exports)
-Jump Shot: 50% opacity of the section color (#27)
-Reference Shot: 28% opacity of the section color (#27)
+Jump Shot: 50% opacity of the line color (#27)
+Reference Shot: 28% opacity of the line color (#27)
 Selection Highlight: #4ecdc4
 Loop Closure Line: dashed, colored by error severity (#22c55e <1%, #eab308 1-3%, #f97316 3-5%, #ef4444 >5%)
 ```

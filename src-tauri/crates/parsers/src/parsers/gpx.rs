@@ -13,7 +13,7 @@ use ts_rs::TS;
 
 use crate::models::geo::{haversine_distance, initial_bearing};
 use crate::models::{
-    AzimuthReference, CorrectionSource, GpsCoordinates, ImportPlacement, ImportLineConfig,
+    AzimuthReference, CorrectionSource, GpsCoordinates, ImportLineConfig, ImportPlacement,
     ShotData, ShotKind,
 };
 

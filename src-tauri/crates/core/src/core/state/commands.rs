@@ -7,7 +7,7 @@ use crate::core::{
     ValidationWarning,
 };
 use crate::models::{
-    ClosuresBeforeSweep, DatumLayout, Project, LineData, LineId, ViolationSeverity,
+    ClosuresBeforeSweep, DatumLayout, LineData, LineId, Project, ViolationSeverity,
 };
 #[cfg(test)]
 use crate::models::{ShotData, ShotId, ShotUpdates};
@@ -123,11 +123,9 @@ impl AppState {
         };
         // A MISSING line is not a no-op - it is an error, and must still fall through so the
         // command fails. Only a line that exists and has no shots is provably inert.
-        lines.iter().all(|sid| {
-            project
-                .get_line(*sid)
-                .is_some_and(|s| s.shots.is_empty())
-        })
+        lines
+            .iter()
+            .all(|sid| project.get_line(*sid).is_some_and(|s| s.shots.is_empty()))
     }
 
     fn command_integrity(cmd: &Command) -> CommandIntegrity {
@@ -808,10 +806,9 @@ impl AppState {
                     .collect(),
             }),
             Command::DeleteLine { line_id } => self.delete_line(*line_id),
-            Command::UpdateLineMetadata {
-                line_id,
-                updates,
-            } => self.update_line(*line_id, updates.clone()),
+            Command::UpdateLineMetadata { line_id, updates } => {
+                self.update_line(*line_id, updates.clone())
+            }
             Command::ReverseLine {
                 line_id,
                 swap_left_right,
@@ -827,10 +824,7 @@ impl AppState {
                 shot_id,
                 updates,
             } => self.update_shot(*line_id, *shot_id, updates.clone()),
-            Command::DeleteShot {
-                line_id,
-                shot_id,
-            } => self.delete_shot(*line_id, *shot_id),
+            Command::DeleteShot { line_id, shot_id } => self.delete_shot(*line_id, *shot_id),
             Command::SetShotKind {
                 line_id,
                 shot_id,

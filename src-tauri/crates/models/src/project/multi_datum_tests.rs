@@ -9,8 +9,7 @@ use chrono::Utc;
 use crate::config::ClosureAdjustmentConfig;
 use crate::{
     datum_gap_threshold_m, gps_to_local, local_to_gps, ClosureStrategy, DatumRole, GpsCoordinates,
-    Project, LineData, LineId, ShotData, StationMerge, StationRef, ZeroDatum,
-    MAX_GPS_ACCURACY_M,
+    LineData, LineId, Project, ShotData, StationMerge, StationRef, ZeroDatum, MAX_GPS_ACCURACY_M,
 };
 
 /// The first entrance's GPS, and the frame of every survey here.
@@ -352,11 +351,7 @@ fn removing_a_placement_datum_places_the_promoted_fix_on_its_gps() {
     let after = raw_xy(&project);
     for (sr, (bx, by)) in &before {
         let (ax, ay) = after[sr];
-        let east = if sr.line_id == elsewhere {
-            0.0
-        } else {
-            40.0
-        };
+        let east = if sr.line_id == elsewhere { 0.0 } else { 40.0 };
         assert!(
             (ax - (bx + east)).abs() < 1e-6 && (ay - by).abs() < 1e-6,
             "{sr:?}: ({bx}, {by}) -> ({ax}, {ay})"
@@ -677,11 +672,7 @@ fn gap_check_cost_does_not_multiply_with_the_number_of_fixes() {
     for (s, &line) in lines.iter().enumerate() {
         for i in 1..=50u32 {
             let north = (s as f64 * 50.0 + f64::from(i)) * 2.0;
-            push_fix(
-                &mut project,
-                StationRef::new(line, i),
-                gps_at(1.0, north),
-            );
+            push_fix(&mut project, StationRef::new(line, i), gps_at(1.0, north));
         }
     }
     assert_eq!(project.gps_fix_datums().len(), 4000);

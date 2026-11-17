@@ -12,7 +12,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::models::{
-    LoopClosure, Project, Line, LineId, StationKey, StationMerge, ZeroDatum, MAX_LINE_ID,
+    Line, LineId, LoopClosure, Project, StationKey, StationMerge, ZeroDatum, MAX_LINE_ID,
 };
 
 /// One ignored warning the add carried over from the source file, remapped onto
@@ -194,9 +194,8 @@ impl AddedContent {
         station_offsets.sort_by_key(|(key, _)| (key.line_id, key.to_string()));
         let station_comments = station_texts_in(&project.station_comments, ids);
         let station_names = station_texts_in(&project.station_names, ids);
-        let touches = |a: &StationKey, b: &StationKey| {
-            ids.contains(&a.line_id) || ids.contains(&b.line_id)
-        };
+        let touches =
+            |a: &StationKey, b: &StationKey| ids.contains(&a.line_id) || ids.contains(&b.line_id);
         Self {
             lines: project
                 .lines
@@ -278,12 +277,12 @@ impl AddedContent {
         project
             .zero_datums
             .retain(|zd| !ids.contains(&zd.station_ref.line_id));
-        project.station_merges.retain(|m| {
-            !ids.contains(&m.station_a.line_id) && !ids.contains(&m.station_b.line_id)
-        });
-        project.loop_closures.retain(|c| {
-            !ids.contains(&c.station_a.line_id) && !ids.contains(&c.station_b.line_id)
-        });
+        project
+            .station_merges
+            .retain(|m| !ids.contains(&m.station_a.line_id) && !ids.contains(&m.station_b.line_id));
+        project
+            .loop_closures
+            .retain(|c| !ids.contains(&c.station_a.line_id) && !ids.contains(&c.station_b.line_id));
         let file_hashes: HashSet<&String> = self.file_hashes.iter().collect();
         project
             .imported_file_hashes

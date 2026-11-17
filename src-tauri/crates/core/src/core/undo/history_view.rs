@@ -606,10 +606,7 @@ fn derive_preview_data(
                     changes: vec![
                         FieldChange {
                             field: "Name".to_string(),
-                            old_value: line
-                                .name
-                                .clone()
-                                .unwrap_or_else(|| "unnamed".to_string()),
+                            old_value: line.name.clone().unwrap_or_else(|| "unnamed".to_string()),
                             new_value: String::new(),
                         },
                         FieldChange {
@@ -724,26 +721,23 @@ fn derive_preview_data(
         }),
 
         // MoveSegment - show offset and affected line count
-        (
-            Command::MoveSegment { offset, .. },
-            UndoData::SegmentMoveInfo {
-                affected_lines, ..
-            },
-        ) => Some(PreviewData {
-            changes: vec![
-                FieldChange {
-                    field: "Offset".to_string(),
-                    old_value: String::new(),
-                    new_value: offset.display_offset(),
-                },
-                FieldChange {
-                    field: "Affected lines".to_string(),
-                    old_value: String::new(),
-                    new_value: affected_lines.len().to_string(),
-                },
-            ],
-            additional_changes: 0,
-        }),
+        (Command::MoveSegment { offset, .. }, UndoData::SegmentMoveInfo { affected_lines, .. }) => {
+            Some(PreviewData {
+                changes: vec![
+                    FieldChange {
+                        field: "Offset".to_string(),
+                        old_value: String::new(),
+                        new_value: offset.display_offset(),
+                    },
+                    FieldChange {
+                        field: "Affected lines".to_string(),
+                        old_value: String::new(),
+                        new_value: affected_lines.len().to_string(),
+                    },
+                ],
+                additional_changes: 0,
+            })
+        }
 
         // MoveSegment fallback (other undo data variants)
         (Command::MoveSegment { offset, .. }, _) => Some(PreviewData {
@@ -990,8 +984,7 @@ pub fn entry_to_history_item(
 mod tests {
     use super::*;
     use crate::models::{
-        ClosureStrategy, Coordinates, GpsCoordinates, LineData, ShotData, ShotUpdates,
-        StationRef,
+        ClosureStrategy, Coordinates, GpsCoordinates, LineData, ShotData, ShotUpdates, StationRef,
     };
     use chrono::Utc;
     use std::collections::HashMap;

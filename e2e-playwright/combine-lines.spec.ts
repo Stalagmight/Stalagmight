@@ -317,6 +317,6 @@ test.describe('Combine Lines', () => {
     await page.keyboard.press('Escape');
     await openContextMenu(page, { type: 'station', ref: { line_id: main!.id, station_index: 1 } });
     await expect(page.getByRole('button', { name: 'Edit Station' })).toBeVisible();
-    await expect(page.getByRole('button', { name: /^Combine Section/ })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /^Combine Line/ })).toHaveCount(0);
   });
 });

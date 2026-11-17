@@ -71,7 +71,7 @@ Validation rules:
 - Both stations must exist.
 - Stations cannot already be merged.
 - Stations must be in the same connected component (merges + closures),
-  **unless** both sections are connected to zero datums via merges (see `section_has_zero_datum`).
+  **unless** both lines are connected to zero datums via merges (see `line_has_zero_datum`).
   This zero-datum check uses merge-only connectivity (closures are ignored).
 - Duplicate closure pairs are rejected.
 - A closure must not join the two ends of one shot (#737). The pair is refused,
@@ -134,7 +134,7 @@ Which edits can make one:
   combine/split/reverse chain fuzzer (`check_no_merge_folds_a_closure`): each is
   refused, or joins two placed pieces and the sweep removes exactly that closure.
 - **A promotion**: two closures that tie a station to the same point record one loop
-  twice (the Merge tool and Combine Sections both allow that), and once the sweep
+  twice (the Merge tool and Combine Lines both allow that), and once the sweep
   promotes one, the other ties that point to itself (#738).
 - A file, or an undo history, written before #738.
 
@@ -150,7 +150,7 @@ it on a copy - the callers that keep the result log one line with the count.
 - **On load** it is silent, exactly as the promotion is: the project opens without
   the closure and the log says how many went. The file settles on the next save: an
   explicit Save writes it, while autosave only runs after an edit.
-- **Inside a command** it is part of that command's undo unit: Split Section Here,
+- **Inside a command** it is part of that command's undo unit: Split Line Here,
   the delete-and-split commands, the deletes, unmerges, merges and Remove Zero Datum
   through `execute()`'s epilogue, Batch and Repair all record a before/after snapshot
   pair around it, so one Undo brings the closure back. Each of those commands except
@@ -162,7 +162,7 @@ it on a copy - the callers that keep the result log one line with the count.
   closure 1:0 to 0:3: another loop closure became a merge, which made its two
   stations one point." ("...: the merge made its two stations one point." after a
   merge, or "...: its two stations were already one point." for one the edit did not
-  cause). Split Section Here says it in its dialog instead.
+  cause). Split Line Here says it in its dialog instead.
 - **The scoped sweep** an inverse runs (the shot-removal paths) snapshots
   `Project::swept_closure_ids` first - orphans and closures already between merged
   stations - and leaves those as recorded; it removes only what its own promotions
@@ -183,8 +183,8 @@ an `error!` past the looser 5 cm `MERGE_ALIGNMENT_TOLERANCE_M` in debug builds, 
 
 So a promotion **owes the coincidence it declares**, and cannot delegate that to
 whatever cascades next: `cascade_bfs` never traverses an edge into an already
-authoritative section, so a merge whose two ends are both authoritative (both
-datum-bearing, or one of them the edited section the cascade was seeded with) is a
+authoritative line, so a merge whose two ends are both authoritative (both
+datum-bearing, or one of them the edited line the cascade was seeded with) is a
 gap no cascade, realign or Repair will close.
 
 Two rules, both in `models/project/offsets.rs`:
@@ -202,8 +202,8 @@ Two rules, both in `models/project/offsets.rs`:
 - **`settle_minted_merges`** translates the movable side's whole rigid group onto
   the anchored one, exactly as `merge_stations` does interactively (the datum side
   anchors; with neither anchored, `station_a`'s group moves). It runs after the
-  minting command's own geometry is final - a shot removal re-places its section's
-  stations and the gap-close compensation slides the whole section - so the residual
+  minting command's own geometry is final - a shot removal re-places its line's
+  stations and the gap-close compensation slides the whole line - so the residual
   is measured off the geometry that will actually be asserted on.
 
 A **replacement merge** (the arbitrary pair a deletion invents to keep a torn merge
@@ -225,15 +225,15 @@ pieces joined merges them, which moves the later piece, can be undone, and makes
 datum a GPS fix. A legacy group with two datums and no torn merge needs nothing: the
 re-solve moves nothing and the later datum is a fix that reports its gap.
 
-## Closures across a Split Section Here or a Combine Sections
+## Closures across a Split Line Here or a Combine Lines
 
 None of these edits moves the closure-adjusted survey of a component they keep
 in one piece: the station the adjustment held the component at stays the one it
-holds, even when the section that anchors the component afterwards (its lowest
+holds, even when the line that anchors the component afterwards (its lowest
 id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-sections.md,
 "The component's anchor").
 
-- **Split Section Here** leaves a closure on the split station with the FIRST
+- **Split Line Here** leaves a closure on the split station with the FIRST
   half only; it is not copied to the second half's co-located start. A copy
   would count the same physical loop twice, and when it is the second half's
   only tie the promotion rule above would turn it into a merge and move the
@@ -245,7 +245,7 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
   only last until the next load or edit converts it, and refusing would leave
   the user deleting the closure, splitting and merging by hand, with the same
   move. Instead the Split dialog shows which half moves and how far before the
-  user confirms (`AppState::split_section_preview`, the split run on a copy).
+  user confirms (`AppState::split_line_preview`, the split run on a copy).
   When a second closure tied that half to the same point, the merge leaves it
   between merged stations and the split removes it (#738); the dialog lists
   each one by the station ids it was created with ("Loop closure 1:0 to 0:3 is
@@ -255,11 +255,11 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
   history recorded before #738) is removed by the same sweep and listed apart
   ("...: its two stations are already one point."); it tied nothing, so it does
   not change how the dialog describes the halves.
-- **Combine Sections** re-keys a closure on either join station onto the one
+- **Combine Lines** re-keys a closure on either join station onto the one
   joined station, drops any closure across the join point (whatever its
   length, it would tie the joined station to itself), and drops a closure the
   combine made identical to another one. An UNALIGNED closure between the two
-  sections elsewhere stays: it becomes a closure inside one section, which the
+  lines elsewhere stays: it becomes a closure inside one line, which the
   least-squares solve adjusts like any other.
 - **Of closures made identical, the one the solve takes stays (#749).**
   Once the two join stations are one, two closures can tie the same two
@@ -300,25 +300,25 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
   the load gives the later of two closures with one id a fresh id
   (`assign_closure_ids`, as it does an id of 0), and a debug build asserts
   unique ids when a combine starts.
-- **A loop closure is a join.** Two section ends tied by a closure are, by the
+- **A loop closure is a join.** Two line ends tied by a closure are, by the
   survey's own statement, one point, apart by the misclosure. Combining there
-  moves one side by the misclosure (the other section and what is merged to
+  moves one side by the misclosure (the other line and what is merged to
   it, or the kept side when a zero datum holds the other, or when the other
   side holds the station this view is anchored at, so the closure-adjusted
-  survey does not shift) and drops the closure. The rigid ties that would then tie the combined section to itself,
+  survey does not shift) and drops the closure. The rigid ties that would then tie the combined line to itself,
   or hold the moving side, become `Batch` closures between the same stations
   (`project/combine_plan.rs`): merges form a forest, so on each path at most
-  one merge tears, the one nearest the moving section; a snapped (aligned)
+  one merge tears, the one nearest the moving line; a snapped (aligned)
   closure across the two sides, or from a side that moves, is demoted to
   `Batch` the same way. The loop's misclosure moves to the torn tie. With
-  zero datums on both sides, the moving section's merges to its datum sides
+  zero datums on both sides, the moving line's merges to its datum sides
   tear too, for the datum (`TornTieReason::ZeroDatum`; the dialog names the
   end that does not move as held), and so does a snap the move tears into
   such a part (#756): the datum is why that part stays, not a loop the
   combine closes. It used to give the loop reason, so the dialog said the
   loop's misclosure moves to the new closure. Nothing the combine makes is a
   sole bridge (the torn tie's ends stay connected through the combined
-  section, or tie two anchored groups, whose promotion is refused), so a
+  line, or tie two anchored groups, whose promotion is refused), so a
   reload converts nothing back; the randomised sweep in
   `combine_closure_tests.rs` checks exactly that, and that each torn tie's
   reason holds on the combined survey (`check_torn_reasons`).
@@ -326,44 +326,44 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
   side (unmerged, within `COMBINE_TOLERANCE_M`, 1 mm) are apart by a
   residual, and so are merged ends whose join station was moved by hand (a
   manual station offset puts their chain positions apart). The combined
-  section hangs the other section's stations off the kept join station, so
+  line hangs the other line's stations off the kept join station, so
   one side moves by the residual whatever the plan says. The plan used to
-  move nothing under the tolerance: the other section alone moved, the
-  sections merged to it stayed, merged stations ended up as much as 1 mm
+  move nothing under the tolerance: the other line alone moved, the
+  lines merged to it stayed, merged stations ended up as much as 1 mm
   apart, and the reopen's offset solve (`redrive_offsets_after_load`, seeded
-  at each component's datum or lowest id) moved the combined section to close
+  at each component's datum or lowest id) moved the combined line to close
   them; where the combine tore a merge into a closure the solve takes, this
   view on the other side moved by the residual. Now any residual past float
   dust (`Project::OFFSET_DUST_M` in each axis, the bound under which the
   offset solve corrects nothing) takes the shifting path of `plan_ties`: the
   anchor rule picks the side, what is merged to it moves along, a snapped
-  closure from it is demoted, and with both sides held the moving section's
+  closure from it is demoted, and with both sides held the moving line's
   merges to its datum sides tear, exactly as for a shift. Dust (truly
   coincident or merged ends) joins as before. Re-solving the offsets after the
   combine instead would seed each component at its datum or lowest id, not
   at the side the anchor rule keeps, and would heal drift anywhere else in
   the project too: the plan could not say what moves. The dialog lists a
   move under 1 mm only when the plan tears a tie (`combineMoveShown`): a
-  snap from the moving side made ordinary, or the moving section's merge
+  snap from the moving side made ordinary, or the moving line's merge
   torn with both sides held by datums. Their listed reason is the move, so
   the move is listed beside them, to 0.1 mm ("moveSideBySide"); otherwise
   "moves 0.00m" next to "Side by side here" would be noise. The
-  `COMBINE_SIDE_BY_SIDE_M` copy of the tolerance in `combineSections.ts` is
+  `COMBINE_SIDE_BY_SIDE_M` copy of the tolerance in `combineLines.ts` is
   pinned to `COMBINE_TOLERANCE_M` by a tripwire test. The sweeps check
   the plan against the result to 1e-6 (a plan that moves nothing, to dust),
   merged stations on one point and a reload that moves nothing, and
   `side_by_side_network` plants such residuals, which the other generators,
-  placing every section exactly, never reach.
+  placing every line exactly, never reach.
 - **What is merged at a hand-moved join station moves with the joined
   station (#755).** A manual station offset (a hand move, from an older or
   hand-edited file; Move Station has folded its moves into the shots since
-  long before Combine, but Split Section Here, Append Project and Undo carry
+  long before Combine, but Split Line Here, Append Project and Undo carry
   one on) moves one station as shown and nothing beyond it, and the joined
   station keeps one: the fixed side's. Where the two join stations' offsets
   differ, the side that moves still goes by the chain gap, but the join
   station whose offset is dropped lands on the joined station as shown, the
   gap between the two as shown away from where it was. On a join that is not
-  merged, the sections merged at that station, and what hangs off them, move
+  merged, the lines merged at that station, and what hangs off them, move
   with the joined station by that gap, not with their side (`plan_ties`,
   `TiePlan.joined_moved`, `CombinePlan.moved_with_joined_station`). They
   used to move with their side and were left behind by the difference, and
@@ -380,12 +380,12 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
   anything moves and stays within the dust otherwise. Merges form a forest
   (`merge_stations` refuses a loop), but nothing breaks a merge loop an
   older or hand-edited file holds: a part merged at the dropped station and
-  also to the moving section at another station cannot follow both, so it
+  also to the moving line at another station cannot follow both, so it
   stays with its side, and its merge at the join becomes a loop closure
   carrying the hand moves' difference. A closure whose two ends move apart
-  is measured again, each end moving with its section except the dropped
+  is measured again, each end moving with its line except the dropped
   join station, which moves by its own move onto the joined station, also
-  when its section does not move. The dialog lists them
+  when its line does not move. The dialog lists them
   beside the "keeps K's, so O's end moves" note (under the side-by-side
   tolerance only beside a torn tie, as a move of the side). A merged join
   needs none of this: everything merged there is a join tie, one point with
@@ -411,9 +411,9 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
   skip such a closure, so the combine removes it instead, inside its one
   project snapshot pair (one Undo restores it with the rest), and reports each
   as a `CLOSURE_REMOVED_ACROSS_ONE_SHOT` warning ("Removed the merge of X 1:1
-  and O 2:0: combining the sections left its two stations at the two ends of
-  one shot.", each station with its section's name before the combine, since
-  the other section is gone afterwards), shown in the shared removed-closure
+  and O 2:0: combining the lines left its two stations at the two ends of
+  one shot.", each station with its line's name before the combine, since
+  the other line is gone afterwards), shown in the shared removed-closure
   toast. The plan names them before the confirm
   (`CombinePlan.closures_removed_across_one_shot`, each by its stations before
   the combine and as what it was). The dialog says how many outside the folded
@@ -431,7 +431,7 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
   build (every test, fuzzer and debug app build); a release build removes it
   too, logs an error and names it by the tie of this combine it came from, or
   by its own stations before the combine.
-  Unlike a split, a combine runs no orphan-closure sweep: it joins two sections
+  Unlike a split, a combine runs no orphan-closure sweep: it joins two lines
   and never strands one on a lone closure.
 
 ## Deferred: Distribution at Create Time (Proportional/Equal)
@@ -451,7 +451,7 @@ this path and never anchor it):
 - If the zero datum is an endpoint, the correction is distributed along the path from that endpoint to the other.
 - If **multiple** zero-datum stations appear on the loop path, the operation fails with an error.
 - If no zero datum is on the path, the correction is applied along the chosen loop path between A and B.
-- If **no loop path exists** (e.g., two zero-datum sections that are not connected), the algorithm falls back to
+- If **no loop path exists** (e.g., two zero-datum lines that are not connected), the algorithm falls back to
   `shortest_path_to_any_zero_datum()` for each endpoint and distributes the correction along those two legs.
 - Corrections are distributed per-shot either proportionally by length or equally.
 - Targets are computed per co-located group, and the same delta is applied to all members of a group.
@@ -475,7 +475,7 @@ The Closures Computed View solves with **only** `LeastSquaresWeighted`. It runs
 non-destructively on a throwaway clone (`Project::compute_adjusted_station_coordinates`),
 once per connected component that has eligible closures or a GPS fix, anchored on a zero datum
 when present and otherwise on a deterministic default anchor (the lexicographically smallest
-`(section_id, station_index)` station in the component, via `default_anchor_for_component`).
+`(line_id, station_index)` station in the component, via `default_anchor_for_component`).
 Eligible closures are `Batch` + `LeastSquaresWeighted` (`Move` closures are already coincident).
 
 Algorithm overview (unchanged math; the only change is *where* it writes - a clone, not the
@@ -484,7 +484,7 @@ live project):
   A closure whose two stations would end up in one group as the two ends of one
   shot - a *closure across one shot* - is skipped first (#737): the solve keeps
   such a shot at its measured vector, so it could not close, and it used to fail
-  the whole component with "inconsistent section translation".
+  the whole component with "inconsistent line translation".
   `Project::closures_across_one_shot` decides it with a union-find over every
   station: all merges first, then the eligible closures in `loop_closures` order;
   a closure that would put both ends of some shot into one group that were not in
@@ -502,13 +502,13 @@ live project):
   `project/datum_roles.rs`) enter as observations, not as fixed groups. See "GPS fixes" below.
 - If neither a placement datum nor a hard fix exists in the component, the anchor station's
   group is fixed.
-- For each shot, build weighted constraints in X/Y using section quality and base sigmas from config:
+- For each shot, build weighted constraints in X/Y using line quality and base sigmas from config:
   - `base_sigma_length_m`
   - `base_sigma_azimuth_deg`
   - `base_sigma_depth_m` (depth is not adjusted - the solve is horizontal-only)
 - Solve independent least-squares systems for X/Y using a sparse Jacobi-preconditioned
   Conjugate Gradient solver (see [performance.md](performance.md) for algorithm details).
-- Update the clone's shot vectors from solved group coordinates and apply section-level
+- Update the clone's shot vectors from solved group coordinates and apply line-level
   translations to keep merged stations aligned, then compute coordinates from the clone.
 - Placement datum positions are verified to remain fixed; any movement is an error. A GPS fix
   is expected to move.
@@ -553,11 +553,11 @@ checked against the closed-form series-spring answer).
 
 A manual station offset (`station_offsets`, a *hand move*) shows ONE station away
 from where its shots put it. Only an older or hand-edited file carries one: Move
-Station folds its moves into the shots, while Split Section Here, Append Project and
+Station folds its moves into the shots, while Split Line Here, Append Project and
 Undo carry an existing one along. The Raw Data View shows each station at its *chain
-position* (section offset plus the shot walk) plus its own hand move, and a merge is
-one point *as shown*: `merge_stations` and the offset cascade line the merged sections
-up on the hand-moved station, so a hand move on a merged station carries what is
+position* (line offset plus the shot walk) plus its own hand move, and a merge is
+one point *as shown*: `merge_stations` and the offset cascade align the merged lines
+on the hand-moved station, so a hand move on a merged station carries what is
 merged there. A closure's misclosure is measured as shown too.
 
 The Closures Computed View keeps that meaning:
@@ -586,12 +586,12 @@ closure's end it is part of the misclosure the view closes.
 
 In the solve (`lsq.rs`, `adjust_least_squares`) the unknowns are where the tie groups
 are shown, which is also how the fixed groups, the warm start, the shot update and the
-section realignment read positions. A shot measures its two stations' chain
+line realignment read positions. A shot measures its two stations' chain
 positions, so it is observed as its measured vector plus the two stations' hand-move
 difference. Observing the bare vector, as the solve did before #759, pinned the held
 station where it is shown while the shots pulled the rest offset-free: a hand move on
 the held station shifted the whole adjusted survey (Plan and Export too) by it, the
-realignment pulled sections that hang off merges apart from the held one (in a debug
+realignment pulled lines that hang off merges apart from the held one (in a debug
 build: `Merge alignment violated after adjust_loop_closures`), and a hand move on a
 loop station vanished from the view, its shots absorbing it. Without a hand move the
 observation is the bare vector, as before, so the change leaves such a survey's solve
@@ -603,9 +603,9 @@ planted anywhere in the combine sweeps' networks.
 
 A component whose solve still fails (for example a closure that ties two placement
 zero datums into one group: "Multiple placement zero datums in a single constraint
-group", which creation allows because both sections have fixed coordinates) is rolled back to its
+group", which creation allows because both lines have fixed coordinates) is rolled back to its
 measured geometry, as before - but it is no longer silent (#737).
-`Project::into_adjusted_stations` returns each failure (anchor, sections, the
+`Project::into_adjusted_stations` returns each failure (anchor, lines, the
 solver's error), `AppState` keeps them beside the memoized adjusted stations, and:
 
 - the `get_adjustment_report` IPC returns `{ skipped_closures, failures }`: the
@@ -656,7 +656,7 @@ clone and taking the same `closures_newly_across_one_shot`; the dialog lists the
 under "Close Gap & Delete removes these loop closures (they would span a single
 shot)" (the heading names the gap-close button, "Delete Shots" for a prefix or
 suffix range, since Split removes none). It is absent when no
-gap-close is offered (the whole section, or a blocked shift). The single-shot
+gap-close is offered (the whole line, or a blocked shift). The single-shot
 preview has no such list: that delete never shortens a closure to one shot, and
 `preview_delete_shot` runs inside every per-shot removal, so a simulation there
 would recurse. A closure that already spanned one shot before the delete is left alone (it
@@ -673,7 +673,7 @@ Closures are treated as co-location relationships **only after alignment** (like
 
 ## `is_aligned` is a MEASUREMENT (#469)
 
-An aligned closure is a **rigid edge**: `get_rigid_connected_section_ids` follows it
+An aligned closure is a **rigid edge**: `get_rigid_connected_line_ids` follows it
 like a merge, the offset cascade solves through it, co-location averages station depth
 across it, and `compute_frozen_shots` freezes the shots of the loop it closes. So the
 flag is a claim about geometry, and it is measured rather than asserted. One predicate,
@@ -694,7 +694,7 @@ from `AppState::reconcile_geometry`, from `redrive_offsets_after_load` and from
 Repair. Each of those runs it AFTER its own re-solve, so the claims are measured off
 the geometry that was settled on rather than the geometry that was found; the
 per-command one also runs it BEFORE, because an aligned closure is an edge the
-cascade solves through and a stale claim would otherwise drag a section onto a
+cascade solves through and a stale claim would otherwise drag a line onto a
 coincidence that is about to be retracted.
 
 The user-facing snap-to-merge path is unchanged: `ClosureDialog` sends `Move` only

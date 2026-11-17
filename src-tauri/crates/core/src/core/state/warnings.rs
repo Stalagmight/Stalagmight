@@ -3,9 +3,9 @@ use std::collections::HashSet;
 
 use crate::core::{Validator, WarningSeverity};
 use crate::models::{
-    datum_gap_ignore_code, severity_for_code, station_id_label, DatumGap, Project, ProjectWarning,
-    LineId, ShotData, ShotId, StationRef, CLOSURE_ACROSS_ONE_SHOT, CLOSURE_ADJUSTMENT_FAILED,
-    DATUM_GPS_GAP, DATUM_GPS_GAP_START,
+    datum_gap_ignore_code, severity_for_code, station_id_label, DatumGap, LineId, Project,
+    ProjectWarning, ShotData, ShotId, StationRef, CLOSURE_ACROSS_ONE_SHOT,
+    CLOSURE_ADJUSTMENT_FAILED, DATUM_GPS_GAP, DATUM_GPS_GAP_START,
 };
 use crate::persistence::Database;
 
@@ -220,12 +220,8 @@ impl AppState {
                     credit: None,
                 };
 
-                let warnings = Validator::validate_shot(
-                    &shot_data,
-                    &project.validation,
-                    line.id,
-                    shot_index,
-                );
+                let warnings =
+                    Validator::validate_shot(&shot_data, &project.validation, line.id, shot_index);
                 for warning in warnings {
                     // Errors are never ignorable (issue #57): force is_resolved
                     // false so a stray resolved row (legacy/bulk) can't hide a
@@ -408,7 +404,7 @@ impl AppState {
                     message: format!(
                         "Shot {line_id}:{} is in a part of the survey ({lines} {}) the Closures Computed View could not adjust, so that part is shown as measured: {}",
                         shot_index + 1,
-                        if lines == 1 { "line" } else { "sections" },
+                        if lines == 1 { "line" } else { "lines" },
                         failure.user_reason(),
                     ),
                     severity: severity_for_code(CLOSURE_ADJUSTMENT_FAILED),
@@ -490,8 +486,7 @@ impl AppState {
         let live: std::collections::HashMap<(u32, u32), String> = live
             .into_iter()
             .filter(|((line_id, _), uuid)| {
-                db.shot_uuid_is_persisted(*line_id, uuid)
-                    .unwrap_or(false)
+                db.shot_uuid_is_persisted(*line_id, uuid).unwrap_or(false)
             })
             .collect();
         if live.is_empty() {
@@ -546,8 +541,7 @@ impl AppState {
                 .iter()
                 .filter_map(|sid| project.get_line(*sid))
                 .flat_map(|line| {
-                    line
-                        .shots
+                    line.shots
                         .iter()
                         .filter_map(move |shot| Some(((line.id, shot.id), shot.uuid.clone()?)))
                 })
@@ -569,10 +563,7 @@ impl AppState {
         let live: std::collections::HashMap<(u32, u32), String> = live
             .into_iter()
             .filter(|((line_id, _), uuid)| {
-                file_stores_uuids
-                    || db
-                        .shot_uuid_is_persisted(*line_id, uuid)
-                        .unwrap_or(false)
+                file_stores_uuids || db.shot_uuid_is_persisted(*line_id, uuid).unwrap_or(false)
             })
             .collect();
         if live.is_empty() {
@@ -672,8 +663,7 @@ impl AppState {
     ) -> Result<()> {
         // An ignore an "Add .stalx" carried in and no save has written yet
         // (#674) lives only in memory; un-ignoring it is forgetting it there.
-        let forgot_pending =
-            self.forget_pending_ignore(line_id, shot_id, warning_code, shot_uuid);
+        let forgot_pending = self.forget_pending_ignore(line_id, shot_id, warning_code, shot_uuid);
         let db_guard = self
             .database
             .lock()
@@ -689,8 +679,7 @@ impl AppState {
         // that row as well. Only a shot whose live id the file does not hold
         // can have been renamed, so the scan is skipped for every other one.
         let maybe_renamed = shot_uuid.filter(|live| {
-            self.load_renamed_shots()
-                && !db.shot_uuid_is_persisted(line_id, live).unwrap_or(false)
+            self.load_renamed_shots() && !db.shot_uuid_is_persisted(line_id, live).unwrap_or(false)
         });
         if let Some(live) = maybe_renamed {
             for row in db.load_resolved_warnings_verbatim().unwrap_or_default() {
@@ -702,12 +691,7 @@ impl AppState {
                     && stored != live
                     && crate::models::stored_shot_uuid_matches(line_id, stored, live)
                 {
-                    db.delete_resolved_warning(
-                        line_id,
-                        row.shot_id,
-                        warning_code,
-                        Some(stored),
-                    )?;
+                    db.delete_resolved_warning(line_id, row.shot_id, warning_code, Some(stored))?;
                 }
             }
         }
@@ -769,12 +753,7 @@ impl AppState {
     /// The code an Ignore of `warning_code` on `(line_id, shot_id)` is
     /// stored and matched under in the open project ([`ignore_code_in`]).
     /// Takes the project lock, so never call it holding one.
-    pub fn ignore_code_for(
-        &self,
-        line_id: LineId,
-        shot_id: ShotId,
-        warning_code: &str,
-    ) -> String {
+    pub fn ignore_code_for(&self, line_id: LineId, shot_id: ShotId, warning_code: &str) -> String {
         let guard = match self.project.lock() {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),

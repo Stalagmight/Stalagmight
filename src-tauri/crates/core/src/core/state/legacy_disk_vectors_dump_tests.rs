@@ -33,10 +33,10 @@ use crate::config::Config;
 use crate::core::{Command, CommandResult, CommentHolder, UndoData, UndoEntry};
 use crate::models::config::GasConfig;
 use crate::models::{
-    AzimuthReference, ClosureStrategy, CombinePick, CombineLinesOptions, Coordinates,
+    AzimuthReference, ClosureStrategy, CombineLinesOptions, CombinePick, Coordinates,
     CorrectionSource, CreditEdit, CreditTargets, DivePlanSnapshot, Diver, ExistingShotUpdate,
-    GpsCoordinates, ImportClosure, ImportPlacement, ImportLineConfig, LoopClosure, MarkedPoint,
-    Person, Project, LineData, LineId, LineUpdates, ShotData, ShotId, ShotKind,
+    GpsCoordinates, ImportClosure, ImportLineConfig, ImportPlacement, LineData, LineId,
+    LineUpdates, LoopClosure, MarkedPoint, Person, Project, ShotData, ShotId, ShotKind,
     ShotUpdates, SplitAt, SplitLineOptions, SplitSide, StationAnchor, StationKey, StationMerge,
     StationRef, SurveyCredit, SurveyDirection,
 };
@@ -1093,9 +1093,7 @@ fn legacy_disk_vectors_dump() {
         "Batch (DeleteLine + UntrackImport)",
         Command::Batch {
             commands: vec![
-                Command::DeleteLine {
-                    line_id: withdrawn,
-                },
+                Command::DeleteLine { line_id: withdrawn },
                 Command::UntrackImport {
                     file_hashes: vec!["synthetic-file-hash".to_string()],
                     line_hashes: vec!["synthetic-line-hash-1".to_string()],
@@ -1272,10 +1270,7 @@ fn legacy_disk_vectors_dump() {
     });
     let source = write_add_source(temp.path());
     steps.exec("Add .stalx", Command::add_project_file(source));
-    steps.exec(
-        "DeleteLine",
-        Command::DeleteLine { line_id: legacy },
-    );
+    steps.exec("DeleteLine", Command::DeleteLine { line_id: legacy });
 
     // --- Three cheap edits, undone below so the redo stack holds them -------
     steps.exec(

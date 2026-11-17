@@ -12,9 +12,8 @@
 use super::AppState;
 use crate::core::{Command, CommandResult};
 use crate::models::{
-    ClosurePair, ClosureStrategy, GpsCoordinates, LoopClosure, Project, LineData, LineId,
-    ShotData, SplitAt, SplitPreview, SplitLineOptions, SplitSide, StationRef,
-    CLOSURE_REMOVED_MERGED_ENDS,
+    ClosurePair, ClosureStrategy, GpsCoordinates, LineData, LineId, LoopClosure, Project, ShotData,
+    SplitAt, SplitLineOptions, SplitPreview, SplitSide, StationRef, CLOSURE_REMOVED_MERGED_ENDS,
 };
 
 fn shot(azimuth: f64, length: f64) -> ShotData {
@@ -571,12 +570,7 @@ fn every_command_that_removes_one_reports_it_by_its_stations_before_the_edit() {
         "Removed loop closure 1:0 to 2:3: another loop closure became a merge, \
                      which made its two stations one point.",
     ];
-    for what in [
-        "unmerge",
-        "delete line",
-        "delete shot",
-        "delete last shot",
-    ] {
+    for what in ["unmerge", "delete line", "delete shot", "delete last shot"] {
         let (p, [_, _, x, y]) = branch_survey();
         let first_of_x = p.get_line(x).unwrap().shots[0].id;
         let only_of_y = p.get_line(y).unwrap().shots[0].id;

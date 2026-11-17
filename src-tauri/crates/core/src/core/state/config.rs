@@ -13,10 +13,10 @@ enum ConfigWrite {
     /// `lock_ops_held` says whether the caller took it.
     Whole { lock_ops_held: bool },
     /// A partial update (`modify_config`). It never edits `[speleodb]`, so the
-    /// stored line is kept as it is at write time. Its payload is a clone taken
+    /// stored section is kept as it is at write time. Its payload is a clone taken
     /// under `config_write_lock`, but a sign-in writes `config` without that lock,
     /// and the clone's endpoint can be one sign-in old. Kept from the live config,
-    /// the line cannot read as an instance change, and a divider drag cannot sign
+    /// the section cannot read as an instance change, and a divider drag cannot sign
     /// the user out or wait behind a SpeleoDB network operation.
     Partial,
 }
@@ -209,7 +209,7 @@ impl AppState {
                 self.finish_config_write(after);
                 Ok(())
             }
-            // Unreachable by construction: a partial write keeps the stored line.
+            // Unreachable by construction: a partial write keeps the stored section.
             Locked::NeedsLockOps(_) => Err(anyhow::anyhow!(
                 "a partial settings write cannot change the SpeleoDB instance"
             )),

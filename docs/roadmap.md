@@ -62,7 +62,7 @@ These features were implemented after the original roadmap was completed:
 
 All backend changes have been implemented:
 
-- `create_section` returns new section ID via `CommandResult.section_id`
+- `create_section` (now `create_line`) returns new section ID via `CommandResult.section_id` (now `line_id`)
 - `ProjectMetadata` has `gps_center` and `gps_bounds` fields
 - `merge_projects` command implemented in `commands/project.rs`
-- `Section` model has `direction: SurveyDirection` field
+- `Section` model (now `Line`) has `direction: SurveyDirection` field

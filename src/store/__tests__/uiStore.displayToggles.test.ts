@@ -128,7 +128,7 @@ describe('Display Toggle State', () => {
       const expectedKeys = [
         'showStations',
         'showShots',
-        'showSectionNames',
+        'showLineNames',
         'showStationLabels',
         'showStationNames',
         'showShotData',
@@ -220,7 +220,7 @@ describe('Display Toggle State', () => {
       const toggleKeys: DisplayToggleKey[] = [
         'showStations',
         'showShots',
-        'showSectionNames',
+        'showLineNames',
         'showStationLabels',
         'showShotData',
         'showShotErrors',
@@ -264,6 +264,22 @@ describe('Display Toggle State', () => {
           value: 'true',
         });
       });
+    });
+
+    // The Line names toggle is showLineNames in the store, but the project file
+    // keeps the pre-rename row key "showSectionNames", which is the key the
+    // backend's load reads. Saving under the store name would orphan the row and
+    // the toggle would reset on reopen.
+    it('persists the Line names toggle under the stored key showSectionNames', async () => {
+      useUIStore.getState().toggleDisplay('showLineNames');
+
+      await vi.waitFor(() => {
+        expect(invoke).toHaveBeenCalledWith('save_display_setting', {
+          key: 'showSectionNames',
+          value: String(!DISPLAY_DEFAULTS.showLineNames),
+        });
+      });
+      expect(invoke).not.toHaveBeenCalledWith('save_display_setting', expect.objectContaining({ key: 'showLineNames' }));
     });
 
     // The Debug submenu's four toggles are session-only (reset on every project

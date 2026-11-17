@@ -19,8 +19,8 @@ use crate::parsers::encoding::read_utf8;
 /// Supported DMP file versions
 const SUPPORTED_VERSIONS: &[u8] = &[2, 3, 4, 5];
 
-/// Line start magic bytes (version > 2)
-const LINE_MAGIC: [u8; 3] = [68, 89, 101];
+/// Section start magic bytes (version > 2)
+const SECTION_MAGIC: [u8; 3] = [68, 89, 101];
 
 /// Shot start magic bytes (version >= 5)
 const SHOT_START_MAGIC: [u8; 3] = [57, 67, 77];
@@ -39,8 +39,8 @@ fn shot_size(version: u8) -> usize {
     }
 }
 
-/// End-of-line patterns for splitting lines
-fn end_of_line_patterns(version: u8) -> Vec<Vec<u8>> {
+/// End-of-section patterns for splitting sections
+fn end_of_section_patterns(version: u8) -> Vec<Vec<u8>> {
     match version {
         2 => vec![vec![3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]],
         5 => {
@@ -138,12 +138,12 @@ pub struct DmpFile {
     pub lines: Vec<DmpSection>,
 }
 
-/// A line from a DMP file
+/// A section from a DMP file (one survey line in the project)
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct DmpSection {
-    /// DMP version for this line
+    /// DMP version for this section
     pub version: u8,
-    /// 3-character line identifier
+    /// 3-character section identifier
     pub name: String,
     /// Survey direction
     pub direction: DmpDirection,
@@ -181,9 +181,9 @@ impl TryFrom<u8> for DmpDirection {
 /// Shot type from MNemo
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, TS)]
 pub enum DmpShotType {
-    /// Cross-line A
+    /// Cross-section A
     CsA,
-    /// Cross-line B
+    /// Cross-section B
     CsB,
     /// Standard shot
     Standard,
@@ -216,7 +216,7 @@ impl TryFrom<u8> for DmpShotType {
 /// merge against existing project shots, and [`DmpShot::to_shot_data`] from
 /// disagreeing about the sign.
 ///
-/// [`compute_line_hash`] runs *before* the flip, over the device's own
+/// [`compute_section_hash`] runs *before* the flip, over the device's own
 /// bytes, so re-import deduplication still recognises lines imported before
 /// issue #296.  See `docs/inclination.md`.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -277,13 +277,13 @@ fn negate_pitch(pitch: f64) -> f64 {
     }
 }
 
-/// Compute a deterministic content hash for a DMP line.
+/// Compute a deterministic content hash for a DMP section.
 ///
 /// Hashes line name, direction, and each Standard shot's measurements
 /// (heading_in/out, length, depth_in/out, pitch_in/out, LRUD, temperature,
 /// marker_index).  Date/time is deliberately excluded so the same line
 /// exported at different times produces an identical hash.
-fn compute_line_hash(name: &str, direction: DmpDirection, shots: &[DmpShot]) -> String {
+fn compute_section_hash(name: &str, direction: DmpDirection, shots: &[DmpShot]) -> String {
     let mut hasher = Sha256::new();
 
     // Line identity
@@ -320,9 +320,9 @@ fn compute_line_hash(name: &str, direction: DmpDirection, shots: &[DmpShot]) -> 
 // Parsing Functions
 // ============================================================================
 
-/// Split DMP data into lines by end-of-line markers
-fn split_into_lines(data: &[u8], version: u8) -> Vec<Vec<u8>> {
-    let patterns = end_of_line_patterns(version);
+/// Split DMP data into sections by end-of-section markers
+fn split_into_sections(data: &[u8], version: u8) -> Vec<Vec<u8>> {
+    let patterns = end_of_section_patterns(version);
     if patterns.is_empty() {
         return vec![];
     }
@@ -430,8 +430,8 @@ fn parse_shot(buffer: &mut IntBuffer, version: u8) -> Result<DmpShot> {
     })
 }
 
-/// Parse a line from raw line data
-fn parse_line(data: Vec<u8>) -> Result<DmpSection> {
+/// Parse a section from raw section data
+fn parse_section(data: Vec<u8>) -> Result<DmpSection> {
     let mut buffer = IntBuffer::new(data);
 
     // Version byte
@@ -443,8 +443,8 @@ fn parse_line(data: Vec<u8>) -> Result<DmpSection> {
     // Magic values (version > 2)
     if version > 2 {
         let magic = buffer.read_n(3)?;
-        if magic != LINE_MAGIC {
-            bail!("Invalid line magic: {magic:?}, expected {LINE_MAGIC:?}");
+        if magic != SECTION_MAGIC {
+            bail!("Invalid section magic: {magic:?}, expected {SECTION_MAGIC:?}");
         }
     }
 
@@ -495,7 +495,7 @@ fn parse_line(data: Vec<u8>) -> Result<DmpSection> {
             Err(e) => {
                 tracing::debug!(
                     reason = %e,
-                    purpose = "parse line shots for import",
+                    purpose = "parse section shots for import",
                     "Stopping shot parsing after terminal or invalid data"
                 );
                 break;
@@ -504,17 +504,17 @@ fn parse_line(data: Vec<u8>) -> Result<DmpSection> {
     }
 
     if shots.is_empty() {
-        bail!("Line has no shots");
+        bail!("Section has no shots");
     }
 
-    let content_hash = compute_line_hash(&name, direction, &shots);
+    let content_hash = compute_section_hash(&name, direction, &shots);
 
     // The MNemo records pitch positive-UP; every other frame in the codebase
     // (and the `depth_in` / `depth_out` carried beside it) is positive-DOWN.
     // Normalise here, once, so that every consumer of a `DmpShot` sees the
     // model frame: the import preview table, the overlap merge against existing
     // project shots, and `to_shot_data` alike.  This runs *after*
-    // `compute_line_hash` deliberately, so the hash keeps being taken over
+    // `compute_section_hash` deliberately, so the hash keeps being taken over
     // the device's own bytes and re-import deduplication still recognises
     // lines imported before issue #296.
     for shot in &mut shots {
@@ -627,7 +627,7 @@ pub fn parse_dmp_bytes(data: &[u8]) -> Result<(DmpFile, DmpReadLoss)> {
     }
 
     // Split into lines
-    let line_data = split_into_lines(data, version);
+    let line_data = split_into_sections(data, version);
     if line_data.is_empty() {
         bail!("No lines found in DMP file");
     }
@@ -641,7 +641,7 @@ pub fn parse_dmp_bytes(data: &[u8]) -> Result<(DmpFile, DmpReadLoss)> {
     // Parse each line
     let mut lines = Vec::new();
     for (i, line_bytes) in line_data.into_iter().enumerate() {
-        match parse_line(line_bytes) {
+        match parse_section(line_bytes) {
             Ok(line) => {
                 tracing::debug!(
                     line_index = i,
@@ -943,13 +943,13 @@ mod tests {
     }
 
     #[test]
-    fn test_split_into_lines_v2() {
+    fn test_split_into_sections_v2() {
         // Create minimal v2 line data with end-of-line marker
         let mut data = vec![2]; // version
         data.extend(vec![0u8; 20]); // padding/header
         data.extend(vec![3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]); // end marker
 
-        let lines = split_into_lines(&data, 2);
+        let lines = split_into_sections(&data, 2);
         assert_eq!(lines.len(), 1);
     }
 
@@ -1046,10 +1046,7 @@ mod tests {
 
         // Check first line has shots
         let first_line = &dmp.lines[0];
-        assert!(
-            !first_line.shots.is_empty(),
-            "First line has no shots"
-        );
+        assert!(!first_line.shots.is_empty(), "First line has no shots");
 
         // Print summary for debugging
         println!(
@@ -1093,10 +1090,7 @@ mod tests {
 
         // Check first line has shots
         let first_line = &dmp.lines[0];
-        assert!(
-            !first_line.shots.is_empty(),
-            "First line has no shots"
-        );
+        assert!(!first_line.shots.is_empty(), "First line has no shots");
 
         // Print summary for debugging
         println!(
@@ -1302,11 +1296,7 @@ mod tests {
         let line = &dmp.lines[0];
         assert_eq!(line.version, 3, "Line version should be 3");
         assert_eq!(line.name, "TST", "Line name should be TST");
-        assert_eq!(
-            line.direction,
-            DmpDirection::In,
-            "Direction should be In"
-        );
+        assert_eq!(line.direction, DmpDirection::In, "Direction should be In");
 
         // Check date parsing
         assert_eq!(line.date.year(), 2024, "Year should be 2024");
@@ -1364,11 +1354,7 @@ mod tests {
         let line = &dmp.lines[0];
         assert_eq!(line.version, 4, "Line version should be 4");
         assert_eq!(line.name, "V4S", "Line name should be V4S");
-        assert_eq!(
-            line.direction,
-            DmpDirection::Out,
-            "Direction should be Out"
-        );
+        assert_eq!(line.direction, DmpDirection::Out, "Direction should be Out");
 
         // Check date parsing
         assert_eq!(line.date.year(), 2024, "Year should be 2024");
@@ -1676,23 +1662,20 @@ mod tests {
     }
 
     #[test]
-    fn test_split_into_lines_empty_data() {
-        let lines = split_into_lines(&[], 2);
+    fn test_split_into_sections_empty_data() {
+        let lines = split_into_sections(&[], 2);
         assert!(lines.is_empty());
     }
 
     #[test]
-    fn test_split_into_lines_data_shorter_than_pattern() {
-        let lines = split_into_lines(&[2, 0, 0], 2);
-        assert!(
-            lines.is_empty(),
-            "data shorter than pattern = no lines"
-        );
+    fn test_split_into_sections_data_shorter_than_pattern() {
+        let lines = split_into_sections(&[2, 0, 0], 2);
+        assert!(lines.is_empty(), "data shorter than pattern = no lines");
     }
 
     #[test]
-    fn test_split_into_lines_unsupported_version() {
-        let lines = split_into_lines(&[1, 0, 0, 0, 0], 99);
+    fn test_split_into_sections_unsupported_version() {
+        let lines = split_into_sections(&[1, 0, 0, 0, 0], 99);
         assert!(lines.is_empty(), "unsupported version = no patterns");
     }
 
@@ -1876,7 +1859,7 @@ mod tests {
                 comment: None,
             },
         ];
-        let hash = compute_line_hash("TST", DmpDirection::Out, &shots);
+        let hash = compute_section_hash("TST", DmpDirection::Out, &shots);
         let line = DmpSection {
             version: 4,
             name: "TST".to_string(),
@@ -1905,30 +1888,30 @@ mod tests {
     }
 
     #[test]
-    fn test_end_of_line_patterns_all_versions() {
+    fn test_end_of_section_patterns_all_versions() {
         // V2 has one pattern of 16 bytes
-        let v2 = end_of_line_patterns(2);
+        let v2 = end_of_section_patterns(2);
         assert_eq!(v2.len(), 1);
         assert_eq!(v2[0].len(), 16);
 
         // V3 has one pattern of 21 bytes
-        let v3 = end_of_line_patterns(3);
+        let v3 = end_of_section_patterns(3);
         assert_eq!(v3.len(), 1);
         assert_eq!(v3[0].len(), 21);
 
         // V4 has one pattern of 29 bytes
-        let v4 = end_of_line_patterns(4);
+        let v4 = end_of_section_patterns(4);
         assert_eq!(v4.len(), 1);
         assert_eq!(v4[0].len(), 29);
 
         // V5 has two patterns of 35 bytes
-        let v5 = end_of_line_patterns(5);
+        let v5 = end_of_section_patterns(5);
         assert_eq!(v5.len(), 2);
         assert_eq!(v5[0].len(), 35);
         assert_eq!(v5[1].len(), 35);
 
         // Invalid version has no patterns
-        let invalid = end_of_line_patterns(99);
+        let invalid = end_of_section_patterns(99);
         assert!(invalid.is_empty());
     }
 
@@ -1977,7 +1960,7 @@ mod tests {
                 comment: None,
             },
         ];
-        let hash = compute_line_hash("TST", DmpDirection::In, &shots);
+        let hash = compute_section_hash("TST", DmpDirection::In, &shots);
         let line = DmpSection {
             version: 3,
             name: "TST".to_string(),
@@ -2023,8 +2006,8 @@ mod tests {
             marker_index: 1,
             comment: None,
         }];
-        let h1 = compute_line_hash("ABC", DmpDirection::In, &shots);
-        let h2 = compute_line_hash("ABC", DmpDirection::In, &shots);
+        let h1 = compute_section_hash("ABC", DmpDirection::In, &shots);
+        let h2 = compute_section_hash("ABC", DmpDirection::In, &shots);
         assert_eq!(h1, h2, "same data must produce identical hash");
         assert_eq!(h1.len(), 64, "SHA256 hex = 64 chars");
     }
@@ -2053,8 +2036,8 @@ mod tests {
         }];
         let mut shots_b = shots_a.clone();
         shots_b[0].length = 5.1; // slightly different length
-        let h_a = compute_line_hash("ABC", DmpDirection::In, &shots_a);
-        let h_b = compute_line_hash("ABC", DmpDirection::In, &shots_b);
+        let h_a = compute_section_hash("ABC", DmpDirection::In, &shots_a);
+        let h_b = compute_section_hash("ABC", DmpDirection::In, &shots_b);
         assert_ne!(h_a, h_b, "different shot data must produce different hash");
     }
 
@@ -2081,9 +2064,9 @@ mod tests {
             marker_index: 1,
             comment: None,
         }];
-        // Date is not an input to compute_line_hash, so same data = same hash
-        let h1 = compute_line_hash("ABC", DmpDirection::In, &shots);
-        let h2 = compute_line_hash("ABC", DmpDirection::In, &shots);
+        // Date is not an input to compute_section_hash, so same data = same hash
+        let h1 = compute_section_hash("ABC", DmpDirection::In, &shots);
+        let h2 = compute_section_hash("ABC", DmpDirection::In, &shots);
         assert_eq!(h1, h2);
     }
 
@@ -2132,8 +2115,8 @@ mod tests {
             },
         ];
         let shots_without = vec![shots_with_eos[0].clone()];
-        let h_with = compute_line_hash("ABC", DmpDirection::In, &shots_with_eos);
-        let h_without = compute_line_hash("ABC", DmpDirection::In, &shots_without);
+        let h_with = compute_section_hash("ABC", DmpDirection::In, &shots_with_eos);
+        let h_without = compute_section_hash("ABC", DmpDirection::In, &shots_without);
         assert_eq!(h_with, h_without, "non-Standard shots must not affect hash");
     }
 
@@ -2491,8 +2474,8 @@ mod tests {
     #[ignore]
     fn kb5_overlap_treatment_regression() {
         use crate::models::placement_suggest::{
-            suggest_all_placements, CrossLineSuggestion, ExistingLine,
-            ImportLineForSuggestion, TargetType,
+            suggest_all_placements, CrossLineSuggestion, ExistingLine, ImportLineForSuggestion,
+            TargetType,
         };
         use crate::models::shot::{Shot, ShotKind};
         use std::collections::{HashMap, HashSet};
@@ -2710,9 +2693,7 @@ mod tests {
                             && s.target_import_index == Some(0)
                     }, // 001
                 )
-                .unwrap_or_else(|| {
-                    panic!("no importing suggestion for line index {}", import_idx)
-                })
+                .unwrap_or_else(|| panic!("no importing suggestion for line index {}", import_idx))
         };
 
         let s005 = find_primary(4);
@@ -3058,7 +3039,7 @@ mod tests {
         );
     }
 
-    /// `compute_line_hash` is taken over the device's own bytes, *before*
+    /// `compute_section_hash` is taken over the device's own bytes, *before*
     /// `parse_line` flips pitch into the +down frame.  That ordering is what
     /// lets a project imported before issue #296 still recognise a re-imported
     /// line as the same content, so the hash must not have moved.  The
@@ -3078,13 +3059,13 @@ mod tests {
         assert_eq!(s0.name, "BAS", "First line name");
         assert_eq!(
             s0.content_hash, "b97987346709cd1089186517af06997c817fbaed0625259f5e12609b8bb66a89",
-            "content_hash moved; is compute_line_hash still running before the pitch flip?"
+            "content_hash moved; is compute_section_hash still running before the pitch flip?"
         );
 
         // Re-hashing the shots as they are *now* (already +down) must NOT
         // reproduce the stored hash, which is the whole point: the stored one
         // was taken in the device frame.
-        let rehashed = compute_line_hash(&s0.name, s0.direction, &s0.shots);
+        let rehashed = compute_section_hash(&s0.name, s0.direction, &s0.shots);
         assert_ne!(
             rehashed, s0.content_hash,
             "fixture has no non-zero pitch, so this test cannot detect the ordering"

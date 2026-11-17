@@ -44,7 +44,7 @@
       "name": "Name",
       "notes": "Notes",
       "status": "Status",
-      "section": "Section"
+      "section": "Line"
     },
     "states": {
       "disabled": "Disabled",
@@ -84,7 +84,7 @@
   "app": {
     "dropOverlay": {
       "title": "Drop to open or import",
-      "existingProject": "Add sections to current project",
+      "existingProject": "Add lines to current project",
       "newProject": "Create new project"
     }
   },
@@ -343,7 +343,7 @@
       },
       "roles": {
         "segment": "Segment",
-        "section": "Section",
+        "section": "Line",
         "shot": "Shot",
         "station": "Station",
         "comment": "Comment",
@@ -452,7 +452,7 @@
         "interface": "Interface",
         "grid": "Grid",
         "font": "Font",
-        "sectionColors": "Section Colors",
+        "sectionColors": "Line Colors",
         "measure": "Measure tool"
       },
       "uiScale": {
@@ -488,8 +488,8 @@
       },
       "sectionColors": {
         "label": "Color palette",
-        "help": "Colors assigned to new sections (click to change)",
-        "aria": "Section color {{index}}"
+        "help": "Colors assigned to new lines (click to change)",
+        "aria": "Line color {{index}}"
       },
       "measurePathColor": {
         "label": "Path highlight color",
@@ -939,7 +939,7 @@
         "toggleSatellite": "Toggle Satellite",
         "toggleStationLabels": "Toggle Station IDs",
         "toggleShotLabels": "Toggle Shot Labels",
-        "toggleSectionLabels": "Toggle Section Labels",
+        "toggleSectionLabels": "Toggle Line Labels",
         "fitToBounds": "Fit to Bounds",
         "zoomIn": "Zoom In",
         "zoomOut": "Zoom Out",
@@ -1146,7 +1146,7 @@
       "found": "Stored value",
       "treatAs": "Treat as",
       "treatAsAria": "Type for shot {{number}}",
-      "unnamedSection": "Unnamed section",
+      "unnamedSection": "Unnamed line",
       "note": "Whatever you pick is an ordinary edit - undoable, and saved with the project.",
       "applyFailed": "Could not apply the changes - the project may be read-only. Your selections are still here; close only if you want to leave everything as reference ties.",
       "keepAsReference": "Leave as references",
@@ -1207,16 +1207,16 @@
     },
     "importReceipt": {
       "title": "Imported from {{source}}: {{fileName}}",
-      "sections_one": "{{count}} section",
-      "sections_other": "{{count}} sections",
+      "sections_one": "{{count}} line",
+      "sections_other": "{{count}} lines",
       "shots_one": "{{count}} shot",
       "shots_other": "{{count}} shots",
       "loops_one": "{{count}} loop reconstructed",
       "loops_other": "{{count}} loops reconstructed",
-      "unanchoredInfo_one": "{{count}} section is not connected to a zero datum",
-      "unanchoredInfo_other": "{{count}} sections are not connected to a zero datum",
-      "unanchoredInfoShort_one": "{{count}} section unanchored",
-      "unanchoredInfoShort_other": "{{count}} sections unanchored",
+      "unanchoredInfo_one": "{{count}} line is not connected to a zero datum",
+      "unanchoredInfo_other": "{{count}} lines are not connected to a zero datum",
+      "unanchoredInfoShort_one": "{{count}} line unanchored",
+      "unanchoredInfoShort_other": "{{count}} lines unanchored",
       "zeroDatumCreated": "Zero datum created on \"{{section}}\"",
       "toast": "{{source}} import: {{summary}}",
       "viewDetails": "View details",
@@ -1229,8 +1229,8 @@
     "mergeStations": {
       "datumShift": "{{piece}} is placed by its own GPS. It moves {{distance}} m to meet the other piece, and its zero datum at {{station}} becomes a GPS fix.",
       "datumShiftAfterMove": "{{piece}} is placed by its own GPS. The merge moves it to meet the other piece, and its zero datum at {{station}} becomes a GPS fix.",
-      "pieceMore_one": "{{name}} and 1 more section",
-      "pieceMore_other": "{{name}} and {{count}} more sections"
+      "pieceMore_one": "{{name}} and 1 more line",
+      "pieceMore_other": "{{name}} and {{count}} more lines"
     },
     "importBlocked": {
       "title": "Importing DMP",
@@ -1274,8 +1274,8 @@
       },
       "summary": {
         "separator": " - ",
-        "sections_one": "{{count}} section",
-        "sections_other": "{{count}} sections",
+        "sections_one": "{{count}} line",
+        "sections_other": "{{count}} lines",
         "shots_one": "{{count}} shot",
         "shots_other": "{{count}} shots",
         "waypoints_one": "{{count}} waypoint",
@@ -1309,7 +1309,7 @@
       "title": "Import Ariane Survey",
       "unitConversion": "Converted from imperial to metric",
       "stats": {
-        "sections": "Sections",
+        "sections": "Lines",
         "shots": "Shots",
         "totalLength": "Total length",
         "lengthValue": "{{length}} m",
@@ -1317,7 +1317,7 @@
         "none": "-"
       },
       "table": {
-        "section": "Section",
+        "section": "Line",
         "shots": "Shots",
         "date": "Date",
         "color": "Color",
@@ -1326,18 +1326,18 @@
         "surveyorsOf": "Surveyors of {{name}}",
         "explorersOf": "Explorers of {{name}}"
       },
-      "sectionsToImport": "Sections to import",
+      "sectionsToImport": "Lines to import",
       "selectedCount": "{{selected}} of {{total}} selected",
-      "selectAllLabel": "Select all sections",
-      "importSectionLabel": "Import section {{name}}",
-      "reanchored_one": "{{count}} section connects to nothing else being imported, so it will be placed at the origin.",
-      "reanchored_other": "{{count}} sections connect to nothing else being imported, so they will be placed at the origin.",
+      "selectAllLabel": "Select all lines",
+      "importSectionLabel": "Import line {{name}}",
+      "reanchored_one": "{{count}} line connects to nothing else being imported, so it will be placed at the origin.",
+      "reanchored_other": "{{count}} lines connect to nothing else being imported, so they will be placed at the origin.",
       "placement": {
         "heading": "Where does this survey go?",
-        "appliesTo": "Applies to \"{{section}}\", the first section imported. Everything else follows the connections recorded in the file.",
+        "appliesTo": "Applies to \"{{section}}\", the first line imported. Everything else follows the connections recorded in the file.",
         "appliesToNothing": "Nothing is selected to import yet.",
         "useFile": "Use the position in the file",
-        "useFileHint": "{{latitude}}, {{longitude}} - recorded on this section.",
+        "useFileHint": "{{latitude}}, {{longitude}} - recorded on this line.",
         "useFileElsewhereHint": "{{latitude}}, {{longitude}} - recorded elsewhere in the file, and not normally used on import.",
         "origin": "Place at the origin",
         "originHint": "Local coordinates. You can georeference the survey later.",
@@ -1372,12 +1372,12 @@
     },
     "dmpNewImport": {
       "title": "Connection Wizard",
-      "progress": "{{placed}} of {{total}} sections placed",
+      "progress": "{{placed}} of {{total}} lines placed",
       "skipped": "{{count}} skipped",
       "importingZeroDatum": "Setting up zero datum...",
       "calculating": "Finding connections...",
       "connectionHeading": "Suggested Connection",
-      "connectionDescription": "Matching survey data was found between these two sections. Confirm if the connection is correct, or skip to handle it manually.",
+      "connectionDescription": "Matching survey data was found between these two lines. Confirm if the connection is correct, or skip to handle it manually.",
       "connectsTo": "connects to",
       "station": "station {{index}}",
       "doesThisLookRight": "Does this connection look right?",
@@ -1386,9 +1386,9 @@
       "confirm": "Confirm",
       "skip": "Skip",
       "noSuggestions": "No more automatic connections found.",
-      "handoffMessage": "{{count}} sections will be configured manually.",
-      "placing": "Placing {{count}} sections...",
-      "allPlaced": "All sections placed!",
+      "handoffMessage": "{{count}} lines will be configured manually.",
+      "placing": "Placing {{count}} lines...",
+      "allPlaced": "All lines placed!",
       "confidence": {
         "high": "High confidence",
         "medium": "Medium confidence",
@@ -1396,20 +1396,20 @@
       },
       "matchedShots": "{{count}} shots matched",
       "cancelWizard": "Cancel Import?",
-      "cancelWizardMessage_one": "{{count}} section has already been imported into the project. Remove it, or keep it and close the wizard?",
-      "cancelWizardMessage_other": "{{count}} sections have already been imported into the project. Remove them, or keep them and close the wizard?",
+      "cancelWizardMessage_one": "{{count}} line has already been imported into the project. Remove it, or keep it and close the wizard?",
+      "cancelWizardMessage_other": "{{count}} lines have already been imported into the project. Remove them, or keep them and close the wizard?",
       "cancelWizardNoImports": "Are you sure you want to cancel the import?",
       "cancelRemoveAndClose": "Remove and close",
       "cancelKeepAndClose": "Keep and close",
       "cancelContinueEditing": "Continue editing",
-      "removeImportedFailed": "Could not remove the imported sections.",
-      "removeImportedSaveFailed": "The sections were removed, but the project could not be saved, so the file on disk still contains them. Try again, or save the project from the main window.",
-      "removeImportedWrongProject": "Could not remove the imported sections: a different project is now open. Close this wizard and remove them from the project they were imported into.",
+      "removeImportedFailed": "Could not remove the imported lines.",
+      "removeImportedSaveFailed": "The lines were removed, but the project could not be saved, so the file on disk still contains them. Try again, or save the project from the main window.",
+      "removeImportedWrongProject": "Could not remove the imported lines: a different project is now open. Close this wizard and remove them from the project they were imported into.",
       "mergeStation": "Merge at",
-      "sectionSettings": "Section Settings",
+      "sectionSettings": "Line Settings",
       "backWizard": "Go Back?",
-      "backWizardMessage_one": "Going back re-runs the import from the start, so the {{count}} section this wizard already imported will be removed first. This can be undone.",
-      "backWizardMessage_other": "Going back re-runs the import from the start, so the {{count}} sections this wizard already imported will be removed first. This can be undone.",
+      "backWizardMessage_one": "Going back re-runs the import from the start, so the {{count}} line this wizard already imported will be removed first. This can be undone.",
+      "backWizardMessage_other": "Going back re-runs the import from the start, so the {{count}} lines this wizard already imported will be removed first. This can be undone.",
       "backWizardNoImports": "Are you sure you want to go back? Connections you have confirmed will be discarded.",
       "backRemoveAndGo": "Remove and go back",
       "overlapMode": "Overlap",
@@ -1420,7 +1420,7 @@
       "noOverlapShots": "No overlapping shots detected for this suggestion.",
       "manualPlacing": {
         "segmentHeader": "Segment {{current}} of {{total}}",
-        "sections": "Sections",
+        "sections": "Lines",
         "anchorStation": "Anchor: {{section}} stn {{station}}",
         "selectAnchor": "Click a station in the preview to set the anchor point",
         "placementMode": "Placement method",
@@ -1435,14 +1435,14 @@
         "gpsLat": "Latitude",
         "gpsLng": "Longitude",
         "importStation": "Import station",
-        "section": "Section",
+        "section": "Line",
         "station": "Station",
         "stationIndexed": "Station {{index}}",
-        "targetSection": "Target section",
+        "targetSection": "Target line",
         "targetStation": "Target station",
-        "noSections": "No existing sections available",
+        "noSections": "No existing lines available",
         "doNotPlace": "Do not place",
-        "doNotPlaceDescription": "Skip this segment entirely - its sections will not be imported",
+        "doNotPlaceDescription": "Skip this segment entirely - its lines will not be imported",
         "next": "Next"
       }
     },
@@ -1474,7 +1474,7 @@
       },
       "declinationMode": "Declination mode: {{mode}}",
       "backsightsPresent": "· backsights present",
-      "duplicateWarning": "This file has already been imported to this project. Importing again will create duplicate sections.",
+      "duplicateWarning": "This file has already been imported to this project. Importing again will create duplicate lines.",
       "options": {
         "applyCorrections": "Apply per-survey instrument corrections (CORRECTIONS / CORRECTIONS2 lines)",
         "commentsOnStations": "Promote shot comments to the FROM station (Compass convention)",
@@ -1520,7 +1520,7 @@
         "segment": "Segment",
         "date": "Date"
       },
-      "duplicateWarning": "This file has already been imported to this project. Importing again will create duplicate sections.",
+      "duplicateWarning": "This file has already been imported to this project. Importing again will create duplicate lines.",
       "options": {
         "commentsOnStations": "Promote shot comments to the FROM station",
         "includeSplays": "Include anonymous wall / splay shots (as reference shots)"
@@ -1559,7 +1559,7 @@
       },
       "trackFallbackName": "Track {{index}}",
       "routeFallbackName": "Route {{index}}",
-      "duplicateWarning": "This file has already been imported to this project. Importing again will create duplicate sections.",
+      "duplicateWarning": "This file has already been imported to this project. Importing again will create duplicate lines.",
       "cancel": "Cancel",
       "import": "Import",
       "importing": "Importing...",
@@ -1573,36 +1573,36 @@
       "shots": "{{count}} shots",
       "depth": "Depth: {{range}}",
       "duplicateHashWarning": "File may have been imported before (same hash detected)",
-      "duplicateSectionsWarning": "{{duplicates}} of {{total}} sections already imported (auto-deselected)",
-      "defaultValues": "Default Values (apply to all sections)",
+      "duplicateSectionsWarning": "{{duplicates}} of {{total}} lines already imported (auto-deselected)",
+      "defaultValues": "Default Values (apply to all lines)",
       "dateOverrideLabel": "Date Override",
       "selectAll": "Select All",
       "selectNone": "Select None",
       "invert": "Invert",
-      "selectedCount": "{{selected}} of {{total}} sections selected",
+      "selectedCount": "{{selected}} of {{total}} lines selected",
       "table": {
         "name": "Name",
         "date": "Date",
         "direction": "Direction",
         "shots": "Shots"
       },
-      "selectSectionLabel": "Select section {{name}}",
+      "selectSectionLabel": "Select line {{name}}",
       "alreadyImported": "(already imported)",
       "empty": "(empty)",
       "cancel": "Cancel",
       "checkingDuplicates": "Checking for duplicates...",
-      "continue": "Continue to Section Setup"
+      "continue": "Continue to Line Setup"
     },
     "orphanPlacement": {
-      "title": "Connect Orphaned Sections",
-      "progress": "Section {{current}} of {{total}}",
+      "title": "Connect Orphaned Lines",
+      "progress": "Line {{current}} of {{total}}",
       "skipped": "{{count}} skipped",
       "confidence": {
         "high": "High",
         "medium": "Medium",
         "low": "Low"
       },
-      "sectionNotFound": "Section not found",
+      "sectionNotFound": "Line not found",
       "suggestedConnection": "Suggested Connection",
       "station": "stn {{index}}",
       "matchedShots_one": "{{count}} shot matched {{direction}}",
@@ -1616,7 +1616,7 @@
         "heading_one": "{{count}} repeated shot",
         "heading_other": "{{count}} repeated shots",
         "setAll": "Set all:",
-        "hint": "Only the shots between this section's open end and the merge station are treated as the repeat; survey on the other side of the merge station is kept as normal survey, so choose the end of the repeat to resolve all of it. The new copy of each repeated shot is kept as a Reference shot. Choose which reading the existing shot keeps.",
+        "hint": "Only the shots between this line's open end and the merge station are treated as the repeat; survey on the other side of the merge station is kept as normal survey, so choose the end of the repeat to resolve all of it. The new copy of each repeated shot is kept as a Reference shot. Choose which reading the existing shot keeps.",
         "anchored": "The existing survey is tied down at both ends, so its readings stay as they are. The new copies are kept as Reference shots.",
         "choices": {
           "keep_existing": "Keep existing",
@@ -1669,11 +1669,11 @@
       "editingDisabled": "Editing is disabled in the current view"
     },
     "zeroDatumSelection": {
-      "title": "Select Zero Datum Section",
-      "subtitle": "A zero datum ties one station to a real-world GPS position, so this section will establish the GPS reference point for this project. All other sections will be positioned relative to this one.",
-      "helpTooltip": "The zero datum is the one station whose GPS coordinates you supply directly. Every other station's position is computed relative to it, so its section becomes the anchor for the whole survey.",
+      "title": "Select Zero Datum Line",
+      "subtitle": "A zero datum ties one station to a real-world GPS position, so this line will establish the GPS reference point for this project. All other lines will be positioned relative to this one.",
+      "helpTooltip": "The zero datum is the one station whose GPS coordinates you supply directly. Every other station's position is computed relative to it, so its line becomes the anchor for the whole survey.",
       "skip": "Skip Zero Datum",
-      "skipCost": "Without a zero datum the survey has no real-world GPS anchor; you can still place sections and set a datum later.",
+      "skipCost": "Without a zero datum the survey has no real-world GPS anchor; you can still place lines and set a datum later.",
       "shotCount": "{{count}} shots",
       "totalLength": "{{length}} total"
     },
@@ -1691,29 +1691,29 @@
       "depthReferenceHint": "Meters, positive = below the surface. Leave blank if unknown.",
       "depthReferenceError": "Depth below surface must be a number.",
       "backConfirm": {
-        "message": "You have unsaved changes. They come back if you return to this section, but are lost if you pick a different one or leave.",
+        "message": "You have unsaved changes. They come back if you return to this line, but are lost if you pick a different one or leave.",
         "discard": "Go Back"
       },
       "confirm": "Confirm Zero Datum",
-      "metadataHeading": "Section Metadata",
+      "metadataHeading": "Line Metadata",
       "shotsHeading": "Shot Data"
     },
     "export": {
       "failed": "Export failed - try a different folder or file name",
       "notes": {
         "azimuth-rotated-to-true": "Bearings rotated to true north for Ariane",
-        "azimuth-mixed-unresolved": "Some sections have no declination - Ariane will re-correct all",
+        "azimuth-mixed-unresolved": "Some lines have no declination - Ariane will re-correct all",
         "gps-anchors-not-written": "Some zero datums could not be written to the file"
       }
     },
     "tmlUnanchoredWarning": {
-      "titleAllUnanchored": "No section is connected to a zero datum",
-      "titlePartial": "Some sections aren't connected to a zero datum",
-      "bodyAllUnanchored": "No section in this project is connected to a zero datum, so the exported file will not be georeferenced - Ariane will not know where in the world the survey sits. Nothing is discarded: every section and shot still exports. Cancel this dialog, then right-click a station in Survey mode and choose \"Set Zero Datum\" to anchor the survey, or continue to export without georeferencing.",
-      "bodyPartial_one": "{{count}} of {{total}} sections is not connected to a zero datum, so no GPS reading places it: it will export at the spot the map shows. Nothing is discarded: every section and shot still exports. Cancel this dialog, then right-click a station in Survey mode and choose \"Set Zero Datum\" to connect it, or continue to export as-is.",
-      "bodyPartial_other": "{{count}} of {{total}} sections are not connected to a zero datum, so no GPS reading places them: they will export at the spot the map shows. Nothing is discarded: every section and shot still exports. Cancel this dialog, then right-click a station in Survey mode and choose \"Set Zero Datum\" to connect them, or continue to export as-is.",
-      "listHeading": "Sections without a zero datum connection",
-      "sectionFallbackName": "Section {{id}}"
+      "titleAllUnanchored": "No line is connected to a zero datum",
+      "titlePartial": "Some lines aren't connected to a zero datum",
+      "bodyAllUnanchored": "No line in this project is connected to a zero datum, so the exported file will not be georeferenced - Ariane will not know where in the world the survey sits. Nothing is discarded: every line and shot still exports. Cancel this dialog, then right-click a station in Survey mode and choose \"Set Zero Datum\" to anchor the survey, or continue to export without georeferencing.",
+      "bodyPartial_one": "{{count}} of {{total}} lines is not connected to a zero datum, so no GPS reading places it: it will export at the spot the map shows. Nothing is discarded: every line and shot still exports. Cancel this dialog, then right-click a station in Survey mode and choose \"Set Zero Datum\" to connect it, or continue to export as-is.",
+      "bodyPartial_other": "{{count}} of {{total}} lines are not connected to a zero datum, so no GPS reading places them: they will export at the spot the map shows. Nothing is discarded: every line and shot still exports. Cancel this dialog, then right-click a station in Survey mode and choose \"Set Zero Datum\" to connect them, or continue to export as-is.",
+      "listHeading": "Lines without a zero datum connection",
+      "sectionFallbackName": "Line {{id}}"
     },
     "about": {
       "title": "About Stalagmight",
@@ -1737,15 +1737,15 @@
       "halvesNotConnected": "The halves are not connected: merge the two cut stations if routes and gas planning should continue across them."
     },
     "combineSections": {
-      "branchesNote_one": "{{names}} stays attached at the join, which becomes a station in the middle of the combined section.",
-      "branchesNote_other": "{{names}} stay attached at the join, which becomes a station in the middle of the combined section.",
+      "branchesNote_one": "{{names}} stays attached at the join, which becomes a station in the middle of the combined line.",
+      "branchesNote_other": "{{names}} stay attached at the join, which becomes a station in the middle of the combined line.",
       "looseEndsNote_one": "{{names}} also ends here but is not merged to the join, so it stays as it is.",
       "looseEndsNote_other": "{{names}} also end here but are not merged to the join, so they stay as they are.",
       "depthNote": "The two ends are recorded {{gap}} apart in depth. The joined station takes the average, so each end moves {{half}} in depth.",
       "summary": "Combining {{kept}} ({{keptShots}}) and {{other}} ({{otherShots}}) at station {{station}}",
       "shots_one": "{{count}} shot",
       "shots_other": "{{count}} shots",
-      "creditTitle": "Survey credit of the combined section ({{shots}})",
+      "creditTitle": "Survey credit of the combined line ({{shots}})",
       "personShots": "{{name}} ({{shots}})",
       "closureJoin": "{{kept}} and {{other}} meet here across a loop closure: the survey puts the two ends {{distance}} apart horizontally.",
       "changesTitle": "Combining also changes:",
@@ -1757,7 +1757,7 @@
       "keptMoves": "{{kept}} is the one that moves, because a zero datum holds {{other}} in place.",
       "rotation": "{{other}}'s bearings turn by {{degrees}} to read against {{kept}}'s north reference, so every station stays where it is.",
       "rotationZero": "{{other}}'s bearings keep their values and follow {{kept}}'s north reference from now on.",
-      "quality": "The combined section keeps {{kept}}'s quality factor ({{keptQuality}}); {{other}}'s was {{otherQuality}}.",
+      "quality": "The combined line keeps {{kept}}'s quality factor ({{keptQuality}}); {{other}}'s was {{otherQuality}}.",
       "offset": "The two join stations were moved by hand by different amounts. The joined station keeps {{fixed}}'s, so {{moving}}'s end moves {{distance}}.",
       "joinedMoves_one": "{{names}} is merged at {{station}} and moves {{distance}} with the joined station, so it stays merged to it.",
       "joinedMoves_other": "{{names}} are merged at {{station}} and move {{distance}} with the joined station, so they stay merged to it.",
@@ -1771,7 +1771,7 @@
       "tornSnapped": "The snapped closure between <a/> and <b/>",
       "tornHeld": "<held/> is held by a zero datum and stays where it is.",
       "tornWhyMoves": "The loop's misclosure moves to the new closure, and the Closures Computed View adjusts it like any other loop.",
-      "tornWhyStays": "Otherwise the combined section would be tied to itself. The Closures Computed View adjusts the closure like any other loop.",
+      "tornWhyStays": "Otherwise the combined line would be tied to itself. The Closures Computed View adjusts the closure like any other loop.",
       "removedSummary_one": "Combining removes 1 connection that would join the two ends of one shot (see Details).",
       "removedSummary_other": "Combining removes {{count}} connections that would each join the two ends of one shot (see Details).",
       "removedTitle_one": "This connection is removed:",
@@ -1877,13 +1877,13 @@
       "lrud": "LRUD",
       "reference": "Jump/Reference",
       "comment": "Comment",
-      "sectionId": "Section ID",
+      "sectionId": "Line ID",
       "shotId": "Shot ID"
     },
     "viewShots": "Shots",
     "viewStations": "Stations",
-    "empty": "No shots in this section.",
-    "stationsEmpty": "No stations in this section.",
+    "empty": "No shots in this line.",
+    "stationsEmpty": "No stations in this line.",
     "frozen": "Geometry locked - part of adjusted network",
     "viewSaveFailed": "Could not save the table layout. Your column widths and visibility may not be restored next time.",
     "pasteReport": {
@@ -1900,9 +1900,9 @@
       "pitchRange": "Inclination must be between -90 and 90",
       "negativeLrud": "Passage dimension cannot be negative"
     },
-    "selectSection": "Select a section to view shots.",
-    "selectSectionPill": "Select this section on the map",
-    "sectionMenu": "Choose section",
+    "selectSection": "Select a line to view shots.",
+    "selectSectionPill": "Select this line on the map",
+    "sectionMenu": "Choose line",
     "rawTableMenu": "Choose table",
     "multiDeleteUnsupported": "Deleting multiple shots at once isn't supported yet - delete one shot at a time.",
     "removeDraft_one": "Remove draft row",
@@ -1949,7 +1949,7 @@
       "exit": "Back to Map"
     },
     "tableSelect": {
-      "sections": "Sections",
+      "sections": "Lines",
       "rawData": "Raw data",
       "readOnly": "(read-only)"
     },
@@ -1997,7 +1997,7 @@
       "resolvedCount": "{{countFormatted}} resolved",
       "hideResolved": "Hide resolved",
       "showResolved": "Show resolved",
-      "location": "Section {{section}} - Shot {{shot}}",
+      "location": "Line {{section}} - Shot {{shot}}",
       "markUnresolved": "Mark unresolved",
       "resolve": "Resolve",
       "openShotDetails": "Open shot {{shot}} details",
@@ -2051,7 +2051,7 @@
     "labels": {
       "id": "ID",
       "name": "Name",
-      "section": "Section",
+      "section": "Line",
       "x": "X",
       "y": "Y",
       "depth": "Depth",
@@ -2106,11 +2106,11 @@
       "markAs": "Mark as {{kind}}"
     },
     "section": {
-      "title": "Section",
-      "center": "Center map on section {{id}}: {{name}}",
-      "unnamed": "Unnamed section",
-      "display": "Section {{id}} - {{name}}",
-      "statsTitle": "Section stats",
+      "title": "Line",
+      "center": "Center map on line {{id}}: {{name}}",
+      "unnamed": "Unnamed line",
+      "display": "Line {{id}} - {{name}}",
+      "statsTitle": "Line stats",
       "totalLength": "Total length",
       "shotCount": "Shots",
       "avgShot": "Average shot",
@@ -2124,7 +2124,7 @@
       "firstStation": "First station",
       "lastStation": "Last station",
       "contribution": "Contribution",
-      "edit": "Edit section"
+      "edit": "Edit line"
     },
     "projectStats": {
       "title": "Project stats",
@@ -2133,7 +2133,7 @@
       "overview": "Overview",
       "totalLength": "Total length",
       "penetration": "Penetration",
-      "sections": "Sections",
+      "sections": "Lines",
       "shots": "Shots",
       "stations": "Stations",
       "loops": "Loops",
@@ -2163,8 +2163,8 @@
     "multiShot": {
       "title_one": "{{count}} shot selected",
       "title_other": "{{count}} shots selected",
-      "summary_one": "{{shots}} shots in 1 section. Changes apply to every selected shot.",
-      "summary_other": "{{shots}} shots in {{count}} sections. Changes apply to every selected shot."
+      "summary_one": "{{shots}} shots in 1 line. Changes apply to every selected shot.",
+      "summary_other": "{{shots}} shots in {{count}} lines. Changes apply to every selected shot."
     }
   },
   "displayMenu": {
@@ -2189,9 +2189,9 @@
       "developer": "Developer"
     },
     "items": {
-      "section": "Section",
+      "section": "Line",
       "stations": "Stations",
-      "sectionNames": "Section names",
+      "sectionNames": "Line names",
       "stationLabels": "Station IDs",
       "stationNames": "Station names",
       "shots": "Shots",
@@ -2215,7 +2215,7 @@
     },
     "descriptions": {
       "stations": "Show station markers",
-      "sectionNames": "Show section labels",
+      "sectionNames": "Show line labels",
       "stationLabels": "Show station IDs",
       "stationNames": "Show station names (e.g. MNemo station numbers) instead of IDs. Stations without a name get no label",
       "stationNamesUnavailable": "This project has no station names. Stations get names from an MNemo (.dmp) import",
@@ -2287,7 +2287,7 @@
       "columns": {
         "name": "Name",
         "path": "Path",
-        "sections": "Sections",
+        "sections": "Lines",
         "length": "Length",
         "edited": "Edited"
       },
@@ -2304,7 +2304,7 @@
         "lastOpened": "Last opened",
         "lastEdited": "Last edited",
         "name": "Name",
-        "sections": "Section count",
+        "sections": "Line count",
         "length": "Total length",
         "ascending": "Ascending",
         "descending": "Descending"
@@ -2344,7 +2344,7 @@
         "initializing": "Initializing",
         "openingDatabase": "Opening database",
         "loadingProjectData": "Loading project data",
-        "loadingSections": "Loading sections",
+        "loadingSections": "Loading lines",
         "computingStations": "Computing stations",
         "computingStatistics": "Computing statistics",
         "validatingData": "Validating data",
@@ -2356,7 +2356,7 @@
         "savingSettings": "Saving settings",
         "importParsing": "Reading survey file",
         "importConverting": "Converting to project model",
-        "importApplyingChanges": "Applying sections and merges",
+        "importApplyingChanges": "Applying lines and merges",
         "importFinalizing": "Finalizing import"
       }
     },
@@ -2389,7 +2389,7 @@
         "location": "Location",
         "file": "File",
         "lastModified": "Last modified",
-        "sections": "Sections",
+        "sections": "Lines",
         "totalLength": "Total length",
         "combinedLength": "Combined length",
         "totalStations": "Total stations",
@@ -2420,7 +2420,7 @@
     "systemCard": {
       "length": "Length",
       "modified": "Edited {{relative}}",
-      "sections": "Sections"
+      "sections": "Lines"
     },
     "tooltip": {
       "length": "Length: {{length}}",
@@ -2601,7 +2601,7 @@
     },
     "placement": {
       "title": "Placement",
-      "instructions": "Click to place section. Esc for more placement options and metadata changes.",
+      "instructions": "Click to place line. Esc for more placement options and metadata changes.",
       "snapped": "Snapped to station"
     },
     "merge": {
@@ -2723,15 +2723,15 @@
     }
   },
   "editSection": {
-    "title": "Edit Section",
-    "notFound": "Section not found",
-    "midShot": "This is a mid-section shot.",
-    "midShotExplain": "Split Section keeps geometry fixed but discards other unsaved edits. Shift Geometry deletes the shot and allows downstream stations to move.",
+    "title": "Edit Line",
+    "notFound": "Line not found",
+    "midShot": "This is a mid-line shot.",
+    "midShotExplain": "Split Line keeps geometry fixed but discards other unsaved edits. Shift Geometry deletes the shot and allows downstream stations to move.",
     "shiftUnavailable": "Shift Geometry is not available for this shot.",
     "shiftImpactTitle": "If you choose Shift Geometry, these relationships will update:",
-    "splitSection": "Split Section",
+    "splitSection": "Split Line",
     "shiftGeometry": "Shift Geometry",
-    "reverseSection": "Reverse Section",
+    "reverseSection": "Reverse Line",
     "saving": "Saving...",
     "save": "Save",
     "incompleteRow_one": "Row {{rows}} is missing required values.",
@@ -2742,14 +2742,14 @@
     "frozenNotDeleted_other": "{{count}} shots were kept: their geometry is locked by the closure solve.",
     "incompleteBlocked_one": "1 shot is missing required values. Fill it in or clear the row.",
     "incompleteBlocked_other": "{{count}} shots are missing required values. Fill them in or clear the rows.",
-    "midRunDelete": "Only shots at the start or end of a section can be deleted together. Delete a mid-section shot on its own to choose split or shift."
+    "midRunDelete": "Only shots at the start or end of a line can be deleted together. Delete a mid-line shot on its own to choose split or shift."
   },
   "dmpWizard": {
     "toasts": {
       "emptySections": "Not imported - no shots left to import: {{names}}",
       "sectionIncomplete_one": "\"{{name}}\": 1 shot is missing required values. Fill it in or clear the row.",
       "sectionIncomplete_other": "\"{{name}}\": {{count}} shots are missing required values. Fill them in or clear the rows.",
-      "placementHint": "Placement: Click to place section. Esc for more placement options and metadata changes."
+      "placementHint": "Placement: Click to place line. Esc for more placement options and metadata changes."
     }
   },
   "banners": {
@@ -2820,23 +2820,23 @@
   },
   "newSection": {
     "collapse": "Shrink the table",
-    "create": "Create Section",
-    "empty": "Enter at least one shot to create a section.",
+    "create": "Create Line",
+    "empty": "Enter at least one shot to create a line.",
     "expand": "Enlarge the table",
     "incomplete_one": "Row {{rows}} is missing required values. Fill it in or delete the row to continue.",
     "incomplete_other": "Rows {{rows}} are missing required values. Fill them in or delete the rows to continue.",
     "labels": {
       "color": "Color",
-      "name": "Section Name"
+      "name": "Line Name"
     },
     "pasteCapped_one": "{{count}} pasted cell was dropped: the table cannot grow any further.",
     "pasteCapped_other": "{{count}} pasted cells were dropped: the table cannot grow any further.",
     "placeholders": {
       "name": "e.g., Main Line"
     },
-    "readOnly": "Editing is disabled in this mode, so a section cannot be created.",
+    "readOnly": "Editing is disabled in this mode, so a line cannot be created.",
     "shots": "Shots",
-    "title": "Import / Create Section"
+    "title": "Import / Create Line"
   },
   "sectionMetadata": {
     "direction": {
@@ -2844,8 +2844,8 @@
       "out": "Out"
     },
     "help": {
-      "quality": "Higher values apply more closure adjustment to this section.",
-      "reverse": "Numbers the section from the other end; the cave does not move. Left/right measurements are kept as recorded."
+      "quality": "Higher values apply more closure adjustment to this line.",
+      "reverse": "Numbers the line from the other end; the cave does not move. Left/right measurements are kept as recorded."
     },
     "labels": {
       "color": "Color",
@@ -2855,25 +2855,25 @@
     },
     "placeholders": {
       "color": "#RRGGBB",
-      "name": "Section name"
+      "name": "Line name"
     }
   },
   "sections": {
     "actions": {
-      "add": "Add section",
-      "color": "Change section color",
-      "colorReadOnly": "This view is read-only, so the section color cannot be changed.",
-      "colorReadOnlyProject": "This project is open read-only, so the section color cannot be changed.",
-      "delete": "Delete section",
-      "focus": "Focus this section",
-      "zoom": "Click to select · double-click to zoom to this section"
+      "add": "Add line",
+      "color": "Change line color",
+      "colorReadOnly": "This view is read-only, so the line color cannot be changed.",
+      "colorReadOnlyProject": "This project is open read-only, so the line color cannot be changed.",
+      "delete": "Delete line",
+      "focus": "Focus this line",
+      "zoom": "Click to select · double-click to zoom to this line"
     },
-    "ariaList": "Sections list",
-    "confirmDelete": "Delete this section?",
-    "defaultName": "Section {{id}}",
+    "ariaList": "Lines list",
+    "confirmDelete": "Delete this line?",
+    "defaultName": "Line {{id}}",
     "empty": {
       "action": "Import data",
-      "message": "No sections yet."
+      "message": "No lines yet."
     },
     "focus": {
       "exit": "Exit focus mode",
@@ -2944,7 +2944,7 @@
     },
     "status": {
       "depthRange": "Depth range: {{min}} - {{max}}",
-      "summary": "Sections: {{sections}} | Shots: {{shots}} | Length: {{length}}",
+      "summary": "Lines: {{sections}} | Shots: {{shots}} | Length: {{length}}",
       "focusedSection": "Focused: {{name}}",
       "saved": "Saved",
       "saving": "Saving...",
@@ -3272,7 +3272,7 @@
             "title": "Survey, Plan, Export",
             "description": "An open project is always in one of three modes. Only Survey can edit; Plan and Export are read-only, and mutating tools are hidden there rather than greyed out.",
             "descriptionItems": [
-              "Survey: edit geometry, sections, and shots.",
+              "Survey: edit geometry, lines, and shots.",
               "Plan: gas planning over the Closures Computed View.",
               "Export: frame and export an image of the survey."
             ]
@@ -3293,7 +3293,7 @@
             "title": "The Three Docks",
             "description": "The map is the same map in every mode. What surrounds it changes with the mode.",
             "descriptionItems": [
-              "Left: sections. Double-click one to frame it.",
+              "Left: the Sections panel with your lines. Double-click one to frame it.",
               "Right: detail for the selection, or the gas plan in Plan mode.",
               "Bottom: the shot table. Double-click a row to frame it."
             ]
@@ -3308,12 +3308,12 @@
         "title": "DMP Import",
         "steps": {
           "selection": {
-            "title": "Choose Sections",
-            "description": "Pick which DMP sections to import. Single-shot sections are deselected by default. Surveyor and date defaults above apply to everything you select."
+            "title": "Choose Lines",
+            "description": "Pick which lines of the DMP file to import. Single-shot lines are deselected by default. Surveyor and date defaults above apply to everything you select."
           },
           "zeroDatumSelection": {
-            "title": "Pick the Anchor Section",
-            "description": "A zero datum ties one station to a real-world GPS position, so every other section can be placed relative to it. Pick the section that should carry it, or skip to position everything manually and set it later."
+            "title": "Pick the Anchor Line",
+            "description": "A zero datum ties one station to a real-world GPS position, so every other line can be placed relative to it. Pick the line that should carry it, or skip to position everything manually and set it later."
           },
           "zeroDatum": {
             "title": "GPS Anchor",
@@ -3346,7 +3346,7 @@
         "steps": {
           "placeOnMap": {
             "title": "Click to Place, Hover to Snap",
-            "description": "Click the map to drop the section; position can be refined later. Hovering near an existing station snaps and merges the two at placement time.",
+            "description": "Click the map to drop the line; position can be refined later. Hovering near an existing station snaps and merges the two at placement time.",
             "descriptionItems": [
               "Drag to pan, scroll to zoom.",
               "Once this guide closes, Esc reopens the placement options and metadata."
@@ -3367,7 +3367,7 @@
           "edit": "Edit"
         },
         "items": {
-          "select": "Select stations, shots, or sections.",
+          "select": "Select stations, shots, or lines.",
           "pan": "Move the map view without editing data.",
           "zoom": "Box-zoom to focus on an area. Left/right click zooms in/out.",
           "merge": "Merge stations together.",
@@ -3376,7 +3376,7 @@
           "moveComment": "Reposition an existing comment.",
           "moveStation": "Reposition a station; connected shots follow.",
           "moveShot": "Reposition an individual shot.",
-          "moveSegment": "Move a group of connected sections."
+          "moveSegment": "Move a group of connected lines."
         }
       },
       "map": {
@@ -3402,9 +3402,9 @@
       "azimuthInRange": "Azimuth in {{value}} must be between 0 and 360 degrees.",
       "azimuthOutRange": "Azimuth out {{value}} must be between 0 and 360 degrees.",
       "lengthPositive": "Length must be positive.",
-      "mergeTargetMissing": "Merge target section is required.",
-      "mergeTargetNotFound": "Merge target section not found.",
-      "sectionNotPlaced": "Section has not been placed."
+      "mergeTargetMissing": "Merge target line is required.",
+      "mergeTargetNotFound": "Merge target line not found.",
+      "sectionNotPlaced": "Line has not been placed."
     },
     "section": {
       "duplicateMarker": "Duplicate marker {{marker}}."

@@ -10,7 +10,7 @@ crates sit under `src-tauri/crates/`:
 
 | Crate | Contents | Key deps |
 |-------|----------|----------|
-| `stalagmight-models` | The data model: `Project` / `Section` / `Shot` / `Station`, geometry (`geo.rs`), closures/merges/offsets, `app_dirs`, gas config + engine | - (base crate) |
+| `stalagmight-models` | The data model: `Project` / `Line` / `Shot` / `Station`, geometry (`geo.rs`), closures/merges/offsets, `app_dirs`, gas config + engine | - (base crate) |
 | `stalagmight-telemetry` | Telemetry collector + event registry (`telemetry/`), tracing/logging setup (`logging/`); its `build.rs` owns `TELEMETRY_ENDPOINT` validation and `APP_VERSION` | models |
 | `stalagmight-parsers` | Import parsers: DMP, Ariane TML/TMLU, Compass, Walls, GPX | models |
 | `stalagmight-persistence` | `.stalx` SQLite store + `.plnx` dive-plan store (`persistence/`), tile caches (`cache/`, `tilemap_cache`) | models |
@@ -46,12 +46,12 @@ family (`command_shot.rs`, `command_station.rs`, `command_move.rs`, ...) under
 ## Data Model
 
 - **Project** (`src-tauri/crates/models/src/project.rs`): the whole in-memory document - the
-  sections, plus everything that cross-references them.
-  - `station_merges`, `zero_datums`, `loop_closures` - the cross-section ties. All three
+  lines, plus everything that cross-references them.
+  - `station_merges`, `zero_datums`, `loop_closures` - the cross-line ties. All three
     are held with position-independent `StationKey` endpoints and re-encoded to the
     positional wire form only at IPC encode, so inserting or deleting a shot cannot
     silently rebind them. Closure detection and adjustment: [closures.md](closures.md).
-  - `section_offsets` / `station_offsets` - displacements applied when sections are
+  - `line_offsets` / `station_offsets` - displacements applied when lines are
     aligned through merges, or when a station is moved by hand.
   - `station_comments` - free text keyed by `StationKey`. A station is implicit (the
     boundary between consecutive shots), so it has no record of its own to hang a
@@ -61,8 +61,13 @@ family (`command_shot.rs`, `command_station.rs`, `command_move.rs`, ...) under
     when shots are inserted, deleted or reversed.
   - `validation` - per-project thresholds, stored in the `.stalx` so they travel with the
     file between collaborators instead of following whoever opens it.
-  - `imported_file_hashes` / `imported_section_hashes` - re-import de-duplication.
-- **Section**: Group of shots with metadata (name, surveyor, date, color)
+  - `imported_file_hashes` / `imported_line_hashes` - re-import de-duplication.
+- **Line** (`src-tauri/crates/models/src/line.rs`): a run of shots with metadata (name,
+  surveyor, date, color). It was called a Section until the rename; the `.stalx` file
+  keeps the old names (the `sections`, `section_offsets` and `imported_section_hashes`
+  tables, `section_id` columns, and the persisted JSON via
+  `src-tauri/crates/models/src/disk_names.rs`) - see
+  [Saving](saving.md#persisted-names-lines-are-sections-on-disk).
 - **Shot**: Single measurement (azimuth pair, length, depth in/out, pitch, LRUD) plus its
   `ShotKind` - a permanent leg, a swum jump, or a survey reference. That distinction is
   what the reachability graph and the gas engine weight on.
@@ -146,7 +151,7 @@ in `src-tauri/src/commands/telemetry_coverage_tests.rs`.
 | `src-tauri/crates/parsers/src/parsers/dmp.rs` | MNemo DMP file parser |
 | `src-tauri/crates/models/src/project.rs` | Project model with merge/offset logic |
 | `src-tauri/crates/models/src/project/gas.rs` | Gas-weighted reachability engine (`compute_gas_reach_field`) |
-| `src-tauri/crates/models/src/project/split_section.rs`, `combine_candidate.rs`, `combine_plan.rs`, `combine_sections.rs` | Split Section Here and Combine Sections (`combine_plan.rs`: across a loop, which side moves and which ties become loop closures); `station_rekey.rs` moves stored station refs with their stations (by stored key) and `gauge.rs` keeps the least-squares gauge on one physical station ([plan](plans/2026-11-12_merge-split-sections.md)) |
+| `src-tauri/crates/models/src/project/split_line.rs`, `combine_candidate.rs`, `combine_plan.rs`, `combine_lines.rs` | Split Line Here and Combine Lines (`combine_plan.rs`: across a loop, which side moves and which ties become loop closures); `station_rekey.rs` moves stored station refs with their stations (by stored key) and `gauge.rs` keeps the least-squares gauge on one physical station ([plan](plans/2026-11-12_merge-split-sections.md)) |
 | `src-tauri/crates/models/src/geo.rs` | GPS-to-local coordinate transformation (WGS84 → ENU) |
 | `src-tauri/crates/speleodb/src/speleodb/mod.rs` | SpeleoDB client module root (HTTP, auth, native files, sync, TLS policy) |
 | `src-tauri/crates/persistence/src/cache/tiles.rs` | Satellite tile cache (SQLite-based) |
@@ -269,13 +274,14 @@ Always use temp file + atomic rename pattern for saves:
 
 This prevents data loss if save fails mid-write.
 
-### Section Offset Tracking
+### Line Offset Tracking
 
-When stations are merged, section positions are recalculated:
-1. Build graph of section connections through merges
-2. Anchor section (first or with zero datum) stays fixed
-3. Calculate offsets for connected sections
-4. Store in `Project.section_offsets: HashMap<SectionId, (f64, f64)>`
+When stations are merged, line positions are recalculated:
+1. Build graph of line connections through merges
+2. Anchor line (first or with zero datum) stays fixed
+3. Calculate offsets for connected lines
+4. Store in `Project.line_offsets: HashMap<LineId, (f64, f64)>` (persisted in the
+   `section_offsets` table)
 
 Offsets are **derived** state that the file merely caches, which is why
 `redrive_offsets_after_load` (`src-tauri/crates/models/src/project/offsets.rs`) re-solves them
@@ -287,7 +293,7 @@ the first entry of `zero_datums` that still resolves (`Project::frame_datum`; a
 dangling datum is dropped from the wire and anchors nothing).
 A command that promotes a different datum to first - or ADDS the survey's first
 datum, which establishes the frame - therefore re-defines every stored coordinate,
-and the answer is always the same: translate every section, free-floating
+and the answer is always the same: translate every line, free-floating
 components included, so that datum's station lands on the origin
 (`Project::renormalize_frame`, issue #469). The add does it inside
 `Project::set_zero_datum` (the subsequent-datum placement reads that invariant, and
@@ -318,7 +324,7 @@ and an accuracy-only or Entrance-only edit moves nothing.
 
 - Use `Database::open_existing()` for reading (doesn't create files)
 - Use `Database::open()` for writing (creates if needed)
-- Shot IDs are generated on load: `section_id * FEATURE_ID_STRIDE + sequence_order`
+- Shot IDs are generated on load: `line_id * FEATURE_ID_STRIDE + sequence_order`
   (`FEATURE_ID_STRIDE` = 100000, `src-tauri/crates/models/src/id_stride.rs`, mirrored in
   `src/utils/ids.ts`). They are therefore *not* stable identity - use `Shot::uuid` for
   anything that has to survive a save/load
@@ -340,7 +346,7 @@ When a station is set as zero datum with GPS coordinates, the system converts GP
 **Important notes**:
 - Altitude is always 0; `depth_reference` is meters below surface, not ellipsoid height
 - The "Up" component is discarded; caves use depth measurements instead
-- Section offsets are tracked in `Project.section_offsets` to maintain visual positions after datum changes
+- Line offsets are tracked in `Project.line_offsets` to maintain visual positions after datum changes
 
 ## Global View Data Flow
 

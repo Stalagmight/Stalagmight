@@ -386,8 +386,7 @@ impl Project {
     pub(super) fn gauge_index(line: &Line) -> usize {
         let position_of = |uuid: &Option<String>| -> Option<usize> {
             let uuid = uuid.as_deref()?;
-            line
-                .shots
+            line.shots
                 .iter()
                 .position(|s| s.uuid.as_deref() == Some(uuid))
         };
@@ -499,10 +498,7 @@ impl Project {
     /// the gauge is reproducible across reloads. The one rule the solve
     /// ([`Self::plan_adjustment_anchors`]) and the edits that must not move
     /// it (Combine Lines' choice of the side that moves) share.
-    pub(crate) fn adjustment_anchor_of(
-        &self,
-        component: &HashSet<LineId>,
-    ) -> Option<StationRef> {
+    pub(crate) fn adjustment_anchor_of(&self, component: &HashSet<LineId>) -> Option<StationRef> {
         // A PLACEMENT datum (#741): a GPS fix is pulled by the solve, never
         // held, so it cannot be the station the component is held at.
         self.placement_datum_refs()
@@ -1144,7 +1140,7 @@ impl Project {
 )]
 mod tests {
     use super::*;
-    use crate::{LoopClosure, LineData, ShotData, StationMerge};
+    use crate::{LineData, LoopClosure, ShotData, StationMerge};
     use chrono::Utc;
 
     fn shot(azimuth: f64, length: f64) -> ShotData {

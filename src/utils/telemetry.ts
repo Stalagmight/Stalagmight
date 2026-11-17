@@ -98,7 +98,7 @@ export type NavigationAction =
 export type PanelName =
   | 'data-table'
   | 'detail'
-  | 'lines';
+  | 'sections';
 
 /** Canonical selection types - parsed by registry exhaustiveness tests. */
 export type SelectionType =

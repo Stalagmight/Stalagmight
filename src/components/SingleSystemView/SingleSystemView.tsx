@@ -56,7 +56,7 @@ const LINE_FOCUS_REFIT_DELAY_MS = 180;
 // header/content divider. These track the panel header layout - revisit if the
 // header height or the top-left map controls change. (The webview UI zoom scales
 // these uniformly with the header, so they stay aligned under zoom.)
-const LINES_TAB_TOP = 40; // just below the top-left "Fit to view" button (bottom ≈ 32px)
+const SECTIONS_TAB_TOP = 40; // just below the top-left "Fit to view" button (bottom ≈ 32px)
 const DETAILS_TAB_TOP = 79; // aligned to the Details panel's header/content divider
 
 // Opener-tab arrow glyphs. Module-level constant elements (immutable, depend on
@@ -99,7 +99,7 @@ export default function SingleSystemView() {
   // table + detail panel; Plan swaps the right Dock for the gas setup sidebar and the
   // bottom Dock for the tabbed plan tables; Export swaps the right Dock for the export
   // stub and hides the bottom table. The carousel owns enter/exit; setView()/setColorMode
-  // reset it. The left Lines Dock is survey-only (Plan/Export are read-only).
+  // reset it. The left Sections Dock is survey-only (Plan/Export are read-only).
   const appMode = useUIStore((s) => s.appMode);
   const workspace = useUIStore((s) => s.leftWorkspace);
   const outsideSurvey = useUIStore((s) => s.speleoOutsideSurvey);
@@ -233,19 +233,19 @@ export default function SingleSystemView() {
   // straight from the PERSISTED mode/open (a hover-floating panel overlays the map
   // and costs no layout width), so this is computable before the reveal hooks run
   // and there is no circular dependency between "am I collapsed" and "am I open".
-  const linesPinnedOpen = useUIStore((s) => s.sectionsPanelMode === 'pin' && s.sectionsPanelOpen);
+  const sectionsPinnedOpen = useUIStore((s) => s.sectionsPanelMode === 'pin' && s.sectionsPanelOpen);
   const detailPinnedOpen = useUIStore((s) => s.detailPanelMode === 'pin' && s.detailPanelOpen);
-  // Lines is survey-only; Plan/Export don't render it at all, so it costs
+  // Sections is survey-only; Plan/Export don't render it at all, so it costs
   // nothing there (not even an opener bar).
-  const linesPresent = appMode === 'survey' || outsideSurvey;
-  const squeezeLines = useMemo(
+  const sectionsPresent = appMode === 'survey' || outsideSurvey;
+  const squeezeSections = useMemo(
     () => ({
       width: Math.max(workspaceMin, sectionsPanelWidth),
       min: workspaceMin,
-      present: linesPresent,
-      pinnedOpen: linesPinnedOpen,
+      present: sectionsPresent,
+      pinnedOpen: sectionsPinnedOpen,
     }),
-    [sectionsPanelWidth, linesPresent, linesPinnedOpen, workspaceMin],
+    [sectionsPanelWidth, sectionsPresent, sectionsPinnedOpen, workspaceMin],
   );
   const squeezeDetail = useMemo(
     () => ({
@@ -259,12 +259,12 @@ export default function SingleSystemView() {
   const squeeze = useSidePanelSqueeze(mainEl, {
     mapMinWidth: MAP_MIN_WIDTH,
     barWidth: BAR,
-    lines: squeezeLines,
+    sections: squeezeSections,
     detail: squeezeDetail,
   });
   // Display-only widths: these feed the Docks' rendered size, NEVER the store or
   // savePanelSizes (see sidePanelSqueeze).
-  const linesDisplayWidth = squeeze.lines.width;
+  const sectionsDisplayWidth = squeeze.sections.width;
   const detailDisplayWidth = squeeze.detail.width;
 
   // The same squeeze on the VERTICAL axis (#260). The original fix covered only
@@ -292,11 +292,11 @@ export default function SingleSystemView() {
   // persisted mode/open; these hooks add transient hover visibility + handlers.
   // `forcedClosed` layers the transient viewport collapse on top without touching
   // either persisted field.
-  const linesReveal = usePanelReveal('lines', { forcedClosed: squeeze.lines.collapsed });
+  const sectionsReveal = usePanelReveal('sections', { forcedClosed: squeeze.sections.collapsed });
   useEffect(() => {
-    useUIStore.setState({ leftWorkspaceVisible: linesPresent && linesReveal.isOpen });
-  }, [linesPresent, linesReveal.isOpen]);
-  const revealLeft = linesReveal.revealTemporarily;
+    useUIStore.setState({ leftWorkspaceVisible: sectionsPresent && sectionsReveal.isOpen });
+  }, [sectionsPresent, sectionsReveal.isOpen]);
+  const revealLeft = sectionsReveal.revealTemporarily;
   const lastReveal = useRef(revealNonce);
   useLayoutEffect(() => {
     if (lastReveal.current === revealNonce) return;
@@ -319,17 +319,17 @@ export default function SingleSystemView() {
   // re-binds its listeners whenever their identity changes, and the display size
   // moves ~60x/s during an unsqueezed drag.
   const squeezeRef = useRef({
-    lines: { display: 0, user: 0 },
+    sections: { display: 0, user: 0 },
     detail: { display: 0, user: 0 },
     data: { display: 0, user: 0 },
   });
   squeezeRef.current = {
-    lines: { display: linesDisplayWidth, user: Math.max(workspaceMin, sectionsPanelWidth) },
+    sections: { display: sectionsDisplayWidth, user: Math.max(workspaceMin, sectionsPanelWidth) },
     detail: { display: detailDisplayWidth, user: detailPanelWidth },
     data: { display: dataDisplayHeight, user: dataTableHeight },
   };
   /** The size to write for `size`, clamped to what this drag could reach on screen. */
-  const resolveSize = useCallback((axis: 'lines' | 'detail' | 'data', size: number) => {
+  const resolveSize = useCallback((axis: 'sections' | 'detail' | 'data', size: number) => {
     const { display, user } = squeezeRef.current[axis];
     return resolveResize(display, user, size);
   }, []);
@@ -338,9 +338,9 @@ export default function SingleSystemView() {
   // through a drag (these props feed useResizeHandle, which re-binds listeners
   // when they change). Inline arrows would be re-created every render - including
   // the ~60×/s store-width updates during the drag itself.
-  const applyLinesWidth = useCallback(
+  const applySectionsWidth = useCallback(
     (size: number) => {
-      setSectionsPanelWidth(resolveSize('lines', size));
+      setSectionsPanelWidth(resolveSize('sections', size));
     },
     [resolveSize, setSectionsPanelWidth],
   );
@@ -356,9 +356,9 @@ export default function SingleSystemView() {
     },
     [resolveSize, setDataTableHeight],
   );
-  const handleLinesResizeEnd = useCallback(
+  const handleSectionsResizeEnd = useCallback(
     (size: number) => {
-      savePanelSizes('lines', resolveSize('lines', size));
+      savePanelSizes('sections', resolveSize('sections', size));
     },
     [resolveSize, savePanelSizes],
   );
@@ -407,19 +407,19 @@ export default function SingleSystemView() {
       setResizingPanel((prev) => (resizing ? panel : prev === panel ? null : prev)),
     [],
   );
-  const onLinesResizing = useCallback((r: boolean) => setPanelResizing('lines', r), [setPanelResizing]);
+  const onSectionsResizing = useCallback((r: boolean) => setPanelResizing('sections', r), [setPanelResizing]);
   const onDataResizing = useCallback((r: boolean) => setPanelResizing('data-table', r), [setPanelResizing]);
   const onDetailResizing = useCallback((r: boolean) => setPanelResizing('detail', r), [setPanelResizing]);
   const dataResizing = resizingPanel === 'data-table';
-  const sidePanelResizing = resizingPanel === 'lines' || resizingPanel === 'detail';
+  const sidePanelResizing = resizingPanel === 'sections' || resizingPanel === 'detail';
   // Stop the Data overlay at ANY open side panel's edge - pinned OR hover-floating
   // (both render the full panel at its persisted width); only fill to the window
   // edge when the side is minimized and the Data panel is open, else sit between
   // the closed bars. (isOpen, not isPinnedOpen, or a floating side panel overlaps
   // the Data panel and hides its tab.)
-  // Outside Survey the Lines Dock is not rendered at all (see the appMode gate below), so there
+  // Outside Survey the Sections Dock is not rendered at all (see the appMode gate below), so there
   // is neither a panel nor a closed bar on the left to stop at - the bottom panel must reach the
-  // window edge. `linesReveal.isOpen` still reports the PERSISTED survey-mode state, which is
+  // window edge. `sectionsReveal.isOpen` still reports the PERSISTED survey-mode state, which is
   // exactly why Plan's cylinders bar used to sit indented by a panel that was not there (#298).
   // Inside Survey it is the display width, i.e. the width each Dock is actually RENDERING at in
   // its current state - squeezed while it reflows the map, and the user's own width (capped at
@@ -428,10 +428,10 @@ export default function SingleSystemView() {
   // viewport-collapsed panel still reports that same width: it is what the panel renders at if
   // the user floats it open, and while it is NOT open neither branch below reads it.
   const dataOverlayLeft =
-    !linesPresent
+    !sectionsPresent
       ? 0
-      : linesReveal.isOpen
-        ? linesDisplayWidth
+      : sectionsReveal.isOpen
+        ? sectionsDisplayWidth
         : dataReveal.isOpen
           ? 0
           : BAR;
@@ -564,7 +564,7 @@ export default function SingleSystemView() {
   // it open, so exiting the step restores the user's exact preference (including
   // hover mode) instead of leaving it pinned. Null when onboarding isn't holding it.
   type PanelSnapshot = { mode: PanelMode; open: boolean };
-  const linesOnboardingSnapRef = useRef<PanelSnapshot | null>(null);
+  const sectionsOnboardingSnapRef = useRef<PanelSnapshot | null>(null);
   const detailOnboardingSnapRef = useRef<PanelSnapshot | null>(null);
   const dataTableOnboardingSnapRef = useRef<PanelSnapshot | null>(null);
 
@@ -624,7 +624,7 @@ export default function SingleSystemView() {
     // One merged "docks" step (#331) spotlights all three panels at once, so all
     // three reveal together instead of one per step.
     const onDocksStep = singleViewOnboardingStepId === 'docks';
-    syncOnboardingPanel('lines', onDocksStep, linesOnboardingSnapRef);
+    syncOnboardingPanel('sections', onDocksStep, sectionsOnboardingSnapRef);
     syncOnboardingPanel('detail', onDocksStep, detailOnboardingSnapRef);
     syncOnboardingPanel('data-table', onDocksStep, dataTableOnboardingSnapRef);
 
@@ -633,7 +633,7 @@ export default function SingleSystemView() {
     // closed from the app menu while the tour is up) would otherwise strand all
     // three panels pinned open with the real layout lost.
     return () => {
-      syncOnboardingPanel('lines', false, linesOnboardingSnapRef);
+      syncOnboardingPanel('sections', false, sectionsOnboardingSnapRef);
       syncOnboardingPanel('detail', false, detailOnboardingSnapRef);
       syncOnboardingPanel('data-table', false, dataTableOnboardingSnapRef);
     };
@@ -642,7 +642,7 @@ export default function SingleSystemView() {
   // Shared panel content - each rendered in exactly ONE place (its Dock), so the
   // heavy instance is never duplicated/remounted across pin/unpin/hover. Memoized
   // so a panel-resize re-render (which fires ~60×/s as the store width/height
-  // updates during a drag) doesn't reconcile the heavy DataTable / Lines /
+  // updates during a drag) doesn't reconcile the heavy DataTable / Sections /
   // Details subtrees: the Docks receive the SAME element reference and React bails
   // out of the child render. Dimmed during placement (dim wraps content only,
   // never the tab/handle).
@@ -655,11 +655,11 @@ export default function SingleSystemView() {
   // panel subtree with a filter while leaving it interactive.
   const dimCls = placementModeActive ? 'pointer-events-none select-none opacity-45 grayscale' : '';
   const lines = project?.lines;
-  const linesContent = useMemo(
+  const sectionsContent = useMemo(
     () =>
       lines ? (
         <div className={`h-full ${dimCls}`}>
-          <ErrorBoundary panelName="Lines">
+          <ErrorBoundary panelName="Sections">
             <SectionsPanel lines={lines} />
           </ErrorBoundary>
         </div>
@@ -716,7 +716,7 @@ export default function SingleSystemView() {
   // would bust the memo every tick.
   const panelLabels = useMemo(() => {
     const name = {
-      lines: t('singleView.panels.sectionsName'),
+      sections: t('singleView.panels.sectionsName'),
       detail: t('singleView.panels.detailName'),
       // In Plan mode the bottom Dock holds the Cylinders/DPV/Segments/Profile tables,
       // so its tab says "Gear" rather than "Data" (#395).
@@ -730,7 +730,7 @@ export default function SingleSystemView() {
     });
     return {
       name,
-      lines: labels(name.lines),
+      sections: labels(name.sections),
       detail: labels(name.detail),
       data: labels(name.data),
     };
@@ -773,35 +773,35 @@ export default function SingleSystemView() {
           side Docks' overlays + tabs. Each Dock renders a flow spacer (the only
           thing that reflows the map) plus a single absolute panel instance. */}
       <div ref={setMainEl} className="relative flex-1 flex overflow-hidden">
-        {/* Lines (left) - survey-only; Plan/Export show the read-only closure map
+        {/* Sections (left) - survey-only; Plan/Export show the read-only closure map
             with no line-editing affordances. */}
-        <div className="contents" style={!linesPresent ? { display: 'none' } : undefined}>
+        <div className="contents" style={!sectionsPresent ? { display: 'none' } : undefined}>
         <Dock
-          reveal={linesReveal}
+          reveal={sectionsReveal}
           edge="left"
           // Display width: squeezed down when the viewport can't afford the user's
           // own width without starving the map (#260). The store keeps the user's
           // value, so zooming back out restores it.
-          size={linesDisplayWidth}
+          size={sectionsDisplayWidth}
           minSize={workspaceMin}
-          maxSize={PANEL_SIZE_BOUNDS.lines.max}
-          onResize={applyLinesWidth}
-          onResizeEnd={handleLinesResizeEnd}
-          label={workspace === 'speleodb' ? 'SpeleoDB' : panelLabels.name.lines}
+          maxSize={PANEL_SIZE_BOUNDS.sections.max}
+          onResize={applySectionsWidth}
+          onResizeEnd={handleSectionsResizeEnd}
+          label={workspace === 'speleodb' ? 'SpeleoDB' : panelLabels.name.sections}
           openArrow={CHEVRON_RIGHT}
           closeArrow={CHEVRON_LEFT}
           keepMounted
-          testId="lines"
-          tabLabels={panelLabels.lines}
-          tabTop={LINES_TAB_TOP}
+          testId="sections"
+          tabLabels={panelLabels.sections}
+          tabTop={SECTIONS_TAB_TOP}
           // When the Data panel is open (pinned OR hover-floating), compress this
           // bar (if minimized) so it stops at the Data panel's top instead of
           // running alongside it.
           closedBottomInset={dataReveal.isOpen ? dataDisplayHeight : 0}
           suspendSiblingTransition={dataResizing}
-          onResizingChange={onLinesResizing}
+          onResizingChange={onSectionsResizing}
         >
-          <LeftWorkspace key={openPath} lines={linesContent} />
+          <LeftWorkspace key={openPath} sections={sectionsContent} />
         </Dock>
         </div>
 
@@ -888,7 +888,7 @@ export default function SingleSystemView() {
         <Dock
           reveal={detailReveal}
           edge="right"
-          // See the Lines Dock: display-only squeeze, never persisted.
+          // See the Sections Dock: display-only squeeze, never persisted.
           size={detailDisplayWidth}
           minSize={PANEL_SIZE_BOUNDS.detail.min}
           maxSize={PANEL_SIZE_BOUNDS.detail.max}
@@ -922,7 +922,7 @@ export default function SingleSystemView() {
       >
         <span>
           {t('singleView.status.summary', {
-            lines: formatNumber(stats?.line_count ?? 0),
+            sections: formatNumber(stats?.line_count ?? 0),
             shots: formatNumber(stats?.shot_count ?? 0),
             length: formatLength(stats?.total_length ?? 0, precision.length),
           })}

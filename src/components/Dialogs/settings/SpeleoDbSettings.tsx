@@ -134,7 +134,7 @@ export function SpeleoDbSettings({
 
       <SettingsSection
         title={t('settings.speleodb.sections.account')}
-        data-testid="line-speleodb-account"
+        data-testid="section-speleodb-account"
       >
 
         {authError && (
@@ -263,7 +263,7 @@ export function SpeleoDbSettings({
 
       <SettingsSection
         title={t('settings.speleodb.sections.connection')}
-        data-testid="line-speleodb-connection"
+        data-testid="section-speleodb-connection"
       >
         <SettingRow
           label={t('settings.speleodb.endpoint.label')}

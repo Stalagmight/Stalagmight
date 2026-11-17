@@ -20,6 +20,8 @@ pub struct Config {
     pub general: GeneralConfig,
     pub units: UnitsConfig,
     pub display: DisplayConfig,
+    /// `section_colors` in `config.toml` (see `toml_names`).
+    #[serde(alias = "section_colors")]
     pub line_colors: LineColorsConfig,
     pub map: MapConfig,
     pub validation: ValidationConfig,
@@ -40,7 +42,7 @@ pub struct Config {
     /// `defaultConfig.ts` (which is typed as the frontend `Config`, so an emitted
     /// `webkit_memory` block would fail `tsc`). Because `skip_serializing` also
     /// drops it from `toml::to_string_pretty`, saving would otherwise wipe the
-    /// `[webkit_memory]` line from disk; `Config::save_to_path` therefore
+    /// `[webkit_memory]` section from disk; `Config::save_to_path` therefore
     /// re-appends the table (when non-default) after serializing, so a hand-tuned
     /// knob in `config.toml` survives a save. The re-appended value is the one
     /// `AppState::update_config` preserves in memory across the session, so saving
@@ -77,7 +79,7 @@ pub struct Config {
     pub(super) legacy_snap: Option<LegacySnapConfig>,
 }
 
-/// Legacy snap config for migration from old [snap] line
+/// Legacy snap config for migration from old [snap] section
 #[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
 pub(super) struct LegacySnapConfig {
     #[serde(default)]
@@ -1087,7 +1089,11 @@ pub struct ShortcutsConfig {
     pub toggle_station_labels: Vec<String>,
     #[serde(deserialize_with = "deserialize_shortcut_vec")]
     pub toggle_shot_labels: Vec<String>,
-    #[serde(deserialize_with = "deserialize_shortcut_vec")]
+    /// `toggle_section_labels` in `config.toml` (see `toml_names`).
+    #[serde(
+        deserialize_with = "deserialize_shortcut_vec",
+        alias = "toggle_section_labels"
+    )]
     pub toggle_line_labels: Vec<String>,
     #[serde(deserialize_with = "deserialize_shortcut_vec")]
     pub fit_to_bounds: Vec<String>,
@@ -1471,6 +1477,7 @@ impl Config {
             let legacy = document
                 .as_table_mut()
                 .and_then(|table| table.remove("speleodb"));
+            super::toml_names::from_disk(&mut document);
             let mut config: Config = document.try_into().context("Failed to parse config file")?;
             super::speleodb_file::load_legacy(&mut config.speleodb, path, legacy);
             super::speleodb_file::load_or_preserve(&mut config.speleodb, path);
@@ -1497,6 +1504,7 @@ impl Config {
         if let Some(table) = document.as_table_mut() {
             table.remove("speleodb");
         }
+        super::toml_names::to_disk(&mut document);
         let mut contents =
             toml::to_string_pretty(&document).context("Failed to serialize config")?;
         // `webkit_memory` is `#[serde(skip_serializing)]` (backend-only, kept out
@@ -1512,7 +1520,7 @@ impl Config {
             struct WebkitMemoryDoc<'a> {
                 webkit_memory: &'a WebkitMemoryConfig,
             }
-            let line = toml::to_string_pretty(&WebkitMemoryDoc {
+            let section = toml::to_string_pretty(&WebkitMemoryDoc {
                 webkit_memory: &self.webkit_memory,
             })
             .context("Failed to serialize webkit_memory config")?;
@@ -1520,7 +1528,7 @@ impl Config {
                 contents.push('\n');
             }
             contents.push('\n');
-            contents.push_str(&line);
+            contents.push_str(&section);
         }
         super::speleodb_file::save_with_general(&self.speleodb, path, &contents)?;
         tracing::info!(config_path = ?path, "Saved config to file");
@@ -1620,14 +1628,14 @@ impl Config {
     /// Called during load() before normalize()
     ///
     /// Note: Migration only occurs when map.snap has default values.
-    /// If a user explicitly sets map.snap to defaults AND has a legacy [snap] line,
+    /// If a user explicitly sets map.snap to defaults AND has a legacy [snap] section,
     /// the legacy values will override. This edge case is accepted as the user likely
     /// wants to migrate their old settings.
     pub(super) fn migrate_legacy(&mut self) {
-        // Migrate old [snap] line to new map.snap
+        // Migrate old [snap] section to new map.snap
         if let Some(legacy) = self.legacy_snap.take() {
             // Only migrate if map.snap appears to be at defaults (not explicitly set)
-            // Limitation: Cannot distinguish explicit defaults from missing line
+            // Limitation: Cannot distinguish explicit defaults from missing section
             let snap_is_default = (self.map.snap.threshold - default_snap_threshold()).abs()
                 < f64::EPSILON
                 && self.map.snap.enabled_merge

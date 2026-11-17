@@ -191,7 +191,7 @@ impl SurveyCredit {
     }
 
     /// The surveyors' names joined with `", "`, or `None` when there are none.
-    /// What the plain-text exports carry (the legacy `lines.surveyor`
+    /// What the plain-text exports carry (the legacy `sections.surveyor`
     /// column is [`legacy_credit_text`]).
     pub fn surveyor_names(&self) -> Option<String> {
         join_names(&self.surveyors)
@@ -221,7 +221,7 @@ pub fn join_names(people: &[Person]) -> Option<String> {
 /// as [`Person::name_key`] compares them, the first spelling kept), or `None`
 /// for an empty list.
 ///
-/// For the legacy `lines.surveyor` text ([`legacy_credit_text`]), which
+/// For the legacy `sections.surveyor` text ([`legacy_credit_text`]), which
 /// older builds and SpeleoDB show as-is: two different people sharing a name
 /// (different emails) are one name there, not "Jo Diver, Jo Diver". The
 /// per-shot tables still keep both people.
@@ -235,7 +235,7 @@ pub fn join_distinct_names(people: &[Person]) -> Option<String> {
     (!names.is_empty()).then(|| names.join(", "))
 }
 
-/// The legacy `lines.surveyor` text of a line's people: the only credit
+/// The legacy `sections.surveyor` text of a line's people: the only credit
 /// SpeleoDB reads, and all an older build keeps, since a released build saves
 /// by writing a fresh file and drops the per-shot tables (#718).
 ///
@@ -441,7 +441,7 @@ pub enum NameSource {
     /// form, and a Compass or Walls team line. Split on `,` and `;` only:
     /// `ds, kb` is two people.
     NameList,
-    /// Free text a person typed: a legacy `lines.surveyor` text that is NOT
+    /// Free text a person typed: a legacy `sections.surveyor` text that is NOT
     /// in the Ariane form. Split on `;` and `,`, except that exactly two comma
     /// parts, each one word, are one `Last, First` person (`Doe, John`).
     FreeText,
@@ -471,7 +471,7 @@ pub fn split_roles(text: &str, source: NameSource) -> (Vec<Person>, Vec<Person>)
     }
 }
 
-/// A `.stalx` legacy `lines.surveyor` text as `(explorers, surveyors)`:
+/// A `.stalx` legacy `sections.surveyor` text as `(explorers, surveyors)`:
 /// [`split_roles`] with text outside the Ariane form read as
 /// [`NameSource::FreeText`].
 pub fn legacy_people(text: &str) -> (Vec<Person>, Vec<Person>) {

@@ -7,10 +7,10 @@
 //!
 //! Like `station_names`, the tables arrived WITHOUT a schema bump: SpeleoDB's
 //! Python reader (see `station_texts`) accepts exactly v18, ignores tables it
-//! does not know, and validates `lines.surveyor` as one string and
+//! does not know, and validates `sections.surveyor` as one string and
 //! `lines.date` as one ISO date. Those two legacy columns are still written,
 //! as the line aggregate: `lines.date` is the earliest shot date, and
-//! `lines.surveyor` is [`crate::models::legacy_credit_text`] - the distinct
+//! `sections.surveyor` is [`crate::models::legacy_credit_text`] - the distinct
 //! surveyor names joined with `", "` (the text it always held; `"; "` for two
 //! one-word names, which free text would read as one `Last, First` person),
 //! or, when anyone explored the line, the Ariane `"explorers / surveyors"`

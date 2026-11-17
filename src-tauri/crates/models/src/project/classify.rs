@@ -244,7 +244,7 @@ mod tests {
 
     use super::ClassifyScope;
     use crate::{
-        ClosureStrategy, LoopClosure, Project, LineData, ShotData, ShotKind, StationMerge,
+        ClosureStrategy, LineData, LoopClosure, Project, ShotData, ShotKind, StationMerge,
         StationRef,
     };
 

@@ -9,8 +9,8 @@ use super::combine_closure_tests::{
 };
 use crate::{
     ClosureStrategy, CombineCandidate, CombineJoinEnds, CombineJoinKind, CombinePlan,
-    CombineRemovedKind, CombineReplacedClosure, CombineReplacedKind, KeptMovesReason, LoopClosure,
-    Project, LineEnd, LineId, StationRef, TornTieKind, TornTieReason,
+    CombineRemovedKind, CombineReplacedClosure, CombineReplacedKind, KeptMovesReason, LineEnd,
+    LineId, LoopClosure, Project, StationRef, TornTieKind, TornTieReason,
 };
 
 /// Plant a loop closure between `a` and `b` as a file can carry it: any
@@ -501,16 +501,8 @@ fn a_snapped_and_an_ordinary_closure_made_identical_keep_the_ordinary_one() {
                 .unwrap()
                 .id;
             let join = CombineJoinEnds {
-                kept: if keep_o {
-                    LineEnd::Start
-                } else {
-                    LineEnd::End
-                },
-                other: if keep_o {
-                    LineEnd::End
-                } else {
-                    LineEnd::Start
-                },
+                kept: if keep_o { LineEnd::Start } else { LineEnd::End },
+                other: if keep_o { LineEnd::End } else { LineEnd::Start },
             };
             let (kept, other) = if keep_o { (o, k) } else { (k, o) };
             let candidate = project

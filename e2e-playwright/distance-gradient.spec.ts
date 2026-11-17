@@ -80,7 +80,7 @@ async function toggleDisplayOption(page: Page, toggleKey: string): Promise<void>
   const before = await isToggleOn(page, toggleKey);
   // Color modes are single-select: turn one OFF by selecting Line, not by re-clicking the pill.
   if (before && colorKeys.includes(toggleKey)) {
-    await page.locator('[data-testid="display-color-line"]').click();
+    await page.locator('[data-testid="display-color-section"]').click();
   } else {
     await page.locator(`[data-testid="display-toggle-${toggleKey}"]`).click();
   }

@@ -572,7 +572,7 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
               {!showPills && (
                 <div className="text-xs text-text-secondary mt-0.5">
                   {t('detailPanel.warnings.location', {
-                    line: getLineName(warning.lineId),
+                    section: getLineName(warning.lineId),
                     shot: formatShotId(warning.lineId, warning.shotIndex + 1),
                   })}
                 </div>
@@ -1539,7 +1539,7 @@ function ClosuresSection({
   const precision = useDecimalPrecision();
   const [expanded, setExpanded] = useState(true);
   const [removingClosureId, setRemovingClosureId] = useState<bigint | null>(null);
-  const contentId = 'closures-line-content';
+  const contentId = 'closures-section-content';
 
   // Precompute station existence set for O(1) lookups
   const stationKeySet = useMemo(() => {
@@ -1598,12 +1598,12 @@ function ClosuresSection({
   };
 
   return (
-    <div className="pt-2 border-t border-border" data-testid="closures-line">
+    <div className="pt-2 border-t border-border" data-testid="closures-section">
       <button
         type="button"
         onClick={() => setExpanded(!expanded)}
         className="flex items-center gap-1 text-sm text-text-secondary hover:text-text-primary w-full text-left"
-        data-testid="closures-line-toggle"
+        data-testid="closures-section-toggle"
         aria-expanded={expanded}
         aria-controls={contentId}
       >
@@ -1613,7 +1613,7 @@ function ClosuresSection({
         <span>{t('detailPanel.closures.title')}</span>
       </button>
       {expanded && (
-        <div className="mt-1 space-y-2" id={contentId} data-testid="closures-line-content">
+        <div className="mt-1 space-y-2" id={contentId} data-testid="closures-section-content">
           {sortedGroups.map(([closureId, refs]) => {
             const closureIdLabel = closureId.toString();
             const closure = closureMap.get(closureId);

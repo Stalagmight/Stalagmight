@@ -12,7 +12,7 @@
 
 use std::time::Instant;
 
-use crate::{ClosureStrategy, LoopClosure, Project, LineData, ShotData, StationRef};
+use crate::{ClosureStrategy, LineData, LoopClosure, Project, ShotData, StationRef};
 
 /// xorshift64*: deterministic, no dependency.
 struct Rng(u64);

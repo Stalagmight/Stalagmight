@@ -2,8 +2,8 @@ use tauri::State;
 
 use crate::core::{AppState, Command, CommandResult};
 use crate::models::{
-    CreditEdit, CreditTargets, DeleteShotImpact, DeleteShotRangeImpact, LineId, ShotData,
-    ShotId, ShotKind, ShotUpdates, SplitAt, SplitPreview, SplitLineOptions,
+    CreditEdit, CreditTargets, DeleteShotImpact, DeleteShotRangeImpact, LineId, ShotData, ShotId,
+    ShotKind, ShotUpdates, SplitAt, SplitLineOptions, SplitPreview,
 };
 
 /// Create a new shot
@@ -15,13 +15,7 @@ pub fn create_shot(
     after_shot_id: Option<ShotId>,
     before_shot_id: Option<ShotId>,
 ) -> CommandResult {
-    create_shot_impl(
-        state.inner(),
-        line_id,
-        shot,
-        after_shot_id,
-        before_shot_id,
-    )
+    create_shot_impl(state.inner(), line_id, shot, after_shot_id, before_shot_id)
 }
 
 pub(crate) fn create_shot_impl(
@@ -120,11 +114,7 @@ pub(crate) fn preview_delete_shot_impl(
 
 /// Delete a shot
 #[tauri::command]
-pub fn delete_shot(
-    state: State<AppState>,
-    line_id: LineId,
-    shot_id: ShotId,
-) -> CommandResult {
+pub fn delete_shot(state: State<AppState>, line_id: LineId, shot_id: ShotId) -> CommandResult {
     delete_shot_impl(state.inner(), line_id, shot_id)
 }
 
@@ -133,10 +123,7 @@ pub(crate) fn delete_shot_impl(
     line_id: LineId,
     shot_id: ShotId,
 ) -> CommandResult {
-    state.execute(Command::DeleteShot {
-        line_id,
-        shot_id,
-    })
+    state.execute(Command::DeleteShot { line_id, shot_id })
 }
 
 /// Delete a mid-line shot and split the line into two named lines

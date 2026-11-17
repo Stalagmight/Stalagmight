@@ -4,9 +4,9 @@ mod command_comment;
 mod command_credit;
 mod command_delete_split;
 mod command_import;
+mod command_line;
 mod command_move;
 mod command_query;
-mod command_line;
 mod command_shot;
 mod command_split_line;
 mod command_split_shot;
@@ -172,16 +172,9 @@ mod issue_756_tests;
     clippy::print_stdout,
     reason = "on-demand vector dump: fails loudly, and says where it wrote"
 )]
-mod legacy_disk_vectors_dump;
+mod legacy_disk_vectors_dump_tests;
 #[cfg(test)]
 mod metamorphic_undo_tests;
-#[cfg(test)]
-#[expect(
-    clippy::expect_used,
-    clippy::panic,
-    reason = "test module: panics on a failed assumption are the point"
-)]
-mod pre_line_rename_disk_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
@@ -208,6 +201,13 @@ mod multi_datum_steps_fuzz;
 mod multi_datum_tests;
 #[cfg(test)]
 mod open_undo_bugs_tests;
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod pre_line_rename_disk_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,

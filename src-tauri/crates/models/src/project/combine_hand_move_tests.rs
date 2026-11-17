@@ -12,8 +12,8 @@ use chrono::Utc;
 
 use super::combine_closure_tests::{add, adjusted, check_combined, dist, options, shot, xy};
 use crate::{
-    ClosureStrategy, CombineJoinEnds, CombineJoinKind, GpsCoordinates, LoopClosure, Project,
-    LineEnd, LineId, ShotData, StationMerge, StationRef, TornTieKind, TornTieReason,
+    ClosureStrategy, CombineJoinEnds, CombineJoinKind, GpsCoordinates, LineEnd, LineId,
+    LoopClosure, Project, ShotData, StationMerge, StationRef, TornTieKind, TornTieReason,
     ZeroDatum,
 };
 
@@ -487,13 +487,7 @@ fn check_one(
 /// moves.
 #[test]
 fn nothing_merged_at_the_dropped_join_station_moves_nothing() {
-    let mut join = join(
-        LineEnd::End,
-        LineEnd::Start,
-        false,
-        (0.3, 0.0, 0.0),
-        NONE,
-    );
+    let mut join = join(LineEnd::End, LineEnd::Start, false, (0.3, 0.0, 0.0), NONE);
     // Only U, at K's end: take T off O's start.
     let t = join.t;
     join.project

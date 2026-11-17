@@ -4,7 +4,7 @@ import type { CombineCandidate } from '../types/ipc/CombineCandidate';
 import type { CombinePlan } from '../types/ipc/CombinePlan';
 
 /**
- * Combine Lines: the read-only queries the context menu and the Lines
+ * Combine Lines: the read-only queries the context menu and the Sections
  * panel ask before offering the action, and the dialog's defaults.
  */
 

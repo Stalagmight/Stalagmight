@@ -19,7 +19,7 @@ use super::AppState;
 use crate::core::events::EventSink;
 use crate::core::Command;
 use crate::models::{
-    reminted_shot_uuid, ClosureStrategy, Project, LineData, LineId, ShotData, ShotUpdates,
+    reminted_shot_uuid, ClosureStrategy, LineData, LineId, Project, ShotData, ShotUpdates,
     StationKey, StationRef,
 };
 use crate::persistence::{Database, ResolvedWarning};
@@ -176,12 +176,8 @@ fn survey_state(state: &AppState) -> String {
     });
     for line in &mut project.lines {
         let position = |uuid: &Option<String>| {
-            uuid.as_ref().and_then(|u| {
-                line
-                    .shots
-                    .iter()
-                    .position(|s| s.uuid.as_ref() == Some(u))
-            })
+            uuid.as_ref()
+                .and_then(|u| line.shots.iter().position(|s| s.uuid.as_ref() == Some(u)))
         };
         let gauge = (
             position(&line.gauge_shot_uuid),

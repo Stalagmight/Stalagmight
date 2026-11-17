@@ -41,7 +41,7 @@ async function getViewCalls(page: Page): Promise<Array<Record<string, unknown>>>
   return page.evaluate(() => ((window as any).__MOCK_DATA_TABLE_VIEW_CALLS__ ?? []) as Array<Record<string, unknown>>);
 }
 
-/** panels line of the in-memory config (re-synced via get_config after a save). */
+/** panels section of the in-memory config (re-synced via get_config after a save). */
 async function getPanelsConfig(page: Page): Promise<Record<string, unknown>> {
   return page.evaluate(() => (window as any).__E2E_TEST__?.projectStore.getState().config?.panels ?? {});
 }

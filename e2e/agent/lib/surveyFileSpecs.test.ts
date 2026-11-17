@@ -77,7 +77,7 @@ describe('randomDmpSpec (valid)', () => {
     }
   });
 
-  it('stays inside every range parse_line validates', () => {
+  it('stays inside every range parse_section validates', () => {
     for (const seed of SEEDS) {
       const spec = randomDmpSpec(mulberry32(seed), 'valid');
       expect([2, 3, 4, 5]).toContain(spec.version);
@@ -257,7 +257,7 @@ describe('suggestiveDmpSpec', () => {
     }
   });
 
-  it('stays inside every range parse_line validates', () => {
+  it('stays inside every range parse_section validates', () => {
     for (const seed of SEEDS) {
       const spec = suggestiveDmpSpec(mulberry32(seed));
       expect([3, 4, 5]).toContain(spec.version);

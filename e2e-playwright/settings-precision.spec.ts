@@ -5,7 +5,7 @@ import { openSettingsFromMenu, closeProjectViaMenu } from './helpers/app';
 /**
  * E2E tests for Decimal Precision settings (per-category).
  *
- * Tests the precision input fields in Settings > Units > Precision line.
+ * Tests the precision input fields in Settings > Units > Precision section.
  * Each category (length, coordinates, depth, azimuth, inclination, gps) has
  * an input-precision-{key} field with range 0-6.
  */
@@ -51,13 +51,13 @@ test.describe('Settings - Decimal Precision', () => {
     await createProject(page, 'Precision Settings Test');
   });
 
-  test('precision line is visible in Units settings', async ({ page }) => {
+  test('precision section is visible in Units settings', async ({ page }) => {
     await openSettingsDialog(page);
     await navigateToUnitsTab(page);
 
-    // The precision line should be visible
-    const precisionLine = page.locator('[data-testid="line-precision"]');
-    await expect(precisionLine).toBeVisible();
+    // The precision section should be visible
+    const precisionSection = page.locator('[data-testid="section-precision"]');
+    await expect(precisionSection).toBeVisible();
   });
 
   test('all six precision input fields are present', async ({ page }) => {
@@ -160,13 +160,13 @@ test.describe('Settings - Decimal Precision', () => {
     await expect(errorDot).not.toBeVisible({ timeout: 3000 });
   });
 
-  test('measurement unit selectors coexist with precision line', async ({ page }) => {
+  test('measurement unit selectors coexist with precision section', async ({ page }) => {
     await openSettingsDialog(page);
     await navigateToUnitsTab(page);
 
-    // Both lines should be visible
-    await expect(page.locator('[data-testid="line-measurement"]')).toBeVisible();
-    await expect(page.locator('[data-testid="line-precision"]')).toBeVisible();
+    // Both sections should be visible
+    await expect(page.locator('[data-testid="section-measurement"]')).toBeVisible();
+    await expect(page.locator('[data-testid="section-precision"]')).toBeVisible();
 
     // Unit selectors should still work
     await expect(page.locator('[data-testid="select-length-unit"]')).toBeVisible();

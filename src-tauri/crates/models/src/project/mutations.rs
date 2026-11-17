@@ -3,8 +3,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use tracing::{debug, info, trace, warn};
 
 use crate::{
-    gps_to_local, ClosurePreview, ClosureStrategy, Coordinates, DatumRole, GpsCoordinates,
-    LoopClosure, LineId, StationKey, StationMerge, StationRef, ZeroDatum,
+    gps_to_local, ClosurePreview, ClosureStrategy, Coordinates, DatumRole, GpsCoordinates, LineId,
+    LoopClosure, StationKey, StationMerge, StationRef, ZeroDatum,
 };
 
 use super::Project;
@@ -1337,8 +1337,7 @@ impl Project {
 
         while let Some(current_line) = queue.pop_front() {
             for merge in &merges {
-                let (this_station, partner_station) = if merge.station_a.line_id
-                    == current_line
+                let (this_station, partner_station) = if merge.station_a.line_id == current_line
                     && !visited.contains(&merge.station_b.line_id)
                 {
                     (&merge.station_a, &merge.station_b)

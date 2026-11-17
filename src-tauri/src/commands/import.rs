@@ -115,9 +115,7 @@ pub fn check_line_hashes(
         purpose = "detect duplicate line imports",
         "Checking line content hashes"
     );
-    state
-        .check_line_hashes(&hashes)
-        .map_err(|e| e.to_string())
+    state.check_line_hashes(&hashes).map_err(|e| e.to_string())
 }
 
 pub(crate) use crate::core::command::decorate_receipt;
@@ -683,10 +681,7 @@ pub fn suggest_import_placement(
         .iter()
         .map(|s| ExistingLine {
             id: s.id,
-            name: s
-                .name
-                .clone()
-                .unwrap_or_else(|| format!("Line {}", s.id)),
+            name: s.name.clone().unwrap_or_else(|| format!("Line {}", s.id)),
             shots: s.shots.clone(),
             azimuth_reference: project.azimuth_reference_for(s),
         })
@@ -719,10 +714,7 @@ pub fn suggest_all_import_placements(
             .iter()
             .map(|s| ExistingLine {
                 id: s.id,
-                name: s
-                    .name
-                    .clone()
-                    .unwrap_or_else(|| format!("Line {}", s.id)),
+                name: s.name.clone().unwrap_or_else(|| format!("Line {}", s.id)),
                 shots: s.shots.clone(),
                 azimuth_reference: project.azimuth_reference_for(s),
             })

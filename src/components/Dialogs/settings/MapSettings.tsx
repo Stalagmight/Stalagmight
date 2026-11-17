@@ -220,7 +220,7 @@ export function MapSettings({
     >
       <h2 className="text-lg font-medium mb-4">{t('settings.map.title')}</h2>
 
-      <SettingsSection title={t('settings.map.sections.satellite')} data-testid="line-satellite">
+      <SettingsSection title={t('settings.map.sections.satellite')} data-testid="section-satellite">
         <SettingRow
           label={t('settings.map.satellite.provider.label')}
           helpText={t('settings.map.satellite.provider.help')}
@@ -299,7 +299,7 @@ export function MapSettings({
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title={t('settings.map.sections.zoom')} data-testid="line-zoom">
+      <SettingsSection title={t('settings.map.sections.zoom')} data-testid="section-zoom">
         <SettingRow
           label={t('settings.map.zoom.default.label')}
           helpText={t('settings.map.zoom.default.help')}
@@ -382,7 +382,7 @@ export function MapSettings({
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title={t('settings.map.sections.controls')} data-testid="line-controls">
+      <SettingsSection title={t('settings.map.sections.controls')} data-testid="section-controls">
         <SettingRow
           label={t('settings.map.controls.showNavigationTools.label')}
           helpText={t('settings.map.controls.showNavigationTools.help')}
@@ -458,7 +458,7 @@ export function MapSettings({
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title={t('settings.map.sections.station')} data-testid="line-station">
+      <SettingsSection title={t('settings.map.sections.station')} data-testid="section-station">
         <SettingRow
           label={t('settings.map.station.radius.label')}
           helpText={t('settings.map.station.radius.help')}
@@ -544,7 +544,7 @@ export function MapSettings({
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title={t('settings.map.sections.shot')} data-testid="line-shot">
+      <SettingsSection title={t('settings.map.sections.shot')} data-testid="section-shot">
         <SettingRow
           label={t('settings.map.shot.width.label')}
           helpText={t('settings.map.shot.width.help')}
@@ -630,7 +630,7 @@ export function MapSettings({
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title={t('settings.map.sections.snap')} data-testid="line-snap">
+      <SettingsSection title={t('settings.map.sections.snap')} data-testid="section-snap">
         <SettingRow
           label={t('settings.map.snap.threshold.label')}
           helpText={t('settings.map.snap.threshold.help')}
@@ -685,7 +685,7 @@ export function MapSettings({
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title={t('settings.map.sections.animation')} data-testid="line-animation">
+      <SettingsSection title={t('settings.map.sections.animation')} data-testid="section-animation">
         <SettingRow
           label={t('settings.map.animation.enabled.label')}
           helpText={t('settings.map.animation.enabled.help')}
@@ -744,7 +744,7 @@ export function MapSettings({
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title={t('settings.map.sections.warnings')} data-testid="line-map-warnings">
+      <SettingsSection title={t('settings.map.sections.warnings')} data-testid="section-map-warnings">
         <SettingRow
           label={t('settings.map.highlightWarnings.label')}
           helpText={t('settings.map.highlightWarnings.help')}

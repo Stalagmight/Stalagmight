@@ -21,7 +21,7 @@ import { emptySurveyData } from '../../../types/survey-data';
 
 const ISSUES = 'display-toggle-showIssueSeverity';
 const ERRORS = 'display-toggle-showShotErrors';
-const LINE = 'display-color-line';
+const LINE = 'display-color-section';
 const NOTE = 'display-warnings-visit-note';
 
 async function openMenu() {

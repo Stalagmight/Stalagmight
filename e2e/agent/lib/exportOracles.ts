@@ -1012,7 +1012,7 @@ function lrudSentinel(value: number | null): string {
  *
  * LRUD goes through `lrudSentinel`, which reads Ariane's `0.0` as the absent
  * sentinel it is - see that function for why this is a documented format
- * semantic rather than a tolerance, and for the two doc lines that own the
+ * semantic rather than a tolerance, and for the two doc sections that own the
  * claim. Every other field is compared as measured.
  *
  * The key is also DIRECTION-AGNOSTIC: a leg and its reciprocal produce the same

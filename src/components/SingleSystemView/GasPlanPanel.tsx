@@ -340,7 +340,7 @@ export function GasPlanPanel() {
     });
 
   // Props shared by both render branches below (#395): the entry card's "Adjust assumptions"
-  // disclosure and the full rig's always-visible sidebar line render the exact same inputs.
+  // disclosure and the full rig's always-visible sidebar section render the exact same inputs.
   const assumptionsProps = {
     units,
     diver,
@@ -437,8 +437,8 @@ export function GasPlanPanel() {
         {/* Previous dive plans (#244): save / load / delete named plans */}
         <DivePlanBar />
         {/* Origin */}
-        <line className="space-y-1">
-          <LineLabel>{t('gasPanel.origin.label')}</LineLabel>
+        <section className="space-y-1">
+          <SectionLabel>{t('gasPanel.origin.label')}</SectionLabel>
           <div className="flex items-center justify-between gap-2">
             <span data-testid="gas-origin-readout" className="font-mono">
               {originLabel}
@@ -480,13 +480,13 @@ export function GasPlanPanel() {
             {t(originPickArmed ? 'gasPanel.origin.pickArmed' : 'gasPanel.origin.pick')}
           </button>
           <p className="text-xs opacity-60">{t('gasPanel.origin.hint')}</p>
-        </line>
+        </section>
 
         {/* Route: the endpoint plus the ordered way points (#298). The way-point rows are the only
             place the visit order can be CHANGED - the map pins can add and remove, but ordering is
             a list operation, and order is what the engine actually routes on. */}
-        <line className="space-y-1" data-testid="gas-route-line">
-          <LineLabel>{t('gasPanel.route.label')}</LineLabel>
+        <section className="space-y-1" data-testid="gas-route-section">
+          <SectionLabel>{t('gasPanel.route.label')}</SectionLabel>
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs opacity-70">{t('gasPanel.route.endpointLabel')}</span>
             <div className="flex items-center gap-2">
@@ -616,11 +616,11 @@ export function GasPlanPanel() {
               </p>
             )}
           </div>
-        </line>
+        </section>
 
         {/* Marked points (#298): annotation only, never a gas input. */}
-        <line className="space-y-1" data-testid="gas-marked-line">
-          <LineLabel>{t('gasPanel.marked.label')}</LineLabel>
+        <section className="space-y-1" data-testid="gas-marked-section">
+          <SectionLabel>{t('gasPanel.marked.label')}</SectionLabel>
           {markedPoints.length === 0 ? (
             <p className="text-xs opacity-60" data-testid="gas-marked-empty">
               {t('gasPanel.marked.empty')}
@@ -664,13 +664,13 @@ export function GasPlanPanel() {
           {markedPoints.length > 0 && (
             <p className="text-xs opacity-60">{t('gasPanel.marked.hint')}</p>
           )}
-        </line>
+        </section>
 
         <GasAssumptionsSections {...assumptionsProps} />
 
         {/* Readout */}
-        <line className="space-y-1 border-t border-border pt-3" data-testid="gas-readout">
-          <LineLabel>{t('gasPanel.readout.label')}</LineLabel>
+        <section className="space-y-1 border-t border-border pt-3" data-testid="gas-readout">
+          <SectionLabel>{t('gasPanel.readout.label')}</SectionLabel>
           {reachField ? (
             <dl className="grid grid-cols-2 gap-x-2 gap-y-1 text-xs">
               <dt className="opacity-70">
@@ -804,12 +804,12 @@ export function GasPlanPanel() {
           ) : (
             <p className="text-xs opacity-60">{t('gasPanel.readout.computing')}</p>
           )}
-        </line>
+        </section>
       </div>
     </div>
   );
 }
 
-function LineLabel({ children }: { children: ReactNode }) {
+function SectionLabel({ children }: { children: ReactNode }) {
   return <h3 className="text-xs font-semibold uppercase tracking-wide opacity-60">{children}</h3>;
 }

@@ -485,9 +485,7 @@ impl Database {
                 salvaged.line_count = lines.len();
                 salvaged.lines_json = serde_json::to_string(&lines).ok();
             }
-            Err(e) => salvaged
-                .errors
-                .push(format!("Failed to read lines: {e}")),
+            Err(e) => salvaged.errors.push(format!("Failed to read lines: {e}")),
         }
 
         // Shots

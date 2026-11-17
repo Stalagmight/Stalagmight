@@ -21,8 +21,8 @@
 )]
 
 use crate::{
-    AzimuthReference, CorrectionSource, NorthReference, Project, Line, LineData, LineId,
-    ShotData, StationRef,
+    AzimuthReference, CorrectionSource, Line, LineData, LineId, NorthReference, Project, ShotData,
+    StationRef,
 };
 
 /// 10 degrees east: big enough that a dropped correction cannot pass as noise.

@@ -42,7 +42,7 @@ use std::collections::HashMap;
 use chrono::Utc;
 
 use crate::{
-    Project, LineData, LineId, Shot, ShotData, SplitLineOptions, SplitSide, StationKey,
+    LineData, LineId, Project, Shot, ShotData, SplitLineOptions, SplitSide, StationKey,
     StationMerge, StationRef,
 };
 
@@ -153,11 +153,7 @@ impl Project {
     /// Why `line_id` cannot be split at its station `station_index`, if it
     /// cannot: the line is missing, or the station is not a mid-line
     /// one. Read-only, so a caller can refuse before changing anything.
-    pub fn split_station_refusal(
-        &self,
-        line_id: LineId,
-        station_index: u32,
-    ) -> Option<String> {
+    pub fn split_station_refusal(&self, line_id: LineId, station_index: u32) -> Option<String> {
         let Some(line) = self.get_line(line_id) else {
             return Some(format!("Line {line_id} not found"));
         };

@@ -416,12 +416,12 @@ fn corrupt(conn: &Connection, rng: &mut Rng, project: &Project) -> Edits {
                     format!(
                         "UPDATE zero_datum_extras SET {} WHERE position = {p}",
                         rng.pick(&[
-                            "line_id = 999",
+                            "section_id = 999",
                             "station_index = 1000",
                             "station_index = station_index + 1",
                             "shot_uuid = 'stale'",
                             "shot_uuid = NULL",
-                            "line_id = 'abc'",
+                            "section_id = 'abc'",
                         ])
                     ),
                     2,

@@ -72,7 +72,7 @@ import ContextMenu from '../ContextMenu';
 
 const rows = () => screen.getAllByRole('button').filter((b) => b.getAttribute('data-testid')?.startsWith('context-menu-item-'));
 /** The combine row: the 8th row of an end station's menu, whatever its label. */
-const combineRow = () => screen.getByRole('button', { name: /^Combine Section/ });
+const combineRow = () => screen.getByRole('button', { name: /^Combine Line/ });
 /** A flyout's rows, as [label, enabled, hint]. */
 const submenuRows = (testId = 'context-menu-submenu') =>
   [...screen.getByTestId(testId).querySelectorAll('button')].map((b) => [
@@ -269,7 +269,7 @@ describe('ContextMenu combine row', () => {
 
   it('is absent on a mid-line station, where nothing is asked', () => {
     openOn(1);
-    expect(screen.queryByRole('button', { name: /^Combine Section/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Combine Line/ })).toBeNull();
     expect(queryCombineCandidate).not.toHaveBeenCalled();
   });
 });

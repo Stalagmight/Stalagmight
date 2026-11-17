@@ -77,7 +77,7 @@ export function AppearanceSettings({
         ? 'light'
         : 'dark';
 
-  // Description text for each line - only shown in auto mode
+  // Description text for each section - only shown in auto mode
   const dayDescription =
     currentMode === 'auto'
       ? t('settings.appearance.theme.lightCard.description')
@@ -96,7 +96,7 @@ export function AppearanceSettings({
     >
       <h2 className="text-lg font-medium mb-4">{t('settings.appearance.title')}</h2>
 
-      <SettingsSection title={t('settings.appearance.theme.title')} data-testid="line-theme">
+      <SettingsSection title={t('settings.appearance.theme.title')} data-testid="section-theme">
         <SettingRow
           label={t('settings.appearance.theme.mode')}
           helpText={t('settings.appearance.theme.help')}
@@ -116,8 +116,8 @@ export function AppearanceSettings({
 
         {/* Side-by-side theme cards */}
         <div className="flex gap-3 mt-3" data-testid="theme-preview-cards">
-          {/* Day theme line */}
-          <div className="flex-1 min-w-0" data-testid="theme-line-day">
+          {/* Day theme section */}
+          <div className="flex-1 min-w-0" data-testid="theme-section-day">
             <ThemePreviewCard
               mode="day"
               colorTheme={dayColorTheme}
@@ -137,8 +137,8 @@ export function AppearanceSettings({
             </div>
           </div>
 
-          {/* Night theme line */}
-          <div className="flex-1 min-w-0" data-testid="theme-line-night">
+          {/* Night theme section */}
+          <div className="flex-1 min-w-0" data-testid="theme-section-night">
             <ThemePreviewCard
               mode="night"
               colorTheme={nightColorTheme}

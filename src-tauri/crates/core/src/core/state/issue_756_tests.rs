@@ -11,7 +11,7 @@
 
 use super::AppState;
 use crate::models::{
-    ClosureStrategy, LoopClosure, Project, LineData, LineId, ShotData, StationRef,
+    ClosureStrategy, LineData, LineId, LoopClosure, Project, ShotData, StationRef,
 };
 
 fn shot(azimuth: f64, length: f64) -> ShotData {
@@ -165,8 +165,8 @@ fn positions(project: &Project) -> Vec<(StationRef, (f64, f64))> {
 fn a_snap_into_a_part_a_zero_datum_holds_tears_for_the_datum_through_the_commands() {
     use crate::core::Command;
     use crate::models::{
-        CombineJoinEnds, CombinePick, CombineLinesOptions, Coordinates, GpsCoordinates,
-        LineEnd, TornTieKind, TornTieReason,
+        CombineJoinEnds, CombineLinesOptions, CombinePick, Coordinates, GpsCoordinates, LineEnd,
+        TornTieKind, TornTieReason,
     };
     let state = AppState::new().unwrap();
     state.execute(Command::CreateProject {
@@ -187,10 +187,7 @@ fn a_snap_into_a_part_a_zero_datum_holds_tears_for_the_datum_through_the_command
     };
     let at = |s: LineId, i: u32| xy(&project(&state), st(s, i));
     let move_onto = |line: LineId, index: u32, target: StationRef| {
-        let (from, to) = (
-            at(line, index),
-            at(target.line_id, target.station_index),
-        );
+        let (from, to) = (at(line, index), at(target.line_id, target.station_index));
         let moved = state.execute(Command::MoveLine {
             line_id: line,
             offset: Coordinates {

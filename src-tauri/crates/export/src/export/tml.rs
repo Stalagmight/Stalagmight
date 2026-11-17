@@ -25,7 +25,7 @@ use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::Writer;
 
 use crate::models::comment_split;
-use crate::models::{normalize_azimuth, Project, LineId, Shot, StationRef};
+use crate::models::{normalize_azimuth, LineId, Project, Shot, StationRef};
 
 use super::atomic_write::write_atomic;
 use super::tml_azimuth::AzimuthExport;
@@ -845,8 +845,7 @@ fn build_export_shots_with_report(
         // a reader grouping rows by (name, date, people) keeps it with them;
         // every shot row carries its own (`row_explorer` / `row_date`).
         let start_credit = |at: usize| {
-            line
-                .shots
+            line.shots
                 .get(at)
                 .or(line.shots.first())
                 .map_or(&crate::models::EMPTY_CREDIT, Shot::credit)
@@ -1092,8 +1091,7 @@ fn build_export_shots_with_report(
                             locked: false,
                         });
 
-                        station_to_ariane
-                            .insert((line.id, (shot_idx + 1) as u32), shot_ariane_id);
+                        station_to_ariane.insert((line.id, (shot_idx + 1) as u32), shot_ariane_id);
                     }
 
                     blocks.push(LineBlock {
@@ -1392,10 +1390,7 @@ fn build_export_shots_with_report(
 
             // Treat merged stations as the same Ariane node ID so closures and GPS
             // references resolve to the parent-attached node.
-            station_to_ariane.insert(
-                (line_id, parent_link.child_station_index),
-                parent_ariane_id,
-            );
+            station_to_ariane.insert((line_id, parent_link.child_station_index), parent_ariane_id);
             progressed = true;
         }
 
@@ -2188,8 +2183,8 @@ mod entrance_tests;
 mod tests {
     use super::*;
     use crate::models::{
-        ClosureStrategy, GpsCoordinates, LoopClosure, LineData, ShotData, ShotKind,
-        StationAnchor, StationKey, StationMerge, ZeroDatum,
+        ClosureStrategy, GpsCoordinates, LineData, LoopClosure, ShotData, ShotKind, StationAnchor,
+        StationKey, StationMerge, ZeroDatum,
     };
     use tempfile::NamedTempFile;
 
@@ -4599,10 +4594,7 @@ mod tests {
             starts.len(),
             2,
             "one entrance per component, got {:?}",
-            starts
-                .iter()
-                .map(|s| s.line.as_str())
-                .collect::<Vec<_>>()
+            starts.iter().map(|s| s.line.as_str()).collect::<Vec<_>>()
         );
         assert!(
             ensure_rooted_chain(&shots, TmlProfile::User).is_ok(),
@@ -5291,9 +5283,7 @@ mod tests {
         // The split exists: a reversed pre-datum leg means the line name shows
         // up in both its forms, and every shot still chains (no orphan roots).
         assert!(
-            shots
-                .iter()
-                .any(|s| s.line == "Gallery (pre-zero-datum)"),
+            shots.iter().any(|s| s.line == "Gallery (pre-zero-datum)"),
             "mid-line datum must split the entrance so the START sits on it"
         );
         assert!(
@@ -5371,10 +5361,7 @@ mod tests {
         assert!(
             gallery_start.is_some(),
             "the datum-carrying line must be the component's entrance; STARTs: {:?}",
-            starts
-                .iter()
-                .map(|s| s.line.as_str())
-                .collect::<Vec<_>>()
+            starts.iter().map(|s| s.line.as_str()).collect::<Vec<_>>()
         );
         let gallery_start = gallery_start.unwrap();
         assert!(

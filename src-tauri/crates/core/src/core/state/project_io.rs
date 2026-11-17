@@ -1,6 +1,6 @@
 use super::AppState;
 use crate::core::{CommandResult, PersistStack, UndoStack};
-use crate::models::{Project, LineId};
+use crate::models::{LineId, Project};
 use crate::persistence::Database;
 use std::path::{Path, PathBuf};
 
@@ -388,11 +388,7 @@ pub(super) fn reapply_heals_after_restore(
         if line.gauge_shot_uuid.is_some() {
             continue;
         }
-        let Some(healed) = live
-            .lines
-            .iter()
-            .find(|candidate| candidate.id == line.id)
-        else {
+        let Some(healed) = live.lines.iter().find(|candidate| candidate.id == line.id) else {
             continue;
         };
         let Some(gauge_shot) = healed.gauge_shot_uuid.as_deref() else {
@@ -423,12 +419,7 @@ pub(super) fn reapply_heals_after_restore(
         // prevent (#24). Leaving the anchors as the snapshot had them (unset) is
         // what lets the next save capture a pair the line can actually
         // resolve.
-        let holds = |uuid: &str| {
-            line
-                .shots
-                .iter()
-                .any(|s| s.uuid.as_deref() == Some(uuid))
-        };
+        let holds = |uuid: &str| line.shots.iter().any(|s| s.uuid.as_deref() == Some(uuid));
         // The neighbour is legitimately absent for a single-shot line, so
         // "unset" passes and only a RECORDED one has to resolve.
         if !holds(gauge_shot) || !healed.gauge_neighbour_uuid.as_deref().is_none_or(holds) {
@@ -708,29 +699,28 @@ impl AppState {
                 // AND its now-persisted UUID. Without this, its stale in-memory
                 // shot_id could point at a different shot (or none) after an
                 // insert/delete on the next load (issue #57 / Codex).
-                let live_by_id: std::collections::HashMap<
-                    (LineId, u32),
-                    (&str, (LineId, u32)),
-                > = project
-                    .lines
-                    .iter()
-                    .flat_map(|s| {
-                        s.shots.iter().enumerate().filter_map(move |(seq, sh)| {
-                            sh.uuid.as_deref().map(|u| {
-                                (
-                                    (s.id, sh.id),
+                let live_by_id: std::collections::HashMap<(LineId, u32), (&str, (LineId, u32))> =
+                    project
+                        .lines
+                        .iter()
+                        .flat_map(|s| {
+                            s.shots.iter().enumerate().filter_map(move |(seq, sh)| {
+                                sh.uuid.as_deref().map(|u| {
                                     (
-                                        u,
+                                        (s.id, sh.id),
                                         (
-                                            s.id,
-                                            s.id * crate::models::FEATURE_ID_STRIDE + seq as u32,
+                                            u,
+                                            (
+                                                s.id,
+                                                s.id * crate::models::FEATURE_ID_STRIDE
+                                                    + seq as u32,
+                                            ),
                                         ),
-                                    ),
-                                )
+                                    )
+                                })
                             })
                         })
-                    })
-                    .collect();
+                        .collect();
                 let homes = super::warnings::ShotHomes::of(project);
                 // Remap each UUID-keyed row to its shot's live position; DROP a
                 // UUID-keyed row whose shot was deleted (UUID no longer live) - it

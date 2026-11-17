@@ -419,10 +419,7 @@ fn worker(
             }
             7 => {
                 if let Some((line_id, shot_id)) = pick_shot(&mut rng) {
-                    state.execute(Command::DeleteShot {
-                        line_id,
-                        shot_id,
-                    });
+                    state.execute(Command::DeleteShot { line_id, shot_id });
                 }
             }
             8 => {
@@ -719,12 +716,9 @@ fn check_final_state(state: &AppState, walked: &mut usize) -> Vec<String> {
     }
     let verdict = integrity_verdict(state);
     if adjusted_geometry_of(state).is_empty()
-        && state.get_project_state().is_some_and(|project| {
-            project
-                .lines
-                .iter()
-                .any(|line| !line.shots.is_empty())
-        })
+        && state
+            .get_project_state()
+            .is_some_and(|project| project.lines.iter().any(|line| !line.shots.is_empty()))
     {
         problems.push(
             "the adjusted solve returned nothing for a project that still has shots".to_string(),

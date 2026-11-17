@@ -3,8 +3,8 @@ use tracing::{debug, error, trace, warn};
 
 use crate::config::ClosureAdjustmentConfig;
 use crate::{
-    normalize_azimuth, AzimuthReference, ClosureStrategy, Coordinates, LoopClosure, LineId,
-    Shot, StationRef,
+    normalize_azimuth, AzimuthReference, ClosureStrategy, Coordinates, LineId, LoopClosure, Shot,
+    StationRef,
 };
 
 use super::{PathEdge, Project, StationPath};
@@ -294,11 +294,7 @@ impl Project {
         // reading the project default afterwards (#438).
         let azimuth_reference = self.azimuth_reference_for_id(station_ref.line_id);
 
-        let Some(line) = self
-            .lines
-            .iter_mut()
-            .find(|s| s.id == station_ref.line_id)
-        else {
+        let Some(line) = self.lines.iter_mut().find(|s| s.id == station_ref.line_id) else {
             return Err("Line not found".to_string());
         };
 
@@ -601,9 +597,8 @@ impl Project {
                     zero_nodes.push(node);
                 }
             }
-            zero_nodes.sort_by(|a, b| {
-                (a.line_id, a.station_index).cmp(&(b.line_id, b.station_index))
-            });
+            zero_nodes
+                .sort_by(|a, b| (a.line_id, a.station_index).cmp(&(b.line_id, b.station_index)));
             zero_nodes.dedup();
 
             if zero_nodes.len() > 1 {

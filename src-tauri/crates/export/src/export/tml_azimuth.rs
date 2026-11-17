@@ -4,7 +4,7 @@
 //! decision, and the export's only choice that can change a NUMBER rather than
 //! a label.
 
-use crate::models::{AzimuthReference, CorrectionSource, NorthReference, Project, Line};
+use crate::models::{AzimuthReference, CorrectionSource, Line, NorthReference, Project};
 
 /// How this document declares its azimuths (#438).
 ///

@@ -15,7 +15,7 @@ export const BAR = 12;
  * The tab anchors are FIXED insets from one container edge (`right: tabInset` for
  * the bottom Data tab, `top: tabTop` for the side tabs). Once the container is
  * smaller than the inset the tab's whole box lands outside it: the Data tab walked
- * off the left edge of a narrow map column and rendered on top of the Lines
+ * off the left edge of a narrow map column and rendered on top of the Sections
  * panel, and a side tab drops below its bar when an open Data panel shortens it.
  *
  * `container === null` means "not measured yet" (first paint, or a zero-layout

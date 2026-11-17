@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use super::Command;
 use crate::models::{
-    GpsCoordinates, LoopClosure, LineData, LineId, LineIdentity, ShotData, ShotId,
-    StationRef, SurveyCredit,
+    GpsCoordinates, LineData, LineId, LineIdentity, LoopClosure, ShotData, ShotId, StationRef,
+    SurveyCredit,
 };
 
 mod added_content;
@@ -508,9 +508,7 @@ impl UndoData {
             // Legacy only - `SetShotKind` now records `PreviousValues`, which
             // can carry a uuid. A persisted one has nothing but the id.
             UndoData::InverseCommand(Command::SetShotKind {
-                line_id,
-                shot_id,
-                ..
+                line_id, shot_id, ..
             }) => Some((*line_id, None, *shot_id)),
             _ => None,
         }
@@ -1473,8 +1471,7 @@ mod tests {
             panic!("Expected CreateLine");
         }
 
-        if let UndoData::InverseCommand(Command::DeleteLine { line_id }) = restored.undo_data
-        {
+        if let UndoData::InverseCommand(Command::DeleteLine { line_id }) = restored.undo_data {
             assert_eq!(line_id, 42);
         } else {
             panic!("Expected InverseCommand with DeleteLine");
@@ -1508,11 +1505,7 @@ mod tests {
         let (cmd_json, undo_json) = result.unwrap();
         let restored = UndoStack::deserialize_entry(&cmd_json, &undo_json).unwrap();
 
-        if let UndoData::LineSnapshot {
-            line_id,
-            line_data,
-        } = restored.undo_data
-        {
+        if let UndoData::LineSnapshot { line_id, line_data } = restored.undo_data {
             assert_eq!(line_id, 5);
             assert_eq!(line_data.name, Some("Snapshot".to_string()));
         } else {
@@ -2786,19 +2779,18 @@ mod tests {
         let offsets: HashMap<LineId, Option<(f64, f64)>> =
             (0..4).map(|id| (id, Some((1.0, 2.0)))).collect();
 
-        let previous_values =
-            |previous_offsets: HashMap<LineId, Option<(f64, f64)>>| UndoEntry {
-                command_bytes: None,
-                command: test_create_line_command("S0"),
-                undo_data: UndoData::PreviousValues {
-                    line_id: 0,
-                    shot_id: Some(1),
-                    shot_uuid: None,
-                    values_json: "x".repeat(64),
-                    previous_offsets,
-                },
-                timestamp: None,
-            };
+        let previous_values = |previous_offsets: HashMap<LineId, Option<(f64, f64)>>| UndoEntry {
+            command_bytes: None,
+            command: test_create_line_command("S0"),
+            undo_data: UndoData::PreviousValues {
+                line_id: 0,
+                shot_id: Some(1),
+                shot_uuid: None,
+                values_json: "x".repeat(64),
+                previous_offsets,
+            },
+            timestamp: None,
+        };
         assert_eq!(
             UndoStack::estimated_size(&previous_values(HashMap::new())),
             64 + 512
@@ -3274,7 +3266,7 @@ mod tests {
     fn test_new_format_undo_history_survives_reload() {
         use std::collections::HashMap;
 
-        use crate::models::{Project, LineData, ShotUpdates};
+        use crate::models::{LineData, Project, ShotUpdates};
         use crate::persistence::sqlite::Database;
         use tempfile::TempDir;
 

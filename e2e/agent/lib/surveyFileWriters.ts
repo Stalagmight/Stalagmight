@@ -21,9 +21,9 @@
  * ## What the framing is checked against
  *
  * The constants below are transcribed from the parsers, not from format docs:
- * `src-tauri/src/parsers/dmp.rs` (`LINE_MAGIC`, `SHOT_START_MAGIC`,
+ * `src-tauri/src/parsers/dmp.rs` (`SECTION_MAGIC`, `SHOT_START_MAGIC`,
  * `SHOT_END_MAGIC`, `shot_size`, `end_of_line_patterns`, `parse_shot`,
- * `parse_line`) and `src-tauri/src/parsers/tml/` (`normalize_key_bytes` for
+ * `parse_section`) and `src-tauri/src/parsers/tml/` (`normalize_key_bytes` for
  * the long/short element spellings, `decode.rs::find_data_entry` for the archive
  * entry name). Where the two disagree the parser wins - see the `shot_size(3)`
  * note on `endOfLineBytes`.
@@ -35,7 +35,7 @@ import { crc32 } from './crc32';
 // DMP
 // ============================================================================
 
-/** Line start magic, emitted for version > 2 (`dmp.rs` `LINE_MAGIC`). */
+/** Section start magic, emitted for version > 2 (`dmp.rs` `SECTION_MAGIC`). */
 export const DMP_SECTION_MAGIC: readonly [number, number, number] = [68, 89, 101];
 /** Per-shot start magic, version >= 5 (`dmp.rs` `SHOT_START_MAGIC`). */
 export const DMP_SHOT_START_MAGIC: readonly [number, number, number] = [57, 67, 77];
@@ -91,7 +91,7 @@ export type DmpEndOfSection = 'normal' | 'buggy' | 'none';
 export interface DmpSectionSpec {
   /** Three name bytes. A string is taken as its first three UTF-8 bytes, padded. */
   name: string | readonly [number, number, number];
-  /** 0 = In, 1 = Out; any other byte makes `parse_line` reject the line. */
+  /** 0 = In, 1 = Out; any other byte makes `parse_section` reject the line. */
   direction: number;
   /** Year as the file stores it: the offset from 2000, so 24 means 2024. */
   year: number;
@@ -162,7 +162,7 @@ function pushI16(out: number[], value: number): void {
 function nameBytes(name: DmpSectionSpec['name']): [number, number, number] {
   if (typeof name !== 'string') return [byte(name[0]), byte(name[1]), byte(name[2])];
   const encoded = new TextEncoder().encode(name);
-  // Three bytes exactly: `parse_line` reads three and falls back to a numeric
+  // Three bytes exactly: `parse_section` reads three and falls back to a numeric
   // spelling when they are not UTF-8, so a short name is space-padded rather
   // than left to shift every following field.
   return [encoded[0] ?? 0x20, encoded[1] ?? 0x20, encoded[2] ?? 0x20];

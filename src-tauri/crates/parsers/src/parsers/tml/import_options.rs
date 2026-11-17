@@ -459,8 +459,7 @@ mod tests {
             .find(|c| c.line_index == 2)
             .expect("C is imported");
         let ImportPlacement::FromImporting {
-            target_line_index,
-            ..
+            target_line_index, ..
         } = c.placement
         else {
             panic!("C still attaches to B, got {:?}", c.placement);
@@ -470,8 +469,7 @@ mod tests {
         // Every FromImporting target must be a line this batch creates.
         for cfg in &configs {
             if let ImportPlacement::FromImporting {
-                target_line_index,
-                ..
+                target_line_index, ..
             } = cfg.placement
             {
                 assert!(

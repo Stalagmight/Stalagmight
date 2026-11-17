@@ -7,10 +7,9 @@ use std::sync::{Arc, Mutex};
 use crate::core::undo::{UndoData, UndoEntry};
 use crate::core::{Command, CommandResult, PersistStack, UndoStack};
 use crate::models::{
-    ClosureStrategy, Coordinates, GpsCoordinates, ImportPlacement, ImportLineConfig,
-    LoopClosure, Project, LineData, LineId, LineUpdates, ShotData, ShotId, ShotKind,
-    ShotUpdates, StationAnchor, StationKey, StationMerge, StationRef, SurveyDirection,
-    MIN_SPLIT_CHILD_LENGTH_M,
+    ClosureStrategy, Coordinates, GpsCoordinates, ImportLineConfig, ImportPlacement, LineData,
+    LineId, LineUpdates, LoopClosure, Project, ShotData, ShotId, ShotKind, ShotUpdates,
+    StationAnchor, StationKey, StationMerge, StationRef, SurveyDirection, MIN_SPLIT_CHILD_LENGTH_M,
 };
 use crate::persistence::Database;
 use tempfile::TempDir;
@@ -286,13 +285,9 @@ fn test_merge_projects_carries_each_lines_resolved_azimuth_reference() {
             shots: vec![due_north(10.0)],
         })
         .id;
-    project_a
-        .get_line_mut(line_a)
-        .unwrap()
-        .azimuth_reference = Some(crate::models::AzimuthReference::magnetic(
-        10.0,
-        crate::models::CorrectionSource::Manual,
-    ));
+    project_a.get_line_mut(line_a).unwrap().azimuth_reference = Some(
+        crate::models::AzimuthReference::magnetic(10.0, crate::models::CorrectionSource::Manual),
+    );
 
     // B: says nothing per line and leans on its PROJECT default.
     let mut project_b = Project::new("B".to_string(), None);
@@ -1006,10 +1001,7 @@ fn test_undo_after_reload_restores_exactly_the_edited_field() {
         );
     }
     let project = state2.get_project_state().unwrap();
-    assert_eq!(
-        project.lines[0].shots[0].comment.as_deref(),
-        Some("edited")
-    );
+    assert_eq!(project.lines[0].shots[0].comment.as_deref(), Some("edited"));
 
     assert!(state2.undo().success);
 
@@ -1171,12 +1163,14 @@ fn test_merge_projects_places_by_datum_and_keeps_station_offsets_datums_and_clos
     }
     assert_eq!(closure_ids.len(), merged.loop_closures.len());
 
-    assert!(merged.loop_closures.iter().any(|c| {
-        c.station_a.line_id == merged_line_a && c.station_b.line_id == merged_line_a
-    }));
-    assert!(merged.loop_closures.iter().any(|c| {
-        c.station_a.line_id == merged_line_b && c.station_b.line_id == merged_line_b
-    }));
+    assert!(merged
+        .loop_closures
+        .iter()
+        .any(|c| { c.station_a.line_id == merged_line_a && c.station_b.line_id == merged_line_a }));
+    assert!(merged
+        .loop_closures
+        .iter()
+        .any(|c| { c.station_a.line_id == merged_line_b && c.station_b.line_id == merged_line_b }));
 }
 
 /// `MergeProjects` is classified `affects_geometry`, so it reaches `execute`'s
@@ -1359,9 +1353,7 @@ fn test_merge_projects_preserves_station_comments() {
         })
         .id;
     project_a.ensure_shot_uuids();
-    let key_a = project_a
-        .key_for_ref(StationRef::new(line_a, 0))
-        .unwrap();
+    let key_a = project_a.key_for_ref(StationRef::new(line_a, 0)).unwrap();
     project_a
         .station_comments
         .insert(key_a, "junction with main line".to_string());
@@ -1375,9 +1367,7 @@ fn test_merge_projects_preserves_station_comments() {
         })
         .id;
     project_b.ensure_shot_uuids();
-    let key_b = project_b
-        .key_for_ref(StationRef::new(line_b, 1))
-        .unwrap();
+    let key_b = project_b.key_for_ref(StationRef::new(line_b, 1)).unwrap();
     project_b
         .station_comments
         .insert(key_b, "sump start".to_string());
@@ -1872,10 +1862,7 @@ fn save_remints_duplicate_shot_uuids_before_persisting() {
         .id;
     project.ensure_shot_uuids();
     // Force a within-line duplicate.
-    let dup = project.get_line(a).unwrap().shots[0]
-        .uuid
-        .clone()
-        .unwrap();
+    let dup = project.get_line(a).unwrap().shots[0].uuid.clone().unwrap();
     project.get_line_mut(a).unwrap().shots[1].uuid = Some(dup.clone());
     assert!(
         project.has_critical_integrity_violations(),
@@ -2268,10 +2255,7 @@ fn undo_of_duplicate_uuid_repair_restores_the_duplicates() {
         .id;
     project.ensure_shot_uuids();
     // A within-line duplicate UUID: a current corrupt state (AfterShot anchors).
-    let dup = project.get_line(a).unwrap().shots[0]
-        .uuid
-        .clone()
-        .unwrap();
+    let dup = project.get_line(a).unwrap().shots[0].uuid.clone().unwrap();
     project.get_line_mut(a).unwrap().shots[1].uuid = Some(dup.clone());
     assert!(project.has_critical_integrity_violations());
     state.set_project_for_tests(project);
@@ -4192,10 +4176,7 @@ fn test_delete_shot() {
     let project = state.get_project_state().unwrap();
     let shot_id = project.lines[0].shots[0].id;
 
-    let result = state.execute(Command::DeleteShot {
-        line_id,
-        shot_id,
-    });
+    let result = state.execute(Command::DeleteShot { line_id, shot_id });
 
     assert!(result.success);
 
@@ -4423,13 +4404,7 @@ fn test_delete_shot_rejects_frozen_shot() {
             .any(|f| f.line_id == sec_a && f.shot_index == 0),
         "precondition: sec_a shot[0] must be frozen by the loop+two-datum setup"
     );
-    let target_shot_id = project
-        .lines
-        .iter()
-        .find(|s| s.id == sec_a)
-        .unwrap()
-        .shots[0]
-        .id;
+    let target_shot_id = project.lines.iter().find(|s| s.id == sec_a).unwrap().shots[0].id;
     let shots_before = project
         .lines
         .iter()
@@ -5164,10 +5139,7 @@ fn test_split_shot_at_distance_preserves_downstream_geometry() {
     });
     let line_id = create_result.line_id.unwrap();
 
-    let before_offset = state
-        .get_project_state()
-        .unwrap()
-        .line_offset(line_id);
+    let before_offset = state.get_project_state().unwrap().line_offset(line_id);
     let before_coords = abs_coord_map(&state.get_project_state().unwrap());
     let start_before = before_coords[&StationRef::new(line_id, 0)];
     let last_before = before_coords[&StationRef::new(line_id, 3)];
@@ -5220,10 +5192,7 @@ fn test_split_shot_at_distance_reference_shot_both_children_reference() {
         line.shots[0].kind.is_virtual(),
         "head must inherit the shot kind"
     );
-    assert!(
-        line.shots[1].kind.is_virtual(),
-        "tail keeps its own kind"
-    );
+    assert!(line.shots[1].kind.is_virtual(), "tail keeps its own kind");
 }
 
 #[test]
@@ -6180,9 +6149,7 @@ fn test_is_undoable_commands() {
         direction: None,
         shots: vec![],
     }));
-    assert!(AppState::is_undoable(&Command::DeleteLine {
-        line_id: 0
-    }));
+    assert!(AppState::is_undoable(&Command::DeleteLine { line_id: 0 }));
     assert!(AppState::is_undoable(&Command::CreateShot {
         line_id: 0,
         shot: ShotData::default(),
@@ -7316,10 +7283,7 @@ fn test_move_line_undo_redo() {
     });
 
     let project = state.get_project_state().unwrap();
-    assert_eq!(
-        project.line_offsets.get(&line_id),
-        Some(&(10.0, 20.0))
-    );
+    assert_eq!(project.line_offsets.get(&line_id), Some(&(10.0, 20.0)));
 
     // Undo should reverse the move
     let undo_result = state.undo();
@@ -7597,9 +7561,7 @@ fn test_execute_create_line_command() {
     let line_id = result.line_id.expect("Line ID should be returned");
 
     let project = state.get_project_state().unwrap();
-    let line = project
-        .get_line(line_id)
-        .expect("Line should exist");
+    let line = project.get_line(line_id).expect("Line should exist");
 
     assert_eq!(line.name, Some("Main Passage".to_string()));
     assert_eq!(line.surveyor_names(), Some("Alice".to_string()));
@@ -7795,14 +7757,8 @@ fn test_undo_set_zero_datum_restores_line_offsets() {
             project.zero_datums.len(),
         )
     };
-    assert_ne!(
-        pre_offset_a, post_offset_a,
-        "Line A offset should change"
-    );
-    assert!(
-        post_offset_b.is_some(),
-        "Line B should now have an offset"
-    );
+    assert_ne!(pre_offset_a, post_offset_a, "Line A offset should change");
+    assert!(post_offset_b.is_some(), "Line B should now have an offset");
     assert_eq!(
         post_datum_count,
         pre_datum_count + 1,
@@ -8019,8 +7975,8 @@ fn test_import_shot_updates_reject_atomically_when_one_is_poisoned() {
     // mutation, so the whole batch is rejected -- NEITHER shot may change, not
     // even the first (valid) one.
     use crate::models::ExistingShotUpdate;
-    use crate::models::ImportPlacement;
     use crate::models::ImportLineConfig;
+    use crate::models::ImportPlacement;
 
     let state = AppState::new().unwrap();
     state.execute(Command::CreateProject {
@@ -8555,9 +8511,7 @@ fn test_execute_delete_line_command() {
     assert_eq!(project.zero_datums.len(), 1);
 
     // Delete line A
-    let result = state.execute(Command::DeleteLine {
-        line_id: line_a_id,
-    });
+    let result = state.execute(Command::DeleteLine { line_id: line_a_id });
 
     assert!(result.success);
 
@@ -8758,10 +8712,7 @@ fn test_undo_delete_shot() {
     let shot_id = project.lines[0].shots[0].id;
 
     // Delete the shot
-    state.execute(Command::DeleteShot {
-        line_id,
-        shot_id,
-    });
+    state.execute(Command::DeleteShot { line_id, shot_id });
 
     let project = state.get_project_state().unwrap();
     assert_eq!(project.lines[0].shots.len(), 1);
@@ -9161,13 +9112,7 @@ fn test_undo_failure_preserves_entry_at_top_lifo_order() {
     // Peek at the top: it should be the invalid UpdateShot (LIFO preserved)
     let top_cmd = stack.peek_undo().unwrap();
     assert!(
-        matches!(
-            top_cmd,
-            Command::UpdateShot {
-                line_id: 999,
-                ..
-            }
-        ),
+        matches!(top_cmd, Command::UpdateShot { line_id: 999, .. }),
         "Failed entry must be at TOP of undo stack (LIFO order preserved)"
     );
 }
@@ -9331,13 +9276,7 @@ fn test_undo_to_partial_completion_stops_at_failed_step() {
     );
     let top_cmd = stack.peek_undo().unwrap();
     assert!(
-        matches!(
-            top_cmd,
-            Command::UpdateShot {
-                line_id: 999,
-                ..
-            }
-        ),
+        matches!(top_cmd, Command::UpdateShot { line_id: 999, .. }),
         "Failed invalid entry must be at top of undo stack after partial undo_to"
     );
 }
@@ -10251,14 +10190,8 @@ fn test_move_station_zero_updates_line_offset() {
         .get(&line_id)
         .copied()
         .unwrap_or((0.0, 0.0));
-    assert!(
-        (offset.0 - 5.0).abs() < 1e-6,
-        "Line offset x should be 5.0"
-    );
-    assert!(
-        (offset.1).abs() < 1e-6,
-        "Line offset y should remain 0.0"
-    );
+    assert!((offset.0 - 5.0).abs() < 1e-6, "Line offset x should be 5.0");
+    assert!((offset.1).abs() < 1e-6, "Line offset y should remain 0.0");
 }
 
 #[test]
@@ -10506,10 +10439,7 @@ fn test_create_line_undo_redo_preserves_id() {
         "Line ID must be preserved after undo/redo, expected {} got {}",
         original_line_id, project.lines[0].id
     );
-    assert_eq!(
-        project.lines[0].name,
-        Some("ID Preservation".to_string())
-    );
+    assert_eq!(project.lines[0].name, Some("ID Preservation".to_string()));
 
     // Verify shot IDs are preserved too
     let restored_shot_ids: Vec<_> = project.lines[0].shots.iter().map(|s| s.id).collect();
@@ -10903,20 +10833,14 @@ fn test_create_shot_double_undo_redo_cycle() {
 
     // First cycle: undo -> redo
     assert!(state.undo().success);
-    assert_eq!(
-        state.get_project_state().unwrap().lines[0].shots.len(),
-        1
-    );
+    assert_eq!(state.get_project_state().unwrap().lines[0].shots.len(), 1);
     assert!(state.redo().success);
     let project = state.get_project_state().unwrap();
     assert_eq!(project.lines[0].shots[1].id, original_shot_id);
 
     // Second cycle: undo -> redo
     assert!(state.undo().success);
-    assert_eq!(
-        state.get_project_state().unwrap().lines[0].shots.len(),
-        1
-    );
+    assert_eq!(state.get_project_state().unwrap().lines[0].shots.len(), 1);
     assert!(state.redo().success);
 
     let project = state.get_project_state().unwrap();
@@ -11011,14 +10935,9 @@ fn test_create_shot_undo_redo_then_delete() {
     assert!(state.redo().success);
 
     // Delete the restored shot
-    let delete_result = state.execute(Command::DeleteShot {
-        line_id,
-        shot_id,
-    });
+    let delete_result = state.execute(Command::DeleteShot { line_id, shot_id });
     assert!(delete_result.success);
-    assert!(state.get_project_state().unwrap().lines[0]
-        .shots
-        .is_empty());
+    assert!(state.get_project_state().unwrap().lines[0].shots.is_empty());
 }
 
 #[test]
@@ -11067,10 +10986,7 @@ fn test_create_shot_created_snapshot_distinct_from_shot_snapshot() {
 
     // Now delete the shot and verify DeleteShot uses ProjectSnapshotPair
     // (changed from ShotSnapshot to handle station ref shifting correctly)
-    state.execute(Command::DeleteShot {
-        line_id,
-        shot_id,
-    });
+    state.execute(Command::DeleteShot { line_id, shot_id });
 
     {
         let stack = state.undo_stack.lock().unwrap();
@@ -11281,14 +11197,8 @@ fn test_delete_shot_undo_redo_still_works() {
     let shot_id = project.lines[0].shots[0].id;
 
     // Delete the first shot
-    state.execute(Command::DeleteShot {
-        line_id,
-        shot_id,
-    });
-    assert_eq!(
-        state.get_project_state().unwrap().lines[0].shots.len(),
-        1
-    );
+    state.execute(Command::DeleteShot { line_id, shot_id });
+    assert_eq!(state.get_project_state().unwrap().lines[0].shots.len(), 1);
 
     // Undo should restore it at its original position
     assert!(state.undo().success);
@@ -11299,17 +11209,11 @@ fn test_delete_shot_undo_redo_still_works() {
 
     // Redo should delete it again
     assert!(state.redo().success);
-    assert_eq!(
-        state.get_project_state().unwrap().lines[0].shots.len(),
-        1
-    );
+    assert_eq!(state.get_project_state().unwrap().lines[0].shots.len(), 1);
 
     // Undo again to restore
     assert!(state.undo().success);
-    assert_eq!(
-        state.get_project_state().unwrap().lines[0].shots.len(),
-        2
-    );
+    assert_eq!(state.get_project_state().unwrap().lines[0].shots.len(), 2);
 }
 
 // === Zero datum merge validation tests ===
@@ -13024,12 +12928,8 @@ fn test_split_remaps_merges() {
         proj.get_line(line_a_id).unwrap().shots[1].id
     };
 
-    let result = state.execute_delete_shot_and_split(
-        line_a_id,
-        shot_id,
-        "A".to_string(),
-        "B".to_string(),
-    );
+    let result =
+        state.execute_delete_shot_and_split(line_a_id, shot_id, "A".to_string(), "B".to_string());
     assert!(result.success);
     let new_line_id = result.line_id.unwrap();
 
@@ -13658,11 +13558,7 @@ fn test_delete_range_undo_redo_roundtrip() {
 
     assert!(state.redo().success);
     let proj = state.get_project_state().unwrap();
-    assert_eq!(
-        proj.lines.len(),
-        2,
-        "redo restores the split (two lines)"
-    );
+    assert_eq!(proj.lines.len(), 2, "redo restores the split (two lines)");
 }
 
 #[test]
@@ -15367,10 +15263,7 @@ fn test_delete_last_shot_removes_line() {
 
     // Verify line is gone
     let proj = state.get_project_state().unwrap();
-    assert!(
-        proj.get_line(line_id).is_none(),
-        "Line should be removed"
-    );
+    assert!(proj.get_line(line_id).is_none(), "Line should be removed");
 }
 
 #[test]
@@ -15444,9 +15337,7 @@ fn test_delete_last_shot_undo_restores() {
 
     // Verify restored
     let proj = state.get_project_state().unwrap();
-    let line = proj
-        .get_line(line_id)
-        .expect("Line should be restored");
+    let line = proj.get_line(line_id).expect("Line should be restored");
     assert_eq!(line.name, Some("WillDelete".to_string()));
     assert_eq!(line.surveyor_names(), Some("UndoTester".to_string()));
     assert_eq!(line.shots.len(), 1);
@@ -15553,9 +15444,7 @@ fn test_delete_last_shot_cleans_up_merges() {
     let remaining_merges: Vec<_> = proj
         .station_merges
         .iter()
-        .filter(|m| {
-            m.station_a.line_id == line_a_id || m.station_b.line_id == line_a_id
-        })
+        .filter(|m| m.station_a.line_id == line_a_id || m.station_b.line_id == line_a_id)
         .collect();
     assert!(
         remaining_merges.is_empty(),
@@ -15683,9 +15572,7 @@ fn test_delete_last_shot_cleans_up_closures() {
     let remaining_closures: Vec<_> = proj
         .loop_closures
         .iter()
-        .filter(|lc| {
-            lc.station_a.line_id == line_a_id || lc.station_b.line_id == line_a_id
-        })
+        .filter(|lc| lc.station_a.line_id == line_a_id || lc.station_b.line_id == line_a_id)
         .collect();
     assert!(
         remaining_closures.is_empty(),
@@ -15785,17 +15672,13 @@ fn test_delete_last_shot_undo_restores_references() {
         let a_merges: Vec<_> = proj
             .station_merges
             .iter()
-            .filter(|m| {
-                m.station_a.line_id == line_a_id || m.station_b.line_id == line_a_id
-            })
+            .filter(|m| m.station_a.line_id == line_a_id || m.station_b.line_id == line_a_id)
             .collect();
         assert!(a_merges.is_empty());
         let a_closures: Vec<_> = proj
             .loop_closures
             .iter()
-            .filter(|lc| {
-                lc.station_a.line_id == line_a_id || lc.station_b.line_id == line_a_id
-            })
+            .filter(|lc| lc.station_a.line_id == line_a_id || lc.station_b.line_id == line_a_id)
             .collect();
         assert!(a_closures.is_empty());
     }
@@ -16784,11 +16667,7 @@ fn test_insert_before_pos0_undo_restores_offsets() {
     // Verify offset was adjusted
     {
         let proj = state.get_project_state().unwrap();
-        let offset = proj
-            .line_offsets
-            .get(&sec_a)
-            .copied()
-            .unwrap_or((0.0, 0.0));
+        let offset = proj.line_offsets.get(&sec_a).copied().unwrap_or((0.0, 0.0));
         assert!(
             (offset.0 - (-5.0)).abs() < 1e-6,
             "Line offset x should be -5, got {}",
@@ -16891,10 +16770,7 @@ fn test_insert_before_pos_gt0_no_offset_adjustment() {
     // Get the line offset before insert
     let offset_before = {
         let proj = state.get_project_state().unwrap();
-        proj.line_offsets
-            .get(&sec_a)
-            .copied()
-            .unwrap_or((0.0, 0.0))
+        proj.line_offsets.get(&sec_a).copied().unwrap_or((0.0, 0.0))
     };
 
     // Insert before the SECOND shot (pos=1, not pos=0)
@@ -16910,11 +16786,7 @@ fn test_insert_before_pos_gt0_no_offset_adjustment() {
 
     // Line offset should NOT have changed (only pos=0 triggers adjustment)
     let proj = state.get_project_state().unwrap();
-    let offset_after = proj
-        .line_offsets
-        .get(&sec_a)
-        .copied()
-        .unwrap_or((0.0, 0.0));
+    let offset_after = proj.line_offsets.get(&sec_a).copied().unwrap_or((0.0, 0.0));
     assert!(
         (offset_after.0 - offset_before.0).abs() < 1e-6,
         "Line offset x should not change for pos>0"
@@ -17939,17 +17811,11 @@ fn test_merge_projects_preserves_station_merges() {
     // The merge should reference lines that exist in the merged project
     let merge = &merged.station_merges[0];
     assert!(
-        merged
-            .lines
-            .iter()
-            .any(|s| s.id == merge.station_a.line_id),
+        merged.lines.iter().any(|s| s.id == merge.station_a.line_id),
         "merge station_a should reference an existing line"
     );
     assert!(
-        merged
-            .lines
-            .iter()
-            .any(|s| s.id == merge.station_b.line_id),
+        merged.lines.iter().any(|s| s.id == merge.station_b.line_id),
         "merge station_b should reference an existing line"
     );
     // Both stations should be from the same source project (A), so their
@@ -17989,7 +17855,7 @@ fn test_execute_create_and_merge_success() {
         "#00ff00".to_string(),
         None,
         vec![test_shot_data(3.0)],
-        0,                                       // import station 0
+        0,                                    // import station 0
         StationRef::new(existing_line_id, 1), // merge to station 1 of existing
         ClosureStrategy::Batch,
     );
@@ -18008,11 +17874,7 @@ fn test_execute_create_and_merge_success() {
     let undo_result = state.undo();
     assert!(undo_result.success);
     let project = state.get_project_state().unwrap();
-    assert_eq!(
-        project.lines.len(),
-        1,
-        "undo should remove imported line"
-    );
+    assert_eq!(project.lines.len(), 1, "undo should remove imported line");
     assert_eq!(project.station_merges.len(), 0, "undo should remove merge");
 }
 
@@ -18045,15 +17907,14 @@ fn test_execute_create_and_merge_rollback_on_merge_failure() {
         StationRef::new(9999, 0), // nonexistent line
         ClosureStrategy::Batch,
     );
-    assert!(
-        !result.success,
-        "merge with nonexistent line should fail"
-    );
+    assert!(!result.success, "merge with nonexistent line should fail");
 
     // Project should be rolled back - line count unchanged
     let lines_after = state.get_project_state().unwrap().lines.len();
-    assert_eq!(lines_before, lines_after,
-        "rollback should restore original line count (before={lines_before}, after={lines_after})");
+    assert_eq!(
+        lines_before, lines_after,
+        "rollback should restore original line count (before={lines_before}, after={lines_after})"
+    );
 }
 
 #[test]
@@ -18080,8 +17941,8 @@ fn test_execute_create_and_merge_no_project_open() {
 
 #[test]
 fn test_execute_import_lines_origin_placement() {
-    use crate::models::ImportPlacement;
     use crate::models::ImportLineConfig;
+    use crate::models::ImportPlacement;
 
     let state = AppState::new().unwrap();
     state.execute(Command::CreateProject {
@@ -18160,7 +18021,7 @@ fn test_execute_import_lines_origin_placement() {
 /// `ImportReceipt`'s doc comment).
 #[test]
 fn test_execute_import_lines_unresolvable_closure_is_skipped_on_receipt() {
-    use crate::models::{ImportClosure, ImportPlacement, ImportLineConfig};
+    use crate::models::{ImportClosure, ImportLineConfig, ImportPlacement};
 
     let state = AppState::new().unwrap();
     state.execute(Command::CreateProject {
@@ -18227,7 +18088,7 @@ fn test_execute_import_lines_unresolvable_closure_is_skipped_on_receipt() {
 /// gas, penetration and the ruler with no user edit.
 #[test]
 fn imported_shot_kinds_survive_an_undo_redo_round_trip() {
-    use crate::models::{ImportPlacement, ImportLineConfig, ShotKind};
+    use crate::models::{ImportLineConfig, ImportPlacement, ShotKind};
 
     let state = AppState::new().unwrap();
     state.execute(Command::CreateProject {
@@ -18291,7 +18152,7 @@ fn imported_shot_kinds_survive_an_undo_redo_round_trip() {
 /// earlier session - with no undo entry and nothing in the UI to say so.
 #[test]
 fn importing_a_second_file_leaves_existing_shot_kinds_alone() {
-    use crate::models::{ImportPlacement, ImportLineConfig, ShotKind};
+    use crate::models::{ImportLineConfig, ImportPlacement, ShotKind};
 
     let state = AppState::new().unwrap();
     state.execute(Command::CreateProject {
@@ -18386,8 +18247,8 @@ fn importing_a_second_file_leaves_existing_shot_kinds_alone() {
 #[test]
 fn test_execute_import_lines_rejects_non_finite_shot_update() {
     use crate::models::ExistingShotUpdate;
-    use crate::models::ImportPlacement;
     use crate::models::ImportLineConfig;
+    use crate::models::ImportPlacement;
     use crate::models::ShotUpdates;
 
     let state = AppState::new().unwrap();
@@ -18484,8 +18345,8 @@ fn test_execute_import_lines_rejects_non_finite_shot_update() {
 
 #[test]
 fn test_execute_import_lines_from_importing_placement() {
-    use crate::models::ImportPlacement;
     use crate::models::ImportLineConfig;
+    use crate::models::ImportPlacement;
 
     let state = AppState::new().unwrap();
     state.execute(Command::CreateProject {
@@ -18553,8 +18414,8 @@ fn test_execute_import_lines_from_importing_placement() {
 
 #[test]
 fn test_execute_import_lines_from_existing_placement() {
-    use crate::models::ImportPlacement;
     use crate::models::ImportLineConfig;
+    use crate::models::ImportPlacement;
 
     let state = AppState::new().unwrap();
     state.execute(Command::CreateProject {
@@ -18610,8 +18471,8 @@ fn test_execute_import_lines_from_existing_placement() {
 
 #[test]
 fn test_execute_import_lines_manual_with_offset() {
-    use crate::models::ImportPlacement;
     use crate::models::ImportLineConfig;
+    use crate::models::ImportPlacement;
 
     let state = AppState::new().unwrap();
     state.execute(Command::CreateProject {
@@ -18669,8 +18530,8 @@ fn test_execute_import_lines_manual_with_offset() {
 
 #[test]
 fn test_execute_import_lines_zero_datum_placement() {
-    use crate::models::ImportPlacement;
     use crate::models::ImportLineConfig;
+    use crate::models::ImportPlacement;
 
     let state = AppState::new().unwrap();
     state.execute(Command::CreateProject {
@@ -18802,8 +18663,8 @@ fn test_execute_import_lines_zero_datum_placement_at_non_origin_station() {
 
 #[test]
 fn test_execute_import_lines_rollback_on_failure() {
-    use crate::models::ImportPlacement;
     use crate::models::ImportLineConfig;
+    use crate::models::ImportPlacement;
 
     let state = AppState::new().unwrap();
     state.execute(Command::CreateProject {
@@ -18897,8 +18758,8 @@ fn test_execute_import_lines_empty_is_noop() {
 
 #[test]
 fn test_execute_import_lines_no_project() {
-    use crate::models::ImportPlacement;
     use crate::models::ImportLineConfig;
+    use crate::models::ImportPlacement;
 
     let state = AppState::new().unwrap();
     let lines = vec![ImportLineConfig {
@@ -18934,8 +18795,8 @@ fn test_execute_import_lines_no_project() {
 
 #[test]
 fn test_execute_import_lines_manual_snap_placement() {
-    use crate::models::ImportPlacement;
     use crate::models::ImportLineConfig;
+    use crate::models::ImportPlacement;
 
     let state = AppState::new().unwrap();
     state.execute(Command::CreateProject {
@@ -19732,11 +19593,7 @@ fn test_move_station_last_station() {
 
     // Verify only the previous shot was modified (not a next shot)
     let project = state.get_project_state().unwrap();
-    let line = project
-        .lines
-        .iter()
-        .find(|s| s.id == line_id)
-        .unwrap();
+    let line = project.lines.iter().find(|s| s.id == line_id).unwrap();
     assert_eq!(line.shots.len(), 2);
 }
 
@@ -19963,11 +19820,7 @@ fn test_delete_line_undo_restores_merges_and_datums() {
     assert!(undo.success);
 
     let project = state.get_project_state().unwrap();
-    assert_eq!(
-        project.lines.len(),
-        2,
-        "undo should restore deleted line"
-    );
+    assert_eq!(project.lines.len(), 2, "undo should restore deleted line");
     assert_eq!(project.station_merges.len(), 1, "undo should restore merge");
     assert_eq!(
         project.zero_datums.len(),
@@ -20234,18 +20087,8 @@ fn kb5_import_overlap_interpolation_integration() {
     let shot_181_id = project.lines[0].shots[181].id;
 
     let existing_updates = vec![
-        interp_update(
-            line_002_id,
-            shot_180_id,
-            &shots_001[105],
-            &shots_002[180],
-        ),
-        interp_update(
-            line_002_id,
-            shot_181_id,
-            &shots_001[106],
-            &shots_002[181],
-        ),
+        interp_update(line_002_id, shot_180_id, &shots_001[105], &shots_002[180]),
+        interp_update(line_002_id, shot_181_id, &shots_001[106], &shots_002[181]),
     ];
 
     // Remove overlap shots 105, 106 from 001
@@ -20720,10 +20563,7 @@ fn test_delete_middle_line_removes_both_merge_edges() {
 
     // Delete the middle line B
     let delete_result = state.execute(Command::DeleteLine { line_id: b });
-    assert!(
-        delete_result.success,
-        "Deleting middle line should succeed"
-    );
+    assert!(delete_result.success, "Deleting middle line should succeed");
 
     let proj = state.get_project_state().unwrap();
 
@@ -21905,16 +21745,8 @@ fn test_stalx_roundtrip_preserves_merges_closures_offsets() {
 
     // Verify line data integrity
     assert_eq!(project_after.lines.len(), 2);
-    let sec_a_after = project_after
-        .lines
-        .iter()
-        .find(|s| s.id == sec_a)
-        .unwrap();
-    let sec_b_after = project_after
-        .lines
-        .iter()
-        .find(|s| s.id == sec_b)
-        .unwrap();
+    let sec_a_after = project_after.lines.iter().find(|s| s.id == sec_a).unwrap();
+    let sec_b_after = project_after.lines.iter().find(|s| s.id == sec_b).unwrap();
     assert_eq!(sec_a_after.shots.len(), 2);
     assert_eq!(sec_b_after.shots.len(), 2);
 }
@@ -22029,13 +21861,7 @@ fn test_insert_shot_before_merged_station_shifts_merge_ref() {
 
     // Get shot ID of shot at index 1 in line A (before the merged station)
     let project = state.get_project_state().unwrap();
-    let shot_id_1 = project
-        .lines
-        .iter()
-        .find(|s| s.id == sec_a)
-        .unwrap()
-        .shots[1]
-        .id;
+    let shot_id_1 = project.lines.iter().find(|s| s.id == sec_a).unwrap().shots[1].id;
 
     // Insert a new shot before shot 1 - this adds a station, shifting station 2 to 3
     let insert_r = state.execute(Command::CreateShot {
@@ -22049,16 +21875,8 @@ fn test_insert_shot_before_merged_station_shifts_merge_ref() {
     // After insertion, A now has 4 shots (stations 0..4)
     // Original A:2 should now be A:3
     let project_after = state.get_project_state().unwrap();
-    let sec_a_after = project_after
-        .lines
-        .iter()
-        .find(|s| s.id == sec_a)
-        .unwrap();
-    assert_eq!(
-        sec_a_after.shots.len(),
-        4,
-        "line A should now have 4 shots"
-    );
+    let sec_a_after = project_after.lines.iter().find(|s| s.id == sec_a).unwrap();
+    assert_eq!(sec_a_after.shots.len(), 4, "line A should now have 4 shots");
 
     // The merge should now reference A:3 (shifted from A:2) and B:0 (unchanged)
     assert_eq!(
@@ -22146,13 +21964,7 @@ fn test_insert_shot_after_merged_station_keeps_merge_ref() {
 
     // Insert a shot AFTER shot[0] in A (between stations 1 and 2)
     let project = state.get_project_state().unwrap();
-    let shot_id_0 = project
-        .lines
-        .iter()
-        .find(|s| s.id == sec_a)
-        .unwrap()
-        .shots[0]
-        .id;
+    let shot_id_0 = project.lines.iter().find(|s| s.id == sec_a).unwrap().shots[0].id;
 
     assert!(
         state
@@ -22235,13 +22047,7 @@ fn test_delete_mid_shot_splits_line_with_merge_intact() {
 
     // Delete the middle shot (shot[1]) from line A - this splits A
     let project = state.get_project_state().unwrap();
-    let shot_id_1 = project
-        .lines
-        .iter()
-        .find(|s| s.id == sec_a)
-        .unwrap()
-        .shots[1]
-        .id;
+    let shot_id_1 = project.lines.iter().find(|s| s.id == sec_a).unwrap().shots[1].id;
 
     let delete_r = state.execute(Command::DeleteShot {
         line_id: sec_a,
@@ -22429,13 +22235,7 @@ fn test_delete_last_shot_and_line_cleans_merges() {
 
     // Delete line A's only shot via the dedicated method
     let project = state.get_project_state().unwrap();
-    let shot_id = project
-        .lines
-        .iter()
-        .find(|s| s.id == sec_a)
-        .unwrap()
-        .shots[0]
-        .id;
+    let shot_id = project.lines.iter().find(|s| s.id == sec_a).unwrap().shots[0].id;
     assert!(
         state
             .execute_delete_last_shot_and_line(sec_a, shot_id)
@@ -23005,11 +22805,7 @@ fn test_merge_chain_survives_save_reopen() {
         "both merges should persist"
     );
     assert_eq!(project_after.zero_datums.len(), 1, "datum should persist");
-    assert_eq!(
-        project_after.lines.len(),
-        3,
-        "all 3 lines should persist"
-    );
+    assert_eq!(project_after.lines.len(), 3, "all 3 lines should persist");
 
     // Verify coordinates match
     let c1_after = project_after.compute_station_raw_coords(StationRef::new(sec_c, 1));
@@ -25717,11 +25513,7 @@ fn undo_of_create_line_re_reads_the_live_shots_so_redo_keeps_uuids_on_their_own_
     let undone = state.undo();
     assert!(undone.success, "undo failed: {:?}", undone.error);
     assert!(
-        state
-            .get_project_state()
-            .unwrap()
-            .get_line(line)
-            .is_none(),
+        state.get_project_state().unwrap().get_line(line).is_none(),
         "undo of CreateLine should have deleted the line"
     );
 

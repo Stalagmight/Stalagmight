@@ -178,7 +178,7 @@ describe('Edit Line survey credit', () => {
     });
     render(<EditLineDialog />);
     typePerson('surveyors', 'Cy Cave');
-    const labels = screen.getAllByTestId(/^section-surveyors-pill-\d+-label$/).map((el) => el.textContent);
+    const labels = screen.getAllByTestId(/^line-surveyors-pill-\d+-label$/).map((el) => el.textContent);
     // On every shot now, which by first appearance would put Cy before Bo.
     expect(labels).toEqual(['Ann Diver', 'Bo Lead', 'Cy Cave']);
   });

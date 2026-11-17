@@ -32,8 +32,8 @@ use serde_bytes::ByteBuf;
 
 use crate::core::loading::{DisplaySettings, LoadProjectFullResult};
 use crate::models::{
-    AzimuthReference, ClosureRef, FrozenShotRef, GpsCoordinates, LoopClosureWire, Person,
-    ProjectStats, ProjectWarning, LineId, ShotId, StationMergeWire, StationRef, SurveyCredit,
+    AzimuthReference, ClosureRef, FrozenShotRef, GpsCoordinates, LineId, LoopClosureWire, Person,
+    ProjectStats, ProjectWarning, ShotId, StationMergeWire, StationRef, SurveyCredit,
     SurveyDirection, ZeroDatumWire,
 };
 
@@ -528,7 +528,7 @@ mod tests {
     use super::*;
     use crate::core::loading::DisplaySettings;
     use crate::models::ShotKind;
-    use crate::models::{Coordinates, Project, ProjectStats, Line, Shot, Station, StationRef};
+    use crate::models::{Coordinates, Line, Project, ProjectStats, Shot, Station, StationRef};
     use chrono::Utc;
     use serde::Deserialize;
 

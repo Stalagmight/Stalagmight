@@ -294,7 +294,7 @@ export function ShortcutsSettings({
       <h2 className="text-lg font-medium mb-4">{t('settings.shortcuts.title')}</h2>
 
       <div className="space-y-4" data-testid="shortcuts-tab-content">
-        {/* Reserved shortcuts line (always visible, above search) */}
+        {/* Reserved shortcuts section (always visible, above search) */}
         <div className="mb-4">
           <h3 className="text-sm font-medium mb-2 text-text-secondary">{t('settings.shortcuts.reserved.title')}</h3>
           <div

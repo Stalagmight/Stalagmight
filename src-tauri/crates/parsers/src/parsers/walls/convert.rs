@@ -4,7 +4,7 @@ use anyhow::Result;
 use chrono::{Datelike, NaiveDate};
 
 use crate::models::azimuth_reference::{AzimuthReference, CorrectionSource, NorthReference};
-use crate::models::line::{ImportClosure, ImportPlacement, ImportLineConfig};
+use crate::models::line::{ImportClosure, ImportLineConfig, ImportPlacement};
 use crate::models::shot::{ShotData, ShotKind};
 use crate::models::station::GpsCoordinates;
 
@@ -1245,8 +1245,7 @@ pub(crate) fn topological_sort_configs(configs: &mut Vec<ImportLineConfig>) {
         .iter()
         .map(|c| match &c.placement {
             ImportPlacement::FromImporting {
-                target_line_index,
-                ..
+                target_line_index, ..
             } => pos_of.get(target_line_index).copied(),
             _ => None,
         })

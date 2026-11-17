@@ -4,7 +4,7 @@
 
 use super::AppState;
 use crate::core::{Command, CommandResult, ShotCreditChange, UndoData};
-use crate::models::{CreditEdit, CreditTargets, Project, LineId, LineUpdates, ShotId};
+use crate::models::{CreditEdit, CreditTargets, LineId, LineUpdates, Project, ShotId};
 
 /// The most shots one explicit-target edit may name. A whole line is
 /// bounded by the per-line shot cap instead.
@@ -106,10 +106,7 @@ impl AppState {
                 Ok(r) => (r, None),
                 Err(_) => return UndoData::None,
             },
-            Command::UpdateLineMetadata {
-                line_id,
-                updates,
-            } => {
+            Command::UpdateLineMetadata { line_id, updates } => {
                 let Some(line) = project.get_line(*line_id) else {
                     return UndoData::None;
                 };
@@ -181,9 +178,7 @@ impl AppState {
         let changes: Vec<ShotCreditChange> = changes
             .into_iter()
             .filter_map(|mut change| {
-                let shot = project
-                    .get_line(change.line_id)?
-                    .get_shot(change.shot_id)?;
+                let shot = project.get_line(change.line_id)?.get_shot(change.shot_id)?;
                 change.after = shot.credit().clone();
                 if change.after == change.before {
                     return None;

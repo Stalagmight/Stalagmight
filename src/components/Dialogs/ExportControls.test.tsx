@@ -95,7 +95,7 @@ describe('TML export unanchored-line notice', () => {
     const dialog = await screen.findByTestId('tml-unanchored-warning-dialog');
     expect(dialog).toHaveTextContent('No line is connected to a zero datum');
     expect(dialog).toHaveTextContent('Set Zero Datum');
-    expect(dialog).not.toHaveTextContent(/\d+ of \d+ sections/);
+    expect(dialog).not.toHaveTextContent(/\d+ of \d+ lines/);
     // The two claims the copy must make / must not make: nothing is discarded,
     // and no entrance-topology promise (entrance-hood is merge-derived and this
     // dialog cannot know it - see the component comment).
@@ -119,7 +119,7 @@ describe('TML export unanchored-line notice', () => {
 
     const dialog = await screen.findByTestId('tml-unanchored-warning-dialog');
     expect(dialog).toHaveTextContent('No line is connected to a zero datum');
-    expect(dialog).not.toHaveTextContent(/\d+ of \d+ sections/);
+    expect(dialog).not.toHaveTextContent(/\d+ of \d+ lines/);
   });
 
   it('names the fix and gives a count when only some lines are unanchored', async () => {

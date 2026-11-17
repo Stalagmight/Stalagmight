@@ -199,8 +199,8 @@ export function AdvancedSettings({
     // (PANEL_SIZE_BOUNDS / DATA_TABLE_MIN_HEIGHT / DATA_TABLE_MAX_HEIGHT), so
     // validation can never accept a value the save round-trip then silently
     // snaps back (#357 item 18).
-    if (config.panels.sections_panel_width < PANEL_SIZE_BOUNDS.lines.min || config.panels.sections_panel_width > PANEL_SIZE_BOUNDS.lines.max) {
-      errors.push(t('settings.advanced.validation.sectionsPanel', { min: PANEL_SIZE_BOUNDS.lines.min, max: PANEL_SIZE_BOUNDS.lines.max }));
+    if (config.panels.sections_panel_width < PANEL_SIZE_BOUNDS.sections.min || config.panels.sections_panel_width > PANEL_SIZE_BOUNDS.sections.max) {
+      errors.push(t('settings.advanced.validation.sectionsPanel', { min: PANEL_SIZE_BOUNDS.sections.min, max: PANEL_SIZE_BOUNDS.sections.max }));
     }
     if (config.panels.detail_panel_width < PANEL_SIZE_BOUNDS.detail.min || config.panels.detail_panel_width > PANEL_SIZE_BOUNDS.detail.max) {
       errors.push(t('settings.advanced.validation.detailPanel', { min: PANEL_SIZE_BOUNDS.detail.min, max: PANEL_SIZE_BOUNDS.detail.max }));
@@ -385,7 +385,7 @@ export function AdvancedSettings({
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title={t('settings.advanced.sections.logging')} data-testid="line-logging">
+      <SettingsSection title={t('settings.advanced.sections.logging')} data-testid="section-logging">
         <SettingRow
           label={t('settings.advanced.logging.level.label')}
           helpText={t('settings.advanced.logging.level.help')}
@@ -429,7 +429,7 @@ export function AdvancedSettings({
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title={t('settings.advanced.sections.closureAdjustment')} data-testid="line-closure-adjustment">
+      <SettingsSection title={t('settings.advanced.sections.closureAdjustment')} data-testid="section-closure-adjustment">
         <SettingRow
           label={t('settings.advanced.closureAdjustment.sigmaLength.label')}
           helpText={t('settings.advanced.closureAdjustment.sigmaLength.help')}
@@ -492,7 +492,7 @@ export function AdvancedSettings({
 
       </SettingsSection>
 
-      <SettingsSection title={t('settings.advanced.sections.placementSuggestion')} data-testid="line-placement-suggestion">
+      <SettingsSection title={t('settings.advanced.sections.placementSuggestion')} data-testid="section-placement-suggestion">
         {/* Scoring Weights */}
         <p className="text-xs text-text-secondary font-medium mt-1 mb-2">Scoring Weights</p>
         <PsRow field="azimuth_weight" i18nKey="azimuthWeight" step={0.05} min={0} max={1}
@@ -547,7 +547,7 @@ export function AdvancedSettings({
           config={config} changedFields={changedFields} onChange={onChange} onInput={handlePsShortShotThresh} t={t} />
       </SettingsSection>
 
-      <SettingsSection title={t('settings.advanced.sections.panels')} data-testid="line-panels">
+      <SettingsSection title={t('settings.advanced.sections.panels')} data-testid="section-panels">
         <SettingRow
           label={t('settings.advanced.panels.sectionsWidth.label')}
           helpText={t('settings.advanced.panels.sectionsWidth.help')}
@@ -559,8 +559,8 @@ export function AdvancedSettings({
           <div className="flex items-center gap-2">
             <input
               type="number" inputMode="decimal"
-              min={PANEL_SIZE_BOUNDS.lines.min}
-              max={PANEL_SIZE_BOUNDS.lines.max}
+              min={PANEL_SIZE_BOUNDS.sections.min}
+              max={PANEL_SIZE_BOUNDS.sections.max}
               value={config.panels.sections_panel_width}
               onChange={(e) => handleSectionsPanelWidthChange(e.target.value)}
               className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
@@ -618,7 +618,7 @@ export function AdvancedSettings({
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title={t('settings.advanced.sections.configFile')} data-testid="line-config-file">
+      <SettingsSection title={t('settings.advanced.sections.configFile')} data-testid="section-config-file">
         <div className="space-y-3">
           <Button
             variant="secondary"

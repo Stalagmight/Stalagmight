@@ -13,41 +13,41 @@ const link: SpeleoLinkState = {
 };
 beforeEach(() => {
   useSpeleoStore.setState({ link, session: null });
-  useUIStore.setState({ appMode: 'survey', leftWorkspace: 'lines', surveyLeftWorkspace: 'lines' });
+  useUIStore.setState({ appMode: 'survey', leftWorkspace: 'sections', surveyLeftWorkspace: 'sections' });
 });
 describe('Left workspace', () => {
-  it('opens Lines first and preserves both tab bodies and drafts', () => {
-    render(<LeftWorkspace lines={<input aria-label="Lines selection" data-testid="lines-test-selection" />} />);
-    const lines = screen.getByRole('tab', { name: 'Lines' });
-    expect(lines).toHaveAttribute('aria-selected', 'true');
-    fireEvent.change(screen.getByTestId('lines-test-selection'), { target: { value: 'station 42' } });
+  it('opens Sections first and preserves both tab bodies and drafts', () => {
+    render(<LeftWorkspace sections={<input aria-label="Sections selection" data-testid="sections-test-selection" />} />);
+    const sections = screen.getByRole('tab', { name: 'Sections' });
+    expect(sections).toHaveAttribute('aria-selected', 'true');
+    fireEvent.change(screen.getByTestId('sections-test-selection'), { target: { value: 'station 42' } });
     fireEvent.click(screen.getByRole('tab', { name: 'SpeleoDB' }));
     const draft = screen.getByRole('textbox', { name: 'Metadata draft' });
     fireEvent.change(draft, { target: { value: 'unfinished' } });
-    fireEvent.click(lines);
+    fireEvent.click(sections);
     expect(draft).not.toBeVisible();
-    expect(screen.getByTestId('lines-test-selection')).toHaveValue('station 42');
+    expect(screen.getByTestId('sections-test-selection')).toHaveValue('station 42');
     fireEvent.click(screen.getByRole('tab', { name: 'SpeleoDB' }));
     expect(screen.getByRole('textbox', { name: 'Metadata draft' })).toBe(draft);
     expect(draft).toHaveValue('unfinished');
   });
   it('implements arrow-key tab navigation and roving focus', () => {
-    render(<LeftWorkspace lines={<div />} />);
-    const first = screen.getByRole('tab', { name: 'Lines' }); first.focus();
+    render(<LeftWorkspace sections={<div />} />);
+    const first = screen.getByRole('tab', { name: 'Sections' }); first.focus();
     fireEvent.keyDown(first, { key: 'ArrowRight' });
     expect(screen.getByRole('tab', { name: 'SpeleoDB' })).toHaveFocus();
     fireEvent.keyDown(document.activeElement!, { key: 'ArrowRight' });
     expect(first).toHaveFocus();
   });
   it('restores the Survey tab after all-mode remote navigation', () => {
-    render(<LeftWorkspace lines={<div />} />);
+    render(<LeftWorkspace sections={<div />} />);
     act(() => useUIStore.getState().setAppMode('plan'));
-    expect(screen.queryByRole('tab', { name: 'Lines' })).toBeNull();
+    expect(screen.queryByRole('tab', { name: 'Sections' })).toBeNull();
     expect(useUIStore.getState().speleoOutsideSurvey).toBe(false);
     act(() => useUIStore.getState().openSpeleoWorkspace('history'));
     expect(useUIStore.getState().speleoOutsideSurvey).toBe(true);
     act(() => useUIStore.getState().setAppMode('survey'));
-    expect(screen.getByRole('tab', { name: 'Lines' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: 'Sections' })).toHaveAttribute('aria-selected', 'true');
   });
   it('exits fullscreen without clearing selection', () => {
     useUIStore.setState({ dataTableFullScreen: true, selection: { type: 'line', lineId: 42 } });
@@ -62,11 +62,11 @@ describe('Left workspace tab icons and SpeleoDB state', () => {
   const badge = () => screen.queryByTestId('workspace-tab-speleodb-icon-state-badge');
   beforeEach(() => useProjectStore.setState({ isDirty: false }));
 
-  it('gives Lines its icon and SpeleoDB the bare mark while editing', () => {
+  it('gives Sections its icon and SpeleoDB the bare mark while editing', () => {
     useSpeleoStore.setState({ link: { ...link, editState: 'editing' } });
-    render(<LeftWorkspace lines={<div />} />);
-    const lines = screen.getByRole('tab', { name: 'Lines' });
-    expect(lines.querySelector('[data-testid="workspace-tab-lines-icon"]')).not.toBeNull();
+    render(<LeftWorkspace sections={<div />} />);
+    const sections = screen.getByRole('tab', { name: 'Sections' });
+    expect(sections.querySelector('[data-testid="workspace-tab-sections-icon"]')).not.toBeNull();
     expect(speleoTab()).toContainElement(screen.getByTestId('workspace-tab-speleodb-icon-logo'));
     expect(speleoTab()).toHaveAttribute('data-state', 'normal');
     expect(badge()).toBeNull();
@@ -76,13 +76,13 @@ describe('Left workspace tab icons and SpeleoDB state', () => {
 
   it('a local project shows the bare mark (no SpeleoDB state to report)', () => {
     useSpeleoStore.setState({ link: null });
-    render(<LeftWorkspace lines={<div />} />);
+    render(<LeftWorkspace sections={<div />} />);
     expect(speleoTab()).toHaveAttribute('data-state', 'normal');
     expect(badge()).toBeNull();
   });
 
   it('read-only (no write lock) badges the mark with a lock and says so', () => {
-    render(<LeftWorkspace lines={<div />} />);
+    render(<LeftWorkspace sections={<div />} />);
     expect(speleoTab()).toHaveAttribute('data-state', 'read-only');
     expect(badge()).not.toBeNull();
     expect(badge()).toHaveClass('text-text-primary');
@@ -99,16 +99,16 @@ describe('Left workspace tab icons and SpeleoDB state', () => {
       'Read-only - you are not editing this project'],
   ] as const)('read-only says why, in the pill and header words, when %s', (_label, session, permission, words) => {
     useSpeleoStore.setState({ session, link: { ...link, permission } });
-    render(<LeftWorkspace lines={<div />} />);
+    render(<LeftWorkspace sections={<div />} />);
     expect(speleoTab()).toHaveAttribute('data-state', 'read-only');
     expect(speleoTab()).toHaveAttribute('title', words);
     expect(speleoTab()).toHaveAccessibleDescription(words);
   });
 
   it('labels the tab list and both tabs through i18n', () => {
-    render(<LeftWorkspace lines={<div />} />);
+    render(<LeftWorkspace sections={<div />} />);
     expect(screen.getByRole('tablist', { name: 'Project workspace' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Lines' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Sections' })).toBeInTheDocument();
     expect(speleoTab()).toBeInTheDocument();
   });
 
@@ -131,12 +131,12 @@ describe('Left workspace tab icons and SpeleoDB state', () => {
     ['unsaved edits', () => { useSpeleoStore.setState({ link: { ...link, editState: 'editing' } }); useProjectStore.setState({ isDirty: true }); }],
   ])('un-uploaded changes (%s) turn the icon and text yellow, with no "!" badge', (_label, seed) => {
     seed();
-    render(<LeftWorkspace lines={<div />} />);
+    render(<LeftWorkspace sections={<div />} />);
     expect(speleoTab()).toHaveAttribute('data-state', 'unuploaded');
     // Not an error: no badge on the mark at all.
     expect(badge()).toBeNull();
     expect(speleoTab().querySelector('svg')).toBeNull();
-    // Not selected (Lines is): the warning text, dimmed, on the label and the mark alike.
+    // Not selected (Sections is): the warning text, dimmed, on the label and the mark alike.
     expect(speleoTab()).toHaveClass('text-warning-text-dim');
     expectIconInTabColour();
     expect(speleoTab().className).not.toMatch(/text-error|text-danger|bg-error|bg-danger/);
@@ -149,7 +149,7 @@ describe('Left workspace tab icons and SpeleoDB state', () => {
 
   it('un-uploaded wins over read-only when both apply, still without a badge', () => {
     useSpeleoStore.setState({ link: { ...link, editState: 'read-only', hasUnpushedEdits: true } });
-    render(<LeftWorkspace lines={<div />} />);
+    render(<LeftWorkspace sections={<div />} />);
     expect(speleoTab()).toHaveAttribute('data-state', 'unuploaded');
     expect(badge()).toBeNull();
     expect(speleoTab()).toHaveAccessibleDescription(/not been uploaded/);
@@ -157,15 +157,15 @@ describe('Left workspace tab icons and SpeleoDB state', () => {
 
   it('a copy only stepped back to an older version is not flagged as un-uploaded (#303)', () => {
     useSpeleoStore.setState({ link: { ...link, editState: 'editing', hasUnpushedEdits: true, unwound: true } });
-    render(<LeftWorkspace lines={<div />} />);
+    render(<LeftWorkspace sections={<div />} />);
     expect(speleoTab()).toHaveAttribute('data-state', 'normal');
   });
 
   it('keeps the warning visible from Plan and Export, where only the SpeleoDB tab exists', () => {
     useSpeleoStore.setState({ link: { ...link, hasUnpushedEdits: true } });
     useUIStore.setState({ appMode: 'plan', leftWorkspace: 'speleodb' });
-    render(<LeftWorkspace lines={<div />} />);
-    expect(screen.queryByRole('tab', { name: 'Lines' })).toBeNull();
+    render(<LeftWorkspace sections={<div />} />);
+    expect(screen.queryByRole('tab', { name: 'Sections' })).toBeNull();
     expect(speleoTab()).toHaveAttribute('data-state', 'unuploaded');
   });
 
@@ -176,23 +176,23 @@ describe('Left workspace tab icons and SpeleoDB state', () => {
 
   it('un-uploaded, not selected: only the dimmed warning text - no wash, no rule, no selected weight', () => {
     unuploaded();
-    render(<LeftWorkspace lines={<div />} />);
+    render(<LeftWorkspace sections={<div />} />);
     expect(speleoTab()).toHaveAttribute('aria-selected', 'false');
     expect(look(speleoTab())).toEqual(['text-warning-text-dim']);
     expect(speleoTab().className).not.toMatch(/bg-warning|shadow|inset/);
-    // Lines, the selected tab, keeps the selected indicator.
-    expect(look(screen.getByRole('tab', { name: 'Lines' }))).toEqual(['bg-accent-10', 'font-medium']);
+    // Sections, the selected tab, keeps the selected indicator.
+    expect(look(screen.getByRole('tab', { name: 'Sections' }))).toEqual(['bg-accent-10', 'font-medium']);
   });
 
-  it('un-uploaded, selected: the same selected indicator as Lines, with the full-strength warning text', () => {
+  it('un-uploaded, selected: the same selected indicator as Sections, with the full-strength warning text', () => {
     unuploaded();
-    const { unmount } = render(<LeftWorkspace lines={<div />} />);
-    const linesSelected = look(screen.getByRole('tab', { name: 'Lines' }));
+    const { unmount } = render(<LeftWorkspace sections={<div />} />);
+    const sectionsSelected = look(screen.getByRole('tab', { name: 'Sections' }));
     unmount();
     useUIStore.setState({ leftWorkspace: 'speleodb', surveyLeftWorkspace: 'speleodb' });
-    render(<LeftWorkspace lines={<div />} />);
+    render(<LeftWorkspace sections={<div />} />);
     expect(speleoTab()).toHaveAttribute('aria-selected', 'true');
-    expect(look(speleoTab())).toEqual([...linesSelected, 'text-warning-text'].sort());
+    expect(look(speleoTab())).toEqual([...sectionsSelected, 'text-warning-text'].sort());
     expect(speleoTab().className).not.toMatch(/bg-warning|shadow|inset|text-warning-text-dim/);
     // Full-strength yellow on the mark too, and still no badge.
     expectIconInTabColour();
@@ -202,9 +202,9 @@ describe('Left workspace tab icons and SpeleoDB state', () => {
   it.each(['selected', 'not selected'] as const)('no warning, %s: exactly the Sections tab look', (which) => {
     useSpeleoStore.setState({ link: { ...link, editState: 'editing' } });
     if (which === 'selected') useUIStore.setState({ leftWorkspace: 'speleodb', surveyLeftWorkspace: 'speleodb' });
-    render(<LeftWorkspace lines={<div />} />);
-    const lines = screen.getByRole('tab', { name: 'Lines' });
+    render(<LeftWorkspace sections={<div />} />);
+    const sections = screen.getByRole('tab', { name: 'Sections' });
     expect(look(speleoTab())).toEqual(which === 'selected' ? ['bg-accent-10', 'font-medium'] : ['text-text-secondary']);
-    expect(look(lines)).toEqual(which === 'selected' ? ['text-text-secondary'] : ['bg-accent-10', 'font-medium']);
+    expect(look(sections)).toEqual(which === 'selected' ? ['text-text-secondary'] : ['bg-accent-10', 'font-medium']);
   });
 });

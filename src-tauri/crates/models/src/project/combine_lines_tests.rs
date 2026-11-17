@@ -4,11 +4,11 @@
 use chrono::Utc;
 
 use crate::{
-    AzimuthReference, ClosureStrategy, CombineJoinEnds, CombineJoinKind, CombinePick,
-    CombineLinesOptions, CorrectionSource, DatumRole, GpsCoordinates, LoopClosure,
-    NorthReference, Person, Project, LineData, LineEnd, LineId, ShotData,
-    SplitLineOptions, SplitSide, StationKey, StationMerge, StationRef, SurveyCredit, TornTie,
-    TornTieKind, TornTieReason, ZeroDatum,
+    AzimuthReference, ClosureStrategy, CombineJoinEnds, CombineJoinKind, CombineLinesOptions,
+    CombinePick, CorrectionSource, DatumRole, GpsCoordinates, LineData, LineEnd, LineId,
+    LoopClosure, NorthReference, Person, Project, ShotData, SplitLineOptions, SplitSide,
+    StationKey, StationMerge, StationRef, SurveyCredit, TornTie, TornTieKind, TornTieReason,
+    ZeroDatum,
 };
 
 fn shot(azimuth: f64, length: f64) -> ShotData {
@@ -272,11 +272,7 @@ fn the_kept_line_keeps_its_shot_ids_and_every_uuid_travels() {
     unique.sort_unstable();
     unique.dedup();
     assert_eq!(unique.len(), ids.len());
-    let mut after: Vec<String> = line
-        .shots
-        .iter()
-        .map(|s| s.uuid.clone().unwrap())
-        .collect();
+    let mut after: Vec<String> = line.shots.iter().map(|s| s.uuid.clone().unwrap()).collect();
     after.sort();
     uuids.sort();
     assert_eq!(after, uuids);
@@ -1383,10 +1379,7 @@ fn every_shot_keeps_its_record_parity_through_a_combine() {
                         .merge_stations(end(&project, k, kept_end), at_o)
                         .unwrap();
                     let (kept, other) = if keep_lower { (k, o) } else { (o, k) };
-                    let reverses = project
-                        .combine_candidate_for_lines(k, o)
-                        .unwrap()
-                        .reverses;
+                    let reverses = project.combine_candidate_for_lines(k, o).unwrap().reverses;
                     let other_uuids: Vec<String> = project
                         .get_line(other)
                         .unwrap()
@@ -1498,12 +1491,7 @@ fn combining_end_to_end_equals_reversing_then_combining() {
     let mut manual = direct.clone();
     direct.combine_lines(k, o, &options()).unwrap();
     assert!(manual.reverse_line(o, true));
-    assert!(
-        !manual
-            .combine_candidate_for_lines(k, o)
-            .unwrap()
-            .reverses
-    );
+    assert!(!manual.combine_candidate_for_lines(k, o).unwrap().reverses);
     manual.combine_lines(k, o, &options()).unwrap();
 
     let shots = |p: &Project| -> Vec<(Option<String>, f64, f64, f64)> {
@@ -1659,10 +1647,7 @@ fn a_kept_line_without_shot_id_room_is_refused_but_the_other_can_be_kept() {
     assert_eq!(project.combine_refusal(k, o, None), Some(reason.clone()));
     let before = serde_json::to_string(&project).unwrap();
     assert_eq!(
-        project
-            .clone()
-            .combine_lines(k, o, &options())
-            .unwrap_err(),
+        project.clone().combine_lines(k, o, &options()).unwrap_err(),
         reason
     );
     assert_eq!(serde_json::to_string(&project).unwrap(), before);

@@ -5,7 +5,7 @@ import { closeProjectViaMenu, openSettingsFromMenu } from './helpers/app';
 /**
  * E2E tests for Number Format and Date Format settings.
  *
- * Tests the format selectors in Settings > General > Language line:
+ * Tests the format selectors in Settings > General > Language section:
  * - select-number-format: locale, en-US (period), de-DE (comma), fr-FR (space)
  * - select-date-format: locale, en-US (MM/DD/YYYY), en-GB (DD/MM/YYYY), en-CA (YYYY/MM/DD)
  */
@@ -184,14 +184,14 @@ test.describe('Settings - Date Format', () => {
     await page.keyboard.press('Escape');
   });
 
-  test('language line contains all format selectors', async ({ page }) => {
+  test('language section contains all format selectors', async ({ page }) => {
     await openSettingsDialog(page);
     await navigateToGeneralTab(page);
 
-    const languageLine = page.locator('[data-testid="line-language"]');
-    await expect(languageLine).toBeVisible();
+    const languageSection = page.locator('[data-testid="section-language"]');
+    await expect(languageSection).toBeVisible();
 
-    // Language, number format, and date format should all be within this line
+    // Language, number format, and date format should all be within this section
     await expect(page.locator('[data-testid="setting-language"]')).toBeVisible();
     await expect(page.locator('[data-testid="setting-number-format"]')).toBeVisible();
     await expect(page.locator('[data-testid="setting-date-format"]')).toBeVisible();
@@ -205,12 +205,12 @@ test.describe('Settings - Auto-Save Controls', () => {
     await createProject(page, 'Auto-Save Settings Test');
   });
 
-  test('auto-save toggle is visible in saving line', async ({ page }) => {
+  test('auto-save toggle is visible in saving section', async ({ page }) => {
     await openSettingsDialog(page);
     await navigateToGeneralTab(page);
 
-    const savingLine = page.locator('[data-testid="line-saving"]');
-    await expect(savingLine).toBeVisible();
+    const savingSection = page.locator('[data-testid="section-saving"]');
+    await expect(savingSection).toBeVisible();
     await expect(page.locator('[data-testid="toggle-auto-save"]')).toBeVisible();
   });
 
@@ -255,8 +255,8 @@ test.describe('Settings - Auto-Save Controls', () => {
     await openSettingsDialog(page);
     await navigateToGeneralTab(page);
 
-    const undoLine = page.locator('[data-testid="line-undo"]');
-    await expect(undoLine).toBeVisible();
+    const undoSection = page.locator('[data-testid="section-undo"]');
+    await expect(undoSection).toBeVisible();
     await expect(page.locator('[data-testid="input-undo-limit"]')).toBeVisible();
     await expect(page.locator('[data-testid="input-undo-persist"]')).toBeVisible();
   });

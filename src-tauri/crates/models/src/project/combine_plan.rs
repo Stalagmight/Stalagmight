@@ -66,8 +66,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
     ClosureStrategy, CombineJoinedMove, CombinePlan, CombineRemovedClosure, CombineRemovedKind,
-    CombineReplacedClosure, KeptMovesReason, LoopClosure, LineId, StationRef, TornTie,
-    TornTieKind, TornTieReason,
+    CombineReplacedClosure, KeptMovesReason, LineId, LoopClosure, StationRef, TornTie, TornTieKind,
+    TornTieReason,
 };
 
 use super::closure_shots::Knots;
@@ -330,8 +330,7 @@ impl Project {
         // own, read once: every anchored-side question below is a lookup in it.
         // GPS fixes do not hold a side (#741).
         let datum_lines: HashSet<LineId> = self.placement_datum_lines();
-        let anchored =
-            |lines: &HashSet<LineId>| lines.iter().any(|s| datum_lines.contains(s));
+        let anchored = |lines: &HashSet<LineId>| lines.iter().any(|s| datum_lines.contains(s));
         // The snapped closures a plan tears when `moving` moves off `fixed`
         // with `torn` merges torn: one across the two sides closes a loop
         // through the combined line, and any from a side that moves stops
@@ -348,10 +347,7 @@ impl Project {
                 .filter(|t| matches!(t.id, TieId::Closure(_)))
                 .filter(|t| !join.is_join_tie(t.a, t.b))
                 .filter(|t| {
-                    let (in_a, in_b) = (
-                        side.contains(&t.a.line_id),
-                        side.contains(&t.b.line_id),
-                    );
+                    let (in_a, in_b) = (side.contains(&t.a.line_id), side.contains(&t.b.line_id));
                     let crosses = (in_a && fixed_side.contains(&t.b.line_id))
                         || (in_b && fixed_side.contains(&t.a.line_id));
                     crosses || (shifting && in_a != in_b)
@@ -436,8 +432,7 @@ impl Project {
                     )
             };
             let anchor = if adjusted {
-                self.adjustment_anchor_of(&component)
-                    .map(|at| at.line_id)
+                self.adjustment_anchor_of(&component).map(|at| at.line_id)
             } else {
                 None
             };
@@ -498,9 +493,7 @@ impl Project {
                 }
                 let part = reach(&adjacency, partner.line_id, moving);
                 let back = kept_merges().any(|t| {
-                    (part.contains(&t.a.line_id)
-                        && t.b.line_id == moving
-                        && t.b != dropped_at)
+                    (part.contains(&t.a.line_id) && t.b.line_id == moving && t.b != dropped_at)
                         || (part.contains(&t.b.line_id)
                             && t.a.line_id == moving
                             && t.a != dropped_at)

@@ -47,7 +47,7 @@
 
 #![expect(clippy::unwrap_used, clippy::indexing_slicing)]
 
-use crate::{Project, LineData, ShotData, StationMerge, StationRef};
+use crate::{LineData, Project, ShotData, StationMerge, StationRef};
 
 /// SplitMix64 - deterministic and reproducible from a seed.
 struct Rng(u64);

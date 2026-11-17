@@ -389,12 +389,7 @@ impl Database {
                  AND section_id = ?3 \
                  AND (shot_uuid = ?2 \
                       OR (shot_uuid IS NULL AND shot_id = ?4))",
-                params![
-                    warning.warning_code,
-                    uuid,
-                    warning.line_id,
-                    warning.shot_id
-                ],
+                params![warning.warning_code, uuid, warning.line_id, warning.shot_id],
             )?;
         } else {
             conn.execute(

@@ -81,7 +81,7 @@ use super::AppState;
 use crate::config::ClosureAdjustmentConfig;
 use crate::core::Command;
 use crate::models::{
-    gps_to_local, ClosureStrategy, DatumRole, GpsCoordinates, Project, LineId, StationKey,
+    gps_to_local, ClosureStrategy, DatumRole, GpsCoordinates, LineId, Project, StationKey,
     StationRef, SurveyDirection,
 };
 
@@ -234,10 +234,7 @@ fn snap(p: &Project) -> Snap {
 /// The first difference between `want` and `got`, if any.
 fn diff(want: &Snap, got: &Snap) -> Option<String> {
     if want.lines != got.lines {
-        return Some(format!(
-            "lines {:?} -> {:?}",
-            want.lines, got.lines
-        ));
+        return Some(format!("lines {:?} -> {:?}", want.lines, got.lines));
     }
     if want.datums != got.datums {
         return Some(format!("datums {:?} -> {:?}", want.datums, got.datums));

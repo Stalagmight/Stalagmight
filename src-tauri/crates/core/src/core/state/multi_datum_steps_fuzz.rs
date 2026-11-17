@@ -9,9 +9,9 @@ use std::fmt;
 use super::AppState;
 use crate::core::Command;
 use crate::models::{
-    local_to_gps, ClosureStrategy, CombineJoinEnds, CombinePick, CombineLinesOptions,
-    GpsCoordinates, Project, LineEnd, LineId, ShotData, SplitAt, SplitLineOptions,
-    SplitSide, StationRef,
+    local_to_gps, ClosureStrategy, CombineJoinEnds, CombineLinesOptions, CombinePick,
+    GpsCoordinates, LineEnd, LineId, Project, ShotData, SplitAt, SplitLineOptions, SplitSide,
+    StationRef,
 };
 
 /// Accuracies a datum is given: the default (a hard pin), an explicit hard
@@ -162,15 +162,9 @@ impl fmt::Display for Op {
             Op::Merge { a, b } => write!(f, "merge({},{})", st(*a), st(*b)),
             Op::Unmerge { a, b } => write!(f, "unmerge({},{})", st(*a), st(*b)),
             Op::Closure { a, b } => write!(f, "closure({},{})", st(*a), st(*b)),
-            Op::Split {
-                line,
-                at,
-                side_b,
-            } => write!(
-                f,
-                "split({line},{at},{})",
-                if *side_b { "b" } else { "a" }
-            ),
+            Op::Split { line, at, side_b } => {
+                write!(f, "split({line},{at},{})", if *side_b { "b" } else { "a" })
+            }
             Op::Combine {
                 kept,
                 kept_end,
@@ -634,11 +628,7 @@ pub(super) fn apply(state: &AppState, origin: &GpsCoordinates, op: &Op, p: &Proj
             station_b: *b,
             closure_strategy: ClosureStrategy::Batch,
         }),
-        Op::Split {
-            line,
-            at,
-            side_b,
-        } => {
+        Op::Split { line, at, side_b } => {
             let side = if *side_b { SplitSide::B } else { SplitSide::A };
             state.execute_split_line(
                 *line,
@@ -673,9 +663,7 @@ pub(super) fn apply(state: &AppState, origin: &GpsCoordinates, op: &Op, p: &Proj
                 }),
             },
         ),
-        Op::DeleteLine { line } => state.execute(Command::DeleteLine {
-            line_id: *line,
-        }),
+        Op::DeleteLine { line } => state.execute(Command::DeleteLine { line_id: *line }),
         Op::DeleteShot { line, index } => {
             match p.get_line(*line).and_then(|s| s.shots.get(*index)) {
                 Some(shot) => state.execute(Command::DeleteShot {

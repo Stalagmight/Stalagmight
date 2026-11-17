@@ -32,8 +32,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    CombineCandidate, CombineJoinEnds, CombineJoinKind, CombinePlan, Line, LineEnd,
-    LineId, StationKey, StationRef, FEATURE_ID_STRIDE,
+    CombineCandidate, CombineJoinEnds, CombineJoinKind, CombinePlan, Line, LineEnd, LineId,
+    StationKey, StationRef, FEATURE_ID_STRIDE,
 };
 
 use super::combine_plan::{ClosureFacts, JoinPoint, Tie, TiePlan};
@@ -121,8 +121,7 @@ fn end_index(line: &Line, end: LineEnd) -> u32 {
 /// A line as the user knows it: its name, or "Line N" when it has none
 /// (the label the Combine dialog and its refusals use).
 pub fn line_label(line: &Line) -> String {
-    line
-        .name
+    line.name
         .clone()
         .filter(|name| !name.trim().is_empty())
         .unwrap_or_else(|| format!("Line {}", line.id))
@@ -337,12 +336,7 @@ impl Project {
     /// Why combining `a` and `b` at their join stations `join` (one of each)
     /// is refused, or `None`. Everything else that stands in the way is
     /// changed, and the plan says what (`combine_plan.rs`).
-    fn combine_blocked_reason(
-        &self,
-        a: &Line,
-        b: &Line,
-        join: [StationRef; 2],
-    ) -> Option<String> {
+    fn combine_blocked_reason(&self, a: &Line, b: &Line, join: [StationRef; 2]) -> Option<String> {
         // The two join stations become ONE station of the combined line, and
         // a station holds at most one datum (#741 D2): a placement datum and a
         // GPS fix folded onto one station key would lose the fix on the next
@@ -700,12 +694,7 @@ impl Project {
     }
 
     /// Every pairing of an end of `s1` with an end of `s2` that touches.
-    fn touching_pairings(
-        &self,
-        s1: &Line,
-        s2: &Line,
-        table: &EndTable,
-    ) -> Vec<(Pairing, Touch)> {
+    fn touching_pairings(&self, s1: &Line, s2: &Line, table: &EndTable) -> Vec<(Pairing, Touch)> {
         Self::joinable_ends(s1)
             .iter()
             .flat_map(|&end_a| {
@@ -733,11 +722,7 @@ impl Project {
     /// loop closures (the plan lists them); the station menu joins at the end
     /// that was clicked instead. `None` when either line is missing or
     /// they are the same line.
-    pub fn combine_candidate_for_lines(
-        &self,
-        s1: LineId,
-        s2: LineId,
-    ) -> Option<CombineCandidate> {
+    pub fn combine_candidate_for_lines(&self, s1: LineId, s2: LineId) -> Option<CombineCandidate> {
         self.candidate_for_lines_with(s1, s2, &self.end_table())
     }
 
@@ -912,7 +897,7 @@ impl Project {
                 return Vec::new();
             };
             touch.blocked = Some(format!(
-                "{count} line ends meet here: select the two to combine in the Lines \
+                "{count} line ends meet here: select the two to combine in the Sections \
                  panel"
             ));
             return self

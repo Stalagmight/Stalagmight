@@ -8,8 +8,8 @@
 
 use super::combine_closure_tests::{add, check_combined, dist, options, shot, xy};
 use crate::{
-    ClosureStrategy, CombineJoinEnds, CombinePlan, GpsCoordinates, LoopClosure, Project,
-    LineEnd, LineId, StationRef, TornTieKind, TornTieReason, ZeroDatum,
+    ClosureStrategy, CombineJoinEnds, CombinePlan, GpsCoordinates, LineEnd, LineId, LoopClosure,
+    Project, StationRef, TornTieKind, TornTieReason, ZeroDatum,
 };
 
 /// Move `id` so its station `index` sits exactly on `target`.
@@ -287,9 +287,7 @@ fn a_snap_into_a_part_a_zero_datum_holds_tears_for_the_datum() {
         ]
     );
     let mut after = project.clone();
-    after
-        .combine_lines(k, o, &options(Some(keep_k)))
-        .unwrap();
+    after.combine_lines(k, o, &options(Some(keep_k))).unwrap();
     check_combined(&project, &after, &c, k, "keep K", &[]);
     assert!(reopen_settles_nothing(&after), "a reopen settles nothing");
 
@@ -316,8 +314,6 @@ fn a_snap_into_a_part_a_zero_datum_holds_tears_for_the_datum() {
         )]
     );
     let mut after = project.clone();
-    after
-        .combine_lines(o, k, &options(Some(keep_o)))
-        .unwrap();
+    after.combine_lines(o, k, &options(Some(keep_o))).unwrap();
     check_combined(&project, &after, &c, o, "keep O", &[]);
 }

@@ -6,7 +6,7 @@
 use super::AppState;
 use crate::core::{Command, UndoData};
 use crate::models::{
-    DatumRole, GpsCoordinates, Project, LineId, ShotData, StationRef, SurveyDirection,
+    DatumRole, GpsCoordinates, LineId, Project, ShotData, StationRef, SurveyDirection,
 };
 
 fn gps(lat: f64) -> GpsCoordinates {

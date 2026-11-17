@@ -12,10 +12,10 @@ use stalagmight_lib::commands::app_update::{
 use stalagmight_lib::commands::cache::{CacheStats, ProviderStats, TileFetchStatsResponse};
 use stalagmight_lib::commands::export::DiveProfileRequest;
 use stalagmight_lib::commands::history::{FieldChange, PreviewData, UndoHistoryItem};
+use stalagmight_lib::commands::line::{SegmentGeometry, SegmentLineGeometry};
 use stalagmight_lib::commands::memory::{MemoryStats, ProcessMemory};
 use stalagmight_lib::commands::mnemo::{MnemoError, MnemoPort, MnemoPullProgress, MnemoPullResult};
 use stalagmight_lib::commands::project::ProjectState;
-use stalagmight_lib::commands::line::{SegmentGeometry, SegmentLineGeometry};
 use stalagmight_lib::commands::survey_geometry::{
     GeometryShot, SurveyGeometry, SurveyGeometryError,
 };
@@ -23,12 +23,12 @@ use stalagmight_lib::config::{
     AngleUnit, AppearanceConfig, CacheConfig, ClosureAdjustmentConfig, ColorTheme, Config,
     DebugConfig, DecimalPrecision, DisplayConfig, DpvRig, DpvUnit, ExportConfig, GasConfig,
     GasUnits, GeneralConfig, GlobalViewConfig, GpsOrigin, ImportConfig, IssueCombine, LengthUnit,
-    LoggingConfig, MapAnimationConfig, MapConfig, MapControlsConfig, MapDebugConfig,
-    MapPaletteConfig, MapSnapConfig, OverlapMode, PaletteChoiceConfig, PanelsConfig, PeopleConfig,
-    PlacementSuggestionConfig, ProviderCacheConfig, ReservePreset, ReserveProfile,
-    LineColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig, SpeleoDbConfig,
-    StationConfig, SyntacticHighlightLevel, SyntacticHighlightPreset, SyntacticHighlightingConfig,
-    ThemeMode, UnitsConfig, UpdateTrack, ValidationConfig,
+    LineColorsConfig, LoggingConfig, MapAnimationConfig, MapConfig, MapControlsConfig,
+    MapDebugConfig, MapPaletteConfig, MapSnapConfig, OverlapMode, PaletteChoiceConfig,
+    PanelsConfig, PeopleConfig, PlacementSuggestionConfig, ProviderCacheConfig, ReservePreset,
+    ReserveProfile, ShortcutFeedback, ShortcutsConfig, ShotConfig, SpeleoDbConfig, StationConfig,
+    SyntacticHighlightLevel, SyntacticHighlightPreset, SyntacticHighlightingConfig, ThemeMode,
+    UnitsConfig, UpdateTrack, ValidationConfig,
 };
 use stalagmight_lib::core::command::{
     CommandResult, CommentHolder, ImportReceipt, IntegrityCheckResult, IntegrityRepairResult,
@@ -53,26 +53,25 @@ use stalagmight_lib::models::placement_suggest::{
 use stalagmight_lib::models::{
     AdjustmentFailureReport, AdjustmentReport, AlongLineResult, AzimuthReference, ClosurePair,
     ClosurePreview, ClosureRef, ClosureStrategy, ClosureUpdate, CombineCandidate, CombineJoinEnds,
-    CombineJoinKind, CombineJoinedMove, CombinePick, CombinePlan, CombineRemovedClosure,
-    CombineRemovedKind, CombineReplacedClosure, CombineReplacedKind, CombineLinesOptions,
+    CombineJoinKind, CombineJoinedMove, CombineLinesOptions, CombinePick, CombinePlan,
+    CombineRemovedClosure, CombineRemovedKind, CombineReplacedClosure, CombineReplacedKind,
     ConnectivityResult, Coordinates, CorrectionSource, CreditEdit, CreditTargets, CreditedPerson,
     CylRole, Cylinder, DatumGap, DatumRole, DeleteShotImpact, DeleteShotRangeImpact, DistanceField,
     DivePlan, DivePlanMeta, DivePlanSnapshot, Diver, ExistingShotUpdate, FarGpsFix, FrozenShotRef,
-    GasReachField, GpsBounds, GpsCoordinates, ImportPlacement, ImportLineConfig,
-    KeptMovesReason, LoopClosureWire, MarkedPoint, MergeDatumShift, NorthReference, PathShot,
-    Person, PlanAnchorSet, PlanMode, PlanSegment, Project, ProjectMetadata, ProjectStats,
-    ProjectWarning, RangeDeleteKind, RouteLeg, RouteProfilePoint, RulerEndpoint, Line,
-    LineCreditSummary, LineData, LineEnd, LineRelationships, LineStats,
-    LineUpdates, Shot, ShotData, ShotKind, ShotUpdates, SkippedClosure, SpeleoLink, SplitAt,
-    SplitPreview, SplitLineOptions, SplitSide, Station, StationMergeWire, StationPair,
-    StationRef, SurveyCredit, SurveyDirection, TankMaterial, Team, TornTie, TornTieKind,
-    TornTieReason, UnrecognisedShotKind, ZeroDatumPreview, ZeroDatumWire,
+    GasReachField, GpsBounds, GpsCoordinates, ImportLineConfig, ImportPlacement, KeptMovesReason,
+    Line, LineCreditSummary, LineData, LineEnd, LineRelationships, LineStats, LineUpdates,
+    LoopClosureWire, MarkedPoint, MergeDatumShift, NorthReference, PathShot, Person, PlanAnchorSet,
+    PlanMode, PlanSegment, Project, ProjectMetadata, ProjectStats, ProjectWarning, RangeDeleteKind,
+    RouteLeg, RouteProfilePoint, RulerEndpoint, Shot, ShotData, ShotKind, ShotUpdates,
+    SkippedClosure, SpeleoLink, SplitAt, SplitLineOptions, SplitPreview, SplitSide, Station,
+    StationMergeWire, StationPair, StationRef, SurveyCredit, SurveyDirection, TankMaterial, Team,
+    TornTie, TornTieKind, TornTieReason, UnrecognisedShotKind, ZeroDatumPreview, ZeroDatumWire,
 };
 use stalagmight_lib::parsers::compass::{CompassFile, CompassSurveySummary, InvalidShotCounts};
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};
 use stalagmight_lib::parsers::gpx::{
-    GpxFile, GpxRoute, GpxRoutePoint, GpxLinePlacement, GpxTrack, GpxTrackPoint,
-    GpxTrackSegment, GpxWaypoint,
+    GpxFile, GpxLinePlacement, GpxRoute, GpxRoutePoint, GpxTrack, GpxTrackPoint, GpxTrackSegment,
+    GpxWaypoint,
 };
 use stalagmight_lib::parsers::tml::{
     TmlClosure, TmlFile, TmlGeoCoding, TmlParseAnomalies, TmlRootPlacement, TmlSection, TmlShot,

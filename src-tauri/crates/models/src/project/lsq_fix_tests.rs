@@ -11,8 +11,8 @@ use std::collections::HashSet;
 
 use crate::config::ClosureAdjustmentConfig;
 use crate::{
-    gps_to_local, local_to_gps, ClosureStrategy, Coordinates, DatumRole, GpsCoordinates,
-    LoopClosure, Project, LineData, LineId, ShotData, StationRef, ZeroDatum,
+    gps_to_local, local_to_gps, ClosureStrategy, Coordinates, DatumRole, GpsCoordinates, LineData,
+    LineId, LoopClosure, Project, ShotData, StationRef, ZeroDatum,
 };
 
 const SHOTS_PER_LEG: usize = 25;

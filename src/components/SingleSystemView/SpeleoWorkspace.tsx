@@ -98,7 +98,7 @@ export function SpeleoWorkspace() {
   const { t } = useTranslation();
   const link = useSpeleoStore((s) => s.link);
   const session = useSpeleoStore((s) => s.session);
-  const expanded = useUIStore((s) => s.speleoWorkspaceLine);
+  const expanded = useUIStore((s) => s.speleoWorkspaceSection);
   const [visited, setVisited] = useState(() => new Set<string>());
   useEffect(() => { if (expanded) setVisited((old) => new Set([...old, expanded])); }, [expanded]);
   const { startEditing, update } = useSpeleoActions();
@@ -158,13 +158,13 @@ export function SpeleoWorkspace() {
           icon={<ExternalLinkIcon size={ICON} />} iconColor={WORKSPACE_ICON_COLORS.web}
           data-testid="speleodb-workspace-open-web">Open on SpeleoDB</Button>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto" data-testid="speleodb-workspace-lines">
+      <div className="min-h-0 flex-1 overflow-y-auto" data-testid="speleodb-workspace-sections">
       {areas.map(([id, label]) => (
-        <line key={id} className="border-t border-border pt-2">
+        <section key={id} className="border-t border-border pt-2">
           <button type="button" aria-expanded={expanded === id} aria-controls={`speleodb-area-${id}`}
             className="w-full flex items-center gap-1.5 text-left font-medium py-2 focus-visible:outline focus-visible:outline-accent"
-            data-testid={`speleodb-workspace-line-${id}`}
-            onClick={() => useUIStore.setState({ speleoWorkspaceLine: expanded === id ? null : id })}>
+            data-testid={`speleodb-workspace-section-${id}`}
+            onClick={() => useUIStore.setState({ speleoWorkspaceSection: expanded === id ? null : id })}>
             {expanded === id ? <ChevronDownIcon size={ICON} /> : <ChevronRightIcon size={ICON} />}
             {label}
           </button>
@@ -173,7 +173,7 @@ export function SpeleoWorkspace() {
             {id === 'history' && <SpeleoRevisionHistory />}
             </>}
           </div>
-        </line>
+        </section>
       ))}
       </div>
     </div>

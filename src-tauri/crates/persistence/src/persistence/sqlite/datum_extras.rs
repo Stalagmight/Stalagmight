@@ -70,7 +70,7 @@ use anyhow::Result;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
 use crate::models::{
-    validate_gps_accuracy, DatumRole, GpsCoordinates, Project, Line, StationKey, ZeroDatum,
+    validate_gps_accuracy, DatumRole, GpsCoordinates, Line, Project, StationKey, ZeroDatum,
 };
 
 use super::shot_credits::{extended_code, is_schema_error};

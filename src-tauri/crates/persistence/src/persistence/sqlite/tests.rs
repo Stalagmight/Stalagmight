@@ -1594,10 +1594,7 @@ fn test_database_transaction_rollback() {
         let loaded = db.load_project().unwrap();
         assert_eq!(loaded.name, "Rollback Test");
         assert_eq!(loaded.lines.len(), 1);
-        assert_eq!(
-            loaded.lines[0].name,
-            Some("Original Line".to_string())
-        );
+        assert_eq!(loaded.lines[0].name, Some("Original Line".to_string()));
     }
 
     // Modify and save again - this simulates a successful transaction
@@ -1613,10 +1610,7 @@ fn test_database_transaction_rollback() {
         let db = Database::open_existing(&db_path).unwrap();
         let loaded = db.load_project().unwrap();
         assert_eq!(loaded.name, "Modified Project");
-        assert_eq!(
-            loaded.lines[0].name,
-            Some("Modified Line".to_string())
-        );
+        assert_eq!(loaded.lines[0].name, Some("Modified Line".to_string()));
     }
 
     // Test that the transaction is atomic - all data is cleared and rewritten
@@ -8898,10 +8892,7 @@ fn counter_parity_file(raw: Option<&str>) -> (TempDir, Database, String) {
             ..Default::default()
         })
         .id;
-    let uuid = project.get_line(id).unwrap().shots[0]
-        .uuid
-        .clone()
-        .unwrap();
+    let uuid = project.get_line(id).unwrap().shots[0].uuid.clone().unwrap();
     project.counter_parity_shots.insert(uuid.clone());
     db.save_project(&project).unwrap();
     assert_eq!(

@@ -16,8 +16,8 @@ use super::AppState;
 use crate::config::GasConfig;
 use crate::models::project::gas::{MAX_SEGMENT_SPEED_M_PER_MIN, MIN_SEGMENT_SPEED_M_PER_MIN};
 use crate::models::{
-    Cylinder, DivePlan, DivePlanMeta, DivePlanSnapshot, Diver, MarkedPoint, PlanAnchorSet,
-    PlanSegment, Project, Line, StationRef, DIVE_PLAN_SCHEMA_VERSION,
+    Cylinder, DivePlan, DivePlanMeta, DivePlanSnapshot, Diver, Line, MarkedPoint, PlanAnchorSet,
+    PlanSegment, Project, StationRef, DIVE_PLAN_SCHEMA_VERSION,
 };
 use crate::persistence::plnx::{PlnxMeta, PlnxStore};
 
@@ -298,8 +298,7 @@ fn resolve_anchor(project: &Project, anchor: &PlanAnchor) -> Option<StationRef> 
     // A reverse of the neighbour's RECORD since this anchor was written flips
     // what "after" means. Read per neighbour: the record parity follows the
     // shot, whichever line holds it now.
-    let record_parity =
-        |uuid: &Option<String>| project.shot_record_parity(line, uuid.as_deref());
+    let record_parity = |uuid: &Option<String>| project.shot_record_parity(line, uuid.as_deref());
     let flipped_a = anchor.parity != record_parity(&anchor.a);
     let flipped_b = anchor.parity_b.unwrap_or(anchor.parity) != record_parity(&anchor.b);
     let index = match (pa, pb) {
@@ -362,9 +361,8 @@ fn resolve_stored(project: &Project, stored: &StoredAnchor) -> Option<StationRef
             let StationAnchor::AfterShot(old) = &key.anchor else {
                 return None;
             };
-            let after = |id: &str| {
-                StationKey::new(key.line_id, StationAnchor::AfterShot(id.to_string()))
-            };
+            let after =
+                |id: &str| StationKey::new(key.line_id, StationAnchor::AfterShot(id.to_string()));
             let live = crate::models::live_shot_uuid_for_stored(key.line_id, old, |id| {
                 project.resolve_key(&after(id)).is_some()
             })?;
@@ -1436,12 +1434,7 @@ mod tests {
     }
 
     /// Every pairing and every combination of the two lines' parities.
-    fn every_combine_shape() -> Vec<(
-        crate::models::LineEnd,
-        crate::models::LineEnd,
-        bool,
-        bool,
-    )> {
+    fn every_combine_shape() -> Vec<(crate::models::LineEnd, crate::models::LineEnd, bool, bool)> {
         use crate::models::LineEnd::{End, Start};
         let mut out = Vec::new();
         for kept_end in [Start, End] {
@@ -2313,7 +2306,7 @@ mod tests {
         assert!(persisted.segments.is_empty());
     }
 
-    /// A `.plnx` written before #24 stores `{line_id, anchor}` and must keep working. The
+    /// A `.plnx` written before #24 stores `{section_id, anchor}` and must keep working. The
     /// pair form's fields all default, so without the untagged ordering it would swallow a
     /// legacy row and silently blank every reference in it - the whole plan, on upgrade.
     #[test]
@@ -2323,9 +2316,10 @@ mod tests {
             .uuid
             .clone()
             .unwrap();
-        // Exactly the shape the old writer produced.
+        // Exactly the shape the old writer produced, in the sidecar's on-disk
+        // vocabulary (see `disk_names`).
         let json = serde_json::json!({
-            "origin": { "section_id": sec, "anchor": "LineStart" },
+            "origin": { "section_id": sec, "anchor": "SectionStart" },
             "endpoint": { "section_id": sec, "anchor": { "AfterShot": uuid } },
             "waypoints": [],
             "diver": { "rmv_l_per_min": 20.0, "label": null },
@@ -2336,7 +2330,8 @@ mod tests {
         })
         .to_string();
 
-        let persisted: PersistedDivePlanSnapshot = serde_json::from_str(&json).unwrap();
+        let persisted: PersistedDivePlanSnapshot =
+            crate::models::disk_names::from_disk_str(&json).unwrap();
         assert!(
             matches!(persisted.origin, Some(StoredAnchor::Legacy(_))),
             "a legacy row must be recognised as legacy, not silently read as an empty pair"

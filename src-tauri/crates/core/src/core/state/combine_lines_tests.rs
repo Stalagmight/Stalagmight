@@ -4,7 +4,7 @@
 use super::AppState;
 use crate::core::Command;
 use crate::models::{
-    CombinePick, CombineLinesOptions, GpsCoordinates, LineId, ShotData, StationRef,
+    CombineLinesOptions, CombinePick, GpsCoordinates, LineId, ShotData, StationRef,
 };
 
 /// A shot credited to its own surveyor, so the snapshot comparisons below
@@ -141,11 +141,7 @@ fn a_refused_combine_changes_nothing_and_leaves_no_undo_entry() {
     assert_eq!(state.get_undo_stack().len(), depth);
 
     for (kept, other) in [(k, k), (k, 999)] {
-        assert!(
-            !state
-                .execute_combine_lines(kept, other, options())
-                .success
-        );
+        assert!(!state.execute_combine_lines(kept, other, options()).success);
         assert_eq!(snapshot(&state), before);
         assert_eq!(state.get_undo_stack().len(), depth);
     }
@@ -378,8 +374,7 @@ fn keeping_the_higher_id_keeps_it() {
 fn a_kept_line_without_shot_id_room_is_refused_with_no_undo_entry() {
     let (state, k, o) = state();
     let mut project = state.get_project_state().unwrap();
-    project.get_line_mut(k).unwrap().next_shot_id =
-        (k + 1) * crate::models::FEATURE_ID_STRIDE - 1;
+    project.get_line_mut(k).unwrap().next_shot_id = (k + 1) * crate::models::FEATURE_ID_STRIDE - 1;
     state.set_project_for_tests(project);
     let before = snapshot(&state);
     let depth = state.get_undo_stack().len();
@@ -761,7 +756,7 @@ fn an_ignore_on_an_unsaved_shot_survives_an_undone_combine() {
 /// component (the first valid one).
 #[test]
 fn a_huge_held_gauge_list_opens_fast_and_keeps_one_per_component() {
-    use crate::models::{HeldGauge, Project, LineData};
+    use crate::models::{HeldGauge, LineData, Project};
     let temp = tempfile::TempDir::new().unwrap();
     let path = temp.path().join("crafted.stalx");
     let mut project = Project::new("Crafted".to_string(), None);
@@ -791,9 +786,7 @@ fn a_huge_held_gauge_list_opens_fast_and_keeps_one_per_component() {
                 .unwrap()
         });
     let held = |project: &Project, line: LineId, index: u32| {
-        project
-            .held_gauge_at(StationRef::new(line, index))
-            .unwrap()
+        project.held_gauge_at(StationRef::new(line, index)).unwrap()
     };
     let first = held(&project, ids[1], 1);
     let same_component = held(&project, ids[0], 1);
@@ -837,7 +830,7 @@ fn a_huge_held_gauge_list_opens_fast_and_keeps_one_per_component() {
 /// the station there, not the lower line's copy of the same uuid.
 #[test]
 fn a_held_gauge_on_the_renamed_copy_of_a_repeated_uuid_holds_its_station() {
-    use crate::models::{Project, LineData};
+    use crate::models::{LineData, Project};
     let temp = tempfile::TempDir::new().unwrap();
     let path = temp.path().join("repeats.stalx");
     let ids = [
@@ -1375,9 +1368,7 @@ fn a_combine_that_would_put_two_datums_on_one_station_is_refused() {
 /// it. No warning: the connection stays.
 #[test]
 fn a_combine_keeps_the_closure_the_solve_takes_over_a_legacy_one() {
-    use crate::models::{
-        ClosureStrategy, CombineJoinEnds, KeptMovesReason, LoopClosure, LineEnd,
-    };
+    use crate::models::{ClosureStrategy, CombineJoinEnds, KeptMovesReason, LineEnd, LoopClosure};
     let temp = tempfile::TempDir::new().unwrap();
     let path = temp.path().join("legacy-loop.stalx");
     let state = AppState::new().unwrap();
@@ -1807,11 +1798,7 @@ fn a_hand_moved_join_station_keeps_its_branch_through_undo_and_a_reopen() {
         combined.station_offsets.is_empty(),
         "the joined station keeps K's hand move: none"
     );
-    let lengths: Vec<f64> = combined.lines[0]
-        .shots
-        .iter()
-        .map(|s| s.length)
-        .collect();
+    let lengths: Vec<f64> = combined.lines[0].shots.iter().map(|s| s.length).collect();
     assert_eq!(lengths, vec![10.0, 10.0], "no shot changes");
     // The joined station and T read the average of the three readings there
     // (K's, O's, T's); the joined station keeps K's hand move in depth, none,

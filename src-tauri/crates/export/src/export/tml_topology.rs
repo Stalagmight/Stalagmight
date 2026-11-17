@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use crate::models::{Project, Line, LineId, StationRef, ZeroDatum};
+use crate::models::{Line, LineId, Project, StationRef, ZeroDatum};
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct ParentLink {
@@ -87,22 +87,16 @@ pub(super) fn build_parent_map(
         ) else {
             continue;
         };
-        adjacency
-            .entry(a.line_id)
-            .or_default()
-            .push(NeighborLink {
-                neighbor_line_id: b.line_id,
-                parent_station: a,
-                child_station_index: b.station_index,
-            });
-        adjacency
-            .entry(b.line_id)
-            .or_default()
-            .push(NeighborLink {
-                neighbor_line_id: a.line_id,
-                parent_station: b,
-                child_station_index: a.station_index,
-            });
+        adjacency.entry(a.line_id).or_default().push(NeighborLink {
+            neighbor_line_id: b.line_id,
+            parent_station: a,
+            child_station_index: b.station_index,
+        });
+        adjacency.entry(b.line_id).or_default().push(NeighborLink {
+            neighbor_line_id: a.line_id,
+            parent_station: b,
+            child_station_index: a.station_index,
+        });
     }
 
     for links in adjacency.values_mut() {
@@ -163,13 +157,7 @@ pub(super) fn build_parent_map(
             .map(|line| line.id)
             .filter(candidate)
             .find(|id| entrance_datums.contains_key(id))
-            .or_else(|| {
-                project
-                    .lines
-                    .iter()
-                    .map(|line| line.id)
-                    .find(candidate)
-            })
+            .or_else(|| project.lines.iter().map(|line| line.id).find(candidate))
         else {
             break;
         };

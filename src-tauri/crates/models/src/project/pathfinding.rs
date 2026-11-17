@@ -821,7 +821,7 @@ mod entrance_tests {
     use super::super::{CylRole, Cylinder, Diver, TankMaterial};
     use crate::config::GasConfig;
     use crate::station::DatumRole;
-    use crate::{GpsCoordinates, Project, LineData, ShotData, StationRef, ZeroDatum};
+    use crate::{GpsCoordinates, LineData, Project, ShotData, StationRef, ZeroDatum};
 
     fn shot(length: f64, azimuth_in: f64) -> ShotData {
         ShotData {

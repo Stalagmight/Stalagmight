@@ -41,7 +41,7 @@ beforeEach(() => {
   invokeIpcMock.mockReset();
   invokeIpcMock.mockResolvedValue({ kind: 'editing' });
   useSpeleoStore.setState({ link: null, banner: null, busy: false, session: null, remoteProjectId: 'synthetic' });
-  useUIStore.setState({ activeDialog: null, dialogData: {}, speleoWorkspaceLine: null });
+  useUIStore.setState({ activeDialog: null, dialogData: {}, speleoWorkspaceSection: null });
 });
 
 describe('SpeleoBanner read-only state', () => {

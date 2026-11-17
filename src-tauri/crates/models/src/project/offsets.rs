@@ -9,7 +9,7 @@ use std::hash::{Hash, Hasher};
 use tracing::error;
 
 use crate::{
-    ClosurePair, ClosureStrategy, LoopClosure, LineId, StationKey, StationMerge, StationRef,
+    ClosurePair, ClosureStrategy, LineId, LoopClosure, StationKey, StationMerge, StationRef,
 };
 
 use super::union_find::UnionFind;
@@ -444,11 +444,7 @@ impl Project {
     /// callers handle cascade and invariants.
     pub fn adjust_line_offset(&mut self, id: LineId, dx: f64, dy: f64) {
         let current = self.line_offset(id);
-        Self::write_line_offset(
-            &mut self.line_offsets,
-            id,
-            (current.0 + dx, current.1 + dy),
-        );
+        Self::write_line_offset(&mut self.line_offsets, id, (current.0 + dx, current.1 + dy));
     }
 
     /// Set an exact offset value (for undo restoration / initial placement).
@@ -509,12 +505,12 @@ impl Project {
         if self.merge_would_double_anchor(ref_a.line_id, ref_b.line_id) {
             return None;
         }
-        let (anchor, moving, anchor_line, moving_line) =
-            if self.line_has_zero_datum(ref_a.line_id) {
-                (a, b, ref_a.line_id, ref_b.line_id)
-            } else {
-                (b, a, ref_b.line_id, ref_a.line_id)
-            };
+        let (anchor, moving, anchor_line, moving_line) = if self.line_has_zero_datum(ref_a.line_id)
+        {
+            (a, b, ref_a.line_id, ref_b.line_id)
+        } else {
+            (b, a, ref_b.line_id, ref_a.line_id)
+        };
         let group = self.get_merged_line_ids(moving_line);
         let mut movable: Vec<LineId> = if group.contains(&anchor_line) {
             Vec::new()

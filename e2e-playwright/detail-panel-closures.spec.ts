@@ -300,7 +300,7 @@ test.describe('Detail Panel - Loop Closures', () => {
     await selectStation(page, mainLineId, 1);
 
     // Verify closures line is visible
-    const closuresSection = page.getByTestId('closures-line');
+    const closuresSection = page.getByTestId('closures-section');
     await expect(closuresSection).toBeVisible();
 
     // Should show "Loop Closures" label
@@ -317,7 +317,7 @@ test.describe('Detail Panel - Loop Closures', () => {
     await selectStation(page, mainLineId, 0);
 
     // Verify closures line is not present
-    const closuresSection = page.getByTestId('closures-line');
+    const closuresSection = page.getByTestId('closures-section');
     await expect(closuresSection).toBeHidden();
   });
 
@@ -415,11 +415,11 @@ test.describe('Detail Panel - Loop Closures', () => {
     await selectStation(page, mainLineId, 1);
 
     // Content should be visible by default (expanded)
-    const content = page.getByTestId('closures-line-content');
+    const content = page.getByTestId('closures-section-content');
     await expect(content).toBeVisible();
 
     // Click toggle to collapse
-    const toggle = page.getByTestId('closures-line-toggle');
+    const toggle = page.getByTestId('closures-section-toggle');
     await toggle.click();
 
     // Content should be hidden

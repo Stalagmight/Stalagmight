@@ -2,7 +2,7 @@
 #
 # slice.sh - Smart file slicing with AST parsing
 #
-# Extracts specific functions, classes, or lines from large source files
+# Extracts specific functions, classes, or sections from large source files
 # using proper AST parsing to prevent token limit errors.
 #
 # Supported languages:

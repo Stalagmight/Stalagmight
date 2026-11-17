@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::models::{GpsCoordinates, Project, LineId, ShotKind, StationRef};
+use crate::models::{GpsCoordinates, LineId, Project, ShotKind, StationRef};
 use crate::persistence::Database;
 
 /// Minimum cosine value to avoid division by near-zero at extreme latitudes.
@@ -221,7 +221,7 @@ fn get_survey_geometry_for_project(
 mod tests {
     use super::*;
     use crate::models::gps_to_local;
-    use crate::models::{Project, LineData, ShotData, StationRef, ZeroDatum};
+    use crate::models::{LineData, Project, ShotData, StationRef, ZeroDatum};
     use crate::persistence::Database;
     use tempfile::TempDir;
 

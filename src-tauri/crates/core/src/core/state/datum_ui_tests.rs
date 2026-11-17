@@ -5,9 +5,7 @@
 
 use super::AppState;
 use crate::core::Command;
-use crate::models::{
-    local_to_gps, GpsCoordinates, LineId, ShotData, StationRef, SurveyDirection,
-};
+use crate::models::{local_to_gps, GpsCoordinates, LineId, ShotData, StationRef, SurveyDirection};
 
 const ORIGIN: (f64, f64) = (20.5, -87.25);
 

@@ -11,7 +11,7 @@ use std::io::{Read as _, Write as _};
 // `impl Database` split into child modules, so gate them to the test build.
 #[cfg(test)]
 use crate::models::{
-    ClosureStrategy, GpsCoordinates, LoopClosure, Project, LineData, StationKey, StationMerge,
+    ClosureStrategy, GpsCoordinates, LineData, LoopClosure, Project, StationKey, StationMerge,
     SurveyDirection, ZeroDatum,
 };
 #[cfg(test)]

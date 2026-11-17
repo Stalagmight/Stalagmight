@@ -589,8 +589,7 @@ fn credit_edit_wire_shape() {
             shots: vec![(1, 100_001)]
         }
     );
-    let targets: CreditTargets =
-        serde_json::from_str(r#"{"type":"line","line_id":4}"#).unwrap();
+    let targets: CreditTargets = serde_json::from_str(r#"{"type":"line","line_id":4}"#).unwrap();
     assert_eq!(targets, CreditTargets::Line { line_id: 4 });
 }
 

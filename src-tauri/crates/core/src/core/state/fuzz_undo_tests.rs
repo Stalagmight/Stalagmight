@@ -798,8 +798,8 @@ use super::AppState;
 use crate::core::undo::history_view::UndoHistoryItem;
 use crate::core::{Command, CommandResult};
 use crate::models::{
-    ClosureStrategy, Coordinates, GpsCoordinates, LineId, LineUpdates, ShotData, ShotId,
-    ShotKind, ShotUpdates, StationRef, SurveyDirection,
+    ClosureStrategy, Coordinates, GpsCoordinates, LineId, LineUpdates, ShotData, ShotId, ShotKind,
+    ShotUpdates, StationRef, SurveyDirection,
 };
 // CONFIG ISOLATION. Every test in this module opens with
 // `let _config = isolated_config();`: `AppState::new()` LOADS the global config,
@@ -935,11 +935,7 @@ const TOLERANCE_REL: f64 = 1e-12;
 fn drop_key(path: &str) -> bool {
     matches!(
         path,
-        "modified_at"
-            | "file_path"
-            | "next_line_id"
-            | "next_closure_id"
-            | "lines.*.next_shot_id"
+        "modified_at" | "file_path" | "next_line_id" | "next_closure_id" | "lines.*.next_shot_id"
     )
 }
 
@@ -1638,8 +1634,7 @@ fn classify(diff: &Diff, ctx: &MoveCtx) -> Option<&'static str> {
 /// save. Deliberately narrow by direction: an anchor may only be GAINED, a uuid
 /// filled in, an offset entry dropped.
 fn attributable_to_save(diff: &Diff) -> bool {
-    ((path_is(diff, "lines[#].gauge_shot_uuid")
-        || path_is(diff, "lines[#].gauge_neighbour_uuid"))
+    ((path_is(diff, "lines[#].gauge_shot_uuid") || path_is(diff, "lines[#].gauge_neighbour_uuid"))
         && diff.expected == "null"
         && diff.actual != "null")
         || (path_is(diff, "lines[#].shots[#].uuid")
@@ -1931,10 +1926,7 @@ pub(super) fn read_targets(state: &AppState) -> Targets {
         .filter_map(|merge| {
             let a = project.resolve_key(&merge.station_a)?;
             let b = project.resolve_key(&merge.station_b)?;
-            Some((
-                (a.line_id, a.station_index),
-                (b.line_id, b.station_index),
-            ))
+            Some(((a.line_id, a.station_index), (b.line_id, b.station_index)))
         })
         .collect();
     merges.sort_unstable();
@@ -1960,8 +1952,7 @@ pub(super) fn read_targets(state: &AppState) -> Targets {
         .lines
         .iter()
         .flat_map(|line| {
-            line
-                .shots
+            line.shots
                 .iter()
                 .filter_map(move |shot| shot.uuid.clone().map(|uuid| (line.id, shot.id, uuid)))
         })
@@ -2265,15 +2256,9 @@ impl Op {
                 line,
                 swap_left_right,
             } => format!("reverseLine(s={line},swapLR={swap_left_right})"),
-            Self::Move {
-                line, segment, ..
-            } => format!(
+            Self::Move { line, segment, .. } => format!(
                 "{}(s={line})",
-                if *segment {
-                    "moveSegment"
-                } else {
-                    "moveLine"
-                }
+                if *segment { "moveSegment" } else { "moveLine" }
             ),
             Self::MoveStation { station: at, .. } => format!("moveStation({})", station(at)),
             Self::StationComment {
@@ -2792,13 +2777,13 @@ pub(super) fn topology_signature(state: &AppState) -> String {
     let cyclic = u8::from(edges + 1 > merged_nodes && merged_nodes > 0);
 
     // The id-vs-position divergence findings 8, 12 and 13 need, as a bit.
-    let diverged =
-        u8::from(project.lines.iter().any(|line| {
-            let base = line.id * crate::models::FEATURE_ID_STRIDE;
-            line.shots.iter().enumerate().any(|(position, shot)| {
-                shot.id != base + position as u32 && shot.id != position as u32
-            })
-        }));
+    let diverged = u8::from(project.lines.iter().any(|line| {
+        let base = line.id * crate::models::FEATURE_ID_STRIDE;
+        line.shots
+            .iter()
+            .enumerate()
+            .any(|(position, shot)| shot.id != base + position as u32 && shot.id != position as u32)
+    }));
 
     format!(
         "s{}e{}o{}h{}m{}d{}c{}y{}z{}g{}k{}v{}",
@@ -4347,9 +4332,7 @@ impl Fuzzer {
             return None;
         }
         let line_id = targets.lines[self.rng.below(targets.lines.len())].0;
-        Some(Op::DeleteLine {
-            line: line_id,
-        })
+        Some(Op::DeleteLine { line: line_id })
     }
 
     fn gen_reverse_line(&mut self, targets: &Targets) -> Option<Op> {
@@ -4407,10 +4390,7 @@ impl Fuzzer {
     /// Two stations in DIFFERENT lines: merging or closing within one line
     /// is rejected up front, so cross-line pairs are the ones that exercise the
     /// undo path.
-    fn pick_cross_pair(
-        &mut self,
-        targets: &Targets,
-    ) -> Option<((LineId, u32), (LineId, u32))> {
+    fn pick_cross_pair(&mut self, targets: &Targets) -> Option<((LineId, u32), (LineId, u32))> {
         if targets.lines.len() < 2 || targets.stations.len() < 2 {
             return None;
         }
@@ -4592,13 +4572,12 @@ impl Fuzzer {
         let mut commands = Vec::new();
         for _ in 0..count {
             let built = match self.rng.below(4) {
-                0 => {
-                    self.pick_shot(targets)
-                        .map(|(line_id, shot_id)| BatchOp::UpdateShotLength {
-                            shot: Self::shot_ref(targets, line_id, shot_id),
-                            length: self.rng.float(1.0, 15.0),
-                        })
-                }
+                0 => self
+                    .pick_shot(targets)
+                    .map(|(line_id, shot_id)| BatchOp::UpdateShotLength {
+                        shot: Self::shot_ref(targets, line_id, shot_id),
+                        length: self.rng.float(1.0, 15.0),
+                    }),
                 1 => (!targets.lines.is_empty()).then(|| {
                     let index = self.rng.below(targets.lines.len());
                     BatchOp::MoveLine {
@@ -4708,8 +4687,7 @@ impl Fuzzer {
                 // is the shot the persisted `after_shot_id` / `before_shot_id`
                 // means. After a reload the same id may address a different one -
                 // which is what makes the REDO re-insert somewhere else.
-                let anchor_target =
-                    anchor.and_then(|shot_id| self.shot_target(line_id, shot_id));
+                let anchor_target = anchor.and_then(|shot_id| self.shot_target(line_id, shot_id));
                 let mut drawn = Drawn::new(
                     format!("createShot(s={line_id},n={},{how})", live.len()),
                     self.state.execute(Command::CreateShot {
@@ -4784,10 +4762,7 @@ impl Fuzzer {
                 };
                 Some(Drawn::new(
                     format!("deleteShot(s={line_id},shot={shot_id})"),
-                    self.state.execute(Command::DeleteShot {
-                        line_id,
-                        shot_id,
-                    }),
+                    self.state.execute(Command::DeleteShot { line_id, shot_id }),
                 ))
             }
             Op::DeleteLine { line } => {
@@ -4825,11 +4800,7 @@ impl Fuzzer {
                 Some(Drawn::new(
                     format!(
                         "{}(s={line_id})",
-                        if *segment {
-                            "moveSegment"
-                        } else {
-                            "moveLine"
-                        }
+                        if *segment { "moveSegment" } else { "moveLine" }
                     ),
                     self.state.execute(if *segment {
                         Command::MoveSegment {
@@ -5116,8 +5087,7 @@ impl Fuzzer {
                             "range-b".to_string(),
                         )
                     } else {
-                        self.state
-                            .execute_delete_shot_range_shift(line_id, lo, hi)
+                        self.state.execute_delete_shot_range_shift(line_id, lo, hi)
                     },
                 ))
             }
@@ -5258,8 +5228,7 @@ impl Fuzzer {
                 .map(|line| {
                     (
                         line.id,
-                        line
-                            .shots
+                        line.shots
                             .iter()
                             .filter_map(|shot| shot.uuid.clone())
                             .collect(),
@@ -5502,10 +5471,7 @@ impl Fuzzer {
             );
         };
         self.forced(
-            Drawn::new(
-                format!("exposure:createLine(s={line_id},shots=3)"),
-                created,
-            ),
+            Drawn::new(format!("exposure:createLine(s={line_id},shots=3)"), created),
             before,
         );
 
@@ -5524,10 +5490,7 @@ impl Fuzzer {
             after_shot_id: None,
             before_shot_id: Some(first_shot),
         });
-        let mut drawn = Drawn::new(
-            format!("exposure:createShot(s={line_id},before)"),
-            inserted,
-        );
+        let mut drawn = Drawn::new(format!("exposure:createShot(s={line_id},before)"), inserted);
         drawn.anchor = anchor;
         drawn.target = drawn
             .result
@@ -5946,10 +5909,7 @@ impl Fuzzer {
             u32::try_from(project.next_closure_id).unwrap_or(u32::MAX),
         );
         for line in &project.lines {
-            out.insert(
-                format!("line {}.next_shot_id", line.id),
-                line.next_shot_id,
-            );
+            out.insert(format!("line {}.next_shot_id", line.id), line.next_shot_id);
         }
         out
     }
@@ -5960,11 +5920,7 @@ impl Fuzzer {
         let Some(project) = self.state.get_project_state() else {
             return;
         };
-        let stations: usize = project
-            .lines
-            .iter()
-            .map(|line| line.shots.len() + 1)
-            .sum();
+        let stations: usize = project.lines.iter().map(|line| line.shots.len() + 1).sum();
         let peak = &mut self.outcome.peak;
         peak.lines = peak.lines.max(project.lines.len());
         peak.stations = peak.stations.max(stations);

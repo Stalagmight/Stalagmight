@@ -134,6 +134,6 @@ describe('buildBatchImport with a blank new row', () => {
     // route reaches IPC with the NaN, and says which line and row.
     const partial = { ...blank(2), length: 7 } as EditableShot;
     expect(() => build([measured(0), partial])).toThrow(NonFiniteShotError);
-    expect(() => build([measured(0), partial])).toThrow(/Section "S" row 2/);
+    expect(() => build([measured(0), partial])).toThrow(/Line "S" row 2/);
   });
 });

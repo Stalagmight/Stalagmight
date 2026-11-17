@@ -122,7 +122,7 @@ const DMP_CORRUPTIONS: readonly DmpCorruption[] = [
     apply: (rng, spec) => withRandomShot(rng, spec, { endMagic: [1, 2, 3] }),
   },
 
-  // Date validation, one entry per `bail!` in `parse_line`.
+  // Date validation, one entry per `bail!` in `parse_section`.
   { id: 'month-0', apply: (rng, spec) => withRandomLine(rng, spec, { month: 0 }) },
   { id: 'month-13', apply: (rng, spec) => withRandomLine(rng, spec, { month: 13 }) },
   { id: 'day-0', apply: (rng, spec) => withRandomLine(rng, spec, { day: 0 }) },

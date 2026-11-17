@@ -93,10 +93,9 @@ impl AppState {
                     .collect(),
             }),
             Command::DeleteLine { line_id } => self.delete_line(*line_id),
-            Command::UpdateLineMetadata {
-                line_id,
-                updates,
-            } => self.update_line(*line_id, updates.clone()),
+            Command::UpdateLineMetadata { line_id, updates } => {
+                self.update_line(*line_id, updates.clone())
+            }
             // Reachable as a batch sub-command: reversing a multi-selection is
             // one atomic user action (#24).
             Command::ReverseLine {
@@ -114,10 +113,7 @@ impl AppState {
                 shot_id,
                 updates,
             } => self.update_shot(*line_id, *shot_id, updates.clone()),
-            Command::DeleteShot {
-                line_id,
-                shot_id,
-            } => self.delete_shot(*line_id, *shot_id),
+            Command::DeleteShot { line_id, shot_id } => self.delete_shot(*line_id, *shot_id),
             Command::SetShotKind {
                 line_id,
                 shot_id,

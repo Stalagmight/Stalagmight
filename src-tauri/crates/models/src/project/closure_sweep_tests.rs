@@ -5,8 +5,8 @@
 use std::collections::HashSet;
 
 use crate::{
-    ClosureStrategy, LoopClosure, Project, LineData, LineId, ShotData, SplitLineOptions,
-    SplitSide, StationRef,
+    ClosureStrategy, LineData, LineId, LoopClosure, Project, ShotData, SplitLineOptions, SplitSide,
+    StationRef,
 };
 
 fn shot(azimuth: f64, length: f64) -> ShotData {

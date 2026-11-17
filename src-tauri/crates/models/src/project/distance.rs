@@ -2,8 +2,7 @@ use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 
 use crate::{
-    Coordinates, FrozenShotRef, Line, LineId, ShotData, ShotId, Station, StationKey,
-    StationRef,
+    Coordinates, FrozenShotRef, Line, LineId, ShotData, ShotId, Station, StationKey, StationRef,
 };
 
 use super::{AlongLineResult, DistanceField, PathShot, Project, RulerEndpoint};
@@ -528,8 +527,7 @@ impl Project {
             // Adjacent stations via shots (backward: station_index - 1 via shot index-1)
             if node.station_index > 0 {
                 let shot_idx = (node.station_index - 1) as usize;
-                let is_excluded =
-                    node.line_id == exclude_line_id && shot_idx == exclude_shot_index;
+                let is_excluded = node.line_id == exclude_line_id && shot_idx == exclude_shot_index;
                 if !is_excluded && shot_idx < line.shots.len() {
                     let neighbor = StationRef::new(node.line_id, node.station_index - 1);
                     if visited.insert(neighbor) {
@@ -544,8 +542,7 @@ impl Project {
             // Adjacent stations via shots (forward: station_index + 1 via shot at station_index)
             if (node.station_index as usize) < line.shots.len() {
                 let shot_idx = node.station_index as usize;
-                let is_excluded =
-                    node.line_id == exclude_line_id && shot_idx == exclude_shot_index;
+                let is_excluded = node.line_id == exclude_line_id && shot_idx == exclude_shot_index;
                 if !is_excluded {
                     let neighbor = StationRef::new(node.line_id, node.station_index + 1);
                     if visited.insert(neighbor) {
@@ -937,10 +934,7 @@ impl Project {
         let new_ids: HashSet<LineId> = newly_imported_line_ids.iter().copied().collect();
         let to_target = |s: &Line| ExistingLine {
             id: s.id,
-            name: s
-                .name
-                .clone()
-                .unwrap_or_else(|| format!("Line {}", s.id)),
+            name: s.name.clone().unwrap_or_else(|| format!("Line {}", s.id)),
             shots: s.shots.clone(),
             azimuth_reference: self.azimuth_reference_for(s),
         };

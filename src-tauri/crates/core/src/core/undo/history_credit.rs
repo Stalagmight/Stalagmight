@@ -5,7 +5,7 @@ use super::history_view::{FieldChange, PreviewData};
 use super::{ShotCreditChange, UndoData, UndoEntry};
 use crate::core::Command;
 use crate::models::{
-    dedupe_people, join_names, CreditEdit, CreditEditKind, Person, LineId, SurveyCredit,
+    dedupe_people, join_names, CreditEdit, CreditEditKind, LineId, Person, SurveyCredit,
 };
 
 /// Longest name list a preview row shows, in chars.

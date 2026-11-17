@@ -237,7 +237,7 @@ const MAP_CANVAS_UI_KEYS = [
   'activeTool',
   'showSatellite',
   'showShotData',
-  'showSectionNames',
+  'showLineNames',
   'showStationLabels',
   'showStationNames',
   'showStationComments',

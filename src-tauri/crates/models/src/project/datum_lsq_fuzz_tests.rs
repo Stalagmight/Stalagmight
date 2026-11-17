@@ -42,8 +42,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::config::ClosureAdjustmentConfig;
 use crate::{
-    gps_to_local, local_to_gps, ClosureStrategy, DatumRole, GpsCoordinates, Project, LineData,
-    LineId, ShotData, StationRef, ZeroDatum,
+    gps_to_local, local_to_gps, ClosureStrategy, DatumRole, GpsCoordinates, LineData, LineId,
+    Project, ShotData, StationRef, ZeroDatum,
 };
 
 /// `lsq.rs`'s `HARD_FIX_ACCURACY_M`: below it a fix is a hard pin.
@@ -464,11 +464,7 @@ fn enforced_hard_fixes(project: &Project) -> Vec<HeldFix> {
 
 /// "hard-fix-no-unknowns" when every group of `line`'s component is held
 /// in `project` (the solve's `n == 0` return), else `class`.
-fn class_unless_all_held(
-    project: &Project,
-    line: LineId,
-    class: &'static str,
-) -> &'static str {
+fn class_unless_all_held(project: &Project, line: LineId, class: &'static str) -> &'static str {
     let (mut groups, held, _) = held_groups(project);
     if component_all_held(project, &mut groups, &held, line) {
         "hard-fix-no-unknowns"

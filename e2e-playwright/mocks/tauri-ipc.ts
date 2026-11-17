@@ -5215,7 +5215,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const key = args?.key as string;
             const value = args?.value as string;
             if (key && value !== undefined) {
-              mockDisplaySettings[key] = value;
+              // The Line names toggle is stored under its pre-rename row key
+              // (src/store/displaySettingKeys.ts); the backend's load reads
+              // "showSectionNames" back into the wire field showLineNames.
+              mockDisplaySettings[key === 'showSectionNames' ? 'showLineNames' : key] = value;
               console.log(`[Mock IPC] save_display_setting: ${key}=${value}`);
             }
             return undefined;
@@ -6393,7 +6396,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               throw new Error('No project database; save the project to browse raw data');
             }
             // Alphabetical, mirroring list_raw_table_names' ORDER BY name.
-            return ['project', 'lines', 'shots', 'undo_stack'];
+            return ['project', 'sections', 'shots', 'undo_stack'];
           }
 
           case 'get_raw_table': {
@@ -6433,7 +6436,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   '1',
                 ]];
                 break;
-              case 'lines':
+              case 'sections':
                 columns = ['id', 'name', 'surveyor', 'date', 'color', 'direction', 'quality', 'created_at'];
                 allRows = rawLines.map((line) => [
                   String(line.id),
@@ -6448,7 +6451,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 break;
               case 'shots':
                 columns = [
-                  'id', 'line_id', 'sequence_order', 'azimuth_in', 'azimuth_out', 'length',
+                  'id', 'section_id', 'sequence_order', 'azimuth_in', 'azimuth_out', 'length',
                   'depth_in', 'depth_out', 'pitch_in', 'pitch_out', 'left_distance', 'right_distance',
                   'up_distance', 'down_distance', 'comment', 'kind', 'marker_index', 'temperature', 'uuid',
                 ];

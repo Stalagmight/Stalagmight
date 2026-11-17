@@ -3,7 +3,7 @@
 //! Synthetic surveys only.
 
 use crate::{
-    local_to_gps, DatumRole, GpsCoordinates, Project, LineData, LineId, ShotData, StationRef,
+    local_to_gps, DatumRole, GpsCoordinates, LineData, LineId, Project, ShotData, StationRef,
 };
 
 const ORIGIN_LAT: f64 = 20.5;

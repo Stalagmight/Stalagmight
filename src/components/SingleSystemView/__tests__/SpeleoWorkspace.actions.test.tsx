@@ -33,7 +33,7 @@ beforeEach(() => {
   ipc.mockReset();
   ipc.mockResolvedValue(null);
   useProjectStore.setState({ project: { name: 'Synthetic cave', file_path: '/synthetic.stalx', zero_datums: [] } as never, isDirty: false });
-  useUIStore.setState({ appMode: 'survey', speleoWorkspaceLine: null });
+  useUIStore.setState({ appMode: 'survey', speleoWorkspaceSection: null });
   useSpeleoStore.setState({ link: LINK, remoteProjectId: 'synthetic', busy: false, session: SESSION });
 });
 

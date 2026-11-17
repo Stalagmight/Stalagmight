@@ -86,16 +86,16 @@ describe('cross-language numeric bounds mirror (#357 item 18)', () => {
 
   it('panel size bounds agree: PanelsConfig::normalize clamps (Rust) vs PANEL_SIZE_BOUNDS (TS)', () => {
     const rustSource = fs.readFileSync(PANELS_RS, 'utf8');
-    const rustLines = parseRustClamp(rustSource, 'sections_panel_width', 'panels.rs');
+    const rustSections = parseRustClamp(rustSource, 'sections_panel_width', 'panels.rs');
     const rustDetail = parseRustClamp(rustSource, 'detail_panel_width', 'panels.rs');
     const rustDataTable = parseRustClamp(rustSource, 'data_table_height', 'panels.rs');
     const rustWizardMap = parseRustClamp(rustSource, 'wizard_map_panel_width', 'panels.rs');
 
     expect(
-      rustLines,
-      `sections_panel_width bounds drift: Rust clamp=${JSON.stringify(rustLines)} but TS ` +
-        `PANEL_SIZE_BOUNDS.lines=${JSON.stringify(PANEL_SIZE_BOUNDS.lines)}. Change both together.`,
-    ).toEqual(PANEL_SIZE_BOUNDS.lines);
+      rustSections,
+      `sections_panel_width bounds drift: Rust clamp=${JSON.stringify(rustSections)} but TS ` +
+        `PANEL_SIZE_BOUNDS.sections=${JSON.stringify(PANEL_SIZE_BOUNDS.sections)}. Change both together.`,
+    ).toEqual(PANEL_SIZE_BOUNDS.sections);
     expect(
       rustDetail,
       `detail_panel_width bounds drift: Rust clamp=${JSON.stringify(rustDetail)} but TS ` +

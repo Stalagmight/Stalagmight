@@ -14,7 +14,7 @@ vi.mock('../SpeleoWorkspace', () => ({ SpeleoWorkspace: () => <div data-testid="
 
 beforeEach(() => {
   useSpeleoNetworkStore.getState().reset();
-  useUIStore.setState({ appMode: 'survey', leftWorkspace: 'lines', surveyLeftWorkspace: 'lines' });
+  useUIStore.setState({ appMode: 'survey', leftWorkspace: 'sections', surveyLeftWorkspace: 'sections' });
 });
 
 function startRead(): () => void {
@@ -97,18 +97,18 @@ describe('SpeleoNetworkBusyIndicator', () => {
 
 describe('LeftWorkspace busy indicator placement', () => {
   it('sits inside the SpeleoDB tab only', () => {
-    render(<LeftWorkspace lines={<div />} />);
+    render(<LeftWorkspace sections={<div />} />);
     startRead();
     const speleo = screen.getByTestId('workspace-tab-speleodb');
-    const lines = screen.getByTestId('workspace-tab-lines');
+    const sections = screen.getByTestId('workspace-tab-sections');
     expect(within(speleo).getByTestId('speleodb-network-busy')).toBeInTheDocument();
-    expect(within(lines).queryByTestId('speleodb-network-busy')).toBeNull();
+    expect(within(sections).queryByTestId('speleodb-network-busy')).toBeNull();
     expect(screen.getAllByTestId('speleodb-network-busy')).toHaveLength(1);
   });
 
   it('is present in Plan mode, where SpeleoDB is the only tab', () => {
     useUIStore.setState({ appMode: 'plan', leftWorkspace: 'speleodb' });
-    render(<LeftWorkspace lines={<div />} />);
+    render(<LeftWorkspace sections={<div />} />);
     act(() => {
       useSpeleoNetworkStore.getState().begin('exclusive');
     });

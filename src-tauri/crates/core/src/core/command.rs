@@ -6,31 +6,22 @@ use ts_rs::TS;
 
 use crate::models::{
     shot_display_position, ClosureStrategy, Coordinates, CreditEdit, CreditTargets, GpsCoordinates,
-    LineId, LineUpdates, ShotData, ShotId, ShotKind, ShotUpdates, StationRef,
-    SurveyDirection,
+    LineId, LineUpdates, ShotData, ShotId, ShotKind, ShotUpdates, StationRef, SurveyDirection,
 };
 
 /// Identifies either a station or a shot as a comment holder
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CommentHolder {
-    Station {
-        station_ref: StationRef,
-    },
-    Shot {
-        line_id: LineId,
-        shot_id: ShotId,
-    },
+    Station { station_ref: StationRef },
+    Shot { line_id: LineId, shot_id: ShotId },
 }
 
 impl std::fmt::Display for CommentHolder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             CommentHolder::Station { station_ref } => write!(f, "station {station_ref}"),
-            CommentHolder::Shot {
-                line_id,
-                shot_id,
-            } => {
+            CommentHolder::Shot { line_id, shot_id } => {
                 let pos = shot_display_position(*shot_id, *line_id);
                 write!(f, "shot {line_id}:{pos}")
             }
@@ -844,18 +835,13 @@ impl Command {
                 format!("Create shot in line {line_id}")
             }
             Command::UpdateShot {
-                line_id,
-                shot_id,
-                ..
+                line_id, shot_id, ..
             } => format!(
                 "Update shot {}:{}",
                 line_id,
                 shot_display_position(*shot_id, *line_id)
             ),
-            Command::DeleteShot {
-                line_id,
-                shot_id,
-            } => format!(
+            Command::DeleteShot { line_id, shot_id } => format!(
                 "Delete shot {}:{}",
                 line_id,
                 shot_display_position(*shot_id, *line_id)
@@ -1258,10 +1244,13 @@ mod tests {
     fn legacy_set_shot_reference_undo_entries_still_deserialize() {
         // Pre-#27 persisted undo history is JSON-tagged `set_shot_reference`
         // with an `is_reference` bool. It must still load, otherwise upgrading
-        // would silently throw away the user's undo stack.
+        // would silently throw away the user's undo stack. Read the way the
+        // undo store reads it, through the on-disk vocabulary (`disk_names`).
+        let from_disk =
+            |json: &str| -> Command { crate::models::disk_names::from_disk_str(json).unwrap() };
         let legacy =
-            r#"{"type":"set_shot_reference","line_id":1,"shot_id":2,"is_reference":true}"#;
-        let parsed: Command = serde_json::from_str(legacy).unwrap();
+            r#"{"type":"set_shot_reference","section_id":1,"shot_id":2,"is_reference":true}"#;
+        let parsed = from_disk(legacy);
         // q2: a legacy virtual shot reads as a Jump, and the ids survive.
         assert!(
             matches!(
@@ -1277,8 +1266,8 @@ mod tests {
 
         // The false case, which is what an old inverse command carried.
         let legacy_false =
-            r#"{"type":"set_shot_reference","line_id":1,"shot_id":2,"is_reference":false}"#;
-        let parsed: Command = serde_json::from_str(legacy_false).unwrap();
+            r#"{"type":"set_shot_reference","section_id":1,"shot_id":2,"is_reference":false}"#;
+        let parsed = from_disk(legacy_false);
         assert!(matches!(
             parsed,
             Command::SetShotKind {
@@ -1288,8 +1277,8 @@ mod tests {
         ));
 
         // And the even older `set_shot_virtual` tag.
-        let ancient = r#"{"type":"set_shot_virtual","line_id":1,"shot_id":2,"is_virtual":true}"#;
-        let parsed: Command = serde_json::from_str(ancient).unwrap();
+        let ancient = r#"{"type":"set_shot_virtual","section_id":1,"shot_id":2,"is_virtual":true}"#;
+        let parsed = from_disk(ancient);
         assert!(matches!(
             parsed,
             Command::SetShotKind {
@@ -1420,7 +1409,7 @@ mod tests {
         );
 
         for absent in [
-            "section_id",
+            "line_id",
             "shot_id",
             "saved_path",
             "session_closed",

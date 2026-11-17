@@ -229,7 +229,7 @@ test.describe('Label Toggle Click Coverage', () => {
     await waitForDrawnStations(page, 1);
   });
 
-  for (const toggleKey of ['showSectionNames', 'showStationLabels', 'showShotErrors'] as const) {
+  for (const toggleKey of ['showLineNames', 'showStationLabels', 'showShotErrors'] as const) {
     test(`toggling ${toggleKey} flips aria-pressed and back`, async ({ page }) => {
       await openDisplayMenu(page);
 
@@ -889,7 +889,7 @@ test.describe('Display Menu State Persistence', () => {
     // Check default values from DISPLAY_DEFAULTS
     expect(await isToggleOn(page, 'showStations')).toBe(true);
     expect(await isToggleOn(page, 'showShots')).toBe(true);
-    expect(await isToggleOn(page, 'showSectionNames')).toBe(true);
+    expect(await isToggleOn(page, 'showLineNames')).toBe(true);
     expect(await isToggleOn(page, 'showStationLabels')).toBe(false);
     expect(await isToggleOn(page, 'showStationNames')).toBe(false);
     expect(await isToggleOn(page, 'showShotData')).toBe(false);

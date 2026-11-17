@@ -175,13 +175,7 @@ fn zero_datums_never_holds_two_datums_of_one_component() {
         let rows = zero_datum_rows(&db);
         let components: Vec<LineId> = rows
             .iter()
-            .map(|r| {
-                *ordered
-                    .get_merged_line_ids(r.line_id)
-                    .iter()
-                    .min()
-                    .unwrap()
-            })
+            .map(|r| *ordered.get_merged_line_ids(r.line_id).iter().min().unwrap())
             .collect();
         let distinct: std::collections::HashSet<_> = components.iter().collect();
         assert_eq!(
@@ -309,7 +303,7 @@ fn corrupt_rows_are_skipped_and_the_load_succeeds() {
     {
         let db = Database::open_existing(&path).unwrap();
         // Named, so a column added later needs no edit here.
-        const COLUMNS: &str = "(position, line_id, station_index, shot_uuid, in_zero_datums, latitude, longitude, depth_reference, accuracy_m)";
+        const COLUMNS: &str = "(position, section_id, station_index, shot_uuid, in_zero_datums, latitude, longitude, depth_reference, accuracy_m)";
         db.conn
             .execute_batch(&format!(
                 "

@@ -36,8 +36,8 @@ use tempfile::TempDir;
 use super::AppState;
 use crate::core::Command;
 use crate::models::{
-    ClosureStrategy, Coordinates, GpsCoordinates, LineId, LineUpdates, ShotData, ShotId,
-    ShotKind, ShotUpdates, StationRef,
+    ClosureStrategy, Coordinates, GpsCoordinates, LineId, LineUpdates, ShotData, ShotId, ShotKind,
+    ShotUpdates, StationRef,
 };
 // CONFIG ISOLATION. Every test in this module opens with
 // `let _config = isolated_config();`: `AppState::new()` LOADS the global config,
@@ -83,9 +83,7 @@ fn create_line(state: &AppState, name: &str, shots: Vec<ShotData>) -> LineId {
         shots,
     });
     assert!(result.success, "CreateLine failed: {:?}", result.error);
-    result
-        .line_id
-        .expect("CreateLine returned no line id")
+    result.line_id.expect("CreateLine returned no line id")
 }
 
 /// Every shot uuid in `line_id`, in order.
@@ -1319,8 +1317,7 @@ fn undo_after_reload_is_not_wedged_by_an_out_of_range_shot_id() {
         assert!(created.success, "CreateShot failed: {:?}", created.error);
 
         let ids = shot_ids(&state, line_id);
-        let highest_renumbered =
-            line_id * crate::models::FEATURE_ID_STRIDE + ids.len() as u32 - 1;
+        let highest_renumbered = line_id * crate::models::FEATURE_ID_STRIDE + ids.len() as u32 - 1;
         assert!(
             ids.iter().any(|id| *id > highest_renumbered),
             "setup: at least one live id must be past the range the loader renumbers into, \
@@ -3544,11 +3541,7 @@ fn a_coincident_closure_between_two_anchored_groups_is_never_aligned() {
             z: 0.0,
         },
     });
-    assert!(
-        commented.success,
-        "MoveLine failed: {:?}",
-        commented.error
-    );
+    assert!(commented.success, "MoveLine failed: {:?}", commented.error);
     assert_eq!(
         closure_alignment(&state, StationRef::new(a, 0), StationRef::new(c, 0)),
         Some(false)
@@ -3721,8 +3714,7 @@ fn unwinding_past_a_stale_id_edit_leaves_no_shot_holding_it() {
         .find(|s| s.id == edited_line)
         .expect("line missing");
     let length_of = |uuid: &str| -> f64 {
-        line
-            .shots
+        line.shots
             .iter()
             .find(|s| s.uuid.as_deref() == Some(uuid))
             .expect("shot vanished")
@@ -3935,8 +3927,7 @@ fn surveyor_of(state: &AppState, line_id: LineId) -> String {
         .iter()
         .find(|line| line.id == line_id)
         .expect("line missing");
-    line
-        .surveyor_names()
+    line.surveyor_names()
         .clone()
         .unwrap_or_else(|| CLEARED.to_string())
 }
@@ -4429,8 +4420,7 @@ fn restoring_a_line_with_an_over_bound_id_is_refused() {
     assert!(!result.success, "an over-bound restore must be refused");
     let err = result.error.unwrap_or_default();
     assert!(
-        err.contains(&hostile.to_string())
-            && err.contains(&crate::models::MAX_LINE_ID.to_string()),
+        err.contains(&hostile.to_string()) && err.contains(&crate::models::MAX_LINE_ID.to_string()),
         "the refusal must name the id and the bound: {err}"
     );
     // The refusal must leave the project untouched.
@@ -4461,10 +4451,7 @@ fn a_snapshot_restore_with_an_over_bound_line_id_is_refused() {
     );
     let live = slot.unwrap();
     assert_eq!(live.name, "Live", "the live project must be untouched");
-    assert!(
-        live.lines.is_empty(),
-        "no hostile line may be installed"
-    );
+    assert!(live.lines.is_empty(), "no hostile line may be installed");
 }
 
 /// PR #575 Codex finding: `next_shot_id` is serde-carried too, so a snapshot
@@ -4488,10 +4475,7 @@ fn a_snapshot_restore_with_a_hostile_shot_counter_is_refused() {
         !AppState::restore_snapshot_into(&mut slot, &json),
         "a hostile shot counter must be refused"
     );
-    assert!(
-        slot.unwrap().lines.is_empty(),
-        "nothing may be installed"
-    );
+    assert!(slot.unwrap().lines.is_empty(), "nothing may be installed");
 
     // The guard must not over-refuse: a real project with shots serializes and
     // restores cleanly.

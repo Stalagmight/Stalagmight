@@ -102,29 +102,43 @@ pub struct PanelsConfig {
     /// two grids share column definitions but not a column SET (the dialog omits
     /// the warning/id columns), so one shared list would let a key hidden in one
     /// view silently govern the other.
-    #[serde(default)]
+    #[serde(default, alias = "new_section_column_order")]
     pub new_line_column_order: Vec<String>,
     /// New-line dialog grid: hidden column keys (the in/out legs, pitch and
     /// LRUD start hidden, matching what the old hand-rolled table showed).
-    #[serde(default = "default_new_line_hidden_columns")]
+    #[serde(
+        default = "default_new_line_hidden_columns",
+        alias = "new_section_hidden_columns"
+    )]
     pub new_line_hidden_columns: Vec<String>,
     /// New-line dialog grid: column widths in pixels, keyed by grid column
     /// key. See `data_table_shot_column_widths` for the BTreeMap and the
     /// tolerant deserializer.
-    #[serde(default, deserialize_with = "lenient_column_widths")]
+    #[serde(
+        default,
+        deserialize_with = "lenient_column_widths",
+        alias = "new_section_column_widths"
+    )]
     pub new_line_column_widths: BTreeMap<String, u32>,
     /// Edit-line dialog's shot grid: column order (grid column keys; empty =
     /// declaration order). Its own set again, for the same reason as
     /// `new_line_*`: the grids share column definitions but not a column SET.
-    #[serde(default)]
+    #[serde(default, alias = "edit_section_column_order")]
     pub edit_line_column_order: Vec<String>,
     /// Edit-line dialog's shot grid: hidden column keys.
-    #[serde(default = "default_edit_line_hidden_columns")]
+    #[serde(
+        default = "default_edit_line_hidden_columns",
+        alias = "edit_section_hidden_columns"
+    )]
     pub edit_line_hidden_columns: Vec<String>,
     /// Edit-line dialog's shot grid: column widths in pixels, keyed by grid
     /// column key. See `data_table_shot_column_widths` for the BTreeMap and the
     /// tolerant deserializer.
-    #[serde(default, deserialize_with = "lenient_column_widths")]
+    #[serde(
+        default,
+        deserialize_with = "lenient_column_widths",
+        alias = "edit_section_column_widths"
+    )]
     pub edit_line_column_widths: BTreeMap<String, u32>,
     /// The IMPORT-time shot grids (the MNemo wizard, both of its steps, and
     /// zero-datum config): column order. Its own set because those dialogs edit
@@ -325,7 +339,7 @@ fn hide_newly_arrived(arrived: &[&str], hidden: &mut Vec<String>, seen: &mut Vec
 }
 
 pub(super) fn default_data_table_hidden_columns() -> Vec<String> {
-    let mut hidden = vec!["section_id".to_string(), "shot_id".to_string()];
+    let mut hidden = vec!["line_id".to_string(), "shot_id".to_string()];
     hidden.extend(default_shot_columns_seen());
     hidden
 }

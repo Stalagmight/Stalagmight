@@ -6,8 +6,8 @@ use std::str::FromStr;
 use ts_rs::TS;
 
 use super::{
-    legacy_people, AzimuthReference, Coordinates, GpsCoordinates, Person, LineCreditSummary,
-    Shot, ShotData, ShotId, ShotKind, ShotUpdates, StationRef, SurveyCredit, FEATURE_ID_STRIDE,
+    legacy_people, AzimuthReference, Coordinates, GpsCoordinates, LineCreditSummary, Person, Shot,
+    ShotData, ShotId, ShotKind, ShotUpdates, StationRef, SurveyCredit, FEATURE_ID_STRIDE,
 };
 
 /// Unique identifier for a line
@@ -57,7 +57,7 @@ pub struct Line {
     /// into it, and [`Line::absorb_legacy_credit`] moves it onto the shots.
     ///
     /// A line WITH NO SHOTS keeps it: there is no shot to carry it, so it
-    /// stays the line's own (written to `lines.surveyor`, serialized in
+    /// stays the line's own (written to `sections.surveyor`, serialized in
     /// undo snapshots) until the first shot arrives and takes it as its credit
     /// (`AppState::create_shot`). Only such a line ever holds one, so the key
     /// is on the wire only for a shot-less line. Read who surveyed a line
@@ -134,7 +134,7 @@ pub struct Line {
     #[serde(default)]
     #[ts(optional)]
     pub azimuth_reference: Option<AzimuthReference>,
-    /// The legacy `lines.surveyor` text this line was READ with, when it
+    /// The legacy `sections.surveyor` text this line was READ with, when it
     /// differs from what this build would write for the same people
     /// ([`Self::legacy_surveyor_text`]): a list longer than a role keeps, a
     /// name past the length clamp, another spelling (`A;B`). While nobody's
@@ -154,7 +154,7 @@ pub struct Line {
 /// the stored text is still its truth.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoadedLegacyText {
-    /// `lines.surveyor` as the file held it.
+    /// `sections.surveyor` as the file held it.
     pub raw: String,
     /// [`Line::legacy_surveyor_text`] once the line was read.
     pub derived: Option<String>,
@@ -606,21 +606,14 @@ impl Line {
     /// A shot with no recorded uuid (`identity.shot_uuids` shorter than the
     /// line, i.e. a legacy entry) keeps the fresh mint - the pre-fix
     /// behaviour, and the same fallback `restore_shot` takes.
-    pub fn restore_with_identity(
-        id: LineId,
-        data: LineData,
-        identity: &LineIdentity,
-    ) -> Self {
+    pub fn restore_with_identity(id: LineId, data: LineData, identity: &LineIdentity) -> Self {
         let mut line = Self::new(id, data);
         for (shot, uuid) in line.shots.iter_mut().zip(identity.shot_uuids.iter()) {
             shot.uuid.clone_from(uuid);
         }
         line.reverse_parity = identity.reverse_parity;
-        line
-            .gauge_shot_uuid
-            .clone_from(&identity.gauge_shot_uuid);
-        line
-            .gauge_neighbour_uuid
+        line.gauge_shot_uuid.clone_from(&identity.gauge_shot_uuid);
+        line.gauge_neighbour_uuid
             .clone_from(&identity.gauge_neighbour_uuid);
         line.azimuth_reference = identity.azimuth_reference;
         line
@@ -809,7 +802,7 @@ impl Line {
         super::join_names(&self.credit_summary().surveyor_people())
     }
 
-    /// The legacy `lines.surveyor` text ([`super::legacy_credit_text`]):
+    /// The legacy `sections.surveyor` text ([`super::legacy_credit_text`]):
     /// the line's explorers and surveyors in first-appearance order, in the
     /// `"explorers / surveyors"` form when anyone explored it and as the plain
     /// surveyor list otherwise, each display name once. Older builds keep only
@@ -820,7 +813,7 @@ impl Line {
         super::legacy_credit_text(&summary.explorer_people(), &summary.surveyor_people())
     }
 
-    /// What a save writes to `lines.surveyor` for a line with shots:
+    /// What a save writes to `sections.surveyor` for a line with shots:
     /// the text the line was read with while its people are unchanged
     /// since ([`Self::loaded_legacy_surveyor`]), else
     /// [`Self::legacy_surveyor_text`]. A long or differently spelled legacy
@@ -834,7 +827,7 @@ impl Line {
         }
     }
 
-    /// Remember `raw`, the `lines.surveyor` text the line was just read
+    /// Remember `raw`, the `sections.surveyor` text the line was just read
     /// with, if it is not what this build would write for the line now
     /// (see [`Self::loaded_legacy_surveyor`]). Call once the shots carry their
     /// credit.

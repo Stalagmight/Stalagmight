@@ -199,8 +199,7 @@ fn reimporting_the_metric_and_imperial_twins_of_one_elevation_warns_never() {
     assert!(result.success, "metric import failed: {:?}", result.error);
 
     let imperial_tml = parse_synthetic_tmlu(&wrap_xml_with("ft", 328.084, &shots));
-    let (lines, closures, _) =
-        convert_tml_to_import_configs(&imperial_tml, false, false).unwrap();
+    let (lines, closures, _) = convert_tml_to_import_configs(&imperial_tml, false, false).unwrap();
     let result = state.execute_tml_import_sections(
         lines,
         closures,
@@ -297,7 +296,7 @@ fn end_to_end_import_respects_datum_invariants() {
 fn zero_datums_are_stable_across_export_import_cycles() {
     use crate::core::state::{AppState, VirtualShotMode};
     use crate::core::Command;
-    use crate::models::{GpsCoordinates, Project, LineData, ShotData, StationRef, ZeroDatum};
+    use crate::models::{GpsCoordinates, LineData, Project, ShotData, StationRef, ZeroDatum};
 
     fn two_entrance_project(datums: &[(u32, f64, f64)]) -> Project {
         let mut project = Project::new("Cycle".to_string(), None);
@@ -445,7 +444,7 @@ fn zero_datums_are_stable_across_export_import_cycles() {
 fn comments_keep_their_side_across_a_default_reimport() {
     use crate::core::state::{AppState, VirtualShotMode};
     use crate::core::Command;
-    use crate::models::{Project, LineData, ShotData, StationRef};
+    use crate::models::{LineData, Project, ShotData, StationRef};
 
     let mut original = Project::new("Comments".to_string(), None);
     original.add_line(LineData {
@@ -614,8 +613,7 @@ fn depth_only_tml_round_trip_fabricates_no_inclination_depth_mismatch() {
     let out_path = out_dir.path().join("depth_only.tmlu");
     crate::export::tml::export_tml(&project, &out_path).unwrap();
     let round_tripped = parse_tml(&out_path).unwrap();
-    let (lines, closures, _) =
-        convert_tml_to_import_configs(&round_tripped, false, false).unwrap();
+    let (lines, closures, _) = convert_tml_to_import_configs(&round_tripped, false, false).unwrap();
 
     let state2 = AppState::new().unwrap();
     state2.execute(Command::CreateProject {
@@ -695,8 +693,7 @@ fn a_genuinely_recorded_zero_pitch_on_a_steep_shot_is_erased_by_one_round_trip()
     let out_path = out_dir.path().join("erasure.tmlu");
     crate::export::tml::export_tml(&project, &out_path).unwrap();
     let round_tripped = parse_tml(&out_path).unwrap();
-    let (lines, closures, _) =
-        convert_tml_to_import_configs(&round_tripped, false, false).unwrap();
+    let (lines, closures, _) = convert_tml_to_import_configs(&round_tripped, false, false).unwrap();
 
     let state2 = AppState::new().unwrap();
     state2.execute(Command::CreateProject {
@@ -1052,7 +1049,7 @@ fn a_line_with_mixed_per_shot_credit_round_trips_through_ariane_as_one_line() {
 
 /// Review of #719, item 1: one name with no `" / "` in Ariane's `Explorer`
 /// field - the common form, e.g. `Tester` - is a SURVEYOR: in the app after
-/// the import, in the saved file's legacy `lines.surveyor`, and again after
+/// the import, in the saved file's legacy `sections.surveyor`, and again after
 /// the file is reopened and saved. That is the role a `.stalx` legacy column
 /// (and SpeleoDB's reader) has always given the same text, so a file imported
 /// before and after #714 no longer disagrees.

@@ -7,7 +7,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::models::{
-    gps_to_local, GpsCoordinates, HeldGauge, LoopClosure, Project, LineId, ShotUuidRemap,
+    gps_to_local, GpsCoordinates, HeldGauge, LineId, LoopClosure, Project, ShotUuidRemap,
     StationKey, StationMerge, StationRef,
 };
 
@@ -143,11 +143,7 @@ pub(super) fn append_project(
 /// source's own layout is preserved. Nothing pre-existing moves. A source with
 /// no datum is left where it is - placing it is the orphan-placement dialog's
 /// job, not a guess made here.
-fn place_by_datum(
-    project: &mut Project,
-    new_ids: &[LineId],
-    frame_before: Option<GpsCoordinates>,
-) {
+fn place_by_datum(project: &mut Project, new_ids: &[LineId], frame_before: Option<GpsCoordinates>) {
     let new: HashSet<LineId> = new_ids.iter().copied().collect();
     let Some((station, gps)) = project
         .zero_datums
@@ -282,8 +278,7 @@ fn copy_offsets_and_comments(
     // store as a transitional Index anchor under the new line; the caller's
     // re-anchor pass canonicalizes it once the copied shots are present.
     for (old_key, offset) in &source.station_offsets {
-        if let Some(new_key) = remap_key(source, line_id_map, old_key, "append station offsets")
-        {
+        if let Some(new_key) = remap_key(source, line_id_map, old_key, "append station offsets") {
             target.station_offsets.insert(new_key, *offset);
         }
     }
@@ -292,8 +287,7 @@ fn copy_offsets_and_comments(
     // (Without this, every per-station comment was silently dropped on merge
     // while every sibling collection was copied.)
     for (old_key, comment) in &source.station_comments {
-        if let Some(new_key) = remap_key(source, line_id_map, old_key, "append station comments")
-        {
+        if let Some(new_key) = remap_key(source, line_id_map, old_key, "append station comments") {
             target.station_comments.insert(new_key, comment.clone());
         }
     }
@@ -369,10 +363,9 @@ fn remap_pair(
     b: &StationKey,
     purpose: &'static str,
 ) -> Option<(StationKey, StationKey)> {
-    let (Some(&new_a_line), Some(&new_b_line)) = (
-        line_id_map.get(&a.line_id),
-        line_id_map.get(&b.line_id),
-    ) else {
+    let (Some(&new_a_line), Some(&new_b_line)) =
+        (line_id_map.get(&a.line_id), line_id_map.get(&b.line_id))
+    else {
         tracing::warn!(
             project = %source.name,
             station_a_line = a.line_id,

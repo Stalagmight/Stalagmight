@@ -29,21 +29,12 @@ fn diagnose_naharon_line31_bridge_closure() {
             .count();
         (merges, closures)
     };
-    eprintln!(
-        "line 31 BEFORE: merges/closures = {:?}",
-        count31(&project)
-    );
+    eprintln!("line 31 BEFORE: merges/closures = {:?}", count31(&project));
     let converted = project.convert_orphan_closures_to_merges();
     eprintln!("converted {converted} orphan closure(s)");
-    eprintln!(
-        "line 31 AFTER:  merges/closures = {:?}",
-        count31(&project)
-    );
+    eprintln!("line 31 AFTER:  merges/closures = {:?}", count31(&project));
     let (merges, closures) = count31(&project);
-    assert_eq!(
-        closures, 0,
-        "line 31's sole-bridge closure should be gone"
-    );
+    assert_eq!(closures, 0, "line 31's sole-bridge closure should be gone");
     assert!(merges >= 1, "line 31 should now be attached by a merge");
 }
 

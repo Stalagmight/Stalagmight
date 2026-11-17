@@ -11,7 +11,7 @@
 //! whose correction is large enough (10 degrees) that no tolerance hides it.
 
 use stalagmight_models::{
-    AzimuthReference, CorrectionSource, Project, LineData, LineId, ShotData, StationRef,
+    AzimuthReference, CorrectionSource, LineData, LineId, Project, ShotData, StationRef,
 };
 
 /// 10 degrees east: big enough that a dropped correction cannot pass as noise.
@@ -113,11 +113,7 @@ fn a_split_gives_both_halves_the_same_reference() {
     assert!(result.success, "split failed: {:?}", result.error);
 
     let project = state.get_project_state().unwrap();
-    assert_eq!(
-        project.lines.len(),
-        2,
-        "the split should make two lines"
-    );
+    assert_eq!(project.lines.len(), 2, "the split should make two lines");
     for line in &project.lines {
         assert_eq!(
             line.azimuth_reference,
@@ -148,9 +144,7 @@ fn the_reference_and_its_provenance_survive_save_and_load() {
     db.save_project(&project).unwrap();
 
     let loaded = db.load_project().unwrap();
-    let line = loaded
-        .get_line(id)
-        .expect("line survives the round trip");
+    let line = loaded.get_line(id).expect("line survives the round trip");
     assert_eq!(line.azimuth_reference, Some(recorded));
     assert_eq!(
         loaded.default_azimuth_reference,
@@ -270,13 +264,12 @@ fn a_mixed_project_exports_true_north_bearings_and_leaves_the_project_alone() {
             shots: vec![shot(200.0, 10.0)],
         })
         .id;
-    project.get_line_mut(magnetic).unwrap().azimuth_reference = Some(
-        AzimuthReference::magnetic(TEST_CORRECTION, CorrectionSource::FileDeclared),
-    );
-    project
-        .get_line_mut(true_north)
-        .unwrap()
-        .azimuth_reference = Some(AzimuthReference::true_north(CorrectionSource::FileDeclared));
+    project.get_line_mut(magnetic).unwrap().azimuth_reference = Some(AzimuthReference::magnetic(
+        TEST_CORRECTION,
+        CorrectionSource::FileDeclared,
+    ));
+    project.get_line_mut(true_north).unwrap().azimuth_reference =
+        Some(AzimuthReference::true_north(CorrectionSource::FileDeclared));
     project.ensure_shot_uuids();
 
     let xml = exported_xml(&project);
@@ -334,13 +327,12 @@ fn undeclared_magnetic_lines_do_not_make_a_declared_one_mixed() {
             shots: vec![shot(200.0, 10.0)],
         })
         .id;
-    project.get_line_mut(declared).unwrap().azimuth_reference = Some(
-        AzimuthReference::magnetic(-2.13, CorrectionSource::IgrfAuto { epoch_year: 2025 }),
-    );
-    project
-        .get_line_mut(undeclared)
-        .unwrap()
-        .azimuth_reference = Some(AzimuthReference::magnetic(0.0, CorrectionSource::Unknown));
+    project.get_line_mut(declared).unwrap().azimuth_reference = Some(AzimuthReference::magnetic(
+        -2.13,
+        CorrectionSource::IgrfAuto { epoch_year: 2025 },
+    ));
+    project.get_line_mut(undeclared).unwrap().azimuth_reference =
+        Some(AzimuthReference::magnetic(0.0, CorrectionSource::Unknown));
     project.ensure_shot_uuids();
 
     let xml = exported_xml(&project);

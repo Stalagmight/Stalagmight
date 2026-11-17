@@ -174,17 +174,11 @@ impl Project {
     /// scan of that line only, as `resolve_key` does).
     fn shot_position(&self, line: &Line, uuid: &str) -> Option<usize> {
         if let Some(&i) = self.shot_uuid_index.get(&(line.id, uuid.to_string())) {
-            if line
-                .shots
-                .get(i as usize)
-                .and_then(|s| s.uuid.as_deref())
-                == Some(uuid)
-            {
+            if line.shots.get(i as usize).and_then(|s| s.uuid.as_deref()) == Some(uuid) {
                 return Some(i as usize);
             }
         }
-        line
-            .shots
+        line.shots
             .iter()
             .position(|s| s.uuid.as_deref() == Some(uuid))
     }
@@ -204,8 +198,7 @@ impl Project {
     fn resolve_held_gauge_anywhere(&self, held: &HeldGauge) -> Option<StationRef> {
         self.resolve_held_gauge(held).or_else(|| {
             self.lines.iter().find_map(|line| {
-                line
-                    .shots
+                line.shots
                     .iter()
                     .any(|s| s.uuid.as_deref() == Some(held.shot.as_str()))
                     .then(|| self.place_held_gauge(held, line))
@@ -271,10 +264,7 @@ impl Project {
         }
         let mut parent: std::collections::HashMap<LineId, LineId> =
             self.lines.iter().map(|s| (s.id, s.id)).collect();
-        fn root(
-            parent: &mut std::collections::HashMap<LineId, LineId>,
-            id: LineId,
-        ) -> LineId {
+        fn root(parent: &mut std::collections::HashMap<LineId, LineId>, id: LineId) -> LineId {
             let mut at = id;
             while let Some(&up) = parent.get(&at) {
                 if up == at {
@@ -398,8 +388,7 @@ impl Project {
                 continue;
             }
             let component = self.get_connected_line_ids(at.line_id);
-            self.held_gauges
-                .retain(|g| !component.contains(&g.line_id));
+            self.held_gauges.retain(|g| !component.contains(&g.line_id));
             let lowest = component.iter().copied().min().unwrap_or(at.line_id);
             if at.line_id == lowest {
                 self.keep_gauge_on_station(lowest, at.station_index as usize, None);
@@ -542,8 +531,7 @@ impl Project {
 fn pair_resolves(line: &Line) -> bool {
     let holds = |uuid: &Option<String>| {
         uuid.as_deref().is_none_or(|uuid| {
-            line
-                .shots
+            line.shots
                 .iter()
                 .any(|shot| shot.uuid.as_deref() == Some(uuid))
         })
@@ -558,7 +546,7 @@ fn pair_resolves(line: &Line) -> bool {
 )]
 mod tests {
     use super::gauge_pair_for_station;
-    use crate::{Project, LineData, LineId, ShotData};
+    use crate::{LineData, LineId, Project, ShotData};
 
     fn project(shots: usize, reversed: bool) -> (Project, LineId) {
         let mut project = Project::new("Gauge".to_string(), None);
@@ -629,10 +617,7 @@ mod tests {
         let (mut project, id) = project(3, false);
         project.keep_gauge_on_station(id, 0, None);
         let line = project.get_line(id).unwrap();
-        assert_eq!(
-            line.gauge_shot_uuid, None,
-            "the fallback already names 0"
-        );
+        assert_eq!(line.gauge_shot_uuid, None, "the fallback already names 0");
 
         project.keep_gauge_on_station(id, 2, None);
         let line = project.get_line(id).unwrap();

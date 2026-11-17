@@ -36,7 +36,9 @@ export function defaultDirectionForField(field: RecentSortField): RecentSortDire
 
 function readField(): RecentSortField {
   try {
-    const stored = localStorage.getItem(FIELD_KEY);
+    const raw = localStorage.getItem(FIELD_KEY);
+    // Stored before the Section -> Line rename.
+    const stored = raw === 'sections' ? 'lines' : raw;
     if (stored && (FIELDS as string[]).includes(stored)) {
       return stored as RecentSortField;
     }

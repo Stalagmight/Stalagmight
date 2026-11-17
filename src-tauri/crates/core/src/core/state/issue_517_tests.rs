@@ -26,7 +26,7 @@ use tempfile::TempDir;
 
 use super::AppState;
 use crate::core::loading::IGNORES_UNREADABLE_CODE;
-use crate::models::{Project, LineData, ShotData};
+use crate::models::{LineData, Project, ShotData};
 use crate::persistence::Database;
 
 const IGNORED_CODE: &str = "SHORT_SHOT";
@@ -34,16 +34,16 @@ const RESOLVED_AT: &str = "2026-01-01T00:00:00+00:00";
 
 /// The pre-v8 `resolved_warnings` shape: every current column except
 /// `shot_uuid`.
-const PRE_V8_COLUMNS: &str = "line_id INTEGER NOT NULL, \
+const PRE_V8_COLUMNS: &str = "section_id INTEGER NOT NULL, \
      shot_id INTEGER NOT NULL, \
      warning_code TEXT NOT NULL, \
      resolved_at TEXT NOT NULL, \
      resolved_comment TEXT, \
-     UNIQUE(line_id, shot_id, warning_code)";
+     UNIQUE(section_id, shot_id, warning_code)";
 
 /// A table whose rows do not say WHICH warning was ignored - no amount of
 /// leniency recovers that.
-const UNREADABLE_COLUMNS: &str = "line_id INTEGER NOT NULL, \
+const UNREADABLE_COLUMNS: &str = "section_id INTEGER NOT NULL, \
      shot_id INTEGER NOT NULL, \
      resolved_at TEXT NOT NULL";
 
@@ -55,7 +55,7 @@ const UNREADABLE_COLUMNS: &str = "line_id INTEGER NOT NULL, \
 /// an integer on insert - so a fixture that stores a text id in a declared
 /// INTEGER column is not testing a text id at all. The tests below assert
 /// `typeof()` afterwards rather than trusting this.
-const UNTYPED_ID_COLUMNS: &str = "line_id INTEGER NOT NULL, \
+const UNTYPED_ID_COLUMNS: &str = "section_id INTEGER NOT NULL, \
      shot_id, \
      warning_code, \
      resolved_at, \
@@ -198,7 +198,7 @@ fn a_forged_current_stamp_over_pre_v8_tables_does_not_erase_the_ignore_list() {
     forge_ignore_table(
         &path,
         PRE_V8_COLUMNS,
-        "line_id, shot_id, warning_code, resolved_at",
+        "section_id, shot_id, warning_code, resolved_at",
         &[format!(
             "{}, {}, '{IGNORED_CODE}', '{RESOLVED_AT}'",
             seeded.line_id, seeded.shot_id
@@ -277,7 +277,7 @@ fn hostile_column_types_are_carried_inert_instead_of_making_the_project_unsaveab
     forge_ignore_table(
         &path,
         UNTYPED_ID_COLUMNS,
-        "line_id, shot_id, warning_code, resolved_at",
+        "section_id, shot_id, warning_code, resolved_at",
         &[
             // Readable, and the row whose survival is the point.
             format!(
@@ -287,16 +287,10 @@ fn hostile_column_types_are_carried_inert_instead_of_making_the_project_unsaveab
             // A code and a timestamp that are not text at all, and not even
             // valid UTF-8. Carried inert: it suppresses nothing, but it is the
             // user's row and the save has no business dropping it.
-            format!(
-                "{}, {}, X'FFFE', X'FFFE'",
-                seeded.line_id, seeded.shot_id
-            ),
+            format!("{}, {}, X'FFFE', X'FFFE'", seeded.line_id, seeded.shot_id),
             // Names no shot, so it can never suppress anything on any project.
             // Dropped - the one case where dropping loses nothing.
-            format!(
-                "{}, X'FFFE', 'LONG_SHOT', '{RESOLVED_AT}'",
-                seeded.line_id
-            ),
+            format!("{}, X'FFFE', 'LONG_SHOT', '{RESOLVED_AT}'", seeded.line_id),
             // A multi-megabyte TEXT id. Rejected on LENGTH before it is decoded
             // or parsed: an id is at most 10 digits, so validating megabytes of
             // UTF-8 to reach that answer is work a hostile file must not be able
@@ -456,7 +450,7 @@ fn a_save_is_refused_when_the_ignore_list_cannot_be_read_at_all() {
     forge_ignore_table(
         &path,
         UNREADABLE_COLUMNS,
-        "line_id, shot_id, resolved_at",
+        "section_id, shot_id, resolved_at",
         &[format!(
             "{}, {}, '{RESOLVED_AT}'",
             seeded.line_id, seeded.shot_id
@@ -529,7 +523,7 @@ fn a_save_refuses_while_the_ignore_list_cannot_be_reached() {
     forge_ignore_table(
         &path,
         PRE_V8_COLUMNS,
-        "line_id, shot_id, warning_code, resolved_at",
+        "section_id, shot_id, warning_code, resolved_at",
         &[format!(
             "{}, {}, '{IGNORED_CODE}', '{RESOLVED_AT}'",
             seeded.line_id, seeded.shot_id
@@ -651,7 +645,7 @@ fn an_unwritable_unstamped_pre_v8_file_keeps_its_ignores_through_a_save_as() {
     forge_ignore_table(
         &source,
         PRE_V8_COLUMNS,
-        "line_id, shot_id, warning_code, resolved_at",
+        "section_id, shot_id, warning_code, resolved_at",
         &[format!(
             "{}, {}, '{IGNORED_CODE}', '{RESOLVED_AT}'",
             seeded.line_id, seeded.shot_id

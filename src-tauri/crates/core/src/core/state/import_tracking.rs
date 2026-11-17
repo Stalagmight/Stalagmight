@@ -66,11 +66,7 @@ impl AppState {
     /// Silent about hashes it does not hold: the caller names what its own run
     /// sent to `import_lines`, and whether each was still tracked is not
     /// something it can know.
-    pub fn untrack_import(
-        &self,
-        file_hashes: &[String],
-        line_hashes: &[String],
-    ) -> CommandResult {
+    pub fn untrack_import(&self, file_hashes: &[String], line_hashes: &[String]) -> CommandResult {
         let Ok(mut proj_guard) = self.project.lock() else {
             return CommandResult::failure("Failed to lock project".to_string());
         };

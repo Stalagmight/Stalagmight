@@ -41,8 +41,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    ClosureStrategy, CombineRemovedKind, CombineReplacedClosure, CombineReplacedKind, LoopClosure,
-    LineId, StationRef,
+    ClosureStrategy, CombineRemovedKind, CombineReplacedClosure, CombineReplacedKind, LineId,
+    LoopClosure, StationRef,
 };
 
 use super::combine_plan::{JoinPoint, ResolvedClosure, Tie, TieId};
@@ -134,9 +134,7 @@ impl Project {
             .loop_closures
             .iter()
             .map(|closure| {
-                if closure.station_a.line_id != line_id
-                    && closure.station_b.line_id != line_id
-                {
+                if closure.station_a.line_id != line_id && closure.station_b.line_id != line_id {
                     return None;
                 }
                 Some((

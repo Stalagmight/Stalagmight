@@ -229,12 +229,7 @@ pub(super) fn join_contiguous_chains(
                 parent_of[child] = None;
                 break;
             }
-            uuids.extend(
-                lines[child]
-                    .shots
-                    .iter()
-                    .filter_map(|s| s.uuid.as_deref()),
-            );
+            uuids.extend(lines[child].shots.iter().filter_map(|s| s.uuid.as_deref()));
             group_of[child] = Some(root);
             members.push(child);
             cursor = child;

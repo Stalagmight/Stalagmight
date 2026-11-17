@@ -1,26 +1,28 @@
 ---
-title: Sections, shots and stations
-description: "Stalagmight's survey terms: stations, shots and their kinds (permanent, jump, reference), sections, LRUD, merging, loop closures, zero datums and GPS fixes."
+title: Lines, shots and stations
+description: "Stalagmight's survey terms: stations, shots and their kinds (permanent, jump, reference), lines, LRUD, merging, loop closures, zero datums and GPS fixes."
 order: 1
 ---
 
-# Sections, shots and stations
+# Lines, shots and stations
 
 - **Station**: a tie-off.
-- **Shot**: the line between two stations. One of three kinds:
+- **Shot**: the straight leg between two stations. One of three kinds:
   - **Permanent**: along permanent cave line.
   - **Jump** (`J`): temporary line the surveyor lays to connect permanent lines,
     or the main line to the surface.
-  - **Reference** (`R`): a shot retaken along a line already surveyed, so two
-    sections can be joined exactly, without ambiguity. On
+  - **Reference** (`R`): a shot retaken along a stretch already surveyed, so
+    two lines can be joined exactly, without ambiguity. On
     [import](../workflows/importing-from-mnemo.md), Stalagmight uses them to
-    suggest where sections join. Survey length leaves references out, so the
+    suggest where lines join. Survey length leaves references out, so the
     same passage is not counted twice.
 - **LRUD**: left, right, up and down distances to the cave walls, i.e. the
   passage size.
-- **Section**: a run of shots, usually one linear stretch of surveyed line.
-- **Merging** two stations connects the sections they are on. That is how
-  separate sections become one cave. See
+- **Line**: a run of shots surveyed in one go, usually along one stretch of
+  cave line, with its own name, color, surveyors and date. The **Sections**
+  panel on the left lists the lines.
+- **Merging** two stations connects the lines they are on. That is how
+  separate lines become one cave. See
   [Merging stations](../workflows/merging-stations.md).
 - **Loop closure**: where survey lines meet up again, completing a loop. It is
   shown as a dashed line and does not move the measured survey. The adjusted
@@ -33,6 +35,6 @@ order: 1
   the survey through it. See [Zero datums and GPS fixes](zero-datums-and-gps-fixes.md)
   and [Setting a zero datum](../workflows/setting-a-zero-datum.md).
 
-Add a section with **Add section** and merge stations with **Merge** in the
+Add a line with **Add line** and merge stations with **Merge** in the
 [survey view](../screens/survey-view.md). The shot kind is the **J/R** column
-in the [Import / Create Section dialog](../screens/create-section-dialog.md).
+in the [Import / Create Line dialog](../screens/create-section-dialog.md).

@@ -20,7 +20,7 @@ use crate::core::{
     extend_unique_hashes, AddedContent, CarriedIgnore, Command, CommandResult, UndoData,
 };
 use crate::models::{
-    live_shot_uuid_for_stored, warning_is_ignorable, Project, LineId, FEATURE_ID_STRIDE,
+    live_shot_uuid_for_stored, warning_is_ignorable, LineId, Project, FEATURE_ID_STRIDE,
     MAX_LINES_IN_ID_SPACE, MAX_LINE_ID,
 };
 use crate::persistence::ResolvedWarning;
@@ -61,9 +61,7 @@ fn remap_ignores(
         };
         let shot_uuid = match row.shot_uuid.as_deref() {
             Some(uuid) => shots.live_uuid(row.line_id, uuid),
-            None => shots
-                .uuid_of(row.line_id, row.shot_id)
-                .map(str::to_string),
+            None => shots.uuid_of(row.line_id, row.shot_id).map(str::to_string),
         };
         let Some(shot_uuid) = shot_uuid else {
             continue;
@@ -98,10 +96,7 @@ impl<'a> ShotIndex<'a> {
             };
             for shot in &line.shots {
                 if let Some(uuid) = shot.uuid.as_deref() {
-                    index
-                        .id_by_uuid
-                        .entry((line_id, uuid))
-                        .or_insert(shot.id);
+                    index.id_by_uuid.entry((line_id, uuid)).or_insert(shot.id);
                 }
                 index
                     .uuid_by_id
@@ -126,10 +121,7 @@ impl<'a> ShotIndex<'a> {
 
     /// The uuid of the shot with `shot_id` in `line_id`, if it has one.
     fn uuid_of(&self, line_id: LineId, shot_id: u32) -> Option<&'a str> {
-        self.uuid_by_id
-            .get(&(line_id, shot_id))
-            .copied()
-            .flatten()
+        self.uuid_by_id.get(&(line_id, shot_id)).copied().flatten()
     }
 }
 

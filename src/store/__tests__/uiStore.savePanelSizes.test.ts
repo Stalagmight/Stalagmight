@@ -20,7 +20,7 @@ describe('uiStore.savePanelSizes', () => {
   // silently never saved and the panel reverted to its last whole-pixel value (e.g.
   // the data table stuck at its 500px max). Rounding before the IPC fixes it.
   it('rounds a fractional size to a whole pixel before the persist IPC', async () => {
-    await useUIStore.getState().savePanelSizes('lines', 250.5);
+    await useUIStore.getState().savePanelSizes('sections', 250.5);
 
     expect(invokeIpcMock).toHaveBeenCalledWith(
       'update_panel_sizes',
@@ -58,7 +58,7 @@ describe('uiStore.savePanelSizes', () => {
   // is no "unset" sentinel, so a stored 0 reloads the panel collapsed. Clamp to the
   // panel's minimum at the store choke-point, not only in the resize-handle caller.
   it('clamps a below-minimum size up to the panel minimum before persisting', async () => {
-    await useUIStore.getState().savePanelSizes('lines', 0);
+    await useUIStore.getState().savePanelSizes('sections', 0);
 
     expect(invokeIpcMock).toHaveBeenCalledWith(
       'update_panel_sizes',

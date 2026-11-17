@@ -146,7 +146,7 @@ describe('uiStore line focus (#50)', () => {
     });
     useUIStore.getState().enterLineFocus(7, FOCUS_HEIGHT);
     // Open the sections panel via setPanelOpen - this exits focus and persists.
-    useUIStore.getState().setPanelOpen('lines', true);
+    useUIStore.getState().setPanelOpen('sections', true);
     const s = useUIStore.getState();
     // (b) focus cleared
     expect(s.focusedLineId).toBeNull();

@@ -35,15 +35,15 @@ save/close/reopen per seed), `_gate_multi_crossing` (three), and
 `_gate_combined` (below).
 
 **Five oracles per run.** Four compare what a history move DID - the project
-snapshot per depth, every cross-section merge, the app's own integrity verdict,
+snapshot per depth, every cross-line merge, the app's own integrity verdict,
 and the adjusted geometry the map draws. The fifth compares what the entry SAYS:
 the `UndoHistoryItem` rows `get_undo_stack` returns, which are the history
 dropdown. It runs in two halves - the entry-intrinsic triple
 (`timestamp|commandType|description`) is pinned per depth for the life of a run,
 and the whole item including `previewData` is compared across every save/reload
 crossing. `previewData` is left out of the first half on purpose: it resolves
-section NAMES against the live project (see
-[Undo/Redo](undo-redo.md#section-name-resolution)), so it is stable exactly
+line NAMES against the live project (see
+[Undo/Redo](undo-redo.md#line-name-resolution)), so it is stable exactly
 where the project is.
 
 **Reproducing a specific known bug.** The module carries a BUG IDENTIFICATION
@@ -535,7 +535,7 @@ Two things the mechanism guarantees, and one it does not:
 
 - A move whose target was shrunk away is SKIPPED with a note rather than fatal
   (the trace names shots by `Shot::uuid`, which survives both the loader's
-  renumbering and the allocator; sections and closures by id, mapped through what
+  renumbering and the allocator; lines and closures by id, mapped through what
   each move created). Replay has to be a total function or a candidate that kills
   the harness looks exactly like one that reproduces the bug.
 - Probes in a ddmin round run in PARALLEL on the same worker pool the sweeps use
@@ -810,10 +810,10 @@ Use these instead of `waitForTimeout`. All from `helpers/app.ts`:
 | `waitForDialogClosed(page, testId)` / `waitForNoDialogs(page)` | Dialog teardown |
 | `waitForDrawnStations` / `waitForDrawnShots` | The custom WebGL layer has drawn N features |
 
-`helpers/app.ts` also has seeding helpers (`createSectionViaStore`,
-`seedProjectWithSections`), menu navigation (`openAppMenu`,
+`helpers/app.ts` also has seeding helpers (`createLineViaStore`,
+`seedProjectWithLines`), menu navigation (`openAppMenu`,
 `openSettingsFromMenu`, `openDebugFromMenu`), the DMP wizard drivers
-(`openDmpSelectionDialog`, `proceedToDmpImportWizard`, `placeAllSections`), and
+(`openDmpSelectionDialog`, `proceedToDmpImportWizard`, `placeAllLines`), and
 canvas readback (`getDrawnGeometry`, `getStationScreenPositions`,
 `readCanvasPixel`, `countCanvasInk`). Read the file before writing a new
 one-off helper.
@@ -864,7 +864,7 @@ Prefer a helper, then the store, then a keypress.
 await page.evaluate(() => {
   (window as any).__E2E_TEST__.uiStore.getState().openDialog('import');
 });
-await page.waitForSelector('[data-testid="import-section-dialog"]');
+await page.waitForSelector('[data-testid="import-line-dialog"]');
 ```
 
 `Ctrl+I` is the `import_dmp` action. It does **not** open a dialog directly - it
@@ -873,7 +873,7 @@ opens the native file picker, which the mock answers with
 `DmpSelectionDialog`. That is why `openDmpSelectionDialog(page)` presses
 `Control+i` and then waits for `dmp-selection-dialog`. Three consequences:
 
-- It never opens `ImportDialog` (manual section creation) - use the store.
+- It never opens `ImportDialog` (manual line creation) - use the store.
 - With a project open the picker is `.dmp`-only (#508); with none open it is the
   full unified picker. The mock returns its fixed path either way, so a spec
   cannot tell the two apart - assert filter choice in vitest, not here.
@@ -914,9 +914,9 @@ Three dialogs, in order, all driven from `helpers/app.ts`:
 | `ZeroDatumSelectionDialog` / `ZeroDatumConfigDialog` | `'zero-datum-selection'` / `'zero-datum-config'` | Continue from selection, when the project has no zero datum |
 | `DmpNewImportDialog` | `'dmp-import-new'` | Continue from selection or from zero-datum config |
 
-`ImportDialog` (`'import'`, manual section creation) is a separate flow, opened
+`ImportDialog` (`'import'`, manual line creation) is a separate flow, opened
 by the SectionsPanel "+" button or via the store. `e2e-playwright/dmp-import.spec.ts`
-and `import-section-dialog.spec.ts` are the worked examples.
+and `import-line-dialog.spec.ts` are the worked examples.
 
 Step 1 selection stats live under `[data-testid="selection-stats"]` with
 `stats-shot-count`, `stats-total-length`, `stats-depth-range` inside; the
@@ -1022,10 +1022,10 @@ The mock deep-clones (`structuredClone(currentProject)`) on every
 `project.clone()` serialized over the boundary - a brand-new object and brand-new
 nested arrays every refetch.
 
-The mock mutates `currentProject`'s arrays **in place** (`sections`,
+The mock mutates `currentProject`'s arrays **in place** (`lines`,
 `zero_datums`, `loop_closures`, `station_merges` via `.push` / `.splice`).
 Returning the same reference freezes every reference-keyed React memo
-(`useMemo(..., [project?.sections])` and friends), and the symptom is
+(`useMemo(..., [project?.lines])` and friends), and the symptom is
 distinctive: **a panel or overlay renders empty while the footer or stats show
 the populated count.** Real users never see it - real IPC returns fresh
 references. Do not "optimize" the clone away.
@@ -1066,7 +1066,7 @@ case 'get_survey_geometry_for_file': {
   const filePath = args?.path as string;
   if (filePath.includes('error')) throw new Error('Failed to load geometry');
   return {
-    shots: [{ from: [-81.78, 24.55], to: [-81.77, 24.56], kind: 'Normal', section_id: 1 }],
+    shots: [{ from: [-81.78, 24.55], to: [-81.77, 24.56], kind: 'Normal', line_id: 1 }],
     origin: [-81.78, 24.55],
   };
 }
@@ -1075,9 +1075,9 @@ case 'get_survey_geometry_for_file': {
 case 'get_undo_stack': {
   return [{
     index: 0,
-    description: 'Create section "Main Line"',
+    description: "Create line 'Main Line'",
     timestamp: new Date().toISOString(),
-    commandType: 'create_section',
+    commandType: 'create_line',
     previewData: {
       changes: [{ field: 'name', oldValue: '', newValue: 'Main Line' }],
       additionalChanges: 0,
@@ -1251,11 +1251,11 @@ above.
 | Element | `data-testid` |
 |---------|---------------|
 | Container | `detail-panel` |
-| Station / section views | `station-detail`, `section-detail` |
-| Station link (position 0-indexed) | `station-{sectionId}-{position}-link` |
-| Shot link (position 1-indexed) | `shot-{sectionId}-{position}-link` |
-| Section link | `section-{sectionId}-link` |
-| Center buttons | `center-station-button`, `center-shot-button`, `center-section-button` |
+| Station / line views | `station-detail`, `line-detail` |
+| Station link (position 0-indexed) | `station-{lineId}-{position}-link` |
+| Shot link (position 1-indexed) | `shot-{lineId}-{position}-link` |
+| Line link | `line-{lineId}-link` |
+| Center buttons | `center-station-button`, `center-shot-button`, `center-line-button` |
 
 Links and center buttons carry descriptive `aria-label`s
 (`"Select station 2:5"`, `"Center map on station 2:5"`). Links to missing
@@ -1542,7 +1542,7 @@ fn parses_v5_dmp() {
 
     let dmp = parse_dmp(&path).expect("v5 DMP should parse");
     assert_eq!(dmp.version, 5);
-    assert!(!dmp.sections.is_empty());
+    assert!(!dmp.lines.is_empty());
 }
 ```
 
@@ -1568,10 +1568,10 @@ under a new name.
 
 The three tests that own this path, all in
 `src-tauri/src/commands/command_tests.rs`:
-`test_import_sections_persists_deferred_new_project` (success),
-`test_import_sections_deferred_save_failure_warns_no_phantom` (a failed save
+`test_import_lines_persists_deferred_new_project` (success),
+`test_import_lines_deferred_save_failure_warns_no_phantom` (a failed save
 warns and leaves no phantom recent-projects entry), and
-`test_import_sections_deferred_save_permission_denied_humanizes_no_marker_leak`.
+`test_import_lines_deferred_save_permission_denied_humanizes_no_marker_leak`.
 
 ### Registering a new mutation entry point
 
@@ -1657,7 +1657,7 @@ under `e2e-playwright/fixtures/`.
 
 The real Tauri backend parses these for real under the agent harness and in the
 Rust tests. Playwright's mock does **not** read them - it returns simulated
-section data.
+line data.
 
 When adding one: prefer real device data (anonymized if needed), or synthetic
 data for a specific edge case, and record what it is for in the fixtures README.

@@ -199,7 +199,7 @@ fi
 # --- The notes that will actually be published ---
 #
 # Rendered by the same script the workflow runs, rather than re-deriving which
-# changelog line wins here. That is the whole point: a check built on a second
+# changelog section wins here. That is the whole point: a check built on a second
 # model of the selection rule can agree with itself and still disagree with what
 # publishes.
 #
@@ -218,7 +218,7 @@ if ! BODY="$(CHANGELOG="$PROJECT_ROOT/CHANGELOG.md" "$SCRIPT_DIR/release-notes.s
 fi
 
 # release-notes.sh falls back to this exact one-line body when it finds no
-# line at all. Publishing it would announce a release by restating its
+# section at all. Publishing it would announce a release by restating its
 # version number, so treat it as a missing changelog rather than a valid body.
 # -F because the tag's dots are literals here, not wildcards.
 if printf '%s\n' "$BODY" | grep -qxF "Release $TAG"; then
@@ -262,7 +262,7 @@ if [ "$PRERELEASE" = false ]; then
     echo "note: no v${BASE_VERSION}-rc.N tag exists - this release was never cut as a candidate." >&2
   fi
 
-  # release.sh stamped the line header the day the version was bumped, which
+  # release.sh stamped the section header the day the version was bumped, which
   # for anything that went through candidates is well before the day it ships.
   # The date is published verbatim in the notes.
   # A literal prefix via index(), not a regex. awk re-processes backslash escapes
@@ -270,12 +270,12 @@ if [ "$PRERELEASE" = false ]; then
   # and "## [0X5Y0] - ..." would match - the escaping defeated by the tool it was
   # handed to. release.sh writes exactly this header shape; anything else simply
   # yields no date and no advisory.
-  LINE_DATE="$(awk -v hdr="## [$BASE_VERSION] - " '
+  SECTION_DATE="$(awk -v hdr="## [$BASE_VERSION] - " '
     index($0, hdr) == 1 { print $NF; exit }
   ' "$PROJECT_ROOT/CHANGELOG.md")"
   TODAY="$(date +%Y-%m-%d)"
-  if [ -n "$LINE_DATE" ] && [ "$LINE_DATE" != "$TODAY" ]; then
-    echo "note: CHANGELOG.md dates $BASE_VERSION as $LINE_DATE, but today is $TODAY." >&2
+  if [ -n "$SECTION_DATE" ] && [ "$SECTION_DATE" != "$TODAY" ]; then
+    echo "note: CHANGELOG.md dates $BASE_VERSION as $SECTION_DATE, but today is $TODAY." >&2
     echo "      That date is published as-is; it is stamped when the version is bumped," >&2
     echo "      not when it ships. Update it first if it should read today." >&2
   fi

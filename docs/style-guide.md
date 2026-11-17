@@ -9,7 +9,7 @@ This guide captures the current UI conventions and design tokens for Stalagmight
 - Warning prose takes `text-warning-text`, not `text-warning`: `--cc-warning` is tuned as a fill (stripes, the map's hover) and is too pale for text on the light themes. `--cc-warning-text` reads at WCAG AA on the panel, the background and the `bg-warning-10` / `bg-warning-20` washes in every theme (pinned in `tokens.test.ts`).
 
 ## Colors
-- **No color value ships without a human seeing it rendered.** Measure and propose; do not merge. Covers `--cc-*` tokens on all 10 themes, display defaults in `src/types/config.ts`, section palettes, and renderer/export constants.
+- **No color value ships without a human seeing it rendered.** Measure and propose; do not merge. Covers `--cc-*` tokens on all 10 themes, display defaults in `src/types/config.ts`, line color palettes, and renderer/export constants.
 - Contrast and CIEDE2000 numbers are evidence for that review, not a substitute: the legibility harness scores endpoint distance, which lightness dominates, so washing a color out *raises* its score.
 - If a test rejects an approved color, the test is wrong.
 - Depth ramp direction is load-bearing: `getDepthColor` walks the shortest HSL hue path, so a shallow anchor at hue >= 180 inverts the theme. Anchors sit below 180; `SHALLOW_HUE.max` is 178.

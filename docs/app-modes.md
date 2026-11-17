@@ -95,7 +95,7 @@ scoped to `appMode === 'survey'`, where it is equivalent.
 
 ## Mode entry and exit
 
-`setAppMode` owns all of it. Entering Plan or Export exits section focus and
+`setAppMode` owns all of it. Entering Plan or Export exits line focus and
 data-table fullscreen, then - **only when coming from Survey** - snapshots
 `prePlanGeometryMode`, `prePlanDisplay` (the display/overlay flags plus grid
 spacing) and `prePlanDocks` into module-level vars. The survey-only condition is

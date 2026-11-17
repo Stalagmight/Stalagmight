@@ -23,7 +23,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::{ClosureStrategy, LoopClosure, LineId, StationRef};
+use crate::{ClosureStrategy, LineId, LoopClosure, StationRef};
 
 use super::Project;
 

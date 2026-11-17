@@ -1,11 +1,11 @@
 //! Command wrapper tests focused on critical/edge behaviors.
 
 use super::{
-    cache, config, export, history, import, project, raw_data, line, shot, station, validation,
+    cache, config, export, history, import, line, project, raw_data, shot, station, validation,
 };
 use crate::core::{AppState, Command, CommandResult};
 use crate::models::{
-    ClosureStrategy, Coordinates, GpsCoordinates, Project, LineData, LineUpdates, ShotData,
+    ClosureStrategy, Coordinates, GpsCoordinates, LineData, LineUpdates, Project, ShotData,
     ShotKind, ShotUpdates, StationRef, SurveyDirection,
 };
 use crate::persistence::Database;
@@ -210,7 +210,7 @@ fn test_get_config_defaults_panels() {
     assert_eq!(
         cfg.panels.data_table_shot_hidden_columns,
         vec![
-            "section_id",
+            "line_id",
             "shot_id",
             "surveyors",
             "explorers",
@@ -360,7 +360,7 @@ fn test_update_new_line_view_roundtrip() {
         assert_eq!(
             cfg.panels.data_table_shot_hidden_columns,
             vec![
-                "section_id",
+                "line_id",
                 "shot_id",
                 "surveyors",
                 "explorers",
@@ -604,10 +604,7 @@ fn test_column_name_lists_are_bounded_on_both_write_paths() {
         .expect("update new-line view");
         let panels = config::get_config(state(&app)).panels;
         assert_bounded(&panels.new_line_column_order, "new_line_column_order");
-        assert_bounded(
-            &panels.new_line_hidden_columns,
-            "new_line_hidden_columns",
-        );
+        assert_bounded(&panels.new_line_hidden_columns, "new_line_hidden_columns");
 
         config::update_edit_line_view_impl(
             state(&app).inner(),
@@ -617,14 +614,8 @@ fn test_column_name_lists_are_bounded_on_both_write_paths() {
         )
         .expect("update edit-line view");
         let panels = config::get_config(state(&app)).panels;
-        assert_bounded(
-            &panels.edit_line_column_order,
-            "edit_line_column_order",
-        );
-        assert_bounded(
-            &panels.edit_line_hidden_columns,
-            "edit_line_hidden_columns",
-        );
+        assert_bounded(&panels.edit_line_column_order, "edit_line_column_order");
+        assert_bounded(&panels.edit_line_hidden_columns, "edit_line_hidden_columns");
 
         // Door 2: the whole-`Config` write, which does no per-field validation of
         // its own and so relies entirely on the normalize pass.
@@ -655,18 +646,9 @@ fn test_column_name_lists_are_bounded_on_both_write_paths() {
                 "station_hidden_columns",
             );
             assert_bounded(&panels.new_line_column_order, "new_line_column_order");
-            assert_bounded(
-                &panels.new_line_hidden_columns,
-                "new_line_hidden_columns",
-            );
-            assert_bounded(
-                &panels.edit_line_column_order,
-                "edit_line_column_order",
-            );
-            assert_bounded(
-                &panels.edit_line_hidden_columns,
-                "edit_line_hidden_columns",
-            );
+            assert_bounded(&panels.new_line_hidden_columns, "new_line_hidden_columns");
+            assert_bounded(&panels.edit_line_column_order, "edit_line_column_order");
+            assert_bounded(&panels.edit_line_hidden_columns, "edit_line_hidden_columns");
         });
     });
 }
@@ -1598,10 +1580,7 @@ fn test_project_lifecycle_persists_undo_and_state() {
         assert_eq!(project_state.project.station_merges.len(), 1);
         assert_eq!(project_state.project.zero_datums.len(), 1);
 
-        let line = project_state
-            .project
-            .get_line(line_a)
-            .expect("line a");
+        let line = project_state.project.get_line(line_a).expect("line a");
         assert!((line.shots[0].length - 12.5).abs() < f64::EPSILON);
         assert_eq!(line.shots[0].comment.as_deref(), Some("recalc"));
 
@@ -1893,17 +1872,8 @@ fn test_import_lines_persists_deferred_new_project() {
             override_date: None,
             surveyors: None,
         }];
-        let result = import::import_lines(
-            state(&app),
-            lines,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        );
+        let result =
+            import::import_lines(state(&app), lines, None, None, None, None, None, None, None);
         assert_success(&result);
 
         // The command resolved the deferred save: file on disk + in Recent Projects.
@@ -2186,17 +2156,8 @@ fn test_import_lines_without_provenance_params_leaves_receipt_defaults() {
             surveyors: None,
         }];
 
-        let result = import::import_lines(
-            state(&app),
-            lines,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        );
+        let result =
+            import::import_lines(state(&app), lines, None, None, None, None, None, None, None);
         assert_success(&result);
         let receipt = result
             .import_receipt
@@ -2353,17 +2314,8 @@ fn test_import_lines_deferred_save_failure_warns_no_phantom() {
             override_date: None,
             surveyors: None,
         }];
-        let result = import::import_lines(
-            state(&app),
-            lines,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        );
+        let result =
+            import::import_lines(state(&app), lines, None, None, None, None, None, None, None);
 
         // Partial success: the import itself still succeeds, but a warning flags the
         // failed save instead of reporting a phantom "saved".
@@ -2483,17 +2435,8 @@ fn test_import_lines_deferred_save_permission_denied_humanizes_no_marker_leak() 
             override_date: None,
             surveyors: None,
         }];
-        let result = import::import_lines(
-            state(&app),
-            lines,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        );
+        let result =
+            import::import_lines(state(&app), lines, None, None, None, None, None, None, None);
 
         let _ = fs::set_permissions(&locked, fs::Permissions::from_mode(0o755));
 
@@ -2560,17 +2503,8 @@ fn test_import_lines_deferred_save_generic_open_failure_is_not_a_denial() {
             override_date: None,
             surveyors: None,
         }];
-        let result = import::import_lines(
-            state(&app),
-            lines,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        );
+        let result =
+            import::import_lines(state(&app), lines, None, None, None, None, None, None, None);
 
         assert_success(&result);
         assert!(
@@ -4671,7 +4605,7 @@ fn test_export_roundtrip_includes_reference_and_comment() {
 
     let json_contents = fs::read_to_string(&json_path).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json_contents).unwrap();
-    let shot_json = &parsed["sections"][0]["shots"][0];
+    let shot_json = &parsed["lines"][0]["shots"][0];
     assert_eq!(shot_json["kind"], "Jump");
     assert_eq!(shot_json["comment"], "note,with comma");
     assert!(shot_json["lrud"].is_array());
@@ -4997,13 +4931,8 @@ fn test_unresolve_warning_clears_resolved_flag() {
     )
     .unwrap();
 
-    validation::unresolve_warning(
-        state(&app),
-        warning.line_id,
-        warning.shot_id,
-        warning.code,
-    )
-    .unwrap();
+    validation::unresolve_warning(state(&app), warning.line_id, warning.shot_id, warning.code)
+        .unwrap();
 
     let warnings_after = validation::get_project_warnings(state(&app));
     let warning_after = warnings_after
@@ -6233,11 +6162,7 @@ fn test_get_segment_geometry_connected_lines() {
 
     // Line A should have 1 shot line, line B should have 1 shot line
     for s in &geom.lines {
-        assert_eq!(
-            s.shot_lines.len(),
-            1,
-            "Each line has 1 shot → 1 shot line"
-        );
+        assert_eq!(s.shot_lines.len(), 1, "Each line has 1 shot → 1 shot line");
     }
 
     // Coordinates should be relative to line A station 0 (the anchor)

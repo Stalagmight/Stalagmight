@@ -482,7 +482,7 @@ test.describe('Gas planning', () => {
     expect(beyondRange.has(GAS_FAR_KEY)).toBe(false);
     expect(beyondRange.has(lineKey)).toBe(false);
     // ...while the genuinely UNCONNECTED station still goes grey (the conservative
-    // direction the renderer reserves for "not part of this cave line at all").
+    // direction the renderer reserves for "not part of this cave section at all").
     const unconnected = await stationColors(page, UNCONNECTED);
     expect(unconnected.has(grey)).toBe(true);
     expect(unconnected.has(lineKey)).toBe(false);
@@ -798,7 +798,7 @@ test.describe('Gas planning', () => {
     await openMenu();
     await expect(page.locator('[data-testid="display-toggle-showStations"]')).toBeVisible();
     await expect(page.locator('[data-testid="geometry-mode-measured"]')).toBeVisible();
-    await expect(page.locator('[data-testid="display-color-line"]')).toBeVisible();
+    await expect(page.locator('[data-testid="display-color-section"]')).toBeVisible();
     await closeMenu();
 
     // Plan: the visibility toggles remain, but the geometry toggle (closure map is forced) and the
@@ -807,7 +807,7 @@ test.describe('Gas planning', () => {
     await openMenu();
     await expect(page.locator('[data-testid="display-toggle-showStations"]')).toBeVisible();
     await expect(page.locator('[data-testid="geometry-mode-measured"]')).toHaveCount(0);
-    await expect(page.locator('[data-testid="display-color-line"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="display-color-section"]')).toHaveCount(0);
     await closeMenu();
 
     // Export: the Display menu is gone entirely - the Export panel's own controls decide what

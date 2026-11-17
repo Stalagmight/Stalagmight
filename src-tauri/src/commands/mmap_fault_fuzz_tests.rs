@@ -73,7 +73,7 @@ use tempfile::TempDir;
 use super::{export, project, recovery};
 use crate::core::events::EventSink;
 use crate::core::{AppState, Command};
-use crate::models::{Project, LineData, ShotData};
+use crate::models::{LineData, Project, ShotData};
 use crate::persistence::Database;
 
 /// The load needs a sink for its progress events; nothing listens here.

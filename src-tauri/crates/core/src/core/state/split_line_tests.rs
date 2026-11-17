@@ -72,8 +72,7 @@ fn shot_id(state: &AppState, line: LineId, index: usize) -> u32 {
 fn a_station_split_is_one_undo_step_and_redoes() {
     let (state, main) = state();
 
-    let result =
-        state.execute_split_line(main, SplitAt::Station { station_index: 1 }, options());
+    let result = state.execute_split_line(main, SplitAt::Station { station_index: 1 }, options());
     assert!(result.success, "{:?}", result.error);
     let second = result.line_id.unwrap();
     assert_eq!(result.line_ids, vec![main, second]);
@@ -350,8 +349,7 @@ fn a_loop_closure_on_the_split_station_stays_on_the_first_half() {
         .map(|i| raw_xy(&state, StationRef::new(main, i)))
         .collect();
 
-    let result =
-        state.execute_split_line(main, SplitAt::Station { station_index: 2 }, options());
+    let result = state.execute_split_line(main, SplitAt::Station { station_index: 2 }, options());
     assert!(result.success, "{:?}", result.error);
     let second = result.line_id.unwrap();
 
@@ -424,8 +422,7 @@ fn an_ignored_warning_follows_its_shot_into_the_second_half() {
         .unwrap();
     assert_eq!(short_shot_verdicts(&state), vec![(main, true)]);
 
-    let result =
-        state.execute_split_line(main, SplitAt::Station { station_index: 1 }, options());
+    let result = state.execute_split_line(main, SplitAt::Station { station_index: 1 }, options());
     assert!(result.success, "{:?}", result.error);
     let second = result.line_id.unwrap();
     assert_eq!(
@@ -459,8 +456,7 @@ fn a_split_survives_a_save_and_a_reopen() {
         comment: Some("past the cut".to_string()),
     });
     assert!(comment.success, "{:?}", comment.error);
-    let result =
-        state.execute_split_line(main, SplitAt::Station { station_index: 1 }, options());
+    let result = state.execute_split_line(main, SplitAt::Station { station_index: 1 }, options());
     assert!(result.success, "{:?}", result.error);
     let second = result.line_id.unwrap();
     assert!(
@@ -495,8 +491,7 @@ fn a_split_with_no_line_id_left_is_refused() {
     state.set_project_for_tests(project);
     let before = lengths(&state);
 
-    let result =
-        state.execute_split_line(main, SplitAt::Station { station_index: 1 }, options());
+    let result = state.execute_split_line(main, SplitAt::Station { station_index: 1 }, options());
 
     assert!(!result.success);
     assert!(result
@@ -551,8 +546,7 @@ fn a_position_keyed_ignore_follows_its_shot_into_the_second_half() {
         .unwrap();
     assert_eq!(short_shot_verdicts(&state), vec![(main, true)]);
 
-    let result =
-        state.execute_split_line(main, SplitAt::Station { station_index: 1 }, options());
+    let result = state.execute_split_line(main, SplitAt::Station { station_index: 1 }, options());
     assert!(result.success, "{:?}", result.error);
     let second = result.line_id.unwrap();
     assert_eq!(short_shot_verdicts(&state), vec![(second, true)]);
@@ -631,8 +625,7 @@ fn a_refused_split_leaves_position_keyed_ignores_unpinned() {
     }
 
     // The same ignore IS pinned by a split that goes ahead.
-    let result =
-        state.execute_split_line(main, SplitAt::Station { station_index: 1 }, options());
+    let result = state.execute_split_line(main, SplitAt::Station { station_index: 1 }, options());
     assert!(result.success, "{:?}", result.error);
     assert!(ignore_uuids(&state)[0].is_some());
 }
@@ -664,8 +657,7 @@ fn a_cut_inside_a_shot_with_no_shot_id_left_is_refused() {
     assert_eq!(lengths(&state), vec![vec![5.0, 7.0, 3.0]]);
     assert_eq!(state.get_undo_stack().len(), depth);
 
-    let result =
-        state.execute_split_line(main, SplitAt::Station { station_index: 1 }, options());
+    let result = state.execute_split_line(main, SplitAt::Station { station_index: 1 }, options());
     assert!(result.success, "{:?}", result.error);
 }
 
@@ -871,8 +863,7 @@ fn a_plain_split_previews_no_move() {
     assert_eq!(preview.moved_side, None);
     assert_eq!(preview.moved_m, 0.0);
 
-    let refused =
-        state.split_line_preview(main, SplitAt::Station { station_index: 0 }, &options());
+    let refused = state.split_line_preview(main, SplitAt::Station { station_index: 0 }, &options());
     assert!(refused.unwrap_err().contains("first or last station"));
 }
 
@@ -901,7 +892,7 @@ fn adjusted_by_position(state: &AppState) -> std::collections::BTreeMap<(i64, i6
 /// closure-adjusted survey, in either delete path.
 #[test]
 fn a_delete_and_split_keeps_the_component_anchor() {
-    use crate::models::{LoopClosure, Project, LineData, StationMerge};
+    use crate::models::{LineData, LoopClosure, Project, StationMerge};
     for range in [false, true] {
         let mut project = Project::new("Bypass".to_string(), None);
         let add = |project: &mut Project, shots: Vec<ShotData>| {
@@ -926,10 +917,7 @@ fn a_delete_and_split_keeps_the_component_anchor() {
             (c.x, c.y)
         };
         for (line, onto) in [(x, StationRef::new(s, 1)), (w, StationRef::new(s, 5))] {
-            let (to, now) = (
-                raw(&project, onto),
-                raw(&project, StationRef::new(line, 0)),
-            );
+            let (to, now) = (raw(&project, onto), raw(&project, StationRef::new(line, 0)));
             project.adjust_line_offset(line, to.0 - now.0, to.1 - now.1);
             project
                 .merge_stations(onto, StationRef::new(line, 0))
@@ -1285,7 +1273,7 @@ fn texts_at(
 /// closure (from Loop, which leaves station 4 and comes back 1 m short of 2);
 /// and references on its neighbours, a comment on 1 and a name and offset on 3.
 fn loaded_station_state() -> (AppState, LineId, LineId, LineId) {
-    use crate::models::{GpsCoordinates, LoopClosure, Project, LineData};
+    use crate::models::{GpsCoordinates, LineData, LoopClosure, Project};
     let mut project = Project::new("Loaded".to_string(), None);
     let add = |project: &mut Project, name: &str, shots: Vec<ShotData>| {
         project
@@ -1315,10 +1303,7 @@ fn loaded_station_state() -> (AppState, LineId, LineId, LineId) {
         (StationRef::new(main, 2), side),
         (StationRef::new(main, 4), lp),
     ] {
-        let (to, now) = (
-            raw(&project, onto),
-            raw(&project, StationRef::new(line, 0)),
-        );
+        let (to, now) = (raw(&project, onto), raw(&project, StationRef::new(line, 0)));
         project.adjust_line_offset(line, to.0 - now.0, to.1 - now.1);
         project
             .merge_stations(onto, StationRef::new(line, 0))

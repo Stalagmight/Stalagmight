@@ -822,8 +822,7 @@ impl AppState {
                 .lines
                 .iter()
                 .flat_map(|line| {
-                    line
-                        .shots
+                    line.shots
                         .iter()
                         .filter(|shot| shot.kind.is_virtual())
                         .map(|shot| {
@@ -867,11 +866,8 @@ impl AppState {
         // ~second of the phase (build_colocated_groups + station_depths)
         // shows an indeterminate spinner - the per-station callback only
         // fires once the main walk begins.
-        let expected_station_total: u32 = project
-            .lines
-            .iter()
-            .map(|s| s.shots.len() as u32 + 1)
-            .sum();
+        let expected_station_total: u32 =
+            project.lines.iter().map(|s| s.shots.len() as u32 + 1).sum();
         progress.update_phase(LoadingPhase::ComputingStations, 0, expected_station_total);
         let stations =
             project.compute_station_coordinates_with_progress(Some(&mut |current, total| {

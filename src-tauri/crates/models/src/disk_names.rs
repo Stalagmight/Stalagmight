@@ -233,7 +233,10 @@ fn has_line_token(key: &str) -> bool {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used, reason = "test module: a failed unwrap is the assertion")]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: a failed unwrap is the assertion"
+)]
 mod tests {
     use super::*;
     use serde_json::json;
@@ -254,14 +257,23 @@ mod tests {
         to_disk(&mut value);
         assert_eq!(value["type"], "create_section");
         assert_eq!(value["section_id"], 3);
-        assert_eq!(value["data"]["name"], "Main Line", "a user value is never renamed");
-        assert_eq!(value["data"]["comment"], "line_id", "a user value is never renamed");
+        assert_eq!(
+            value["data"]["name"], "Main Line",
+            "a user value is never renamed"
+        );
+        assert_eq!(
+            value["data"]["comment"], "line_id",
+            "a user value is never renamed"
+        );
         assert_eq!(value["key"]["anchor"], "SectionStart");
         assert_eq!(value["credit"]["type"], "section");
         let before: Value =
             serde_json::from_str(value["ProjectSnapshotPair"]["before"].as_str().unwrap()).unwrap();
         assert!(before.get("sections").is_some() && before.get("section_offsets").is_some());
-        assert_eq!(value["ProjectSnapshotPair"]["after"], "", "an empty half stays empty");
+        assert_eq!(
+            value["ProjectSnapshotPair"]["after"], "",
+            "an empty half stays empty"
+        );
         from_disk(&mut value);
         let mut expected = original;
         // The nested document comes back re-serialized; compare it parsed.
@@ -282,7 +294,14 @@ mod tests {
 
     #[test]
     fn the_line_token_check_tells_words_from_letters() {
-        for yes in ["line_id", "lines", "lineIds", "CreatedLineSnapshot", "LINE", "per_line"] {
+        for yes in [
+            "line_id",
+            "lines",
+            "lineIds",
+            "CreatedLineSnapshot",
+            "LINE",
+            "per_line",
+        ] {
             assert!(has_line_token(yes), "{yes}");
         }
         for no in ["polyline", "baseline", "outline_width", "Linear", "online"] {

@@ -1,8 +1,8 @@
 use super::AppState;
 use crate::core::{Command, CommandResult};
 use crate::models::{
-    AzimuthReference, ClosureStrategy, Coordinates, Project, LineData, LineId, ShotData,
-    ShotKind, StationRef, FEATURE_ID_STRIDE, MAX_LINES_IN_ID_SPACE, MAX_LINE_ID,
+    AzimuthReference, ClosureStrategy, Coordinates, LineData, LineId, Project, ShotData, ShotKind,
+    StationRef, FEATURE_ID_STRIDE, MAX_LINES_IN_ID_SPACE, MAX_LINE_ID,
 };
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -472,8 +472,7 @@ impl AppState {
                         if update.line_id != sid {
                             continue;
                         }
-                        if let Some(idx) = line.shots.iter().position(|s| s.id == update.shot_id)
-                        {
+                        if let Some(idx) = line.shots.iter().position(|s| s.id == update.shot_id) {
                             modified_indices.push(idx as u32);
                         }
                     }
@@ -604,14 +603,8 @@ impl AppState {
                     if blocked_lines.contains(&update.line_id) {
                         continue;
                     }
-                    if let Some(line) = project
-                        .lines
-                        .iter_mut()
-                        .find(|s| s.id == update.line_id)
-                    {
-                        if let Some(shot) =
-                            line.shots.iter_mut().find(|s| s.id == update.shot_id)
-                        {
+                    if let Some(line) = project.lines.iter_mut().find(|s| s.id == update.line_id) {
+                        if let Some(shot) = line.shots.iter_mut().find(|s| s.id == update.shot_id) {
                             let old_len = shot.length;
                             if let Some(v) = update.updates.azimuth_in {
                                 shot.azimuth_in = v;
@@ -882,9 +875,7 @@ impl AppState {
             // toggle") disagree about that, and about which end the least-squares gauge pins.
             if config.reverse || declared_reference.is_some() {
                 if let Ok(mut guard) = self.project.lock() {
-                    if let Some(line) =
-                        guard.as_mut().and_then(|p| p.get_line_mut(line_id))
-                    {
+                    if let Some(line) = guard.as_mut().and_then(|p| p.get_line_mut(line_id)) {
                         if config.reverse {
                             line.reverse_parity = !line.reverse_parity;
                         }

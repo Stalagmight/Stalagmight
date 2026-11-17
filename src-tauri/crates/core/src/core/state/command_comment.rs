@@ -157,10 +157,7 @@ impl AppState {
                     .key_for_ref(*station_ref)
                     .and_then(|key| project.station_comments.get(&key).cloned()))
             }
-            CommentHolder::Shot {
-                line_id,
-                shot_id,
-            } => {
+            CommentHolder::Shot { line_id, shot_id } => {
                 let line = project
                     .get_line(*line_id)
                     .ok_or_else(|| format!("Line {line_id} not found"))?;
@@ -194,10 +191,7 @@ impl AppState {
                 }
                 Ok(())
             }
-            CommentHolder::Shot {
-                line_id,
-                shot_id,
-            } => {
+            CommentHolder::Shot { line_id, shot_id } => {
                 let line = project
                     .get_line_mut(*line_id)
                     .ok_or_else(|| format!("Line {line_id} not found"))?;

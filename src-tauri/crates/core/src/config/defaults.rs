@@ -1,11 +1,11 @@
 use super::{
     AngleUnit, AppearanceConfig, CacheConfig, ClosureAdjustmentConfig, Config, DebugConfig,
     DecimalPrecision, DisplayConfig, ExportConfig, GasConfig, GeneralConfig, GlobalViewConfig,
-    GpsOrigin, ImportConfig, LengthUnit, LoggingConfig, MapAnimationConfig, MapConfig,
-    MapControlsConfig, MapPaletteConfig, MapSnapConfig, PanelsConfig, PeopleConfig,
-    PlacementSuggestionConfig, LineColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig,
-    SpeleoDbConfig, StationConfig, SyntacticHighlightingConfig, UnitsConfig, UpdateTrack,
-    ValidationConfig, WebkitMemoryConfig,
+    GpsOrigin, ImportConfig, LengthUnit, LineColorsConfig, LoggingConfig, MapAnimationConfig,
+    MapConfig, MapControlsConfig, MapPaletteConfig, MapSnapConfig, PanelsConfig, PeopleConfig,
+    PlacementSuggestionConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig, SpeleoDbConfig,
+    StationConfig, SyntacticHighlightingConfig, UnitsConfig, UpdateTrack, ValidationConfig,
+    WebkitMemoryConfig,
 };
 
 #[expect(clippy::derivable_impls)]

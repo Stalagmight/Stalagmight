@@ -8,9 +8,9 @@ use std::collections::HashMap;
 use super::AppState;
 use crate::core::Command;
 use crate::models::{
-    gps_to_local, local_to_gps, ClosureStrategy, CombineJoinEnds, CombinePick,
-    CombineLinesOptions, DatumRole, GpsCoordinates, Project, LineEnd, LineId, ShotData,
-    StationRef, SurveyDirection, DATUM_GPS_GAP, DATUM_GPS_GAP_START,
+    gps_to_local, local_to_gps, ClosureStrategy, CombineJoinEnds, CombineLinesOptions, CombinePick,
+    DatumRole, GpsCoordinates, LineEnd, LineId, Project, ShotData, StationRef, SurveyDirection,
+    DATUM_GPS_GAP, DATUM_GPS_GAP_START,
 };
 
 const ORIGIN: (f64, f64) = (20.5, -87.25);
@@ -614,7 +614,7 @@ fn accuracy_survives_the_batch_command_path() {
         "type": "batch",
         "commands": [{
             "type": "set_zero_datum",
-            "station_ref": { "section_id": b, "station_index": 5 },
+            "station_ref": { "line_id": b, "station_index": 5 },
             "coordinates": {
                 "latitude": fix.latitude,
                 "longitude": fix.longitude,

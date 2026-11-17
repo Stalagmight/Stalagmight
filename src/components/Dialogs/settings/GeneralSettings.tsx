@@ -168,7 +168,7 @@ export function GeneralSettings({
     >
       <h2 className="text-lg font-medium mb-4">{t('settings.general.title')}</h2>
 
-      <SettingsSection title={t('settings.general.sections.language')} data-testid="line-language">
+      <SettingsSection title={t('settings.general.sections.language')} data-testid="section-language">
         <SettingRow
           label={t('settings.general.language.label')}
           helpText={t('settings.general.language.help')}
@@ -237,7 +237,7 @@ export function GeneralSettings({
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title={t('settings.general.sections.saving')} data-testid="line-saving">
+      <SettingsSection title={t('settings.general.sections.saving')} data-testid="section-saving">
         <SettingRow
           label={t('settings.general.autoSave.label')}
           helpText={t('settings.general.autoSave.help')}
@@ -275,7 +275,7 @@ export function GeneralSettings({
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title={t('settings.general.sections.recentProjects')} data-testid="line-recent">
+      <SettingsSection title={t('settings.general.sections.recentProjects')} data-testid="section-recent">
         <SettingRow
           label={t('settings.general.recentProjectsMax.label')}
           helpText={t('settings.general.recentProjectsMax.help')}
@@ -297,7 +297,7 @@ export function GeneralSettings({
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title={t('settings.general.sections.undoHistory')} data-testid="line-undo">
+      <SettingsSection title={t('settings.general.sections.undoHistory')} data-testid="section-undo">
         <SettingRow
           label={t('settings.general.undoHistoryLimit.label')}
           helpText={t('settings.general.undoHistoryLimit.help')}
@@ -339,7 +339,7 @@ export function GeneralSettings({
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title={t('settings.general.sections.feedback')} data-testid="line-feedback">
+      <SettingsSection title={t('settings.general.sections.feedback')} data-testid="section-feedback">
         <SettingRow
           label={t('settings.general.shortcutFeedback.label')}
           helpText={t('settings.general.shortcutFeedback.help')}
@@ -364,7 +364,7 @@ export function GeneralSettings({
       </SettingsSection>
 
 
-      <SettingsSection title={t('settings.general.sections.startup')} data-testid="line-startup">
+      <SettingsSection title={t('settings.general.sections.startup')} data-testid="section-startup">
         <SettingRow
           label={t('settings.general.splashScreen.label')}
           helpText={t('settings.general.splashScreen.help')}
@@ -417,7 +417,7 @@ export function GeneralSettings({
       </SettingsSection>
 
       {isTelemetryAvailable() && (
-        <SettingsSection title={t('settings.general.sections.privacy', 'Privacy')} data-testid="line-privacy">
+        <SettingsSection title={t('settings.general.sections.privacy', 'Privacy')} data-testid="section-privacy">
           <SettingRow
             label={t('settings.general.telemetry.label', 'Share anonymous usage statistics')}
             helpText={t('settings.general.telemetry.help', 'Help improve Stalagmight by sharing which features you use. No personal data or survey content is collected.')}
@@ -436,7 +436,7 @@ export function GeneralSettings({
         </SettingsSection>
       )}
 
-      <SettingsSection title={t('settings.general.sections.updates')} data-testid="line-updates">
+      <SettingsSection title={t('settings.general.sections.updates')} data-testid="section-updates">
         <SettingRow
           label={t('settings.general.updateCheck.label')}
           helpText={t('settings.general.updateCheck.help')}

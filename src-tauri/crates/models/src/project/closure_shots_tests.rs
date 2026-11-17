@@ -6,7 +6,7 @@
 use crate::config::ClosureAdjustmentConfig;
 use crate::{
     closure_across_one_shot_refusal, ClosureAcrossOneShot, ClosureStrategy, GpsCoordinates,
-    LoopClosure, Project, LineData, LineId, ShotData, Station, StationRef,
+    LineData, LineId, LoopClosure, Project, ShotData, Station, StationRef,
 };
 
 fn shot(azimuth: f64, length: f64) -> ShotData {
