@@ -61,8 +61,15 @@ fn same_place(a: Option<(f64, f64)>, b: Option<(f64, f64)>) -> bool {
         if (a.0 - b.0).abs() <= Project::OFFSET_DUST_M && (a.1 - b.1).abs() <= Project::OFFSET_DUST_M)
 }
 
-/// How many ranks [`likeness`] has: five tiers, each split by the stored value.
-const RANKS: usize = 10;
+/// How many tiers [`likeness`] has, and how many ranks: each tier split by
+/// the stored value.
+const TIERS: usize = 5;
+const RANKS: usize = 2 * TIERS;
+
+/// The most earlier-by-current cells [`DatumLayout::unplaced`] aligns (a
+/// byte of steps each, 4 MB). Past it, thousands of datums changed in one
+/// command, it places every placement datum it could not pair as it stands.
+const ALIGN_CELLS: usize = 1 << 22;
 
 /// How alike an earlier datum and a current one are, as a rank from 0 (the
 /// strongest) to `RANKS - 1`, or `None` when neither the station key nor the
@@ -79,7 +86,7 @@ const RANKS: usize = 10;
 /// command that moves or re-keys a datum does not edit it, but a Batch, which
 /// settles once for several commands, can do both.
 fn likeness(was: &DatumWas, now: &DatumWas) -> Option<usize> {
-    let tier = match (
+    let tier: usize = match (
         same_gps(&was.gps, &now.gps),
         was.key == now.key,
         same_place(was.at, now.at),
@@ -88,7 +95,7 @@ fn likeness(was: &DatumWas, now: &DatumWas) -> Option<usize> {
         (true, false, true) => 1,
         (true, true, false) => 2,
         (true, false, false) => 3,
-        (false, true, _) => 4,
+        (false, true, _) => TIERS - 1,
         (false, false, _) => return None,
     };
     let same_value = was.accuracy == now.accuracy && was.entrance == now.entrance;
@@ -120,7 +127,7 @@ enum Step {
 /// appends a new datum at the end of the list, so a current datum is left
 /// new only when no earlier one explains it as well.
 ///
-/// `O(before * after)` time and steps (one byte each).
+/// `O(before * after)` time, and as many steps (one byte each).
 pub(super) fn align(
     before: usize,
     after: usize,
@@ -128,15 +135,18 @@ pub(super) fn align(
 ) -> Vec<Option<usize>> {
     let mut steps = vec![Step::Added; before * after];
     // `next[j]` is the best score of earlier datums `i + 1..` against current
-    // ones `j..`: an alignment of the suffixes, built from the end.
+    // ones `j..`, and `row[j]` that of `i..`: the suffixes, from the end.
     let mut next: Vec<Score> = vec![[0; RANKS]; after + 1];
+    let mut row = next.clone();
     for i in (0..before).rev() {
-        let mut row: Vec<Score> = vec![[0; RANKS]; after + 1];
         for j in (0..after).rev() {
             let mut best = (next[j], Step::Dropped);
             if let Some(r) = rank(i, j) {
+                debug_assert!(r < RANKS, "likeness rank {r} is past RANKS");
                 let mut paired = next[j + 1];
-                paired[r] += 1;
+                if let Some(count) = paired.get_mut(r) {
+                    *count += 1;
+                }
                 if paired >= best.0 {
                     best = (paired, Step::Pair);
                 }
@@ -147,7 +157,7 @@ pub(super) fn align(
             row[j] = best.0;
             steps[i * after + j] = best.1;
         }
-        next = row;
+        std::mem::swap(&mut next, &mut row);
     }
     let mut earlier = vec![None; after];
     let (mut i, mut j) = (0, 0);
@@ -178,6 +188,8 @@ impl DatumLayout {
     /// order-preserving alignment ([`align`] over [`likeness`]). That tells
     /// twins apart (two datums with one GPS, copied coordinates) that a
     /// combine re-keys one onto the other's key, even with one stored value.
+    /// Untouched datums at either end of the lists pair as they stand, so
+    /// only the few a command changed are aligned.
     ///
     /// Key and GPS alone are not enough. Deleting a section's first shot drops
     /// the datum on its first station and re-anchors the next station's datum
@@ -185,35 +197,69 @@ impl DatumLayout {
     /// too: either way the promoted datum would pass for the placement datum
     /// it replaced. The position settles it, since neither moves a station.
     ///
-    /// A placement datum paired with an earlier placement datum still counts
-    /// as unplaced when an earlier datum the alignment dropped, not a
-    /// placement datum, is as alike: placing it moves nothing when its piece
-    /// already sits on that GPS. A datum that matches no earlier one is new
-    /// (its command placed it already).
+    /// A placement datum paired, not untouched, with an earlier placement
+    /// datum still counts as unplaced when the alignment left out an earlier
+    /// datum that was not a placement datum and could be it as well: one as
+    /// alike, or its twin (key and position say little once twins are both
+    /// re-keyed and moved). Placing it moves nothing when its piece already
+    /// sits on that GPS. A datum that matches no earlier one is new (its
+    /// command placed it already).
     fn unplaced(&self, now: &DatumLayout) -> Vec<usize> {
-        let rank = |i: usize, j: usize| likeness(&self.datums[i], &now.datums[j]);
-        let earlier = align(self.datums.len(), now.datums.len(), rank);
-        let mut paired = vec![false; self.datums.len()];
+        let (was, is) = (&self.datums, &now.datums);
+        let rank = |i: usize, j: usize| likeness(&was[i], &is[j]);
+        let untouched = |i: usize, j: usize| rank(i, j).is_some_and(|r| r < 2);
+        let head = (0..was.len().min(is.len()))
+            .take_while(|&k| untouched(k, k))
+            .count();
+        let tail = (0..(was.len() - head).min(is.len() - head))
+            .take_while(|&k| untouched(was.len() - 1 - k, is.len() - 1 - k))
+            .count();
+        let (was_end, is_end) = (was.len() - tail, is.len() - tail);
+        let mut earlier: Vec<Option<usize>> = (0..is.len())
+            .map(|j| {
+                if j < head {
+                    Some(j)
+                } else if j >= is_end {
+                    Some(j - is_end + was_end)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let (middle_was, middle_is) = (was_end - head, is_end - head);
+        let aligned = middle_was.saturating_mul(middle_is) <= ALIGN_CELLS;
+        if aligned {
+            let middle = align(middle_was, middle_is, |i, j| rank(head + i, head + j));
+            for (j, i) in middle.into_iter().enumerate() {
+                earlier[head + j] = i.map(|i| head + i);
+            }
+        } else {
+            warn!(
+                earlier = middle_was,
+                current = middle_is,
+                purpose = "match the datums before and after a command",
+                "Too many changed datums to align; placing every placement datum among them"
+            );
+        }
+        let mut paired = vec![false; was.len()];
         for i in earlier.iter().flatten() {
             paired[*i] = true;
         }
-        let placement = |was: &DatumWas| was.role == Some(DatumRole::Placement);
-        now.datums
-            .iter()
-            .zip(&earlier)
-            .enumerate()
-            .filter(|(_, (datum, _))| placement(datum))
-            .filter(|(j, (_, was))| {
-                was.is_some_and(|i| {
-                    !placement(&self.datums[i])
-                        || (0..self.datums.len()).any(|other| {
-                            !paired[other]
-                                && !placement(&self.datums[other])
-                                && rank(other, *j).is_some_and(|r| Some(r) <= rank(i, *j))
-                        })
-                })
+        let placement = |d: &DatumWas| d.role == Some(DatumRole::Placement);
+        let doubted = |i: usize, j: usize| {
+            (0..was.len()).any(|o| {
+                !paired[o]
+                    && !placement(&was[o])
+                    && rank(o, j)
+                        .is_some_and(|r| same_gps(&was[o].gps, &is[j].gps) || Some(r) <= rank(i, j))
             })
-            .map(|(j, _)| j)
+        };
+        (0..is.len())
+            .filter(|&j| placement(&is[j]))
+            .filter(|&j| match earlier[j] {
+                Some(i) => !placement(&was[i]) || (!untouched(i, j) && doubted(i, j)),
+                None => !aligned && (head..is_end).contains(&j),
+            })
             .collect()
     }
 

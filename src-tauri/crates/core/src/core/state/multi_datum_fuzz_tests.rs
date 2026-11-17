@@ -105,7 +105,7 @@ const EXACT_M: f64 = 1e-9;
 /// `datum-key-reused` (Delete Shot re-anchoring a fix onto the removed
 /// datum's key, or a combine re-keying one of two twins, a placement and a
 /// fix with one GPS, onto the key of the other), both fixed in
-/// `DatumLayout::was_unplaced`; and
+/// `DatumLayout::unplaced`; and
 /// `datum-twin-station` (Combine Sections joining two stations that each
 /// hold a datum), now refused; and `hard-fix-no-unknowns` (a hard fix in a
 /// component with no unknown left), now applied; and `frame-gps-edit` (a new
@@ -570,9 +570,9 @@ impl Chain {
 /// A datum that was not a placement before (a fix, or under a key no datum
 /// had) is one now, and shares its GPS (lat/lon bits) with a datum that was
 /// a placement before under another key, without being that datum re-keyed
-/// (the other one is still there, or this one was a fix):
-/// `DatumLayout::was_unplaced` matches datums by GPS as well as by key, so
-/// it takes this one for the placement it twins and never places it.
+/// (the other one is still there, or this one was a fix): the settle would
+/// have taken this one for the placement it twins and never placed it
+/// (`DatumLayout::unplaced` pairs datums by their list order, #778).
 fn promoted_twin(before: &Snap, p: &Project) -> bool {
     p.zero_datums
         .iter()
