@@ -14,7 +14,7 @@ use tauri_plugin_opener::OpenerExt;
 /// The user guide (`docs/user-guide/`), read on GitHub while the website does
 /// not publish it (#792). Point back at the website's `/docs/` once it does.
 const USER_GUIDE_URL: &str =
-    "https://github.com/Stalagmight/Stalagmight/tree/master/docs/user-guide";
+    "https://github.com/Stalagmight/Stalagmight/blob/master/docs/user-guide/index.md";
 const REPORT_ISSUE_URL: &str = "https://github.com/Stalagmight/Stalagmight/issues/new";
 
 /// Asks the frontend to open the keyboard shortcuts dialog. The listener is

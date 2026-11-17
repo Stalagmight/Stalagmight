@@ -59,6 +59,11 @@ How to use Stalagmight. Pages link to each other.
 Every page here except this README is published at
 <https://stalagmight.com/docs/> within six hours of reaching `master`.
 
+> [!NOTE]
+> Publishing is switched off on the website for now (#792), so the app's
+> **Help > Stalagmight Help** opens `index.md` on GitHub instead. Switch the
+> app back when the website publishes the guide again.
+
 - Start each page with front matter:
 
   ```yaml
