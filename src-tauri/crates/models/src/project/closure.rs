@@ -98,6 +98,12 @@ impl Project {
     /// component is one of them and the component holds no GPS fix (#741),
     /// there is nothing to solve and this returns `Ok(())` without touching
     /// the project.
+    ///
+    /// The solve ties every snapped closure of the component as one point,
+    /// as it ties a merge (#736, [`Self::closure_is_snap`]), so the view
+    /// keeps a pair the Raw Data View holds rigid together. A snap alone is
+    /// nothing to solve: a component whose only closures are snaps is left
+    /// as measured, as before.
     pub fn adjust_loop_closures(
         &mut self,
         anchor_station: StationRef,
@@ -194,9 +200,29 @@ impl Project {
             return Ok(());
         }
 
+        // What the solve ties as one point besides the merges: the closures
+        // above and every snapped closure of the component (#736), which the
+        // Raw Data View holds rigid like a merge, in list order and without
+        // the ones the across-one-shot sweep skips. A snap gives the
+        // component nothing to solve, so it is not in `closures`, which
+        // decided above whether there is anything to do.
+        let ties: Vec<LoopClosure> = self
+            .loop_closures
+            .iter()
+            .filter(|lc| {
+                component.contains(&lc.station_a.section_id)
+                    && component.contains(&lc.station_b.section_id)
+                    && !skipped.contains(&lc.id)
+                    && (lc.strategy == method
+                        || lc.strategy == ClosureStrategy::Batch
+                        || Self::closure_is_snap(lc.strategy, lc.is_aligned))
+            })
+            .cloned()
+            .collect();
+
         match method {
             ClosureStrategy::LeastSquaresWeighted => {
-                self.adjust_least_squares(&component, &closures, anchor_station, config)?;
+                self.adjust_least_squares(&component, &ties, anchor_station, config)?;
             }
             _ => {
                 return Err("Unsupported adjustment method".to_string());

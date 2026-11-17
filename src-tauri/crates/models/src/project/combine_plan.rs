@@ -129,6 +129,17 @@ impl ClosureFacts {
     }
 }
 
+/// How the solve of the joined survey takes a closure of
+/// `Project::joined_sweep`: as one it solves (a closure it takes now, a snap
+/// the combine makes ordinary, or a torn merge), or as a snap the combine
+/// leaves snapped, which it only ties as one point (#736) and which gives a
+/// survey nothing to solve.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Swept {
+    Solved,
+    Snap,
+}
+
 /// The point two sections are joined at, from the kept section's side.
 #[derive(Debug, Clone)]
 pub(crate) struct JoinPoint {
@@ -671,12 +682,24 @@ impl Project {
     /// The across-one-shot sweep of the survey this combine joins - the
     /// combined project's `closure_knots`, run on this one: every merge but
     /// the `torn` ones, the two join stations as the one station they become,
-    /// then the closures in `loop_closures` order (the join's own gone, the
-    /// `snaps` made ordinary taking part), then the torn merges as the `Batch`
+    /// then the closures the solve ties in `loop_closures` order (the join's
+    /// own gone, the `snaps` made ordinary taking part, and every snap the
+    /// combine leaves snapped, #736), then the torn merges as the `Batch`
     /// closures `tear_ties` appends. Calls `visit` with each closure the solve
-    /// would see, in that order, and whether it would skip it (it collapses a
-    /// shot); a skipped one unites nothing, as in the real sweep. Stops when
-    /// `visit` returns false. `O(n)`.
+    /// would see, in that order, how it takes it ([`Swept`]), and whether it
+    /// would skip it (it collapses a shot); a skipped one unites nothing, as
+    /// in the real sweep. Stops when `visit` returns false. `O(n)`.
+    ///
+    /// A snap the combine's dedupe drops for a LATER closure the solve takes
+    /// on the same two stations ([`Self::snaps_the_dedupe_defers`]) is not
+    /// swept where it stands: in the combined project it is gone and that
+    /// later closure ties the pair, at its own place. It is visited last
+    /// instead. By then its pair is joined, unless every such later closure
+    /// collapsed a shot - and then the two knots still have that shot between
+    /// them (nothing checked can join two knots a shot runs between), so the
+    /// snap is skipped too and the combine removes it with them, as it would
+    /// otherwise outlive the closures it was dropped for and tie the pair
+    /// where it stands.
     ///
     /// The one model of the joined survey the anchor rule
     /// ([`Self::joined_survey_is_solved`]) and the closures the combine
@@ -688,7 +711,7 @@ impl Project {
         closures: &[ResolvedClosure],
         torn: &HashSet<TieId>,
         snaps: &HashSet<TieId>,
-        mut visit: impl FnMut(Tie, bool) -> bool,
+        mut visit: impl FnMut(Tie, Swept, bool) -> bool,
     ) {
         let mut knots = Knots::new(self);
         let merges = || ties.iter().filter(|t| matches!(t.id, TieId::Merge(_)));
@@ -696,44 +719,113 @@ impl Project {
             knots.join(tie.a, tie.b);
         }
         knots.join(join.join_k, join.join_o);
-        let mut sweep = |knots: &mut Knots, tie: Tie| -> bool {
+        let mut sweep = |knots: &mut Knots, tie: Tie, swept: Swept| -> bool {
             let skipped = knots.collapsed_shot(tie.a, tie.b).is_some();
             if !skipped {
                 knots.join(tie.a, tie.b);
             }
-            visit(tie, skipped)
+            visit(tie, swept, skipped)
         };
+        let deferred_ids = Self::snaps_the_dedupe_defers(join, ties, closures, torn, snaps);
+        let mut deferred: Vec<Tie> = Vec::new();
         for closure in closures {
             if join.is_join_tie(closure.a, closure.b) {
                 continue; // the combine removes it
             }
             let id = TieId::Closure(closure.id);
-            if !(closure.eligible || snaps.contains(&id)) {
+            let swept = if closure.eligible || snaps.contains(&id) {
+                Swept::Solved
+            } else if Self::closure_is_snap(closure.strategy, closure.aligned) {
+                Swept::Snap
+            } else {
                 continue;
-            }
+            };
             let tie = Tie {
                 id,
                 a: closure.a,
                 b: closure.b,
             };
-            if !sweep(&mut knots, tie) {
+            if swept == Swept::Snap && deferred_ids.contains(&closure.id) {
+                deferred.push(tie);
+                continue;
+            }
+            if !sweep(&mut knots, tie, swept) {
                 return;
             }
         }
         for tie in merges().filter(|t| torn.contains(&t.id)) {
-            if !sweep(&mut knots, *tie) {
+            if !sweep(&mut knots, *tie, Swept::Solved) {
+                return;
+            }
+        }
+        for tie in deferred {
+            if !sweep(&mut knots, tie, Swept::Snap) {
                 return;
             }
         }
     }
 
+    /// The snaps the combine leaves snapped (not in `snaps`, which it makes
+    /// ordinary, and not the join's own) whose two stations, once the two join
+    /// stations are one, are those of a LATER closure the solve takes in the
+    /// combined closure list: a closure it takes now, a snap made ordinary, or
+    /// a torn merge (`tear_ties` appends those). The combine's dedupe keeps
+    /// the first closure the solve takes on two stations
+    /// (`closure_dedupe`), so it drops each of these, and the pair is tied
+    /// where that later closure stands, not where the snap stands
+    /// ([`Self::joined_sweep`]). Only closures with a station on the combined
+    /// section are deduped. `O(closures)`.
+    fn snaps_the_dedupe_defers(
+        join: &JoinPoint,
+        ties: &[Tie],
+        closures: &[ResolvedClosure],
+        torn: &HashSet<TieId>,
+        snaps: &HashSet<TieId>,
+    ) -> HashSet<u64> {
+        let joined = |at: StationRef| if at == join.join_o { join.join_k } else { at };
+        let on_combined = |a: StationRef, b: StationRef| {
+            [a, b]
+                .iter()
+                .any(|at| at.section_id == join.kept || at.section_id == join.other)
+        };
+        let pair = |a: StationRef, b: StationRef| {
+            let (a, b) = (joined(a), joined(b));
+            if a <= b {
+                (a, b)
+            } else {
+                (b, a)
+            }
+        };
+        let mut later: HashSet<(StationRef, StationRef)> = ties
+            .iter()
+            .filter(|t| torn.contains(&t.id) && on_combined(t.a, t.b))
+            .map(|t| pair(t.a, t.b))
+            .collect();
+        let mut deferred = HashSet::new();
+        for closure in closures.iter().rev() {
+            if join.is_join_tie(closure.a, closure.b) || !on_combined(closure.a, closure.b) {
+                continue;
+            }
+            let at = pair(closure.a, closure.b);
+            if closure.eligible || snaps.contains(&TieId::Closure(closure.id)) {
+                later.insert(at);
+            } else if Self::closure_is_snap(closure.strategy, closure.aligned)
+                && later.contains(&at)
+            {
+                deferred.insert(closure.id);
+            }
+        }
+        deferred
+    }
+
     /// Would the closure-adjusted view solve the survey this combine joins,
     /// were `torn` merges torn and `snaps` snapped closures made ordinary
     /// (the plain plan's, where the other section moves)? Solved when one
-    /// closure in `component` takes part in the joined survey's sweep
-    /// ([`Self::joined_sweep`]) without collapsing a shot - what
-    /// `plan_adjustment_anchors` asks of the combined project. Reached only
-    /// for a shifting plan with something to solve.
+    /// closure in `component` that the solve takes (not a snap, which only
+    /// ties) takes part in the joined survey's sweep ([`Self::joined_sweep`])
+    /// without collapsing a shot - what `plan_adjustment_anchors` asks of the
+    /// combined project. Reached only for a shifting plan with something to
+    /// solve.
     fn joined_survey_is_solved(
         &self,
         join: &JoinPoint,
@@ -744,8 +836,9 @@ impl Project {
         snaps: &HashSet<TieId>,
     ) -> bool {
         let mut solved = false;
-        self.joined_sweep(join, ties, closures, torn, snaps, |tie, skipped| {
+        self.joined_sweep(join, ties, closures, torn, snaps, |tie, swept, skipped| {
             solved = !skipped
+                && swept == Swept::Solved
                 && component.contains(&tie.a.section_id)
                 && component.contains(&tie.b.section_id);
             !solved
@@ -764,8 +857,10 @@ impl Project {
     /// read one answer.
     ///
     /// Nothing changes for the sweep when no tie tears and the join stations
-    /// are already one point (merged), or when no closure is solved at all:
-    /// then this is empty without the `O(n)` sweep.
+    /// are already one point (merged), unless the dedupe drops a snap there
+    /// for a later closure ([`Self::snaps_the_dedupe_defers`]), or when the
+    /// solve ties no closure at all: then this is empty without the `O(n)`
+    /// sweep.
     fn joined_across_one_shot(
         &self,
         join: &JoinPoint,
@@ -774,8 +869,17 @@ impl Project {
         facts: &ClosureFacts,
     ) -> Vec<(Tie, CombineRemovedKind)> {
         let closures = facts.closures(self);
-        if torn_ties.is_empty() && (join.merged || !closures.iter().any(|c| c.eligible)) {
-            return Vec::new();
+        if torn_ties.is_empty() {
+            let tied = closures
+                .iter()
+                .any(|c| c.eligible || Self::closure_is_snap(c.strategy, c.aligned));
+            let none = HashSet::new();
+            if !tied
+                || (join.merged
+                    && Self::snaps_the_dedupe_defers(join, ties, closures, &none, &none).is_empty())
+            {
+                return Vec::new();
+            }
         }
         let torn: HashSet<TieId> = torn_ties
             .iter()
@@ -789,23 +893,31 @@ impl Project {
             .collect();
         let skipped_now = facts.skipped(self);
         let mut dropped = Vec::new();
-        self.joined_sweep(join, ties, closures, &torn, &snaps, |tie, skipped| {
-            if skipped {
-                let kind = match tie.id {
-                    TieId::Merge(_) => Some(CombineRemovedKind::Merge),
-                    // Skipped already (an eligible snap counts): it carries
-                    // its own warning, and the combine answers only for what
-                    // it causes.
-                    TieId::Closure(id) if skipped_now.contains(&id) => None,
-                    TieId::Closure(_) if snaps.contains(&tie.id) => {
-                        Some(CombineRemovedKind::SnappedClosure)
-                    }
-                    TieId::Closure(_) => Some(CombineRemovedKind::LoopClosure),
-                };
-                dropped.extend(kind.map(|kind| (tie, kind)));
-            }
-            true
-        });
+        self.joined_sweep(
+            join,
+            ties,
+            closures,
+            &torn,
+            &snaps,
+            |tie, swept, skipped| {
+                if skipped {
+                    let kind = match tie.id {
+                        TieId::Merge(_) => Some(CombineRemovedKind::Merge),
+                        // Skipped already (an eligible snap counts): it carries
+                        // its own warning, and the combine answers only for what
+                        // it causes.
+                        TieId::Closure(id) if skipped_now.contains(&id) => None,
+                        // Made ordinary by this combine, or left snapped (#736).
+                        TieId::Closure(_) if snaps.contains(&tie.id) || swept == Swept::Snap => {
+                            Some(CombineRemovedKind::SnappedClosure)
+                        }
+                        TieId::Closure(_) => Some(CombineRemovedKind::LoopClosure),
+                    };
+                    dropped.extend(kind.map(|kind| (tie, kind)));
+                }
+                true
+            },
+        );
         dropped
     }
 

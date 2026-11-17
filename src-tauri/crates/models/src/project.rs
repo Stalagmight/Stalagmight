@@ -84,6 +84,12 @@ mod closure_shots_tests;
     clippy::unwrap_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
+mod closure_snap_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
 mod closure_sweep_tests;
 #[cfg(test)]
 #[expect(

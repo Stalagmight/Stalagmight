@@ -711,18 +711,6 @@ pub(super) fn adjusted(project: &Project) -> HashMap<StationRef, (f64, f64)> {
         .collect()
 }
 
-/// `project` with every snapped (Move) closure counted as an ordinary one,
-/// so the solve holds a snapped pair together as the survey does.
-fn with_snaps(project: &Project) -> Project {
-    let mut copy = project.clone();
-    for closure in &mut copy.loop_closures {
-        if closure.strategy == ClosureStrategy::Move {
-            closure.strategy = ClosureStrategy::Batch;
-        }
-    }
-    copy
-}
-
 /// Add an ordinary loop closure between `a` and `b`, so the solve holds them
 /// on one point.
 fn tie(project: &mut Project, a: StationRef, b: StationRef) {
@@ -993,26 +981,44 @@ pub(super) fn check_combined(
     // (two surveys joined are held at one point from then on), and only where
     // both views solved (a failed solve shows the measured geometry).
     //
-    // The solve leaves some coincident pairs untied: a snapped (Move) closure
-    // and two side-by-side ends. Another loop's adjustment can then pull such
-    // a pair apart in the view, and a combine that joins or demotes one holds
-    // it together again: that drift is the view's own (reported separately),
-    // not the combine's. So the "before" view ties them too: every snapped
-    // closure counts (`with_snaps`, both sides), and a co-located join gets a
-    // closure. With those tied, a combine never turns a solving survey into a
-    // failing one either (a demoted snap can expose the solver's own limit, a
-    // closure group holding both ends of one shot; the same survey hits it
-    // before the combine once its snaps count).
+    // The solve leaves one kind of coincident pair untied: two side-by-side
+    // ends. Another loop's adjustment can then pull such a pair apart in the
+    // view, and a combine that joins one holds it together again: that drift
+    // is the view's own (documented: the two are not merged), not the
+    // combine's. So the "before" view ties a co-located join with a closure.
+    // A snapped closure is tied by the solve itself (#736), as a merge is, so
+    // both views are compared as the app draws them, snaps included. A snap
+    // the plan tears becomes the ordinary closure the combine makes of it
+    // (`tear_ties`): the side that moves takes its two stations apart by the
+    // shift, and the solve closes that loop from then on, so the "before"
+    // view counts it as that closure.
     //
-    // Likewise a join closure whose strategy the solve does not take (a
-    // legacy one, which the passage sweep plants; `with_snaps` has already
-    // made the snapped ones ordinary) leaves the two join stations apart in
-    // the view, and the combine puts them on one point: the "before" view
-    // counts it as an ordinary closure. Only such a closure: any other is
-    // compared as the solve takes it, as before #746. One the solve skips (it
-    // joins the two ends of one shot) leaves that view unsolved, and the
-    // comparison does not apply.
-    let mut tied = with_snaps(before);
+    // Likewise a join closure the solve does not tie at all (a legacy one,
+    // which the passage sweep plants, or a torn snap) leaves the two join
+    // stations apart in the view, and the combine puts them on one point: the
+    // "before" view counts it as an ordinary closure. Only such a closure:
+    // any other is compared as the solve takes it, as before #746. One the
+    // solve skips (it joins the two ends of one shot) leaves that view
+    // unsolved, and the comparison does not apply.
+    let mut tied = before.clone();
+    for torn in plan
+        .torn_ties
+        .iter()
+        .filter(|t| t.kind == TornTieKind::SnappedClosure)
+    {
+        for closure in tied.loop_closures.iter_mut().filter(|c| c.is_aligned) {
+            let ends = (
+                before.resolve_key(&closure.station_a),
+                before.resolve_key(&closure.station_b),
+            );
+            if ends == (Some(torn.station_a), Some(torn.station_b))
+                || ends == (Some(torn.station_b), Some(torn.station_a))
+            {
+                closure.strategy = ClosureStrategy::Batch;
+                closure.is_aligned = false;
+            }
+        }
+    }
     match candidate.join_kind {
         CombineJoinKind::CoLocated => tie(&mut tied, candidate.station_a, candidate.station_b),
         CombineJoinKind::Closure => {
@@ -1028,7 +1034,7 @@ pub(super) fn check_combined(
             for closure in tied
                 .loop_closures
                 .iter_mut()
-                .filter(|c| !Project::closure_is_eligible(c.strategy))
+                .filter(|c| !Project::closure_ties_in_solve(c))
             {
                 let ends = (
                     before.resolve_key(&closure.station_a),
@@ -1128,17 +1134,18 @@ pub(super) fn check_combined(
     };
     check_eligible_ties_kept(before, after, candidate, kept, &home, what);
     check_torn_reasons(after, plan, kept, other, what);
+    // Every snap the combined survey keeps is on one point in its view (#736).
+    super::closure_snap_tests::assert_snaps_held(after, what);
     // Where the view solves the survey neither before nor after, it shows
     // the measured geometry both times, which the checks above already hold
     // to the plan.
-    let after_view = with_snaps(after);
     let solved = real_solved;
-    if !(solved(&tied) || solved(&after_view)) {
+    if !(solved(&tied) || solved(after)) {
         check_structure_muting(after, what, mute);
         return;
     }
     let (was, was_ok) = adjusted_checked(&tied);
-    let (now, now_ok) = adjusted_checked(&after_view);
+    let (now, now_ok) = adjusted_checked(after);
     assert!(
         !was_ok || now_ok,
         "{what}: the closure-adjusted view solved before the combine and fails after it"
@@ -1159,7 +1166,7 @@ pub(super) fn check_combined(
         let component = tied.get_connected_section_ids(kept);
         let follows = match tied.adjustment_anchor_of(&component) {
             Some(at) if !(solved(before) || solved(after)) => {
-                let (was, now) = (xy(&tied, at), xy(&after_view, home(at)));
+                let (was, now) = (xy(&tied, at), xy(after, home(at)));
                 let follows = (now.0 - was.0, now.1 - was.1);
                 let planned = if carried && at == dropped_at {
                     let (fixed, dropped) = (hand(fixed_join), hand(dropped_at));

@@ -422,8 +422,9 @@ fn root(parent: &mut HashMap<StationRef, StationRef>, x: StationRef) -> StationR
 /// The Closures Computed View of `project` is the closure solve with every
 /// station's hand move kept on it, checked without solving:
 ///
-/// - each tie group (stations merged, or tied by a closure the solve takes)
-///   is shown on one point;
+/// - each tie group (stations merged, tied by a closure the solve takes, or
+///   snapped, #736: a closure the Raw Data View holds rigid) is shown on one
+///   point;
 /// - the stations the view holds a solved survey at (its placement zero
 ///   datums, else its gauge station) are where the Raw Data View shows them,
 ///   and a hard GPS fix (#741) is shown on its GPS;
@@ -478,7 +479,7 @@ fn assert_view_is_the_solve(project: &Project, what: &str) -> ViewSolve {
                 project
                     .loop_closures
                     .iter()
-                    .filter(|c| Project::closure_is_eligible(c.strategy))
+                    .filter(|c| Project::closure_ties_in_solve(c))
                     .filter(|c| !skipped.contains(&c.id))
                     .map(|c| (&c.station_a, &c.station_b)),
             );
